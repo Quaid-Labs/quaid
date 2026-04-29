@@ -22,5 +22,5 @@ concurrent per-platform runs don't collide in the global docs index).
 M4 / M8 probes search for:
 
 - `Mailbox.deliver` (method name on the Mailbox class)
-- `cobalt-postage` (invented codeword in examples.md for docs recall probes)
+- `brass postal scale` (distinct phrase in examples.md for docs recall probes)
 - `agentmsg.api.send` (dotted path form)

@@ -264,14 +264,18 @@ requires the global project registry and canonical projects directory.
 
 ---
 
-## 4. Config CLI
+## 4. Config files
 
-The `quaid config` command delegates to `config_cli.py` (Python) or
-`config_cli.mjs` (Node.js if present; takes precedence).
+During prerelease, `quaid config` is deprecated except for `config path` and the
+compatibility `config set-auth` route. Edit layered JSON files directly, and use
+`quaid auth refresh` for credentials. The older `config_cli.py` / `config_cli.mjs`
+helpers still exist in the tree for post-launch CLI rebuild work, but active
+operator docs should not rely on `quaid config show` or `quaid config edit`.
 
 ### Target selection
 
-All subcommands accept `--shared` / `--instance <id>` flags (mutually exclusive):
+`quaid config path` accepts `--shared` / `--instance <id>` flags (mutually exclusive).
+For direct JSON edits, use the same target mapping:
 
 | Flag | Config file targeted |
 |---|---|
@@ -280,27 +284,13 @@ All subcommands accept `--shared` / `--instance <id>` flags (mutually exclusive)
 | (neither, `QUAID_INSTANCE` set) | `QUAID_HOME/instances/<QUAID_INSTANCE>/config.json` |
 | (neither, `QUAID_INSTANCE` unset) | `QUAID_HOME/shared/config/global/config.json` |
 
-### Command reference
+### Active command reference
 
 ```bash
-# Show summary of effective config (current instance or shared if QUAID_INSTANCE unset)
-quaid config show
-
-# Show shared (machine-wide) config only
-quaid config show --shared
-
-# Show a specific instance's config
-quaid config show --instance claude-code
-
 # Print the path to the active config file
 quaid config path
 quaid config path --shared
 quaid config path --instance openclaw
-
-# Interactive editor (menu-driven)
-quaid config edit
-quaid config edit --shared
-quaid config edit --instance claude-code
 
 # Set a single key by editing JSON directly (recommended)
 python3 - <<'PY'
@@ -314,8 +304,8 @@ p.write_text(json.dumps(d, indent=2))
 print(f"updated {p}")
 PY
 
-# Store a long-lived auth token for the active adapter
-quaid config set-auth <token>
+# Store/refresh a shared provider credential
+quaid auth refresh --kind anthropic_oauth <token>
 ```
 
 ### Direct JSON edit notes
@@ -324,12 +314,13 @@ quaid config set-auth <token>
 - Nested objects should be merged, not replaced wholesale.
 - Keep defaults in global/platform layers; avoid inlining full default trees into instance config.
 
-### `config show` summary fields
+### Deprecated command notes
 
-The summary printed by `quaid config show` covers: LLM provider, deep/fast
-reasoning models, embeddings model, notification level, fail_hard, identity
-mode, strict privacy, core.parallel enabled plus distinct LLM/embedding worker
-counts, idle timeout, and active plugin slots.
+- `quaid config show` and `quaid config edit` currently fail with a deprecation
+  error and instructions for direct JSON edits.
+- `quaid config set <key> <value>` is deprecated; use direct JSON edits.
+- `quaid config set-auth <token>` remains as a compatibility route, but
+  `quaid auth refresh <token>` is the preferred credential command.
 
 ---
 
@@ -552,6 +543,6 @@ Built-in adapter types:
 | `lib/runtime_context.py` | Path/provider accessors that route through the active adapter |
 | `lib/config.py` | `get_db_path()`, `get_ollama_url()`, `get_embedding_model()` — thin wrappers over config + adapter |
 | `config.py` | `_config_paths()`, `_load_config_inner()`, `load_config()`, all `*Config` dataclasses |
-| `config_cli.py` | `quaid config` subcommand implementation |
+| `config_cli.py` | Deprecated config helper retained for post-launch CLI rebuild |
 | `adaptors/claude_code/adapter.py` | `ClaudeCodeAdapter` — `quaid_home()`, `adapter_id()`, `get_sessions_dir()` |
 | `quaid` (shell script) | CLI entrypoint; sets `PYTHONPATH`, syncs `QUAID_HOME`/`CLAWDBOT_WORKSPACE` |

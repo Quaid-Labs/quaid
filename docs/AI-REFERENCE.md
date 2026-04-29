@@ -190,13 +190,13 @@ The write is idempotent — if content is unchanged the file is not touched, pre
 
 ### Auth Token
 
-The Claude Code adapter requires a long-lived Anthropic token for background API calls made by supervisor-owned instance monitors and janitor workers. Store it at `~/.quaid/adaptors/claude-code/.auth-token` or set `ANTHROPIC_API_KEY` explicitly for the daemon environment.
+The Claude Code adapter requires a long-lived Anthropic token for background API calls made by supervisor-owned instance monitors, docs workers, and janitor workers. Store it in Quaid's shared auth registry with `quaid auth refresh`, or set `ANTHROPIC_API_KEY` explicitly for the daemon environment.
 
 ```bash
 claude setup-token    # Generate token
-python3 config_cli.py set-auth <token>  # Store it for the active adapter instance
+quaid auth refresh --kind anthropic_oauth <token>
 ```
-> **Note:** `quaid config set-auth` is not yet routed through the `quaid` wrapper script (it prints a usage error). Use the direct Python CLI above until this is fixed.
+`quaid config` is deprecated during prerelease; use `quaid auth refresh` for credentials and direct JSON edits for config.
 
 ---
 
@@ -645,7 +645,8 @@ quaid updater <subcmd>        # Project event processor
 
 # Admin
 quaid doctor                  # Health check (DB, embeddings, API key, gateway)
-quaid config                  # Show current configuration
+quaid config path             # Print active config path; edit JSON directly
+quaid auth refresh <token>    # Store/refresh shared provider auth
 quaid stats                   # Database statistics
 quaid health                  # Detailed KB health metrics
 quaid janitor [opts]          # Run janitor pipeline (--dry-run, --task <name>)

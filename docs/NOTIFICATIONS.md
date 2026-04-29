@@ -52,9 +52,9 @@ Pending maintenance approval requests use immediate adapter notifications (coold
 
 ## Configuration
 
-Use `quaid config edit` for interactive changes, or edit the target JSON config
-file directly. `quaid config path` prints the file Quaid will read for the
-current scope.
+Edit the target JSON config file directly. `quaid config path` prints the file
+Quaid will read for the current scope; the rest of `quaid config` is deprecated
+during prerelease while layered config is being stabilized.
 
 Example:
 

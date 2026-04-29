@@ -1345,15 +1345,9 @@ Rules:
 - Missing layers are silently skipped; only files that exist are merged.
 - Deep merge semantics: nested dicts are merged recursively; scalar and list values in higher-priority layers overwrite lower-priority values entirely.
 
-### 4.2 Config CLI Commands
+### 4.2 Config Commands
 
 ```bash
-quaid config show                          # Show effective merged config (instance + shared)
-quaid config show --shared                 # Show shared config only
-quaid config show --instance <id>          # Show specific instance's config
-quaid config edit                          # Edit current instance config ($EDITOR)
-quaid config edit --shared                 # Edit shared config (embeddings, Ollama URL)
-quaid config edit --instance <id>          # Edit a specific instance's config
 quaid config path                          # Show active config file path
 # For scripted updates, edit JSON directly (instance > platform > global layering)
 python3 - <<'PY'
@@ -1367,6 +1361,11 @@ p.write_text(json.dumps(d, indent=2))
 print(f"updated {p}")
 PY
 ```
+
+During prerelease, `quaid config show`, `quaid config edit`, and
+`quaid config set` are deprecated. Use `quaid config path` to locate the active
+file, then edit JSON directly. Use `quaid auth refresh <token>` for provider
+credentials.
 
 ### 4.3 Config Sections
 
@@ -1438,7 +1437,8 @@ Embeddings config lives in `QUAID_HOME/shared/config/global/config.json` — wri
 }
 ```
 
-To change the embedding model: `quaid config edit --shared`
+To change the embedding model, edit `QUAID_HOME/shared/config/global/config.json`
+directly.
 
 Default embedding model is **nomic-embed-text** (768-dim). Other models can be selected via shared config when needed for specific recall/latency tradeoffs.
 

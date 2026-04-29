@@ -138,12 +138,13 @@ quaid notify --deferred-drain                 # fetch buffered notices when a hu
 ## Config & Instances
 
 ```bash
-quaid config show                    # print layered resolved config
-quaid config edit [--shared]         # open layered JSON file in $EDITOR (global, platform, or instance)
+quaid config path                    # print the active config file path
+quaid auth refresh <token>           # store/refresh shared provider auth
 quaid instances list [--json]
 ```
 
-**Note:** `quaid config set` was deprecated in favor of direct JSON edits of the layered config files
+**Note:** `quaid config` is deprecated during prerelease except for `config path`
+and the compatibility `config set-auth` route. Prefer direct JSON edits of the layered config files
 (`~/.quaid/shared/config/global/config.json`, `~/.quaid/shared/config/<platform>/config.json`,
 `~/.quaid/instances/<instance>/config.json`). Edit the file layer that matches your scope — the
 resolver layers instance → platform → global. For scripted changes use a python one-liner

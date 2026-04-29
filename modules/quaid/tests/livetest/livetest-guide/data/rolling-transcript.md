@@ -128,9 +128,9 @@ Apartment's pet-free for now — Yuni is allergic to cats, so if we ever got
 anything it'd be a dog, and we've loosely discussed a golden retriever
 named Baxter as a someday-plan. No action on that yet.
 
-When I'm writing longhand I mostly use a tangerine-cased notebook from
-the Lisbon papelaria Emília Rosa — `tangerine-emilia` is my mental
-codeword for it. The shop was a recommendation from Leah's husband Nathan.
+When I'm writing longhand I mostly use an orange linen notebook from the
+Lisbon papelaria Emília Rosa. The shop was a recommendation from Leah's
+husband Nathan.
 
 Community-wise, I sit on the advisory panel for a Singapore-based data
 nonprofit called Altitude Data, chaired by Renata Sim; meetings are
@@ -173,7 +173,7 @@ DB after rolling fires between chunks — they only land after the
 post-chunk-2 `LIFECYCLE` trigger captures the residual:
 
 - `Baxter` (golden retriever someday-plan)
-- `tangerine-emilia` (codeword for the Lisbon notebook)
+- `orange linen notebook` (Lisbon notebook)
 - `Emília Rosa` (papelaria)
 
 Milestone M2 Part B uses this split to prove both rolling and lifecycle
