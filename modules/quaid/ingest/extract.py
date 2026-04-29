@@ -1102,9 +1102,6 @@ _EXTRACTION_ARTIFACT_FACT_RE = re.compile(
 _STRUCTURAL_ANCHOR_TOKEN_RE = re.compile(
     r"(?<![A-Za-z0-9])(?=[A-Za-z0-9_-]*[A-Za-z])(?:[A-Za-z0-9]+[-_]){1,}[A-Za-z0-9]+(?![A-Za-z0-9])"
 )
-_TITLEISH_SPAN_RE = re.compile(
-    r"(?<![A-Za-z0-9])(?:[A-Z][A-Za-z0-9']*(?:\s+(?:[+&]\s+)?[A-Z][A-Za-z0-9']*){0,4})(?![A-Za-z0-9])"
-)
 _UUID_ANCHOR_RE = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
     re.IGNORECASE,
@@ -1278,15 +1275,6 @@ def _explicit_structural_anchor_facts(
     return additions
 
 
-def _extract_titleish_spans(text: str) -> List[str]:
-    spans: List[str] = []
-    for match in _TITLEISH_SPAN_RE.finditer(str(text or "")):
-        span = match.group(0).strip(" \t\r\n\"'`()[]{}.,;:!?")
-        if span:
-            spans.append(span)
-    return spans
-
-
 def _dedupe_casefold(values: List[str]) -> List[str]:
     deduped: List[str] = []
     seen: set[str] = set()
@@ -1307,6 +1295,20 @@ def _structural_overlap_tokens(text: str, *, min_len: int = 6) -> List[str]:
             continue
         tokens.append(token)
     return _dedupe_casefold(tokens)
+
+
+def _novel_structural_tokens(
+    text: str,
+    *,
+    existing_tokens: set[str],
+    seen_tokens: set[str],
+    min_len: int = 4,
+) -> List[str]:
+    return [
+        token
+        for token in _structural_overlap_tokens(text, min_len=min_len)
+        if token not in existing_tokens and token not in seen_tokens
+    ]
 
 
 def _assistant_anchor_keywords(text: str) -> str:
@@ -1371,33 +1373,40 @@ def _explicit_user_mirrored_anchor_facts(
         next_role, next_text = turns[index + 1]
         if role != "user" or next_role != "assistant":
             continue
-        assistant_text_lower = str(next_text or "").lower()
-        assistant_overlap_tokens = set(_structural_overlap_tokens(next_text))
+        assistant_overlap_tokens = set(_structural_overlap_tokens(next_text, min_len=4))
         raw_sentences = _split_fact_sentences(turn_text)
-        candidate_sentences: List[str] = []
+        candidate_sentences: List[Tuple[str, bool]] = []
         for sentence_index, sentence in enumerate(raw_sentences):
             stripped_sentence = str(sentence or "").strip()
-            if stripped_sentence.rstrip().endswith("?") and sentence_index + 1 < len(raw_sentences):
+            is_question_shaped = stripped_sentence.rstrip().endswith("?")
+            if is_question_shaped and sentence_index + 1 < len(raw_sentences):
                 next_sentence = str(raw_sentences[sentence_index + 1] or "").strip()
                 if next_sentence and len(next_sentence.split()) <= 12:
-                    candidate_sentences.append(
-                        f"{stripped_sentence.rstrip('?').rstrip()} {next_sentence}"
-                    )
-            candidate_sentences.append(stripped_sentence)
-        for sentence in candidate_sentences:
+                    next_sentence_tokens = next_sentence.split()
+                    next_sentence = " ".join(next_sentence_tokens[:6])
+                    candidate_sentences.append((
+                        f"{stripped_sentence.rstrip('?').rstrip()} {next_sentence}",
+                        True,
+                    ))
+            candidate_sentences.append((stripped_sentence, is_question_shaped))
+        for sentence, question_shaped in candidate_sentences:
+            if not question_shaped:
+                continue
             fact_text = _normalize_structural_anchor_sentence(str(sentence or "").rstrip("?"))
             if len(fact_text.split()) < 5 or len(fact_text) > 240:
                 continue
-            user_spans = _dedupe_casefold(_extract_titleish_spans(fact_text))
-            shared_spans = [span for span in user_spans if span.lower() in assistant_text_lower]
+            candidate_tokens = _structural_overlap_tokens(fact_text, min_len=4)
+            if not candidate_tokens:
+                continue
             overlap_tokens = [
                 token
-                for token in _structural_overlap_tokens(fact_text)
+                for token in candidate_tokens
                 if token in assistant_overlap_tokens
             ]
-            strong_title_overlap = len(user_spans) >= 2 and len(shared_spans) >= 2
-            strong_structural_overlap = len(shared_spans) >= 1 and len(overlap_tokens) >= 2
-            if not strong_title_overlap and not strong_structural_overlap:
+            overlap_ratio = len(overlap_tokens) / max(1, len(candidate_tokens))
+            strong_structural_overlap = len(overlap_tokens) >= 2 and overlap_ratio >= 0.5
+            question_overlap = len(overlap_tokens) >= 1 and len(fact_text.split()) >= 6 and overlap_ratio >= 0.6
+            if not strong_structural_overlap and not question_overlap:
                 continue
             fact_key = _fact_text_key(fact_text)
             if not fact_key or fact_key in seen_fact_texts or fact_text.lower() in existing_text:
@@ -1433,12 +1442,25 @@ def _explicit_assistant_anchor_facts(
         for fact in facts or []
         if isinstance(fact, dict)
     ).lower()
+    existing_tokens = set(_structural_overlap_tokens(existing_text, min_len=4))
     seen_fact_texts: set[str] = set()
-    seen_spans: set[str] = set()
+    seen_tokens: set[str] = set()
     additions: List[Dict[str, Any]] = []
 
-    for turn in _iter_agent_turn_texts(transcript):
-        for raw_paragraph in re.split(r"\n\s*\n", str(turn or "")):
+    turns = _iter_prefixed_turns(transcript)
+    for index, (role, turn_text) in enumerate(turns):
+        if role != "assistant":
+            continue
+        prev_text = turns[index - 1][1] if index > 0 and turns[index - 1][0] == "user" else ""
+        next_text = turns[index + 1][1] if index + 1 < len(turns) and turns[index + 1][0] == "user" else ""
+        prev_is_question_shaped = any(
+            str(sentence or "").rstrip().endswith("?")
+            for sentence in _split_fact_sentences(prev_text)
+        )
+        adjacent_tokens = set(_structural_overlap_tokens("\n".join((prev_text, next_text)), min_len=4))
+        next_tokens = set(_structural_overlap_tokens(next_text, min_len=4))
+        context_tokens = set(_structural_overlap_tokens("\n".join((prev_text, next_text, existing_text)), min_len=4))
+        for raw_paragraph in re.split(r"\n\s*\n", str(turn_text or "")):
             if "<" in raw_paragraph or "```" in raw_paragraph:
                 continue
             bullet_lines = [
@@ -1451,13 +1473,13 @@ def _explicit_assistant_anchor_facts(
             for bullet_candidate in bullet_lines:
                 if len(bullet_candidate.split()) < 3 or len(bullet_candidate) > 220:
                     continue
-                unique_spans = _dedupe_casefold(_extract_titleish_spans(bullet_candidate))
-                missing_spans = [
-                    span
-                    for span in unique_spans
-                    if span.lower() not in existing_text and span.lower() not in seen_spans
-                ]
-                if len(unique_spans) < 1 or len(missing_spans) < 1:
+                novel_tokens = _novel_structural_tokens(
+                    bullet_candidate,
+                    existing_tokens=existing_tokens,
+                    seen_tokens=seen_tokens,
+                    min_len=4,
+                )
+                if len(novel_tokens) < 1:
                     continue
                 fact_key = _fact_text_key(bullet_candidate)
                 if not fact_key or fact_key in seen_fact_texts:
@@ -1467,8 +1489,9 @@ def _explicit_assistant_anchor_facts(
                     confidence_reason="Exact assistant-authored named option bullet omitted by model extraction",
                 ))
                 seen_fact_texts.add(fact_key)
-                for span in missing_spans:
-                    seen_spans.add(span.lower())
+                seen_tokens.update(novel_tokens)
+            if bullet_lines:
+                continue
             candidate = _strip_trailing_question_lines(raw_paragraph)
             if not candidate:
                 continue
@@ -1478,26 +1501,41 @@ def _explicit_assistant_anchor_facts(
             candidate = _normalize_structural_anchor_sentence(candidate)
             if len(candidate.split()) < 6 or len(candidate) > 360:
                 continue
-            unique_spans = _dedupe_casefold(_extract_titleish_spans(candidate))
-            missing_spans = [
-                span
-                for span in unique_spans
-                if span.lower() not in existing_text and span.lower() not in seen_spans
+            sentence_count = len(_split_fact_sentences(candidate))
+            candidate_tokens = _structural_overlap_tokens(candidate, min_len=4)
+            novel_tokens = [
+                token for token in candidate_tokens
+                if token not in existing_tokens and token not in seen_tokens
             ]
-            if len(unique_spans) < 2 or len(missing_spans) < 1:
+            context_overlap = [token for token in candidate_tokens if token in context_tokens]
+            existing_overlap = [token for token in candidate_tokens if token in existing_tokens]
+            existing_only_overlap = [token for token in existing_overlap if token not in adjacent_tokens]
+            next_overlap = [token for token in candidate_tokens if token in next_tokens]
+            separator_segments = [
+                segment for segment in re.split(r"\s*[,;/]\s*", candidate)
+                if segment.strip()
+            ]
+            rich_segments = sum(
+                1 for segment in separator_segments
+                if len(_structural_overlap_tokens(segment, min_len=4)) >= 2
+            )
+            listish_shape = sentence_count >= 2 and rich_segments >= 2
+            if len(novel_tokens) < 2:
+                continue
+            question_plan_shape = prev_is_question_shaped and len(context_overlap) >= 2 and sentence_count >= 2
+            callback_shape = len(existing_only_overlap) >= 1 and len(next_overlap) >= 1 and sentence_count >= 2
+            if not listish_shape and not question_plan_shape and not callback_shape:
                 continue
             fact_key = _fact_text_key(candidate)
             if not fact_key or fact_key in seen_fact_texts:
-                for span in missing_spans:
-                    seen_spans.add(span.lower())
+                seen_tokens.update(novel_tokens)
                 continue
             additions.append(_build_assistant_anchor_fact(
                 candidate,
                 confidence_reason="Exact assistant-authored named-option or plan anchor omitted by model extraction",
             ))
             seen_fact_texts.add(fact_key)
-            for span in missing_spans:
-                seen_spans.add(span.lower())
+            seen_tokens.update(novel_tokens)
 
     return additions
 

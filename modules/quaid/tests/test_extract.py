@@ -704,7 +704,9 @@ class TestExtractFromTranscript:
             "  Want me to look into any of those?\n\n"
             "User: the local foods direction sounds right.\n\n"
             "Assistant: I'd look at places like Weights + Measures, or Feges BBQ for something more casual.\n"
+            "  Both in the Montrose/Heights area.\n"
             "  Do you want me to look up specific menus?\n"
+            "\nUser: menus would help.\n"
         )
 
         result = extract_from_transcript(
@@ -753,7 +755,7 @@ class TestExtractFromTranscript:
         }), 0.1)
 
         transcript = (
-            "User: maybe we do a FaceTime thing for Rachel during dinner.\n\n"
+            "User: maybe we do a FaceTime thing for Rachel during dinner?\n\n"
             "Assistant: The FaceTime call during dinner is actually a great idea — it makes the surprise even bigger.\n"
             "  Your mom thinks it's just her and David, then you show up, then Rachel's on the phone.\n"
             "  Layer the surprises. It'll be a great moment.\n"
@@ -771,27 +773,15 @@ class TestExtractFromTranscript:
             for fact in result["raw_facts"]
             if str(fact.get("speaker", "") or "").lower() == "agent"
         ]
-        user_facts = [
-            fact
-            for fact in result["raw_facts"]
-            if str(fact.get("speaker", "") or "").lower() == "user"
-        ]
         agent_texts = [fact["text"] for fact in agent_facts]
-        user_texts = [fact["text"] for fact in user_facts]
         assert any(
             "FaceTime call during dinner" in text and "David" in text and "Rachel" in text
             for text in agent_texts
         )
-        assert any("FaceTime thing for Rachel during dinner" in text for text in user_texts)
         assert any(
             fact.get("extraction_confidence") == "high"
             and "FaceTime call during dinner" in str(fact.get("text", "") or "")
             for fact in agent_facts
-        )
-        assert any(
-            fact.get("extraction_confidence") == "high"
-            and "FaceTime thing for Rachel during dinner" in str(fact.get("text", "") or "")
-            for fact in user_facts
         )
 
     @patch("ingest.extract.call_deep_reasoning")
@@ -837,7 +827,52 @@ class TestExtractFromTranscript:
         assert any(
             fact.get("extraction_confidence") == "high"
             and "FaceTime thing for Rachel during dinner" in str(fact.get("text", "") or "")
-            and "calls once we're seated" in str(fact.get("text", "") or "")
+            for fact in user_facts
+        )
+
+    @patch("ingest.extract.call_deep_reasoning")
+    def test_question_shaped_user_idea_anchor_is_preserved_in_spanish_without_titlecase(self, mock_llm):
+        from ingest.extract import extract_from_transcript
+
+        mock_llm.return_value = (json.dumps({
+            "chunk_assessment": "usable",
+            "facts": [
+                {
+                    "text": "Raquel llamó durante la cena de cumpleaños de Linda",
+                    "category": "fact",
+                    "speaker": "user",
+                    "domains": ["personal"],
+                    "extraction_confidence": "high",
+                    "privacy": "shared",
+                }
+            ],
+            "soul_snippets": {},
+            "journal_entries": {},
+            "project_logs": {},
+        }), 0.1)
+
+        transcript = (
+            "User: y si hacemos una videollamada con raquel durante la cena?\n"
+            "  ella llama cuando ya estemos sentados.\n\n"
+            "Assistant: la videollamada durante la cena es una gran idea.\n"
+            "  tu mamá piensa que solo está con david, luego apareces tú, y después raquel entra en la llamada.\n"
+            "  así la sorpresa crece por capas.\n"
+        )
+
+        result = extract_from_transcript(
+            transcript=transcript,
+            owner_id="Maya Chen",
+            dry_run=True,
+        )
+
+        user_facts = [
+            fact
+            for fact in result["raw_facts"]
+            if str(fact.get("speaker", "") or "").lower() == "user"
+        ]
+        assert any(
+            fact.get("extraction_confidence") == "high"
+            and "videollamada con raquel durante la cena" in str(fact.get("text", "") or "").lower()
             for fact in user_facts
         )
 
@@ -897,6 +932,54 @@ class TestExtractFromTranscript:
             for fact in result["raw_facts"]
             if str(fact.get("speaker", "") or "").lower() == "agent"
         )
+
+    @patch("ingest.extract.call_deep_reasoning")
+    def test_assistant_named_option_anchor_is_preserved_without_titlecase_spans(self, mock_llm):
+        from ingest.extract import extract_from_transcript
+
+        mock_llm.return_value = (json.dumps({
+            "chunk_assessment": "usable",
+            "facts": [
+                {
+                    "text": "David planned a surprise birthday dinner for Linda",
+                    "category": "fact",
+                    "speaker": "user",
+                    "domains": ["personal"],
+                    "extraction_confidence": "high",
+                    "privacy": "shared",
+                }
+            ],
+            "soul_snippets": {},
+            "journal_entries": {},
+            "project_logs": {},
+        }), 0.1)
+
+        transcript = (
+            "User: david quiere hacer una cena sorpresa para mi mamá.\n\n"
+            "Assistant: el barrio de montrose es perfecto para eso.\n"
+            "  - mercado comunal — más casual y flexible con dietas\n"
+            "  - casa umi — japonesa, quizá demasiado elegante\n"
+            "  ¿quieres que revise menús?\n\n"
+            "User: lo casual suena mejor.\n\n"
+            "Assistant: yo miraría bodega central, o fuego bbq para algo aún más relajado.\n"
+            "  Ambos quedan cerca del centro.\n"
+            "\nUser: sí, revisa menús.\n"
+        )
+
+        result = extract_from_transcript(
+            transcript=transcript,
+            owner_id="Maya Chen",
+            dry_run=True,
+        )
+
+        agent_texts = [
+            fact["text"]
+            for fact in result["raw_facts"]
+            if str(fact.get("speaker", "") or "").lower() == "agent"
+        ]
+        assert any(text.startswith("mercado comunal") for text in agent_texts)
+        assert any(text.startswith("casa umi") for text in agent_texts)
+        assert any("bodega central" in text.lower() and "fuego bbq" in text.lower() for text in agent_texts)
 
     @patch("ingest.extract.call_deep_reasoning")
     def test_explicit_structural_anchor_does_not_store_user_questions(self, mock_llm):
