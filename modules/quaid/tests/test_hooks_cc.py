@@ -276,7 +276,7 @@ def test_claude_code_inject_refreshes_rules_context_for_compact_command(monkeypa
     assert (tmp_path / "data" / "context-refresh-compaction" / "sess-cc-compact.json").is_file()
 
 
-def test_claude_code_post_compact_turn_gets_one_shot_identity_context(monkeypatch, tmp_path, cursor_dir):
+def test_claude_code_post_compact_turn_relies_on_rules_file_without_additional_context(monkeypatch, tmp_path, cursor_dir):
     from adaptors.claude_code.adapter import ClaudeCodeAdapter
 
     transcript_path = tmp_path / "cc-compact-followup.jsonl"
@@ -294,10 +294,7 @@ def test_claude_code_post_compact_turn_gets_one_shot_identity_context(monkeypatc
 
     rules_dir = tmp_path / ".claude" / "rules"
     data_dir = tmp_path / "data"
-    debug_dir = tmp_path / "debug"
     monkeypatch.setenv("QUAID_RULES_DIR", str(rules_dir))
-    monkeypatch.setenv("QUAID_CC_M7_DEBUG_DUMP", "1")
-    monkeypatch.setenv("QUAID_CC_M7_DEBUG_DIR", str(debug_dir))
 
     written_signals = []
 
@@ -362,8 +359,11 @@ def test_claude_code_post_compact_turn_gets_one_shot_identity_context(monkeypatc
 
     marker_path = data_dir / "context-refresh-compaction" / "sess-cc-compact-followup.json"
     assert marker_path.is_file()
+    rules_content = (rules_dir / "quaid-projects.md").read_text(encoding="utf-8")
+    assert "Bartholomew" in rules_content
+    assert "fiddle-leaf fig" in rules_content
 
-    out, err = _run_hook_inject(
+    out, _err = _run_hook_inject(
         {
             "session_id": "sess-cc-compact-followup",
             "transcript_path": str(transcript_path),
@@ -373,24 +373,7 @@ def test_claude_code_post_compact_turn_gets_one_shot_identity_context(monkeypatc
         monkeypatch=monkeypatch,
     )
 
-    payload = json.loads(out)
-    context = payload["hookSpecificOutput"]["additionalContext"]
-    assert "# Quaid Refreshed Identity Context" in context
-    assert "Bartholomew" in context
-    assert "fiddle-leaf fig" in context
-    assert context.index("Bartholomew") < context.index("# Quaid Project Context")
-    assert "refreshed identity files as the current authoritative source" in context
-    assert "source of truth" in context
-    assert "previously recorded in memory" not in context
-    assert "Still nothing in memory" not in context
-    assert "What's the office plant named" not in context
-    assert "Baratza Encore" in context
-    dump_files = list(debug_dir.glob("quaid-cc-m7-debug-*-sess-cc-compact-followup.txt"))
-    assert len(dump_files) == 1
-    dumped = dump_files[0].read_text(encoding="utf-8")
-    assert dumped == context
-    assert "mandatory_header_byte=" in err
-    assert "bartholomew_present=True" in err
+    assert out.strip() == ""
     assert not marker_path.exists()
 
     adapter.get_pending_context.return_value = ""
@@ -406,81 +389,6 @@ def test_claude_code_post_compact_turn_gets_one_shot_identity_context(monkeypatc
         monkeypatch=monkeypatch,
     )
     assert out2.strip() == ""
-
-
-def test_claude_code_post_compact_additional_context_can_be_disabled(monkeypatch, tmp_path, cursor_dir):
-    from adaptors.claude_code.adapter import ClaudeCodeAdapter
-
-    transcript_path = tmp_path / "cc-compact-disabled.jsonl"
-    transcript_path.write_text(
-        json.dumps({"type": "user", "message": {"role": "user", "content": "/compact"}}) + "\n",
-        encoding="utf-8",
-    )
-    projects_dir = tmp_path / "projects"
-    identity_dir = tmp_path / "identity"
-    projects_dir.mkdir()
-    identity_dir.mkdir()
-    (identity_dir / "USER.md").write_text("The office plant is named Bartholomew.", encoding="utf-8")
-    (identity_dir / "SOUL.md").write_text("SOUL live", encoding="utf-8")
-    (identity_dir / "ENVIRONMENT.md").write_text("It is a fiddle-leaf fig.", encoding="utf-8")
-
-    rules_dir = tmp_path / ".claude" / "rules"
-    data_dir = tmp_path / "data"
-    monkeypatch.setenv("QUAID_RULES_DIR", str(rules_dir))
-
-    adapter = _adapter_mock()
-    cc_adapter = ClaudeCodeAdapter()
-    adapter.adapter_id.return_value = "claude-code"
-    adapter.resolve_prompt_submit_signal.side_effect = cc_adapter.resolve_prompt_submit_signal
-    adapter.projects_dir.return_value = projects_dir
-    adapter.identity_dir.return_value = identity_dir
-    adapter.data_dir.return_value = data_dir
-    adapter.get_base_context_files.return_value = {}
-    adapter.get_cli_tools_snippet.return_value = ""
-    adapter.get_pending_context.return_value = ""
-    adapter.get_deferred_notice_relay_context.return_value = ""
-
-    monkeypatch.setattr("core.extraction_daemon.write_signal", lambda **kwargs: tmp_path / "signal.json")
-    monkeypatch.setattr("core.extraction_daemon.ensure_alive", lambda: None)
-    monkeypatch.setattr("core.extraction_daemon.read_cursor", lambda session_id: {"transcript_path": str(transcript_path)})
-    monkeypatch.setattr("lib.adapter.get_adapter", lambda: adapter)
-    monkeypatch.setattr("core.interface.api.recall_fast", lambda **kwargs: ([
-        {
-            "text": "Solomon Steadman uses a Baratza Encore grinder in his office.",
-            "category": "fact",
-            "similarity": 0.7,
-        }
-    ], None))
-    monkeypatch.setattr("core.interface.api.projects_search_docs", lambda **kwargs: {})
-
-    _run_hook_inject(
-        {
-            "session_id": "sess-cc-compact-disabled",
-            "transcript_path": str(transcript_path),
-            "cwd": str(tmp_path),
-            "prompt": "/compact",
-        },
-        monkeypatch=monkeypatch,
-    )
-
-    marker_path = data_dir / "context-refresh-compaction" / "sess-cc-compact-disabled.json"
-    rules_file = rules_dir / "quaid-projects.md"
-    assert marker_path.is_file()
-    assert "Bartholomew" in rules_file.read_text(encoding="utf-8")
-
-    monkeypatch.setenv("QUAID_DISABLE_COMPACT_ADDITIONAL_CONTEXT", "1")
-    out, _err = _run_hook_inject(
-        {
-            "session_id": "sess-cc-compact-disabled",
-            "transcript_path": str(transcript_path),
-            "cwd": str(tmp_path),
-            "prompt": "What is the office plant named?",
-        },
-        monkeypatch=monkeypatch,
-    )
-
-    assert out.strip() == ""
-    assert not marker_path.exists()
 
 
 def test_refresh_runtime_config_if_changed_reloads_and_resets_caches(monkeypatch, tmp_path):

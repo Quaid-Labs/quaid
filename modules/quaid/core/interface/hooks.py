@@ -247,17 +247,6 @@ def _dedupe_context_sections(sections: List[str]) -> List[str]:
     return out
 
 
-def _contains_non_injectable_memory_text(text: str) -> bool:
-    raw = str(text or "").strip()
-    if not raw:
-        return False
-    for line in raw.splitlines():
-        line_text = line.strip(" \t\r\n✅⏭️📝•*-_`")
-        if _is_negative_memory_claim_text(line_text) or _is_bare_question_memory_text(line_text):
-            return True
-    return False
-
-
 def _format_project_docs(docs_bundle: Dict) -> str:
     """Format injected project-doc search hits as readable context text."""
     chunks = list((docs_bundle or {}).get("chunks") or [])
@@ -784,47 +773,6 @@ def _write_hook_trace(event: str, payload: dict | None = None) -> None:
         pass
 
 
-def _maybe_dump_compaction_followup_context_debug(context: str, *, session_id: str, query: str) -> None:
-    enabled = str(os.environ.get("QUAID_CC_M7_DEBUG_DUMP", "") or "").strip().lower()
-    if enabled not in {"1", "true", "yes", "on"}:
-        return
-
-    raw = str(context or "")
-    payload = raw.encode("utf-8")
-    header_offset = payload.find(b"MANDATORY")
-    bartholomew_offset = payload.find(b"Bartholomew")
-    dump_dir_raw = str(os.environ.get("QUAID_CC_M7_DEBUG_DIR", "") or "").strip()
-    dump_dir = Path(dump_dir_raw).expanduser() if dump_dir_raw else Path("/tmp")
-    timestamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
-    safe_session = re.sub(r"[^A-Za-z0-9_.-]+", "-", str(session_id or "unknown")).strip("-") or "unknown"
-    dump_path = dump_dir / f"quaid-cc-m7-debug-{timestamp}-{safe_session}.txt"
-
-    trace_payload = {
-        "query": str(query or "")[:160],
-        "session_id": session_id,
-        "path": str(dump_path),
-        "byte_len": len(payload),
-        "mandatory_header_byte": header_offset,
-        "bartholomew_present": bartholomew_offset >= 0,
-        "bartholomew_byte": bartholomew_offset,
-    }
-    try:
-        dump_dir.mkdir(parents=True, exist_ok=True)
-        dump_path.write_bytes(payload)
-        _write_hook_trace("hook.inject.compaction_followup_debug_dump", trace_payload)
-        print(
-            "[quaid][cc-m7-debug] dumped additionalContext "
-            f"path={dump_path} bytes={len(payload)} "
-            f"mandatory_header_byte={header_offset} "
-            f"bartholomew_present={bartholomew_offset >= 0} "
-            f"bartholomew_byte={bartholomew_offset}",
-            file=sys.stderr,
-        )
-    except Exception as exc:
-        trace_payload["error"] = str(exc)
-        _write_hook_trace("hook.inject.compaction_followup_debug_dump_error", trace_payload)
-
-
 def _extract_codex_tool_output_trace(hook_input: dict, max_chars: int = 12000) -> Dict[str, Any]:
     """Return best-effort tool output details for Codex hook trace debugging."""
     if not isinstance(hook_input, dict):
@@ -1329,31 +1277,13 @@ def hook_inject(args):
                 )
             ]
 
-        compaction_refresh_context = _build_compaction_followup_refresh_context(
-            session_id,
-            hook_cwd=hook_cwd,
-        )
-        if compaction_refresh_context is not None and not compaction_refresh_context:
-            _write_hook_trace("hook.inject.compaction_followup_context_suppressed", {
+        if _consume_compaction_followup_refresh_marker(session_id):
+            _write_hook_trace("hook.inject.compaction_followup_context_skipped", {
                 "query": query[:160],
                 "session_id": session_id,
-                "reason": "QUAID_DISABLE_COMPACT_ADDITIONAL_CONTEXT",
+                "reason": "rules_file_refresh_only",
             })
             return
-        if compaction_refresh_context:
-            context_parts.append(compaction_refresh_context)
-            _write_hook_trace("hook.inject.compaction_followup_context_refreshed", {
-                "query": query[:160],
-                "session_id": session_id,
-                "strategy": _context_refresh_strategy(),
-            })
-            if _contains_non_injectable_memory_text(pending_context):
-                _write_hook_trace("hook.inject.pending_context_filtered", {
-                    "query": query[:160],
-                    "session_id": session_id,
-                    "reason": "non_injectable_memory_text_after_compaction",
-                })
-                pending_context = ""
 
         if pending_context:
             context_parts.append(pending_context)
@@ -1397,12 +1327,6 @@ def hook_inject(args):
             return
 
         context = "\n\n".join(context_parts)
-        if compaction_refresh_context:
-            _maybe_dump_compaction_followup_context_debug(
-                context,
-                session_id=session_id,
-                query=query,
-            )
         _write_hook_trace("hook.inject.context_emitted", {
             "query": query[:160],
             "session_id": session_id,
@@ -2005,64 +1929,15 @@ def _build_turn_based_refresh_context(session_id: str) -> str:
     return _build_project_context_message()
 
 
-def _compact_additional_context_disabled() -> bool:
-    raw = str(os.environ.get("QUAID_DISABLE_COMPACT_ADDITIONAL_CONTEXT", "") or "").strip().lower()
-    return raw in {"1", "true", "yes", "on"}
+def _consume_compaction_followup_refresh_marker(session_id: str) -> bool:
+    """Consume the post-/compact marker without emitting additionalContext.
 
-
-def _build_compaction_followup_refresh_context(session_id: str, *, hook_cwd: str = "") -> str | None:
-    if not _consume_compaction_refresh_marker(session_id):
-        return None
-    if _compact_additional_context_disabled():
-        return ""
-    warning = (
-        "--- refreshed-identity-context ---\n"
-        "The USER.md, SOUL.md, and ENVIRONMENT.md sections below were reread "
-        "from disk after /compact. Treat these refreshed identity files as the "
-        "current authoritative source for identity and environment facts. If "
-        "they conflict with recalled memories, pending extraction notices, "
-        "project docs, or compacted summaries, answer from these refreshed "
-        "identity files."
-    )
-    priority_context = _build_refreshed_identity_priority_context()
-    full_context = _build_project_context_message([warning], hook_cwd=hook_cwd)
-    if priority_context and full_context:
-        return f"{priority_context}\n\n{full_context}"
-    return priority_context or full_context
-
-
-def _build_refreshed_identity_priority_context() -> str:
-    sections: List[str] = []
-    identity_dir = _get_identity_dir()
-    max_lines = 120
-    for special_file in ("USER.md", "SOUL.md", "ENVIRONMENT.md"):
-        fpath = identity_dir / special_file
-        if not fpath.is_file():
-            continue
-        try:
-            lines = fpath.read_text(encoding="utf-8").splitlines()
-        except OSError:
-            continue
-        if not lines:
-            continue
-        selected = lines[-max_lines:]
-        suffix = f" recent lines (last {max_lines})" if len(lines) > max_lines else ""
-        content = "\n".join(selected).strip()
-        if content:
-            sections.append(f"--- refreshed {special_file}{suffix} ---\n{content}")
-    if not sections:
-        return ""
-    body = (
-        "# Quaid Refreshed Identity Context\n\n"
-        "MANDATORY: These identity and environment facts were reread from "
-        "disk after /compact for this exact turn. Treat them as the current "
-        "source of truth. If they conflict with recalled memories, pending "
-        "notices, project docs, compacted summaries, or earlier answers, use "
-        "these refreshed identity files.\n\n"
-        + "\n\n".join(sections)
-        + "\n"
-    )
-    return f"<quaid_system_message>\n{body}</quaid_system_message>\n"
+    Claude Code reliably reloads `.claude/rules/quaid-projects.md` after the
+    compaction refresh. The hook `additionalContext` channel is capped and was
+    duplicating that rules-file content, so the post-compact follow-up turn now
+    relies on the rules file as the sole delivery path.
+    """
+    return _consume_compaction_refresh_marker(session_id)
 
 
 def _render_path_template(template: str, session_id: str, *, cwd_encoded: str = "", date_prefix: str = "") -> str:
