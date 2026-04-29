@@ -189,6 +189,15 @@ follow-up message in the new session (e.g. `Hello`) to trigger `hook-inject` and
 `check_session_transition`. Do not just wait — no message means no hook fires
 and extraction never starts.
 
+**M2 Part B residual timing:** CDX can publish the rolling threshold payload and
+the post-`/new` residual payload separately. The first `rolling_flush` after
+Chunk 2 may only contain the threshold-crossing facts. For the Chunk-2-only
+markers (`Baxter`, `orange linen notebook`, `Emília Rosa`), keep polling until
+the test session has a `rolling_flush` row with
+`processing_signal_type=session_end`, or until 7 minutes have elapsed after the
+follow-up prompt that materialized `/new`. Treat earlier empty DB checks as
+"still extracting", not a failure.
+
 **CDX does NOT have `quaid-hook-trace.jsonl`.** Do not check for this file — it is
 OC-native and will always be absent from CDX instance log directories. Checking for
 it and treating absence as a failure is a false-negative.
