@@ -5741,7 +5741,23 @@ def _run_recall_store_plan(
                     store_run["graph_discovery_count"] = max(0, int(graph_discovery_count))
         store_runs.append(store_run)
 
-    merged = _merge_recall_batches(merged_batches, limit=max(limit, limit * 2 if fast_mode else limit))
+    relation_chain_groups = _relation_chain_groups_for_query(query)
+    relation_chain_query = (
+        len(relation_chain_groups) >= 2
+        and _has_relation_chain_structure(query)
+    )
+    merge_limit = max(limit, limit * 2 if fast_mode else limit)
+    if relation_chain_query:
+        # Relation-chain reranking needs enough pre-merge rows to keep the
+        # terminal entity's attached facts alive before similarity trimming.
+        merge_limit = max(merge_limit, limit * 4, limit + 8)
+    merged = _merge_recall_batches(merged_batches, limit=merge_limit)
+    if relation_chain_query and merged:
+        _boost_relation_chain_row_scores(merged, relation_chain_groups)
+        merged.sort(
+            key=lambda row: _relation_chain_sort_key(row, relation_chain_groups),
+            reverse=True,
+        )
     if fast_mode:
         merged = _prioritize_fast_anchor_direct_rows(query, merged)
     final_rows = merged[:limit]
