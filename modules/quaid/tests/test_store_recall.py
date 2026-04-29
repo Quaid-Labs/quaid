@@ -6664,6 +6664,49 @@ class TestRecallFastHookInjectContract:
         assert merged[0]["graph_relation_sequence"] == ["spouse_of", "sibling_of", "spouse_of", "has_fact"]
         assert merged[0]["graph_path"].startswith("Solomon --spouse_of--> Yuni")
 
+    def test_merge_recall_batches_prefers_richer_graph_path_over_direct_attached_variant(self):
+        import datastore.memorydb.memory_graph as mg
+
+        merged = mg._merge_recall_batches(
+            [[
+                {
+                    "id": "fact-1",
+                    "text": "Mei runs a ceramics practice out of Kai and Mei's garage",
+                    "category": "fact",
+                    "similarity": 0.91,
+                    "via": "graph_attached_fact",
+                    "via_relation": "has_fact",
+                    "graph_path": "Mei --has_fact--> Mei runs a ceramics practice out of Kai and Mei's garage",
+                    "graph_relation_sequence": ["has_fact"],
+                    "graph_relation_groups": ["has_fact"],
+                    "graph_discovery_kind": "graph_attached_fact",
+                    "source_name": "Mei",
+                    "hop_depth": 1,
+                },
+                {
+                    "id": "fact-1",
+                    "text": "Mei runs a ceramics practice out of Kai and Mei's garage",
+                    "category": "fact",
+                    "similarity": 0.74,
+                    "via": "graph_attached_fact",
+                    "via_relation": "has_fact",
+                    "graph_path": "Solomon --spouse_of--> Yuni --sibling_of--> Kai --spouse_of--> Mei --has_fact--> Mei runs a ceramics practice out of Kai and Mei's garage",
+                    "graph_relation_sequence": ["spouse_of", "sibling_of", "spouse_of", "has_fact"],
+                    "graph_relation_groups": ["spouse", "sibling", "spouse", "has_fact"],
+                    "graph_discovery_kind": "graph_attached_fact",
+                    "source_name": "Mei",
+                    "hop_depth": 4,
+                },
+            ]],
+            limit=5,
+        )
+
+        assert len(merged) == 1
+        assert merged[0]["similarity"] == 0.91
+        assert merged[0]["graph_discovery_kind"] == "graph_attached_fact"
+        assert merged[0]["graph_relation_sequence"] == ["spouse_of", "sibling_of", "spouse_of", "has_fact"]
+        assert merged[0]["graph_path"].startswith("Solomon --spouse_of--> Yuni")
+
     def test_graph_aware_recall_does_not_relation_filter_multi_hop_depth(self, tmp_path):
         import datastore.memorydb.memory_graph as mg
 

@@ -7830,12 +7830,33 @@ def _merge_recall_batches(batches: List[List[Dict[str, Any]]], limit: int) -> Li
         "anchor_category",
     )
 
+    def _graph_metadata_richness(row: Dict[str, Any]) -> Tuple[int, int, int, int]:
+        if not isinstance(row, dict) or not _has_structured_graph_discovery(row):
+            return (0, 0, 0, 0)
+        sequence = row.get("graph_relation_sequence")
+        if isinstance(sequence, list):
+            relation_count = sum(1 for item in sequence if str(item or "").strip())
+        else:
+            relation_count = 0
+        path_len = len(str(row.get("graph_path") or "").strip())
+        fact_bonus = 1 if str(row.get("via") or "") == "graph_attached_fact" else 0
+        try:
+            hop_depth = int(row.get("hop_depth") or row.get("depth") or 0)
+        except Exception:
+            hop_depth = 0
+        return (relation_count, fact_bonus, hop_depth, path_len)
+
     def _merge_row_variants(preferred: Dict[str, Any], alternate: Dict[str, Any]) -> Dict[str, Any]:
         merged = dict(preferred)
         if not _has_structured_graph_discovery(merged) and _has_structured_graph_discovery(alternate):
             for key in graph_meta_keys:
                 if alternate.get(key) is not None:
                     merged[key] = alternate.get(key)
+        elif _has_structured_graph_discovery(merged) and _has_structured_graph_discovery(alternate):
+            if _graph_metadata_richness(alternate) > _graph_metadata_richness(merged):
+                for key in graph_meta_keys:
+                    if alternate.get(key) is not None:
+                        merged[key] = alternate.get(key)
         else:
             for key in graph_meta_keys:
                 if merged.get(key) is None and alternate.get(key) is not None:
