@@ -3419,6 +3419,7 @@ def graph_aware_recall(
     _started_at = time.monotonic()
 
     expand_from: List[str] = []  # Node IDs to expand from
+    deferred_expand_from: List[str] = []
     seen_ids: set = set()
     owner_anchor_id: Optional[str] = None
     owner_anchor_name: Optional[str] = None
@@ -3514,7 +3515,19 @@ def graph_aware_recall(
             relation_chain_path_by_node = {}
             relation_chain_sequence_by_node = {}
 
-    # 3. For each Fact, find associated Person via reverse edge traversal.
+    # 3. Extract entities from query before fact-subject backfill so explicit
+    # named anchors (for example "Mei") expand ahead of inferred relation
+    # subjects such as "Kai's wife is Mei".
+    query_entities = extract_entities_from_text(query)
+    for entity in query_entities:
+        expand_from.append(entity.id)
+        results["entities_found"].append({
+            "id": entity.id,
+            "name": entity.name,
+            "type": entity.type
+        })
+
+    # 4. For each Fact, find associated Person via reverse edge traversal.
     # Do not mark the direct fact as seen here: if graph expansion later reaches
     # the same fact, the graph-attached duplicate carries path metadata and can
     # replace the direct row during merge.
@@ -3539,21 +3552,11 @@ def graph_aware_recall(
                                 relation_chain_sequence_by_node.get(person.id, []) + ["has_fact"],
                                 discovery_kind="graph_attached_fact",
                             )
-                        expand_from.append(person.id)
-
-    # 4. Extract entities from query
-    query_entities = extract_entities_from_text(query)
-    for entity in query_entities:
-        expand_from.append(entity.id)
-        results["entities_found"].append({
-            "id": entity.id,
-            "name": entity.name,
-            "type": entity.type
-        })
+                        deferred_expand_from.append(person.id)
 
     # If we still don't have an anchor node, infer one from direct fact subjects
     # (e.g., "Quaid has sisters..." -> anchor "Quaid").
-    if not expand_from and direct:
+    if not expand_from and not deferred_expand_from and direct:
         inferred_names = []
         for fact in direct:
             text = str(fact.get("text", "")).strip()
@@ -3563,15 +3566,19 @@ def graph_aware_recall(
         for name in inferred_names:
             node = graph.find_node_by_name(name, type="Person")
             if node:
-                expand_from.append(node.id)
+                deferred_expand_from.append(node.id)
                 break
+
+    expand_from.extend(deferred_expand_from)
 
     # 5. Bidirectional graph expansion with relation filtering
     max_graph_results = max(limit * 2, 40) if relation_chain_query else limit * 2
     _graph_started_at = time.monotonic()
-    for node_id in set(expand_from):
-        if node_id in seen_ids:
+    processed_anchor_ids: set[str] = set()
+    for node_id in expand_from:
+        if not node_id or node_id in processed_anchor_ids:
             continue
+        processed_anchor_ids.add(node_id)
 
         # Get related nodes bidirectionally
         source_node = graph.get_node(node_id)
