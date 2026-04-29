@@ -2282,17 +2282,33 @@ def write_rolling_metric(event: str, session_id: str, **data: Any) -> None:
 
 
 def _rolling_debug_dump_enabled() -> bool:
-    return str(os.environ.get("QUAID_ROLLING_DEBUG_DUMP", "") or "").strip().lower() in {
+    env_value = str(os.environ.get("QUAID_ROLLING_DEBUG_DUMP", "") or "").strip().lower()
+    if env_value in {
         "1",
         "true",
         "yes",
         "on",
-    }
+    }:
+        return True
+    try:
+        return (_instance_root() / "data" / "rolling-debug.enabled").is_file()
+    except Exception:
+        return False
 
 
 def _rolling_debug_dir() -> Path:
     raw = str(os.environ.get("QUAID_ROLLING_DEBUG_DIR", "") or "").strip()
-    return Path(raw).expanduser() if raw else Path("/tmp")
+    if raw:
+        return Path(raw).expanduser()
+    try:
+        flag_path = _instance_root() / "data" / "rolling-debug.enabled"
+        if flag_path.is_file():
+            configured = flag_path.read_text(encoding="utf-8").strip()
+            if configured:
+                return Path(configured).expanduser()
+    except Exception:
+        pass
+    return Path("/tmp")
 
 
 def _rolling_debug_markers() -> List[str]:

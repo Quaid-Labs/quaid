@@ -843,8 +843,18 @@ def test_synthetic_rolling_stage_flush_metric_uses_rolling_flush_processing_labe
 def test_rolling_debug_dump_writes_input_and_fact_rows(monkeypatch, tmp_path):
     monkeypatch.setenv("QUAID_HOME", str(tmp_path / ".quaid"))
     monkeypatch.setenv("QUAID_INSTANCE", "codex-private-tmp-cdx-livetest")
-    monkeypatch.setenv("QUAID_ROLLING_DEBUG_DUMP", "1")
-    monkeypatch.setenv("QUAID_ROLLING_DEBUG_DIR", str(tmp_path / "debug"))
+    monkeypatch.delenv("QUAID_ROLLING_DEBUG_DUMP", raising=False)
+    monkeypatch.delenv("QUAID_ROLLING_DEBUG_DIR", raising=False)
+    flag_path = (
+        tmp_path
+        / ".quaid"
+        / "instances"
+        / "codex-private-tmp-cdx-livetest"
+        / "data"
+        / "rolling-debug.enabled"
+    )
+    flag_path.parent.mkdir(parents=True, exist_ok=True)
+    flag_path.write_text(str(tmp_path / "debug"), encoding="utf-8")
 
     extraction_daemon._write_rolling_debug_dump(
         "rolling_stage_extract",
