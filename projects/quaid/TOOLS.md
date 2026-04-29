@@ -98,7 +98,7 @@ quaid project link <name>     # add current instance to existing project (idempo
 quaid project unlink <name>   # remove current instance (does not delete project)
 quaid project delete <name>   # destructive — removes dir + all SQLite rows
 quaid project snapshot [<name>]
-quaid project sync
+quaid project status <name>
 quaid global-registry list    # cross-instance project list
 ```
 
