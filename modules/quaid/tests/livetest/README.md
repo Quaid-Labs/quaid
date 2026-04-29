@@ -141,7 +141,9 @@ CC has two separate auth requirements:
 
 1. The interactive Claude CLI itself needs a valid local `~/.claude/.credentials.json`
    on the coordinator. Preflight copies that file to the run VM for real CC sessions.
-   If the coordinator copy is missing or expired, preflight now fails before launch.
+   If the coordinator copy is missing, expired, or too close to expiry, preflight
+   fails before launch. Default minimum remaining lifetime is 90 minutes; override
+   only for emergency short runs with `LIVETEST_CC_OAUTH_MIN_TTL_SECONDS=0`.
 
 2. Quaid's CC daemon needs an Anthropic token in
    `~/.quaid/shared/auth/credentials.json`. Set `platforms.cc.auth_token_file` in
@@ -203,7 +205,7 @@ exclusively via SSH — they cannot accidentally affect the local machine.
 | `livetest-dashboard-new-run.sh` | Create/reset `dashboard.log` from `dashboard_template.log` for a new run. |
 | `livetest-dashboard-autostart-install.sh` | Install/load a user LaunchAgent so dashboard starts automatically on login/system start (macOS). |
 | `livetest-dashboard-autostart-uninstall.sh` | Unload/remove the dashboard LaunchAgent (macOS). |
-| `tmux-msg.sh` | Direct pane message delivery. Use for urgent interrupts, self-tests, and one-off nudges. |
+| `tmux-msg.sh` | Direct pane message delivery. Use normal mode for inter-agent messages and `--no-chrome` for CC/CDX user-visible test content. |
 | `tmux-mailbox.sh` | Queue-backed mailbox for routine STATUS/ISSUE traffic. The first unread item is delivered inline when a queue goes from empty to non-empty; the coordinator then uses `reply` or `done` to acknowledge the current item and pull the next one. Mailbox data lives in `tests/livetest/scripts/.tmux-mailbox/` and is gitignored. |
 | `livetest-nudge.sh` | Keepalive loop that periodically nudges a tester window. The active coordinator starts and owns one per tester at run start. Do not route these through window `5` / `claude-looper`. |
 | `autonomous_mode.sh` | General-purpose nudge loop for any pane (`main:N.0` preferred). Writes structured telemetry to `/tmp/autonomous_mode_<target>.status.json`. |

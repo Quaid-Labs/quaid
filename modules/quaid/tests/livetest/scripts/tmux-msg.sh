@@ -5,10 +5,11 @@
 # direct-delivery path for urgent interrupts, self-tests, and one-off nudges.
 #
 # Usage:
-#   tmux-msg.sh <target> <message>
+#   tmux-msg.sh [--no-chrome] <target> <message>
 #   tmux-msg.sh 3 "check benchmark status"
 #   tmux-msg.sh main:3.0 "run benchmark loop"
 #   tmux-msg.sh self "reminder: check back in 20m"
+#   tmux-msg.sh --no-chrome livetest:CC "Hello. Reply with ACK only."
 #
 # Targets:
 #   0-99         tmux window index (main:<n>.0)
@@ -20,6 +21,7 @@
 # Environment:
 #   TMUX_MSG_SENDER               (required) sender identity label
 #   TMUX_MSG_SOURCE               (optional) override source pane; auto-detected from current tmux pane if not set
+#   TMUX_MSG_NO_CHROME            (optional) true/1=yes; suppress "[from sender @ pane]" prefix
 #   THIS_IS_A_CRITICAL_MESSAGE    (optional) set to "true" to bypass draft detection and send immediately
 #   TMUX_MSG_WAIT                 (optional) max seconds to wait for user to finish; default 60
 #   TMUX_MSG_POLL                 (optional) poll interval in seconds; default 2
@@ -42,7 +44,29 @@
 
 set -euo pipefail
 
-TARGET="${1:?Usage: tmux-msg.sh <target> <message>}"
+NO_CHROME="${TMUX_MSG_NO_CHROME:-false}"
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --no-chrome)
+            NO_CHROME=true
+            shift
+            ;;
+        --)
+            shift
+            break
+            ;;
+        -*)
+            echo "Error: unknown option '$1'" >&2
+            echo "Usage: tmux-msg.sh [--no-chrome] <target> <message>" >&2
+            exit 1
+            ;;
+        *)
+            break
+            ;;
+    esac
+done
+
+TARGET="${1:?Usage: tmux-msg.sh [--no-chrome] <target> <message>}"
 SENDER="${TMUX_MSG_SENDER:-}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TARGETS_FILE="${TMUX_MSG_TARGETS_FILE:-$SCRIPT_DIR/.tmux-targets.json}"
@@ -61,17 +85,26 @@ else
 fi
 shift
 
-if [ -z "$SENDER" ]; then
-    echo "Error: TMUX_MSG_SENDER is required (example: TMUX_MSG_SENDER=codex TMUX_MSG_SOURCE=main:2.0 tmux-msg.sh <target> <message>)" >&2
-    exit 1
-fi
+BODY="$*"
+NO_CHROME_NORMALIZED="$(printf '%s' "$NO_CHROME" | tr '[:upper:]' '[:lower:]')"
+case "$NO_CHROME_NORMALIZED" in
+    1|true|yes|on) NO_CHROME=true ;;
+    *) NO_CHROME=false ;;
+esac
 
-MESSAGE="[from $SENDER @ $SENDER_PANE] $*"
-
-if [ -z "$MESSAGE" ]; then
-    echo "Error: no message provided" >&2
-    echo "Usage: tmux-msg.sh <target> <message>" >&2
-    exit 1
+if [[ "$NO_CHROME" != "true" ]]; then
+    if [ -z "$SENDER" ]; then
+        echo "Error: TMUX_MSG_SENDER is required (example: TMUX_MSG_SENDER=codex TMUX_MSG_SOURCE=main:2.0 tmux-msg.sh <target> <message>)" >&2
+        exit 1
+    fi
+    if [ -z "$BODY" ]; then
+        echo "Error: no message provided" >&2
+        echo "Usage: tmux-msg.sh [--no-chrome] <target> <message>" >&2
+        exit 1
+    fi
+    MESSAGE="[from $SENDER @ $SENDER_PANE] $BODY"
+else
+    MESSAGE="$BODY"
 fi
 
 # Resolve target to tmux pane

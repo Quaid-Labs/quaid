@@ -17,8 +17,14 @@ export SILO=~/.quaid/instances/codex-private-tmp-cdx-livetest
 export LIFECYCLE="/new"  # CDX has no /clear or /compact hook
 ```
 
-`SEND` mechanism: write directly into the CDX tmux pane with
-`tmux send-keys -t livetest:CDX.1 "<text>" Enter`.
+`SEND` mechanism: send user-visible content into the CDX tmux pane with
+`tmux-msg.sh --no-chrome` so no inter-agent prefix is injected:
+
+```bash
+~/quaidcode/dev/modules/quaid/tests/livetest/scripts/tmux-msg.sh --no-chrome livetest:CDX.1 "<text>"
+```
+
+Raw `tmux send-keys` remains banned for milestone prompts and recovery turns.
 
 **CDX extraction window:** CDX extracts via rollout + session-transition
 hooks after the next lifecycle signal; wait ~2 min after `/new` before
@@ -40,8 +46,8 @@ After M0 install, start the CDX interaction pane:
 
 ```bash
 tmux respawn-pane -k -t livetest:CDX.1 'zsh -il'
-tmux send-keys -t livetest:CDX.1 "ssh REMOTE_HOST" Enter
-tmux send-keys -t livetest:CDX.1 "mkdir -p /tmp/cdx-livetest && cd /tmp/cdx-livetest && QUAID_HOME=WORKSPACE QUAID_INSTANCE=CDX_INSTANCE codex --yolo" Enter
+~/quaidcode/dev/modules/quaid/tests/livetest/scripts/tmux-msg.sh --no-chrome livetest:CDX.1 "ssh REMOTE_HOST"
+~/quaidcode/dev/modules/quaid/tests/livetest/scripts/tmux-msg.sh --no-chrome livetest:CDX.1 "mkdir -p /tmp/cdx-livetest && cd /tmp/cdx-livetest && QUAID_HOME=WORKSPACE QUAID_INSTANCE=CDX_INSTANCE codex --yolo"
 ```
 
 **MANDATORY — always launch Codex in a FRESH process after Quaid install.**
@@ -87,7 +93,7 @@ assert models.get(\"deepReasoning\") in (\"gpt-5.4\", \"claude-sonnet-4-5\"), mo
 The platform (Codex on the remote VM) runs in the **CDX.1** pane:
 
 ```bash
-tmux send-keys -t livetest:CDX.1 "your message" Enter
+~/quaidcode/dev/modules/quaid/tests/livetest/scripts/tmux-msg.sh --no-chrome livetest:CDX.1 "your message"
 sleep 10
 tmux capture-pane -t livetest:CDX.1 -p | tail -30
 ```
@@ -98,7 +104,7 @@ by checking for a model response. If the text is staged but not submitted, send 
 bare Enter:
 
 ```bash
-tmux send-keys -t livetest:CDX.1 "" Enter
+~/quaidcode/dev/modules/quaid/tests/livetest/scripts/tmux-msg.sh --no-chrome livetest:CDX.1 ""
 ```
 
 This must be sent by whoever is driving the pane — the tester agent (from CDX.0),

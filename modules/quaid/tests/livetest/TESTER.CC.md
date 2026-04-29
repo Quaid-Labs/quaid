@@ -17,9 +17,15 @@ export SILO=~/.quaid/instances/claude-code-private-tmp-cc-livetest
 export LIFECYCLE="/clear"   # M2 Part A also uses /compact where supported
 ```
 
-`SEND` mechanism: write directly into the CC tmux pane with
-`tmux send-keys -t livetest:CC "<text>" Enter`. CC does not have a Matrix
-surface — messages go in the visible pane only.
+`SEND` mechanism: send user-visible content into the CC tmux pane with
+`tmux-msg.sh --no-chrome` so no inter-agent prefix is injected:
+
+```bash
+~/quaidcode/dev/modules/quaid/tests/livetest/scripts/tmux-msg.sh --no-chrome livetest:CC "<text>"
+```
+
+CC does not have a Matrix surface — messages go in the visible pane only.
+Raw `tmux send-keys` remains banned for milestone prompts and recovery turns.
 
 **CC extraction window:** CC extracts asynchronously via `session_end` after
 `/exit` or `/clear`. Wait at least 2 minutes after the trigger before
@@ -37,8 +43,8 @@ After M0 install, start the CC interaction pane:
 
 ```bash
 tmux respawn-pane -k -t livetest:CC 'zsh -il'
-tmux send-keys -t livetest:CC "ssh REMOTE_HOST" Enter
-tmux send-keys -t livetest:CC "mkdir -p /tmp/cc-livetest && cd /tmp/cc-livetest && QUAID_HOME=WORKSPACE CLAUDE_PROJECT_DIR=/tmp/cc-livetest claude --dangerously-skip-permissions --model claude-sonnet-4-6" Enter
+~/quaidcode/dev/modules/quaid/tests/livetest/scripts/tmux-msg.sh --no-chrome livetest:CC "ssh REMOTE_HOST"
+~/quaidcode/dev/modules/quaid/tests/livetest/scripts/tmux-msg.sh --no-chrome livetest:CC "mkdir -p /tmp/cc-livetest && cd /tmp/cc-livetest && QUAID_HOME=WORKSPACE CLAUDE_PROJECT_DIR=/tmp/cc-livetest claude --dangerously-skip-permissions --model claude-sonnet-4-6"
 ```
 
 **MANDATORY — always pass `--model claude-sonnet-4-6` as a launch flag.**
@@ -59,7 +65,7 @@ bypass-permissions banner is visible.
 ## Sending Messages
 
 ```bash
-tmux send-keys -t livetest:CC "your message" Enter
+~/quaidcode/dev/modules/quaid/tests/livetest/scripts/tmux-msg.sh --no-chrome livetest:CC "your message"
 sleep 10
 tmux capture-pane -t livetest:CC -p | tail -30
 ```
@@ -189,10 +195,11 @@ Verify instance root, log file, and pid file all point to `CC_INSTANCE`.
 CC needs two different auth surfaces to be healthy:
 
 1. **Claude CLI session auth** from `~/.claude/.credentials.json` on the run VM.
-   Preflight copies this from the coordinator. If it is expired, `claude` fails
-   with `401` before `SessionStart`, no transcript JSONL is created, and no hook
-   trace appears. That is a run blocker: stop and ask the coordinator to refresh
-   Claude auth + rerun preflight.
+   Preflight copies this from the coordinator and requires a safe remaining
+   lifetime before launch. If it is expired or too close to expiry, preflight
+   fails; if it expires anyway, `claude` fails with `401` before `SessionStart`,
+   no transcript JSONL is created, and no hook trace appears. That is a run
+   blocker: stop and ask the coordinator to refresh Claude auth + rerun preflight.
 
 2. **Quaid shared Anthropic auth** in `WORKSPACE/shared/auth/credentials.json`
    for daemon LLM calls after hooks fire.

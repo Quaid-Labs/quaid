@@ -317,6 +317,9 @@ wait for their ruling. The coordinator applies the four-condition test.
 - Use `tests/livetest/scripts/tmux-mailbox.sh` for routine STATUS and ISSUE traffic.
 - Use `tests/livetest/scripts/tmux-msg.sh` only for urgent interrupts, explicit
   self-tests, or one-off coordinator nudges.
+- Use `tests/livetest/scripts/tmux-msg.sh --no-chrome` for user-visible test
+  content sent into CC/CDX agent panes. This suppresses the `[from ...]` prefix
+  while preserving tmux quoting/submission safeguards.
 - Never use raw `tmux send-keys` for messages to other agents.
 - Always include `TMUX_MSG_SENDER` and `TMUX_MSG_SOURCE` env vars when posting or sending.
 - Only use `THIS_IS_A_CRITICAL_MESSAGE=true` with `tmux-msg.sh` for genuine

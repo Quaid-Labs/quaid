@@ -43,6 +43,11 @@
 #                                    always pulls from dev.
 #   -h, --help                       Show this help
 #
+# Environment:
+#   LIVETEST_CC_OAUTH_MIN_TTL_SECONDS  Minimum remaining lifetime required for
+#                                      coordinator Claude OAuth before copying
+#                                      it to the VM. Default: 5400 (90 min).
+#
 # Exit codes:
 #   0  All checks passed and prep complete
 #   1  Error (safety check failed, SSH unreachable, wipe failed, etc.)
@@ -64,6 +69,7 @@ PLATFORM_UPGRADES_ONLY=0
 DRY_RUN=0
 CONFIG_PATH="$CONFIG_DEFAULT"
 RELEASE_VERIFY=""   # empty = dev mode (default); set to a tag like v0.3.0-alpha for release verification
+CC_OAUTH_MIN_TTL_SECONDS="${LIVETEST_CC_OAUTH_MIN_TTL_SECONDS:-5400}"
 
 # --- Parse args ---
 while [[ $# -gt 0 ]]; do
@@ -88,6 +94,10 @@ done
 if [[ ! -f "$CONFIG_PATH" ]]; then
     echo "Error: config not found at '$CONFIG_PATH'" >&2
     echo "Copy livetest-config.template.json to livetest-config.json and fill it in." >&2
+    exit 1
+fi
+if [[ ! "$CC_OAUTH_MIN_TTL_SECONDS" =~ ^[0-9]+$ ]]; then
+    echo "Error: LIVETEST_CC_OAUTH_MIN_TTL_SECONDS must be an integer number of seconds" >&2
     exit 1
 fi
 
@@ -121,7 +131,8 @@ FAIL="FAIL"
 validate_claude_oauth_credentials() {
     local creds_path="$1"
     local label="$2"
-    python3 - "$creds_path" "$label" <<'PYEOF'
+    local min_ttl_seconds="${3:-0}"
+    python3 - "$creds_path" "$label" "$min_ttl_seconds" <<'PYEOF'
 import datetime
 import json
 import pathlib
@@ -129,6 +140,10 @@ import sys
 
 path = pathlib.Path(sys.argv[1]).expanduser()
 label = sys.argv[2]
+try:
+    min_ttl_seconds = int(float(sys.argv[3] or 0))
+except Exception:
+    raise SystemExit(f"{label}: invalid minimum TTL seconds {sys.argv[3]!r}")
 if not path.exists():
     raise SystemExit(f"{label}: missing {path}")
 
@@ -168,8 +183,14 @@ except Exception as exc:
 now = datetime.datetime.now(datetime.timezone.utc)
 if expires_at <= now:
     raise SystemExit(f"{label}: expired at {expires_at.isoformat()} ({path})")
+remaining = (expires_at - now).total_seconds()
+if min_ttl_seconds > 0 and remaining < min_ttl_seconds:
+    raise SystemExit(
+        f"{label}: expires too soon at {expires_at.isoformat()} "
+        f"(remaining {int(remaining // 60)}m, required {int(min_ttl_seconds // 60)}m; {path})"
+    )
 
-print(f"{label}: valid until {expires_at.isoformat()}")
+print(f"{label}: valid until {expires_at.isoformat()} (remaining {int(remaining // 60)}m)")
 PYEOF
 }
 
@@ -674,6 +695,7 @@ CC_ENABLED="$(read_config platforms.cc.enabled)"
 if [[ "$CC_ENABLED" != "True" && "$CC_ENABLED" != "true" ]]; then
     echo "  (skipped — CC platform not enabled in config)"
 elif [[ "$DRY_RUN" == "1" ]]; then
+    echo "  [dry-run] would validate coordinator Claude OAuth has >=$((CC_OAUTH_MIN_TTL_SECONDS / 60))m remaining"
     echo "  [dry-run] would scp ~/.claude/.credentials.json to $REMOTE_HOST:~/.claude/.credentials.json"
 else
     LOCAL_CREDS="$HOME/.claude/.credentials.json"
@@ -681,17 +703,18 @@ else
         echo "  $FAIL  $LOCAL_CREDS not found — CC cannot create real sessions without coordinator Claude auth"
         ERRORS=$((ERRORS + 1))
     else
-        LOCAL_CC_AUTH_STATUS="$(validate_claude_oauth_credentials "$LOCAL_CREDS" "local CC OAuth" 2>&1 || true)"
+        LOCAL_CC_AUTH_STATUS="$(validate_claude_oauth_credentials "$LOCAL_CREDS" "local CC OAuth" "$CC_OAUTH_MIN_TTL_SECONDS" 2>&1 || true)"
         if [[ "$LOCAL_CC_AUTH_STATUS" != local\ CC\ OAuth:\ valid\ until* ]]; then
             echo "  $FAIL  $LOCAL_CC_AUTH_STATUS"
             echo "         Refresh coordinator Claude auth before preflight, then rerun."
+            echo "         Override only for emergency short runs: LIVETEST_CC_OAUTH_MIN_TTL_SECONDS=0"
             ERRORS=$((ERRORS + 1))
         else
             echo "  $PASS  $LOCAL_CC_AUTH_STATUS"
             ssh "$REMOTE_HOST" 'mkdir -p ~/.claude'
             scp "$LOCAL_CREDS" "$REMOTE_HOST:~/.claude/.credentials.json"
             echo "  $PASS  CC OAuth credentials copied to remote ~/.claude/.credentials.json"
-            if ! REMOTE_CC_AUTH_STATUS="$(ssh "$REMOTE_HOST" python3 - '~/.claude/.credentials.json' <<'PYEOF' 2>&1
+            if ! REMOTE_CC_AUTH_STATUS="$(ssh "$REMOTE_HOST" python3 - '~/.claude/.credentials.json' "$CC_OAUTH_MIN_TTL_SECONDS" <<'PYEOF' 2>&1
 import datetime
 import json
 import pathlib
@@ -699,6 +722,10 @@ import sys
 
 path = pathlib.Path(sys.argv[1]).expanduser()
 label = "remote CC OAuth"
+try:
+    min_ttl_seconds = int(float(sys.argv[2] or 0))
+except Exception:
+    raise SystemExit(f"{label}: invalid minimum TTL seconds {sys.argv[2]!r}")
 if not path.exists():
     raise SystemExit(f"{label}: missing {path}")
 
@@ -735,10 +762,17 @@ try:
 except Exception as exc:
     raise SystemExit(f"{label}: cannot parse expiresAt={raw_expires!r} in {path}: {exc}") from exc
 
-if expires_at <= datetime.datetime.now(datetime.timezone.utc):
+now = datetime.datetime.now(datetime.timezone.utc)
+if expires_at <= now:
     raise SystemExit(f"{label}: expired at {expires_at.isoformat()} ({path})")
+remaining = (expires_at - now).total_seconds()
+if min_ttl_seconds > 0 and remaining < min_ttl_seconds:
+    raise SystemExit(
+        f"{label}: expires too soon at {expires_at.isoformat()} "
+        f"(remaining {int(remaining // 60)}m, required {int(min_ttl_seconds // 60)}m; {path})"
+    )
 
-print(f"{label}: valid until {expires_at.isoformat()}")
+print(f"{label}: valid until {expires_at.isoformat()} (remaining {int(remaining // 60)}m)")
 PYEOF
 )"; then
                 echo "  $FAIL  $REMOTE_CC_AUTH_STATUS"
