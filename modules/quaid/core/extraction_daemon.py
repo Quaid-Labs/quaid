@@ -3686,6 +3686,17 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                         # Higher-priority signal (e.g. rolling) — preserve it so it
                         # can stage content before this flush processes.
                         continue
+                    _dup_meta = _dup.get("meta") if isinstance(_dup.get("meta"), dict) else {}
+                    if (
+                        staged_payload_sweep_signal
+                        and _semantic_buffer_has_content(staged_state)
+                        and _dup.get("type") in ("session_end", "reset", "compaction", "timeout")
+                        and not _is_staged_payload_flush_signal_meta(_dup_meta)
+                    ):
+                        # A synthetic rolling flush only publishes the already
+                        # staged payload. A real lifecycle signal is still needed
+                        # to drain any preserved sub-threshold semantic tail.
+                        continue
                     _dup["_signal_path"] = str(_dup_f)
                     mark_signal_processed(_dup)
             except (json.JSONDecodeError, OSError):
