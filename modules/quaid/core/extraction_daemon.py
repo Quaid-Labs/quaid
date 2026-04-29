@@ -67,6 +67,17 @@ _SIGNAL_POLL_PRIORITY = {
     "compaction": 4,
 }
 _ROLLING_INTERNAL_ADVANCE_GRACE_SECONDS = 60.0
+_TRIVIAL_TIMEOUT_USER_TURNS = {
+    "hello",
+    "hi",
+    "hey",
+    "ack",
+    "ok",
+    "okay",
+    "thanks",
+    "thank you",
+}
+_TRANSCRIPT_ROLE_RE = re.compile(r"^\s*(User|Assistant|System):\s*(.*)$", re.IGNORECASE)
 
 # Session ID validation (B008)
 _SESSION_ID_RE = re.compile(r"^[a-zA-Z0-9_-]{1,128}$")
@@ -3071,9 +3082,94 @@ def _is_internal_transcript_session(
         if active_adapter is None:
             return False
         transcript_text = active_adapter.parse_session_jsonl(Path(transcript_path))
-        return not bool((transcript_text or "").strip())
+        stripped = (transcript_text or "").strip()
+        if not stripped:
+            return True
+        return not _transcript_has_meaningful_timeout_user_content(stripped)
     except Exception:
         return False
+
+
+def _iter_parsed_transcript_turns(transcript_text: str) -> List[Tuple[str, str]]:
+    turns: List[Tuple[str, str]] = []
+    current_role = ""
+    current_lines: List[str] = []
+    for raw_line in str(transcript_text or "").splitlines():
+        match = _TRANSCRIPT_ROLE_RE.match(raw_line)
+        if match:
+            if current_role:
+                turns.append((current_role, "\n".join(current_lines).strip()))
+            current_role = match.group(1).strip().lower()
+            current_lines = [match.group(2).strip()]
+            continue
+        if current_role:
+            current_lines.append(raw_line)
+    if current_role:
+        turns.append((current_role, "\n".join(current_lines).strip()))
+    return turns
+
+
+def _is_timeout_startup_user_turn(text: str) -> bool:
+    value = str(text or "").strip()
+    if not value:
+        return True
+    lowered = value.lower()
+    if "a new session was started via /new or /reset" in lowered:
+        return True
+    if "[queued messages while agent was busy]" in lowered:
+        return True
+    return False
+
+
+def _is_short_timeout_greeting_user_turn(text: str) -> bool:
+    value = str(text or "").strip()
+    if not value:
+        return True
+    lowered = value.lower()
+    normalized = re.sub(r"[\s.!?,;:'\"`]+", " ", lowered).strip()
+    if normalized in _TRIVIAL_TIMEOUT_USER_TURNS:
+        return True
+    return False
+
+
+def _transcript_has_meaningful_timeout_user_content(transcript_text: str) -> bool:
+    """Return True when parsed transcript text has user content worth timing out.
+
+    OpenClaw can leave a post-/new session in a startup/handshake-only state for
+    several minutes while the real queued user message is still delayed. Treating
+    those wrappers as extractable advances the cursor before the real message
+    arrives, so idle scans should freeze them as internal maintenance until a
+    non-trivial user turn appears.
+    """
+    turns = _iter_parsed_transcript_turns(transcript_text)
+    if not turns:
+        return not _is_timeout_startup_user_turn(transcript_text)
+    saw_user = False
+    saw_startup_wrapper = False
+    non_startup_user_turns: List[str] = []
+    for role, content in turns:
+        if role != "user":
+            continue
+        saw_user = True
+        if _is_timeout_startup_user_turn(content):
+            saw_startup_wrapper = True
+            continue
+        non_startup_user_turns.append(content)
+    if not saw_user:
+        return False
+    if saw_startup_wrapper and all(
+        _is_short_timeout_greeting_user_turn(turn)
+        for turn in non_startup_user_turns
+    ):
+        return False
+    if saw_startup_wrapper:
+        return bool(non_startup_user_turns)
+    for role, content in turns:
+        if role != "user":
+            continue
+        if content.strip():
+            return True
+    return False
 
 
 def _advance_internal_session_cursor_to_end(

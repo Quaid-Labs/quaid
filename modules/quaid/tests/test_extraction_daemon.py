@@ -462,7 +462,11 @@ def test_remove_pid_if_matches_preserves_newer_pidfile(monkeypatch, tmp_path):
 
 def test_check_idle_sessions_writes_timeout_signal_for_idle_unextracted_session(monkeypatch, tmp_path):
     transcript_path = tmp_path / "session.jsonl"
-    transcript_path.write_text('{"role":"user","content":"hello"}\n{"role":"assistant","content":"hi"}\n', encoding="utf-8")
+    transcript_path.write_text(
+        '{"role":"user","content":"hello - my garden shed combination is written inside an indigo glass lantern"}\n'
+        '{"role":"assistant","content":"noted"}\n',
+        encoding="utf-8",
+    )
 
     instance_id = os.environ.get("QUAID_INSTANCE", "pytest-runner")
     cursor_dir = tmp_path / "instances" / instance_id / "data" / "session-cursors"
@@ -3601,6 +3605,51 @@ class TestCheckIdleSessions:
         extraction_daemon.check_idle_sessions(timeout_minutes=30)
 
         assert captured == []
+
+    def test_idle_scan_freezes_startup_handshake_only_transcript(self, monkeypatch, tmp_path):
+        """OC startup wrappers must not consume the timeout path before queued user text lands."""
+        instance_id = "openclaw-main"
+        session_id = "139d8a95-9421-4274-a4c9-a1e44d8aa79a"
+        transcript = tmp_path / f"{session_id}.jsonl"
+        transcript.write_text(
+            '{"role":"user","content":"Hello"}\n'
+            '{"role":"assistant","content":"Hey Solomon - how can I help?"}\n'
+            '{"role":"user","content":"[Queued messages while agent was busy]\\nA new session was started via /new or /reset. Execute your Session Startup sequence now."}\n'
+            '{"role":"assistant","content":"NO_REPLY"}\n',
+            encoding="utf-8",
+        )
+        self._setup_cursor(tmp_path, instance_id, session_id, 0, transcript)
+
+        now = 1_700_000_000.0
+        os.utime(transcript, (now - 120, now - 120))
+
+        class _FakeAdapter(_OwnedTestAdapterMixin):
+            def parse_session_jsonl(self, _path):
+                return (
+                    "User: Hello\n\n"
+                    "Assistant: Hey Solomon - how can I help?\n\n"
+                    "User: A new session was started via /new or /reset. Execute your Session Startup sequence now.\n\n"
+                    "Assistant: NO_REPLY"
+                )
+
+        captured = []
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", instance_id)
+        monkeypatch.setattr(extraction_daemon.time, "time", lambda: now)
+        monkeypatch.setattr(extraction_daemon, "_read_installed_at", lambda: now - 7200)
+        monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
+        monkeypatch.setattr(extraction_daemon, "_load_runtime_adapter", lambda: _FakeAdapter())
+        monkeypatch.setattr(extraction_daemon, "write_signal", lambda *a, **kw: captured.append((a, kw)))
+
+        try:
+            extraction_daemon.check_idle_sessions(timeout_minutes=1)
+        finally:
+            extraction_daemon._cursor_end_timeout_fired.discard(session_id)
+
+        cursor = extraction_daemon.read_cursor(session_id)
+        assert captured == []
+        assert cursor["internal"] is True
+        assert cursor["line_offset"] == 4
 
     def test_recent_idle_sessions_timeout_before_stale_backlog(self, monkeypatch, tmp_path):
         """A fresh idle session must not wait behind old stale timeout work."""

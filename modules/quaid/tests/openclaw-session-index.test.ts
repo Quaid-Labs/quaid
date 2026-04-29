@@ -281,6 +281,83 @@ describe("openclaw session_index watcher", () => {
     rmSync(harness.root, { recursive: true, force: true });
   });
 
+  it("suppresses replayed message and command lifecycle resets after captured user content", async () => {
+    const harness = makeHarness("replayed-lifecycle-after-user-content");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const sessionId = "139d8a95-9421-4274-a4c9-a1e44d8aa79a";
+    const sessionKey = "agent:main:m2c";
+    const transcript = join(harness.sessionsDir, `${sessionId}.jsonl`);
+    writeTranscript(transcript, [
+      "Just logging: my garden shed combination is written inside an indigo glass lantern.",
+    ]);
+    writeJson(join(harness.sessionsDir, "sessions.json"), {
+      [sessionKey]: { sessionId, updatedAt: Date.now(), sessionFile: transcript },
+    });
+
+    const api = makeFakeApi();
+    const plugin = await loadPlugin(harness);
+    plugin.register(api as any);
+
+    const messageReceivedHook = api.on.mock.calls.find((call: any[]) =>
+      call?.[0] === "message_received" && call?.[2]?.name === "message-received-command-memory-extraction"
+    )?.[1];
+    const commandNewHook = api.registerHook.mock.calls.find((call: any[]) =>
+      call[0] === "command:new" && call[2]?.name === "command-new-memory-extraction"
+    )?.[1];
+    expect(typeof messageReceivedHook).toBe("function");
+    expect(typeof commandNewHook).toBe("function");
+
+    await messageReceivedHook(
+      {
+        sessionId,
+        sessionKey,
+        message: {
+          role: "user",
+          content: [{ type: "text", text: "Just logging: my garden shed combination is written inside an indigo glass lantern." }],
+        },
+      },
+      { sessionId, sessionKey, agentId: "main" },
+    );
+    await messageReceivedHook(
+      {
+        sessionId,
+        sessionKey,
+        message: {
+          role: "user",
+          content: [{ type: "text", text: "/new" }],
+        },
+      },
+      { sessionId, sessionKey, agentId: "main" },
+    );
+    await commandNewHook(
+      {
+        action: "new",
+        sessionId,
+        sessionKey,
+        context: {
+          sessionEntry: {
+            sessionId,
+            sessionFile: transcript,
+          },
+        },
+      },
+      { sessionId, sessionKey, agentId: "main" },
+    );
+
+    const staleResets = readSignalPayloads(harness.signalDir).filter((payload) =>
+      payload?.type === "reset" && payload?.session_id === sessionId
+    );
+    expect(staleResets).toHaveLength(0);
+
+    warn.mockRestore();
+    log.mockRestore();
+    error.mockRestore();
+    rmSync(harness.root, { recursive: true, force: true });
+  });
+
   it("also flushes agent:main:main when /new resets only a TUI lifecycle session", async () => {
     vi.useFakeTimers();
     const harness = makeHarness("command-new-flushes-agent-main");

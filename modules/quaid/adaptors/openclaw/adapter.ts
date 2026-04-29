@@ -1009,6 +1009,10 @@ function isAutoInjectEnabled(config: Record<string, any> = getMemoryConfig()): b
 }
 
 type LastUserMessageQuery = { text: string; seenAtMs: number; sessionId?: string; originSessionId?: string } | null;
+const LIFECYCLE_REPLAY_AFTER_USER_CACHE_MS = Math.max(
+  5_000,
+  Math.min(_envTimeoutMs("QUAID_OC_LIFECYCLE_REPLAY_AFTER_USER_CACHE_MS", 60_000), 300_000),
+);
 
 const OPENCLAW_INTERNAL_CONTEXT_RE = /<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>[\s\S]*?<<<END_OPENCLAW_INTERNAL_CONTEXT>>>/gi;
 const PROMPT_RELAY_SKIP_RE = /^(A new session|Read HEARTBEAT|HEARTBEAT|You are being asked to|You are running as a subagent|You are a subagent|\/\w|Exec failed)/;
@@ -1146,6 +1150,33 @@ function selectQueuedStartupRecoveryMessage(
     isQueuedSessionStartupWrapper(collectPromptBuildText(event));
   if (!hasQueuedStartupWrapper) return null;
   return { text: text.slice(0, 1_000), ageMs };
+}
+
+function shouldSuppressLifecycleCommandAfterRecentUserMessage(
+  commandAction: LifecycleSlashAction | null,
+  sessionId: string,
+  lastUserMessageQuery: LastUserMessageQuery,
+  nowMs: number = Date.now(),
+): boolean {
+  if (commandAction !== "new" && commandAction !== "reset") return false;
+  if (!lastUserMessageQuery) return false;
+  const ageMs = nowMs - lastUserMessageQuery.seenAtMs;
+  if (ageMs < 0 || ageMs > LIFECYCLE_REPLAY_AFTER_USER_CACHE_MS) return false;
+  const text = String(lastUserMessageQuery.text || "").trim();
+  if (text.length < 3 || text.startsWith("/")) return false;
+  const activeSessionId = String(sessionId || "").trim();
+  const cachedSessionId = String(lastUserMessageQuery.sessionId || "").trim();
+  const originSessionId = String(lastUserMessageQuery.originSessionId || "").trim();
+  if (
+    cachedSessionId
+    && activeSessionId
+    && cachedSessionId !== activeSessionId
+    && !isOpenClawTransientSessionId(cachedSessionId)
+    && !isOpenClawTransientSessionId(originSessionId)
+  ) {
+    return false;
+  }
+  return true;
 }
 
 function buildQueuedStartupUserMessageOverride(recovered: { text: string; ageMs: number } | null): string | undefined {
@@ -6583,6 +6614,15 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
           text: text.slice(0, 120),
           hook_session_id: sessionId || "",
         });
+        if (shouldSuppressLifecycleCommandAfterRecentUserMessage(commandAction, sessionId, lastUserMessageQuery)) {
+          writeHookTrace("hook.message.signal_suppressed", {
+            source_event: sourceEvent,
+            command: commandAction,
+            hook_session_id: sessionId,
+            reason: "recent_user_message_before_lifecycle_command",
+          });
+          return;
+        }
         if (commandAction === "new" || commandAction === "reset") {
           armLifecycleProjectContextRefresh(
             event,
@@ -6797,6 +6837,14 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
           preferred_transcript_path: preferredTranscriptPath,
           transcript_hint_session_id: String(lastTranscriptSessionHint?.sessionId || ""),
         });
+        if (shouldSuppressLifecycleCommandAfterRecentUserMessage(action, sessionId, lastUserMessageQuery)) {
+          writeHookTrace("hook.command.signal_suppressed", {
+            action,
+            hook_session_id: sessionId,
+            reason: "recent_user_message_before_lifecycle_command",
+          });
+          return;
+        }
         armLifecycleProjectContextRefresh(
           event,
           ctx,
