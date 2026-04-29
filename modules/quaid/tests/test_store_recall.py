@@ -6100,6 +6100,39 @@ class TestRecallFastHookInjectContract:
         assert "ceramics practice" in attached[0]["text"]
         assert attached[0]["via_relation"] == "has_fact"
 
+    def test_graph_aware_recall_named_entity_includes_anchor_attached_fact(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _ = _make_graph(tmp_path)
+        mei = mg.Node.create("Person", "Mei")
+        ceramics = mg.Node.create(
+            "Fact",
+            "Mei runs a ceramics practice out of their garage in Osaka",
+        )
+        for node in (mei, ceramics):
+            graph.add_node(node, embed=False)
+        graph.add_edge(mg.Edge.create(mei.id, ceramics.id, "has_fact"))
+
+        fake_cfg = SimpleNamespace(users=SimpleNamespace(identities={}))
+        with patch.object(mg, "get_graph", return_value=graph), \
+             patch.object(mg, "_HAS_CONFIG", True), \
+             patch.object(mg, "_get_memory_config", return_value=fake_cfg), \
+             patch.object(mg, "extract_entities_from_text", return_value=[mei]):
+            payload = mg.graph_aware_recall(
+                "what does Mei do",
+                owner_id="solomon-steadman",
+                limit=5,
+                graph_depth=2,
+                candidate_pool=[],
+            )
+
+        attached = [
+            row for row in payload["graph_results"]
+            if row.get("via") == "graph_attached_fact"
+        ]
+        assert attached
+        assert any("ceramics practice" in row["text"] for row in attached)
+
     def test_graph_store_prioritizes_chained_relation_path_over_noisy_owner_edges(self, tmp_path):
         import datastore.memorydb.memory_graph as mg
 
@@ -6159,6 +6192,49 @@ class TestRecallFastHookInjectContract:
         assert "Yuni --sibling_of--> Kai --spouse_of--> Mei" in rows[0]["graph_path"]
         assert rows[0]["graph_relation_sequence"] == ["spouse_of", "sibling_of", "spouse_of", "has_fact"]
         assert meta["counts"]["graph_discoveries"] > 0
+
+    def test_graph_store_relation_chain_keeps_relevant_attached_fact_when_anchor_has_multiple_facts(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _ = _make_graph(tmp_path)
+        solomon = mg.Node.create("Person", "Solomon Steadman")
+        yuni = mg.Node.create("Person", "Yuni")
+        kai = mg.Node.create("Person", "Kai")
+        mei = mg.Node.create("Person", "Mei")
+        likes_tea = mg.Node.create("Fact", "Mei likes strong black tea every morning")
+        lives_osaka = mg.Node.create("Fact", "Mei lives in Osaka with Kai")
+        ceramics = mg.Node.create("Fact", "Mei runs a ceramics practice out of their garage in Osaka")
+        for node in (solomon, yuni, kai, mei, likes_tea, lives_osaka, ceramics):
+            graph.add_node(node, embed=False)
+        graph.add_edge(mg.Edge.create(solomon.id, yuni.id, "spouse_of"))
+        graph.add_edge(mg.Edge.create(kai.id, yuni.id, "sibling_of"))
+        graph.add_edge(mg.Edge.create(kai.id, mei.id, "spouse_of"))
+        graph.add_edge(mg.Edge.create(mei.id, likes_tea.id, "has_fact"))
+        graph.add_edge(mg.Edge.create(mei.id, lives_osaka.id, "has_fact"))
+        graph.add_edge(mg.Edge.create(mei.id, ceramics.id, "has_fact"))
+
+        fake_cfg = SimpleNamespace(users=SimpleNamespace(identities={}))
+        with patch.object(mg, "get_graph", return_value=graph), \
+             patch.object(mg, "_HAS_CONFIG", True), \
+             patch.object(mg, "_get_memory_config", return_value=fake_cfg), \
+             patch.object(mg, "extract_entities_from_text", return_value=[]):
+            rows, meta, bundle = mg._run_recall_store_plan(
+                "what does my partner's brother's wife do",
+                stores=["graph"],
+                limit=5,
+                owner_id="solomon-steadman",
+                min_similarity=0.6,
+                planner_profile="fast",
+                planned_queries=None,
+                planner_meta={"planned_stores": ["graph"]},
+                fast_mode=False,
+                graph_depth=3,
+                common_kwargs={"candidate_pool": []},
+            )
+
+        assert bundle is None
+        assert meta["store_runs"][0]["selected_path"] == "graph_aware"
+        assert any("ceramics practice" in row["text"] for row in rows)
 
     def test_graph_store_recovers_non_english_relation_chain_keywords(self):
         import datastore.memorydb.memory_graph as mg

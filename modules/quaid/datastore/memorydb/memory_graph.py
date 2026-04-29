@@ -3265,6 +3265,7 @@ def _graph_attached_fact_rows(
     relation_sequence: Optional[List[str]] = None,
     hop_depth: int,
     seen_ids: set,
+    query: Optional[str] = None,
     per_anchor_limit: int = 2,
 ) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
@@ -3274,6 +3275,10 @@ def _graph_attached_fact_rows(
         edges = list(graph.get_edges(anchor_node.id, direction="both"))
     except Exception:
         return rows
+    lower_anchor_text = str(anchor_text or "").strip().lower()
+    query_terms = set(_extract_distinctive_query_terms(query, limit=8))
+    explicit_anchor_terms = set(_extract_explicit_query_anchor_terms(query, limit=4))
+    candidates: List[Tuple[Tuple[int, int, int, float], Dict[str, Any]]] = []
     for edge in edges:
         if str(getattr(edge, "relation", "") or "") != "has_fact":
             continue
@@ -3314,9 +3319,15 @@ def _graph_attached_fact_rows(
             list(relation_sequence or []) + ["has_fact"],
             discovery_kind="graph_attached_fact",
         )
+        fact_text = str(fact.name or "").lower()
+        query_overlap = sum(1 for term in query_terms if term in fact_text)
+        explicit_overlap = sum(1 for term in explicit_anchor_terms if term in fact_text)
+        anchor_text_hit = 1 if lower_anchor_text and lower_anchor_text in fact_text else 0
+        candidates.append(((query_overlap, explicit_overlap, anchor_text_hit, fact_score), row))
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    for _score, row in candidates[: max(1, int(per_anchor_limit or 1))]:
+        seen_ids.add(str(row.get("id") or ""))
         rows.append(row)
-        if len(rows) >= max(1, int(per_anchor_limit or 1)):
-            break
     return rows
 
 
@@ -3539,6 +3550,21 @@ def graph_aware_recall(
             continue
 
         # Get related nodes bidirectionally
+        source_node = graph.get_node(node_id)
+        source_name = source_node.name if source_node else "?"
+        if source_node:
+            results["graph_results"].extend(_graph_attached_fact_rows(
+                graph,
+                anchor_node=source_node,
+                anchor_text=source_name,
+                anchor_score=0.93,
+                graph_path=source_name,
+                relation_sequence=[],
+                hop_depth=0,
+                seen_ids=seen_ids,
+                query=query,
+                per_anchor_limit=4,
+            ))
         related = graph.get_related_bidirectional(node_id, relations=expand_relations, depth=graph_depth)
 
         for node, relation, direction, depth, path in related:
@@ -3546,9 +3572,6 @@ def graph_aware_recall(
                 seen_ids.add(node.id)
 
                 # Get source node name for display
-                source_node = graph.get_node(node_id)
-                source_name = source_node.name if source_node else "?"
-
                 graph_path = _render_bidirectional_graph_path(
                     source_name,
                     node.name,
@@ -3585,6 +3608,8 @@ def graph_aware_recall(
                     relation_sequence=relation_sequence,
                     hop_depth=depth,
                     seen_ids=seen_ids,
+                    query=query,
+                    per_anchor_limit=4,
                 ))
 
                 # Limit graph results
