@@ -34,6 +34,8 @@ from typing import Any, Dict, List
 
 logger = logging.getLogger(__name__)
 _HOOK_RUNTIME_CONFIG_SNAPSHOT: tuple[tuple[str, int], ...] | None = None
+_RULES_FILE_PREFIX = "quaid-"
+_LEGACY_RULES_FILE = "quaid-projects.md"
 
 _DAEMON_START_SKIP_ENV_KEYS = {
     "CLAUDE_CODE_OAUTH_TOKEN",
@@ -1295,14 +1297,13 @@ def hook_inject(args):
                 )
             ]
 
-        compaction_refresh_context = _build_compaction_followup_refresh_context(session_id)
-        if compaction_refresh_context:
-            context_parts.append(compaction_refresh_context)
-            _write_hook_trace("hook.inject.compaction_followup_context_refreshed", {
+        compaction_marker_consumed = _consume_compaction_refresh_marker(session_id)
+        if compaction_marker_consumed:
+            _write_hook_trace("hook.inject.compaction_followup_rules_ready", {
                 "query": query[:160],
                 "session_id": session_id,
                 "strategy": _context_refresh_strategy(),
-                "context_len": len(compaction_refresh_context),
+                "reason": "split_rules_file_refresh_only",
             })
             if _is_negative_memory_claim_text(pending_context):
                 _write_hook_trace("hook.inject.pending_context_filtered", {
@@ -1889,19 +1890,24 @@ def _collect_project_context_sections(*, hook_cwd: str = "") -> List[str]:
     return sections
 
 
-def _build_project_context_message(
+def _build_project_context_rule_sections(
     warning_sections: List[str] | None = None,
     *,
-    include_startup_pending_context: bool = False,
     hook_cwd: str = "",
-) -> str:
+) -> List[str]:
     sections = _collect_project_context_sections(hook_cwd=hook_cwd)
-    warnings = list(warning_sections or [])
-    if not sections and not warnings:
-        return ""
-    for warning in reversed(warnings):
+    for warning in reversed(list(warning_sections or [])):
         sections.insert(0, warning)
-    sections = _dedupe_context_sections(sections)
+    return _dedupe_context_sections(sections)
+
+
+def _format_project_context_message_from_sections(
+    sections: List[str],
+    *,
+    include_startup_pending_context: bool = False,
+) -> str:
+    if not sections:
+        return ""
     body = "# Quaid Project Context\n\n" + "\n\n".join(sections) + "\n"
     content_parts: List[str] = []
     if include_startup_pending_context:
@@ -1915,27 +1921,163 @@ def _build_project_context_message(
     return "\n\n".join(content_parts)
 
 
-def _write_rules_context_content(hook_input: dict, content: str, *, label: str) -> None:
-    if not content:
-        return
+def _build_project_context_message(
+    warning_sections: List[str] | None = None,
+    *,
+    include_startup_pending_context: bool = False,
+    hook_cwd: str = "",
+) -> str:
+    sections = _build_project_context_rule_sections(
+        warning_sections,
+        hook_cwd=hook_cwd,
+    )
+    return _format_project_context_message_from_sections(
+        sections,
+        include_startup_pending_context=include_startup_pending_context,
+    )
+
+
+def _rules_slug(value: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", str(value or "").strip().lower()).strip("-")
+    return slug or "section"
+
+
+def _context_section_header(section: str) -> str:
+    first = str(section or "").splitlines()[0].strip() if section else ""
+    match = re.match(r"^---\s+(.+?)\s+---$", first)
+    return match.group(1).strip() if match else ""
+
+
+def _rule_filename_for_context_section(section: str, index: int) -> str:
+    header = _context_section_header(section)
+    if not header:
+        if str(section or "").lstrip().startswith("[Quaid runtime]"):
+            return f"{_RULES_FILE_PREFIX}00-runtime.md"
+        return f"{_RULES_FILE_PREFIX}{index:02d}-context.md"
+    normalized = header.strip()
+    if normalized in {"SYSTEM WARNING", "base-context-files"}:
+        return f"{_RULES_FILE_PREFIX}00-runtime.md"
+    if normalized in {"USER.md", "SOUL.md", "ENVIRONMENT.md"}:
+        return f"{_RULES_FILE_PREFIX}{_rules_slug(normalized)}.md"
+    if normalized.startswith("adapter-compatibility/"):
+        return f"{_RULES_FILE_PREFIX}adapter-compatibility.md"
+    if normalized == "adapter-cli":
+        return f"{_RULES_FILE_PREFIX}adapter-cli.md"
+    if "/" in normalized:
+        project_name, doc_name = normalized.split("/", 1)
+        return f"{_RULES_FILE_PREFIX}{_rules_slug(project_name)}-{_rules_slug(doc_name)}.md"
+    return f"{_RULES_FILE_PREFIX}{_rules_slug(normalized)}.md"
+
+
+def _format_rule_file_content(filename: str, sections: List[str]) -> str:
+    title = filename
+    if title.startswith(_RULES_FILE_PREFIX):
+        title = title[len(_RULES_FILE_PREFIX):]
+    if title.endswith(".md"):
+        title = title[:-3]
+    title = title.replace("-", " ").strip().title() or "Context"
+    body = "\n\n".join(section.strip() for section in sections if str(section or "").strip()).strip()
+    return (
+        f"# Quaid {title} Rules\n\n"
+        "<quaid_system_message>\n"
+        f"{body}\n"
+        "</quaid_system_message>\n"
+    )
+
+
+def _resolve_rules_context_dir(hook_input: dict) -> Path:
     rules_env = os.environ.get("QUAID_RULES_DIR", "").strip()
     if rules_env:
-        rules_dir = Path(rules_env)
-    else:
-        hook_cwd = hook_input.get("cwd", "").strip() if hook_input else ""
-        base = Path(hook_cwd) if hook_cwd else Path.cwd()
-        rules_dir = base / ".claude" / "rules"
-    rules_dir.mkdir(parents=True, exist_ok=True)
-    rules_file = rules_dir / "quaid-projects.md"
+        return Path(rules_env)
     try:
-        existing = rules_file.read_text(encoding="utf-8") if rules_file.is_file() else ""
-    except OSError:
-        existing = ""
-    if content != existing:
-        rules_file.write_text(content, encoding="utf-8")
-        print(f"[quaid][{label}] updated {rules_file}", file=sys.stderr)
+        from lib.adapter import get_adapter
+        adapter = get_adapter()
+        getter = getattr(adapter, "cached_rules_dir", None)
+        raw = getter() if callable(getter) else None
+        if type(raw).__module__.startswith("unittest.mock"):
+            raw = None
+        if isinstance(raw, (str, os.PathLike)) and str(raw).strip():
+            return Path(raw)
+    except Exception:
+        pass
+    hook_cwd = hook_input.get("cwd", "").strip() if hook_input else ""
+    base = Path(hook_cwd) if hook_cwd else Path.cwd()
+    return base / ".claude" / "rules"
+
+
+def _migrate_legacy_rules_file(rules_dir: Path, *, label: str) -> None:
+    legacy_file = rules_dir / _LEGACY_RULES_FILE
+    if not legacy_file.is_file():
+        return
+    backup_file = rules_dir / f"{_LEGACY_RULES_FILE}.bak"
+    try:
+        os.replace(legacy_file, backup_file)
+        print(f"[quaid][{label}] migrated {legacy_file} to {backup_file}", file=sys.stderr)
+    except OSError as exc:
+        print(f"[quaid][{label}] failed to migrate {legacy_file}: {exc}", file=sys.stderr)
+
+
+def _clear_rules_context_files(hook_input: dict, *, label: str) -> None:
+    rules_dir = _resolve_rules_context_dir(hook_input)
+    if not rules_dir.exists():
+        return
+    _migrate_legacy_rules_file(rules_dir, label=label)
+    removed = 0
+    try:
+        for stale_file in rules_dir.glob(f"{_RULES_FILE_PREFIX}*.md"):
+            if stale_file.is_file():
+                stale_file.unlink()
+                removed += 1
+    except OSError as exc:
+        print(f"[quaid][{label}] failed to clear stale rules: {exc}", file=sys.stderr)
+    if removed:
+        print(f"[quaid][{label}] cleared {removed} stale Quaid rules files from {rules_dir}", file=sys.stderr)
+
+
+def _write_rules_context_sections(hook_input: dict, sections: List[str], *, label: str) -> None:
+    sections = _dedupe_context_sections([section for section in sections if str(section or "").strip()])
+    if not sections:
+        _clear_rules_context_files(hook_input, label=label)
+        return
+    rules_dir = _resolve_rules_context_dir(hook_input)
+    rules_dir.mkdir(parents=True, exist_ok=True)
+    _migrate_legacy_rules_file(rules_dir, label=label)
+
+    grouped: Dict[str, List[str]] = {}
+    for index, section in enumerate(sections):
+        filename = _rule_filename_for_context_section(section, index)
+        grouped.setdefault(filename, []).append(section)
+
+    changed = 0
+    for filename, file_sections in grouped.items():
+        rules_file = rules_dir / filename
+        content = _format_rule_file_content(filename, file_sections)
+        try:
+            existing = rules_file.read_text(encoding="utf-8") if rules_file.is_file() else ""
+        except OSError:
+            existing = ""
+        if content != existing:
+            rules_file.write_text(content, encoding="utf-8")
+            changed += 1
+
+    removed = 0
+    target_names = set(grouped)
+    try:
+        for stale_file in rules_dir.glob(f"{_RULES_FILE_PREFIX}*.md"):
+            if stale_file.name not in target_names and stale_file.is_file():
+                stale_file.unlink()
+                removed += 1
+    except OSError as exc:
+        print(f"[quaid][{label}] failed to remove stale split rules: {exc}", file=sys.stderr)
+
+    if changed or removed:
+        print(
+            f"[quaid][{label}] wrote {len(grouped)} split rules files to {rules_dir} "
+            f"({changed} updated, {removed} removed)",
+            file=sys.stderr,
+        )
     else:
-        print(f"[quaid][{label}] {rules_file} up to date", file=sys.stderr)
+        print(f"[quaid][{label}] split rules files up to date in {rules_dir}", file=sys.stderr)
 
 
 def _maybe_compaction_refresh_context_artifacts(hook_input: dict, *, is_precompact: bool) -> None:
@@ -1944,66 +2086,14 @@ def _maybe_compaction_refresh_context_artifacts(hook_input: dict, *, is_precompa
     if _context_refresh_strategy() != "compaction":
         return
     hook_cwd = str(hook_input.get("cwd") or "").strip() if isinstance(hook_input, dict) else ""
-    content = _build_project_context_message(hook_cwd=hook_cwd)
-    if not content:
-        return
-    _write_rules_context_content(hook_input, content, label="context-refresh")
+    sections = _build_project_context_rule_sections(hook_cwd=hook_cwd)
+    _write_rules_context_sections(hook_input, sections, label="context-refresh")
 
 
 def _build_turn_based_refresh_context(session_id: str) -> str:
     if not _should_emit_turn_based_refresh(session_id):
         return ""
     return _build_project_context_message()
-
-
-def _build_compaction_followup_refresh_context(session_id: str) -> str:
-    """Emit a compact identity-only bridge after /compact.
-
-    Claude Code reloads rules files on fresh session starts, but live testing
-    showed the /compact path can leave the just-rebuilt rules file out of the
-    model-visible prompt. The hook additionalContext channel is capped, so this
-    bridge intentionally carries only fresh identity files, not the full project
-    context already written to `.claude/rules/quaid-projects.md`.
-    """
-    if not _consume_compaction_refresh_marker(session_id):
-        return ""
-    return _build_refreshed_identity_priority_context()
-
-
-def _build_refreshed_identity_priority_context() -> str:
-    sections: List[str] = []
-    identity_dir = _get_identity_dir()
-    max_chars_per_file = 2400
-    for special_file in ("USER.md", "SOUL.md", "ENVIRONMENT.md"):
-        fpath = identity_dir / special_file
-        if not fpath.is_file():
-            continue
-        try:
-            content = fpath.read_text(encoding="utf-8").strip()
-        except OSError:
-            continue
-        if not content:
-            continue
-        if len(content) > max_chars_per_file:
-            content = content[-max_chars_per_file:].lstrip()
-            title = f"--- refreshed {special_file} recent tail ---"
-        else:
-            title = f"--- refreshed {special_file} ---"
-        sections.append(f"{title}\n{content}")
-    if not sections:
-        return ""
-    body = (
-        "# Quaid Refreshed Identity Context\n\n"
-        "MANDATORY: These USER.md, SOUL.md, and ENVIRONMENT.md excerpts were "
-        "reread from disk after /compact for this exact turn. Treat them as "
-        "the current source of truth for identity and environment facts. If "
-        "they conflict with recalled memories, pending notices, compacted "
-        "summaries, or earlier answers, answer from these refreshed identity "
-        "files.\n\n"
-        + "\n\n".join(sections)
-        + "\n"
-    )
-    return f"<quaid_system_message>\n{body}</quaid_system_message>\n"
 
 
 def _render_path_template(template: str, session_id: str, *, cwd_encoded: str = "", date_prefix: str = "") -> str:
@@ -2393,7 +2483,7 @@ def _get_identity_dir() -> Path:
 
 
 def hook_session_init(args):
-    """Collect project docs and write to .claude/rules/ for durable caching.
+    """Collect project docs and write split Quaid rules files for durable caching.
 
     Claude Code auto-loads .claude/rules/*.md into context at session start,
     caches them via prompt caching, and preserves them through compaction.
@@ -2403,7 +2493,8 @@ def hook_session_init(args):
     Scans projects/<name>/ subdirectories for TOOLS.md and AGENTS.md.
     Collects identity files (USER.md, SOUL.md, ENVIRONMENT.md) from the adapter's
     per-instance identity directory (not the shared project dir).
-    Writes the combined content to .claude/rules/quaid-projects.md.
+    Writes the content into .claude/rules/quaid-*.md files so each section can
+    stay below Claude Code's per-rules-file display/truncation threshold.
 
     Also sweeps for orphaned sessions (previous sessions whose transcripts
     have un-extracted content past the extraction cursor).
@@ -2566,51 +2657,7 @@ def hook_session_init(args):
     if not projects_dir.is_dir():
         print(f"[quaid][session-init] projects dir not found: {projects_dir}", file=sys.stderr)
 
-    sections: List[str] = []
-
-    # 1. Collect identity files (SOUL.md, USER.md, ENVIRONMENT.md) from instance silo
-    identity_dir = _get_identity_dir()
-    for special_file in ("USER.md", "SOUL.md", "ENVIRONMENT.md"):
-        fpath = identity_dir / special_file
-        if fpath.is_file():
-            content = fpath.read_text(encoding="utf-8").strip()
-            if content:
-                sections.append(f"--- {special_file} ---\n{content}")
-
-    # 2. Collect compact project context. Full TOOLS/AGENTS bootstrap is reserved
-    #    for explicitly allowlisted operational projects; user projects get a
-    #    bounded catalog and are reached through docs recall.
     hook_cwd = hook_input.get("cwd", "").strip() if hook_input else ""
-    sections.extend(_collect_project_doc_context_sections(projects_dir, hook_cwd=hook_cwd))
-    sections.extend(_collect_adapter_compatibility_context_sections())
-
-    # 2b. Append base context file names so guidance can refer to them generically.
-    #     These are the adapter's authoritative instruction files (e.g. CLAUDE.md for CC).
-    try:
-        from lib.adapter import get_adapter
-        base_files = get_adapter().get_base_context_files()
-        if base_files:
-            names = [str(Path(p).name) for p in base_files]
-            sections.append(
-                f"--- base-context-files ---\n"
-                f"Your authoritative base context files are: {', '.join(names)}\n"
-                f"These have higher authority than any evolved guidance."
-            )
-    except Exception as e:
-        print(f"[quaid][session-init] base context files error: {e}", file=sys.stderr)
-
-    # 2c. Append adapter CLI tools snippet (registered by the active adapter)
-    try:
-        from lib.adapter import get_adapter
-        cli_snippet = get_adapter().get_cli_tools_snippet()
-        if cli_snippet:
-            sections.append(f"--- adapter-cli ---\n{cli_snippet.strip()}")
-    except Exception as e:
-        print(f"[quaid][session-init] adapter CLI snippet error: {e}", file=sys.stderr)
-
-    if sections:
-        sections.insert(0, _build_runtime_context_block())
-
     warning_sections: List[str] = []
     for notice in startup_notices:
         warning_sections.append(f"--- SYSTEM WARNING ---\n{notice}")
@@ -2635,26 +2682,22 @@ def hook_session_init(args):
     if multi_instance_warning:
         warning_sections.append(f"--- SYSTEM WARNING ---\n{multi_instance_warning}")
 
+    sections = _build_project_context_rule_sections(
+        warning_sections,
+        hook_cwd=hook_cwd,
+    )
+
     if not sections and not warning_sections:
+        output_mode = str(_adapter_capability("session_start_output_mode", "rules_file") or "").strip().lower()
+        if output_mode != "additional_context":
+            _clear_rules_context_files(hook_input, label="session-init")
         print("[quaid][session-init] no project docs found", file=sys.stderr)
         return
 
-    for warning in reversed(warning_sections):
-        sections.insert(0, warning)
-
-    sections = _dedupe_context_sections(sections)
-    body = "# Quaid Project Context\n\n" + "\n\n".join(sections) + "\n"
-    content_parts: List[str] = []
-    if bool(_adapter_capability("session_start_include_pending_context", False)):
-        deferred_notice_hint = _get_deferred_notice_hint()
-        if deferred_notice_hint:
-            content_parts.append(deferred_notice_hint)
-        startup_pending_context = _get_pending_context()
-        if startup_pending_context:
-            content_parts.append(startup_pending_context)
-    content_parts.append(f"<quaid_system_message>\n{body}</quaid_system_message>\n")
-    content = "\n\n".join(content_parts)
-
+    content = _format_project_context_message_from_sections(
+        sections,
+        include_startup_pending_context=bool(_adapter_capability("session_start_include_pending_context", False)),
+    )
     output_mode = str(_adapter_capability("session_start_output_mode", "rules_file") or "").strip().lower()
     if output_mode == "additional_context":
         print(json.dumps({
@@ -2667,9 +2710,9 @@ def hook_session_init(args):
         return
 
     # 4. Write to .claude/rules/ so Claude Code caches it and preserves
-    #    through compaction. The file is regenerated on each session start
+    #    through compaction. The files are regenerated on each session start
     #    to pick up any project doc changes.
-    _write_rules_context_content(hook_input, content, label="session-init")
+    _write_rules_context_sections(hook_input, sections, label="session-init")
 
 
 

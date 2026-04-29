@@ -474,6 +474,30 @@ class TestUnlinkProject:
         loaded = get_project("my-app")
         assert "drop-instance" not in loaded["instances"]
 
+    def test_unlink_prunes_project_cached_rules_files(self, mock_adapter, monkeypatch):
+        _, tmp_path = mock_adapter
+        rules_dir = tmp_path / ".claude" / "rules"
+        rules_dir.mkdir(parents=True)
+        stale_project_rules = rules_dir / "quaid-my-app-project-catalog.md"
+        stale_project_rules.write_text("stale my-app catalog", encoding="utf-8")
+        other_project_rules = rules_dir / "quaid-other-project-catalog.md"
+        other_project_rules.write_text("other catalog", encoding="utf-8")
+        legacy_combined = rules_dir / "quaid-projects.md.bak"
+        legacy_combined.write_text("legacy backup", encoding="utf-8")
+
+        with patch("lib.instance.instance_id", return_value="creator-instance"):
+            create_project("my-app")
+        with patch("lib.instance.instance_id", return_value="drop-instance"):
+            link_project("my-app")
+
+        monkeypatch.chdir(tmp_path)
+        with patch("lib.instance.instance_id", return_value="drop-instance"):
+            unlink_project("my-app")
+
+        assert not stale_project_rules.exists()
+        assert other_project_rules.is_file()
+        assert legacy_combined.is_file()
+
     @pytest.mark.parametrize(
         ("project_name", "instance_name"),
         [

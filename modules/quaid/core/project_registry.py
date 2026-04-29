@@ -9,6 +9,7 @@ See docs/PROJECT-SYSTEM-SPEC.md#project-registry.
 import json
 import logging
 import os
+import re
 import tempfile
 import shutil
 import threading
@@ -22,6 +23,7 @@ from lib.adapter import quaid_projects_dir, quaid_tracking_dir
 from lib.project_registry_lock import registry_lock, registry_lock_path, registry_path
 
 logger = logging.getLogger(__name__)
+_RULES_FILE_PREFIX = "quaid-"
 
 
 def _is_temp_canonical_path(path: Path) -> bool:
@@ -647,6 +649,58 @@ def link_project(name: str, *, instance_id: Optional[str] = None) -> Dict[str, A
         return registry["projects"][name]
 
 
+def _rules_slug(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", str(value or "").strip().lower()).strip("-") or "section"
+
+
+def _current_cached_rules_dirs() -> List[Path]:
+    dirs: List[Path] = []
+    env_dir = os.environ.get("QUAID_RULES_DIR", "").strip()
+    if env_dir:
+        dirs.append(Path(env_dir))
+    try:
+        from lib.adapter import get_adapter
+
+        adapter = get_adapter()
+        getter = getattr(adapter, "cached_rules_dir", None)
+        raw = getter() if callable(getter) else None
+        if type(raw).__module__.startswith("unittest.mock"):
+            raw = None
+        if isinstance(raw, (str, os.PathLike)) and str(raw).strip():
+            dirs.append(Path(raw))
+    except Exception:
+        pass
+    for raw_root in (
+        os.environ.get("CLAUDE_PROJECT_DIR", "").strip(),
+        os.environ.get("CODEX_PROJECT_DIR", "").strip(),
+        os.getcwd(),
+    ):
+        if raw_root:
+            dirs.append(Path(raw_root) / ".claude" / "rules")
+    out: List[Path] = []
+    seen: set[str] = set()
+    for path in dirs:
+        key = str(path.expanduser())
+        if key not in seen:
+            seen.add(key)
+            out.append(path.expanduser())
+    return out
+
+
+def _prune_cached_rules_for_project(name: str) -> None:
+    slug = _rules_slug(name)
+    pattern = f"{_RULES_FILE_PREFIX}{slug}-*.md"
+    for rules_dir in _current_cached_rules_dirs():
+        if not rules_dir.is_dir():
+            continue
+        try:
+            for path in rules_dir.glob(pattern):
+                if path.is_file():
+                    path.unlink()
+        except OSError as exc:
+            logger.warning("Failed to prune cached rules for project %s in %s: %s", name, rules_dir, exc)
+
+
 def unlink_project(name: str) -> Dict[str, Any]:
     """Remove the current QUAID_INSTANCE from a project's instances list.
 
@@ -677,7 +731,9 @@ def unlink_project(name: str) -> Dict[str, Any]:
             registry["projects"][name]["updated_at"] = datetime.now(tz=timezone.utc).isoformat()
             _save_registry(registry)
             logger.info("Unlinked instance %s from project %s", instance, name)
-        return registry["projects"][name]
+        entry = registry["projects"][name]
+    _prune_cached_rules_for_project(name)
+    return entry
 
 
 def _docs_db_table_exists(conn: Any, table: str) -> bool:

@@ -89,14 +89,13 @@ def _run_hook_inject(hook_input: dict, *, monkeypatch, patches: dict | None = No
 def _run_hook_session_init(hook_input: dict, *, monkeypatch, rules_dir: Path):
     """Drive hook_session_init with fake stdin and captured stdout/stderr.
 
-    Returns (stdout_text, stderr_text, rules_file_content_or_None).
+    Returns (stdout_text, stderr_text, combined_quaid_rules_content_or_None).
     """
     from core.interface import hooks
 
     captured_out = io.StringIO()
     captured_err = io.StringIO()
 
-    rules_file = rules_dir / "quaid-projects.md"
     monkeypatch.setenv("QUAID_RULES_DIR", str(rules_dir))
 
     with patch("core.interface.hooks._read_stdin_json", return_value=hook_input), \
@@ -104,7 +103,11 @@ def _run_hook_session_init(hook_input: dict, *, monkeypatch, rules_dir: Path):
          patch("core.interface.hooks.sys.stderr", captured_err):
         hooks.hook_session_init(MagicMock())
 
-    content = rules_file.read_text(encoding="utf-8") if rules_file.is_file() else None
+    rule_files = sorted(
+        path for path in rules_dir.glob("quaid-*.md")
+        if path.is_file() and not path.name.endswith(".bak")
+    )
+    content = "\n\n".join(path.read_text(encoding="utf-8") for path in rule_files) if rule_files else None
     return captured_out.getvalue(), captured_err.getvalue(), content
 
 
@@ -269,14 +272,15 @@ def test_claude_code_inject_refreshes_rules_context_for_compact_command(monkeypa
     assert sig["session_id"] == "sess-cc-compact"
     assert sig["transcript_path"] == str(transcript_path)
     assert sig["meta"]["command"] == "/compact"
-    content = (rules_dir / "quaid-projects.md").read_text(encoding="utf-8")
-    assert "Bartholomew" in content
-    assert "fiddle-leaf fig" in content
+    user_rules = (rules_dir / "quaid-user-md.md").read_text(encoding="utf-8")
+    env_rules = (rules_dir / "quaid-environment-md.md").read_text(encoding="utf-8")
+    assert "Bartholomew" in user_rules
+    assert "fiddle-leaf fig" in env_rules
     assert "context-refresh" in err
     assert (tmp_path / "data" / "context-refresh-compaction" / "sess-cc-compact.json").is_file()
 
 
-def test_claude_code_post_compact_turn_gets_identity_additional_context(monkeypatch, tmp_path, cursor_dir):
+def test_claude_code_post_compact_turn_relies_on_split_rules_without_additional_context(monkeypatch, tmp_path, cursor_dir):
     from adaptors.claude_code.adapter import ClaudeCodeAdapter
 
     transcript_path = tmp_path / "cc-compact-followup.jsonl"
@@ -359,9 +363,11 @@ def test_claude_code_post_compact_turn_gets_identity_additional_context(monkeypa
 
     marker_path = data_dir / "context-refresh-compaction" / "sess-cc-compact-followup.json"
     assert marker_path.is_file()
-    rules_content = (rules_dir / "quaid-projects.md").read_text(encoding="utf-8")
-    assert "Bartholomew" in rules_content
-    assert "fiddle-leaf fig" in rules_content
+    user_rules = (rules_dir / "quaid-user-md.md").read_text(encoding="utf-8")
+    env_rules = (rules_dir / "quaid-environment-md.md").read_text(encoding="utf-8")
+    assert "Bartholomew" in user_rules
+    assert "fiddle-leaf fig" in env_rules
+    monkeypatch.setattr("core.interface.api.recall_fast", lambda **kwargs: ([], None))
 
     out, _err = _run_hook_inject(
         {
@@ -373,15 +379,7 @@ def test_claude_code_post_compact_turn_gets_identity_additional_context(monkeypa
         monkeypatch=monkeypatch,
     )
 
-    payload = json.loads(out)
-    context = payload["hookSpecificOutput"]["additionalContext"]
-    assert "Quaid Refreshed Identity Context" in context
-    assert "MANDATORY" in context
-    assert "The office plant is named Bartholomew." in context
-    assert "It is a fiddle-leaf fig." in context
-    assert "Solomon Steadman asked about an office plant name" not in context
-    assert "Still nothing in memory" not in context
-    assert len(context) < 10_000
+    assert out.strip() == ""
     assert not marker_path.exists()
 
     adapter.get_pending_context.return_value = ""
@@ -1135,8 +1133,8 @@ def test_hook_extract_precompact_refreshes_rules_context_from_identity_and_proje
 
     rules_dir = tmp_path / ".claude" / "rules"
     rules_dir.mkdir(parents=True, exist_ok=True)
-    rules_file = rules_dir / "quaid-projects.md"
-    rules_file.write_text("stale rules body", encoding="utf-8")
+    legacy_rules_file = rules_dir / "quaid-projects.md"
+    legacy_rules_file.write_text("stale rules body", encoding="utf-8")
 
     monkeypatch.setenv("QUAID_HOME", str(tmp_path))
     monkeypatch.setenv("QUAID_INSTANCE", "claude-code-test")
@@ -1154,10 +1152,13 @@ def test_hook_extract_precompact_refreshes_rules_context_from_identity_and_proje
 
     assert out == ""
     assert "context-refresh" in err
-    content = rules_file.read_text(encoding="utf-8")
-    assert "Compaction refresh canary: vellum-orchid" in content
-    assert "refresh docs" in content
-    assert "stale rules body" not in content
+    assert not legacy_rules_file.exists()
+    assert (rules_dir / "quaid-projects.md.bak").read_text(encoding="utf-8") == "stale rules body"
+    user_rules = (rules_dir / "quaid-user-md.md").read_text(encoding="utf-8")
+    tools_rules = (rules_dir / "quaid-quaid-tools-md.md").read_text(encoding="utf-8")
+    assert "Compaction refresh canary: vellum-orchid" in user_rules
+    assert "refresh docs" in tools_rules
+    assert "stale rules body" not in user_rules + tools_rules
 
 
 # ===========================================================================
@@ -1819,7 +1820,7 @@ class TestHookSessionInitRegistryAugmentation:
         return projects_dir, identity_dir, rules_dir
 
     def test_projects_inside_projects_dir_are_found(self, tmp_path, monkeypatch):
-        """Projects living under projects_dir show up in quaid-projects.md."""
+        """Projects living under projects_dir show up in split Quaid rules files."""
         projects_dir, identity_dir, rules_dir = self._make_init_env(tmp_path, monkeypatch)
 
         # Create a project with tool docs and read-only lookup docs.
@@ -1838,7 +1839,10 @@ class TestHookSessionInitRegistryAugmentation:
                 rules_dir=rules_dir,
             )
 
-        assert content is not None, "quaid-projects.md should have been written"
+        assert content is not None, "split Quaid rules files should have been written"
+        assert not (rules_dir / "quaid-projects.md").exists()
+        assert (rules_dir / "quaid-00-runtime.md").is_file()
+        assert (rules_dir / "quaid-myproject-project-catalog.md").is_file()
         assert "myproject/project-catalog" in content
         assert f"project_path: {proj}" in content
         assert "details_recall: quaid recall" in content
@@ -1899,6 +1903,34 @@ class TestHookSessionInitRegistryAugmentation:
         # Count occurrences — should appear exactly once
         occurrences = content.count("sharedproject/project-catalog")
         assert occurrences == 1, f"Expected exactly 1 occurrence, found {occurrences}"
+
+    def test_split_rules_migrate_legacy_file_and_remove_stale_project_rules(self, tmp_path, monkeypatch):
+        projects_dir, identity_dir, rules_dir = self._make_init_env(tmp_path, monkeypatch)
+
+        (identity_dir / "USER.md").write_text("Slim identity line.", encoding="utf-8")
+        proj = projects_dir / "currentproject"
+        proj.mkdir()
+        (proj / "PROJECT.md").write_text("# Project\ncurrent project detail", encoding="utf-8")
+        legacy_file = rules_dir / "quaid-projects.md"
+        legacy_file.write_text("legacy combined rules", encoding="utf-8")
+        stale_file = rules_dir / "quaid-oldproject-project-catalog.md"
+        stale_file.write_text("stale project rules", encoding="utf-8")
+
+        with patch("core.project_registry.list_projects", return_value={}):
+            _, err, content = _run_hook_session_init(
+                {"session_id": "s3b", "cwd": str(tmp_path)},
+                monkeypatch=monkeypatch,
+                rules_dir=rules_dir,
+            )
+
+        assert content is not None
+        assert not legacy_file.exists()
+        assert (rules_dir / "quaid-projects.md.bak").read_text(encoding="utf-8") == "legacy combined rules"
+        assert not stale_file.exists()
+        assert (rules_dir / "quaid-user-md.md").is_file()
+        assert (rules_dir / "quaid-currentproject-project-catalog.md").is_file()
+        assert "migrated" in err
+        assert "removed" in err
 
     def test_tools_md_content_in_output(self, tmp_path, monkeypatch):
         """TOOLS.md content from a project directory is present in the output file."""

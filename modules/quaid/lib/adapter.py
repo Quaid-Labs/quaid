@@ -760,11 +760,20 @@ class QuaidAdapter(abc.ABC):
     def get_cli_tools_snippet(self) -> str:
         """Markdown snippet describing this adapter's CLI commands.
 
-        Injected into .claude/rules/quaid-projects.md at session start so
+        Injected into the adapter's cached Quaid rules context at session start so
         agents know what adapter-specific commands are available.
         Returns empty string if no adapter CLI commands exist.
         """
         return ""
+
+    def cached_rules_dir(self) -> Optional[Path]:
+        """Return an adapter-owned rules/cache directory, if this host has one.
+
+        Claude Code normally derives this from the hook cwd as `.claude/rules`.
+        Other adapters can opt in by returning a concrete path; returning None
+        means the hook should fall back to its host-specific default.
+        """
+        return None
 
     def get_instance_manager(self) -> Optional["InstanceManager"]:
         """Return the InstanceManager for this adapter.
