@@ -85,7 +85,7 @@ Use Quaid via your Bash tool. Prefer `quaid`. If it is not on `PATH`, use `$QUAI
 ## How Memory Works
 
 ```
-Conversation → compaction/reset → Opus extracts facts + edges → stored in DB
+Conversation → compaction/reset → deep-reasoning extraction stores facts + edges in DB
 Nightly janitor (4 AM default) → review → dedup → decay → graduate to active
 ```
 

@@ -36,7 +36,7 @@ Query
   -> Intent classification (WHO/WHEN/WHERE/WHAT/WHY/PREFERENCE/RELATION)
   -> Parallel datastore search (vector_basic/vector_technical/graph/journal/projects)
   -> Reciprocal Rank Fusion (dynamic weights per intent)
-  -> Optional: Haiku LLM reranker (0-5 graded scale)
+  -> Optional: fast-reasoning LLM reranker (0-5 graded scale)
   -> Read-time injection filtering (_sanitize_for_context)
 ```
 
@@ -141,7 +141,7 @@ Write request
 
 | File | Purpose |
 |------|---------|
-| `extraction.txt` | Extraction system prompt for Opus (~160 lines, used by `ingest/extract.py`) |
+| `extraction.txt` | Extraction system prompt for the configured deep-reasoning model (~160 lines, used by `ingest/extract.py`) |
 
 Project onboarding instructions live at `projects/quaid/operations/project_onboarding.md`.
 
@@ -394,7 +394,7 @@ The system normalizes edge relations to canonical forms. Three mechanisms:
 ### Memory Lifecycle
 
 ```
-Conversation -> /compact or /reset -> Opus extracts facts+edges -> status=pending
+Conversation -> /compact or /reset -> deep-reasoning extraction -> status=pending
     |
 Nightly janitor -> review -> status=approved -> dedup -> decay -> status=active
     |
@@ -413,7 +413,7 @@ Two complementary learning systems, triggered at compaction/reset:
 
 **Snippets** (fast path -- continuous core markdown refinement):
 ```
-Conversation -> Opus extracts soul_snippets (bullet points)
+Conversation -> deep-reasoning extraction emits soul_snippets (bullet points)
   -> Written to *.snippets.md (per core markdown file)
   -> Nightly janitor (task 1d-snippets) -> FOLD/REWRITE/DISCARD review
   -> Approved snippets merged into SOUL.md, USER.md, etc.
@@ -421,9 +421,9 @@ Conversation -> Opus extracts soul_snippets (bullet points)
 
 **Journal** (slow path -- long-term reflective log):
 ```
-Conversation -> Opus extracts journal_entries (diary paragraphs)
+Conversation -> deep-reasoning extraction emits journal_entries (diary paragraphs)
   -> Written to journal/*.journal.md (newest at top)
-  -> Nightly janitor (task 1d-journal) -> Opus distills themes -> updates core markdown
+  -> Nightly janitor (task 1d-journal) -> deep-reasoning distills themes -> updates core markdown
   -> Distilled entries -> journal/archive/{FILE}-{YYYY-MM}.md
 ```
 
@@ -447,7 +447,7 @@ Merges are crash-safe, executed in single database transactions.
 ### Retrieval Features
 
 - **sqlite-vec**: Indexed ANN (Approximate Nearest Neighbor) vector search
-- **Haiku API graded reranker**: 0-5 scale scoring
+- **Fast-reasoning graded reranker**: 0-5 scale scoring
 - **RRF fusion**: Reciprocal Rank Fusion with `_get_fusion_weights(intent)` for dynamic per-query-type weight adjustment
 - **Intent classification**: WHO, WHEN, WHERE, WHAT, WHY, PREFERENCE, RELATION
 - **HyDE**: Hypothetical Document Embedding (generates hypothetical answer for better vector match)
@@ -467,13 +467,13 @@ Merges are crash-safe, executed in single database transactions.
 |------|------|---------|----------|
 | 0b | embeddings | Backfill missing embeddings | Free (local Ollama) |
 | 0c | edges | Backfill missing relationship edges from stored facts | Free |
-| 2 | review | Opus reviews pending facts | ~$0.01-0.05 per batch |
+| 2 | review | Deep-reasoning reviews pending facts | ~$0.01-0.05 per batch |
 | 2a | temporal | Resolve relative dates (no LLM) | Free |
-| 2b | dedup_review | Review dedup rejections (Opus) | ~$0.01-0.05 |
+| 2b | dedup_review | Review dedup rejections (deep-reasoning) | ~$0.01-0.05 |
 | 3+4 | duplicates/contradictions | Shared recall pass, then dedup (contradiction detection decommissioned) | ~$0.01-0.05 |
 | 4b | contradictions (resolve) | **Disabled by default** (`janitor.contradiction.enabled=false`) | — |
 | 5 | decay | Ebbinghaus confidence decay | Free |
-| 5b | decay_review | Review decayed memories (Opus) | ~$0.01-0.05 |
+| 5b | decay_review | Review decayed memories (deep-reasoning) | ~$0.01-0.05 |
 | 0a | project_docs_monitor | Queue async project-docs monitor refresh requests | Free |
 | 1d | snippets | Soul snippets review (FOLD/REWRITE/DISCARD into core markdown) | ~$0.01-0.05 |
 | 1d | journal | Distill journal entries into core markdown | ~$0.05-0.10 |
@@ -673,7 +673,7 @@ echo "User: hi" | python3 ingest/extract.py - --owner default
 
 # Janitor pipeline
 python3 core/lifecycle/janitor.py --task all --dry-run           # Preview (no changes)
-python3 core/lifecycle/janitor.py --task review --apply           # Opus review of pending facts
+python3 core/lifecycle/janitor.py --task review --apply           # Deep-reasoning review of pending facts
 python3 core/lifecycle/janitor.py --task snippets --apply         # FOLD/REWRITE/DISCARD snippet review
 python3 core/lifecycle/janitor.py --task journal --apply          # Journal distillation
 python3 core/lifecycle/janitor.py --task embeddings               # Backfill missing embeddings
@@ -683,7 +683,7 @@ python3 core/lifecycle/janitor.py --task cleanup                  # Prune old lo
 
 # Documentation
 python3 datastore/docsdb/updater.py check                      # Check doc staleness (free)
-python3 datastore/docsdb/updater.py update-stale --apply       # Fix stale docs (Opus calls)
+python3 datastore/docsdb/updater.py update-stale --apply       # Fix stale docs (deep-reasoning calls)
 python3 datastore/docsdb/rag.py search "query text"     # RAG search (free, local)
 
 # Projects

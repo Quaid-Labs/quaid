@@ -349,7 +349,7 @@ auto-registered.
 │    (Extraction daemon picks up signal asynchronously)                   │
 │    └─ Daemon reads transcript from cursor offset                        │
 │         ├─ chunks transcript (waterfall batching)                       │
-│         ├─ extracts facts + edges via LLM (Opus)                        │
+│         ├─ extracts facts + edges via configured deep-reasoning LLM      │
 │         ├─ stores in SQLite memory graph                                │
 │         └─ advances cursor to EOF                                       │
 ├─────────────────────────────────────────────────────────────────────────┤

@@ -18,7 +18,7 @@ The docs system has four tightly integrated components:
 | Doc registry | `DocsRegistry` | `doc_registry` (SQLite) | Tracks which files belong to which projects; maps source files to docs |
 | Project definitions | `DocsRegistry` | `project_definitions` (SQLite) | Canonical project config (seeded from instance `config.json`, then DB is source of truth) |
 | RAG indexer | `DocsRAG` | `doc_chunks` + `vec_doc_chunks` (SQLite + sqlite-vec) | Chunks files, batches embeddings, serves bounded semantic search |
-| Staleness detector / updater | `updater.py` | `logs/docs-update-log.json` | Detects when source code has drifted ahead of docs, calls Opus to rewrite |
+| Staleness detector / updater | `updater.py` | `logs/docs-update-log.json` | Detects when source code has drifted ahead of docs, calls the configured deep-reasoning model to rewrite |
 | Project docs worker | `core/project_docs*.py` | `data/project-docs/` | Processes shadow-git and PROJECT.log deltas, updates visible project docs, syncs registry |
 
 All components share a single SQLite database at `QUAID_HOME/instances/<instance>/data/memory.db`
@@ -270,7 +270,7 @@ def search_docs(
 **CLI search invocation:**
 ```bash
 quaid recall "query" '{"stores":["docs"]}'
-quaid recall "query" '{"stores":["docs"]}' --project quaid
+quaid recall "query" '{"stores":["docs"],"project":"quaid"}'
 ```
 
 `quaid recall "query"` (without store filter) combines memory recall and docs search in a single call.
@@ -320,7 +320,7 @@ Returns combined text or empty string. If git is unavailable or times out, the u
 1. Reads current doc content.
 2. Calls `get_git_diff()` for each stale source.
 3. Detects if the doc is a "core markdown" file (TOOLS.md, AGENTS.md, etc.) via `_get_core_markdown_info()` — if so, uses a line-limit-aware prompt.
-4. Calls `call_deep_reasoning()` (Opus/`lib/llm_clients.py`) with the current doc + diffs + purpose as context.
+4. Calls `call_deep_reasoning()` with the current doc + diffs + purpose as context.
 5. Two skip-write guards run before writing: (a) if the response is less than 50% of the original size (suspected LLM truncation), skips write and returns `False`; (b) for core markdown files, if the response line count exceeds the configured `maxLines` limit, skips write and returns `False` — does **not** truncate. Both cases log to the changelog with `success=False`.
 6. On success: atomically writes the new content via `_atomic_write_text()` (temp file + `os.replace()`).
 7. Logs the update to `logs/docs-update-log.json` via `log_doc_update()`, which also tracks cleanup state.
@@ -344,7 +344,7 @@ After repeated updates, docs can grow bloated. `updater.py` tracks cleanup state
 
 `check_cleanup_needed()` iterates all docs in `get_doc_purposes()`, computes `growth_ratio = current_chars / chars_at_cleanup`, and returns docs meeting either threshold with a `reason` of `"updates"`, `"growth"`, or `"both"`.
 
-`cleanup_doc(doc_path, purpose, dry_run)` calls Opus (`call_deep_reasoning`, max 8000 tokens, 300s timeout) with instructions to remove stale/redundant content while preserving all current accurate information. On success, resets cleanup state via `_reset_cleanup_state()`.
+`cleanup_doc(doc_path, purpose, dry_run)` calls the configured deep-reasoning model (`call_deep_reasoning`, max 8000 tokens, 300s timeout) with instructions to remove stale/redundant content while preserving all current accurate information. On success, resets cleanup state via `_reset_cleanup_state()`.
 
 ---
 
@@ -430,18 +430,13 @@ python3 datastore/docsdb/rag.py stats                # Index statistics
 
 # --- Search ---
 quaid recall "query" '{"stores":["docs"]}'                          # Docs search
-quaid recall "query" '{"stores":["docs"]}' --project <name>        # Project-scoped
+quaid recall "query" '{"stores":["docs"],"project":"<name>"}'       # Project-scoped
 quaid recall "query"                                                # Memory + docs combined
 
 # --- Staleness ---
 quaid docs check                                     # Show stale doc/source pairs
-quaid docs update --apply                            # Trigger Opus update on stale docs (exits 0 whether docs updated or already current)
+quaid docs update --apply                            # Trigger deep-reasoning update on stale docs (exits 0 whether docs updated or already current)
 quaid docs update --apply --trivial-only             # Only trivial changes
-
-# --- Cleanup ---
-quaid docs cleanup-check                             # Which docs have update/growth bloat
-quaid docs cleanup --apply                           # Clean all bloated docs via Opus
-quaid docs cleanup <doc_path> --apply                # Clean specific doc
 
 # --- Runtime supervisor / project docs monitors ---
 quaid docs update <project>                          # Queue async force update

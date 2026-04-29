@@ -56,7 +56,7 @@ cursor as internal, which then silently skips extraction for every subsequent
 user turn in that session. Launching with `--model` avoids touching the
 transcript before the first real user prompt.
 
-Never run CC milestones on Opus — too expensive. Do not send any test
+Never run CC milestones on the highest-cost model tier — too expensive. Do not send any test
 messages until the launch has fully rendered the Welcome screen and the
 bypass-permissions banner is visible.
 

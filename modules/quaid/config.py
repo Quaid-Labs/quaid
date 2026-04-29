@@ -388,7 +388,7 @@ class DocsConfig:
     auto_update_on_compact: bool = True
     max_docs_per_update: int = 3
     staleness_check_enabled: bool = True
-    update_timeout_seconds: int = 480  # Timeout for Opus/Sonnet doc updates
+    update_timeout_seconds: int = 480  # Timeout for deep-reasoning doc updates
     notify_on_update: bool = True  # Notify user when docs are auto-updated
     source_mapping: Dict[str, SourceMapping] = field(default_factory=dict)
     doc_purposes: Dict[str, str] = field(default_factory=dict)

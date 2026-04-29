@@ -20,7 +20,7 @@ as the source of truth for dynamic state.
 
 ### Memory Lifecycle
 
-Facts flow: **capture -> pending -> review (Opus) -> approved -> dedup/decay -> active**
+Facts flow: **capture -> pending -> review (deep-reasoning) -> approved -> dedup/decay -> active**
 
 - Capture runs at compaction/reset from full transcript extraction.
 - Nightly janitor handles dedup, decay, docs upkeep, snippets, and journal tasks.

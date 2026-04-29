@@ -7,7 +7,7 @@ Do not edit manually. Regenerate with:
 python3 modules/quaid/scripts/generate-config-reference.py
 ```
 
-Source hash: `95b3c8f4776c`
+Source hash: `9a73e694416f`
 
 Notes:
 - Keys are documented in `snake_case` (loader also accepts camelCase aliases).
@@ -79,7 +79,7 @@ Notes:
 | `docs.auto_update_on_compact` | `bool` | `true` |  |
 | `docs.max_docs_per_update` | `int` | `3` |  |
 | `docs.staleness_check_enabled` | `bool` | `true` |  |
-| `docs.update_timeout_seconds` | `int` | `480` | Timeout for Opus/Sonnet doc updates |
+| `docs.update_timeout_seconds` | `int` | `480` | Timeout for deep-reasoning doc updates |
 | `docs.notify_on_update` | `bool` | `true` | Notify user when docs are auto-updated |
 | `docs.source_mapping` | `dict[str, SourceMapping]` | `{}` |  |
 | `docs.doc_purposes` | `dict[str, str]` | `{}` |  |

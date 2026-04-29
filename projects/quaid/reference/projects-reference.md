@@ -664,17 +664,17 @@ The old staged project event queue, `process_event`, `process_all_events`,
 `doc-health`, `request-docs`, and dirty-queue semantics were removed prelaunch.
 There is no compatibility layer.
 
-### 6.3 Gating Cascade: mtime → rule-based → Haiku → Opus
+### 6.3 Gating Cascade: mtime → rule-based → fast reasoning → deep reasoning
 
 The updater applies a cost-escalating decision cascade before calling an expensive LLM:
 
 1. **mtime check** — skip if doc is newer than all its `source_files`. Free.
 2. **Rule-based check** — skip if no meaningful content changed (e.g. only whitespace or
    comments). Cheap.
-3. **Haiku** — for ambiguous cases, ask the small model if an update is needed. Cheap LLM.
-4. **Opus** — only when a real update is confirmed necessary. Full rewrite.
+3. **Fast reasoning** — for ambiguous cases, ask the fast model if an update is needed. Cheap LLM.
+4. **Deep reasoning** — only when a real update is confirmed necessary. Full rewrite.
 
-This gate prevents unnecessary Opus calls when the doc is still accurate.
+This gate prevents unnecessary deep-reasoning calls when the doc is still accurate.
 
 ### 6.4 `append_project_logs(project_logs, trigger, date_str, dry_run)`
 
@@ -858,7 +858,7 @@ Accepts absolute paths or paths relative to the workspace root.
 
 #### Search project docs (semantic RAG)
 ```bash
-quaid recall "query" '{"stores":["docs"]}' --project <name>
+quaid recall "query" '{"stores":["docs"],"project":"<name>"}'
 quaid recall "query" '{"stores":["docs"]}'   # search all projects
 ```
 Requires embeddings (Ollama running locally or on a configured embedding server). Returns ranked chunks with similarity scores.
@@ -964,8 +964,8 @@ QUAID_INSTANCE=claude-code quaid project link my-proj
 QUAID_INSTANCE=claude-code quaid registry register /path/to/cc-doc.md --project my-proj
 
 # Both adapters can now search all docs
-QUAID_INSTANCE=openclaw quaid recall "query" '{"stores":["docs"]}' --project my-proj    # sees CC doc too
-QUAID_INSTANCE=claude-code quaid recall "query" '{"stores":["docs"]}' --project my-proj  # sees OC doc too
+QUAID_INSTANCE=openclaw quaid recall "query" '{"stores":["docs"],"project":"my-proj"}'    # sees CC doc too
+QUAID_INSTANCE=claude-code quaid recall "query" '{"stores":["docs"],"project":"my-proj"}'  # sees OC doc too
 
 # CC leaves the project (without deleting it)
 QUAID_INSTANCE=claude-code quaid project unlink my-proj

@@ -74,8 +74,8 @@ All dedup decisions are recorded in the `dedup_log` table:
 
 ### Review Pipeline (Task 2b)
 Nightly janitor reviews recent dedup rejections via `recall_pass`:
-- **`hash_exact` entries are auto-confirmed** — identical text matches need no LLM review. These are excluded from the Opus review query and auto-confirmed at the start of the task.
-- Embedding-based rejections (`auto_reject`, `llm_reject`, `fallback_reject`) are sent to Opus for review
+- **`hash_exact` entries are auto-confirmed** — identical text matches need no LLM review. These are excluded from the deep-reasoning review query and auto-confirmed at the start of the task.
+- Embedding-based rejections (`auto_reject`, `llm_reject`, `fallback_reject`) are sent to the configured deep-reasoning model for review
 - Status: `unreviewed` → `confirmed` or `reversed`
 - **REVERSE safety check**: Before restoring a reversed fact, checks if a living node with the same content hash already exists. If so, skips restoration to prevent duplicate creation.
 
