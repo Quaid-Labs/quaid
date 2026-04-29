@@ -230,8 +230,8 @@ class TestListInstances:
         for name in [
             "openclaw-main",
             "openclaw-live",
-            "openclaw-dironly",
             "openclaw-deleted",
+            "openclaw-m5silo034449r",
             "claude-code-main",
         ]:
             root = tmp_path / "instances" / name
@@ -244,11 +244,11 @@ class TestListInstances:
 
         assert list_instances() == [
             "claude-code-main",
-            "openclaw-dironly",
             "openclaw-live",
             "openclaw-main",
         ]
         assert (tmp_path / "instances" / "openclaw-deleted").exists()
+        assert (tmp_path / "instances" / "openclaw-m5silo034449r").exists()
 
     def test_openclaw_physical_prune_requires_livetest_harness(self, monkeypatch, tmp_path):
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
@@ -259,20 +259,24 @@ class TestListInstances:
             json.dumps({"agents": {"list": [{"id": "main"}]}}),
             encoding="utf-8",
         )
-        deleted = tmp_path / "instances" / "openclaw-deleted"
-        deleted.mkdir(parents=True)
-        deleted.joinpath("config.json").write_text(
-            json.dumps({"adapter": {"type": "openclaw"}}),
-            encoding="utf-8",
-        )
+        deleted_names = ["openclaw-deleted", "openclaw-m5silo034449r"]
+        for name in deleted_names:
+            deleted = tmp_path / "instances" / name
+            deleted.mkdir(parents=True)
+            deleted.joinpath("config.json").write_text(
+                json.dumps({"adapter": {"type": "openclaw"}}),
+                encoding="utf-8",
+            )
 
         with pytest.raises(InstanceError, match="livetest harness"):
             prune_stale_openclaw_agent_instances(tmp_path)
-        assert deleted.exists()
+        for name in deleted_names:
+            assert (tmp_path / "instances" / name).exists()
 
         monkeypatch.setenv("QUAID_LIVETEST_HARNESS", "1")
-        assert prune_stale_openclaw_agent_instances(tmp_path) == ["openclaw-deleted"]
-        assert not deleted.exists()
+        assert prune_stale_openclaw_agent_instances(tmp_path) == deleted_names
+        for name in deleted_names:
+            assert not (tmp_path / "instances" / name).exists()
 
     def test_empty(self, monkeypatch, tmp_path):
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))

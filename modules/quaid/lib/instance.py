@@ -244,9 +244,10 @@ def _openclaw_config_candidates() -> List[Path]:
     return deduped
 
 
-def _active_openclaw_agent_labels() -> tuple[set[str], list[Path]]:
+def _active_openclaw_agent_labels() -> tuple[set[str], list[Path], bool]:
     labels = {"main"}
     roots: list[Path] = []
+    has_authoritative_list = False
     for cfg_path in _openclaw_config_candidates():
         if not cfg_path.exists():
             continue
@@ -255,7 +256,10 @@ def _active_openclaw_agent_labels() -> tuple[set[str], list[Path]]:
         agents = cfg.get("agents")
         if not isinstance(agents, dict):
             continue
-        for row in agents.get("list") or []:
+        agent_list = agents.get("list")
+        if isinstance(agent_list, list):
+            has_authoritative_list = True
+        for row in agent_list or []:
             if isinstance(row, dict):
                 label = str(row.get("id") or "").strip().lower()
                 if label:
@@ -267,7 +271,7 @@ def _active_openclaw_agent_labels() -> tuple[set[str], list[Path]]:
     fallback_root = Path.home() / ".openclaw"
     if fallback_root.exists() and all(str(root) != str(fallback_root) for root in roots):
         roots.append(fallback_root)
-    return labels, roots
+    return labels, roots, has_authoritative_list
 
 
 def _is_stale_openclaw_agent_instance(name: str, instance_dir: Path) -> bool:
@@ -276,12 +280,16 @@ def _is_stale_openclaw_agent_instance(name: str, instance_dir: Path) -> bool:
         return False
     if _raw_adapter_type(instance_dir) != "openclaw":
         return False
-    labels, roots = _active_openclaw_agent_labels()
+    labels, roots, has_authoritative_list = _active_openclaw_agent_labels()
     if not roots:
         return False
     label = name[len(prefix):].strip().lower()
     if not label or label in labels:
         return False
+    # OpenClaw 2026.4.26 can leave ~/.openclaw/agents/<label> behind after
+    # `openclaw agents delete`; agents.list is the authoritative active set.
+    if has_authoritative_list:
+        return True
     for root in roots:
         if (root / "agents" / label).exists():
             return False
