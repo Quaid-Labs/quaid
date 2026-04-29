@@ -7870,10 +7870,17 @@ def _prioritize_fast_anchor_direct_rows(query: str, rows: List[Dict[str, Any]]) 
     """Keep fresh direct memory rows ahead of graph context for explicit-anchor hook recall."""
     if not rows:
         return rows
-    explicit_anchor_terms = _extract_explicit_query_anchor_terms(query, limit=8)
+    explicit_anchor_terms = _priority_anchor_terms_for_fast_attribution(
+        query,
+        _extract_explicit_query_anchor_terms(query, limit=8),
+    )
     if not explicit_anchor_terms:
         return rows
-    query_terms = _extract_distinctive_query_terms(query, limit=8)
+    query_terms = _priority_query_terms_for_fast_attribution(
+        query,
+        _extract_distinctive_query_terms(query, limit=8),
+        explicit_anchor_terms,
+    )
 
     def _row_text(row: Dict[str, Any]) -> str:
         return str((row or {}).get("text") or "")
@@ -7933,6 +7940,52 @@ def _prioritize_fast_anchor_direct_rows(query: str, rows: List[Dict[str, Any]]) 
         row for row in rows
         if _recall_row_identity(row) not in priority_keys
     ]
+
+
+def _is_origin_attribution_query(query: str) -> bool:
+    lower = str(query or "").lower()
+    if re.search(r"\bwhose idea\b", lower):
+        return True
+    if re.search(r"\bwho (?:came up with|suggested|proposed)\b", lower):
+        return True
+    if re.search(r"\bwho\b", lower) and re.search(r"\bidea\b", lower):
+        return True
+    return False
+
+
+def _priority_anchor_terms_for_fast_attribution(query: str, anchors: List[str]) -> List[str]:
+    clean = [" ".join(str(term or "").split()).strip().lower() for term in (anchors or [])]
+    clean = [term for term in clean if term]
+    if len(clean) <= 1 or not _is_origin_attribution_query(query):
+        return clean
+    max_len = max(len(term) for term in clean)
+    narrowed = [term for term in clean if len(term) >= max_len - 1]
+    return narrowed or clean
+
+
+def _priority_query_terms_for_fast_attribution(
+    query: str,
+    query_terms: List[str],
+    anchor_terms: List[str],
+) -> List[str]:
+    clean_terms = [" ".join(str(term or "").split()).strip().lower() for term in (query_terms or [])]
+    clean_terms = [term for term in clean_terms if term]
+    clean_anchors = [" ".join(str(term or "").split()).strip().lower() for term in (anchor_terms or [])]
+    clean_anchors = [term for term in clean_anchors if term]
+    if not clean_terms or not _is_origin_attribution_query(query):
+        return clean_terms
+
+    prioritized: List[str] = []
+    seen: set[str] = set()
+    for term in clean_anchors:
+        if term and term not in seen:
+            seen.add(term)
+            prioritized.append(term)
+    for candidate in ("idea", "suggested", "proposed"):
+        if candidate in clean_terms and candidate not in seen:
+            seen.add(candidate)
+            prioritized.append(candidate)
+    return prioritized or clean_terms
 
 
 def _is_docs_recall_row(row: Dict[str, Any]) -> bool:
@@ -9440,6 +9493,7 @@ def _build_fast_drill_fallback_queries(
     *,
     gate_eval: Optional[Dict[str, Any]],
     planner_meta: Optional[Dict[str, Any]],
+    owner_id: Optional[str] = None,
 ) -> List[str]:
     """Cheap deterministic fallback when the drill planner returns nothing.
 
@@ -9466,8 +9520,63 @@ def _build_fast_drill_fallback_queries(
     def _normalize_term(raw: Any) -> str:
         return " ".join(str(raw or "").split()).strip().strip(".,;:!?\"'").lower()
 
+    def _build_origin_attribution_fallback() -> List[str]:
+        if not _is_origin_attribution_query(query):
+            return []
+        anchor_terms = _priority_anchor_terms_for_fast_attribution(
+            query,
+            [_normalize_term(raw) for raw in _extract_explicit_query_anchor_terms(query, limit=6)],
+        )
+        anchor_terms = [term for term in anchor_terms if term]
+        if not anchor_terms:
+            return []
+
+        assistant_query = f"assistant {anchor_terms[0]} idea"
+        queries: List[str] = []
+
+        owner_query = None
+        owner_node = resolve_owner_person(str(owner_id or "").strip()) if owner_id else None
+        owner_name = " ".join(str(getattr(owner_node, "name", "") or "").split()).strip().lower()
+        owner_token = owner_name.split()[0] if owner_name else ""
+        if owner_token:
+            extra_terms: List[str] = []
+            for raw in list(gate.get("query_terms") or []) + list(_extract_distinctive_query_terms(query, limit=8)):
+                term = _normalize_term(raw)
+                if (
+                    not term
+                    or term == owner_token
+                    or term in anchor_terms
+                    or term in _QUERY_STOPWORDS
+                    or term in {"came", "idea", "who"}
+                ):
+                    continue
+                extra_terms.append(term)
+            ordered_extra: List[str] = []
+            seen_extra: set[str] = set()
+            for preferred in ("birthday", "dinner", "meal", "surprise"):
+                if preferred in extra_terms and preferred not in seen_extra:
+                    seen_extra.add(preferred)
+                    ordered_extra.append(preferred)
+            for term in extra_terms:
+                if term not in seen_extra:
+                    seen_extra.add(term)
+                    ordered_extra.append(term)
+            owner_parts = [owner_token, anchor_terms[0]]
+            if ordered_extra:
+                owner_parts.append(ordered_extra[0])
+            owner_parts.append("idea")
+            owner_query = " ".join(owner_parts)
+            queries.append(owner_query)
+
+        if assistant_query and assistant_query not in queries:
+            queries.append(assistant_query)
+        return queries[:2]
+
     def _build_assistant_source_fallback() -> Optional[str]:
         if "assistant_source" not in requirements or assistant_coverage > 0:
+            return None
+        attribution_queries = _build_origin_attribution_fallback()
+        if attribution_queries:
             return None
         explicit_terms = [
             _normalize_term(raw)
@@ -9521,6 +9630,10 @@ def _build_fast_drill_fallback_queries(
         if len(filtered_terms) == 1 and re.search(r"\b(recall|remember|surpris)\w*\b", lower_query):
             filtered_terms.append("memory")
         return "assistant " + " ".join(filtered_terms[:4])
+
+    attribution_fallback = _build_origin_attribution_fallback()
+    if attribution_fallback:
+        return attribution_fallback
 
     assistant_fallback = _build_assistant_source_fallback()
     if assistant_fallback:
@@ -10843,6 +10956,7 @@ def recall_fast(
             query,
             gate_eval=gate_eval,
             planner_meta=planner_meta,
+            owner_id=owner_id,
         )
         if drill_queries:
             lowered_drill = {" ".join(str(item or "").lower().split()) for item in drill_queries}
@@ -10900,6 +11014,7 @@ def recall_fast(
                 query,
                 gate_eval=gate_eval,
                 planner_meta=planner_meta,
+                owner_id=owner_id,
             )
             if drill_queries:
                 drill_meta = dict(drill_meta or {})
@@ -10909,7 +11024,8 @@ def recall_fast(
                 drill_meta.setdefault("planned_stores", list(planned_stores))
                 drill_meta.setdefault("planned_project", planned_project)
         if drill_queries:
-            drill_queries = drill_queries[:2]
+            max_drill_queries = 3 if preserved_exact_fast_path else 2
+            drill_queries = drill_queries[:max_drill_queries]
             drill_limit = min(effective_limit, 5)
             fast_drill_meta = dict(drill_meta or {})
             fast_drill_meta.setdefault("planned_stores", list(planned_stores))

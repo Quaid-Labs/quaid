@@ -3241,9 +3241,58 @@ class TestRecallTelemetry:
                 "planned_stores": ["vector"],
                 "query_shape": "focused",
             },
+            owner_id="maya",
         )
 
         assert queries == ["assistant biscuit memory"]
+
+    def test_priority_anchor_terms_for_fast_attribution_prefers_structural_anchor(self):
+        import datastore.memorydb.memory_graph as mg
+
+        narrowed = mg._priority_anchor_terms_for_fast_attribution(
+            "Who came up with the FaceTime idea for Linda's birthday?",
+            ["facetime", "linda"],
+        )
+
+        assert narrowed == ["facetime"]
+
+    def test_priority_query_terms_for_fast_attribution_keeps_anchor_and_idea(self):
+        import datastore.memorydb.memory_graph as mg
+
+        narrowed = mg._priority_query_terms_for_fast_attribution(
+            "Who came up with the FaceTime idea for Linda's birthday?",
+            ["came", "facetime", "idea", "linda", "birthday"],
+            ["facetime"],
+        )
+
+        assert narrowed == ["facetime", "idea"]
+
+    def test_build_fast_drill_fallback_queries_adds_owner_and_assistant_attribution_queries(self):
+        import datastore.memorydb.memory_graph as mg
+
+        with patch.object(
+            mg,
+            "resolve_owner_person",
+            return_value=SimpleNamespace(name="Maya Patel"),
+        ):
+            queries = mg._build_fast_drill_fallback_queries(
+                "Who came up with the FaceTime idea for Linda's birthday?",
+                gate_eval={
+                    "requirements": ["assistant_source"],
+                    "coverage": {"assistant_source": 0},
+                    "query_terms": ["came", "facetime", "idea", "linda", "birthday"],
+                    "overlap_ratio": 0.2,
+                },
+                planner_meta={
+                    "used_llm": False,
+                    "bailout_reason": "preserve_short_exact_query",
+                    "planned_stores": ["vector"],
+                    "query_shape": "focused",
+                },
+                owner_id="maya",
+            )
+
+        assert queries == ["maya facetime birthday idea", "assistant facetime idea"]
 
     def test_recall_fast_uses_assistant_anchor_drill_when_exact_assistant_query_has_zero_assistant_hits(self):
         import datastore.memorydb.memory_graph as mg
@@ -3325,6 +3374,96 @@ class TestRecallTelemetry:
         assert rows[0]["text"] == "The assistant recalled that Biscuit once tried to eat a pinecone"
         assert meta["quality_gate"]["fast_drill_enabled"] is True
         assert "assistant biscuit memory" in meta["quality_gate"]["fast_drill_queries"]
+
+    def test_recall_fast_uses_owner_and_assistant_drill_for_origin_attribution_query(self):
+        import datastore.memorydb.memory_graph as mg
+
+        run_calls = []
+
+        def _fake_run(query, *, stores, limit, owner_id, min_similarity, planner_profile, planned_queries, planner_meta, fast_mode, graph_depth, common_kwargs):
+            run_calls.append({
+                "planner_profile": planner_profile,
+                "planned_queries": list(planned_queries or []),
+                "stores": list(stores or []),
+            })
+            if len(run_calls) == 1:
+                return (
+                    [{"id": "a", "text": "Rachel FaceTimed into Linda's birthday dinner", "category": "fact", "similarity": 0.83}],
+                    {"phases_ms": {"total_ms": 120, "store_plan_wall_ms": 120}, "turn_details": [{"turn": 1}]},
+                    None,
+                )
+            return (
+                [
+                    {"id": "b", "text": "Maya and David decided to have Rachel join the birthday dinner via FaceTime during the meal if she cannot attend in person", "category": "fact", "similarity": 1.0, "source_type": "user"},
+                    {"id": "c", "text": "The layered surprises worked! Remember we talked about the FaceTime call idea? Glad you went with that", "category": "fact", "similarity": 0.99, "source_type": "assistant"},
+                ],
+                {"phases_ms": {"total_ms": 90, "store_plan_wall_ms": 90}, "store_runs": [{"store": "vector", "result_count": 2}]},
+                None,
+            )
+
+        with patch.object(
+            mg,
+            "_recall_store_plan_timeout_s",
+            return_value=5.0,
+        ), patch.object(
+            mg,
+            "_plan_fanout_queries",
+            return_value=(
+                ["Who came up with the FaceTime idea for Linda's birthday?"],
+                {
+                    "query": "Who came up with the FaceTime idea for Linda's birthday?",
+                    "used_llm": False,
+                    "bailout_reason": "preserve_short_exact_query",
+                    "queries_count": 1,
+                    "elapsed_ms": 100,
+                    "query_shape": "focused",
+                    "planned_stores": ["vector"],
+                    "planned_project": None,
+                },
+            ),
+        ), patch.object(
+            mg,
+            "_run_recall_store_plan",
+            side_effect=_fake_run,
+        ), patch.object(
+            mg,
+            "_should_fast_drill_follow_up",
+            return_value=(
+                True,
+                {
+                    "requirements": ["assistant_source"],
+                    "coverage": {"assistant_source": 0},
+                    "query_terms": ["came", "facetime", "idea", "linda", "birthday"],
+                    "ready": False,
+                    "needs_validation": True,
+                    "overlap_ratio": 0.2,
+                },
+                ["preserved_exact_low_overlap"],
+                "GENERAL",
+            ),
+        ), patch.object(
+            mg,
+            "_evaluate_quality_gate_readiness",
+            return_value={"ready": True, "needs_validation": False},
+        ), patch.object(
+            mg,
+            "resolve_owner_person",
+            return_value=SimpleNamespace(name="Maya Patel"),
+        ):
+            rows, meta = mg.recall_fast(
+                "Who came up with the FaceTime idea for Linda's birthday?",
+                owner_id="maya",
+                return_meta=True,
+            )
+
+        assert len(run_calls) == 2
+        assert run_calls[1]["planner_profile"] == "off"
+        assert run_calls[1]["planned_queries"][0] == "Who came up with the FaceTime idea for Linda's birthday?"
+        assert "maya facetime birthday idea" in run_calls[1]["planned_queries"]
+        assert "assistant facetime idea" in run_calls[1]["planned_queries"]
+        assert meta["quality_gate"]["fast_drill_enabled"] is True
+        assert "maya facetime birthday idea" in meta["quality_gate"]["fast_drill_queries"]
+        assert "assistant facetime idea" in meta["quality_gate"]["fast_drill_queries"]
 
     def test_recall_fast_skips_drill_when_injection_budget_is_exhausted(self):
         import datastore.memorydb.memory_graph as mg
