@@ -23,7 +23,7 @@
 #   livetest-preflight.sh --dry-run               # print commands without executing
 #   livetest-preflight.sh --config path/to/livetest-config.json
 #   livetest-preflight.sh --with-platform-upgrades # slow presnapshot-only CLI upgrade path
-#   livetest-preflight.sh --platform-upgrades-only # safety checks + CLI upgrades, exit 20 if changed
+#   livetest-preflight.sh --platform-upgrades-only # safety checks + CLI/OAuth maintenance, exit 20 if changed
 #   livetest-preflight.sh --release-verify v0.3.0-alpha  # release verification mode
 #
 # Options:
@@ -33,7 +33,7 @@
 #   --skip-platform-version-check    Skip non-blocking platform drift warning
 #   --with-platform-upgrades         Apply platform CLI upgrades during preflight.
 #                                    Intended for presnapshot maintenance, not per-run loops.
-#   --platform-upgrades-only         Run safety checks + platform CLI upgrades, then exit.
+#   --platform-upgrades-only         Run safety checks + platform CLI/OAuth maintenance, then exit.
 #                                    Returns 20 when upgrades changed the run VM.
 #   --dry-run                        Print commands without executing them
 #   --config <path>                  Path to livetest-config.json (default: auto-detected)
@@ -190,7 +190,136 @@ if min_ttl_seconds > 0 and remaining < min_ttl_seconds:
         f"(remaining {int(remaining // 60)}m, required {int(min_ttl_seconds // 60)}m; {path})"
     )
 
-print(f"{label}: valid until {expires_at.isoformat()} (remaining {int(remaining // 60)}m)")
+print(f"{label}: valid until {expires_at.isoformat()} (TTL {remaining / 3600.0:.1f}h, remaining {int(remaining // 60)}m)")
+PYEOF
+}
+
+CC_OAUTH_REMOTE_REFRESHED=0
+
+copy_claude_oauth_credentials_to_remote() {
+    local heading="${1:-[7/8] Copying CC OAuth credentials to remote...}"
+    local cc_enabled local_creds local_status remote_status ttl_summary
+
+    echo ""
+    echo "$heading"
+    CC_OAUTH_REMOTE_REFRESHED=0
+
+    cc_enabled="$(read_config platforms.cc.enabled)"
+    if [[ "$cc_enabled" != "True" && "$cc_enabled" != "true" ]]; then
+        echo "  (skipped — CC platform not enabled in config)"
+        return 0
+    fi
+    if [[ "$DRY_RUN" == "1" ]]; then
+        echo "  [dry-run] would validate coordinator Claude OAuth has >=$((CC_OAUTH_MIN_TTL_SECONDS / 60))m remaining"
+        echo "  [dry-run] would scp ~/.claude/.credentials.json to $REMOTE_HOST:~/.claude/.credentials.json"
+        return 0
+    fi
+
+    local_creds="$HOME/.claude/.credentials.json"
+    if [[ ! -f "$local_creds" ]]; then
+        echo "  $FAIL  $local_creds not found — CC cannot create real sessions without coordinator Claude auth"
+        ERRORS=$((ERRORS + 1))
+        return 0
+    fi
+
+    local_status="$(validate_claude_oauth_credentials "$local_creds" "local CC OAuth" "$CC_OAUTH_MIN_TTL_SECONDS" 2>&1 || true)"
+    if [[ "$local_status" != local\ CC\ OAuth:\ valid\ until* ]]; then
+        echo "  $FAIL  $local_status"
+        echo "         Refresh coordinator Claude auth before preflight, then rerun."
+        echo "         Override only for emergency short runs: LIVETEST_CC_OAUTH_MIN_TTL_SECONDS=0"
+        ERRORS=$((ERRORS + 1))
+        return 0
+    fi
+
+    echo "  $PASS  $local_status"
+    ssh "$REMOTE_HOST" 'mkdir -p ~/.claude'
+    scp "$local_creds" "$REMOTE_HOST:~/.claude/.credentials.json"
+    if ! remote_status="$(ssh "$REMOTE_HOST" python3 - '~/.claude/.credentials.json' "$CC_OAUTH_MIN_TTL_SECONDS" <<'PYEOF' 2>&1
+import datetime
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1]).expanduser()
+label = "remote CC OAuth"
+try:
+    min_ttl_seconds = int(float(sys.argv[2] or 0))
+except Exception:
+    raise SystemExit(f"{label}: invalid minimum TTL seconds {sys.argv[2]!r}")
+if not path.exists():
+    raise SystemExit(f"{label}: missing {path}")
+
+try:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+except Exception as exc:
+    raise SystemExit(f"{label}: invalid JSON in {path}: {exc}") from exc
+
+oauth = payload.get("claudeAiOauth")
+if not isinstance(oauth, dict):
+    raise SystemExit(f"{label}: claudeAiOauth block missing in {path}")
+
+access_token = str(oauth.get("accessToken") or "").strip()
+refresh_token = str(oauth.get("refreshToken") or "").strip()
+raw_expires = oauth.get("expiresAt")
+if not access_token:
+    raise SystemExit(f"{label}: accessToken missing in {path}")
+if not refresh_token:
+    raise SystemExit(f"{label}: refreshToken missing in {path}")
+if raw_expires in (None, ""):
+    raise SystemExit(f"{label}: expiresAt missing in {path}")
+
+try:
+    if isinstance(raw_expires, (int, float)):
+        expires_at = datetime.datetime.fromtimestamp(float(raw_expires) / 1000.0, tz=datetime.timezone.utc)
+    else:
+        raw_text = str(raw_expires).strip()
+        if raw_text.isdigit():
+            expires_at = datetime.datetime.fromtimestamp(int(raw_text) / 1000.0, tz=datetime.timezone.utc)
+        else:
+            expires_at = datetime.datetime.fromisoformat(raw_text.replace("Z", "+00:00"))
+            if expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=datetime.timezone.utc)
+except Exception as exc:
+    raise SystemExit(f"{label}: cannot parse expiresAt={raw_expires!r} in {path}: {exc}") from exc
+
+now = datetime.datetime.now(datetime.timezone.utc)
+if expires_at <= now:
+    raise SystemExit(f"{label}: expired at {expires_at.isoformat()} ({path})")
+remaining = (expires_at - now).total_seconds()
+if min_ttl_seconds > 0 and remaining < min_ttl_seconds:
+    raise SystemExit(
+        f"{label}: expires too soon at {expires_at.isoformat()} "
+        f"(remaining {int(remaining // 60)}m, required {int(min_ttl_seconds // 60)}m; {path})"
+    )
+
+print(f"{label}: valid until {expires_at.isoformat()} (TTL {remaining / 3600.0:.1f}h, remaining {int(remaining // 60)}m)")
+PYEOF
+)"; then
+        echo "  $FAIL  $remote_status"
+        ERRORS=$((ERRORS + 1))
+    elif [[ "$remote_status" != remote\ CC\ OAuth:\ valid\ until* ]]; then
+        echo "  $FAIL  $remote_status"
+        ERRORS=$((ERRORS + 1))
+    else
+        echo "  $PASS  $remote_status"
+        ttl_summary="$(printf '%s\n' "$remote_status" | sed -n 's/.*TTL \([^,)]*\).*/\1/p')"
+        [[ -z "$ttl_summary" ]] && ttl_summary="unknown"
+        echo "  $PASS  refreshed VM Claude OAuth, $ttl_summary TTL (~/.claude/.credentials.json)"
+        CC_OAUTH_REMOTE_REFRESHED=1
+    fi
+
+    # Ensure any stale ANTHROPIC_API_KEY is removed from settings.json (it overrides .credentials.json).
+    ssh "$REMOTE_HOST" python3 << 'PYEOF'
+import json, pathlib
+p = pathlib.Path.home() / '.claude' / 'settings.json'
+if p.exists():
+    d = json.loads(p.read_text())
+    env = d.get('env', {})
+    if 'ANTHROPIC_API_KEY' in env:
+        del env['ANTHROPIC_API_KEY']
+        d['env'] = env
+        p.write_text(json.dumps(d, indent=2))
+        print('  removed stale ANTHROPIC_API_KEY from settings.json')
 PYEOF
 }
 
@@ -332,7 +461,8 @@ elif [[ "$DRY_RUN" == "1" ]]; then
         echo "  [dry-run] would upgrade claude, codex, openclaw to latest on $REMOTE_HOST"
         echo "  [dry-run] would compare before/after versions"
         if [[ "$PLATFORM_UPGRADES_ONLY" == "1" ]]; then
-            echo "  [dry-run] would exit after platform upgrade check"
+            echo "  [dry-run] would refresh VM Claude OAuth credentials for base snapshot"
+            echo "  [dry-run] would exit after platform/OAuth maintenance check"
             exit 0
         fi
     else
@@ -601,6 +731,15 @@ PYEOF" 2>/dev/null | tr -d '\r'
     echo "    codex    : $BEFORE_CODEX -> $AFTER_CODEX"
     echo "    openclaw : $BEFORE_OPENCLAW -> $AFTER_OPENCLAW"
 
+    if [[ "$PLATFORM_UPGRADES_ONLY" == "1" ]]; then
+        copy_claude_oauth_credentials_to_remote "[4b/8] Refreshing CC OAuth credentials for base snapshot..."
+        if [[ "$ERRORS" -gt 0 ]]; then
+            echo ""
+            echo "Presnapshot preflight failed during CC OAuth refresh." >&2
+            exit 1
+        fi
+    fi
+
     if [[ "$updates_applied" -eq 1 ]]; then
         echo ""
         if [[ "$PLATFORM_UPGRADES_ONLY" == "1" ]]; then
@@ -617,7 +756,11 @@ PYEOF" 2>/dev/null | tr -d '\r'
     fi
 
     if [[ "$PLATFORM_UPGRADES_ONLY" == "1" ]]; then
-        echo "No platform updates were applied. Base snapshot is current."
+        if [[ "$CC_OAUTH_REMOTE_REFRESHED" == "1" ]]; then
+            echo "Claude OAuth credentials were refreshed. Presnapshot wrapper should refresh the base image."
+            exit 20
+        fi
+        echo "No platform updates or credential refresh were applied. Base snapshot is current."
         exit 0
     fi
 fi
@@ -688,117 +831,7 @@ fi
 # Fail early if the coordinator copy is missing or expired; otherwise W4 only
 # discovers the problem when the first real CC session hits 401 before any hooks fire.
 # Do NOT inject ANTHROPIC_API_KEY — it overrides credentials.json and may be stale.
-echo ""
-echo "[7/8] Copying CC OAuth credentials to remote..."
-
-CC_ENABLED="$(read_config platforms.cc.enabled)"
-if [[ "$CC_ENABLED" != "True" && "$CC_ENABLED" != "true" ]]; then
-    echo "  (skipped — CC platform not enabled in config)"
-elif [[ "$DRY_RUN" == "1" ]]; then
-    echo "  [dry-run] would validate coordinator Claude OAuth has >=$((CC_OAUTH_MIN_TTL_SECONDS / 60))m remaining"
-    echo "  [dry-run] would scp ~/.claude/.credentials.json to $REMOTE_HOST:~/.claude/.credentials.json"
-else
-    LOCAL_CREDS="$HOME/.claude/.credentials.json"
-    if [[ ! -f "$LOCAL_CREDS" ]]; then
-        echo "  $FAIL  $LOCAL_CREDS not found — CC cannot create real sessions without coordinator Claude auth"
-        ERRORS=$((ERRORS + 1))
-    else
-        LOCAL_CC_AUTH_STATUS="$(validate_claude_oauth_credentials "$LOCAL_CREDS" "local CC OAuth" "$CC_OAUTH_MIN_TTL_SECONDS" 2>&1 || true)"
-        if [[ "$LOCAL_CC_AUTH_STATUS" != local\ CC\ OAuth:\ valid\ until* ]]; then
-            echo "  $FAIL  $LOCAL_CC_AUTH_STATUS"
-            echo "         Refresh coordinator Claude auth before preflight, then rerun."
-            echo "         Override only for emergency short runs: LIVETEST_CC_OAUTH_MIN_TTL_SECONDS=0"
-            ERRORS=$((ERRORS + 1))
-        else
-            echo "  $PASS  $LOCAL_CC_AUTH_STATUS"
-            ssh "$REMOTE_HOST" 'mkdir -p ~/.claude'
-            scp "$LOCAL_CREDS" "$REMOTE_HOST:~/.claude/.credentials.json"
-            echo "  $PASS  CC OAuth credentials copied to remote ~/.claude/.credentials.json"
-            if ! REMOTE_CC_AUTH_STATUS="$(ssh "$REMOTE_HOST" python3 - '~/.claude/.credentials.json' "$CC_OAUTH_MIN_TTL_SECONDS" <<'PYEOF' 2>&1
-import datetime
-import json
-import pathlib
-import sys
-
-path = pathlib.Path(sys.argv[1]).expanduser()
-label = "remote CC OAuth"
-try:
-    min_ttl_seconds = int(float(sys.argv[2] or 0))
-except Exception:
-    raise SystemExit(f"{label}: invalid minimum TTL seconds {sys.argv[2]!r}")
-if not path.exists():
-    raise SystemExit(f"{label}: missing {path}")
-
-try:
-    payload = json.loads(path.read_text(encoding="utf-8"))
-except Exception as exc:
-    raise SystemExit(f"{label}: invalid JSON in {path}: {exc}") from exc
-
-oauth = payload.get("claudeAiOauth")
-if not isinstance(oauth, dict):
-    raise SystemExit(f"{label}: claudeAiOauth block missing in {path}")
-
-access_token = str(oauth.get("accessToken") or "").strip()
-refresh_token = str(oauth.get("refreshToken") or "").strip()
-raw_expires = oauth.get("expiresAt")
-if not access_token:
-    raise SystemExit(f"{label}: accessToken missing in {path}")
-if not refresh_token:
-    raise SystemExit(f"{label}: refreshToken missing in {path}")
-if raw_expires in (None, ""):
-    raise SystemExit(f"{label}: expiresAt missing in {path}")
-
-try:
-    if isinstance(raw_expires, (int, float)):
-        expires_at = datetime.datetime.fromtimestamp(float(raw_expires) / 1000.0, tz=datetime.timezone.utc)
-    else:
-        raw_text = str(raw_expires).strip()
-        if raw_text.isdigit():
-            expires_at = datetime.datetime.fromtimestamp(int(raw_text) / 1000.0, tz=datetime.timezone.utc)
-        else:
-            expires_at = datetime.datetime.fromisoformat(raw_text.replace("Z", "+00:00"))
-            if expires_at.tzinfo is None:
-                expires_at = expires_at.replace(tzinfo=datetime.timezone.utc)
-except Exception as exc:
-    raise SystemExit(f"{label}: cannot parse expiresAt={raw_expires!r} in {path}: {exc}") from exc
-
-now = datetime.datetime.now(datetime.timezone.utc)
-if expires_at <= now:
-    raise SystemExit(f"{label}: expired at {expires_at.isoformat()} ({path})")
-remaining = (expires_at - now).total_seconds()
-if min_ttl_seconds > 0 and remaining < min_ttl_seconds:
-    raise SystemExit(
-        f"{label}: expires too soon at {expires_at.isoformat()} "
-        f"(remaining {int(remaining // 60)}m, required {int(min_ttl_seconds // 60)}m; {path})"
-    )
-
-print(f"{label}: valid until {expires_at.isoformat()} (remaining {int(remaining // 60)}m)")
-PYEOF
-)"; then
-                echo "  $FAIL  $REMOTE_CC_AUTH_STATUS"
-                ERRORS=$((ERRORS + 1))
-            elif [[ "$REMOTE_CC_AUTH_STATUS" != remote\ CC\ OAuth:\ valid\ until* ]]; then
-                echo "  $FAIL  $REMOTE_CC_AUTH_STATUS"
-                ERRORS=$((ERRORS + 1))
-            else
-                echo "  $PASS  $REMOTE_CC_AUTH_STATUS"
-            fi
-            # Ensure any stale ANTHROPIC_API_KEY is removed from settings.json (it overrides .credentials.json)
-            ssh "$REMOTE_HOST" python3 << 'PYEOF'
-import json, pathlib
-p = pathlib.Path.home() / '.claude' / 'settings.json'
-if p.exists():
-    d = json.loads(p.read_text())
-    env = d.get('env', {})
-    if 'ANTHROPIC_API_KEY' in env:
-        del env['ANTHROPIC_API_KEY']
-        d['env'] = env
-        p.write_text(json.dumps(d, indent=2))
-        print('  removed stale ANTHROPIC_API_KEY from settings.json')
-PYEOF
-        fi
-    fi
-fi
+copy_claude_oauth_credentials_to_remote "[7/8] Copying CC OAuth credentials to remote..."
 
 # --- Step 7b: Seed shared Quaid auth credentials for installer ---
 # M0 expects ~/.quaid/shared/auth/credentials.json to exist on the run VM.

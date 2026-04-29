@@ -2,9 +2,10 @@
 # livetest-presnapshot-preflight.sh — Update live-test base snapshot tooling
 #
 # Runs the slow platform-tool maintenance path against a fresh clone of the
-# current base image. If platform upgrades or final harness cleanup changed the
-# clone, promotes that disk back into the locked base image. If nothing changed,
-# destroys the clone and leaves the base untouched.
+# current base image. If platform upgrades, Claude OAuth refresh, or final
+# harness cleanup changed the clone, promotes that disk back into the locked
+# base image. If nothing changed, destroys the clone and leaves the base
+# untouched.
 #
 # Usage:
 #   livetest-presnapshot-preflight.sh [options]
@@ -120,9 +121,10 @@ if [[ "$DRY_RUN" == "1" ]]; then
     echo "[dry-run] would start a fresh clone from '$BASE_IMAGE' as '$RUN_NAME'"
     echo "[dry-run] would run:"
     echo "  $SCRIPT_DIR/livetest-preflight.sh --config $CONFIG_PATH --platform-upgrades-only"
+    echo "[dry-run] that maintenance pass includes platform CLI upgrades and VM Claude OAuth refresh"
     echo "[dry-run] would run final presnapshot cleanup:"
     echo "  ssh <remote.host> ~/quaidcode/dev/modules/quaid/tests/livetest/scripts/livetest-prune-openclaw-silos.sh --home ~/.quaid"
-    echo "[dry-run] if platform upgrades or cleanup changed the clone, would run:"
+    echo "[dry-run] if platform upgrades, OAuth refresh, or cleanup changed the clone, would run:"
     echo "  $SCRIPT_DIR/livetest-refresh-base.sh --base $BASE_IMAGE --name $RUN_NAME --config $CONFIG_PATH"
     echo "[dry-run] would then destroy '$RUN_NAME' and restore remote.host in config"
     exit 0
@@ -153,7 +155,7 @@ run_presnapshot_cleanup
 if [[ "$preflight_rc" -eq 20 || "$PRESNAPSHOT_CLEANUP_CHANGED" -eq 1 ]]; then
     echo ""
     if [[ "$preflight_rc" -eq 20 ]]; then
-        echo "Platform updates changed the run VM. Promoting run disk to base snapshot..."
+        echo "Platform/OAuth maintenance changed the run VM. Promoting run disk to base snapshot..."
     else
         echo "Presnapshot cleanup changed the run VM. Promoting run disk to base snapshot..."
     fi
@@ -165,7 +167,7 @@ if [[ "$preflight_rc" -eq 20 || "$PRESNAPSHOT_CLEANUP_CHANGED" -eq 1 ]]; then
     echo "Base snapshot refreshed from maintained run VM."
 elif [[ "$preflight_rc" -eq 0 ]]; then
     echo ""
-    echo "No platform updates or presnapshot cleanup changes were applied. Base snapshot already current."
+    echo "No platform updates, OAuth refresh, or presnapshot cleanup changes were applied. Base snapshot already current."
 fi
 
 echo ""

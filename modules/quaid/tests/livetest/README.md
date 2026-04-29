@@ -144,6 +144,9 @@ CC has two separate auth requirements:
    If the coordinator copy is missing, expired, or too close to expiry, preflight
    fails before launch. Default minimum remaining lifetime is 90 minutes; override
    only for emergency short runs with `LIVETEST_CC_OAUTH_MIN_TTL_SECONDS=0`.
+   Presnapshot maintenance also copies the coordinator file into the base clone
+   before snapshot promotion, so refresh the coordinator login before baking a
+   long-running base image.
 
 2. Quaid's CC daemon needs an Anthropic token in
    `~/.quaid/shared/auth/credentials.json`. Set `platforms.cc.auth_token_file` in
@@ -195,7 +198,7 @@ exclusively via SSH — they cannot accidentally affect the local machine.
 
 | Script | Purpose |
 |--------|---------|
-| `livetest-presnapshot-preflight.sh` | **Run before overnight loops or when platform drift is suspected.** Clones the current base VM, applies slow platform CLI upgrades plus final harness cleanup such as stale OpenClaw silo pruning, and refreshes the base snapshot only if maintenance changed the clone. |
+| `livetest-presnapshot-preflight.sh` | **Run before overnight loops or when platform drift is suspected.** Clones the current base VM, applies slow platform CLI upgrades, refreshes VM Claude OAuth credentials, runs final harness cleanup such as stale OpenClaw silo pruning, and refreshes the base snapshot only if maintenance changed the clone. |
 | `livetest-preflight.sh` | **Run before every run.** Verifies remote ≠ local, checks SSH, hard-errors on platform version drift unless `--allow-platform-drift '<reason>'` is provided, wipes the remote, syncs the dev tree, seeds credentials, and starts platform services. Hard-aborts if the remote host matches the local machine. |
 | `livetest-session-init.sh` | Create the canonical local `livetest` tmux session/windows, launch tester panes, open SSH panes to the remote, and start tester nudge loops. |
 | `livetest-wipe.sh` | Wipe Quaid from the remote. `--platform all` for full wipe, `--platform cc` for CC-only wipe while OC is live. Called by preflight; can also be run standalone. |
