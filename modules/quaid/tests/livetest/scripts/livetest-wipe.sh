@@ -211,7 +211,7 @@ if p.exists():
 print('CC hooks cleared')
 \""
     run_remote "clear CC adapter rules" \
-        "rm -f ~/.claude/rules/quaid-*.md ~/.claude/rules/quaid-projects.md ~/.claude/rules/quaid-projects.md.bak && echo 'CC rules cleared'"
+        "bash -c 'rm -f ~/.claude/rules/quaid-*.md ~/.claude/rules/quaid-projects.md ~/.claude/rules/quaid-projects.md.bak' && echo 'CC rules cleared'"
     # Wipe entire ~/.claude/projects/ directory. Previous logic derived a single
     # target from CC_PROJECT_DIR but macOS normalizes /tmp → /private/tmp in the
     # project-dir-sanitized form Claude uses, so the targeted rm missed the
