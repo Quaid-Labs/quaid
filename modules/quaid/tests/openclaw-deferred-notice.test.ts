@@ -1471,6 +1471,109 @@ describe("openclaw deferred notices", () => {
     removeTempDir(fixture.home);
   });
 
+  it("re-arms project context injection when /compact is captured as a message event", async () => {
+    vi.useFakeTimers();
+    const fixture = seedDeferredNoticeFixture(
+      "quaid-oc-message-compact-refresh-home-",
+      "openclaw-main",
+      "[Quaid] message compact refresh fixture",
+    );
+    const toolsPath = path.join(fixture.visibleHome, "projects", "quaid", "TOOLS.md");
+    fs.writeFileSync(
+      toolsPath,
+      "# TOOLS\nMessage compact refresh canary: copper-orchid\n",
+      "utf8",
+    );
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const plugin = await loadAdapterWithHomes(
+      fixture.hiddenHome,
+      fixture.visibleHome,
+      fixture.openClawConfigPath,
+      "openclaw-main",
+    );
+    const api = makeFakeApi();
+    plugin.register(api as any);
+
+    const beforePromptBuildCall = api.on.mock.calls.find((call: any[]) =>
+      call?.[0] === "before_prompt_build" && call?.[2]?.name === "memory-injection-prompt-build"
+    );
+    const messageReceivedCall = api.on.mock.calls.find((call: any[]) =>
+      call?.[0] === "message_received" && call?.[2]?.name === "message-received-command-memory-extraction"
+    );
+    expect(beforePromptBuildCall).toBeTruthy();
+    expect(messageReceivedCall).toBeTruthy();
+
+    const beforePromptBuildHandler = beforePromptBuildCall?.[1];
+    const messageReceivedHandler = messageReceivedCall?.[1];
+    const sessionKey = "agent:main:matrix:room-compact-message";
+    const ctx = {
+      sessionId: "session-message-compact-refresh",
+      sessionKey,
+      agentId: "main",
+      trigger: "user",
+    };
+
+    const first = await beforePromptBuildHandler(
+      {
+        prependContext: "",
+        prompt: "first",
+        messages: [{ role: "user", content: "first" }],
+        sessionId: ctx.sessionId,
+        sessionKey,
+      },
+      ctx,
+    );
+    expect(combinedSystemContext(first)).toContain("copper-orchid");
+
+    const second = await beforePromptBuildHandler(
+      {
+        prependContext: "",
+        prompt: "second",
+        messages: [{ role: "user", content: "second" }],
+        sessionId: ctx.sessionId,
+        sessionKey,
+      },
+      ctx,
+    );
+    expect(combinedSystemContext(second)).not.toContain("copper-orchid");
+
+    fs.writeFileSync(
+      toolsPath,
+      "# TOOLS\nMessage compact refresh canary: brass-fern\n",
+      "utf8",
+    );
+
+    await messageReceivedHandler(
+      {
+        message: { role: "user", content: "/compact" },
+        sessionId: ctx.sessionId,
+        sessionKey,
+      },
+      ctx,
+    );
+
+    const third = await beforePromptBuildHandler(
+      {
+        prependContext: "",
+        prompt: "third",
+        messages: [{ role: "user", content: "third" }],
+        sessionId: ctx.sessionId,
+        sessionKey,
+      },
+      ctx,
+    );
+    expect(combinedSystemContext(third)).toContain("brass-fern");
+
+    warn.mockRestore();
+    log.mockRestore();
+    error.mockRestore();
+    removeTempDir(fixture.home);
+  });
+
   it("re-arms project context injection after /new on the same matrix session key", async () => {
     vi.useFakeTimers();
     const fixture = seedDeferredNoticeFixture(

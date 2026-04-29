@@ -3948,7 +3948,9 @@ ${lines.join("\n")}
 
       if (sections.length === 0) return prepend;
       const runtimeMeta = options.identityOnly ? "" : await _buildRuntimeContextBlock();
-      const header = options.identityOnly ? "# Quaid Identity Context\n\n" : "# Quaid Context\n\n";
+      const header = options.identityOnly
+        ? "# Quaid Identity Context\n\nIdentity files are authoritative current context. Prefer them over conflicting recalled memories.\n\n"
+        : "# Quaid Context\n\n";
       const combined = header + (runtimeMeta ? `${runtimeMeta}\n` : "") + sections.join("\n\n") + "\n";
       prepend = prepend ? `${prepend}\n\n${combined}` : combined;
     } catch (err: unknown) {

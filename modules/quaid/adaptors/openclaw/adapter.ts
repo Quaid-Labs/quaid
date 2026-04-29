@@ -6519,6 +6519,11 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
             sessionId,
             `${sourceEvent}:command_${commandAction}`,
           );
+        } else if (commandAction === "compact") {
+          maybeArmCompactionContextRefresh(
+            resolveProjectDocsRefreshKey(event, ctx, sessionId),
+            `${sourceEvent}:command_compact`,
+          );
         }
         if (!sessionId || isInternalSessionContext(event, ctx) || !isSystemEnabled("memory")) {
           return;

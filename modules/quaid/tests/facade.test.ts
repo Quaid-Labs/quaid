@@ -211,6 +211,7 @@ describe("QuaidFacade", () => {
 
     const out = await facade.injectProjectContext(undefined, { identityOnly: true });
     expect(out).toContain("# Quaid Identity Context");
+    expect(out).toContain("Identity files are authoritative current context");
     expect(out).toContain("--- USER.md ---");
     expect(out).toContain("Bartholomew");
     expect(out).toContain("--- SOUL.md ---");
