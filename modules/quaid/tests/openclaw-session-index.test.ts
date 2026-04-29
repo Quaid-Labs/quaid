@@ -314,7 +314,9 @@ describe("openclaw session_index watcher", () => {
       {
         sessionId,
         sessionKey,
+        timestamp: 2_000,
         message: {
+          timestamp: 2_000,
           role: "user",
           content: [{ type: "text", text: "Just logging: my garden shed combination is written inside an indigo glass lantern." }],
         },
@@ -325,7 +327,9 @@ describe("openclaw session_index watcher", () => {
       {
         sessionId,
         sessionKey,
+        timestamp: 1_000,
         message: {
+          timestamp: 1_000,
           role: "user",
           content: [{ type: "text", text: "/new" }],
         },
@@ -351,6 +355,70 @@ describe("openclaw session_index watcher", () => {
       payload?.type === "reset" && payload?.session_id === sessionId
     );
     expect(staleResets).toHaveLength(0);
+
+    warn.mockRestore();
+    log.mockRestore();
+    error.mockRestore();
+    rmSync(harness.root, { recursive: true, force: true });
+  });
+
+  it("does not suppress a current lifecycle command after captured user content", async () => {
+    const harness = makeHarness("current-lifecycle-after-user-content");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const sessionId = "07e4ee8c-1111-4111-8111-111111111111";
+    const sessionKey = "agent:main:m2c-current";
+    const transcript = join(harness.sessionsDir, `${sessionId}.jsonl`);
+    writeTranscript(transcript, [
+      "Just logging: my garden shed combination is written inside an indigo glass lantern.",
+      "/new",
+    ]);
+    writeJson(join(harness.sessionsDir, "sessions.json"), {
+      [sessionKey]: { sessionId, updatedAt: Date.now(), sessionFile: transcript },
+    });
+
+    const api = makeFakeApi();
+    const plugin = await loadPlugin(harness);
+    plugin.register(api as any);
+
+    const messageReceivedHook = api.on.mock.calls.find((call: any[]) =>
+      call?.[0] === "message_received" && call?.[2]?.name === "message-received-command-memory-extraction"
+    )?.[1];
+    expect(typeof messageReceivedHook).toBe("function");
+
+    await messageReceivedHook(
+      {
+        sessionId,
+        sessionKey,
+        timestamp: 1_000,
+        message: {
+          timestamp: 1_000,
+          role: "user",
+          content: [{ type: "text", text: "Just logging: my garden shed combination is written inside an indigo glass lantern." }],
+        },
+      },
+      { sessionId, sessionKey, agentId: "main" },
+    );
+    await messageReceivedHook(
+      {
+        sessionId,
+        sessionKey,
+        timestamp: 2_000,
+        message: {
+          timestamp: 2_000,
+          role: "user",
+          content: [{ type: "text", text: "/new" }],
+        },
+      },
+      { sessionId, sessionKey, agentId: "main" },
+    );
+
+    const resets = readSignalPayloads(harness.signalDir).filter((payload) =>
+      payload?.type === "reset" && payload?.session_id === sessionId
+    );
+    expect(resets).toHaveLength(1);
 
     warn.mockRestore();
     log.mockRestore();

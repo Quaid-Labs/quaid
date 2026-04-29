@@ -1008,10 +1008,21 @@ function isAutoInjectEnabled(config: Record<string, any> = getMemoryConfig()): b
   return configured !== false;
 }
 
-type LastUserMessageQuery = { text: string; seenAtMs: number; sessionId?: string; originSessionId?: string } | null;
+type LastUserMessageQuery = {
+  text: string;
+  seenAtMs: number;
+  sessionId?: string;
+  originSessionId?: string;
+  sourceTimestampMs?: number;
+} | null;
+type SuppressedLifecycleReplay = { command: "new" | "reset"; seenAtMs: number };
 const LIFECYCLE_REPLAY_AFTER_USER_CACHE_MS = Math.max(
   5_000,
   Math.min(_envTimeoutMs("QUAID_OC_LIFECYCLE_REPLAY_AFTER_USER_CACHE_MS", 60_000), 300_000),
+);
+const COMMAND_HOOK_REPLAY_AFTER_MESSAGE_SUPPRESS_MS = Math.min(
+  LIFECYCLE_REPLAY_AFTER_USER_CACHE_MS,
+  15_000,
 );
 
 const OPENCLAW_INTERNAL_CONTEXT_RE = /<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>[\s\S]*?<<<END_OPENCLAW_INTERNAL_CONTEXT>>>/gi;
@@ -1104,6 +1115,40 @@ function isQueuedSessionStartupWrapper(raw: string): boolean {
     && /A new session was started via \/new or \/reset\./i.test(text);
 }
 
+function parseOpenClawTimestampMs(value: unknown): number {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value > 10_000_000_000 ? Math.floor(value) : Math.floor(value * 1000);
+  }
+  const raw = String(value || "").trim();
+  if (!raw) return 0;
+  if (/^\d+(?:\.\d+)?$/.test(raw)) {
+    const parsed = Number(raw);
+    if (Number.isFinite(parsed)) {
+      return parsed > 10_000_000_000 ? Math.floor(parsed) : Math.floor(parsed * 1000);
+    }
+  }
+  const parsed = Date.parse(raw);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function extractOpenClawEventTimestampMs(event: any, ctx?: any): number {
+  const candidates = [
+    event?.message?.timestamp,
+    event?.timestamp,
+    event?.createdAt,
+    event?.message?.createdAt,
+    event?.context?.timestamp,
+    ctx?.timestamp,
+    ctx?.message?.timestamp,
+    ctx?.context?.timestamp,
+  ];
+  for (const candidate of candidates) {
+    const parsed = parseOpenClawTimestampMs(candidate);
+    if (parsed > 0) return parsed;
+  }
+  return 0;
+}
+
 function isOpenClawTransientSessionId(value: unknown): boolean {
   const sid = String(value || "").trim().toLowerCase();
   return Boolean(sid) && (
@@ -1156,6 +1201,8 @@ function shouldSuppressLifecycleCommandAfterRecentUserMessage(
   commandAction: LifecycleSlashAction | null,
   sessionId: string,
   lastUserMessageQuery: LastUserMessageQuery,
+  event?: any,
+  ctx?: any,
   nowMs: number = Date.now(),
 ): boolean {
   if (commandAction !== "new" && commandAction !== "reset") return false;
@@ -1176,7 +1223,9 @@ function shouldSuppressLifecycleCommandAfterRecentUserMessage(
   ) {
     return false;
   }
-  return true;
+  const cachedTimestampMs = Number(lastUserMessageQuery.sourceTimestampMs || 0);
+  const commandTimestampMs = extractOpenClawEventTimestampMs(event, ctx);
+  return cachedTimestampMs > 0 && commandTimestampMs > 0 && commandTimestampMs < cachedTimestampMs;
 }
 
 function buildQueuedStartupUserMessageOverride(recovered: { text: string; ageMs: number } | null): string | undefined {
@@ -5607,6 +5656,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
     // which fires before before_prompt_build with the actual user query. Used as query
     // fallback when event.prompt is the OC metadata wrapper (empty after scrubbing).
     let lastUserMessageQuery: LastUserMessageQuery = null;
+    const suppressedLifecycleReplays = new Map<string, SuppressedLifecycleReplay>();
     const sessionLastActivityMs = new Map<string, number>();
     const runtimeEvents = (api as any)?.runtime?.events;
     if (runtimeEvents && typeof runtimeEvents.onSessionTranscriptUpdate === "function") {
@@ -6614,7 +6664,11 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
           text: text.slice(0, 120),
           hook_session_id: sessionId || "",
         });
-        if (shouldSuppressLifecycleCommandAfterRecentUserMessage(commandAction, sessionId, lastUserMessageQuery)) {
+        if (shouldSuppressLifecycleCommandAfterRecentUserMessage(commandAction, sessionId, lastUserMessageQuery, event, ctx)) {
+          suppressedLifecycleReplays.set(`${sessionId}:${commandAction}`, {
+            command: commandAction,
+            seenAtMs: Date.now(),
+          });
           writeHookTrace("hook.message.signal_suppressed", {
             source_event: sourceEvent,
             command: commandAction,
@@ -6744,6 +6798,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
           lastUserMessageQuery = {
             text: rawText,
             seenAtMs: Date.now(),
+            sourceTimestampMs: extractOpenClawEventTimestampMs(event, ctx),
             ...(sessionId ? { sessionId } : {}),
             ...(transientOrigin ? { originSessionId: transientOriginValue } : {}),
           };
@@ -6758,6 +6813,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
             resolved_session_id: resolvedSessionId,
             transient_origin: transientOrigin,
             text_len: rawText.length,
+            source_timestamp_ms: lastUserMessageQuery.sourceTimestampMs || 0,
           });
         }
       } catch { /* ignore */ }
@@ -6837,11 +6893,31 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
           preferred_transcript_path: preferredTranscriptPath,
           transcript_hint_session_id: String(lastTranscriptSessionHint?.sessionId || ""),
         });
-        if (shouldSuppressLifecycleCommandAfterRecentUserMessage(action, sessionId, lastUserMessageQuery)) {
+        const suppressedReplay = suppressedLifecycleReplays.get(`${sessionId}:${action}`);
+        const suppressedReplayAgeMs = suppressedReplay ? Date.now() - suppressedReplay.seenAtMs : Infinity;
+        const directTimestampSuppress = shouldSuppressLifecycleCommandAfterRecentUserMessage(
+          action,
+          sessionId,
+          lastUserMessageQuery,
+          event,
+          ctx,
+        );
+        const replayFallbackSuppress = (
+          suppressedReplayAgeMs >= 0
+          && suppressedReplayAgeMs <= COMMAND_HOOK_REPLAY_AFTER_MESSAGE_SUPPRESS_MS
+          && extractOpenClawEventTimestampMs(event, ctx) <= 0
+        );
+        if (
+          directTimestampSuppress
+          || replayFallbackSuppress
+        ) {
+          suppressedLifecycleReplays.delete(`${sessionId}:${action}`);
           writeHookTrace("hook.command.signal_suppressed", {
             action,
             hook_session_id: sessionId,
             reason: "recent_user_message_before_lifecycle_command",
+            replay_age_ms: Number.isFinite(suppressedReplayAgeMs) ? suppressedReplayAgeMs : -1,
+            direct_timestamp_suppress: directTimestampSuppress,
           });
           return;
         }

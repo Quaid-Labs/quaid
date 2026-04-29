@@ -793,6 +793,10 @@ const LIFECYCLE_REPLAY_AFTER_USER_CACHE_MS = Math.max(
   5e3,
   Math.min(_envTimeoutMs("QUAID_OC_LIFECYCLE_REPLAY_AFTER_USER_CACHE_MS", 6e4), 3e5)
 );
+const COMMAND_HOOK_REPLAY_AFTER_MESSAGE_SUPPRESS_MS = Math.min(
+  LIFECYCLE_REPLAY_AFTER_USER_CACHE_MS,
+  15e3
+);
 const OPENCLAW_INTERNAL_CONTEXT_RE = /<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>[\s\S]*?<<<END_OPENCLAW_INTERNAL_CONTEXT>>>/gi;
 const PROMPT_RELAY_SKIP_RE = /^(A new session|Read HEARTBEAT|HEARTBEAT|You are being asked to|You are running as a subagent|You are a subagent|\/\w|Exec failed)/;
 const OPENCLAW_QUEUED_SESSION_START_RE = /\n*(?:\[Queued messages while agent was busy\]\s*\n+)?---\s*\n?Queued\s*#\d+\s*(?:\([^)]+\))?\s*\nA new session was started via \/new or \/reset\.[\s\S]*$/i;
@@ -846,6 +850,38 @@ function isQueuedSessionStartupWrapper(raw) {
   if (OPENCLAW_SESSION_START_BOILERPLATE_RE.test(text)) return true;
   return /\[Queued messages while agent was busy\]/i.test(text) && /A new session was started via \/new or \/reset\./i.test(text);
 }
+function parseOpenClawTimestampMs(value) {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value > 1e10 ? Math.floor(value) : Math.floor(value * 1e3);
+  }
+  const raw = String(value || "").trim();
+  if (!raw) return 0;
+  if (/^\d+(?:\.\d+)?$/.test(raw)) {
+    const parsed2 = Number(raw);
+    if (Number.isFinite(parsed2)) {
+      return parsed2 > 1e10 ? Math.floor(parsed2) : Math.floor(parsed2 * 1e3);
+    }
+  }
+  const parsed = Date.parse(raw);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+function extractOpenClawEventTimestampMs(event, ctx) {
+  const candidates = [
+    event?.message?.timestamp,
+    event?.timestamp,
+    event?.createdAt,
+    event?.message?.createdAt,
+    event?.context?.timestamp,
+    ctx?.timestamp,
+    ctx?.message?.timestamp,
+    ctx?.context?.timestamp
+  ];
+  for (const candidate of candidates) {
+    const parsed = parseOpenClawTimestampMs(candidate);
+    if (parsed > 0) return parsed;
+  }
+  return 0;
+}
 function isOpenClawTransientSessionId(value) {
   const sid = String(value || "").trim().toLowerCase();
   return Boolean(sid) && (sid === "slug-generator" || sid.includes(":slug-generator") || sid.includes("slug-generator:"));
@@ -870,7 +906,7 @@ function selectQueuedStartupRecoveryMessage(event, lastUserMessageQuery, nowMs =
   if (!hasQueuedStartupWrapper) return null;
   return { text: text.slice(0, 1e3), ageMs };
 }
-function shouldSuppressLifecycleCommandAfterRecentUserMessage(commandAction, sessionId, lastUserMessageQuery, nowMs = Date.now()) {
+function shouldSuppressLifecycleCommandAfterRecentUserMessage(commandAction, sessionId, lastUserMessageQuery, event, ctx, nowMs = Date.now()) {
   if (commandAction !== "new" && commandAction !== "reset") return false;
   if (!lastUserMessageQuery) return false;
   const ageMs = nowMs - lastUserMessageQuery.seenAtMs;
@@ -883,7 +919,9 @@ function shouldSuppressLifecycleCommandAfterRecentUserMessage(commandAction, ses
   if (cachedSessionId && activeSessionId && cachedSessionId !== activeSessionId && !isOpenClawTransientSessionId(cachedSessionId) && !isOpenClawTransientSessionId(originSessionId)) {
     return false;
   }
-  return true;
+  const cachedTimestampMs = Number(lastUserMessageQuery.sourceTimestampMs || 0);
+  const commandTimestampMs = extractOpenClawEventTimestampMs(event, ctx);
+  return cachedTimestampMs > 0 && commandTimestampMs > 0 && commandTimestampMs < cachedTimestampMs;
 }
 function buildQueuedStartupUserMessageOverride(recovered) {
   if (!recovered) return void 0;
@@ -4505,6 +4543,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
     let lastTranscriptSessionHint = null;
     let currentInteractiveSession = null;
     let lastUserMessageQuery = null;
+    const suppressedLifecycleReplays = /* @__PURE__ */ new Map();
     const sessionLastActivityMs = /* @__PURE__ */ new Map();
     const runtimeEvents = api?.runtime?.events;
     if (runtimeEvents && typeof runtimeEvents.onSessionTranscriptUpdate === "function") {
@@ -5319,7 +5358,11 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
           text: text.slice(0, 120),
           hook_session_id: sessionId || ""
         });
-        if (shouldSuppressLifecycleCommandAfterRecentUserMessage(commandAction, sessionId, lastUserMessageQuery)) {
+        if (shouldSuppressLifecycleCommandAfterRecentUserMessage(commandAction, sessionId, lastUserMessageQuery, event, ctx)) {
+          suppressedLifecycleReplays.set(`${sessionId}:${commandAction}`, {
+            command: commandAction,
+            seenAtMs: Date.now()
+          });
           writeHookTrace("hook.message.signal_suppressed", {
             source_event: sourceEvent,
             command: commandAction,
@@ -5437,6 +5480,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
           lastUserMessageQuery = {
             text: rawText,
             seenAtMs: Date.now(),
+            sourceTimestampMs: extractOpenClawEventTimestampMs(event, ctx),
             ...sessionId ? { sessionId } : {},
             ...transientOrigin ? { originSessionId: transientOriginValue } : {}
           };
@@ -5450,7 +5494,8 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
             hook_session_key: originSessionKey,
             resolved_session_id: resolvedSessionId,
             transient_origin: transientOrigin,
-            text_len: rawText.length
+            text_len: rawText.length,
+            source_timestamp_ms: lastUserMessageQuery.sourceTimestampMs || 0
           });
         }
       } catch {
@@ -5518,11 +5563,24 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
           preferred_transcript_path: preferredTranscriptPath,
           transcript_hint_session_id: String(lastTranscriptSessionHint?.sessionId || "")
         });
-        if (shouldSuppressLifecycleCommandAfterRecentUserMessage(action, sessionId, lastUserMessageQuery)) {
+        const suppressedReplay = suppressedLifecycleReplays.get(`${sessionId}:${action}`);
+        const suppressedReplayAgeMs = suppressedReplay ? Date.now() - suppressedReplay.seenAtMs : Infinity;
+        const directTimestampSuppress = shouldSuppressLifecycleCommandAfterRecentUserMessage(
+          action,
+          sessionId,
+          lastUserMessageQuery,
+          event,
+          ctx
+        );
+        const replayFallbackSuppress = suppressedReplayAgeMs >= 0 && suppressedReplayAgeMs <= COMMAND_HOOK_REPLAY_AFTER_MESSAGE_SUPPRESS_MS && extractOpenClawEventTimestampMs(event, ctx) <= 0;
+        if (directTimestampSuppress || replayFallbackSuppress) {
+          suppressedLifecycleReplays.delete(`${sessionId}:${action}`);
           writeHookTrace("hook.command.signal_suppressed", {
             action,
             hook_session_id: sessionId,
-            reason: "recent_user_message_before_lifecycle_command"
+            reason: "recent_user_message_before_lifecycle_command",
+            replay_age_ms: Number.isFinite(suppressedReplayAgeMs) ? suppressedReplayAgeMs : -1,
+            direct_timestamp_suppress: directTimestampSuppress
           });
           return;
         }
