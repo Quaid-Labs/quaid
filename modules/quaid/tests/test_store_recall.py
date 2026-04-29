@@ -770,6 +770,33 @@ class TestStoreBasic:
         assert mocked_once.call_count == 1
         assert out and out[0]["id"] == "a"
 
+    def test_recall_uses_supplied_planned_queries_when_routing_disabled(self):
+        import datastore.memorydb.memory_graph as mg
+
+        calls = []
+
+        def fake_once(query, **kwargs):
+            calls.append(query)
+            return [{"id": query, "text": query, "category": "fact", "similarity": 0.7}]
+
+        with patch.object(mg, "_recall_once", side_effect=fake_once), \
+             patch.object(mg, "_plan_fanout_queries", side_effect=AssertionError("planner should not be called")), \
+             patch.object(mg, "_evaluate_quality_gate_readiness", return_value={"ready": True, "needs_validation": False}), \
+             patch.object(mg, "_drill_plan_queries", return_value=[]):
+            out = mg.recall(
+                "outer query",
+                owner_id="quaid",
+                limit=5,
+                use_routing=False,
+                planned_queries=["fallback one", "fallback two"],
+                planner_meta={"planned_stores": ["vector"]},
+            )
+
+        assert calls == ["fallback one", "fallback two"]
+        ids = [r.get("id") for r in out]
+        assert "fallback one" in ids
+        assert "fallback two" in ids
+
     def test_recall_fanout_dedup_keeps_best_similarity(self):
         import datastore.memorydb.memory_graph as mg
 
@@ -3244,7 +3271,7 @@ class TestRecallTelemetry:
             owner_id="maya",
         )
 
-        assert queries == ["assistant biscuit memory"]
+        assert queries == ["what surprised maya about biscuit recall", "assistant biscuit memory"]
 
     def test_recover_assistant_suggestion_cluster_rows_lifts_structural_siblings(self, tmp_path):
         import datastore.memorydb.memory_graph as mg
@@ -3455,6 +3482,38 @@ class TestRecallTelemetry:
 
         assert [row["id"] for row in rows[:4]] == ["b", "d", "c", "a"]
 
+    def test_prioritize_fast_assistant_memory_rows_prefers_callback_like_assistant_row(self):
+        import datastore.memorydb.memory_graph as mg
+
+        rows = mg._prioritize_fast_assistant_memory_rows(
+            "What did the agent recall about Biscuit that surprised Maya?",
+            [
+                {
+                    "id": "a",
+                    "text": "It took Maya and David 3 months to teach Biscuit to shake hands",
+                    "source_type": "user",
+                    "similarity": 0.976,
+                },
+                {
+                    "id": "b",
+                    "text": "And Biscuit learning to shake is a triumph of persistence over brain cells. For a golden retriever who once tried to eat a pinecone, this is character growth",
+                    "source_type": "assistant",
+                    "similarity": 0.992,
+                },
+                {
+                    "id": "c",
+                    "text": "Biscuit in a go mom bandana is the best thing I've heard all week",
+                    "source_type": "assistant",
+                    "similarity": 0.96,
+                },
+            ],
+            gate_eval={
+                "requirements": ["assistant_source"],
+            },
+        )
+
+        assert [row["id"] for row in rows[:3]] == ["b", "a", "c"]
+
     def test_recall_fast_uses_assistant_anchor_drill_when_exact_assistant_query_has_zero_assistant_hits(self):
         import datastore.memorydb.memory_graph as mg
 
@@ -3531,6 +3590,7 @@ class TestRecallTelemetry:
         assert len(run_calls) == 2
         assert run_calls[1]["planner_profile"] == "off"
         assert run_calls[1]["planned_queries"][0] == "What did the agent recall about Biscuit that surprised Maya?"
+        assert "what surprised maya about biscuit recall" in run_calls[1]["planned_queries"]
         assert "assistant biscuit memory" in run_calls[1]["planned_queries"]
         assert rows[0]["text"] == "The assistant recalled that Biscuit once tried to eat a pinecone"
         assert meta["quality_gate"]["fast_drill_enabled"] is True

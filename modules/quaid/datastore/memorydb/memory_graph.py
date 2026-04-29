@@ -9797,19 +9797,58 @@ def _build_fast_drill_fallback_queries(
             queries.append(assistant_query)
         return queries[:2]
 
-    def _build_assistant_source_fallback() -> Optional[str]:
+    def _build_assistant_source_fallback() -> List[str]:
         if "assistant_source" not in requirements or assistant_coverage > 0:
-            return None
+            return []
         attribution_queries = _build_origin_attribution_fallback()
         if attribution_queries:
-            return None
+            return []
         explicit_terms = [
             _normalize_term(raw)
             for raw in _extract_explicit_query_anchor_terms(query, limit=6)
         ]
         explicit_terms = [term for term in explicit_terms if term]
+        queries: List[str] = []
         if explicit_terms and re.search(r"\b(recall|remember|surpris)\w*\b", lower_query):
-            return f"assistant {explicit_terms[0]} memory"
+            owner_term = ""
+            seen_owner_terms = {explicit_terms[0]}
+            owner_skip_terms = {
+                "agent",
+                "ai",
+                "assistant",
+                "callback",
+                "memory",
+                "recall",
+                "recalled",
+                "remember",
+                "remembered",
+                "surprise",
+                "surprised",
+                "what",
+                "who",
+                "did",
+            }
+            for raw in (
+                explicit_terms[1:]
+                + list(gate.get("query_terms") or [])
+                + list(_extract_distinctive_query_terms(query, limit=8))
+            ):
+                term = _normalize_term(raw)
+                if (
+                    not term
+                    or term in seen_owner_terms
+                    or term in _QUERY_STOPWORDS
+                    or term in owner_skip_terms
+                    or len(term) < 3
+                ):
+                    continue
+                owner_term = term
+                break
+            if owner_term:
+                queries.append(f"what surprised {owner_term} about {explicit_terms[0]} recall")
+        if explicit_terms and re.search(r"\b(recall|remember|surpris)\w*\b", lower_query):
+            queries.append(f"assistant {explicit_terms[0]} memory")
+            return queries
         filtered_terms: List[str] = []
         filtered_seen: set[str] = set()
         skip_terms = {
@@ -9851,10 +9890,10 @@ def _build_fast_drill_fallback_queries(
             if len(filtered_terms) >= 4:
                 break
         if not filtered_terms:
-            return None
+            return []
         if len(filtered_terms) == 1 and re.search(r"\b(recall|remember|surpris)\w*\b", lower_query):
             filtered_terms.append("memory")
-        return "assistant " + " ".join(filtered_terms[:4])
+        return ["assistant " + " ".join(filtered_terms[:4])]
 
     attribution_fallback = _build_origin_attribution_fallback()
     if attribution_fallback:
@@ -9862,7 +9901,7 @@ def _build_fast_drill_fallback_queries(
 
     assistant_fallback = _build_assistant_source_fallback()
     if assistant_fallback:
-        return [assistant_fallback]
+        return assistant_fallback
 
     overlap = float(gate.get("overlap_ratio") or 0.0)
     if overlap < 0.45 or overlap > 0.75:
@@ -9943,6 +9982,63 @@ def _prioritize_fast_origin_attribution_rows(query: str, rows: List[Dict[str, An
             2 if str((row or {}).get("source_type") or "").strip().lower() == "assistant" else 1,
             float((row or {}).get("similarity", 0.0) or 0.0),
         ),
+        reverse=True,
+    )
+    return priority_rows + remaining_rows
+
+
+_ASSISTANT_MEMORY_CALLBACK_CUE_RE = re.compile(
+    r"\b(?:remember(?:ed)?|recall(?:ed)?|once|back when|used to|old detail|character growth)\b",
+    re.IGNORECASE,
+)
+
+
+def _prioritize_fast_assistant_memory_rows(
+    query: str,
+    rows: List[Dict[str, Any]],
+    *,
+    gate_eval: Optional[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    if not rows:
+        return rows
+    gate = dict(gate_eval or {})
+    requirements = {str(item) for item in (gate.get("requirements") or []) if str(item)}
+    if "assistant_source" not in requirements or "enumeration" in requirements:
+        return rows
+    lower_query = str(query or "").lower()
+    if not re.search(r"\b(recall|remember|surpris)\w*\b", lower_query):
+        return rows
+    anchor_terms = [
+        str(term or "").strip().lower()
+        for term in _extract_explicit_query_anchor_terms(query, limit=6)
+        if str(term or "").strip()
+    ]
+    if not anchor_terms:
+        return rows
+
+    priority_rows: List[Dict[str, Any]] = []
+    remaining_rows: List[Dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            remaining_rows.append(row)
+            continue
+        if row.get("via_relation") or row.get("graph_path") or _is_docs_recall_row(row):
+            remaining_rows.append(row)
+            continue
+        if str((row or {}).get("source_type") or "").strip().lower() != "assistant":
+            remaining_rows.append(row)
+            continue
+        lower_text = str((row or {}).get("text") or "").lower()
+        if not any(term in lower_text for term in anchor_terms):
+            remaining_rows.append(row)
+            continue
+        if not _ASSISTANT_MEMORY_CALLBACK_CUE_RE.search(lower_text):
+            remaining_rows.append(row)
+            continue
+        priority_rows.append(row)
+
+    priority_rows.sort(
+        key=lambda row: float((row or {}).get("similarity", 0.0) or 0.0),
         reverse=True,
     )
     return priority_rows + remaining_rows
@@ -11646,6 +11742,11 @@ def recall_fast(
             rows = _merge_recall_batches([rows, drill_rows], limit=max(effective_limit, drill_limit * 2))
             rows = _prioritize_fast_anchor_direct_rows(query, rows)
             rows = _prioritize_fast_origin_attribution_rows(query, rows)
+            rows = _prioritize_fast_assistant_memory_rows(
+                query,
+                rows,
+                gate_eval=gate_eval,
+            )
             rows = _prioritize_recovered_assistant_list_rows(
                 query,
                 rows,
@@ -12155,7 +12256,7 @@ def recall(
 
     # --- Turn 1: Parallel fanout ---
     turn_start = _time.monotonic()
-    if use_routing and planned_queries is not None:
+    if planned_queries is not None:
         fanout_queries = list(planned_queries)
         fanout_meta = dict(planner_meta or {})
         fanout_meta.setdefault("query", query)
