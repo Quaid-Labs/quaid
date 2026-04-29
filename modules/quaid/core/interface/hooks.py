@@ -130,16 +130,89 @@ _TOOLS_DOMAIN_BLOCK_RE = re.compile(
 
 def _format_memories(memories: List[Dict]) -> str:
     """Format recalled memories as readable context text."""
-    if not memories:
+    filtered_memories = _filter_injectable_memories(memories)
+    if not filtered_memories:
         return ""
     lines = ["[Quaid Memory Context]"]
-    for i, mem in enumerate(memories, 1):
+    for i, mem in enumerate(filtered_memories, 1):
         text = mem.get("text", "")
         sim = mem.get("similarity", 0)
         category = mem.get("category", "fact")
         lines.append(f"  {i}. [{category}] {text} (relevance: {sim:.2f})")
     body = "\n".join(lines)
     return f"<quaid_system_message>\n{body}\n</quaid_system_message>"
+
+
+_NEGATIVE_MEMORY_CONTEXT_RE = re.compile(
+    r"\b(?:memory|record|records|previous\s+sessions|previous\s+conversation|conversation\s+history|"
+    r"context|stored|recorded|recall|remember|came\s+up|matches?|log\s+it|save\s+it|save\s+that)\b",
+    re.IGNORECASE,
+)
+_NEGATIVE_MEMORY_CLAIM_RE = re.compile(
+    r"\b(?:"
+    r"(?:do|does|did)\s+not\s+(?:know|have|remember)|"
+    r"(?:do|does|did)n['’]t\s+(?:know|have|remember)|"
+    r"(?:still\s+)?nothing\s+(?:in|from|for)|"
+    r"(?:no|nothing)\s+(?:in\s+)?(?:memory|record|records|previous\s+sessions|previous\s+conversation|"
+    r"conversation\s+history|context|information|info|data)|"
+    r"no\s+(?:plant\s+name|name|fact|record|records|information|info)\s+(?:was|were|is|are)\s+(?:previously\s+)?"
+    r"(?:recorded|stored|found|available)|"
+    r"(?:not|never)\s+(?:previously\s+)?(?:recorded|stored|found|available)|"
+    r"nothing\s+(?:came|comes)\s+up|"
+    r"no\s+matches?\s+(?:came|come|found)|"
+    r"(?:want|would\s+you\s+like)\s+(?:me\s+)?to\s+(?:log|save|record)\s+(?:one|it|that)"
+    r")\b",
+    re.IGNORECASE,
+)
+_QUESTION_MEMORY_RE = re.compile(
+    r"^\s*(?:who|what|when|where|why|how|which|whose|is|are|was|were|do|does|did|can|could|"
+    r"should|would|will|may|might|has|have|had)\b.*\?\s*$",
+    re.IGNORECASE,
+)
+
+
+def _is_negative_memory_claim_text(text: str) -> bool:
+    raw = str(text or "").strip()
+    if not raw:
+        return False
+    return bool(
+        _NEGATIVE_MEMORY_CLAIM_RE.search(raw)
+        and _NEGATIVE_MEMORY_CONTEXT_RE.search(raw)
+    )
+
+
+def _is_bare_question_memory_text(text: str) -> bool:
+    return bool(_QUESTION_MEMORY_RE.match(str(text or "").strip()))
+
+
+def _is_non_injectable_memory(mem: Dict) -> bool:
+    text = str((mem or {}).get("text") or "").strip()
+    if not text:
+        return False
+    if _is_negative_memory_claim_text(text):
+        return True
+    if _is_bare_question_memory_text(text):
+        return True
+    return False
+
+
+def _filter_injectable_memories(memories: List[Dict]) -> List[Dict]:
+    return [
+        mem
+        for mem in list(memories or [])
+        if isinstance(mem, dict) and not _is_non_injectable_memory(mem)
+    ]
+
+
+def _contains_non_injectable_memory_text(text: str) -> bool:
+    raw = str(text or "").strip()
+    if not raw:
+        return False
+    for line in raw.splitlines():
+        line_text = line.strip(" \t\r\n✅⏭️📝•*-_`")
+        if _is_negative_memory_claim_text(line_text) or _is_bare_question_memory_text(line_text):
+            return True
+    return False
 
 
 def _format_project_docs(docs_bundle: Dict) -> str:
@@ -1117,7 +1190,8 @@ def hook_inject(args):
             "query": query[:160],
             "session_id": session_id,
             "count": len(memories or []),
-            "top_results": _summarize_recall_results(memories),
+            "top_results": _summarize_recall_results(_filter_injectable_memories(memories)),
+            "filtered_count": len(memories or []) - len(_filter_injectable_memories(memories)),
             "diagnostics": _summarize_recall_meta(recall_meta),
         })
         _write_hook_trace("hook.inject.docs_done", {
@@ -1176,6 +1250,13 @@ def hook_inject(args):
                 "session_id": session_id,
                 "strategy": _context_refresh_strategy(),
             })
+            if _contains_non_injectable_memory_text(pending_context):
+                _write_hook_trace("hook.inject.pending_context_filtered", {
+                    "query": query[:160],
+                    "session_id": session_id,
+                    "reason": "non_injectable_memory_text_after_compaction",
+                })
+                pending_context = ""
 
         if pending_context:
             context_parts.append(pending_context)

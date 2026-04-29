@@ -1103,19 +1103,26 @@ _NEGATIVE_MEMORY_CLAIM_RE = re.compile(
     r"\b(?:"
     r"(?:do|does|did)\s+not\s+(?:know|have|remember)|"
     r"(?:do|does|did)n['’]t\s+(?:know|have|remember)|"
+    r"(?:still\s+)?nothing\s+(?:in|from|for)|"
     r"(?:no|nothing)\s+(?:in\s+)?(?:memory|record|records|previous\s+sessions|previous\s+conversation|"
     r"conversation\s+history|context|information|info|data)|"
     r"no\s+(?:plant\s+name|name|fact|record|records|information|info)\s+(?:was|were|is|are)\s+(?:previously\s+)?"
     r"(?:recorded|stored|found|available)|"
     r"(?:not|never)\s+(?:previously\s+)?(?:recorded|stored|found|available)|"
     r"nothing\s+(?:came|comes)\s+up|"
-    r"no\s+matches?\s+(?:came|come|found)"
+    r"no\s+matches?\s+(?:came|come|found)|"
+    r"(?:want|would\s+you\s+like)\s+(?:me\s+)?to\s+(?:log|save|record)\s+(?:one|it|that)"
     r")\b",
     re.IGNORECASE,
 )
 _NEGATIVE_MEMORY_CONTEXT_RE = re.compile(
     r"\b(?:memory|record|records|previous\s+sessions|previous\s+conversation|conversation\s+history|"
-    r"context|stored|recorded|recall|remember|came\s+up|matches?)\b",
+    r"context|stored|recorded|recall|remember|came\s+up|matches?|log\s+it|save\s+it|save\s+that)\b",
+    re.IGNORECASE,
+)
+_QUESTION_FACT_RE = re.compile(
+    r"^\s*(?:who|what|when|where|why|how|which|whose|is|are|was|were|do|does|did|can|could|"
+    r"should|would|will|may|might|has|have|had)\b.*\?\s*$",
     re.IGNORECASE,
 )
 _STRUCTURAL_ANCHOR_TOKEN_RE = re.compile(
@@ -1579,6 +1586,11 @@ def _is_negative_memory_claim_fact_text(text: str) -> bool:
     return bool(_NEGATIVE_MEMORY_CONTEXT_RE.search(lowered))
 
 
+def _is_question_fact_text(text: str) -> bool:
+    """Return true for question-shaped strings the extractor mislabeled as facts."""
+    return bool(_QUESTION_FACT_RE.match(str(text or "").strip()))
+
+
 def _filter_extraction_artifact_facts(parsed: Dict[str, Any]) -> Tuple[Dict[str, Any], int]:
     facts = parsed.get("facts", []) or []
     if not isinstance(facts, list) or not facts:
@@ -1594,6 +1606,7 @@ def _filter_extraction_artifact_facts(parsed: Dict[str, Any]) -> Tuple[Dict[str,
         if isinstance(text, str) and (
             _is_extraction_artifact_fact_text(text)
             or _is_negative_memory_claim_fact_text(text)
+            or _is_question_fact_text(text)
         ):
             dropped += 1
             continue

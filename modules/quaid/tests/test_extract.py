@@ -1069,6 +1069,20 @@ class TestExtractFromTranscript:
                     "extraction_confidence": "high",
                 },
                 {
+                    "text": "Still nothing in memory for an office plant name. If you have one, happy to log it",
+                    "category": "fact",
+                    "speaker": "agent",
+                    "domains": ["personal"],
+                    "extraction_confidence": "high",
+                },
+                {
+                    "text": "What's the office plant named?",
+                    "category": "fact",
+                    "speaker": "user",
+                    "domains": ["personal"],
+                    "extraction_confidence": "high",
+                },
+                {
                     "text": "The office plant is named Bartholomew and is a fiddle-leaf fig",
                     "category": "fact",
                     "speaker": "user",
@@ -1092,8 +1106,8 @@ class TestExtractFromTranscript:
         )
 
         texts = [fact["text"] for fact in result["raw_facts"]]
-        assert result["artifact_facts_dropped"] == 1
-        assert result["facts_skipped"] == 1
+        assert result["artifact_facts_dropped"] == 3
+        assert result["facts_skipped"] == 3
         assert texts == ["The office plant is named Bartholomew and is a fiddle-leaf fig"]
 
     def test_carry_selection_is_bounded_and_persistable(self):

@@ -328,6 +328,21 @@ def test_claude_code_post_compact_turn_gets_one_shot_identity_context(monkeypatc
             "text": "Solomon Steadman asked about an office plant name but no plant name was previously recorded in memory.",
             "category": "fact",
             "similarity": 1.0,
+        },
+        {
+            "text": "What's the office plant named?",
+            "category": "fact",
+            "similarity": 1.0,
+        },
+        {
+            "text": "Still nothing in memory for an office plant name. If you have one, happy to log it.",
+            "category": "fact",
+            "similarity": 1.0,
+        },
+        {
+            "text": "Solomon Steadman uses a Baratza Encore grinder in his office.",
+            "category": "fact",
+            "similarity": 0.7,
         }
     ], None))
     monkeypatch.setattr("core.interface.api.projects_search_docs", lambda **kwargs: {})
@@ -360,7 +375,10 @@ def test_claude_code_post_compact_turn_gets_one_shot_identity_context(monkeypatc
     assert "Bartholomew" in context
     assert "fiddle-leaf fig" in context
     assert "refreshed identity files as the current authoritative source" in context
-    assert context.index("Bartholomew") < context.index("previously recorded in memory")
+    assert "previously recorded in memory" not in context
+    assert "Still nothing in memory" not in context
+    assert "What's the office plant named?" not in context
+    assert "Baratza Encore" in context
     assert not marker_path.exists()
 
     adapter.get_pending_context.return_value = ""
