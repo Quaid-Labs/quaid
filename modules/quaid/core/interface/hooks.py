@@ -752,6 +752,47 @@ def _write_hook_trace(event: str, payload: dict | None = None) -> None:
         pass
 
 
+def _maybe_dump_compaction_followup_context_debug(context: str, *, session_id: str, query: str) -> None:
+    enabled = str(os.environ.get("QUAID_CC_M7_DEBUG_DUMP", "") or "").strip().lower()
+    if enabled not in {"1", "true", "yes", "on"}:
+        return
+
+    raw = str(context or "")
+    payload = raw.encode("utf-8")
+    header_offset = payload.find(b"MANDATORY")
+    bartholomew_offset = payload.find(b"Bartholomew")
+    dump_dir_raw = str(os.environ.get("QUAID_CC_M7_DEBUG_DIR", "") or "").strip()
+    dump_dir = Path(dump_dir_raw).expanduser() if dump_dir_raw else Path("/tmp")
+    timestamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
+    safe_session = re.sub(r"[^A-Za-z0-9_.-]+", "-", str(session_id or "unknown")).strip("-") or "unknown"
+    dump_path = dump_dir / f"quaid-cc-m7-debug-{timestamp}-{safe_session}.txt"
+
+    trace_payload = {
+        "query": str(query or "")[:160],
+        "session_id": session_id,
+        "path": str(dump_path),
+        "byte_len": len(payload),
+        "mandatory_header_byte": header_offset,
+        "bartholomew_present": bartholomew_offset >= 0,
+        "bartholomew_byte": bartholomew_offset,
+    }
+    try:
+        dump_dir.mkdir(parents=True, exist_ok=True)
+        dump_path.write_bytes(payload)
+        _write_hook_trace("hook.inject.compaction_followup_debug_dump", trace_payload)
+        print(
+            "[quaid][cc-m7-debug] dumped additionalContext "
+            f"path={dump_path} bytes={len(payload)} "
+            f"mandatory_header_byte={header_offset} "
+            f"bartholomew_present={bartholomew_offset >= 0} "
+            f"bartholomew_byte={bartholomew_offset}",
+            file=sys.stderr,
+        )
+    except Exception as exc:
+        trace_payload["error"] = str(exc)
+        _write_hook_trace("hook.inject.compaction_followup_debug_dump_error", trace_payload)
+
+
 def _extract_codex_tool_output_trace(hook_input: dict, max_chars: int = 12000) -> Dict[str, Any]:
     """Return best-effort tool output details for Codex hook trace debugging."""
     if not isinstance(hook_input, dict):
@@ -1317,6 +1358,12 @@ def hook_inject(args):
             return
 
         context = "\n\n".join(context_parts)
+        if compaction_refresh_context:
+            _maybe_dump_compaction_followup_context_debug(
+                context,
+                session_id=session_id,
+                query=query,
+            )
         _write_hook_trace("hook.inject.context_emitted", {
             "query": query[:160],
             "session_id": session_id,

@@ -294,7 +294,10 @@ def test_claude_code_post_compact_turn_gets_one_shot_identity_context(monkeypatc
 
     rules_dir = tmp_path / ".claude" / "rules"
     data_dir = tmp_path / "data"
+    debug_dir = tmp_path / "debug"
     monkeypatch.setenv("QUAID_RULES_DIR", str(rules_dir))
+    monkeypatch.setenv("QUAID_CC_M7_DEBUG_DUMP", "1")
+    monkeypatch.setenv("QUAID_CC_M7_DEBUG_DIR", str(debug_dir))
 
     written_signals = []
 
@@ -360,7 +363,7 @@ def test_claude_code_post_compact_turn_gets_one_shot_identity_context(monkeypatc
     marker_path = data_dir / "context-refresh-compaction" / "sess-cc-compact-followup.json"
     assert marker_path.is_file()
 
-    out, _ = _run_hook_inject(
+    out, err = _run_hook_inject(
         {
             "session_id": "sess-cc-compact-followup",
             "transcript_path": str(transcript_path),
@@ -382,6 +385,12 @@ def test_claude_code_post_compact_turn_gets_one_shot_identity_context(monkeypatc
     assert "Still nothing in memory" not in context
     assert "What's the office plant named" not in context
     assert "Baratza Encore" in context
+    dump_files = list(debug_dir.glob("quaid-cc-m7-debug-*-sess-cc-compact-followup.txt"))
+    assert len(dump_files) == 1
+    dumped = dump_files[0].read_text(encoding="utf-8")
+    assert dumped == context
+    assert "mandatory_header_byte=" in err
+    assert "bartholomew_present=True" in err
     assert not marker_path.exists()
 
     adapter.get_pending_context.return_value = ""
