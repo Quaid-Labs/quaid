@@ -713,14 +713,23 @@ class TestExtractFromTranscript:
             dry_run=True,
         )
 
-        agent_texts = [
-            fact["text"]
+        agent_facts = [
+            fact
             for fact in result["raw_facts"]
             if str(fact.get("speaker", "") or "").lower() == "agent"
         ]
+        agent_texts = [fact["text"] for fact in agent_facts]
         assert any(text.startswith("Local Foods") for text in agent_texts)
         assert any(text.startswith("Uchi Houston") for text in agent_texts)
         assert any("Weights + Measures" in text and "Feges BBQ" in text for text in agent_texts)
+        assert all(
+            fact.get("extraction_confidence") == "high"
+            for fact in agent_facts
+            if any(
+                marker in str(fact.get("text", "") or "")
+                for marker in ("Local Foods", "Uchi Houston", "Weights + Measures", "Feges BBQ")
+            )
+        )
 
     @patch("ingest.extract.call_deep_reasoning")
     def test_assistant_plan_anchor_is_preserved_when_llm_omits_it(self, mock_llm):
@@ -757,21 +766,80 @@ class TestExtractFromTranscript:
             dry_run=True,
         )
 
-        agent_texts = [
-            fact["text"]
+        agent_facts = [
+            fact
             for fact in result["raw_facts"]
             if str(fact.get("speaker", "") or "").lower() == "agent"
         ]
-        user_texts = [
-            fact["text"]
+        user_facts = [
+            fact
             for fact in result["raw_facts"]
             if str(fact.get("speaker", "") or "").lower() == "user"
         ]
+        agent_texts = [fact["text"] for fact in agent_facts]
+        user_texts = [fact["text"] for fact in user_facts]
         assert any(
             "FaceTime call during dinner" in text and "David" in text and "Rachel" in text
             for text in agent_texts
         )
         assert any("FaceTime thing for Rachel during dinner" in text for text in user_texts)
+        assert any(
+            fact.get("extraction_confidence") == "high"
+            and "FaceTime call during dinner" in str(fact.get("text", "") or "")
+            for fact in agent_facts
+        )
+        assert any(
+            fact.get("extraction_confidence") == "high"
+            and "FaceTime thing for Rachel during dinner" in str(fact.get("text", "") or "")
+            for fact in user_facts
+        )
+
+    @patch("ingest.extract.call_deep_reasoning")
+    def test_question_shaped_user_idea_anchor_is_preserved_when_assistant_builds_on_it(self, mock_llm):
+        from ingest.extract import extract_from_transcript
+
+        mock_llm.return_value = (json.dumps({
+            "chunk_assessment": "usable",
+            "facts": [
+                {
+                    "text": "Rachel FaceTimed into Linda's birthday dinner with Ethan and Lily",
+                    "category": "fact",
+                    "speaker": "user",
+                    "domains": ["personal"],
+                    "extraction_confidence": "high",
+                    "privacy": "shared",
+                }
+            ],
+            "soul_snippets": {},
+            "journal_entries": {},
+            "project_logs": {},
+        }), 0.1)
+
+        transcript = (
+            "User: maybe we do a FaceTime thing for Rachel during dinner?\n"
+            "  like she calls once we're seated.\n\n"
+            "Assistant: The FaceTime call during dinner is actually a great idea — it makes the surprise even bigger.\n"
+            "  Your mom thinks it's just her and David, then you show up, then Rachel's on the phone.\n"
+            "  Layer the surprises. It'll be a great moment.\n"
+        )
+
+        result = extract_from_transcript(
+            transcript=transcript,
+            owner_id="Maya Chen",
+            dry_run=True,
+        )
+
+        user_facts = [
+            fact
+            for fact in result["raw_facts"]
+            if str(fact.get("speaker", "") or "").lower() == "user"
+        ]
+        assert any(
+            fact.get("extraction_confidence") == "high"
+            and "FaceTime thing for Rachel during dinner" in str(fact.get("text", "") or "")
+            and "calls once we're seated" in str(fact.get("text", "") or "")
+            for fact in user_facts
+        )
 
     @patch("ingest.extract.call_deep_reasoning")
     def test_assistant_callback_anchor_is_preserved_when_llm_omits_it(self, mock_llm):
@@ -822,6 +890,13 @@ class TestExtractFromTranscript:
             if str(fact.get("speaker", "") or "").lower() == "agent"
         ]
         assert any("pinecone" in text and "Biscuit" in text for text in agent_texts)
+        assert any(
+            fact.get("extraction_confidence") == "high"
+            and "pinecone" in str(fact.get("text", "") or "").lower()
+            and "biscuit" in str(fact.get("text", "") or "").lower()
+            for fact in result["raw_facts"]
+            if str(fact.get("speaker", "") or "").lower() == "agent"
+        )
 
     @patch("ingest.extract.call_deep_reasoning")
     def test_explicit_structural_anchor_does_not_store_user_questions(self, mock_llm):

@@ -1299,6 +1299,16 @@ def _dedupe_casefold(values: List[str]) -> List[str]:
     return deduped
 
 
+def _structural_overlap_tokens(text: str, *, min_len: int = 6) -> List[str]:
+    tokens: List[str] = []
+    for match in re.finditer(rf"(?u)\b[\w'+-]{{{max(1, int(min_len))},}}\b", str(text or "")):
+        token = str(match.group(0) or "").strip().lower()
+        if not token or not any(ch.isalpha() for ch in token):
+            continue
+        tokens.append(token)
+    return _dedupe_casefold(tokens)
+
+
 def _assistant_anchor_keywords(text: str) -> str:
     tokens = [
         token.strip(".,;:!?()[]{}\"'`").lower()
@@ -1335,7 +1345,7 @@ def _build_assistant_anchor_fact(
         "category": "fact",
         "speaker": "agent",
         "domains": ["personal"],
-        "extraction_confidence": "medium",
+        "extraction_confidence": "high",
         "keywords": _assistant_anchor_keywords(candidate),
         "privacy": "shared",
         "confidence_reason": confidence_reason,
@@ -1362,17 +1372,32 @@ def _explicit_user_mirrored_anchor_facts(
         if role != "user" or next_role != "assistant":
             continue
         assistant_text_lower = str(next_text or "").lower()
-        for sentence in _split_fact_sentences(turn_text):
-            if sentence.rstrip().endswith("?"):
-                continue
-            fact_text = _normalize_structural_anchor_sentence(sentence)
+        assistant_overlap_tokens = set(_structural_overlap_tokens(next_text))
+        raw_sentences = _split_fact_sentences(turn_text)
+        candidate_sentences: List[str] = []
+        for sentence_index, sentence in enumerate(raw_sentences):
+            stripped_sentence = str(sentence or "").strip()
+            if stripped_sentence.rstrip().endswith("?") and sentence_index + 1 < len(raw_sentences):
+                next_sentence = str(raw_sentences[sentence_index + 1] or "").strip()
+                if next_sentence and len(next_sentence.split()) <= 12:
+                    candidate_sentences.append(
+                        f"{stripped_sentence.rstrip('?').rstrip()} {next_sentence}"
+                    )
+            candidate_sentences.append(stripped_sentence)
+        for sentence in candidate_sentences:
+            fact_text = _normalize_structural_anchor_sentence(str(sentence or "").rstrip("?"))
             if len(fact_text.split()) < 5 or len(fact_text) > 240:
                 continue
             user_spans = _dedupe_casefold(_extract_titleish_spans(fact_text))
-            if len(user_spans) < 2:
-                continue
             shared_spans = [span for span in user_spans if span.lower() in assistant_text_lower]
-            if len(shared_spans) < 2:
+            overlap_tokens = [
+                token
+                for token in _structural_overlap_tokens(fact_text)
+                if token in assistant_overlap_tokens
+            ]
+            strong_title_overlap = len(user_spans) >= 2 and len(shared_spans) >= 2
+            strong_structural_overlap = len(shared_spans) >= 1 and len(overlap_tokens) >= 2
+            if not strong_title_overlap and not strong_structural_overlap:
                 continue
             fact_key = _fact_text_key(fact_text)
             if not fact_key or fact_key in seen_fact_texts or fact_text.lower() in existing_text:
@@ -1387,7 +1412,7 @@ def _explicit_user_mirrored_anchor_facts(
                 "category": "fact",
                 "speaker": "user",
                 "domains": ["personal"],
-                "extraction_confidence": "medium",
+                "extraction_confidence": "high",
                 "keywords": " ".join(dict.fromkeys(keyword_tokens)),
                 "privacy": "shared",
                 "confidence_reason": "Exact user-authored idea anchor mirrored by immediate assistant follow-up",
