@@ -50,6 +50,7 @@ import time
 import urllib.request
 import urllib.error
 import uuid
+from collections import Counter
 from contextlib import nullcontext
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timedelta, timezone
@@ -9635,6 +9636,7 @@ def _build_fast_drill_fallback_queries(
     gate_eval: Optional[Dict[str, Any]],
     planner_meta: Optional[Dict[str, Any]],
     owner_id: Optional[str] = None,
+    current_rows: Optional[List[Dict[str, Any]]] = None,
 ) -> List[str]:
     """Cheap deterministic fallback when the drill planner returns nothing.
 
@@ -9661,6 +9663,81 @@ def _build_fast_drill_fallback_queries(
     def _normalize_term(raw: Any) -> str:
         return " ".join(str(raw or "").split()).strip().strip(".,;:!?\"'").lower()
 
+    def _normalize_owner_token(raw: Any) -> str:
+        token = _normalize_term(raw)
+        if not token:
+            return ""
+        token = re.split(r"[\s\-_/:]+", token, maxsplit=1)[0]
+        token = re.sub(r"[^a-z0-9]", "", token)
+        if len(token) < 3:
+            return ""
+        return token
+
+    def _origin_context_terms(anchor_terms: List[str], *, limit: int = 2) -> List[str]:
+        preferred = ("dinner", "surprise", "call", "birthday", "meal")
+        candidate_terms: List[str] = []
+        for row in list(current_rows or []):
+            if not isinstance(row, dict):
+                continue
+            if row.get("via_relation") or row.get("graph_path") or _is_docs_recall_row(row):
+                continue
+            source_type = str((row or {}).get("source_type") or "").strip().lower()
+            if source_type not in {"user", "assistant", "both"}:
+                continue
+            lower_text = str((row or {}).get("text") or "").lower()
+            if anchor_terms and not any(term in lower_text for term in anchor_terms):
+                continue
+            for raw in _extract_distinctive_query_terms(str((row or {}).get("text") or ""), limit=10):
+                term = _normalize_term(raw)
+                if (
+                    not term
+                    or term in anchor_terms
+                    or term in _QUERY_STOPWORDS
+                    or term in {"came", "idea", "who"}
+                ):
+                    continue
+                candidate_terms.append(term)
+        ordered: List[str] = []
+        seen_terms: set[str] = set()
+        for term in preferred:
+            if term in candidate_terms and term not in seen_terms:
+                seen_terms.add(term)
+                ordered.append(term)
+        for term in candidate_terms:
+            if term not in seen_terms:
+                seen_terms.add(term)
+                ordered.append(term)
+        return ordered[: max(0, limit)]
+
+    def _origin_owner_token(anchor_terms: List[str]) -> str:
+        owner_tokens: List[str] = []
+        for row in list(current_rows or []):
+            if not isinstance(row, dict):
+                continue
+            if row.get("via_relation") or row.get("graph_path") or _is_docs_recall_row(row):
+                continue
+            source_type = str((row or {}).get("source_type") or "").strip().lower()
+            if source_type not in {"user", "assistant", "both"}:
+                continue
+            lower_text = str((row or {}).get("text") or "").lower()
+            if anchor_terms and not any(term in lower_text for term in anchor_terms):
+                continue
+            token = _normalize_owner_token((row or {}).get("owner_id"))
+            if token:
+                owner_tokens.append(token)
+        if owner_tokens:
+            counts = Counter(owner_tokens)
+            return max(counts.items(), key=lambda item: (item[1], -owner_tokens.index(item[0])))[0]
+        if owner_id:
+            token = _normalize_owner_token(owner_id)
+            if token:
+                return token
+            owner_node = resolve_owner_person(str(owner_id or "").strip())
+            token = _normalize_owner_token(getattr(owner_node, "name", "") if owner_node is not None else "")
+            if token:
+                return token
+        return ""
+
     def _build_origin_attribution_fallback() -> List[str]:
         if not _is_origin_attribution_query(query):
             return []
@@ -9672,13 +9749,16 @@ def _build_fast_drill_fallback_queries(
         if not anchor_terms:
             return []
 
-        assistant_query = f"assistant {anchor_terms[0]} idea"
+        context_terms = _origin_context_terms(anchor_terms)
+        assistant_parts = ["assistant", anchor_terms[0], *context_terms, "idea"]
+        assistant_query = " ".join(
+            part for index, part in enumerate(assistant_parts)
+            if part and part not in assistant_parts[:index]
+        )
         queries: List[str] = []
 
         owner_query = None
-        owner_node = resolve_owner_person(str(owner_id or "").strip()) if owner_id else None
-        owner_name = " ".join(str(getattr(owner_node, "name", "") or "").split()).strip().lower()
-        owner_token = owner_name.split()[0] if owner_name else ""
+        owner_token = _origin_owner_token(anchor_terms)
         if owner_token:
             extra_terms: List[str] = []
             for raw in list(gate.get("query_terms") or []) + list(_extract_distinctive_query_terms(query, limit=8)):
@@ -9694,7 +9774,11 @@ def _build_fast_drill_fallback_queries(
                 extra_terms.append(term)
             ordered_extra: List[str] = []
             seen_extra: set[str] = set()
-            for preferred in ("birthday", "dinner", "meal", "surprise"):
+            for preferred in ("dinner", "surprise", "birthday", "meal"):
+                if preferred in extra_terms and preferred not in seen_extra:
+                    seen_extra.add(preferred)
+                    ordered_extra.append(preferred)
+            for preferred in context_terms:
                 if preferred in extra_terms and preferred not in seen_extra:
                     seen_extra.add(preferred)
                     ordered_extra.append(preferred)
@@ -9813,6 +9897,55 @@ def _is_assistant_suggestion_list_query(query: str, gate_eval: Optional[Dict[str
             lower,
         )
     )
+
+
+_ORIGIN_ATTRIBUTION_CUE_RE = re.compile(
+    r"\b(?:idea|suggest(?:ed|ion)?|propos(?:e|ed|al)|maybe|should|could|"
+    r"let'?s|plan(?:ned)?|talked|glad)\b",
+    re.IGNORECASE,
+)
+
+
+def _prioritize_fast_origin_attribution_rows(query: str, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Preserve direct ideation/adoption rows before fast-path truncation."""
+    if not rows or not _is_origin_attribution_query(query):
+        return rows
+    anchor_terms = _priority_anchor_terms_for_fast_attribution(
+        query,
+        _extract_explicit_query_anchor_terms(query, limit=8),
+    )
+    anchor_terms = [str(term or "").strip().lower() for term in anchor_terms if str(term or "").strip()]
+    if not anchor_terms:
+        return rows
+
+    def _is_priority_row(row: Dict[str, Any]) -> bool:
+        if not isinstance(row, dict):
+            return False
+        if row.get("via_relation") or row.get("graph_path") or _is_docs_recall_row(row):
+            return False
+        source_type = str((row or {}).get("source_type") or "").strip().lower()
+        if source_type not in {"assistant", "user", "both"}:
+            return False
+        lower_text = str((row or {}).get("text") or "").lower()
+        if not any(term in lower_text for term in anchor_terms):
+            return False
+        return bool(_ORIGIN_ATTRIBUTION_CUE_RE.search(lower_text))
+
+    priority_rows: List[Dict[str, Any]] = []
+    remaining_rows: List[Dict[str, Any]] = []
+    for row in rows:
+        if _is_priority_row(row):
+            priority_rows.append(row)
+        else:
+            remaining_rows.append(row)
+    priority_rows.sort(
+        key=lambda row: (
+            2 if str((row or {}).get("source_type") or "").strip().lower() == "assistant" else 1,
+            float((row or {}).get("similarity", 0.0) or 0.0),
+        ),
+        reverse=True,
+    )
+    return priority_rows + remaining_rows
 
 
 def _build_recall_row_from_node(
@@ -11315,6 +11448,7 @@ def recall_fast(
             gate_eval=gate_eval,
             planner_meta=planner_meta,
             owner_id=owner_id,
+            current_rows=rows,
         )
         if drill_queries:
             lowered_drill = {" ".join(str(item or "").lower().split()) for item in drill_queries}
@@ -11373,6 +11507,7 @@ def recall_fast(
                 gate_eval=gate_eval,
                 planner_meta=planner_meta,
                 owner_id=owner_id,
+                current_rows=rows,
             )
             if drill_queries:
                 drill_meta = dict(drill_meta or {})
@@ -11387,6 +11522,8 @@ def recall_fast(
             drill_limit = min(effective_limit, 5)
             if _is_assistant_suggestion_list_query(query, gate_eval):
                 drill_limit = max(drill_limit, min(120, max(40, effective_limit * 5)))
+            elif _is_origin_attribution_query(query):
+                drill_limit = max(drill_limit, 12)
             fast_drill_meta = dict(drill_meta or {})
             fast_drill_meta.setdefault("planned_stores", list(planned_stores))
             fast_drill_meta.setdefault("planned_project", planned_project)
@@ -11508,6 +11645,7 @@ def recall_fast(
                 )
             rows = _merge_recall_batches([rows, drill_rows], limit=max(effective_limit, drill_limit * 2))
             rows = _prioritize_fast_anchor_direct_rows(query, rows)
+            rows = _prioritize_fast_origin_attribution_rows(query, rows)
             rows = _prioritize_recovered_assistant_list_rows(
                 query,
                 rows,

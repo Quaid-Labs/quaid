@@ -3386,6 +3386,75 @@ class TestRecallTelemetry:
 
         assert queries == ["maya facetime birthday idea", "assistant facetime idea"]
 
+    def test_build_fast_drill_fallback_queries_uses_row_context_for_origin_attribution(self):
+        import datastore.memorydb.memory_graph as mg
+
+        queries = mg._build_fast_drill_fallback_queries(
+            "Who came up with the FaceTime idea for Linda's birthday?",
+            gate_eval={
+                "requirements": ["assistant_source"],
+                "coverage": {"assistant_source": 0},
+                "query_terms": ["came", "facetime", "idea", "linda", "birthday"],
+                "overlap_ratio": 0.2,
+            },
+            planner_meta={
+                "used_llm": False,
+                "bailout_reason": "preserve_short_exact_query",
+                "planned_stores": ["vector"],
+                "query_shape": "focused",
+            },
+            owner_id="solomon-steadman",
+            current_rows=[
+                {
+                    "text": "maybe we do a facetime thing for her like she calls during dinner actually",
+                    "source_type": "user",
+                    "owner_id": "maya",
+                },
+                {
+                    "text": "The FaceTime call during dinner is actually a great idea — it makes the surprise even bigger.",
+                    "source_type": "assistant",
+                    "owner_id": "maya",
+                },
+            ],
+        )
+
+        assert queries == ["maya facetime birthday idea", "assistant facetime dinner surprise idea"]
+
+    def test_prioritize_fast_origin_attribution_rows_prefers_ideation_rows(self):
+        import datastore.memorydb.memory_graph as mg
+
+        rows = mg._prioritize_fast_origin_attribution_rows(
+            "Who came up with the FaceTime idea for Linda's birthday?",
+            [
+                {
+                    "id": "a",
+                    "text": "Rachel FaceTimed into Linda's birthday dinner with Ethan and Lily",
+                    "source_type": "user",
+                    "similarity": 1.0,
+                },
+                {
+                    "id": "b",
+                    "text": "The layered surprises worked! Remember we talked about the FaceTime call idea? Glad you went with that",
+                    "source_type": "assistant",
+                    "similarity": 0.99,
+                },
+                {
+                    "id": "c",
+                    "text": "maybe we do a facetime thing for her like she calls during dinner actually",
+                    "source_type": "user",
+                    "similarity": 0.78,
+                },
+                {
+                    "id": "d",
+                    "text": "Maya and David planned to have Rachel call via FaceTime during Maya's mom's April 2026 birthday dinner to layer the surprises",
+                    "source_type": "user",
+                    "similarity": 0.81,
+                },
+            ],
+        )
+
+        assert [row["id"] for row in rows[:4]] == ["b", "d", "c", "a"]
+
     def test_recall_fast_uses_assistant_anchor_drill_when_exact_assistant_query_has_zero_assistant_hits(self):
         import datastore.memorydb.memory_graph as mg
 
@@ -3477,6 +3546,7 @@ class TestRecallTelemetry:
                 "planner_profile": planner_profile,
                 "planned_queries": list(planned_queries or []),
                 "stores": list(stores or []),
+                "limit": limit,
             })
             if len(run_calls) == 1:
                 return (
@@ -3551,6 +3621,7 @@ class TestRecallTelemetry:
         assert len(run_calls) == 2
         assert run_calls[1]["planner_profile"] == "off"
         assert run_calls[1]["planned_queries"][0] == "Who came up with the FaceTime idea for Linda's birthday?"
+        assert run_calls[1]["limit"] == 12
         assert "maya facetime birthday idea" in run_calls[1]["planned_queries"]
         assert "assistant facetime idea" in run_calls[1]["planned_queries"]
         assert meta["quality_gate"]["fast_drill_enabled"] is True
