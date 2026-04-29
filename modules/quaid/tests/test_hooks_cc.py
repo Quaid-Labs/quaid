@@ -214,6 +214,66 @@ def test_claude_code_inject_writes_session_end_signal_for_clear_command(monkeypa
     assert sig["meta"]["reason"] == "command:clear"
 
 
+def test_claude_code_inject_refreshes_rules_context_for_compact_command(monkeypatch, tmp_path, cursor_dir):
+    from adaptors.claude_code.adapter import ClaudeCodeAdapter
+
+    transcript_path = tmp_path / "cc-compact.jsonl"
+    transcript_path.write_text(
+        json.dumps({"type": "user", "message": {"role": "user", "content": "/compact"}}) + "\n",
+        encoding="utf-8",
+    )
+    projects_dir = tmp_path / "projects"
+    identity_dir = tmp_path / "identity"
+    projects_dir.mkdir()
+    identity_dir.mkdir()
+    (identity_dir / "USER.md").write_text("The office plant is named Bartholomew.", encoding="utf-8")
+    (identity_dir / "SOUL.md").write_text("SOUL live", encoding="utf-8")
+    (identity_dir / "ENVIRONMENT.md").write_text("It is a fiddle-leaf fig.", encoding="utf-8")
+
+    rules_dir = tmp_path / ".claude" / "rules"
+    monkeypatch.setenv("QUAID_RULES_DIR", str(rules_dir))
+
+    written_signals = []
+
+    def fake_write_signal(**kwargs):
+        written_signals.append(kwargs)
+        return Path(tmp_path / "signals" / "sig-compact.json")
+
+    adapter = _adapter_mock()
+    cc_adapter = ClaudeCodeAdapter()
+    adapter.adapter_id.return_value = "claude-code"
+    adapter.resolve_prompt_submit_signal.side_effect = cc_adapter.resolve_prompt_submit_signal
+    adapter.projects_dir.return_value = projects_dir
+    adapter.identity_dir.return_value = identity_dir
+    adapter.get_base_context_files.return_value = {}
+    adapter.get_cli_tools_snippet.return_value = ""
+
+    monkeypatch.setattr("core.extraction_daemon.write_signal", fake_write_signal)
+    monkeypatch.setattr("lib.adapter.get_adapter", lambda: adapter)
+
+    out, err = _run_hook_inject(
+        {
+            "session_id": "sess-cc-compact",
+            "transcript_path": str(transcript_path),
+            "cwd": str(tmp_path),
+            "prompt": "/compact",
+        },
+        monkeypatch=monkeypatch,
+    )
+
+    assert out.strip() == ""
+    assert len(written_signals) == 1
+    sig = written_signals[0]
+    assert sig["signal_type"] == "compaction"
+    assert sig["session_id"] == "sess-cc-compact"
+    assert sig["transcript_path"] == str(transcript_path)
+    assert sig["meta"]["command"] == "/compact"
+    content = (rules_dir / "quaid-projects.md").read_text(encoding="utf-8")
+    assert "Bartholomew" in content
+    assert "fiddle-leaf fig" in content
+    assert "context-refresh" in err
+
+
 def test_refresh_runtime_config_if_changed_reloads_and_resets_caches(monkeypatch, tmp_path):
     from core.interface import hooks
 

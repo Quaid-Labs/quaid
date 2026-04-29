@@ -1245,6 +1245,15 @@ class TestClaudeCodeAdapter:
         assert signal["meta"]["command"] == "/clear"
         assert signal["meta"]["reason"] == "command:clear"
 
+    def test_resolve_prompt_submit_signal_returns_compaction_for_compact_command(self):
+        adapter = ClaudeCodeAdapter()
+        signal = adapter.resolve_prompt_submit_signal({"prompt": "/compact"})
+        assert signal is not None
+        assert signal["signal_type"] == "compaction"
+        assert signal["meta"]["source"] == "hook_inject"
+        assert signal["meta"]["command"] == "/compact"
+        assert signal["meta"]["reason"] == "command:compact"
+
     def test_resolve_prompt_submit_signal_detects_local_command_wrapper(self):
         adapter = ClaudeCodeAdapter()
         signal = adapter.resolve_prompt_submit_signal({

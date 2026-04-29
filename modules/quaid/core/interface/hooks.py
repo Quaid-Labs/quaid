@@ -939,6 +939,21 @@ def hook_inject(args):
             signal_type = str(signal_spec.get("signal_type") or "session_end")
             meta = dict(signal_spec.get("meta") or {})
             lifecycle_command = str(meta.get("command") or "").strip()
+            if lifecycle_command == "/compact":
+                try:
+                    _maybe_compaction_refresh_context_artifacts(hook_input, is_precompact=True)
+                    _write_hook_trace("hook.inject.compaction_context_refreshed", {
+                        "query": query[:160],
+                        "session_id": session_id,
+                        "strategy": _context_refresh_strategy(),
+                    })
+                except Exception as exc:
+                    print(f"[quaid][hook-inject] compaction context refresh error: {exc}", file=sys.stderr)
+                    _write_hook_trace("hook.inject.compaction_context_refresh_error", {
+                        "query": query[:160],
+                        "session_id": session_id,
+                        "error": str(exc)[:500],
+                    })
             _write_hook_trace("hook.inject.command_detected", {
                 "query": query[:160],
                 "session_id": session_id,

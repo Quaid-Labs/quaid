@@ -68,7 +68,7 @@ class ClaudeCodeAdapter(QuaidAdapter):
         flags=re.DOTALL | re.IGNORECASE,
     )
     _LOCAL_COMMAND_NAME_RE = re.compile(
-        r"<command-name>\s*(/(?:new|clear|reset|restart))\b.*?</command-name>",
+        r"<command-name>\s*(/(?:new|clear|reset|restart|compact))\b.*?</command-name>",
         flags=re.DOTALL | re.IGNORECASE,
     )
     _SESSION_ID_FROM_TRANSCRIPT_RE = re.compile(
@@ -643,7 +643,7 @@ class ClaudeCodeAdapter(QuaidAdapter):
         if not value.startswith("/"):
             return ""
         command = value.split()[0].lower()
-        if command in ("/new", "/clear", "/reset", "/restart"):
+        if command in ("/new", "/clear", "/reset", "/restart", "/compact"):
             return command
         return ""
 
@@ -679,8 +679,9 @@ class ClaudeCodeAdapter(QuaidAdapter):
         command = self._scan_lifecycle_candidates(hook_input)
         if not command:
             return None
+        signal_type = "compaction" if command == "/compact" else "session_end"
         return {
-            "signal_type": "session_end",
+            "signal_type": signal_type,
             "meta": {
                 "source": "hook_inject",
                 "command": command,
