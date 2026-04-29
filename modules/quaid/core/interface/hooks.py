@@ -1333,6 +1333,13 @@ def hook_inject(args):
             session_id,
             hook_cwd=hook_cwd,
         )
+        if compaction_refresh_context is not None and not compaction_refresh_context:
+            _write_hook_trace("hook.inject.compaction_followup_context_suppressed", {
+                "query": query[:160],
+                "session_id": session_id,
+                "reason": "QUAID_DISABLE_COMPACT_ADDITIONAL_CONTEXT",
+            })
+            return
         if compaction_refresh_context:
             context_parts.append(compaction_refresh_context)
             _write_hook_trace("hook.inject.compaction_followup_context_refreshed", {
@@ -1998,8 +2005,15 @@ def _build_turn_based_refresh_context(session_id: str) -> str:
     return _build_project_context_message()
 
 
-def _build_compaction_followup_refresh_context(session_id: str, *, hook_cwd: str = "") -> str:
+def _compact_additional_context_disabled() -> bool:
+    raw = str(os.environ.get("QUAID_DISABLE_COMPACT_ADDITIONAL_CONTEXT", "") or "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _build_compaction_followup_refresh_context(session_id: str, *, hook_cwd: str = "") -> str | None:
     if not _consume_compaction_refresh_marker(session_id):
+        return None
+    if _compact_additional_context_disabled():
         return ""
     warning = (
         "--- refreshed-identity-context ---\n"
