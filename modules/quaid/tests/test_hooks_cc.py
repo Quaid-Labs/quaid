@@ -311,14 +311,25 @@ def test_claude_code_post_compact_turn_gets_one_shot_identity_context(monkeypatc
     adapter.data_dir.return_value = data_dir
     adapter.get_base_context_files.return_value = {}
     adapter.get_cli_tools_snippet.return_value = ""
-    adapter.get_pending_context.return_value = ""
+    adapter.get_pending_context.return_value = (
+        "<quaid_system_message>\n"
+        "Solomon Steadman asked about an office plant name but no plant name "
+        "was previously recorded in memory.\n"
+        "</quaid_system_message>"
+    )
     adapter.get_deferred_notice_relay_context.return_value = ""
 
     monkeypatch.setattr("core.extraction_daemon.write_signal", fake_write_signal)
     monkeypatch.setattr("core.extraction_daemon.ensure_alive", lambda: None)
     monkeypatch.setattr("core.extraction_daemon.read_cursor", lambda session_id: {"transcript_path": str(transcript_path)})
     monkeypatch.setattr("lib.adapter.get_adapter", lambda: adapter)
-    monkeypatch.setattr("core.interface.api.recall_fast", lambda **kwargs: ([], None))
+    monkeypatch.setattr("core.interface.api.recall_fast", lambda **kwargs: ([
+        {
+            "text": "Solomon Steadman asked about an office plant name but no plant name was previously recorded in memory.",
+            "category": "fact",
+            "similarity": 1.0,
+        }
+    ], None))
     monkeypatch.setattr("core.interface.api.projects_search_docs", lambda **kwargs: {})
 
     _run_hook_inject(
@@ -348,7 +359,12 @@ def test_claude_code_post_compact_turn_gets_one_shot_identity_context(monkeypatc
     context = payload["hookSpecificOutput"]["additionalContext"]
     assert "Bartholomew" in context
     assert "fiddle-leaf fig" in context
+    assert "refreshed identity files as the current authoritative source" in context
+    assert context.index("Bartholomew") < context.index("previously recorded in memory")
     assert not marker_path.exists()
+
+    adapter.get_pending_context.return_value = ""
+    monkeypatch.setattr("core.interface.api.recall_fast", lambda **kwargs: ([], None))
 
     out2, _ = _run_hook_inject(
         {

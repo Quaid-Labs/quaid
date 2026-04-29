@@ -1099,6 +1099,25 @@ _EXTRACTION_ARTIFACT_FACT_RE = re.compile(
     r"-\s*\*\*(?:Session Key|Session ID|Source)\*\*:",
     re.IGNORECASE | re.DOTALL,
 )
+_NEGATIVE_MEMORY_CLAIM_RE = re.compile(
+    r"\b(?:"
+    r"(?:do|does|did)\s+not\s+(?:know|have|remember)|"
+    r"(?:do|does|did)n['’]t\s+(?:know|have|remember)|"
+    r"(?:no|nothing)\s+(?:in\s+)?(?:memory|record|records|previous\s+sessions|previous\s+conversation|"
+    r"conversation\s+history|context|information|info|data)|"
+    r"no\s+(?:plant\s+name|name|fact|record|records|information|info)\s+(?:was|were|is|are)\s+(?:previously\s+)?"
+    r"(?:recorded|stored|found|available)|"
+    r"(?:not|never)\s+(?:previously\s+)?(?:recorded|stored|found|available)|"
+    r"nothing\s+(?:came|comes)\s+up|"
+    r"no\s+matches?\s+(?:came|come|found)"
+    r")\b",
+    re.IGNORECASE,
+)
+_NEGATIVE_MEMORY_CONTEXT_RE = re.compile(
+    r"\b(?:memory|record|records|previous\s+sessions|previous\s+conversation|conversation\s+history|"
+    r"context|stored|recorded|recall|remember|came\s+up|matches?)\b",
+    re.IGNORECASE,
+)
 _STRUCTURAL_ANCHOR_TOKEN_RE = re.compile(
     r"(?<![A-Za-z0-9])(?=[A-Za-z0-9_-]*[A-Za-z])(?:[A-Za-z0-9]+[-_]){1,}[A-Za-z0-9]+(?![A-Za-z0-9])"
 )
@@ -1544,6 +1563,22 @@ def _is_extraction_artifact_fact_text(text: str) -> bool:
     return bool(_EXTRACTION_ARTIFACT_FACT_RE.search(str(text or "")))
 
 
+def _is_negative_memory_claim_fact_text(text: str) -> bool:
+    """Return true for agent self-reports that no durable memory exists.
+
+    These statements describe a transient recall miss, not a durable fact about
+    the user or world. Persisting them lets stale "I don't know" answers outrank
+    later authoritative context.
+    """
+    raw = str(text or "").strip()
+    if not raw:
+        return False
+    lowered = raw.lower()
+    if not _NEGATIVE_MEMORY_CLAIM_RE.search(lowered):
+        return False
+    return bool(_NEGATIVE_MEMORY_CONTEXT_RE.search(lowered))
+
+
 def _filter_extraction_artifact_facts(parsed: Dict[str, Any]) -> Tuple[Dict[str, Any], int]:
     facts = parsed.get("facts", []) or []
     if not isinstance(facts, list) or not facts:
@@ -1556,7 +1591,10 @@ def _filter_extraction_artifact_facts(parsed: Dict[str, Any]) -> Tuple[Dict[str,
             filtered.append(fact)
             continue
         text = fact.get("text", "")
-        if isinstance(text, str) and _is_extraction_artifact_fact_text(text):
+        if isinstance(text, str) and (
+            _is_extraction_artifact_fact_text(text)
+            or _is_negative_memory_claim_fact_text(text)
+        ):
             dropped += 1
             continue
         filtered.append(fact)

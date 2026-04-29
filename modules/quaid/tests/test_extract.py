@@ -1054,6 +1054,48 @@ class TestExtractFromTranscript:
         assert result["facts_skipped"] == 2
         assert texts == ["Solomon Steadman uses marker marigold-anvil-5816 for pumpkin seeds"]
 
+    @patch("ingest.extract.call_deep_reasoning")
+    def test_extraction_drops_agent_no_memory_claim_facts(self, mock_llm):
+        from ingest.extract import extract_from_transcript
+
+        mock_llm.return_value = (json.dumps({
+            "chunk_assessment": "usable",
+            "facts": [
+                {
+                    "text": "Solomon Steadman asked about an office plant name but no plant name was previously recorded in memory",
+                    "category": "fact",
+                    "speaker": "agent",
+                    "domains": ["personal"],
+                    "extraction_confidence": "high",
+                },
+                {
+                    "text": "The office plant is named Bartholomew and is a fiddle-leaf fig",
+                    "category": "fact",
+                    "speaker": "user",
+                    "domains": ["personal"],
+                    "extraction_confidence": "high",
+                },
+            ],
+            "soul_snippets": {},
+            "journal_entries": {},
+            "project_logs": {},
+        }), 0.1)
+
+        result = extract_from_transcript(
+            transcript=(
+                "User: What is the office plant named?\n\n"
+                "Assistant: I don't have a plant name in memory.\n\n"
+                "User: The office plant is named Bartholomew and is a fiddle-leaf fig."
+            ),
+            owner_id="Solomon Steadman",
+            dry_run=True,
+        )
+
+        texts = [fact["text"] for fact in result["raw_facts"]]
+        assert result["artifact_facts_dropped"] == 1
+        assert result["facts_skipped"] == 1
+        assert texts == ["The office plant is named Bartholomew and is a fiddle-leaf fig"]
+
     def test_carry_selection_is_bounded_and_persistable(self):
         from ingest.extract import _select_carry_facts, _persistable_carry_facts
 

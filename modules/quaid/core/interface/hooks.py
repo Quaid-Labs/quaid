@@ -1165,6 +1165,18 @@ def hook_inject(args):
                 )
             ]
 
+        compaction_refresh_context = _build_compaction_followup_refresh_context(
+            session_id,
+            hook_cwd=hook_cwd,
+        )
+        if compaction_refresh_context:
+            context_parts.append(compaction_refresh_context)
+            _write_hook_trace("hook.inject.compaction_followup_context_refreshed", {
+                "query": query[:160],
+                "session_id": session_id,
+                "strategy": _context_refresh_strategy(),
+            })
+
         if pending_context:
             context_parts.append(pending_context)
 
@@ -1188,17 +1200,6 @@ def hook_inject(args):
         baseline_agents_context = _get_quaid_agents_baseline_context()
         if baseline_agents_context:
             context_parts.append(baseline_agents_context)
-        compaction_refresh_context = _build_compaction_followup_refresh_context(
-            session_id,
-            hook_cwd=hook_cwd,
-        )
-        if compaction_refresh_context:
-            context_parts.append(compaction_refresh_context)
-            _write_hook_trace("hook.inject.compaction_followup_context_refreshed", {
-                "query": query[:160],
-                "session_id": session_id,
-                "strategy": _context_refresh_strategy(),
-            })
         refresh_context = _build_turn_based_refresh_context(session_id)
         if refresh_context:
             context_parts.append(refresh_context)
@@ -1822,7 +1823,16 @@ def _build_turn_based_refresh_context(session_id: str) -> str:
 def _build_compaction_followup_refresh_context(session_id: str, *, hook_cwd: str = "") -> str:
     if not _consume_compaction_refresh_marker(session_id):
         return ""
-    return _build_project_context_message(hook_cwd=hook_cwd)
+    warning = (
+        "--- refreshed-identity-context ---\n"
+        "The USER.md, SOUL.md, and ENVIRONMENT.md sections below were reread "
+        "from disk after /compact. Treat these refreshed identity files as the "
+        "current authoritative source for identity and environment facts. If "
+        "they conflict with recalled memories, pending extraction notices, "
+        "project docs, or compacted summaries, answer from these refreshed "
+        "identity files."
+    )
+    return _build_project_context_message([warning], hook_cwd=hook_cwd)
 
 
 def _render_path_template(template: str, session_id: str, *, cwd_encoded: str = "", date_prefix: str = "") -> str:
