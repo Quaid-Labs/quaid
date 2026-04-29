@@ -195,7 +195,7 @@ exclusively via SSH — they cannot accidentally affect the local machine.
 
 | Script | Purpose |
 |--------|---------|
-| `livetest-presnapshot-preflight.sh` | **Run before overnight loops or when platform drift is suspected.** Clones the current base VM, applies slow platform CLI upgrades, and refreshes the base snapshot only if upgrades changed the clone. |
+| `livetest-presnapshot-preflight.sh` | **Run before overnight loops or when platform drift is suspected.** Clones the current base VM, applies slow platform CLI upgrades plus final harness cleanup such as stale OpenClaw silo pruning, and refreshes the base snapshot only if maintenance changed the clone. |
 | `livetest-preflight.sh` | **Run before every run.** Verifies remote ≠ local, checks SSH, warns on platform version drift without upgrading, wipes the remote, syncs the dev tree, seeds credentials, and starts platform services. Hard-aborts if the remote host matches the local machine. |
 | `livetest-session-init.sh` | Create the canonical local `livetest` tmux session/windows, launch tester panes, open SSH panes to the remote, and start tester nudge loops. |
 | `livetest-wipe.sh` | Wipe Quaid from the remote. `--platform all` for full wipe, `--platform cc` for CC-only wipe while OC is live. Called by preflight; can also be run standalone. |

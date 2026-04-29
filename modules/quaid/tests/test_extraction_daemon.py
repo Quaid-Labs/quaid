@@ -831,6 +831,11 @@ def test_clear_rolling_state_removes_payload_matched_stale_file(monkeypatch, tmp
     assert not stale_file.exists()
 
 
+def test_synthetic_rolling_stage_flush_metric_uses_rolling_flush_processing_label():
+    assert extraction_daemon._rolling_flush_processing_signal_type("session_end", True) == "rolling_flush"
+    assert extraction_daemon._rolling_flush_processing_signal_type("session_end", False) == "session_end"
+
+
 def test_write_rolling_state_clears_structurally_empty_payload_artifacts(monkeypatch, tmp_path):
     monkeypatch.setenv("QUAID_HOME", str(tmp_path))
     instance_id = os.environ.get("QUAID_INSTANCE", "pytest-runner")
@@ -5542,7 +5547,7 @@ class TestRollingExtraction:
             flush_metric = rolling_metrics[-1]
             assert flush_metric["event"] == "rolling_flush"
             assert flush_metric["signal_type"] == "rolling"
-            assert flush_metric["processing_signal_type"] == "session_end"
+            assert flush_metric["processing_signal_type"] == "rolling_flush"
             assert flush_metric["staged_batches"] == 1
             assert flush_metric["staged_facts"] == 1
             assert flush_metric["carry_facts_final"] == 1

@@ -230,6 +230,57 @@ describe("openclaw session_index watcher", () => {
     rmSync(harness.root, { recursive: true, force: true });
   });
 
+  it("does not queue a delayed command:new reset after the next user turn lands", async () => {
+    const harness = makeHarness("delayed-command-new-after-seed");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const sessionId = "bfebb8aa-9327-467d-b421-c99843233862";
+    const transcript = join(harness.sessionsDir, `${sessionId}.jsonl`);
+    writeTranscript(transcript, [
+      "/new",
+      "My garage workbench has a green enamel task lamp on the corner.",
+    ]);
+
+    const api = makeFakeApi();
+    const plugin = await loadPlugin(harness);
+    plugin.register(api as any);
+
+    const commandNewHook = api.registerHook.mock.calls.find((call: any[]) =>
+      call[0] === "command:new" && call[2]?.name === "command-new-memory-extraction"
+    )?.[1];
+    expect(typeof commandNewHook).toBe("function");
+
+    await commandNewHook(
+      {
+        action: "new",
+        sessionId,
+        sessionKey: "agent:main:m2c",
+        context: {
+          sessionEntry: {
+            sessionId,
+            sessionFile: transcript,
+          },
+        },
+      },
+      {
+        sessionId,
+        sessionKey: "agent:main:m2c",
+      },
+    );
+
+    const staleResets = readSignalPayloads(harness.signalDir).filter((payload) =>
+      payload?.type === "reset" && payload?.session_id === sessionId
+    );
+    expect(staleResets).toHaveLength(0);
+
+    warn.mockRestore();
+    log.mockRestore();
+    error.mockRestore();
+    rmSync(harness.root, { recursive: true, force: true });
+  });
+
   it("also flushes agent:main:main when /new resets only a TUI lifecycle session", async () => {
     vi.useFakeTimers();
     const harness = makeHarness("command-new-flushes-agent-main");

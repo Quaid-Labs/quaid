@@ -1679,6 +1679,52 @@ class TestCodexAdapter:
         assert signal["signal_type"] == "session_end"
         assert adapter._read_last_session_id() == "new-thread"
 
+    def test_check_session_transition_prefers_cursor_snapshot_over_unclassified_rollout(self, tmp_path, monkeypatch):
+        project_dir = tmp_path / "cdx-livetest"
+        project_dir.mkdir()
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path / ".quaid"))
+        monkeypatch.setenv("QUAID_INSTANCE", "codex-private-tmp-cdx-livetest")
+        monkeypatch.setenv("CODEX_PROJECT_DIR", str(project_dir))
+        adapter = CodexAdapter()
+        instance_data = tmp_path / ".quaid" / "instances" / "codex-private-tmp-cdx-livetest" / "data"
+        monkeypatch.setattr(adapter, "data_dir", lambda: instance_data)
+        adapter._write_last_session_id("old-thread")
+
+        sessions_root = tmp_path / ".codex" / "sessions" / "2026" / "04" / "28"
+        sessions_root.mkdir(parents=True)
+        unclassified = sessions_root / "rollout-2026-04-28T13-43-15-old-thread.jsonl"
+        unclassified.write_text(
+            json.dumps({"type": "event_msg", "payload": {"type": "user_message", "message": "Tamarind fact"}}) + "\n",
+            encoding="utf-8",
+        )
+        snapshot = (
+            tmp_path
+            / ".quaid"
+            / "instances"
+            / "codex-private-tmp-cdx-livetest"
+            / "logs"
+            / "daemon"
+            / "rolling-transcript-snapshots"
+            / "old-thread.jsonl"
+        )
+        snapshot.parent.mkdir(parents=True)
+        snapshot.write_text(unclassified.read_text(encoding="utf-8"), encoding="utf-8")
+        cursor_dir = instance_data / "session-cursors"
+        cursor_dir.mkdir(parents=True)
+        (cursor_dir / "source-deadbeef.json").write_text(
+            json.dumps({"session_id": "old-thread", "transcript_path": str(snapshot)}) + "\n",
+            encoding="utf-8",
+        )
+
+        assert adapter._get_session_path("old-thread", allow_unclassified=True) == unclassified
+        signal = adapter.check_session_transition({"thread_id": "new-thread"})
+
+        assert signal is not None
+        assert signal["ended_session_id"] == "old-thread"
+        assert signal["ended_transcript_path"] == str(snapshot)
+        assert signal["signal_type"] == "session_end"
+
     def test_check_session_transition_does_not_read_cursor_from_other_instance(self, tmp_path, monkeypatch):
         project_dir = tmp_path / "cdx-m13test"
         project_dir.mkdir()

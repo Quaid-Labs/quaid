@@ -477,8 +477,8 @@ class CodexAdapter(QuaidAdapter):
         # this instance's cursor still records the exact transcript it touched on
         # the prior turn. Trust that instance-local cursor as the fallback source.
         transcript_path = (
-            self._get_session_path(last_id, allow_unclassified=True)
-            or self._get_session_path_from_cursor(last_id)
+            self._get_session_path_from_cursor(last_id)
+            or self._get_session_path(last_id, allow_unclassified=True)
         )
         if transcript_path is None:
             if is_fail_hard_enabled():
@@ -538,13 +538,39 @@ class CodexAdapter(QuaidAdapter):
                 raise
             return None
         raw_path = str((cursor or {}).get("transcript_path") or "").strip()
-        if not raw_path:
-            return None
-        path = Path(raw_path).expanduser()
+        candidates: list[tuple[int, float, Path]] = []
+
+        def add_candidate(raw: str) -> None:
+            raw = str(raw or "").strip()
+            if not raw:
+                return
+            path = Path(raw).expanduser()
+            try:
+                if not path.is_file():
+                    return
+                is_snapshot = 1 if "rolling-transcript-snapshots" in str(path) else 0
+                candidates.append((is_snapshot, path.stat().st_mtime, path))
+            except OSError:
+                return
+
+        add_candidate(raw_path)
+        cursor_dir = self.data_dir() / "session-cursors"
         try:
-            return path if path.is_file() else None
+            cursor_files = list(cursor_dir.glob("*.json")) if cursor_dir.is_dir() else []
         except OSError:
-            return None
+            cursor_files = []
+        for cursor_file in cursor_files:
+            try:
+                data = json.loads(cursor_file.read_text(encoding="utf-8"))
+            except Exception:
+                if is_fail_hard_enabled():
+                    raise
+                continue
+            if str(data.get("session_id") or "").strip() != session_id:
+                continue
+            add_candidate(str(data.get("transcript_path") or ""))
+        candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
+        return candidates[0][2] if candidates else None
 
     def get_session_path(self, session_id: str) -> Optional[Path]:
         return self._get_session_path(session_id, allow_unclassified=False)

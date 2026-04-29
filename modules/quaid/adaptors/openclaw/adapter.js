@@ -2112,6 +2112,10 @@ function writeDaemonSignal(sessionId, signalType, meta) {
     console.warn(message);
     return null;
   }
+  if (shouldSuppressResetSignalAfterPostCommandContent(sessionId, resolvedPath, signalType, meta)) {
+    console.log(`[quaid][daemon-signal] suppressed stale ${signalType} signal for session=${sessionId} after post-command user content`);
+    return null;
+  }
   const agentLabel = sessionIdToAgentId.get(sessionId);
   const signalDir = !agentLabel || agentLabel === "main" ? DAEMON_SIGNAL_DIR : getDaemonSignalDir(agentLabel);
   try {
@@ -3434,6 +3438,47 @@ function isMeaningfulUserTranscriptActivity(messages) {
     return true;
   }
   return false;
+}
+function normalizeUserTranscriptLineForLifecycleGate(line) {
+  return String(line || "").replace(/^\[.*?\]\s*/, "").replace(/^(?:user|u)\s*:\s*/i, "").trim();
+}
+function transcriptHasPostLifecycleCommandUserContent(sessionFile, commandAction) {
+  let sawLifecycleCommand = false;
+  for (const message of parseSessionMessagesJsonl(sessionFile)) {
+    const role = String(message?.role || "").trim().toLowerCase();
+    if (role !== "user") continue;
+    const text = preprocessTranscriptText(extractSessionMessageText(message)).trim();
+    if (!text) continue;
+    const lines = text.split(/\r?\n/).map(normalizeUserTranscriptLineForLifecycleGate).filter(Boolean);
+    for (const line of lines) {
+      const action = extractLifecycleSlashAction(line);
+      if (action === commandAction) {
+        sawLifecycleCommand = true;
+        continue;
+      }
+      if (!sawLifecycleCommand) continue;
+      if (isMeaningfulUserTranscriptActivity([{ role: "user", content: line }])) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+function shouldSuppressResetSignalAfterPostCommandContent(sessionId, resolvedPath, signalType, meta) {
+  if (signalType !== "reset") return false;
+  const command = String(meta?.command || "").trim().toLowerCase();
+  if (command !== "new" && command !== "reset") return false;
+  if (!resolvedPath || resolvedPath.includes(".jsonl.reset.")) return false;
+  if (!transcriptHasPostLifecycleCommandUserContent(resolvedPath, command)) return false;
+  writeHookTrace("session.daemon_signal_reset_suppressed", {
+    reason: "post_command_user_content",
+    session_id: sessionId,
+    signal_type: signalType,
+    command,
+    source: String(meta?.source || ""),
+    resolved_path: resolvedPath
+  });
+  return true;
 }
 const adapterFacadeByInstance = /* @__PURE__ */ new Map();
 function resolveAdapterFacadeRuntimePaths(instanceId = _QUAID_INSTANCE) {
@@ -5015,17 +5060,27 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
               }
               pendingNewKeyFallbacks.delete(sessionId);
               facade.markLifecycleSignalFromHook(sessionId, lifecycleSignal);
-              writeDaemonSignal(sessionId, daemonType, {
+              const sigPath = writeDaemonSignal(sessionId, daemonType, {
                 source: `session_index_command_${commandName}`,
                 command: commandName,
                 session_key: key
               });
-              writeHookTrace("session_index.signal_queued", {
-                signal: daemonType,
-                source: `command-${commandName}`,
-                session_id: sessionId,
-                session_key: key
-              });
+              if (sigPath) {
+                writeHookTrace("session_index.signal_queued", {
+                  signal: daemonType,
+                  source: `command-${commandName}`,
+                  session_id: sessionId,
+                  session_key: key
+                });
+              } else {
+                writeHookTrace("session_index.signal_skipped", {
+                  signal: daemonType,
+                  source: `command-${commandName}`,
+                  session_id: sessionId,
+                  session_key: key,
+                  reason: "daemon_signal_not_written"
+                });
+              }
             }
           }
           for (const [priorKey, priorSid] of Array.from(sessionKeyLastSeen.entries())) {
@@ -5280,18 +5335,27 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
         }
         facade.markLifecycleSignalFromHook(sessionId, lifecycleSignal);
         const daemonSigType = lifecycleSignal.toLowerCase().includes("reset") ? "reset" : "compaction";
-        writeDaemonSignal(sessionId, daemonSigType, {
+        const sigPath = writeDaemonSignal(sessionId, daemonSigType, {
           source: sourceEvent,
           command: commandAction,
           hook_session_id: sessionId,
           hook_session_key: String(event?.sessionKey || ctx?.sessionKey || "")
         });
-        console.log(`[quaid][signal] daemon signal ${daemonSigType} session=${sessionId} source=${sourceEvent} command=${commandAction}`);
-        writeHookTrace("hook.message.signal_queued", {
-          source_event: sourceEvent,
-          command: commandAction,
-          hook_session_id: sessionId
-        });
+        if (sigPath) {
+          console.log(`[quaid][signal] daemon signal ${daemonSigType} session=${sessionId} source=${sourceEvent} command=${commandAction}`);
+          writeHookTrace("hook.message.signal_queued", {
+            source_event: sourceEvent,
+            command: commandAction,
+            hook_session_id: sessionId
+          });
+        } else {
+          writeHookTrace("hook.message.signal_skipped", {
+            source_event: sourceEvent,
+            command: commandAction,
+            hook_session_id: sessionId,
+            reason: "daemon_signal_not_written"
+          });
+        }
         if (commandAction === "new" || commandAction === "reset") {
           queueAgentMainFlushForLifecycle(commandAction, event, ctx, sessionId);
         }
@@ -5455,17 +5519,25 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
           return;
         }
         facade.markLifecycleSignalFromHook(sessionId, "ResetSignal");
-        writeDaemonSignal(sessionId, "reset", {
+        const sigPath = writeDaemonSignal(sessionId, "reset", {
           source: `command:${action}`,
           command: action,
           hook_session_id: sessionId,
           hook_session_key: String(event?.sessionKey || ctx?.sessionKey || "")
         });
-        console.log(`[quaid][signal] daemon signal reset session=${sessionId} source=command:${action}`);
-        writeHookTrace("hook.command.signal_queued", {
-          action,
-          hook_session_id: sessionId
-        });
+        if (sigPath) {
+          console.log(`[quaid][signal] daemon signal reset session=${sessionId} source=command:${action}`);
+          writeHookTrace("hook.command.signal_queued", {
+            action,
+            hook_session_id: sessionId
+          });
+        } else {
+          writeHookTrace("hook.command.signal_skipped", {
+            action,
+            hook_session_id: sessionId,
+            reason: "daemon_signal_not_written"
+          });
+        }
         queueAgentMainFlushForLifecycle(action, event, ctx, sessionId);
       } catch (err) {
         if (isFailHardEnabled2()) throw err;
@@ -6563,6 +6635,7 @@ const __test = {
   isInternalSessionContext,
   isInternalTranscriptMessages,
   isMeaningfulUserTranscriptActivity,
+  transcriptHasPostLifecycleCommandUserContent,
   lateTranscriptUpdateSessionEndDecision,
   parseSessionMessagesJsonl,
   rememberSessionTranscriptPath,
