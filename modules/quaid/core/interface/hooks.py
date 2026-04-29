@@ -169,6 +169,14 @@ _QUESTION_MEMORY_RE = re.compile(
     r"should|would|will|may|might|has|have|had)\b.*\?\s*$",
     re.IGNORECASE,
 )
+_QUESTION_MEMORY_NO_MARK_RE = re.compile(
+    r"^\s*(?:"
+    r"(?:who|what|when|where|why|how)(?:['’]s|\s+(?:is|are|was|were|do|does|did|can|could|should|would|will|may|might|has|have|had))|"
+    r"(?:which|whose)\s+(?:is|are|was|were|do|does|did|can|could|should|would|will|may|might|has|have|had)|"
+    r"(?:is|are|was|were|do|does|did|can|could|should|would|will|may|might|has|have|had)\s+"
+    r")\b",
+    re.IGNORECASE,
+)
 
 
 def _is_negative_memory_claim_text(text: str) -> bool:
@@ -182,7 +190,16 @@ def _is_negative_memory_claim_text(text: str) -> bool:
 
 
 def _is_bare_question_memory_text(text: str) -> bool:
-    return bool(_QUESTION_MEMORY_RE.match(str(text or "").strip()))
+    raw = str(text or "").strip()
+    if not raw:
+        return False
+    if _QUESTION_MEMORY_RE.match(raw):
+        return True
+    if raw.endswith((".", "!", ":")):
+        return False
+    if len(raw.split()) > 24:
+        return False
+    return bool(_QUESTION_MEMORY_NO_MARK_RE.match(raw))
 
 
 def _is_non_injectable_memory(mem: Dict) -> bool:
@@ -1913,7 +1930,45 @@ def _build_compaction_followup_refresh_context(session_id: str, *, hook_cwd: str
         "project docs, or compacted summaries, answer from these refreshed "
         "identity files."
     )
-    return _build_project_context_message([warning], hook_cwd=hook_cwd)
+    priority_context = _build_refreshed_identity_priority_context()
+    full_context = _build_project_context_message([warning], hook_cwd=hook_cwd)
+    if priority_context and full_context:
+        return f"{priority_context}\n\n{full_context}"
+    return priority_context or full_context
+
+
+def _build_refreshed_identity_priority_context() -> str:
+    sections: List[str] = []
+    identity_dir = _get_identity_dir()
+    max_lines = 120
+    for special_file in ("USER.md", "SOUL.md", "ENVIRONMENT.md"):
+        fpath = identity_dir / special_file
+        if not fpath.is_file():
+            continue
+        try:
+            lines = fpath.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            continue
+        if not lines:
+            continue
+        selected = lines[-max_lines:]
+        suffix = f" recent lines (last {max_lines})" if len(lines) > max_lines else ""
+        content = "\n".join(selected).strip()
+        if content:
+            sections.append(f"--- refreshed {special_file}{suffix} ---\n{content}")
+    if not sections:
+        return ""
+    body = (
+        "# Quaid Refreshed Identity Context\n\n"
+        "MANDATORY: These identity and environment facts were reread from "
+        "disk after /compact for this exact turn. Treat them as the current "
+        "source of truth. If they conflict with recalled memories, pending "
+        "notices, project docs, compacted summaries, or earlier answers, use "
+        "these refreshed identity files.\n\n"
+        + "\n\n".join(sections)
+        + "\n"
+    )
+    return f"<quaid_system_message>\n{body}</quaid_system_message>\n"
 
 
 def _render_path_template(template: str, session_id: str, *, cwd_encoded: str = "", date_prefix: str = "") -> str:

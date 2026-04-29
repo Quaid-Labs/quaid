@@ -1125,6 +1125,14 @@ _QUESTION_FACT_RE = re.compile(
     r"should|would|will|may|might|has|have|had)\b.*\?\s*$",
     re.IGNORECASE,
 )
+_QUESTION_FACT_NO_MARK_RE = re.compile(
+    r"^\s*(?:"
+    r"(?:who|what|when|where|why|how)(?:['’]s|\s+(?:is|are|was|were|do|does|did|can|could|should|would|will|may|might|has|have|had))|"
+    r"(?:which|whose)\s+(?:is|are|was|were|do|does|did|can|could|should|would|will|may|might|has|have|had)|"
+    r"(?:is|are|was|were|do|does|did|can|could|should|would|will|may|might|has|have|had)\s+"
+    r")\b",
+    re.IGNORECASE,
+)
 _STRUCTURAL_ANCHOR_TOKEN_RE = re.compile(
     r"(?<![A-Za-z0-9])(?=[A-Za-z0-9_-]*[A-Za-z])(?:[A-Za-z0-9]+[-_]){1,}[A-Za-z0-9]+(?![A-Za-z0-9])"
 )
@@ -1588,7 +1596,16 @@ def _is_negative_memory_claim_fact_text(text: str) -> bool:
 
 def _is_question_fact_text(text: str) -> bool:
     """Return true for question-shaped strings the extractor mislabeled as facts."""
-    return bool(_QUESTION_FACT_RE.match(str(text or "").strip()))
+    raw = str(text or "").strip()
+    if not raw:
+        return False
+    if _QUESTION_FACT_RE.match(raw):
+        return True
+    if raw.endswith((".", "!", ":")):
+        return False
+    if len(raw.split()) > 24:
+        return False
+    return bool(_QUESTION_FACT_NO_MARK_RE.match(raw))
 
 
 def _filter_extraction_artifact_facts(parsed: Dict[str, Any]) -> Tuple[Dict[str, Any], int]:

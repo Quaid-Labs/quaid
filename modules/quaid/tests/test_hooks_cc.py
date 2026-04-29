@@ -330,7 +330,7 @@ def test_claude_code_post_compact_turn_gets_one_shot_identity_context(monkeypatc
             "similarity": 1.0,
         },
         {
-            "text": "What's the office plant named?",
+            "text": "What's the office plant named",
             "category": "fact",
             "similarity": 1.0,
         },
@@ -372,12 +372,15 @@ def test_claude_code_post_compact_turn_gets_one_shot_identity_context(monkeypatc
 
     payload = json.loads(out)
     context = payload["hookSpecificOutput"]["additionalContext"]
+    assert "# Quaid Refreshed Identity Context" in context
     assert "Bartholomew" in context
     assert "fiddle-leaf fig" in context
+    assert context.index("Bartholomew") < context.index("# Quaid Project Context")
     assert "refreshed identity files as the current authoritative source" in context
+    assert "source of truth" in context
     assert "previously recorded in memory" not in context
     assert "Still nothing in memory" not in context
-    assert "What's the office plant named?" not in context
+    assert "What's the office plant named" not in context
     assert "Baratza Encore" in context
     assert not marker_path.exists()
 

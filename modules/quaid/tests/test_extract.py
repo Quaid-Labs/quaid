@@ -1076,7 +1076,7 @@ class TestExtractFromTranscript:
                     "extraction_confidence": "high",
                 },
                 {
-                    "text": "What's the office plant named?",
+                    "text": "What's the office plant named",
                     "category": "fact",
                     "speaker": "user",
                     "domains": ["personal"],
