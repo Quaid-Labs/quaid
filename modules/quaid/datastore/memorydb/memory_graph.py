@@ -1171,12 +1171,45 @@ class MemoryGraph:
         with self._get_conn() as conn:
             if type:
                 row = conn.execute(
-                    "SELECT * FROM nodes WHERE name = ? AND type = ?",
-                    (name, type)
+                    """
+                    SELECT n.*
+                    FROM nodes n
+                    WHERE n.name = ? AND n.type = ?
+                    ORDER BY
+                        CASE WHEN n.deleted_at IS NULL THEN 0 ELSE 1 END,
+                        CASE WHEN n.superseded_by IS NULL THEN 0 ELSE 1 END,
+                        CASE WHEN n.status IS NULL OR n.status IN ('active', 'approved', 'pending') THEN 0 ELSE 1 END,
+                        (
+                            SELECT COUNT(*)
+                            FROM edges e
+                            WHERE e.source_id = n.id OR e.target_id = n.id
+                        ) DESC,
+                        COALESCE(n.updated_at, n.created_at, n.accessed_at, '') DESC,
+                        n.rowid DESC
+                    LIMIT 1
+                    """,
+                    (name, type),
                 ).fetchone()
             else:
                 row = conn.execute(
-                    "SELECT * FROM nodes WHERE name = ?", (name,)
+                    """
+                    SELECT n.*
+                    FROM nodes n
+                    WHERE n.name = ?
+                    ORDER BY
+                        CASE WHEN n.deleted_at IS NULL THEN 0 ELSE 1 END,
+                        CASE WHEN n.superseded_by IS NULL THEN 0 ELSE 1 END,
+                        CASE WHEN n.status IS NULL OR n.status IN ('active', 'approved', 'pending') THEN 0 ELSE 1 END,
+                        (
+                            SELECT COUNT(*)
+                            FROM edges e
+                            WHERE e.source_id = n.id OR e.target_id = n.id
+                        ) DESC,
+                        COALESCE(n.updated_at, n.created_at, n.accessed_at, '') DESC,
+                        n.rowid DESC
+                    LIMIT 1
+                    """,
+                    (name,),
                 ).fetchone()
             if row:
                 return self._row_to_node(row)
@@ -3218,12 +3251,47 @@ def extract_entities_from_text(text: str) -> List[Node]:
             # Case-insensitive exact, then prefix match on entity types
             with graph._get_conn() as conn:
                 row = conn.execute(
-                    "SELECT * FROM nodes WHERE LOWER(name) = LOWER(?) AND type IN ('Person', 'Place', 'Pet', 'Entity', 'Concept') LIMIT 1",
+                    """
+                    SELECT n.*
+                    FROM nodes n
+                    WHERE LOWER(n.name) = LOWER(?)
+                      AND n.type IN ('Person', 'Place', 'Pet', 'Entity', 'Concept')
+                    ORDER BY
+                        CASE WHEN n.deleted_at IS NULL THEN 0 ELSE 1 END,
+                        CASE WHEN n.superseded_by IS NULL THEN 0 ELSE 1 END,
+                        CASE WHEN n.status IS NULL OR n.status IN ('active', 'approved', 'pending') THEN 0 ELSE 1 END,
+                        (
+                            SELECT COUNT(*)
+                            FROM edges e
+                            WHERE e.source_id = n.id OR e.target_id = n.id
+                        ) DESC,
+                        COALESCE(n.updated_at, n.created_at, n.accessed_at, '') DESC,
+                        n.rowid DESC
+                    LIMIT 1
+                    """,
                     (word,)
                 ).fetchone()
                 if not row:
                     row = conn.execute(
-                        "SELECT * FROM nodes WHERE name LIKE ? AND type IN ('Person', 'Place', 'Pet', 'Organization') ORDER BY LENGTH(name) LIMIT 1",
+                        """
+                        SELECT n.*
+                        FROM nodes n
+                        WHERE n.name LIKE ?
+                          AND n.type IN ('Person', 'Place', 'Pet', 'Organization')
+                        ORDER BY
+                            LENGTH(n.name),
+                            CASE WHEN n.deleted_at IS NULL THEN 0 ELSE 1 END,
+                            CASE WHEN n.superseded_by IS NULL THEN 0 ELSE 1 END,
+                            CASE WHEN n.status IS NULL OR n.status IN ('active', 'approved', 'pending') THEN 0 ELSE 1 END,
+                            (
+                                SELECT COUNT(*)
+                                FROM edges e
+                                WHERE e.source_id = n.id OR e.target_id = n.id
+                            ) DESC,
+                            COALESCE(n.updated_at, n.created_at, n.accessed_at, '') DESC,
+                            n.rowid DESC
+                        LIMIT 1
+                        """,
                         (word + "%",)
                     ).fetchone()
                 if row:
@@ -5776,6 +5844,7 @@ def _run_recall_store_plan(
             key=lambda row: _relation_chain_sort_key(row, relation_chain_groups),
             reverse=True,
         )
+    merged = _prioritize_named_entity_activity_anchor_rows(query, merged)
     if fast_mode:
         merged = _prioritize_fast_anchor_direct_rows(query, merged)
     final_rows = merged[:limit]
@@ -7968,6 +8037,43 @@ def _prioritize_fast_anchor_direct_rows(query: str, rows: List[Dict[str, Any]]) 
         row for row in rows
         if _recall_row_identity(row) not in priority_keys
     ]
+
+
+_NAMED_ENTITY_ACTIVITY_QUERY_RE = re.compile(r"\bwhat\s+do(?:es)?\b")
+
+
+def _prioritize_named_entity_activity_anchor_rows(query: str, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Prefer direct attached facts from the explicit entity on 'what does X do' queries."""
+    if not rows:
+        return rows
+    lower_query = str(query or "").strip().lower()
+    if not lower_query or not _NAMED_ENTITY_ACTIVITY_QUERY_RE.search(lower_query):
+        return rows
+    anchor_terms = {
+        str(term or "").strip().lower()
+        for term in _extract_explicit_query_anchor_terms(query, limit=4)
+        if str(term or "").strip()
+    }
+    if not anchor_terms:
+        return rows
+
+    def _is_direct_anchor_attached_fact(row: Dict[str, Any]) -> bool:
+        if str((row or {}).get("via") or "") != "graph_attached_fact":
+            return False
+        source_name = str((row or {}).get("source_name") or "").strip().lower()
+        if source_name and source_name in anchor_terms:
+            return True
+        graph_path = str((row or {}).get("graph_path") or "").strip().lower()
+        return any(graph_path.startswith(f"{term} --has_fact-->") for term in anchor_terms)
+
+    return sorted(
+        rows,
+        key=lambda row: (
+            1 if _is_direct_anchor_attached_fact(row) else 0,
+            float((row or {}).get("similarity", 0.0) or 0.0),
+        ),
+        reverse=True,
+    )
 
 
 def _is_origin_attribution_query(query: str) -> bool:
