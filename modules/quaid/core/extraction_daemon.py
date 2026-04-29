@@ -2281,6 +2281,141 @@ def write_rolling_metric(event: str, session_id: str, **data: Any) -> None:
         logger.warning("rolling metric write failed for %s: %s", session_id, exc)
 
 
+def _rolling_debug_dump_enabled() -> bool:
+    return str(os.environ.get("QUAID_ROLLING_DEBUG_DUMP", "") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _rolling_debug_dir() -> Path:
+    raw = str(os.environ.get("QUAID_ROLLING_DEBUG_DIR", "") or "").strip()
+    return Path(raw).expanduser() if raw else Path("/tmp")
+
+
+def _rolling_debug_markers() -> List[str]:
+    raw = str(os.environ.get("QUAID_ROLLING_DEBUG_MARKERS", "") or "").strip()
+    if raw:
+        return [item.strip() for item in raw.split(",") if item.strip()]
+    return [
+        "Baxter",
+        "orange linen notebook",
+        "Emília Rosa",
+        "Emilia Rosa",
+        "tangerine-emilia",
+    ]
+
+
+def _rolling_debug_marker_hits(text: str) -> Dict[str, List[int]]:
+    haystack = str(text or "")
+    lowered = haystack.casefold()
+    hits: Dict[str, List[int]] = {}
+    for marker in _rolling_debug_markers():
+        needle = marker.casefold()
+        if not needle:
+            continue
+        positions: List[int] = []
+        start = 0
+        while True:
+            idx = lowered.find(needle, start)
+            if idx < 0:
+                break
+            positions.append(idx)
+            start = idx + max(1, len(needle))
+        if positions:
+            hits[marker] = positions
+    return hits
+
+
+def _rolling_debug_fact_rows(facts: Any, *, fallback_session_id: str = "") -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    for index, fact in enumerate(list(facts or []), start=1):
+        if not isinstance(fact, dict):
+            continue
+        text = str(fact.get("text") or "").strip()
+        source_session_id = (
+            str(fact.get("source_session_id") or "").strip()
+            or str(fact.get("session_id") or "").strip()
+            or str(fact.get("source_id") or "").strip()
+            or str(fact.get("_source_id") or "").strip()
+            or fallback_session_id
+        )
+        row = {
+            "index": index,
+            "text": text,
+            "source_session_id": source_session_id,
+            "status": str(fact.get("status") or "").strip(),
+            "reason": str(fact.get("reason") or "").strip(),
+            "source": str(fact.get("source") or "").strip(),
+            "source_label": str(fact.get("_source_label") or "").strip(),
+            "source_id": str(fact.get("_source_id") or fact.get("source_id") or "").strip(),
+            "speaker": str(fact.get("speaker") or "").strip(),
+            "category": str(fact.get("category") or "").strip(),
+            "domains": fact.get("domains") if isinstance(fact.get("domains"), list) else [],
+            "marker_hits": _rolling_debug_marker_hits(text),
+        }
+        rows.append(row)
+    return rows
+
+
+def _write_rolling_debug_dump(
+    event: str,
+    session_id: str,
+    *,
+    text: str = "",
+    facts: Any = None,
+    storage_facts: Any = None,
+    **data: Any,
+) -> None:
+    if not _rolling_debug_dump_enabled():
+        return
+    debug_dir = _rolling_debug_dir()
+    timestamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
+    safe_session = re.sub(r"[^A-Za-z0-9_.-]+", "-", str(session_id or "unknown")).strip("-") or "unknown"
+    unique = f"{int(time.time() * 1000)}-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+    payload: Dict[str, Any] = {
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "event": event,
+        "instance": _instance_id(),
+        "session_id": session_id,
+        **data,
+    }
+    raw_text = str(text or "")
+    if raw_text:
+        text_path = debug_dir / f"quaid-rolling-debug-{timestamp}-{safe_session}-{event}-{unique}.txt"
+        payload.update(
+            {
+                "text_path": str(text_path),
+                "text_byte_len": len(raw_text.encode("utf-8", "replace")),
+                "text_preview": raw_text[:4000],
+                "text_marker_hits": _rolling_debug_marker_hits(raw_text),
+            }
+        )
+    if facts is not None:
+        payload["facts"] = _rolling_debug_fact_rows(facts, fallback_session_id=session_id)
+    if storage_facts is not None:
+        payload["storage_facts"] = _rolling_debug_fact_rows(storage_facts, fallback_session_id=session_id)
+
+    jsonl_path = debug_dir / f"quaid-rolling-debug-{safe_session}.jsonl"
+    try:
+        debug_dir.mkdir(parents=True, exist_ok=True)
+        if raw_text:
+            text_path.write_text(raw_text, encoding="utf-8")
+        with jsonl_path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(payload, ensure_ascii=False) + "\n")
+        logger.info(
+            "[rolling-debug] %s session %s wrote %s%s",
+            event,
+            session_id,
+            jsonl_path,
+            f" text={payload.get('text_path')}" if raw_text else "",
+        )
+    except Exception as exc:
+        logger.warning("[rolling-debug] failed writing %s for session %s: %s", event, session_id, exc)
+
+
 def _bucket_fact_reason(status: str, reason: str) -> str:
     status_text = str(status or "").strip().lower()
     reason_text = str(reason or "").strip()
@@ -2588,6 +2723,28 @@ def _stage_semantic_buffer_payload(
             reason=f"non_provider_failure_{failed_chunks}_of_{chunks_total}_chunks",
         )
     staged_state = merge_staged_payloads(staged_state, stage_result)
+    _write_rolling_debug_dump(
+        "rolling_stage_extract",
+        session_id,
+        text=stage_text,
+        facts=stage_result.get("raw_facts", []) or [],
+        label=label,
+        signal_type=signal_type,
+        transcript_path=transcript_path,
+        buffered_line_offset=buffered_line_offset,
+        raw_lines_added=int(semantic_buffer_metrics.get("raw_lines_added", len(new_lines)) or 0),
+        semantic_chars_added=int(semantic_buffer_metrics.get("semantic_chars_added", 0) or 0),
+        semantic_tokens_added=int(semantic_buffer_metrics.get("semantic_tokens_added", 0) or 0),
+        semantic_buffer_tokens=int(staged_state.get("semantic_buffer_tokens", 0) or 0),
+        stage_raw_fact_count=len(stage_result.get("raw_facts", []) or []),
+        staged_fact_count=len(staged_state.get("raw_facts", []) or []),
+        staged_facts=_rolling_debug_fact_rows(staged_state.get("raw_facts", []) or [], fallback_session_id=session_id),
+        chunks_processed=chunks_processed,
+        chunks_total=chunks_total,
+        assessment_usable=int(stage_result.get("assessment_usable", 0) or 0),
+        assessment_nothing_usable=int(stage_result.get("assessment_nothing_usable", 0) or 0),
+        payload_duplicate_facts_collapsed=int(staged_state.get("payload_duplicate_facts_collapsed", 0) or 0),
+    )
     staged_state["processed_line_offset"] = buffered_line_offset
     staged_state["buffered_line_offset"] = buffered_line_offset
     _write_extraction_buffer_log(
@@ -4329,6 +4486,23 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                     label=label,
                     reason=f"flush_non_provider_failure_{_failed_chunks}_of_{chunks_total}_chunks",
                 )
+            _write_rolling_debug_dump(
+                "rolling_flush_tail_extract",
+                session_id,
+                text=transcript_text,
+                facts=tail_result.get("raw_facts", []) or [],
+                label=label,
+                signal_type=signal_type,
+                processing_signal_type=flush_metric_processing_signal_type,
+                transcript_path=transcript_path,
+                cursor_offset=cursor_offset,
+                buffered_line_offset=buffered_line_offset,
+                total_lines=total_lines,
+                chunks_processed=chunks_processed,
+                chunks_total=chunks_total,
+                assessment_usable=int(tail_result.get("assessment_usable", 0) or 0),
+                assessment_nothing_usable=int(tail_result.get("assessment_nothing_usable", 0) or 0),
+            )
         extract_wall = time.time() - extract_started_at
         usage_after_extract = _read_usage_totals()
 
@@ -4358,6 +4532,22 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                     ),
                 )
         operation_phase = "flush_publish"
+        _write_rolling_debug_dump(
+            "rolling_flush_publish_start",
+            session_id,
+            label=label,
+            signal_type=flush_metric_signal_type,
+            processing_signal_type=flush_metric_processing_signal_type,
+            transcript_path=transcript_path,
+            staged_batches=int(staged_state.get("rolling_batches", 0) or 0),
+            staged_facts=len(staged_state.get("raw_facts", []) or []),
+            final_raw_fact_count=len(flush_payload.get("raw_facts", []) or []),
+            raw_facts=_rolling_debug_fact_rows(flush_payload.get("raw_facts", []) or [], fallback_session_id=session_id),
+            tail_raw_fact_count=len((tail_result or {}).get("raw_facts", []) or []) if isinstance(tail_result, dict) else 0,
+            cursor_offset=cursor_offset,
+            buffered_line_offset=buffered_line_offset,
+            total_lines=total_lines,
+        )
         publish_started_at = time.time()
         result = apply_extracted_payloads(
             flush_payload,
@@ -4374,6 +4564,20 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
         facts_stored = result.get("facts_stored", 0)
         facts_skipped = result.get("facts_skipped", 0)
         edges_created = result.get("edges_created", 0)
+        _write_rolling_debug_dump(
+            "rolling_flush_publish_done",
+            session_id,
+            label=label,
+            signal_type=flush_metric_signal_type,
+            processing_signal_type=flush_metric_processing_signal_type,
+            transcript_path=transcript_path,
+            final_raw_fact_count=len(flush_payload.get("raw_facts", []) or []),
+            final_facts_stored=facts_stored,
+            final_facts_skipped=facts_skipped,
+            final_edges_created=edges_created,
+            raw_facts=_rolling_debug_fact_rows(flush_payload.get("raw_facts", []) or [], fallback_session_id=session_id),
+            storage_facts=result.get("facts", []) or [],
+        )
         fact_bucket_summary = _summarize_fact_result_buckets(result.get("facts"))
         snippets_count = sum(
             len(v)

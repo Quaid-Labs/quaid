@@ -840,6 +840,46 @@ def test_synthetic_rolling_stage_flush_metric_uses_rolling_flush_processing_labe
     assert extraction_daemon._rolling_flush_processing_signal_type("session_end", False) == "session_end"
 
 
+def test_rolling_debug_dump_writes_input_and_fact_rows(monkeypatch, tmp_path):
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path / ".quaid"))
+    monkeypatch.setenv("QUAID_INSTANCE", "codex-private-tmp-cdx-livetest")
+    monkeypatch.setenv("QUAID_ROLLING_DEBUG_DUMP", "1")
+    monkeypatch.setenv("QUAID_ROLLING_DEBUG_DIR", str(tmp_path / "debug"))
+
+    extraction_daemon._write_rolling_debug_dump(
+        "rolling_stage_extract",
+        "019dd8da-f1ca-7413-af17-a793beeb79aa",
+        text="User: Baxter wrote in the orange linen notebook for Emília Rosa.",
+        facts=[
+            {
+                "text": "Baxter wrote in the orange linen notebook for Emília Rosa.",
+                "_source_id": "019dd8da-f1ca-7413-af17-a793beeb79aa",
+                "speaker": "user",
+                "domains": ["personal"],
+            }
+        ],
+        storage_facts=[
+            {
+                "text": "Baxter wrote in the orange linen notebook for Emília Rosa.",
+                "status": "stored",
+            }
+        ],
+        buffered_line_offset=42,
+    )
+
+    jsonl_files = list((tmp_path / "debug").glob("quaid-rolling-debug-019dd8da-f1ca-7413-af17-a793beeb79aa.jsonl"))
+    assert len(jsonl_files) == 1
+    row = json.loads(jsonl_files[0].read_text(encoding="utf-8").strip())
+    assert row["event"] == "rolling_stage_extract"
+    assert row["buffered_line_offset"] == 42
+    assert row["text_marker_hits"]["Baxter"] == [6]
+    assert row["facts"][0]["source_session_id"] == "019dd8da-f1ca-7413-af17-a793beeb79aa"
+    assert row["storage_facts"][0]["status"] == "stored"
+    assert Path(row["text_path"]).read_text(encoding="utf-8") == (
+        "User: Baxter wrote in the orange linen notebook for Emília Rosa."
+    )
+
+
 def test_write_rolling_state_clears_structurally_empty_payload_artifacts(monkeypatch, tmp_path):
     monkeypatch.setenv("QUAID_HOME", str(tmp_path))
     instance_id = os.environ.get("QUAID_INSTANCE", "pytest-runner")
