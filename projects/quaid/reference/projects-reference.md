@@ -664,7 +664,7 @@ The old staged project event queue, `process_event`, `process_all_events`,
 `doc-health`, `request-docs`, and dirty-queue semantics were removed prelaunch.
 There is no compatibility layer.
 
-### 6.3 Gating Cascade: mtime → rule-based → fast reasoning → deep reasoning
+### 6.3 Gating Cascade: mtime → rule-based → fast-reasoning → deep-reasoning
 
 The updater applies a cost-escalating decision cascade before calling an expensive LLM:
 
