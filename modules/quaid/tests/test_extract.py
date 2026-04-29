@@ -680,6 +680,14 @@ class TestExtractFromTranscript:
                     "domains": ["personal"],
                     "extraction_confidence": "high",
                     "privacy": "shared",
+                },
+                {
+                    "text": "Underbelly",
+                    "category": "fact",
+                    "speaker": "user",
+                    "domains": ["personal"],
+                    "extraction_confidence": "high",
+                    "privacy": "shared",
                 }
             ],
             "soul_snippets": {},
@@ -710,7 +718,8 @@ class TestExtractFromTranscript:
             for fact in result["raw_facts"]
             if str(fact.get("speaker", "") or "").lower() == "agent"
         ]
-        assert any("Local Foods" in text and "Uchi Houston" in text for text in agent_texts)
+        assert any(text.startswith("Local Foods") for text in agent_texts)
+        assert any(text.startswith("Uchi Houston") for text in agent_texts)
         assert any("Weights + Measures" in text and "Feges BBQ" in text for text in agent_texts)
 
     @patch("ingest.extract.call_deep_reasoning")
@@ -753,10 +762,66 @@ class TestExtractFromTranscript:
             for fact in result["raw_facts"]
             if str(fact.get("speaker", "") or "").lower() == "agent"
         ]
+        user_texts = [
+            fact["text"]
+            for fact in result["raw_facts"]
+            if str(fact.get("speaker", "") or "").lower() == "user"
+        ]
         assert any(
             "FaceTime call during dinner" in text and "David" in text and "Rachel" in text
             for text in agent_texts
         )
+        assert any("FaceTime thing for Rachel during dinner" in text for text in user_texts)
+
+    @patch("ingest.extract.call_deep_reasoning")
+    def test_assistant_callback_anchor_is_preserved_when_llm_omits_it(self, mock_llm):
+        from ingest.extract import extract_from_transcript
+
+        mock_llm.return_value = (json.dumps({
+            "chunk_assessment": "usable",
+            "facts": [
+                {
+                    "text": "Biscuit learned to shake hands by May 2026 after 3 months of training",
+                    "category": "fact",
+                    "speaker": "user",
+                    "domains": ["personal"],
+                    "extraction_confidence": "high",
+                    "privacy": "shared",
+                },
+                {
+                    "text": "Biscuit tried to eat a pinecone and David had to wrestle it away from him",
+                    "category": "fact",
+                    "speaker": "user",
+                    "domains": ["personal"],
+                    "extraction_confidence": "high",
+                    "privacy": "shared",
+                },
+            ],
+            "soul_snippets": {},
+            "journal_entries": {},
+            "project_logs": {},
+        }), 0.1)
+
+        transcript = (
+            "User: biscuit learned a new trick. he can shake hands now.\n\n"
+            "Assistant: And Biscuit learning to shake is a triumph of persistence over brain cells.\n"
+            "  For a golden retriever who once tried to eat a pinecone, this is character growth.\n"
+            "  3 months for one trick is very on-brand for the one-brain-cell dog.\n\n"
+            "User: ok i can't believe you remember the pinecone thing from months ago.\n"
+        )
+
+        result = extract_from_transcript(
+            transcript=transcript,
+            owner_id="Maya Chen",
+            dry_run=True,
+        )
+
+        agent_texts = [
+            fact["text"]
+            for fact in result["raw_facts"]
+            if str(fact.get("speaker", "") or "").lower() == "agent"
+        ]
+        assert any("pinecone" in text and "Biscuit" in text for text in agent_texts)
 
     @patch("ingest.extract.call_deep_reasoning")
     def test_explicit_structural_anchor_does_not_store_user_questions(self, mock_llm):

@@ -1140,6 +1140,28 @@ def _iter_role_turn_texts(transcript: str, *, role_name: str) -> List[str]:
     return [turn for turn in turns if turn]
 
 
+def _iter_prefixed_turns(transcript: str) -> List[Tuple[str, str]]:
+    """Return ordered authored turns from a rendered transcript."""
+    turns: List[Tuple[str, str]] = []
+    current_role: Optional[str] = None
+    current_parts: List[str] = []
+
+    for raw_line in str(transcript or "").splitlines():
+        match = _SPEAKER_PREFIX_RE.match(raw_line)
+        if match:
+            if current_role and current_parts:
+                turns.append((current_role, "\n".join(current_parts).strip()))
+            current_role = match.group(1).strip().lower().replace("_", " ").replace("-", " ")
+            current_parts = [match.group(2)]
+            continue
+        if current_role:
+            current_parts.append(raw_line)
+
+    if current_role and current_parts:
+        turns.append((current_role, "\n".join(current_parts).strip()))
+    return [(role, turn) for role, turn in turns if turn]
+
+
 def _iter_user_turn_texts(transcript: str) -> List[str]:
     """Return user-authored turn text from a rendered transcript."""
     return _iter_role_turn_texts(transcript, role_name="user")
@@ -1265,6 +1287,18 @@ def _extract_titleish_spans(text: str) -> List[str]:
     return spans
 
 
+def _dedupe_casefold(values: List[str]) -> List[str]:
+    deduped: List[str] = []
+    seen: set[str] = set()
+    for value in values:
+        key = str(value or "").strip().lower()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        deduped.append(str(value).strip())
+    return deduped
+
+
 def _assistant_anchor_keywords(text: str) -> str:
     tokens = [
         token.strip(".,;:!?()[]{}\"'`").lower()
@@ -1291,6 +1325,79 @@ def _strip_trailing_question_lines(text: str) -> str:
     return "\n".join(lines).strip()
 
 
+def _build_assistant_anchor_fact(
+    candidate: str,
+    *,
+    confidence_reason: str,
+) -> Dict[str, Any]:
+    return {
+        "text": candidate,
+        "category": "fact",
+        "speaker": "agent",
+        "domains": ["personal"],
+        "extraction_confidence": "medium",
+        "keywords": _assistant_anchor_keywords(candidate),
+        "privacy": "shared",
+        "confidence_reason": confidence_reason,
+        "edges": [],
+    }
+
+
+def _explicit_user_mirrored_anchor_facts(
+    transcript: str,
+    facts: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Preserve exact user idea/plan anchors when the assistant immediately builds on them."""
+    existing_text = "\n".join(
+        str(fact.get("text", "") or "")
+        for fact in facts or []
+        if isinstance(fact, dict)
+    ).lower()
+    seen_fact_texts: set[str] = set()
+    additions: List[Dict[str, Any]] = []
+
+    turns = _iter_prefixed_turns(transcript)
+    for index, (role, turn_text) in enumerate(turns[:-1]):
+        next_role, next_text = turns[index + 1]
+        if role != "user" or next_role != "assistant":
+            continue
+        assistant_text_lower = str(next_text or "").lower()
+        for sentence in _split_fact_sentences(turn_text):
+            if sentence.rstrip().endswith("?"):
+                continue
+            fact_text = _normalize_structural_anchor_sentence(sentence)
+            if len(fact_text.split()) < 5 or len(fact_text) > 240:
+                continue
+            user_spans = _dedupe_casefold(_extract_titleish_spans(fact_text))
+            if len(user_spans) < 2:
+                continue
+            shared_spans = [span for span in user_spans if span.lower() in assistant_text_lower]
+            if len(shared_spans) < 2:
+                continue
+            fact_key = _fact_text_key(fact_text)
+            if not fact_key or fact_key in seen_fact_texts or fact_text.lower() in existing_text:
+                continue
+            keyword_tokens = [
+                token.strip(".,;:!?()[]{}\"'`").lower()
+                for token in re.split(r"\s+", fact_text)
+                if token.strip(".,;:!?()[]{}\"'`")
+            ]
+            additions.append({
+                "text": fact_text,
+                "category": "fact",
+                "speaker": "user",
+                "domains": ["personal"],
+                "extraction_confidence": "medium",
+                "keywords": " ".join(dict.fromkeys(keyword_tokens)),
+                "privacy": "shared",
+                "confidence_reason": "Exact user-authored idea anchor mirrored by immediate assistant follow-up",
+                "edges": [],
+            })
+            seen_fact_texts.add(fact_key)
+
+    return additions
+
+
 def _explicit_assistant_anchor_facts(
     transcript: str,
     facts: List[Dict[str, Any]],
@@ -1309,6 +1416,34 @@ def _explicit_assistant_anchor_facts(
         for raw_paragraph in re.split(r"\n\s*\n", str(turn or "")):
             if "<" in raw_paragraph or "```" in raw_paragraph:
                 continue
+            bullet_lines = [
+                _normalize_structural_anchor_sentence(
+                    re.sub(r"\*\*([^*]+)\*\*", r"\1", re.sub(r"^\s*[-*•]+\s*", "", raw_line))
+                )
+                for raw_line in str(raw_paragraph or "").splitlines()
+                if re.match(r"^\s*[-*•]+\s+", raw_line)
+            ]
+            for bullet_candidate in bullet_lines:
+                if len(bullet_candidate.split()) < 3 or len(bullet_candidate) > 220:
+                    continue
+                unique_spans = _dedupe_casefold(_extract_titleish_spans(bullet_candidate))
+                missing_spans = [
+                    span
+                    for span in unique_spans
+                    if span.lower() not in existing_text and span.lower() not in seen_spans
+                ]
+                if len(unique_spans) < 1 or len(missing_spans) < 1:
+                    continue
+                fact_key = _fact_text_key(bullet_candidate)
+                if not fact_key or fact_key in seen_fact_texts:
+                    continue
+                additions.append(_build_assistant_anchor_fact(
+                    bullet_candidate,
+                    confidence_reason="Exact assistant-authored named option bullet omitted by model extraction",
+                ))
+                seen_fact_texts.add(fact_key)
+                for span in missing_spans:
+                    seen_spans.add(span.lower())
             candidate = _strip_trailing_question_lines(raw_paragraph)
             if not candidate:
                 continue
@@ -1318,36 +1453,23 @@ def _explicit_assistant_anchor_facts(
             candidate = _normalize_structural_anchor_sentence(candidate)
             if len(candidate.split()) < 6 or len(candidate) > 360:
                 continue
-            spans = _extract_titleish_spans(candidate)
-            unique_spans: List[str] = []
-            for span in spans:
-                key = span.lower()
-                if key in {s.lower() for s in unique_spans}:
-                    continue
-                unique_spans.append(span)
+            unique_spans = _dedupe_casefold(_extract_titleish_spans(candidate))
             missing_spans = [
                 span
                 for span in unique_spans
                 if span.lower() not in existing_text and span.lower() not in seen_spans
             ]
-            if len(unique_spans) < 2 or len(missing_spans) < 2:
+            if len(unique_spans) < 2 or len(missing_spans) < 1:
                 continue
             fact_key = _fact_text_key(candidate)
             if not fact_key or fact_key in seen_fact_texts:
                 for span in missing_spans:
                     seen_spans.add(span.lower())
                 continue
-            additions.append({
-                "text": candidate,
-                "category": "fact",
-                "speaker": "agent",
-                "domains": ["personal"],
-                "extraction_confidence": "medium",
-                "keywords": _assistant_anchor_keywords(candidate),
-                "privacy": "shared",
-                "confidence_reason": "Exact assistant-authored named-option or plan anchor omitted by model extraction",
-                "edges": [],
-            })
+            additions.append(_build_assistant_anchor_fact(
+                candidate,
+                confidence_reason="Exact assistant-authored named-option or plan anchor omitted by model extraction",
+            ))
             seen_fact_texts.add(fact_key)
             for span in missing_spans:
                 seen_spans.add(span.lower())
@@ -3081,6 +3203,7 @@ def extract_from_transcript(
         all_facts,
         owner_id=owner_id,
     )
+    explicit_anchor_facts.extend(_explicit_user_mirrored_anchor_facts(transcript, all_facts))
     explicit_anchor_facts.extend(_explicit_assistant_anchor_facts(transcript, all_facts))
     if explicit_anchor_facts:
         logger.info(
