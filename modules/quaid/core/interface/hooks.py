@@ -36,6 +36,8 @@ logger = logging.getLogger(__name__)
 _HOOK_RUNTIME_CONFIG_SNAPSHOT: tuple[tuple[str, int], ...] | None = None
 _RULES_FILE_PREFIX = "quaid-"
 _LEGACY_RULES_FILE = "quaid-projects.md"
+_COMPACT_IDENTITY_CONTEXT_MAX_CHARS = 9000
+_IDENTITY_CONTEXT_FILES = ("USER.md", "SOUL.md", "ENVIRONMENT.md")
 
 _DAEMON_START_SKIP_ENV_KEYS = {
     "CLAUDE_CODE_OAUTH_TOKEN",
@@ -1160,6 +1162,48 @@ def hook_inject(args):
     deferred_notice_relay_context = ""
     deferred_notice_hint = ""
 
+    compaction_marker_consumed = _consume_compaction_refresh_marker(session_id)
+    if compaction_marker_consumed:
+        identity_context = _build_compaction_identity_context()
+        context_parts = []
+        direct_notice_context = _format_direct_agent_notices(direct_notices)
+        if direct_notice_context:
+            context_parts.append(direct_notice_context)
+        if identity_context:
+            context_parts.append(identity_context)
+        context = "\n\n".join(context_parts)
+        _write_hook_trace("hook.inject.compaction_followup_identity_context_ready", {
+            "query": query[:160],
+            "session_id": session_id,
+            "strategy": _context_refresh_strategy(),
+            "context_len": len(context),
+            "identity_context_len": len(identity_context),
+            "has_direct_notices": bool(direct_notice_context),
+            "reason": "compact_identity_additional_context_bridge",
+        })
+        if context:
+            _write_hook_trace("hook.inject.context_emitted", {
+                "query": query[:160],
+                "session_id": session_id,
+                "recall_count": 0,
+                "docs_count": 0,
+                "context_len": len(context),
+                "context_mode": "compaction_identity",
+            })
+            print(json.dumps({
+                "hookSpecificOutput": {
+                    "hookEventName": "UserPromptSubmit",
+                    "additionalContext": context,
+                }
+            }))
+            return
+        _write_hook_trace("hook.inject.compaction_followup_rules_ready", {
+            "query": query[:160],
+            "session_id": session_id,
+            "strategy": _context_refresh_strategy(),
+            "reason": "compact_identity_context_empty",
+        })
+
     try:
         from concurrent.futures import ThreadPoolExecutor
         from core.interface.api import projects_search_docs, recall_fast
@@ -1296,22 +1340,6 @@ def hook_inject(args):
                     and str(mem.get("text") or "").strip().startswith("[RECALL ROUTER WARNING]")
                 )
             ]
-
-        compaction_marker_consumed = _consume_compaction_refresh_marker(session_id)
-        if compaction_marker_consumed:
-            _write_hook_trace("hook.inject.compaction_followup_rules_ready", {
-                "query": query[:160],
-                "session_id": session_id,
-                "strategy": _context_refresh_strategy(),
-                "reason": "split_rules_file_refresh_only",
-            })
-            if _is_negative_memory_claim_text(pending_context):
-                _write_hook_trace("hook.inject.pending_context_filtered", {
-                    "query": query[:160],
-                    "session_id": session_id,
-                    "reason": "non_injectable_memory_text_after_compaction",
-                })
-                pending_context = ""
 
         if pending_context:
             context_parts.append(pending_context)
@@ -1849,11 +1877,87 @@ def _collect_adapter_compatibility_context_sections() -> List[str]:
         return []
 
 
+def _clip_identity_text_for_compact_context(text: str, max_chars: int) -> str:
+    text = str(text or "").strip()
+    if max_chars <= 0 or not text:
+        return ""
+    if len(text) <= max_chars:
+        return text
+    marker = "\n\n[... older identity lines omitted to keep this compact refresh under Claude Code's hook limit ...]\n\n"
+    if max_chars <= len(marker) + 80:
+        return text[:max_chars].rstrip()
+    head_chars = max(120, (max_chars - len(marker)) // 2)
+    tail_chars = max_chars - len(marker) - head_chars
+    return f"{text[:head_chars].rstrip()}{marker}{text[-tail_chars:].lstrip()}".strip()
+
+
+def _build_compaction_identity_context(max_chars: int = _COMPACT_IDENTITY_CONTEXT_MAX_CHARS) -> str:
+    """Build the small post-/compact identity bridge for Claude Code.
+
+    CC 2.1.x writes split rules files correctly during /compact, but live tests
+    show the model-visible context may not reload those files until a new
+    session.  The follow-up turn after /compact therefore gets identity files
+    only, kept below CC's hook additionalContext cap.
+    """
+    try:
+        max_chars = max(1000, min(9500, int(max_chars)))
+    except Exception:
+        max_chars = _COMPACT_IDENTITY_CONTEXT_MAX_CHARS
+
+    identity_dir = _get_identity_dir()
+    raw_sections: List[tuple[str, str]] = []
+    for filename in _IDENTITY_CONTEXT_FILES:
+        fpath = identity_dir / filename
+        if not fpath.is_file():
+            continue
+        try:
+            content = fpath.read_text(encoding="utf-8").strip()
+        except OSError:
+            continue
+        if content:
+            raw_sections.append((filename, content))
+
+    if not raw_sections:
+        return ""
+
+    header = (
+        "<quaid_system_message>\n"
+        "# Quaid Refreshed Identity Context\n\n"
+        "MANDATORY: Quaid rebuilt this identity context immediately after /compact. "
+        "Treat these identity-file facts as authoritative over conflicting recalled memories. "
+        "Answer the current user from this identity context when it is relevant.\n\n"
+    )
+    footer = "\n</quaid_system_message>"
+    heading_overhead = sum(len(f"## {filename}\n\n") + 2 for filename, _ in raw_sections)
+    available = max_chars - len(header) - len(footer) - heading_overhead
+    if available <= 0:
+        return ""
+    per_file_budget = max(200, available // len(raw_sections))
+    parts = []
+    for filename, content in raw_sections:
+        clipped = _clip_identity_text_for_compact_context(content, per_file_budget)
+        if clipped:
+            parts.append(f"## {filename}\n\n{clipped}")
+
+    if not parts:
+        return ""
+    joined = "\n\n".join(parts)
+    context = f"{header}{joined}{footer}"
+    if len(context) <= max_chars:
+        return context
+
+    # Hard fallback: preserve the top-level instruction and a tail slice of
+    # identity content, since M7-style canaries are appended during the test.
+    body_budget = max(200, max_chars - len(header) - len(footer))
+    clipped_body = _clip_identity_text_for_compact_context(joined, body_budget)
+    return f"{header}{clipped_body}{footer}"
+
+
 def _collect_project_context_sections(*, hook_cwd: str = "") -> List[str]:
     sections: List[str] = []
 
     identity_dir = _get_identity_dir()
-    for special_file in ("USER.md", "SOUL.md", "ENVIRONMENT.md"):
+    for special_file in _IDENTITY_CONTEXT_FILES:
         fpath = identity_dir / special_file
         if fpath.is_file():
             content = fpath.read_text(encoding="utf-8").strip()

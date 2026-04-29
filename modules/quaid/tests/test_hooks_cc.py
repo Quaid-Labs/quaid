@@ -280,7 +280,7 @@ def test_claude_code_inject_refreshes_rules_context_for_compact_command(monkeypa
     assert (tmp_path / "data" / "context-refresh-compaction" / "sess-cc-compact.json").is_file()
 
 
-def test_claude_code_post_compact_turn_relies_on_split_rules_without_additional_context(monkeypatch, tmp_path, cursor_dir):
+def test_claude_code_post_compact_turn_gets_identity_additional_context_under_cap(monkeypatch, tmp_path, cursor_dir):
     from adaptors.claude_code.adapter import ClaudeCodeAdapter
 
     transcript_path = tmp_path / "cc-compact-followup.jsonl"
@@ -327,30 +327,6 @@ def test_claude_code_post_compact_turn_relies_on_split_rules_without_additional_
     monkeypatch.setattr("core.extraction_daemon.ensure_alive", lambda: None)
     monkeypatch.setattr("core.extraction_daemon.read_cursor", lambda session_id: {"transcript_path": str(transcript_path)})
     monkeypatch.setattr("lib.adapter.get_adapter", lambda: adapter)
-    monkeypatch.setattr("core.interface.api.recall_fast", lambda **kwargs: ([
-        {
-            "text": "Solomon Steadman asked about an office plant name but no plant name was previously recorded in memory.",
-            "category": "fact",
-            "similarity": 1.0,
-        },
-        {
-            "text": "What's the office plant named",
-            "category": "fact",
-            "similarity": 1.0,
-        },
-        {
-            "text": "Still nothing in memory for an office plant name. If you have one, happy to log it.",
-            "category": "fact",
-            "similarity": 1.0,
-        },
-        {
-            "text": "Solomon Steadman uses a Baratza Encore grinder in his office.",
-            "category": "fact",
-            "similarity": 0.7,
-        }
-    ], None))
-    monkeypatch.setattr("core.interface.api.projects_search_docs", lambda **kwargs: {})
-
     _run_hook_inject(
         {
             "session_id": "sess-cc-compact-followup",
@@ -367,7 +343,12 @@ def test_claude_code_post_compact_turn_relies_on_split_rules_without_additional_
     env_rules = (rules_dir / "quaid-environment-md.md").read_text(encoding="utf-8")
     assert "Bartholomew" in user_rules
     assert "fiddle-leaf fig" in env_rules
-    monkeypatch.setattr("core.interface.api.recall_fast", lambda **kwargs: ([], None))
+
+    def fail_recall(**kwargs):
+        pytest.fail("post-compact identity bridge should skip recall on marker turn")
+
+    monkeypatch.setattr("core.interface.api.recall_fast", fail_recall)
+    monkeypatch.setattr("core.interface.api.projects_search_docs", lambda **kwargs: pytest.fail("post-compact identity bridge should skip docs on marker turn"))
 
     out, _err = _run_hook_inject(
         {
@@ -379,11 +360,20 @@ def test_claude_code_post_compact_turn_relies_on_split_rules_without_additional_
         monkeypatch=monkeypatch,
     )
 
-    assert out.strip() == ""
+    payload = json.loads(out)
+    context = payload["hookSpecificOutput"]["additionalContext"]
+    assert len(context) < 10_000
+    assert "Quaid Refreshed Identity Context" in context
+    assert "MANDATORY" in context
+    assert "Bartholomew" in context
+    assert "fiddle-leaf fig" in context
+    assert "no plant name" not in context
+    assert "Baratza Encore" not in context
     assert not marker_path.exists()
 
     adapter.get_pending_context.return_value = ""
     monkeypatch.setattr("core.interface.api.recall_fast", lambda **kwargs: ([], None))
+    monkeypatch.setattr("core.interface.api.projects_search_docs", lambda **kwargs: {})
 
     out2, _ = _run_hook_inject(
         {
