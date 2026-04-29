@@ -3766,6 +3766,18 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             _release_session_processing_lock(lock_owner_key, lock_fd)
             return
 
+    if signal_type == "timeout" and _is_daemon_owned_transcript_snapshot_path(str(transcript_path)):
+        logger.info(
+            "[%s] session %s: timeout signal points at daemon-owned preserved transcript; "
+            "skipping inactive mirror: %s",
+            label,
+            session_id,
+            transcript_path,
+        )
+        mark_signal_processed(signal_data)
+        _release_session_processing_lock(lock_owner_key, lock_fd)
+        return
+
     if not _cursor_or_adapter_owns_transcript_path(
         adapter,
         session_id,
@@ -5002,6 +5014,12 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
         session_id = data.get("session_id", "")
         transcript_path = data.get("transcript_path", "")
         if not session_id or not transcript_path or not os.path.isfile(transcript_path):
+            continue
+        if _is_daemon_owned_transcript_snapshot_path(str(transcript_path)):
+            # Preserved daemon mirrors are valid lifecycle inputs, but they are
+            # not active host transcripts. Let discovery replace stale mirrors
+            # with the live adapter path; otherwise do not let an old mirror fire
+            # timeout extraction before the host materializes the real session.
             continue
         if _is_discovery_artifact_transcript(Path(str(transcript_path))):
             continue

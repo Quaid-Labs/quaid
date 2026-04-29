@@ -3701,6 +3701,78 @@ class TestCheckIdleSessions:
         assert cursor["internal"] is True
         assert cursor["line_offset"] == 4
 
+    def test_idle_scan_skips_daemon_owned_preserved_transcript_without_live_source(self, monkeypatch, tmp_path):
+        """Preserved OC mirrors are lifecycle inputs, not active timeout candidates."""
+        instance_id = "openclaw-main"
+        session_id = "a397508c-02c8-401a-88cf-9f977757fbfd"
+        preserved_dir = tmp_path / "instances" / instance_id / "logs" / "quaid" / "sessions"
+        preserved_dir.mkdir(parents=True, exist_ok=True)
+        preserved = preserved_dir / f"{session_id}.jsonl"
+        preserved.write_text(
+            '{"role":"user","content":"Hello"}\n'
+            '{"role":"assistant","content":"Hey!"}\n'
+            '{"role":"assistant","content":"NO_REPLY"}\n',
+            encoding="utf-8",
+        )
+        source_key = extraction_daemon._signal_source_cursor_key(session_id, str(preserved))
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", instance_id)
+        extraction_daemon.write_cursor(session_id, 0, str(preserved), source_key=source_key)
+
+        now = 1_700_000_000.0
+        os.utime(preserved, (now - 600, now - 600))
+
+        class _FakeAdapter(_OwnedTestAdapterMixin):
+            def get_sessions_dir(self):
+                return tmp_path / "missing-openclaw-sessions"
+
+            def parse_session_jsonl(self, path):
+                return Path(path).read_text(encoding="utf-8")
+
+        captured = []
+        monkeypatch.setattr(extraction_daemon.time, "time", lambda: now)
+        monkeypatch.setattr(extraction_daemon, "_read_installed_at", lambda: now - 7200)
+        monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
+        monkeypatch.setattr(extraction_daemon, "_load_runtime_adapter", lambda: _FakeAdapter())
+        monkeypatch.setattr(extraction_daemon, "write_signal", lambda *a, **kw: captured.append((a, kw)))
+
+        extraction_daemon.check_idle_sessions(timeout_minutes=1)
+
+        assert captured == []
+
+    def test_timeout_signal_skips_daemon_owned_preserved_transcript(self, monkeypatch, tmp_path):
+        """A queued timeout against a preserved mirror must not extract stale startup text."""
+        instance_id = "openclaw-main"
+        session_id = "a397508c-02c8-401a-88cf-9f977757fbfd"
+        preserved_dir = tmp_path / "instances" / instance_id / "logs" / "quaid" / "sessions"
+        preserved_dir.mkdir(parents=True, exist_ok=True)
+        preserved = preserved_dir / f"{session_id}.jsonl"
+        preserved.write_text('{"role":"user","content":"Hello"}\n', encoding="utf-8")
+        source_key = extraction_daemon._signal_source_cursor_key(session_id, str(preserved))
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", instance_id)
+        extraction_daemon.write_cursor(session_id, 0, str(preserved), source_key=source_key)
+        signal_path = extraction_daemon.write_signal(
+            signal_type="timeout",
+            session_id=session_id,
+            transcript_path=str(preserved),
+            meta={"compact_on_timeout": True},
+        )
+
+        class _FakeAdapter(_OwnedTestAdapterMixin):
+            def parse_session_jsonl(self, _path):
+                raise AssertionError("timeout should not parse preserved daemon mirror")
+
+        monkeypatch.setattr(extraction_daemon, "_reload_config_if_changed", lambda _reason: None)
+        monkeypatch.setattr(extraction_daemon, "_load_runtime_adapter", lambda: _FakeAdapter())
+        monkeypatch.setattr(extraction_daemon, "_get_owner_id", lambda: "Owner")
+        monkeypatch.setattr(extraction_daemon, "write_context_refresh_timeout_marker", lambda _sid: None)
+
+        signal = extraction_daemon.read_pending_signals()[0]
+        extraction_daemon.process_signal(signal)
+
+        assert not signal_path.exists()
+
     def test_recent_idle_sessions_timeout_before_stale_backlog(self, monkeypatch, tmp_path):
         """A fresh idle session must not wait behind old stale timeout work."""
         instance_id = os.environ.get("QUAID_INSTANCE", "pytest-runner")
