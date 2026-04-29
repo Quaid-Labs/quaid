@@ -2959,6 +2959,19 @@ ${header}${journalContent}` : `${header}${journalContent}`;
       return "";
     }
   }
+  function _adapterCompatibilitySection() {
+    const adapterName = String(deps.adapterName || "openclaw").replace(/_adapter$/i, "").replace(/[^a-z0-9_-]+/gi, "").toLowerCase();
+    const adapterDir = adapterName || "openclaw";
+    const compatPath = path.join(deps.pluginRoot, "adaptors", adapterDir, "COMPATIBILITY.md");
+    try {
+      if (!fs.existsSync(compatPath)) return "";
+      const content = fs.readFileSync(compatPath, "utf8").split(/\r?\n/).slice(0, 120).join("\n").trim();
+      return content ? `--- adapter-compatibility/COMPATIBILITY.md ---
+${content}` : "";
+    } catch {
+      return "";
+    }
+  }
   async function injectProjectContext(existingContext, options = {}) {
     let prepend = existingContext;
     try {
@@ -2976,6 +2989,10 @@ ${content}`);
             }
           }
         }
+      }
+      const compatibilitySection = _adapterCompatibilitySection();
+      if (compatibilitySection) {
+        sections.push(compatibilitySection);
       }
       if (!options.identityOnly) {
         const projectsDir = path.join(resolveVisibleHome(), "projects");

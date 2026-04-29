@@ -407,6 +407,10 @@ class QuaidAdapter(abc.ABC):
         """
         return {}
 
+    def get_compatibility_context_files(self) -> Dict[str, Dict]:
+        """Return adapter compatibility notes safe to inject into agent context."""
+        return {}
+
     def should_filter_transcript_message(self, text: str) -> bool:
         """Adapter-specific transcript noise filtering."""
         value = str(text or "").strip()

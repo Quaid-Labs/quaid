@@ -354,6 +354,17 @@ class OpenClawAdapter(QuaidAdapter):
                 files[str(fpath)] = {"purpose": purpose, "maxLines": max_lines}
         return files
 
+    def get_compatibility_context_files(self):
+        path = Path(__file__).with_name("COMPATIBILITY.md")
+        if not path.is_file():
+            return {}
+        return {
+            str(path.resolve()): {
+                "purpose": "OpenClaw compatibility notes",
+                "maxLines": 100,
+            }
+        }
+
     def quaid_home(self) -> Path:
         """Root directory containing all Quaid instances (QUAID_HOME)."""
         env = os.environ.get("QUAID_HOME", "").strip()

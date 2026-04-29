@@ -1908,6 +1908,35 @@ class TestHookSessionInitRegistryAugmentation:
         assert "Keep shell snippets short." in content
         assert "Legacy projected fact should not persist in rules." in content
 
+    def test_adapter_compatibility_context_is_included(self, tmp_path, monkeypatch):
+        projects_dir, identity_dir, rules_dir = self._make_init_env(tmp_path, monkeypatch)
+        compat_path = tmp_path / "COMPATIBILITY.md"
+        compat_path.write_text("# Claude Code Compatibility\nWait briefly after compact.", encoding="utf-8")
+
+        adapter = _adapter_mock()
+        adapter.adapter_id.return_value = "claude-code"
+        adapter.projects_dir.return_value = projects_dir
+        adapter.identity_dir.return_value = identity_dir
+        adapter.data_dir.return_value = tmp_path / "data"
+        adapter.instance_root.return_value = tmp_path
+        adapter.get_base_context_files.return_value = {}
+        adapter.get_cli_tools_snippet.return_value = ""
+        adapter.get_compatibility_context_files.return_value = {
+            str(compat_path): {"purpose": "compatibility", "maxLines": 20}
+        }
+        monkeypatch.setattr("lib.adapter.get_adapter", lambda: adapter)
+
+        with patch("core.project_registry.list_projects", return_value={}):
+            _, _, content = _run_hook_session_init(
+                {"session_id": "s5-compat", "cwd": str(tmp_path)},
+                monkeypatch=monkeypatch,
+                rules_dir=rules_dir,
+            )
+
+        assert content is not None
+        assert "--- adapter-compatibility/COMPATIBILITY.md ---" in content
+        assert "Wait briefly after compact." in content
+
     def test_no_project_docs_no_file_written(self, tmp_path, monkeypatch):
         """When projects_dir has no TOOLS/AGENTS docs, no rules file is written."""
         projects_dir, identity_dir, rules_dir = self._make_init_env(tmp_path, monkeypatch)

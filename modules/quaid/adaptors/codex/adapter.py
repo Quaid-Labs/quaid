@@ -363,6 +363,17 @@ class CodexAdapter(QuaidAdapter):
                 break
         return files
 
+    def get_compatibility_context_files(self):
+        path = Path(__file__).with_name("COMPATIBILITY.md")
+        if not path.is_file():
+            return {}
+        return {
+            str(path.resolve()): {
+                "purpose": "Codex compatibility notes",
+                "maxLines": 120,
+            }
+        }
+
     def get_cli_tools_snippet(self) -> str:
         instance_name = os.environ.get("QUAID_INSTANCE", "").strip()
         if not instance_name:

@@ -1609,6 +1609,47 @@ def _should_emit_turn_based_refresh(session_id: str) -> bool:
     return should_emit
 
 
+def _collect_context_file_sections(files: Any, *, section_prefix: str, default_max_lines: int = 120) -> List[str]:
+    if not isinstance(files, dict):
+        return []
+    sections: List[str] = []
+    for raw_path, raw_meta in files.items():
+        try:
+            path = Path(str(raw_path)).expanduser()
+        except Exception:
+            continue
+        if not path.is_file():
+            continue
+        max_lines = default_max_lines
+        if isinstance(raw_meta, dict):
+            try:
+                max_lines = max(1, min(250, int(raw_meta.get("maxLines") or default_max_lines)))
+            except Exception:
+                max_lines = default_max_lines
+        try:
+            content = "\n".join(path.read_text(encoding="utf-8").splitlines()[:max_lines]).strip()
+        except OSError:
+            continue
+        if content:
+            sections.append(f"--- {section_prefix}/{path.name} ---\n{content}")
+    return sections
+
+
+def _collect_adapter_compatibility_context_sections() -> List[str]:
+    try:
+        from lib.adapter import get_adapter
+        adapter = get_adapter()
+        getter = getattr(adapter, "get_compatibility_context_files", None)
+        files = getter() if callable(getter) else {}
+        return _collect_context_file_sections(
+            files,
+            section_prefix="adapter-compatibility",
+            default_max_lines=120,
+        )
+    except Exception:
+        return []
+
+
 def _collect_project_context_sections(*, hook_cwd: str = "") -> List[str]:
     sections: List[str] = []
 
@@ -1622,6 +1663,7 @@ def _collect_project_context_sections(*, hook_cwd: str = "") -> List[str]:
 
     projects_dir = _get_projects_dir()
     sections.extend(_collect_project_doc_context_sections(projects_dir, hook_cwd=hook_cwd))
+    sections.extend(_collect_adapter_compatibility_context_sections())
 
     try:
         from lib.adapter import get_adapter
@@ -2274,7 +2316,6 @@ def hook_session_init(args):
     projects_dir = _get_projects_dir()
     if not projects_dir.is_dir():
         print(f"[quaid][session-init] projects dir not found: {projects_dir}", file=sys.stderr)
-        return
 
     sections: List[str] = []
 
@@ -2292,6 +2333,7 @@ def hook_session_init(args):
     #    bounded catalog and are reached through docs recall.
     hook_cwd = hook_input.get("cwd", "").strip() if hook_input else ""
     sections.extend(_collect_project_doc_context_sections(projects_dir, hook_cwd=hook_cwd))
+    sections.extend(_collect_adapter_compatibility_context_sections())
 
     # 2b. Append base context file names so guidance can refer to them generically.
     #     These are the adapter's authoritative instruction files (e.g. CLAUDE.md for CC).

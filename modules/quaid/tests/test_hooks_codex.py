@@ -118,6 +118,8 @@ def test_codex_session_init_emits_additional_context(monkeypatch, tmp_path):
     identity_dir = tmp_path / "identity"
     projects_dir.mkdir()
     identity_dir.mkdir()
+    compat_path = tmp_path / "COMPATIBILITY.md"
+    compat_path.write_text("# Codex Compatibility\nUse separate instances for parallel agents.", encoding="utf-8")
 
     project = projects_dir / "quaid"
     project.mkdir()
@@ -130,6 +132,9 @@ def test_codex_session_init_emits_additional_context(monkeypatch, tmp_path):
     adapter.projects_dir.return_value = projects_dir
     adapter.identity_dir.return_value = identity_dir
     adapter.get_base_context_files.return_value = {}
+    adapter.get_compatibility_context_files.return_value = {
+        str(compat_path): {"purpose": "compatibility", "maxLines": 20}
+    }
     adapter.get_cli_tools_snippet.return_value = ""
     adapter.get_pending_context.return_value = ""
     adapter.data_dir.return_value = tmp_path / "data"
@@ -162,6 +167,8 @@ def test_codex_session_init_emits_additional_context(monkeypatch, tmp_path):
     assert context.rstrip().endswith("</quaid_system_message>")
     assert "quaid/TOOLS.md" in context
     assert "codex startup docs" in context
+    assert "adapter-compatibility/COMPATIBILITY.md" in context
+    assert "separate instances for parallel agents" in context
     assert ensure_alive_calls == [True]
     assert not (tmp_path / ".claude" / "rules" / "quaid-projects.md").exists()
     assert "emitted startup additionalContext" in err

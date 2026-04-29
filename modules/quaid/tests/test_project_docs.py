@@ -995,6 +995,37 @@ def test_start_supervisor_reaps_matching_orphans_before_spawn(project_env, monke
     assert captured["env"]["QUAID_SUPERVISOR_BOOT"] == "1"
 
 
+def test_start_supervisor_hydrates_anthropic_key_from_shared_auth(project_env, monkeypatch):
+    tmp_path, _src, _entry = project_env
+    from core import project_docs
+
+    auth_path = tmp_path / "shared" / "auth" / "credentials.json"
+    auth_path.parent.mkdir(parents=True)
+    auth_path.write_text(
+        json.dumps({"credentials": {"anthropic_oauth": {"token": "sk-ant-oat01-supervisor"}}}),
+        encoding="utf-8",
+    )
+    captured = {}
+
+    class _FakePopen:
+        pid = 33334
+
+        def __init__(self, *_args, **kwargs):
+            captured["env"] = dict(kwargs.get("env") or {})
+
+        def poll(self):
+            return None
+
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setattr(project_docs, "read_supervisor_pid", lambda: None)
+    monkeypatch.setattr(project_docs, "_matching_supervisor_pids", lambda **_kwargs: [])
+    monkeypatch.setattr(project_docs.subprocess, "Popen", _FakePopen)
+    monkeypatch.setattr(project_docs, "_wait_for_pid", lambda *args, **kwargs: 33334)
+
+    assert project_docs.start_supervisor() == 33334
+    assert captured["env"]["ANTHROPIC_API_KEY"] == "sk-ant-oat01-supervisor"
+
+
 def test_start_worker_strips_inherited_memory_db_overrides(project_env, monkeypatch):
     _tmp_path, _src, _entry = project_env
     from core import project_docs
@@ -1034,6 +1065,64 @@ def test_start_worker_strips_inherited_memory_db_overrides(project_env, monkeypa
     assert "QUAID_ADAPTER_TYPE" not in captured["env"]
     assert captured["env"]["QUAID_SUPERVISOR_PID"] == "12345"
     assert captured["env"]["QUAID_PROJECT_DOCS_WORKER_TOKEN"]
+
+
+def test_start_worker_preserves_explicit_anthropic_key(project_env, monkeypatch):
+    _tmp_path, _src, _entry = project_env
+    from core import project_docs
+
+    captured = {}
+
+    class _FakePopen:
+        pid = 44445
+
+        def __init__(self, *_args, **kwargs):
+            captured["env"] = dict(kwargs.get("env") or {})
+
+        def poll(self):
+            return None
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-explicit-worker")
+    monkeypatch.setattr(project_docs, "project_is_registered_for_worker", lambda _name: True)
+    monkeypatch.setattr(project_docs, "read_worker_pid", lambda _name: None)
+    monkeypatch.setattr(project_docs, "read_supervisor_pid", lambda: 12345)
+    monkeypatch.setattr(project_docs.subprocess, "Popen", _FakePopen)
+    monkeypatch.setattr(project_docs, "_wait_for_pid", lambda *args, **kwargs: 44445)
+
+    assert project_docs.start_worker("demo") == 44445
+    assert captured["env"]["ANTHROPIC_API_KEY"] == "sk-ant-explicit-worker"
+
+
+def test_start_worker_hydrates_anthropic_key_from_shared_auth(project_env, monkeypatch):
+    tmp_path, _src, _entry = project_env
+    from core import project_docs
+
+    auth_path = tmp_path / "shared" / "auth" / "credentials.json"
+    auth_path.parent.mkdir(parents=True)
+    auth_path.write_text(
+        json.dumps({"credentials": {"anthropic_api": {"token": "sk-ant-api-worker"}}}),
+        encoding="utf-8",
+    )
+    captured = {}
+
+    class _FakePopen:
+        pid = 44446
+
+        def __init__(self, *_args, **kwargs):
+            captured["env"] = dict(kwargs.get("env") or {})
+
+        def poll(self):
+            return None
+
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setattr(project_docs, "project_is_registered_for_worker", lambda _name: True)
+    monkeypatch.setattr(project_docs, "read_worker_pid", lambda _name: None)
+    monkeypatch.setattr(project_docs, "read_supervisor_pid", lambda: 12345)
+    monkeypatch.setattr(project_docs.subprocess, "Popen", _FakePopen)
+    monkeypatch.setattr(project_docs, "_wait_for_pid", lambda *args, **kwargs: 44446)
+
+    assert project_docs.start_worker("demo") == 44446
+    assert captured["env"]["ANTHROPIC_API_KEY"] == "sk-ant-api-worker"
 
 
 def test_stop_supervisor_kills_pidfile_target_and_matching_orphans(project_env, monkeypatch):

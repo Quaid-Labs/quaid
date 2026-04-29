@@ -3896,6 +3896,26 @@ ${lines.join("\n")}
     }
   }
 
+  function _adapterCompatibilitySection(): string {
+    const adapterName = String(deps.adapterName || "openclaw")
+      .replace(/_adapter$/i, "")
+      .replace(/[^a-z0-9_-]+/gi, "")
+      .toLowerCase();
+    const adapterDir = adapterName || "openclaw";
+    const compatPath = path.join(deps.pluginRoot, "adaptors", adapterDir, "COMPATIBILITY.md");
+    try {
+      if (!fs.existsSync(compatPath)) return "";
+      const content = fs.readFileSync(compatPath, "utf8")
+        .split(/\r?\n/)
+        .slice(0, 120)
+        .join("\n")
+        .trim();
+      return content ? `--- adapter-compatibility/COMPATIBILITY.md ---\n${content}` : "";
+    } catch {
+      return "";
+    }
+  }
+
   async function injectProjectContext(existingContext?: string, options: ProjectContextOptions = {}): Promise<string | undefined> {
     let prepend = existingContext;
     try {
@@ -3913,6 +3933,11 @@ ${lines.join("\n")}
             } catch { /* skip unreadable */ }
           }
         }
+      }
+
+      const compatibilitySection = _adapterCompatibilitySection();
+      if (compatibilitySection) {
+        sections.push(compatibilitySection);
       }
 
       if (!options.identityOnly) {

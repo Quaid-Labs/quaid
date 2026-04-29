@@ -448,6 +448,17 @@ class ClaudeCodeAdapter(QuaidAdapter):
                 break  # Only the first match
         return files
 
+    def get_compatibility_context_files(self):
+        path = Path(__file__).with_name("COMPATIBILITY.md")
+        if not path.is_file():
+            return {}
+        return {
+            str(path.resolve()): {
+                "purpose": "Claude Code compatibility notes",
+                "maxLines": 100,
+            }
+        }
+
     @staticmethod
     def _normalize_claude_project_dir_name(value: str) -> str:
         return re.sub(r"[^a-z0-9]+", "-", str(value or "").lower()).strip("-")

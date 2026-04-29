@@ -139,6 +139,38 @@ This section records behaviors discovered during live testing that materially ch
 
 ---
 
+### Session-end extraction latency — Codex `/new` boundary
+
+**Status:** Resolved as an accepted Codex platform limitation.
+
+**Symptom:** When a Codex user types `/new`, an immediate follow-up question about content from the prior session can hit stale memory.
+
+**Root cause:** Codex does not materialize the session boundary until the first follow-up prompt. Quaid receives the prior-session signal at that moment and starts async extraction, which usually takes several seconds. The same follow-up prompt's synchronous memory injection can complete before extraction lands.
+
+**Impact:** Immediate-after-`/new` recall can miss facts that Quaid extracts correctly moments later. This is platform-specific to Codex; Claude Code and OpenClaw expose different lifecycle hooks and do not have this exact race.
+
+**Current workaround:** Ask again after a moment. For live testing, send a sacrificial first prompt after `/new` to materialize the boundary, then poll for extraction before grading prior-session recall.
+
+**Future path:** Revisit if Codex exposes a `/new`-side hook or synchronous session-boundary flush. Quaid is not pursuing a local sync barrier for this release.
+
+---
+
+### Parallel agents in one Codex instance
+
+**Status:** Accepted Codex platform limitation; use separate Quaid instances for isolation-sensitive parallel work.
+
+**Symptom:** Multiple agents sharing one Codex-backed Quaid instance can make extraction appear early, late, or out of phase with the visible agent turn.
+
+**Root cause:** Codex has no compaction hook and no upfront `/new` lifecycle hook. Quaid relies on asynchronous `Stop` and follow-up prompt signals, so concurrent sessions in the same instance can interleave lifecycle observations.
+
+**Impact:** Same-instance parallel agents can confuse tests or user workflows that assume strict extraction ordering. The memory silo is intentionally shared, but lifecycle timing is less deterministic than on platforms with stronger session hooks.
+
+**Current workaround:** Use a separate Quaid instance for each parallel Codex agent when timing, isolation, or extraction ordering matters.
+
+**Future path:** Revisit if Codex exposes stronger per-session lifecycle metadata or compaction hooks.
+
+---
+
 ### HyDE recall LLM timeout — Codex adapter
 
 **Symptom:** On the Codex adapter, `quaid recall` queries that trigger HyDE (Hypothetical Document Embedding) generation intermittently time out with `[llm_clients] LLM error: Timed out waiting for Codex turn notifications`. The timeout occurs in the LLM call path for generating the hypothetical document used to improve query embedding quality. The failure degrades recall to unranked vector results, which may be irrelevant.

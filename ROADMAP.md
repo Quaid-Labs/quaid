@@ -38,6 +38,10 @@ for agents.
 - **Stronger shared-memory foundations**
   - Build the groundwork for multi-user, group, and shared-project memory without cross-user leakage.
   - Improve routing and ownership rules so shared contexts stay useful without becoming unsafe.
+  - Add an explicit per-instance stateless mode so a lane can disable Quaid
+    memory capture, injection, project-doc updates, janitor participation, and
+    daemon extraction from one config row instead of partially disabling
+    individual subsystems.
 
 - **Better memory introspection**
   - Make it easier to answer:

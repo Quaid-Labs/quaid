@@ -223,6 +223,32 @@ describe("QuaidFacade", () => {
     await rm(workspace, { recursive: true, force: true });
   });
 
+  it("injectProjectContext includes adapter compatibility notes when present", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "quaid-facade-compat-context-"));
+    const pluginRoot = path.join(workspace, "modules", "quaid");
+    const compatDir = path.join(pluginRoot, "adaptors", "openclaw");
+    await mkdir(compatDir, { recursive: true });
+    await writeFile(
+      path.join(compatDir, "COMPATIBILITY.md"),
+      "# OpenClaw Compatibility\nUse `/compact` before relying on refreshed identity context.",
+      "utf8",
+    );
+
+    const facade = createQuaidFacade(makeMockDeps({
+      workspace,
+      pluginRoot,
+      adapterName: "openclaw_adapter",
+      execPython: vi.fn(async () => ""),
+    }));
+
+    const out = await facade.injectProjectContext(undefined, { identityOnly: true });
+    expect(out).toContain("# Quaid Identity Context");
+    expect(out).toContain("--- adapter-compatibility/COMPATIBILITY.md ---");
+    expect(out).toContain("Use `/compact` before relying on refreshed identity context.");
+
+    await rm(workspace, { recursive: true, force: true });
+  });
+
   it("injectProjectContext warns and skips visible-home root files when instance is unknown", async () => {
     const workspace = await mkdtemp(path.join(tmpdir(), "quaid-facade-project-context-no-instance-"));
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
