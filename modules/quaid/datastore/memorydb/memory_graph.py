@@ -9520,6 +9520,44 @@ def _estimate_fanout_profile(query: str, max_queries: int, planner_profile: str 
     }
 
 
+def _should_preserve_query_after_empty_plan(
+    query: str,
+    *,
+    profile: Optional[Dict[str, Any]] = None,
+    default_stores: Optional[List[str]] = None,
+    default_project: Optional[str] = None,
+) -> bool:
+    """Keep a meaningful recall query alive when the planner returns [].
+
+    The planner is allowed to short-circuit obvious filler/greetings earlier.
+    Once we reach this branch, an empty LLM plan on a concrete recall prompt is
+    more likely planner over-conservatism than genuine "no retrieval needed".
+    Preserve the user's exact query for focused/exact prompts rather than
+    converting a real recall ask into planner_returned_empty.
+    """
+    clean = " ".join(str(query or "").split()).strip()
+    if not clean:
+        return False
+    if _is_single_structural_exact_query(clean):
+        return True
+
+    query_profile = dict(profile or {})
+    token_count = int(query_profile.get("token_count") or len(clean.split()))
+    shape = str(query_profile.get("shape") or "")
+    planned_default_stores = list(_planner_store_plan(default_stores))
+    explicit_anchors = _extract_explicit_query_anchor_terms(clean, limit=4)
+    distinctive_terms = _extract_distinctive_query_terms(clean, limit=6)
+    has_anchor_signal = bool(explicit_anchors) or len(distinctive_terms) >= 2
+
+    if default_project or "docs" in planned_default_stores:
+        return has_anchor_signal
+    if shape in {"narrow", "focused"} and token_count <= 24 and has_anchor_signal:
+        return True
+    if token_count >= 8 and len(distinctive_terms) >= 3:
+        return True
+    return False
+
+
 def _build_branch_telemetry(
     queries: List[str],
     branch_metas: List[Dict[str, Any]],
@@ -9996,6 +10034,13 @@ def _plan_fanout_queries(
         if out and clean.lower() not in {q.lower() for q in out}:
             out.insert(0, clean)
         if not out:
+            if _should_preserve_query_after_empty_plan(
+                clean,
+                profile=profile,
+                default_stores=planned_default_stores,
+                default_project=default_project,
+            ):
+                return _finish([clean], "preserve_query_after_empty_plan")
             return _finish([], "planner_returned_empty")
         return _finish(out)
     except Exception as exc:
@@ -11762,6 +11807,7 @@ def recall(
         )
 
     # Final merge to requested limit
+    merged = _prioritize_fast_anchor_direct_rows(query, merged)
     final = merged[:limit]
     total_elapsed = (_time.monotonic() - recall_start) * 1000
     if stop_reason == "max_turns" and len(drill_log) < max_turns:

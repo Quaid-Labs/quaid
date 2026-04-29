@@ -1766,6 +1766,68 @@ class TestRecallBasic:
         assert ranked[0]["id"] == "fresh-baxter"
         assert ranked.index(rows[2]) < ranked.index(rows[0])
 
+    def test_recall_deliberate_prioritizes_fresh_direct_anchor_row_before_final_limit(self):
+        import datastore.memorydb.memory_graph as mg
+
+        query = "What is my Friday ritual?"
+        planner_meta = {
+            "query": query,
+            "timeout_ms": 0,
+            "used_llm": False,
+            "bailout_reason": None,
+            "queries_count": 1,
+            "elapsed_ms": 0,
+            "planner_profile": "full",
+            "planned_stores": ["vector"],
+            "planned_project": None,
+            "freshness_preferred": False,
+        }
+        rows = [
+            {
+                "id": "stale-friday",
+                "text": "Solomon Steadman's Friday ritual is Hale Hale Fitness before work.",
+                "category": "fact",
+                "similarity": 0.99,
+                "created_at": "2026-04-01T08:00:00",
+            },
+            {
+                "id": "fresh-friday",
+                "text": "Solomon Steadman's Friday ritual is roasting pumpkin seeds with smoked paprika and maple salt.",
+                "category": "fact",
+                "similarity": 0.82,
+                "created_at": "2026-04-22T08:00:00",
+            },
+        ]
+        branch_meta = {
+            "mode": "fast",
+            "selected_path": "vector",
+            "phases_ms": {"total_ms": 12},
+        }
+
+        with patch.object(
+            mg,
+            "_run_recall_branch_callables",
+            return_value=([([dict(row) for row in rows], branch_meta)], 12.0),
+        ), patch.object(mg, "_summarize_memory_quality", return_value={}), \
+             patch.object(
+                 mg,
+                 "_evaluate_quality_gate_readiness",
+                 return_value={"ready": False, "needs_validation": False, "overlap_ratio": 0.5},
+             ):
+            recalled, meta = mg.recall(
+                query,
+                limit=1,
+                return_meta=True,
+                planned_queries=[query],
+                planner_meta=planner_meta,
+                max_turns=1,
+                use_lightweight_config=True,
+            )
+
+        assert recalled
+        assert recalled[0]["id"] == "fresh-friday"
+        assert meta["query"] == query
+
 # ---------------------------------------------------------------------------
 # store() dedup behavior
 # ---------------------------------------------------------------------------
@@ -3496,6 +3558,28 @@ class TestRecallTelemetry:
         assert meta["bailout_reason"] == "preserve_short_exact_query"
         assert meta["planned_stores"] == ["vector"]
         assert meta["planned_project"] is None
+
+    def test_plan_fanout_queries_preserves_verbatim_query_when_planner_returns_empty(self):
+        import datastore.memorydb.memory_graph as mg
+
+        query = "Solomon Steadman's Friday ritual is roasting pumpkin seeds with smoked paprika and maple salt."
+
+        with patch.object(
+            mg,
+            "parse_json_response",
+            return_value={"queries": []},
+        ), patch("lib.llm_clients.call_fast_reasoning", return_value=('{"queries":[]}', {})), \
+             patch.object(mg, "_has_generic_graph_signal", return_value=False):
+            queries, meta = mg._plan_fanout_queries(
+                query,
+                timeout_s=60.0,
+                return_meta=True,
+                planner_profile="full",
+            )
+
+        assert queries == [query]
+        assert meta["used_llm"] is True
+        assert meta["bailout_reason"] == "preserve_query_after_empty_plan"
 
     def test_exact_query_store_classification_uses_segmentation_uncertainty_not_script_gate(self):
         import datastore.memorydb.memory_graph as mg
