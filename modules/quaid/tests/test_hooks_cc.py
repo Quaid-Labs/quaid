@@ -276,7 +276,7 @@ def test_claude_code_inject_refreshes_rules_context_for_compact_command(monkeypa
     assert (tmp_path / "data" / "context-refresh-compaction" / "sess-cc-compact.json").is_file()
 
 
-def test_claude_code_post_compact_turn_relies_on_rules_file_without_additional_context(monkeypatch, tmp_path, cursor_dir):
+def test_claude_code_post_compact_turn_gets_identity_additional_context(monkeypatch, tmp_path, cursor_dir):
     from adaptors.claude_code.adapter import ClaudeCodeAdapter
 
     transcript_path = tmp_path / "cc-compact-followup.jsonl"
@@ -373,7 +373,15 @@ def test_claude_code_post_compact_turn_relies_on_rules_file_without_additional_c
         monkeypatch=monkeypatch,
     )
 
-    assert out.strip() == ""
+    payload = json.loads(out)
+    context = payload["hookSpecificOutput"]["additionalContext"]
+    assert "Quaid Refreshed Identity Context" in context
+    assert "MANDATORY" in context
+    assert "The office plant is named Bartholomew." in context
+    assert "It is a fiddle-leaf fig." in context
+    assert "Solomon Steadman asked about an office plant name" not in context
+    assert "Still nothing in memory" not in context
+    assert len(context) < 10_000
     assert not marker_path.exists()
 
     adapter.get_pending_context.return_value = ""

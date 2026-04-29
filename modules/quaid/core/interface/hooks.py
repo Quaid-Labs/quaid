@@ -1277,13 +1277,22 @@ def hook_inject(args):
                 )
             ]
 
-        if _consume_compaction_followup_refresh_marker(session_id):
-            _write_hook_trace("hook.inject.compaction_followup_context_skipped", {
+        compaction_refresh_context = _build_compaction_followup_refresh_context(session_id)
+        if compaction_refresh_context:
+            context_parts.append(compaction_refresh_context)
+            _write_hook_trace("hook.inject.compaction_followup_context_refreshed", {
                 "query": query[:160],
                 "session_id": session_id,
-                "reason": "rules_file_refresh_only",
+                "strategy": _context_refresh_strategy(),
+                "context_len": len(compaction_refresh_context),
             })
-            return
+            if _is_negative_memory_claim_text(pending_context):
+                _write_hook_trace("hook.inject.pending_context_filtered", {
+                    "query": query[:160],
+                    "session_id": session_id,
+                    "reason": "non_injectable_memory_text_after_compaction",
+                })
+                pending_context = ""
 
         if pending_context:
             context_parts.append(pending_context)
@@ -1929,15 +1938,54 @@ def _build_turn_based_refresh_context(session_id: str) -> str:
     return _build_project_context_message()
 
 
-def _consume_compaction_followup_refresh_marker(session_id: str) -> bool:
-    """Consume the post-/compact marker without emitting additionalContext.
+def _build_compaction_followup_refresh_context(session_id: str) -> str:
+    """Emit a compact identity-only bridge after /compact.
 
-    Claude Code reliably reloads `.claude/rules/quaid-projects.md` after the
-    compaction refresh. The hook `additionalContext` channel is capped and was
-    duplicating that rules-file content, so the post-compact follow-up turn now
-    relies on the rules file as the sole delivery path.
+    Claude Code reloads rules files on fresh session starts, but live testing
+    showed the /compact path can leave the just-rebuilt rules file out of the
+    model-visible prompt. The hook additionalContext channel is capped, so this
+    bridge intentionally carries only fresh identity files, not the full project
+    context already written to `.claude/rules/quaid-projects.md`.
     """
-    return _consume_compaction_refresh_marker(session_id)
+    if not _consume_compaction_refresh_marker(session_id):
+        return ""
+    return _build_refreshed_identity_priority_context()
+
+
+def _build_refreshed_identity_priority_context() -> str:
+    sections: List[str] = []
+    identity_dir = _get_identity_dir()
+    max_chars_per_file = 2400
+    for special_file in ("USER.md", "SOUL.md", "ENVIRONMENT.md"):
+        fpath = identity_dir / special_file
+        if not fpath.is_file():
+            continue
+        try:
+            content = fpath.read_text(encoding="utf-8").strip()
+        except OSError:
+            continue
+        if not content:
+            continue
+        if len(content) > max_chars_per_file:
+            content = content[-max_chars_per_file:].lstrip()
+            title = f"--- refreshed {special_file} recent tail ---"
+        else:
+            title = f"--- refreshed {special_file} ---"
+        sections.append(f"{title}\n{content}")
+    if not sections:
+        return ""
+    body = (
+        "# Quaid Refreshed Identity Context\n\n"
+        "MANDATORY: These USER.md, SOUL.md, and ENVIRONMENT.md excerpts were "
+        "reread from disk after /compact for this exact turn. Treat them as "
+        "the current source of truth for identity and environment facts. If "
+        "they conflict with recalled memories, pending notices, compacted "
+        "summaries, or earlier answers, answer from these refreshed identity "
+        "files.\n\n"
+        + "\n\n".join(sections)
+        + "\n"
+    )
+    return f"<quaid_system_message>\n{body}</quaid_system_message>\n"
 
 
 def _render_path_template(template: str, session_id: str, *, cwd_encoded: str = "", date_prefix: str = "") -> str:
