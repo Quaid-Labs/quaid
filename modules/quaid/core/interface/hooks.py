@@ -942,6 +942,7 @@ def hook_inject(args):
             if lifecycle_command == "/compact":
                 try:
                     _maybe_compaction_refresh_context_artifacts(hook_input, is_precompact=True)
+                    _arm_compaction_refresh_marker(session_id)
                     _write_hook_trace("hook.inject.compaction_context_refreshed", {
                         "query": query[:160],
                         "session_id": session_id,
@@ -1187,6 +1188,17 @@ def hook_inject(args):
         baseline_agents_context = _get_quaid_agents_baseline_context()
         if baseline_agents_context:
             context_parts.append(baseline_agents_context)
+        compaction_refresh_context = _build_compaction_followup_refresh_context(
+            session_id,
+            hook_cwd=hook_cwd,
+        )
+        if compaction_refresh_context:
+            context_parts.append(compaction_refresh_context)
+            _write_hook_trace("hook.inject.compaction_followup_context_refreshed", {
+                "query": query[:160],
+                "session_id": session_id,
+                "strategy": _context_refresh_strategy(),
+            })
         refresh_context = _build_turn_based_refresh_context(session_id)
         if refresh_context:
             context_parts.append(refresh_context)
@@ -1497,6 +1509,56 @@ def _context_refresh_timeout_marker_path(session_id: str) -> Path | None:
         return None
 
 
+def _context_refresh_compaction_marker_path(session_id: str) -> Path | None:
+    sid = str(session_id or "").strip()
+    if not sid:
+        return None
+    try:
+        from lib.adapter import get_adapter
+
+        return get_adapter().data_dir() / "context-refresh-compaction" / f"{sid}.json"
+    except Exception:
+        return None
+
+
+def _arm_compaction_refresh_marker(session_id: str) -> None:
+    if _context_refresh_strategy() != "compaction":
+        return
+    marker_path = _context_refresh_compaction_marker_path(session_id)
+    if marker_path is None:
+        return
+    try:
+        marker_path.parent.mkdir(parents=True, exist_ok=True)
+        marker_path.write_text(
+            json.dumps(
+                {
+                    "session_id": str(session_id or "").strip(),
+                    "created_at": int(time.time()),
+                    "reason": "compact_command",
+                },
+                ensure_ascii=True,
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+
+
+def _consume_compaction_refresh_marker(session_id: str) -> bool:
+    if _context_refresh_strategy() != "compaction":
+        return False
+    marker_path = _context_refresh_compaction_marker_path(session_id)
+    if marker_path is None or not isinstance(marker_path, Path) or not marker_path.is_file():
+        return False
+    try:
+        marker_path.unlink()
+    except Exception:
+        pass
+    return True
+
+
 def _consume_timeout_refresh_marker(session_id: str) -> bool:
     marker_path = _context_refresh_timeout_marker_path(session_id)
     if marker_path is None or not isinstance(marker_path, Path) or not marker_path.is_file():
@@ -1755,6 +1817,12 @@ def _build_turn_based_refresh_context(session_id: str) -> str:
     if not _should_emit_turn_based_refresh(session_id):
         return ""
     return _build_project_context_message()
+
+
+def _build_compaction_followup_refresh_context(session_id: str, *, hook_cwd: str = "") -> str:
+    if not _consume_compaction_refresh_marker(session_id):
+        return ""
+    return _build_project_context_message(hook_cwd=hook_cwd)
 
 
 def _render_path_template(template: str, session_id: str, *, cwd_encoded: str = "", date_prefix: str = "") -> str:

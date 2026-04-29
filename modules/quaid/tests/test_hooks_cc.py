@@ -245,6 +245,7 @@ def test_claude_code_inject_refreshes_rules_context_for_compact_command(monkeypa
     adapter.resolve_prompt_submit_signal.side_effect = cc_adapter.resolve_prompt_submit_signal
     adapter.projects_dir.return_value = projects_dir
     adapter.identity_dir.return_value = identity_dir
+    adapter.data_dir.return_value = tmp_path / "data"
     adapter.get_base_context_files.return_value = {}
     adapter.get_cli_tools_snippet.return_value = ""
 
@@ -272,6 +273,93 @@ def test_claude_code_inject_refreshes_rules_context_for_compact_command(monkeypa
     assert "Bartholomew" in content
     assert "fiddle-leaf fig" in content
     assert "context-refresh" in err
+    assert (tmp_path / "data" / "context-refresh-compaction" / "sess-cc-compact.json").is_file()
+
+
+def test_claude_code_post_compact_turn_gets_one_shot_identity_context(monkeypatch, tmp_path, cursor_dir):
+    from adaptors.claude_code.adapter import ClaudeCodeAdapter
+
+    transcript_path = tmp_path / "cc-compact-followup.jsonl"
+    transcript_path.write_text(
+        json.dumps({"type": "user", "message": {"role": "user", "content": "/compact"}}) + "\n",
+        encoding="utf-8",
+    )
+    projects_dir = tmp_path / "projects"
+    identity_dir = tmp_path / "identity"
+    projects_dir.mkdir()
+    identity_dir.mkdir()
+    (identity_dir / "USER.md").write_text("The office plant is named Bartholomew.", encoding="utf-8")
+    (identity_dir / "SOUL.md").write_text("SOUL live", encoding="utf-8")
+    (identity_dir / "ENVIRONMENT.md").write_text("It is a fiddle-leaf fig.", encoding="utf-8")
+
+    rules_dir = tmp_path / ".claude" / "rules"
+    data_dir = tmp_path / "data"
+    monkeypatch.setenv("QUAID_RULES_DIR", str(rules_dir))
+
+    written_signals = []
+
+    def fake_write_signal(**kwargs):
+        written_signals.append(kwargs)
+        return Path(tmp_path / "signals" / "sig-compact.json")
+
+    adapter = _adapter_mock()
+    cc_adapter = ClaudeCodeAdapter()
+    adapter.adapter_id.return_value = "claude-code"
+    adapter.resolve_prompt_submit_signal.side_effect = cc_adapter.resolve_prompt_submit_signal
+    adapter.projects_dir.return_value = projects_dir
+    adapter.identity_dir.return_value = identity_dir
+    adapter.data_dir.return_value = data_dir
+    adapter.get_base_context_files.return_value = {}
+    adapter.get_cli_tools_snippet.return_value = ""
+    adapter.get_pending_context.return_value = ""
+    adapter.get_deferred_notice_relay_context.return_value = ""
+
+    monkeypatch.setattr("core.extraction_daemon.write_signal", fake_write_signal)
+    monkeypatch.setattr("core.extraction_daemon.ensure_alive", lambda: None)
+    monkeypatch.setattr("core.extraction_daemon.read_cursor", lambda session_id: {"transcript_path": str(transcript_path)})
+    monkeypatch.setattr("lib.adapter.get_adapter", lambda: adapter)
+    monkeypatch.setattr("core.interface.api.recall_fast", lambda **kwargs: ([], None))
+    monkeypatch.setattr("core.interface.api.projects_search_docs", lambda **kwargs: {})
+
+    _run_hook_inject(
+        {
+            "session_id": "sess-cc-compact-followup",
+            "transcript_path": str(transcript_path),
+            "cwd": str(tmp_path),
+            "prompt": "/compact",
+        },
+        monkeypatch=monkeypatch,
+    )
+
+    marker_path = data_dir / "context-refresh-compaction" / "sess-cc-compact-followup.json"
+    assert marker_path.is_file()
+
+    out, _ = _run_hook_inject(
+        {
+            "session_id": "sess-cc-compact-followup",
+            "transcript_path": str(transcript_path),
+            "cwd": str(tmp_path),
+            "prompt": "What is the office plant named?",
+        },
+        monkeypatch=monkeypatch,
+    )
+
+    payload = json.loads(out)
+    context = payload["hookSpecificOutput"]["additionalContext"]
+    assert "Bartholomew" in context
+    assert "fiddle-leaf fig" in context
+    assert not marker_path.exists()
+
+    out2, _ = _run_hook_inject(
+        {
+            "session_id": "sess-cc-compact-followup",
+            "transcript_path": str(transcript_path),
+            "cwd": str(tmp_path),
+            "prompt": "Ask again.",
+        },
+        monkeypatch=monkeypatch,
+    )
+    assert out2.strip() == ""
 
 
 def test_refresh_runtime_config_if_changed_reloads_and_resets_caches(monkeypatch, tmp_path):
