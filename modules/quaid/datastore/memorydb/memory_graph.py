@@ -5847,6 +5847,7 @@ def _run_recall_store_plan(
     merged = _prioritize_named_entity_activity_anchor_rows(query, merged)
     if fast_mode:
         merged = _prioritize_fast_anchor_direct_rows(query, merged)
+        merged = _prioritize_named_entity_activity_anchor_rows(query, merged)
     final_rows = merged[:limit]
     final_rows, preserved_docs_rows = _preserve_requested_docs_rows(
         final_rows,

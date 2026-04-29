@@ -6743,6 +6743,32 @@ class TestRecallFastHookInjectContract:
         assert rows[0]["via"] == "graph_attached_fact"
         assert rows[0]["graph_path"].startswith("Mei --has_fact-->")
 
+    def test_graph_store_fast_mode_keeps_named_entity_attached_fact_above_exact_spouse_rows(self):
+        import datastore.memorydb.memory_graph as mg
+
+        rows = [
+            {"id": "spouse-1", "text": "Kai married to Mei; Leah in Vancouver; Leah married to Nathan", "category": "fact", "similarity": 0.99},
+            {"id": "spouse-2", "text": "Kai is married to Mei", "category": "fact", "similarity": 0.98},
+            {"id": "mei-node", "text": "Mei", "category": "person", "similarity": 0.98},
+            {
+                "id": "ceramics",
+                "text": "Kai's wife Mei runs a ceramics practice out of their garage",
+                "category": "fact",
+                "similarity": 0.95,
+                "via": "graph_attached_fact",
+                "source_name": "Mei",
+                "graph_path": "Mei --has_fact--> Kai's wife Mei runs a ceramics practice out of their garage",
+            },
+        ]
+
+        ordered = mg._prioritize_named_entity_activity_anchor_rows("what does Mei do", rows)
+        ordered = mg._prioritize_fast_anchor_direct_rows("what does Mei do", ordered)
+        ordered = mg._prioritize_named_entity_activity_anchor_rows("what does Mei do", ordered)
+
+        assert "ceramics practice" in ordered[0]["text"]
+        assert ordered[0]["via"] == "graph_attached_fact"
+        assert ordered[0]["graph_path"].startswith("Mei --has_fact-->")
+
     def test_infer_recall_store_defaults_routes_named_person_activity_to_graph(self):
         import datastore.memorydb.memory_graph as mg
 
