@@ -9459,6 +9459,73 @@ def _build_fast_drill_fallback_queries(
     stores = _planner_store_plan(planner.get("planned_stores") or ["vector"])
     if stores not in (["vector"], ["vector", "graph"]):
         return []
+    assistant_coverage = int((gate.get("coverage") or {}).get("assistant_source") or 0)
+    requirements = {str(item) for item in (gate.get("requirements") or []) if str(item)}
+    lower_query = str(query or "").lower()
+
+    def _normalize_term(raw: Any) -> str:
+        return " ".join(str(raw or "").split()).strip().strip(".,;:!?\"'").lower()
+
+    def _build_assistant_source_fallback() -> Optional[str]:
+        if "assistant_source" not in requirements or assistant_coverage > 0:
+            return None
+        explicit_terms = [
+            _normalize_term(raw)
+            for raw in _extract_explicit_query_anchor_terms(query, limit=6)
+        ]
+        explicit_terms = [term for term in explicit_terms if term]
+        if explicit_terms and re.search(r"\b(recall|remember|surpris)\w*\b", lower_query):
+            return f"assistant {explicit_terms[0]} memory"
+        filtered_terms: List[str] = []
+        filtered_seen: set[str] = set()
+        skip_terms = {
+            "agent",
+            "ai",
+            "assistant",
+            "came",
+            "did",
+            "idea",
+            "ideas",
+            "recall",
+            "recalled",
+            "remember",
+            "remembered",
+            "said",
+            "suggest",
+            "suggested",
+            "surprise",
+            "surprised",
+            "what",
+            "who",
+        }
+        for raw in (
+            list(_extract_explicit_query_anchor_terms(query, limit=6))
+            + list(gate.get("query_terms") or [])
+            + list(_extract_distinctive_query_terms(query, limit=8))
+        ):
+            term = _normalize_term(raw)
+            if (
+                not term
+                or term in filtered_seen
+                or term in _QUERY_STOPWORDS
+                or term in skip_terms
+                or len(term) < 3
+            ):
+                continue
+            filtered_seen.add(term)
+            filtered_terms.append(term)
+            if len(filtered_terms) >= 4:
+                break
+        if not filtered_terms:
+            return None
+        if len(filtered_terms) == 1 and re.search(r"\b(recall|remember|surpris)\w*\b", lower_query):
+            filtered_terms.append("memory")
+        return "assistant " + " ".join(filtered_terms[:4])
+
+    assistant_fallback = _build_assistant_source_fallback()
+    if assistant_fallback:
+        return [assistant_fallback]
+
     overlap = float(gate.get("overlap_ratio") or 0.0)
     if overlap < 0.45 or overlap > 0.75:
         return []

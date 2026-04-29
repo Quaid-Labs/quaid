@@ -3206,6 +3206,10 @@ class TestRecallTelemetry:
                 ["preserved_exact_low_overlap"],
                 "GENERAL",
             ),
+        ), patch.object(
+            mg,
+            "_evaluate_quality_gate_readiness",
+            return_value={"ready": True, "needs_validation": False},
         ):
             rows, meta = mg.recall_fast("Have Maya and David done any races together?", return_meta=True)
 
@@ -3219,6 +3223,108 @@ class TestRecallTelemetry:
         assert meta["quality_gate"]["fast_drill_enabled"] is True
         assert meta["quality_gate"]["fast_drill_queries"] == run_calls[1]["planned_queries"]
         assert meta["phases_ms"]["fast_drill_wall_ms"] == 90
+
+    def test_build_fast_drill_fallback_queries_prefers_assistant_anchor_when_assistant_coverage_is_missing(self):
+        import datastore.memorydb.memory_graph as mg
+
+        queries = mg._build_fast_drill_fallback_queries(
+            "What did the agent recall about Biscuit that surprised Maya?",
+            gate_eval={
+                "requirements": ["assistant_source"],
+                "coverage": {"assistant_source": 0},
+                "query_terms": ["agent", "recall", "biscuit", "surprised", "maya"],
+                "overlap_ratio": 0.2,
+            },
+            planner_meta={
+                "used_llm": False,
+                "bailout_reason": "preserve_short_exact_query",
+                "planned_stores": ["vector"],
+                "query_shape": "focused",
+            },
+        )
+
+        assert queries == ["assistant biscuit memory"]
+
+    def test_recall_fast_uses_assistant_anchor_drill_when_exact_assistant_query_has_zero_assistant_hits(self):
+        import datastore.memorydb.memory_graph as mg
+
+        run_calls = []
+
+        def _fake_run(query, *, stores, limit, owner_id, min_similarity, planner_profile, planned_queries, planner_meta, fast_mode, graph_depth, common_kwargs):
+            run_calls.append({
+                "planner_profile": planner_profile,
+                "planned_queries": list(planned_queries or []),
+                "stores": list(stores or []),
+            })
+            if len(run_calls) == 1:
+                return (
+                    [{"id": "a", "text": "Maya's manager skimmed PRDs before meetings", "category": "fact", "similarity": 0.83}],
+                    {"phases_ms": {"total_ms": 120, "store_plan_wall_ms": 120}, "turn_details": [{"turn": 1}]},
+                    None,
+                )
+            return (
+                [{"id": "b", "text": "The assistant recalled that Biscuit once tried to eat a pinecone", "category": "fact", "similarity": 0.98, "source_type": "assistant"}],
+                {"phases_ms": {"total_ms": 90, "store_plan_wall_ms": 90}, "store_runs": [{"store": "vector", "result_count": 1}]},
+                None,
+            )
+
+        with patch.object(
+            mg,
+            "_recall_store_plan_timeout_s",
+            return_value=5.0,
+        ), patch.object(
+            mg,
+            "_plan_fanout_queries",
+            return_value=(
+                ["What did the agent recall about Biscuit that surprised Maya?"],
+                {
+                    "query": "What did the agent recall about Biscuit that surprised Maya?",
+                    "used_llm": False,
+                    "bailout_reason": "preserve_short_exact_query",
+                    "queries_count": 1,
+                    "elapsed_ms": 100,
+                    "query_shape": "focused",
+                    "planned_stores": ["vector"],
+                    "planned_project": None,
+                },
+            ),
+        ), patch.object(
+            mg,
+            "_run_recall_store_plan",
+            side_effect=_fake_run,
+        ), patch.object(
+            mg,
+            "_should_fast_drill_follow_up",
+            return_value=(
+                True,
+                {
+                    "requirements": ["assistant_source"],
+                    "coverage": {"assistant_source": 0},
+                    "query_terms": ["agent", "recall", "biscuit", "surprised", "maya"],
+                    "ready": False,
+                    "needs_validation": True,
+                    "overlap_ratio": 0.2,
+                },
+                ["preserved_exact_low_overlap"],
+                "GENERAL",
+            ),
+        ), patch.object(
+            mg,
+            "_evaluate_quality_gate_readiness",
+            return_value={"ready": True, "needs_validation": False},
+        ):
+            rows, meta = mg.recall_fast(
+                "What did the agent recall about Biscuit that surprised Maya?",
+                return_meta=True,
+            )
+
+        assert len(run_calls) == 2
+        assert run_calls[1]["planner_profile"] == "off"
+        assert run_calls[1]["planned_queries"][0] == "What did the agent recall about Biscuit that surprised Maya?"
+        assert "assistant biscuit memory" in run_calls[1]["planned_queries"]
+        assert rows[0]["text"] == "The assistant recalled that Biscuit once tried to eat a pinecone"
+        assert meta["quality_gate"]["fast_drill_enabled"] is True
+        assert "assistant biscuit memory" in meta["quality_gate"]["fast_drill_queries"]
 
     def test_recall_fast_skips_drill_when_injection_budget_is_exhausted(self):
         import datastore.memorydb.memory_graph as mg
