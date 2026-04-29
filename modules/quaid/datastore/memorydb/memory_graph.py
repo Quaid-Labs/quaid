@@ -10617,6 +10617,15 @@ def _infer_recall_store_defaults(text: str) -> Tuple[List[str], Optional[str]]:
     generic_graph_signal = _has_generic_graph_signal(text)
     relation_matches = _relation_matches_for_query(text) if generic_graph_signal else []
     graph_like = bool(relation_matches) or generic_graph_signal
+    named_person_activity_like = False
+    if _NAMED_ENTITY_ACTIVITY_QUERY_RE.search(lowered):
+        try:
+            named_person_activity_like = any(
+                str(getattr(entity, "type", "") or "").strip().lower() == "person"
+                for entity in extract_entities_from_text(text)
+            )
+        except Exception:
+            named_person_activity_like = False
     mixed_memory_docs = docs_like and bool(_re.search(
         r"\b(current|currently|changed|history|motivat|why|decided|still|bug|issue|safe|security)\b",
         lowered,
@@ -10630,6 +10639,8 @@ def _infer_recall_store_defaults(text: str) -> Tuple[List[str], Optional[str]]:
         stores = ["vector", "docs"]
     elif docs_like:
         stores = ["vector", "docs"]
+    elif named_person_activity_like:
+        stores = ["vector", "graph"]
     elif graph_like:
         stores = ["vector", "graph"]
 

@@ -6743,6 +6743,29 @@ class TestRecallFastHookInjectContract:
         assert rows[0]["via"] == "graph_attached_fact"
         assert rows[0]["graph_path"].startswith("Mei --has_fact-->")
 
+    def test_infer_recall_store_defaults_routes_named_person_activity_to_graph(self):
+        import datastore.memorydb.memory_graph as mg
+
+        mei = SimpleNamespace(id="mei-1", name="Mei", type="Person")
+        with patch.object(mg, "_registered_project_name_in_query", return_value=None), \
+             patch.object(mg, "_has_generic_graph_signal", return_value=False), \
+             patch.object(mg, "extract_entities_from_text", return_value=[mei]):
+            stores, project = mg._infer_recall_store_defaults("what does Mei do")
+
+        assert stores == ["vector", "graph"]
+        assert project is None
+
+    def test_infer_recall_store_defaults_keeps_non_person_activity_vector_only(self):
+        import datastore.memorydb.memory_graph as mg
+
+        with patch.object(mg, "_registered_project_name_in_query", return_value=None), \
+             patch.object(mg, "_has_generic_graph_signal", return_value=False), \
+             patch.object(mg, "extract_entities_from_text", return_value=[]):
+            stores, project = mg._infer_recall_store_defaults("what does Mei do")
+
+        assert stores == ["vector"]
+        assert project is None
+
     def test_graph_store_relation_chain_owner_anchor_runs_before_mid_chain_subjects(self, tmp_path):
         import datastore.memorydb.memory_graph as mg
 
