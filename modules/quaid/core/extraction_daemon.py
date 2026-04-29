@@ -525,6 +525,27 @@ def _matching_daemon_pids(
     return sorted(set(matches))
 
 
+def _daemon_pid_matches_current_instance(pid: int) -> bool:
+    """Return True when pid belongs to this home+instance daemon.
+
+    A PID file alone is not ownership proof: fresh VM clones can inherit stale
+    pid files, and that PID may now belong to a different Quaid instance's live
+    daemon. Status/start/stop must never trust a cross-instance daemon just
+    because it is an extraction_daemon.py process.
+    """
+    try:
+        return int(pid) in _matching_daemon_pids(include_foreground=True)
+    except Exception as exc:
+        logger.warning(
+            "failed to verify daemon PID %s ownership for home=%s instance=%s: %s",
+            pid,
+            _quaid_home(),
+            _instance_id(),
+            exc,
+        )
+        return False
+
+
 def _supervisor_alive() -> bool:
     raw = os.environ.get("QUAID_SUPERVISOR_PID", "").strip()
     if not raw:
@@ -550,6 +571,14 @@ def read_pid() -> Optional[int]:
         if not _is_daemon_process(pid):
             logger.warning("PID %d in pid file is alive but is not the extraction daemon (PID reused) — treating as stale", pid)
             raise OSError("PID reused by unrelated process")
+        if not _daemon_pid_matches_current_instance(pid):
+            logger.warning(
+                "PID %d in pid file is an extraction daemon but not owned by home=%s instance=%s — treating as stale",
+                pid,
+                _quaid_home(),
+                _instance_id(),
+            )
+            raise OSError("PID belongs to a different Quaid instance")
         return pid
     except (ValueError, OSError):
         # PID file exists but process is dead or stale

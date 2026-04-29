@@ -389,6 +389,36 @@ def test_matching_daemon_pids_can_include_foreground_run(monkeypatch):
     ) == [101, 102]
 
 
+def test_read_pid_rejects_foreign_instance_daemon_pid(monkeypatch, tmp_path):
+    pid_path = tmp_path / "extraction-daemon.pid"
+    pid_path.write_text("5896", encoding="utf-8")
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path / ".quaid"))
+    monkeypatch.setenv("QUAID_INSTANCE", "openclaw-main")
+    monkeypatch.setattr(extraction_daemon, "_pid_path", lambda: pid_path)
+    monkeypatch.setattr(extraction_daemon.os, "kill", lambda _pid, _sig: None)
+    monkeypatch.setattr(extraction_daemon, "_is_daemon_process", lambda _pid: True)
+    monkeypatch.setattr(extraction_daemon, "_matching_daemon_pids", lambda **_kwargs: [])
+
+    assert extraction_daemon.read_pid() is None
+    assert not pid_path.exists()
+
+
+def test_read_pid_accepts_current_instance_daemon_pid(monkeypatch, tmp_path):
+    pid_path = tmp_path / "extraction-daemon.pid"
+    pid_path.write_text("5590", encoding="utf-8")
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path / ".quaid"))
+    monkeypatch.setenv("QUAID_INSTANCE", "openclaw-main")
+    monkeypatch.setattr(extraction_daemon, "_pid_path", lambda: pid_path)
+    monkeypatch.setattr(extraction_daemon.os, "kill", lambda _pid, _sig: None)
+    monkeypatch.setattr(extraction_daemon, "_is_daemon_process", lambda _pid: True)
+    monkeypatch.setattr(extraction_daemon, "_matching_daemon_pids", lambda **_kwargs: [5590])
+
+    assert extraction_daemon.read_pid() == 5590
+    assert pid_path.read_text(encoding="utf-8").strip() == "5590"
+
+
 def test_start_daemon_adopts_matching_live_worker_without_pidfile(monkeypatch, tmp_path):
     pid_path = tmp_path / "extraction-daemon.pid"
     adopted = []
