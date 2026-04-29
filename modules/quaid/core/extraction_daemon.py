@@ -949,24 +949,42 @@ def _fail_hard_enabled() -> bool:
         return False
 
 
-def _is_daemon_owned_transcript_snapshot_path(transcript_path: str) -> bool:
+def _is_daemon_rolling_transcript_snapshot_path(transcript_path: str) -> bool:
     raw = str(transcript_path or "").strip()
     if not raw:
         return False
     try:
         path = Path(raw).expanduser().resolve()
-        roots = (
-            (_instance_root() / "logs" / "daemon" / "rolling-transcript-snapshots").resolve(),
-            # OpenClaw mirrors authoritative transcript copies here before reset /
-            # compaction lifecycle signals. These files are instance-local daemon
-            # inputs, not host-owned foreign transcripts.
-            (_instance_root() / "logs" / "quaid" / "sessions").resolve(),
-        )
-        return path.is_file() and any(path.is_relative_to(root) for root in roots)
+        root = (_instance_root() / "logs" / "daemon" / "rolling-transcript-snapshots").resolve()
+        return path.is_file() and path.is_relative_to(root)
     except OSError as exc:
         if _should_raise_transcript_stat_error(raw, exc):
             raise
         return False
+
+
+def _is_daemon_preserved_session_transcript_path(transcript_path: str) -> bool:
+    raw = str(transcript_path or "").strip()
+    if not raw:
+        return False
+    try:
+        path = Path(raw).expanduser().resolve()
+        # OpenClaw mirrors authoritative transcript copies here before reset /
+        # compaction lifecycle signals. These files are instance-local daemon
+        # inputs, not active host transcripts for idle timeout discovery.
+        root = (_instance_root() / "logs" / "quaid" / "sessions").resolve()
+        return path.is_file() and path.is_relative_to(root)
+    except OSError as exc:
+        if _should_raise_transcript_stat_error(raw, exc):
+            raise
+        return False
+
+
+def _is_daemon_owned_transcript_snapshot_path(transcript_path: str) -> bool:
+    return (
+        _is_daemon_rolling_transcript_snapshot_path(transcript_path)
+        or _is_daemon_preserved_session_transcript_path(transcript_path)
+    )
 
 
 def _stable_transcript_snapshot_for_continued_rolling(
@@ -1024,7 +1042,7 @@ def _stable_transcript_snapshot_for_continued_rolling(
 
 def _cleanup_daemon_transcript_snapshot_path(transcript_path: str) -> None:
     raw = str(transcript_path or "").strip()
-    if not raw or not _is_daemon_owned_transcript_snapshot_path(raw):
+    if not raw or not _is_daemon_rolling_transcript_snapshot_path(raw):
         return
     try:
         path = Path(raw).expanduser().resolve()
@@ -3766,7 +3784,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             _release_session_processing_lock(lock_owner_key, lock_fd)
             return
 
-    if signal_type == "timeout" and _is_daemon_owned_transcript_snapshot_path(str(transcript_path)):
+    if signal_type == "timeout" and _is_daemon_preserved_session_transcript_path(str(transcript_path)):
         logger.info(
             "[%s] session %s: timeout signal points at daemon-owned preserved transcript; "
             "skipping inactive mirror: %s",
@@ -4416,7 +4434,8 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                     source_key=lock_owner_key,
                 )
                 mark_signal_processed(signal_data)
-                _cleanup_daemon_transcript_snapshot_path(transcript_path)
+                # Keep the stable snapshot while the semantic tail is deferred;
+                # idle/newer-session scans need a live cursor target to flush it.
                 return
             staged_state = _stage_semantic_buffer_payload(
                 session_id=session_id,
@@ -5015,7 +5034,7 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
         transcript_path = data.get("transcript_path", "")
         if not session_id or not transcript_path or not os.path.isfile(transcript_path):
             continue
-        if _is_daemon_owned_transcript_snapshot_path(str(transcript_path)):
+        if _is_daemon_preserved_session_transcript_path(str(transcript_path)):
             # Preserved daemon mirrors are valid lifecycle inputs, but they are
             # not active host transcripts. Let discovery replace stale mirrors
             # with the live adapter path; otherwise do not let an old mirror fire
@@ -5080,6 +5099,7 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
             "has_cursor_size_bytes": "transcript_size_bytes" in data,
             "current_size_bytes": _transcript_size_bytes(transcript_path),
             "mtime": mtime,
+            "cursor_data": data,
         })
 
     # Process recently-active sessions first. Old stale cursors can be expensive
@@ -5098,6 +5118,7 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
         has_cursor_size_bytes = bool(row.get("has_cursor_size_bytes", False))
         current_size_bytes = int(row.get("current_size_bytes", 0) or 0)
         mtime = float(row["mtime"])
+        row_cursor_data = row.get("cursor_data") if isinstance(row.get("cursor_data"), dict) else {}
 
         # Check if transcript has grown past cursor
         total_lines = count_transcript_lines(transcript_path)
@@ -5130,7 +5151,7 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
         )
 
         if has_flushable_rolling_content and session_id not in pending_session_ids:
-            source_key = _signal_source_cursor_key(session_id, transcript_path, cursor_data=data)
+            source_key = _signal_source_cursor_key(session_id, transcript_path, cursor_data=row_cursor_data)
             if source_key in pending_source_keys:
                 continue
             newer_session_exists = any(

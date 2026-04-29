@@ -5972,6 +5972,88 @@ class TestRollingExtraction:
             else:
                 sys.modules.pop("lib.adapter", None)
 
+    def test_rolling_below_threshold_keeps_snapshot_for_lifecycle_flush(self, monkeypatch, tmp_path):
+        import sys
+        import types
+
+        session_id = "sess-roll-snapshot-tail"
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "rolling-inst")
+        instance_root = tmp_path / "instances" / "rolling-inst"
+        snapshot = (
+            instance_root
+            / "logs"
+            / "daemon"
+            / "rolling-transcript-snapshots"
+            / session_id
+            / "20260429T135031Z-deadbeef"
+            / f"{session_id}.jsonl"
+        )
+        snapshot.parent.mkdir(parents=True, exist_ok=True)
+        snapshot.write_text(
+            '{"role":"user","content":"chunk one"}\n'
+            '{"role":"assistant","content":"ack"}\n',
+            encoding="utf-8",
+        )
+        extraction_daemon.write_cursor(session_id, 2, str(snapshot))
+        extraction_daemon.write_rolling_state(
+            session_id,
+            {
+                "session_id": session_id,
+                "transcript_path": str(snapshot),
+                "semantic_buffer": "User: Baxter residual context waits for lifecycle.",
+                "semantic_buffer_tokens": 10,
+                "buffered_line_offset": 2,
+                "processed_line_offset": 2,
+                "raw_facts": [],
+                "raw_snippets": {},
+                "raw_journal": {},
+                "raw_project_logs": {},
+            },
+        )
+        monkeypatch.setattr(extraction_daemon, "_get_owner_id", lambda: "Owner")
+        monkeypatch.setattr(extraction_daemon, "_get_capture_chunk_tokens", lambda default=8000: 100)
+
+        real_adapter = sys.modules.get("lib.adapter")
+        fake_adapter_mod = types.ModuleType("lib.adapter")
+
+        class _FakeAdapter(_OwnedTestAdapterMixin):
+            def quaid_home(self):
+                return tmp_path
+
+            def instance_root(self):
+                return instance_root
+
+            def data_dir(self):
+                return instance_root / "data"
+
+            def parse_session_jsonl(self, path):
+                return ""
+
+        fake_adapter_mod.get_adapter = lambda: _FakeAdapter()
+        sys.modules["lib.adapter"] = fake_adapter_mod
+
+        try:
+            extraction_daemon.write_signal(
+                signal_type="rolling",
+                session_id=session_id,
+                transcript_path=str(snapshot),
+                meta={"reason": "continued_chunk_budget"},
+            )
+            extraction_daemon.process_signal(extraction_daemon.read_pending_signals()[0])
+
+            state = extraction_daemon.read_rolling_state(session_id)
+            cursor = extraction_daemon.read_cursor(session_id)
+            assert snapshot.exists()
+            assert state["semantic_buffer"] == "User: Baxter residual context waits for lifecycle."
+            assert cursor["transcript_path"] == str(snapshot)
+            assert extraction_daemon.read_pending_signals() == []
+        finally:
+            if real_adapter is not None:
+                sys.modules["lib.adapter"] = real_adapter
+            else:
+                sys.modules.pop("lib.adapter", None)
+
     def test_lifecycle_alias_drains_residual_rolling_semantic_buffer(self, monkeypatch, tmp_path):
         uuid = "019dcf34-52b2-7010-9b01-eec8ba485b54"
         full_session_id = f"rollout-2026-04-27T13-50-06-{uuid}"
@@ -8019,6 +8101,89 @@ class TestRollingExtraction:
                 "signal_type": "session_end",
                 "session_id": "old-short-sess",
                 "transcript_path": str(old_transcript),
+            }
+        ]
+
+    def test_flushes_buffered_semantic_tail_from_rolling_snapshot_when_newer_session_exists(self, monkeypatch, tmp_path):
+        """Daemon rolling snapshots are stable lifecycle inputs, not inactive preserved mirrors."""
+        instance_id = "openclaw-main"
+        session_id = "old-snapshot-sess"
+        snapshot = (
+            tmp_path
+            / "instances"
+            / instance_id
+            / "logs"
+            / "daemon"
+            / "rolling-transcript-snapshots"
+            / session_id
+            / "20260429T135031Z-deadbeef"
+            / f"{session_id}.jsonl"
+        )
+        snapshot.parent.mkdir(parents=True, exist_ok=True)
+        snapshot.write_text(
+            '{"role":"user","content":"chunk one"}\n'
+            '{"role":"assistant","content":"ack"}\n',
+            encoding="utf-8",
+        )
+        self._setup_cursor(tmp_path, instance_id, session_id, 2, snapshot)
+        rolling_dir = tmp_path / "instances" / instance_id / "data" / "rolling-extraction"
+        rolling_dir.mkdir(parents=True, exist_ok=True)
+        (rolling_dir / f"{session_id}.json").write_text(
+            json.dumps({
+                "session_id": session_id,
+                "transcript_path": str(snapshot),
+                "processed_line_offset": 2,
+                "buffered_line_offset": 2,
+                "semantic_buffer": "User: Baxter is written in the orange linen notebook from Emília Rosa.",
+                "semantic_buffer_tokens": 14,
+                "raw_facts": [],
+                "raw_snippets": {},
+                "raw_journal": {},
+                "raw_project_logs": {},
+            }),
+            encoding="utf-8",
+        )
+
+        new_transcript = tmp_path / "new-openclaw.jsonl"
+        new_transcript.write_text('{"role":"user","content":"new session"}\n', encoding="utf-8")
+        self._setup_cursor(tmp_path, instance_id, "new-openclaw-sess", 0, new_transcript)
+
+        now = 1_700_000_000.0
+        old_mtime = now - 30
+        new_mtime = now - 5
+        os.utime(snapshot, (old_mtime, old_mtime))
+        os.utime(new_transcript, (new_mtime, new_mtime))
+
+        class _FakeAdapter(_OwnedTestAdapterMixin):
+            pass
+
+        captured = []
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", instance_id)
+        monkeypatch.setattr(extraction_daemon.time, "time", lambda: now)
+        monkeypatch.setattr(extraction_daemon, "_read_installed_at", lambda: now - 7200)
+        monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
+        monkeypatch.setattr(extraction_daemon, "_load_runtime_adapter", lambda: _FakeAdapter())
+        monkeypatch.setattr(extraction_daemon, "_reconcile_internal_cursor_state", lambda *a, **kw: "not_internal")
+        monkeypatch.setattr(
+            extraction_daemon,
+            "write_signal",
+            lambda signal_type, session_id, transcript_path, **kwargs: captured.append(
+                {
+                    "signal_type": signal_type,
+                    "session_id": session_id,
+                    "transcript_path": transcript_path,
+                }
+            ),
+        )
+
+        extraction_daemon.check_idle_sessions(timeout_minutes=30)
+
+        assert captured == [
+            {
+                "signal_type": "session_end",
+                "session_id": session_id,
+                "transcript_path": str(snapshot),
             }
         ]
 
