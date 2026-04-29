@@ -2876,17 +2876,23 @@ def _cursor_data_records_transcript_source(
     if not cursor_path:
         return False
     cursor_session = str(cursor_data.get("session_id") or "").strip()
-    if cursor_session and cursor_session != session_id:
-        return False
-    if _cursor_data_records_transcript_path(cursor_data, transcript_path):
-        return True
     cursor_key = str(cursor_data.get("cursor_key") or "").strip()
+    same_session = not cursor_session or cursor_session == session_id
+    if same_session and _cursor_data_records_transcript_path(cursor_data, transcript_path):
+        return True
     if not cursor_key.startswith("source-"):
         return False
-    return (
-        _signal_source_identity(session_id, cursor_path)
-        == _signal_source_identity(session_id, transcript_path)
-    )
+    cursor_identity_session = cursor_session or session_id
+    try:
+        cursor_identity = _signal_source_identity(cursor_identity_session, cursor_path)
+        transcript_identity = _signal_source_identity(session_id, transcript_path)
+        if cursor_identity != transcript_identity:
+            return False
+        expected_cursor_key = _signal_source_cursor_key(cursor_identity_session, cursor_path)
+        expected_transcript_key = _signal_source_cursor_key(session_id, transcript_path)
+        return cursor_key in {expected_cursor_key, expected_transcript_key}
+    except Exception:
+        return False
 
 
 def _cursor_or_adapter_owns_transcript_path(
