@@ -1359,7 +1359,7 @@ def test_summarize_fact_result_buckets_groups_duplicate_and_skip_reasons():
     }
 
 
-def test_process_signal_clamps_same_path_cursor_when_oc_transcript_shrinks_in_place(monkeypatch, tmp_path):
+def test_process_signal_resets_same_path_cursor_when_oc_transcript_rebases_smaller(monkeypatch, tmp_path):
     from lib.adapter import set_adapter, reset_adapter
 
     transcript_path = tmp_path / "same-path-shrink.jsonl"
@@ -1436,9 +1436,9 @@ def test_process_signal_clamps_same_path_cursor_when_oc_transcript_shrinks_in_pl
     finally:
         reset_adapter()
 
-    assert captured["read_offsets"] == [8]
-    assert captured["write_cursor"][-1]["line_offset"] == 8
-    assert captured["write_cursor"][-1]["transcript_path"] == str(transcript_path)
+    assert captured["read_offsets"]
+    assert set(captured["read_offsets"]) == {0}
+    assert captured["write_cursor"] == []
     assert captured.get("processed") is True
 
 
@@ -5943,6 +5943,189 @@ class TestRollingExtraction:
             assert applied[0][1]["session_id"] == full_session_id
             assert not extraction_daemon._rolling_state_path(full_session_id).exists()
             assert not extraction_daemon._rolling_state_path(uuid).exists()
+        finally:
+            if real_registry is not None:
+                sys.modules["core.subagent_registry"] = real_registry
+            else:
+                sys.modules.pop("core.subagent_registry", None)
+            if real_adapter is not None:
+                sys.modules["lib.adapter"] = real_adapter
+            else:
+                sys.modules.pop("lib.adapter", None)
+            if real_notify is not None:
+                sys.modules["core.runtime.notify"] = real_notify
+            else:
+                sys.modules.pop("core.runtime.notify", None)
+
+    def test_process_signal_trusts_source_cursor_when_rolling_snapshot_relocated(
+        self, monkeypatch, tmp_path
+    ):
+        import sys
+        import types
+
+        session_id = "019dd737-3b58-7b30-adc9-dbab99dc5846"
+        basename = f"rollout-2026-04-29T03-10-14-{session_id}.jsonl"
+        original = tmp_path / ".codex" / "sessions" / "2026" / "04" / "29" / basename
+        original.parent.mkdir(parents=True, exist_ok=True)
+        original.write_text(
+            '{"type":"session_meta","payload":{"cwd":"/Users/admin/quaidcode/dev"}}\n'
+            '{"type":"event_msg","payload":{"type":"user_message","message":"Baxter residual context"}}\n',
+            encoding="utf-8",
+        )
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "codex-private-tmp-cdx-livetest")
+        instance_root = tmp_path / "instances" / "codex-private-tmp-cdx-livetest"
+        snapshot = (
+            instance_root
+            / "logs"
+            / "daemon"
+            / "rolling-transcript-snapshots"
+            / session_id
+            / "20260429T031319Z-ab465afeaeb56ef6"
+            / basename
+        )
+        snapshot.parent.mkdir(parents=True, exist_ok=True)
+        snapshot.write_text(original.read_text(encoding="utf-8"), encoding="utf-8")
+
+        source_key = extraction_daemon._signal_source_cursor_key(session_id, str(original))
+        extraction_daemon.write_cursor(session_id, 2, str(snapshot), source_key=source_key)
+        extraction_daemon.write_rolling_state(
+            session_id,
+            {
+                "session_id": session_id,
+                "transcript_path": str(snapshot),
+                "processed_line_offset": 2,
+                "buffered_line_offset": 2,
+                "rolling_batches": 1,
+                "semantic_buffer": "",
+                "semantic_buffer_tokens": 0,
+                "carry_facts": [{"text": "Owner has stable prior memories"}],
+                "raw_facts": [{"text": "Owner discussed Baxter", "status": "new"}],
+            },
+        )
+        monkeypatch.setattr(extraction_daemon, "_get_owner_id", lambda: "Owner")
+
+        real_registry = sys.modules.get("core.subagent_registry")
+        real_adapter = sys.modules.get("lib.adapter")
+        real_notify = sys.modules.get("core.runtime.notify")
+        fake_registry = types.ModuleType("core.subagent_registry")
+        fake_registry.is_registered_subagent = lambda sid: False
+        fake_registry.get_harvestable = lambda sid: []
+        fake_registry.mark_harvested = lambda sid, cid: None
+        fake_registry._registry_dir = lambda: tmp_path / "registry"
+        sys.modules["core.subagent_registry"] = fake_registry
+
+        fake_adapter_mod = types.ModuleType("lib.adapter")
+        fake_adapter_mod.StandaloneAdapter = object
+        fake_adapter_mod.quaid_projects_dir = lambda: tmp_path / "projects"
+        fake_adapter_mod.quaid_tracking_dir = lambda: tmp_path / "tracking"
+
+        class _RejectingAdapter(_OwnedTestAdapterMixin):
+            def quaid_home(self):
+                return tmp_path
+
+            def instance_root(self):
+                return instance_root
+
+            def data_dir(self):
+                return instance_root / "data"
+
+            def owns_session_path(self, path, session_id=""):
+                return False
+
+            def parse_session_jsonl(self, path):
+                raise AssertionError("residual buffer should be used instead of reparsing host path")
+
+        fake_adapter_mod.get_adapter = lambda: _RejectingAdapter()
+        sys.modules["lib.adapter"] = fake_adapter_mod
+        fake_notify = types.ModuleType("core.runtime.notify")
+        fake_notify.notify_memory_extraction = lambda **kwargs: None
+        sys.modules["core.runtime.notify"] = fake_notify
+
+        import core.docs_updater_hook as docs_updater_mod
+        import core.ingest_runtime as ingest_runtime_mod
+        import core.project_registry as project_registry_mod
+        import ingest.extract as extract_mod
+
+        seen_transcripts = []
+        applied = []
+        monkeypatch.setattr(
+            extract_mod,
+            "extract_from_transcript",
+            lambda **kwargs: seen_transcripts.append(kwargs["transcript"]) or {
+                "carry_facts": [{"text": "Owner discussed Baxter"}],
+                "raw_facts": [{"text": "Owner discussed Baxter", "status": "new"}],
+                "raw_snippets": {},
+                "raw_journal": {},
+                "raw_project_logs": {},
+                "facts_skipped": 0,
+                "payload_duplicate_facts_collapsed": 0,
+                "carry_duplicate_facts_dropped": 0,
+                "chunks_processed": 1,
+                "chunks_total": 1,
+                "root_chunks": 1,
+                "split_events": 0,
+                "split_child_chunks": 0,
+                "leaf_chunks": 1,
+                "max_split_depth": 0,
+                "deep_calls": 1,
+                "repair_calls": 0,
+                "assessment_usable": 1,
+                "assessment_nothing_usable": 0,
+                "assessment_needs_smaller_chunk": 0,
+                "unclassified_empty_payloads": 0,
+            },
+        )
+        monkeypatch.setattr(
+            extract_mod,
+            "apply_extracted_payloads",
+            lambda payload, **kwargs: applied.append((payload, kwargs)) or {
+                **payload,
+                "facts_stored": len(payload.get("raw_facts", []) or []),
+                "facts_skipped": 0,
+                "edges_created": 0,
+                "facts": [
+                    {"text": fact.get("text", ""), "status": "stored", "edges": []}
+                    for fact in (payload.get("raw_facts", []) or [])
+                ],
+                "snippets": {},
+                "journal": {},
+                "project_logs": {},
+                "project_log_metrics": {},
+            },
+        )
+        monkeypatch.setattr(ingest_runtime_mod, "run_session_logs_ingest", lambda **kwargs: {"status": "indexed"})
+        monkeypatch.setattr(project_registry_mod, "snapshot_all_projects", lambda: [])
+        monkeypatch.setattr(docs_updater_mod, "update_project_docs", lambda snapshots, extraction_result: {"docs_updated": 0})
+        monkeypatch.setattr(extraction_daemon, "_warm_payload_embeddings", lambda facts: {
+            "requested": len(facts),
+            "unique": len(facts),
+            "cache_hits": 0,
+            "warmed": len(facts),
+            "failed": 0,
+            "skipped_empty": 0,
+        })
+
+        try:
+            extraction_daemon.write_signal(
+                signal_type="session_end",
+                session_id=session_id,
+                transcript_path=str(original),
+                meta={
+                    "reason": "rolling_stage_flush",
+                    "source_signal": "rolling",
+                    "staged_payload_sweep": True,
+                    "source_cursor_key": source_key,
+                },
+            )
+            extraction_daemon.process_signal(extraction_daemon.read_pending_signals()[0])
+
+            assert seen_transcripts == []
+            assert len(applied) == 1
+            assert applied[0][1]["session_id"] == session_id
+            assert applied[0][0]["raw_facts"] == [{"text": "Owner discussed Baxter", "status": "new"}]
+            assert not extraction_daemon._rolling_state_path(session_id).exists()
         finally:
             if real_registry is not None:
                 sys.modules["core.subagent_registry"] = real_registry

@@ -834,6 +834,7 @@ def _cursor_storage_key(session_id: str, source_key: Optional[str] = None) -> st
 
 def _read_cursor_file(cursor_file: Path, fallback_session_id: str) -> Dict[str, Any]:
     defaults = {
+        "session_id": fallback_session_id,
         "line_offset": 0,
         "transcript_path": "",
         "internal": False,
@@ -848,6 +849,7 @@ def _read_cursor_file(cursor_file: Path, fallback_session_id: str) -> Dict[str, 
         if not _SESSION_ID_RE.match(cursor_key):
             cursor_key = _cursor_storage_key(fallback_session_id, cursor_key)
         return {
+            "session_id": str(data.get("session_id") or fallback_session_id),
             "line_offset": int(data.get("line_offset", 0)),
             "transcript_path": data.get("transcript_path", ""),
             "internal": bool(data.get("internal", False)),
@@ -2838,6 +2840,38 @@ def _cursor_data_records_transcript_path(cursor_data: Dict[str, Any], transcript
     )
 
 
+def _cursor_data_records_transcript_source(
+    cursor_data: Dict[str, Any],
+    session_id: str,
+    transcript_path: str,
+) -> bool:
+    """Return True when a source-keyed cursor points at the same transcript source.
+
+    Rolling extraction may snapshot a host transcript into the instance-local
+    daemon log tree before queueing a later lifecycle flush. The later signal can
+    still reference the original host path. If the source-keyed cursor records
+    the same rollout/session source, the daemon already accepted that source for
+    this instance and should not fall back to adapter-only cwd ownership.
+    """
+    if not cursor_data or not transcript_path:
+        return False
+    cursor_path = str(cursor_data.get("transcript_path") or "").strip()
+    if not cursor_path:
+        return False
+    cursor_session = str(cursor_data.get("session_id") or "").strip()
+    if cursor_session and cursor_session != session_id:
+        return False
+    if _cursor_data_records_transcript_path(cursor_data, transcript_path):
+        return True
+    cursor_key = str(cursor_data.get("cursor_key") or "").strip()
+    if not cursor_key.startswith("source-"):
+        return False
+    return (
+        _signal_source_identity(session_id, cursor_path)
+        == _signal_source_identity(session_id, transcript_path)
+    )
+
+
 def _cursor_or_adapter_owns_transcript_path(
     adapter,
     session_id: str,
@@ -2846,7 +2880,7 @@ def _cursor_or_adapter_owns_transcript_path(
     cursor_data: Optional[Dict[str, Any]] = None,
 ) -> bool:
     """Return True when this instance has already cursored or owns a transcript."""
-    if cursor_data is not None and _cursor_data_records_transcript_path(cursor_data, transcript_path):
+    if cursor_data is not None and _cursor_data_records_transcript_source(cursor_data, session_id, transcript_path):
         return True
     if _cursor_records_transcript_path(session_id, transcript_path):
         return True
@@ -3261,12 +3295,17 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
         adapter = get_adapter()
     except Exception:
         adapter = None
+    cursor_data = _read_cursor_with_source_compat(session_id, lock_owner_key)
 
     if (
         transcript_path
         and os.path.isfile(transcript_path)
-        and not _cursor_records_transcript_path(session_id, transcript_path)
-        and not _adapter_owns_transcript_path(adapter, session_id, transcript_path)
+        and not _cursor_or_adapter_owns_transcript_path(
+            adapter,
+            session_id,
+            transcript_path,
+            cursor_data=cursor_data,
+        )
     ):
         logger.warning(
             "[%s] session %s: transcript does not belong to active instance, skipping: %s",
@@ -3279,7 +3318,6 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
         _release_session_processing_lock(lock_owner_key, lock_fd)
         return
 
-    cursor_data = _read_cursor_with_source_compat(session_id, lock_owner_key)
     if (staged_payload_sweep_signal and staged_state_has_payload(staged_state)) or _semantic_buffer_has_content(staged_state):
         internal_state = "not_internal"
     else:
@@ -3432,7 +3470,12 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             _release_session_processing_lock(lock_owner_key, lock_fd)
             return
 
-    if not _cursor_records_transcript_path(session_id, transcript_path) and not _adapter_owns_transcript_path(adapter, session_id, transcript_path):
+    if not _cursor_or_adapter_owns_transcript_path(
+        adapter,
+        session_id,
+        transcript_path,
+        cursor_data=cursor_data,
+    ):
         logger.warning(
             "[%s] session %s: resolved transcript does not belong to active instance, skipping: %s",
             label,
@@ -3631,7 +3674,27 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             and _canonicalize_transcript_source_path(cursor_transcript)
             == _canonicalize_transcript_source_path(transcript_path)
         )
-        if same_transcript_source and signal_type != "reset":
+        prior_size_bytes = int(cursor_data.get("transcript_size_bytes", 0) or 0)
+        current_size_bytes = _transcript_size_bytes(transcript_path)
+        same_source_rebased_smaller = bool(
+            same_transcript_source
+            and prior_size_bytes
+            and current_size_bytes
+            and current_size_bytes < prior_size_bytes
+        )
+        if same_source_rebased_smaller:
+            logger.warning(
+                "[%s] session %s: cursor offset %d > file length %d on same path, "
+                "but transcript shrank from %d to %d bytes; resetting cursor for rebased content",
+                label,
+                session_id,
+                cursor_offset,
+                total_lines,
+                prior_size_bytes,
+                current_size_bytes,
+            )
+            cursor_offset = 0
+        elif same_transcript_source and signal_type != "reset":
             logger.warning(
                 "[%s] session %s: cursor offset %d > file length %d on unchanged transcript source, "
                 "clamping cursor to EOF to avoid replay",
