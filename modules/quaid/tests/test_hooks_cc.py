@@ -1570,6 +1570,53 @@ class TestHookInjectRecallResilience:
         assert "Authentication uses JWTs and refresh tokens." in context
         assert "api.md" in context
 
+    def test_project_docs_context_dedupes_identical_chunks(
+        self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
+    ):
+        from core import extraction_daemon
+        monkeypatch.setattr(extraction_daemon, "write_cursor", lambda *a: None)
+
+        files_block = "## Files\n- `README.md` — overview\n- `api.py` — API surface"
+        docs_bundle = {
+            "project": "agentmsg",
+            "chunks": [
+                {
+                    "content": files_block,
+                    "source": "/tmp/agentmsg/README.md",
+                    "similarity": 0.94,
+                },
+                {
+                    "content": "  ## Files\n- `README.md` — overview\n- `api.py` — API surface  ",
+                    "source": "/tmp/agentmsg/README.md",
+                    "similarity": 0.93,
+                },
+                {
+                    "content": "Ember Glass means pager escalation level 2.",
+                    "source": "/tmp/agentmsg/STATUS.md",
+                    "similarity": 0.91,
+                },
+            ],
+        }
+
+        with patch("core.interface.api.recall_fast", return_value=[]), patch(
+            "core.interface.api.projects_search_docs", return_value=docs_bundle
+        ):
+            out, _err = _run_hook_inject(
+                {
+                    "prompt": "What files are in agentmsg?",
+                    "session_id": "sess-docs-dedupe",
+                    "cwd": "/Users/x",
+                },
+                monkeypatch=monkeypatch,
+            )
+
+        payload = json.loads(out)
+        context = payload["hookSpecificOutput"]["additionalContext"]
+        assert context.count("## Files") == 1
+        assert context.count("`README.md`") == 1
+        assert "  1. ## Files" in context
+        assert "  2. Ember Glass means pager escalation level 2." in context
+
     def test_project_docs_search_uses_project_hint_from_hook_cwd(
         self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
     ):

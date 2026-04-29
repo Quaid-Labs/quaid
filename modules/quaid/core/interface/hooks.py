@@ -221,6 +221,32 @@ def _filter_injectable_memories(memories: List[Dict]) -> List[Dict]:
     ]
 
 
+_CONTEXT_DEDUPE_WS_RE = re.compile(r"\s+")
+
+
+def _context_dedupe_key(text: str) -> str:
+    raw = str(text or "").strip()
+    if not raw:
+        return ""
+    return _CONTEXT_DEDUPE_WS_RE.sub(" ", raw).strip().lower()
+
+
+def _dedupe_context_sections(sections: List[str]) -> List[str]:
+    out: List[str] = []
+    seen: set[str] = set()
+    for section in list(sections or []):
+        text = str(section or "").strip()
+        if not text:
+            continue
+        key = _context_dedupe_key(text)
+        if key and key in seen:
+            continue
+        if key:
+            seen.add(key)
+        out.append(section)
+    return out
+
+
 def _contains_non_injectable_memory_text(text: str) -> bool:
     raw = str(text or "").strip()
     if not raw:
@@ -241,14 +267,20 @@ def _format_project_docs(docs_bundle: Dict) -> str:
     project = str((docs_bundle or {}).get("project") or "").strip()
     heading = f"[Quaid Project Docs: {project}]" if project else "[Quaid Project Docs]"
     lines = [heading]
-    for i, chunk in enumerate(chunks, 1):
+    seen_chunk_text: set[str] = set()
+    for chunk in chunks:
         text = str(chunk.get("text") or chunk.get("content") or "").strip()
         if not text:
             continue
+        chunk_key = _context_dedupe_key(text)
+        if chunk_key and chunk_key in seen_chunk_text:
+            continue
+        if chunk_key:
+            seen_chunk_text.add(chunk_key)
         source = Path(str(chunk.get("source") or "")).name
         sim = float(chunk.get("similarity") or 0.0)
         label = f" (from {source})" if source else ""
-        lines.append(f"  {i}. {text}{label} (relevance: {sim:.2f})")
+        lines.append(f"  {len(lines)}. {text}{label} (relevance: {sim:.2f})")
     if len(lines) <= 1:
         return ""
     body = "\n".join(lines)
@@ -1911,6 +1943,7 @@ def _build_project_context_message(
         return ""
     for warning in reversed(warnings):
         sections.insert(0, warning)
+    sections = _dedupe_context_sections(sections)
     body = "# Quaid Project Context\n\n" + "\n\n".join(sections) + "\n"
     content_parts: List[str] = []
     if include_startup_pending_context:
@@ -2654,6 +2687,7 @@ def hook_session_init(args):
     for warning in reversed(warning_sections):
         sections.insert(0, warning)
 
+    sections = _dedupe_context_sections(sections)
     body = "# Quaid Project Context\n\n" + "\n\n".join(sections) + "\n"
     content_parts: List[str] = []
     if bool(_adapter_capability("session_start_include_pending_context", False)):
