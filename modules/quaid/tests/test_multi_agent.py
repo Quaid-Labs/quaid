@@ -266,7 +266,7 @@ class TestListAgentInstanceIds:
             ids = adapter.list_agent_instance_ids()
 
         assert ids == ["openclaw-main", "openclaw-live", "openclaw-dironly"]
-        assert not (tmp_path / "instances" / "openclaw-deleted").exists()
+        assert (tmp_path / "instances" / "openclaw-deleted").exists()
 
 
 # ---------------------------------------------------------------------------

@@ -22,6 +22,7 @@ from lib.instance import (
     shared_registry_path,
     instance_exists,
     list_instances,
+    prune_stale_openclaw_agent_instances,
     require_instance_exists,
 )
 
@@ -247,7 +248,31 @@ class TestListInstances:
             "openclaw-live",
             "openclaw-main",
         ]
-        assert not (tmp_path / "instances" / "openclaw-deleted").exists()
+        assert (tmp_path / "instances" / "openclaw-deleted").exists()
+
+    def test_openclaw_physical_prune_requires_livetest_harness(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        oc_root = tmp_path / "openclaw-runtime"
+        oc_root.mkdir()
+        monkeypatch.setenv("OPENCLAW_CONFIG_PATH", str(oc_root / "openclaw.json"))
+        (oc_root / "openclaw.json").write_text(
+            json.dumps({"agents": {"list": [{"id": "main"}]}}),
+            encoding="utf-8",
+        )
+        deleted = tmp_path / "instances" / "openclaw-deleted"
+        deleted.mkdir(parents=True)
+        deleted.joinpath("config.json").write_text(
+            json.dumps({"adapter": {"type": "openclaw"}}),
+            encoding="utf-8",
+        )
+
+        with pytest.raises(InstanceError, match="livetest harness"):
+            prune_stale_openclaw_agent_instances(tmp_path)
+        assert deleted.exists()
+
+        monkeypatch.setenv("QUAID_LIVETEST_HARNESS", "1")
+        assert prune_stale_openclaw_agent_instances(tmp_path) == ["openclaw-deleted"]
+        assert not deleted.exists()
 
     def test_empty(self, monkeypatch, tmp_path):
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))

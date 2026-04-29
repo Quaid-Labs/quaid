@@ -97,6 +97,20 @@ Do not continue to M2 until this is non-empty.
 
 ---
 
+## XP Project-Link Contract
+
+XP tests two separate behaviors:
+
+- For a one-fact project lookup, the agent should answer without running
+  `quaid project link`; direct file read or scoped project recall is acceptable.
+- For durable project work, edits, API/tool use, or "start working on this
+  project" phrasing, the agent should link the project before proceeding.
+
+Do not mark "no auto-link" as a failure unless the prompt asked for durable
+project engagement.
+
+---
+
 ## Extraction Triggers
 
 | Trigger | How | Notes |

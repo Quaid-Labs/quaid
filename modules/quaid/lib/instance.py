@@ -311,12 +311,16 @@ def _prune_stale_openclaw_agent_instance(
         return False
 
 
-def prune_stale_openclaw_agent_instances(home: Optional[Path] = None) -> List[str]:
-    """Delete stale OpenClaw agent silos whose native agent state is gone."""
+def _livetest_harness_enabled() -> bool:
+    return os.environ.get("QUAID_LIVETEST_HARNESS", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def stale_openclaw_agent_instances(home: Optional[Path] = None) -> List[str]:
+    """List stale OpenClaw agent silos whose native agent state is gone."""
     instances_dir = (Path(home).resolve() if home is not None else quaid_home()) / "instances"
     if not instances_dir.is_dir():
         return []
-    pruned: List[str] = []
+    stale: List[str] = []
     for entry in sorted(instances_dir.iterdir()):
         if not entry.is_dir() or entry.is_symlink():
             continue
@@ -325,6 +329,26 @@ def prune_stale_openclaw_agent_instances(home: Optional[Path] = None) -> List[st
             validate_instance_id(name)
         except InstanceError:
             continue
+        if _is_stale_openclaw_agent_instance(name, entry):
+            stale.append(name)
+    return stale
+
+
+def prune_stale_openclaw_agent_instances(home: Optional[Path] = None) -> List[str]:
+    """Delete stale OpenClaw agent silos whose native agent state is gone.
+
+    This is intentionally restricted to the livetest harness. User-facing
+    instance listing must never delete local instance data as a side effect.
+    """
+    if not _livetest_harness_enabled():
+        raise InstanceError(
+            "Refusing to delete stale OpenClaw silos outside the livetest harness; "
+            "set QUAID_LIVETEST_HARNESS=1 only from tests/livetest cleanup tools."
+        )
+    pruned: List[str] = []
+    instances_dir = (Path(home).resolve() if home is not None else quaid_home()) / "instances"
+    for name in stale_openclaw_agent_instances(home):
+        entry = instances_dir / name
         if _prune_stale_openclaw_agent_instance(name, entry, home=instances_dir.parent):
             pruned.append(name)
     return pruned
@@ -352,7 +376,6 @@ def list_instances() -> List[str]:
         if is_internal_path_derived_instance_id(name):
             continue
         if _is_stale_openclaw_agent_instance(name, entry):
-            _prune_stale_openclaw_agent_instance(name, entry)
             continue
         if (entry / "config.json").is_file():
             instances.append(name)

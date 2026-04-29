@@ -133,6 +133,20 @@ feature under test and poison reset-dedupe markers.
 
 ---
 
+## XP Project-Link Contract
+
+XP tests two separate behaviors:
+
+- For a one-fact project lookup, the agent should answer without running
+  `quaid project link`; direct file read or scoped project recall is acceptable.
+- For durable project work, edits, API/tool use, or "start working on this
+  project" phrasing, the agent should link the project before proceeding.
+
+Do not mark "no auto-link" as a failure unless the prompt asked for durable
+project engagement.
+
+---
+
 ## Gateway
 
 Check and restart the OC gateway:
@@ -289,10 +303,12 @@ After the test, clean up:
   --on-timeout "ssh REMOTE_HOST 'pkill -f openclaw-update >/dev/null 2>&1 || true; pkill -f openclaw-completion >/dev/null 2>&1 || true; pkill -f openclaw-agent >/dev/null 2>&1 || true; pkill -f openclaw-agents >/dev/null 2>&1 || true'" \
   -- ssh REMOTE_HOST 'source ~/.zprofile; openclaw agents delete m13test --force'
 ssh REMOTE_HOST 'trash /tmp/oc-m13-workspace 2>/dev/null || rm -rf /tmp/oc-m13-workspace'
+ssh REMOTE_HOST '~/quaidcode/dev/modules/quaid/tests/livetest/scripts/livetest-prune-openclaw-silos.sh --home ~/.quaid'
 ```
 Note: `--force` is required in non-interactive (SSH) context. If that still fails,
-manually remove `~/.openclaw/agents/m13test` and the Quaid silo at
-`~/.quaid/instances/openclaw-m13test/`.
+manually remove only `~/.openclaw/agents/m13test`, then rerun the livetest prune
+script above. Do not manually `rm -rf ~/.quaid/instances/openclaw-*`; production
+instance listing intentionally never deletes stale silos as a side effect.
 
 Do NOT re-run the installer for M13 — that overwrites the gateway
 config and disrupts the active livetest instance.

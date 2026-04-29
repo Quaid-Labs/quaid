@@ -1183,17 +1183,6 @@ class OpenClawAdapter(QuaidAdapter):
         Examples: ["openclaw-main", "openclaw-coding", "openclaw-livetest"]
         """
         prefix = self.agent_id_prefix()
-        try:
-            from lib.instance import prune_stale_openclaw_agent_instances
-
-            prune_stale_openclaw_agent_instances(self.quaid_home())
-        except Exception as exc:
-            if is_fail_hard_enabled():
-                raise
-            print(
-                f"[adapter] OpenClaw stale-agent silo cleanup skipped: {exc}",
-                file=sys.stderr,
-            )
 
         # Source 1: OC agent registry
         labels: list[str] = []
