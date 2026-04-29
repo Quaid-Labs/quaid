@@ -5833,6 +5833,12 @@ def _run_recall_store_plan(
         and _has_relation_chain_structure(query)
     )
     merge_limit = max(limit, limit * 2 if fast_mode else limit)
+    if not fast_mode and len(normalized_stores) > 1:
+        # Keep a wider merged candidate window before post-merge rank
+        # refinement. In mixed vector+graph deliberate recall, exact
+        # entity/relationship rows can occupy the first limit-sized window even
+        # when a graph-attached fact is already present just below it.
+        merge_limit = max(merge_limit, limit * 2)
     if relation_chain_query:
         # Relation-chain reranking needs enough pre-merge rows to keep the
         # terminal entity's attached facts alive before similarity trimming.

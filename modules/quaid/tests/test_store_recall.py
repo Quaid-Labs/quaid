@@ -4739,6 +4739,85 @@ class TestRecallFastHookInjectContract:
         assert captured["date_from"] == "2023-01-01"
         assert captured["date_to"] == "2023-12-31"
 
+    def test_run_recall_store_plan_deliberate_keeps_graph_attached_fact_for_named_entity_query(self):
+        import datastore.memorydb.memory_graph as mg
+
+        def _fake_vector(*args, **kwargs):
+            rows = [
+                {
+                    "id": "spouse-1",
+                    "text": "Kai -> spouse_of -> Mei",
+                    "category": "fact",
+                    "similarity": 0.99,
+                },
+                {
+                    "id": "spouse-2",
+                    "text": "Kai married to Mei; Leah in Vancouver; Leah married to Nathan",
+                    "category": "fact",
+                    "similarity": 0.98,
+                },
+                {
+                    "id": "mei-node",
+                    "text": "Mei",
+                    "category": "person",
+                    "similarity": 0.98,
+                },
+                {
+                    "id": "spouse-3",
+                    "text": "Kai is married to Mei",
+                    "category": "fact",
+                    "similarity": 0.97,
+                },
+                {
+                    "id": "spouse-4",
+                    "text": "Kai -> spouse_of -> Mei",
+                    "category": "fact",
+                    "similarity": 0.96,
+                },
+            ]
+            return rows, {"selected_path": "vector", "phases_ms": {"total_ms": 10}}, None
+
+        def _fake_graph(*args, **kwargs):
+            rows = [
+                {
+                    "id": "ceramics",
+                    "text": "Kai's wife Mei runs a ceramics practice out of their garage",
+                    "category": "fact",
+                    "similarity": 0.95,
+                    "via": "graph_attached_fact",
+                    "source_name": "Mei",
+                    "graph_path": "Mei --has_fact--> Kai's wife Mei runs a ceramics practice out of their garage",
+                }
+            ]
+            return rows, {"selected_path": "graph_aware", "phases_ms": {"total_ms": 5}}, None
+
+        registry = {
+            "vector": {"recall": _fake_vector, "recall_fast": _fake_vector},
+            "graph": {"recall": _fake_graph, "recall_fast": _fake_graph},
+            "docs": {"recall": lambda *a, **k: ([], {}, None), "recall_fast": lambda *a, **k: ([], {}, None)},
+        }
+
+        with patch.object(mg, "_get_recall_store_registry", return_value=registry), \
+             patch.object(mg, "_relation_chain_groups_for_query", return_value=[]):
+            rows, meta, _ = mg._run_recall_store_plan(
+                "what does Mei do",
+                stores=["vector", "graph"],
+                limit=5,
+                owner_id="solomon-steadman",
+                min_similarity=0.6,
+                planner_profile="full",
+                planned_queries=["what does Mei do"],
+                planner_meta={"planned_stores": ["vector", "graph"]},
+                fast_mode=False,
+                graph_depth=1,
+                common_kwargs={},
+            )
+
+        assert rows
+        assert rows[0]["id"] == "ceramics"
+        assert rows[0]["via"] == "graph_attached_fact"
+        assert meta["planned_stores"] == ["vector", "graph"]
+
     def test_run_recall_store_plan_prefers_non_empty_store_meta_over_empty_vector_meta(self):
         import datastore.memorydb.memory_graph as mg
 
