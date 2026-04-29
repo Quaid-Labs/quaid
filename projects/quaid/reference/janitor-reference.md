@@ -71,16 +71,16 @@ The janitor requires LLM access for review/dedup/docs tasks. Provider/model rout
 |---|------|-----|----------|-------------|
 | 0b | **embeddings** | None | Infra | Backfill missing embeddings |
 | 0c | **edges** | None | Infra | Backfill missing relationship edges from stored facts |
-| 2 | **review** | Opus | Memory | Batch-review pending memories (KEEP/DELETE/FIX/MERGE/MOVE_TO_PROJECT) |
+| 2 | **review** | Deep | Memory | Batch-review pending memories (KEEP/DELETE/FIX/MERGE/MOVE_TO_PROJECT) |
 | 2a | **temporal** | None | Memory | Resolve relative dates (tomorrow, yesterday) to absolute |
-| 2b | **dedup_review** | Opus | Memory | Auto-confirm hash_exact entries, review embedding-based rejections (catch false positives) |
-| 3 | **duplicates** | Haiku | Memory | Token-recall + batched dedup detection |
+| 2b | **dedup_review** | Deep | Memory | Auto-confirm hash_exact entries, review embedding-based rejections (catch false positives) |
+| 3 | **duplicates** | Fast | Memory | Token-recall + batched dedup detection |
 | 4 | **contradictions** | None | Memory | **Decommissioned** in active janitor path (task name retained as no-op compatibility surface) |
 | 5 | **decay** | None | Memory | Confidence decay on old unused memories |
-| 5b | **decay_review** | Opus | Memory | Review decayed facts (DELETE/EXTEND/PIN) |
+| 5b | **decay_review** | Deep | Memory | Review decayed facts (DELETE/EXTEND/PIN) |
 | 0a | **project_docs_monitor** | None | Infra | Queue async project-docs monitor refresh requests through DocsDB maintenance |
-| 1d-snippets | **snippets** | Opus | Infra | Review & fold pending snippets into core markdown (runs after memory pipeline) |
-| 1d-journal | **journal** | Opus | Infra | Distill journal entries into core markdown themes, archive old entries (runs after memory pipeline) |
+| 1d-snippets | **snippets** | Deep | Infra | Review & fold pending snippets into core markdown (runs after memory pipeline) |
+| 1d-journal | **journal** | Deep | Infra | Distill journal entries into core markdown themes, archive old entries (runs after memory pipeline) |
 | 8 | **tests** | None | Infra | Run vitest suite (npm test; only when `--task tests`, `QUAID_DEV=1`, or `janitor.run_tests=true`) |
 | 9 | **cleanup** | None | Infra | Prune old recall_log (90d), dedup_log (90d), health_snapshots (180d), orphaned embeddings |
 | 10 | **update_check** | None | Infra | Check for Quaid updates (version comparison + cache) |
@@ -119,7 +119,7 @@ docs updates are owned by the supervisor/project-docs worker pipeline, and RAG
 indexing is run by docs datastore/project-docs paths rather than as a broad
 inline janitor task.
 
-### Task 1d-snippets: Soul Snippets Review (Opus)
+### Task 1d-snippets: Soul Snippets Review (deep-reasoning)
 Reviews pending soul snippets (from `.snippets.md` files) and decides whether to fold them into core markdown files:
 - **Source:** `*.snippets.md` files written by extraction hook during compaction/reset
 - **Target files:** default is SOUL.md, USER.md, ENVIRONMENT.md (AGENTS.md can be added via `docs.journal.targetFiles`)
@@ -128,7 +128,7 @@ Reviews pending soul snippets (from `.snippets.md` files) and decides whether to
 - **Config:** `docs.journal` in config.json (`snippetsEnabled`, `targetFiles`, `maxEntriesPerFile`; legacy fallback `maxSnippetsPerFile`). Note: config key was renamed from `docs.soulSnippets` to `docs.journal` for the unified journal system; snippets are controlled by the `snippetsEnabled` sub-key.
 - **Module:** `soul_snippets.py`
 
-### Task 1d-journal: Journal Distillation (Opus)
+### Task 1d-journal: Journal Distillation (deep-reasoning)
 Distills journal diary entries into core markdown themes and archives processed entries:
 - **Source:** `journal/*.journal.md` files written by extraction hook during compaction/reset
 - **Target files:** SOUL.md, USER.md, ENVIRONMENT.md (core markdown updated with distilled themes)
@@ -139,8 +139,8 @@ Distills journal diary entries into core markdown themes and archives processed 
 - **Config:** `docs.journal` in config.json (`enabled`, `mode`, `journalDir`, `targetFiles`)
 - **Module:** `soul_snippets.py` (`run_journal_distillation()`)
 
-### Task 2: Memory Review (Opus)
-Pending memories are batched (50 per batch) and sent to Opus:
+### Task 2: Memory Review (deep-reasoning)
+Pending memories are batched (50 per batch) and sent to the configured deep-reasoning model:
 - **KEEP**: Personal facts, preferences, opinions, decisions (with reasoning), relationships, life events, health, locations, schedules. Personal tech decisions count (e.g., "owner chose X because Y").
 - **DELETE**: Noise, conversational filler, vague statements. Also: system architecture facts, infrastructure knowledge, operational rules for AI agents, tool/config descriptions — these belong in docs/RAG, not personal memory.
 - **FIX**: Good info with attribution errors ("The user" → owner name from config). Also resolves relative temporal references using `created_at`.
@@ -158,20 +158,20 @@ Fixes relative temporal references in fact text using the fact's `created_at` ti
 - Patterns: tomorrow (+1d), yesterday (-1d), today (0d), tonight (0d), this morning (0d), next week (+7d), last week (-7d), next month (+30d), last month (-30d), next year (+365d), last year (-365d)
 - Replaces with absolute dates (e.g., "tomorrow" → "on 2026-02-06")
 - Auto-adjusts tense for past events ("is meeting" → "met")
-- Also added to the Opus review prompt so new pending facts get resolved during review via FIX
+- Also added to the review prompt so new pending facts get resolved during review via FIX
 
-### Task 2b: Dedup Review (Opus)
+### Task 2b: Dedup Review (deep-reasoning)
 Reviews dedup candidates to catch false positives and confirm true duplicates:
 - **Auto-confirm:** `hash_exact` entries are auto-confirmed without LLM review (content-identical matches need no judgment)
-- **LLM review:** Embedding-based rejections (where vector similarity flagged a pair but it wasn't hash-exact) are reviewed by Opus to catch false positives
+- **LLM review:** Embedding-based rejections (where vector similarity flagged a pair but it wasn't hash-exact) are reviewed by the configured deep-reasoning model to catch false positives
 - **Prompt bias:** The review prompt is tuned to bias toward CONFIRM (~90% confirmation rate) — most dedup candidates flagged by the pipeline are genuine duplicates; the LLM review exists primarily to catch the minority of false positives rather than to second-guess the pipeline
 
-### Task 3: Duplicates (Haiku)
+### Task 3: Duplicates (fast-reasoning)
 Token-recall + batched LLM dedup detection:
 1. Extract significant tokens per memory (nouns, names — not stopwords)
 2. SQL LIKE search for candidate pairs sharing tokens
 3. Vector similarity on candidates only (~30 per memory vs O(n²) full scan)
-4. Batch pairs per Haiku call for confirmation (batch sizes are dynamic via `TokenBatchBuilder`, based on model context window x budget percent)
+4. Batch pairs per fast-reasoning call for confirmation (batch sizes are dynamic via `TokenBatchBuilder`, based on model context window x budget percent)
 
 **Content hash dedup:** Before LLM-based dedup, a fast content hash check identifies exact-match duplicates. The hash comparison includes memories with `flagged` status in addition to `pending`, `approved`, and `active` statuses, preventing flagged memories from being overlooked as potential duplicates.
 
@@ -460,9 +460,9 @@ The janitor dispatches maintenance tasks through a `LifecycleRegistry` — a plu
 Facts flow through the pipeline before becoming permanent:
 
 ```
-Extraction (Opus, at compaction/reset) → status: pending, edges extracted inline
+Extraction (deep-reasoning, at compaction/reset) → status: pending, edges extracted inline
     ↓
-Task 2: Review (Opus) → KEEP/FIX → status: approved | DELETE → hard deleted | MOVE_TO_PROJECT → relocated
+Task 2: Review (deep-reasoning) → KEEP/FIX → status: approved | DELETE → hard deleted | MOVE_TO_PROJECT → relocated
     ↓
 Task 2a: Temporal resolution (regex) → fix relative dates
     ↓

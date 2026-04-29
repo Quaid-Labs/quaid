@@ -93,12 +93,12 @@ Access tracking (increment access_count on returned results)
 Agent receives results with similarity %, extraction_confidence
      │
      ▼
-[on /compact or /reset] Opus extraction → personal facts+edges → status: pending
-                                       → soul_snippets → .snippets.md staging files
-                                       → journal_entries → journal/*.journal.md diary files
+[on /compact or /reset] deep-reasoning extraction → personal facts+edges → status: pending
+                                                        → soul_snippets → .snippets.md staging files
+                                                        → journal_entries → journal/*.journal.md diary files
 ```
 
-> **Note:** Recall is agent-driven via `memory_recall` tool (Feb 2026). Auto-injection is optional (gated by config/env), latency-capped, and intentionally incomplete. The fast OpenClaw auto-inject lane requests both vector and graph recall within the same bounded subprocess budget so linked memories are reachable without language-specific routing heuristics. It can still miss answers that require query rewriting or deeper reasoning, so explicit recall remains the fallback. Core now injects a runtime metadata block with active domains and active graph relation types so the model can decide when an explicit recall is warranted. Auto-capture via per-message classifier is deprecated, but inactivity-timeout extraction still runs when capture is enabled. Memory extraction happens at compaction/reset via Opus with combined fact+edge+snippet+journal extraction. Soul snippets are observations written to `.snippets.md` staging files, reviewed by janitor Task 1d-snippets, and folded into core markdown files (default SOUL.md, USER.md, ENVIRONMENT.md; AGENTS.md optional via `docs.journal.targetFiles`). Journal entries are diary-style paragraphs written to `journal/*.journal.md`, distilled by janitor Task 1d-journal into core markdown themes, then archived to `journal/archive/`.
+> **Note:** Recall is agent-driven via `memory_recall` tool (Feb 2026). Auto-injection is optional (gated by config/env), latency-capped, and intentionally incomplete. The fast OpenClaw auto-inject lane requests both vector and graph recall within the same bounded subprocess budget so linked memories are reachable without language-specific routing heuristics. It can still miss answers that require query rewriting or deeper reasoning, so explicit recall remains the fallback. Core now injects a runtime metadata block with active domains and active graph relation types so the model can decide when an explicit recall is warranted. Auto-capture via per-message classifier is deprecated, but inactivity-timeout extraction still runs when capture is enabled. Memory extraction happens at compaction/reset via the configured deep-reasoning model with combined fact+edge+snippet+journal extraction. Soul snippets are observations written to `.snippets.md` staging files, reviewed by janitor Task 1d-snippets, and folded into core markdown files (default SOUL.md, USER.md, ENVIRONMENT.md; AGENTS.md optional via `docs.journal.targetFiles`). Journal entries are diary-style paragraphs written to `journal/*.journal.md`, distilled by janitor Task 1d-journal into core markdown themes, then archived to `journal/archive/`.
 
 ### Privacy Tiers
 
@@ -108,7 +108,7 @@ Agent receives results with similarity %, extraction_confidence
 | `shared` | Household knowledge (default) | All owners |
 | `private` | Secrets, surprises, finances, health | Owner only |
 
-Privacy is classified per-fact during extraction (Opus at compaction/reset). Default is `shared`. The recall pipeline filters private memories to only the owning user.
+Privacy is classified per-fact during extraction (configured deep-reasoning model at compaction/reset). Default is `shared`. The recall pipeline filters private memories to only the owning user.
 
 ### Search System (Batches 1-4, Feb 2026)
 
@@ -130,7 +130,7 @@ Multi-stage pipeline with RRF fusion, HyDE query expansion, intent awareness, an
 - **Formula:** `R = 2^(-t / half_life)` with access-scaled half-life
 - `half_life = 60d × (1 + 0.15 × access_count) × (1 + 0.5 × storage_strength) × (2 if verified)`
 - Pinned memories never decay; frequently accessed memories decay slower
-- Below threshold: queued for Opus review (DELETE/EXTEND/PIN), not silently deleted
+- Below threshold: queued for deep-reasoning review (DELETE/EXTEND/PIN), not silently deleted
 
 ### Data Quality
 
@@ -143,13 +143,13 @@ Multi-stage pipeline with RRF fusion, HyDE query expansion, intent awareness, an
 
 #### Phase 1: LanceDB + Local Routing (DONE, Retired)
 - [x] LanceDB with OpenAI embeddings — replaced by local system
-- [x] Regex-based auto-capture — replaced by Haiku classifier
+- [x] Regex-based auto-capture — replaced by classifier-driven capture, then retired in favor of lifecycle extraction
 - [x] ~19 seeded memories — now ~616 active nodes, ~205 edges (all graduated)
 
 #### Phase 2: Graph Store (DONE)
 - [x] SQLite schema with nodes, edges, FTS5, metadata
 - [x] Ollama embeddings (`nomic-embed-text`, 768-dim default)
-- [x] Entity extraction via Claude Haiku
+- [x] Entity extraction via configured LLM extraction
 - [x] Relationship extraction via janitor edges task
 - [x] Hybrid search (semantic + FTS + edge traversal)
 
@@ -158,14 +158,14 @@ Multi-stage pipeline with RRF fusion, HyDE query expansion, intent awareness, an
 - [x] Hybrid search replaces LanceDB vector-only
 - [x] Privacy tier filtering (per-fact classification)
 - [x] User identity mapping via instance `config.json`
-- [x] Haiku reranker for recall relevance
+- [x] Fast-reasoning reranker for recall relevance
 - [x] Session dedup + compaction time-gate
 - [x] LanceDB plugin disabled
 
 #### Phase 4: Local-Only (DONE)
 - [x] Ollama replaces OpenAI for embeddings
 - [x] Zero external API dependency for storage/search
-- [x] Anthropic API only used for extraction (Opus) and reranking (Haiku)
+- [x] External LLM calls route through configured adapter/provider deep and fast reasoning tiers
 
 #### Phase 5: Quality & Governance (DONE)
 - [x] Per-message auto-capture deprecated → event-based extraction (compaction/reset) + inactivity-timeout extraction
@@ -173,8 +173,8 @@ Multi-stage pipeline with RRF fusion, HyDE query expansion, intent awareness, an
 - [x] Fail-fast pipeline guard with graduation blocking
 - [x] Temporal resolution (regex-based, no LLM)
 - [x] Edge normalization (inverse/synonym maps, symmetric ordering)
-- [x] Smart dedup with token-recall + Haiku verification
-- [x] Decay review queue (Opus review instead of silent deletion)
+- [x] Smart dedup with token-recall + fast-reasoning verification
+- [x] Decay review queue (deep-reasoning review instead of silent deletion)
 - [x] Three-layer architecture: Markdown / RAG / Memory DB
 - [x] LLM prompts scoped to personal facts only
 
@@ -194,7 +194,7 @@ Multi-stage pipeline with RRF fusion, HyDE query expansion, intent awareness, an
 
 - **Search pipeline overhaul** (Batches 1-4): RRF fusion, BM25, composite scoring, MMR diversity, intent classification, temporal validity filtering, Ebbinghaus decay, multi-hop traversal, access tracking, parallel search
 - **Agent-driven recall**: Auto-injection is optional; agent calls `memory_recall` tool with crafted queries
-- **Combined fact+edge extraction**: Single Opus call extracts both facts and relationships at compaction/reset
+- **Combined fact+edge extraction**: Single deep-reasoning call extracts both facts and relationships at compaction/reset
 - **Content hash dedup**: SHA256 pre-filter catches exact duplicates before embedding comparison
 - **Embedding cache**: DB-backed cache avoids redundant Ollama calls
 - **Fact versioning**: `supersede_node()` chains old→new facts with history tracking
@@ -209,7 +209,7 @@ Multi-stage pipeline with RRF fusion, HyDE query expansion, intent awareness, an
 - **Fail-fast pipeline**: `memory_pipeline_ok` flag — if any memory task fails, graduation blocked
 - **Temporal resolution**: Regex-based date resolver (Task 2a)
 - **Edge normalization**: Inverse flipping, synonym resolution, symmetric alphabetical ordering
-- **Smart dedup**: Token-recall + Haiku verification in gray zone (0.88-0.98)
+- **Smart dedup**: Token-recall + fast-reasoning verification in gray zone (0.88-0.98)
 - **Graduation**: `pending → approved → active` lifecycle, all facts now graduated
 
 ### Design Notes
@@ -226,7 +226,7 @@ Multi-stage pipeline with RRF fusion, HyDE query expansion, intent awareness, an
 ### Answered Design Questions
 
 1. **Token budget:** Dynamic K based on node count (clamped by config); optional LLM reranker for relevance
-2. **Capture quality:** Opus extraction at compaction/reset events with strict personal-facts-only criteria. Nightly janitor cleans any remaining noise.
+2. **Capture quality:** Deep-reasoning extraction at compaction/reset events with strict personal-facts-only criteria. Nightly janitor cleans any remaining noise.
 3. **Graph initialization:** Database schema is initialized by `memory_graph.py` startup/migration paths, then continuously enriched by event-based extraction
 4. **Stale-fact handling:** Supersession + temporal normalization + recency-weighted retrieval are the active conflict controls; contradiction task name remains as a compatibility no-op in current janitor runs
 
@@ -435,7 +435,7 @@ OpenClaw plugin (Total Recall / quaid) that:
 **Hooks:**
 - `before_agent_start` — optional auto-injection pipeline (gated by config/env). Fast path is latency-bounded and should be treated as a hint surface rather than exhaustive recall.
 - `agent_end` — disabled; was inactivity-timeout extraction (replaced by session_end + compaction hooks)
-- `before_compaction` — extracts all personal facts from full transcript via Opus before context is compacted. Records compaction timestamp and resets injection dedup list. **Combined fact+edge extraction runs across transcript chunks with carry-forward context.** Enforces 3-word minimum on extracted facts. Generates derived keywords per fact for FTS vocabulary bridging. Extracts causal edges (`caused_by`, `led_to`) when causal links are clearly stated. **Also extracts soul snippets** — observations destined for core markdown files (default targets: SOUL.md, USER.md, ENVIRONMENT.md; AGENTS.md optional via config). Snippets are written to `.snippets.md` staging files for janitor review (Task 1d).
+- `before_compaction` — extracts all personal facts from full transcript via the configured deep-reasoning model before context is compacted. Records compaction timestamp and resets injection dedup list. **Combined fact+edge extraction runs across transcript chunks with carry-forward context.** Enforces 3-word minimum on extracted facts. Generates derived keywords per fact for FTS vocabulary bridging. Extracts causal edges (`caused_by`, `led_to`) when causal links are clearly stated. **Also extracts soul snippets** — observations destined for core markdown files (default targets: SOUL.md, USER.md, ENVIRONMENT.md; AGENTS.md optional via config). Snippets are written to `.snippets.md` staging files for janitor review (Task 1d).
 - `before_reset` — same extraction as compaction, triggered on `/new` or `/reset`
 
 **LLM timeouts:**
@@ -546,12 +546,12 @@ The injection pipeline runs before agent start, filtering and reranking memories
 
 > **Per-message classifier is deprecated.** The inactivity-timeout extraction remains active when capture is enabled.
 
-The previous per-message approach (Haiku classifier on each message pair) was:
+The previous per-message approach (fast classifier on each message pair) was:
 - Expensive: called on every `agent_end`, including heartbeats
 - Low context: only saw the last user + assistant message pair
 - Noisy: extracted many system/infrastructure facts that required janitor cleanup
 
-**Current extraction** happens in `before_compaction` and `before_reset` hooks via Opus (full transcript), plus inactivity-timeout extraction when enabled. **Combined fact+edge extraction** performs both fact extraction and relationship detection in a chunked deep-reasoning loop for efficiency and context-window safety.
+**Current extraction** happens in `before_compaction` and `before_reset` hooks via the configured deep-reasoning model (full transcript), plus inactivity-timeout extraction when enabled. **Combined fact+edge extraction** performs both fact extraction and relationship detection in a chunked deep-reasoning loop for efficiency and context-window safety.
 
 Capture timeout config keys:
 - `capture.inactivity_timeout_minutes` (default `60`): minutes of inactivity before timeout extraction runs (`0` disables timeout extraction).
@@ -647,8 +647,8 @@ Core orchestrators import ingest via this bridge rather than importing `ingest.*
 
 **`datastore/notedb/soul_snippets.py`:** Dual extraction system producing both fast-path snippets and slow-path journal entries at compaction/reset.
 - **Snippets (fast path):** Bullet-point observations written to `*.snippets.md` staging files in the identity dir. Nightly janitor reviews each snippet with `FOLD` (integrate into core file), `REWRITE` (synthesize), or `DISCARD` decisions. Keeps `SOUL.md`, `USER.md`, `ENVIRONMENT.md` current day-to-day. Target files configurable; `AGENTS.md` is optional via config.
-- **Journal (slow path):** Diary-style paragraphs written to `journal/*.journal.md`. Opus distillation runs weekly, synthesizing themes into core markdown. Old journal entries archived monthly.
-- Entry points: `run_soul_snippets_review()` — nightly snippet FOLD/REWRITE/DISCARD (janitor Task 1d-snippets); `run_journal_distillation()` — weekly Opus distillation (janitor Task 1d-journal).
+- **Journal (slow path):** Diary-style paragraphs written to `journal/*.journal.md`. Deep-reasoning distillation runs weekly, synthesizing themes into core markdown. Old journal entries archived monthly.
+- Entry points: `run_soul_snippets_review()` — nightly snippet FOLD/REWRITE/DISCARD (janitor Task 1d-snippets); `run_journal_distillation()` — weekly deep-reasoning distillation (janitor Task 1d-journal).
 - Protected regions in core markdown files are skipped during writes (via `lib/markdown.strip_protected_regions`).
 
 ### 2.16 Plugin Contract Architecture

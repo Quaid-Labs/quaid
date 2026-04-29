@@ -255,7 +255,7 @@ Signal file
   → extract_from_transcript() called
       → capture skip patterns applied
       → transcript chunked (~30k chars / chunk, max 10 chunks)
-      → per chunk: build carry context → call Opus → parse JSON response
+      → per chunk: build carry context → call deep-reasoning model → parse JSON response
       → facts stored (dedup check at store time)
       → edges stored
       → soul snippets written
@@ -358,7 +358,7 @@ own content is always included in full; only overflow subagents are deferred.
 - Maximum chunks per extraction: 10. Transcripts exceeding this are capped (the oldest
   content in the window is what gets cut — the cursor already excluded all previously
   extracted content).
-- Each chunk is sent to Opus independently with carryover context from prior chunks.
+- Each chunk is sent to the configured deep-reasoning model independently with carryover context from prior chunks.
 
 **Truncation is banned.** Chunking is waterfall batching: chunk N's distilled facts
 feed chunk N+1 as carryover context. No content is silently discarded.
@@ -381,15 +381,15 @@ The carry context includes up to 40 high-confidence facts, formatted as:
 - [category | source | confidence] fact text | edges: subject --rel--> object
 ```
 
-Opus is called via `call_deep_reasoning()` with:
+The configured deep-reasoning model is called via `call_deep_reasoning()` with:
 - `max_tokens=6144` per chunk
 - `timeout=min(600.0, remaining_budget)`
 - Total extraction wall-clock budget: 2400 seconds (`DEFAULT_EXTRACT_WALL_SECONDS`)
 
-If Opus returns non-JSON prose, a one-pass repair is attempted via `call_fast_reasoning()`
+If the deep-reasoning model returns non-JSON prose, a one-pass repair is attempted via `call_fast_reasoning()`
 before the chunk is skipped.
 
-### Step 8: Parsing Opus output
+### Step 8: Parsing extraction output
 
 The expected JSON response shape:
 
@@ -455,11 +455,11 @@ are written:
 - **Soul snippets** (`write_snippets=True`): Written to `data/soul-snippets/`.
   The nightly janitor FOLD/REWRITE/DISCARDs them into core files (SOUL.md, USER.md, ENVIRONMENT.md).
 - **Journal entries** (`write_journal=True`): Written to `journal/*.journal.md`.
-  Opus distills themes from these into core markdown. Old entries are archived monthly.
+  A deep-reasoning distillation pass turns these into core markdown. Old entries are archived monthly.
 
 ### Step 12: Project logs
 
-`project_logs` from Opus output are appended to `projects/<name>/PROJECT.log` via
+`project_logs` from extraction output are appended to `projects/<name>/PROJECT.log` via
 `core.docs.updater.append_project_logs()`. The project-doc worker reads this
 append-only log through a hidden cursor; extraction no longer emits staged JSON
 events for docs updates.
@@ -818,7 +818,7 @@ circular imports.
 |----------|-------|-------------|
 | `DEFAULT_EXTRACT_WALL_SECONDS` | 2400.0 | Total wall-clock budget for one extraction |
 | Default chunk size | 8,000 tokens | From `capture.chunk_tokens` config |
-| Max Opus tokens per chunk | 6,144 | Response `max_tokens` |
+| Max response tokens per extraction chunk | 6,144 | Response `max_tokens` |
 
 ### Configuration keys
 
