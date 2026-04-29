@@ -4878,9 +4878,10 @@ def _docs_bundle_to_rows(bundle: Optional[Dict[str, Any]], limit: int) -> List[D
                         {
                             "text": (
                                 "[docs] scoped miss: likely matches may exist in unlinked project(s): "
-                                f"{', '.join(names)}. If the user asks to use, search, link, "
-                                "or work with one of these projects, run `quaid project link <name>` "
-                                "before filesystem grep/cat. Do not read project files directly first."
+                                f"{', '.join(names)}. For read-only lookups or one-fact questions, "
+                                "answer from scoped recall or direct file read without linking. "
+                                "Link only when the user explicitly asks to link the project or requests "
+                                "durable work such as edits, API/tool use, or starting development."
                             ),
                             "similarity": 0.0,
                             "category": "docs_scope_hint",
@@ -5811,8 +5812,9 @@ def _print_docs_bundle(bundle: Dict[str, Any]) -> None:
             print("No docs hits were found inside linked projects.")
             print(f"Likely unlinked project candidates: {', '.join(names)}")
             print(
-                "If the user asks to use/search/link one, run `quaid project link <name>` "
-                "before filesystem grep/cat, then retry docs recall."
+                "For read-only lookups or one-fact questions, answer from scoped recall or direct file read "
+                "without linking. Link only when the user explicitly asks to link the project or requests "
+                "durable work such as edits, API/tool use, or starting development."
             )
 
 

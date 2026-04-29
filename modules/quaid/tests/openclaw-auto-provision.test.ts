@@ -291,10 +291,13 @@ describe("openclaw auto-provision", () => {
       "quaid registry register <absolute-file-path> --project misc--openclaw-m13test",
     );
     expect(String(promptResult?.prependSystemContext || "")).toContain(
-      "Run quaid project link <project-name>",
+      "LINK ONLY FOR DURABLE ENGAGEMENT",
     );
     expect(String(promptResult?.prependSystemContext || "")).toContain(
-      "Do NOT satisfy that request by reading project files directly first.",
+      "For a read-only lookup, one-fact question",
+    );
+    expect(String(promptResult?.prependSystemContext || "")).toContain(
+      "run quaid project link <project-name> first",
     );
     expect(String(promptResult?.prependSystemContext || "")).not.toContain("openclaw-main");
     expect(testApi.shouldMirrorTranscriptUpdateToPreservedCopy("agent:main:matrix:channel:!room:localhost")).toBe(true);

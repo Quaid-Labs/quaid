@@ -163,5 +163,5 @@ class TestDocsBundleScopeHints:
         assert len(rows) == 1
         assert rows[0]["category"] == "docs_scope_hint"
         assert "cross-live-test" in rows[0]["text"]
-        assert "quaid project link <name>" in rows[0]["text"]
-        assert "Do not read project files directly first" in rows[0]["text"]
+        assert "without linking" in rows[0]["text"]
+        assert "Link only" in rows[0]["text"]
