@@ -2521,6 +2521,10 @@ def _normalize_relation_query_tokens(text: str) -> List[str]:
             token = token.strip()
             if token:
                 tokens.append(token)
+                if token.endswith("ies") and len(token) > 4:
+                    tokens.append(token[:-3] + "y")
+                elif token.endswith("s") and len(token) > 4:
+                    tokens.append(token[:-1])
     return tokens
 
 
@@ -2656,6 +2660,7 @@ def _has_relation_chain_structure(query: str) -> bool:
     return (
         lowered.count("'s") + lowered.count("’s") >= 1
         or bool(re.search(r"\bof\b", lowered))
+        or len(_relation_chain_groups_for_query(query)) >= 2
         or (
             any(ord(ch) > 127 for ch in lowered)
             and len(_normalize_relation_query_tokens(query)) <= 1
@@ -2730,6 +2735,15 @@ def _relation_matches_for_query(query: str) -> List[str]:
         if words & tokens:
             matches.add(relation)
     return sorted(matches)
+
+
+def _relation_descriptor_tokens() -> set[str]:
+    tokens: set[str] = set()
+    for relation_tokens in _relation_tokens_for_runtime().values():
+        tokens.update(str(token or "").strip().lower() for token in relation_tokens if str(token or "").strip())
+    for schema_tokens in _SCHEMA_RELATION_GROUP_TOKENS.values():
+        tokens.update(str(token or "").strip().lower() for token in schema_tokens if str(token or "").strip())
+    return tokens
 
 
 def _has_generic_graph_signal(query: str) -> bool:
@@ -3278,7 +3292,16 @@ def _graph_attached_fact_rows(
     lower_anchor_text = str(anchor_text or "").strip().lower()
     query_terms = set(_extract_distinctive_query_terms(query, limit=8))
     explicit_anchor_terms = set(_extract_explicit_query_anchor_terms(query, limit=4))
-    candidates: List[Tuple[Tuple[int, int, int, float], Dict[str, Any]]] = []
+    relation_descriptor_terms = _relation_descriptor_tokens()
+    normalized_relation_query_terms = {
+        token
+        for token in _normalize_relation_query_tokens(query)
+        if token not in _QUERY_STOPWORDS and (len(token) >= 4 or token in _SHORT_SIGNAL_TOKENS)
+    }
+    relation_only_query = bool(normalized_relation_query_terms) and all(
+        term in relation_descriptor_terms for term in normalized_relation_query_terms
+    )
+    candidates: List[Tuple[Tuple[int, int, int, int, float], Dict[str, Any]]] = []
     for edge in edges:
         if str(getattr(edge, "relation", "") or "") != "has_fact":
             continue
@@ -3291,9 +3314,8 @@ def _graph_attached_fact_rows(
             continue
         if not fact or str(getattr(fact, "type", "") or "").lower() != "fact":
             continue
-        seen_ids.add(fact.id)
         fact_attrs = fact.attributes if isinstance(fact.attributes, dict) else {}
-        fact_score = max(0.60, min(0.91, float(anchor_score or 0.0) * 0.98))
+        fact_score = max(0.60, min(0.995, max(float(anchor_score or 0.0), 0.0) + 0.02))
         row = {
             "id": fact.id,
             "text": _sanitize_for_context(fact.name),
@@ -3323,7 +3345,12 @@ def _graph_attached_fact_rows(
         query_overlap = sum(1 for term in query_terms if term in fact_text)
         explicit_overlap = sum(1 for term in explicit_anchor_terms if term in fact_text)
         anchor_text_hit = 1 if lower_anchor_text and lower_anchor_text in fact_text else 0
-        candidates.append(((query_overlap, explicit_overlap, anchor_text_hit, fact_score), row))
+        informative_token_count = len(_extract_distinctive_query_terms(fact_text, limit=12))
+        if relation_only_query:
+            score_key = (informative_token_count, explicit_overlap, anchor_text_hit, query_overlap, fact_score)
+        else:
+            score_key = (query_overlap, explicit_overlap, anchor_text_hit, informative_token_count, fact_score)
+        candidates.append((score_key, row))
     candidates.sort(key=lambda item: item[0], reverse=True)
     for _score, row in candidates[: max(1, int(per_anchor_limit or 1))]:
         seen_ids.add(str(row.get("id") or ""))
@@ -3410,10 +3437,7 @@ def graph_aware_recall(
     relation_chain_groups = _relation_chain_groups_for_query(query)
     relation_chain_query = (
         len(relation_chain_groups) >= 2
-        and (
-            str(query or "").count("'s") + str(query or "").count("’s") >= 1
-            or bool(re.search(r"\bof\b", str(query or "").lower()))
-        )
+        and _has_relation_chain_structure(query)
     )
 
     # 1. Pronoun resolution
@@ -5386,10 +5410,7 @@ def _graph_store_recall(
     relation_chain_groups = _relation_chain_groups_for_query(query)
     relation_chain_query = (
         len(relation_chain_groups) >= 2
-        and (
-            str(query or "").count("'s") + str(query or "").count("’s") >= 1
-            or bool(re.search(r"\bof\b", str(query or "").lower()))
-        )
+        and _has_relation_chain_structure(query)
     )
     if relation_chain_query and combined:
         _boost_relation_chain_row_scores(combined, relation_chain_groups)
