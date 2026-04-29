@@ -9794,6 +9794,212 @@ def _build_fast_drill_fallback_queries(
     return [fallback]
 
 
+_ASSISTANT_STRUCTURAL_LIST_ANCHOR_KINDS = {
+    "assistant_option_bullet_anchor",
+    "assistant_callback_anchor",
+    "assistant_plan_anchor",
+}
+
+
+def _is_assistant_suggestion_list_query(query: str, gate_eval: Optional[Dict[str, Any]]) -> bool:
+    gate = dict(gate_eval or {})
+    requirements = {str(item) for item in (gate.get("requirements") or []) if str(item)}
+    if "assistant_source" not in requirements or "enumeration" not in requirements:
+        return False
+    lower = str(query or "").lower()
+    return bool(
+        re.search(
+            r"\b(suggest|suggested|recommend|recommended|options?|ideas?|restaurants?|places?|spots?|venues?)\b",
+            lower,
+        )
+    )
+
+
+def _build_recall_row_from_node(
+    node: "Node",
+    *,
+    similarity: float,
+    structural_anchor_kind: Optional[str] = None,
+    recovered_assistant_list: bool = False,
+) -> Dict[str, Any]:
+    attrs = node.attributes if isinstance(node.attributes, dict) else {}
+    row = {
+        "text": node.name,
+        "category": node.type.lower(),
+        "similarity": round(float(similarity), 4),
+        "verified": bool(node.verified),
+        "pinned": bool(node.pinned),
+        "id": node.id,
+        "extraction_confidence": float(node.extraction_confidence),
+        "created_at": node.created_at,
+        "valid_from": node.valid_from,
+        "valid_until": node.valid_until,
+        "source_date": attrs.get("source_date"),
+        "session_id": str(attrs.get("source_session_id") or node.session_id or "").strip() or None,
+        "privacy": node.privacy,
+        "owner_id": node.owner_id,
+        "_multi_pass": False,
+        "domains": attrs.get("domains"),
+        "source_type": attrs.get("source_type"),
+        "project": attrs.get("project"),
+        "source_channel": str(attrs.get("source_channel") or "").strip().lower() or None,
+        "source_conversation_id": str(attrs.get("source_conversation_id") or attrs.get("conversation_id") or node.conversation_id or "").strip() or None,
+        "source_author_id": str(attrs.get("source_author_id") or "").strip() or None,
+        "actor_id": str(attrs.get("actor_id") or "").strip() or None,
+        "speaker_entity_id": str(attrs.get("speaker_entity_id") or node.speaker_entity_id or "").strip() or None,
+        "subject_entity_id": str(attrs.get("subject_entity_id") or "").strip() or None,
+        "conversation_id": str(attrs.get("conversation_id") or node.conversation_id or "").strip() or None,
+        "visibility_scope": str(attrs.get("visibility_scope") or node.visibility_scope or "source_shared").strip(),
+        "sensitivity": str(attrs.get("sensitivity") or node.sensitivity or "normal").strip(),
+        "provenance_confidence": attrs.get("provenance_confidence", node.provenance_confidence),
+        "participant_entity_ids": attrs.get("participant_entity_ids"),
+    }
+    if structural_anchor_kind:
+        row["structural_anchor_kind"] = structural_anchor_kind
+    if recovered_assistant_list:
+        row["_assistant_list_recovery"] = True
+    return row
+
+
+def _recover_assistant_suggestion_cluster_rows(
+    query: str,
+    *,
+    gate_eval: Optional[Dict[str, Any]],
+    owner_id: Optional[str],
+    limit: int,
+) -> List[Dict[str, Any]]:
+    if not _is_assistant_suggestion_list_query(query, gate_eval):
+        return []
+
+    graph = get_graph()
+    search_limit = max(160, min(400, max(1, int(limit)) * 50))
+    try:
+        raw_results = graph.search_hybrid(query, limit=search_limit, owner_id=owner_id)
+    except Exception:
+        logger.debug("assistant suggestion cluster recovery search failed", exc_info=True)
+        return []
+
+    cluster_scores: Dict[str, Tuple[float, int]] = {}
+    candidate_scores: Dict[str, float] = {}
+    candidate_nodes: Dict[str, Node] = {}
+    for node, score in raw_results:
+        attrs = node.attributes if isinstance(node.attributes, dict) else {}
+        if str(attrs.get("source_type") or "").strip().lower() != "assistant":
+            continue
+        kind = str(attrs.get("structural_anchor_kind") or "").strip().lower()
+        if kind not in _ASSISTANT_STRUCTURAL_LIST_ANCHOR_KINDS:
+            continue
+        created_at = str(node.created_at or "").strip()
+        if not created_at:
+            continue
+        adjusted = float(score)
+        if kind == "assistant_option_bullet_anchor":
+            adjusted += 0.10
+        elif kind == "assistant_callback_anchor":
+            adjusted += 0.06
+        else:
+            adjusted += 0.03
+        candidate_nodes[node.id] = node
+        candidate_scores[node.id] = adjusted
+        prior_best, prior_count = cluster_scores.get(created_at, (0.0, 0))
+        cluster_scores[created_at] = (max(prior_best, adjusted), prior_count + 1)
+
+    if not cluster_scores:
+        return []
+
+    target_created_at = max(
+        cluster_scores.items(),
+        key=lambda item: (item[1][0], item[1][1], item[0]),
+    )[0]
+    cluster_best_score = float(cluster_scores[target_created_at][0])
+
+    params: List[Any] = [target_created_at]
+    owner_sql = ""
+    if owner_id:
+        owner_sql = " AND owner_id = ?"
+        params.append(owner_id)
+    sibling_rows: List[sqlite3.Row] = []
+    try:
+        with graph._get_conn() as conn:
+            sibling_rows = conn.execute(
+                f"""
+                SELECT *
+                FROM nodes
+                WHERE created_at = ?
+                  {owner_sql}
+                  AND json_extract(attributes, '$.source_type') = 'assistant'
+                  AND json_extract(attributes, '$.structural_anchor_kind') IN (
+                    'assistant_option_bullet_anchor',
+                    'assistant_callback_anchor',
+                    'assistant_plan_anchor'
+                  )
+                ORDER BY created_at, id
+                """,
+                params,
+            ).fetchall()
+    except Exception:
+        logger.debug("assistant suggestion cluster sibling fetch failed", exc_info=True)
+        return []
+
+    recovered: List[Dict[str, Any]] = []
+    for sql_row in sibling_rows:
+        node = graph._row_to_node(sql_row)
+        attrs = node.attributes if isinstance(node.attributes, dict) else {}
+        kind = str(attrs.get("structural_anchor_kind") or "").strip().lower()
+        similarity = candidate_scores.get(node.id, cluster_best_score - 0.08)
+        recovered.append(
+            _build_recall_row_from_node(
+                node,
+                similarity=similarity,
+                structural_anchor_kind=kind,
+                recovered_assistant_list=True,
+            )
+        )
+
+    if not recovered:
+        return []
+
+    kind_priority = {
+        "assistant_option_bullet_anchor": 3,
+        "assistant_callback_anchor": 2,
+        "assistant_plan_anchor": 1,
+    }
+    recovered.sort(
+        key=lambda row: (
+            kind_priority.get(str(row.get("structural_anchor_kind") or ""), 0),
+            float(row.get("similarity") or 0.0),
+            str(row.get("text") or ""),
+        ),
+        reverse=True,
+    )
+    return recovered
+
+
+def _prioritize_recovered_assistant_list_rows(
+    query: str,
+    rows: List[Dict[str, Any]],
+    *,
+    gate_eval: Optional[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    if not rows or not _is_assistant_suggestion_list_query(query, gate_eval):
+        return rows
+
+    kind_priority = {
+        "assistant_option_bullet_anchor": 3,
+        "assistant_callback_anchor": 2,
+        "assistant_plan_anchor": 1,
+    }
+    indexed: List[Tuple[Tuple[int, int, float, float, int], Dict[str, Any]]] = []
+    for index, row in enumerate(rows):
+        recovered = 1 if row.get("_assistant_list_recovery") else 0
+        kind = kind_priority.get(str(row.get("structural_anchor_kind") or ""), 0)
+        source_type = 1 if str(row.get("source_type") or "").strip().lower() == "assistant" else 0
+        similarity = float(row.get("similarity") or 0.0)
+        indexed.append(((recovered, kind, source_type, similarity, -index), row))
+    indexed.sort(key=lambda item: item[0], reverse=True)
+    return [row for _, row in indexed]
+
+
 def _compute_query_fit_multiplier(
     query: str,
     node: Node,
@@ -11179,6 +11385,8 @@ def recall_fast(
             max_drill_queries = 3 if preserved_exact_fast_path else 2
             drill_queries = drill_queries[:max_drill_queries]
             drill_limit = min(effective_limit, 5)
+            if _is_assistant_suggestion_list_query(query, gate_eval):
+                drill_limit = max(drill_limit, min(120, max(40, effective_limit * 5)))
             fast_drill_meta = dict(drill_meta or {})
             fast_drill_meta.setdefault("planned_stores", list(planned_stores))
             fast_drill_meta.setdefault("planned_project", planned_project)
@@ -11287,8 +11495,24 @@ def recall_fast(
                     meta=meta,
                 )
                 return (rows, meta) if return_meta else rows
+            assistant_list_rows = _recover_assistant_suggestion_cluster_rows(
+                query,
+                gate_eval=gate_eval,
+                owner_id=owner_id,
+                limit=drill_limit,
+            )
+            if assistant_list_rows:
+                drill_rows = _merge_recall_batches(
+                    [drill_rows, assistant_list_rows],
+                    limit=max(drill_limit * 3, effective_limit * 2),
+                )
             rows = _merge_recall_batches([rows, drill_rows], limit=max(effective_limit, drill_limit * 2))
-            rows = _prioritize_fast_anchor_direct_rows(query, rows)[:effective_limit]
+            rows = _prioritize_fast_anchor_direct_rows(query, rows)
+            rows = _prioritize_recovered_assistant_list_rows(
+                query,
+                rows,
+                gate_eval=gate_eval,
+            )[:effective_limit]
             if drill_docs_bundle:
                 docs_bundle = _merge_docs_bundles(docs_bundle, drill_docs_bundle)
             meta.setdefault("turn_details", [])
@@ -12938,6 +13162,7 @@ def store(
     actor_id: Optional[str] = None,  # canonical actor entity id
     subject_entity_id: Optional[str] = None,  # canonical subject entity id
     subject_entity_name: Optional[str] = None,  # exact named entity this fact is about
+    structural_anchor_kind: Optional[str] = None,  # exact-anchor preservation marker
     created_at: Optional[str] = None,  # Override created_at timestamp (ISO format)
     accessed_at: Optional[str] = None,  # Override accessed_at timestamp (ISO format)
     _conn: Optional[sqlite3.Connection] = None,
@@ -13030,6 +13255,8 @@ def store(
         source_conversation_id = conversation_id
     if subject_entity_name is not None:
         subject_entity_name = " ".join(str(subject_entity_name).split()).strip() or None
+    if structural_anchor_kind is not None:
+        structural_anchor_kind = str(structural_anchor_kind).strip().lower() or None
     
     # Map category to type
     type_map = {
@@ -13106,6 +13333,7 @@ def store(
             or actor_id
             or subject_entity_id
             or subject_entity_name
+            or structural_anchor_kind
         ):
             return
         attrs = existing.attributes if isinstance(existing.attributes, dict) else (existing.attributes or {})
@@ -13175,6 +13403,8 @@ def store(
             attrs["subject_entity_id"] = resolved_subject_id
         if subject_entity_name and not attrs.get("subject_entity_name"):
             attrs["subject_entity_name"] = subject_entity_name
+        if structural_anchor_kind and not attrs.get("structural_anchor_kind"):
+            attrs["structural_anchor_kind"] = structural_anchor_kind
         if speaker_entity_id and not existing.speaker_entity_id:
             existing.speaker_entity_id = speaker_entity_id
         if conversation_id and not existing.conversation_id:
@@ -13592,6 +13822,7 @@ def store(
         or actor_id
         or subject_entity_id
         or subject_entity_name
+        or structural_anchor_kind
     ):
         attrs = json.loads(node.attributes) if isinstance(node.attributes, str) else (node.attributes or {})
         if source_type:
@@ -13626,6 +13857,8 @@ def store(
             attrs["subject_entity_id"] = subject_entity_id
         if subject_entity_name:
             attrs["subject_entity_name"] = subject_entity_name
+        if structural_anchor_kind:
+            attrs["structural_anchor_kind"] = structural_anchor_kind
         node.attributes = attrs
 
     injection_match = None

@@ -3246,6 +3246,98 @@ class TestRecallTelemetry:
 
         assert queries == ["assistant biscuit memory"]
 
+    def test_recover_assistant_suggestion_cluster_rows_lifts_structural_siblings(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+        from datastore.memorydb.memory_graph import store
+
+        graph, _ = _make_graph(tmp_path)
+        cluster_ts = "2026-03-24T23:59:59"
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+            store(
+                "Local Foods — more casual but great for dietary flexibility",
+                owner_id="maya",
+                session_id="benchmark-quaid-s08",
+                created_at=cluster_ts,
+                source_type="assistant",
+                structural_anchor_kind="assistant_option_bullet_anchor",
+                skip_dedup=True,
+            )
+            store(
+                "Uchi Houston — Japanese, universally dietary-friendly but",
+                owner_id="maya",
+                session_id="benchmark-quaid-s08",
+                created_at=cluster_ts,
+                source_type="assistant",
+                structural_anchor_kind="assistant_option_bullet_anchor",
+                skip_dedup=True,
+            )
+            store(
+                "I'd look at places like Weights + Measures, or Feges BBQ for something more casual with great smoked fish options. Both in the Montrose/Heights area",
+                owner_id="maya",
+                session_id="benchmark-quaid-s08",
+                created_at=cluster_ts,
+                source_type="assistant",
+                structural_anchor_kind="assistant_callback_anchor",
+                skip_dedup=True,
+            )
+            store(
+                "Montrose is actually perfect for this — it's one of the best food neighborhoods in Houston. Tons of variety. I can think of a few directions:",
+                owner_id="maya",
+                session_id="benchmark-quaid-s08",
+                created_at=cluster_ts,
+                source_type="assistant",
+                structural_anchor_kind="assistant_plan_anchor",
+                skip_dedup=True,
+            )
+
+            local = graph.find_node_by_name("Local Foods — more casual but great for dietary flexibility", type="Fact")
+            uchi = graph.find_node_by_name("Uchi Houston — Japanese, universally dietary-friendly but", type="Fact")
+            weights = graph.find_node_by_name(
+                "I'd look at places like Weights + Measures, or Feges BBQ for something more casual with great smoked fish options. Both in the Montrose/Heights area",
+                type="Fact",
+            )
+            plan = graph.find_node_by_name(
+                "Montrose is actually perfect for this — it's one of the best food neighborhoods in Houston. Tons of variety. I can think of a few directions:",
+                type="Fact",
+            )
+
+            with patch.object(
+                graph,
+                "search_hybrid",
+                return_value=[
+                    (weights, 0.625),
+                    (plan, 0.624),
+                    (local, 0.563),
+                    (uchi, 0.562),
+                ],
+            ):
+                rows = mg._recover_assistant_suggestion_cluster_rows(
+                    "What restaurants did the AI suggest for Linda's birthday dinner?",
+                    gate_eval={
+                        "requirements": ["assistant_source", "enumeration"],
+                    },
+                    owner_id="maya",
+                    limit=40,
+                )
+
+        assert [row["text"] for row in rows[:4]] == [
+            "Local Foods — more casual but great for dietary flexibility",
+            "Uchi Houston — Japanese, universally dietary-friendly but",
+            "I'd look at places like Weights + Measures, or Feges BBQ for something more casual with great smoked fish options. Both in the Montrose/Heights area",
+            "Montrose is actually perfect for this — it's one of the best food neighborhoods in Houston. Tons of variety. I can think of a few directions:",
+        ]
+        assert all(row.get("_assistant_list_recovery") is True for row in rows)
+        assert all(
+            row.get("structural_anchor_kind") in {
+                "assistant_option_bullet_anchor",
+                "assistant_callback_anchor",
+                "assistant_plan_anchor",
+            }
+            for row in rows
+        )
+
     def test_priority_anchor_terms_for_fast_attribution_prefers_structural_anchor(self):
         import datastore.memorydb.memory_graph as mg
 
@@ -3464,6 +3556,119 @@ class TestRecallTelemetry:
         assert meta["quality_gate"]["fast_drill_enabled"] is True
         assert "maya facetime birthday idea" in meta["quality_gate"]["fast_drill_queries"]
         assert "assistant facetime idea" in meta["quality_gate"]["fast_drill_queries"]
+
+    def test_recall_fast_recovers_assistant_suggestion_cluster_rows(self):
+        import datastore.memorydb.memory_graph as mg
+
+        run_calls = []
+
+        def _fake_run(query, *, stores, limit, owner_id, min_similarity, planner_profile, planned_queries, planner_meta, fast_mode, graph_depth, common_kwargs):
+            run_calls.append({
+                "planner_profile": planner_profile,
+                "planned_queries": list(planned_queries or []),
+                "limit": limit,
+            })
+            if len(run_calls) == 1:
+                return (
+                    [
+                        {"id": "a", "text": "Maya and David took Linda to a surprise birthday dinner at Riel in Montrose", "category": "fact", "similarity": 1.0, "source_type": "user"},
+                        {"id": "b", "text": "Oh I was wondering about that! The surprise dinner David was planning — that was back when we were talking about restaurants in Montrose that would work for Linda's dietary needs", "category": "fact", "similarity": 1.0, "source_type": "assistant"},
+                    ],
+                    {"phases_ms": {"total_ms": 120, "store_plan_wall_ms": 120}, "turn_details": [{"turn": 1}]},
+                    None,
+                )
+            return (
+                [
+                    {"id": "b", "text": "Oh I was wondering about that! The surprise dinner David was planning — that was back when we were talking about restaurants in Montrose that would work for Linda's dietary needs", "category": "fact", "similarity": 1.0, "source_type": "assistant"},
+                ],
+                {"phases_ms": {"total_ms": 90, "store_plan_wall_ms": 90}, "store_runs": [{"store": "vector", "result_count": 1}]},
+                None,
+            )
+
+        recovered_rows = [
+            {
+                "id": "c",
+                "text": "Local Foods — more casual but great for dietary flexibility",
+                "category": "fact",
+                "similarity": 0.95,
+                "source_type": "assistant",
+                "structural_anchor_kind": "assistant_option_bullet_anchor",
+                "_assistant_list_recovery": True,
+            },
+            {
+                "id": "d",
+                "text": "Uchi Houston — Japanese, universally dietary-friendly but",
+                "category": "fact",
+                "similarity": 0.94,
+                "source_type": "assistant",
+                "structural_anchor_kind": "assistant_option_bullet_anchor",
+                "_assistant_list_recovery": True,
+            },
+        ]
+
+        gate_eval = {
+            "requirements": ["assistant_source", "temporal", "enumeration"],
+            "coverage": {"assistant_source": 2, "temporal": 2, "enumeration": 1},
+            "query_terms": ["restaurants", "suggest", "linda", "birthday", "dinner"],
+            "ready": True,
+            "needs_validation": True,
+            "overlap_ratio": 0.6,
+        }
+
+        with patch.object(
+            mg,
+            "_recall_store_plan_timeout_s",
+            return_value=5.0,
+        ), patch.object(
+            mg,
+            "_plan_fanout_queries",
+            return_value=(
+                ["What restaurants did the AI suggest for Linda's birthday dinner?"],
+                {
+                    "query": "What restaurants did the AI suggest for Linda's birthday dinner?",
+                    "used_llm": False,
+                    "bailout_reason": "preserve_short_exact_query",
+                    "queries_count": 1,
+                    "elapsed_ms": 100,
+                    "query_shape": "focused",
+                    "planned_stores": ["vector"],
+                    "planned_project": None,
+                },
+            ),
+        ), patch.object(
+            mg,
+            "_run_recall_store_plan",
+            side_effect=_fake_run,
+        ), patch.object(
+            mg,
+            "_should_fast_drill_follow_up",
+            return_value=(
+                True,
+                gate_eval,
+                ["needs_validation", "preserved_exact_low_overlap"],
+                "GENERAL",
+            ),
+        ), patch.object(
+            mg,
+            "_evaluate_quality_gate_readiness",
+            return_value=gate_eval,
+        ), patch.object(
+            mg,
+            "_recover_assistant_suggestion_cluster_rows",
+            return_value=recovered_rows,
+        ):
+            rows, meta = mg.recall_fast(
+                "What restaurants did the AI suggest for Linda's birthday dinner?",
+                owner_id="maya",
+                return_meta=True,
+            )
+
+        assert len(run_calls) == 2
+        assert run_calls[1]["planner_profile"] == "off"
+        assert run_calls[1]["limit"] >= 40
+        assert rows[0]["text"] == "Local Foods — more casual but great for dietary flexibility"
+        assert rows[1]["text"] == "Uchi Houston — Japanese, universally dietary-friendly but"
+        assert meta["quality_gate"]["fast_drill_enabled"] is True
 
     def test_recall_fast_skips_drill_when_injection_budget_is_exhausted(self):
         import datastore.memorydb.memory_graph as mg
