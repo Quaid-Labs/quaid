@@ -151,7 +151,7 @@ class TestDocsBundleScopeHints:
                 "scope_hint": {
                     "type": "unlinked_project_candidates",
                     "candidates": [
-                        {"project": "cross-live-test", "score": 0.87},
+                        {"project": "cross-live-test", "score": 0.87, "path": "/tmp/projects/cross-live-test"},
                         {"project": "quaid-live-cli", "score": 0.79},
                     ],
                 }
@@ -163,5 +163,6 @@ class TestDocsBundleScopeHints:
         assert len(rows) == 1
         assert rows[0]["category"] == "docs_scope_hint"
         assert "cross-live-test" in rows[0]["text"]
+        assert "/tmp/projects/cross-live-test" in rows[0]["text"]
         assert "without linking" in rows[0]["text"]
         assert "Link only" in rows[0]["text"]

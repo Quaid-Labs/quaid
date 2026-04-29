@@ -645,9 +645,11 @@ def _project_catalog_section(
     lines = [
         f"--- {project_name}/project-catalog ---",
         f"project: {project_name}",
+        f"project_path: {project_dir}",
         f"active_project: {'true' if active else 'false'}",
         "context_policy: compact catalog only; detailed project docs are current source-state hints, not default answer authority.",
         f"details_recall: quaid recall \"<query>\" '{{\"stores\":[\"docs\"],\"project\":\"{project_name}\"}}'",
+        "read_only_lookup: for one-fact or read-only questions, run details_recall first; if it returns weak, index-only, or no hits, read the listed file path directly without linking.",
     ]
     for doc_file in doc_files:
         path = project_dir / doc_file
@@ -659,6 +661,22 @@ def _project_catalog_section(
         suffix = f"; summary: {summary}" if summary else ""
         lines.append(f"- {doc_file}: {size} bytes{suffix}")
     return "\n".join(lines)
+
+
+def _project_catalog_doc_files(project_dir: Path) -> List[str]:
+    """Return bounded project files useful for read-only lookup fallback."""
+    preferred = ["TOOLS.md", "AGENTS.md", "PROJECT.md", "README.md"]
+    out: List[str] = [name for name in preferred if (project_dir / name).is_file()]
+    docs_dir = project_dir / "docs"
+    if docs_dir.is_dir():
+        try:
+            for path in sorted(docs_dir.glob("*.md"))[:20]:
+                rel = path.relative_to(project_dir).as_posix()
+                if rel not in out:
+                    out.append(rel)
+        except OSError:
+            pass
+    return out
 
 
 def _iter_project_context_dirs(projects_dir: Path) -> List[tuple[str, Path, Dict[str, Any]]]:
@@ -705,11 +723,11 @@ def _iter_project_context_dirs(projects_dir: Path) -> List[tuple[str, Path, Dict
 def _collect_project_doc_context_sections(projects_dir: Path, *, hook_cwd: str = "") -> List[str]:
     sections: List[str] = []
     for project_name, project_dir, registry_entry in _iter_project_context_dirs(projects_dir):
-        existing_docs = [doc for doc in ("TOOLS.md", "AGENTS.md") if (project_dir / doc).is_file()]
-        if not existing_docs:
+        catalog_docs = _project_catalog_doc_files(project_dir)
+        if not catalog_docs:
             continue
         if _should_inject_full_project_context(project_name):
-            for doc_file in existing_docs:
+            for doc_file in [doc for doc in ("TOOLS.md", "AGENTS.md") if (project_dir / doc).is_file()]:
                 fpath = project_dir / doc_file
                 content = _strip_tools_domain_block(doc_file, fpath.read_text(encoding="utf-8").strip())
                 if content:
@@ -720,7 +738,7 @@ def _collect_project_doc_context_sections(projects_dir: Path, *, hook_cwd: str =
                     project_name,
                     project_dir,
                     registry_entry,
-                    existing_docs,
+                    catalog_docs,
                     hook_cwd=hook_cwd,
                 )
             )

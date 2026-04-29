@@ -1822,10 +1822,13 @@ class TestHookSessionInitRegistryAugmentation:
         """Projects living under projects_dir show up in quaid-projects.md."""
         projects_dir, identity_dir, rules_dir = self._make_init_env(tmp_path, monkeypatch)
 
-        # Create a project with TOOLS.md
+        # Create a project with tool docs and read-only lookup docs.
         proj = projects_dir / "myproject"
         proj.mkdir()
+        (proj / "docs").mkdir()
         (proj / "TOOLS.md").write_text("# Tools\nsome tool docs", encoding="utf-8")
+        (proj / "PROJECT.md").write_text("# Project\nproject index", encoding="utf-8")
+        (proj / "docs" / "ember-glass.md").write_text("# Ember Glass\nlevel two cipher", encoding="utf-8")
 
         # No registry extras
         with patch("core.project_registry.list_projects", return_value={}):
@@ -1837,8 +1840,13 @@ class TestHookSessionInitRegistryAugmentation:
 
         assert content is not None, "quaid-projects.md should have been written"
         assert "myproject/project-catalog" in content
+        assert f"project_path: {proj}" in content
         assert "details_recall: quaid recall" in content
+        assert "read_only_lookup:" in content
         assert "some tool docs" in content
+        assert "- PROJECT.md:" in content
+        assert "- docs/ember-glass.md:" in content
+        assert "summary: level two cipher" in content
         assert "--- myproject/TOOLS.md ---" not in content
 
     def test_registry_project_outside_projects_dir_included(self, tmp_path, monkeypatch):
@@ -1941,7 +1949,7 @@ class TestHookSessionInitRegistryAugmentation:
             "active graph relation types: neighbor_of, parent_of",
             "runtime note: Preinject does not cover graph structure or edge traversal. If a query depends on these relations, use graph recall explicitly.",
             "linked projects: quaid (/tmp/quaid); misc--cc-test (/tmp/misc)",
-            "runtime note: Preinject does not cover project or docs detail. MANDATORY ORDER: For project document questions, run docs recall before filesystem grep/cat (for example: quaid recall \"<query>\" '{\"stores\":[\"docs\"],\"project\":\"<project-name>\"}'). Only use filesystem reads if docs recall returns no relevant hits.",
+            "runtime note: Preinject does not cover project or docs detail. MANDATORY ORDER: For project document questions, run docs recall before filesystem grep/cat (for example: quaid recall \"<query>\" '{\"stores\":[\"docs\"],\"project\":\"<project-name>\"}'). Use filesystem reads only when docs recall returns no relevant hits, weak hits, or only index/catalog rows; for read-only one-fact lookups, read the catalog-listed file directly without linking.",
         ])
 
         with patch("core.runtime.system_context.build_system_context_block", return_value=runtime_block), \
@@ -1959,6 +1967,7 @@ class TestHookSessionInitRegistryAugmentation:
         assert "active graph relation types: neighbor_of, parent_of" in content
         assert "linked projects: quaid (/tmp/quaid); misc--cc-test (/tmp/misc)" in content
         assert "run docs recall before filesystem grep/cat" in content
+        assert "catalog-listed file directly without linking" in content
         assert "before domains" in content
         assert "after domains" in content
         assert "AUTO-GENERATED:DOMAIN-LIST" not in content

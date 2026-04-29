@@ -4899,11 +4899,20 @@ def _docs_bundle_to_rows(bundle: Optional[Dict[str, Any]], limit: int) -> List[D
                     if isinstance(item, dict) and str(item.get("project") or "").strip()
                 ]
                 if names:
+                    rendered_names = []
+                    for item in candidates:
+                        if not isinstance(item, dict):
+                            continue
+                        project = str(item.get("project") or "").strip()
+                        if not project:
+                            continue
+                        path = str(item.get("path") or "").strip()
+                        rendered_names.append(f"{project} ({path})" if path else project)
                     out.append(
                         {
                             "text": (
                                 "[docs] scoped miss: likely matches may exist in unlinked project(s): "
-                                f"{', '.join(names)}. For read-only lookups or one-fact questions, "
+                                f"{', '.join(rendered_names or names)}. For read-only lookups or one-fact questions, "
                                 "answer from scoped recall or direct file read without linking. "
                                 "Link only when the user explicitly asks to link the project or requests "
                                 "durable work such as edits, API/tool use, or starting development."
@@ -5833,9 +5842,18 @@ def _print_docs_bundle(bundle: Dict[str, Any]) -> None:
                 if isinstance(item, dict) and str(item.get("project") or "").strip()
             ]
         if names:
+            rendered_names = []
+            for item in candidates:
+                if not isinstance(item, dict):
+                    continue
+                project = str(item.get("project") or "").strip()
+                if not project:
+                    continue
+                path = str(item.get("path") or "").strip()
+                rendered_names.append(f"{project} ({path})" if path else project)
             print("\n=== Documentation Scope Hint ===")
             print("No docs hits were found inside linked projects.")
-            print(f"Likely unlinked project candidates: {', '.join(names)}")
+            print(f"Likely unlinked project candidates: {', '.join(rendered_names or names)}")
             print(
                 "For read-only lookups or one-fact questions, answer from scoped recall or direct file read "
                 "without linking. Link only when the user explicitly asks to link the project or requests "

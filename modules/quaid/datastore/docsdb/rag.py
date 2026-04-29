@@ -1994,22 +1994,22 @@ class DocsRAG:
         limit: int = 3,
     ) -> List[Dict[str, Any]]:
         linked_set = {str(name or "").strip() for name in list(linked_projects or []) if str(name or "").strip()}
-        all_projects: List[str] = []
+        registry_entries: Dict[str, Dict[str, Any]] = {}
         try:
             from lib.project_registry import list_all as _list_projects
 
-            all_projects = [
-                str(name or "").strip()
-                for name in (_list_projects() or {}).keys()
-                if str(name or "").strip()
-            ]
+            registry_entries = {
+                str(name or "").strip(): entry
+                for name, entry in (_list_projects() or {}).items()
+                if str(name or "").strip() and isinstance(entry, dict)
+            }
         except Exception:
             # Keep scope-hint behavior available even when registry metadata is
             # unavailable; inferred source-project labels can still surface likely
             # unlinked candidates for a scoped miss.
-            all_projects = []
+            registry_entries = {}
 
-        candidate_projects = [name for name in all_projects if name not in linked_set]
+        candidate_projects = [name for name in registry_entries.keys() if name not in linked_set]
         query_lower = str(query or "").lower()
         name_matches: set[str] = set()
         for name in candidate_projects:
@@ -2097,12 +2097,20 @@ class DocsRAG:
             matched = project_name in name_matches
             if score < min_score and not matched:
                 continue
+            entry = registry_entries.get(project_name, {}) or {}
+            project_path = str(
+                entry.get("canonical_path")
+                or entry.get("source_root")
+                or entry.get("home_dir")
+                or ""
+            ).strip()
             out.append(
                 {
                     "project": project_name,
                     "score": round(float(score), 3),
                     "matched_query_name": bool(matched),
                     "match_count": int(counts.get(project_name, 0)),
+                    "path": project_path,
                 }
             )
 
@@ -2155,8 +2163,8 @@ class DocsRAG:
                 "No docs matched inside currently linked projects. "
                 "Likely unlinked project candidates were found. "
                 "For read-only lookups or one-fact questions, answer from scoped recall or direct file read "
-                "without linking. Link only when the user explicitly asks to link the project or requests "
-                "durable work such as edits, API/tool use, or starting development."
+                "without linking; candidate paths are included when known. Link only when the user explicitly asks "
+                "to link the project or requests durable work such as edits, API/tool use, or starting development."
             ),
             "requested_project": str(requested_project or "").strip() or None,
             "linked_projects": sorted(

@@ -1500,7 +1500,10 @@ class TestDocsSearchFiltering:
                  "lib.project_registry.list_all",
                  return_value={
                      "quaid": {"instances": ["cc-main"]},
-                     "cross-live-test": {"instances": []},
+                     "cross-live-test": {
+                         "canonical_path": "/tmp/workspace/projects/cross-live-test",
+                         "instances": [],
+                     },
                  },
              ), \
              patch.object(
@@ -1515,6 +1518,7 @@ class TestDocsSearchFiltering:
         hint = ((bundle.get("telemetry") or {}).get("scope_hint") or {})
         assert hint.get("type") == "unlinked_project_candidates"
         assert [c["project"] for c in hint.get("candidates", [])] == ["cross-live-test"]
+        assert hint["candidates"][0]["path"] == "/tmp/workspace/projects/cross-live-test"
 
     def test_linked_project_scope_fails_closed_when_reconcile_fails(self, tmp_path):
         from datastore.docsdb import rag as rag_module
@@ -1678,7 +1682,10 @@ class TestDocsSearchFiltering:
                  "lib.project_registry.list_all",
                  return_value={
                      "quaid": {"instances": ["cc-main"]},
-                     "cross-live-test": {"instances": []},
+                     "cross-live-test": {
+                         "canonical_path": "/tmp/workspace/projects/cross-live-test",
+                         "instances": [],
+                     },
                  },
              ), \
              patch.object(rag, "_get_project_paths", side_effect=_project_paths), \
@@ -1690,6 +1697,7 @@ class TestDocsSearchFiltering:
         assert hint.get("type") == "unlinked_project_candidates"
         assert hint.get("requested_project") == "cross-live-test"
         assert [c["project"] for c in hint.get("candidates", [])] == ["cross-live-test"]
+        assert hint["candidates"][0]["path"] == "/tmp/workspace/projects/cross-live-test"
 
     @patch("datastore.docsdb.rag._lib_get_embedding", return_value=[0.1, 0.2, 0.3])
     @patch("datastore.docsdb.rag.is_fail_hard_enabled", return_value=True)

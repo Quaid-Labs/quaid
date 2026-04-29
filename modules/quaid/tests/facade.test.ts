@@ -132,7 +132,7 @@ describe("QuaidFacade", () => {
           "active graph relation types: neighbor_of, parent_of",
           "runtime note: Preinject does not cover graph structure or edge traversal. If a query depends on these relations, use graph recall explicitly.",
           "linked projects: quaid (/tmp/workspace/projects/quaid); misc--instance-a (/tmp/workspace/projects/misc--instance-a)",
-          "runtime note: Preinject does not cover project or docs detail. MANDATORY ORDER: For project document questions, run docs recall before filesystem grep/cat (for example: quaid recall \"<query>\" '{\"stores\":[\"docs\"],\"project\":\"<project-name>\"}'). Only use filesystem reads if docs recall returns no relevant hits.",
+          "runtime note: Preinject does not cover project or docs detail. MANDATORY ORDER: For project document questions, run docs recall before filesystem grep/cat (for example: quaid recall \"<query>\" '{\"stores\":[\"docs\"],\"project\":\"<project-name>\"}'). Use filesystem reads only when docs recall returns no relevant hits, weak hits, or only index/catalog rows; for read-only one-fact lookups, read the catalog-listed file directly without linking.",
         ].join("\n");
       }
       return "{}";
@@ -157,6 +157,7 @@ describe("QuaidFacade", () => {
     expect(out).toContain("active graph relation types: neighbor_of, parent_of");
     expect(out).toContain("linked projects: quaid (/tmp/workspace/projects/quaid); misc--instance-a (/tmp/workspace/projects/misc--instance-a)");
     expect(out).toContain("run docs recall before filesystem grep/cat");
+    expect(out).toContain("catalog-listed file directly without linking");
     expect(out).toContain("--- quaid/TOOLS.md ---");
     expect(out).toContain("before domains");
     expect(out).toContain("after domains");
@@ -170,8 +171,11 @@ describe("QuaidFacade", () => {
     const workspace = await mkdtemp(path.join(tmpdir(), "quaid-facade-project-catalog-"));
     const projectDir = path.join(workspace, "projects", "recipe-app");
     await mkdir(projectDir, { recursive: true });
+    await mkdir(path.join(projectDir, "docs"), { recursive: true });
     await writeFile(path.join(projectDir, "TOOLS.md"), "# Tools\nRun npm test\nSECRET FULL TOOL BODY", "utf8");
     await writeFile(path.join(projectDir, "AGENTS.md"), "# Agents\nUse app docs\nSECRET FULL AGENT BODY", "utf8");
+    await writeFile(path.join(projectDir, "PROJECT.md"), "# Project\nRecipe app index", "utf8");
+    await writeFile(path.join(projectDir, "docs", "ember-glass.md"), "# Ember Glass\nLevel two cipher", "utf8");
 
     const facade = createQuaidFacade(makeMockDeps({
       workspace,
@@ -180,10 +184,15 @@ describe("QuaidFacade", () => {
 
     const out = await facade.injectProjectContext(undefined, { cwd: projectDir });
     expect(out).toContain("--- recipe-app/project-catalog ---");
+    expect(out).toContain(`project_path: ${projectDir}`);
     expect(out).toContain("active_project: true");
     expect(out).toContain("details_recall: quaid recall");
+    expect(out).toContain("read_only_lookup:");
     expect(out).toContain("- TOOLS.md:");
+    expect(out).toContain("- PROJECT.md:");
+    expect(out).toContain("- docs/ember-glass.md:");
     expect(out).toContain("summary: Run npm test");
+    expect(out).toContain("summary: Level two cipher");
     expect(out).not.toContain("--- recipe-app/TOOLS.md ---");
     expect(out).not.toContain("SECRET FULL TOOL BODY");
     expect(out).not.toContain("SECRET FULL AGENT BODY");

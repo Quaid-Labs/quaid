@@ -2932,9 +2932,11 @@ ${header}${journalContent}` : `${header}${journalContent}`;
     const lines = [
       `--- ${projectName}/project-catalog ---`,
       `project: ${projectName}`,
+      `project_path: ${projectDir}`,
       `active_project: ${_pathContains(projectDir, cwd) ? "true" : "false"}`,
       "context_policy: compact catalog only; detailed project docs are current source-state hints, not default answer authority.",
-      `details_recall: quaid recall "<query>" '{"stores":["docs"],"project":"${projectName}"}'`
+      `details_recall: quaid recall "<query>" '{"stores":["docs"],"project":"${projectName}"}'`,
+      "read_only_lookup: for one-fact or read-only questions, run details_recall first; if it returns weak, index-only, or no hits, read the listed file path directly without linking."
     ];
     for (const docFile of docFiles) {
       const filePath = path.join(projectDir, docFile);
@@ -2948,6 +2950,24 @@ ${header}${journalContent}` : `${header}${journalContent}`;
       lines.push(`- ${docFile}: ${size} bytes${summary ? `; summary: ${summary}` : ""}`);
     }
     return lines.join("\n");
+  }
+  function _projectCatalogDocFiles(projectDir) {
+    const preferred = ["TOOLS.md", "AGENTS.md", "PROJECT.md", "README.md"];
+    const out = preferred.filter((docFile) => fs.existsSync(path.join(projectDir, docFile)));
+    const docsDir = path.join(projectDir, "docs");
+    try {
+      if (fs.existsSync(docsDir) && fs.statSync(docsDir).isDirectory()) {
+        for (const name of fs.readdirSync(docsDir).sort().slice(0, 20)) {
+          if (!name.endsWith(".md")) continue;
+          const rel = path.join("docs", name);
+          if (!out.includes(rel) && fs.existsSync(path.join(projectDir, rel))) {
+            out.push(rel);
+          }
+        }
+      }
+    } catch {
+    }
+    return out;
   }
   async function _buildRuntimeContextBlock() {
     try {
@@ -3009,10 +3029,10 @@ ${content}`);
         }
         for (const projectName of subdirs) {
           const projectDir = path.join(projectsDir, projectName);
-          const existingDocs = ["TOOLS.md", "AGENTS.md"].filter((docFile) => fs.existsSync(path.join(projectDir, docFile)));
-          if (existingDocs.length === 0) continue;
+          const catalogDocs = _projectCatalogDocFiles(projectDir);
+          if (catalogDocs.length === 0) continue;
           if (_shouldInjectFullProjectContext(projectName)) {
-            for (const docFile of existingDocs) {
+            for (const docFile of ["TOOLS.md", "AGENTS.md"].filter((item) => catalogDocs.includes(item))) {
               const filePath = path.join(projectDir, docFile);
               try {
                 const content = _stripInjectedToolsDomainBlock(docFile, fs.readFileSync(filePath, "utf8").trim());
@@ -3022,7 +3042,7 @@ ${content}`);
               }
             }
           } else {
-            sections.push(_projectCatalogSection(projectName, projectDir, existingDocs, options.cwd));
+            sections.push(_projectCatalogSection(projectName, projectDir, catalogDocs, options.cwd));
           }
         }
       }
