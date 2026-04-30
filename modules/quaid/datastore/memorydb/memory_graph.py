@@ -590,6 +590,11 @@ class MemoryGraph:
         configured_dim = _get_configured_embedding_dim()
 
         with self._get_conn() as conn:
+            nodes_table_exists = bool(
+                conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='nodes'"
+                ).fetchone()
+            )
             # Check if vec_nodes already exists and at what dimension.
             table_exists = False
             try:
@@ -624,10 +629,11 @@ class MemoryGraph:
                     conn.execute("DROP TABLE vec_nodes")
                     # Null out all embeddings that were stored at the wrong dimension
                     # so they will be re-embedded on the next janitor embeddings run.
-                    conn.execute(
-                        "UPDATE nodes SET embedding = NULL WHERE length(embedding) / 4 = ?",
-                        (existing_dim,),
-                    )
+                    if nodes_table_exists:
+                        conn.execute(
+                            "UPDATE nodes SET embedding = NULL WHERE length(embedding) / 4 = ?",
+                            (existing_dim,),
+                        )
                     table_exists = False
 
             if not table_exists:
@@ -640,6 +646,9 @@ class MemoryGraph:
                     f"node_id TEXT PRIMARY KEY, "
                     f"embedding float[{configured_dim}] distance_metric=cosine)"
                 )
+
+            if not nodes_table_exists:
+                return
 
             # Backfill: insert any nodes with embeddings not yet in vec_nodes
             missing = conn.execute("""
@@ -7612,6 +7621,9 @@ def _recall_once(
         anchor_rows=anchor_rows,
         expansion_limit_per_anchor=expansion_limit_per_anchor,
     )
+    if include_lexical_anchor_shaping:
+        final_output = _prioritize_fast_anchor_direct_rows(query, final_output)
+    final_output = _prioritize_named_entity_activity_anchor_rows(query, final_output)
     _phase_ms["filtering_ms"] = round((_time.monotonic() - _phase_t0) * 1000)
 
     # Update access stats for returned results (feeds into Ebbinghaus decay)
@@ -8047,6 +8059,72 @@ def _prioritize_fast_anchor_direct_rows(query: str, rows: List[Dict[str, Any]]) 
     ]
 
 
+def _prioritize_deliberate_fresh_direct_anchor_rows(query: str, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Use recency as a tiebreaker for broad same-anchor deliberate recall rows."""
+    if not rows:
+        return rows
+    anchor_terms = _extract_explicit_query_anchor_terms(query, limit=8)
+    if not anchor_terms:
+        return rows
+    query_terms = _extract_distinctive_query_terms(query, limit=8)
+    if not query_terms:
+        return rows
+
+    def _row_text(row: Dict[str, Any]) -> str:
+        return str((row or {}).get("text") or "")
+
+    def _row_matches_anchor(row: Dict[str, Any]) -> bool:
+        lower_text = _row_text(row).lower()
+        return any(term in lower_text for term in anchor_terms)
+
+    def _row_created_sort_key(row: Dict[str, Any]) -> str:
+        for key in ("created_at", "source_date", "valid_from"):
+            raw = str((row or {}).get(key) or "").strip()
+            if raw:
+                return raw
+        return ""
+
+    def _is_direct_memory_row(row: Dict[str, Any]) -> bool:
+        if str((row or {}).get("category") or "").strip().lower() == "docs":
+            return False
+        if (row or {}).get("via_relation") or (row or {}).get("graph_path"):
+            return False
+        return bool(str((row or {}).get("id") or "").strip())
+
+    direct_anchor_rows = [
+        row
+        for row in rows
+        if isinstance(row, dict) and _is_direct_memory_row(row) and _row_matches_anchor(row)
+    ]
+    if len(direct_anchor_rows) < 2:
+        return rows
+
+    overlap_by_id = {
+        str(row.get("id")): _query_term_overlap({"text": _row_text(row)}, query_terms)
+        for row in direct_anchor_rows
+    }
+    max_overlap = max(overlap_by_id.values(), default=0)
+    priority_rows = [
+        row for row in direct_anchor_rows
+        if overlap_by_id.get(str(row.get("id")), 0) == max_overlap
+    ]
+    if len(priority_rows) < 2:
+        return rows
+
+    priority_rows.sort(
+        key=lambda row: (
+            _row_created_sort_key(row),
+            float(row.get("similarity", 0.0) or 0.0),
+        ),
+        reverse=True,
+    )
+    priority_keys = {_recall_row_identity(row) for row in priority_rows}
+    return priority_rows + [
+        row for row in rows
+        if _recall_row_identity(row) not in priority_keys
+    ]
+
+
 _NAMED_ENTITY_ACTIVITY_QUERY_RE = re.compile(r"\bwhat\s+do(?:es)?\b")
 
 
@@ -8073,6 +8151,9 @@ def _prioritize_named_entity_activity_anchor_rows(query: str, rows: List[Dict[st
             return True
         graph_path = str((row or {}).get("graph_path") or "").strip().lower()
         return any(graph_path.startswith(f"{term} --has_fact-->") for term in anchor_terms)
+
+    if not any(_is_direct_anchor_attached_fact(row) for row in rows):
+        return rows
 
     return sorted(
         rows,
@@ -12341,9 +12422,13 @@ def recall(
             **branch_common_kwargs,
         ))
 
+    turn1_max_workers = min(len(search_callables), 5)
+    if planned_queries is not None and not use_routing:
+        turn1_max_workers = 1
+
     t1_batches, search_wall_ms = _run_recall_branch_callables(
         search_callables,
-        max_workers=min(len(search_callables), 5),
+        max_workers=turn1_max_workers,
         pool_name="recall_drill",
         timeout_seconds=remaining,
     )
@@ -12418,7 +12503,7 @@ def recall(
                 fanout_queries,
                 turn1_batch_metas,
                 wall_ms=search_wall_ms,
-                max_workers=min(len(search_callables), 5),
+                max_workers=turn1_max_workers,
             ),
             "post_merge_refine": turn1_refine_meta,
             "coverage": turn1_coverage,
@@ -12432,6 +12517,8 @@ def recall(
 
     if not fanout_queries:
         stop_reason = fanout_meta.get("bailout_reason") or "planner_returned_empty"
+        merged = _prioritize_deliberate_fresh_direct_anchor_rows(query, merged)
+        merged = _prioritize_named_entity_activity_anchor_rows(query, merged)
         final = merged[:limit]
         total_elapsed = (_time.monotonic() - recall_start) * 1000
         total_planner_ms = sum(
@@ -12698,7 +12785,8 @@ def recall(
         )
 
     # Final merge to requested limit
-    merged = _prioritize_fast_anchor_direct_rows(query, merged)
+    merged = _prioritize_deliberate_fresh_direct_anchor_rows(query, merged)
+    merged = _prioritize_named_entity_activity_anchor_rows(query, merged)
     final = merged[:limit]
     total_elapsed = (_time.monotonic() - recall_start) * 1000
     if stop_reason == "max_turns" and len(drill_log) < max_turns:
@@ -13150,6 +13238,22 @@ def _load_dedup_candidates_vec(
     if owner_id:
         owner_clause = " AND (n.owner_id = ? OR n.owner_id IS NULL)"
         owner_params.append(owner_id)
+
+    has_candidates = conn.execute(
+        f"""
+            SELECT 1
+            FROM nodes n
+            WHERE n.embedding IS NOT NULL
+              AND n.superseded_by IS NULL
+              AND (n.status IS NULL OR n.status IN ('approved', 'pending', 'active'))
+              {rowid_clause}
+              {owner_clause}
+            LIMIT 1
+        """,
+        tuple(rowid_params + owner_params),
+    ).fetchone()
+    if not has_candidates:
+        return [], telemetry
 
     packed_query = graph._pack_embedding(query_embedding)
     telemetry["vec_query_count"] = 1
