@@ -30,40 +30,34 @@ After install, start here:
 
 ## Benchmarks
 
-**Headline result: Quaid beats Anthropic agents answering from full context on long-form AgentLife lanes while using about one-fifth of the evaluation tokens.**
+**Headline: on AgentLife, Quaid matches full-context Sonnet quality at roughly one-third of the evaluation token cost. On the OpenClaw execution surface, Quaid also substantially outperforms OpenClaw native memory.**
 
-When developing Quaid we found that current public benchmarks were simple Q&A and did not appropriately cover a true agentic lifecycle, so were insufficient to measure this type of project, this is why we built AgentLife. The AgentLife benchmark is maintained in a dedicated public repo so benchmark docs and runbooks have a single source of truth.
+AgentLife tests long-running agent memory across sessions, resets, stale facts, project continuity, and context pressure. Full Context (FC) is an upper-bound baseline where the answer model sees the transcript directly; it is useful for comparison, but it is not persistent memory.
 
-One of the primary goal posts we measure Quaid against is Full Context (Sonnet). This gives us the measure of how well an agent does answering a question when the entire chat history is inside the context window. It should be noted that if a new session is made, this score drops to 0% whereas Quaid will retain its accuracy.
+### Clean Harness Headline Rows
 
-Terminology:
-- `AgentLife-S`: clean core AgentLife lane
-- `AgentLife-L`: long/noisy lane with filler sessions
-- `AgentLife-L OBD`: `AgentLife-L` compressed into one operational day, simulates a power user
-- `Full Context (Sonnet)`: full-context baseline without a memory system
-- `Tokens`: minimum eval tokens to answer all 283 benchmark questions
+| Surface | Quaid | FC Sonnet | Quaid Tokens | FC Tokens |
+| --- | ---: | ---: | ---: | ---: |
+| AgentLife-S | 93.64% | 93.11% | 7.95M | 29.83M |
+| AgentLife-L | 88.52% | 88.69% | 9.64M | 26.50M |
+| AgentLife-L OBD | 88.69% | 88.69% | 8.45M | 26.50M |
 
-Headline launch summary:
+`AgentLife-S` is the clean core lane. `AgentLife-L` adds long/noisy filler sessions. `AgentLife-L OBD` compresses the long lane into one operational day. Quaid rows use Sonnet deep reasoning, Haiku fast reasoning, and Sonnet answer re-evaluation.
 
-| Lane | Quaid Acc | Quaid Tok | Full Context Acc | Full Context Tok | OpenClaw Acc | OpenClaw Tok |
-|---|---:|---:|---:|---:|---:|---:|
-| AgentLife-S | 92.23% | 5,753,673 | 92.90% | 29,828,646 | 69.40% | unknown |
-| AgentLife-L | 87.81% | 5,917,209 | 87.70% | 34,596,206 | 63.06% | unknown |
-| AgentLife-L OBD | 89.58% | 8,382,952 | 87.70%* | 34,596,206* | 63.06%* | unknown* |
+### OpenClaw Execution Surface
 
-Quaid's current public headline rows reflect real use parameters: Sonnet for deep reasoning, Haiku for fast reasoning, and Sonnet as the answer model. `AgentLife-S` remains the clean reference lane. `AgentLife-L` and `AgentLife-L OBD` are the more operational long-form lanes; on both, Quaid now meets or exceeds the Full Context Sonnet baseline. In the long-form Full Context rows, the baseline simulates a transcript compaction at roughly `160k` tokens. OpenClaw Native remains included as a host-native comparison row where a published baseline exists.
+| Surface | OpenClaw Native | Quaid on OpenClaw |
+| --- | ---: | ---: |
+| AgentLife-S | 26.49% | 80.97% |
+| AgentLife-L | 31.72% | pending refresh |
 
-Those study rows are the basis for the claim that Quaid can stay near full-context quality at roughly one-fifth the eval token cost on long-form lanes.
+The clean harness table is the core Quaid reference surface. The OpenClaw table measures host execution-path tax, so the two are intentionally separated.
 
-* Full Context and OpenClaw Native do not currently distinguish between `AgentLife-L` and `AgentLife-L OBD`, so the OBD row mirrors the same published baseline values.
-* Benchmark accuracy snapshot: 2026-04-05.
+### Notes
 
-Benchmark note: AgentLife uses synthetic high-density conversations designed to stress memory systems. Current public rows are single-run per lane/configuration; informal repeat variance on stable configs has typically been about `+-1pp`.
-
-Use these canonical links:
-- [AgentLife GitHub Repo](https://github.com/quaid-labs/agentlife)
-- [AgentLife Technical Report (2026-03-29)](https://github.com/quaid-labs/agentlife/blob/main/published/runbooks/AGENTLIFE_TECHNICAL_REPORT_20260329.md)
-- [AgentLife Technical Report (2026-04-05)](https://github.com/quaid-labs/agentlife/blob/main/published/runbooks/AGENTLIFE_TECHNICAL_REPORT_20260405.md)
+- Public token rows are non-judge evaluation tokens: answer model + recall/tool + preinject, excluding judge spend.
+- Results are single-run per lane/configuration; informal repeat variance on stable configs is typically about `+-1pp`.
+- Full methodology and run IDs live in the AgentLife repo: [latest technical report](https://github.com/quaid-labs/agentlife/blob/main/published/runbooks/AGENTLIFE_TECHNICAL_REPORT_20260430.md) and [runbooks folder](https://github.com/quaid-labs/agentlife/tree/main/published/runbooks).
 
 ---
 
