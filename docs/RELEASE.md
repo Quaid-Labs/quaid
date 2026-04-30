@@ -190,6 +190,11 @@ For live clears:
   `--sha <cleared-runtime-sha>` so the row reflects what was actually tested.
 - `bash scripts/release-check.sh` rewrites those SHA placeholders to the released Quaid version when the clear SHA still matches release `HEAD`, or when Solomon has locally approved the post-clear delta with `scripts/release-approve-delta.mjs`.
 - Promoted rows keep a `validated_sha` marker, so future release runs can tell whether the current matrix is fresh or only reflects an older clear.
+- Installer OpenClaw Smoke has two lanes: `latest` for drift detection and
+  `compatible-record` for the newest concrete OpenClaw version recorded as
+  compatible in `compatibility.json`. Do not hand-maintain a pinned OpenClaw
+  version in the workflow; update the compatibility record through the live-clear
+  process instead.
 - If the cleared SHA is behind the intended release target, the live lane should
   record it after Solomon accepts the clear, then report the mismatch; release
   decides whether that delta needs a rerun or can be explicitly approved.

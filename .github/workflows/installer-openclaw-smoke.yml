@@ -30,16 +30,16 @@ permissions:
 
 jobs:
   openclaw-installer-smoke:
-    name: installer-smoke (${{ matrix.openclaw_version }}, ${{ matrix.scenario }})
+    name: installer-smoke (${{ matrix.openclaw_target }}, ${{ matrix.scenario }})
     runs-on: ubuntu-latest
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        openclaw_version:
-          # Primary drift signal first, plus a concrete support target for reproducibility.
+        openclaw_target:
+          # Primary drift signal first, plus the newest operator-accepted concrete version.
           - latest
-          - 2026.4.27
+          - compatible-record
         scenario:
           - fresh
           - stale-registry-upgrade
@@ -70,10 +70,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [[ "${{ matrix.openclaw_version }}" == "latest" ]]; then
+          if [[ "${{ matrix.openclaw_target }}" == "latest" ]]; then
             npm install -g openclaw
           else
-            npm install -g "openclaw@${{ matrix.openclaw_version }}"
+            OPENCLAW_VERSION="$(node scripts/resolve-compatible-host-version.mjs --host openclaw)"
+            echo "Resolved compatible OpenClaw version from compatibility.json: ${OPENCLAW_VERSION}"
+            npm install -g "openclaw@${OPENCLAW_VERSION}"
           fi
           echo "Installed OpenClaw:"
           openclaw --version || true
