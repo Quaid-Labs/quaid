@@ -680,7 +680,7 @@ Pre-install prep, then install directly via SSH:
 
 # 2. Run the install
 REMOTE="admin@192.168.64.77"
-TAG="v0.3.0-alpha"
+TAG="v0.3.1"
 ssh "$REMOTE" "curl -fsSL https://raw.githubusercontent.com/quaid-labs/quaid/main/install.sh | QUAID_VERSION=$TAG bash -s -- --agent --all-platforms --owner-name 'Solomon Steadman'"
 
 # 3. Verify

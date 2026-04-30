@@ -24,7 +24,7 @@
 #   livetest-preflight.sh --config path/to/livetest-config.json
 #   livetest-preflight.sh --with-platform-upgrades # slow presnapshot-only CLI upgrade path
 #   livetest-preflight.sh --platform-upgrades-only # safety checks + CLI/OAuth maintenance, exit 20 if changed
-#   livetest-preflight.sh --release-verify v0.3.0-alpha  # release verification mode
+#   livetest-preflight.sh --release-verify v0.3.1  # release verification mode
 #
 # Options:
 #   --wipe-platform <all|oc|cc|cdx>  Wipe scope (default: all)
@@ -68,7 +68,7 @@ RUN_PLATFORM_UPGRADES=0
 PLATFORM_UPGRADES_ONLY=0
 DRY_RUN=0
 CONFIG_PATH="$CONFIG_DEFAULT"
-RELEASE_VERIFY=""   # empty = dev mode (default); set to a tag like v0.3.0-alpha for release verification
+RELEASE_VERIFY=""   # empty = dev mode (default); set to a tag like v0.3.1 for release verification
 CC_OAUTH_MIN_TTL_SECONDS="${LIVETEST_CC_OAUTH_MIN_TTL_SECONDS:-5400}"
 
 # --- Parse args ---

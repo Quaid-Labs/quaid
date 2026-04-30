@@ -26,7 +26,7 @@ case "$(uname -s 2>/dev/null || echo unknown)" in
 esac
 
 # --- Constants ---
-QUAID_VERSION="0.3.0-alpha"
+QUAID_VERSION="0.3.1"
 MIN_PYTHON_VERSION="3.10"
 MIN_SQLITE_VERSION="3.35"
 # Gateway PR #13287 — required hooks for knowledge extraction

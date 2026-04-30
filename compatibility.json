@@ -3,7 +3,7 @@
   "kill_message": null,
   "schema_version": 1,
   "updated_at": "2026-04-18",
-  "latest_quaid": "0.3.0-alpha",
+  "latest_quaid": "0.3.1",
   "update_message": null,
   "matrix": [
     {
@@ -35,7 +35,7 @@
     {
       "host": "openclaw",
       "host_range": "2026.4.8",
-      "quaid_range": "0.3.0-alpha",
+      "quaid_range": "0.3.1",
       "status": "compatible",
       "notes": "Run 66 clear",
       "message": "",
@@ -46,7 +46,7 @@
     {
       "host": "claude-code",
       "host_range": "2.1.96",
-      "quaid_range": "0.3.0-alpha",
+      "quaid_range": "0.3.1",
       "status": "compatible",
       "notes": "Run 66 clear",
       "message": "",
@@ -57,7 +57,7 @@
     {
       "host": "codex",
       "host_range": "0.118.0",
-      "quaid_range": "0.3.0-alpha",
+      "quaid_range": "0.3.1",
       "status": "compatible",
       "notes": "Run 66 clear",
       "message": "",
@@ -68,7 +68,7 @@
     {
       "host": "openclaw",
       "host_range": "2026.4.15",
-      "quaid_range": "0.3.0-alpha",
+      "quaid_range": "0.3.1",
       "status": "compatible",
       "notes": "Run 110 clear",
       "message": "",
@@ -79,7 +79,7 @@
     {
       "host": "claude-code",
       "host_range": "2.1.114",
-      "quaid_range": "0.3.0-alpha",
+      "quaid_range": "0.3.1",
       "status": "compatible",
       "notes": "Run 110 clear",
       "message": "",
@@ -90,7 +90,7 @@
     {
       "host": "codex",
       "host_range": "0.120.0",
-      "quaid_range": "0.3.0-alpha",
+      "quaid_range": "0.3.1",
       "status": "compatible",
       "notes": "Run 110 clear",
       "message": "",
