@@ -91,6 +91,7 @@ home = pathlib.Path.home()
 required = [
     home / "quaidcode" / "dev" / "setup-quaid.mjs",
     home / ".claude" / ".credentials.json",
+    home / ".codex" / "auth.json",
     home / ".quaid" / "shared" / "auth" / "credentials.json",
 ]
 missing = [str(path) for path in required if not path.is_file()]
@@ -102,6 +103,7 @@ if missing:
 
 import datetime
 import json
+import base64
 
 cc_creds = home / ".claude" / ".credentials.json"
 payload = json.loads(cc_creds.read_text(encoding="utf-8"))
@@ -123,6 +125,29 @@ else:
             expires_at = expires_at.replace(tzinfo=datetime.timezone.utc)
 if expires_at <= datetime.datetime.now(datetime.timezone.utc):
     raise SystemExit(f"{label}: Claude OAuth expired at {expires_at.isoformat()} in {cc_creds}")
+
+codex_auth = home / ".codex" / "auth.json"
+codex_payload = json.loads(codex_auth.read_text(encoding="utf-8"))
+tokens = codex_payload.get("tokens")
+if not isinstance(tokens, dict):
+    raise SystemExit(f"{label}: missing tokens block in {codex_auth}")
+access_token = str(tokens.get("access_token") or "").strip()
+refresh_token = str(tokens.get("refresh_token") or "").strip()
+if not access_token:
+    raise SystemExit(f"{label}: missing Codex access_token in {codex_auth}")
+if not refresh_token:
+    raise SystemExit(f"{label}: missing Codex refresh_token in {codex_auth}")
+parts = access_token.split(".")
+if len(parts) < 2:
+    raise SystemExit(f"{label}: Codex access_token is not a JWT in {codex_auth}")
+body = parts[1] + "=" * (-len(parts[1]) % 4)
+claims = json.loads(base64.urlsafe_b64decode(body.encode("ascii")).decode("utf-8"))
+raw_exp = claims.get("exp")
+if not isinstance(raw_exp, (int, float)):
+    raise SystemExit(f"{label}: missing Codex access_token exp in {codex_auth}")
+codex_expires_at = datetime.datetime.fromtimestamp(float(raw_exp), tz=datetime.timezone.utc)
+if codex_expires_at <= datetime.datetime.now(datetime.timezone.utc):
+    raise SystemExit(f"{label}: Codex access_token expired at {codex_expires_at.isoformat()} in {codex_auth}")
 print(f"{label}: verified preinstall state")
 PYEOF
 }

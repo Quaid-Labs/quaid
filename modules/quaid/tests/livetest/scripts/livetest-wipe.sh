@@ -183,7 +183,30 @@ for target in targets:
     seen.add(key)
     shutil.rmtree(target, ignore_errors=True)
 
-print('OC silo, sessions, extension, and native memory state wiped')
+if isinstance(cfg, dict):
+    plugins = cfg.get('plugins')
+    if isinstance(plugins, dict):
+        entries = plugins.get('entries')
+        if isinstance(entries, dict):
+            entries.pop('quaid', None)
+        installs = plugins.get('installs')
+        if isinstance(installs, dict):
+            installs.pop('quaid', None)
+        install_records = plugins.get('installRecords')
+        if isinstance(install_records, dict):
+            install_records.pop('quaid', None)
+        allow = plugins.get('allow')
+        if isinstance(allow, list):
+            plugins['allow'] = [item for item in allow if str(item).strip() != 'quaid']
+        slots = plugins.get('slots')
+        if isinstance(slots, dict) and slots.get('memory') == 'quaid':
+            slots.pop('memory', None)
+        cfg_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = cfg_path.with_name(f'.{cfg_path.name}.{os.getpid()}.tmp')
+        tmp.write_text(json.dumps(cfg, indent=2) + '\\n', encoding='utf-8')
+        tmp.replace(cfg_path)
+
+print('OC silo, sessions, extension, native memory state, and stale quaid plugin refs wiped')
 PYEOF"
 }
 

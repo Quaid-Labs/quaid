@@ -47,6 +47,11 @@
 #   LIVETEST_CC_OAUTH_MIN_TTL_SECONDS  Minimum remaining lifetime required for
 #                                      coordinator Claude OAuth before copying
 #                                      it to the VM. Default: 5400 (90 min).
+#   LIVETEST_CODEX_OAUTH_MIN_TTL_SECONDS  Minimum remaining access-token
+#                                      lifetime required for coordinator Codex
+#                                      OAuth before copying it to the VM and
+#                                      seeding OpenClaw access-only auth.
+#                                      Default: 5400 (90 min).
 #
 # Exit codes:
 #   0  All checks passed and prep complete
@@ -70,6 +75,7 @@ DRY_RUN=0
 CONFIG_PATH="$CONFIG_DEFAULT"
 RELEASE_VERIFY=""   # empty = dev mode (default); set to a tag like v0.3.1 for release verification
 CC_OAUTH_MIN_TTL_SECONDS="${LIVETEST_CC_OAUTH_MIN_TTL_SECONDS:-5400}"
+CODEX_OAUTH_MIN_TTL_SECONDS="${LIVETEST_CODEX_OAUTH_MIN_TTL_SECONDS:-5400}"
 
 # --- Parse args ---
 while [[ $# -gt 0 ]]; do
@@ -98,6 +104,10 @@ if [[ ! -f "$CONFIG_PATH" ]]; then
 fi
 if [[ ! "$CC_OAUTH_MIN_TTL_SECONDS" =~ ^[0-9]+$ ]]; then
     echo "Error: LIVETEST_CC_OAUTH_MIN_TTL_SECONDS must be an integer number of seconds" >&2
+    exit 1
+fi
+if [[ ! "$CODEX_OAUTH_MIN_TTL_SECONDS" =~ ^[0-9]+$ ]]; then
+    echo "Error: LIVETEST_CODEX_OAUTH_MIN_TTL_SECONDS must be an integer number of seconds" >&2
     exit 1
 fi
 
@@ -205,6 +215,69 @@ print(hashlib.sha256(path.read_bytes()).hexdigest())
 PYEOF
 }
 
+validate_codex_oauth_credentials() {
+    local auth_path="$1"
+    local label="$2"
+    local min_ttl_seconds="${3:-0}"
+    python3 - "$auth_path" "$label" "$min_ttl_seconds" <<'PYEOF'
+import base64
+import datetime
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1]).expanduser()
+label = sys.argv[2]
+try:
+    min_ttl_seconds = int(float(sys.argv[3] or 0))
+except Exception:
+    raise SystemExit(f"{label}: invalid minimum TTL seconds {sys.argv[3]!r}")
+if not path.exists():
+    raise SystemExit(f"{label}: missing {path}")
+
+try:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+except Exception as exc:
+    raise SystemExit(f"{label}: invalid JSON in {path}: {exc}") from exc
+
+tokens = payload.get("tokens")
+if not isinstance(tokens, dict):
+    raise SystemExit(f"{label}: tokens block missing in {path}")
+
+access_token = str(tokens.get("access_token") or "").strip()
+refresh_token = str(tokens.get("refresh_token") or "").strip()
+if not access_token:
+    raise SystemExit(f"{label}: access_token missing in {path}")
+if not refresh_token:
+    raise SystemExit(f"{label}: refresh_token missing in {path}")
+
+parts = access_token.split(".")
+if len(parts) < 2:
+    raise SystemExit(f"{label}: access_token is not a JWT in {path}")
+try:
+    body = parts[1] + "=" * (-len(parts[1]) % 4)
+    claims = json.loads(base64.urlsafe_b64decode(body.encode("ascii")).decode("utf-8"))
+except Exception as exc:
+    raise SystemExit(f"{label}: cannot decode access_token JWT in {path}: {exc}") from exc
+
+raw_exp = claims.get("exp")
+if not isinstance(raw_exp, (int, float)):
+    raise SystemExit(f"{label}: access_token exp missing in {path}")
+expires_at = datetime.datetime.fromtimestamp(float(raw_exp), tz=datetime.timezone.utc)
+now = datetime.datetime.now(datetime.timezone.utc)
+if expires_at <= now:
+    raise SystemExit(f"{label}: access_token expired at {expires_at.isoformat()} ({path})")
+remaining = (expires_at - now).total_seconds()
+if min_ttl_seconds > 0 and remaining < min_ttl_seconds:
+    raise SystemExit(
+        f"{label}: access_token expires too soon at {expires_at.isoformat()} "
+        f"(remaining {int(remaining // 60)}m, required {int(min_ttl_seconds // 60)}m; {path})"
+    )
+
+print(f"{label}: access token valid until {expires_at.isoformat()} (TTL {remaining / 3600.0:.1f}h, remaining {int(remaining // 60)}m)")
+PYEOF
+}
+
 validate_remote_claude_oauth_credentials() {
     local expected_sha="${1:-}"
     ssh "$REMOTE_HOST" python3 - "$CC_OAUTH_MIN_TTL_SECONDS" "$expected_sha" <<'PYEOF'
@@ -282,6 +355,80 @@ print(
 PYEOF
 }
 
+validate_remote_codex_oauth_credentials() {
+    local expected_sha="${1:-}"
+    ssh "$REMOTE_HOST" python3 - "$CODEX_OAUTH_MIN_TTL_SECONDS" "$expected_sha" <<'PYEOF'
+import base64
+import datetime
+import hashlib
+import json
+import pathlib
+import sys
+
+path = pathlib.Path.home() / ".codex" / "auth.json"
+label = "remote Codex OAuth"
+try:
+    min_ttl_seconds = int(float(sys.argv[1] or 0))
+except Exception:
+    raise SystemExit(f"{label}: invalid minimum TTL seconds {sys.argv[1]!r}")
+expected_sha = str(sys.argv[2] or "").strip().lower()
+if not path.exists():
+    raise SystemExit(f"{label}: missing {path}")
+
+raw = path.read_bytes()
+actual_sha = hashlib.sha256(raw).hexdigest()
+if expected_sha and actual_sha != expected_sha:
+    raise SystemExit(
+        f"{label}: remote auth hash mismatch at {path} "
+        f"(remote {actual_sha[:12]}, local {expected_sha[:12]})"
+    )
+
+try:
+    payload = json.loads(raw.decode("utf-8"))
+except Exception as exc:
+    raise SystemExit(f"{label}: invalid JSON in {path}: {exc}") from exc
+
+tokens = payload.get("tokens")
+if not isinstance(tokens, dict):
+    raise SystemExit(f"{label}: tokens block missing in {path}")
+
+access_token = str(tokens.get("access_token") or "").strip()
+refresh_token = str(tokens.get("refresh_token") or "").strip()
+if not access_token:
+    raise SystemExit(f"{label}: access_token missing in {path}")
+if not refresh_token:
+    raise SystemExit(f"{label}: refresh_token missing in {path}")
+
+parts = access_token.split(".")
+if len(parts) < 2:
+    raise SystemExit(f"{label}: access_token is not a JWT in {path}")
+try:
+    body = parts[1] + "=" * (-len(parts[1]) % 4)
+    claims = json.loads(base64.urlsafe_b64decode(body.encode("ascii")).decode("utf-8"))
+except Exception as exc:
+    raise SystemExit(f"{label}: cannot decode access_token JWT in {path}: {exc}") from exc
+
+raw_exp = claims.get("exp")
+if not isinstance(raw_exp, (int, float)):
+    raise SystemExit(f"{label}: access_token exp missing in {path}")
+expires_at = datetime.datetime.fromtimestamp(float(raw_exp), tz=datetime.timezone.utc)
+now = datetime.datetime.now(datetime.timezone.utc)
+if expires_at <= now:
+    raise SystemExit(f"{label}: access_token expired at {expires_at.isoformat()} ({path})")
+remaining = (expires_at - now).total_seconds()
+if min_ttl_seconds > 0 and remaining < min_ttl_seconds:
+    raise SystemExit(
+        f"{label}: access_token expires too soon at {expires_at.isoformat()} "
+        f"(remaining {int(remaining // 60)}m, required {int(min_ttl_seconds // 60)}m; {path})"
+    )
+
+print(
+    f"{label}: access token valid until {expires_at.isoformat()} "
+    f"(TTL {remaining / 3600.0:.1f}h, remaining {int(remaining // 60)}m, sha {actual_sha[:12]})"
+)
+PYEOF
+}
+
 abort_if_errors() {
     local context="${1:-Preflight}"
     if [[ "$ERRORS" -gt 0 ]]; then
@@ -293,6 +440,8 @@ abort_if_errors() {
 
 CC_OAUTH_REMOTE_REFRESHED=0
 CC_OAUTH_EXPECTED_SHA=""
+CODEX_OAUTH_REMOTE_REFRESHED=0
+CODEX_OAUTH_EXPECTED_SHA=""
 
 copy_claude_oauth_credentials_to_remote() {
     local heading="${1:-[7/8] Copying CC OAuth credentials to remote...}"
@@ -383,6 +532,82 @@ if p.exists():
 PYEOF
 }
 
+copy_codex_oauth_credentials_to_remote() {
+    local heading="${1:-[7b/8] Copying Codex OAuth credentials to remote...}"
+    local cdx_enabled oc_enabled local_auth local_status local_sha remote_status remote_tmp ttl_summary
+
+    echo ""
+    echo "$heading"
+    CODEX_OAUTH_REMOTE_REFRESHED=0
+    CODEX_OAUTH_EXPECTED_SHA=""
+
+    cdx_enabled="$(read_config platforms.cdx.enabled)"
+    oc_enabled="$(read_config platforms.oc.enabled)"
+    if [[ "$cdx_enabled" != "True" && "$cdx_enabled" != "true" && "$oc_enabled" != "True" && "$oc_enabled" != "true" ]]; then
+        echo "  (skipped — neither CDX nor OC platform is enabled in config)"
+        return 0
+    fi
+    if [[ "$DRY_RUN" == "1" ]]; then
+        echo "  [dry-run] would validate coordinator Codex OAuth has >=$((CODEX_OAUTH_MIN_TTL_SECONDS / 60))m access-token TTL remaining"
+        echo "  [dry-run] would scp ~/.codex/auth.json to $REMOTE_HOST:~/.codex/auth.json"
+        return 0
+    fi
+
+    local_auth="$HOME/.codex/auth.json"
+    if [[ ! -f "$local_auth" ]]; then
+        echo "  $FAIL  $local_auth not found — CDX and OC openai-codex cannot share fresh OAuth state"
+        ERRORS=$((ERRORS + 1))
+        return 0
+    fi
+
+    local_status="$(validate_codex_oauth_credentials "$local_auth" "local Codex OAuth" "$CODEX_OAUTH_MIN_TTL_SECONDS" 2>&1 || true)"
+    if [[ "$local_status" != local\ Codex\ OAuth:\ access\ token\ valid\ until* ]]; then
+        echo "  $FAIL  $local_status"
+        echo "         Refresh coordinator Codex auth before preflight, then rerun."
+        echo "         Override only for emergency short runs: LIVETEST_CODEX_OAUTH_MIN_TTL_SECONDS=0"
+        ERRORS=$((ERRORS + 1))
+        return 0
+    fi
+
+    echo "  $PASS  $local_status"
+    local_sha="$(sha256_file "$local_auth")"
+    CODEX_OAUTH_EXPECTED_SHA="$local_sha"
+    remote_tmp="$(ssh "$REMOTE_HOST" 'mkdir -p "$HOME/.codex" && umask 077 && mktemp "$HOME/.codex/auth.json.tmp.XXXXXX"')"
+    scp "$local_auth" "$REMOTE_HOST:$remote_tmp"
+    ssh "$REMOTE_HOST" python3 - "$remote_tmp" <<'PYEOF'
+import os
+import pathlib
+import sys
+
+tmp = pathlib.Path(sys.argv[1]).expanduser()
+dest = pathlib.Path.home() / ".codex" / "auth.json"
+dest.parent.mkdir(parents=True, exist_ok=True)
+os.replace(tmp, dest)
+dest.chmod(0o600)
+try:
+    dir_fd = os.open(str(dest.parent), os.O_RDONLY)
+    try:
+        os.fsync(dir_fd)
+    finally:
+        os.close(dir_fd)
+except Exception:
+    pass
+PYEOF
+    if ! remote_status="$(validate_remote_codex_oauth_credentials "$local_sha" 2>&1)"; then
+        echo "  $FAIL  $remote_status"
+        ERRORS=$((ERRORS + 1))
+    elif [[ "$remote_status" != remote\ Codex\ OAuth:\ access\ token\ valid\ until* ]]; then
+        echo "  $FAIL  $remote_status"
+        ERRORS=$((ERRORS + 1))
+    else
+        echo "  $PASS  $remote_status"
+        ttl_summary="$(printf '%s\n' "$remote_status" | sed -n 's/.*TTL \([^,)]*\).*/\1/p')"
+        [[ -z "$ttl_summary" ]] && ttl_summary="unknown"
+        echo "  $PASS  refreshed VM Codex OAuth, $ttl_summary access-token TTL (~/.codex/auth.json)"
+        CODEX_OAUTH_REMOTE_REFRESHED=1
+    fi
+}
+
 verify_claude_oauth_seed_persisted() {
     local heading="${1:-Verifying CC OAuth seed persisted...}"
     local cc_enabled local_creds local_sha remote_status
@@ -411,6 +636,42 @@ verify_claude_oauth_seed_persisted() {
         local_sha="$(sha256_file "$local_creds")"
     fi
     if ! remote_status="$(validate_remote_claude_oauth_credentials "$local_sha" 2>&1)"; then
+        echo "  $FAIL  $remote_status"
+        ERRORS=$((ERRORS + 1))
+    else
+        echo "  $PASS  $remote_status"
+    fi
+}
+
+verify_codex_oauth_seed_persisted() {
+    local heading="${1:-Verifying Codex OAuth seed persisted...}"
+    local cdx_enabled oc_enabled local_auth local_sha remote_status
+
+    echo ""
+    echo "$heading"
+
+    cdx_enabled="$(read_config platforms.cdx.enabled)"
+    oc_enabled="$(read_config platforms.oc.enabled)"
+    if [[ "$cdx_enabled" != "True" && "$cdx_enabled" != "true" && "$oc_enabled" != "True" && "$oc_enabled" != "true" ]]; then
+        echo "  (skipped — neither CDX nor OC platform is enabled in config)"
+        return 0
+    fi
+    if [[ "$DRY_RUN" == "1" ]]; then
+        echo "  [dry-run] would verify remote ~/.codex/auth.json still matches coordinator credentials"
+        return 0
+    fi
+
+    local_sha="$CODEX_OAUTH_EXPECTED_SHA"
+    if [[ -z "$local_sha" ]]; then
+        local_auth="$HOME/.codex/auth.json"
+        if [[ ! -f "$local_auth" ]]; then
+            echo "  $FAIL  $local_auth not found — cannot verify remote Codex OAuth seed"
+            ERRORS=$((ERRORS + 1))
+            return 0
+        fi
+        local_sha="$(sha256_file "$local_auth")"
+    fi
+    if ! remote_status="$(validate_remote_codex_oauth_credentials "$local_sha" 2>&1)"; then
         echo "  $FAIL  $remote_status"
         ERRORS=$((ERRORS + 1))
     else
@@ -557,6 +818,7 @@ elif [[ "$DRY_RUN" == "1" ]]; then
         echo "  [dry-run] would compare before/after versions"
         if [[ "$PLATFORM_UPGRADES_ONLY" == "1" ]]; then
             echo "  [dry-run] would refresh VM Claude OAuth credentials for base snapshot"
+            echo "  [dry-run] would refresh VM Codex OAuth credentials for base snapshot"
             echo "  [dry-run] would exit after platform/OAuth maintenance check"
             exit 0
         fi
@@ -840,9 +1102,10 @@ PYEOF" 2>/dev/null | tr -d '\r'
 
     if [[ "$PLATFORM_UPGRADES_ONLY" == "1" ]]; then
         copy_claude_oauth_credentials_to_remote "[4b/8] Refreshing CC OAuth credentials for base snapshot..."
+        copy_codex_oauth_credentials_to_remote "[4c/8] Refreshing Codex OAuth credentials for base snapshot..."
         if [[ "$ERRORS" -gt 0 ]]; then
             echo ""
-            echo "Presnapshot preflight failed during CC OAuth refresh." >&2
+            echo "Presnapshot preflight failed during OAuth refresh." >&2
             exit 1
         fi
     fi
@@ -863,8 +1126,13 @@ PYEOF" 2>/dev/null | tr -d '\r'
     fi
 
     if [[ "$PLATFORM_UPGRADES_ONLY" == "1" ]]; then
-        if [[ "$CC_OAUTH_REMOTE_REFRESHED" == "1" ]]; then
-            echo "Claude OAuth credentials were refreshed. Presnapshot wrapper should refresh the base image."
+        if [[ "$CC_OAUTH_REMOTE_REFRESHED" == "1" || "$CODEX_OAUTH_REMOTE_REFRESHED" == "1" ]]; then
+            if [[ "$CC_OAUTH_REMOTE_REFRESHED" == "1" ]]; then
+                echo "Claude OAuth credentials were refreshed. Presnapshot wrapper should refresh the base image."
+            fi
+            if [[ "$CODEX_OAUTH_REMOTE_REFRESHED" == "1" ]]; then
+                echo "Codex OAuth credentials were refreshed. Presnapshot wrapper should refresh the base image."
+            fi
             exit 20
         fi
         echo "No platform updates or credential refresh were applied. Base snapshot is current."
@@ -941,18 +1209,25 @@ fi
 copy_claude_oauth_credentials_to_remote "[7/8] Copying CC OAuth credentials to remote..."
 abort_if_errors "Preflight"
 
+# --- Step 7a: Copy coordinator Codex OAuth credentials to remote ---
+# CDX and OC's openai-codex provider share the same ChatGPT OAuth account. Keep
+# the VM's Codex CLI auth fresh before deriving OC auth-profiles from it.
+copy_codex_oauth_credentials_to_remote "[7a/8] Copying Codex OAuth credentials to remote..."
+abort_if_errors "Preflight"
+
 # --- Step 7b: Seed shared Quaid auth credentials for installer ---
 # M0 expects ~/.quaid/shared/auth/credentials.json to exist on the run VM.
 # Source anthropic token from platforms.cc.auth_token_file when configured;
-# otherwise use the historical local fallback. Source codex auth from the VM's
-# live ~/.codex/auth.json, hydrate OC auth-profiles with the schema OpenClaw
-# expects, and pin the livetest OC agent to the matching openai-codex provider.
+# otherwise use the historical local fallback. Source Codex auth from the VM's
+# freshly-copied ~/.codex/auth.json, hydrate OC auth-profiles with access-only
+# credentials so OpenClaw cannot rotate CDX's refresh token behind its back, and
+# pin the livetest OC agent to the matching openai-codex provider.
 echo ""
 echo "[7b/8] Seeding Quaid shared auth credentials on remote..."
 if [[ "$DRY_RUN" == "1" ]]; then
-    echo "  [dry-run] would read platforms.cc.auth_token_file (or fallback token path) and $REMOTE_HOST:~/.codex/auth.json"
+    echo "  [dry-run] would read platforms.cc.auth_token_file (or fallback token path) and the freshly-copied $REMOTE_HOST:~/.codex/auth.json"
     echo "            then write $REMOTE_HOST:~/.quaid/shared/auth/credentials.json, seed ~/.openclaw/agents/main/agent/auth-profiles.json,"
-    echo "            and pin ~/.openclaw/openclaw.json agents.defaults.model.primary to openai-codex/gpt-5.4"
+    echo "            using access-only openai-codex credentials, and pin ~/.openclaw/openclaw.json agents.defaults.model.primary to openai-codex/gpt-5.4"
 else
     LOCAL_SHARED_TOKEN_FILE="$(read_config platforms.cc.auth_token_file)"
     LOCAL_SHARED_TOKEN_FILE="${LOCAL_SHARED_TOKEN_FILE/#\~/$HOME}"
@@ -1069,16 +1344,15 @@ if codex_token:
     except Exception:
         profiles = {}
     expires = _jwt_expiry_ms(codex_token)
+    # OpenClaw and Codex CLI run on the same VM but do not share refresh-token
+    # writeback. Give OpenClaw only the long-lived access token so it cannot
+    # rotate and invalidate the Codex CLI refresh token mid-run.
     credential = {
-        "type": "oauth" if codex_refresh else "token",
+        "type": "token",
         "provider": "openai-codex",
+        "token": codex_token,
+        "managedBy": "quaid-preflight-access-only",
     }
-    if codex_refresh:
-        credential["access"] = codex_token
-        credential["refresh"] = codex_refresh
-        credential["managedBy"] = "codex-cli"
-    else:
-        credential["token"] = codex_token
     if expires:
         credential["expires"] = expires
     if codex_account_id:
@@ -1524,6 +1798,7 @@ else
 fi
 
 verify_claude_oauth_seed_persisted "[8b/8] Verifying CC OAuth seed persisted..."
+verify_codex_oauth_seed_persisted "[8c/8] Verifying Codex OAuth seed persisted..."
 abort_if_errors "Preflight"
 
 # --- Done ---

@@ -121,7 +121,7 @@ if [[ "$DRY_RUN" == "1" ]]; then
     echo "[dry-run] would start a fresh clone from '$BASE_IMAGE' as '$RUN_NAME'"
     echo "[dry-run] would run:"
     echo "  $SCRIPT_DIR/livetest-preflight.sh --config $CONFIG_PATH --platform-upgrades-only"
-    echo "[dry-run] that maintenance pass includes platform CLI upgrades and VM Claude OAuth refresh"
+    echo "[dry-run] that maintenance pass includes platform CLI upgrades and VM Claude/Codex OAuth refresh"
     echo "[dry-run] would run final presnapshot cleanup:"
     echo "  ssh <remote.host> ~/quaidcode/dev/modules/quaid/tests/livetest/scripts/livetest-prune-openclaw-silos.sh --home ~/.quaid"
     echo "[dry-run] if platform upgrades, OAuth refresh, or cleanup changed the clone, would run:"
