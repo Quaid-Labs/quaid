@@ -651,6 +651,9 @@ class MemoryGraph:
                 return
 
             # Backfill: insert any nodes with embeddings not yet in vec_nodes
+            if not nodes_table_exists:
+                return
+
             missing = conn.execute("""
                 SELECT n.id, n.embedding FROM nodes n
                 WHERE n.embedding IS NOT NULL
