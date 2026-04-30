@@ -69,6 +69,29 @@ release_body_file() {
   fi
 }
 
+is_prerelease_version() {
+  [[ "$1" == *alpha* || "$1" == *beta* || "$1" == *rc* ]]
+}
+
+create_github_release() {
+  if is_prerelease_version "$VERSION"; then
+    run_cmd gh release create "$TAG" \
+      "$TARBALL_PATH" \
+      --repo Quaid-Labs/quaid \
+      --title "$TAG" \
+      --notes-file "$RELEASE_BODY_FILE" \
+      --target "$HEAD_SHA" \
+      --prerelease
+  else
+    run_cmd gh release create "$TAG" \
+      "$TARBALL_PATH" \
+      --repo Quaid-Labs/quaid \
+      --title "$TAG" \
+      --notes-file "$RELEASE_BODY_FILE" \
+      --target "$HEAD_SHA"
+  fi
+}
+
 if [[ -n "$(git status --short)" ]]; then
   die "worktree is dirty; commit or stash changes before cutting a release"
 fi
@@ -150,11 +173,6 @@ run_cmd git push github "$RELEASE_BRANCH:$RELEASE_BRANCH"
 echo "[cut-release] push tag"
 run_cmd git push github "$TAG"
 
-PRERELEASE_FLAG=()
-if [[ "$VERSION" == *alpha* || "$VERSION" == *beta* || "$VERSION" == *rc* ]]; then
-  PRERELEASE_FLAG=(--prerelease)
-fi
-
 RELEASE_BODY_FILE="$(release_body_file)"
 
 if gh release view "$TAG" --repo Quaid-Labs/quaid >/dev/null 2>&1; then
@@ -166,13 +184,7 @@ if gh release view "$TAG" --repo Quaid-Labs/quaid >/dev/null 2>&1; then
   run_cmd gh release upload "$TAG" "$TARBALL_PATH" --repo Quaid-Labs/quaid --clobber
 else
   echo "[cut-release] create GitHub release $TAG"
-  run_cmd gh release create "$TAG" \
-    "$TARBALL_PATH" \
-    --repo Quaid-Labs/quaid \
-    --title "$TAG" \
-    --notes-file "$RELEASE_BODY_FILE" \
-    --target "$HEAD_SHA" \
-    "${PRERELEASE_FLAG[@]}"
+  create_github_release
 fi
 
 echo "[cut-release] PASS tag=$TAG branch=$RELEASE_BRANCH"
