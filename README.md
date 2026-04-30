@@ -80,7 +80,7 @@ Quaid is built around these four components. When you load Quaid, this is the mo
 - **Cross-platform and multi-agent:** per-instance silos keep personal memory separate by default, while the project space can stay shared across agents and hosts.
 - **You own the data:** SQLite DBs, identity files, and project docs stay inspectable and portable.
 - **Dual learning evolution system:** fast updates plus slower journal distillation for long-term synthesis.
-- **Project system with shadow git:** project knowledge is tracked through a shadow git-backed docs pipeline instead of being dumped into personal memory.
+- **Project system with shadow git:** project memory keeps filtered durable facts, while the shadow git-backed docs pipeline keeps the exhaustive project record.
 - **Tested for scale and cost:** long-horizon benchmark and live study data show the system stays practical as history grows, while bounded recall and compaction reduce token spend.
 - **System-agnostic design:** the architecture is built around pluggable adapter contracts rather than a single host.
 
