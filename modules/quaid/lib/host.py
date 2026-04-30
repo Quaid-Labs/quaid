@@ -11,7 +11,7 @@ from typing import Optional
 @dataclass
 class HostInfo:
     """Information about the host platform."""
-    platform: str           # "openclaw", "claude-code", "standalone"
+    platform: str           # adapter or host platform id
     version: str            # "2026.3.7", "2.1.72", etc.
     binary_path: Optional[str] = None  # Path to the host binary (for mtime)
 

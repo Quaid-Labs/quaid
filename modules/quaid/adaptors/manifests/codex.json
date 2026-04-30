@@ -13,6 +13,11 @@
   },
   "runtime": {
     "instancePrefix": "codex-",
+    "projectEnvVars": [
+      "CODEX_PROJECT_DIR"
+    ],
+    "deriveInstanceFromCwd": true,
+    "supportsProjectDirBinding": true,
     "python": {
       "module": "adaptors.codex.adapter",
       "class": "CodexAdapter"

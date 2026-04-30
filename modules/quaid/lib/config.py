@@ -77,17 +77,38 @@ def _deep_merge_dicts(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[st
 
 def _platform_from_instance_name(instance_name: str) -> str:
     name = str(instance_name or "").strip().lower()
-    if name.startswith("claude-code-") or name == "claude-code":
-        return "claude-code"
-    if name.startswith("codex-") or name == "codex":
-        return "codex"
-    if name.startswith("openclaw-") or name == "openclaw":
-        return "openclaw"
+    for adapter_id, prefix in _adapter_prefix_rows():
+        if name == prefix or name.startswith(f"{prefix}-"):
+            return adapter_id
     if name.startswith("standalone-") or name == "standalone":
         return "standalone"
     if "-" in name:
         return name.split("-", 1)[0] or "standalone"
     return name or "standalone"
+
+
+def _adapter_prefix_rows() -> List[tuple[str, str]]:
+    rows: List[tuple[str, str]] = []
+    manifest_root = Path(__file__).resolve().parent.parent / "adaptors" / "manifests"
+    try:
+        manifests = sorted(manifest_root.glob("*.json"))
+    except Exception:
+        manifests = []
+    for manifest_path in manifests:
+        try:
+            data = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        adapter_id = str(data.get("id") or manifest_path.stem).strip().lower()
+        runtime = data.get("runtime") if isinstance(data, dict) else {}
+        prefix = ""
+        if isinstance(runtime, dict):
+            prefix = str(runtime.get("instancePrefix") or "").strip().lower()
+        prefix = prefix[:-1] if prefix.endswith("-") else prefix
+        if adapter_id and prefix:
+            rows.append((adapter_id, prefix))
+    rows.sort(key=lambda item: len(item[1]), reverse=True)
+    return rows
 
 
 def _lightweight_platform_id(instance: str) -> str:

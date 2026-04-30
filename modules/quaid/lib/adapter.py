@@ -184,7 +184,7 @@ class QuaidAdapter(abc.ABC):
         return self.visible_home() / "projects"
 
     def adapter_id(self) -> str:
-        """Short identifier for this adapter type (e.g. 'claude-code', 'openclaw').
+        """Short identifier for this adapter type.
 
         Used by core to derive Quaid-managed paths like identity dirs.
         Must be a valid directory name (lowercase, no spaces).
@@ -709,9 +709,8 @@ class QuaidAdapter(abc.ABC):
     def agent_id_prefix(self) -> str:
         """Prefix used to build per-agent instance IDs.
 
-        Convention: instance IDs follow "<prefix>-<label>" (e.g. "openclaw-main",
-        "openclaw-coding"). The prefix is derived by stripping the "-main" suffix
-        from the primary instance ID — e.g. "openclaw-main" → "openclaw".
+        Convention: instance IDs follow "<prefix>-<label>". The prefix is
+        derived by stripping the "-main" suffix from the primary instance ID.
 
         For single-agent platforms with a bare instance ID (no "-main" suffix),
         returns instance_id() unchanged.
@@ -1053,7 +1052,7 @@ class StandaloneAdapter(QuaidAdapter):
             if is_fail_hard_enabled():
                 raise RuntimeError(
                     "models.llmProvider must be explicitly set in config.json. "
-                    "Valid values: 'claude-code', 'anthropic', 'openai-compatible'. "
+                    "Use a configured host bridge, 'anthropic', or 'openai-compatible'. "
                     "No default fallback while failHard is enabled."
                 )
             # Reliability path when failHard=false: choose explicit fallback chain.
@@ -1119,7 +1118,7 @@ class StandaloneAdapter(QuaidAdapter):
                 fast_reasoning_effort=fast_effort,
             )
 
-        if provider_id == "claude-code":
+        if provider_id == _canonical_adapter_id("claudecode"):
             resolved_deep = deep_model
             resolved_fast = fast_model
             if not resolved_deep or str(resolved_deep).strip() == "default":
@@ -1164,7 +1163,7 @@ class StandaloneAdapter(QuaidAdapter):
 
         raise RuntimeError(
             f"Unknown LLM provider '{provider_id}'. "
-            "Valid values: 'claude-code', 'anthropic', 'openai-compatible'."
+            "Use a configured host bridge, 'anthropic', or 'openai-compatible'."
         )
 
     def installer_supported_providers(self) -> List[str]:
@@ -1350,8 +1349,6 @@ _adapter_project_bootstrapped_instances: set[str] = set()
 
 def _normalize_adapter_id(value: str) -> str:
     token = str(value or "").strip().lower().replace("_", "-")
-    if token == "claudecode":
-        return "claude-code"
     return token
 
 
@@ -1378,7 +1375,7 @@ def _adapter_manifest_candidates(adapter_id: str) -> List[Path]:
 
 
 def _load_adapter_manifest(adapter_id: str) -> dict:
-    normalized = _normalize_adapter_id(adapter_id)
+    normalized = _canonical_adapter_id(adapter_id)
     searched: List[str] = []
     for path in _adapter_manifest_candidates(normalized):
         searched.append(str(path))
@@ -1402,7 +1399,7 @@ def _load_adapter_manifest(adapter_id: str) -> dict:
 
 def _instantiate_adapter_from_manifest(adapter_id: str) -> QuaidAdapter:
     klass = _load_adapter_class_from_manifest(adapter_id)
-    normalized = _normalize_adapter_id(adapter_id)
+    normalized = _canonical_adapter_id(adapter_id)
     try:
         adapter = klass()
     except Exception as e:
@@ -1432,7 +1429,7 @@ def _instantiate_adapter_from_manifest(adapter_id: str) -> QuaidAdapter:
 
 
 def _load_adapter_class_from_manifest(adapter_id: str):
-    normalized = _normalize_adapter_id(adapter_id)
+    normalized = _canonical_adapter_id(adapter_id)
     manifest = _load_adapter_manifest(normalized)
     runtime = manifest.get("runtime", {})
     runtime_py = runtime.get("python", {}) if isinstance(runtime, dict) else {}
@@ -1496,7 +1493,7 @@ def _adapter_config_paths() -> List[Path]:
         instance_config_exists = instance_config_path.is_file()
         paths.append(instance_config_path)
 
-    explicit_adapter_type = os.environ.get("QUAID_ADAPTER_TYPE", "").strip().lower()
+    explicit_adapter_type = _canonical_adapter_id(os.environ.get("QUAID_ADAPTER_TYPE", ""))
     derived_adapter_type = _adapter_type_from_instance_id(instance) if instance else ""
 
     # Secondary: path-derived instance path when QUAID_INSTANCE is not yet set.
@@ -1504,40 +1501,46 @@ def _adapter_config_paths() -> List[Path]:
     # helper shells launched from a project cwd where only QUAID_ADAPTER_TYPE is
     # available.
     if home and not instance:
-        _cpd = os.environ.get("CLAUDE_PROJECT_DIR", "").strip()
-        if _cpd:
-            from lib.instance import instance_slug_from_project_dir
-            _slug = instance_slug_from_project_dir(_cpd)
-            paths.append(
-                Path(home) / "instances" / f"claude-code-{_slug}" / "config.json"
-            )
-        _codex_project_dir = os.environ.get("CODEX_PROJECT_DIR", "").strip()
-        if _codex_project_dir:
-            from lib.instance import instance_slug_from_project_dir
-            _slug = instance_slug_from_project_dir(_codex_project_dir)
-            paths.append(
-                Path(home) / "instances" / f"codex-{_slug}" / "config.json"
-            )
-        if explicit_adapter_type in ("claude-code", "codex") and _should_derive_instance_from_cwd(home):
+        from lib.instance import instance_slug_from_project_dir
+
+        project_env_seen = False
+        for row in _project_env_adapter_rows():
+            project_dir = os.environ.get(row["env_name"], "").strip()
+            if not project_dir:
+                continue
+            project_env_seen = True
+            _slug = instance_slug_from_project_dir(project_dir)
+            prefix = _adapter_instance_prefix(row["adapter_id"])
+            if _slug and prefix:
+                paths.append(
+                    Path(home) / "instances" / f"{prefix}-{_slug}" / "config.json"
+                )
+        if (
+            explicit_adapter_type
+            and _adapter_runtime_bool(explicit_adapter_type, "deriveInstanceFromCwd", False)
+            and _should_derive_instance_from_cwd(home)
+        ):
             from lib.instance import instance_slug_from_project_dir
             _slug = instance_slug_from_project_dir(os.getcwd())
+            prefix = _adapter_instance_prefix(explicit_adapter_type)
             paths.append(
-                Path(home) / "instances" / f"{explicit_adapter_type}-{_slug}" / "config.json"
+                Path(home) / "instances" / f"{prefix}-{_slug}" / "config.json"
             )
-        elif not explicit_adapter_type and not _cpd and not _codex_project_dir:
+        elif not explicit_adapter_type and not project_env_seen:
             from lib.instance import instance_slug_from_project_dir
 
             _slug = instance_slug_from_project_dir(os.getcwd())
             cwd_candidates = [
-                Path(home) / "instances" / f"{adapter_id}-{_slug}" / "config.json"
-                for adapter_id in ("claude-code", "codex")
+                Path(home) / "instances" / f"{_adapter_instance_prefix(adapter_id)}-{_slug}" / "config.json"
+                for adapter_id in _cwd_deriving_adapter_ids()
+                if _adapter_instance_prefix(adapter_id)
             ]
             existing_cwd_candidates = [path for path in cwd_candidates if path.is_file()]
             if len(existing_cwd_candidates) == 1:
                 paths.append(existing_cwd_candidates[0])
             elif len(existing_cwd_candidates) > 1:
                 raise RuntimeError(
-                    "Ambiguous adapter resolution: both claude-code and codex "
+                    "Ambiguous adapter resolution: multiple cwd-derived adapter "
                     f"instance configs exist for cwd slug '{_slug}'. Set "
                     "QUAID_INSTANCE or QUAID_ADAPTER_TYPE to disambiguate. "
                     f"Candidates: {', '.join(str(path) for path in existing_cwd_candidates)}"
@@ -1562,13 +1565,14 @@ def _adapter_config_paths() -> List[Path]:
                 paths.append(Path(home) / "shared" / "config" / derived_adapter_type / "config.json")
             if (
                 len(platform_cfgs) == 1
-                and platform_cfgs[0].parent.name in ("claude-code", "codex")
+                and _adapter_runtime_bool(platform_cfgs[0].parent.name, "deriveInstanceFromCwd", False)
                 and _should_derive_instance_from_cwd(home)
             ):
                 from lib.instance import instance_slug_from_project_dir
                 _slug = instance_slug_from_project_dir(os.getcwd())
+                prefix = _adapter_instance_prefix(platform_cfgs[0].parent.name)
                 paths.append(
-                    Path(home) / "instances" / f"{platform_cfgs[0].parent.name}-{_slug}" / "config.json"
+                    Path(home) / "instances" / f"{prefix}-{_slug}" / "config.json"
                 )
             if len(platform_cfgs) == 1:
                 paths.append(platform_cfgs[0])
@@ -1607,7 +1611,7 @@ def _read_adapter_type_from_config() -> str:
 
     Accepted formats:
       {"adapter": "standalone"}
-      {"adapter": {"type": "openclaw"}}
+      {"adapter": {"type": "<adapter-id>"}}
     """
     last_existing: Optional[Path] = None
     for cfg_path in _adapter_config_paths():
@@ -1634,7 +1638,7 @@ def _read_adapter_type_from_config() -> str:
             kind = ""
 
         if kind:
-            return kind
+            return _canonical_adapter_id(kind)
         continue
 
     searched = ", ".join(str(p) for p in _adapter_config_paths())
@@ -1653,7 +1657,7 @@ def _read_adapter_type_from_config() -> str:
 
 def _adapter_instance_prefix(adapter_type: str) -> str:
     """Resolve instance prefix from adapter manifest, fallback to adapter id."""
-    normalized = _normalize_adapter_id(adapter_type)
+    normalized = _canonical_adapter_id(adapter_type)
     if not normalized:
         return ""
     try:
@@ -1691,6 +1695,60 @@ def _manifest_adapter_ids() -> List[str]:
     except Exception:
         pass
     return ids
+
+
+def _canonical_adapter_id(value: str) -> str:
+    """Map an adapter token to the manifest id that owns it, if known."""
+    token = _normalize_adapter_id(value)
+    if not token:
+        return ""
+    compact_token = token.replace("-", "")
+    for adapter_id in _manifest_adapter_ids():
+        if token == adapter_id or compact_token == adapter_id.replace("-", ""):
+            return adapter_id
+    return token
+
+
+def _adapter_runtime_config(adapter_id: str) -> Dict[str, Any]:
+    try:
+        runtime = _load_adapter_manifest(adapter_id).get("runtime")
+    except Exception:
+        return {}
+    return runtime if isinstance(runtime, dict) else {}
+
+
+def _adapter_runtime_bool(adapter_id: str, key: str, default: bool = False) -> bool:
+    value = _adapter_runtime_config(adapter_id).get(key)
+    if value is None:
+        return bool(default)
+    return bool(value)
+
+
+def _adapter_project_env_vars(adapter_id: str) -> List[str]:
+    raw = _adapter_runtime_config(adapter_id).get("projectEnvVars")
+    if not isinstance(raw, list):
+        return []
+    return [str(item).strip() for item in raw if str(item).strip()]
+
+
+def _project_env_adapter_rows() -> List[Dict[str, str]]:
+    rows: List[Dict[str, str]] = []
+    for adapter_id in _manifest_adapter_ids():
+        for env_name in _adapter_project_env_vars(adapter_id):
+            rows.append({"adapter_id": adapter_id, "env_name": env_name})
+    return rows
+
+
+def _cwd_deriving_adapter_ids() -> List[str]:
+    return [
+        adapter_id
+        for adapter_id in _manifest_adapter_ids()
+        if _adapter_runtime_bool(adapter_id, "deriveInstanceFromCwd", False)
+    ]
+
+
+def _adapter_supports_project_dir_binding(adapter_id: str) -> bool:
+    return _adapter_runtime_bool(adapter_id, "supportsProjectDirBinding", False)
 
 
 def _adapter_type_from_instance_id(instance_id: str) -> str:
@@ -1754,7 +1812,7 @@ def _should_derive_instance_from_cwd(home: str | Path) -> bool:
 
 def _project_instance_binding_path(home: str | Path, adapter_type: str, project_dir: str) -> Optional[Path]:
     """Return the binding path for a project-dir -> explicit instance mapping."""
-    adapter_id = _normalize_adapter_id(adapter_type)
+    adapter_id = _canonical_adapter_id(adapter_type)
     if not adapter_id or not str(project_dir or "").strip():
         return None
     try:
@@ -1798,7 +1856,7 @@ def _write_project_instance_binding(
     instance: str,
 ) -> None:
     """Persist an explicit instance binding for later unscoped hook/helper calls."""
-    adapter_id = _normalize_adapter_id(adapter_type)
+    adapter_id = _canonical_adapter_id(adapter_type)
     instance_id = str(instance or "").strip()
     if not adapter_id or not instance_id or not str(project_dir or "").strip():
         return
@@ -1843,9 +1901,14 @@ def _auto_provision_from_env_if_needed() -> None:
     """
     home = os.environ.get("QUAID_HOME", "").strip()
     instance = os.environ.get("QUAID_INSTANCE", "").strip()
-    claude_project_dir = os.environ.get("CLAUDE_PROJECT_DIR", "").strip()
-    codex_project_dir = os.environ.get("CODEX_PROJECT_DIR", "").strip()
-    explicit_adapter_type = os.environ.get("QUAID_ADAPTER_TYPE", "").strip().lower()
+    explicit_instance_from_env = bool(instance)
+    explicit_adapter_type = _canonical_adapter_id(os.environ.get("QUAID_ADAPTER_TYPE", ""))
+    project_env_rows: List[Dict[str, str]] = []
+    for row in _project_env_adapter_rows():
+        project_dir = os.environ.get(row["env_name"], "").strip()
+        if project_dir:
+            project_env_rows.append({**row, "project_dir": project_dir})
+    instance_origin = "env" if explicit_instance_from_env else ""
 
     # When QUAID_INSTANCE is absent, derive a path-based instance from explicit
     # project env first, then from cwd when the adapter type is already known.
@@ -1854,74 +1917,97 @@ def _auto_provision_from_env_if_needed() -> None:
     if home and not instance:
         from lib.instance import instance_slug_from_project_dir
 
-        if claude_project_dir and codex_project_dir:
+        if len(project_env_rows) > 1:
             try:
-                if Path(claude_project_dir).resolve() != Path(codex_project_dir).resolve():
+                project_paths = {str(Path(row["project_dir"]).resolve()) for row in project_env_rows}
+                if len(project_paths) > 1:
                     import logging as _logging
                     _logging.getLogger(__name__).error(
-                        "Both CLAUDE_PROJECT_DIR and CODEX_PROJECT_DIR are set with different paths; "
+                        "Multiple adapter project-dir environment variables are set with different paths; "
                         "refusing to guess an instance silo"
                     )
                     return
             except Exception:
                 return
 
-        if codex_project_dir:
-            bound = _read_project_instance_binding(home, "codex", codex_project_dir)
-            if bound:
-                instance = bound
-                os.environ["QUAID_INSTANCE"] = instance
-
-        if not instance and explicit_adapter_type == "codex" and _should_derive_instance_from_cwd(home):
-            bound = _read_project_instance_binding(home, "codex", os.getcwd())
-            if bound:
-                instance = bound
-                os.environ["QUAID_INSTANCE"] = instance
-
-        for env_name, prefix in (
-            ("CLAUDE_PROJECT_DIR", "claude-code"),
-            ("CODEX_PROJECT_DIR", "codex"),
-        ):
-            if instance:
-                break
-            project_dir = os.environ.get(env_name, "").strip()
-            if not project_dir:
+        for row in project_env_rows:
+            if not _adapter_supports_project_dir_binding(row["adapter_id"]):
                 continue
-            _slug = instance_slug_from_project_dir(project_dir)
-            if _slug:
-                instance = f"{prefix}-{_slug}"
+            bound = _read_project_instance_binding(home, row["adapter_id"], row["project_dir"])
+            if bound:
+                instance = bound
+                instance_origin = "project_binding"
                 os.environ["QUAID_INSTANCE"] = instance
                 break
 
         if (
             not instance
-            and explicit_adapter_type in ("claude-code", "codex")
+            and explicit_adapter_type
+            and _adapter_supports_project_dir_binding(explicit_adapter_type)
+            and _should_derive_instance_from_cwd(home)
+        ):
+            bound = _read_project_instance_binding(home, explicit_adapter_type, os.getcwd())
+            if bound:
+                instance = bound
+                instance_origin = "cwd_binding"
+                os.environ["QUAID_INSTANCE"] = instance
+
+        for row in project_env_rows:
+            if instance:
+                break
+            project_dir = row["project_dir"]
+            if not project_dir:
+                continue
+            _slug = instance_slug_from_project_dir(project_dir)
+            prefix = _adapter_instance_prefix(row["adapter_id"])
+            if _slug and prefix:
+                instance = f"{prefix}-{_slug}"
+                instance_origin = "project_env"
+                os.environ["QUAID_INSTANCE"] = instance
+                break
+
+        if (
+            not instance
+            and explicit_adapter_type
+            and _adapter_runtime_bool(explicit_adapter_type, "deriveInstanceFromCwd", False)
             and _should_derive_instance_from_cwd(home)
         ):
             _slug = instance_slug_from_project_dir(os.getcwd())
-            if _slug:
-                instance = f"{explicit_adapter_type}-{_slug}"
+            prefix = _adapter_instance_prefix(explicit_adapter_type)
+            if _slug and prefix:
+                instance = f"{prefix}-{_slug}"
+                instance_origin = "cwd"
                 os.environ["QUAID_INSTANCE"] = instance
 
     if not home or not instance:
         return
-    adapter_type_hint = _normalize_adapter_id(explicit_adapter_type) or _adapter_type_from_instance_id(instance)
-    if adapter_type_hint == "codex" and codex_project_dir:
-        _write_project_instance_binding(home, "codex", codex_project_dir, instance)
+    adapter_type_hint = _canonical_adapter_id(explicit_adapter_type) or _adapter_type_from_instance_id(instance)
+    if (
+        instance_origin in {"project_env", "cwd"}
+        and adapter_type_hint
+        and _adapter_supports_project_dir_binding(adapter_type_hint)
+    ):
+        binding_project_dir = ""
+        for row in project_env_rows:
+            if row["adapter_id"] == adapter_type_hint:
+                binding_project_dir = row["project_dir"]
+                break
+        if not binding_project_dir and instance_origin == "cwd":
+            binding_project_dir = os.getcwd()
+        if binding_project_dir:
+            _write_project_instance_binding(home, adapter_type_hint, binding_project_dir, instance)
     silo_root = Path(home) / "instances" / instance
     config_path = silo_root / "config.json"
     db_path = silo_root / "data" / "memory.db"
     if config_path.exists() and db_path.exists():
         return  # Already initialised — nothing to do
 
-    adapter_type = _normalize_adapter_id(explicit_adapter_type)
+    adapter_type = _canonical_adapter_id(explicit_adapter_type)
     if not adapter_type and not config_path.exists():
         adapter_type = _adapter_type_from_instance_id(instance)
     if not adapter_type:
-        if claude_project_dir and not codex_project_dir:
-            adapter_type = "claude-code"
-        elif codex_project_dir and not claude_project_dir:
-            adapter_type = "codex"
+        if len(project_env_rows) == 1:
+            adapter_type = project_env_rows[0]["adapter_id"]
     if not adapter_type:
         adapter_type = _adapter_type_from_instance_id(instance) if not config_path.exists() else ""
     if not adapter_type:
@@ -1930,7 +2016,7 @@ def _auto_provision_from_env_if_needed() -> None:
         # first-touch path-derived instances, so treat lookup errors as "unknown"
         # and let the normal adapter-resolution path raise loudly.
         try:
-            adapter_type = _normalize_adapter_id(_read_adapter_type_from_config())
+            adapter_type = _canonical_adapter_id(_read_adapter_type_from_config())
         except RuntimeError:
             adapter_type = ""
     if not adapter_type:
@@ -2033,7 +2119,7 @@ def get_adapter() -> QuaidAdapter:
             adapter = _adapter
         else:
             _auto_provision_from_env_if_needed()
-            kind = _normalize_adapter_id(_read_adapter_type_from_config())
+            kind = _canonical_adapter_id(_read_adapter_type_from_config())
             _adapter = _instantiate_adapter_from_manifest(kind)
             _bootstrap_instance_env(_adapter)
             adapter = _adapter

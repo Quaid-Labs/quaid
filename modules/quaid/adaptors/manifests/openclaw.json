@@ -12,6 +12,10 @@
   },
   "runtime": {
     "instancePrefix": "openclaw-",
+    "projectEnvVars": [],
+    "deriveInstanceFromCwd": false,
+    "supportsProjectDirBinding": false,
+    "staleAgentSiloPrune": true,
     "python": {
       "module": "adaptors.openclaw.adapter",
       "class": "OpenClawAdapter"

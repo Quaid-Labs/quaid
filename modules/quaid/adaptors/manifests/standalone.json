@@ -10,6 +10,9 @@
   },
   "runtime": {
     "instancePrefix": "standalone",
+    "projectEnvVars": [],
+    "deriveInstanceFromCwd": false,
+    "supportsProjectDirBinding": false,
     "python": {
       "module": "lib.adapter",
       "class": "StandaloneAdapter"

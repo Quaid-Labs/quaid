@@ -3917,11 +3917,12 @@ ${lines.join("\n")}
   }
 
   function _adapterCompatibilitySection(): string {
-    const adapterName = String(deps.adapterName || "openclaw")
+    const adapterName = String(deps.adapterName || "")
       .replace(/_adapter$/i, "")
       .replace(/[^a-z0-9_-]+/gi, "")
       .toLowerCase();
-    const adapterDir = adapterName || "openclaw";
+    if (!adapterName) return "";
+    const adapterDir = adapterName;
     const compatPath = path.join(deps.pluginRoot, "adaptors", adapterDir, "COMPATIBILITY.md");
     try {
       if (!fs.existsSync(compatPath)) return "";

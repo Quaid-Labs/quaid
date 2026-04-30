@@ -91,7 +91,7 @@ class InstanceManager:
         """Derive the full instance ID from a short label.
 
         Uses the adapter's agent_id_prefix() so naming is always consistent:
-          label "myproject" + prefix "claude-code" → "claude-code-myproject"
+          label "myproject" + prefix "<adapter>" → "<adapter>-myproject"
         """
         label = str(label or "").strip().lower()
         if not label:

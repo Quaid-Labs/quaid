@@ -1,6 +1,6 @@
 """Platform-level LLM slot scheduler.
 
-One coordinator process per platform (e.g. 'claude-code') per QUAID_HOME.
+One coordinator process per platform per QUAID_HOME.
 All instances on the same platform share a bounded slot pool, preventing
 N×max_workers concurrent LLM calls against the same API credentials.
 

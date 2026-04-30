@@ -488,7 +488,9 @@ class TestNotifyAgent:
 
     def test_openclaw_provider_error_uses_deferred_not_direct_notification(self, tmp_path):
         adapter = MagicMock()
-        adapter.adapter_id.return_value = "openclaw"
+        adapter.get_capability.side_effect = (
+            lambda key, default=False: True if key == "turn_scoped_provider_notices" else default
+        )
         adapter.data_dir.return_value = tmp_path / "data"
         adapter.instance_root.return_value = tmp_path
         adapter.notify.return_value = True

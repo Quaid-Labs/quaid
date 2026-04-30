@@ -10,7 +10,7 @@ Schema:
         "projects": {
             "quaid": {
                 "canonical_path": "/Users/me/quaid/projects/quaid",
-                "instances": ["claude-code", "openclaw"],
+                "instances": ["<adapter-instance-id>"],
                 "created_at": "2026-03-09T...",
                 "description": "Knowledge layer project"
             }

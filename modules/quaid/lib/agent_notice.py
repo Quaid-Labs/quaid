@@ -101,10 +101,9 @@ def _uses_turn_scoped_provider_notices(adapter: Any, *, severity: str, source: s
     if str(source or "").strip().lower() not in {"provider", "llm_config"}:
         return False
     try:
-        adapter_id = str(adapter.adapter_id() or "").strip().lower()
+        return adapter.get_capability("turn_scoped_provider_notices", False) is True
     except Exception:
-        adapter_id = ""
-    return adapter_id == "openclaw"
+        return False
 
 
 def _now_iso() -> str:

@@ -292,7 +292,7 @@ def preflight_compatibility_check(
     If not ok, the installer should print the message and bail.
 
     Args:
-        host_platform: "openclaw" or "claude-code"
+        host_platform: adapter or host platform id
         host_version: e.g. "2026.3.7"
         quaid_version: e.g. "0.2.15-alpha"
         cache_dir: optional dir for matrix cache (temp dir if None)

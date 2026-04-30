@@ -12,6 +12,11 @@
   },
   "runtime": {
     "instancePrefix": "claude-code-",
+    "projectEnvVars": [
+      "CLAUDE_PROJECT_DIR"
+    ],
+    "deriveInstanceFromCwd": true,
+    "supportsProjectDirBinding": false,
     "python": {
       "module": "adaptors.claude_code.adapter",
       "class": "ClaudeCodeAdapter"

@@ -23,6 +23,7 @@ from lib.adapter import (
     get_adapter,
     set_adapter,
     reset_adapter,
+    _project_instance_binding_path,
     _read_env_file,
 )
 from lib.instance import instance_slug_from_project_dir
@@ -2476,6 +2477,74 @@ class TestAdapterSelection:
         adapter = get_adapter()
         assert isinstance(adapter, CodexAdapter)
 
+    def test_config_codex_derived_project_instance_writes_binding(self, monkeypatch, tmp_path):
+        project_dir = tmp_path / "cdx-project"
+        project_dir.mkdir()
+        slug = "cdx-project"
+        expected_instance = f"codex-{slug}"
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_VISIBLE_HOME", str(tmp_path / "visible"))
+        monkeypatch.delenv("QUAID_INSTANCE", raising=False)
+        monkeypatch.delenv("QUAID_ADAPTER_TYPE", raising=False)
+        monkeypatch.setenv("CODEX_PROJECT_DIR", str(project_dir))
+
+        with patch("lib.instance.instance_slug_from_project_dir", return_value=slug):
+            adapter = get_adapter()
+
+        assert isinstance(adapter, CodexAdapter)
+        assert os.environ.get("QUAID_INSTANCE") == expected_instance
+        with patch("lib.instance.instance_slug_from_project_dir", return_value=slug):
+            binding_path = _project_instance_binding_path(tmp_path, "codex", str(project_dir))
+        assert binding_path is not None
+        payload = json.loads(binding_path.read_text(encoding="utf-8"))
+        assert payload["instance"] == expected_instance
+
+    def test_config_codex_explicit_instance_does_not_overwrite_project_binding(self, monkeypatch, tmp_path):
+        project_dir = tmp_path / "cdx-livetest"
+        project_dir.mkdir()
+        explicit_instance = "codex-m13test"
+        slug = "private-tmp-cdx-livetest"
+        canonical_instance = f"codex-{slug}"
+        for instance_id in (explicit_instance, canonical_instance):
+            cfg_dir = tmp_path / "instances" / instance_id
+            cfg_dir.mkdir(parents=True, exist_ok=True)
+            (cfg_dir / "config.json").write_text(
+                json.dumps({"adapter": {"type": "codex"}}),
+                encoding="utf-8",
+            )
+            data_dir = cfg_dir / "data"
+            data_dir.mkdir(parents=True, exist_ok=True)
+            (data_dir / "memory.db").touch()
+        with patch("lib.instance.instance_slug_from_project_dir", return_value=slug):
+            binding_path = _project_instance_binding_path(tmp_path, "codex", str(project_dir))
+        assert binding_path is not None
+        binding_path.parent.mkdir(parents=True, exist_ok=True)
+        binding_path.write_text(
+            json.dumps(
+                {
+                    "adapter": "codex",
+                    "instance": canonical_instance,
+                    "project_dir": str(project_dir.resolve()),
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_VISIBLE_HOME", str(tmp_path / "visible"))
+        monkeypatch.setenv("QUAID_INSTANCE", explicit_instance)
+        monkeypatch.setenv("QUAID_ADAPTER_TYPE", "codex")
+        monkeypatch.setenv("CODEX_PROJECT_DIR", str(project_dir))
+
+        with patch("lib.instance.instance_slug_from_project_dir", return_value=slug):
+            adapter = get_adapter()
+
+        assert isinstance(adapter, CodexAdapter)
+        payload = json.loads(binding_path.read_text(encoding="utf-8"))
+        assert payload["instance"] == canonical_instance
+
     def test_config_missing_adapter_type_fails_loud(self, monkeypatch, tmp_path):
         instance_id = "codex-lean"
         cfg_dir = tmp_path / "instances" / instance_id
@@ -2603,7 +2672,7 @@ class TestAdapterSelection:
         monkeypatch.delenv("QUAID_WORKSPACE", raising=False)
         monkeypatch.chdir(project_dir)
 
-        with pytest.raises(RuntimeError, match="Ambiguous adapter resolution: both claude-code and codex"):
+        with pytest.raises(RuntimeError, match="Ambiguous adapter resolution: multiple cwd-derived adapter"):
             get_adapter()
 
         assert os.environ.get("QUAID_INSTANCE") is None

@@ -18,7 +18,7 @@ import json
 import re
 import shutil
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, List, Optional
 
 # Instance name: alphanumeric start, then alphanumeric/dot/underscore/hyphen, max 64 chars
 _INSTANCE_ID_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$")
@@ -105,7 +105,7 @@ def instance_id() -> str:
     if not env:
         raise InstanceError(
             "QUAID_INSTANCE environment variable is not set. "
-            "Set it to a valid instance name (e.g. 'openclaw', 'claude-code')."
+            "Set it to a valid instance name."
         )
     return validate_instance_id(env)
 
@@ -274,11 +274,33 @@ def _active_openclaw_agent_labels() -> tuple[set[str], list[Path], bool]:
     return labels, roots, has_authoritative_list
 
 
+def _adapter_id_with_runtime_flag(flag: str) -> str:
+    manifests_dir = Path(__file__).resolve().parent.parent / "adaptors" / "manifests"
+    try:
+        for manifest_path in sorted(manifests_dir.glob("*.json")):
+            try:
+                data: Any = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            runtime = data.get("runtime")
+            if not isinstance(runtime, dict) or not runtime.get(flag):
+                continue
+            adapter_id = str(data.get("id") or manifest_path.stem).strip().lower()
+            if adapter_id:
+                return adapter_id
+    except Exception:
+        return ""
+    return ""
+
+
 def _is_stale_openclaw_agent_instance(name: str, instance_dir: Path) -> bool:
-    prefix = "openclaw-"
+    adapter_id = _adapter_id_with_runtime_flag("staleAgentSiloPrune")
+    if not adapter_id:
+        return False
+    prefix = f"{adapter_id}-"
     if not name.startswith(prefix) or name == f"{prefix}main":
         return False
-    if _raw_adapter_type(instance_dir) != "openclaw":
+    if _raw_adapter_type(instance_dir) != adapter_id:
         return False
     labels, roots, has_authoritative_list = _active_openclaw_agent_labels()
     if not roots:
