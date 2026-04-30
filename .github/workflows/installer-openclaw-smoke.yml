@@ -156,6 +156,30 @@ jobs:
             python -c "import json, os, pathlib; cfg=pathlib.Path(os.environ['OPENCLAW_CFG_PATH']); data=json.loads(cfg.read_text()); agents=data.setdefault('agents', {}); defaults=agents.setdefault('defaults', {}); defaults.setdefault('compaction', {})['mode']='safeguard'; cfg.write_text(json.dumps(data, indent=2) + '\n'); print(f'seeded compaction safeguard mode: {cfg}')"
           fi
 
+          python - <<'PY'
+          import json
+          import pathlib
+
+          auth_path = pathlib.Path.home() / ".quaid" / "shared" / "auth" / "credentials.json"
+          auth_path.parent.mkdir(parents=True, exist_ok=True)
+          auth_path.write_text(
+              json.dumps(
+                  {
+                      "credentials": {
+                          "anthropic_oauth": {
+                              "token": "sk-ant-oat01-ci-installer-smoke"
+                          }
+                      }
+                  },
+                  indent=2,
+              )
+              + "\n",
+              encoding="utf-8",
+          )
+          auth_path.chmod(0o600)
+          print(f"seeded shared auth registry: {auth_path}")
+          PY
+
           node setup-quaid.mjs --agent --owner-name "CI Installer"
 
           OPENCLAW_CFG_PATH="${HOME}/.openclaw/openclaw.json"
