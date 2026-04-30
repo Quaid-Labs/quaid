@@ -219,6 +219,9 @@ because `openclaw update --yes` can finish the CLI upgrade quickly and then spen
 additional time waiting for the launchd gateway restart verification to settle.
 Override with `OPENCLAW_PREFLIGHT_UPDATE_TIMEOUT_S` only for presnapshot
 maintenance diagnostics.
+NPM-backed platform upgrades install the concrete version resolved by
+`npm view <package> version`, not cached `@latest`, and verify the installed
+version after `npm install` returns.
 
 All scripts that touch the remote accept `--dry-run` to print SSH commands without
 executing them, and `--config <path>` to override the default config location.

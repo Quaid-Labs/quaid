@@ -649,7 +649,19 @@ PYEOF" 2>/dev/null | tr -d '\r'
 
             printf "  upgrading %-12s ... " "${label}"
             update_output=""
-            if update_output="$(ssh "$REMOTE_HOST" "set -euo pipefail; export PATH=\"/opt/homebrew/bin:\$HOME/.local/bin:\$PATH\"; eval \"\$(/opt/homebrew/bin/brew shellenv 2>/dev/null)\" 2>/dev/null || true; npm install -g ${package_name}@latest --prefer-offline 2>/dev/null || npm install -g ${package_name}@latest" 2>&1)"; then
+            local install_spec="${package_name}@latest"
+            if [[ "$latest_version" != "__UNKNOWN__" && -n "$latest_version" ]]; then
+                install_spec="${package_name}@${latest_version}"
+            fi
+            if update_output="$(ssh "$REMOTE_HOST" "set -euo pipefail; export PATH=\"/opt/homebrew/bin:\$HOME/.local/bin:\$PATH\"; eval \"\$(/opt/homebrew/bin/brew shellenv 2>/dev/null)\" 2>/dev/null || true; npm install -g '${install_spec}'" 2>&1)"; then
+                local after_version
+                after_version="$(remote_pkg_version "$package_name")"
+                if [[ "$latest_version" != "__UNKNOWN__" && "$after_version" != "$latest_version" ]]; then
+                    echo "WARN: upgrade verification failed (continuing)"
+                    echo "    expected ${latest_version}, found ${after_version}"
+                    printf '%s\n' "$update_output" | tail -3 | sed 's/^/    /'
+                    return
+                fi
                 echo "done"
             else
                 echo "WARN: upgrade failed (continuing)"
