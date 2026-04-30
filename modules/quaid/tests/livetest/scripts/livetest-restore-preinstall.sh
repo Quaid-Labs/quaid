@@ -90,6 +90,7 @@ label = sys.argv[1]
 home = pathlib.Path.home()
 required = [
     home / "quaidcode" / "dev" / "setup-quaid.mjs",
+    home / ".claude" / ".credentials.json",
     home / ".quaid" / "shared" / "auth" / "credentials.json",
 ]
 missing = [str(path) for path in required if not path.is_file()]
@@ -98,6 +99,30 @@ if missing:
     for path in missing:
         print(f"  {path}", file=sys.stderr)
     raise SystemExit(1)
+
+import datetime
+import json
+
+cc_creds = home / ".claude" / ".credentials.json"
+payload = json.loads(cc_creds.read_text(encoding="utf-8"))
+oauth = payload.get("claudeAiOauth")
+if not isinstance(oauth, dict):
+    raise SystemExit(f"{label}: missing claudeAiOauth in {cc_creds}")
+raw_expires = oauth.get("expiresAt")
+if raw_expires in (None, ""):
+    raise SystemExit(f"{label}: missing Claude OAuth expiresAt in {cc_creds}")
+if isinstance(raw_expires, (int, float)):
+    expires_at = datetime.datetime.fromtimestamp(float(raw_expires) / 1000.0, tz=datetime.timezone.utc)
+else:
+    raw_text = str(raw_expires).strip()
+    if raw_text.isdigit():
+        expires_at = datetime.datetime.fromtimestamp(int(raw_text) / 1000.0, tz=datetime.timezone.utc)
+    else:
+        expires_at = datetime.datetime.fromisoformat(raw_text.replace("Z", "+00:00"))
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=datetime.timezone.utc)
+if expires_at <= datetime.datetime.now(datetime.timezone.utc):
+    raise SystemExit(f"{label}: Claude OAuth expired at {expires_at.isoformat()} in {cc_creds}")
 print(f"{label}: verified preinstall state")
 PYEOF
 }

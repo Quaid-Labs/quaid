@@ -194,63 +194,46 @@ print(f"{label}: valid until {expires_at.isoformat()} (TTL {remaining / 3600.0:.
 PYEOF
 }
 
-CC_OAUTH_REMOTE_REFRESHED=0
-
-copy_claude_oauth_credentials_to_remote() {
-    local heading="${1:-[7/8] Copying CC OAuth credentials to remote...}"
-    local cc_enabled local_creds local_status remote_status ttl_summary
-
-    echo ""
-    echo "$heading"
-    CC_OAUTH_REMOTE_REFRESHED=0
-
-    cc_enabled="$(read_config platforms.cc.enabled)"
-    if [[ "$cc_enabled" != "True" && "$cc_enabled" != "true" ]]; then
-        echo "  (skipped — CC platform not enabled in config)"
-        return 0
-    fi
-    if [[ "$DRY_RUN" == "1" ]]; then
-        echo "  [dry-run] would validate coordinator Claude OAuth has >=$((CC_OAUTH_MIN_TTL_SECONDS / 60))m remaining"
-        echo "  [dry-run] would scp ~/.claude/.credentials.json to $REMOTE_HOST:~/.claude/.credentials.json"
-        return 0
-    fi
-
-    local_creds="$HOME/.claude/.credentials.json"
-    if [[ ! -f "$local_creds" ]]; then
-        echo "  $FAIL  $local_creds not found — CC cannot create real sessions without coordinator Claude auth"
-        ERRORS=$((ERRORS + 1))
-        return 0
-    fi
-
-    local_status="$(validate_claude_oauth_credentials "$local_creds" "local CC OAuth" "$CC_OAUTH_MIN_TTL_SECONDS" 2>&1 || true)"
-    if [[ "$local_status" != local\ CC\ OAuth:\ valid\ until* ]]; then
-        echo "  $FAIL  $local_status"
-        echo "         Refresh coordinator Claude auth before preflight, then rerun."
-        echo "         Override only for emergency short runs: LIVETEST_CC_OAUTH_MIN_TTL_SECONDS=0"
-        ERRORS=$((ERRORS + 1))
-        return 0
-    fi
-
-    echo "  $PASS  $local_status"
-    ssh "$REMOTE_HOST" 'mkdir -p ~/.claude'
-    scp "$local_creds" "$REMOTE_HOST:~/.claude/.credentials.json"
-    if ! remote_status="$(ssh "$REMOTE_HOST" python3 - '~/.claude/.credentials.json' "$CC_OAUTH_MIN_TTL_SECONDS" <<'PYEOF' 2>&1
-import datetime
-import json
+sha256_file() {
+    python3 - "$1" <<'PYEOF'
+import hashlib
 import pathlib
 import sys
 
 path = pathlib.Path(sys.argv[1]).expanduser()
+print(hashlib.sha256(path.read_bytes()).hexdigest())
+PYEOF
+}
+
+validate_remote_claude_oauth_credentials() {
+    local expected_sha="${1:-}"
+    ssh "$REMOTE_HOST" python3 - "$CC_OAUTH_MIN_TTL_SECONDS" "$expected_sha" <<'PYEOF'
+import datetime
+import hashlib
+import json
+import pathlib
+import sys
+
+path = pathlib.Path.home() / ".claude" / ".credentials.json"
 label = "remote CC OAuth"
 try:
-    min_ttl_seconds = int(float(sys.argv[2] or 0))
+    min_ttl_seconds = int(float(sys.argv[1] or 0))
 except Exception:
-    raise SystemExit(f"{label}: invalid minimum TTL seconds {sys.argv[2]!r}")
+    raise SystemExit(f"{label}: invalid minimum TTL seconds {sys.argv[1]!r}")
+expected_sha = str(sys.argv[2] or "").strip().lower()
 if not path.exists():
     raise SystemExit(f"{label}: missing {path}")
 
+raw = path.read_bytes()
+actual_sha = hashlib.sha256(raw).hexdigest()
+if expected_sha and actual_sha != expected_sha:
+    raise SystemExit(
+        f"{label}: remote credential hash mismatch at {path} "
+        f"(remote {actual_sha[:12]}, local {expected_sha[:12]})"
+    )
+
 try:
-    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload = json.loads(raw.decode("utf-8"))
 except Exception as exc:
     raise SystemExit(f"{label}: invalid JSON in {path}: {exc}") from exc
 
@@ -292,9 +275,86 @@ if min_ttl_seconds > 0 and remaining < min_ttl_seconds:
         f"(remaining {int(remaining // 60)}m, required {int(min_ttl_seconds // 60)}m; {path})"
     )
 
-print(f"{label}: valid until {expires_at.isoformat()} (TTL {remaining / 3600.0:.1f}h, remaining {int(remaining // 60)}m)")
+print(
+    f"{label}: valid until {expires_at.isoformat()} "
+    f"(TTL {remaining / 3600.0:.1f}h, remaining {int(remaining // 60)}m, sha {actual_sha[:12]})"
+)
 PYEOF
-)"; then
+}
+
+abort_if_errors() {
+    local context="${1:-Preflight}"
+    if [[ "$ERRORS" -gt 0 ]]; then
+        echo ""
+        echo "$context aborted: $ERRORS check(s) failed." >&2
+        exit 1
+    fi
+}
+
+CC_OAUTH_REMOTE_REFRESHED=0
+CC_OAUTH_EXPECTED_SHA=""
+
+copy_claude_oauth_credentials_to_remote() {
+    local heading="${1:-[7/8] Copying CC OAuth credentials to remote...}"
+    local cc_enabled local_creds local_status local_sha remote_status remote_tmp ttl_summary
+
+    echo ""
+    echo "$heading"
+    CC_OAUTH_REMOTE_REFRESHED=0
+    CC_OAUTH_EXPECTED_SHA=""
+
+    cc_enabled="$(read_config platforms.cc.enabled)"
+    if [[ "$cc_enabled" != "True" && "$cc_enabled" != "true" ]]; then
+        echo "  (skipped — CC platform not enabled in config)"
+        return 0
+    fi
+    if [[ "$DRY_RUN" == "1" ]]; then
+        echo "  [dry-run] would validate coordinator Claude OAuth has >=$((CC_OAUTH_MIN_TTL_SECONDS / 60))m remaining"
+        echo "  [dry-run] would scp ~/.claude/.credentials.json to $REMOTE_HOST:~/.claude/.credentials.json"
+        return 0
+    fi
+
+    local_creds="$HOME/.claude/.credentials.json"
+    if [[ ! -f "$local_creds" ]]; then
+        echo "  $FAIL  $local_creds not found — CC cannot create real sessions without coordinator Claude auth"
+        ERRORS=$((ERRORS + 1))
+        return 0
+    fi
+
+    local_status="$(validate_claude_oauth_credentials "$local_creds" "local CC OAuth" "$CC_OAUTH_MIN_TTL_SECONDS" 2>&1 || true)"
+    if [[ "$local_status" != local\ CC\ OAuth:\ valid\ until* ]]; then
+        echo "  $FAIL  $local_status"
+        echo "         Refresh coordinator Claude auth before preflight, then rerun."
+        echo "         Override only for emergency short runs: LIVETEST_CC_OAUTH_MIN_TTL_SECONDS=0"
+        ERRORS=$((ERRORS + 1))
+        return 0
+    fi
+
+    echo "  $PASS  $local_status"
+    local_sha="$(sha256_file "$local_creds")"
+    CC_OAUTH_EXPECTED_SHA="$local_sha"
+    remote_tmp="$(ssh "$REMOTE_HOST" 'mkdir -p "$HOME/.claude" && umask 077 && mktemp "$HOME/.claude/.credentials.json.tmp.XXXXXX"')"
+    scp "$local_creds" "$REMOTE_HOST:$remote_tmp"
+    ssh "$REMOTE_HOST" python3 - "$remote_tmp" <<'PYEOF'
+import os
+import pathlib
+import sys
+
+tmp = pathlib.Path(sys.argv[1]).expanduser()
+dest = pathlib.Path.home() / ".claude" / ".credentials.json"
+dest.parent.mkdir(parents=True, exist_ok=True)
+os.replace(tmp, dest)
+dest.chmod(0o600)
+try:
+    dir_fd = os.open(str(dest.parent), os.O_RDONLY)
+    try:
+        os.fsync(dir_fd)
+    finally:
+        os.close(dir_fd)
+except Exception:
+    pass
+PYEOF
+    if ! remote_status="$(validate_remote_claude_oauth_credentials "$local_sha" 2>&1)"; then
         echo "  $FAIL  $remote_status"
         ERRORS=$((ERRORS + 1))
     elif [[ "$remote_status" != remote\ CC\ OAuth:\ valid\ until* ]]; then
@@ -321,6 +381,41 @@ if p.exists():
         p.write_text(json.dumps(d, indent=2))
         print('  removed stale ANTHROPIC_API_KEY from settings.json')
 PYEOF
+}
+
+verify_claude_oauth_seed_persisted() {
+    local heading="${1:-Verifying CC OAuth seed persisted...}"
+    local cc_enabled local_creds local_sha remote_status
+
+    echo ""
+    echo "$heading"
+
+    cc_enabled="$(read_config platforms.cc.enabled)"
+    if [[ "$cc_enabled" != "True" && "$cc_enabled" != "true" ]]; then
+        echo "  (skipped — CC platform not enabled in config)"
+        return 0
+    fi
+    if [[ "$DRY_RUN" == "1" ]]; then
+        echo "  [dry-run] would verify remote ~/.claude/.credentials.json still matches coordinator credentials"
+        return 0
+    fi
+
+    local_sha="$CC_OAUTH_EXPECTED_SHA"
+    if [[ -z "$local_sha" ]]; then
+        local_creds="$HOME/.claude/.credentials.json"
+        if [[ ! -f "$local_creds" ]]; then
+            echo "  $FAIL  $local_creds not found — cannot verify remote CC OAuth seed"
+            ERRORS=$((ERRORS + 1))
+            return 0
+        fi
+        local_sha="$(sha256_file "$local_creds")"
+    fi
+    if ! remote_status="$(validate_remote_claude_oauth_credentials "$local_sha" 2>&1)"; then
+        echo "  $FAIL  $remote_status"
+        ERRORS=$((ERRORS + 1))
+    else
+        echo "  $PASS  $remote_status"
+    fi
 }
 
 echo "========================================"
@@ -844,6 +939,7 @@ fi
 # discovers the problem when the first real CC session hits 401 before any hooks fire.
 # Do NOT inject ANTHROPIC_API_KEY — it overrides credentials.json and may be stale.
 copy_claude_oauth_credentials_to_remote "[7/8] Copying CC OAuth credentials to remote..."
+abort_if_errors "Preflight"
 
 # --- Step 7b: Seed shared Quaid auth credentials for installer ---
 # M0 expects ~/.quaid/shared/auth/credentials.json to exist on the run VM.
@@ -1426,6 +1522,9 @@ else
     "$SCRIPT_DIR/livetest-platform-start.sh" "${START_ARGS[@]}"
     echo "  [8/8] platform start complete"
 fi
+
+verify_claude_oauth_seed_persisted "[8b/8] Verifying CC OAuth seed persisted..."
+abort_if_errors "Preflight"
 
 # --- Done ---
 echo ""
