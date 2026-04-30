@@ -95,11 +95,11 @@ vm_ip() {
 # Retry tart ip until we get an address or timeout
 wait_for_ip() {
     local name="$1" elapsed=0 ip=""
-    echo "  Waiting for VM to get an IP address..."
+    echo "  Waiting for VM to get an IP address..." >&2
     while [[ $elapsed -lt $BOOT_TIMEOUT ]]; do
         ip="$(vm_ip "$name")"
         if [[ -n "$ip" && "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "  VM IP: $ip"
+            echo "  VM IP: $ip" >&2
             echo "$ip"
             return 0
         fi
