@@ -698,6 +698,21 @@ class MemoryGraph:
                 f"embedding float[{dim}] distance_metric=cosine)"
             )
 
+    def _delete_vec_node_if_present(self, conn, node_id: str, *, context: str = "") -> bool:
+        """Delete a vec row when the index exists; ignore pre-bootstrap absence."""
+        try:
+            conn.execute("DELETE FROM vec_nodes WHERE node_id = ?", (node_id,))
+            return True
+        except sqlite3.OperationalError as exc:
+            if "no such table: vec_nodes" in str(exc).lower():
+                logger.debug(
+                    "vec_nodes delete skipped before vec bootstrap context=%s node_id=%s",
+                    context or "unknown",
+                    node_id,
+                )
+                return False
+            raise
+
     # ==========================================================================
     # Embeddings
     # ==========================================================================
@@ -1143,7 +1158,7 @@ class MemoryGraph:
                     recovered = False
                     # Recover any vec upsert failure via delete-then-insert in the same txn.
                     try:
-                        active_conn.execute("DELETE FROM vec_nodes WHERE node_id = ?", (node.id,))
+                        self._delete_vec_node_if_present(active_conn, node.id, context="update_node_retry")
                         active_conn.execute("INSERT INTO vec_nodes(node_id, embedding) VALUES (?, ?)", (node.id, packed))
                         recovered = True
                         logger.warning(
@@ -1234,7 +1249,7 @@ class MemoryGraph:
             result = conn.execute("DELETE FROM nodes WHERE id = ?", (node_id,))
             if result.rowcount > 0 and _lib_has_vec():
                 try:
-                    conn.execute("DELETE FROM vec_nodes WHERE node_id = ?", (node_id,))
+                    self._delete_vec_node_if_present(conn, node_id, context="delete_node")
                 except Exception as exc:
                     logger.warning(
                         "delete_node removed node %s but failed vec_nodes cleanup: %s",
@@ -6339,54 +6354,72 @@ def _recall_once(
     target_date = _query_target_date(clean_query)
     prefer_fresh = bool(relative_temporal_freshness) and not target_date
 
-    # Fast Ollama health check — skip semantic search entirely if Ollama is down
-    # Saves ~30s of embedding timeout waits when Ollama is unreachable
-    _phase_t0 = _time.monotonic()
-    _ollama_up = _ollama_healthy()
-    _phase_ms["ollama_health_ms"] = round((_time.monotonic() - _phase_t0) * 1000)
-
     # Search with buffer for composite scoring + MMR selection
     search_limit = limit * 3
-    if _ollama_up:
-        # Route query through LLM (HyDE) — only when embeddings will be used
-        cfg_use_hyde = True
+    search_query = clean_query
+    results = []
+    _ollama_up = False
+    _phase_ms["ollama_health_ms"] = 0
+
+    # Structural exact markers are better served by a lexical exact pass than by
+    # embeddings. This is a primary retrieval path, not a degraded fallback.
+    if _is_single_structural_exact_query(clean_query):
+        _phase_t0 = _time.monotonic()
         try:
-            cfg_use_hyde = bool(get_config().retrieval.use_hyde)
+            exact_fts = graph.search_fts(clean_query, limit=search_limit, owner_id=owner_id)
         except Exception:
+            exact_fts = []
+        for node, fts_rank in exact_fts:
+            quality = max(0.94, 1.0 - fts_rank * 0.01)
+            results.append((node, quality))
+        _phase_ms["exact_structural_fts_ms"] = round((_time.monotonic() - _phase_t0) * 1000)
+
+    if not results:
+        # Fast Ollama health check — skip semantic search entirely if Ollama is down
+        # Saves ~30s of embedding timeout waits when Ollama is unreachable
+        _phase_t0 = _time.monotonic()
+        _ollama_up = _ollama_healthy()
+        _phase_ms["ollama_health_ms"] = round((_time.monotonic() - _phase_t0) * 1000)
+
+        if _ollama_up:
+            # Route query through LLM (HyDE) — only when embeddings will be used
             cfg_use_hyde = True
-        _use_hyde = bool(use_routing) and cfg_use_hyde
-        if not _HAS_LLM_CLIENTS:
-            _use_hyde = False
-        _phase_t0 = _time.monotonic()
-        search_query = route_query(clean_query) if _use_hyde else clean_query
-        _phase_ms["hyde_ms"] = round((_time.monotonic() - _phase_t0) * 1000)
-        _phase_t0 = _time.monotonic()
-        results = graph.search_hybrid(
-            search_query,
-            limit=search_limit,
-            privacy=privacy,
-            owner_id=owner_id,
-            current_session_id=current_session_id,
-            compaction_time=compaction_time,
-            intent=intent,
-            timeout_seconds=search_timeout_s,
-        )
-        _phase_ms["search_hybrid_ms"] = round((_time.monotonic() - _phase_t0) * 1000)
-    else:
-        search_query = clean_query  # No HyDE when embeddings unavailable
-        import logging
-        msg = "Ollama unreachable — recall falling back to FTS-only"
-        logging.getLogger(__name__).warning(msg)
-        if _is_fail_hard_mode():
-            raise RuntimeError(
-                "Embedding provider unavailable during recall. "
-                "Fail-hard mode is ON (retrieval.fail_hard=true), "
-                "so degraded FTS-only fallback is blocked. "
-                "Set retrieval.fail_hard=false to allow fallback, "
-                "but this is not recommended because it masks infrastructure faults."
+            try:
+                cfg_use_hyde = bool(get_config().retrieval.use_hyde)
+            except Exception:
+                cfg_use_hyde = True
+            _use_hyde = bool(use_routing) and cfg_use_hyde
+            if not _HAS_LLM_CLIENTS:
+                _use_hyde = False
+            _phase_t0 = _time.monotonic()
+            search_query = route_query(clean_query) if _use_hyde else clean_query
+            _phase_ms["hyde_ms"] = round((_time.monotonic() - _phase_t0) * 1000)
+            _phase_t0 = _time.monotonic()
+            results = graph.search_hybrid(
+                search_query,
+                limit=search_limit,
+                privacy=privacy,
+                owner_id=owner_id,
+                current_session_id=current_session_id,
+                compaction_time=compaction_time,
+                intent=intent,
+                timeout_seconds=search_timeout_s,
             )
-        results = []  # Skip semantic search, go straight to FTS fallback
-        _fts_fallback_used = True
+            _phase_ms["search_hybrid_ms"] = round((_time.monotonic() - _phase_t0) * 1000)
+        else:
+            import logging
+            msg = "Ollama unreachable — recall falling back to FTS-only"
+            logging.getLogger(__name__).warning(msg)
+            if _is_fail_hard_mode():
+                raise RuntimeError(
+                    "Embedding provider unavailable during recall. "
+                    "Fail-hard mode is ON (retrieval.fail_hard=true), "
+                    "so degraded FTS-only fallback is blocked. "
+                    "Set retrieval.fail_hard=false to allow fallback, "
+                    "but this is not recommended because it masks infrastructure faults."
+                )
+            results = []  # Skip semantic search, go straight to FTS fallback
+            _fts_fallback_used = True
 
     # FTS fallback: if hybrid search returned nothing (Ollama may be down),
     # fall back to keyword-only search so recall isn't completely broken
@@ -14047,7 +14080,7 @@ def store(
                                 if _lib_has_vec():
                                     conn_cm = nullcontext(_conn) if _conn is not None else graph._get_conn()
                                     with conn_cm as conn:
-                                        conn.execute("DELETE FROM vec_nodes WHERE node_id = ?", (existing.id,))
+                                        graph._delete_vec_node_if_present(conn, existing.id, context="dedup_subsume_update")
                             graph.update_node(existing, conn=_conn)
                             if (update_if_dup and verified) or subsumes == "a_subsumes_b":
                                 return _with_dedup_telemetry({
@@ -14682,7 +14715,7 @@ def hard_delete_node(node_id: str, conn: Optional[sqlite3.Connection] = None) ->
         active_conn.execute("DELETE FROM node_domains WHERE node_id = ?", (node_id,))
         # Clean up vec_nodes index (virtual table, no CASCADE)
         try:
-            active_conn.execute("DELETE FROM vec_nodes WHERE node_id = ?", (node_id,))
+            graph._delete_vec_node_if_present(active_conn, node_id, context="hard_delete")
         except Exception:
             pass  # vec_nodes may not exist yet
         # dedup_log.existing_node_id uses ON DELETE SET NULL — audit trail preserved automatically

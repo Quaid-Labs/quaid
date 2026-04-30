@@ -2696,8 +2696,7 @@ class TestRecallTelemetry:
              patch("datastore.memorydb.memory_graph._ollama_healthy", return_value=True), \
              patch("datastore.memorydb.memory_graph._is_fail_hard_mode", return_value=False), \
              patch("lib.llm_clients.call_fast_reasoning", side_effect=AssertionError("exact codeword path should not call LLM")), \
-             patch.object(mg.MemoryGraph, "search_hybrid", return_value=[(exact_node, 0.93)]), \
-             patch.object(mg.MemoryGraph, "search_fts", return_value=[]):
+             patch.object(mg.MemoryGraph, "search_hybrid", side_effect=AssertionError("exact codeword path should not call hybrid search")):
             rows, meta = mg.recall(
                 "walnut-umbrella-7142",
                 owner_id="quaid",
