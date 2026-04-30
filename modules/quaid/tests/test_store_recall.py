@@ -2685,7 +2685,8 @@ class TestRecallTelemetry:
                 "walnut-umbrella-7142 retrieval canary marker",
                 owner_id="quaid",
                 status="approved",
-            )
+            ),
+            embed=False,
         )
         exact_node = graph.get_node(node_id)
         assert exact_node is not None
