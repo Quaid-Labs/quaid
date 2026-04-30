@@ -37,8 +37,8 @@ jobs:
       fail-fast: false
       matrix:
         openclaw_version:
-          # Single pinned release target for prerelease Quaid.
-          - 2026.3.23
+          # Single pinned latest release target for Quaid.
+          - 2026.4.27
         scenario:
           - fresh
           - stale-registry-upgrade
