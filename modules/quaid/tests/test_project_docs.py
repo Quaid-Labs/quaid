@@ -948,6 +948,28 @@ def test_pid_identity_rejects_unrelated_process(project_env):
     assert project_docs.read_supervisor_pid() is None
 
 
+def test_worker_pid_reader_tolerates_fresh_command_probe_miss(project_env, monkeypatch):
+    _tmp_path, _src, _entry = project_env
+    from core import project_docs
+
+    project_docs._write_pid_record(
+        project_docs.worker_pid_path("demo"),
+        role=project_docs.WORKER_ROLE,
+        pid=os.getpid(),
+        token="pytest",
+        project="demo",
+    )
+    monkeypatch.setattr(project_docs, "_process_command", lambda _pid: "")
+
+    assert project_docs.read_worker_pid("demo") == os.getpid()
+
+    record = json.loads(project_docs.worker_pid_path("demo").read_text(encoding="utf-8"))
+    record["started_at"] = "2000-01-01T00:00:00Z"
+    project_docs.worker_pid_path("demo").write_text(json.dumps(record), encoding="utf-8")
+
+    assert project_docs.read_worker_pid("demo") is None
+
+
 def test_start_supervisor_reaps_matching_orphans_before_spawn(project_env, monkeypatch):
     _tmp_path, _src, _entry = project_env
     from core import project_docs

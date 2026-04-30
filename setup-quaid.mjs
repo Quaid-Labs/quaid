@@ -11,7 +11,7 @@
 // License: MIT
 // =============================================================================
 
-import { execSync, spawnSync } from "node:child_process";
+import { execSync, spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -1906,9 +1906,46 @@ function _gatewayRegisteredInLaunchd() {
 function _gatewayServiceLooksStopped(snapshot) {
   const text = `${snapshot.statusText}\n${snapshot.probeText}`.toLowerCase();
   return text.includes("not loaded")
+    || text.includes("runtime: stopped")
+    || text.includes("state inactive")
+    || text.includes("sub dead")
     || text.includes("reachable: no")
     || text.includes("econnrefused")
     || text.includes("connect failed");
+}
+
+function _foregroundGatewayRecoveryEnabled() {
+  const raw = String(process.env.QUAID_INSTALLER_OPENCLAW_FOREGROUND_GATEWAY_RECOVERY || "").trim().toLowerCase();
+  return raw === "1" || raw === "true" || raw === "yes";
+}
+
+function _startForegroundOpenClawGateway(cli, context) {
+  if (!cli) return false;
+  const port = _resolveOpenClawGatewayPort();
+  const logPath = path.join(os.tmpdir(), `quaid-openclaw-gateway-recovery-${process.pid}-${Date.now()}.log`);
+  let logFd = null;
+  try {
+    logFd = fs.openSync(logPath, "a");
+    const child = spawn(
+      cli,
+      ["gateway", "run", "--allow-unconfigured", "--force", "--port", port],
+      {
+        detached: true,
+        stdio: ["ignore", logFd, logFd],
+        env: { ...process.env, OPENCLAW_GATEWAY_PORT: port },
+      },
+    );
+    child.unref();
+    log.warn(`Started foreground OpenClaw gateway recovery during ${context}: pid=${child.pid} port=${port} log=${logPath}`);
+    return true;
+  } catch (err) {
+    log.warn(`Foreground OpenClaw gateway recovery failed during ${context}: ${String(err)}`);
+    return false;
+  } finally {
+    if (logFd !== null) {
+      try { fs.closeSync(logFd); } catch {}
+    }
+  }
 }
 
 async function ensureGatewayReadyOrThrow(cli, context, timeoutMs = 12_000) {
@@ -1930,6 +1967,15 @@ async function ensureGatewayReadyOrThrow(cli, context, timeoutMs = 12_000) {
   if (_gatewayHttpCode("/health", "GET", null) === 200) return;
 
   const serviceInLaunchd = _gatewayRegisteredInLaunchd();
+  if (
+    _foregroundGatewayRecoveryEnabled()
+    && !serviceInLaunchd
+    && (_gatewayServiceLooksMissing(snapshot) || _gatewayServiceLooksStopped(snapshot))
+  ) {
+    log.warn(`Gateway service is unavailable during ${context}; attempting env-gated foreground recovery.`);
+    if (_startForegroundOpenClawGateway(cli, context) && await waitForGatewayWarmup(60_000)) return;
+    snapshot = _gatewayStatusSnapshot(cli);
+  }
   if (_gatewayServiceLooksMissing(snapshot) && !serviceInLaunchd) {
     log.warn("Gateway service appears missing after restart; attempting service install recovery.");
     const installRes = runCliWithTimeout(cli, ["gateway", "install"], 30_000);

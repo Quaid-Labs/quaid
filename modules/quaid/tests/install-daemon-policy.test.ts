@@ -197,6 +197,22 @@ describe("install daemon policy", () => {
     expect(setupText).toContain('const rawPort = _resolveOpenClawGatewayPort();');
   });
 
+  it("OpenClaw installer smoke can recover a foreground gateway when explicitly enabled", () => {
+    const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+    const setupText = fs.readFileSync(path.join(repoRoot, "setup-quaid.mjs"), "utf8");
+    const workflowText = fs.readFileSync(
+      path.join(repoRoot, ".github", "workflows", "installer-openclaw-smoke.yml"),
+      "utf8",
+    );
+
+    expect(workflowText).toContain("QUAID_INSTALLER_OPENCLAW_FOREGROUND_GATEWAY_RECOVERY=1");
+    expect(setupText).toContain("function _foregroundGatewayRecoveryEnabled()");
+    expect(setupText).toContain("function _startForegroundOpenClawGateway(cli, context)");
+    expect(setupText).toContain('text.includes("runtime: stopped")');
+    expect(setupText).toContain('["gateway", "run", "--allow-unconfigured", "--force", "--port", port]');
+    expect(setupText).toContain("Gateway service is unavailable during ${context}; attempting env-gated foreground recovery.");
+  });
+
   it("OpenClaw hook symbol grep is diagnostic after the version gate", () => {
     const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
     const setupText = fs.readFileSync(path.join(repoRoot, "setup-quaid.mjs"), "utf8");

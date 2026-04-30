@@ -530,14 +530,32 @@ def _matching_supervisor_pids(*, quaid_home: Optional[Path] = None) -> List[int]
     return sorted(set(matches))
 
 
-def _pid_record_matches(record: Dict[str, Any], *, role: str, project: Optional[str] = None) -> bool:
-    pid = int(record.get("pid") or 0)
+def _pid_record_started_recently(record: Dict[str, Any], *, max_age_seconds: float = 300.0) -> bool:
+    ts = _parse_iso_ts(record.get("started_at"))
+    if ts is None:
+        return False
+    age = time.time() - ts
+    return -5.0 <= age <= max_age_seconds
+
+
+def _pid_record_basic_matches(record: Dict[str, Any], *, role: str, project: Optional[str] = None) -> bool:
+    try:
+        pid = int(record.get("pid") or 0)
+    except (TypeError, ValueError):
+        return False
     if not _pid_alive(pid):
         return False
     if record.get("role") != role:
         return False
     if project is not None and record.get("project") != validate_project_name(project):
         return False
+    return True
+
+
+def _pid_record_matches(record: Dict[str, Any], *, role: str, project: Optional[str] = None) -> bool:
+    if not _pid_record_basic_matches(record, role=role, project=project):
+        return False
+    pid = int(record.get("pid") or 0)
     command = _process_command(pid)
     if role == SUPERVISOR_ROLE:
         if "project_docs_supervisor.py" in command and " run" in f" {command}":
@@ -545,7 +563,12 @@ def _pid_record_matches(record: Dict[str, Any], *, role: str, project: Optional[
         return "project_docs_cli.py" in command and " supervisor " in f" {command} " and " run" in f" {command}"
     if role == WORKER_ROLE:
         name = validate_project_name(project or str(record.get("project") or ""))
-        return "project_docs_worker.py" in command and f" {name}" in f" {command}"
+        if "project_docs_worker.py" in command and f" {name}" in f" {command}":
+            return True
+        # Linux CI can briefly expose an empty or incomplete command line for a
+        # just-spawned worker. Trust only fresh Quaid-written worker pid records;
+        # old records still need command identity so stale PID reuse is rejected.
+        return _pid_record_started_recently(record)
     return False
 
 
