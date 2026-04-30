@@ -38,18 +38,18 @@ AgentLife tests long-running agent memory across sessions, resets, stale facts, 
 
 | Surface | Quaid | FC Sonnet | Quaid Tokens | FC Tokens |
 | --- | ---: | ---: | ---: | ---: |
-| AgentLife-S | 93.64% | 93.11% | 7.95M | 29.83M |
-| AgentLife-L | 88.52% | 88.69% | 9.64M | 26.50M |
-| AgentLife-L OBD | 88.69% | 88.69% | 8.45M | 26.50M |
+| AgentLife Short | 93.64% | 93.11% | 7.95M | 29.83M |
+| AgentLife Long | 88.52% | 88.69% | 9.64M | 26.50M |
+| AgentLife Long OBD | 88.69% | 88.69% | 8.45M | 26.50M |
 
-`AgentLife-S` is the clean core lane. `AgentLife-L` adds long/noisy filler sessions. `AgentLife-L OBD` compresses the long lane into one operational day. Quaid rows use Sonnet deep reasoning, Haiku fast reasoning, and Sonnet answer re-evaluation.
+`AgentLife Short` is the clean core lane. `AgentLife Long` adds long/noisy filler sessions. `AgentLife Long OBD` compresses the long lane into one operational day. Quaid rows use Sonnet deep reasoning, Haiku fast reasoning, and Sonnet answer re-evaluation.
 
 ### OpenClaw Execution Surface
 
 | Surface | OpenClaw Native | Quaid on OpenClaw |
 | --- | ---: | ---: |
-| AgentLife-S | 26.49% | 80.97% |
-| AgentLife-L | 31.72% | pending refresh |
+| AgentLife Short | 26.49% | 80.97% |
+| AgentLife Long | 31.72% | pending refresh |
 
 The clean harness table is the core Quaid reference surface. The OpenClaw table measures host execution-path tax, so the two are intentionally separated.
 
