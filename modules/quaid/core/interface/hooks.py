@@ -39,6 +39,7 @@ _RULES_FILE_PREFIX = "quaid-"
 _LEGACY_RULES_FILE = "quaid-projects.md"
 _COMPACT_IDENTITY_CONTEXT_MAX_CHARS = 9000
 _IDENTITY_CONTEXT_FILES = ("USER.md", "SOUL.md", "ENVIRONMENT.md")
+_TURN_REFRESH_PARALLEL_REPLAY_SECONDS = 5
 
 _DAEMON_START_SKIP_ENV_KEYS = {
     "CLAUDE_CODE_OAUTH_TOKEN",
@@ -1387,7 +1388,7 @@ def hook_inject(args):
         baseline_agents_context = _get_quaid_agents_baseline_context()
         if baseline_agents_context:
             context_parts.append(baseline_agents_context)
-        refresh_context = _build_turn_based_refresh_context(session_id)
+        refresh_context = _build_turn_based_refresh_context(session_id, prompt=query)
         if refresh_context:
             context_parts.append(refresh_context)
             _write_hook_trace("hook.inject.context_refreshed", {
@@ -1803,6 +1804,13 @@ def _identity_context_signature() -> str:
     return "|".join(parts)
 
 
+def _turn_refresh_prompt_hash(prompt: str) -> str:
+    prompt = str(prompt or "")
+    if not prompt:
+        return ""
+    return hashlib.sha256(prompt.encode("utf-8", errors="replace")).hexdigest()
+
+
 def _mark_turn_based_refresh(
     entry: Dict[str, Any],
     *,
@@ -1810,10 +1818,15 @@ def _mark_turn_based_refresh(
     refreshed_at: int,
     identity_signature: str,
     reason: str,
+    prompt_hash: str = "",
 ) -> None:
     entry["last_refresh_turn"] = turn_count
     entry["last_refresh_at"] = refreshed_at
     entry["last_refresh_reason"] = reason
+    if prompt_hash:
+        entry["last_refresh_prompt_hash"] = prompt_hash
+    else:
+        entry.pop("last_refresh_prompt_hash", None)
     if identity_signature:
         entry["last_identity_signature"] = identity_signature
     else:
@@ -1857,7 +1870,7 @@ def _seed_turn_based_refresh_state(session_id: str) -> None:
     _store_context_refresh_state(state)
 
 
-def _should_emit_turn_based_refresh(session_id: str) -> bool:
+def _should_emit_turn_based_refresh(session_id: str, *, prompt: str = "") -> bool:
     if _context_refresh_strategy() != "turn_based":
         return False
     sid = str(session_id or "").strip()
@@ -1886,6 +1899,25 @@ def _should_emit_turn_based_refresh(session_id: str) -> bool:
     last_refresh_at = int(entry.get("last_refresh_at", 0) or 0)
     identity_signature = _identity_context_signature()
     last_identity_signature = str(entry.get("last_identity_signature") or "").strip()
+    prompt_hash = _turn_refresh_prompt_hash(prompt)
+    last_prompt_hash = str(entry.get("last_refresh_prompt_hash") or "").strip()
+    last_reason = str(entry.get("last_refresh_reason") or "").strip()
+
+    # Codex CLI 0.125.0 can run duplicate UserPromptSubmit hooks in parallel for
+    # one user turn. The first process may mark the refresh as delivered before
+    # the host chooses which hook output reaches the model. Re-emit the same
+    # refresh for a short same-prompt window so a racing duplicate cannot suppress
+    # identity/context delivery.
+    if (
+        prompt_hash
+        and prompt_hash == last_prompt_hash
+        and last_reason in {"identity_changed", "first_turn", "timeout_marker", "turn_guard", "time_guard"}
+        and last_refresh_at > 0
+        and (now - last_refresh_at) <= _TURN_REFRESH_PARALLEL_REPLAY_SECONDS
+        and (not identity_signature or identity_signature == last_identity_signature)
+    ):
+        _store_context_refresh_state(state)
+        return True
 
     # Idle-timeout extraction path (used by adapters without compaction hooks)
     # writes a one-shot marker after timeout processing. Consume it on the next
@@ -1897,6 +1929,7 @@ def _should_emit_turn_based_refresh(session_id: str) -> bool:
             refreshed_at=now,
             identity_signature=identity_signature,
             reason="timeout_marker",
+            prompt_hash=prompt_hash,
         )
         _store_context_refresh_state(state)
         return True
@@ -1908,6 +1941,7 @@ def _should_emit_turn_based_refresh(session_id: str) -> bool:
             refreshed_at=now,
             identity_signature=identity_signature,
             reason="identity_changed",
+            prompt_hash=prompt_hash,
         )
         _store_context_refresh_state(state)
         return True
@@ -1923,6 +1957,7 @@ def _should_emit_turn_based_refresh(session_id: str) -> bool:
                 refreshed_at=now,
                 identity_signature=identity_signature,
                 reason="first_turn",
+                prompt_hash=prompt_hash,
             )
             _store_context_refresh_state(state)
             return True
@@ -1943,6 +1978,7 @@ def _should_emit_turn_based_refresh(session_id: str) -> bool:
             refreshed_at=now,
             identity_signature=identity_signature,
             reason=reason,
+            prompt_hash=prompt_hash,
         )
     _store_context_refresh_state(state)
     return should_emit
@@ -2310,8 +2346,8 @@ def _maybe_compaction_refresh_context_artifacts(hook_input: dict, *, is_precompa
     _write_rules_context_sections(hook_input, sections, label="context-refresh")
 
 
-def _build_turn_based_refresh_context(session_id: str) -> str:
-    if not _should_emit_turn_based_refresh(session_id):
+def _build_turn_based_refresh_context(session_id: str, *, prompt: str = "") -> str:
+    if not _should_emit_turn_based_refresh(session_id, prompt=prompt):
         return ""
     reason = _turn_based_refresh_reason(session_id)
     if reason in {"identity_changed", "first_turn"}:
