@@ -2729,6 +2729,88 @@ def _has_relation_chain_structure(query: str) -> bool:
     )
 
 
+def _guided_relation_chain_prefix_maps(
+    graph: "MemoryGraph",
+    *,
+    owner_anchor_id: str,
+    owner_anchor_name: str,
+    relation_groups: List[str],
+) -> Tuple[Dict[str, str], Dict[str, List[str]]]:
+    """Build owner-side relation-chain prefixes that follow the query order.
+
+    Generic bidirectional BFS returns the first/shortest path to a node. For
+    kinship-chain prompts that can be wrong when multiple valid family paths
+    exist (for example both sibling-of and spouse-of routes to the same person).
+    This helper walks the graph in the exact canonical relation-group order from
+    the query so later ranking sees the intended owner -> ... -> terminal path.
+    """
+    clean_groups = [str(group or "").strip() for group in list(relation_groups or []) if str(group or "").strip()]
+    if not owner_anchor_id or not owner_anchor_name or not clean_groups:
+        return {}, {}
+
+    path_by_node: Dict[str, str] = {}
+    sequence_by_node: Dict[str, List[str]] = {}
+    states: List[Tuple[str, str, List[tuple], List[str], set[str]]] = [
+        (owner_anchor_id, owner_anchor_name, [], [], {owner_anchor_id}),
+    ]
+
+    for expected_group in clean_groups:
+        next_states: List[Tuple[str, str, List[tuple], List[str], set[str]]] = []
+        seen_step_keys: set[Tuple[str, Tuple[str, ...]]] = set()
+        for current_id, current_name, current_path, current_sequence, visited in states:
+            try:
+                edges = list(graph.get_edges(current_id, direction="both"))
+            except Exception:
+                continue
+            for edge in edges:
+                relation = str(getattr(edge, "relation", "") or "").strip()
+                if not relation:
+                    continue
+                relation_group = _canonical_relation_group_for_relation(relation)
+                if relation_group != expected_group:
+                    continue
+                if edge.source_id == current_id:
+                    next_id = str(edge.target_id or "").strip()
+                elif edge.target_id == current_id:
+                    next_id = str(edge.source_id or "").strip()
+                else:
+                    continue
+                if not next_id or next_id in visited:
+                    continue
+                try:
+                    next_node = graph.get_node(next_id)
+                except Exception:
+                    continue
+                if not next_node:
+                    continue
+                next_path = list(current_path) + [(current_name, relation)]
+                next_sequence = list(current_sequence) + [relation]
+                step_key = (next_id, tuple(_relation_groups_for_sequence(next_sequence)))
+                if step_key in seen_step_keys:
+                    continue
+                seen_step_keys.add(step_key)
+                next_states.append((
+                    next_id,
+                    next_node.name,
+                    next_path,
+                    next_sequence,
+                    set(visited) | {next_id},
+                ))
+                path_by_node[next_id] = _render_bidirectional_graph_path(
+                    owner_anchor_name,
+                    next_node.name,
+                    relation,
+                    "out",
+                    next_path,
+                )
+                sequence_by_node[next_id] = next_sequence
+        if not next_states:
+            break
+        states = next_states
+
+    return path_by_node, sequence_by_node
+
+
 def _relation_groups_for_sequence(sequence: List[str]) -> List[str]:
     groups: List[str] = []
     for relation in sequence or []:
@@ -3536,6 +3618,9 @@ def graph_aware_recall(
         len(relation_chain_groups) >= 2
         and _has_relation_chain_structure(query)
     )
+    if relation_chain_query:
+        graph_depth = max(graph_depth, len(relation_chain_groups))
+        results["meta"]["graph_depth"] = int(graph_depth)
 
     # 1. Pronoun resolution
     if has_owner_pronoun(query):
@@ -3592,21 +3677,30 @@ def graph_aware_recall(
     relation_chain_sequence_by_node: Dict[str, List[str]] = {}
     if relation_chain_query and owner_anchor_id and owner_anchor_name:
         try:
-            for node, relation, direction, _depth, path in graph.get_related_bidirectional(
-                owner_anchor_id,
-                relations=None,
-                depth=graph_depth,
-            ):
-                if node.id and node.id not in relation_chain_path_by_node:
-                    relation_sequence = _relation_sequence_from_path(path, terminal_relation=relation)
-                    relation_chain_path_by_node[node.id] = _render_bidirectional_graph_path(
-                        owner_anchor_name,
-                        node.name,
-                        relation,
-                        direction,
-                        path,
-                    )
-                    relation_chain_sequence_by_node[node.id] = relation_sequence
+            guided_path_by_node, guided_sequence_by_node = _guided_relation_chain_prefix_maps(
+                graph,
+                owner_anchor_id=owner_anchor_id,
+                owner_anchor_name=owner_anchor_name,
+                relation_groups=relation_chain_groups,
+            )
+            relation_chain_path_by_node.update(guided_path_by_node)
+            relation_chain_sequence_by_node.update(guided_sequence_by_node)
+            if not relation_chain_path_by_node:
+                for node, relation, direction, _depth, path in graph.get_related_bidirectional(
+                    owner_anchor_id,
+                    relations=None,
+                    depth=graph_depth,
+                ):
+                    if node.id and node.id not in relation_chain_path_by_node:
+                        relation_sequence = _relation_sequence_from_path(path, terminal_relation=relation)
+                        relation_chain_path_by_node[node.id] = _render_bidirectional_graph_path(
+                            owner_anchor_name,
+                            node.name,
+                            relation,
+                            direction,
+                            path,
+                        )
+                        relation_chain_sequence_by_node[node.id] = relation_sequence
         except Exception:
             relation_chain_path_by_node = {}
             relation_chain_sequence_by_node = {}
@@ -3687,8 +3781,8 @@ def graph_aware_recall(
                 anchor_node=source_node,
                 anchor_text=source_name,
                 anchor_score=0.93,
-                graph_path=source_name,
-                relation_sequence=[],
+                graph_path=chain_prefix_path or source_name,
+                relation_sequence=chain_prefix_sequence if chain_prefix_path else [],
                 hop_depth=0,
                 seen_ids=seen_ids,
                 query=query,
@@ -3709,7 +3803,12 @@ def graph_aware_recall(
                     path,
                 )
                 hop_relation_sequence = _relation_sequence_from_path(path, terminal_relation=relation)
-                if chain_prefix_path:
+                guided_node_path = relation_chain_path_by_node.get(node.id) if relation_chain_query else None
+                guided_node_sequence = relation_chain_sequence_by_node.get(node.id, []) if relation_chain_query else []
+                if guided_node_path and guided_node_sequence:
+                    graph_path = guided_node_path
+                    relation_sequence = list(guided_node_sequence)
+                elif chain_prefix_path:
                     if hop_graph_path.startswith(source_name):
                         graph_path = f"{chain_prefix_path}{hop_graph_path[len(source_name):]}"
                     else:
