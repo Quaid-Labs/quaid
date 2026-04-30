@@ -37,7 +37,8 @@ jobs:
       fail-fast: false
       matrix:
         openclaw_version:
-          # Single pinned latest release target for Quaid.
+          # Primary drift signal first, plus a concrete support target for reproducibility.
+          - latest
           - 2026.4.27
         scenario:
           - fresh
