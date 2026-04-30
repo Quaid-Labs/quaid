@@ -51,7 +51,7 @@ AgentLife tests long-running agent memory across sessions, resets, stale facts, 
 | AgentLife Short | 26.49% | 80.97% |
 | AgentLife Long | 31.72% | pending refresh |
 
-The clean harness table is the core Quaid reference surface. The OpenClaw table measures host execution-path tax, so the two are intentionally separated.
+The clean harness table is the core Quaid reference surface. The OpenClaw table measures host execution-path tax, so the two are intentionally separated. OpenClaw Native was run with OpenClaw's built-in memory plugins enabled: `memory-core`, `session-memory`, and `session-index`.
 
 ### Notes
 
