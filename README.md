@@ -88,11 +88,11 @@ Quaid is built around these four components. When you load Quaid, this is the mo
 
 | Capability | OpenClaw | Claude Code | Codex |
 |---|---|---|---|
-| Memory + janitor lifecycle | <span style="color:#15803d;font-weight:600">Yes</span> | <span style="color:#15803d;font-weight:600">Yes</span> | <span style="color:#15803d;font-weight:600">Yes</span> |
-| Project docs + RAG system | <span style="color:#15803d;font-weight:600">Yes</span> | <span style="color:#15803d;font-weight:600">Yes</span> | <span style="color:#15803d;font-weight:600">Yes</span> |
-| Evolving `SOUL/USER/ENVIRONMENT` | <span style="color:#15803d;font-weight:600">Yes</span> | <span style="color:#15803d;font-weight:600">Yes</span> | <span style="color:#15803d;font-weight:600">Yes</span> |
-| Hook-based auto extraction | <span style="color:#15803d;font-weight:600">Yes</span> | <span style="color:#15803d;font-weight:600">Yes</span> | <span style="color:#15803d;font-weight:600">Yes</span> |
-| Timeout Triggered Compaction (harvests token savings) | <span style="color:#15803d;font-weight:600">Yes</span> | <span style="color:#b91c1c;font-weight:600">No</span> | <span style="color:#b91c1c;font-weight:600">No</span> |
+| Memory + janitor lifecycle | ✅ Yes | ✅ Yes | ✅ Yes |
+| Project docs + RAG system | ✅ Yes | ✅ Yes | ✅ Yes |
+| Evolving `SOUL/USER/ENVIRONMENT` | ✅ Yes | ✅ Yes | ✅ Yes |
+| Hook-based auto extraction | ✅ Yes | ✅ Yes | ✅ Yes |
+| Timeout Triggered Compaction (harvests token savings) | ✅ Yes | ❌ No | ❌ No |
 
 OpenAI-backed lanes remain available in alpha, but they are currently experimental and benchmark materially below Anthropic for Quaid memory quality. Anthropic is the recommended backend unless you are blocked on credentials.
 
