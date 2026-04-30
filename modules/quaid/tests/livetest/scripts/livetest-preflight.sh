@@ -680,7 +680,7 @@ PYEOF" 2>/dev/null | tr -d '\r'
         # update times out or fails.
         set +e
         oc_output="$("$SCRIPT_DIR/openclaw-cli-safe.sh" \
-            --timeout "${OPENCLAW_CLI_TIMEOUT_S:-45}" \
+            --timeout "${OPENCLAW_PREFLIGHT_UPDATE_TIMEOUT_S:-${OPENCLAW_CLI_TIMEOUT_S:-120}}" \
             --label "openclaw-preflight-update" \
             --on-timeout "ssh \"$REMOTE_HOST\" 'pkill -f openclaw-update >/dev/null 2>&1 || true; pkill -f openclaw-completion >/dev/null 2>&1 || true; pkill -f openclaw-agent >/dev/null 2>&1 || true; pkill -f openclaw-agents >/dev/null 2>&1 || true'" \
             -- ssh "$REMOTE_HOST" 'set -euo pipefail; export PATH="/opt/homebrew/bin:$HOME/.local/bin:$PATH"; eval "$(/opt/homebrew/bin/brew shellenv 2>/dev/null)" 2>/dev/null || true; if ! command -v openclaw >/dev/null 2>&1; then echo "__OPENCLAW_MISSING__"; exit 0; fi; openclaw update --yes' 2>&1)"

@@ -58,6 +58,7 @@ fi
 CMD=("$@")
 TMP_OUT="$(mktemp -t openclaw-cli-safe.XXXXXX)"
 DONE_TOKEN="__OPENCLAW_CLI_DONE__${RANDOM}${RANDOM}"
+WRAPPER_PGID="$(ps -o pgid= -p "$$" 2>/dev/null | tr -d ' ' || true)"
 
 _cleanup_tmp() {
     rm -f "$TMP_OUT" 2>/dev/null || true
@@ -80,20 +81,34 @@ _terminate_process_tree() {
     local pgid
     pgid="$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d ' ' || true)"
 
-    if [[ -n "$pgid" ]]; then
+    if [[ -n "$pgid" && -n "$WRAPPER_PGID" && "$pgid" != "$WRAPPER_PGID" ]]; then
         kill -TERM "-$pgid" 2>/dev/null || true
         sleep 1
         kill -KILL "-$pgid" 2>/dev/null || true
+    else
+        _terminate_descendants "$pid" TERM
+        kill -TERM "$pid" 2>/dev/null || true
+        sleep 1
+        _terminate_descendants "$pid" KILL
+        kill -KILL "$pid" 2>/dev/null || true
     fi
-    kill -TERM "$pid" 2>/dev/null || true
-    sleep 1
-    kill -KILL "$pid" 2>/dev/null || true
 
     # Defensive cleanup for known detached OpenClaw worker helpers.
     pkill -f 'openclaw-update' 2>/dev/null || true
     pkill -f 'openclaw-completion' 2>/dev/null || true
     pkill -f 'openclaw-agent' 2>/dev/null || true
     pkill -f 'openclaw-agents' 2>/dev/null || true
+}
+
+_terminate_descendants() {
+    local pid="$1"
+    local sig="$2"
+    local child
+    while IFS= read -r child; do
+        [[ -n "$child" ]] || continue
+        _terminate_descendants "$child" "$sig"
+        kill "-$sig" "$child" 2>/dev/null || true
+    done < <(pgrep -P "$pid" 2>/dev/null || true)
 }
 
 while kill -0 "$cmd_pid" 2>/dev/null; do

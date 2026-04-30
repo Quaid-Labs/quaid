@@ -213,6 +213,13 @@ exclusively via SSH — they cannot accidentally affect the local machine.
 | `livetest-nudge.sh` | Keepalive loop that periodically nudges a tester window. The active coordinator starts and owns one per tester at run start. Do not route these through window `5` / `claude-looper`. |
 | `autonomous_mode.sh` | General-purpose nudge loop for any pane (`main:N.0` preferred). Writes structured telemetry to `/tmp/autonomous_mode_<target>.status.json`. |
 
+Platform CLI upgrade maintenance is intentionally slow-path. OpenClaw upgrades are
+wrapped by `openclaw-cli-safe.sh`; the preflight default timeout is 120 seconds
+because `openclaw update --yes` can finish the CLI upgrade quickly and then spend
+additional time waiting for the launchd gateway restart verification to settle.
+Override with `OPENCLAW_PREFLIGHT_UPDATE_TIMEOUT_S` only for presnapshot
+maintenance diagnostics.
+
 All scripts that touch the remote accept `--dry-run` to print SSH commands without
 executing them, and `--config <path>` to override the default config location.
 
