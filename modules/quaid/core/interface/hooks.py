@@ -137,12 +137,34 @@ def _format_memories(memories: List[Dict]) -> str:
     filtered_memories = _filter_injectable_memories(memories)
     if not filtered_memories:
         return ""
+    anchor_labels = {
+        "assistant_option_bullet_anchor": "assistant-suggestion",
+        "assistant_option_list_anchor": "assistant-suggestion",
+        "assistant_callback_anchor": "assistant-callback",
+        "assistant_plan_anchor": "assistant-plan",
+        "user_mirrored_idea_anchor": "user-idea",
+    }
+
+    def _memory_tags(mem: Dict[str, Any]) -> str:
+        tags = [str(mem.get("category", "fact") or "fact").strip().lower() or "fact"]
+
+        source_type = str(mem.get("source_type") or "").strip().lower()
+        if source_type:
+            tags.append(source_type)
+
+        anchor_kind = str(mem.get("structural_anchor_kind") or "").strip().lower()
+        anchor_label = anchor_labels.get(anchor_kind)
+        if anchor_label and anchor_label not in tags:
+            tags.append(anchor_label)
+
+        return "".join(f"[{tag}]" for tag in tags)
+
     lines = ["[Quaid Memory Context]"]
     for i, mem in enumerate(filtered_memories, 1):
         text = mem.get("text", "")
         sim = mem.get("similarity", 0)
-        category = mem.get("category", "fact")
-        lines.append(f"  {i}. [{category}] {text} (relevance: {sim:.2f})")
+        tags = _memory_tags(mem)
+        lines.append(f"  {i}. {tags} {text} (relevance: {sim:.2f})")
     body = "\n".join(lines)
     return f"<quaid_system_message>\n{body}\n</quaid_system_message>"
 

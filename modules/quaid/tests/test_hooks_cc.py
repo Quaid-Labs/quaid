@@ -1476,6 +1476,47 @@ class TestHookInjectRecallResilience:
         assert "South Austin" in context
         assert "<tool_hint>" not in context
 
+    def test_memory_context_preserves_source_and_anchor_provenance(
+        self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
+    ):
+        from core import extraction_daemon
+
+        monkeypatch.setattr(extraction_daemon, "write_cursor", lambda *a: None)
+
+        memories = [
+            {
+                "text": "The layered surprises worked! Remember we talked about the FaceTime call idea? Glad you went with that",
+                "similarity": 0.99,
+                "category": "fact",
+                "source_type": "assistant",
+                "structural_anchor_kind": "assistant_callback_anchor",
+            },
+            {
+                "text": "maybe we do a facetime thing for her like she calls during dinner actually",
+                "similarity": 0.88,
+                "category": "fact",
+                "source_type": "user",
+                "structural_anchor_kind": "user_mirrored_idea_anchor",
+            },
+        ]
+
+        with patch("core.interface.api.recall_fast", return_value=memories):
+            out, _err = _run_hook_inject(
+                {
+                    "prompt": "Who came up with the FaceTime idea for Linda's birthday?",
+                    "session_id": "sess-provenance",
+                    "cwd": "/Users/x",
+                },
+                monkeypatch=monkeypatch,
+            )
+
+        payload = json.loads(out)
+        context = payload["hookSpecificOutput"]["additionalContext"]
+        assert "[fact][assistant][assistant-callback]" in context
+        assert "[fact][user][user-idea]" in context
+        assert "The layered surprises worked!" in context
+        assert "maybe we do a facetime thing" in context
+
     def test_recall_router_warning_is_promoted_to_provider_notice(
         self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
     ):
