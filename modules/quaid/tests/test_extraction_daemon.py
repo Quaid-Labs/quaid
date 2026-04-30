@@ -5021,7 +5021,7 @@ class TestRollingExtraction:
         fake_adapter_mod.get_adapter = lambda: _FakeAdapter()
         sys.modules["lib.adapter"] = fake_adapter_mod
 
-        monkeypatch.setattr(extraction_daemon, "_get_capture_chunk_tokens", lambda default=8000: 200)
+        monkeypatch.setattr(extraction_daemon, "_get_capture_chunk_tokens", lambda default=8000: 8)
         monkeypatch.setattr(extraction_daemon, "_get_capture_chunk_max_lines", lambda default=0: 1)
         monkeypatch.setattr(extraction_daemon, "_get_owner_id", lambda: "Owner")
         monkeypatch.setattr(
@@ -5770,6 +5770,7 @@ class TestRollingExtraction:
         )
         monkeypatch.setattr(project_registry_mod, "snapshot_all_projects", lambda: [])
         monkeypatch.setattr(docs_updater_mod, "update_project_docs", lambda snapshots, extraction_result: {"docs_updated": 0})
+        monkeypatch.setattr(extraction_daemon, "_get_capture_chunk_tokens", lambda default=8000: 10)
         monkeypatch.setattr(extraction_daemon, "_read_usage_totals", lambda: dict(next(usage_snapshots)))
         monkeypatch.setattr(
             extraction_daemon,
@@ -6731,6 +6732,7 @@ class TestRollingExtraction:
             },
         )
         monkeypatch.setattr(extraction_daemon, "_get_owner_id", lambda: "Owner")
+        monkeypatch.setattr(extraction_daemon, "_get_capture_chunk_tokens", lambda default=8000: 8)
 
         real_registry = sys.modules.get("core.subagent_registry")
         real_adapter = sys.modules.get("lib.adapter")
@@ -7734,6 +7736,7 @@ class TestRollingExtraction:
             lambda *args, **kwargs: (_ for _ in ()).throw(sqlite3.OperationalError("database is locked")),
         )
         monkeypatch.setattr(extraction_daemon, "_read_usage_totals", lambda: dict(next(usage_snapshots)))
+        monkeypatch.setattr(extraction_daemon, "_get_capture_chunk_tokens", lambda default=8000: 10)
         monkeypatch.setattr(
             extraction_daemon,
             "write_rolling_metric",
