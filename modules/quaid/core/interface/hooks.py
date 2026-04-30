@@ -20,6 +20,7 @@ Usage:
 import argparse
 import fcntl
 import glob as glob_mod
+import hashlib
 import json
 import logging
 import os
@@ -1393,6 +1394,7 @@ def hook_inject(args):
                 "query": query[:160],
                 "session_id": session_id,
                 "strategy": _context_refresh_strategy(),
+                "reason": _turn_based_refresh_reason(session_id),
             })
 
         if not context_parts:
@@ -1782,6 +1784,54 @@ def _store_context_refresh_state(state: Dict[str, Any]) -> None:
         pass
 
 
+def _identity_context_signature() -> str:
+    """Hash current identity-file content for turn-based refresh invalidation."""
+    try:
+        identity_dir = _get_identity_dir()
+    except Exception:
+        return ""
+    parts: List[str] = []
+    for filename in _IDENTITY_CONTEXT_FILES:
+        path = identity_dir / filename
+        try:
+            if not path.is_file():
+                continue
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        except Exception:
+            continue
+        parts.append(f"{filename}:{digest}")
+    return "|".join(parts)
+
+
+def _mark_turn_based_refresh(
+    entry: Dict[str, Any],
+    *,
+    turn_count: int,
+    refreshed_at: int,
+    identity_signature: str,
+    reason: str,
+) -> None:
+    entry["last_refresh_turn"] = turn_count
+    entry["last_refresh_at"] = refreshed_at
+    entry["last_refresh_reason"] = reason
+    if identity_signature:
+        entry["last_identity_signature"] = identity_signature
+    else:
+        entry.pop("last_identity_signature", None)
+
+
+def _turn_based_refresh_reason(session_id: str) -> str:
+    sid = str(session_id or "").strip()
+    if not sid:
+        return ""
+    state = _load_context_refresh_state()
+    sessions = state.get("sessions") if isinstance(state, dict) else {}
+    entry = sessions.get(sid) if isinstance(sessions, dict) else {}
+    if isinstance(entry, dict):
+        return str(entry.get("last_refresh_reason") or "").strip()
+    return ""
+
+
 def _seed_turn_based_refresh_state(session_id: str) -> None:
     if _context_refresh_strategy() != "turn_based":
         return
@@ -1799,7 +1849,11 @@ def _seed_turn_based_refresh_state(session_id: str) -> None:
         sessions[sid] = entry
     entry.setdefault("turn_count", 0)
     entry.setdefault("last_refresh_turn", 0)
-    entry.setdefault("last_refresh_at", int(time.time()))
+    # SessionStart may emit startup context, but CDX /new often reuses the same
+    # process and does not fire SessionStart. Do not mark a turn-based refresh as
+    # completed until UserPromptSubmit actually emits refresh context.
+    entry.setdefault("last_refresh_at", 0)
+    entry.setdefault("seeded_at", int(time.time()))
     _store_context_refresh_state(state)
 
 
@@ -1830,21 +1884,51 @@ def _should_emit_turn_based_refresh(session_id: str) -> bool:
 
     last_refresh_turn = int(entry.get("last_refresh_turn", 0) or 0)
     last_refresh_at = int(entry.get("last_refresh_at", 0) or 0)
+    identity_signature = _identity_context_signature()
+    last_identity_signature = str(entry.get("last_identity_signature") or "").strip()
 
     # Idle-timeout extraction path (used by adapters without compaction hooks)
     # writes a one-shot marker after timeout processing. Consume it on the next
     # turn and force a context refresh regardless of turn/time guard thresholds.
     if _consume_timeout_refresh_marker(sid):
-        entry["last_refresh_turn"] = turn_count
-        entry["last_refresh_at"] = now
+        _mark_turn_based_refresh(
+            entry,
+            turn_count=turn_count,
+            refreshed_at=now,
+            identity_signature=identity_signature,
+            reason="timeout_marker",
+        )
         _store_context_refresh_state(state)
         return True
 
-    # First turn after session start seeds the baseline. Refreshing immediately
-    # would duplicate SessionStart context and waste tokens.
+    if identity_signature and identity_signature != last_identity_signature:
+        _mark_turn_based_refresh(
+            entry,
+            turn_count=turn_count,
+            refreshed_at=now,
+            identity_signature=identity_signature,
+            reason="identity_changed",
+        )
+        _store_context_refresh_state(state)
+        return True
+
+    # First prompt after a CDX session starts is the first refresh point we can
+    # trust for /new-created in-process threads. SessionStart is not guaranteed
+    # to fire for those threads, so do not suppress this as a duplicate.
     if last_refresh_at <= 0:
+        if identity_signature:
+            _mark_turn_based_refresh(
+                entry,
+                turn_count=turn_count,
+                refreshed_at=now,
+                identity_signature=identity_signature,
+                reason="first_turn",
+            )
+            _store_context_refresh_state(state)
+            return True
         entry["last_refresh_turn"] = turn_count
         entry["last_refresh_at"] = now
+        entry["last_refresh_reason"] = "first_turn_no_identity"
         _store_context_refresh_state(state)
         return False
 
@@ -1852,8 +1936,14 @@ def _should_emit_turn_based_refresh(session_id: str) -> bool:
     due_time = min_interval_seconds > 0 and (now - last_refresh_at) >= min_interval_seconds
     should_emit = bool(due_turns or due_time)
     if should_emit:
-        entry["last_refresh_turn"] = turn_count
-        entry["last_refresh_at"] = now
+        reason = "turn_guard" if due_turns else "time_guard"
+        _mark_turn_based_refresh(
+            entry,
+            turn_count=turn_count,
+            refreshed_at=now,
+            identity_signature=identity_signature,
+            reason=reason,
+        )
     _store_context_refresh_state(state)
     return should_emit
 
@@ -1980,11 +2070,15 @@ def _collect_project_context_sections(*, hook_cwd: str = "") -> List[str]:
 
     identity_dir = _get_identity_dir()
     for special_file in _IDENTITY_CONTEXT_FILES:
-        fpath = identity_dir / special_file
-        if fpath.is_file():
+        try:
+            fpath = identity_dir / special_file
+            if not fpath.is_file():
+                continue
             content = fpath.read_text(encoding="utf-8").strip()
-            if content:
-                sections.append(f"--- {special_file} ---\n{content}")
+        except Exception:
+            continue
+        if isinstance(content, str) and content:
+            sections.append(f"--- {special_file} ---\n{content}")
 
     projects_dir = _get_projects_dir()
     sections.extend(_collect_project_doc_context_sections(projects_dir, hook_cwd=hook_cwd))
