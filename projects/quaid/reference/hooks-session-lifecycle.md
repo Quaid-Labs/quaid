@@ -200,18 +200,29 @@ and is picked up when the daemon next starts.
    a `--- SYSTEM WARNING ---` block if the Quaid instance is running in a
    degraded or safe mode.
 
-8. **Write rules file** — combines all sections and writes to:
-   - `$QUAID_RULES_DIR/quaid-projects.md` if `QUAID_RULES_DIR` is set, or
-   - `{cwd}/.claude/rules/quaid-projects.md` using `cwd` from stdin (falling
-     back to `os.getcwd()`).
+8. **Write split rules files** — groups context sections and writes
+   `quaid-*.md` files to:
+   - `$QUAID_RULES_DIR/` if `QUAID_RULES_DIR` is set, or
+   - `{cwd}/.claude/rules/` using `cwd` from stdin (falling back to
+     `os.getcwd()`).
 
-   **Idempotent:** reads the existing file first and skips the write if
+   Legacy `{rules_dir}/quaid-projects.md` is renamed to
+   `quaid-projects.md.bak` before split files are written. Common split files
+   include `quaid-00-runtime.md`, `quaid-user-md.md`,
+   `quaid-soul-md.md`, `quaid-environment-md.md`,
+   `quaid-adapter-compatibility.md`, `quaid-adapter-cli.md`, and
+   `quaid-<project>-<doc>.md`.
+
+   **Idempotent:** reads each existing split file first and skips the write if
    content is unchanged. This avoids unnecessary filesystem churn and
    prevents Claude Code from invalidating its prompt cache on no-op starts.
 
-The rules file is picked up by Claude Code's automatic `.claude/rules/`
-loading mechanism and persists through compaction (unlike `additionalContext`
-which is lost when the context window is compacted).
+The split rules files are picked up by Claude Code's automatic
+`.claude/rules/` loading mechanism at session start. On `/compact`, Quaid
+rebuilds the split files and marks the next user turn for a bounded
+identity-only `additionalContext` bridge because Claude Code 2.1.x does not
+reliably reload rewritten rules files into model-visible context immediately
+after compaction.
 
 ---
 
@@ -325,7 +336,7 @@ auto-registered.
 │         ├─ ensure runtime supervisor/current instance monitor alive      │
 │         ├─ signal prior session end if adapter detects transition        │
 │         ├─ seed cursor for current session_id                           │
-│         └─ write/update .claude/rules/quaid-projects.md                │
+│         └─ write/update .claude/rules/quaid-*.md split files            │
 │              (identity files + full quaid docs + compact project catalog)│
 ├─────────────────────────────────────────────────────────────────────────┤
 │  User sends message                                                     │
@@ -339,6 +350,9 @@ auto-registered.
 │              (injected into Claude's context for this turn)             │
 ├─────────────────────────────────────────────────────────────────────────┤
 │  (repeat UserPromptSubmit for each user message)                        │
+│    └─ if previous user prompt was /compact                              │
+│         └─ return bounded identity-only additionalContext bridge         │
+│              (kept below Claude Code hook output cap)                   │
 ├─────────────────────────────────────────────────────────────────────────┤
 │  Context window fills → CC triggers PreCompact                          │
 │    └─ hook-extract --precompact                                         │
@@ -639,7 +653,7 @@ Each adapter filters certain messages from transcripts before extraction:
 |---|---|---|
 | `QUAID_HOME` | All hooks | Root of the Quaid instance silo |
 | `QUAID_INSTANCE` | All hooks | Instance identifier (e.g., `claude-code`) |
-| `QUAID_RULES_DIR` | `hook-session-init` | Override destination for `quaid-projects.md` |
+| `QUAID_RULES_DIR` | `hook-session-init`, compact refresh | Override destination directory for split `quaid-*.md` rules files |
 | `QUAID_DISABLE_NOTIFICATIONS` | Notifications | Silence all notifications |
 | `QUAID_MESSAGE_CLI` | OC notifications | Override adapter CLI binary path (e.g. `openclaw` or your adapter binary) |
 | `CLAWDBOT_WORKSPACE` | OC adapter | OpenClaw workspace root (OC-specific) |
@@ -654,7 +668,7 @@ Each adapter instance on a machine has its own `QUAID_HOME` silo.
 | File | Path |
 |---|---|
 | CC settings (hook registration) | `~/.claude/settings.json` |
-| CC rules file (session context) | `<project-cwd>/.claude/rules/quaid-projects.md` |
+| CC split rules files (session context) | `<project-cwd>/.claude/rules/quaid-*.md` |
 | CC instance silo | `$QUAID_HOME/` |
 | Extraction signals dir | `$QUAID_HOME/data/extraction-signals/` |
 | Session cursors dir | `$QUAID_HOME/instances/<instance>/data/session-cursors/` |

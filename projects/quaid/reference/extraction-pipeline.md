@@ -524,6 +524,11 @@ Each hook reads JSON from stdin and writes to stdout/stderr.
 2. Calls `recall_fast()` (parallel HyDE fanout, hard time budget) with the user's message.
 3. Drains `data/cc-pending-notifications.jsonl` (CC's deferred notification channel).
 4. Outputs `additionalContext` containing recalled memories + any pending notifications.
+   On the first non-command prompt after `/compact`, Claude Code receives a
+   bounded identity-only bridge instead of the normal recall bundle; the split
+   rules files have already been rebuilt, but current Claude Code releases do
+   not reliably reload rewritten rules into model-visible context immediately
+   after compaction.
 
 **Stdout:**
 ```json
@@ -595,15 +600,19 @@ the signal asynchronously.
    for user projects. Detailed user-project docs are reached through docs recall.
 6. Checks janitor health; prepends a warning if janitor hasn't run in 24 hours.
 7. Checks compatibility circuit breaker; prepends a warning if degraded.
-8. Writes combined content to `.claude/rules/quaid-projects.md` (idempotent — only
-   writes if content has changed).
+8. Writes grouped context sections to split `.claude/rules/quaid-*.md` files
+   (idempotent per file — only writes files whose content changed). Legacy
+   `.claude/rules/quaid-projects.md` is renamed to `quaid-projects.md.bak`
+   before the split writer runs.
 
-The rules file is auto-loaded by Claude Code at session start, cached via prompt
-caching, and preserved through compaction. This is more reliable than `additionalContext`
-(which is ephemeral).
+The split rules files are auto-loaded by Claude Code at session start and
+cached via prompt caching. Quaid also rebuilds them on `/compact`; because CC
+2.1.x does not reliably reload rewritten rules files into model-visible context
+on that same compact boundary, the next user turn gets a small identity-only
+`additionalContext` bridge.
 
-The rules file target directory is resolved from `QUAID_RULES_DIR` env var if set,
-otherwise `<hook_cwd>/.claude/rules/`.
+The split rules target directory is resolved from `QUAID_RULES_DIR` env var if
+set, otherwise `<hook_cwd>/.claude/rules/`.
 
 ---
 

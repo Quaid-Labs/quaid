@@ -101,6 +101,7 @@ Nightly janitor (4 AM default) → review → dedup → decay → graduate to ac
 
 - Lifecycle extraction can be asynchronous after `/clear`, `/compact`, `/new`, `Stop`, or session end. Fresh facts may take a few seconds to appear in recall; if a just-ended fact is missing, wait briefly and ask again.
 - Platform details live in the active adapter's `COMPATIBILITY.md` and in `docs/COMPATIBILITY.md`. Use those notes to explain platform-specific timing or visibility quirks, not as a substitute for checking Quaid logs when something looks broken.
+- COMPATIBILITY entries are operator-approved records of accepted host/platform constraints, not a substitute for fixing Quaid bugs. If something looks broken, diagnose it before citing compatibility.
 
 ---
 

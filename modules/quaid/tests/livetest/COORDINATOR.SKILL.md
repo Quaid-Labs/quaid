@@ -434,6 +434,84 @@ invalid and unsafe.
 
 ---
 
+## Step 1.5 — SUT Pane Safeguard (mandatory)
+
+**Background.** Each tester window has two panes — the tester agent on `.0`
+and an SSH-to-VM shell on `.1` that is the System Under Test target. Testers
+drive the SUT with `tests/livetest/scripts/tmux-msg.sh --no-chrome` targeted at
+`livetest:<lane>.1`. If `.1`'s ssh exits for any reason (idle disconnect,
+network blip, accidental Ctrl-D, remote restart), the pane silently drops to a
+local `zsh` prompt and every subsequent pane send hits the LOCAL dev box instead
+of the VM.
+
+This is exactly the contamination class that bit Run 125: OC tester's
+`.1` had escaped its ssh at unknown time, so chunk fixtures and lifecycle
+keys landed on the dev box's local shell. Local Quaid bits got polluted
+(`~/.quaid`, `~/quaid`) and OC test results were invalid.
+
+**Coordinator owns the SSH lifecycle, not the testers.** During M0 setup,
+the coordinator opens the ssh in each `.1` pane explicitly and verifies it
+before sending the lane brief. Testers only operate at `.0`.
+
+**Verification helper:**
+
+```bash
+VM_IP="$VM_IP" tests/livetest/scripts/verify-tester-ssh.sh --all
+# OK   livetest:0.1: ssh admin@192.168.64.110 (child pid=12938)
+# OK   livetest:1.1: ssh admin@192.168.64.110 (child pid=92037)
+# OK   livetest:2.1: ssh admin@192.168.64.110 (child pid=57975)
+# Exit 0 = all clean. Exit 1 = at least one pane dropped local.
+```
+
+**When to run:**
+1. **At M0 start**, after `livetest-session-init.sh` and after you open ssh
+   into each `.1` pane. Must return exit 0 before any tester brief.
+2. **Before every milestone brief** (M1 through GLOBAL). Treat a non-zero exit
+   the same as a foundational milestone fail: halt the affected lane,
+   re-establish ssh, re-verify, and only then re-brief.
+3. **On any tester ISSUE that mentions empty extraction logs / no daemon
+   activity / "no signal received"** — that pattern is the classic drop-local
+   signature. Run the verifier before re-routing the issue to W1.
+
+**On verifier failure:**
+1. Run
+   `tests/livetest/scripts/tmux-msg.sh --no-chrome livetest:<lane>.1 "ssh admin@${VM_IP}"`
+   to re-establish the connection. Wait 3s, then re-run the verifier.
+2. Capture the dashboard incident as a CONTAMINATION row with timestamp
+   and the affected lane — historical results from that lane become suspect.
+3. If you cannot determine when the drop happened, mark the in-flight run as
+   contaminated and either restart from M0 or quarantine the affected lane's
+   results until next clean run.
+
+**Do not skip this check** — the cost of a 0.1s `verify-tester-ssh.sh` call
+before each brief is vastly less than the cost of a contaminated run.
+
+### Local-quaid presence check (post-M0 mandatory)
+
+After every M0 install, verify that `~/quaid` and `~/.quaid` do NOT exist on
+the **coordinator/dev box**. If they do, something contaminated the local
+machine — either a tester pane dropped to local (see above), a stray hook
+fired locally, or a vitest/pytest run leaked test fixture writes outside
+its tmpdir.
+
+```bash
+# Run after M0 completes. Either ls fails = clean.
+ls -la ~/quaid 2>&1 | head -2
+ls -la ~/.quaid 2>&1 | head -2
+```
+
+If either directory exists post-M0:
+1. Inspect what's in it (memory.db, instances/, logs/) to identify the source.
+2. `trash ~/.quaid ~/quaid` (recoverable). Do NOT use `rm -rf`.
+3. Investigate the source. Common culprits:
+   - A pytest/vitest test that didn't isolate to tmpdir.
+   - A tester pane that escaped ssh (use verify-tester-ssh.sh).
+   - A leftover Quaid CLI shim at `/opt/homebrew/bin/quaid` calling the local install.
+4. If you can't identify the source, surface as an immediate ISSUE — the run
+   is potentially contaminated.
+
+---
+
 ## Step 2 — Preflight: Pane Verify, Safety Check, Wipe, Platform Start
 
 **Do this at the start of every run.** Two things happen here: you confirm your
@@ -590,8 +668,8 @@ always show 0 nodes — this is not a failure.
 | Platform | How to send |
 |----------|------------|
 | OC | Via the OC agent CLI (`openclaw agent --agent main -m "..."`) |
-| CC | tmux send-keys to `livetest:CC`, then Enter |
-| CDX | tmux send-keys to `livetest:CDX`, then Enter |
+| CC | `tmux-msg.sh --no-chrome livetest:CC "<message>"` |
+| CDX | `tmux-msg.sh --no-chrome livetest:CDX "<message>"` |
 
 ### Release verify install (coordinator-driven, no tester involvement)
 
@@ -792,6 +870,7 @@ Examine the Quaid install on REMOTE_HOST for platform PLATFORM.
 6. Platform-specific checks:
    - OC: verify ~/.openclaw/extensions/quaid/ is a real directory copy containing the Quaid plugin files (not a symlink)
    - CC: verify ~/.claude/settings.json has Quaid hooks registered
+     AND `/tmp/cc-livetest/.claude/settings.json` contains the expected `QUAID_INSTANCE`
    - CDX: verify ~/.codex/hooks.json has Quaid hooks registered
 
 7. Verify NO stale flat or misplaced paths:
@@ -894,6 +973,11 @@ Concrete rules:
   tester starting the next milestone on its own, rein it in and require
   explicit boundaries — otherwise you lose the ability to gate on fix-deploys
   between milestones.
+- **CC requires a session-capture proof before M2.** A green launch screen is
+  not enough. Before M2, require evidence that Claude created a fresh transcript
+  under `~/.claude/projects/-tmp-cc-livetest/*.jsonl` after the first real user
+  message. If no fresh JSONL exists, halt the CC lane immediately: hooks may be
+  installed, but Quaid has no session input to extract.
 - **Silence is not passing.** If a tester has been quiet past the expected
   duration for a milestone (see per-milestone expected windows in the guide),
   nudge it for a STATUS before assuming work is in flight. A common failure

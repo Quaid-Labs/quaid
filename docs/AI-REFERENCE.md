@@ -184,9 +184,9 @@ There is no `PostCompact` hook wired. `hook-inject-compact` exists as a callable
    is a controlled fallback when `QUAID_SUPERVISOR_DISABLE=1`.
 2. For adapters that track session transitions (e.g. Codex), signals extraction for the session that just ended via `/new` or process restart.
 3. Seeds an extraction cursor for the current session so the daemon can discover it for timeout-based extraction.
-4. Collects identity files (`USER.md`, `SOUL.md`, `ENVIRONMENT.md`) from `$QUAID_VISIBLE_HOME/instances/<INSTANCE_ID>/`, scans registered projects for bounded context, checks janitor health and compatibility state, then writes the combined content to `{cwd}/.claude/rules/quaid-projects.md` (or `$QUAID_RULES_DIR/quaid-projects.md` if set). Bounded project context injects full `TOOLS.md`/`AGENTS.md` only for allowlisted operational projects such as `quaid`; other project docs appear as compact catalog entries and remain available through docs recall.
+4. Collects identity files (`USER.md`, `SOUL.md`, `ENVIRONMENT.md`) from `$QUAID_VISIBLE_HOME/instances/<INSTANCE_ID>/`, scans registered projects for bounded context, checks janitor health and compatibility state, then writes split context files under `{cwd}/.claude/rules/quaid-*.md` (or the directory named by `$QUAID_RULES_DIR`). Legacy `quaid-projects.md` is migrated to `quaid-projects.md.bak` when the split writer runs. Bounded project context injects full `TOOLS.md`/`AGENTS.md` only for allowlisted operational projects such as `quaid`; other project docs appear as compact catalog entries and remain available through docs recall.
 
-The write is idempotent — if content is unchanged the file is not touched, preventing unnecessary prompt cache invalidation. Claude Code auto-loads `rules/*.md` and preserves them through compaction (unlike `additionalContext` which is lost on compaction).
+The write is idempotent per split file — unchanged files are not touched, preventing unnecessary prompt cache invalidation. Claude Code auto-loads `rules/*.md` at session start. During `/compact`, Quaid rebuilds the split rules files and emits a bounded identity-only `additionalContext` bridge on the next user turn because Claude Code 2.1.x does not reliably reload rewritten rules files into model-visible context immediately after compaction.
 
 ### Auth Token
 

@@ -4,6 +4,10 @@ This page has two views:
 - product capabilities (what Quaid provides)
 - host integration capabilities (what each platform can expose)
 
+Compatibility entries are operator-approved records of accepted host/platform
+constraints. Do not use this page as a first-line bug fix or a way to paper
+over Quaid defects; if behavior can be repaired in Quaid, fix it instead.
+
 ## Validated Release Versions
 
 Versions confirmed fully compatible with Quaid through the complete M1–M15 + XP live test suite.
@@ -61,7 +65,7 @@ Quaid also provides a direct operational CLI, but this page focuses on host inte
 | Core recall/store pipeline | Yes | Yes | Yes | Same core memory engine and datastore paths. |
 | Hook-based auto extraction | Yes | Yes | Yes | Codex extraction runs from `Stop` hook (`hook-codex-stop`); OC/CC use daemon signal flow. |
 | Compaction extraction trigger | Yes (`before_compaction`) | Yes (`PreCompact`) | No | Codex currently has no pre-compaction extraction hook. |
-| System-context refresh trigger | Yes (`/compact`) | Yes (`/compact`) | Timeout (no compact hook) | Long-lived sessions need to re-pull system-context markdown when projects/identity files evolve. OC/CC refresh on compaction. Codex has no compaction hook, so its refresh fires on the daemon idle-timeout path instead — meaning Codex sessions only see system-context updates after `inactivityTimeoutMinutes` elapses (default 60). |
+| System-context refresh trigger | Yes (`/compact`) | Yes (`/compact` rebuild + next-turn identity bridge) | Timeout (no compact hook) | Long-lived sessions need to re-pull system-context markdown when projects/identity files evolve. OC refreshes on compaction. CC rebuilds split rules files on `/compact` and sends a bounded identity-only bridge on the next user turn because rewritten rules are not reliably model-visible immediately after compact. Codex has no compaction hook, so its refresh fires on the daemon idle-timeout path instead — meaning Codex sessions only see system-context updates after `inactivityTimeoutMinutes` elapses (default 60). |
 | **Compaction control (wait for extraction before compact)** | **Yes** | **No** | **No** | OC sets `supports_compaction_control=True`; CC/Codex are async or post-turn extraction flows. |
 | Timeout-based extraction path | Yes | Yes | No | Codex uses synchronous stop-hook extraction rather than daemon timeout sweeps. |
 | Adapter-owned auth token required for Quaid LLM calls | Yes | Yes | Yes | OC uses `~/.quaid/adaptors/openclaw/.auth-token`, CC uses `~/.quaid/adaptors/claude-code/.auth-token`, CDX uses `~/.quaid/adaptors/codex/.auth-token`. |
@@ -152,6 +156,31 @@ This section records behaviors discovered during live testing that materially ch
 **Current workaround:** Ask again after a moment. For live testing, send a sacrificial first prompt after `/new` to materialize the boundary, then poll for extraction before grading prior-session recall.
 
 **Future path:** Revisit if Codex exposes a `/new`-side hook or synchronous session-boundary flush. Quaid is not pursuing a local sync barrier for this release.
+
+---
+
+### Rules-file refresh after compaction — Claude Code
+
+**Status:** Mitigated in Quaid by split rules files plus a bounded identity bridge.
+
+**Symptom:** Identity or project context that was appended immediately before
+`/compact` may be present on disk in `.claude/rules/quaid-*.md` but not visible
+to the model on the first post-compact question.
+
+**Root cause:** Claude Code auto-loads `.claude/rules/*.md` at session start,
+but current 2.1.x builds do not reliably reload rewritten rules files into
+model-visible context on the `/compact` boundary.
+
+**Impact:** Without a bridge, post-compact questions can miss freshly updated
+identity facts even though Quaid rebuilt the rules files correctly.
+
+**Current workaround:** Quaid rebuilds split `quaid-*.md` rules files on
+`/compact`, then sends a small identity-only `additionalContext` bridge on the
+next user turn. Project/tool context still rides through split rules and normal
+recall paths.
+
+**Future path:** Remove the bridge if Claude Code exposes a reliable rules
+reload signal or makes rewritten rules model-visible immediately after compact.
 
 ---
 
