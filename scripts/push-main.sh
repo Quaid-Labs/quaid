@@ -8,7 +8,6 @@ BRANCH="$(git -C "$ROOT_DIR" rev-parse --abbrev-ref HEAD)"
 REMOTE_MAIN_REF="${REMOTE}/${TARGET_BRANCH}"
 HEAD_SHA="$(git -C "$ROOT_DIR" rev-parse HEAD)"
 STAGING_BRANCH="ci/main/${HEAD_SHA:0:12}"
-WORKFLOW_NAME="Quaid CI"
 WAIT_SECONDS="${QUAID_PUSH_MAIN_WAIT_SECONDS:-2400}"
 POLL_SECONDS="${QUAID_PUSH_MAIN_POLL_SECONDS:-10}"
 PREVALIDATION_STAMP="$ROOT_DIR/.git/.quaid-prepush-validation.stamp"
@@ -60,6 +59,45 @@ cleanup_staging_branch() {
   git push "$REMOTE" ":${STAGING_BRANCH}" >/dev/null 2>&1 || true
 }
 
+installer_gate_required() {
+  git rev-parse --verify "$REMOTE_MAIN_REF" >/dev/null 2>&1 || return 1
+  git diff --name-only "${REMOTE_MAIN_REF}...HEAD" | \
+    rg -q '^(setup-quaid\.mjs|setup-quaid\.sh|install\.sh|install\.ps1|\.github/workflows/installer-openclaw-smoke\.yml|\.github/workflows/ci\.yml|scripts/push-main\.sh)$'
+}
+
+wait_for_workflow_success() {
+  local workflow_name="$1"
+  local deadline="$2"
+  local run_id=""
+
+  while (( $(date +%s) < deadline )); do
+    run_id="$(gh run list --workflow "$workflow_name" --branch "$STAGING_BRANCH" --limit 20 --json databaseId,headSha --jq ".[] | select(.headSha == \"${HEAD_SHA}\") | .databaseId" | head -n1 | tr -d '[:space:]')"
+    if [[ -n "$run_id" ]]; then
+      break
+    fi
+    sleep "$POLL_SECONDS"
+  done
+
+  [[ -n "$run_id" ]] || die "timed out waiting for ${workflow_name} run on ${STAGING_BRANCH} (${HEAD_SHA})"
+
+  echo "[push-main] waiting for ${workflow_name} run ${run_id}"
+  while (( $(date +%s) < deadline )); do
+    local status=""
+    local conclusion=""
+    status="$(gh run view "$run_id" --json status --jq '.status' | tr -d '[:space:]')"
+    if [[ "$status" == "completed" ]]; then
+      conclusion="$(gh run view "$run_id" --json conclusion --jq '.conclusion' | tr -d '[:space:]')"
+      [[ "$conclusion" == "success" ]] || die "${workflow_name} failed on ${STAGING_BRANCH} (run ${run_id}, conclusion=${conclusion:-unknown})"
+      return 0
+    fi
+    sleep "$POLL_SECONDS"
+  done
+
+  local final_conclusion=""
+  final_conclusion="$(gh run view "$run_id" --json conclusion --jq '.conclusion' | tr -d '[:space:]')"
+  [[ "$final_conclusion" == "success" ]] || die "timed out waiting for successful ${workflow_name} on ${STAGING_BRANCH} (run ${run_id})"
+}
+
 if [[ "$BRANCH" != "$TARGET_BRANCH" ]]; then
   die "current branch is '$BRANCH'; only '$TARGET_BRANCH' may be pushed with this script"
 fi
@@ -99,30 +137,12 @@ git push "$REMOTE" "HEAD:${STAGING_BRANCH}"
 trap cleanup_staging_branch EXIT
 
 deadline=$(( $(date +%s) + WAIT_SECONDS ))
-run_id=""
-while (( $(date +%s) < deadline )); do
-  run_id="$(gh run list --workflow "$WORKFLOW_NAME" --branch "$STAGING_BRANCH" --limit 20 --json databaseId,headSha --jq ".[] | select(.headSha == \"${HEAD_SHA}\") | .databaseId" | head -n1 | tr -d '[:space:]')"
-  if [[ -n "$run_id" ]]; then
-    break
-  fi
-  sleep "$POLL_SECONDS"
-done
-
-[[ -n "$run_id" ]] || die "timed out waiting for ${WORKFLOW_NAME} run on ${STAGING_BRANCH} (${HEAD_SHA})"
-
-echo "[push-main] waiting for ${WORKFLOW_NAME} run ${run_id}"
-while (( $(date +%s) < deadline )); do
-  status="$(gh run view "$run_id" --json status --jq '.status' | tr -d '[:space:]')"
-  if [[ "$status" == "completed" ]]; then
-    conclusion="$(gh run view "$run_id" --json conclusion --jq '.conclusion' | tr -d '[:space:]')"
-    [[ "$conclusion" == "success" ]] || die "${WORKFLOW_NAME} failed on ${STAGING_BRANCH} (run ${run_id}, conclusion=${conclusion:-unknown})"
-    break
-  fi
-  sleep "$POLL_SECONDS"
-done
-
-final_conclusion="$(gh run view "$run_id" --json conclusion --jq '.conclusion' | tr -d '[:space:]')"
-[[ "$final_conclusion" == "success" ]] || die "timed out waiting for successful ${WORKFLOW_NAME} on ${STAGING_BRANCH} (run ${run_id})"
+wait_for_workflow_success "Quaid CI" "$deadline"
+if installer_gate_required; then
+  wait_for_workflow_success "Installer OpenClaw Smoke" "$deadline"
+else
+  echo "[push-main] installer smoke gate not required for this changeset"
+fi
 
 echo "[push-main] promoting ${HEAD_SHA} to ${TARGET_BRANCH}"
 git push "$REMOTE" "HEAD:${TARGET_BRANCH}"

@@ -13,12 +13,17 @@ on:
       - 'install.ps1'
       - '.github/workflows/installer-openclaw-smoke.yml'
   push:
-    branches: [main]
+    branches:
+      - main
+      - 'ci/main/**'
     paths:
       - 'setup-quaid.mjs'
       - 'setup-quaid.sh'
       - 'install.sh'
       - 'install.ps1'
+      - '.github/workflows/installer-openclaw-smoke.yml'
+      - '.github/workflows/ci.yml'
+      - 'scripts/push-main.sh'
 
 permissions:
   contents: read
