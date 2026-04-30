@@ -46,7 +46,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: '22.12.0'
+          node-version: '22.16.0'
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -85,7 +85,6 @@ jobs:
           fi
           WORKSPACE="${RUNNER_TEMP}/quaid-installer-workspace-${SCENARIO}"
           mkdir -p "${WORKSPACE}"
-          export CLAWDBOT_WORKSPACE="${WORKSPACE}"
           export PATH="$(npm config get prefix)/bin:${PATH}"
           npm install --no-save @clack/prompts
 
@@ -152,7 +151,7 @@ jobs:
             python -c "import json, os, pathlib; cfg=pathlib.Path(os.environ['OPENCLAW_CFG_PATH']); data=json.loads(cfg.read_text()); agents=data.setdefault('agents', {}); defaults=agents.setdefault('defaults', {}); defaults.setdefault('compaction', {})['mode']='safeguard'; cfg.write_text(json.dumps(data, indent=2) + '\n'); print(f'seeded compaction safeguard mode: {cfg}')"
           fi
 
-          node setup-quaid.mjs --agent --workspace "${WORKSPACE}" --owner-name "CI Installer"
+          node setup-quaid.mjs --agent --owner-name "CI Installer"
 
           OPENCLAW_CFG_PATH="${HOME}/.openclaw/openclaw.json"
           if [[ ! -f "${OPENCLAW_CFG_PATH}" ]]; then

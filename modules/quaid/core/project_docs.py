@@ -1585,6 +1585,15 @@ def _wait_for_pid(
     timeout = pid_startup_wait_seconds() if timeout_seconds is None else float(timeout_seconds)
     deadline = time.time() + timeout
     while time.time() < deadline:
+        record = _read_pid_record(path)
+        if (
+            record
+            and int(record.get("pid") or 0) == int(expected_pid)
+            and record.get("role") == role
+            and (project is None or record.get("project") == validate_project_name(project))
+            and _pid_alive(expected_pid)
+        ):
+            return int(expected_pid)
         pid = _read_valid_pid(path, role=role, project=project)
         if pid == expected_pid:
             return pid

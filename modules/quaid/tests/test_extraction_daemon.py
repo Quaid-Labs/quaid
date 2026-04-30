@@ -4340,6 +4340,9 @@ class TestRollingExtraction:
 
         real_adapter = sys.modules.get("lib.adapter")
         fake_adapter_mod = types.ModuleType("lib.adapter")
+        fake_adapter_mod.StandaloneAdapter = object
+        fake_adapter_mod.quaid_projects_dir = lambda: tmp_path / "projects"
+        fake_adapter_mod.quaid_tracking_dir = lambda: tmp_path / "tracking"
 
         class _FakeAdapter(_OwnedTestAdapterMixin):
             def parse_session_jsonl(self, path):
@@ -4455,6 +4458,9 @@ class TestRollingExtraction:
 
         real_adapter = sys.modules.get("lib.adapter")
         fake_adapter_mod = types.ModuleType("lib.adapter")
+        fake_adapter_mod.StandaloneAdapter = object
+        fake_adapter_mod.quaid_projects_dir = lambda: tmp_path / "projects"
+        fake_adapter_mod.quaid_tracking_dir = lambda: tmp_path / "tracking"
 
         class _FakeAdapter(_OwnedTestAdapterMixin):
             def parse_session_jsonl(self, path):
@@ -5941,6 +5947,9 @@ class TestRollingExtraction:
         sys.modules["core.subagent_registry"] = fake_registry
 
         fake_adapter_mod = types.ModuleType("lib.adapter")
+        fake_adapter_mod.StandaloneAdapter = object
+        fake_adapter_mod.quaid_projects_dir = lambda: tmp_path / "projects"
+        fake_adapter_mod.quaid_tracking_dir = lambda: tmp_path / "tracking"
         if real_adapter is not None:
             fake_adapter_mod.StandaloneAdapter = getattr(real_adapter, "StandaloneAdapter", object)
             fake_adapter_mod.quaid_projects_dir = getattr(
@@ -6141,6 +6150,9 @@ class TestRollingExtraction:
 
         real_adapter = sys.modules.get("lib.adapter")
         fake_adapter_mod = types.ModuleType("lib.adapter")
+        fake_adapter_mod.StandaloneAdapter = object
+        fake_adapter_mod.quaid_projects_dir = lambda: tmp_path / "projects"
+        fake_adapter_mod.quaid_tracking_dir = lambda: tmp_path / "tracking"
 
         class _FakeAdapter(_OwnedTestAdapterMixin):
             def quaid_home(self):
@@ -6745,6 +6757,9 @@ class TestRollingExtraction:
         sys.modules["core.subagent_registry"] = fake_registry
 
         fake_adapter_mod = types.ModuleType("lib.adapter")
+        fake_adapter_mod.StandaloneAdapter = object
+        fake_adapter_mod.quaid_projects_dir = lambda: tmp_path / "projects"
+        fake_adapter_mod.quaid_tracking_dir = lambda: tmp_path / "tracking"
 
         class _FakeAdapter(_OwnedTestAdapterMixin):
             def quaid_home(self):
@@ -6949,6 +6964,9 @@ class TestRollingExtraction:
             def parse_session_jsonl(self, path):
                 return "unused when semantic buffer is present"
 
+        fake_adapter_mod.StandaloneAdapter = object
+        fake_adapter_mod.quaid_projects_dir = lambda: tmp_path / "projects"
+        fake_adapter_mod.quaid_tracking_dir = lambda: tmp_path / "tracking"
         fake_adapter_mod.get_adapter = lambda: _FakeAdapter()
         sys.modules["lib.adapter"] = fake_adapter_mod
 
@@ -7119,6 +7137,9 @@ class TestRollingExtraction:
         sys.modules["core.subagent_registry"] = fake_registry
 
         fake_adapter_mod = types.ModuleType("lib.adapter")
+        fake_adapter_mod.StandaloneAdapter = object
+        fake_adapter_mod.quaid_projects_dir = lambda: tmp_path / "projects"
+        fake_adapter_mod.quaid_tracking_dir = lambda: tmp_path / "tracking"
 
         class _FakeAdapter(_OwnedTestAdapterMixin):
             def quaid_home(self):
@@ -7229,6 +7250,14 @@ class TestRollingExtraction:
                 {"event": event, "session_id": session_id, **data}
             ),
         )
+        monkeypatch.setattr(extraction_daemon, "_warm_payload_embeddings", lambda facts: {
+            "requested": len(facts),
+            "unique": len(facts),
+            "cache_hits": 0,
+            "warmed": len(facts),
+            "failed": 0,
+            "skipped_empty": 0,
+        })
 
         try:
             extraction_daemon.write_signal(
@@ -7314,6 +7343,9 @@ class TestRollingExtraction:
         sys.modules["core.subagent_registry"] = fake_registry
 
         fake_adapter_mod = types.ModuleType("lib.adapter")
+        fake_adapter_mod.StandaloneAdapter = object
+        fake_adapter_mod.quaid_projects_dir = lambda: tmp_path / "projects"
+        fake_adapter_mod.quaid_tracking_dir = lambda: tmp_path / "tracking"
 
         class _FakeAdapter(_OwnedTestAdapterMixin):
             def quaid_home(self):
@@ -7427,6 +7459,14 @@ class TestRollingExtraction:
                 {"event": event, "session_id": session_id, **data}
             ),
         )
+        monkeypatch.setattr(extraction_daemon, "_warm_payload_embeddings", lambda facts: {
+            "requested": len(facts),
+            "unique": len(facts),
+            "cache_hits": 0,
+            "warmed": len(facts),
+            "failed": 0,
+            "skipped_empty": 0,
+        })
 
         try:
             extraction_daemon.write_signal(

@@ -165,7 +165,7 @@ class TestInstanceExists:
         assert instance_exists("shared") is False
 
     def test_internal_path_derived_instance_does_not_exist(self, monkeypatch, tmp_path):
-        home = Path("/private/tmp") / f"qit{os.getpid()}a"
+        home = Path("/tmp") / f"qit{os.getpid()}a"
         shutil.rmtree(home, ignore_errors=True)
         try:
             monkeypatch.setenv("QUAID_HOME", str(home))
@@ -198,7 +198,7 @@ class TestListInstances:
         assert result == ["claude-code", "openclaw"]
 
     def test_ignores_internal_path_derived_instances(self, monkeypatch, tmp_path):
-        home = Path("/private/tmp") / f"qit{os.getpid()}b"
+        home = Path("/tmp") / f"qit{os.getpid()}b"
         shutil.rmtree(home, ignore_errors=True)
         try:
             monkeypatch.setenv("QUAID_HOME", str(home))

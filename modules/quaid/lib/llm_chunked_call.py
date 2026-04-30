@@ -54,8 +54,13 @@ def _get_configured_chunk_tokens() -> int:
 def _load_content(content_or_path: str) -> str:
     """Load content from a string or file path."""
     p = Path(content_or_path)
-    if p.is_file():
-        return p.read_text(encoding="utf-8")
+    try:
+        if p.is_file():
+            return p.read_text(encoding="utf-8")
+    except (OSError, ValueError):
+        # Long multi-line prompts and strings with path-illegal bytes are
+        # content, not filesystem paths.
+        return content_or_path
     return content_or_path
 
 
