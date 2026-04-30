@@ -261,9 +261,10 @@ def test_codex_hook_inject_turn_based_refresh_emits_context_on_first_turn_and_af
 
     payload1 = json.loads(out1)
     context1 = payload1["hookSpecificOutput"]["additionalContext"]
-    assert "# Quaid Project Context" in context1
+    assert len(context1) < 10_000
+    assert "# Quaid Refreshed Identity Context" in context1
     assert "Turn refresh canary: ember-cascade" in context1
-    assert "refresh toolset" in context1
+    assert "refresh toolset" not in context1
     assert out2.strip() == ""
     payload = json.loads(out3)
     context = payload["hookSpecificOutput"]["additionalContext"]
@@ -357,7 +358,10 @@ def test_codex_hook_inject_turn_based_refresh_repairs_legacy_state_without_ident
 
     payload = json.loads(out)
     context = payload["hookSpecificOutput"]["additionalContext"]
+    assert len(context) < 10_000
+    assert "# Quaid Refreshed Identity Context" in context
     assert "The office plant is named Bartholomew" in context
+    assert "legacy refresh toolset" not in context
     refreshed_state = json.loads(state_path.read_text(encoding="utf-8"))
     entry = refreshed_state["sessions"]["codex-m7-session"]
     assert entry["last_refresh_reason"] == "identity_changed"

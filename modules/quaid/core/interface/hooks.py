@@ -2035,7 +2035,7 @@ def _build_compaction_identity_context(max_chars: int = _COMPACT_IDENTITY_CONTEX
     header = (
         "<quaid_system_message>\n"
         "# Quaid Refreshed Identity Context\n\n"
-        "MANDATORY: Quaid rebuilt this identity context immediately after /compact. "
+        "MANDATORY: Quaid refreshed this identity context from USER.md, SOUL.md, and ENVIRONMENT.md. "
         "Treat these identity-file facts as authoritative over conflicting recalled memories. "
         "Answer the current user from this identity context when it is relevant.\n\n"
     )
@@ -2313,6 +2313,11 @@ def _maybe_compaction_refresh_context_artifacts(hook_input: dict, *, is_precompa
 def _build_turn_based_refresh_context(session_id: str) -> str:
     if not _should_emit_turn_based_refresh(session_id):
         return ""
+    reason = _turn_based_refresh_reason(session_id)
+    if reason in {"identity_changed", "first_turn"}:
+        identity_context = _build_compaction_identity_context()
+        if identity_context:
+            return identity_context
     return _build_project_context_message()
 
 
