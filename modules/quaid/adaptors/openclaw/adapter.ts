@@ -363,38 +363,6 @@ function getInstanceId(agentLabel: string = "main"): string {
   return _QUAID_PREFIX ? `${_QUAID_PREFIX}-${label}` : label;
 }
 
-function readRegisteredOpenClawAgentLabels(): string[] {
-  const labels: string[] = [];
-  try {
-    const cfgPath = _resolveOpenClawConfigPath();
-    if (!cfgPath || !fs.existsSync(cfgPath)) {
-      return [];
-    }
-    const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
-    const agents = cfg?.agents;
-    if (!agents || typeof agents !== "object") {
-      return [];
-    }
-    const list = Array.isArray(agents.list) ? agents.list : [];
-    for (const row of list) {
-      const label = String((row as any)?.id || "").trim().toLowerCase();
-      if (label) labels.push(label);
-    }
-    for (const key of Object.keys(agents)) {
-      const label = String(key || "").trim().toLowerCase();
-      if (label && !["defaults", "list"].includes(label)) {
-        labels.push(label);
-      }
-    }
-  } catch (err: unknown) {
-    writeHookTrace("instance.agent_registry_scan_error", {
-      error: String((err as Error)?.message || err),
-    });
-    return [];
-  }
-  return Array.from(new Set(labels)).filter((label) => label && label !== "main");
-}
-
 /** Daemon signal directory for a given agent's Quaid silo. */
 function getDaemonSignalDir(agentId: string = "main"): string {
   const instanceId = getInstanceId(agentId);
@@ -498,9 +466,6 @@ const sessionTranscriptPaths = new Map<string, string>();
 // Populated by the session index watcher as sessions are discovered.
 const sessionIdToAgentId = new Map<string, string>();
 const provisionedAgentInstances = new Set<string>();
-let registeredAgentProvisionSignature = "";
-let registeredAgentProvisionLastScanMs = 0;
-const REGISTERED_AGENT_PROVISION_SCAN_MS = 30_000;
 const subagentParentSessionIds = new Map<string, string>();
 const registeredSubagentSessions = new Set<string>();
 const QUAID_SESSION_PRESERVE_DIR = path.join(QUAID_LOGS_DIR, "quaid", "sessions");
@@ -717,35 +682,6 @@ function ensureAgentInstanceProvisioned(agentLabel: string, reason: string): boo
     });
     return false;
   }
-}
-
-function provisionRegisteredAgentSilos(reason: string, nowMs: number = Date.now()): number {
-  const labels = readRegisteredOpenClawAgentLabels();
-  const signature = labels.join("\0");
-  if (
-    signature === registeredAgentProvisionSignature
-    && nowMs - registeredAgentProvisionLastScanMs < REGISTERED_AGENT_PROVISION_SCAN_MS
-  ) {
-    return 0;
-  }
-  registeredAgentProvisionSignature = signature;
-  registeredAgentProvisionLastScanMs = nowMs;
-  let provisioned = 0;
-  for (const label of labels) {
-    const configPath = path.join(WORKSPACE, "instances", getInstanceId(label), "config.json");
-    const existedBefore = fs.existsSync(configPath);
-    if (ensureAgentInstanceProvisioned(label, reason)) {
-      provisioned += existedBefore ? 0 : 1;
-    }
-  }
-  if (labels.length > 0) {
-    writeHookTrace("instance.registered_agents_scanned", {
-      reason,
-      labels,
-      provisioned,
-    });
-  }
-  return provisioned;
 }
 
 function deliverDeferredNoticesViaChannel(agentLabel: string, reason: string): number {
@@ -6080,7 +6016,6 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
       let lastStaleRecoverMs = 0;
       const tickSessionIndex = () => {
         try {
-          provisionRegisteredAgentSilos("session_index_agent_registry", Date.now());
           const data = readSessionsIndex();
 
           // Build the list of all recognized interactive key entries from sessions.json.
@@ -8357,8 +8292,6 @@ export const __test = {
   resolveConfiguredLLMTransport: _resolveConfiguredLLMTransport,
   resolveAgentLabelFromModelName,
   resolveHookAgentLabel,
-  readRegisteredOpenClawAgentLabels,
-  provisionRegisteredAgentSilos,
   isInternalSessionContext,
   isInternalTranscriptMessages,
   isMeaningfulUserTranscriptActivity,

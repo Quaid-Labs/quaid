@@ -11,8 +11,6 @@ type AdapterTestApi = {
   shouldMirrorTranscriptUpdateToPreservedCopy: (sessionKey: string) => boolean;
   resolveAgentLabelFromModelName: (modelName: unknown) => string;
   resolveHookAgentLabel: (event: any, ctx: any) => string;
-  readRegisteredOpenClawAgentLabels: () => string[];
-  provisionRegisteredAgentSilos: (reason: string, nowMs?: number) => number;
 };
 type LoadedAdapter = {
   plugin: AdapterPlugin;
@@ -149,7 +147,7 @@ describe("openclaw auto-provision", () => {
     fs.rmSync(home, { recursive: true, force: true });
   });
 
-  it("auto-provisions registered non-default agent silos before first message", async () => {
+  it("auto-provisions a non-default agent silo on first before_agent_start hook touch", async () => {
     vi.useFakeTimers();
     const home = makeTempDir("quaid-oc-autoprov-home-");
     const hiddenHome = path.join(home, ".quaid");
@@ -232,9 +230,8 @@ describe("openclaw auto-provision", () => {
 
     const targetConfigPath = path.join(hiddenHome, "instances", "openclaw-m13test", "config.json");
     const targetSoulPath = path.join(visibleHome, "instances", "openclaw-m13test", "SOUL.md");
-    expect(fs.existsSync(targetConfigPath)).toBe(true);
-    expect(fs.existsSync(targetSoulPath)).toBe(true);
-    expect(testApi.readRegisteredOpenClawAgentLabels()).toEqual(["m13test"]);
+    expect(fs.existsSync(targetConfigPath)).toBe(false);
+    expect(fs.existsSync(targetSoulPath)).toBe(false);
     expect(testApi.resolveAgentLabelFromModelName("openclaw/m5run162")).toBe("m5run162");
     expect(
       testApi.resolveHookAgentLabel(
@@ -253,26 +250,6 @@ describe("openclaw auto-provision", () => {
     expect(beforeAgentStartRegisterHookCall).toBeTruthy();
 
     const beforeAgentStartHandler = beforeAgentStartCall?.[1];
-    const lateAddConfigPath = path.join(hiddenHome, "instances", "openclaw-lateadd", "config.json");
-    expect(fs.existsSync(lateAddConfigPath)).toBe(false);
-    writeJson(openClawConfigPath, {
-      agents: {
-        list: [
-          { id: "main", default: true },
-          { id: "m13test" },
-          { id: "lateadd" },
-        ],
-      },
-      env: {
-        vars: {
-          QUAID_INSTANCE: "openclaw-main",
-        },
-      },
-    });
-    fs.mkdirSync(path.join(openClawRoot, "agents", "lateadd", "agent"), { recursive: true });
-    expect(testApi.provisionRegisteredAgentSilos("agents-add-test", Date.now() + 31_000)).toBe(1);
-    expect(fs.existsSync(lateAddConfigPath)).toBe(true);
-
     await beforeAgentStartHandler(
       { prependContext: "" },
       {
