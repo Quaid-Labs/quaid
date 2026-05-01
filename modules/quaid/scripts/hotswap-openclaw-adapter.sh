@@ -25,7 +25,17 @@ PLUGIN_DIRS=()
 APPLY=0
 
 remote_quote() {
-  printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+  local value="$1"
+  if [[ "$value" == "~" ]]; then
+    printf "~"
+    return
+  fi
+  if [[ "$value" == "~/"* ]]; then
+    local rest="${value#~/}"
+    printf "~/'%s'" "$(printf '%s' "$rest" | sed "s/'/'\\\\''/g")"
+    return
+  fi
+  printf "'%s'" "$(printf '%s' "$value" | sed "s/'/'\\\\''/g")"
 }
 
 while [[ $# -gt 0 ]]; do
@@ -94,10 +104,10 @@ for plugin_dir in "${PLUGIN_DIRS[@]}"; do
   quoted_adapter_dir="$(remote_quote "$remote_adapter_dir")"
   quoted_core_dir="$(remote_quote "$remote_core_dir")"
   ssh "$HOST" "mkdir -p $quoted_adapter_dir $quoted_core_dir"
-  scp "$LOCAL_ADAPTER_TS" "$HOST:$remote_adapter_dir/adapter.ts"
-  scp "$LOCAL_ADAPTER_JS" "$HOST:$remote_adapter_dir/adapter.js"
-  scp "$LOCAL_TIMEOUT_TS" "$HOST:$remote_core_dir/session-timeout.ts"
-  scp "$LOCAL_TIMEOUT_JS" "$HOST:$remote_core_dir/session-timeout.js"
+  ssh "$HOST" "cat > $quoted_adapter_dir/adapter.ts" < "$LOCAL_ADAPTER_TS"
+  ssh "$HOST" "cat > $quoted_adapter_dir/adapter.js" < "$LOCAL_ADAPTER_JS"
+  ssh "$HOST" "cat > $quoted_core_dir/session-timeout.ts" < "$LOCAL_TIMEOUT_TS"
+  ssh "$HOST" "cat > $quoted_core_dir/session-timeout.js" < "$LOCAL_TIMEOUT_JS"
 done
 
 ssh "$HOST" 'export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"; if command -v openclaw >/dev/null 2>&1; then openclaw gateway restart; elif [ -x /opt/homebrew/bin/openclaw ]; then /opt/homebrew/bin/openclaw gateway restart; elif [ -x /usr/local/bin/openclaw ]; then /usr/local/bin/openclaw gateway restart; else echo "openclaw not found" >&2; exit 127; fi'
