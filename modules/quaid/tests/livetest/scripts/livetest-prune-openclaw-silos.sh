@@ -60,8 +60,12 @@ PY
 fi
 
 QUAID_HOME="$QUAID_HOME_ARG" QUAID_LIVETEST_HARNESS=1 PYTHONPATH="$QUAID_ROOT" python3 - <<'PY'
-from lib.instance import prune_stale_openclaw_agent_instances
+from lib.instance import prune_livetest_instance_residues, prune_stale_openclaw_agent_instances
 
-for name in prune_stale_openclaw_agent_instances():
+seen = set()
+for name in [*prune_stale_openclaw_agent_instances(), *prune_livetest_instance_residues()]:
+    if name in seen:
+        continue
+    seen.add(name)
     print(name)
 PY

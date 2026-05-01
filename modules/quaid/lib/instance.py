@@ -264,10 +264,11 @@ def _active_openclaw_agent_labels() -> tuple[set[str], list[Path], bool]:
                 label = str(row.get("id") or "").strip().lower()
                 if label:
                     labels.add(label)
-        for key in agents.keys():
-            label = str(key or "").strip().lower()
-            if label and label not in {"defaults", "list"}:
-                labels.add(label)
+        if not has_authoritative_list:
+            for key in agents.keys():
+                label = str(key or "").strip().lower()
+                if label and label not in {"defaults", "list"}:
+                    labels.add(label)
     fallback_root = Path.home() / ".openclaw"
     if fallback_root.exists() and all(str(root) != str(fallback_root) for root in roots):
         roots.append(fallback_root)
@@ -381,6 +382,62 @@ def prune_stale_openclaw_agent_instances(home: Optional[Path] = None) -> List[st
         entry = instances_dir / name
         if _prune_stale_openclaw_agent_instance(name, entry, home=instances_dir.parent):
             pruned.append(name)
+    return pruned
+
+
+def _is_empty_instance_bind_point_residue(instance_dir: Path) -> bool:
+    """Return true for configless instance dirs that contain only empty dirs.
+
+    The live-test harness can leave a bind-point behind when a daemon or hook
+    creates ``data/extraction-signals`` after the test has already torn down the
+    sibling silo. Only delete directories with no files at all; anything with a
+    config, database, cursor, log, or other file is real state.
+    """
+    if not instance_dir.is_dir() or instance_dir.is_symlink():
+        return False
+    if (instance_dir / "config.json").exists():
+        return False
+    try:
+        for child in instance_dir.rglob("*"):
+            if child.is_symlink() or child.is_file():
+                return False
+            if not child.is_dir():
+                return False
+        return True
+    except OSError:
+        return False
+
+
+def prune_livetest_instance_residues(home: Optional[Path] = None) -> List[str]:
+    """Delete empty configless instance bind-points in the livetest harness."""
+    if not _livetest_harness_enabled():
+        raise InstanceError(
+            "Refusing to delete instance residues outside the livetest harness; "
+            "set QUAID_LIVETEST_HARNESS=1 only from tests/livetest cleanup tools."
+        )
+    pruned: List[str] = []
+    instances_dir = (Path(home).resolve() if home is not None else quaid_home()) / "instances"
+    if not instances_dir.is_dir():
+        return pruned
+    root = instances_dir.resolve()
+    for entry in sorted(instances_dir.iterdir()):
+        if not entry.is_dir() or entry.is_symlink():
+            continue
+        name = entry.name
+        try:
+            validate_instance_id(name)
+        except InstanceError:
+            continue
+        target = entry.resolve()
+        if target.parent != root or target.name != name:
+            continue
+        if not _is_empty_instance_bind_point_residue(entry):
+            continue
+        try:
+            shutil.rmtree(target)
+            pruned.append(name)
+        except OSError:
+            continue
     return pruned
 
 

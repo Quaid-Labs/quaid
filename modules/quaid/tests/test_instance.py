@@ -22,6 +22,7 @@ from lib.instance import (
     shared_registry_path,
     instance_exists,
     list_instances,
+    prune_livetest_instance_residues,
     prune_stale_openclaw_agent_instances,
     require_instance_exists,
 )
@@ -222,7 +223,12 @@ class TestListInstances:
         oc_root.mkdir()
         monkeypatch.setenv("OPENCLAW_CONFIG_PATH", str(oc_root / "openclaw.json"))
         (oc_root / "openclaw.json").write_text(
-            json.dumps({"agents": {"list": [{"id": "main"}, {"id": "live"}]}}),
+            json.dumps({
+                "agents": {
+                    "list": [{"id": "main"}, {"id": "live"}],
+                    "deleted": {"workspace": "/tmp/old-deleted-agent"},
+                }
+            }),
             encoding="utf-8",
         )
         (oc_root / "agents" / "dironly").mkdir(parents=True)
@@ -277,6 +283,24 @@ class TestListInstances:
         assert prune_stale_openclaw_agent_instances(tmp_path) == deleted_names
         for name in deleted_names:
             assert not (tmp_path / "instances" / name).exists()
+
+    def test_livetest_prune_removes_empty_instance_bind_point_residue(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        residue = tmp_path / "instances" / "claude-code-private-tmp-cc-livetest-sibling"
+        (residue / "data" / "extraction-signals").mkdir(parents=True)
+        real = tmp_path / "instances" / "codex-m13test"
+        (real / "data" / "extraction-signals").mkdir(parents=True)
+        (real / "config.json").write_text(json.dumps({"adapter": {"type": "codex"}}), encoding="utf-8")
+
+        with pytest.raises(InstanceError, match="livetest harness"):
+            prune_livetest_instance_residues(tmp_path)
+        assert residue.exists()
+        assert real.exists()
+
+        monkeypatch.setenv("QUAID_LIVETEST_HARNESS", "1")
+        assert prune_livetest_instance_residues(tmp_path) == [residue.name]
+        assert not residue.exists()
+        assert real.exists()
 
     def test_empty(self, monkeypatch, tmp_path):
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
