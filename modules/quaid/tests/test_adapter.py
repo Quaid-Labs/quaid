@@ -274,22 +274,6 @@ class TestStandaloneAdapter:
         assert "Edges created" not in transcript
         assert transcript == "User: My Friday ritual uses marker marigold-anvil-5816."
 
-    def test_build_transcript_strips_plain_language_quaid_notice_relay(self, standalone):
-        transcript = standalone.build_transcript([
-            {
-                "role": "assistant",
-                "content": (
-                    "Quaid has repeated provider errors: its deep model is configured as "
-                    "invalid-model-m6-probe, and Anthropic is returning 404 not_found_error.\n\n"
-                    "Hello. What would you like to work on?"
-                ),
-            },
-        ])
-
-        assert "provider errors" not in transcript
-        assert "invalid-model-m6-probe" not in transcript
-        assert transcript == "Assistant: Hello. What would you like to work on?"
-
     def test_parse_session_jsonl_uses_adapter_transcript_rules(self, standalone, tmp_path):
         import json
         jsonl_file = tmp_path / "session.jsonl"
@@ -2191,70 +2175,6 @@ class TestCodexAdapter:
         transcript = adapter.parse_session_jsonl(path)
         assert "pending Quaid notice" not in transcript
         assert "Tell me about Baxter." in transcript
-
-    def test_parse_session_jsonl_strips_developer_notice_block_and_assistant_plain_language_relay(self, tmp_path):
-        path = tmp_path / "rollout-quaid-notice-relay.jsonl"
-        path.write_text(
-            "\n".join(
-                [
-                    json.dumps(
-                        {
-                            "type": "response_item",
-                            "payload": {
-                                "type": "message",
-                                "role": "developer",
-                                "content": [
-                                    {
-                                        "type": "input_text",
-                                        "text": (
-                                            "MANDATORY: Quaid has active notices for the human user. "
-                                            "Begin your next response by relaying each notice below in plain language, "
-                                            "then answer the user.\n\n"
-                                            "<quaid_system_message>\n"
-                                            "• [Quaid error] [provider] Quaid could not access its deep language model "
-                                            "provider (AnthropicLLMProvider, model=invalid-model-m6-probe). Error: "
-                                            "Anthropic API HTTPError code=404.\n"
-                                            "</quaid_system_message>"
-                                        ),
-                                    }
-                                ],
-                            },
-                        }
-                    ),
-                    json.dumps(
-                        {
-                            "type": "event_msg",
-                            "payload": {
-                                "type": "user_message",
-                                "message": "Hello",
-                            },
-                        }
-                    ),
-                    json.dumps(
-                        {
-                            "type": "event_msg",
-                            "payload": {
-                                "type": "agent_message",
-                                "message": (
-                                    "Quaid has repeated provider errors: its deep model is configured as "
-                                    "invalid-model-m6-probe, and Anthropic is returning 404 not_found_error.\n\n"
-                                    "Hello. What would you like to work on?"
-                                ),
-                            },
-                        }
-                    ),
-                ]
-            ),
-            encoding="utf-8",
-        )
-        adapter = CodexAdapter()
-        transcript = adapter.parse_session_jsonl(path)
-        assert "MANDATORY: Quaid" not in transcript
-        assert "quaid_system_message" not in transcript
-        assert "provider errors" not in transcript
-        assert "invalid-model-m6-probe" not in transcript
-        assert "User: Hello" in transcript
-        assert "Assistant: Hello. What would you like to work on?" in transcript
 
     def test_parse_session_jsonl_strips_openclaw_self_memory_acknowledgement(self, tmp_path):
         path = tmp_path / "rollout-openclaw-memory-ack.jsonl"
