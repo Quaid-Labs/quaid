@@ -1688,6 +1688,8 @@ describe("openclaw deferred notices", () => {
     );
     expect(combinedSystemContext(refreshed)).toContain("Bartholomew");
     expect(combinedSystemContext(refreshed)).toContain("fiddle-leaf fig");
+    expect(String(refreshed?.prependContext || "")).toContain("Bartholomew");
+    expect(String(refreshed?.prependContext || "")).toContain("fiddle-leaf fig");
 
     warn.mockRestore();
     log.mockRestore();
