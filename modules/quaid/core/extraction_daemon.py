@@ -1185,6 +1185,9 @@ def write_cursor(
             existing_mtime_ns = int(existing.get("transcript_mtime_ns", 0) or 0)
             existing_inode = int(existing.get("transcript_inode", 0) or 0)
             existing_device = int(existing.get("transcript_device", 0) or 0)
+            # Zero-valued existing fields mean a legacy cursor; fall back to
+            # size-only behavior instead of treating missing metadata as a rebase.
+            # Device is mostly belt-and-suspenders for unusual same-path moves.
             same_size_rebased = bool(
                 (existing_mtime_ns and current_mtime_ns and current_mtime_ns != existing_mtime_ns)
                 or (existing_inode and current_inode and current_inode != existing_inode)
