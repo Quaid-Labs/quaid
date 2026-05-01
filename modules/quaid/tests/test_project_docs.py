@@ -67,8 +67,8 @@ def test_start_worker_env_uses_pending_request_runtime_context(project_env, monk
     monkeypatch.setenv("QUAID_INSTANCE", "codex-private-tmp-cdx-livetest")
     monkeypatch.setenv("QUAID_ADAPTER_TYPE", "codex")
     project_docs.request_update("demo", reason="manual-test", requested_by="pytest")
-    monkeypatch.delenv("QUAID_INSTANCE", raising=False)
-    monkeypatch.delenv("QUAID_ADAPTER_TYPE", raising=False)
+    monkeypatch.setenv("QUAID_INSTANCE", "openclaw-main")
+    monkeypatch.setenv("QUAID_ADAPTER_TYPE", "openclaw")
 
     captured = {}
 

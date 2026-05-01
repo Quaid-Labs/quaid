@@ -769,7 +769,7 @@ def _apply_project_runtime_env(
         raise RuntimeError(
             f"cannot resolve QUAID_INSTANCE for project {name}; "
             "queued request must include requested_instance or project must be linked to exactly one valid instance "
-            f"(valid_linked_instances={len(valid_linked)})"
+            f"(valid_linked_instances={len(valid_linked)}: {', '.join(valid_linked) or 'none'})"
         )
     if chosen_adapter:
         env["QUAID_ADAPTER_TYPE"] = chosen_adapter
@@ -1782,7 +1782,6 @@ def start_supervisor() -> int:
             env.pop(key, None)
         env["QUAID_HOME"] = str(get_quaid_home())
         env = _hydrate_anthropic_api_key_from_shared_auth(env)
-        env.pop("QUAID_INSTANCE", None)
         env["QUAID_SUPERVISOR_BOOT"] = "1"
         env.setdefault("QUAID_SUPERVISOR_INTERVAL_SECONDS", "5")
         env["QUAID_SUPERVISOR_TOKEN"] = uuid.uuid4().hex
