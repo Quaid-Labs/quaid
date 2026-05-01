@@ -376,7 +376,44 @@ function resolveAgentLabelFromSessionKey(sessionKey) {
   }
   return String(parts[1] || "").trim().toLowerCase();
 }
+function resolveAgentLabelFromModelName(modelName) {
+  const raw = String(modelName || "").trim().toLowerCase();
+  if (!raw) {
+    return "";
+  }
+  const match = raw.match(/^openclaw\/([^/\s]+)$/);
+  if (!match) {
+    return "";
+  }
+  const label = String(match[1] || "").trim();
+  return label && label !== "openclaw" ? label : "";
+}
 function resolveHookAgentLabel(event, ctx) {
+  const modelCandidates = [
+    event?.model,
+    ctx?.model,
+    event?.targetModel,
+    ctx?.targetModel,
+    event?.request?.model,
+    ctx?.request?.model,
+    event?.body?.model,
+    ctx?.body?.model,
+    event?.payload?.model,
+    ctx?.payload?.model
+  ];
+  for (const candidate of modelCandidates) {
+    const label = resolveAgentLabelFromModelName(candidate);
+    if (label) {
+      return label;
+    }
+  }
+  const sessionId = String(ctx?.sessionId || event?.sessionId || "").trim();
+  if (sessionId) {
+    const knownLabel = String(sessionIdToAgentId.get(sessionId) || "").trim().toLowerCase();
+    if (knownLabel) {
+      return knownLabel;
+    }
+  }
   const keyCandidates = [
     ctx?.sessionKey,
     ctx?.targetSessionKey,
@@ -401,7 +438,6 @@ function resolveHookAgentLabel(event, ctx) {
       return label;
     }
   }
-  const sessionId = String(ctx?.sessionId || event?.sessionId || "").trim();
   if (sessionId) {
     const label = resolveAgentLabelFromSessionKey(resolveSessionKeyForSessionId(sessionId));
     if (label) {
@@ -1312,12 +1348,12 @@ function sessionNeedsLifecycleFlush(sessionId, transcriptPath, agentLabel = "mai
   if (isInternalTranscriptMessages(messages)) return false;
   return isMeaningfulUserTranscriptActivity(messages);
 }
-function writeSessionCursorToEnd(sessionId, transcriptPath) {
+function writeSessionCursorToEnd(sessionId, transcriptPath, agentLabel = "main") {
   const sid = String(sessionId || "").trim();
   const resolvedPath = String(transcriptPath || "").trim();
   if (!sid || !resolvedPath) return;
   try {
-    const cursorPath = sessionCursorPath(sid);
+    const cursorPath = agentLabel && agentLabel !== "main" ? sessionCursorPathForAgent(sid, agentLabel) : sessionCursorPath(sid);
     fs.mkdirSync(path.dirname(cursorPath), { recursive: true });
     const nowIso = (/* @__PURE__ */ new Date()).toISOString().replace(/\.\d+Z$/, "Z");
     fs.writeFileSync(cursorPath, JSON.stringify({
@@ -4074,6 +4110,9 @@ notify_user(${JSON.stringify(message)})
       const promptInstanceId = getInstanceId(promptAgentLabel);
       const promptFacade = getAdapterFacadeForInstance(promptInstanceId);
       const promptSessionId = String(event?.sessionId || ctx?.sessionId || ctx?.session?.id || "").trim();
+      if (promptSessionId) {
+        sessionIdToAgentId.set(promptSessionId, promptAgentLabel);
+      }
       ensureAgentInstanceProvisioned(promptAgentLabel, "before_prompt_build");
       const nowMs = Date.now();
       pingDaemonAliveIfNeeded(promptInstanceId, nowMs);
@@ -4580,15 +4619,24 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
           const sessionKey = String(
             update?.sessionKey || update?.targetSessionKey || resolveSessionKeyForSessionId(sessionId) || ""
           ).trim();
+          const transcriptAgentLabel = resolveHookAgentLabel(
+            { ...update, sessionId, sessionKey },
+            { ...update, sessionId, sessionKey }
+          );
+          if (sessionId) {
+            sessionIdToAgentId.set(sessionId, transcriptAgentLabel);
+            ensureAgentInstanceProvisioned(transcriptAgentLabel, "transcript_update");
+          }
           const hasInternalTranscript = isInternalTranscriptMessages(messages);
           if (hasInternalTranscript) {
             if (sessionId) {
-              writeSessionCursorToEnd(sessionId, sessionFile);
+              writeSessionCursorToEnd(sessionId, sessionFile, transcriptAgentLabel);
             }
             writeHookTrace("hook.transcript_update.skipped", {
               reason: "internal_maintenance_transcript",
               parsed_session_id: sessionId,
               parsed_session_key: sessionKey,
+              agent_label: transcriptAgentLabel,
               session_file: sessionFile,
               message_count: messages.length
             });
@@ -4604,7 +4652,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
             }
           }
           if (sessionId && isSystemEnabled2("memory") && !isInternalSessionContext({ sessionId, sessionKey }, { sessionId, sessionKey })) {
-            const instanceRoot = _QUAID_INSTANCE ? path.join(WORKSPACE, "instances", _QUAID_INSTANCE) : WORKSPACE;
+            const instanceRoot = instanceRootForAgentLabel(transcriptAgentLabel);
             const cursorDir = path.join(instanceRoot, "data", "session-cursors");
             const cursorPath = path.join(cursorDir, `${sessionId}.json`);
             if (!fs.existsSync(cursorPath)) {
@@ -4617,7 +4665,8 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
                   transcript_path: sessionFile,
                   updated_at: nowIso
                 }, null, 2), "utf8");
-                console.log(`[quaid][cursor] seeded rolling cursor for transcript session ${sessionId}`);
+                pingDaemonAliveIfNeeded(getInstanceId(transcriptAgentLabel));
+                console.log(`[quaid][cursor] seeded rolling cursor for transcript session ${sessionId} agent=${transcriptAgentLabel}`);
               } catch (e) {
                 console.warn(`[quaid][cursor] cursor seed error: ${e}`);
               }
@@ -4808,7 +4857,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
             } catch {
             }
             if (isInternalTranscriptMessages(rows)) {
-              writeSessionCursorToEnd(sessionId, sessionFile);
+              writeSessionCursorToEnd(sessionId, sessionFile, agentLabel);
               sessionKeyLastSeen.set(key, sessionId);
               rememberSessionTranscriptPath(sessionId, sessionFile, "session-index-internal");
               sessionIndexMessageCounts.set(sessionId, rows.length);
@@ -6725,6 +6774,7 @@ const __test = {
   extractOpenAICodexText: _extractOpenAICodexText,
   buildOpenAICodexOAuthBody: _buildOpenAICodexOAuthBody,
   resolveConfiguredLLMTransport: _resolveConfiguredLLMTransport,
+  resolveAgentLabelFromModelName,
   resolveHookAgentLabel,
   isInternalSessionContext,
   isInternalTranscriptMessages,

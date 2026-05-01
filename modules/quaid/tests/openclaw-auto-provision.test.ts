@@ -9,6 +9,8 @@ type AdapterPlugin = {
 };
 type AdapterTestApi = {
   shouldMirrorTranscriptUpdateToPreservedCopy: (sessionKey: string) => boolean;
+  resolveAgentLabelFromModelName: (modelName: unknown) => string;
+  resolveHookAgentLabel: (event: any, ctx: any) => string;
 };
 type LoadedAdapter = {
   plugin: AdapterPlugin;
@@ -213,13 +215,30 @@ describe("openclaw auto-provision", () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
 
     const { plugin, testApi } = await loadAdapterWithHomes(hiddenHome, visibleHome, openClawConfigPath);
-    const api = makeFakeApi();
+    let transcriptUpdateHook: ((update: any) => void) | undefined;
+    const api = {
+      ...makeFakeApi(),
+      runtime: {
+        events: {
+          onSessionTranscriptUpdate: vi.fn((hook: (update: any) => void) => {
+            transcriptUpdateHook = hook;
+          }),
+        },
+      },
+    };
     plugin.register(api as any);
 
     const targetConfigPath = path.join(hiddenHome, "instances", "openclaw-m13test", "config.json");
     const targetSoulPath = path.join(visibleHome, "instances", "openclaw-m13test", "SOUL.md");
     expect(fs.existsSync(targetConfigPath)).toBe(false);
     expect(fs.existsSync(targetSoulPath)).toBe(false);
+    expect(testApi.resolveAgentLabelFromModelName("openclaw/m5run162")).toBe("m5run162");
+    expect(
+      testApi.resolveHookAgentLabel(
+        { model: "openclaw/m5run162" },
+        { sessionKey: "agent:main:http-responses" },
+      ),
+    ).toBe("m5run162");
 
     const beforeAgentStartCall = api.on.mock.calls.find((call: any[]) =>
       call?.[0] === "before_agent_start" && call?.[2]?.name === "memory-injection"
@@ -277,6 +296,63 @@ describe("openclaw auto-provision", () => {
     expect(beforeCompactionRegisterHookCall).toBeTruthy();
 
     const beforePromptBuildHandler = beforePromptBuildCall?.[1];
+    const modelTargetConfigPath = path.join(hiddenHome, "instances", "openclaw-m5run162", "config.json");
+    expect(fs.existsSync(modelTargetConfigPath)).toBe(false);
+    await beforePromptBuildHandler(
+      { prompt: "ok", messages: [], model: "openclaw/m5run162", prependContext: "" },
+      {
+        sessionId: "9650d6bc-a71c-4b59-a08a-7fe9f5d41162",
+        sessionKey: "agent:main:http-responses",
+      },
+    );
+    expect(fs.existsSync(modelTargetConfigPath)).toBe(true);
+    expect(
+      childProcessState.daemonStartCalls.some(
+        (call) => String(call.env?.QUAID_INSTANCE || "") === "openclaw-m5run162",
+      ),
+    ).toBe(true);
+    expect(
+      testApi.resolveHookAgentLabel(
+        { sessionId: "9650d6bc-a71c-4b59-a08a-7fe9f5d41162" },
+        { sessionKey: "agent:main:http-responses" },
+      ),
+    ).toBe("m5run162");
+
+    const modelTranscriptPath = path.join(openClawRoot, "agents", "main", "sessions", "9650d6bc-a71c-4b59-a08a-7fe9f5d41162.jsonl");
+    fs.mkdirSync(path.dirname(modelTranscriptPath), { recursive: true });
+    fs.writeFileSync(
+      modelTranscriptPath,
+      `${JSON.stringify({ role: "user", content: "My tamarind reading chair has a brass desk lamp." })}\n`,
+      "utf8",
+    );
+    expect(transcriptUpdateHook).toBeTruthy();
+    transcriptUpdateHook?.({
+      sessionId: "9650d6bc-a71c-4b59-a08a-7fe9f5d41162",
+      sessionKey: "agent:main:http-responses",
+      model: "openclaw/m5run162",
+      sessionFile: modelTranscriptPath,
+    });
+    expect(
+      fs.existsSync(path.join(
+        hiddenHome,
+        "instances",
+        "openclaw-m5run162",
+        "data",
+        "session-cursors",
+        "9650d6bc-a71c-4b59-a08a-7fe9f5d41162.json",
+      )),
+    ).toBe(true);
+    expect(
+      fs.existsSync(path.join(
+        hiddenHome,
+        "instances",
+        "openclaw-main",
+        "data",
+        "session-cursors",
+        "9650d6bc-a71c-4b59-a08a-7fe9f5d41162.json",
+      )),
+    ).toBe(false);
+
     const promptResult = await beforePromptBuildHandler(
       { prompt: "ok", messages: [], prependContext: "" },
       {
