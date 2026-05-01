@@ -145,6 +145,30 @@ def _data_dir() -> Path:
 def _logs_dir() -> Path:
     return get_logs_dir()
 
+
+def _shared_logs_dir() -> Path:
+    raw = str(os.environ.get("QUAID_HOME", "") or "").strip()
+    if raw:
+        return Path(raw).expanduser().resolve() / "logs"
+    return _logs_dir()
+
+
+def _write_janitor_log_entry(logs_dir: Path, event: str, level: str = "info", **data: Any) -> None:
+    entry = {
+        "ts": datetime.now().isoformat(),
+        "level": level,
+        "component": "janitor",
+        "event": event,
+        **data,
+    }
+    log_file = logs_dir / "janitor.log"
+    try:
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        with log_file.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(entry, default=str) + "\n")
+    except Exception as exc:
+        print(f"[janitor] Failed to write {log_file}: {exc}", file=sys.stderr)
+
 _LIFECYCLE_REGISTRY = None
 
 # Thresholds - now loaded from config.json
@@ -704,9 +728,10 @@ def _write_janitor_stats(
     usage: Dict[str, Any] | None = None,
     estimated_cost_usd: float | None = None,
     completed_at: str | None = None,
+    logs_dir: Path | None = None,
 ) -> Path:
     """Write dashboard-visible janitor stats for direct and supervisor workers."""
-    stats_file = _logs_dir() / "janitor-stats.json"
+    stats_file = (logs_dir or _logs_dir()) / "janitor-stats.json"
     stats_file.parent.mkdir(parents=True, exist_ok=True)
     existing: Dict[str, Any] = {}
     try:
@@ -1989,6 +2014,15 @@ def _can_route_supervisor_janitor(args: argparse.Namespace, *, dry_run: bool) ->
 def _run_supervisor_janitor_request(*, instance: Optional[str] = None) -> int:
     from core import project_docs
 
+    logs_dir = _shared_logs_dir()
+    started_at = datetime.now().isoformat()
+    _write_janitor_log_entry(
+        logs_dir,
+        "janitor_supervisor_request_start",
+        task="all",
+        dry_run=False,
+        instance=instance or "",
+    )
     supervisor_pid = project_docs.ensure_supervisor_alive()
     scope = f"instance {instance}" if instance else "all live instances"
     attached_to_existing = False
@@ -1997,6 +2031,13 @@ def _run_supervisor_janitor_request(*, instance: Optional[str] = None) -> int:
             instance=instance,
             reason="janitor-cli-apply",
             requested_by="janitor-cli",
+        )
+        _write_janitor_log_entry(
+            logs_dir,
+            "janitor_supervisor_request_queued",
+            request_id=str(request.get("request_id") or ""),
+            supervisor_pid=supervisor_pid,
+            scope=scope,
         )
         print(f"[janitor] Queued supervisor-owned janitor request for {scope}")
     except RuntimeError as exc:
@@ -2028,6 +2069,73 @@ def _run_supervisor_janitor_request(*, instance: Optional[str] = None) -> int:
     if errors:
         for error in errors:
             print(f"[janitor] Error: {error}", file=sys.stderr)
+    completed_at = str(result.get("completed_at") or datetime.now().isoformat())
+    exit_codes = {str(k): int(v) for k, v in dict(result.get("exit_codes") or {}).items()}
+    success = status == "completed" and not errors
+    per_instance_stats: Dict[str, Any] = {}
+    aggregate_changes: Dict[str, int] = {
+        "instances_completed": sum(1 for code in exit_codes.values() if int(code) == 0),
+        "instances_failed": sum(1 for code in exit_codes.values() if int(code) != 0),
+    }
+    raw_home = str(os.environ.get("QUAID_HOME", "") or "").strip()
+    if raw_home:
+        instances_root = Path(raw_home).expanduser().resolve() / "instances"
+        for instance_name in sorted(exit_codes):
+            stats_path = instances_root / instance_name / "logs" / "janitor-stats.json"
+            try:
+                stats = json.loads(stats_path.read_text(encoding="utf-8"))
+                if isinstance(stats, dict):
+                    per_instance_stats[instance_name] = stats
+                    for key, value in dict(stats.get("applied_changes") or {}).items():
+                        if isinstance(value, (int, float)) and not isinstance(value, bool):
+                            aggregate_changes[key] = int(aggregate_changes.get(key, 0)) + int(value)
+            except FileNotFoundError:
+                per_instance_stats[instance_name] = {"missing_stats": str(stats_path)}
+            except Exception as exc:
+                per_instance_stats[instance_name] = {"stats_error": str(exc), "path": str(stats_path)}
+            _write_janitor_log_entry(
+                logs_dir,
+                "janitor_supervisor_instance_result",
+                task="all",
+                dry_run=False,
+                instance=instance_name,
+                exit_code=exit_codes.get(instance_name),
+                stats=per_instance_stats.get(instance_name, {}),
+            )
+    audit_result = {
+        "success": success,
+        "applied_changes": aggregate_changes,
+        "metrics": {
+            "errors": len(errors),
+            "instances": len(exit_codes),
+            "started_at": started_at,
+            "completed_at": completed_at,
+            "status": status,
+            "exit_codes": exit_codes,
+            "per_instance_stats": per_instance_stats,
+        },
+    }
+    _write_janitor_log_entry(
+        logs_dir,
+        "janitor_supervisor_request_complete",
+        level="info" if success else "error",
+        task="all",
+        dry_run=False,
+        request_id=str(result.get("request_id") or request.get("request_id") or ""),
+        status=status,
+        success=success,
+        errors=errors,
+        exit_codes=exit_codes,
+    )
+    _write_janitor_stats(
+        task="all",
+        dry_run=False,
+        result=audit_result,
+        usage={"api_calls": 0, "input_tokens": 0, "output_tokens": 0},
+        estimated_cost_usd=0.0,
+        completed_at=completed_at,
+        logs_dir=logs_dir,
+    )
     return 0 if status == "completed" else 1
 
 

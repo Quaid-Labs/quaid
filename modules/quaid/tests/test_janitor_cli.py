@@ -99,7 +99,13 @@ def test_janitor_main_routes_all_apply_through_supervisor_request(monkeypatch, t
         lambda request_id, *, timeout_seconds: calls.append(
             ("wait", {"request_id": request_id, "timeout_seconds": timeout_seconds})
         )
-        or {"request_id": request_id, "status": "completed", "errors": []},
+        or {
+            "request_id": request_id,
+            "status": "completed",
+            "completed_at": "2026-05-02T01:02:03",
+            "errors": [],
+            "exit_codes": {"pytest-runner": 0},
+        },
     )
     monkeypatch.setattr(janitor, "run_task_optimized", lambda *_a, **_kw: (_ for _ in ()).throw(AssertionError()))
 
@@ -107,6 +113,12 @@ def test_janitor_main_routes_all_apply_through_supervisor_request(monkeypatch, t
     assert calls[0] == ("request", {"instance": None, "reason": "janitor-cli-apply", "requested_by": "janitor-cli"})
     assert calls[1][0] == "wait"
     assert calls[1][1]["request_id"] == "req-1"
+    log_path = tmp_path / "logs" / "janitor.log"
+    assert "janitor_supervisor_request_complete" in log_path.read_text(encoding="utf-8")
+    stats = json.loads((tmp_path / "logs" / "janitor-stats.json").read_text(encoding="utf-8"))
+    assert stats["dry_run"] is False
+    assert stats["last_janitor_completed_at"] == "2026-05-02T01:02:03"
+    assert stats["applied_changes"]["instances_completed"] == 1
 
 
 def test_janitor_main_routes_all_apply_without_instance_bootstrap(monkeypatch, tmp_path):
