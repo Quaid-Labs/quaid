@@ -158,7 +158,7 @@ supervisor lifecycle bug.
 | `QUAID_SUPERVISOR_DISABLE=1` | Disable supervisor ownership and use legacy direct daemon path |
 | `QUAID_SUPERVISOR_INTERVAL_SECONDS` | Supervisor tick interval |
 | `QUAID_SUPERVISOR_JANITOR_CHECK_INTERVAL_SECONDS` | Minimum interval between janitor scheduler worker starts per instance |
-| `QUAID_INSTANCE_MONITOR_WAIT_SECONDS` | How long `ensure_alive()` waits for a supervisor-owned instance monitor PID |
+| `QUAID_INSTANCE_MONITOR_WAIT_SECONDS` | How long supervisor-enabled daemon startup waits for an instance monitor PID during handoff |
 | `QUAID_PROJECT_DOCS_AUTO_REGISTER_INTERVAL_SECONDS` | Supervisor interval for visible project-docs registry sync |
 | `QUAID_PROJECT_DOCS_STALE_INDEX_INTERVAL_SECONDS` | Supervisor interval for indexing one stale registered doc |
 | `QUAID_PROJECT_DOCS_WORKER_INTERVAL_SECONDS` | Project-docs worker tick interval |

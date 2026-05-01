@@ -2332,9 +2332,10 @@ function ensureDaemonAlive(instanceId = _QUAID_INSTANCE) {
       });
       return;
     }
+    const fallbackReason = startError ? "start_failed" : status.error ? "status_probe_failed" : "status_not_running";
     writeHookTrace("daemon.ensure_alive.supervisor_miss", {
       instance_id: target,
-      reason: startError ? "start_failed" : status.error ? "status_probe_failed" : "status_not_running",
+      reason: fallbackReason,
       start_output: String(startOutput || "").trim().slice(0, 240),
       start_error: startError.slice(0, 240),
       status_error: String(status.error || "").slice(0, 240),
@@ -2364,6 +2365,7 @@ function ensureDaemonAlive(instanceId = _QUAID_INSTANCE) {
     const message = `[quaid][daemon] ensure_alive failed for ${target}: daemon start returned without a running pid`;
     writeHookTrace("daemon.ensure_alive.failed", {
       instance_id: target,
+      reason: fallbackReason,
       start_output: String(startOutput || "").trim().slice(0, 240),
       start_error: startError.slice(0, 240),
       status_error: String(status.error || "").slice(0, 240),

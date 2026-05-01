@@ -336,6 +336,7 @@ describe("openclaw auto-provision", () => {
     const beforePromptBuildHandler = beforePromptBuildCall?.[1];
     const modelTargetConfigPath = path.join(hiddenHome, "instances", "openclaw-m5run162", "config.json");
     expect(fs.existsSync(modelTargetConfigPath)).toBe(false);
+    childProcessState.daemonStatusByInstance["openclaw-m5run162"] = ["bad-json", true];
     await beforePromptBuildHandler(
       { prompt: "ok", messages: [], model: "openclaw/m5run162", prependContext: "" },
       {
@@ -349,6 +350,16 @@ describe("openclaw auto-provision", () => {
         (call) => String(call.env?.QUAID_INSTANCE || "") === "openclaw-m5run162",
       ),
     ).toBe(true);
+    const m5DaemonStarts = childProcessState.daemonStartCalls.filter(
+      (call) => String(call.env?.QUAID_INSTANCE || "") === "openclaw-m5run162",
+    );
+    expect(m5DaemonStarts.length).toBeGreaterThanOrEqual(2);
+    expect(m5DaemonStarts.some((call) => String(call.env?.QUAID_SUPERVISOR_DISABLE || "") === "1")).toBe(true);
+    expect(
+      childProcessState.daemonStatusCalls.filter(
+        (call) => String(call.env?.QUAID_INSTANCE || "") === "openclaw-m5run162",
+      ).length,
+    ).toBeGreaterThanOrEqual(2);
     expect(
       testApi.resolveHookAgentLabel(
         { sessionId: "9650d6bc-a71c-4b59-a08a-7fe9f5d41162" },
