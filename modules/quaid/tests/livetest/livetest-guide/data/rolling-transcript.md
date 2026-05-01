@@ -6,10 +6,12 @@ doesn't spend time composing responses to the content.
 
 - **Chunk 1** is ~1300 tokens — below the `chunk_tokens=1500` rolling
   threshold, so rolling does not fire yet.
-- **Chunk 2** is ~300 tokens — cumulative ~1600 tokens, which trips rolling
-  extraction between the two chunks.
+- **Chunk 2** adds enough margin that the cumulative post-sanitization buffer
+  lands safely above the `chunk_tokens=1500` threshold across CC/OC/CDX
+  tokenization differences, which trips rolling extraction between the two
+  chunks.
 - After both chunks, the tester fires the lane's `LIFECYCLE` command to
-  flush the residual ~100 tokens via session_end extraction.
+  flush the residual Chunk 2 tail via session_end extraction.
 
 Net: one test pass exercises both rolling and lifecycle paths, while making
 the agent's work just two cheap ACK replies.
@@ -120,7 +122,7 @@ which is where most of the ambient mixes live.
 
 ---
 
-## Chunk 2 (~300 tokens)
+## Chunk 2 (~350 tokens)
 
 A few more things for context, then I'll stop dumping.
 
@@ -137,6 +139,16 @@ nonprofit called Altitude Data, chaired by Renata Sim; meetings are
 quarterly and I took the 2026 seat from a retired colleague Peter Lim.
 My cycling commute bike is a steel-framed Brompton T-Line in racing green,
 serviced at Treknology Bikes on Orchard.
+
+Tiny household logistics, just for background: I keep a gray felt cable pouch
+in the hallway drawer with USB-C adapters, spare label tape, and a folding
+travel charger. The apartment's guest Wi-Fi is named Meridian Guest, and the
+printed QR card sits on the entry shelf beside a small brass umbrella stand.
+None of that needs action; it is simply the kind of stable background detail
+that should ride along with the rest of this automatic extraction seed. If I
+travel, that pouch goes in the left pocket of a navy Topo Designs backpack,
+while the adapters stay wrapped with a yellow Velcro tie so I can find them
+quickly after flights.
 
 That's the end of the context dump — no action on anything above.
 
