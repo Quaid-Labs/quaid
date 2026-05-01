@@ -70,6 +70,15 @@ function writeJson(filePath: string, value: unknown): void {
   fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
+function readTraceEvents(hiddenHome: string, instanceId: string): any[] {
+  const tracePath = path.join(hiddenHome, "instances", instanceId, "logs", "quaid-hook-trace.jsonl");
+  if (!fs.existsSync(tracePath)) return [];
+  return fs.readFileSync(tracePath, "utf8")
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
+}
+
 function makeTempDir(prefix: string): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 }
@@ -360,6 +369,31 @@ describe("openclaw auto-provision", () => {
         (call) => String(call.env?.QUAID_INSTANCE || "") === "openclaw-m5run162",
       ).length,
     ).toBeGreaterThanOrEqual(2);
+    expect(
+      readTraceEvents(hiddenHome, "openclaw-main").some(
+        (event) => event.event === "daemon.ensure_alive.supervisor_miss" &&
+          event.instance_id === "openclaw-m5run162" &&
+          event.reason === "status_probe_failed" &&
+          String(event.status_error || "").includes("invalid daemon status JSON"),
+      ),
+    ).toBe(true);
+
+    childProcessState.daemonStatusByInstance["openclaw-m5fail"] = ["bad-json", false];
+    await beforePromptBuildHandler(
+      { prompt: "ok", messages: [], model: "openclaw/m5fail", prependContext: "" },
+      {
+        sessionId: "11f77f60-ded9-42c7-a0d2-61fc179db1bd",
+        sessionKey: "agent:main:http-responses-fail",
+      },
+    );
+    expect(
+      readTraceEvents(hiddenHome, "openclaw-main").some(
+        (event) => event.event === "daemon.ensure_alive.failed" &&
+          event.instance_id === "openclaw-m5fail" &&
+          event.reason === "status_probe_failed" &&
+          String(event.status_error || "").includes("invalid daemon status JSON"),
+      ),
+    ).toBe(true);
     expect(
       testApi.resolveHookAgentLabel(
         { sessionId: "9650d6bc-a71c-4b59-a08a-7fe9f5d41162" },
