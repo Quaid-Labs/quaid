@@ -6027,6 +6027,7 @@ def start_daemon() -> int:
 
     Uses flock on PID file to prevent concurrent starts (B001).
     """
+    instance = _instance_id()
     # B001: Acquire exclusive lock on PID file to prevent TOCTOU race
     pid_file = _pid_path()
     pid_file.parent.mkdir(parents=True, exist_ok=True)
@@ -6108,6 +6109,7 @@ def start_daemon() -> int:
         from core import project_docs
         env = project_docs.scrub_background_process_env(env)
         env["QUAID_HOME"] = str(_quaid_home())
+        env["QUAID_INSTANCE"] = instance
         env["QUAID_DAEMON"] = "1"
         for key in list(env):
             if key.startswith("QUAID_SUPERVISOR_"):

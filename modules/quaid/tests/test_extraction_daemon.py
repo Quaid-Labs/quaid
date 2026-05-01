@@ -2276,10 +2276,10 @@ def test_transcript_size_bytes_raises_stat_failure_under_failhard(monkeypatch):
     fake_fail_policy.is_fail_hard_enabled = lambda: True
     monkeypatch.setitem(sys.modules, "lib.fail_policy", fake_fail_policy)
 
-    def _raise_getsize(_path):
+    def _raise_stat(_path):
         raise OSError("stat failed")
 
-    monkeypatch.setattr(extraction_daemon.os.path, "getsize", _raise_getsize)
+    monkeypatch.setattr(extraction_daemon.os, "stat", _raise_stat)
 
     with pytest.raises(OSError, match="stat failed"):
         extraction_daemon._transcript_size_bytes("/missing/transcript.jsonl")
