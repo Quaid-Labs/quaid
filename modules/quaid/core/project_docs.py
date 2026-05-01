@@ -38,6 +38,7 @@ _BACKGROUND_PROCESS_SCRUB_ENV_KEYS = (
     "LANE_UPPER",
     "PROBE_ID",
     "QUAID_ADAPTER_TYPE",
+    "QUAID_INSTANCE",
     "SILO",
     "SILO_X",
     "SILO_Y",
@@ -705,12 +706,7 @@ def _adapter_type_from_instance_name(instance_name: str) -> str:
         return ""
 
 
-def _project_runtime_hints(
-    entry: Dict[str, Any],
-    request: Optional[Dict[str, Any]] = None,
-    *,
-    include_ambient_adapter: bool = True,
-) -> Tuple[Optional[str], Optional[str]]:
+def _valid_linked_project_instances(entry: Dict[str, Any]) -> List[str]:
     from lib.instance import validate_instance_id
 
     linked_instances: List[str] = []
@@ -719,10 +715,19 @@ def _project_runtime_hints(
             linked_instances.append(validate_instance_id(str(raw or "").strip()))
         except Exception:
             continue
-    linked_instances = sorted(set(linked_instances))
+    return sorted(set(linked_instances))
 
+
+def _project_runtime_hints(
+    entry: Dict[str, Any],
+    request: Optional[Dict[str, Any]] = None,
+    *,
+    include_ambient_instance: bool = True,
+    include_ambient_adapter: bool = True,
+) -> Tuple[Optional[str], Optional[str]]:
+    linked_instances = _valid_linked_project_instances(entry)
     requested_instance = str((request or {}).get("requested_instance") or "").strip()
-    ambient_instance = str(os.environ.get("QUAID_INSTANCE", "") or "").strip()
+    ambient_instance = str(os.environ.get("QUAID_INSTANCE", "") or "").strip() if include_ambient_instance else ""
     chosen_instance = requested_instance or (linked_instances[0] if len(linked_instances) == 1 else "") or ambient_instance
 
     chosen_adapter = str((request or {}).get("requested_adapter_type") or "").strip().lower()
@@ -744,14 +749,28 @@ def _apply_project_runtime_env(
     env: Dict[str, str],
     entry: Dict[str, Any],
     request: Optional[Dict[str, Any]] = None,
+    *,
+    project: Optional[str] = None,
+    require_instance: bool = False,
 ) -> Dict[str, str]:
+    # Worker subprocesses outlive the shell that queued them, so derive their
+    # runtime identity only from durable project/request state.
     chosen_instance, chosen_adapter = _project_runtime_hints(
         entry,
         request=request,
+        include_ambient_instance=False,
         include_ambient_adapter=False,
     )
     if chosen_instance:
         env["QUAID_INSTANCE"] = chosen_instance
+    elif require_instance:
+        valid_linked = _valid_linked_project_instances(entry)
+        name = str(project or entry.get("name") or "").strip() or "unknown"
+        raise RuntimeError(
+            f"cannot resolve QUAID_INSTANCE for project {name}; "
+            "queued request must include requested_instance or project must be linked to exactly one valid instance "
+            f"(valid_linked_instances={len(valid_linked)})"
+        )
     if chosen_adapter:
         env["QUAID_ADAPTER_TYPE"] = chosen_adapter
     return env
@@ -1847,7 +1866,7 @@ def start_worker(project: str) -> int:
         for key in _DB_OVERRIDE_ENV_KEYS:
             env.pop(key, None)
         env["QUAID_HOME"] = str(get_quaid_home())
-        env = _apply_project_runtime_env(env, entry, request=request)
+        env = _apply_project_runtime_env(env, entry, request=request, project=name, require_instance=True)
         env.setdefault("QUAID_PROJECT_DOCS_WORKER_INTERVAL_SECONDS", "5")
         env = _hydrate_anthropic_api_key_from_shared_auth(env)
         env["QUAID_PROJECT_DOCS_WORKER_TOKEN"] = uuid.uuid4().hex

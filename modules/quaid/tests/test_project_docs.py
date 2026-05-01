@@ -117,6 +117,47 @@ def test_start_worker_env_uses_single_linked_instance_without_request(project_en
     assert "QUAID_ADAPTER_TYPE" not in env
 
 
+def test_start_worker_refuses_multi_instance_without_request(project_env, monkeypatch):
+    _tmp_path, _src, _entry = project_env
+    from core import project_docs
+    from core.project_registry import update_project
+
+    with patch("core.project_registry._sync_docs_registry_project"):
+        update_project(
+            "demo",
+            instances=["codex-private-tmp-cdx-livetest", "openclaw-main"],
+        )
+    monkeypatch.setenv("QUAID_INSTANCE", "openclaw-main")
+    monkeypatch.setenv("QUAID_ADAPTER_TYPE", "openclaw")
+    monkeypatch.setattr(
+        project_docs.subprocess,
+        "Popen",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("worker should not spawn")),
+    )
+
+    with pytest.raises(RuntimeError, match="cannot resolve QUAID_INSTANCE"):
+        project_docs.start_worker("demo")
+
+
+def test_start_worker_refuses_unlinked_project_without_request(project_env, monkeypatch):
+    _tmp_path, _src, _entry = project_env
+    from core import project_docs
+    from core.project_registry import update_project
+
+    with patch("core.project_registry._sync_docs_registry_project"):
+        update_project("demo", instances=[])
+    monkeypatch.delenv("QUAID_INSTANCE", raising=False)
+    monkeypatch.delenv("QUAID_ADAPTER_TYPE", raising=False)
+    monkeypatch.setattr(
+        project_docs.subprocess,
+        "Popen",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("worker should not spawn")),
+    )
+
+    with pytest.raises(RuntimeError, match="valid_linked_instances=0"):
+        project_docs.start_worker("demo")
+
+
 def test_get_project_entry_uses_raw_registry_without_instance_env(project_env, monkeypatch):
     _tmp_path, _src, _entry = project_env
     from core import project_docs
