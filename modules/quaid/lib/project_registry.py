@@ -153,7 +153,7 @@ def clear_deleted(name: str) -> None:
 
 def is_deleted(name: str) -> bool:
     """Return whether a project has an explicit delete marker."""
-    name = _validate_project_name(name)
+    name = str(name or "").strip()
     return name in _load().get("deleted_projects", {})
 
 
@@ -244,7 +244,7 @@ def unlink(name: str, instance: Optional[str] = None) -> bool:
 
 def lookup(name: str) -> Optional[Dict[str, Any]]:
     """Look up a project by name. Returns entry dict or None."""
-    name = _validate_project_name(name)
+    name = str(name or "").strip()
     data = _load()
     if name in data.get("deleted_projects", {}):
         return None
@@ -264,7 +264,7 @@ def remove(name: str, force: bool = False) -> bool:
     If force=False and other instances are still tracking, raises ValueError.
     Returns True if removed.
     """
-    name = _validate_project_name(name)
+    name = str(name or "").strip()
     with registry_lock():
         data = _load()
         if name not in data["projects"]:
