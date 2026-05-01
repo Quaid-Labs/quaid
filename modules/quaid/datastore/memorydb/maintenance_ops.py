@@ -2274,6 +2274,18 @@ def batch_extract_edges(facts: List[Dict[str, Any]], graph: MemoryGraph,
     if not facts:
         return []
 
+    def _retry_in_smaller_batches(reason: str) -> Optional[List[List[Dict[str, Any]]]]:
+        if len(facts) <= 1:
+            return None
+        split_at = max(1, len(facts) // 2)
+        metrics.add_warning(
+            f"{reason}; retrying edge extraction in smaller batches "
+            f"({len(facts)} -> {split_at}+{len(facts) - split_at})"
+        )
+        left = batch_extract_edges(facts[:split_at], graph, metrics, relations_list)
+        right = batch_extract_edges(facts[split_at:], graph, metrics, relations_list)
+        return left + right
+
     numbered = []
     for i, f in enumerate(facts):
         numbered.append(f'{i+1}. "{f["text"]}"')
@@ -2337,6 +2349,9 @@ JSON array only:"""
     metrics.add_llm_call(duration)
 
     if not response:
+        retried = _retry_in_smaller_batches("Batch edge extraction returned empty response")
+        if retried is not None:
+            return retried
         metrics.add_error(f"Batch edge extraction failed ({len(facts)} facts)")
         return [[] for _ in facts]
 
@@ -2357,6 +2372,9 @@ JSON array only:"""
             type(parsed).__name__,
             str(response)[:200],
         )
+        retried = _retry_in_smaller_batches("Batch edge response was not a list")
+        if retried is not None:
+            return retried
         metrics.add_warning("Batch edge response was not a list")
         return [[] for _ in facts]
 

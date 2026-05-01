@@ -141,6 +141,82 @@ def test_batch_extract_edges_prompt_includes_domain_neutral_role_guardrails():
     assert "Do not infer hidden intermediate hops unless the intermediate relationship is explicitly stated" in prompt
 
 
+def test_batch_extract_edges_retries_smaller_batches_when_parent_batch_returns_empty_response():
+    facts = [
+        {"id": "fact-7", "text": "Diana has a daughter named Alice", "owner_id": "default"},
+        {"id": "fact-8", "text": "David is the user's brother.", "owner_id": "default"},
+    ]
+    metrics = maintenance_ops.JanitorMetrics()
+    responses = [
+        ("", 0.05),
+        (
+            '[{"fact": 1, "edges": ['
+            '{"subject":"Diana","subject_type":"Person","relation":"parent_of","object":"Alice","object_type":"Person"}'
+            ']}]',
+            0.05,
+        ),
+        (
+            '[{"fact": 1, "edges": ['
+            '{"subject":"David","subject_type":"Person","relation":"sibling_of","object":"the user","object_type":"Person"}'
+            ']}]',
+            0.05,
+        ),
+    ]
+
+    with patch.object(maintenance_ops, "call_deep_reasoning", side_effect=responses), patch.object(
+        maintenance_ops, "resolve_owner_person", return_value=SimpleNamespace(name="Solomon Steadman")
+    ):
+        results = maintenance_ops.batch_extract_edges(
+            facts=facts,
+            graph=object(),
+            metrics=metrics,
+            relations_list="parent_of, sibling_of, spouse_of",
+        )
+
+    assert [edge["relation"] for edge in results[0]] == ["parent_of"]
+    assert [edge["relation"] for edge in results[1]] == ["sibling_of"]
+    assert not metrics.has_errors
+    assert any("retrying edge extraction in smaller batches" in item["warning"] for item in metrics.warnings)
+
+
+def test_batch_extract_edges_retries_smaller_batches_when_batch_response_is_not_a_list():
+    facts = [
+        {"id": "fact-9", "text": "Diana has a daughter named Alice", "owner_id": "default"},
+        {"id": "fact-10", "text": "David is the user's brother.", "owner_id": "default"},
+    ]
+    metrics = maintenance_ops.JanitorMetrics()
+    responses = [
+        ('{"status":"incomplete"}', 0.05),
+        (
+            '[{"fact": 1, "edges": ['
+            '{"subject":"Diana","subject_type":"Person","relation":"parent_of","object":"Alice","object_type":"Person"}'
+            ']}]',
+            0.05,
+        ),
+        (
+            '[{"fact": 1, "edges": ['
+            '{"subject":"David","subject_type":"Person","relation":"sibling_of","object":"the user","object_type":"Person"}'
+            ']}]',
+            0.05,
+        ),
+    ]
+
+    with patch.object(maintenance_ops, "call_deep_reasoning", side_effect=responses), patch.object(
+        maintenance_ops, "resolve_owner_person", return_value=SimpleNamespace(name="Solomon Steadman")
+    ):
+        results = maintenance_ops.batch_extract_edges(
+            facts=facts,
+            graph=object(),
+            metrics=metrics,
+            relations_list="parent_of, sibling_of, spouse_of",
+        )
+
+    assert [edge["relation"] for edge in results[0]] == ["parent_of"]
+    assert [edge["relation"] for edge in results[1]] == ["sibling_of"]
+    assert not metrics.has_errors
+    assert any("Batch edge response was not a list" in item["warning"] for item in metrics.warnings)
+
+
 def test_review_pending_prompt_includes_domain_neutral_role_guardrails():
     captured = {}
 
