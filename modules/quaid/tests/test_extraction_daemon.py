@@ -3425,6 +3425,58 @@ class TestSignalRoundTrip:
         extraction_daemon._release_session_processing_lock("sess-lock", first)
         extraction_daemon._release_session_processing_lock("sess-other", other)
 
+    def test_session_processing_lock_reclaims_dead_holder(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
+        monkeypatch.setenv("QUAID_PROCESSING_LOCK_STALE_SECONDS", "0")
+
+        first = extraction_daemon._acquire_session_processing_lock("sess-lock")
+        lock_path = extraction_daemon._processing_lock_path("sess-lock")
+        lock_path.write_text(
+            json.dumps(
+                {
+                    "session_id": "sess-lock",
+                    "pid": 987654,
+                    "started_at": "2026-05-01T05:52:46Z",
+                }
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(extraction_daemon, "_pid_alive", lambda pid: False)
+
+        second = extraction_daemon._acquire_session_processing_lock("sess-lock")
+
+        assert first is not None
+        assert second is not None
+        payload = json.loads(lock_path.read_text(encoding="utf-8"))
+        assert payload["pid"] == os.getpid()
+
+        os.close(first)
+        extraction_daemon._release_session_processing_lock("sess-lock", second)
+
+    def test_session_processing_lock_does_not_reclaim_fresh_dead_holder(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
+        monkeypatch.setenv("QUAID_PROCESSING_LOCK_STALE_SECONDS", "60")
+
+        first = extraction_daemon._acquire_session_processing_lock("sess-lock")
+        lock_path = extraction_daemon._processing_lock_path("sess-lock")
+        lock_path.write_text(
+            json.dumps({"session_id": "sess-lock", "pid": 987654}),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(extraction_daemon, "_pid_alive", lambda pid: False)
+
+        second = extraction_daemon._acquire_session_processing_lock("sess-lock")
+
+        assert first is not None
+        assert second is None
+        os.close(first)
+        try:
+            lock_path.unlink()
+        except OSError:
+            pass
+
     def test_process_signal_preserves_signal_when_session_lock_unavailable(self, monkeypatch, tmp_path):
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
         monkeypatch.setenv("QUAID_INSTANCE", "test-inst")

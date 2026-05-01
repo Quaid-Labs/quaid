@@ -1339,6 +1339,53 @@ def _processing_lock_path(session_id: str) -> Path:
     return _processing_lock_dir() / f"{session_id}.lock"
 
 
+def _read_processing_lock_payload(lock_path: Path) -> Dict[str, Any]:
+    try:
+        raw = lock_path.read_text(encoding="utf-8").strip()
+        if not raw:
+            return {}
+        loaded = json.loads(raw)
+        return loaded if isinstance(loaded, dict) else {}
+    except Exception:
+        return {}
+
+
+def _processing_lock_holder_dead(lock_path: Path) -> bool:
+    payload = _read_processing_lock_payload(lock_path)
+    try:
+        pid = int(payload.get("pid") or 0)
+    except Exception:
+        return False
+    if pid <= 0 or pid == os.getpid():
+        return False
+    try:
+        raw_min_age = os.environ.get("QUAID_PROCESSING_LOCK_STALE_SECONDS", "")
+        min_age_seconds = max(0.0, float(raw_min_age) if raw_min_age.strip() else 10.0)
+    except Exception:
+        min_age_seconds = 10.0
+    try:
+        age_seconds = time.time() - lock_path.stat().st_mtime
+    except OSError:
+        return False
+    if age_seconds < min_age_seconds:
+        return False
+    return not _pid_alive(pid)
+
+
+def _remove_stale_processing_lock(lock_path: Path, *, holder_dead: bool) -> bool:
+    if not holder_dead:
+        return False
+    try:
+        lock_path.unlink()
+        logger.warning("removed stale session processing lock with dead holder: %s", lock_path)
+        return True
+    except FileNotFoundError:
+        return True
+    except OSError as exc:
+        logger.warning("failed removing stale session processing lock %s: %s", lock_path, exc)
+        return False
+
+
 def _acquire_session_processing_lock(session_id: str) -> Optional[int]:
     """Acquire a per-session processing lease; returns fd while held."""
     lock_path = _processing_lock_path(session_id)
@@ -1350,11 +1397,27 @@ def _acquire_session_processing_lock(session_id: str) -> Optional[int]:
     try:
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except (OSError, IOError):
+        holder_dead = _processing_lock_holder_dead(lock_path)
         try:
             os.close(fd)
         except OSError:
             pass
-        return None
+        if _remove_stale_processing_lock(lock_path, holder_dead=holder_dead):
+            try:
+                fd = os.open(str(lock_path), os.O_RDWR | os.O_CREAT, 0o600)
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except (OSError, IOError) as exc:
+                logger.warning("failed reclaiming stale session processing lock for %s: %s", session_id, exc)
+                try:
+                    os.close(fd)
+                except Exception:
+                    pass
+                return None
+            except Exception as exc:
+                logger.warning("failed reopening stale session processing lock for %s: %s", session_id, exc)
+                return None
+        else:
+            return None
     payload = {
         "session_id": _validate_session_id(session_id),
         "pid": os.getpid(),
