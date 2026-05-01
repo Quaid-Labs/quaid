@@ -39,6 +39,44 @@ def test_janitor_worker_run_all_once_bypasses_schedule_gate(monkeypatch, tmp_pat
     assert calls == [("all", False)]
 
 
+def test_write_janitor_stats_records_apply_completion_and_preserves_it(monkeypatch, tmp_path):
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_VISIBLE_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "pytest-runner")
+
+    from core.lifecycle import janitor
+
+    logs_dir = tmp_path / "logs"
+    monkeypatch.setattr(janitor, "_logs_dir", lambda: logs_dir)
+    monkeypatch.setattr(janitor, "get_token_usage", lambda: {"api_calls": 0, "input_tokens": 0, "output_tokens": 0})
+    monkeypatch.setattr(janitor, "estimate_cost", lambda: 0.0)
+
+    apply_result = {"success": True, "applied_changes": {"memories_reviewed": 1}, "metrics": {"errors": 0}}
+    stats_path = janitor._write_janitor_stats(
+        task="all",
+        dry_run=False,
+        result=apply_result,
+        completed_at="2026-05-01T01:02:03",
+    )
+
+    stats = json.loads(stats_path.read_text(encoding="utf-8"))
+    assert stats["last_janitor_completed_at"] == "2026-05-01T01:02:03"
+    assert stats["dry_run"] is False
+
+    dry_run_result = {"success": True, "applied_changes": {}, "metrics": {"errors": 0}}
+    janitor._write_janitor_stats(
+        task="all",
+        dry_run=True,
+        result=dry_run_result,
+        completed_at="2026-05-01T02:03:04",
+    )
+
+    stats = json.loads(stats_path.read_text(encoding="utf-8"))
+    assert stats["last_run"] == "2026-05-01T02:03:04"
+    assert stats["dry_run"] is True
+    assert stats["last_janitor_completed_at"] == "2026-05-01T01:02:03"
+
+
 def test_janitor_main_routes_all_apply_through_supervisor_request(monkeypatch, tmp_path):
     monkeypatch.setenv("QUAID_HOME", str(tmp_path))
     monkeypatch.setenv("QUAID_VISIBLE_HOME", str(tmp_path))

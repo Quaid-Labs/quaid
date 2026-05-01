@@ -316,7 +316,7 @@ class TestCheckpointBehavior:
         orig_write = janitor._atomic_write_json
 
         def _spy(path, payload):
-            if "checkpoint" in str(path):
+            if Path(path).name.startswith("checkpoint-"):
                 checkpoint_writes.append(dict(payload))
             orig_write(path, payload)
 
@@ -340,7 +340,7 @@ class TestCheckpointBehavior:
         orig_write = janitor._atomic_write_json
 
         def _spy(path, payload):
-            if "checkpoint" in str(path):
+            if Path(path).name.startswith("checkpoint-"):
                 checkpoint_writes.append(dict(payload))
             orig_write(path, payload)
 
@@ -379,9 +379,11 @@ class TestCheckpointBehavior:
         assert first["task"] == "all"
         assert first["status"] == "running"
 
-        final = checkpoint_writes[-1]
+        final = [payload for payload in checkpoint_writes if payload.get("task") == "all" and payload.get("status")][-1]
         assert final["task"] == "all"
         assert final["status"] in ("completed", "failed")
+        assert final.get("terminal_status") == final["status"]
+        assert final.get("finished_at")
 
     def test_checkpoint_memory_stages_use_completed_stages_tracking(self, monkeypatch, tmp_path):
         """Memory graph stages update current_stage/completed_stages in checkpoint.
@@ -393,7 +395,7 @@ class TestCheckpointBehavior:
         orig_write = janitor._atomic_write_json
 
         def _spy(path, payload):
-            if "checkpoint" in str(path):
+            if Path(path).name.startswith("checkpoint-"):
                 checkpoints.append(dict(payload))
             orig_write(path, payload)
 
@@ -443,7 +445,7 @@ class TestCheckpointBehavior:
         orig_write = janitor._atomic_write_json
 
         def _spy(path, payload):
-            if "checkpoint" in str(path):
+            if Path(path).name.startswith("checkpoint-"):
                 checkpoints.append(dict(payload))
             orig_write(path, payload)
 
@@ -495,7 +497,7 @@ class TestCheckpointBehavior:
         orig_write = janitor._atomic_write_json
 
         def _spy(path, payload):
-            if "checkpoint" in str(path):
+            if Path(path).name.startswith("checkpoint-"):
                 checkpoints.append(dict(payload))
             orig_write(path, payload)
 

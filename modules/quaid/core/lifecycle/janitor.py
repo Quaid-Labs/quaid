@@ -696,6 +696,62 @@ def _atomic_write_json(path: Path, payload: Dict[str, Any]) -> None:
     _atomic_write_text(path, json.dumps(payload, indent=2) + "\n")
 
 
+def _write_janitor_stats(
+    *,
+    task: str,
+    dry_run: bool,
+    result: Dict[str, Any],
+    usage: Dict[str, Any] | None = None,
+    estimated_cost_usd: float | None = None,
+    completed_at: str | None = None,
+) -> Path:
+    """Write dashboard-visible janitor stats for direct and supervisor workers."""
+    stats_file = _logs_dir() / "janitor-stats.json"
+    stats_file.parent.mkdir(parents=True, exist_ok=True)
+    existing: Dict[str, Any] = {}
+    try:
+        loaded = json.loads(stats_file.read_text(encoding="utf-8"))
+        if isinstance(loaded, dict):
+            existing = loaded
+    except FileNotFoundError:
+        existing = {}
+    except Exception as exc:
+        if is_fail_hard_enabled():
+            raise RuntimeError(f"Failed to read existing janitor stats: {stats_file}") from exc
+        janitor_logger.warn("janitor_stats_read_failed", path=str(stats_file), error=str(exc))
+        existing = {}
+
+    run_at = completed_at or datetime.now().isoformat()
+    usage = usage or get_token_usage()
+    stats_data = {
+        "last_run": run_at,
+        "task": task,
+        "dry_run": bool(dry_run),
+        "success": bool(result.get("success")),
+        "applied_changes": result.get("applied_changes", {}),
+        "metrics": result.get("metrics", {}),
+        "api_usage": {
+            "calls": usage.get("api_calls", 0),
+            "input_tokens": usage.get("input_tokens", 0),
+            "output_tokens": usage.get("output_tokens", 0),
+            "estimated_cost_usd": estimate_cost() if estimated_cost_usd is None else estimated_cost_usd,
+        },
+    }
+    previous_completed_at = str(existing.get("last_janitor_completed_at") or "").strip()
+    previous_failed_at = str(existing.get("last_janitor_failed_at") or "").strip()
+    if not dry_run and bool(result.get("success")):
+        stats_data["last_janitor_completed_at"] = run_at
+    elif previous_completed_at:
+        stats_data["last_janitor_completed_at"] = previous_completed_at
+    if not dry_run and not bool(result.get("success")):
+        stats_data["last_janitor_failed_at"] = run_at
+    elif previous_failed_at:
+        stats_data["last_janitor_failed_at"] = previous_failed_at
+
+    _atomic_write_json(stats_file, stats_data)
+    return stats_file
+
+
 def _queue_delayed_notification(
     message: str,
     kind: str = "janitor",
@@ -963,8 +1019,14 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
                 checkpoint_state["status"] = status
                 if status == "completed":
                     checkpoint_state["last_completed_at"] = now_iso
+                    checkpoint_state["finished_at"] = now_iso
+                    checkpoint_state["terminal_status"] = status
+                    checkpoint_state["terminal_stage"] = checkpoint_state.get("current_stage", "")
                 elif status == "failed":
                     checkpoint_state["last_failed_at"] = now_iso
+                    checkpoint_state["finished_at"] = now_iso
+                    checkpoint_state["terminal_status"] = status
+                    checkpoint_state["terminal_stage"] = checkpoint_state.get("current_stage", "")
             if completed and stage:
                 done = checkpoint_state.setdefault("completed_stages", [])
                 if stage not in done:
@@ -1887,14 +1949,25 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
         except Exception:
             pass  # Checkpoint is best-effort
 
+    completed_at = datetime.now().isoformat()
     _checkpoint_save(status="completed" if success else "failed")
 
-    return {
+    result = {
         "success": success,
         "memory_pipeline_ok": memory_pipeline_ok,
         "metrics": final_metrics,
         "applied_changes": applied_changes
     }
+    stats_file = _write_janitor_stats(
+        task=task,
+        dry_run=dry_run,
+        result=result,
+        usage=usage,
+        estimated_cost_usd=cost,
+        completed_at=completed_at,
+    )
+    print(f"\n📊 Stats written to {stats_file}")
+    return result
 
 def _supervisor_janitor_wait_timeout_seconds() -> float:
     return float(max(300, int(MAX_EXECUTION_TIME) + 60))
@@ -2162,27 +2235,6 @@ def main(argv: Optional[List[str]] = None) -> int:
                                     user_approved=args.approve,
                                     token_budget=effective_token_budget,
                                     resume_checkpoint=(not args.no_resume_checkpoint))
-    
-        # Write stats to file for dashboard consumption
-        stats_file = _logs_dir() / "janitor-stats.json"
-        stats_file.parent.mkdir(parents=True, exist_ok=True)
-        usage = get_token_usage()
-        stats_data = {
-            "last_run": datetime.now().isoformat(),
-            "task": args.task,
-            "dry_run": dry_run,
-            "success": result["success"],
-            "applied_changes": result["applied_changes"],
-            "metrics": result["metrics"],
-            "api_usage": {
-                "calls": usage["api_calls"],
-                "input_tokens": usage["input_tokens"],
-                "output_tokens": usage["output_tokens"],
-                "estimated_cost_usd": estimate_cost(),
-            }
-        }
-        _atomic_write_json(Path(stats_file), stats_data)
-        print(f"\n📊 Stats written to {stats_file}")
     
         # Shut down the global LLM scheduler's thread pool before exiting.
         # Without this, non-daemon executor threads block Python from exiting cleanly.
