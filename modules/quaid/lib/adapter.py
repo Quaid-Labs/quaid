@@ -142,6 +142,14 @@ class QuaidAdapter(abc.ABC):
         r")",
         flags=re.IGNORECASE,
     )
+    _QUAID_NOTICE_RELAY_PARAGRAPH_RE = re.compile(
+        r"^\s*(?:"
+        r"Quaid\s+(?:has|still\s+has)\s+(?:(?:repeated|active)\s+)?"
+        r"(?:[a-z-]+\s+)?(?:notice|notices|warning|warnings|error|errors)\b"
+        r"|Quaid\s+could\s+not\s+access\s+its\b"
+        r")",
+        flags=re.IGNORECASE,
+    )
     _QUAID_NOTICE_BULLET_CONTINUATION_RE = re.compile(
         r"^\s*(?:[-*]\s+.+(?:\n|$))+",
         flags=re.IGNORECASE,
@@ -504,7 +512,10 @@ class QuaidAdapter(abc.ABC):
             if self._QUAID_NOTICE_COMMENTARY_RE.match(candidate):
                 dropping_notice_block = False
                 continue
-            if self._QUAID_NOTICE_PARAGRAPH_RE.match(candidate):
+            if (
+                self._QUAID_NOTICE_PARAGRAPH_RE.match(candidate)
+                or self._QUAID_NOTICE_RELAY_PARAGRAPH_RE.match(candidate)
+            ):
                 dropping_notice_block = True
                 continue
             if dropping_notice_block and self._QUAID_NOTICE_BULLET_CONTINUATION_RE.match(candidate):
