@@ -106,8 +106,8 @@ for plugin_dir in "${PLUGIN_DIRS[@]}"; do
   ssh "$HOST" "mkdir -p $quoted_adapter_dir $quoted_core_dir"
   ssh "$HOST" "cat > $quoted_adapter_dir/adapter.ts" < "$LOCAL_ADAPTER_TS"
   ssh "$HOST" "cat > $quoted_adapter_dir/adapter.js" < "$LOCAL_ADAPTER_JS"
-ssh "$HOST" "cat > $quoted_core_dir/session-timeout.ts" < "$LOCAL_TIMEOUT_TS"
-ssh "$HOST" "cat > $quoted_core_dir/session-timeout.js" < "$LOCAL_TIMEOUT_JS"
+  ssh "$HOST" "cat > $quoted_core_dir/session-timeout.ts" < "$LOCAL_TIMEOUT_TS"
+  ssh "$HOST" "cat > $quoted_core_dir/session-timeout.js" < "$LOCAL_TIMEOUT_JS"
 done
 
 GATEWAY_RESTART_HELPER="$MOD_DIR/tests/livetest/scripts/livetest-openclaw-gateway-restart.sh"

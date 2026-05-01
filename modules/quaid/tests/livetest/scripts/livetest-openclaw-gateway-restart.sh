@@ -10,11 +10,12 @@ set -euo pipefail
 usage() {
     cat <<'EOF'
 Usage:
-  livetest-openclaw-gateway-restart.sh [--start|--restart] [--host <ssh-host>] [--config <path>] [--dry-run]
+  livetest-openclaw-gateway-restart.sh [--start|--restart|--hard] [--host <ssh-host>] [--config <path>] [--dry-run]
 
 Modes:
   --start      Return immediately if gateway /health is responsive; otherwise start it.
   --restart    Force a real gateway restart. This is the default.
+  --hard       Alias for --restart.
 
 The helper prefers launchctl kickstart when the ai.openclaw.gateway agent is
 loaded. If health still fails, it tears down the port owner and starts
