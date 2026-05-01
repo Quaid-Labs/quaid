@@ -82,6 +82,25 @@ def test_project_names_are_normalized_to_lowercase(project_registry_env):
     assert get_project("livetest-agentmsg-CDX") is not None
 
 
+def test_global_project_cleanup_paths_normalize_mixed_case_input(project_registry_env):
+    from lib.project_registry import link, lookup, register, remove, unlink
+
+    project_dir = project_registry_env["visible_home"] / "projects" / "mixed-cleanup"
+    project_dir.mkdir(parents=True)
+
+    register(
+        name="Mixed-Cleanup",
+        canonical_path=str(project_dir),
+        link_current_instance=False,
+    )
+    assert lookup("MIXED-CLEANUP") is not None
+    assert link("MIXED-CLEANUP", instance="benchrunner") is True
+    assert unlink("mixed-cleanup", instance="BENCHRUNNER") is False
+    assert unlink("MIXED-CLEANUP", instance="benchrunner") is True
+    assert remove("MIXED-CLEANUP", force=True) is True
+    assert lookup("mixed-cleanup") is None
+
+
 def test_project_list_reconciles_existing_docs_registry_project_rows(project_registry_env):
     from core.project_registry import list_projects
     from datastore.docsdb.registry import DocsRegistry

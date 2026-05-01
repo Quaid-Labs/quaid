@@ -8,6 +8,8 @@ import sqlite3
 import sys
 from types import SimpleNamespace
 
+import pytest
+
 
 def _fresh_import_janitor():
     for name in (
@@ -114,11 +116,24 @@ def test_janitor_main_routes_all_apply_through_supervisor_request(monkeypatch, t
     assert calls[1][0] == "wait"
     assert calls[1][1]["request_id"] == "req-1"
     log_path = tmp_path / "logs" / "janitor.log"
-    assert "janitor_supervisor_request_complete" in log_path.read_text(encoding="utf-8")
+    log_text = log_path.read_text(encoding="utf-8")
+    assert "janitor_supervisor_request_complete" in log_text
+    assert "janitor_complete" in log_text
     stats = json.loads((tmp_path / "logs" / "janitor-stats.json").read_text(encoding="utf-8"))
     assert stats["dry_run"] is False
     assert stats["last_janitor_completed_at"] == "2026-05-02T01:02:03"
     assert stats["applied_changes"]["instances_completed"] == 1
+
+
+def test_janitor_audit_log_honors_fail_hard(monkeypatch, tmp_path):
+    from core.lifecycle import janitor
+
+    log_dir = tmp_path / "not-a-dir"
+    log_dir.write_text("blocks mkdir", encoding="utf-8")
+    monkeypatch.setattr(janitor, "is_fail_hard_enabled", lambda: True)
+
+    with pytest.raises(RuntimeError, match="Failed to write janitor audit log"):
+        janitor._write_janitor_log_entry(log_dir, "janitor_complete")
 
 
 def test_janitor_main_routes_all_apply_without_instance_bootstrap(monkeypatch, tmp_path):

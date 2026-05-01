@@ -167,6 +167,8 @@ def _write_janitor_log_entry(logs_dir: Path, event: str, level: str = "info", **
         with log_file.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(entry, default=str) + "\n")
     except Exception as exc:
+        if is_fail_hard_enabled():
+            raise RuntimeError(f"Failed to write janitor audit log: {log_file}") from exc
         print(f"[janitor] Failed to write {log_file}: {exc}", file=sys.stderr)
 
 _LIFECYCLE_REGISTRY = None
@@ -2126,6 +2128,22 @@ def _run_supervisor_janitor_request(*, instance: Optional[str] = None) -> int:
         success=success,
         errors=errors,
         exit_codes=exit_codes,
+    )
+    _write_janitor_log_entry(
+        logs_dir,
+        "janitor_complete",
+        level="info" if success else "error",
+        task="all",
+        dry_run=False,
+        supervisor_owned=True,
+        status=status,
+        success=success,
+        errors=len(errors),
+        **{
+            k: v
+            for k, v in aggregate_changes.items()
+            if isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0
+        },
     )
     _write_janitor_stats(
         task="all",

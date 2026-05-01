@@ -110,6 +110,11 @@ class TestCreateProject:
         with pytest.raises(ValueError, match="already exists"):
             create_project("my-app")
 
+    def test_rejects_duplicate_after_lowercase_normalization(self, mock_adapter):
+        create_project("My-App")
+        with pytest.raises(ValueError, match="already exists"):
+            create_project("my-app")
+
     def test_allows_unscoped_create_when_instance_env_missing(self, mock_adapter, monkeypatch):
         _, _tmp_path = mock_adapter
         monkeypatch.delenv("QUAID_INSTANCE", raising=False)
