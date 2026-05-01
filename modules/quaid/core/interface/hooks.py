@@ -1099,7 +1099,11 @@ def hook_inject(args):
             if lifecycle_command == "/compact":
                 try:
                     _maybe_compaction_refresh_context_artifacts(hook_input, is_precompact=True)
-                    _arm_compaction_refresh_marker(session_id)
+                    _arm_compaction_refresh_marker(
+                        session_id,
+                        reason="compact_command",
+                        source="hook_inject",
+                    )
                     _write_hook_trace("hook.inject.compaction_context_refreshed", {
                         "query": query[:160],
                         "session_id": session_id,

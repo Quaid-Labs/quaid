@@ -277,7 +277,11 @@ def test_claude_code_inject_refreshes_rules_context_for_compact_command(monkeypa
     assert "Bartholomew" in user_rules
     assert "fiddle-leaf fig" in env_rules
     assert "context-refresh" in err
-    assert (tmp_path / "data" / "context-refresh-compaction" / "sess-cc-compact.json").is_file()
+    marker_file = tmp_path / "data" / "context-refresh-compaction" / "sess-cc-compact.json"
+    assert marker_file.is_file()
+    marker_payload = json.loads(marker_file.read_text(encoding="utf-8"))
+    assert marker_payload["reason"] == "compact_command"
+    assert marker_payload["source"] == "hook_inject"
 
 
 def test_claude_code_post_compact_turn_gets_identity_additional_context_under_cap(monkeypatch, tmp_path, cursor_dir):

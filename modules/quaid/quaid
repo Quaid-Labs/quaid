@@ -382,21 +382,19 @@ _log_hook_command_invocation() {
   mkdir -p "$log_dir" 2>/dev/null || return 0
 
   local event="$CMD"
-  if [[ "$CMD" == "hook-extract" && " $* " == *" --precompact "* ]]; then
-    event="PreCompact"
-  fi
-  local sanitized_args=()
+  local sanitized_args=""
   local arg
   for arg in "$@"; do
     case "$arg" in
       --precompact)
-        sanitized_args+=("$arg")
+        event="PreCompact"
+        sanitized_args="${sanitized_args:+$sanitized_args }--precompact"
         ;;
       --*)
-        sanitized_args+=("[flag-redacted]")
+        sanitized_args="${sanitized_args:+$sanitized_args }[flag-redacted]"
         ;;
       *)
-        sanitized_args+=("[arg-redacted]")
+        sanitized_args="${sanitized_args:+$sanitized_args }[arg-redacted]"
         ;;
     esac
   done
@@ -406,7 +404,7 @@ _log_hook_command_invocation() {
     "$CMD" \
     "$instance" \
     "$PWD" \
-    "${sanitized_args[*]}" >> "$log_dir/quaid-hook-command.log" 2>/dev/null || true
+    "$sanitized_args" >> "$log_dir/quaid-hook-command.log" 2>/dev/null || true
 }
 
 _log_hook_command_invocation "$@"
