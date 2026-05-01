@@ -1440,6 +1440,38 @@ function looksLikeQuaidEventLogTranscript(filePath) {
     return false;
   }
 }
+function resolvePreservedConversationTranscriptPath(sessionId) {
+  const sid = String(sessionId || "").trim();
+  if (!sid) return "";
+  const candidates = [];
+  const addCandidate = (value) => {
+    const candidate = String(value || "").trim();
+    if (candidate && !candidates.includes(candidate)) {
+      candidates.push(candidate);
+    }
+  };
+  addCandidate(getPreservedSessionFile(sid));
+  const prefix = sid.includes("-") ? sid.split("-")[0] : "";
+  if (prefix && prefix.length >= 8) {
+    addCandidate(path.join(QUAID_SESSION_PRESERVE_DIR, `${prefix}.jsonl`));
+  }
+  try {
+    for (const name of fs.readdirSync(QUAID_SESSION_PRESERVE_DIR)) {
+      if (!name.endsWith(".jsonl")) continue;
+      if (name === `${sid}.jsonl` || prefix && name === `${prefix}.jsonl`) {
+        addCandidate(path.join(QUAID_SESSION_PRESERVE_DIR, name));
+      }
+    }
+  } catch {
+  }
+  const usable = candidates.filter((candidate) => {
+    if (!candidate || !fs.existsSync(candidate)) return false;
+    if (looksLikeQuaidEventLogTranscript(candidate)) return false;
+    const messages = parseSessionMessagesJsonl(candidate);
+    return Array.isArray(messages) && messages.length > 0 && !isInternalTranscriptMessages(messages);
+  });
+  return selectBestTranscriptCandidate(usable) || "";
+}
 function repairSessionCursorPathsFromQuaidEventLogs() {
   const cursorDir = path.join(QUAID_INSTANCE_ROOT, "data", "session-cursors");
   let repaired = 0;
@@ -2109,15 +2141,20 @@ function writeDaemonSignal(sessionId, signalType, meta) {
     });
   }
   if (!transcriptPath) {
+    const preservedFallback = resolvePreservedConversationTranscriptPath(sessionId);
     const candidates = [
       path.join(os.homedir(), ".openclaw", "agents", "main", "sessions", `${sessionId}.jsonl`),
       path.join(os.homedir(), ".openclaw", "sessions", `${sessionId}.jsonl`),
-      path.join(QUAID_SESSION_PRESERVE_DIR, `${sessionId}.jsonl`)
+      preservedFallback
     ];
     for (const candidate of candidates) {
       if (fs.existsSync(candidate)) {
-        rememberSessionTranscriptPath(sessionId, candidate, "daemon-signal-candidate");
-        break;
+        const remembered = rememberSessionTranscriptPath(sessionId, candidate, "daemon-signal-candidate", {
+          trustedSessionMapping: candidate === preservedFallback
+        });
+        if (remembered || candidate === preservedFallback) {
+          break;
+        }
       }
     }
   }
@@ -2127,6 +2164,18 @@ function writeDaemonSignal(sessionId, signalType, meta) {
     if (backup) {
       resolvedPath = backup;
       sessionTranscriptPaths.set(sessionId, backup);
+    } else {
+      const preservedFallback = resolvePreservedConversationTranscriptPath(sessionId);
+      if (preservedFallback) {
+        resolvedPath = preservedFallback;
+        sessionTranscriptPaths.set(sessionId, preservedFallback);
+        writeHookTrace("session.daemon_signal_preserved_fallback", {
+          session_id: sessionId,
+          signal_type: signalType,
+          reason: "missing_initial_path",
+          preserved_path: preservedFallback
+        });
+      }
     }
   }
   if (!resolvedPath) {
@@ -2138,8 +2187,8 @@ function writeDaemonSignal(sessionId, signalType, meta) {
     return null;
   }
   const usePreservedFallbackIfAvailable = (reason) => {
-    const preserved = getPreservedSessionFile(sessionId);
-    if (!fs.existsSync(preserved) || looksLikeQuaidEventLogTranscript(preserved)) {
+    const preserved = resolvePreservedConversationTranscriptPath(sessionId);
+    if (!preserved) {
       return false;
     }
     writeHookTrace("session.daemon_signal_preserved_fallback", {
@@ -6899,6 +6948,7 @@ const __test = {
   preserveLifecycleTranscript,
   writeDaemonSignal,
   looksLikeQuaidEventLogTranscript,
+  resolvePreservedConversationTranscriptPath,
   preserveSessionTranscript,
   shouldMirrorTranscriptUpdateToPreservedCopy,
   isMainInteractiveSessionKey,

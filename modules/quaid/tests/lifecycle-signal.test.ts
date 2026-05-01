@@ -585,6 +585,70 @@ describe("lifecycle signal detection", () => {
     }
   });
 
+  it("uses Quaid preserved transcript prefix when OC never writes the native transcript", async () => {
+    const baseDir = fs.mkdtempSync(path.join("/tmp", "quaid-oc-preserved-prefix-fallback-"));
+    const quaidHome = path.join(baseDir, ".quaid");
+    const visibleHome = path.join(baseDir, "quaid");
+    const openClawConfigPath = path.join(baseDir, ".openclaw", "openclaw.json");
+    const sessionsDir = path.join(baseDir, ".openclaw", "agents", "main", "sessions");
+    fs.mkdirSync(sessionsDir, { recursive: true });
+    fs.mkdirSync(path.dirname(openClawConfigPath), { recursive: true });
+    fs.writeFileSync(
+      openClawConfigPath,
+      JSON.stringify({ agents: { list: [{ id: "main", default: true }] } }),
+      "utf8",
+    );
+    fs.mkdirSync(path.join(quaidHome, "instances", "openclaw-main"), { recursive: true });
+    fs.writeFileSync(
+      path.join(quaidHome, "instances", "openclaw-main", "config.json"),
+      JSON.stringify({ retrieval: { fail_hard: false } }),
+      "utf8",
+    );
+
+    try {
+      vi.stubEnv("HOME", baseDir);
+      vi.stubEnv("QUAID_HOME", quaidHome);
+      vi.stubEnv("QUAID_VISIBLE_HOME", visibleHome);
+      vi.stubEnv("OPENCLAW_CONFIG_PATH", openClawConfigPath);
+      vi.stubEnv("QUAID_INSTANCE", "openclaw-main");
+      vi.resetModules();
+      const isolatedAdapter = await import("../adaptors/openclaw/adapter.js");
+      const isolatedTest = isolatedAdapter.__test;
+      const sessionId = "052c9665-a148-464f-bfda-b502139db588";
+      const prefixPath = path.join(
+        quaidHome,
+        "instances",
+        "openclaw-main",
+        "logs",
+        "quaid",
+        "sessions",
+        "052c9665.jsonl",
+      );
+      fs.mkdirSync(path.dirname(prefixPath), { recursive: true });
+      fs.writeFileSync(
+        prefixPath,
+        `${JSON.stringify({
+          type: "message",
+          message: {
+            role: "user",
+            content: "Quick one to remember: the desk plant is Bartholomew.",
+          },
+        })}\n`,
+        "utf8",
+      );
+
+      expect(fs.existsSync(path.join(sessionsDir, `${sessionId}.jsonl`))).toBe(false);
+      expect(isolatedTest.resolvePreservedConversationTranscriptPath(sessionId)).toBe(prefixPath);
+      const sigPath = isolatedTest.writeDaemonSignal(sessionId, "reset", { source: "command:new" });
+      expect(sigPath).toBeTruthy();
+      const payload = JSON.parse(fs.readFileSync(String(sigPath), "utf8"));
+      expect(payload.transcript_path).toBe(prefixPath);
+    } finally {
+      vi.unstubAllEnvs();
+      try { fs.rmSync(baseDir, { recursive: true, force: true }); } catch {}
+    }
+  });
+
   it("does not emit daemon signals that point at missing OC transcript files", async () => {
     const baseDir = fs.mkdtempSync(path.join("/tmp", "quaid-oc-missing-transcript-signal-"));
     const quaidHome = path.join(baseDir, ".quaid");
