@@ -89,6 +89,40 @@ def test_project_runtime_context_uses_request_instance(monkeypatch):
     assert "QUAID_ADAPTER_TYPE" not in os.environ
 
 
+def test_matching_supervisor_pids_merges_partial_ps_outputs(monkeypatch, tmp_path):
+    from core import project_docs
+
+    calls = []
+    home = tmp_path.resolve()
+
+    class Result:
+        def __init__(self, stdout="", returncode=0):
+            self.stdout = stdout
+            self.returncode = returncode
+
+    def fake_run(command, **_kwargs):
+        calls.append(command)
+        if len(calls) == 1:
+            # Darwin can accept the Linux/procps form while returning only the
+            # caller tty session. Continue to BSD forms instead of accepting it.
+            return Result(stdout=f"11 /bin/zsh QUAID_HOME={home}\n")
+        if len(calls) == 2:
+            return Result(
+                stdout=(
+                    "202 /usr/bin/python3 /tmp/core/project_docs_supervisor.py run "
+                    f"QUAID_HOME={home}\n"
+                )
+            )
+        return Result(stdout="", returncode=0)
+
+    monkeypatch.setattr(project_docs.subprocess, "run", fake_run)
+    monkeypatch.setattr(project_docs, "_pid_alive", lambda _pid: True)
+
+    assert project_docs._matching_supervisor_pids(quaid_home=home) == [202]
+    assert calls[0] == ["ps", "eww", "-eo", "pid=,command="]
+    assert calls[1] == ["ps", "eww", "-ax", "-o", "pid=", "-o", "command="]
+
+
 def test_project_runtime_context_uses_single_linked_instance(monkeypatch):
     from core import project_docs
 

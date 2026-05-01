@@ -497,36 +497,43 @@ def _supervisor_command_matches(command: str) -> bool:
 def _matching_supervisor_pids(*, quaid_home: Optional[Path] = None) -> List[int]:
     home = (quaid_home.resolve() if quaid_home is not None else get_quaid_home().resolve())
     home_marker = f"QUAID_HOME={home}"
-    try:
-        result = subprocess.run(
-            ["ps", "eww", "-ax", "-o", "pid=", "-o", "command="],
-            capture_output=True,
-            text=True,
-            timeout=2,
-        )
-    except Exception:
-        return []
-    if result.returncode != 0:
-        return []
+    commands = [
+        ["ps", "eww", "-eo", "pid=,command="],
+        ["ps", "eww", "-ax", "-o", "pid=", "-o", "command="],
+        ["ps", "eww", "-axo", "pid=,command="],
+        ["ps", "axeww", "-o", "pid=,command="],
+    ]
     matches: List[int] = []
-    for raw in (result.stdout or "").splitlines():
-        line = str(raw or "").strip()
-        if not line:
-            continue
-        parts = line.split(None, 1)
-        if len(parts) != 2:
-            continue
+    for ps_command in commands:
         try:
-            pid = int(parts[0])
-        except ValueError:
+            result = subprocess.run(
+                ps_command,
+                capture_output=True,
+                text=True,
+                timeout=2,
+            )
+        except Exception:
             continue
-        command = parts[1]
-        if not _supervisor_command_matches(command):
+        if result.returncode != 0 or not str(result.stdout or "").strip():
             continue
-        if home_marker not in command:
-            continue
-        if _pid_alive(pid):
-            matches.append(pid)
+        for raw in str(result.stdout or "").splitlines():
+            line = str(raw or "").strip()
+            if not line:
+                continue
+            parts = line.split(None, 1)
+            if len(parts) != 2:
+                continue
+            try:
+                pid = int(parts[0])
+            except ValueError:
+                continue
+            command = parts[1]
+            if not _supervisor_command_matches(command):
+                continue
+            if home_marker not in command:
+                continue
+            if _pid_alive(pid):
+                matches.append(pid)
     return sorted(set(matches))
 
 

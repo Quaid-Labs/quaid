@@ -363,6 +363,41 @@ def test_matching_daemon_pids_does_not_match_instance_prefix(monkeypatch):
     ) == [101]
 
 
+def test_matching_daemon_pids_merges_partial_ps_outputs(monkeypatch):
+    calls = []
+    home = "/tmp/quaid"
+
+    class Result:
+        def __init__(self, stdout="", returncode=0):
+            self.stdout = stdout
+            self.returncode = returncode
+
+    def fake_run(command, **_kwargs):
+        calls.append(command)
+        if len(calls) == 1:
+            # Darwin accepts the Linux/procps form but can return only the
+            # caller's tty session. This must not prevent BSD fallbacks.
+            return Result(stdout="11 /bin/zsh QUAID_HOME=/tmp/quaid QUAID_INSTANCE=interactive\n")
+        if len(calls) == 2:
+            return Result(
+                stdout=(
+                    "101 /usr/bin/python3 /tmp/core/extraction_daemon.py _worker "
+                    f"QUAID_HOME={home} QUAID_INSTANCE=benchrunner QUAID_DAEMON=1\n"
+                )
+            )
+        return Result(stdout="", returncode=0)
+
+    monkeypatch.setattr(extraction_daemon.subprocess, "run", fake_run)
+    monkeypatch.setattr(extraction_daemon, "_pid_alive", lambda _pid: True)
+
+    assert extraction_daemon._matching_daemon_pids(
+        quaid_home=home,
+        instance="benchrunner",
+    ) == [101]
+    assert calls[0] == ["ps", "eww", "-eo", "pid=,command="]
+    assert calls[1] == ["ps", "eww", "-axo", "pid=,command="]
+
+
 def test_matching_daemon_pids_can_include_foreground_run(monkeypatch):
     home = "/Users/admin/.quaid"
     worker = "/opt/homebrew/bin/python3 /Users/admin/.quaid/plugins/quaid/core/extraction_daemon.py _worker"

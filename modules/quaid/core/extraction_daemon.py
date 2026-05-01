@@ -464,13 +464,29 @@ def _pid_alive(pid: int) -> bool:
 
 def _all_process_commands_with_env() -> list[tuple[int, str]]:
     """Return (pid, command-with-env) rows for process scanning."""
-    try:
-        result = subprocess.run(
-            ["ps", "eww", "-axo", "pid=,command="],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
+    commands = [
+        # Linux/procps: BSD "-x" requires a BSD personality, but "-e" works
+        # and "eww" still includes the full environment needed for ownership.
+        ["ps", "eww", "-eo", "pid=,command="],
+        # macOS/BSD fallbacks. Darwin accepts the Linux form but can return
+        # only caller-session rows, so merge all viable forms instead of
+        # trusting the first successful command.
+        ["ps", "eww", "-axo", "pid=,command="],
+        ["ps", "axeww", "-o", "pid=,command="],
+    ]
+    rows_by_pid: dict[int, str] = {}
+    for ps_command in commands:
+        try:
+            result = subprocess.run(
+                ps_command,
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+        except Exception:
+            continue
+        if result.returncode != 0 or not str(result.stdout or "").strip():
+            continue
         rows: list[tuple[int, str]] = []
         for raw_line in StringIO(result.stdout).read().splitlines():
             line = str(raw_line or "").strip()
@@ -483,9 +499,12 @@ def _all_process_commands_with_env() -> list[tuple[int, str]]:
                 continue
             command = parts[1] if len(parts) > 1 else ""
             rows.append((pid, command))
-        return rows
-    except Exception:
-        return []
+        for pid, command in rows:
+            # Prefer the fuller row when forms overlap; env-bearing ps output is
+            # usually longer and is required for instance ownership matching.
+            if len(command) > len(rows_by_pid.get(pid, "")):
+                rows_by_pid[pid] = command
+    return sorted(rows_by_pid.items())
 
 
 def _command_has_env_value(command: str, key: str, value: str) -> bool:
