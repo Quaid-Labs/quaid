@@ -16,6 +16,7 @@ manages API keys directly — the adapter/provider handles authentication.
 
 import json
 import hashlib
+import http.client
 import logging
 import os
 import subprocess
@@ -120,6 +121,25 @@ def _notify_provider_access_error(
         )
     except Exception as notice_exc:
         logger.warning("Failed queueing provider access error for agent relay: %s", notice_exc)
+
+
+def _is_retryable_llm_transport_error(exc: Optional[BaseException]) -> bool:
+    """Return True for transient transport errors worth retrying.
+
+    This includes incomplete HTTP body reads from streaming providers such as
+    the Codex OAuth responses backend.
+    """
+    return isinstance(
+        exc,
+        (
+            TimeoutError,
+            ConnectionError,
+            OSError,
+            subprocess.TimeoutExpired,
+            urllib.error.URLError,
+            http.client.IncompleteRead,
+        ),
+    )
 
 
 # Timeouts (seconds)
@@ -769,8 +789,7 @@ def call_llm(system_prompt: str, user_message: str,
                 "key_fp": _key_fp(),
             })
             # Only retry on transient errors (rate limit, server errors, timeouts)
-            retryable = isinstance(e, (TimeoutError, ConnectionError, OSError,
-                                       subprocess.TimeoutExpired))
+            retryable = _is_retryable_llm_transport_error(e)
             if isinstance(e, urllib.error.HTTPError):
                 retryable = e.code in _RETRYABLE_HTTP_CODES
             if retryable and attempt < retries:
@@ -810,7 +829,7 @@ def call_llm(system_prompt: str, user_message: str,
     # Determine if this is a confirmed provider outage (retryable HTTP codes
     # exhausted) vs. a bug or config error in our code.
     _is_provider_outage = False
-    if isinstance(last_error, (TimeoutError, ConnectionError, OSError)):
+    if _is_retryable_llm_transport_error(last_error):
         _is_provider_outage = True
     elif isinstance(last_error, urllib.error.HTTPError):
         _is_provider_outage = last_error.code in _RETRYABLE_HTTP_CODES

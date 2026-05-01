@@ -1,6 +1,7 @@
 """Tests for llm_clients.py — JSON parsing, token usage, provider delegation."""
 
 from concurrent.futures import ThreadPoolExecutor
+import http.client
 import os
 import sys
 import json
@@ -474,6 +475,24 @@ class TestCallLlmProvider:
         result, duration = llm_clients.call_llm("system", "user", max_retries=3)
         assert result is not None
         assert call_count[0] == 3  # 2 failures + 1 success
+
+    def test_retries_on_incomplete_read_transport_error(self, test_adapter):
+        """Incomplete HTTP body reads should be retried as transient transport errors."""
+        import core.llm.clients as llm_clients
+
+        call_count = [0]
+        original_llm_call = test_adapter._llm.llm_call
+
+        def flaky_llm_call(messages, model_tier="deep", max_tokens=4000, timeout=120):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                raise http.client.IncompleteRead(b'{"partial": true}', 42)
+            return original_llm_call(messages, model_tier, max_tokens, timeout)
+
+        test_adapter._llm.llm_call = flaky_llm_call
+        result, _duration = llm_clients.call_llm("system", "user", max_retries=2)
+        assert result is not None
+        assert call_count[0] == 2
 
     def test_raises_on_persistent_error_when_failhard_enabled(self, test_adapter):
         """Persistent provider failures should raise when failHard is enabled."""

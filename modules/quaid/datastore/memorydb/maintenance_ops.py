@@ -2,6 +2,7 @@
 
 import argparse
 import hashlib
+import http.client
 import json
 import logging
 import math
@@ -2400,6 +2401,56 @@ def _resolve_entity_node(graph: MemoryGraph, name: str, node_type: str,
 
 EDGE_BATCH_SIZE = 25  # Safety cap for edge extraction batch size
 
+_EDGE_BATCH_RETRYABLE_ERROR_MARKERS = frozenset(
+    {
+        "error_type=IncompleteRead",
+        "error_type=TimeoutError",
+        "error_type=ConnectionError",
+        "error_type=URLError",
+    }
+)
+
+
+def _edge_batch_root_error(exc: BaseException) -> BaseException:
+    seen = set()
+    current: BaseException = exc
+    while True:
+        marker = id(current)
+        if marker in seen:
+            return current
+        seen.add(marker)
+        nxt = getattr(current, "__cause__", None) or getattr(current, "__context__", None)
+        if not isinstance(nxt, BaseException):
+            return current
+        current = nxt
+
+
+def _is_retryable_edge_batch_error(exc: BaseException) -> bool:
+    current = _edge_batch_root_error(exc)
+    if isinstance(
+        current,
+        (
+            TimeoutError,
+            ConnectionError,
+            OSError,
+            urllib.error.URLError,
+            http.client.IncompleteRead,
+        ),
+    ):
+        return True
+    text = str(exc or "")
+    return any(marker in text for marker in _EDGE_BATCH_RETRYABLE_ERROR_MARKERS)
+
+
+def _edge_batch_retry_reason(exc: BaseException) -> str:
+    root = _edge_batch_root_error(exc)
+    detail = str(root or "").replace("\n", " ").strip()
+    if len(detail) > 160:
+        detail = detail[:157].rstrip() + "..."
+    if not detail:
+        detail = type(root).__name__
+    return f"Batch edge extraction transport failed ({type(root).__name__}: {detail})"
+
 
 def batch_extract_edges(facts: List[Dict[str, Any]], graph: MemoryGraph,
                         metrics: JanitorMetrics,
@@ -2488,8 +2539,18 @@ Respond with a JSON array of {len(facts)} objects, one per fact in order:
 
 JSON array only:"""
 
-    response, duration = call_deep_reasoning(prompt, max_tokens=300 * len(facts),
-                                   timeout=DEEP_REASONING_TIMEOUT)
+    try:
+        response, duration = call_deep_reasoning(
+            prompt,
+            max_tokens=300 * len(facts),
+            timeout=DEEP_REASONING_TIMEOUT,
+        )
+    except Exception as exc:
+        if _is_retryable_edge_batch_error(exc):
+            retried = _retry_in_smaller_batches(_edge_batch_retry_reason(exc))
+            if retried is not None:
+                return retried
+        raise
     metrics.add_llm_call(duration)
 
     if not response:

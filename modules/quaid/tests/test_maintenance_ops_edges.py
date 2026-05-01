@@ -217,6 +217,48 @@ def test_batch_extract_edges_retries_smaller_batches_when_batch_response_is_not_
     assert any("Batch edge response was not a list" in item["warning"] for item in metrics.warnings)
 
 
+def test_batch_extract_edges_retries_smaller_batches_when_batch_raises_retryable_transport_error():
+    facts = [
+        {"id": "fact-11", "text": "Diana has a daughter named Alice", "owner_id": "default"},
+        {"id": "fact-12", "text": "David is the user's brother.", "owner_id": "default"},
+    ]
+    metrics = maintenance_ops.JanitorMetrics()
+    responses = [
+        RuntimeError(
+            "LLM call failed after retries while failHard is enabled "
+            "(provider=OpenAICodexOAuthLLMProvider, tier=deep, model=gpt-5.4, "
+            "error_type=IncompleteRead, error=IncompleteRead(2747 bytes read))."
+        ),
+        (
+            '[{"fact": 1, "edges": ['
+            '{"subject":"Diana","subject_type":"Person","relation":"parent_of","object":"Alice","object_type":"Person"}'
+            ']}]',
+            0.05,
+        ),
+        (
+            '[{"fact": 1, "edges": ['
+            '{"subject":"David","subject_type":"Person","relation":"sibling_of","object":"the user","object_type":"Person"}'
+            ']}]',
+            0.05,
+        ),
+    ]
+
+    with patch.object(maintenance_ops, "call_deep_reasoning", side_effect=responses), patch.object(
+        maintenance_ops, "resolve_owner_person", return_value=SimpleNamespace(name="Solomon Steadman")
+    ):
+        results = maintenance_ops.batch_extract_edges(
+            facts=facts,
+            graph=object(),
+            metrics=metrics,
+            relations_list="parent_of, sibling_of, spouse_of",
+        )
+
+    assert [edge["relation"] for edge in results[0]] == ["parent_of"]
+    assert [edge["relation"] for edge in results[1]] == ["sibling_of"]
+    assert not metrics.has_errors
+    assert any("transport failed" in item["warning"] for item in metrics.warnings)
+
+
 def test_relationship_backfill_filter_rejects_media_title_noise_and_assistant_recommendations():
     assert maintenance_ops._looks_like_relationship_backfill_fact(
         "Conan O'Brien Needs a Friend — funny, light, great for runs."
