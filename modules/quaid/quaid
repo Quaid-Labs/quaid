@@ -365,6 +365,37 @@ if [[ -z "${QUAID_INSTANCE:-}" && -n "${QUAID_HOME:-}" ]]; then
   fi
 fi
 
+_log_hook_command_invocation() {
+  case "$CMD" in
+    hook-*) ;;
+    *) return 0 ;;
+  esac
+
+  local home="${QUAID_HOME:-$HOME/.quaid}"
+  local instance="${QUAID_INSTANCE:-}"
+  local log_dir
+  if [[ -n "$instance" ]]; then
+    log_dir="$home/instances/$instance/logs"
+  else
+    log_dir="$home/logs"
+  fi
+  mkdir -p "$log_dir" 2>/dev/null || return 0
+
+  local event="$CMD"
+  if [[ "$CMD" == "hook-extract" && " $* " == *" --precompact "* ]]; then
+    event="PreCompact"
+  fi
+  printf '%s event=%q cmd=%q instance=%q cwd=%q args=%q\n' \
+    "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
+    "$event" \
+    "$CMD" \
+    "$instance" \
+    "$PWD" \
+    "$*" >> "$log_dir/quaid-hook-command.log" 2>/dev/null || true
+}
+
+_log_hook_command_invocation "$@"
+
 case "$CMD" in
   # Lifecycle hooks (adapter-agnostic)
   hook-inject)

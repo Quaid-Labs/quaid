@@ -2578,8 +2578,20 @@ def hook_extract(args):
     # session context files current for platforms that preserve them in-session.
     try:
         _maybe_compaction_refresh_context_artifacts(hook_input, is_precompact=is_precompact)
+        if is_precompact and session_id:
+            _arm_compaction_refresh_marker(session_id)
+            _write_hook_trace("hook.extract.compaction_context_refreshed", {
+                "session_id": session_id,
+                "strategy": _context_refresh_strategy(),
+                "source": "precompact",
+            })
     except Exception as exc:
         print(f"[quaid][{label}] context refresh error: {exc}", file=sys.stderr)
+        _write_hook_trace("hook.extract.compaction_context_refresh_error", {
+            "session_id": session_id,
+            "error": str(exc),
+            "source": "precompact" if is_precompact else "hook_extract",
+        })
 
     if not transcript_path:
         print(f"[quaid][{label}] no transcript_path in hook input", file=sys.stderr)

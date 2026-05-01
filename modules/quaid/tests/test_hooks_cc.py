@@ -1192,6 +1192,7 @@ def test_hook_extract_precompact_refreshes_rules_context_from_identity_and_proje
     mock_adapter.get_sessions_dir.return_value = str(sessions_dir)
     mock_adapter.projects_dir.return_value = projects_dir
     mock_adapter.identity_dir.return_value = identity_dir
+    mock_adapter.data_dir.return_value = tmp_path / "data"
     mock_adapter.get_base_context_files.return_value = {}
     mock_adapter.get_cli_tools_snippet.return_value = ""
     mock_adapter.store_auth_token.return_value = tmp_path / ".auth-token"
@@ -1223,6 +1224,8 @@ def test_hook_extract_precompact_refreshes_rules_context_from_identity_and_proje
     tools_rules = (rules_dir / "quaid-quaid-tools-md.md").read_text(encoding="utf-8")
     assert "Compaction refresh canary: vellum-orchid" in user_rules
     assert "refresh docs" in tools_rules
+    assert (tmp_path / "data" / "context-refresh-compaction" / f"{session_id}.json").is_file()
+    assert (tmp_path / "data" / "context-refresh-compaction" / "_latest.json").is_file()
     assert "stale rules body" not in user_rules + tools_rules
 
 
