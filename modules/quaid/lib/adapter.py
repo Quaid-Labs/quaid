@@ -131,21 +131,6 @@ class QuaidAdapter(abc.ABC):
         r"^\s*Quaid notices?:",
         flags=re.IGNORECASE,
     )
-    _QUAID_NOTICE_COMMENTARY_RE = re.compile(
-        r"^\s*(?:You started a new interaction\..*?pending Quaid notice.*?|I(?:'|’)m checking .*?Quaid.*?notice.*?)\s*$",
-        flags=re.DOTALL | re.IGNORECASE,
-    )
-    _QUAID_NOTICE_PARAGRAPH_RE = re.compile(
-        r"^\s*(?:"
-        r"(?:\*{1,2}\s*)?\[Quaid(?:[^\]]*)\](?:\*{1,2})?(?:\s*[:—-]\s*)?"
-        r"|Quaid\s+(?:notice|notices|warning|warnings|error|errors)(?:\s+to\s+relay)?\s*:"
-        r")",
-        flags=re.IGNORECASE,
-    )
-    _QUAID_NOTICE_BULLET_CONTINUATION_RE = re.compile(
-        r"^\s*(?:[-*]\s+.+(?:\n|$))+",
-        flags=re.IGNORECASE,
-    )
 
     # ---- Paths ----
 
@@ -489,30 +474,6 @@ class QuaidAdapter(abc.ABC):
             value = re.sub(r"\n{3,}", "\n\n", value)
         return value.strip()
 
-    def strip_assistant_notice_artifacts(self, text: str) -> str:
-        """Remove Quaid-emitted assistant notice paragraphs from transcript text."""
-        value = str(text or "").strip()
-        if not value:
-            return ""
-        paragraphs = re.split(r"\n{2,}", value)
-        kept: List[str] = []
-        dropping_notice_block = False
-        for paragraph in paragraphs:
-            candidate = paragraph.strip()
-            if not candidate:
-                continue
-            if self._QUAID_NOTICE_COMMENTARY_RE.match(candidate):
-                dropping_notice_block = False
-                continue
-            if self._QUAID_NOTICE_PARAGRAPH_RE.match(candidate):
-                dropping_notice_block = True
-                continue
-            if dropping_notice_block and self._QUAID_NOTICE_BULLET_CONTINUATION_RE.match(candidate):
-                continue
-            dropping_notice_block = False
-            kept.append(candidate)
-        return "\n\n".join(kept).strip()
-
     @staticmethod
     def _transcript_label(role: str, source_type: str = "") -> str:
         role_label = "User" if role == "user" else "Assistant"
@@ -570,8 +531,6 @@ class QuaidAdapter(abc.ABC):
                 flags=re.DOTALL,
             ).strip()
             text = self.sanitize_transcript_text(text)
-            if role == "assistant":
-                text = self.strip_assistant_notice_artifacts(text)
             if not text or self.should_filter_transcript_message(text):
                 continue
 
