@@ -5563,7 +5563,7 @@ class TestRollingExtraction:
             flush_metric = rolling_metrics[-1]
             assert flush_metric["event"] == "rolling_flush"
             assert flush_metric["signal_type"] == "rolling"
-            assert flush_metric["processing_signal_type"] == "session_end"
+            assert flush_metric["processing_signal_type"] == "rolling_flush"
             assert flush_metric["staged_batches"] == 1
             assert flush_metric["staged_facts"] == 1
             assert flush_metric["carry_facts_final"] == 1
