@@ -3877,12 +3877,8 @@ function _rewriteAgentRecallAutoInjectQuery(query) {
     const aboutMatch = raw.match(/\babout\s+([A-Z][A-Za-z0-9'_-]*(?:\s+[A-Z][A-Za-z0-9'_-]*){0,2})\b/);
     const entity = String(aboutMatch?.[1] || "").trim();
     if (entity) {
-      const suffix = /\b(?:surprise|surprised|surprising)\b/.test(normalized) ? "surprising anecdote funny moment" : "";
-      return `${entity} recalled remembered ${suffix}`.trim();
+      return `${entity} recalled remembered`;
     }
-  }
-  if (/\b(?:architecture|architectural|decision)\b/.test(normalized) && /\bapi\b/.test(normalized)) {
-    return `${raw} GraphQL REST compatibility migration Apollo`;
   }
   return void 0;
 }

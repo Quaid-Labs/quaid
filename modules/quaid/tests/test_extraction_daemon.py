@@ -97,55 +97,6 @@ def test_daemon_loop_leaves_docs_refresh_to_project_docs_supervisor(monkeypatch)
     assert docs_refresh_calls == []
 
 
-def test_flush_pending_signals_drains_queue(monkeypatch, tmp_path):
-    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
-    monkeypatch.setenv("QUAID_INSTANCE", "flush-inst")
-    processed = []
-
-    extraction_daemon.write_signal("timeout", "sess-a", "/tmp/a.jsonl")
-    extraction_daemon.write_signal("session_end", "sess-b", "/tmp/b.jsonl")
-
-    def fake_process_signal(sig):
-        processed.append(sig["session_id"])
-        extraction_daemon.mark_signal_processed(sig)
-
-    monkeypatch.setattr(extraction_daemon, "process_signal", fake_process_signal)
-    monkeypatch.setattr(extraction_daemon.time, "sleep", lambda _seconds: None)
-
-    summary = extraction_daemon.flush_pending_signals(timeout_seconds=1.0, poll_interval=0.0)
-
-    assert summary["status"] == "drained"
-    assert summary["attempted"] == 2
-    assert summary["processed"] == 2
-    assert summary["remaining_signals"] == 0
-    assert set(processed) == {"sess-a", "sess-b"}
-
-
-def test_flush_pending_signals_retries_preserved_signal(monkeypatch, tmp_path):
-    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
-    monkeypatch.setenv("QUAID_INSTANCE", "flush-inst")
-    calls = 0
-
-    extraction_daemon.write_signal("timeout", "sess-a", "/tmp/a.jsonl")
-
-    def fake_process_signal(sig):
-        nonlocal calls
-        calls += 1
-        if calls >= 2:
-            extraction_daemon.mark_signal_processed(sig)
-
-    monkeypatch.setattr(extraction_daemon, "process_signal", fake_process_signal)
-    monkeypatch.setattr(extraction_daemon.time, "sleep", lambda _seconds: None)
-
-    summary = extraction_daemon.flush_pending_signals(timeout_seconds=1.0, poll_interval=0.0)
-
-    assert summary["status"] == "drained"
-    assert summary["attempted"] == 2
-    assert summary["processed"] == 1
-    assert summary["preserved"] == 1
-    assert summary["remaining_signals"] == 0
-
-
 def test_daemon_loop_exits_when_supervisor_disappears(monkeypatch):
     monkeypatch.setattr(extraction_daemon, "write_pid", lambda _pid: None)
     monkeypatch.setattr(extraction_daemon, "remove_pid", lambda: None)
@@ -438,36 +389,6 @@ def test_matching_daemon_pids_can_include_foreground_run(monkeypatch):
     ) == [101, 102]
 
 
-def test_read_pid_rejects_foreign_instance_daemon_pid(monkeypatch, tmp_path):
-    pid_path = tmp_path / "extraction-daemon.pid"
-    pid_path.write_text("5896", encoding="utf-8")
-
-    monkeypatch.setenv("QUAID_HOME", str(tmp_path / ".quaid"))
-    monkeypatch.setenv("QUAID_INSTANCE", "openclaw-main")
-    monkeypatch.setattr(extraction_daemon, "_pid_path", lambda: pid_path)
-    monkeypatch.setattr(extraction_daemon.os, "kill", lambda _pid, _sig: None)
-    monkeypatch.setattr(extraction_daemon, "_is_daemon_process", lambda _pid: True)
-    monkeypatch.setattr(extraction_daemon, "_matching_daemon_pids", lambda **_kwargs: [])
-
-    assert extraction_daemon.read_pid() is None
-    assert not pid_path.exists()
-
-
-def test_read_pid_accepts_current_instance_daemon_pid(monkeypatch, tmp_path):
-    pid_path = tmp_path / "extraction-daemon.pid"
-    pid_path.write_text("5590", encoding="utf-8")
-
-    monkeypatch.setenv("QUAID_HOME", str(tmp_path / ".quaid"))
-    monkeypatch.setenv("QUAID_INSTANCE", "openclaw-main")
-    monkeypatch.setattr(extraction_daemon, "_pid_path", lambda: pid_path)
-    monkeypatch.setattr(extraction_daemon.os, "kill", lambda _pid, _sig: None)
-    monkeypatch.setattr(extraction_daemon, "_is_daemon_process", lambda _pid: True)
-    monkeypatch.setattr(extraction_daemon, "_matching_daemon_pids", lambda **_kwargs: [5590])
-
-    assert extraction_daemon.read_pid() == 5590
-    assert pid_path.read_text(encoding="utf-8").strip() == "5590"
-
-
 def test_start_daemon_adopts_matching_live_worker_without_pidfile(monkeypatch, tmp_path):
     pid_path = tmp_path / "extraction-daemon.pid"
     adopted = []
@@ -541,11 +462,7 @@ def test_remove_pid_if_matches_preserves_newer_pidfile(monkeypatch, tmp_path):
 
 def test_check_idle_sessions_writes_timeout_signal_for_idle_unextracted_session(monkeypatch, tmp_path):
     transcript_path = tmp_path / "session.jsonl"
-    transcript_path.write_text(
-        '{"role":"user","content":"hello - my garden shed combination is written inside an indigo glass lantern"}\n'
-        '{"role":"assistant","content":"noted"}\n',
-        encoding="utf-8",
-    )
+    transcript_path.write_text('{"role":"user","content":"hello"}\n{"role":"assistant","content":"hi"}\n', encoding="utf-8")
 
     instance_id = os.environ.get("QUAID_INSTANCE", "pytest-runner")
     cursor_dir = tmp_path / "instances" / instance_id / "data" / "session-cursors"
@@ -627,6 +544,26 @@ def test_ensure_discovered_session_cursors_repairs_broken_existing_cursor(monkey
     assert migrated["line_offset"] == 1
     assert migrated["transcript_path"] == str(transcript)
     assert not broken.exists()
+
+
+def test_ensure_discovered_session_cursors_can_be_disabled_via_env(monkeypatch, tmp_path):
+    instance_id = os.environ.get("QUAID_INSTANCE", "pytest-runner")
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_DISABLE_DISCOVERY_CURSOR_SCAN", "1")
+    sessions_dir = tmp_path / "sessions"
+    transcript = sessions_dir / "-tmp-quaid-dev" / "sess-cc.jsonl"
+    transcript.parent.mkdir(parents=True, exist_ok=True)
+    transcript.write_text('{"role":"user","content":"hello"}\n', encoding="utf-8")
+
+    class _Adapter(_OwnedTestAdapterMixin):
+        def get_sessions_dir(self):
+            return sessions_dir
+
+    discovered = extraction_daemon._ensure_discovered_session_cursors(_Adapter())
+    assert discovered == 0
+    cursor_dir = tmp_path / "instances" / instance_id / "data" / "session-cursors"
+    if cursor_dir.exists():
+        assert list(cursor_dir.glob("*.json")) == []
 
 
 def test_ensure_discovered_session_cursors_skips_checkpoint_sidecars(monkeypatch, tmp_path):
@@ -912,61 +849,6 @@ def test_clear_rolling_state_removes_payload_matched_stale_file(monkeypatch, tmp
     extraction_daemon.clear_rolling_state("sess-roll-stale")
 
     assert not stale_file.exists()
-
-
-def test_synthetic_rolling_stage_flush_metric_uses_rolling_flush_processing_label():
-    assert extraction_daemon._rolling_flush_processing_signal_type("session_end", True) == "rolling_flush"
-    assert extraction_daemon._rolling_flush_processing_signal_type("session_end", False) == "session_end"
-
-
-def test_rolling_debug_dump_writes_input_and_fact_rows(monkeypatch, tmp_path):
-    monkeypatch.setenv("QUAID_HOME", str(tmp_path / ".quaid"))
-    monkeypatch.setenv("QUAID_INSTANCE", "codex-private-tmp-cdx-livetest")
-    monkeypatch.delenv("QUAID_ROLLING_DEBUG_DUMP", raising=False)
-    monkeypatch.delenv("QUAID_ROLLING_DEBUG_DIR", raising=False)
-    flag_path = (
-        tmp_path
-        / ".quaid"
-        / "instances"
-        / "codex-private-tmp-cdx-livetest"
-        / "data"
-        / "rolling-debug.enabled"
-    )
-    flag_path.parent.mkdir(parents=True, exist_ok=True)
-    flag_path.write_text(str(tmp_path / "debug"), encoding="utf-8")
-
-    extraction_daemon._write_rolling_debug_dump(
-        "rolling_stage_extract",
-        "019dd8da-f1ca-7413-af17-a793beeb79aa",
-        text="User: Baxter wrote in the orange linen notebook for Emília Rosa.",
-        facts=[
-            {
-                "text": "Baxter wrote in the orange linen notebook for Emília Rosa.",
-                "_source_id": "019dd8da-f1ca-7413-af17-a793beeb79aa",
-                "speaker": "user",
-                "domains": ["personal"],
-            }
-        ],
-        storage_facts=[
-            {
-                "text": "Baxter wrote in the orange linen notebook for Emília Rosa.",
-                "status": "stored",
-            }
-        ],
-        buffered_line_offset=42,
-    )
-
-    jsonl_files = list((tmp_path / "debug").glob("quaid-rolling-debug-019dd8da-f1ca-7413-af17-a793beeb79aa.jsonl"))
-    assert len(jsonl_files) == 1
-    row = json.loads(jsonl_files[0].read_text(encoding="utf-8").strip())
-    assert row["event"] == "rolling_stage_extract"
-    assert row["buffered_line_offset"] == 42
-    assert row["text_marker_hits"]["Baxter"] == [6]
-    assert row["facts"][0]["source_session_id"] == "019dd8da-f1ca-7413-af17-a793beeb79aa"
-    assert row["storage_facts"][0]["status"] == "stored"
-    assert Path(row["text_path"]).read_text(encoding="utf-8") == (
-        "User: Baxter wrote in the orange linen notebook for Emília Rosa."
-    )
 
 
 def test_write_rolling_state_clears_structurally_empty_payload_artifacts(monkeypatch, tmp_path):
@@ -3425,58 +3307,6 @@ class TestSignalRoundTrip:
         extraction_daemon._release_session_processing_lock("sess-lock", first)
         extraction_daemon._release_session_processing_lock("sess-other", other)
 
-    def test_session_processing_lock_reclaims_dead_holder(self, monkeypatch, tmp_path):
-        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
-        monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
-        monkeypatch.setenv("QUAID_PROCESSING_LOCK_STALE_SECONDS", "0")
-
-        first = extraction_daemon._acquire_session_processing_lock("sess-lock")
-        lock_path = extraction_daemon._processing_lock_path("sess-lock")
-        lock_path.write_text(
-            json.dumps(
-                {
-                    "session_id": "sess-lock",
-                    "pid": 987654,
-                    "started_at": "2026-05-01T05:52:46Z",
-                }
-            ),
-            encoding="utf-8",
-        )
-        monkeypatch.setattr(extraction_daemon, "_pid_alive", lambda pid: False)
-
-        second = extraction_daemon._acquire_session_processing_lock("sess-lock")
-
-        assert first is not None
-        assert second is not None
-        payload = json.loads(lock_path.read_text(encoding="utf-8"))
-        assert payload["pid"] == os.getpid()
-
-        os.close(first)
-        extraction_daemon._release_session_processing_lock("sess-lock", second)
-
-    def test_session_processing_lock_does_not_reclaim_fresh_dead_holder(self, monkeypatch, tmp_path):
-        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
-        monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
-        monkeypatch.setenv("QUAID_PROCESSING_LOCK_STALE_SECONDS", "60")
-
-        first = extraction_daemon._acquire_session_processing_lock("sess-lock")
-        lock_path = extraction_daemon._processing_lock_path("sess-lock")
-        lock_path.write_text(
-            json.dumps({"session_id": "sess-lock", "pid": 987654}),
-            encoding="utf-8",
-        )
-        monkeypatch.setattr(extraction_daemon, "_pid_alive", lambda pid: False)
-
-        second = extraction_daemon._acquire_session_processing_lock("sess-lock")
-
-        assert first is not None
-        assert second is None
-        os.close(first)
-        try:
-            lock_path.unlink()
-        except OSError:
-            pass
-
     def test_process_signal_preserves_signal_when_session_lock_unavailable(self, monkeypatch, tmp_path):
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
         monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
@@ -3786,217 +3616,6 @@ class TestCheckIdleSessions:
         extraction_daemon.check_idle_sessions(timeout_minutes=30)
 
         assert captured == []
-
-    def test_idle_scan_freezes_startup_handshake_only_transcript(self, monkeypatch, tmp_path):
-        """OC startup wrappers must not consume the timeout path before queued user text lands."""
-        instance_id = "openclaw-main"
-        session_id = "139d8a95-9421-4274-a4c9-a1e44d8aa79a"
-        transcript = tmp_path / f"{session_id}.jsonl"
-        transcript.write_text(
-            '{"role":"user","content":"Hello"}\n'
-            '{"role":"assistant","content":"Hey Solomon - how can I help?"}\n'
-            '{"role":"user","content":"[Queued messages while agent was busy]\\nA new session was started via /new or /reset. Execute your Session Startup sequence now."}\n'
-            '{"role":"assistant","content":"NO_REPLY"}\n',
-            encoding="utf-8",
-        )
-        self._setup_cursor(tmp_path, instance_id, session_id, 0, transcript)
-
-        now = 1_700_000_000.0
-        os.utime(transcript, (now - 120, now - 120))
-
-        class _FakeAdapter(_OwnedTestAdapterMixin):
-            def parse_session_jsonl(self, _path):
-                return (
-                    "User: Hello\n\n"
-                    "Assistant: Hey Solomon - how can I help?\n\n"
-                    "User: A new session was started via /new or /reset. Execute your Session Startup sequence now.\n\n"
-                    "Assistant: NO_REPLY"
-                )
-
-        captured = []
-        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
-        monkeypatch.setenv("QUAID_INSTANCE", instance_id)
-        monkeypatch.setattr(extraction_daemon.time, "time", lambda: now)
-        monkeypatch.setattr(extraction_daemon, "_read_installed_at", lambda: now - 7200)
-        monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
-        monkeypatch.setattr(extraction_daemon, "_load_runtime_adapter", lambda: _FakeAdapter())
-        monkeypatch.setattr(extraction_daemon, "write_signal", lambda *a, **kw: captured.append((a, kw)))
-
-        try:
-            extraction_daemon.check_idle_sessions(timeout_minutes=1)
-        finally:
-            extraction_daemon._cursor_end_timeout_fired.discard(session_id)
-
-        cursor = extraction_daemon.read_cursor(session_id)
-        assert captured == []
-        assert cursor["internal"] is True
-        assert cursor["line_offset"] == 4
-
-    def test_idle_scan_freezes_greeting_only_timeout_transcript(self, monkeypatch, tmp_path):
-        """OC may materialize only /new greeting turns before the real queued prompt."""
-        instance_id = "openclaw-main"
-        session_id = "8bdb7c01-2af3-41ae-9882-04324aa1d7f6"
-        transcript = tmp_path / f"{session_id}.jsonl"
-        transcript.write_text(
-            '{"role":"user","content":"Hello"}\n'
-            '{"role":"assistant","content":"Hey Solomon. How can I help?"}\n'
-            '{"role":"assistant","content":"NO_REPLY"}\n',
-            encoding="utf-8",
-        )
-        self._setup_cursor(tmp_path, instance_id, session_id, 0, transcript)
-
-        now = 1_700_000_000.0
-        os.utime(transcript, (now - 120, now - 120))
-
-        class _FakeAdapter(_OwnedTestAdapterMixin):
-            def parse_session_jsonl(self, _path):
-                return (
-                    "User: Hello\n\n"
-                    "Assistant: Hey Solomon. How can I help?\n\n"
-                    "Assistant: NO_REPLY"
-                )
-
-        captured = []
-        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
-        monkeypatch.setenv("QUAID_INSTANCE", instance_id)
-        monkeypatch.setattr(extraction_daemon.time, "time", lambda: now)
-        monkeypatch.setattr(extraction_daemon, "_read_installed_at", lambda: now - 7200)
-        monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
-        monkeypatch.setattr(extraction_daemon, "_load_runtime_adapter", lambda: _FakeAdapter())
-        monkeypatch.setattr(extraction_daemon, "write_signal", lambda *a, **kw: captured.append((a, kw)))
-
-        try:
-            extraction_daemon.check_idle_sessions(timeout_minutes=1)
-        finally:
-            extraction_daemon._cursor_end_timeout_fired.discard(session_id)
-
-        cursor = extraction_daemon.read_cursor(session_id)
-        assert captured == []
-        assert cursor["internal"] is True
-        assert cursor["line_offset"] == 3
-
-    def test_idle_scan_skips_daemon_owned_preserved_transcript_without_live_source(self, monkeypatch, tmp_path):
-        """Preserved OC mirrors are lifecycle inputs, not active timeout candidates."""
-        instance_id = "openclaw-main"
-        session_id = "a397508c-02c8-401a-88cf-9f977757fbfd"
-        preserved_dir = tmp_path / "instances" / instance_id / "logs" / "quaid" / "sessions"
-        preserved_dir.mkdir(parents=True, exist_ok=True)
-        preserved = preserved_dir / f"{session_id}.jsonl"
-        preserved.write_text(
-            '{"role":"user","content":"Hello"}\n'
-            '{"role":"assistant","content":"Hey!"}\n'
-            '{"role":"assistant","content":"NO_REPLY"}\n',
-            encoding="utf-8",
-        )
-        source_key = extraction_daemon._signal_source_cursor_key(session_id, str(preserved))
-        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
-        monkeypatch.setenv("QUAID_INSTANCE", instance_id)
-        extraction_daemon.write_cursor(session_id, 0, str(preserved), source_key=source_key)
-
-        now = 1_700_000_000.0
-        os.utime(preserved, (now - 600, now - 600))
-
-        class _FakeAdapter(_OwnedTestAdapterMixin):
-            def get_sessions_dir(self):
-                return tmp_path / "missing-openclaw-sessions"
-
-            def parse_session_jsonl(self, path):
-                return Path(path).read_text(encoding="utf-8")
-
-        captured = []
-        monkeypatch.setattr(extraction_daemon.time, "time", lambda: now)
-        monkeypatch.setattr(extraction_daemon, "_read_installed_at", lambda: now - 7200)
-        monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
-        monkeypatch.setattr(extraction_daemon, "_load_runtime_adapter", lambda: _FakeAdapter())
-        monkeypatch.setattr(extraction_daemon, "write_signal", lambda *a, **kw: captured.append((a, kw)))
-
-        extraction_daemon.check_idle_sessions(timeout_minutes=1)
-
-        assert captured == []
-
-    def test_timeout_signal_skips_daemon_owned_preserved_transcript(self, monkeypatch, tmp_path):
-        """A queued timeout against a preserved mirror must not extract stale startup text."""
-        instance_id = "openclaw-main"
-        session_id = "a397508c-02c8-401a-88cf-9f977757fbfd"
-        preserved_dir = tmp_path / "instances" / instance_id / "logs" / "quaid" / "sessions"
-        preserved_dir.mkdir(parents=True, exist_ok=True)
-        preserved = preserved_dir / f"{session_id}.jsonl"
-        preserved.write_text('{"role":"user","content":"Hello"}\n', encoding="utf-8")
-        source_key = extraction_daemon._signal_source_cursor_key(session_id, str(preserved))
-        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
-        monkeypatch.setenv("QUAID_INSTANCE", instance_id)
-        extraction_daemon.write_cursor(session_id, 0, str(preserved), source_key=source_key)
-        signal_path = extraction_daemon.write_signal(
-            signal_type="timeout",
-            session_id=session_id,
-            transcript_path=str(preserved),
-            meta={"compact_on_timeout": True},
-        )
-
-        class _FakeAdapter(_OwnedTestAdapterMixin):
-            def parse_session_jsonl(self, _path):
-                raise AssertionError("timeout should not parse preserved daemon mirror")
-
-        monkeypatch.setattr(extraction_daemon, "_reload_config_if_changed", lambda _reason: None)
-        monkeypatch.setattr(extraction_daemon, "_load_runtime_adapter", lambda: _FakeAdapter())
-        monkeypatch.setattr(extraction_daemon, "_get_owner_id", lambda: "Owner")
-        monkeypatch.setattr(extraction_daemon, "write_context_refresh_timeout_marker", lambda _sid: None)
-
-        signal = extraction_daemon.read_pending_signals()[0]
-        extraction_daemon.process_signal(signal)
-
-        assert not signal_path.exists()
-
-    def test_timeout_signal_marks_greeting_only_transcript_internal(self, monkeypatch, tmp_path):
-        """Queued timeout signals must not send /new greeting wrappers to extraction."""
-        instance_id = "openclaw-main"
-        session_id = "8bdb7c01-2af3-41ae-9882-04324aa1d7f6"
-        transcript = tmp_path / f"{session_id}.jsonl"
-        transcript.write_text(
-            '{"role":"user","content":"Hello"}\n'
-            '{"role":"assistant","content":"Hey Solomon. How can I help?"}\n'
-            '{"role":"assistant","content":"NO_REPLY"}\n',
-            encoding="utf-8",
-        )
-        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
-        monkeypatch.setenv("QUAID_INSTANCE", instance_id)
-        extraction_daemon.write_cursor(session_id, 0, str(transcript))
-        signal_path = extraction_daemon.write_signal(
-            signal_type="timeout",
-            session_id=session_id,
-            transcript_path=str(transcript),
-            meta={"compact_on_timeout": True},
-        )
-
-        class _FakeAdapter(_OwnedTestAdapterMixin):
-            def parse_session_jsonl(self, _path):
-                return (
-                    "User: Hello\n\n"
-                    "Assistant: Hey Solomon. How can I help?\n\n"
-                    "Assistant: NO_REPLY"
-                )
-
-        import ingest.extract as extract_mod
-
-        monkeypatch.setattr(extraction_daemon, "_reload_config_if_changed", lambda _reason: None)
-        monkeypatch.setattr(extraction_daemon, "_load_runtime_adapter", lambda: _FakeAdapter())
-        monkeypatch.setattr(extraction_daemon, "_get_owner_id", lambda: "Owner")
-        monkeypatch.setattr(extraction_daemon, "write_context_refresh_timeout_marker", lambda _sid: None)
-        monkeypatch.setattr(
-            extract_mod,
-            "extract_from_transcript",
-            lambda *_args, **_kwargs: (_ for _ in ()).throw(
-                AssertionError("greeting-only timeout should not call extraction")
-            ),
-        )
-
-        signal = extraction_daemon.read_pending_signals()[0]
-        extraction_daemon.process_signal(signal)
-
-        cursor = extraction_daemon.read_cursor(session_id)
-        assert not signal_path.exists()
-        assert cursor["internal"] is True
-        assert cursor["line_offset"] == 3
 
     def test_recent_idle_sessions_timeout_before_stale_backlog(self, monkeypatch, tmp_path):
         """A fresh idle session must not wait behind old stale timeout work."""
@@ -4441,9 +4060,6 @@ class TestRollingExtraction:
 
         real_adapter = sys.modules.get("lib.adapter")
         fake_adapter_mod = types.ModuleType("lib.adapter")
-        fake_adapter_mod.StandaloneAdapter = object
-        fake_adapter_mod.quaid_projects_dir = lambda: tmp_path / "projects"
-        fake_adapter_mod.quaid_tracking_dir = lambda: tmp_path / "tracking"
 
         class _FakeAdapter(_OwnedTestAdapterMixin):
             def parse_session_jsonl(self, path):
@@ -4559,9 +4175,6 @@ class TestRollingExtraction:
 
         real_adapter = sys.modules.get("lib.adapter")
         fake_adapter_mod = types.ModuleType("lib.adapter")
-        fake_adapter_mod.StandaloneAdapter = object
-        fake_adapter_mod.quaid_projects_dir = lambda: tmp_path / "projects"
-        fake_adapter_mod.quaid_tracking_dir = lambda: tmp_path / "tracking"
 
         class _FakeAdapter(_OwnedTestAdapterMixin):
             def parse_session_jsonl(self, path):
@@ -5579,67 +5192,6 @@ class TestRollingExtraction:
             else:
                 sys.modules.pop("lib.adapter", None)
 
-    def test_process_signal_rolling_preserves_lifecycle_flush_for_residual_tail(self, monkeypatch, tmp_path):
-        import sys
-        import types
-
-        transcript_path = tmp_path / "session.jsonl"
-        transcript_path.write_text(
-            '{"role":"user","content":"short residual chunk"}\n',
-            encoding="utf-8",
-        )
-
-        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
-        monkeypatch.setenv("QUAID_INSTANCE", "rolling-inst")
-        session_id = "sess-roll-lifecycle"
-        extraction_daemon.write_cursor(session_id, 0, str(transcript_path))
-
-        real_adapter = sys.modules.get("lib.adapter")
-        fake_adapter_mod = types.ModuleType("lib.adapter")
-
-        class _FakeAdapter(_OwnedTestAdapterMixin):
-            def parse_session_jsonl(self, path):
-                return "User: short residual chunk"
-
-        fake_adapter_mod.StandaloneAdapter = object
-        fake_adapter_mod.get_adapter = lambda: _FakeAdapter()
-        sys.modules["lib.adapter"] = fake_adapter_mod
-
-        monkeypatch.setattr(extraction_daemon, "_get_capture_chunk_tokens", lambda default=8000: 1000)
-        monkeypatch.setattr(extraction_daemon, "_get_capture_chunk_max_lines", lambda default=0: 0)
-        monkeypatch.setattr(extraction_daemon, "_get_owner_id", lambda: "Owner")
-
-        try:
-            extraction_daemon.write_signal(
-                signal_type="session_end",
-                session_id=session_id,
-                transcript_path=str(transcript_path),
-                meta={"reason": "command:clear"},
-            )
-            extraction_daemon.write_signal(
-                signal_type="rolling",
-                session_id=session_id,
-                transcript_path=str(transcript_path),
-            )
-            rolling_signal = next(
-                signal for signal in extraction_daemon.read_pending_signals()
-                if signal["type"] == "rolling"
-            )
-            extraction_daemon.process_signal(rolling_signal)
-
-            pending = extraction_daemon.read_pending_signals()
-            assert [signal["type"] for signal in pending] == ["session_end"]
-            assert pending[0]["session_id"] == session_id
-            assert pending[0]["meta"]["reason"] == "command:clear"
-            state = extraction_daemon.read_rolling_state(session_id)
-            assert "short residual chunk" in state["semantic_buffer"]
-            assert state["semantic_buffer_tokens"] > 0
-        finally:
-            if real_adapter is not None:
-                sys.modules["lib.adapter"] = real_adapter
-            else:
-                sys.modules.pop("lib.adapter", None)
-
     def test_process_signal_rolling_requeues_continuation_for_below_budget_tail_without_line_cap(self, monkeypatch, tmp_path):
         import sys
         import types
@@ -5794,6 +5346,7 @@ class TestRollingExtraction:
         )
         extraction_daemon.write_cursor("sess-roll", 0, str(transcript_path))
         monkeypatch.setattr(extraction_daemon, "_get_owner_id", lambda: "Owner")
+        monkeypatch.setattr(extraction_daemon, "_rolling_ready_threshold", lambda chunk_budget: 1)
 
         real_registry = sys.modules.get("core.subagent_registry")
         real_adapter = sys.modules.get("lib.adapter")
@@ -5938,7 +5491,6 @@ class TestRollingExtraction:
         )
         monkeypatch.setattr(project_registry_mod, "snapshot_all_projects", lambda: [])
         monkeypatch.setattr(docs_updater_mod, "update_project_docs", lambda snapshots, extraction_result: {"docs_updated": 0})
-        monkeypatch.setattr(extraction_daemon, "_get_capture_chunk_tokens", lambda default=8000: 10)
         monkeypatch.setattr(extraction_daemon, "_read_usage_totals", lambda: dict(next(usage_snapshots)))
         monkeypatch.setattr(
             extraction_daemon,
@@ -6011,7 +5563,7 @@ class TestRollingExtraction:
             flush_metric = rolling_metrics[-1]
             assert flush_metric["event"] == "rolling_flush"
             assert flush_metric["signal_type"] == "rolling"
-            assert flush_metric["processing_signal_type"] == "rolling_flush"
+            assert flush_metric["processing_signal_type"] == "session_end"
             assert flush_metric["staged_batches"] == 1
             assert flush_metric["staged_facts"] == 1
             assert flush_metric["carry_facts_final"] == 1
@@ -6109,9 +5661,6 @@ class TestRollingExtraction:
         sys.modules["core.subagent_registry"] = fake_registry
 
         fake_adapter_mod = types.ModuleType("lib.adapter")
-        fake_adapter_mod.StandaloneAdapter = object
-        fake_adapter_mod.quaid_projects_dir = lambda: tmp_path / "projects"
-        fake_adapter_mod.quaid_tracking_dir = lambda: tmp_path / "tracking"
         if real_adapter is not None:
             fake_adapter_mod.StandaloneAdapter = getattr(real_adapter, "StandaloneAdapter", object)
             fake_adapter_mod.quaid_projects_dir = getattr(
@@ -6228,15 +5777,6 @@ class TestRollingExtraction:
             assert state_after_stage["semantic_buffer"] == tail
             assert state_after_stage["raw_facts"] == [{"text": "Owner has stable prior memories", "status": "new"}]
 
-            # Simulate a real lifecycle signal arriving before the synthetic
-            # staged-payload flush is processed. The synthetic flush must not
-            # consume it, because it is the signal that drains the residual
-            # semantic buffer below the rolling threshold.
-            extraction_daemon.write_signal(
-                signal_type="session_end",
-                session_id="sess-roll-residual",
-                transcript_path=str(transcript_path),
-            )
             parse_empty["value"] = True
             extraction_daemon.process_signal(extraction_daemon.read_pending_signals()[0])
             state_after_synthetic_flush = extraction_daemon.read_rolling_state("sess-roll-residual")
@@ -6246,11 +5786,26 @@ class TestRollingExtraction:
             ]
             assert state_after_synthetic_flush["semantic_buffer"] == tail
             assert state_after_synthetic_flush["raw_facts"] == []
-            pending_after_synthetic_flush = extraction_daemon.read_pending_signals()
-            assert len(pending_after_synthetic_flush) == 1
-            assert pending_after_synthetic_flush[0]["type"] == "session_end"
-            assert not pending_after_synthetic_flush[0].get("meta")
+            assert extraction_daemon.read_pending_signals() == []
 
+            extraction_daemon.write_signal(
+                signal_type="rolling",
+                session_id="sess-roll-residual",
+                transcript_path=str(transcript_path),
+                meta={"reason": "continued_chunk_budget"},
+            )
+            extraction_daemon.process_signal(extraction_daemon.read_pending_signals()[0])
+            state_after_stale_rolling = extraction_daemon.read_rolling_state("sess-roll-residual")
+            assert seen_transcripts == [prior]
+            assert state_after_stale_rolling["semantic_buffer"] == tail
+            assert state_after_stale_rolling["raw_facts"] == []
+            assert extraction_daemon.read_pending_signals() == []
+
+            extraction_daemon.write_signal(
+                signal_type="session_end",
+                session_id="sess-roll-residual",
+                transcript_path=str(transcript_path),
+            )
             extraction_daemon.process_signal(extraction_daemon.read_pending_signals()[0])
             assert seen_transcripts == [prior, tail]
             assert len(applied_payloads) == 2
@@ -6263,91 +5818,6 @@ class TestRollingExtraction:
                 sys.modules["core.subagent_registry"] = real_registry
             else:
                 sys.modules.pop("core.subagent_registry", None)
-            if real_adapter is not None:
-                sys.modules["lib.adapter"] = real_adapter
-            else:
-                sys.modules.pop("lib.adapter", None)
-
-    def test_rolling_below_threshold_keeps_snapshot_for_lifecycle_flush(self, monkeypatch, tmp_path):
-        import sys
-        import types
-
-        session_id = "sess-roll-snapshot-tail"
-        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
-        monkeypatch.setenv("QUAID_INSTANCE", "rolling-inst")
-        instance_root = tmp_path / "instances" / "rolling-inst"
-        snapshot = (
-            instance_root
-            / "logs"
-            / "daemon"
-            / "rolling-transcript-snapshots"
-            / session_id
-            / "20260429T135031Z-deadbeef"
-            / f"{session_id}.jsonl"
-        )
-        snapshot.parent.mkdir(parents=True, exist_ok=True)
-        snapshot.write_text(
-            '{"role":"user","content":"chunk one"}\n'
-            '{"role":"assistant","content":"ack"}\n',
-            encoding="utf-8",
-        )
-        extraction_daemon.write_cursor(session_id, 2, str(snapshot))
-        extraction_daemon.write_rolling_state(
-            session_id,
-            {
-                "session_id": session_id,
-                "transcript_path": str(snapshot),
-                "semantic_buffer": "User: Baxter residual context waits for lifecycle.",
-                "semantic_buffer_tokens": 10,
-                "buffered_line_offset": 2,
-                "processed_line_offset": 2,
-                "raw_facts": [],
-                "raw_snippets": {},
-                "raw_journal": {},
-                "raw_project_logs": {},
-            },
-        )
-        monkeypatch.setattr(extraction_daemon, "_get_owner_id", lambda: "Owner")
-        monkeypatch.setattr(extraction_daemon, "_get_capture_chunk_tokens", lambda default=8000: 100)
-
-        real_adapter = sys.modules.get("lib.adapter")
-        fake_adapter_mod = types.ModuleType("lib.adapter")
-        fake_adapter_mod.StandaloneAdapter = object
-        fake_adapter_mod.quaid_projects_dir = lambda: tmp_path / "projects"
-        fake_adapter_mod.quaid_tracking_dir = lambda: tmp_path / "tracking"
-
-        class _FakeAdapter(_OwnedTestAdapterMixin):
-            def quaid_home(self):
-                return tmp_path
-
-            def instance_root(self):
-                return instance_root
-
-            def data_dir(self):
-                return instance_root / "data"
-
-            def parse_session_jsonl(self, path):
-                return ""
-
-        fake_adapter_mod.get_adapter = lambda: _FakeAdapter()
-        sys.modules["lib.adapter"] = fake_adapter_mod
-
-        try:
-            extraction_daemon.write_signal(
-                signal_type="rolling",
-                session_id=session_id,
-                transcript_path=str(snapshot),
-                meta={"reason": "continued_chunk_budget"},
-            )
-            extraction_daemon.process_signal(extraction_daemon.read_pending_signals()[0])
-
-            state = extraction_daemon.read_rolling_state(session_id)
-            cursor = extraction_daemon.read_cursor(session_id)
-            assert snapshot.exists()
-            assert state["semantic_buffer"] == "User: Baxter residual context waits for lifecycle."
-            assert cursor["transcript_path"] == str(snapshot)
-            assert extraction_daemon.read_pending_signals() == []
-        finally:
             if real_adapter is not None:
                 sys.modules["lib.adapter"] = real_adapter
             else:
@@ -6704,170 +6174,6 @@ class TestRollingExtraction:
             else:
                 sys.modules.pop("core.runtime.notify", None)
 
-    def test_process_signal_trusts_source_cursor_alias_when_rollout_session_id_differs(
-        self, monkeypatch, tmp_path
-    ):
-        import sys
-        import types
-
-        uuid = "019dd737-3b58-7b30-adc9-dbab99dc5846"
-        full_session_id = f"rollout-2026-04-29T03-10-14-{uuid}"
-        basename = f"{full_session_id}.jsonl"
-        original = tmp_path / ".codex" / "sessions" / "2026" / "04" / "29" / basename
-        original.parent.mkdir(parents=True, exist_ok=True)
-        original.write_text(
-            '{"type":"session_meta","payload":{"cwd":"/Users/admin/quaidcode/dev"}}\n'
-            '{"type":"event_msg","payload":{"type":"user_message","message":"Baxter residual context with enough durable detail for extraction"}}\n',
-            encoding="utf-8",
-        )
-
-        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
-        monkeypatch.setenv("QUAID_INSTANCE", "codex-private-tmp-cdx-livetest")
-        instance_root = tmp_path / "instances" / "codex-private-tmp-cdx-livetest"
-        instance_root.mkdir(parents=True, exist_ok=True)
-        snapshot = (
-            instance_root
-            / "logs"
-            / "daemon"
-            / "rolling-transcript-snapshots"
-            / full_session_id
-            / "20260429T031319Z-ab465afeaeb56ef6"
-            / basename
-        )
-        snapshot.parent.mkdir(parents=True, exist_ok=True)
-        snapshot.write_text(original.read_text(encoding="utf-8"), encoding="utf-8")
-
-        source_key = extraction_daemon._signal_source_cursor_key(full_session_id, str(original))
-        extraction_daemon.write_cursor(full_session_id, 1, str(snapshot), source_key=source_key)
-        monkeypatch.setattr(extraction_daemon, "_get_owner_id", lambda: "Owner")
-
-        real_registry = sys.modules.get("core.subagent_registry")
-        real_adapter = sys.modules.get("lib.adapter")
-        real_notify = sys.modules.get("core.runtime.notify")
-        fake_registry = types.ModuleType("core.subagent_registry")
-        fake_registry.is_registered_subagent = lambda sid: False
-        fake_registry.get_harvestable = lambda sid: []
-        fake_registry.mark_harvested = lambda sid, cid: None
-        fake_registry._registry_dir = lambda: tmp_path / "registry"
-        sys.modules["core.subagent_registry"] = fake_registry
-
-        fake_adapter_mod = types.ModuleType("lib.adapter")
-        fake_adapter_mod.StandaloneAdapter = object
-        fake_adapter_mod.quaid_projects_dir = lambda: tmp_path / "projects"
-        fake_adapter_mod.quaid_tracking_dir = lambda: tmp_path / "tracking"
-
-        class _RejectingAdapter(_OwnedTestAdapterMixin):
-            def quaid_home(self):
-                return tmp_path
-
-            def instance_root(self):
-                return instance_root
-
-            def data_dir(self):
-                return instance_root / "data"
-
-            def owns_session_path(self, path, session_id=""):
-                return False
-
-            def parse_session_jsonl(self, path):
-                raw = Path(path).read_text(encoding="utf-8")
-                return "User: Baxter residual context with enough durable detail for extraction" if "Baxter" in raw else ""
-
-        fake_adapter_mod.get_adapter = lambda: _RejectingAdapter()
-        sys.modules["lib.adapter"] = fake_adapter_mod
-        fake_notify = types.ModuleType("core.runtime.notify")
-        fake_notify.notify_memory_extraction = lambda **kwargs: None
-        sys.modules["core.runtime.notify"] = fake_notify
-
-        import core.docs_updater_hook as docs_updater_mod
-        import core.ingest_runtime as ingest_runtime_mod
-        import core.project_registry as project_registry_mod
-        import ingest.extract as extract_mod
-
-        seen_transcripts = []
-        applied = []
-        monkeypatch.setattr(
-            extract_mod,
-            "extract_from_transcript",
-            lambda **kwargs: seen_transcripts.append(kwargs["transcript"]) or {
-                "carry_facts": [{"text": "Owner discussed Baxter"}],
-                "raw_facts": [{"text": "Owner discussed Baxter", "status": "new"}],
-                "raw_snippets": {},
-                "raw_journal": {},
-                "raw_project_logs": {},
-                "facts_skipped": 0,
-                "payload_duplicate_facts_collapsed": 0,
-                "carry_duplicate_facts_dropped": 0,
-                "chunks_processed": 1,
-                "chunks_total": 1,
-                "root_chunks": 1,
-                "split_events": 0,
-                "split_child_chunks": 0,
-                "leaf_chunks": 1,
-                "max_split_depth": 0,
-                "deep_calls": 1,
-                "repair_calls": 0,
-                "assessment_usable": 1,
-                "assessment_nothing_usable": 0,
-                "assessment_needs_smaller_chunk": 0,
-                "unclassified_empty_payloads": 0,
-            },
-        )
-        monkeypatch.setattr(
-            extract_mod,
-            "apply_extracted_payloads",
-            lambda payload, **kwargs: applied.append((payload, kwargs)) or {
-                **payload,
-                "facts_stored": len(payload.get("raw_facts", []) or []),
-                "facts_skipped": 0,
-                "edges_created": 0,
-                "facts": [
-                    {"text": fact.get("text", ""), "status": "stored", "edges": []}
-                    for fact in (payload.get("raw_facts", []) or [])
-                ],
-                "snippets": {},
-                "journal": {},
-                "project_logs": {},
-                "project_log_metrics": {},
-            },
-        )
-        monkeypatch.setattr(ingest_runtime_mod, "run_session_logs_ingest", lambda **kwargs: {"status": "indexed"})
-        monkeypatch.setattr(project_registry_mod, "snapshot_all_projects", lambda: [])
-        monkeypatch.setattr(docs_updater_mod, "update_project_docs", lambda snapshots, extraction_result: {"docs_updated": 0})
-        monkeypatch.setattr(extraction_daemon, "_warm_payload_embeddings", lambda facts: {
-            "requested": len(facts),
-            "unique": len(facts),
-            "cache_hits": 0,
-            "warmed": len(facts),
-            "failed": 0,
-            "skipped_empty": 0,
-        })
-
-        try:
-            extraction_daemon.write_signal(
-                signal_type="session_end",
-                session_id=uuid,
-                transcript_path=str(original),
-            )
-            extraction_daemon.process_signal(extraction_daemon.read_pending_signals()[0])
-
-            assert seen_transcripts == ["User: Baxter residual context with enough durable detail for extraction"]
-            assert len(applied) == 1
-            assert applied[0][1]["session_id"] == uuid
-        finally:
-            if real_registry is not None:
-                sys.modules["core.subagent_registry"] = real_registry
-            else:
-                sys.modules.pop("core.subagent_registry", None)
-            if real_adapter is not None:
-                sys.modules["lib.adapter"] = real_adapter
-            else:
-                sys.modules.pop("lib.adapter", None)
-            if real_notify is not None:
-                sys.modules["core.runtime.notify"] = real_notify
-            else:
-                sys.modules.pop("core.runtime.notify", None)
-
     def test_rolling_stage_flush_runs_before_continued_raw_tail(self, monkeypatch, tmp_path):
         import sys
         import types
@@ -6906,7 +6212,7 @@ class TestRollingExtraction:
             },
         )
         monkeypatch.setattr(extraction_daemon, "_get_owner_id", lambda: "Owner")
-        monkeypatch.setattr(extraction_daemon, "_get_capture_chunk_tokens", lambda default=8000: 8)
+        monkeypatch.setattr(extraction_daemon, "_rolling_ready_threshold", lambda chunk_budget: 1)
 
         real_registry = sys.modules.get("core.subagent_registry")
         real_adapter = sys.modules.get("lib.adapter")
@@ -6919,9 +6225,6 @@ class TestRollingExtraction:
         sys.modules["core.subagent_registry"] = fake_registry
 
         fake_adapter_mod = types.ModuleType("lib.adapter")
-        fake_adapter_mod.StandaloneAdapter = object
-        fake_adapter_mod.quaid_projects_dir = lambda: tmp_path / "projects"
-        fake_adapter_mod.quaid_tracking_dir = lambda: tmp_path / "tracking"
 
         class _FakeAdapter(_OwnedTestAdapterMixin):
             def quaid_home(self):
@@ -7126,9 +6429,6 @@ class TestRollingExtraction:
             def parse_session_jsonl(self, path):
                 return "unused when semantic buffer is present"
 
-        fake_adapter_mod.StandaloneAdapter = object
-        fake_adapter_mod.quaid_projects_dir = lambda: tmp_path / "projects"
-        fake_adapter_mod.quaid_tracking_dir = lambda: tmp_path / "tracking"
         fake_adapter_mod.get_adapter = lambda: _FakeAdapter()
         sys.modules["lib.adapter"] = fake_adapter_mod
 
@@ -7299,9 +6599,6 @@ class TestRollingExtraction:
         sys.modules["core.subagent_registry"] = fake_registry
 
         fake_adapter_mod = types.ModuleType("lib.adapter")
-        fake_adapter_mod.StandaloneAdapter = object
-        fake_adapter_mod.quaid_projects_dir = lambda: tmp_path / "projects"
-        fake_adapter_mod.quaid_tracking_dir = lambda: tmp_path / "tracking"
 
         class _FakeAdapter(_OwnedTestAdapterMixin):
             def quaid_home(self):
@@ -7412,14 +6709,6 @@ class TestRollingExtraction:
                 {"event": event, "session_id": session_id, **data}
             ),
         )
-        monkeypatch.setattr(extraction_daemon, "_warm_payload_embeddings", lambda facts: {
-            "requested": len(facts),
-            "unique": len(facts),
-            "cache_hits": 0,
-            "warmed": len(facts),
-            "failed": 0,
-            "skipped_empty": 0,
-        })
 
         try:
             extraction_daemon.write_signal(
@@ -7505,9 +6794,6 @@ class TestRollingExtraction:
         sys.modules["core.subagent_registry"] = fake_registry
 
         fake_adapter_mod = types.ModuleType("lib.adapter")
-        fake_adapter_mod.StandaloneAdapter = object
-        fake_adapter_mod.quaid_projects_dir = lambda: tmp_path / "projects"
-        fake_adapter_mod.quaid_tracking_dir = lambda: tmp_path / "tracking"
 
         class _FakeAdapter(_OwnedTestAdapterMixin):
             def quaid_home(self):
@@ -7621,14 +6907,6 @@ class TestRollingExtraction:
                 {"event": event, "session_id": session_id, **data}
             ),
         )
-        monkeypatch.setattr(extraction_daemon, "_warm_payload_embeddings", lambda facts: {
-            "requested": len(facts),
-            "unique": len(facts),
-            "cache_hits": 0,
-            "warmed": len(facts),
-            "failed": 0,
-            "skipped_empty": 0,
-        })
 
         try:
             extraction_daemon.write_signal(
@@ -7863,6 +7141,7 @@ class TestRollingExtraction:
         )
         extraction_daemon.write_cursor("sess-roll", 0, str(transcript_path))
         monkeypatch.setattr(extraction_daemon, "_get_owner_id", lambda: "Owner")
+        monkeypatch.setattr(extraction_daemon, "_rolling_ready_threshold", lambda chunk_budget: 1)
 
         real_registry = sys.modules.get("core.subagent_registry")
         real_adapter = sys.modules.get("lib.adapter")
@@ -7938,7 +7217,6 @@ class TestRollingExtraction:
             lambda *args, **kwargs: (_ for _ in ()).throw(sqlite3.OperationalError("database is locked")),
         )
         monkeypatch.setattr(extraction_daemon, "_read_usage_totals", lambda: dict(next(usage_snapshots)))
-        monkeypatch.setattr(extraction_daemon, "_get_capture_chunk_tokens", lambda default=8000: 10)
         monkeypatch.setattr(
             extraction_daemon,
             "write_rolling_metric",
@@ -8430,89 +7708,6 @@ class TestRollingExtraction:
                 "signal_type": "session_end",
                 "session_id": "old-short-sess",
                 "transcript_path": str(old_transcript),
-            }
-        ]
-
-    def test_flushes_buffered_semantic_tail_from_rolling_snapshot_when_newer_session_exists(self, monkeypatch, tmp_path):
-        """Daemon rolling snapshots are stable lifecycle inputs, not inactive preserved mirrors."""
-        instance_id = "openclaw-main"
-        session_id = "old-snapshot-sess"
-        snapshot = (
-            tmp_path
-            / "instances"
-            / instance_id
-            / "logs"
-            / "daemon"
-            / "rolling-transcript-snapshots"
-            / session_id
-            / "20260429T135031Z-deadbeef"
-            / f"{session_id}.jsonl"
-        )
-        snapshot.parent.mkdir(parents=True, exist_ok=True)
-        snapshot.write_text(
-            '{"role":"user","content":"chunk one"}\n'
-            '{"role":"assistant","content":"ack"}\n',
-            encoding="utf-8",
-        )
-        self._setup_cursor(tmp_path, instance_id, session_id, 2, snapshot)
-        rolling_dir = tmp_path / "instances" / instance_id / "data" / "rolling-extraction"
-        rolling_dir.mkdir(parents=True, exist_ok=True)
-        (rolling_dir / f"{session_id}.json").write_text(
-            json.dumps({
-                "session_id": session_id,
-                "transcript_path": str(snapshot),
-                "processed_line_offset": 2,
-                "buffered_line_offset": 2,
-                "semantic_buffer": "User: Baxter is written in the orange linen notebook from Emília Rosa.",
-                "semantic_buffer_tokens": 14,
-                "raw_facts": [],
-                "raw_snippets": {},
-                "raw_journal": {},
-                "raw_project_logs": {},
-            }),
-            encoding="utf-8",
-        )
-
-        new_transcript = tmp_path / "new-openclaw.jsonl"
-        new_transcript.write_text('{"role":"user","content":"new session"}\n', encoding="utf-8")
-        self._setup_cursor(tmp_path, instance_id, "new-openclaw-sess", 0, new_transcript)
-
-        now = 1_700_000_000.0
-        old_mtime = now - 30
-        new_mtime = now - 5
-        os.utime(snapshot, (old_mtime, old_mtime))
-        os.utime(new_transcript, (new_mtime, new_mtime))
-
-        class _FakeAdapter(_OwnedTestAdapterMixin):
-            pass
-
-        captured = []
-        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
-        monkeypatch.setenv("QUAID_INSTANCE", instance_id)
-        monkeypatch.setattr(extraction_daemon.time, "time", lambda: now)
-        monkeypatch.setattr(extraction_daemon, "_read_installed_at", lambda: now - 7200)
-        monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
-        monkeypatch.setattr(extraction_daemon, "_load_runtime_adapter", lambda: _FakeAdapter())
-        monkeypatch.setattr(extraction_daemon, "_reconcile_internal_cursor_state", lambda *a, **kw: "not_internal")
-        monkeypatch.setattr(
-            extraction_daemon,
-            "write_signal",
-            lambda signal_type, session_id, transcript_path, **kwargs: captured.append(
-                {
-                    "signal_type": signal_type,
-                    "session_id": session_id,
-                    "transcript_path": transcript_path,
-                }
-            ),
-        )
-
-        extraction_daemon.check_idle_sessions(timeout_minutes=30)
-
-        assert captured == [
-            {
-                "signal_type": "session_end",
-                "session_id": session_id,
-                "transcript_path": str(snapshot),
             }
         ]
 

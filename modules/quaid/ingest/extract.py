@@ -1099,40 +1099,6 @@ _EXTRACTION_ARTIFACT_FACT_RE = re.compile(
     r"-\s*\*\*(?:Session Key|Session ID|Source)\*\*:",
     re.IGNORECASE | re.DOTALL,
 )
-_NEGATIVE_MEMORY_CLAIM_RE = re.compile(
-    r"\b(?:"
-    r"(?:do|does|did)\s+not\s+(?:know|have|remember)|"
-    r"(?:do|does|did)n['’]t\s+(?:know|have|remember)|"
-    r"(?:still\s+)?nothing\s+(?:in|from|for)|"
-    r"(?:no|nothing)\s+(?:in\s+)?(?:memory|record|records|previous\s+sessions|previous\s+conversation|"
-    r"conversation\s+history|context|information|info|data)|"
-    r"no\s+(?:plant\s+name|name|fact|record|records|information|info)\s+(?:was|were|is|are)\s+(?:previously\s+)?"
-    r"(?:recorded|stored|found|available)|"
-    r"(?:not|never)\s+(?:previously\s+)?(?:recorded|stored|found|available)|"
-    r"nothing\s+(?:came|comes)\s+up|"
-    r"no\s+matches?\s+(?:came|come|found)|"
-    r"(?:want|would\s+you\s+like)\s+(?:me\s+)?to\s+(?:log|save|record)\s+(?:one|it|that)"
-    r")\b",
-    re.IGNORECASE,
-)
-_NEGATIVE_MEMORY_CONTEXT_RE = re.compile(
-    r"\b(?:memory|record|records|previous\s+sessions|previous\s+conversation|conversation\s+history|"
-    r"context|stored|recorded|recall|remember|came\s+up|matches?|log\s+it|save\s+it|save\s+that)\b",
-    re.IGNORECASE,
-)
-_QUESTION_FACT_RE = re.compile(
-    r"^\s*(?:who|what|when|where|why|how|which|whose|is|are|was|were|do|does|did|can|could|"
-    r"should|would|will|may|might|has|have|had)\b.*\?\s*$",
-    re.IGNORECASE,
-)
-_QUESTION_FACT_NO_MARK_RE = re.compile(
-    r"^\s*(?:"
-    r"(?:who|what|when|where|why|how)(?:['’]s|\s+(?:is|are|was|were|do|does|did|can|could|should|would|will|may|might|has|have|had))|"
-    r"(?:which|whose)\s+(?:is|are|was|were|do|does|did|can|could|should|would|will|may|might|has|have|had)|"
-    r"(?:is|are|was|were|do|does|did|can|could|should|would|will|may|might|has|have|had)\s+"
-    r")\b",
-    re.IGNORECASE,
-)
 _STRUCTURAL_ANCHOR_TOKEN_RE = re.compile(
     r"(?<![A-Za-z0-9])(?=[A-Za-z0-9_-]*[A-Za-z])(?:[A-Za-z0-9]+[-_]){1,}[A-Za-z0-9]+(?![A-Za-z0-9])"
 )
@@ -1300,6 +1266,7 @@ def _explicit_structural_anchor_facts(
                 "keywords": " ".join(dict.fromkeys(keyword_tokens)),
                 "privacy": "private",
                 "confidence_reason": "Explicit user-authored structural anchor statement in transcript",
+                "structural_anchor_kind": "explicit_user_structural_anchor",
                 "edges": [],
             })
             seen_fact_texts.add(fact_key)
@@ -1354,6 +1321,293 @@ def _assistant_anchor_keywords(text: str) -> str:
     return " ".join(dict.fromkeys(tokens[:12]))
 
 
+_GENERIC_ASSISTANT_ANCHOR_TOKENS = {
+    "actually",
+    "anything",
+    "awesome",
+    "calendar",
+    "casual",
+    "conversation",
+    "email",
+    "finally",
+    "great",
+    "help",
+    "helpful",
+    "mostly",
+    "phone",
+    "questions",
+    "random",
+    "really",
+    "reminders",
+    "right",
+    "stuff",
+    "thing",
+    "things",
+    "totally",
+    "whatever",
+    "whenever",
+    "work",
+}
+
+_ASSISTANT_META_CHATTER_RE = re.compile(
+    r"^(?:"
+    r"hey\b.*\bnice to meet you\b|"
+    r"i\s+(?:can(?:not|'t)?|can't|don't|do not|am|i'm|love)\b|"
+    r"mostly\b|"
+    r"nah\b|"
+    r"ha[,! ]|"
+    r"what made you finally set this up\b|"
+    r"austin's great\b|"
+    r"does [a-z][a-z'-]* have\b"
+    r")",
+    re.IGNORECASE,
+)
+
+_ASSISTANT_TECHNICAL_META_CHATTER_RE = re.compile(
+    r"^(?:"
+    r"let me\b|"
+    r"ok,?\s+back to\b|"
+    r"already fixed\b|"
+    r"100%\b|"
+    r"yeah,\s+since\b|"
+    r"yep\b|"
+    r"thanks!?\b|"
+    r"enjoy!?\b|"
+    r"on it\b"
+    r")",
+    re.IGNORECASE,
+)
+
+_ASSISTANT_TECHNICAL_SUMMARY_RE = re.compile(
+    r"^(?:"
+    r"(?:Absolutely\.\s+)?I'll set up a proper test suite\b|"
+    r"//\s*N\+1 BUG\b|"
+    r"//\s*---- CORS ----|"
+    r"Environment-driven configuration\b|"
+    r"All mutation endpoints\b|"
+    r"I'll write a comprehensive test suite\b|"
+    r"The N\+1 test is especially important\b|"
+    r"Yeah, that's the obvious next step\b|"
+    r"Good call\.\s+Right now if a route throws\b|"
+    r"The `notFoundHandler` goes first\b|"
+    r"//\s*Build client response\b|"
+    r"//\s*better-sqlite3 does not allow\b|"
+    r"The image URL field I can add\b|"
+    r"If there's no image URL, the card just shows\b|"
+    r"The helpers mirror the app's constants\b|"
+    r"I also cleaned up the route handlers\b|"
+    r"This gives us reusable validators we can compose for any endpoint\b|"
+    r"/\*\*\s*Trim whitespace from string values\.\s*\*/\s*function trimValue\b|"
+    r"We should also add rate limiting to the API\b|"
+    r"//\s*Periodically purge expired entries\b|"
+    r"Got it — I'll apply it to `/api` routes only\b|"
+    r"Done — version bumped to 0\.5\.1\b|"
+    r"Exactly, proportional security\. Here's the auth middleware\b|"
+    r"//\s*NOTE:\s*requireOwnership\(\) is NOT implemented\b|"
+    r"Foreign keys with ON DELETE CASCADE throughout\b|"
+    r"Yeah, the sample data from session 3 is pretty thin\b|"
+    r"Ha, art imitating life\.\s+The seed data should give us good coverage\b|"
+    r"Good call\.\s+Server\.js is getting long with all the inline SQL\b|"
+    r"The setup now mirrors the full cumulative schema\b|"
+    r"Huge session!\s+Nine files changed\b|"
+    r"That's \+\d+\s+lines to database\.js\b|"
+    r"Yeah, for now the profile stores the preferences\b|"
+    r"//\s*Check for existing user\b|"
+    r"Committed!\s+Auth is live\b|"
+    r"Committed!\s+.*\bis\s+live\b.*\b(?:alongside|ready|queued)\b|"
+    r"Since it's just you two for now, it's low risk\b|"
+    r"What's your vision\?.*looks like an app\b|"
+    r"The share endpoint is already set up:\b|"
+    r"[A-Za-z0-9_ ]+\s+\(unique\s+(?:index|constraint)\s+on\s+[A-Za-z0-9_]+\)(?:,|$)|"
+    r"No,\s+you're right\s+—\s+it IS a real problem\.\s+It's called the N\+1 query issue\b|"
+    r"For .* with maybe \d+-\d+\s+\w+,\s+it's fine\.\s+If it grows,\s+we'd add [A-Za-z0-9_]+\b|"
+    r"(?:describe|it)\(['\"]|"
+    r"type\s+[A-Z][A-Za-z0-9_]+\s*\{|"
+    r"I left a TODO comment\b|"
+    r"\d+\s+lines\.\s+Hooks into the response `finish` event\b|"
+    r"Dockerfile uses Alpine\b|"
+    r"Environment-driven configuration\b|"
+    r"\d+\s+lines\.\s+Covers all queries\b|"
+    r"\d+\s+lines\.\s+All auth parameters centralized\b|"
+    r"\d+\s+lines\.\s+Uses the real `jsonwebtoken` library\b|"
+    r"\d+\s+lines\.\s+Five test sections:(?:\s|$)|"
+    r"The N\+1 test is especially important\b|"
+    r"431 lines of documentation\b|"
+    r"Concise README:(?:\s|$)"
+    r")",
+    re.IGNORECASE,
+)
+
+_ASSISTANT_PROJECT_SIGNAL_RE = re.compile(
+    r"\b("
+    r"api|graphql|rest|endpoint|schema|database|sqlite|server|frontend|backend|"
+    r"test|tests|queries|resolver|middleware|project|seed(?:ed)?"
+    r")\b",
+    re.IGNORECASE,
+)
+
+_ASSISTANT_REFERENCE_BULLET_RE = re.compile(
+    r"^(?:"
+    r"(?:GET|POST|PUT|DELETE|PATCH)\s+/|"
+    r"@param\b|@returns?\b|"
+    r"(?:\.env(?:\.example)?|\.gitignore|(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:js|ts|tsx|jsx|html|css|json|md|ya?ml))`?\s*(?:[—:-]|$)|"
+    r"[A-Za-z_][A-Za-z0-9_]*\s*:\s+[A-Za-z]|"
+    r"[A-Z][A-Za-z0-9_ ]+:\s+[A-Za-z]|"
+    r"A\s+`[^`]+`\s+(?:table|endpoint|column)\b|"
+    r"(?:const|function|app\.[A-Za-z_]+|module\.exports)\b"
+    r")",
+    re.IGNORECASE,
+)
+
+_ASSISTANT_CODE_SHAPED_RE = re.compile(
+    r"(?:"
+    r"\b(?:const|let|var)\s+[A-Za-z_][A-Za-z0-9_]*\b|"
+    r"\bapp\.(?:get|post|put|delete|patch)\s*\(|"
+    r"\bdb\.prepare\s*\(|"
+    r"\breturn\s+res\.json\s*\(|"
+    r"\b(?:describe|it|expect)\s*\(|"
+    r"(?:^|[\s`])/[A-Za-z0-9_./-]+(?:\?[A-Za-z0-9_=,&%.-]+)?\b|"
+    r"\?[A-Za-z0-9_=-]+(?:[&,][A-Za-z0-9_=-]+)*|"
+    r"(?:^|[\s`])(?:tests?|src|seeds)/[A-Za-z0-9_./-]+\.(?:js|ts|tsx|jsx|json|md)\b|"
+    r"`%?\$\{[^}]+\}%?`|"
+    r"=>\s*\{|"
+    r"docker-compose\.yml\b|"
+    r"\bDockerfile\b|"
+    r"\bMakefile\b"
+    r")",
+    re.IGNORECASE,
+)
+
+_ASSISTANT_IMPLEMENTATION_BULLET_RE = re.compile(
+    r"^(?:"
+    r"A\s+`[^`]+`\s+(?:table|endpoint|column|route|constant|query)\b|"
+    r"(?:Express middleware|Lazy DB connection|foreign key|schema comments)\b|"
+    r"tests/(?:setup|helpers)\.js`?\b|"
+    r"This test demonstrates the vulnerability would allow\b|"
+    r"Custom application error with HTTP status code\b|"
+    r"Operational errors\b|"
+    r"Programming errors\b|"
+    r"a generic 500 response in production\b|"
+    r"Format a timestamp for error logs\b|"
+    r"Express error-handling middleware\b|"
+    r"Catch-all 404 handler\b|"
+    r"Build an Express middleware that validates req\.body against a rules object\b|"
+    r"[A-Za-z ]+\s+(?:generation|creation)\s*\([^)]*\b(?:format|unique|valid|invalid|constraint|cascade|code|id)[^)]*\)|"
+    r"Retrieval by code\b|"
+    r"Idempotency\s*\([^)]*\)|"
+    r"Edge cases\s*\([^)]*\)|"
+    r"includes the final status code and timing\b|"
+    r"Parses ingredient text into structured rows\b|"
+    r"Auto-categorizes ingredients\b|"
+    r"Uses transactions for atomic inserts\b|"
+    r"[A-Z][A-Za-z0-9_]+\s+with\s+[a-z_]+(?:,\s*[a-z_ ]+){2,}\b|"
+    r"nanoid:\s*\^[0-9][^`]*`?\b|"
+    r"//\s*BUG:\s*No authorization check\b|"
+    r"//\s*Should verify args\.owner_id\b|"
+    r"An auth middleware for protected routes\b|"
+    r"User profiles \(so each person can set their preferences\)(?:\s|$)|"
+    r"Restrict access to users with a specific role\b|"
+    r"Must be used after requireAuth\b|"
+    r"[A-Za-z_][A-Za-z0-9_]*\(\)`?|"
+    r"[a-z][A-Za-z0-9_]*(?: uses| filters)\b|"
+    r"(?:Fetch|Parse|Guess|Generate|Filter|Filtering uses|Respects|Attaches)\b|"
+    r"Attempts to extract\b|"
+    r"The app stores\b|"
+    r"as the name with amount\b|"
+    r"count how many\b|"
+    r"resetDatabase\b|"
+    r"\d+\b"
+    r")",
+    re.IGNORECASE,
+)
+
+_ASSISTANT_SCHEMA_FEATURE_BULLET_RE = re.compile(
+    r"^(?:"
+    r"(?:[A-Z][A-Za-z0-9_]{2,})\b.*\b"
+    r"(?:nested|resolver|computed|reference|placeholder|stub|owner)\b|"
+    r"(?:[A-Z][A-Za-z0-9_ -]{0,40}\s+(?:CRUD|filtering|sharing|structured records?))\b|"
+    r"[A-Z][A-Za-z0-9_]+\s+with\s+[A-Za-z0-9_ -]+(?:,\s*[A-Za-z0-9_ -]+){1,}\b|"
+    r"New\s+`?[^`\n]+`?\s+table\s+with\b|"
+    r"[A-Z][A-Za-z0-9_]*(?:\s+Server)?\s+mounted\s+at\s+`?/[A-Za-z0-9_./:-]+`?\s+via\b|"
+    r"Health check at\b|"
+    r"Nutrition stub\b|"
+    r"[A-Za-z0-9_-]+\s+constant is now exported\b|"
+    r"[A-Za-z0-9_-]+`?\s+column added\b|"
+    r"docker-compose\.yml:|Dockerfile:|Share endpoints:"
+    r")",
+    re.IGNORECASE,
+)
+
+_ASSISTANT_RECALL_CALLBACK_RE = re.compile(
+    r"\b(?:once|remember(?:ed)?|that\s+thing|from\s+months\s+ago|used\s+to)\b",
+    re.IGNORECASE,
+)
+
+_USER_RECALL_REACTION_RE = re.compile(
+    r"\b(?:can't\s+believe|cannot\s+believe|forgot\s+about|remember(?:ed)?|months\s+ago)\b",
+    re.IGNORECASE,
+)
+
+_USER_EXPLICIT_RECALL_REACTION_ANCHOR_RE = re.compile(
+    r"\b(?:can't\s+believe|cannot\s+believe|forgot\s+about|months\s+ago|remember(?:ed)?\s+(?:that|the|this))\b",
+    re.IGNORECASE,
+)
+
+_GENERIC_SPEAKER_PREFIX_RE = re.compile(r"^\s*([^:\n]{1,60}):\s*(.*)$")
+
+
+def _assistant_anchor_informative_tokens(text: str, *, min_len: int = 4) -> List[str]:
+    return [
+        token
+        for token in _structural_overlap_tokens(text, min_len=min_len)
+        if token not in _GENERIC_ASSISTANT_ANCHOR_TOKENS
+    ]
+
+
+def _assistant_anchor_has_project_signal(*parts: str) -> bool:
+    return bool(_ASSISTANT_PROJECT_SIGNAL_RE.search("\n".join(str(part or "") for part in parts)))
+
+
+def _is_low_signal_assistant_anchor_candidate(text: str) -> bool:
+    return bool(_ASSISTANT_META_CHATTER_RE.search(str(text or "").strip()))
+
+
+def _is_low_signal_technical_assistant_candidate(text: str) -> bool:
+    return bool(_ASSISTANT_TECHNICAL_META_CHATTER_RE.search(str(text or "").strip()))
+
+
+def _is_technical_summary_assistant_candidate(text: str) -> bool:
+    return bool(_ASSISTANT_TECHNICAL_SUMMARY_RE.search(str(text or "").strip()))
+
+
+def _is_reference_style_assistant_bullet(text: str) -> bool:
+    return bool(_ASSISTANT_REFERENCE_BULLET_RE.search(str(text or "").strip()))
+
+
+def _is_code_shaped_assistant_candidate(text: str) -> bool:
+    return bool(_ASSISTANT_CODE_SHAPED_RE.search(str(text or "").strip()))
+
+
+def _is_implementation_style_assistant_bullet(text: str) -> bool:
+    return bool(_ASSISTANT_IMPLEMENTATION_BULLET_RE.search(str(text or "").strip()))
+
+
+def _is_schema_or_feature_style_assistant_bullet(text: str) -> bool:
+    return bool(_ASSISTANT_SCHEMA_FEATURE_BULLET_RE.search(str(text or "").strip()))
+
+
+def _assistant_anchor_has_recall_callback_signal(text: str) -> bool:
+    return bool(_ASSISTANT_RECALL_CALLBACK_RE.search(str(text or "").strip()))
+
+
+def _user_turn_has_recall_reaction_signal(text: str) -> bool:
+    return bool(_USER_RECALL_REACTION_RE.search(str(text or "").strip()))
+
+
+def _user_turn_has_explicit_recall_reaction_anchor_signal(text: str) -> bool:
+    return bool(_USER_EXPLICIT_RECALL_REACTION_ANCHOR_RE.search(str(text or "").strip()))
+
+
 def _strip_trailing_question_lines(text: str) -> str:
     lines = [line.rstrip() for line in str(text or "").splitlines()]
     while lines and not lines[-1].strip():
@@ -1375,6 +1629,7 @@ def _build_assistant_anchor_fact(
     candidate: str,
     *,
     confidence_reason: str,
+    structural_anchor_kind: str,
 ) -> Dict[str, Any]:
     return {
         "text": candidate,
@@ -1385,8 +1640,43 @@ def _build_assistant_anchor_fact(
         "keywords": _assistant_anchor_keywords(candidate),
         "privacy": "shared",
         "confidence_reason": confidence_reason,
+        "structural_anchor_kind": structural_anchor_kind,
         "edges": [],
     }
+
+
+def _canonicalize_explicit_anchor_transcript(transcript: str, *, owner_id: str) -> str:
+    owner_aliases: set[str] = {"user", "human", "owner"}
+    owner_text = str(owner_id or "").strip()
+    if owner_text:
+        owner_aliases.add(owner_text.lower())
+        first_token = owner_text.split()[0].strip(".,;:!?()[]{}\"'`").lower()
+        if first_token:
+            owner_aliases.add(first_token)
+    assistant_aliases = {
+        "assistant",
+        "agent",
+        "ai assistant",
+        "ai_assistant",
+        "ai-assistant",
+        "aiアシスタント",
+    }
+
+    normalized_lines: List[str] = []
+    for raw_line in str(transcript or "").splitlines():
+        match = _GENERIC_SPEAKER_PREFIX_RE.match(raw_line)
+        if not match:
+            normalized_lines.append(raw_line)
+            continue
+        speaker = re.sub(r"\s+", " ", match.group(1).strip().lower().replace("_", " ").replace("-", " "))
+        content = match.group(2)
+        if speaker in owner_aliases:
+            normalized_lines.append(f"User: {content}")
+        elif speaker in assistant_aliases:
+            normalized_lines.append(f"Assistant: {content}")
+        else:
+            normalized_lines.append(raw_line)
+    return "\n".join(normalized_lines)
 
 
 def _explicit_user_mirrored_anchor_facts(
@@ -1459,6 +1749,78 @@ def _explicit_user_mirrored_anchor_facts(
                 "keywords": " ".join(dict.fromkeys(keyword_tokens)),
                 "privacy": "shared",
                 "confidence_reason": "Exact user-authored idea anchor mirrored by immediate assistant follow-up",
+                "structural_anchor_kind": "user_mirrored_idea_anchor",
+                "edges": [],
+            })
+            seen_fact_texts.add(fact_key)
+
+    return additions
+
+
+def _explicit_user_recall_reaction_facts(
+    transcript: str,
+    facts: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Preserve exact user reactions to assistant recall when model extraction omits them."""
+    existing_text = "\n".join(
+        str(fact.get("text", "") or "")
+        for fact in facts or []
+        if isinstance(fact, dict)
+    ).lower()
+    seen_fact_texts: set[str] = set()
+    additions: List[Dict[str, Any]] = []
+
+    turns = _iter_prefixed_turns(transcript)
+    for index, (role, turn_text) in enumerate(turns):
+        if role != "user":
+            continue
+        prev_text = turns[index - 1][1] if index > 0 and turns[index - 1][0] == "assistant" else ""
+        next_text = turns[index + 1][1] if index + 1 < len(turns) and turns[index + 1][0] == "assistant" else ""
+        prev_callback = _assistant_anchor_has_recall_callback_signal(prev_text)
+        next_callback = _assistant_anchor_has_recall_callback_signal(next_text)
+        if not prev_callback and not next_callback:
+            continue
+        assistant_context_tokens = set(
+            _structural_overlap_tokens("\n".join((prev_text, next_text)), min_len=4)
+        )
+        if not assistant_context_tokens:
+            continue
+        raw_sentences = _split_fact_sentences(turn_text)
+        candidate_sentences: List[str] = []
+        for sentence_index, sentence in enumerate(raw_sentences):
+            stripped_sentence = str(sentence or "").strip()
+            if stripped_sentence.endswith("...") and sentence_index + 1 < len(raw_sentences):
+                next_sentence = str(raw_sentences[sentence_index + 1] or "").strip()
+                if next_sentence and len(next_sentence.split()) <= 4:
+                    candidate_sentences.append(f"{stripped_sentence} {next_sentence}")
+            candidate_sentences.append(stripped_sentence)
+        for sentence in candidate_sentences:
+            candidate = _normalize_structural_anchor_sentence(sentence)
+            if len(candidate.split()) < 5 or len(candidate) > 220:
+                continue
+            if not _user_turn_has_explicit_recall_reaction_anchor_signal(candidate):
+                continue
+            candidate_tokens = _structural_overlap_tokens(candidate, min_len=4)
+            if not any(token in assistant_context_tokens for token in candidate_tokens):
+                continue
+            fact_key = _fact_text_key(candidate)
+            if not fact_key or fact_key in seen_fact_texts or candidate.lower() in existing_text:
+                continue
+            keyword_tokens = [
+                token.strip(".,;:!?()[]{}\"'`").lower()
+                for token in re.split(r"\s+", candidate)
+                if token.strip(".,;:!?()[]{}\"'`")
+            ]
+            additions.append({
+                "text": candidate,
+                "category": "fact",
+                "speaker": "user",
+                "domains": ["personal"],
+                "extraction_confidence": "high",
+                "keywords": " ".join(dict.fromkeys(keyword_tokens)),
+                "privacy": "shared",
+                "confidence_reason": "Exact user recall reaction omitted by model extraction",
+                "structural_anchor_kind": "user_recall_reaction_anchor",
                 "edges": [],
             })
             seen_fact_texts.add(fact_key)
@@ -1491,6 +1853,7 @@ def _explicit_assistant_anchor_facts(
             str(sentence or "").rstrip().endswith("?")
             for sentence in _split_fact_sentences(prev_text)
         )
+        prev_tokens = set(_structural_overlap_tokens(prev_text, min_len=4))
         adjacent_tokens = set(_structural_overlap_tokens("\n".join((prev_text, next_text)), min_len=4))
         next_tokens = set(_structural_overlap_tokens(next_text, min_len=4))
         context_tokens = set(_structural_overlap_tokens("\n".join((prev_text, next_text, existing_text)), min_len=4))
@@ -1507,6 +1870,14 @@ def _explicit_assistant_anchor_facts(
             for bullet_candidate in bullet_lines:
                 if len(bullet_candidate.split()) < 3 or len(bullet_candidate) > 220:
                     continue
+                if _is_reference_style_assistant_bullet(bullet_candidate):
+                    continue
+                if _is_code_shaped_assistant_candidate(bullet_candidate):
+                    continue
+                if _is_implementation_style_assistant_bullet(bullet_candidate):
+                    continue
+                if _is_schema_or_feature_style_assistant_bullet(bullet_candidate):
+                    continue
                 novel_tokens = _novel_structural_tokens(
                     bullet_candidate,
                     existing_tokens=existing_tokens,
@@ -1515,12 +1886,22 @@ def _explicit_assistant_anchor_facts(
                 )
                 if len(novel_tokens) < 1:
                     continue
+                informative_tokens = _assistant_anchor_informative_tokens(bullet_candidate)
+                has_project_signal = _assistant_anchor_has_project_signal(
+                    bullet_candidate,
+                    prev_text,
+                    next_text,
+                    existing_text,
+                )
+                if len(informative_tokens) < 2 and not has_project_signal and not _has_exact_value_signal(bullet_candidate):
+                    continue
                 fact_key = _fact_text_key(bullet_candidate)
                 if not fact_key or fact_key in seen_fact_texts:
                     continue
                 additions.append(_build_assistant_anchor_fact(
                     bullet_candidate,
                     confidence_reason="Exact assistant-authored named option bullet omitted by model extraction",
+                    structural_anchor_kind="assistant_option_bullet_anchor",
                 ))
                 seen_fact_texts.add(fact_key)
                 seen_tokens.update(novel_tokens)
@@ -1535,8 +1916,11 @@ def _explicit_assistant_anchor_facts(
             candidate = _normalize_structural_anchor_sentence(candidate)
             if len(candidate.split()) < 6 or len(candidate) > 360:
                 continue
+            if _is_code_shaped_assistant_candidate(candidate):
+                continue
             sentence_count = len(_split_fact_sentences(candidate))
             candidate_tokens = _structural_overlap_tokens(candidate, min_len=4)
+            informative_tokens = _assistant_anchor_informative_tokens(candidate)
             novel_tokens = [
                 token for token in candidate_tokens
                 if token not in existing_tokens and token not in seen_tokens
@@ -1544,7 +1928,15 @@ def _explicit_assistant_anchor_facts(
             context_overlap = [token for token in candidate_tokens if token in context_tokens]
             existing_overlap = [token for token in candidate_tokens if token in existing_tokens]
             existing_only_overlap = [token for token in existing_overlap if token not in adjacent_tokens]
+            prev_overlap = [token for token in candidate_tokens if token in prev_tokens]
             next_overlap = [token for token in candidate_tokens if token in next_tokens]
+            has_project_signal = _assistant_anchor_has_project_signal(
+                candidate,
+                prev_text,
+                next_text,
+                existing_text,
+            )
+            has_exact_signal = _has_exact_value_signal(candidate)
             separator_segments = [
                 segment for segment in re.split(r"\s*[,;/]\s*", candidate)
                 if segment.strip()
@@ -1553,20 +1945,68 @@ def _explicit_assistant_anchor_facts(
                 1 for segment in separator_segments
                 if len(_structural_overlap_tokens(segment, min_len=4)) >= 2
             )
+            informative_segments = sum(
+                1 for segment in separator_segments
+                if len(_assistant_anchor_informative_tokens(segment)) >= 2
+            )
             listish_shape = sentence_count >= 2 and rich_segments >= 2
             if len(novel_tokens) < 2:
                 continue
             question_plan_shape = prev_is_question_shaped and len(context_overlap) >= 2 and sentence_count >= 2
-            callback_shape = len(existing_only_overlap) >= 1 and len(next_overlap) >= 1 and sentence_count >= 2
+            callback_shape = len(existing_only_overlap) >= 1 and len(next_overlap) >= 2 and sentence_count >= 2
+            recall_reaction_callback_shape = (
+                len(context_overlap) >= 2
+                and len(next_overlap) >= 1
+                and sentence_count >= 2
+                and _assistant_anchor_has_recall_callback_signal(candidate)
+                and _user_turn_has_recall_reaction_signal(next_text)
+            )
+            post_recall_reaction_callback_shape = (
+                len(context_overlap) >= 2
+                and len(prev_overlap) >= 1
+                and len(existing_overlap) >= 1
+                and sentence_count >= 2
+                and _user_turn_has_recall_reaction_signal(prev_text)
+            )
+            callback_shape = callback_shape or recall_reaction_callback_shape or post_recall_reaction_callback_shape
+            if listish_shape and informative_segments < 2 and not has_project_signal and not has_exact_signal:
+                listish_shape = False
+            if question_plan_shape and len(context_overlap) < 3 and not has_project_signal and not has_exact_signal:
+                question_plan_shape = False
+            if question_plan_shape and has_project_signal and not has_exact_signal:
+                question_plan_shape = False
+            if (
+                callback_shape
+                and len(next_overlap) < 2
+                and not has_project_signal
+                and not has_exact_signal
+                and not recall_reaction_callback_shape
+                and not post_recall_reaction_callback_shape
+            ):
+                callback_shape = False
             if not listish_shape and not question_plan_shape and not callback_shape:
+                continue
+            if len(informative_tokens) < 3 and not has_project_signal and not has_exact_signal:
+                continue
+            if has_project_signal and _is_low_signal_technical_assistant_candidate(candidate) and not has_exact_signal:
+                continue
+            if _is_technical_summary_assistant_candidate(candidate):
+                continue
+            if _is_low_signal_assistant_anchor_candidate(candidate) and not has_project_signal and not has_exact_signal and len(next_overlap) < 2:
                 continue
             fact_key = _fact_text_key(candidate)
             if not fact_key or fact_key in seen_fact_texts:
                 seen_tokens.update(novel_tokens)
                 continue
+            anchor_kind = "assistant_option_list_anchor"
+            if callback_shape:
+                anchor_kind = "assistant_callback_anchor"
+            elif question_plan_shape:
+                anchor_kind = "assistant_plan_anchor"
             additions.append(_build_assistant_anchor_fact(
                 candidate,
                 confidence_reason="Exact assistant-authored named-option or plan anchor omitted by model extraction",
+                structural_anchor_kind=anchor_kind,
             ))
             seen_fact_texts.add(fact_key)
             seen_tokens.update(novel_tokens)
@@ -1574,38 +2014,71 @@ def _explicit_assistant_anchor_facts(
     return additions
 
 
+def materialize_cached_extraction_payload(
+    *,
+    transcript: str,
+    parsed_payload: Dict[str, Any],
+    owner_id: str,
+    label: str = "cached-extract",
+    session_date_hint: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Upgrade parsed extraction output into the same anchor-augmented payload shape as runtime extraction."""
+    result: Dict[str, Any] = {
+        "chunks_processed": 0,
+        "facts_skipped": 0,
+    }
+    all_facts: List[Dict[str, Any]] = []
+    all_snippets: Dict[str, List[str]] = {}
+    all_journal: Dict[str, str] = {}
+    all_project_logs: Dict[str, List[Dict[str, Any]]] = {}
+
+    parsed = dict(parsed_payload or {})
+    parsed, artifact_dropped = _filter_extraction_artifact_facts(parsed)
+    if artifact_dropped:
+        result["facts_skipped"] = int(result.get("facts_skipped", 0) or 0) + artifact_dropped
+
+    _merge_parsed_payloads(
+        [parsed],
+        transcript_text=transcript,
+        all_facts=all_facts,
+        all_snippets=all_snippets,
+        all_journal=all_journal,
+        all_project_logs=all_project_logs,
+        result=result,
+        chunk_label="1",
+        label=label,
+        session_date_hint=session_date_hint,
+    )
+
+    anchor_transcript = _canonicalize_explicit_anchor_transcript(transcript, owner_id=owner_id)
+    explicit_anchor_facts = _explicit_structural_anchor_facts(
+        anchor_transcript,
+        all_facts,
+        owner_id=owner_id,
+    )
+    explicit_anchor_facts.extend(_explicit_user_mirrored_anchor_facts(anchor_transcript, all_facts))
+    explicit_anchor_facts.extend(_explicit_user_recall_reaction_facts(anchor_transcript, all_facts))
+    explicit_anchor_facts.extend(_explicit_assistant_anchor_facts(anchor_transcript, all_facts))
+    if explicit_anchor_facts:
+        all_facts = explicit_anchor_facts + all_facts
+
+    return {
+        "facts": list(all_facts),
+        "raw_facts": list(all_facts),
+        "soul_snippets": dict(all_snippets),
+        "raw_snippets": dict(all_snippets),
+        "journal_entries": dict(all_journal),
+        "raw_journal": dict(all_journal),
+        "project_logs": dict(all_project_logs),
+        "raw_project_logs": dict(all_project_logs),
+        "chunks_processed": int(result.get("chunks_processed", 0) or 0),
+        "facts_skipped": int(result.get("facts_skipped", 0) or 0),
+        "explicit_structural_anchor_facts": len(explicit_anchor_facts),
+    }
+
+
 def _is_extraction_artifact_fact_text(text: str) -> bool:
     return bool(_EXTRACTION_ARTIFACT_FACT_RE.search(str(text or "")))
-
-
-def _is_negative_memory_claim_fact_text(text: str) -> bool:
-    """Return true for agent self-reports that no durable memory exists.
-
-    These statements describe a transient recall miss, not a durable fact about
-    the user or world. Persisting them lets stale "I don't know" answers outrank
-    later authoritative context.
-    """
-    raw = str(text or "").strip()
-    if not raw:
-        return False
-    lowered = raw.lower()
-    if not _NEGATIVE_MEMORY_CLAIM_RE.search(lowered):
-        return False
-    return bool(_NEGATIVE_MEMORY_CONTEXT_RE.search(lowered))
-
-
-def _is_question_fact_text(text: str) -> bool:
-    """Return true for question-shaped strings the extractor mislabeled as facts."""
-    raw = str(text or "").strip()
-    if not raw:
-        return False
-    if _QUESTION_FACT_RE.match(raw):
-        return True
-    if raw.endswith((".", "!", ":")):
-        return False
-    if len(raw.split()) > 24:
-        return False
-    return bool(_QUESTION_FACT_NO_MARK_RE.match(raw))
 
 
 def _filter_extraction_artifact_facts(parsed: Dict[str, Any]) -> Tuple[Dict[str, Any], int]:
@@ -1620,11 +2093,7 @@ def _filter_extraction_artifact_facts(parsed: Dict[str, Any]) -> Tuple[Dict[str,
             filtered.append(fact)
             continue
         text = fact.get("text", "")
-        if isinstance(text, str) and (
-            _is_extraction_artifact_fact_text(text)
-            or _is_negative_memory_claim_fact_text(text)
-            or _is_question_fact_text(text)
-        ):
+        if isinstance(text, str) and _is_extraction_artifact_fact_text(text):
             dropped += 1
             continue
         filtered.append(fact)
@@ -2710,6 +3179,7 @@ def apply_extracted_payloads(
                 participant_entity_ids=participant_entity_ids,
                 source_author_id=source_author_id,
                 created_at=fact.get("created_at"),
+                structural_anchor_kind=fact.get("structural_anchor_kind"),
                 _conn=write_conn,
                 _dedup_rowid_max=dedup_rowid_max,
             )
@@ -2861,6 +3331,7 @@ def apply_extracted_payloads(
                             participant_entity_ids=participant_entity_ids,
                             source_author_id=source_author_id,
                             created_at=fact.get("created_at"),
+                            structural_anchor_kind=fact.get("structural_anchor_kind"),
                             _conn=write_conn,
                             _dedup_rowid_min_exclusive=external_rowid_seen,
                             _dedup_rowid_max=delta_rowid_max,
@@ -3329,13 +3800,15 @@ def extract_from_transcript(
                 session_date_hint=session_date_hint,
             )
 
+    anchor_transcript = _canonicalize_explicit_anchor_transcript(transcript, owner_id=owner_id)
     explicit_anchor_facts = _explicit_structural_anchor_facts(
-        transcript,
+        anchor_transcript,
         all_facts,
         owner_id=owner_id,
     )
-    explicit_anchor_facts.extend(_explicit_user_mirrored_anchor_facts(transcript, all_facts))
-    explicit_anchor_facts.extend(_explicit_assistant_anchor_facts(transcript, all_facts))
+    explicit_anchor_facts.extend(_explicit_user_mirrored_anchor_facts(anchor_transcript, all_facts))
+    explicit_anchor_facts.extend(_explicit_user_recall_reaction_facts(anchor_transcript, all_facts))
+    explicit_anchor_facts.extend(_explicit_assistant_anchor_facts(anchor_transcript, all_facts))
     if explicit_anchor_facts:
         logger.info(
             "[extract] %s: preserved %d explicit structural anchor fact(s)",

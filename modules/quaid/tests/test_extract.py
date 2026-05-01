@@ -934,6 +934,1220 @@ class TestExtractFromTranscript:
         )
 
     @patch("ingest.extract.call_deep_reasoning")
+    def test_assistant_callback_anchor_is_preserved_from_surprise_reaction_without_older_fact(self, mock_llm):
+        from ingest.extract import extract_from_transcript
+
+        mock_llm.return_value = (json.dumps({
+            "chunk_assessment": "usable",
+            "facts": [
+                {
+                    "text": "Biscuit learned to shake hands by May 2026 after 3 months of training",
+                    "category": "fact",
+                    "speaker": "user",
+                    "domains": ["personal"],
+                    "extraction_confidence": "high",
+                    "privacy": "shared",
+                },
+            ],
+            "soul_snippets": {},
+            "journal_entries": {},
+            "project_logs": {},
+        }), 0.1)
+
+        transcript = (
+            "User: biscuit learned a new trick. he can shake hands now.\n\n"
+            "Assistant: And Biscuit learning to shake is a triumph of persistence over brain cells.\n"
+            "  For a golden retriever who once tried to eat a pinecone, this is character growth.\n"
+            "  3 months for one trick is very on-brand for the one-brain-cell dog.\n\n"
+            "User: THE PINECONE. i forgot about that. ok i can't believe you remember the pinecone thing from months ago.\n"
+        )
+
+        result = extract_from_transcript(
+            transcript=transcript,
+            owner_id="Maya Chen",
+            dry_run=True,
+        )
+
+        agent_facts = [
+            fact
+            for fact in result["raw_facts"]
+            if str(fact.get("speaker", "") or "").lower() == "agent"
+        ]
+        assert any(
+            fact.get("structural_anchor_kind") == "assistant_callback_anchor"
+            and "pinecone" in str(fact.get("text", "") or "").lower()
+            and "biscuit" in str(fact.get("text", "") or "").lower()
+            for fact in agent_facts
+        )
+
+    @patch("ingest.extract.call_deep_reasoning")
+    def test_assistant_callback_anchor_survives_real_session20_paragraph_split(self, mock_llm):
+        from ingest.extract import extract_from_transcript
+
+        mock_llm.return_value = (json.dumps({
+            "chunk_assessment": "usable",
+            "facts": [
+                {
+                    "text": "Maya and David's dog Biscuit learned to shake hands after 3 months of training.",
+                    "category": "fact",
+                    "speaker": "user",
+                    "domains": ["personal"],
+                    "extraction_confidence": "high",
+                    "privacy": "shared",
+                },
+                {
+                    "text": "Biscuit is a golden retriever with a short attention span who once tried to eat a pinecone.",
+                    "category": "fact",
+                    "speaker": "agent",
+                    "domains": ["personal"],
+                    "extraction_confidence": "medium",
+                    "privacy": "shared",
+                },
+            ],
+            "soul_snippets": {},
+            "journal_entries": {},
+            "project_logs": {},
+        }), 0.1)
+
+        transcript = (
+            "User: also biscuit learned a new trick. he can shake hands now. it took us like 3 months to teach him because he has the attention span of a goldfish but he did it\n\n"
+            "Assistant: The Thai place on South Congress! That's become a regular spot for you two.\n\n"
+            "And Biscuit learning to shake is a triumph of persistence over brain cells. For a golden retriever who once tried to eat a pinecone, this is character growth.\n\n"
+            "3 months for one trick is very on-brand for the one-brain-cell dog.\n\n"
+            "User: THE PINECONE. i forgot about that. god he's dumb. i love him so much\n\n"
+            "ok i can't believe you remember the pinecone thing from like... months ago.\n"
+        )
+
+        result = extract_from_transcript(
+            transcript=transcript,
+            owner_id="Maya Chen",
+            dry_run=True,
+        )
+
+        agent_facts = [
+            fact
+            for fact in result["raw_facts"]
+            if str(fact.get("speaker", "") or "").lower() == "agent"
+        ]
+        assert any(
+            fact.get("structural_anchor_kind") == "assistant_callback_anchor"
+            and "pinecone" in str(fact.get("text", "") or "").lower()
+            and "biscuit" in str(fact.get("text", "") or "").lower()
+            for fact in agent_facts
+        )
+
+    @patch("ingest.extract.call_deep_reasoning")
+    def test_assistant_callback_anchor_survives_post_surprise_confirmation_turn(self, mock_llm):
+        from ingest.extract import extract_from_transcript
+
+        mock_llm.return_value = (json.dumps({
+            "chunk_assessment": "usable",
+            "facts": [
+                {
+                    "text": "Biscuit learned to shake hands after 3 months of training due to his limited attention span",
+                    "category": "fact",
+                    "speaker": "user",
+                    "domains": ["personal"],
+                    "extraction_confidence": "high",
+                    "privacy": "shared",
+                },
+                {
+                    "text": "Biscuit once tried to eat a pinecone and someone had to stop him",
+                    "category": "fact",
+                    "speaker": "agent",
+                    "domains": ["personal"],
+                    "extraction_confidence": "medium",
+                    "privacy": "shared",
+                },
+            ],
+            "soul_snippets": {},
+            "journal_entries": {},
+            "project_logs": {},
+        }), 0.1)
+
+        transcript = (
+            "User: also biscuit learned a new trick. he can shake hands now. it took us like 3 months to teach him because he has the attention span of a goldfish but he did it\n\n"
+            "Assistant: The Thai place on South Congress! That's become a regular spot for you two.\n\n"
+            "And Biscuit learning to shake is a triumph of persistence over brain cells. For a golden retriever who once tried to eat a pinecone, this is character growth.\n\n"
+            "3 months for one trick is very on-brand for the one-brain-cell dog.\n\n"
+            "User: THE PINECONE. i forgot about that. god he's dumb. i love him so much\n\n"
+            "ok i can't believe you remember the pinecone thing from like... months ago.\n\n"
+            "Assistant: Some things are unforgettable. And Biscuit committing fully to eating a pinecone is definitely one of those things.\n"
+        )
+
+        result = extract_from_transcript(
+            transcript=transcript,
+            owner_id="Maya Chen",
+            dry_run=True,
+        )
+
+        agent_facts = [
+            fact
+            for fact in result["raw_facts"]
+            if str(fact.get("speaker", "") or "").lower() == "agent"
+        ]
+        assert any(
+            fact.get("structural_anchor_kind") == "assistant_callback_anchor"
+            and "some things are unforgettable" in str(fact.get("text", "") or "").lower()
+            and "pinecone" in str(fact.get("text", "") or "").lower()
+            for fact in agent_facts
+        )
+
+    @patch("ingest.extract.call_deep_reasoning")
+    def test_user_recall_reaction_anchor_is_preserved_from_real_session20_reaction(self, mock_llm):
+        from ingest.extract import extract_from_transcript
+
+        mock_llm.return_value = (json.dumps({
+            "chunk_assessment": "usable",
+            "facts": [
+                {
+                    "text": "Biscuit is a golden retriever and has learned to shake hands as a new trick.",
+                    "category": "fact",
+                    "speaker": "user",
+                    "domains": ["personal"],
+                    "extraction_confidence": "high",
+                    "privacy": "shared",
+                },
+                {
+                    "text": "Biscuit previously tried to eat a pinecone, demonstrating his limited intelligence according to Maya.",
+                    "category": "fact",
+                    "speaker": "user",
+                    "domains": ["personal"],
+                    "extraction_confidence": "high",
+                    "privacy": "shared",
+                },
+            ],
+            "soul_snippets": {},
+            "journal_entries": {},
+            "project_logs": {},
+        }), 0.1)
+
+        transcript = (
+            "Maya: also biscuit learned a new trick. he can shake hands now. it took us like 3 months to teach him because he has the attention span of a goldfish but he did it\n\n"
+            "Assistant: And Biscuit learning to shake is a triumph of persistence over brain cells. For a golden retriever who once tried to eat a pinecone, this is character growth.\n\n"
+            "Maya: THE PINECONE. i forgot about that. god he's dumb. i love him so much\n\n"
+            "ok i can't believe you remember the pinecone thing from like... months ago.\n\n"
+            "Assistant: Some things are unforgettable. And Biscuit committing fully to eating a pinecone is definitely one of those things.\n"
+        )
+
+        result = extract_from_transcript(
+            transcript=transcript,
+            owner_id="Maya Chen",
+            dry_run=True,
+        )
+
+        user_facts = [
+            fact
+            for fact in result["raw_facts"]
+            if str(fact.get("speaker", "") or "").lower() == "user"
+        ]
+        assert any(
+            fact.get("structural_anchor_kind") == "user_recall_reaction_anchor"
+            and "remember the pinecone thing" in str(fact.get("text", "") or "").lower()
+            and "months ago" in str(fact.get("text", "") or "").lower()
+            for fact in user_facts
+        )
+
+    @patch("ingest.extract.call_deep_reasoning")
+    def test_assistant_meta_capability_chatter_is_not_preserved_as_anchor(self, mock_llm):
+        from ingest.extract import extract_from_transcript
+
+        mock_llm.return_value = (json.dumps({
+            "chunk_assessment": "nothing_usable",
+            "facts": [],
+            "soul_snippets": {},
+            "journal_entries": {},
+            "project_logs": {},
+        }), 0.1)
+
+        transcript = (
+            "User: are you connected to my calendar or email or anything?\n\n"
+            "Assistant: Mostly \"ask questions get answers\" for now — I can't see your calendar, email, or anything like that. "
+            "Just this conversation.\n\n"
+            "User: ok got it.\n"
+        )
+
+        result = extract_from_transcript(
+            transcript=transcript,
+            owner_id="Maya Chen",
+            dry_run=True,
+        )
+
+        agent_texts = [
+            fact["text"]
+            for fact in result["raw_facts"]
+            if str(fact.get("speaker", "") or "").lower() == "agent"
+        ]
+        assert not any("ask questions get answers" in text.lower() for text in agent_texts)
+        assert not any("calendar, email" in text.lower() for text in agent_texts)
+
+    @patch("ingest.extract.call_deep_reasoning")
+    def test_assistant_generic_greeting_list_is_not_preserved_as_anchor(self, mock_llm):
+        from ingest.extract import extract_from_transcript
+
+        mock_llm.return_value = (json.dumps({
+            "chunk_assessment": "nothing_usable",
+            "facts": [],
+            "soul_snippets": {},
+            "journal_entries": {},
+            "project_logs": {},
+        }), 0.1)
+
+        transcript = (
+            "User: just figuring out what this is.\n\n"
+            "Assistant: Hey Maya! Nice to meet you. I'm here whenever you need help with anything — "
+            "work stuff, random questions, whatever.\n\n"
+            "User: cool.\n"
+        )
+
+        result = extract_from_transcript(
+            transcript=transcript,
+            owner_id="Maya Chen",
+            dry_run=True,
+        )
+
+        agent_texts = [
+            fact["text"]
+            for fact in result["raw_facts"]
+            if str(fact.get("speaker", "") or "").lower() == "agent"
+        ]
+        assert not any("nice to meet you" in text.lower() for text in agent_texts)
+        assert not any("random questions" in text.lower() for text in agent_texts)
+
+    @patch("ingest.extract.call_deep_reasoning")
+    def test_assistant_reference_bullets_are_not_preserved_as_anchors(self, mock_llm):
+        from ingest.extract import extract_from_transcript
+
+        mock_llm.return_value = (json.dumps({
+            "chunk_assessment": "nothing_usable",
+            "facts": [],
+            "soul_snippets": {},
+            "journal_entries": {},
+            "project_logs": {},
+        }), 0.1)
+
+        transcript = (
+            "User: ok show me the endpoints and filter params.\n\n"
+            "Assistant: Sure — the main ones are:\n"
+            "  - GET /api/recipes/:id — now includes structuredIngredients array\n"
+            "  - POST /api/meal-plans — create a meal plan\n"
+            "  - @param {boolean} [filters.safeForMom] - Shortcut for diabetic-friendly + low-sodium\n"
+            "  - recipes: findAll (with dietary/prep time/pagination filters)\n\n"
+            "User: got it.\n"
+        )
+
+        result = extract_from_transcript(
+            transcript=transcript,
+            owner_id="Maya Chen",
+            dry_run=True,
+        )
+
+        agent_texts = [
+            fact["text"]
+            for fact in result["raw_facts"]
+            if str(fact.get("speaker", "") or "").lower() == "agent"
+        ]
+        assert not any(text.startswith("GET /api/recipes/:id") for text in agent_texts)
+        assert not any(text.startswith("@param") for text in agent_texts)
+        assert not any(text.startswith("recipes: findAll") for text in agent_texts)
+
+    @patch("ingest.extract.call_deep_reasoning")
+    def test_assistant_file_map_bullets_are_not_preserved_as_anchors(self, mock_llm):
+        from ingest.extract import extract_from_transcript
+
+        mock_llm.return_value = (json.dumps({
+            "chunk_assessment": "nothing_usable",
+            "facts": [],
+            "soul_snippets": {},
+            "journal_entries": {},
+            "project_logs": {},
+        }), 0.1)
+
+        transcript = (
+            "User: ok show me the recipe app file map.\n\n"
+            "Assistant: The starter layout is:\n"
+            "  - database.js` — SQLite setup, recipes table\n"
+            "  - server.js` — Express REST API (CRUD endpoints)\n"
+            "  - public/index.html` — Simple frontend to list/add recipes\n"
+            "  - config/database.js` — Connection factory\n"
+            "  - .gitignore` — node_modules, db, env\n"
+            "  - .env.example` — Config template\n\n"
+            "User: ok.\n"
+        )
+
+        result = extract_from_transcript(
+            transcript=transcript,
+            owner_id="Maya Chen",
+            dry_run=True,
+        )
+
+        agent_texts = [
+            fact["text"]
+            for fact in result["raw_facts"]
+            if str(fact.get("speaker", "") or "").lower() == "agent"
+        ]
+        assert not any(text.startswith("database.js") for text in agent_texts)
+        assert not any(text.startswith("server.js") for text in agent_texts)
+        assert not any(text.startswith("public/index.html") for text in agent_texts)
+        assert not any(text.startswith("config/database.js") for text in agent_texts)
+        assert not any(text.startswith(".gitignore") for text in agent_texts)
+        assert not any(text.startswith(".env.example") for text in agent_texts)
+
+    @patch("ingest.extract.call_deep_reasoning")
+    def test_assistant_implementation_bullets_are_not_preserved_as_anchors(self, mock_llm):
+        from ingest.extract import extract_from_transcript
+
+        mock_llm.return_value = (json.dumps({
+            "chunk_assessment": "nothing_usable",
+            "facts": [],
+            "soul_snippets": {},
+            "journal_entries": {},
+            "project_logs": {},
+        }), 0.1)
+
+        transcript = (
+            "User: ok show me the implementation notes.\n\n"
+            "Assistant: The main pieces are:\n"
+            "  - A `meal_plans` table for weekly containers (week start date, name)\n"
+            "  - Express middleware that logs request completion\n"
+            "  - setDb() for test injection — same pattern as the error handler\n"
+            "  - Parse a comma-separated ingredient string into structured objects\n"
+            "  - 2 cups flour\" or \"1/2 tsp salt\". Falls back to the full text\n"
+            "  - Generate a grocery list for a meal plan using GROUP BY aggregation\n\n"
+            "User: ok.\n"
+        )
+
+        result = extract_from_transcript(
+            transcript=transcript,
+            owner_id="Maya Chen",
+            dry_run=True,
+        )
+
+        agent_texts = [
+            fact["text"]
+            for fact in result["raw_facts"]
+            if str(fact.get("speaker", "") or "").lower() == "agent"
+        ]
+        assert not any(text.startswith("A `meal_plans` table") for text in agent_texts)
+        assert not any(text.startswith("Express middleware") for text in agent_texts)
+        assert not any(text.startswith("setDb() for test injection") for text in agent_texts)
+        assert not any(text.startswith("Parse a comma-separated ingredient string") for text in agent_texts)
+        assert not any(text.startswith("2 cups flour") for text in agent_texts)
+        assert not any(text.startswith("Generate a grocery list") for text in agent_texts)
+
+    @patch("ingest.extract.call_deep_reasoning")
+    def test_assistant_recipe_test_harness_bullets_are_not_preserved_as_anchors(self, mock_llm):
+        from ingest.extract import extract_from_transcript
+
+        mock_llm.return_value = (json.dumps({
+            "chunk_assessment": "nothing_usable",
+            "facts": [],
+            "soul_snippets": {},
+            "journal_entries": {},
+            "project_logs": {},
+        }), 0.1)
+
+        transcript = (
+            "User: ok show me the recipe app test and error-handler notes.\n\n"
+            "Assistant: Here are the implementation notes:\n"
+            "  - tests/setup.js` — test database setup with in-memory SQLite\n"
+            "  - tests/helpers.js` — data factories and assertion utilities\n"
+            "  - Custom application error with HTTP status code\n"
+            "  - Operational errors (user input, not-found, auth) are safe to expose\n"
+            "  - Express error-handling middleware (4 arguments)\n"
+            "  - Catch-all 404 handler — mount before errorHandler\n\n"
+            "User: ok.\n"
+        )
+
+        result = extract_from_transcript(
+            transcript=transcript,
+            owner_id="Maya Chen",
+            dry_run=True,
+        )
+
+        agent_texts = [
+            fact["text"]
+            for fact in result["raw_facts"]
+            if str(fact.get("speaker", "") or "").lower() == "agent"
+        ]
+        assert not any(text.startswith("tests/setup.js") for text in agent_texts)
+        assert not any(text.startswith("tests/helpers.js") for text in agent_texts)
+        assert not any(text.startswith("Custom application error") for text in agent_texts)
+        assert not any(text.startswith("Operational errors") for text in agent_texts)
+        assert not any(text.startswith("Express error-handling middleware") for text in agent_texts)
+        assert not any(text.startswith("Catch-all 404 handler") for text in agent_texts)
+
+    @patch("ingest.extract.call_deep_reasoning")
+    def test_assistant_technical_meta_callback_is_not_preserved_as_anchor(self, mock_llm):
+        from ingest.extract import extract_from_transcript
+
+        mock_llm.return_value = (json.dumps({
+            "chunk_assessment": "nothing_usable",
+            "facts": [],
+            "soul_snippets": {},
+            "journal_entries": {},
+            "project_logs": {},
+        }), 0.1)
+
+        transcript = (
+            "User: can you redo the recipe app frontend?\n\n"
+            "Assistant: Let me redesign the whole frontend. Give me a sec.\n\n"
+            "User: ok.\n"
+        )
+
+        result = extract_from_transcript(
+            transcript=transcript,
+            owner_id="Maya Chen",
+            dry_run=True,
+        )
+
+        agent_texts = [
+            fact["text"]
+            for fact in result["raw_facts"]
+            if str(fact.get("speaker", "") or "").lower() == "agent"
+        ]
+        assert not any(text.startswith("Let me redesign the whole frontend") for text in agent_texts)
+
+    @patch("ingest.extract.call_deep_reasoning")
+    def test_assistant_code_snippet_list_is_not_preserved_as_anchor(self, mock_llm):
+        from ingest.extract import extract_from_transcript
+
+        mock_llm.return_value = (json.dumps({
+            "chunk_assessment": "nothing_usable",
+            "facts": [],
+            "soul_snippets": {},
+            "journal_entries": {},
+            "project_logs": {},
+        }), 0.1)
+
+        transcript = (
+            "User: ok show me the recipe test examples.\n\n"
+            "Assistant: Here's the shape:\n"
+            "describe('Recipe CRUD', () => { it('should create a recipe', () => { expect(true).toBe(true); }); });\n\n"
+            "User: ok.\n"
+        )
+
+        result = extract_from_transcript(
+            transcript=transcript,
+            owner_id="Maya Chen",
+            dry_run=True,
+        )
+
+        agent_texts = [
+            fact["text"]
+            for fact in result["raw_facts"]
+            if str(fact.get("speaker", "") or "").lower() == "agent"
+        ]
+        assert not any(text.startswith("describe('Recipe CRUD'") for text in agent_texts)
+
+    @patch("ingest.extract.call_deep_reasoning")
+    def test_assistant_schema_feature_bullets_are_not_preserved_as_anchors(self, mock_llm):
+        from ingest.extract import extract_from_transcript
+
+        mock_llm.return_value = (json.dumps({
+            "chunk_assessment": "nothing_usable",
+            "facts": [],
+            "soul_snippets": {},
+            "journal_entries": {},
+            "project_logs": {},
+        }), 0.1)
+
+        transcript = (
+            "User: ok list the graphql and feature bullets.\n\n"
+            "Assistant: Sure:\n"
+            "  - Recipe with nested ingredientList, dietaryTags, prepTime, owner\n"
+            "  - GroceryItem as a computed type (aggregated from ingredients)\n"
+            "  - AuthPayload stub for when auth comes later\n"
+            "  - SAFE_FOR_MOM constant is now exported (used by resolvers)\n"
+            "  - Recipe CRUD — create, read, update, delete recipes\n"
+            "  - Health check at `/health` for Docker healthcheck\n\n"
+            "User: ok.\n"
+        )
+
+        result = extract_from_transcript(
+            transcript=transcript,
+            owner_id="Maya Chen",
+            dry_run=True,
+        )
+
+        agent_texts = [
+            fact["text"]
+            for fact in result["raw_facts"]
+            if str(fact.get("speaker", "") or "").lower() == "agent"
+        ]
+        assert not any(text.startswith("Recipe with nested ingredientList") for text in agent_texts)
+        assert not any(text.startswith("GroceryItem as a computed type") for text in agent_texts)
+        assert not any(text.startswith("AuthPayload stub") for text in agent_texts)
+        assert not any("SAFE_FOR_MOM constant is now exported" in text for text in agent_texts)
+        assert not any(text.startswith("Recipe CRUD") for text in agent_texts)
+        assert not any(text.startswith("Health check at") for text in agent_texts)
+
+    @patch("ingest.extract.call_deep_reasoning")
+    def test_assistant_technical_summary_paragraph_is_not_preserved_as_anchor(self, mock_llm):
+        from ingest.extract import extract_from_transcript
+
+        mock_llm.return_value = (json.dumps({
+            "chunk_assessment": "nothing_usable",
+            "facts": [],
+            "soul_snippets": {},
+            "journal_entries": {},
+            "project_logs": {},
+        }), 0.1)
+
+        transcript = (
+            "User: ok what comes next for graphql?\n\n"
+            "Assistant: I'll write a comprehensive test suite for the GraphQL resolvers. "
+            "Tests for every query and mutation, dietary filtering, share code idempotency, "
+            "field resolvers, and an explicit test that documents the N+1 behavior.\n\n"
+            "User: ok.\n"
+        )
+
+        result = extract_from_transcript(
+            transcript=transcript,
+            owner_id="Maya Chen",
+            dry_run=True,
+        )
+
+        agent_texts = [
+            fact["text"]
+            for fact in result["raw_facts"]
+            if str(fact.get("speaker", "") or "").lower() == "agent"
+        ]
+        assert not any(text.startswith("I'll write a comprehensive test suite") for text in agent_texts)
+
+    @patch("ingest.extract.call_deep_reasoning")
+    def test_assistant_recipe_bootstrap_callback_is_not_preserved_as_anchor(self, mock_llm):
+        from ingest.extract import extract_from_transcript
+
+        mock_llm.return_value = (json.dumps({
+            "chunk_assessment": "nothing_usable",
+            "facts": [],
+            "soul_snippets": {},
+            "journal_entries": {},
+            "project_logs": {},
+        }), 0.1)
+
+        transcript = (
+            "User: ok how is the recipe app wired up?\n\n"
+            "Assistant: Maya's recipe app uses SQLite with WAL mode for better concurrency. "
+            "The .env file is gitignored and includes placeholders for future auth and nutrition API.\n\n"
+            "User: ok.\n"
+        )
+
+        result = extract_from_transcript(
+            transcript=transcript,
+            owner_id="Maya Chen",
+            dry_run=True,
+        )
+
+        agent_texts = [
+            fact["text"]
+            for fact in result["raw_facts"]
+            if str(fact.get("speaker", "") or "").lower() == "agent"
+        ]
+        assert not any(text.startswith("Maya's recipe app uses SQLite with WAL mode") for text in agent_texts)
+
+    @patch("ingest.extract.call_deep_reasoning")
+    def test_assistant_dietary_endpoint_callback_is_not_preserved_as_anchor(self, mock_llm):
+        from ingest.extract import extract_from_transcript
+
+        mock_llm.return_value = (json.dumps({
+            "chunk_assessment": "nothing_usable",
+            "facts": [],
+            "soul_snippets": {},
+            "journal_entries": {},
+            "project_logs": {},
+        }), 0.1)
+
+        transcript = (
+            "User: ok what changed for dietary filtering?\n\n"
+            "Assistant: Filtering is built into the main `/api/recipes` endpoint — "
+            "`?safeForMom=true` for the preset, or `?diet=vegetarian,gluten-free` for custom filters. "
+            "Also added a `/api/dietary-labels` endpoint so the frontend can fetch the label list dynamically.\n\n"
+            "User: ok.\n"
+        )
+
+        result = extract_from_transcript(
+            transcript=transcript,
+            owner_id="Maya Chen",
+            dry_run=True,
+        )
+
+        agent_texts = [
+            fact["text"]
+            for fact in result["raw_facts"]
+            if str(fact.get("speaker", "") or "").lower() == "agent"
+        ]
+        assert not any(text.startswith("Filtering is built into the main `/api/recipes` endpoint") for text in agent_texts)
+
+    @patch("ingest.extract.call_deep_reasoning")
+    def test_assistant_validation_middleware_plan_is_not_preserved_as_anchor(self, mock_llm):
+        from ingest.extract import extract_from_transcript
+
+        mock_llm.return_value = (json.dumps({
+            "chunk_assessment": "nothing_usable",
+            "facts": [],
+            "soul_snippets": {},
+            "journal_entries": {},
+            "project_logs": {},
+        }), 0.1)
+
+        transcript = (
+            "User: ok what validator infrastructure did you add?\n\n"
+            "Assistant: Build an Express middleware that validates req.body against a rules object.\n\n"
+            "Assistant: /** Trim whitespace from string values. */ function trimValue(value) { "
+            "return typeof value === 'string' ? value.trim() : value; }\n\n"
+            "User: ok.\n"
+        )
+
+        result = extract_from_transcript(
+            transcript=transcript,
+            owner_id="Maya Chen",
+            dry_run=True,
+        )
+
+        agent_texts = [
+            fact["text"]
+            for fact in result["raw_facts"]
+            if str(fact.get("speaker", "") or "").lower() == "agent"
+        ]
+        assert not any(text.startswith("Build an Express middleware") for text in agent_texts)
+        assert not any(text.startswith("/** Trim whitespace from string values.") for text in agent_texts)
+
+    @patch("ingest.extract.call_deep_reasoning")
+    def test_assistant_share_code_test_plan_is_not_preserved_as_anchor(self, mock_llm):
+        from ingest.extract import extract_from_transcript
+
+        mock_llm.return_value = (json.dumps({
+            "chunk_assessment": "nothing_usable",
+            "facts": [],
+            "soul_snippets": {},
+            "journal_entries": {},
+            "project_logs": {},
+        }), 0.1)
+
+        transcript = (
+            "User: ok what sharing tests should we add?\n\n"
+            "Assistant: The missing cases are:\n"
+            "  - Share code generation (creates a code, correct format, unique per recipe)\n"
+            "  - Idempotency (sharing the same recipe twice returns the same code)\n"
+            "  - Retrieval by code (correct recipe, handles invalid codes)\n"
+            "  - Edge cases (deleted recipe cascade, unique constraint enforcement)\n\n"
+            "User: ok.\n"
+        )
+
+        result = extract_from_transcript(
+            transcript=transcript,
+            owner_id="Maya Chen",
+            dry_run=True,
+        )
+
+        agent_texts = [
+            fact["text"]
+            for fact in result["raw_facts"]
+            if str(fact.get("speaker", "") or "").lower() == "agent"
+        ]
+        assert not any(text.startswith("Share code generation") for text in agent_texts)
+        assert not any(text.startswith("Idempotency (sharing the same recipe twice returns the same code)") for text in agent_texts)
+        assert not any(text.startswith("Retrieval by code") for text in agent_texts)
+        assert not any(text.startswith("Edge cases (deleted recipe cascade") for text in agent_texts)
+
+    @patch("ingest.extract.call_deep_reasoning")
+    def test_assistant_rate_limit_plumbing_is_not_preserved_as_anchor(self, mock_llm):
+        from ingest.extract import extract_from_transcript
+
+        mock_llm.return_value = (json.dumps({
+            "chunk_assessment": "nothing_usable",
+            "facts": [],
+            "soul_snippets": {},
+            "journal_entries": {},
+            "project_logs": {},
+        }), 0.1)
+
+        transcript = (
+            "User: ok how are you wiring rate limiting?\n\n"
+            "Assistant: We should also add rate limiting to the API. Right now there's nothing stopping someone from hammering the endpoints.\n\n"
+            "Assistant: // Periodically purge expired entries to prevent unbounded memory growth. // The interval is unref'd so it doesn't keep the process alive.\n\n"
+            "Assistant: Got it — I'll apply it to `/api` routes only. The health check and GraphQL endpoint stay unthrottled.\n\n"
+            "User: ok.\n"
+        )
+
+        result = extract_from_transcript(
+            transcript=transcript,
+            owner_id="Maya Chen",
+            dry_run=True,
+        )
+
+        agent_texts = [
+            fact["text"]
+            for fact in result["raw_facts"]
+            if str(fact.get("speaker", "") or "").lower() == "agent"
+        ]
+        assert not any(text.startswith("We should also add rate limiting to the API") for text in agent_texts)
+        assert not any(text.startswith("// Periodically purge expired entries") for text in agent_texts)
+        assert not any(text.startswith("Got it — I'll apply it to `/api` routes only") for text in agent_texts)
+
+    @patch("ingest.extract.call_deep_reasoning")
+    def test_assistant_auth_wiring_and_todos_are_not_preserved_as_anchor(self, mock_llm):
+        from ingest.extract import extract_from_transcript
+
+        mock_llm.return_value = (json.dumps({
+            "chunk_assessment": "nothing_usable",
+            "facts": [],
+            "soul_snippets": {},
+            "journal_entries": {},
+            "project_logs": {},
+        }), 0.1)
+
+        transcript = (
+            "User: ok what auth plumbing did you add?\n\n"
+            "Assistant: An auth middleware for protected routes.\n"
+            "Assistant: User profiles (so each person can set their preferences).\n"
+            "Assistant: // BUG: No authorization check — any user can update any recipe.\n"
+            "Assistant: // NOTE: requireOwnership() is NOT implemented.\n"
+            "Assistant: I'll add a `dietary_preferences` column to the users table — stored as a JSON array so people can have multiple restrictions.\n"
+            "Assistant: That's +15 lines to database.js. The `dietary_preferences` column defaults to '[]'.\n"
+            "Assistant: Committed! Auth is live — you and David can register, login, and save dietary preferences.\n\n"
+            "User: ok.\n"
+        )
+
+        result = extract_from_transcript(
+            transcript=transcript,
+            owner_id="Maya Chen",
+            dry_run=True,
+        )
+
+        agent_texts = [
+            fact["text"]
+            for fact in result["raw_facts"]
+            if str(fact.get("speaker", "") or "").lower() == "agent"
+        ]
+        assert not any(text.startswith("An auth middleware for protected routes") for text in agent_texts)
+        assert not any(text.startswith("User profiles (so each person can set their preferences)") for text in agent_texts)
+        assert not any(text.startswith("// BUG: No authorization check") for text in agent_texts)
+        assert not any(text.startswith("// NOTE: requireOwnership() is NOT implemented") for text in agent_texts)
+        assert not any(text.startswith("I'll add a `dietary_preferences` column to the users table") for text in agent_texts)
+        assert not any(text.startswith("That's +15 lines to database.js") for text in agent_texts)
+        assert not any(text.startswith("Committed! Auth is live") for text in agent_texts)
+
+    @patch("ingest.extract.call_deep_reasoning")
+    def test_assistant_meal_plan_route_snippets_and_refactor_notes_are_not_preserved(self, mock_llm):
+        from ingest.extract import extract_from_transcript
+
+        mock_llm.return_value = (json.dumps({
+            "chunk_assessment": "nothing_usable",
+            "facts": [],
+            "soul_snippets": {},
+            "journal_entries": {},
+            "project_logs": {},
+        }), 0.1)
+
+        transcript = (
+            "User: ok what implementation cleanup did you do for meal planning?\n\n"
+            "Assistant: // Search recipes app.get('/api/recipes/search', (req, res) => { return res.json([]); });\n\n"
+            "Assistant: // Remove item from meal plan app.delete('/api/meal-plans/:planId/items/:itemId', (req, res) => { return res.json({ message: 'Item removed' }); });\n\n"
+            "Assistant: Good call. Server.js is getting long with all the inline SQL. I'll create `src/db/queries.js` with three namespaces.\n\n"
+            "Assistant: The setup now mirrors the full cumulative schema. Each test file gets a fresh in-memory database with all tables created.\n\n"
+            "Assistant: Huge session! Nine files changed, almost 1500 lines added.\n\n"
+            "User: ok.\n"
+        )
+
+        result = extract_from_transcript(
+            transcript=transcript,
+            owner_id="Maya Chen",
+            dry_run=True,
+        )
+
+        agent_texts = [
+            fact["text"]
+            for fact in result["raw_facts"]
+            if str(fact.get("speaker", "") or "").lower() == "agent"
+        ]
+        assert not any(text.startswith("// Search recipes") for text in agent_texts)
+        assert not any(text.startswith("// Remove item from meal plan") for text in agent_texts)
+        assert not any(text.startswith("Good call. Server.js is getting long with all the inline SQL") for text in agent_texts)
+        assert not any(text.startswith("The setup now mirrors the full cumulative schema") for text in agent_texts)
+        assert not any(text.startswith("Huge session! Nine files changed") for text in agent_texts)
+
+    @patch("ingest.extract.call_deep_reasoning")
+    def test_assistant_grocery_query_implementation_notes_are_not_preserved(self, mock_llm):
+        from ingest.extract import extract_from_transcript
+
+        mock_llm.return_value = (json.dumps({
+            "chunk_assessment": "nothing_usable",
+            "facts": [],
+            "soul_snippets": {},
+            "journal_entries": {},
+            "project_logs": {},
+        }), 0.1)
+
+        transcript = (
+            "User: ok how does the grocery aggregation work under the hood?\n\n"
+            "Assistant: Foreign keys with ON DELETE CASCADE throughout. The `recipe_ingredients` table is what makes the grocery list work.\n\n"
+            "Assistant: The grocery list query will GROUP BY name and unit, then SUM the amounts.\n\n"
+            "Assistant: The grocery list query is the key — it joins meal_plan_items to recipe_ingredients to recipes.\n\n"
+            "Assistant: Yeah, the sample data from session 3 is pretty thin.\n\n"
+            "Assistant: Ha, art imitating life. The seed data should give us good coverage for testing the grocery list aggregation too.\n\n"
+            "User: ok.\n"
+        )
+
+        result = extract_from_transcript(
+            transcript=transcript,
+            owner_id="Maya Chen",
+            dry_run=True,
+        )
+
+        agent_texts = [
+            fact["text"]
+            for fact in result["raw_facts"]
+            if str(fact.get("speaker", "") or "").lower() == "agent"
+        ]
+        assert not any(text.startswith("Foreign keys with ON DELETE CASCADE throughout") for text in agent_texts)
+        assert not any(text.startswith("The grocery list query will GROUP BY name and unit") for text in agent_texts)
+        assert not any(text.startswith("The grocery list query is the key") for text in agent_texts)
+        assert not any(text.startswith("Yeah, the sample data from session 3 is pretty thin") for text in agent_texts)
+        assert not any(text.startswith("Ha, art imitating life.") for text in agent_texts)
+
+    @patch("ingest.extract.call_deep_reasoning")
+    def test_assistant_code_shaped_recipe_app_paragraphs_are_not_preserved(self, mock_llm):
+        from ingest.extract import extract_from_transcript
+
+        mock_llm.return_value = (json.dumps({
+            "chunk_assessment": "nothing_usable",
+            "facts": [],
+            "soul_snippets": {},
+            "journal_entries": {},
+            "project_logs": {},
+        }), 0.1)
+
+        transcript = (
+            "User: ok what changed in the recipe internals?\n\n"
+            "Assistant: // Search recipes app.get('/api/recipes/search', (req, res) => { "
+            "const { q } = req.query; return res.json([]); });\n\n"
+            "Assistant: const merged = { title: data.title ?? existing.title, dietary_tags: "
+            "JSON.stringify(data.dietary_tags ?? existing.dietary_tags) };\n\n"
+            "Assistant: search(query) { const db = getDb(); const pattern = `%${query}%`; "
+            "return db.prepare('SELECT * FROM recipes').all(pattern); }\n\n"
+            "Assistant: const items = db.prepare('SELECT * FROM meal_plan_items WHERE plan_id = ?').all(plan.id);\n\n"
+            "User: ok.\n"
+        )
+
+        result = extract_from_transcript(
+            transcript=transcript,
+            owner_id="Maya Chen",
+            dry_run=True,
+        )
+
+        agent_texts = [
+            fact["text"]
+            for fact in result["raw_facts"]
+            if str(fact.get("speaker", "") or "").lower() == "agent"
+        ]
+        assert not any(text.startswith("// Search recipes app.get") for text in agent_texts)
+        assert not any(text.startswith("const merged = { title: data.title") for text in agent_texts)
+        assert not any(text.startswith("search(query) { const db = getDb()") for text in agent_texts)
+        assert not any(text.startswith("const items = db.prepare(") for text in agent_texts)
+
+    @patch("ingest.extract.call_deep_reasoning")
+    def test_assistant_recipe_infra_and_test_summaries_are_not_preserved(self, mock_llm):
+        from ingest.extract import extract_from_transcript
+
+        mock_llm.return_value = (json.dumps({
+            "chunk_assessment": "nothing_usable",
+            "facts": [],
+            "soul_snippets": {},
+            "journal_entries": {},
+            "project_logs": {},
+        }), 0.1)
+
+        transcript = (
+            "User: ok summarize the implementation details.\n\n"
+            "Assistant: 67 lines. Hooks into the response `finish` event so the log includes the actual status code and timing.\n\n"
+            "Assistant: Two files. First, `seeds/sample-recipes.json` with 20 recipes:\n\n"
+            "Assistant: 1. `tests/dietary.test.js` — SAFE_FOR_MOM preset and multi-tag intersection. "
+            "2. `tests/mealplan.test.js` — plan CRUD, grocery aggregation, cascade deletes.\n\n"
+            "Assistant: Dockerfile uses Alpine for a small image. docker-compose mounts SQLite data and .env read-only.\n\n"
+            "Assistant: Environment-driven configuration. CORS origins are comma-separated and rate limiting is 100 requests per 15 minutes.\n\n"
+            "Assistant: 638 lines. Covers all queries, all mutations, field resolvers, and the documented N+1 bug.\n\n"
+            "Assistant: The N+1 test is especially important — it's not a failure test, it's a documentation test.\n\n"
+            "Assistant: Concise README: features, quick start, API table, dev commands, Docker, tech stack.\n\n"
+            "User: ok.\n"
+        )
+
+        result = extract_from_transcript(
+            transcript=transcript,
+            owner_id="Maya Chen",
+            dry_run=True,
+        )
+
+        agent_texts = [
+            fact["text"]
+            for fact in result["raw_facts"]
+            if str(fact.get("speaker", "") or "").lower() == "agent"
+        ]
+        assert not any(text.startswith("67 lines. Hooks into the response `finish` event") for text in agent_texts)
+        assert not any(text.startswith("Two files. First, `seeds/sample-recipes.json`") for text in agent_texts)
+        assert not any(text.startswith("1. `tests/dietary.test.js`") for text in agent_texts)
+        assert not any(text.startswith("Dockerfile uses Alpine") for text in agent_texts)
+        assert not any(text.startswith("Environment-driven configuration") for text in agent_texts)
+        assert not any(text.startswith("638 lines. Covers all queries") for text in agent_texts)
+        assert not any(text.startswith("The N+1 test is especially important") for text in agent_texts)
+        assert not any(text.startswith("Concise README:") for text in agent_texts)
+
+    @patch("ingest.extract.call_deep_reasoning")
+    def test_assistant_graphql_schema_and_mount_bullets_are_not_preserved(self, mock_llm):
+        from ingest.extract import extract_from_transcript
+
+        mock_llm.return_value = (json.dumps({
+            "chunk_assessment": "nothing_usable",
+            "facts": [],
+            "soul_snippets": {},
+            "journal_entries": {},
+            "project_logs": {},
+        }), 0.1)
+
+        transcript = (
+            "User: ok what schema and infra bullets were added?\n\n"
+            "Assistant: Sure:\n"
+            "  - Ingredient with name, amount, unit, category\n"
+            "  - MealPlanItem with day, meal type, and the full recipe\n"
+            "  - New `recipe_shares` table with unique code constraint and CASCADE delete\n"
+            "  - Apollo Server mounted at `/graphql` via expressMiddleware\n\n"
+            "User: ok.\n"
+        )
+
+        result = extract_from_transcript(
+            transcript=transcript,
+            owner_id="Maya Chen",
+            dry_run=True,
+        )
+
+        agent_texts = [
+            fact["text"]
+            for fact in result["raw_facts"]
+            if str(fact.get("speaker", "") or "").lower() == "agent"
+        ]
+        assert not any(text.startswith("Ingredient with name, amount, unit, category") for text in agent_texts)
+        assert not any(text.startswith("MealPlanItem with day, meal type") for text in agent_texts)
+        assert not any(text.startswith("New `recipe_shares` table") for text in agent_texts)
+        assert not any(text.startswith("Apollo Server mounted at `/graphql`") for text in agent_texts)
+
+    @patch("ingest.extract.call_deep_reasoning")
+    def test_assistant_graphql_exact_value_technical_summaries_are_not_preserved(self, mock_llm):
+        from ingest.extract import extract_from_transcript
+
+        mock_llm.return_value = (json.dumps({
+            "chunk_assessment": "nothing_usable",
+            "facts": [],
+            "soul_snippets": {},
+            "journal_entries": {},
+            "project_logs": {},
+        }), 0.1)
+
+        transcript = (
+            "User: ok let's add graphql but keep rest.\n\n"
+            "Assistant: GraphQL at `/graphql`, REST at `/api/*`. Best of both worlds.\n\n"
+            "User: ok what about the follow-up implementation notes?\n\n"
+            "Assistant: I left a TODO comment in the resolver. It's not a problem at our current scale "
+            "(we have maybe 20 recipes) but it'll bite us if the list grows.\n\n"
+            "Assistant: Environment-driven configuration. CORS origins are comma-separated, rate limiting "
+            "is 100 requests per 15 minutes per IP, pagination caps at 100 items.\n\n"
+            "Assistant: The N+1 test is especially important — it's not a failure test, it's a documentation test.\n\n"
+            "Assistant: Concise README: features, quick start, API table, dev commands, Docker, tech stack.\n\n"
+            "User: ok.\n"
+        )
+
+        result = extract_from_transcript(
+            transcript=transcript,
+            owner_id="Maya Chen",
+            dry_run=True,
+        )
+
+        agent_texts = [
+            fact["text"]
+            for fact in result["raw_facts"]
+            if str(fact.get("speaker", "") or "").lower() == "agent"
+        ]
+        assert not any(text.startswith("I left a TODO comment in the resolver") for text in agent_texts)
+        assert not any(text.startswith("Environment-driven configuration.") for text in agent_texts)
+        assert not any(text.startswith("The N+1 test is especially important") for text in agent_texts)
+        assert not any(text.startswith("Concise README:") for text in agent_texts)
+
+    @patch("ingest.extract.call_deep_reasoning")
+    def test_assistant_auth_config_and_test_count_summaries_are_not_preserved(self, mock_llm):
+        from ingest.extract import extract_from_transcript
+
+        mock_llm.return_value = (json.dumps({
+            "chunk_assessment": "nothing_usable",
+            "facts": [],
+            "soul_snippets": {},
+            "journal_entries": {},
+            "project_logs": {},
+        }), 0.1)
+
+        transcript = (
+            "User: ok what auth internals did you add?\n\n"
+            "Assistant: 33 lines. All auth parameters centralized — JWT secret, algorithm, expiry, PBKDF2 iterations, key length, salt length.\n\n"
+            "Assistant: 70 lines. Uses the real `jsonwebtoken` library — not hand-rolled HMAC. "
+            "`requireAuth` verifies the JWT, attaches the decoded payload to `req.user`, and handles expired and invalid tokens separately.\n\n"
+            "Assistant: 291 lines. Five test sections: User Registration, Password Hashing, Recipe Ownership, "
+            "Test Token Generation, and User Queries.\n\n"
+            "User: ok.\n"
+        )
+
+        result = extract_from_transcript(
+            transcript=transcript,
+            owner_id="Maya Chen",
+            dry_run=True,
+        )
+
+        agent_texts = [
+            fact["text"]
+            for fact in result["raw_facts"]
+            if str(fact.get("speaker", "") or "").lower() == "agent"
+        ]
+        assert not any(text.startswith("33 lines. All auth parameters centralized") for text in agent_texts)
+        assert not any(text.startswith("70 lines. Uses the real `jsonwebtoken` library") for text in agent_texts)
+        assert not any(text.startswith("291 lines. Five test sections:") for text in agent_texts)
+
+    @patch("ingest.extract.call_deep_reasoning")
+    def test_assistant_graphql_share_and_n_plus_one_meta_summaries_are_not_preserved(self, mock_llm):
+        from ingest.extract import extract_from_transcript
+
+        mock_llm.return_value = (json.dumps({
+            "chunk_assessment": "nothing_usable",
+            "facts": [],
+            "soul_snippets": {},
+            "journal_entries": {},
+            "project_logs": {},
+        }), 0.1)
+
+        transcript = (
+            "User: ok what did you wire for sharing and graphql internals?\n\n"
+            "Assistant: The share endpoint is already set up: `shareRecipe` generates the code, and `/shared/:code` serves the recipe.\n\n"
+            "Assistant: One share per recipe (unique index on recipe_id), and the code is unique too. CASCADE delete means if the recipe is deleted, the share link goes away.\n\n"
+            "Assistant: No, you're right — it IS a real problem. It's called the N+1 query issue. For 50 recipes, that's 51 database queries.\n\n"
+            "Assistant: For a personal app with maybe 20-30 recipes, it's fine. If it grows, we'd add DataLoader to batch those queries.\n\n"
+            "Assistant: nanoid: ^3.3.7` (for share code generation, though we're using short custom wrappers).\n\n"
+            "Assistant: Committed! GraphQL is live alongside REST, sharing is ready for Linda, and auth is queued for next session.\n\n"
+            "User: ok.\n"
+        )
+
+        result = extract_from_transcript(
+            transcript=transcript,
+            owner_id="Maya Chen",
+            dry_run=True,
+        )
+
+        agent_texts = [
+            fact["text"]
+            for fact in result["raw_facts"]
+            if str(fact.get("speaker", "") or "").lower() == "agent"
+        ]
+        assert not any(text.startswith("The share endpoint is already set up:") for text in agent_texts)
+        assert not any(text.startswith("One share per recipe (unique index on recipe_id)") for text in agent_texts)
+        assert not any(text.startswith("No, you're right — it IS a real problem. It's called the N+1 query issue") for text in agent_texts)
+        assert not any(text.startswith("For a personal app with maybe 20-30 recipes") for text in agent_texts)
+        assert not any(text.startswith("nanoid: ^3.3.7") for text in agent_texts)
+        assert not any(text.startswith("Committed! GraphQL is live alongside REST") for text in agent_texts)
+
+    @patch("ingest.extract.call_deep_reasoning")
+    def test_assistant_route_cleanup_summary_is_not_preserved_as_anchor(self, mock_llm):
+        from ingest.extract import extract_from_transcript
+
+        mock_llm.return_value = (json.dumps({
+            "chunk_assessment": "nothing_usable",
+            "facts": [],
+            "soul_snippets": {},
+            "journal_entries": {},
+            "project_logs": {},
+        }), 0.1)
+
+        transcript = (
+            "User: ok what else changed in the recipe server?\n\n"
+            "Assistant: I also cleaned up the route handlers to use consistent error responses. "
+            "The search endpoint now uses the parameterized query fix we discussed, and all routes "
+            "return proper JSON error objects.\n\n"
+            "User: ok.\n"
+        )
+
+        result = extract_from_transcript(
+            transcript=transcript,
+            owner_id="Maya Chen",
+            dry_run=True,
+        )
+
+        agent_texts = [
+            fact["text"]
+            for fact in result["raw_facts"]
+            if str(fact.get("speaker", "") or "").lower() == "agent"
+        ]
+        assert not any(text.startswith("I also cleaned up the route handlers") for text in agent_texts)
+
+    @patch("ingest.extract.call_deep_reasoning")
+    def test_assistant_recipe_app_upgrade_summary_is_not_preserved_as_anchor(self, mock_llm):
+        from ingest.extract import extract_from_transcript
+
+        mock_llm.return_value = (json.dumps({
+            "chunk_assessment": "nothing_usable",
+            "facts": [],
+            "soul_snippets": {},
+            "journal_entries": {},
+            "project_logs": {},
+        }), 0.1)
+
+        transcript = (
+            "User: ok how did the recipe app cleanup land?\n\n"
+            "Assistant: The app went from \"spreadsheet\" to \"actual recipe app\" with proper tests and error handling. Nice upgrade.\n\n"
+            "User: nice.\n"
+        )
+
+        result = extract_from_transcript(
+            transcript=transcript,
+            owner_id="Maya Chen",
+            dry_run=True,
+        )
+
+        agent_texts = [
+            fact["text"]
+            for fact in result["raw_facts"]
+            if str(fact.get("speaker", "") or "").lower() == "agent"
+        ]
+        assert not any(text.startswith("The app went from \"spreadsheet\"") for text in agent_texts)
+
+    @patch("ingest.extract.call_deep_reasoning")
+    def test_assistant_project_plan_anchor_is_not_preserved(self, mock_llm):
+        from ingest.extract import extract_from_transcript
+
+        mock_llm.return_value = (json.dumps({
+            "chunk_assessment": "nothing_usable",
+            "facts": [],
+            "soul_snippets": {},
+            "journal_entries": {},
+            "project_logs": {},
+        }), 0.1)
+
+        transcript = (
+            "User: can you add proper tests for the recipe app routes?\n\n"
+            "Assistant: Absolutely. I'll set up a proper test suite with Jest. "
+            "The SQL injection tests will be the headline, then parameterized query coverage.\n\n"
+            "User: sounds good.\n"
+        )
+
+        result = extract_from_transcript(
+            transcript=transcript,
+            owner_id="Maya Chen",
+            dry_run=True,
+        )
+
+        agent_texts = [
+            fact["text"]
+            for fact in result["raw_facts"]
+            if str(fact.get("speaker", "") or "").lower() == "agent"
+        ]
+        assert not any(text.startswith("Absolutely. I'll set up a proper test suite with Jest") for text in agent_texts)
+
+    @patch("ingest.extract.call_deep_reasoning")
     def test_assistant_named_option_anchor_is_preserved_without_titlecase_spans(self, mock_llm):
         from ingest.extract import extract_from_transcript
 
@@ -1053,62 +2267,6 @@ class TestExtractFromTranscript:
         assert result["artifact_facts_dropped"] == 2
         assert result["facts_skipped"] == 2
         assert texts == ["Solomon Steadman uses marker marigold-anvil-5816 for pumpkin seeds"]
-
-    @patch("ingest.extract.call_deep_reasoning")
-    def test_extraction_drops_agent_no_memory_claim_facts(self, mock_llm):
-        from ingest.extract import extract_from_transcript
-
-        mock_llm.return_value = (json.dumps({
-            "chunk_assessment": "usable",
-            "facts": [
-                {
-                    "text": "Solomon Steadman asked about an office plant name but no plant name was previously recorded in memory",
-                    "category": "fact",
-                    "speaker": "agent",
-                    "domains": ["personal"],
-                    "extraction_confidence": "high",
-                },
-                {
-                    "text": "Still nothing in memory for an office plant name. If you have one, happy to log it",
-                    "category": "fact",
-                    "speaker": "agent",
-                    "domains": ["personal"],
-                    "extraction_confidence": "high",
-                },
-                {
-                    "text": "What's the office plant named",
-                    "category": "fact",
-                    "speaker": "user",
-                    "domains": ["personal"],
-                    "extraction_confidence": "high",
-                },
-                {
-                    "text": "The office plant is named Bartholomew and is a fiddle-leaf fig",
-                    "category": "fact",
-                    "speaker": "user",
-                    "domains": ["personal"],
-                    "extraction_confidence": "high",
-                },
-            ],
-            "soul_snippets": {},
-            "journal_entries": {},
-            "project_logs": {},
-        }), 0.1)
-
-        result = extract_from_transcript(
-            transcript=(
-                "User: What is the office plant named?\n\n"
-                "Assistant: I don't have a plant name in memory.\n\n"
-                "User: The office plant is named Bartholomew and is a fiddle-leaf fig."
-            ),
-            owner_id="Solomon Steadman",
-            dry_run=True,
-        )
-
-        texts = [fact["text"] for fact in result["raw_facts"]]
-        assert result["artifact_facts_dropped"] == 3
-        assert result["facts_skipped"] == 3
-        assert texts == ["The office plant is named Bartholomew and is a fiddle-leaf fig"]
 
     def test_carry_selection_is_bounded_and_persistable(self):
         from ingest.extract import _select_carry_facts, _persistable_carry_facts
@@ -2574,8 +3732,8 @@ class TestExtractFromTranscript:
 
         assert "short exact list of named options or steps" in prompt
         assert "minimum viable stretching routine" in prompt
-        assert "dog tried to eat a pinecone" in prompt
-        assert "GraphQL alongside REST" in prompt
+        assert "pet got into a household item" in prompt
+        assert "new interface while preserving an older compatibility path" in prompt
         assert "subject_entity_name" in prompt
 
     @patch("lib.batch_utils.chunk_text_by_tokens")

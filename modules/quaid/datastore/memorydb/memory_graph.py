@@ -651,9 +651,6 @@ class MemoryGraph:
                 return
 
             # Backfill: insert any nodes with embeddings not yet in vec_nodes
-            if not nodes_table_exists:
-                return
-
             missing = conn.execute("""
                 SELECT n.id, n.embedding FROM nodes n
                 WHERE n.embedding IS NOT NULL
@@ -697,21 +694,6 @@ class MemoryGraph:
                 f"node_id TEXT PRIMARY KEY, "
                 f"embedding float[{dim}] distance_metric=cosine)"
             )
-
-    def _delete_vec_node_if_present(self, conn, node_id: str, *, context: str = "") -> bool:
-        """Delete a vec row when the index exists; ignore pre-bootstrap absence."""
-        try:
-            conn.execute("DELETE FROM vec_nodes WHERE node_id = ?", (node_id,))
-            return True
-        except sqlite3.OperationalError as exc:
-            if "no such table: vec_nodes" in str(exc).lower():
-                logger.debug(
-                    "vec_nodes delete skipped before vec bootstrap context=%s node_id=%s",
-                    context or "unknown",
-                    node_id,
-                )
-                return False
-            raise
 
     # ==========================================================================
     # Embeddings
@@ -1158,7 +1140,7 @@ class MemoryGraph:
                     recovered = False
                     # Recover any vec upsert failure via delete-then-insert in the same txn.
                     try:
-                        self._delete_vec_node_if_present(active_conn, node.id, context="update_node_retry")
+                        active_conn.execute("DELETE FROM vec_nodes WHERE node_id = ?", (node.id,))
                         active_conn.execute("INSERT INTO vec_nodes(node_id, embedding) VALUES (?, ?)", (node.id, packed))
                         recovered = True
                         logger.warning(
@@ -1249,7 +1231,7 @@ class MemoryGraph:
             result = conn.execute("DELETE FROM nodes WHERE id = ?", (node_id,))
             if result.rowcount > 0 and _lib_has_vec():
                 try:
-                    self._delete_vec_node_if_present(conn, node_id, context="delete_node")
+                    conn.execute("DELETE FROM vec_nodes WHERE node_id = ?", (node_id,))
                 except Exception as exc:
                     logger.warning(
                         "delete_node removed node %s but failed vec_nodes cleanup: %s",
@@ -3510,6 +3492,7 @@ def _graph_attached_fact_rows(
             "domains": _domains_from_attrs(fact_attrs),
             "project": fact_attrs.get("project"),
             "source_type": fact_attrs.get("source_type"),
+            "structural_anchor_kind": fact_attrs.get("structural_anchor_kind"),
             "extraction_confidence": getattr(fact, "extraction_confidence", None),
             "privacy": getattr(fact, "privacy", None),
             "owner_id": getattr(fact, "owner_id", None),
@@ -3638,6 +3621,13 @@ def graph_aware_recall(
         direct_all = candidate_pool
     else:
         _base_started_at = time.monotonic()
+        lexical_anchor_planner_mode = _seed_recall_lexical_anchor_planner_mode(
+            query,
+            fast_mode=fast_mode,
+            date_from=date_from,
+            date_to=date_to,
+            graph_seed=True,
+        )
         direct_all, base_meta = recall(
             query,
             # Graph-aware recall only needs seed facts. It performs its own graph
@@ -3659,6 +3649,7 @@ def graph_aware_recall(
             max_turns=1,
             timeout_ms=timeout_ms,
             lexical_anchor_timeout_ms=_resolve_lexical_anchor_timeout_ms(timeout_ms, fast_mode=fast_mode),
+            lexical_anchor_planner_mode=lexical_anchor_planner_mode,
             return_meta=True,
         )
         results["meta"]["phases_ms"]["base_recall_ms"] = round((time.monotonic() - _base_started_at) * 1000)
@@ -4489,7 +4480,7 @@ _INTENT_PATTERNS = {
             r"\bpackage\b", r"\blibrary\b", r"\bdependenc", r"\broute\b", r"\bserver\b",
             r"\bfrontend\b", r"\bbackend\b", r"\btesting\b", r"\btest suite\b",
             r"\bbug\b", r"\bfeature\b", r"\brefactor\b", r"\bcommit\b", r"\bbranch\b",
-            r"\bproject\b", r"\bapp\b", r"\brecipe app\b", r"\bportfolio\b",
+            r"\bproject\b", r"\bapp\b", r"\bportfolio\b",
         ],
         "type_boosts": {"Fact": 1.0, "Decision": 1.2},
     },
@@ -5136,20 +5127,11 @@ def _docs_bundle_to_rows(bundle: Optional[Dict[str, Any]], limit: int) -> List[D
                     if isinstance(item, dict) and str(item.get("project") or "").strip()
                 ]
                 if names:
-                    rendered_names = []
-                    for item in candidates:
-                        if not isinstance(item, dict):
-                            continue
-                        project = str(item.get("project") or "").strip()
-                        if not project:
-                            continue
-                        path = str(item.get("path") or "").strip()
-                        rendered_names.append(f"{project} ({path})" if path else project)
                     out.append(
                         {
                             "text": (
                                 "[docs] scoped miss: likely matches may exist in unlinked project(s): "
-                                f"{', '.join(rendered_names or names)}. For read-only lookups or one-fact questions, "
+                                f"{', '.join(names)}. For read-only lookups or one-fact questions, "
                                 "answer from scoped recall or direct file read without linking. "
                                 "Link only when the user explicitly asks to link the project or requests "
                                 "durable work such as edits, API/tool use, or starting development."
@@ -5216,6 +5198,13 @@ def _vector_store_recall(
         vector_kwargs.get("relative_temporal_freshness")
         or (isinstance(planner_meta, dict) and planner_meta.get("freshness_preferred") is True)
     )
+    lexical_anchor_planner_mode = _seed_recall_lexical_anchor_planner_mode(
+        query,
+        fast_mode=fast_mode,
+        date_from=vector_kwargs.get("date_from"),
+        date_to=vector_kwargs.get("date_to"),
+        graph_seed=False,
+    )
     results, meta = recall(
         query=query,
         limit=limit,
@@ -5232,7 +5221,7 @@ def _vector_store_recall(
         include_co_session=False if fast_mode else True,
         include_mmr=False if fast_mode else True,
         include_lexical_anchor_shaping=True,
-        lexical_anchor_planner_mode="deterministic" if fast_mode else "llm",
+        lexical_anchor_planner_mode=lexical_anchor_planner_mode,
         use_lightweight_config=fast_mode,
         track_access=not fast_mode,
         return_meta=True,
@@ -5249,6 +5238,34 @@ def _callable_accepts_kwarg(fn: Any, name: str) -> bool:
     except (TypeError, ValueError):
         return True
     return name in params or any(param.kind == inspect.Parameter.VAR_KEYWORD for param in params.values())
+
+
+def _seed_recall_lexical_anchor_planner_mode(
+    query: str,
+    *,
+    fast_mode: bool,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    graph_seed: bool = False,
+) -> str:
+    if fast_mode:
+        return "deterministic"
+
+    explicit_anchor_terms = _extract_explicit_query_anchor_terms(query, limit=4)
+    if not explicit_anchor_terms:
+        return "llm"
+
+    if date_from or date_to:
+        return "deterministic"
+
+    if graph_seed:
+        lowered = str(query or "").lower()
+        if len(explicit_anchor_terms) >= 2:
+            return "deterministic"
+        if _NAMED_ENTITY_ACTIVITY_QUERY_RE.search(lowered):
+            return "deterministic"
+
+    return "llm"
 
 
 def _filter_supported_kwargs(fn: Any, kwargs: Dict[str, Any]) -> Dict[str, Any]:
@@ -5954,33 +5971,30 @@ def _run_recall_store_plan(
                     store_run["graph_discovery_count"] = max(0, int(graph_discovery_count))
         store_runs.append(store_run)
 
+    # Keep a wider merged candidate window before post-merge rank refinement.
+    # In mixed vector+graph recall, exact entity/relationship rows can occupy
+    # the first limit-sized window even when a graph-attached fact is already
+    # present just below it. If we truncate to `limit` here, later deliberate
+    # prioritizers never see that fact row.
+    merge_limit = max(limit, limit * 2 if fast_mode else limit)
+    if not fast_mode and len(normalized_stores) > 1:
+        merge_limit = max(merge_limit, limit * 2)
+    merged = _merge_recall_batches(merged_batches, limit=merge_limit)
     relation_chain_groups = _relation_chain_groups_for_query(query)
     relation_chain_query = (
         len(relation_chain_groups) >= 2
         and _has_relation_chain_structure(query)
     )
-    merge_limit = max(limit, limit * 2 if fast_mode else limit)
-    if not fast_mode and len(normalized_stores) > 1:
-        # Keep a wider merged candidate window before post-merge rank
-        # refinement. In mixed vector+graph deliberate recall, exact
-        # entity/relationship rows can occupy the first limit-sized window even
-        # when a graph-attached fact is already present just below it.
-        merge_limit = max(merge_limit, limit * 2)
-    if relation_chain_query:
-        # Relation-chain reranking needs enough pre-merge rows to keep the
-        # terminal entity's attached facts alive before similarity trimming.
-        merge_limit = max(merge_limit, limit * 4, limit + 8)
-    merged = _merge_recall_batches(merged_batches, limit=merge_limit)
     if relation_chain_query and merged:
         _boost_relation_chain_row_scores(merged, relation_chain_groups)
         merged.sort(
             key=lambda row: _relation_chain_sort_key(row, relation_chain_groups),
             reverse=True,
         )
-    merged = _prioritize_named_entity_activity_anchor_rows(query, merged)
     if fast_mode:
         merged = _prioritize_fast_anchor_direct_rows(query, merged)
-        merged = _prioritize_named_entity_activity_anchor_rows(query, merged)
+    merged = _prioritize_date_relation_callback_rows(query, merged)
+    merged = _prioritize_named_entity_activity_anchor_rows(query, merged)
     final_rows = merged[:limit]
     final_rows, preserved_docs_rows = _preserve_requested_docs_rows(
         final_rows,
@@ -6100,18 +6114,9 @@ def _print_docs_bundle(bundle: Dict[str, Any]) -> None:
                 if isinstance(item, dict) and str(item.get("project") or "").strip()
             ]
         if names:
-            rendered_names = []
-            for item in candidates:
-                if not isinstance(item, dict):
-                    continue
-                project = str(item.get("project") or "").strip()
-                if not project:
-                    continue
-                path = str(item.get("path") or "").strip()
-                rendered_names.append(f"{project} ({path})" if path else project)
             print("\n=== Documentation Scope Hint ===")
             print("No docs hits were found inside linked projects.")
-            print(f"Likely unlinked project candidates: {', '.join(rendered_names or names)}")
+            print(f"Likely unlinked project candidates: {', '.join(names)}")
             print(
                 "For read-only lookups or one-fact questions, answer from scoped recall or direct file read "
                 "without linking. Link only when the user explicitly asks to link the project or requests "
@@ -6318,7 +6323,7 @@ def _recall_once(
         owner_id: Filter by owner (includes shared/public if set)
         min_similarity: Minimum similarity threshold (None = read from config retrieval.minSimilarity)
         use_routing: Whether to apply HyDE query expansion via LLM before search
-        use_aliases: Whether to resolve entity aliases (e.g., Mom → Linda)
+        use_aliases: Whether to resolve entity aliases (e.g., Mom -> a known person node)
         use_intent: Whether to classify query intent for fusion weight tuning
         use_multi_pass: Whether to attempt a second-pass broader search on low-quality results
         use_reranker: Override config reranker_enabled (None = use config)
@@ -6453,72 +6458,54 @@ def _recall_once(
     target_date = _query_target_date(clean_query)
     prefer_fresh = bool(relative_temporal_freshness) and not target_date
 
+    # Fast Ollama health check — skip semantic search entirely if Ollama is down
+    # Saves ~30s of embedding timeout waits when Ollama is unreachable
+    _phase_t0 = _time.monotonic()
+    _ollama_up = _ollama_healthy()
+    _phase_ms["ollama_health_ms"] = round((_time.monotonic() - _phase_t0) * 1000)
+
     # Search with buffer for composite scoring + MMR selection
     search_limit = limit * 3
-    search_query = clean_query
-    results = []
-    _ollama_up = False
-    _phase_ms["ollama_health_ms"] = 0
-
-    # Structural exact markers are better served by a lexical exact pass than by
-    # embeddings. This is a primary retrieval path, not a degraded fallback.
-    if _is_single_structural_exact_query(clean_query):
-        _phase_t0 = _time.monotonic()
+    if _ollama_up:
+        # Route query through LLM (HyDE) — only when embeddings will be used
+        cfg_use_hyde = True
         try:
-            exact_fts = graph.search_fts(clean_query, limit=search_limit, owner_id=owner_id)
+            cfg_use_hyde = bool(get_config().retrieval.use_hyde)
         except Exception:
-            exact_fts = []
-        for node, fts_rank in exact_fts:
-            quality = max(0.94, 1.0 - fts_rank * 0.01)
-            results.append((node, quality))
-        _phase_ms["exact_structural_fts_ms"] = round((_time.monotonic() - _phase_t0) * 1000)
-
-    if not results:
-        # Fast Ollama health check — skip semantic search entirely if Ollama is down
-        # Saves ~30s of embedding timeout waits when Ollama is unreachable
-        _phase_t0 = _time.monotonic()
-        _ollama_up = _ollama_healthy()
-        _phase_ms["ollama_health_ms"] = round((_time.monotonic() - _phase_t0) * 1000)
-
-        if _ollama_up:
-            # Route query through LLM (HyDE) — only when embeddings will be used
             cfg_use_hyde = True
-            try:
-                cfg_use_hyde = bool(get_config().retrieval.use_hyde)
-            except Exception:
-                cfg_use_hyde = True
-            _use_hyde = bool(use_routing) and cfg_use_hyde
-            if not _HAS_LLM_CLIENTS:
-                _use_hyde = False
-            _phase_t0 = _time.monotonic()
-            search_query = route_query(clean_query) if _use_hyde else clean_query
-            _phase_ms["hyde_ms"] = round((_time.monotonic() - _phase_t0) * 1000)
-            _phase_t0 = _time.monotonic()
-            results = graph.search_hybrid(
-                search_query,
-                limit=search_limit,
-                privacy=privacy,
-                owner_id=owner_id,
-                current_session_id=current_session_id,
-                compaction_time=compaction_time,
-                intent=intent,
-                timeout_seconds=search_timeout_s,
+        _use_hyde = bool(use_routing) and cfg_use_hyde
+        if not _HAS_LLM_CLIENTS:
+            _use_hyde = False
+        _phase_t0 = _time.monotonic()
+        search_query = route_query(clean_query) if _use_hyde else clean_query
+        _phase_ms["hyde_ms"] = round((_time.monotonic() - _phase_t0) * 1000)
+        _phase_t0 = _time.monotonic()
+        results = graph.search_hybrid(
+            search_query,
+            limit=search_limit,
+            privacy=privacy,
+            owner_id=owner_id,
+            current_session_id=current_session_id,
+            compaction_time=compaction_time,
+            intent=intent,
+            timeout_seconds=search_timeout_s,
+        )
+        _phase_ms["search_hybrid_ms"] = round((_time.monotonic() - _phase_t0) * 1000)
+    else:
+        search_query = clean_query  # No HyDE when embeddings unavailable
+        import logging
+        msg = "Ollama unreachable — recall falling back to FTS-only"
+        logging.getLogger(__name__).warning(msg)
+        if _is_fail_hard_mode():
+            raise RuntimeError(
+                "Embedding provider unavailable during recall. "
+                "Fail-hard mode is ON (retrieval.fail_hard=true), "
+                "so degraded FTS-only fallback is blocked. "
+                "Set retrieval.fail_hard=false to allow fallback, "
+                "but this is not recommended because it masks infrastructure faults."
             )
-            _phase_ms["search_hybrid_ms"] = round((_time.monotonic() - _phase_t0) * 1000)
-        else:
-            import logging
-            msg = "Ollama unreachable — recall falling back to FTS-only"
-            logging.getLogger(__name__).warning(msg)
-            if _is_fail_hard_mode():
-                raise RuntimeError(
-                    "Embedding provider unavailable during recall. "
-                    "Fail-hard mode is ON (retrieval.fail_hard=true), "
-                    "so degraded FTS-only fallback is blocked. "
-                    "Set retrieval.fail_hard=false to allow fallback, "
-                    "but this is not recommended because it masks infrastructure faults."
-                )
-            results = []  # Skip semantic search, go straight to FTS fallback
-            _fts_fallback_used = True
+        results = []  # Skip semantic search, go straight to FTS fallback
+        _fts_fallback_used = True
 
     # FTS fallback: if hybrid search returned nothing (Ollama may be down),
     # fall back to keyword-only search so recall isn't completely broken
@@ -6612,7 +6599,7 @@ def _recall_once(
                     "agent", "api", "app", "around", "city", "detail", "details",
                     "did", "does", "family", "find", "goal", "handle", "kind",
                     "label", "labels", "level", "live", "presentation", "project",
-                    "recipe", "school", "secret", "suggested", "target", "thing",
+                    "school", "secret", "suggested", "target", "thing",
                     "type", "what", "which", "who", "whose", "why", "where", "when",
                 }
                 for candidate in _extract_distinctive_query_terms(clean_query, limit=24):
@@ -6948,8 +6935,7 @@ def _recall_once(
 
     # Fast hook lexical rescue:
     # deterministic pre-injection can get "good enough" vector rows for a broad
-    # anchor (for example Baxter) while missing exact lexical details in a fresh
-    # pending row (for example pewter bell). Before returning generic context,
+    # anchor while missing exact lexical details in a fresh pending row. Before returning generic context,
     # cheaply merge FTS hits that cover more query terms. This is DB-local and
     # stays inside existing project/domain/date filters below.
     planner_mode = str(lexical_anchor_planner_mode or "llm").strip().lower()
@@ -7288,6 +7274,7 @@ def _recall_once(
             "_multi_pass": node.id in _multi_pass_ids,
             "domains": _domains_from_attrs(_attrs),
             "source_type": _attrs.get("source_type"),
+            "structural_anchor_kind": _attrs.get("structural_anchor_kind"),
             "project": _attrs.get("project"),
             "source_channel": _attrs.get("source_channel"),
             "source_conversation_id": _attrs.get("source_conversation_id"),
@@ -8133,7 +8120,29 @@ def _prioritize_fast_anchor_direct_rows(query: str, rows: List[Dict[str, Any]]) 
         _extract_distinctive_query_terms(query, limit=8),
         explicit_anchor_terms,
     )
-
+    broad_outcome_terms = {
+        "bug",
+        "ended",
+        "ending",
+        "ever",
+        "happen",
+        "happened",
+        "intentional",
+        "issue",
+        "keep",
+        "keeping",
+        "kept",
+        "latest",
+        "left",
+        "recent",
+        "secret",
+        "still",
+    }
+    event_focus_terms = [
+        term
+        for term in query_terms
+        if term not in explicit_anchor_terms and term not in broad_outcome_terms
+    ]
     def _row_text(row: Dict[str, Any]) -> str:
         return str((row or {}).get("text") or "")
 
@@ -8167,6 +8176,10 @@ def _prioritize_fast_anchor_direct_rows(query: str, rows: List[Dict[str, Any]]) 
         str(row.get("id")): _query_term_overlap({"text": _row_text(row)}, query_terms)
         for row in direct_anchor_rows
     }
+    event_overlap_by_id = {
+        str(row.get("id")): _query_term_overlap({"text": _row_text(row)}, event_focus_terms)
+        for row in direct_anchor_rows
+    }
     max_overlap = max(overlap_by_id.values(), default=0)
     if max_overlap >= 2:
         priority_rows = [
@@ -8181,6 +8194,7 @@ def _prioritize_fast_anchor_direct_rows(query: str, rows: List[Dict[str, Any]]) 
 
     priority_rows.sort(
         key=lambda row: (
+            event_overlap_by_id.get(str(row.get("id")), 0),
             overlap_by_id.get(str(row.get("id")), 0),
             _row_created_sort_key(row),
             float(row.get("similarity", 0.0) or 0.0),
@@ -8188,9 +8202,24 @@ def _prioritize_fast_anchor_direct_rows(query: str, rows: List[Dict[str, Any]]) 
         reverse=True,
     )
     priority_keys = {_recall_row_identity(row) for row in priority_rows}
-    return priority_rows + [
+    residual_anchor_rows = [
+        row for row in direct_anchor_rows
+        if _recall_row_identity(row) not in priority_keys
+    ]
+    residual_anchor_rows.sort(
+        key=lambda row: (
+            event_overlap_by_id.get(str(row.get("id")), 0),
+            overlap_by_id.get(str(row.get("id")), 0),
+            _row_created_sort_key(row),
+            float(row.get("similarity", 0.0) or 0.0),
+        ),
+        reverse=True,
+    )
+    residual_keys = {_recall_row_identity(row) for row in residual_anchor_rows}
+    return priority_rows + residual_anchor_rows + [
         row for row in rows
         if _recall_row_identity(row) not in priority_keys
+        and _recall_row_identity(row) not in residual_keys
     ]
 
 
@@ -8257,6 +8286,111 @@ def _prioritize_deliberate_fresh_direct_anchor_rows(query: str, rows: List[Dict[
     return priority_rows + [
         row for row in rows
         if _recall_row_identity(row) not in priority_keys
+    ]
+
+
+_DATE_RANGE_CONNECTION_QUERY_RE = re.compile(
+    r"\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|"
+    r"jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|"
+    r"nov(?:ember)?|dec(?:ember)?)\s+\d{1,2}\s*[-/]\s*\d{1,2}\b"
+)
+_DATE_RELATION_ROW_CUE_RE = re.compile(
+    r"\b(day after|the day after|next day|following day|day before|the day before|"
+    r"back[- ]to[- ]back|back to back)\b"
+)
+_SAME_DAY_ROW_CUE_RE = re.compile(r"\bsame day\b")
+_MONTH_NAME_TOKENS = {
+    "january", "february", "march", "april", "may", "june",
+    "july", "august", "september", "october", "november", "december",
+    "jan", "feb", "mar", "apr", "jun", "jul", "aug", "sep", "sept", "oct", "nov", "dec",
+}
+
+
+def _is_date_relation_callback_query(query: str) -> bool:
+    lower = str(query or "").lower()
+    if not lower:
+        return False
+    if not _DATE_RANGE_CONNECTION_QUERY_RE.search(lower):
+        return False
+    return any(
+        cue in lower
+        for cue in ("cross-session", "connection", "connect", "linked", "agent make", "agent made")
+    )
+
+
+def _prioritize_date_relation_callback_rows(query: str, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Prefer assistant callback rows that express date-to-date connections explicitly."""
+    if not rows or not _is_date_relation_callback_query(query):
+        return rows
+
+    query_terms = _extract_distinctive_query_terms(query, limit=8)
+    query_months = {
+        token
+        for token in re.findall(r"[a-z]+", str(query or "").lower())
+        if token in _MONTH_NAME_TOKENS
+    }
+
+    def _row_text(row: Dict[str, Any]) -> str:
+        return str((row or {}).get("text") or "")
+
+    def _row_created_sort_key(row: Dict[str, Any]) -> str:
+        for key in ("created_at", "source_date", "valid_from"):
+            raw = str((row or {}).get(key) or "").strip()
+            if raw:
+                return raw
+        return ""
+
+    def _is_direct_memory_row(row: Dict[str, Any]) -> bool:
+        if str((row or {}).get("category") or "").strip().lower() == "docs":
+            return False
+        if (row or {}).get("via_relation") or (row or {}).get("graph_path"):
+            return False
+        return bool(str((row or {}).get("id") or "").strip())
+
+    def _row_date_relation_score(row: Dict[str, Any]) -> int:
+        if not isinstance(row, dict) or not _is_direct_memory_row(row):
+            return 0
+        lower_text = _row_text(row).lower()
+        score = 0
+        if _DATE_RELATION_ROW_CUE_RE.search(lower_text):
+            score += 5
+        elif _SAME_DAY_ROW_CUE_RE.search(lower_text):
+            score += 1
+        row_months = {
+            token
+            for token in re.findall(r"[a-z]+", lower_text)
+            if token in _MONTH_NAME_TOKENS
+        }
+        if row_months & query_months:
+            score += 1
+        if score <= 0:
+            return 0
+        if str((row or {}).get("structural_anchor_kind") or "") == "assistant_callback_anchor":
+            score += 2
+        if str((row or {}).get("source_type") or "") == "assistant":
+            score += 1
+        return score
+
+    scored_rows = [
+        row for row in rows
+        if _row_date_relation_score(row) > 0
+    ]
+    if not scored_rows:
+        return rows
+
+    scored_rows.sort(
+        key=lambda row: (
+            _row_date_relation_score(row),
+            _query_term_overlap({"text": _row_text(row)}, query_terms),
+            _row_created_sort_key(row),
+            float((row or {}).get("similarity", 0.0) or 0.0),
+        ),
+        reverse=True,
+    )
+    scored_keys = {_recall_row_identity(row) for row in scored_rows}
+    return scored_rows + [
+        row for row in rows
+        if _recall_row_identity(row) not in scored_keys
     ]
 
 
@@ -8743,7 +8877,7 @@ def _extract_explicit_query_anchor_terms(query: str, *, limit: int = 4) -> List[
     """Return explicit entity-like anchors from the original query text.
 
     These anchors are intentionally conservative. They are only used to keep
-    named queries like "my dog Baxter" from being buried by hotter global
+    named queries like "my dog <Name>" from being buried by hotter global
     profile/setup rows that do not mention the named entity at all.
     """
     tokens = re.findall(r"[\w][\w._'-]*", str(query or ""), flags=re.UNICODE)
@@ -9737,6 +9871,13 @@ def _summarize_memory_quality(
         and close_competitor_count >= 2
         and temporal_span_days >= 30
     )
+    assistant_memory_cluster_ready = _assistant_memory_surface_resolved(
+        query,
+        sample,
+        gate_eval=gate,
+    )
+    if assistant_memory_cluster_ready:
+        ambiguity_risk = False
 
     signals: List[str] = []
     if not ready:
@@ -9757,6 +9898,8 @@ def _summarize_memory_quality(
         surface_quality = "empty"
     elif not ready or low_similarity:
         surface_quality = "low"
+    elif assistant_memory_cluster_ready:
+        surface_quality = "good"
     elif mixed_temporal_candidates or ambiguity_risk:
         surface_quality = "conflicted"
     elif needs_validation and not docs_evidence_ready:
@@ -9826,10 +9969,16 @@ def _should_fast_drill_follow_up(
     query_shape = str(meta.get("query_shape") or "")
     planned_stores = _planner_store_plan(meta.get("planned_stores") or ["vector"])
     preserved_exact = bailout_reason == "preserve_short_exact_query"
+    allow_planner_disabled_assistant_memory_drill = (
+        bailout_reason == "planner_disabled"
+        and _is_assistant_memory_query(query, gate_eval)
+        and bool(gate_eval.get("needs_validation"))
+        and "docs" not in planned_stores
+    )
     reasons: List[str] = []
     if not rows:
         return False, gate_eval, reasons, gate_intent
-    if not used_llm and not preserved_exact:
+    if not used_llm and not preserved_exact and not allow_planner_disabled_assistant_memory_drill:
         return False, gate_eval, reasons, gate_intent
     if bailout_reason.endswith("_fallback_off"):
         return False, gate_eval, reasons, gate_intent
@@ -9865,11 +10014,21 @@ def _build_fast_drill_fallback_queries(
     gate = dict(gate_eval or {})
     planner = dict(planner_meta or {})
     preserved_exact = str(planner.get("bailout_reason") or "") == "preserve_short_exact_query"
-    if not planner.get("used_llm") and not preserved_exact:
+    stores = _planner_store_plan(planner.get("planned_stores") or ["vector"])
+    allow_planner_disabled_assistant_memory_fallback = (
+        str(planner.get("bailout_reason") or "") == "planner_disabled"
+        and _is_assistant_memory_query(query, gate)
+        and bool(gate.get("needs_validation"))
+        and "docs" not in stores
+    )
+    if (
+        not planner.get("used_llm")
+        and not preserved_exact
+        and not allow_planner_disabled_assistant_memory_fallback
+    ):
         return []
     if str(planner.get("query_shape") or "") not in {"broad", "focused", "narrow"}:
         return []
-    stores = _planner_store_plan(planner.get("planned_stores") or ["vector"])
     if stores not in (["vector"], ["vector", "graph"]):
         return []
     assistant_coverage = int((gate.get("coverage") or {}).get("assistant_source") or 0)
@@ -9890,7 +10049,7 @@ def _build_fast_drill_fallback_queries(
         return token
 
     def _origin_context_terms(anchor_terms: List[str], *, limit: int = 2) -> List[str]:
-        preferred = ("dinner", "surprise", "call", "birthday", "meal")
+        filler_terms = {"actually", "during", "like", "maybe", "thing"}
         candidate_terms: List[str] = []
         for row in list(current_rows or []):
             if not isinstance(row, dict):
@@ -9909,16 +10068,13 @@ def _build_fast_drill_fallback_queries(
                     not term
                     or term in anchor_terms
                     or term in _QUERY_STOPWORDS
+                    or term in filler_terms
                     or term in {"came", "idea", "who"}
                 ):
                     continue
                 candidate_terms.append(term)
         ordered: List[str] = []
         seen_terms: set[str] = set()
-        for term in preferred:
-            if term in candidate_terms and term not in seen_terms:
-                seen_terms.add(term)
-                ordered.append(term)
         for term in candidate_terms:
             if term not in seen_terms:
                 seen_terms.add(term)
@@ -9990,10 +10146,6 @@ def _build_fast_drill_fallback_queries(
                 extra_terms.append(term)
             ordered_extra: List[str] = []
             seen_extra: set[str] = set()
-            for preferred in ("dinner", "surprise", "birthday", "meal"):
-                if preferred in extra_terms and preferred not in seen_extra:
-                    seen_extra.add(preferred)
-                    ordered_extra.append(preferred)
             for preferred in context_terms:
                 if preferred in extra_terms and preferred not in seen_extra:
                     seen_extra.add(preferred)
@@ -10014,7 +10166,14 @@ def _build_fast_drill_fallback_queries(
         return queries[:2]
 
     def _build_assistant_source_fallback() -> List[str]:
-        if "assistant_source" not in requirements or assistant_coverage > 0:
+        assistant_memory_needs_refine = (
+            _is_assistant_memory_query(query, gate)
+            and bool(gate.get("needs_validation"))
+            and bool(re.search(r"\b(recall|remember)\w*\b", lower_query))
+        )
+        if "assistant_source" not in requirements:
+            return []
+        if assistant_coverage > 0 and not assistant_memory_needs_refine:
             return []
         attribution_queries = _build_origin_attribution_fallback()
         if attribution_queries:
@@ -10025,7 +10184,7 @@ def _build_fast_drill_fallback_queries(
         ]
         explicit_terms = [term for term in explicit_terms if term]
         queries: List[str] = []
-        if explicit_terms and re.search(r"\b(recall|remember|surpris)\w*\b", lower_query):
+        if explicit_terms and re.search(r"\b(recall|remember)\w*\b", lower_query):
             owner_term = ""
             seen_owner_terms = {explicit_terms[0]}
             owner_skip_terms = {
@@ -10038,8 +10197,6 @@ def _build_fast_drill_fallback_queries(
                 "recalled",
                 "remember",
                 "remembered",
-                "surprise",
-                "surprised",
                 "what",
                 "who",
                 "did",
@@ -10061,8 +10218,8 @@ def _build_fast_drill_fallback_queries(
                 owner_term = term
                 break
             if owner_term:
-                queries.append(f"what surprised {owner_term} about {explicit_terms[0]} recall")
-        if explicit_terms and re.search(r"\b(recall|remember|surpris)\w*\b", lower_query):
+                queries.append(f"{owner_term} {explicit_terms[0]} assistant recall")
+        if explicit_terms and re.search(r"\b(recall|remember)\w*\b", lower_query):
             queries.append(f"assistant {explicit_terms[0]} memory")
             return queries
         filtered_terms: List[str] = []
@@ -10082,8 +10239,6 @@ def _build_fast_drill_fallback_queries(
             "said",
             "suggest",
             "suggested",
-            "surprise",
-            "surprised",
             "what",
             "who",
         }
@@ -10107,7 +10262,7 @@ def _build_fast_drill_fallback_queries(
                 break
         if not filtered_terms:
             return []
-        if len(filtered_terms) == 1 and re.search(r"\b(recall|remember|surpris)\w*\b", lower_query):
+        if len(filtered_terms) == 1 and re.search(r"\b(recall|remember)\w*\b", lower_query):
             filtered_terms.append("memory")
         return ["assistant " + " ".join(filtered_terms[:4])]
 
@@ -10152,6 +10307,15 @@ def _is_assistant_suggestion_list_query(query: str, gate_eval: Optional[Dict[str
             lower,
         )
     )
+
+
+def _is_assistant_memory_query(query: str, gate_eval: Optional[Dict[str, Any]]) -> bool:
+    gate = dict(gate_eval or {})
+    requirements = {str(item) for item in (gate.get("requirements") or []) if str(item)}
+    if "assistant_source" not in requirements or "enumeration" in requirements:
+        return False
+    lower = str(query or "").lower()
+    return bool(re.search(r"\b(recall|remember)\w*\b", lower))
 
 
 _ORIGIN_ATTRIBUTION_CUE_RE = re.compile(
@@ -10204,7 +10368,7 @@ def _prioritize_fast_origin_attribution_rows(query: str, rows: List[Dict[str, An
 
 
 _ASSISTANT_MEMORY_CALLBACK_CUE_RE = re.compile(
-    r"\b(?:remember(?:ed)?|recall(?:ed)?|once|back when|used to|old detail|character growth)\b",
+    r"\b(?:remember(?:ed)?|recall(?:ed)?|once|back when|used to|old detail)\b",
     re.IGNORECASE,
 )
 
@@ -10217,12 +10381,10 @@ def _prioritize_fast_assistant_memory_rows(
 ) -> List[Dict[str, Any]]:
     if not rows:
         return rows
-    gate = dict(gate_eval or {})
-    requirements = {str(item) for item in (gate.get("requirements") or []) if str(item)}
-    if "assistant_source" not in requirements or "enumeration" in requirements:
+    if not _is_assistant_memory_query(query, gate_eval):
         return rows
     lower_query = str(query or "").lower()
-    if not re.search(r"\b(recall|remember|surpris)\w*\b", lower_query):
+    if not re.search(r"\b(recall|remember)\w*\b", lower_query):
         return rows
     anchor_terms = [
         str(term or "").strip().lower()
@@ -10231,9 +10393,25 @@ def _prioritize_fast_assistant_memory_rows(
     ]
     if not anchor_terms:
         return rows
+    primary_anchor = anchor_terms[0]
+
+    def _row_anchor_match(row: Dict[str, Any]) -> bool:
+        lower_text = str((row or {}).get("text") or "").lower()
+        if primary_anchor:
+            return primary_anchor in lower_text
+        return any(term in lower_text for term in anchor_terms)
+
+    def _row_primary_anchor_match(row: Dict[str, Any]) -> bool:
+        lower_text = str((row or {}).get("text") or "").lower()
+        return bool(primary_anchor and primary_anchor in lower_text)
 
     priority_rows: List[Dict[str, Any]] = []
     remaining_rows: List[Dict[str, Any]] = []
+    anchor_kind_priority = {
+        "assistant_callback_anchor": 3,
+        "assistant_option_list_anchor": 2,
+        "assistant_option_bullet_anchor": 1,
+    }
     for row in rows:
         if not isinstance(row, dict):
             remaining_rows.append(row)
@@ -10245,19 +10423,78 @@ def _prioritize_fast_assistant_memory_rows(
             remaining_rows.append(row)
             continue
         lower_text = str((row or {}).get("text") or "").lower()
-        if not any(term in lower_text for term in anchor_terms):
+        kind = str((row or {}).get("structural_anchor_kind") or "").strip().lower()
+        if kind not in anchor_kind_priority and not _ASSISTANT_MEMORY_CALLBACK_CUE_RE.search(lower_text):
             remaining_rows.append(row)
             continue
-        if not _ASSISTANT_MEMORY_CALLBACK_CUE_RE.search(lower_text):
+        if not row.get("_assistant_memory_recovery") and not _row_anchor_match(row):
             remaining_rows.append(row)
             continue
         priority_rows.append(row)
 
     priority_rows.sort(
-        key=lambda row: float((row or {}).get("similarity", 0.0) or 0.0),
+        key=lambda row: (
+            1 if row.get("_assistant_memory_recovery") else 0,
+            anchor_kind_priority.get(str((row or {}).get("structural_anchor_kind") or "").strip().lower(), 0),
+            1 if _row_primary_anchor_match(row) else 0,
+            1 if _row_anchor_match(row) else 0,
+            1 if _ASSISTANT_MEMORY_CALLBACK_CUE_RE.search(str((row or {}).get("text") or "").lower()) else 0,
+            float((row or {}).get("similarity", 0.0) or 0.0),
+        ),
+        reverse=True,
+    )
+    remaining_rows.sort(
+        key=lambda row: (
+            1 if isinstance(row, dict) and _row_primary_anchor_match(row) else 0,
+            1 if isinstance(row, dict) and _row_anchor_match(row) else 0,
+            float((row or {}).get("similarity", 0.0) or 0.0) if isinstance(row, dict) else 0.0,
+        ),
         reverse=True,
     )
     return priority_rows + remaining_rows
+
+
+def _assistant_memory_surface_resolved(
+    query: str,
+    rows: List[Dict[str, Any]],
+    *,
+    gate_eval: Optional[Dict[str, Any]],
+) -> bool:
+    if not _is_assistant_memory_query(query, gate_eval):
+        return False
+    lower_query = str(query or "").lower()
+    if not re.search(r"\b(recall|remember)\w*\b", lower_query):
+        return False
+    sample = [row for row in list(rows or [])[:5] if isinstance(row, dict)]
+    if not sample:
+        return False
+    anchor_terms = [
+        str(term or "").strip().lower()
+        for term in _extract_explicit_query_anchor_terms(query, limit=6)
+        if str(term or "").strip()
+    ]
+    if not anchor_terms:
+        return False
+    primary_anchor = anchor_terms[0]
+
+    def _row_assistant_memory_match(row: Dict[str, Any]) -> bool:
+        lower_text = str((row or {}).get("text") or "").lower()
+        source_type = str((row or {}).get("source_type") or "").strip().lower()
+        kind = str((row or {}).get("structural_anchor_kind") or "").strip().lower()
+        if source_type != "assistant":
+            return False
+        if kind not in {
+            "assistant_callback_anchor",
+            "assistant_option_list_anchor",
+            "assistant_option_bullet_anchor",
+        } and not _ASSISTANT_MEMORY_CALLBACK_CUE_RE.search(lower_text):
+            return False
+        return bool(row.get("_assistant_memory_recovery") or (primary_anchor and primary_anchor in lower_text))
+
+    assistant_rows = [row for row in sample if _row_assistant_memory_match(row)]
+    if not assistant_rows:
+        return False
+    return _row_assistant_memory_match(sample[0])
 
 
 def _build_recall_row_from_node(
@@ -10411,6 +10648,258 @@ def _recover_assistant_suggestion_cluster_rows(
     }
     recovered.sort(
         key=lambda row: (
+            kind_priority.get(str(row.get("structural_anchor_kind") or ""), 0),
+            float(row.get("similarity") or 0.0),
+            str(row.get("text") or ""),
+        ),
+        reverse=True,
+    )
+    return recovered
+
+
+def _recover_assistant_memory_cluster_rows(
+    query: str,
+    *,
+    gate_eval: Optional[Dict[str, Any]],
+    owner_id: Optional[str],
+    limit: int,
+    current_rows: Optional[List[Dict[str, Any]]] = None,
+) -> List[Dict[str, Any]]:
+    if not _is_assistant_memory_query(query, gate_eval):
+        return []
+
+    anchor_terms = [
+        str(term or "").strip().lower()
+        for term in _extract_explicit_query_anchor_terms(query, limit=6)
+        if str(term or "").strip()
+    ]
+    if anchor_terms:
+        anchor_terms = [anchor_terms[0]]
+    if not anchor_terms:
+        return []
+
+    owner_ids = sorted({
+        str((row or {}).get("owner_id") or "").strip()
+        for row in (current_rows or [])
+        if isinstance(row, dict) and str((row or {}).get("owner_id") or "").strip()
+    })
+
+    cluster_scores: Dict[str, Tuple[float, int]] = {}
+    candidate_scores: Dict[str, float] = {}
+    graph = get_graph()
+    raw_results: List[Tuple["Node", float]] = []
+
+    def _accumulate_candidate(
+        *,
+        node_id: str,
+        lower_text: str,
+        kind: str,
+        score: float,
+        created_at: str,
+        require_anchor_match: bool,
+    ) -> None:
+        if anchor_terms and not any(term in lower_text for term in anchor_terms):
+            if require_anchor_match or kind != "assistant_callback_anchor":
+                return
+            if float(score) < 0.40:
+                return
+        if kind != "assistant_callback_anchor" and not _ASSISTANT_MEMORY_CALLBACK_CUE_RE.search(lower_text):
+            return
+        has_callback_cue = bool(_ASSISTANT_MEMORY_CALLBACK_CUE_RE.search(lower_text))
+        adjusted = float(score)
+        if kind == "assistant_callback_anchor":
+            adjusted += 0.12 if has_callback_cue else 0.02
+        elif kind == "assistant_option_list_anchor":
+            adjusted += 0.10 if has_callback_cue else 0.06
+        else:
+            adjusted += 0.03
+        candidate_scores[node_id] = adjusted
+        prior_best, prior_count = cluster_scores.get(created_at, (0.0, 0))
+        cluster_scores[created_at] = (max(prior_best, adjusted), prior_count + 1)
+
+    if current_rows:
+        for row in current_rows:
+            if not isinstance(row, dict):
+                continue
+            if str(row.get("source_type") or "").strip().lower() != "assistant":
+                continue
+            kind = str(row.get("structural_anchor_kind") or "").strip().lower()
+            if kind not in {
+                "assistant_callback_anchor",
+                "assistant_option_list_anchor",
+                "assistant_option_bullet_anchor",
+            }:
+                continue
+            created_at = str(row.get("created_at") or "").strip()
+            if not created_at:
+                continue
+            _accumulate_candidate(
+                node_id=str(row.get("id") or ""),
+                lower_text=str(row.get("text") or "").lower(),
+                kind=kind,
+                score=float(row.get("similarity") or 0.0),
+                created_at=created_at,
+                require_anchor_match=True,
+            )
+    else:
+        search_limit = max(120, min(320, max(1, int(limit)) * 40))
+        try:
+            raw_results = graph.search_hybrid(query, limit=search_limit, owner_id=owner_id)
+        except Exception:
+            logger.debug("assistant memory cluster recovery search failed", exc_info=True)
+            return []
+
+        for node, score in raw_results:
+            attrs = node.attributes if isinstance(node.attributes, dict) else {}
+            if str(attrs.get("source_type") or "").strip().lower() != "assistant":
+                continue
+            kind = str(attrs.get("structural_anchor_kind") or "").strip().lower()
+            if kind not in {
+                "assistant_callback_anchor",
+                "assistant_option_list_anchor",
+                "assistant_option_bullet_anchor",
+            }:
+                continue
+            created_at = str(node.created_at or "").strip()
+            if not created_at:
+                continue
+            _accumulate_candidate(
+                node_id=str(node.id),
+                lower_text=str(node.name or "").lower(),
+                kind=kind,
+                score=float(score or 0.0),
+                created_at=created_at,
+                require_anchor_match=False,
+            )
+
+    if not cluster_scores:
+        seed_params: List[Any] = []
+        owner_sql = ""
+        if owner_ids:
+            owner_sql = " AND owner_id IN ({})".format(",".join("?" for _ in owner_ids))
+            seed_params.extend(owner_ids)
+        elif owner_id:
+            owner_sql = " AND owner_id = ?"
+            seed_params.append(owner_id)
+        anchor_clause = " OR ".join("LOWER(name) LIKE ?" for _ in anchor_terms)
+        seed_params.extend(f"%{term}%" for term in anchor_terms)
+        try:
+            with graph._get_conn() as conn:
+                seed_rows = conn.execute(
+                    f"""
+                    SELECT *
+                    FROM nodes
+                    WHERE json_extract(attributes, '$.source_type') = 'assistant'
+                      AND json_extract(attributes, '$.structural_anchor_kind') IN (
+                        'assistant_callback_anchor',
+                        'assistant_option_list_anchor',
+                        'assistant_option_bullet_anchor'
+                      )
+                      {owner_sql}
+                      AND ({anchor_clause})
+                    ORDER BY created_at, id
+                    """,
+                    seed_params,
+                ).fetchall()
+        except Exception:
+            logger.debug("assistant memory fallback seed fetch failed", exc_info=True)
+            seed_rows = []
+
+        seed_score_by_kind = {
+            "assistant_callback_anchor": 0.45,
+            "assistant_option_list_anchor": 0.39,
+            "assistant_option_bullet_anchor": 0.35,
+        }
+        for sql_row in seed_rows:
+            node = graph._row_to_node(sql_row)
+            attrs = node.attributes if isinstance(node.attributes, dict) else {}
+            kind = str(attrs.get("structural_anchor_kind") or "").strip().lower()
+            created_at = str(node.created_at or "").strip()
+            if not created_at or kind not in seed_score_by_kind:
+                continue
+            base_score = float(seed_score_by_kind[kind])
+            raw_results.append((node, base_score))
+            _accumulate_candidate(
+                node_id=str(node.id),
+                lower_text=str(node.name or "").lower(),
+                kind=kind,
+                score=base_score,
+                created_at=created_at,
+                require_anchor_match=True,
+            )
+
+    if not cluster_scores:
+        return []
+
+    target_created_at = max(
+        cluster_scores.items(),
+        key=lambda item: (item[1][0], item[1][1], item[0]),
+    )[0]
+    cluster_best_score = float(cluster_scores[target_created_at][0])
+
+    params: List[Any] = [target_created_at]
+    owner_sql = ""
+    if owner_ids:
+        owner_sql = " AND owner_id IN ({})".format(",".join("?" for _ in owner_ids))
+        params.extend(owner_ids)
+    elif owner_id:
+        owner_sql = " AND owner_id = ?"
+        params.append(owner_id)
+    try:
+        with graph._get_conn() as conn:
+            sibling_rows = conn.execute(
+                f"""
+                SELECT *
+                FROM nodes
+                WHERE created_at = ?
+                  {owner_sql}
+                  AND json_extract(attributes, '$.source_type') = 'assistant'
+                  AND json_extract(attributes, '$.structural_anchor_kind') IN (
+                    'assistant_callback_anchor',
+                    'assistant_option_list_anchor',
+                    'assistant_option_bullet_anchor'
+                  )
+                ORDER BY created_at, id
+                """,
+                params,
+            ).fetchall()
+    except Exception:
+        logger.debug("assistant memory cluster sibling fetch failed", exc_info=True)
+        return []
+
+    recovered: List[Dict[str, Any]] = []
+    for sql_row in sibling_rows:
+        node = graph._row_to_node(sql_row)
+        attrs = node.attributes if isinstance(node.attributes, dict) else {}
+        kind = str(attrs.get("structural_anchor_kind") or "").strip().lower()
+        lower_text = str(node.name or "").lower()
+        if anchor_terms and not any(term in lower_text for term in anchor_terms):
+            if kind != "assistant_callback_anchor":
+                continue
+            if candidate_scores.get(node.id, 0.0) <= 0.0:
+                continue
+        if kind != "assistant_callback_anchor" and not _ASSISTANT_MEMORY_CALLBACK_CUE_RE.search(lower_text):
+            continue
+        similarity = candidate_scores.get(node.id, cluster_best_score - 0.08)
+        recovered.append(
+            _build_recall_row_from_node(
+                node,
+                similarity=similarity,
+                structural_anchor_kind=kind,
+            )
+        )
+
+    if not recovered:
+        return []
+
+    kind_priority = {
+        "assistant_callback_anchor": 3,
+        "assistant_option_list_anchor": 2,
+        "assistant_option_bullet_anchor": 1,
+    }
+    recovered.sort(
+        key=lambda row: (
+            1 if row.get("_assistant_memory_recovery") else 0,
             kind_priority.get(str(row.get("structural_anchor_kind") or ""), 0),
             float(row.get("similarity") or 0.0),
             str(row.get("text") or ""),
@@ -10993,7 +11482,7 @@ def _plan_fanout_queries(
     prompt = (
         f"Generate 1 to {max_queries} search queries to find relevant stored knowledge for this message.\n"
         "Rules:\n"
-        '- Return JSON only: {"queries": ["..."], "stores": ["vector","graph","docs"], "project": "recipe-app", "freshness_preferred": false}\n'
+        '- Return JSON only: {"queries": ["..."], "stores": ["vector","graph","docs"], "project": "project-alpha", "freshness_preferred": false}\n'
         '- "stores" is optional, but when present it must be an array containing any of: "vector", "graph", "docs".\n'
         '- "project" is optional and should be set only when the message clearly names a project.\n'
         '- "freshness_preferred" is optional. Set it true only when the user asks for current/latest/current-state information or an open-ended schedule date, and not for explicit historical/as-of date lookups.\n'
@@ -11159,7 +11648,7 @@ def _resolve_lexical_anchor_timeout_ms(
 
 _FAST_DRILL_RESERVE_MS = 250
 _FAST_DRILL_MIN_TIMEOUT_MS = 500
-_FAST_DRILL_MAX_TIMEOUT_MS = 750
+_FAST_DRILL_MAX_TIMEOUT_MS = 1200
 _FAST_DRILL_MIN_REMAINING_MS = _FAST_DRILL_RESERVE_MS + _FAST_DRILL_MIN_TIMEOUT_MS
 
 
@@ -11249,10 +11738,6 @@ def _infer_recall_store_defaults(text: str) -> Tuple[List[str], Optional[str]]:
     project_name: Optional[str] = None
 
     for needle, project in (
-        ("recipe-app", "recipe-app"),
-        ("recipe app", "recipe-app"),
-        ("portfolio-site", "portfolio-site"),
-        ("portfolio site", "portfolio-site"),
         ("quaid", "quaid"),
     ):
         if needle in lowered:
@@ -11284,6 +11769,15 @@ def _infer_recall_store_defaults(text: str) -> Tuple[List[str], Optional[str]]:
             )
         except Exception:
             named_person_activity_like = False
+    dated_feature_state_like = has_iso_date and bool(_re.search(
+        r"\b(support(?:ed|s)?|available|allowed|configured|defined|enabled|options?|labels?|presets?|features?|fields?|settings?|constants?)\b",
+        lowered,
+    ))
+    dated_app_or_project_like = has_iso_date and bool(_re.search(
+        r"\b(app|application|project|repo|repository|service|system|tool|product)\b|"
+        r"(?:项目|專案|应用|應用|系统|系統|服务|服務|工具|产品|產品|プロジェクト|アプリ|サービス)",
+        lowered,
+    ))
     mixed_memory_docs = docs_like and bool(_re.search(
         r"\b(current|currently|changed|history|motivat|why|decided|still|bug|issue|safe|security)\b",
         lowered,
@@ -11292,6 +11786,10 @@ def _infer_recall_store_defaults(text: str) -> Tuple[List[str], Optional[str]]:
     if dated_project_like:
         stores = ["vector", "docs"]
     elif project_docs_like:
+        stores = ["vector", "docs"]
+    elif dated_feature_state_like:
+        stores = ["vector", "docs"]
+    elif dated_app_or_project_like:
         stores = ["vector", "docs"]
     elif mixed_memory_docs:
         stores = ["vector", "docs"]
@@ -11675,6 +12173,50 @@ def recall_fast(
     if docs_bundle:
         meta["docs_rows_count"] = len((docs_bundle.get("chunks") or []) if isinstance(docs_bundle, dict) else [])
 
+    initial_gate_eval = _evaluate_quality_gate_readiness(
+        query,
+        rows,
+        intent="GENERAL",
+        limit=effective_limit,
+        include_relation_keywords=False,
+    )
+    assistant_memory_rows = _recover_assistant_memory_cluster_rows(
+        query,
+        gate_eval=initial_gate_eval,
+        owner_id=owner_id,
+        limit=effective_limit,
+        current_rows=rows,
+    )
+    if assistant_memory_rows:
+        rows = _merge_recall_batches(
+            [rows, assistant_memory_rows],
+            limit=max(effective_limit * 2, 20),
+        )
+    assistant_list_rows = _recover_assistant_suggestion_cluster_rows(
+        query,
+        gate_eval=initial_gate_eval,
+        owner_id=owner_id,
+        limit=effective_limit,
+    )
+    if assistant_list_rows:
+        rows = _merge_recall_batches(
+            [rows, assistant_list_rows],
+            limit=max(effective_limit * 2, 20),
+        )
+    rows = _prioritize_fast_anchor_direct_rows(query, rows)
+    rows = _prioritize_date_relation_callback_rows(query, rows)
+    rows = _prioritize_fast_origin_attribution_rows(query, rows)
+    rows = _prioritize_fast_assistant_memory_rows(
+        query,
+        rows,
+        gate_eval=initial_gate_eval,
+    )
+    rows = _prioritize_recovered_assistant_list_rows(
+        query,
+        rows,
+        gate_eval=initial_gate_eval,
+    )[:effective_limit]
+
     should_fast_drill, gate_eval, fast_drill_reasons, gate_intent = _should_fast_drill_follow_up(
         query,
         rows,
@@ -11682,7 +12224,17 @@ def recall_fast(
         docs_bundle=docs_bundle,
         limit=effective_limit,
     )
-    fast_drill_enabled = "preserved_exact_low_overlap" in fast_drill_reasons
+    fast_drill_enabled = (
+        "preserved_exact_low_overlap" in fast_drill_reasons
+    )
+    if (
+        not fast_drill_enabled
+        and "needs_validation" in fast_drill_reasons
+        and (
+            _is_assistant_memory_query(query, gate_eval)
+        )
+    ):
+        fast_drill_enabled = True
     fast_drill_skip_reason = None
     fast_drill_remaining_ms: Optional[int] = None
     fast_drill_min_budget_ms = _FAST_DRILL_MIN_REMAINING_MS
@@ -11834,6 +12386,8 @@ def recall_fast(
             drill_limit = min(effective_limit, 5)
             if _is_assistant_suggestion_list_query(query, gate_eval):
                 drill_limit = max(drill_limit, min(120, max(40, effective_limit * 5)))
+            elif _is_assistant_memory_query(query, gate_eval):
+                drill_limit = max(drill_limit, 10)
             elif _is_origin_attribution_query(query):
                 drill_limit = max(drill_limit, 12)
             fast_drill_meta = dict(drill_meta or {})
@@ -11944,6 +12498,18 @@ def recall_fast(
                     meta=meta,
                 )
                 return (rows, meta) if return_meta else rows
+            assistant_memory_rows = _recover_assistant_memory_cluster_rows(
+                query,
+                gate_eval=gate_eval,
+                owner_id=owner_id,
+                limit=drill_limit,
+                current_rows=drill_rows,
+            )
+            if assistant_memory_rows:
+                drill_rows = _merge_recall_batches(
+                    [drill_rows, assistant_memory_rows],
+                    limit=max(drill_limit * 3, effective_limit * 2),
+                )
             assistant_list_rows = _recover_assistant_suggestion_cluster_rows(
                 query,
                 gate_eval=gate_eval,
@@ -11957,6 +12523,7 @@ def recall_fast(
                 )
             rows = _merge_recall_batches([rows, drill_rows], limit=max(effective_limit, drill_limit * 2))
             rows = _prioritize_fast_anchor_direct_rows(query, rows)
+            rows = _prioritize_date_relation_callback_rows(query, rows)
             rows = _prioritize_fast_origin_attribution_rows(query, rows)
             rows = _prioritize_fast_assistant_memory_rows(
                 query,
@@ -12653,6 +13220,7 @@ def recall(
     if not fanout_queries:
         stop_reason = fanout_meta.get("bailout_reason") or "planner_returned_empty"
         merged = _prioritize_deliberate_fresh_direct_anchor_rows(query, merged)
+        merged = _prioritize_date_relation_callback_rows(query, merged)
         merged = _prioritize_named_entity_activity_anchor_rows(query, merged)
         final = merged[:limit]
         total_elapsed = (_time.monotonic() - recall_start) * 1000
@@ -12747,7 +13315,7 @@ def recall(
             break
         # High-confidence early-stop for non-stateful queries (relational, personal, direct-answer).
         # The standard gate blocks on `needs_validation` when lexical overlap is low — expected
-        # for indirect relational matches ("niece" → "daughter of sister", "dog" → "Baxter is a Lab").
+        # for indirect relational matches ("niece" -> "daughter of sister", "dog" -> "<Name> is a Lab").
         # These are not uncertain results; they just use different vocabulary. When the query is
         # not temporal/current/progression (those genuinely need deeper search), a strong score
         # is sufficient to stop drilling rather than exhausting the budget.
@@ -12921,6 +13489,7 @@ def recall(
 
     # Final merge to requested limit
     merged = _prioritize_deliberate_fresh_direct_anchor_rows(query, merged)
+    merged = _prioritize_date_relation_callback_rows(query, merged)
     merged = _prioritize_named_entity_activity_anchor_rows(query, merged)
     final = merged[:limit]
     total_elapsed = (_time.monotonic() - recall_start) * 1000
@@ -13211,6 +13780,7 @@ def _expand_high_confidence_entity_anchors(
                 "domains": _domains_from_attrs(rel_attrs),
                 "project": rel_attrs.get("project"),
                 "source_type": rel_attrs.get("source_type"),
+                "structural_anchor_kind": rel_attrs.get("structural_anchor_kind"),
                 **_node_recall_temporal_fields(rel_node),
                 "extraction_confidence": getattr(rel_node, "extraction_confidence", None),
                 "privacy": getattr(rel_node, "privacy", None),
@@ -13791,7 +14361,11 @@ def store(
             return existing_value if int(existing_match.group(1)) <= int(new_match.group(1)) else new_value
         return new_value
 
-    def _apply_metadata_flags(existing: Node) -> None:
+    def _apply_metadata_flags(
+        existing: Node,
+        *,
+        allow_structural_anchor_upgrade: bool = False,
+    ) -> None:
         """Persist source/domain metadata on dedup-update paths."""
         if not (
             session_id
@@ -13881,7 +14455,11 @@ def store(
             attrs["subject_entity_id"] = resolved_subject_id
         if subject_entity_name and not attrs.get("subject_entity_name"):
             attrs["subject_entity_name"] = subject_entity_name
-        if structural_anchor_kind and not attrs.get("structural_anchor_kind"):
+        if (
+            allow_structural_anchor_upgrade
+            and structural_anchor_kind
+            and not attrs.get("structural_anchor_kind")
+        ):
             attrs["structural_anchor_kind"] = structural_anchor_kind
         if speaker_entity_id and not existing.speaker_entity_id:
             existing.speaker_entity_id = speaker_entity_id
@@ -13953,7 +14531,7 @@ def store(
                 existing.confidence = min(existing.confidence + 0.02, 0.95)
                 # Bjork: re-encoding strengthens storage (smaller than retrieval increment)
                 existing.storage_strength = min(10.0, existing.storage_strength + 0.03)
-                _apply_metadata_flags(existing)
+                _apply_metadata_flags(existing, allow_structural_anchor_upgrade=True)
                 if update_if_dup and verified and not existing.verified:
                     existing.verified = True
                     existing.confidence = 0.9
@@ -14044,7 +14622,7 @@ def store(
                     existing.confidence = min(existing.confidence + 0.02, 0.95)
                     # Bjork: re-encoding strengthens storage (smaller than retrieval increment)
                     existing.storage_strength = min(10.0, existing.storage_strength + 0.03)
-                    _apply_metadata_flags(existing)
+                    _apply_metadata_flags(existing, allow_structural_anchor_upgrade=True)
                     if update_if_dup and verified and not existing.verified:
                         existing.verified = True
                         existing.confidence = 0.9
@@ -14085,7 +14663,7 @@ def store(
                             existing.confidence = min(existing.confidence + 0.02, 0.95)
                             # Bjork: re-encoding strengthens storage (smaller than retrieval increment)
                             existing.storage_strength = min(10.0, existing.storage_strength + 0.03)
-                            _apply_metadata_flags(existing)
+                            _apply_metadata_flags(existing, allow_structural_anchor_upgrade=True)
                             if update_if_dup and verified and not existing.verified:
                                 existing.verified = True
                                 existing.confidence = 0.9
@@ -14176,10 +14754,14 @@ def store(
                                 existing.name = text
                                 existing.embedding = None
                                 existing.content_hash = None
+                                attrs = existing.attributes if isinstance(existing.attributes, dict) else (existing.attributes or {})
+                                if structural_anchor_kind and not attrs.get("structural_anchor_kind"):
+                                    attrs["structural_anchor_kind"] = structural_anchor_kind
+                                    existing.attributes = attrs
                                 if _lib_has_vec():
                                     conn_cm = nullcontext(_conn) if _conn is not None else graph._get_conn()
                                     with conn_cm as conn:
-                                        graph._delete_vec_node_if_present(conn, existing.id, context="dedup_subsume_update")
+                                        conn.execute("DELETE FROM vec_nodes WHERE node_id = ?", (existing.id,))
                             graph.update_node(existing, conn=_conn)
                             if (update_if_dup and verified) or subsumes == "a_subsumes_b":
                                 return _with_dedup_telemetry({
@@ -14212,7 +14794,7 @@ def store(
                         existing.last_confirmed_at = _now_iso()
                         existing.confidence = min(existing.confidence + 0.02, 0.95)
                         existing.storage_strength = min(10.0, existing.storage_strength + 0.03)
-                        _apply_metadata_flags(existing)
+                        _apply_metadata_flags(existing, allow_structural_anchor_upgrade=True)
                         if update_if_dup and verified and not existing.verified:
                             existing.verified = True
                             existing.confidence = 0.9
@@ -14814,7 +15396,7 @@ def hard_delete_node(node_id: str, conn: Optional[sqlite3.Connection] = None) ->
         active_conn.execute("DELETE FROM node_domains WHERE node_id = ?", (node_id,))
         # Clean up vec_nodes index (virtual table, no CASCADE)
         try:
-            graph._delete_vec_node_if_present(active_conn, node_id, context="hard_delete")
+            active_conn.execute("DELETE FROM vec_nodes WHERE node_id = ?", (node_id,))
         except Exception:
             pass  # vec_nodes may not exist yet
         # dedup_log.existing_node_id uses ON DELETE SET NULL — audit trail preserved automatically
@@ -14993,7 +15575,7 @@ def _llm_dedup_check_many(new_text: str, existing_texts: List[str]) -> Optional[
             "IMPORTANT RULES:\n"
             "- Negation flips meaning: 'likes coffee' vs 'doesn't like coffee' are DIFFERENT.\n"
             "- If Statement A includes ALL info from Statement B plus more detail, "
-            "A subsumes B. Example: 'Maya has a dog named Biscuit' subsumes 'Maya has a dog'.\n"
+            "A subsumes B. Example: 'The user has a dog named Scout' subsumes 'The user has a dog'.\n"
             "- If they convey the same info in different words, they are the SAME.\n"
             "- Only mark as different if they contain genuinely distinct information.\n\n"
             f'Statement A (new): "{new_text}"\n'
@@ -15031,7 +15613,7 @@ def _llm_dedup_check_many(new_text: str, existing_texts: List[str]) -> Optional[
         "IMPORTANT RULES:\n"
         "- Negation flips meaning: 'likes coffee' vs 'doesn't like coffee' are DIFFERENT.\n"
         "- If Statement A includes ALL info from Statement B plus more detail, "
-        "A subsumes B. Example: 'Maya has a dog named Biscuit' subsumes 'Maya has a dog'.\n"
+        "A subsumes B. Example: 'The user has a dog named Scout' subsumes 'The user has a dog'.\n"
         "- If they convey the same info in different words, they are the SAME.\n"
         "- Only mark as different if they contain genuinely distinct information.\n\n"
         f'Statement A (new): "{new_text}"\n\n'
@@ -15186,8 +15768,10 @@ def get_pending_decay_reviews(limit: int = 50) -> List[Dict[str, Any]]:
     graph = get_graph()
     with graph._get_conn() as conn:
         rows = conn.execute("""
-            SELECT * FROM decay_review_queue
-            WHERE status = 'pending'
+            SELECT q.*, n.speaker AS node_speaker, n.source AS node_source, n.attributes AS node_attributes
+            FROM decay_review_queue q
+            LEFT JOIN nodes n ON n.id = q.node_id
+            WHERE q.status = 'pending'
             ORDER BY queued_at ASC
             LIMIT ?
         """, (limit,)).fetchall()
@@ -15447,6 +16031,7 @@ if __name__ == "__main__":
         store_p.add_argument("--keywords", default=None, help="Space-separated derived search keywords")
         store_p.add_argument("--created-at", default=None, help="Override created_at timestamp (ISO format)")
         store_p.add_argument("--accessed-at", default=None, help="Override accessed_at timestamp (ISO format)")
+        store_p.add_argument("--structural-anchor-kind", default=None, help="Structural anchor kind to preserve on the stored fact")
         store_p.add_argument("--project", default=None, help="Project name this fact belongs to (stored in attributes)")
         store_p.add_argument("--domains", default="", help='Comma-separated domain tags (e.g., "technical,research")')
         store_p.add_argument("--sensitivity", default=None, help="Sensitivity tag (private_health, financial, relationship_conflict, family_trauma, emotional_vulnerability)")
@@ -15693,6 +16278,7 @@ if __name__ == "__main__":
                     project=project_tag,
                     created_at=getattr(args, 'created_at', None),
                     accessed_at=getattr(args, 'accessed_at', None),
+                    structural_anchor_kind=getattr(args, 'structural_anchor_kind', None),
                 )
                 # Add project tagging to attributes if specified.
                 # Apply on ALL statuses (created, duplicate, updated) — dedup

@@ -274,6 +274,11 @@ def _log_path() -> Path:
     return d / "extraction-daemon.log"
 
 
+def _discovery_cursor_scan_disabled() -> bool:
+    raw = str(os.environ.get("QUAID_DISABLE_DISCOVERY_CURSOR_SCAN", "") or "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
 def _extraction_buffer_log_path() -> Path:
     d = _instance_root() / "logs" / "daemon"
     d.mkdir(parents=True, exist_ok=True)
@@ -3269,6 +3274,8 @@ def _ensure_discovered_session_cursors(adapter=None) -> int:
     still needs to discover those sessions so rolling/timeout extraction can
     operate on them.
     """
+    if _discovery_cursor_scan_disabled():
+        return 0
     active_adapter = adapter if adapter is not None else _load_runtime_adapter()
     if active_adapter is None or not hasattr(active_adapter, "get_sessions_dir"):
         return 0

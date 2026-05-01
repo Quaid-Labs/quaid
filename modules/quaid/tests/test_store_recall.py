@@ -268,6 +268,36 @@ class TestStoreBasic:
         assert node is not None
         assert node.created_at == "2026-03-11T23:59:59"
 
+    def test_recall_preserves_structural_anchor_kind(self, tmp_path):
+        from datastore.memorydb.memory_graph import _recall_once, store
+
+        graph, _ = _make_graph(tmp_path)
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+            created = store(
+                "The pinecone commitment is peak golden retriever energy. That one brain cell working overtime",
+                owner_id="quaid",
+                source_type="assistant",
+                structural_anchor_kind="assistant_callback_anchor",
+                skip_dedup=True,
+            )
+            results = _recall_once(
+                "pinecone commitment",
+                owner_id="quaid",
+                limit=5,
+                use_aliases=False,
+                use_intent=False,
+                use_multi_pass=False,
+                include_graph_traversal=False,
+                include_co_session=False,
+                include_mmr=False,
+                low_signal_retry=False,
+            )
+
+        row = next(row for row in results if row["id"] == created["id"])
+        assert row.get("source_type") == "assistant"
+        assert row.get("structural_anchor_kind") == "assistant_callback_anchor"
+
     def test_recall_date_filter_uses_session_source_date_over_publish_time(self, tmp_path):
         from datastore.memorydb.memory_graph import _recall_once, store
 
@@ -1751,8 +1781,8 @@ class TestRecallBasic:
     def test_fast_drill_timeout_reserves_preinject_budget_tail(self):
         import datastore.memorydb.memory_graph as mg
 
-        assert mg._fast_drill_timeout_ms_from_remaining(3000) == 750
-        assert mg._fast_drill_timeout_ms_from_remaining(1000) == 750
+        assert mg._fast_drill_timeout_ms_from_remaining(3000) == 1200
+        assert mg._fast_drill_timeout_ms_from_remaining(1500) == 1200
         assert mg._fast_drill_timeout_ms_from_remaining(900) == 650
         assert mg._fast_drill_timeout_ms_from_remaining(749) is None
 
@@ -1792,6 +1822,90 @@ class TestRecallBasic:
 
         assert ranked[0]["id"] == "fresh-baxter"
         assert ranked.index(rows[2]) < ranked.index(rows[0])
+
+    def test_fast_anchor_priority_sorts_direct_rows_by_lexical_overlap(self):
+        import datastore.memorydb.memory_graph as mg
+
+        rows = [
+            {
+                "id": "anchor-only",
+                "text": "Baxter is still part of the workshop notes.",
+                "category": "fact",
+                "similarity": 0.87,
+                "created_at": "2026-03-24T23:59:59",
+            },
+            {
+                "id": "later-anchor-only",
+                "text": "Baxter was mentioned again during the status review.",
+                "category": "fact",
+                "similarity": 0.95,
+                "created_at": "2026-05-26T23:59:59",
+            },
+            {
+                "id": "full-lexical-match",
+                "text": "Baxter packed the pewter bell into the travel crate.",
+                "category": "fact",
+                "similarity": 0.81,
+                "created_at": "2026-05-19T23:59:59",
+            },
+            {
+                "id": "partial-lexical-match",
+                "text": "Baxter checked the travel crate before leaving.",
+                "category": "fact",
+                "similarity": 0.90,
+                "created_at": "2026-03-24T23:59:59",
+            },
+        ]
+
+        ranked = mg._prioritize_fast_anchor_direct_rows(
+            "Which Baxter update mentioned the pewter bell travel crate?",
+            rows,
+        )
+
+        assert [row["id"] for row in ranked[:4]] == [
+            "full-lexical-match",
+            "partial-lexical-match",
+            "later-anchor-only",
+            "anchor-only",
+        ]
+
+    def test_prioritize_date_relation_callback_rows_prefers_day_after_connection(self):
+        import datastore.memorydb.memory_graph as mg
+
+        rows = [
+            {
+                "id": "same-day",
+                "text": "Maya started her first day at Stripe on the same day she finished the half marathon.",
+                "category": "fact",
+                "similarity": 0.97,
+                "created_at": "2026-05-19T23:59:59",
+            },
+            {
+                "id": "day-after",
+                "text": "Oh wait — May 19th? That's the day after your half marathon. Talk about a big week",
+                "category": "fact",
+                "source_type": "assistant",
+                "structural_anchor_kind": "assistant_callback_anchor",
+                "similarity": 0.88,
+                "created_at": "2026-04-21T23:59:59",
+            },
+            {
+                "id": "pinecone",
+                "text": "Maya loves David deeply and was surprised the assistant remembered the pinecone incident involving Biscuit.",
+                "category": "fact",
+                "source_type": "assistant",
+                "structural_anchor_kind": "assistant_callback_anchor",
+                "similarity": 0.99,
+                "created_at": "2026-05-26T23:59:59",
+            },
+        ]
+
+        ranked = mg._prioritize_date_relation_callback_rows(
+            "What cross-session connection did the agent make about May 18-19?",
+            rows,
+        )
+
+        assert [row["id"] for row in ranked[:2]] == ["day-after", "same-day"]
 
     def test_recall_deliberate_prioritizes_fresh_direct_anchor_row_before_final_limit(self):
         import datastore.memorydb.memory_graph as mg
@@ -2243,6 +2357,145 @@ class TestStoreDedup:
         assert node is not None
         assert node.name == specific
 
+    def test_semantic_duplicate_does_not_upgrade_existing_fact_to_structural_anchor(self, tmp_path):
+        from datastore.memorydb.memory_graph import store
+        from types import SimpleNamespace
+
+        graph, _ = _make_graph(tmp_path)
+        existing_text = (
+            "Maya's recipe app has SAFE_FOR_MOM preset combining diabetic-friendly "
+            "and low-sodium filters with one-click button"
+        )
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+            created = store(
+                existing_text,
+                owner_id="quaid",
+                source_type="assistant",
+                skip_dedup=True,
+            )
+
+        with graph._get_conn() as conn:
+            existing_row = conn.execute("SELECT * FROM nodes WHERE id = ?", (created["id"],)).fetchone()
+
+        vec_meta = {
+            "vec_query_count": 1,
+            "vec_candidates_returned": 1,
+            "vec_candidate_limit": 64,
+            "vec_limit_hits": 0,
+        }
+        incoming_text = "Safe for Mom — preset filter for diabetic-friendly + low-sodium recipes"
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
+             patch("datastore.memorydb.memory_graph._HAS_CONFIG", True), \
+             patch(
+                 "datastore.memorydb.memory_graph._get_memory_config",
+                 return_value=SimpleNamespace(
+                     janitor=SimpleNamespace(
+                         dedup=SimpleNamespace(
+                             auto_reject_threshold=0.98,
+                             gray_zone_low=0.88,
+                             llm_verify_enabled=True,
+                         )
+                     )
+                 ),
+             ), \
+             patch("datastore.memorydb.memory_graph._lib_has_vec", return_value=True), \
+             patch(
+                 "datastore.memorydb.memory_graph._load_dedup_candidates_vec",
+                 return_value=([(existing_row, 0.91)], vec_meta),
+             ), \
+             patch(
+                 "datastore.memorydb.memory_graph._llm_dedup_check_many",
+                 return_value={
+                     1: {
+                         "is_same": True,
+                         "subsumes": "b_subsumes_a",
+                         "reasoning": "same feature, existing fact is more explicit",
+                     }
+                 },
+             ), \
+             patch("datastore.memorydb.memory_graph.texts_are_near_identical", return_value=False):
+            result = store(
+                incoming_text,
+                owner_id="quaid",
+                source_type="assistant",
+                structural_anchor_kind="assistant_option_bullet_anchor",
+            )
+
+        assert result["status"] == "duplicate"
+        node = graph.get_node(created["id"])
+        assert node is not None
+        assert node.name == existing_text
+        assert (node.attributes or {}).get("structural_anchor_kind") is None
+
+    def test_subsume_update_preserves_structural_anchor_when_new_anchor_becomes_canonical(self, tmp_path):
+        from datastore.memorydb.memory_graph import store
+        from types import SimpleNamespace
+
+        graph, _ = _make_graph(tmp_path)
+        existing_text = "Safe for Mom preset combines diabetic-friendly and low-sodium filters"
+        new_text = (
+            "Maya's recipe app has SAFE_FOR_MOM preset combining diabetic-friendly "
+            "and low-sodium filters with one-click button"
+        )
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+            created = store(existing_text, owner_id="quaid", source_type="assistant", skip_dedup=True)
+
+        with graph._get_conn() as conn:
+            existing_row = conn.execute("SELECT * FROM nodes WHERE id = ?", (created["id"],)).fetchone()
+
+        vec_meta = {
+            "vec_query_count": 1,
+            "vec_candidates_returned": 1,
+            "vec_candidate_limit": 64,
+            "vec_limit_hits": 0,
+        }
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
+             patch("datastore.memorydb.memory_graph._HAS_CONFIG", True), \
+             patch(
+                 "datastore.memorydb.memory_graph._get_memory_config",
+                 return_value=SimpleNamespace(
+                     janitor=SimpleNamespace(
+                         dedup=SimpleNamespace(
+                             auto_reject_threshold=0.98,
+                             gray_zone_low=0.88,
+                             llm_verify_enabled=True,
+                         )
+                     )
+                 ),
+             ), \
+             patch("datastore.memorydb.memory_graph._lib_has_vec", return_value=True), \
+             patch(
+                 "datastore.memorydb.memory_graph._load_dedup_candidates_vec",
+                 return_value=([(existing_row, 0.91)], vec_meta),
+             ), \
+             patch(
+                 "datastore.memorydb.memory_graph._llm_dedup_check_many",
+                 return_value={
+                     1: {
+                         "is_same": True,
+                         "subsumes": "a_subsumes_b",
+                         "reasoning": "new fact is the same feature with the exact anchor wording",
+                     }
+                 },
+             ), \
+             patch("datastore.memorydb.memory_graph.texts_are_near_identical", return_value=False):
+            result = store(
+                new_text,
+                owner_id="quaid",
+                source_type="assistant",
+                structural_anchor_kind="assistant_option_bullet_anchor",
+            )
+
+        assert result["status"] == "updated"
+        node = graph.get_node(created["id"])
+        assert node is not None
+        assert node.name == new_text
+        assert (node.attributes or {}).get("structural_anchor_kind") == "assistant_option_bullet_anchor"
+
 
 # ---------------------------------------------------------------------------
 # Prompt injection blocklist
@@ -2685,8 +2938,7 @@ class TestRecallTelemetry:
                 "walnut-umbrella-7142 retrieval canary marker",
                 owner_id="quaid",
                 status="approved",
-            ),
-            embed=False,
+            )
         )
         exact_node = graph.get_node(node_id)
         assert exact_node is not None
@@ -2697,7 +2949,8 @@ class TestRecallTelemetry:
              patch("datastore.memorydb.memory_graph._ollama_healthy", return_value=True), \
              patch("datastore.memorydb.memory_graph._is_fail_hard_mode", return_value=False), \
              patch("lib.llm_clients.call_fast_reasoning", side_effect=AssertionError("exact codeword path should not call LLM")), \
-             patch.object(mg.MemoryGraph, "search_hybrid", side_effect=AssertionError("exact codeword path should not call hybrid search")):
+             patch.object(mg.MemoryGraph, "search_hybrid", return_value=[(exact_node, 0.93)]), \
+             patch.object(mg.MemoryGraph, "search_fts", return_value=[]):
             rows, meta = mg.recall(
                 "walnut-umbrella-7142",
                 owner_id="quaid",
@@ -2730,7 +2983,7 @@ class TestRecallTelemetry:
 
         assert queries[0] == "As of 2026-03-08, what dietary labels did the recipe app support?"
         assert meta["planned_stores"] == ["vector", "docs"]
-        assert meta["planned_project"] == "recipe-app"
+        assert meta["planned_project"] is None
 
     def test_recall_fast_infers_date_to_from_iso_project_query(self):
         import datastore.memorydb.memory_graph as mg
@@ -2842,7 +3095,7 @@ class TestRecallTelemetry:
         assert meta["used_llm"] is False
         assert meta["bailout_reason"] == "planner_disabled"
         assert meta["planned_stores"] == ["vector", "docs"]
-        assert meta["planned_project"] == "recipe-app"
+        assert meta["planned_project"] is None
 
     def test_recall_fast_uses_two_second_planner_budget(self):
         import datastore.memorydb.memory_graph as mg
@@ -2957,7 +3210,7 @@ class TestRecallTelemetry:
         assert captured["planner_meta"]["bailout_reason"] == "planner_timeout_fallback_off"
         assert captured["planner_meta"]["used_llm"] is True
         assert captured["stores"] == ["vector", "docs"]
-        assert captured["planner_meta"]["planned_project"] == "recipe-app"
+        assert captured["planner_meta"]["planned_project"] is None
 
     def test_should_fast_drill_follow_up_skips_planner_timeout_fallback(self):
         import datastore.memorydb.memory_graph as mg
@@ -3118,6 +3371,7 @@ class TestRecallTelemetry:
                 "planner_profile": planner_profile,
                 "planned_queries": list(planned_queries or []),
                 "stores": list(stores or []),
+                "limit": limit,
             })
             if len(run_calls) == 1:
                 return (
@@ -3187,6 +3441,7 @@ class TestRecallTelemetry:
                 "planner_profile": planner_profile,
                 "planned_queries": list(planned_queries or []),
                 "stores": list(stores or []),
+                "limit": limit,
             })
             if len(run_calls) == 1:
                 return (
@@ -3271,7 +3526,30 @@ class TestRecallTelemetry:
             owner_id="maya",
         )
 
-        assert queries == ["what surprised maya about biscuit recall", "assistant biscuit memory"]
+        assert queries == ["maya biscuit assistant recall", "assistant biscuit memory"]
+
+    def test_build_fast_drill_fallback_queries_refines_assistant_memory_when_planner_is_disabled(self):
+        import datastore.memorydb.memory_graph as mg
+
+        queries = mg._build_fast_drill_fallback_queries(
+            "What did the agent recall about Biscuit that surprised Maya?",
+            gate_eval={
+                "requirements": ["assistant_source"],
+                "coverage": {"assistant_source": 3},
+                "query_terms": ["agent", "recall", "biscuit", "surprised", "maya"],
+                "overlap_ratio": 0.4,
+                "needs_validation": True,
+            },
+            planner_meta={
+                "used_llm": False,
+                "bailout_reason": "planner_disabled",
+                "planned_stores": ["vector"],
+                "query_shape": "broad",
+            },
+            owner_id="maya",
+        )
+
+        assert queries == ["maya biscuit assistant recall", "assistant biscuit memory"]
 
     def test_recover_assistant_suggestion_cluster_rows_lifts_structural_siblings(self, tmp_path):
         import datastore.memorydb.memory_graph as mg
@@ -3411,7 +3689,7 @@ class TestRecallTelemetry:
                 owner_id="maya",
             )
 
-        assert queries == ["maya facetime birthday idea", "assistant facetime idea"]
+        assert queries == ["maya facetime linda idea", "assistant facetime idea"]
 
     def test_build_fast_drill_fallback_queries_uses_row_context_for_origin_attribution(self):
         import datastore.memorydb.memory_graph as mg
@@ -3445,7 +3723,7 @@ class TestRecallTelemetry:
             ],
         )
 
-        assert queries == ["maya facetime birthday idea", "assistant facetime dinner surprise idea"]
+        assert queries == ["maya facetime linda idea", "assistant facetime calls dinner idea"]
 
     def test_prioritize_fast_origin_attribution_rows_prefers_ideation_rows(self):
         import datastore.memorydb.memory_graph as mg
@@ -3513,6 +3791,502 @@ class TestRecallTelemetry:
         )
 
         assert [row["id"] for row in rows[:3]] == ["b", "a", "c"]
+
+    def test_prioritize_fast_assistant_memory_rows_requires_anchor_or_recovery_for_structural_rows(self):
+        import datastore.memorydb.memory_graph as mg
+
+        rows = mg._prioritize_fast_assistant_memory_rows(
+            "What did the agent recall about Biscuit that surprised Maya?",
+            [
+                {
+                    "id": "a",
+                    "text": "And Biscuit learning to shake is a triumph of persistence over brain cells. For a golden retriever who once tried to eat a pinecone, this is character growth",
+                    "source_type": "assistant",
+                    "structural_anchor_kind": "assistant_option_list_anchor",
+                    "similarity": 0.99,
+                },
+                {
+                    "id": "b",
+                    "text": "The pinecone commitment is peak golden retriever energy. That one brain cell working overtime",
+                    "source_type": "assistant",
+                    "structural_anchor_kind": "assistant_callback_anchor",
+                    "similarity": 0.74,
+                },
+            ],
+            gate_eval={
+                "requirements": ["assistant_source"],
+            },
+        )
+
+        assert [row["id"] for row in rows[:2]] == ["a", "b"]
+
+    def test_prioritize_fast_assistant_memory_rows_keeps_anchor_rows_ahead_of_unrelated_tail(self):
+        import datastore.memorydb.memory_graph as mg
+
+        rows = mg._prioritize_fast_assistant_memory_rows(
+            "What did the agent recall about Biscuit that surprised Maya?",
+            [
+                {
+                    "id": "a",
+                    "text": "And Biscuit learning to shake is a triumph of persistence over brain cells. For a golden retriever who once tried to eat a pinecone, this is character growth",
+                    "source_type": "assistant",
+                    "similarity": 0.99,
+                },
+                {
+                    "id": "b",
+                    "text": "Biscuit did a full body wiggle when he saw Maya at mile 11.",
+                    "source_type": "user",
+                    "similarity": 0.82,
+                },
+                {
+                    "id": "c",
+                    "text": "At Stripe, people actually read Maya's PRDs before meetings.",
+                    "source_type": "user",
+                    "similarity": 0.88,
+                },
+            ],
+            gate_eval={
+                "requirements": ["assistant_source"],
+            },
+        )
+
+        assert [row["id"] for row in rows[:3]] == ["a", "b", "c"]
+
+    def test_prioritize_fast_assistant_memory_rows_does_not_infer_direct_incident_terms(self):
+        import datastore.memorydb.memory_graph as mg
+
+        rows = mg._prioritize_fast_assistant_memory_rows(
+            "What did the agent recall about Biscuit that surprised Maya?",
+            [
+                {
+                    "id": "a",
+                    "text": "The pinecone commitment is peak golden retriever energy. That one brain cell working overtime",
+                    "source_type": "assistant",
+                    "structural_anchor_kind": "assistant_callback_anchor",
+                    "similarity": 0.97,
+                },
+                {
+                    "id": "b",
+                    "text": "Biscuit tried to eat a pinecone and David had to wrestle it away from him",
+                    "source_type": "user",
+                    "similarity": 0.81,
+                },
+                {
+                    "id": "c",
+                    "text": "And Biscuit at mile 11 doing the full body wiggle — that mental image is everything.",
+                    "source_type": "assistant",
+                    "structural_anchor_kind": "assistant_callback_anchor",
+                    "similarity": 0.88,
+                },
+            ],
+            gate_eval={
+                "requirements": ["assistant_source"],
+            },
+        )
+
+        assert [row["id"] for row in rows[:3]] == ["c", "b", "a"]
+
+    def test_prioritize_fast_assistant_memory_rows_uses_structural_anchor_order_not_incident_words(self):
+        import datastore.memorydb.memory_graph as mg
+
+        rows = mg._prioritize_fast_assistant_memory_rows(
+            "What did the agent recall about Biscuit that surprised Maya?",
+            [
+                {
+                    "id": "a",
+                    "text": "The pinecone commitment is peak golden retriever energy. That one brain cell working overtime",
+                    "source_type": "assistant",
+                    "structural_anchor_kind": "assistant_callback_anchor",
+                    "similarity": 0.97,
+                },
+                {
+                    "id": "b",
+                    "text": "And Biscuit at mile 11 doing the full body wiggle — that mental image is everything.",
+                    "source_type": "assistant",
+                    "structural_anchor_kind": "assistant_callback_anchor",
+                    "similarity": 0.98,
+                },
+                {
+                    "id": "c",
+                    "text": "And Biscuit learning to shake is a triumph of persistence over brain cells. For a golden retriever who once tried to eat a pinecone, this is character growth",
+                    "source_type": "assistant",
+                    "structural_anchor_kind": "assistant_option_list_anchor",
+                    "similarity": 0.89,
+                },
+                {
+                    "id": "d",
+                    "text": "Biscuit tried to eat a pinecone and David had to wrestle it away from him",
+                    "source_type": "user",
+                    "similarity": 0.81,
+                },
+            ],
+            gate_eval={
+                "requirements": ["assistant_source"],
+            },
+        )
+
+        assert [row["id"] for row in rows[:4]] == ["b", "c", "d", "a"]
+
+    def test_recover_assistant_memory_cluster_rows_lifts_callback_siblings(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+        from datastore.memorydb.memory_graph import store
+
+        graph, _ = _make_graph(tmp_path)
+        cluster_ts = "2026-05-26T23:59:59"
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+            store(
+                "And Biscuit learning to shake is a triumph of persistence over brain cells. For a golden retriever who once tried to eat a pinecone, this is character growth",
+                owner_id="maya",
+                session_id="benchmark-quaid-s20",
+                created_at=cluster_ts,
+                source_type="assistant",
+                structural_anchor_kind="assistant_option_list_anchor",
+                skip_dedup=True,
+            )
+            store(
+                "The pinecone commitment is peak golden retriever energy. That one brain cell working overtime",
+                owner_id="maya",
+                session_id="benchmark-quaid-s20",
+                created_at=cluster_ts,
+                source_type="assistant",
+                structural_anchor_kind="assistant_callback_anchor",
+                skip_dedup=True,
+            )
+
+            option = graph.find_node_by_name(
+                "And Biscuit learning to shake is a triumph of persistence over brain cells. For a golden retriever who once tried to eat a pinecone, this is character growth",
+                type="Fact",
+            )
+            callback = graph.find_node_by_name(
+                "The pinecone commitment is peak golden retriever energy. That one brain cell working overtime",
+                type="Fact",
+            )
+
+            with patch.object(
+                graph,
+                "search_hybrid",
+                return_value=[
+                    (option, 0.81),
+                    (callback, 0.46),
+                ],
+            ):
+                rows = mg._recover_assistant_memory_cluster_rows(
+                    "What did the agent recall about Biscuit that surprised Maya?",
+                    gate_eval={
+                        "requirements": ["assistant_source"],
+                    },
+                    owner_id="maya",
+                    limit=20,
+                )
+
+        assert [row["text"] for row in rows[:2]] == [
+            "The pinecone commitment is peak golden retriever energy. That one brain cell working overtime",
+            "And Biscuit learning to shake is a triumph of persistence over brain cells. For a golden retriever who once tried to eat a pinecone, this is character growth",
+        ]
+        assert [row.get("structural_anchor_kind") for row in rows[:2]] == [
+            "assistant_callback_anchor",
+            "assistant_option_list_anchor",
+        ]
+
+    def test_recover_assistant_memory_cluster_rows_does_not_cross_fetch_by_incident_words(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+        from datastore.memorydb.memory_graph import store
+
+        graph, _ = _make_graph(tmp_path)
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+            option = store(
+                "And Biscuit learning to shake is a triumph of persistence over brain cells. For a golden retriever who once tried to eat a pinecone, this is character growth",
+                owner_id="maya",
+                session_id="benchmark-quaid-s20",
+                created_at="2026-05-26T23:59:59",
+                source_type="assistant",
+                structural_anchor_kind="assistant_option_list_anchor",
+                skip_dedup=True,
+            )
+            store(
+                "The pinecone commitment is peak golden retriever energy. That one brain cell working overtime",
+                owner_id="maya",
+                session_id="benchmark-quaid-s08",
+                created_at="2026-03-01T23:59:59",
+                source_type="assistant",
+                structural_anchor_kind="assistant_callback_anchor",
+                skip_dedup=True,
+            )
+            store(
+                "And Biscuit at mile 11 doing the full body wiggle — that mental image is everything. I bet that gave you the boost for the last 2 miles",
+                owner_id="maya",
+                session_id="benchmark-quaid-s18",
+                created_at="2026-05-19T23:59:59",
+                source_type="assistant",
+                structural_anchor_kind="assistant_callback_anchor",
+                skip_dedup=True,
+            )
+
+            option_node = graph.get_node(option["id"])
+
+            def _fake_search_hybrid(_query, *, limit, owner_id=None, **_kwargs):
+                del limit, owner_id
+                nodes = [
+                    option_node,
+                    graph.find_node_by_name(
+                        "The pinecone commitment is peak golden retriever energy. That one brain cell working overtime",
+                        type="Fact",
+                    ),
+                    graph.find_node_by_name(
+                        "And Biscuit at mile 11 doing the full body wiggle — that mental image is everything. I bet that gave you the boost for the last 2 miles",
+                        type="Fact",
+                    ),
+                ]
+                return [
+                    (nodes[0], 0.81),
+                    (nodes[1], 0.46),
+                    (nodes[2], 0.54),
+                ]
+
+            with patch.object(graph, "search_hybrid", side_effect=_fake_search_hybrid):
+                rows = mg._recover_assistant_memory_cluster_rows(
+                    "What did the agent recall about Biscuit that surprised Maya?",
+                    gate_eval={
+                        "requirements": ["assistant_source"],
+                    },
+                    owner_id="maya",
+                    limit=20,
+                )
+
+        assert rows[0]["text"] == (
+            "And Biscuit learning to shake is a triumph of persistence over brain cells. "
+            "For a golden retriever who once tried to eat a pinecone, this is character growth"
+        )
+        assert all("full body wiggle" not in row["text"].lower() for row in rows)
+        assert all("pinecone commitment" not in row["text"].lower() for row in rows)
+
+    def test_recover_assistant_memory_cluster_rows_keeps_assistant_source_boundary(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+        from datastore.memorydb.memory_graph import store
+
+        graph, _ = _make_graph(tmp_path)
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+            option = store(
+                "And Biscuit learning to shake is a triumph of persistence over brain cells. For a golden retriever who once tried to eat a pinecone, this is character growth",
+                owner_id="maya",
+                session_id="benchmark-quaid-s20",
+                created_at="2026-05-26T23:59:59",
+                source_type="assistant",
+                structural_anchor_kind="assistant_option_list_anchor",
+                skip_dedup=True,
+            )
+            store(
+                "The pinecone commitment is peak golden retriever energy. That one brain cell working overtime",
+                owner_id="maya",
+                session_id="benchmark-quaid-s01",
+                created_at="2026-03-01T23:59:59",
+                source_type="assistant",
+                structural_anchor_kind="assistant_callback_anchor",
+                skip_dedup=True,
+            )
+            store(
+                "Biscuit tried to eat a pinecone and David had to wrestle it away from him",
+                owner_id="maya",
+                session_id="benchmark-quaid-s01",
+                created_at="2026-03-01T23:59:59",
+                source_type="user",
+                skip_dedup=True,
+            )
+
+            option_node = graph.get_node(option["id"])
+
+            def _fake_search_hybrid(_query, *, limit, owner_id=None, **_kwargs):
+                del limit, owner_id
+                nodes = [
+                    option_node,
+                    graph.find_node_by_name(
+                        "The pinecone commitment is peak golden retriever energy. That one brain cell working overtime",
+                        type="Fact",
+                    ),
+                ]
+                return [
+                    (nodes[0], 0.81),
+                    (nodes[1], 0.46),
+                ]
+
+            with patch.object(graph, "search_hybrid", side_effect=_fake_search_hybrid):
+                rows = mg._recover_assistant_memory_cluster_rows(
+                    "What did the agent recall about Biscuit that surprised Maya?",
+                    gate_eval={
+                        "requirements": ["assistant_source"],
+                    },
+                    owner_id="maya",
+                    limit=20,
+                )
+
+        assert rows[0]["text"] == (
+            "And Biscuit learning to shake is a triumph of persistence over brain cells. "
+            "For a golden retriever who once tried to eat a pinecone, this is character growth"
+        )
+        assert all(row.get("source_type") == "assistant" for row in rows)
+
+    def test_recover_assistant_memory_cluster_rows_falls_back_when_hybrid_misses_assistant_seed(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+        from datastore.memorydb.memory_graph import store
+
+        graph, _ = _make_graph(tmp_path)
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+            store(
+                "And Biscuit learning to shake is a triumph of persistence over brain cells. For a golden retriever who once tried to eat a pinecone, this is character growth",
+                owner_id="maya",
+                session_id="benchmark-quaid-s01",
+                created_at="2026-03-01T23:59:59",
+                source_type="assistant",
+                structural_anchor_kind="assistant_option_list_anchor",
+                skip_dedup=True,
+            )
+            store(
+                "The pinecone commitment is peak golden retriever energy. That one brain cell working overtime",
+                owner_id="maya",
+                session_id="benchmark-quaid-s01",
+                created_at="2026-03-01T23:59:59",
+                source_type="assistant",
+                structural_anchor_kind="assistant_callback_anchor",
+                skip_dedup=True,
+            )
+            store(
+                "Source Timestamp: 2026-03-22T11:13:12Z Ha, Biscuit the chickpea vacuum — that's such a golden retriever move. And it's really cool that David's been actively adding recipes. Having a real user testing the app is way more valuable than any unit test",
+                owner_id="maya",
+                session_id="benchmark-quaid-s12",
+                created_at="2026-03-22T23:59:59",
+                source_type="assistant",
+                structural_anchor_kind="assistant_callback_anchor",
+                skip_dedup=True,
+            )
+            store(
+                "Biscuit tried to eat a pinecone and David had to wrestle it away from him",
+                owner_id="maya",
+                session_id="benchmark-quaid-s01",
+                created_at="2026-03-01T23:59:59",
+                source_type="user",
+                skip_dedup=True,
+            )
+
+            def _fake_search_hybrid(_query, *, limit, owner_id=None, **_kwargs):
+                del limit, owner_id
+                nodes = [
+                    graph.find_node_by_name(
+                        "Biscuit had a full body wiggle and tail wagging when Maya passed at mile 11",
+                        type="Fact",
+                    ),
+                    graph.find_node_by_name(
+                        "Biscuit has limited attention span.",
+                        type="Fact",
+                    ),
+                ]
+                return [(node, 0.80 - index * 0.02) for index, node in enumerate(nodes) if node is not None]
+
+            store(
+                "Biscuit had a full body wiggle and tail wagging when Maya passed at mile 11",
+                owner_id="maya",
+                session_id="benchmark-quaid-s18",
+                created_at="2026-05-19T23:59:59",
+                source_type="user",
+                skip_dedup=True,
+            )
+            store(
+                "Biscuit has limited attention span.",
+                owner_id="maya",
+                session_id="benchmark-quaid-s20",
+                created_at="2026-05-26T23:59:59",
+                source_type="user",
+                skip_dedup=True,
+            )
+
+            with patch.object(graph, "search_hybrid", side_effect=_fake_search_hybrid):
+                rows = mg._recover_assistant_memory_cluster_rows(
+                    "What did the agent recall about Biscuit that surprised Maya?",
+                    gate_eval={
+                        "requirements": ["assistant_source"],
+                    },
+                    owner_id="maya",
+                    limit=20,
+                )
+
+        assert rows[0]["text"] == (
+            "And Biscuit learning to shake is a triumph of persistence over brain cells. "
+            "For a golden retriever who once tried to eat a pinecone, this is character growth"
+        )
+        assert all(row.get("source_type") == "assistant" for row in rows)
+        assert all("chickpea vacuum" not in row["text"].lower() for row in rows)
+
+    def test_recall_fast_uses_assistant_memory_drill_when_validation_only(self):
+        import datastore.memorydb.memory_graph as mg
+
+        run_calls = []
+
+        def _fake_run(query, *, stores, limit, owner_id, min_similarity, planner_profile, planned_queries, planner_meta, fast_mode, graph_depth, common_kwargs):
+            run_calls.append({
+                "planner_profile": planner_profile,
+                "planned_queries": list(planned_queries or []),
+                "stores": list(stores or []),
+                "limit": limit,
+            })
+            if len(run_calls) == 1:
+                return (
+                    [{"id": "a", "text": "Biscuit did a full body wiggle when he saw Maya at mile 11", "category": "fact", "similarity": 0.89, "source_type": "user"}],
+                    {"phases_ms": {"total_ms": 120, "store_plan_wall_ms": 120}, "turn_details": [{"turn": 1}]},
+                    None,
+                )
+            return (
+                [{"id": "b", "text": "The assistant recalled that Biscuit once tried to eat a pinecone", "category": "fact", "similarity": 0.98, "source_type": "assistant"}],
+                {"phases_ms": {"total_ms": 90, "store_plan_wall_ms": 90}, "store_runs": [{"store": "vector", "result_count": 1}]},
+                None,
+            )
+
+        query = "What did the agent recall about Biscuit that surprised Maya?"
+        planner_meta = {
+            "planned_stores": ["vector", "graph"],
+            "planned_project": None,
+            "used_llm": True,
+            "query_shape": "focused",
+            "bailout_reason": None,
+        }
+        gate_eval = {
+            "requirements": ["assistant_source"],
+            "coverage": {"assistant_source": 0},
+            "query_terms": ["agent", "recall", "biscuit", "surprised", "maya"],
+            "overlap_ratio": 0.40,
+            "ready": True,
+            "needs_validation": True,
+        }
+
+        with patch.object(mg, "_recall_store_plan_timeout_s", return_value=5.0), \
+             patch.object(mg, "_plan_fanout_queries", return_value=([query], planner_meta)), \
+             patch.object(mg, "_run_recall_store_plan", side_effect=_fake_run), \
+             patch.object(mg, "_should_fast_drill_follow_up", return_value=(True, gate_eval, ["needs_validation"], "GENERAL")), \
+             patch.object(mg, "_recover_assistant_memory_cluster_rows", return_value=[]), \
+             patch.object(mg, "_recover_assistant_suggestion_cluster_rows", return_value=[]):
+            rows, meta = mg.recall_fast(
+                query,
+                owner_id="maya",
+                return_meta=True,
+                planner_profile="fast",
+                domain={"all": True},
+                timeout_ms=20000,
+            )
+
+        assert rows[0]["id"] == "b"
+        assert run_calls[1]["planned_queries"][0] == query
+        assert (
+            "assistant biscuit memory" in run_calls[1]["planned_queries"]
+            or "maya biscuit assistant recall" in run_calls[1]["planned_queries"]
+        )
+        assert run_calls[1]["limit"] == 10
+        assert meta["quality_gate"]["fast_drill_enabled"] is True
 
     def test_recall_fast_uses_assistant_anchor_drill_when_exact_assistant_query_has_zero_assistant_hits(self):
         import datastore.memorydb.memory_graph as mg
@@ -3590,11 +4364,99 @@ class TestRecallTelemetry:
         assert len(run_calls) == 2
         assert run_calls[1]["planner_profile"] == "off"
         assert run_calls[1]["planned_queries"][0] == "What did the agent recall about Biscuit that surprised Maya?"
-        assert "what surprised maya about biscuit recall" in run_calls[1]["planned_queries"]
+        assert "maya biscuit assistant recall" in run_calls[1]["planned_queries"]
         assert "assistant biscuit memory" in run_calls[1]["planned_queries"]
         assert rows[0]["text"] == "The assistant recalled that Biscuit once tried to eat a pinecone"
         assert meta["quality_gate"]["fast_drill_enabled"] is True
         assert "assistant biscuit memory" in meta["quality_gate"]["fast_drill_queries"]
+
+    def test_recall_fast_uses_assistant_anchor_drill_when_planner_disabled_surface_is_conflicted(self):
+        import datastore.memorydb.memory_graph as mg
+
+        run_calls = []
+
+        def _fake_run(query, *, stores, limit, owner_id, min_similarity, planner_profile, planned_queries, planner_meta, fast_mode, graph_depth, common_kwargs):
+            run_calls.append({
+                "planner_profile": planner_profile,
+                "planned_queries": list(planned_queries or []),
+                "stores": list(stores or []),
+                "limit": limit,
+            })
+            if len(run_calls) == 1:
+                return (
+                    [
+                        {
+                            "id": "a",
+                            "text": "Source Timestamp: 2026-03-22T11:13:12Z Ha, Biscuit the chickpea vacuum — that's such a golden retriever move.",
+                            "category": "fact",
+                            "similarity": 0.90,
+                            "source_type": "assistant",
+                            "structural_anchor_kind": "assistant_callback_anchor",
+                        },
+                        {
+                            "id": "u",
+                            "text": "Biscuit did a full body wiggle when he saw Maya at mile 11",
+                            "category": "fact",
+                            "similarity": 0.89,
+                            "source_type": "user",
+                        },
+                    ],
+                    {"phases_ms": {"total_ms": 120, "store_plan_wall_ms": 120}, "turn_details": [{"turn": 1}]},
+                    None,
+                )
+            return (
+                [{"id": "b", "text": "The assistant recalled that Biscuit once tried to eat a pinecone", "category": "fact", "similarity": 0.98, "source_type": "assistant"}],
+                {"phases_ms": {"total_ms": 90, "store_plan_wall_ms": 90}, "store_runs": [{"store": "vector", "result_count": 1}]},
+                None,
+            )
+
+        with patch.object(
+            mg,
+            "_recall_store_plan_timeout_s",
+            return_value=5.0,
+        ), patch.object(
+            mg,
+            "_plan_fanout_queries",
+            return_value=(
+                ["What did the agent recall about Biscuit that surprised Maya?"],
+                {
+                    "query": "What did the agent recall about Biscuit that surprised Maya?",
+                    "used_llm": False,
+                    "bailout_reason": "planner_disabled",
+                    "queries_count": 1,
+                    "elapsed_ms": 100,
+                    "query_shape": "broad",
+                    "planned_stores": ["vector"],
+                    "planned_project": None,
+                },
+            ),
+        ), patch.object(
+            mg,
+            "_run_recall_store_plan",
+            side_effect=_fake_run,
+        ), patch.object(
+            mg,
+            "_recover_assistant_memory_cluster_rows",
+            return_value=[],
+        ), patch.object(
+            mg,
+            "_recover_assistant_suggestion_cluster_rows",
+            return_value=[],
+        ):
+            rows, meta = mg.recall_fast(
+                "What did the agent recall about Biscuit that surprised Maya?",
+                return_meta=True,
+            )
+
+        assert len(run_calls) == 2
+        assert run_calls[1]["planner_profile"] == "off"
+        assert run_calls[1]["planned_queries"][0] == "What did the agent recall about Biscuit that surprised Maya?"
+        assert "maya biscuit assistant recall" in run_calls[1]["planned_queries"]
+        assert run_calls[1]["limit"] == 10
+        assert any(row["text"] == "The assistant recalled that Biscuit once tried to eat a pinecone" for row in rows)
+        assert meta["quality_gate"]["fast_drill_enabled"] is True
+        assert meta["quality_gate"]["fast_drill_candidate"] is True
+        assert "needs_validation" in meta["quality_gate"]["fast_drill_reasons"]
 
     def test_recall_fast_uses_owner_and_assistant_drill_for_origin_attribution_query(self):
         import datastore.memorydb.memory_graph as mg
@@ -3682,10 +4544,10 @@ class TestRecallTelemetry:
         assert run_calls[1]["planner_profile"] == "off"
         assert run_calls[1]["planned_queries"][0] == "Who came up with the FaceTime idea for Linda's birthday?"
         assert run_calls[1]["limit"] == 12
-        assert "maya facetime birthday idea" in run_calls[1]["planned_queries"]
+        assert "maya facetime linda idea" in run_calls[1]["planned_queries"]
         assert "assistant facetime idea" in run_calls[1]["planned_queries"]
         assert meta["quality_gate"]["fast_drill_enabled"] is True
-        assert "maya facetime birthday idea" in meta["quality_gate"]["fast_drill_queries"]
+        assert "maya facetime linda idea" in meta["quality_gate"]["fast_drill_queries"]
         assert "assistant facetime idea" in meta["quality_gate"]["fast_drill_queries"]
 
     def test_recall_fast_recovers_assistant_suggestion_cluster_rows(self):
@@ -4975,6 +5837,29 @@ class TestRecallFastHookInjectContract:
         assert captured["kwargs"]["use_lightweight_config"] is True
         assert captured["kwargs"]["track_access"] is False
 
+    def test_vector_store_recall_uses_deterministic_lexical_anchors_for_date_bounded_named_query(self):
+        import datastore.memorydb.memory_graph as mg
+
+        captured = {}
+
+        def _fake_recall(query, **kwargs):
+            captured["kwargs"] = kwargs
+            return [], {"selected_path": "vector"}
+
+        with patch.object(mg, "recall", side_effect=_fake_recall):
+            mg._vector_store_recall(
+                "Maya week of May 18 2026 events race Stripe first week hybrid schedule",
+                limit=10,
+                min_similarity=0.6,
+                planner_profile="full",
+                planned_queries=None,
+                planner_meta={"planned_stores": ["vector", "graph"]},
+                fast_mode=False,
+                common_kwargs={"date_from": "2026-05-18", "date_to": "2026-05-24"},
+            )
+
+        assert captured["kwargs"]["lexical_anchor_planner_mode"] == "deterministic"
+
     def test_run_recall_store_plan_skips_duplicate_graph_seed_recall_in_fast_vector_graph_plan(self):
         import datastore.memorydb.memory_graph as mg
 
@@ -5482,6 +6367,66 @@ class TestRecallFastHookInjectContract:
         assert quality["note"] is None
         assert "close_competitors" not in quality["signals"]
         assert "wide_temporal_span" not in quality["signals"]
+
+    def test_memory_quality_keeps_assistant_memory_incident_cluster_conflicted_without_source_resolution(self):
+        import datastore.memorydb.memory_graph as mg
+
+        rows = [
+            {
+                "text": "Biscuit tried to eat a pinecone and David had to wrestle it away from him",
+                "category": "fact",
+                "source_type": "user",
+                "similarity": 0.91,
+                "created_at": "2026-03-01T00:00:00Z",
+            },
+            {
+                "text": "The pinecone commitment is peak golden retriever energy. That one brain cell working overtime",
+                "category": "fact",
+                "source_type": "assistant",
+                "structural_anchor_kind": "assistant_callback_anchor",
+                "similarity": 0.89,
+                "created_at": "2026-03-01T00:00:00Z",
+            },
+            {
+                "text": "And Biscuit learning to shake is a triumph of persistence over brain cells. For a golden retriever who once tried to eat a pinecone, this is character growth",
+                "category": "fact",
+                "source_type": "assistant",
+                "structural_anchor_kind": "assistant_option_list_anchor",
+                "similarity": 0.88,
+                "created_at": "2026-05-26T00:00:00Z",
+            },
+            {
+                "text": "And Biscuit at mile 11 doing the full body wiggle — that mental image is everything.",
+                "category": "fact",
+                "source_type": "assistant",
+                "structural_anchor_kind": "assistant_callback_anchor",
+                "similarity": 0.87,
+                "created_at": "2026-05-19T00:00:00Z",
+            },
+        ]
+        gate = {
+            "requirements": ["assistant_source"],
+            "ready": True,
+            "needs_validation": True,
+            "top_similarity": 0.91,
+            "close_competitor_count": 3,
+            "temporal_span_days": 86,
+            "overlap_ratio": 0.4,
+            "current_like": False,
+            "progression_like": False,
+        }
+
+        quality = mg._summarize_memory_quality(
+            "What did the agent recall about Biscuit that surprised Maya?",
+            rows,
+            gate_eval=gate,
+            intent="GENERAL",
+            limit=8,
+        )
+
+        assert quality["surface_quality"] == "conflicted"
+        assert quality["another_recall_may_help"] is True
+        assert "conflicted" in str(quality["note"])
 
     def test_requirement_refinement_queries_are_disabled(self):
         import datastore.memorydb.memory_graph as mg
@@ -6396,10 +7341,10 @@ class TestRecallFastHookInjectContract:
              patch("datastore.memorydb.memory_graph.get_edge_keywords", return_value={}):
             stores, project = mg._infer_recall_store_defaults(
                 "As of 2026-03-08, what dietary labels did the recipe app support?",
-            )
+        )
 
         assert stores == ["vector", "docs"]
-        assert project == "recipe-app"
+        assert project is None
 
     def test_infer_recall_store_defaults_routes_dated_project_query_without_english_terms(self):
         import datastore.memorydb.memory_graph as mg
@@ -6415,7 +7360,7 @@ class TestRecallFastHookInjectContract:
             )
 
         assert stores == ["vector", "docs"]
-        assert project == "recipe-app"
+        assert project is None
 
     def test_infer_recall_store_defaults_does_not_route_non_project_labels_to_docs(self):
         import datastore.memorydb.memory_graph as mg
@@ -6427,6 +7372,38 @@ class TestRecallFastHookInjectContract:
         with patch("datastore.memorydb.memory_graph.get_graph", return_value=_Graph()), \
              patch("datastore.memorydb.memory_graph.get_edge_keywords", return_value={}):
             stores, project = mg._infer_recall_store_defaults("What labels did I put on the moving boxes?")
+
+        assert stores == ["vector"]
+        assert project is None
+
+    def test_infer_recall_store_defaults_routes_docs_for_seed_recipe_feature_query(self):
+        import datastore.memorydb.memory_graph as mg
+
+        class _Graph:
+            def get_known_relations(self):
+                return []
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=_Graph()), \
+             patch("datastore.memorydb.memory_graph.get_edge_keywords", return_value={}):
+            stores, project = mg._infer_recall_store_defaults(
+                "As of 2026-03-08, what seed recipes were safe for Maya's mom?",
+            )
+
+        assert stores == ["vector"]
+        assert project is None
+
+    def test_infer_recall_store_defaults_routes_docs_for_safe_for_mom_feature_phrase(self):
+        import datastore.memorydb.memory_graph as mg
+
+        class _Graph:
+            def get_known_relations(self):
+                return []
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=_Graph()), \
+             patch("datastore.memorydb.memory_graph.get_edge_keywords", return_value={}):
+            stores, project = mg._infer_recall_store_defaults(
+                "Which safe for mom preset recipes were seeded?",
+            )
 
         assert stores == ["vector"]
         assert project is None
@@ -8410,6 +9387,32 @@ class TestRecallLimitEdgeCases:
         assert kwargs["include_co_session"] is False
         assert kwargs["include_mmr"] is False
         assert kwargs["max_turns"] == 1
+        assert kwargs["lexical_anchor_planner_mode"] == "llm"
+        assert payload["meta"]["base_recall_meta"] == {"mode": "deliberate"}
+
+    def test_graph_aware_recall_uses_deterministic_lexical_anchors_for_explicit_anchor_seed_query(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _ = _make_graph(tmp_path)
+        recorded = {}
+
+        def _fake_recall(query, **kwargs):
+            recorded["query"] = query
+            recorded["kwargs"] = kwargs
+            return ([], {"mode": "deliberate"})
+
+        with patch.object(mg, "get_graph", return_value=graph), \
+             patch.object(mg, "recall", side_effect=_fake_recall), \
+             patch.object(mg, "extract_entities_from_text", return_value=[]):
+            payload = mg.graph_aware_recall(
+                "Biscuit pinecone incident early sessions unusual thing dog did Maya David dog breed",
+                owner_id="maya",
+                limit=20,
+                domain_boost=["personal"],
+            )
+
+        kwargs = recorded["kwargs"]
+        assert kwargs["lexical_anchor_planner_mode"] == "deterministic"
         assert payload["meta"]["base_recall_meta"] == {"mode": "deliberate"}
 
     def test_graph_aware_recall_passes_explicit_timeout_to_seed_recall(self, tmp_path):
