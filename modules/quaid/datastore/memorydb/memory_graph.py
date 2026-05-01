@@ -5995,6 +5995,13 @@ def _run_recall_store_plan(
         merged = _prioritize_fast_anchor_direct_rows(query, merged)
     merged = _prioritize_date_relation_callback_rows(query, merged)
     merged = _prioritize_named_entity_activity_anchor_rows(query, merged)
+    if kwargs.get("date_from") or kwargs.get("date_to"):
+        merged = _filter_recall_rows_by_date_bounds(
+            merged,
+            date_from=kwargs.get("date_from"),
+            date_to=kwargs.get("date_to"),
+            keep_undated=True,
+        )
     final_rows = merged[:limit]
     final_rows, preserved_docs_rows = _preserve_requested_docs_rows(
         final_rows,
@@ -6002,6 +6009,13 @@ def _run_recall_store_plan(
         limit=limit,
         date_to=kwargs.get("date_to"),
     )
+    if kwargs.get("date_from") or kwargs.get("date_to"):
+        final_rows = _filter_recall_rows_by_date_bounds(
+            final_rows,
+            date_from=kwargs.get("date_from"),
+            date_to=kwargs.get("date_to"),
+            keep_undated=True,
+        )
     if _store_meta_result_count(base_meta) <= 0:
         for _, candidate_meta in store_meta_entries:
             if _store_meta_result_count(candidate_meta) > 0:
@@ -9572,6 +9586,7 @@ def _filter_recall_rows_by_date_bounds(
     *,
     date_from: Optional[str],
     date_to: Optional[str],
+    keep_undated: bool = False,
 ) -> List[Dict[str, Any]]:
     """Return only recall rows whose best temporal date falls within bounds."""
     normalized_from = _normalize_recall_date_bound(date_from)
@@ -9584,6 +9599,8 @@ def _filter_recall_rows_by_date_bounds(
             continue
         date_part = _recall_row_temporal_date(row)
         if not date_part:
+            if keep_undated:
+                filtered.append(row)
             continue
         if normalized_from and date_part < normalized_from:
             continue
@@ -13224,6 +13241,13 @@ def recall(
         merged = _prioritize_deliberate_fresh_direct_anchor_rows(query, merged)
         merged = _prioritize_date_relation_callback_rows(query, merged)
         merged = _prioritize_named_entity_activity_anchor_rows(query, merged)
+        if date_from or date_to:
+            merged = _filter_recall_rows_by_date_bounds(
+                merged,
+                date_from=date_from,
+                date_to=date_to,
+                keep_undated=True,
+            )
         final = merged[:limit]
         total_elapsed = (_time.monotonic() - recall_start) * 1000
         total_planner_ms = sum(
@@ -13493,6 +13517,13 @@ def recall(
     merged = _prioritize_deliberate_fresh_direct_anchor_rows(query, merged)
     merged = _prioritize_date_relation_callback_rows(query, merged)
     merged = _prioritize_named_entity_activity_anchor_rows(query, merged)
+    if date_from or date_to:
+        merged = _filter_recall_rows_by_date_bounds(
+            merged,
+            date_from=date_from,
+            date_to=date_to,
+            keep_undated=True,
+        )
     final = merged[:limit]
     total_elapsed = (_time.monotonic() - recall_start) * 1000
     if stop_reason == "max_turns" and len(drill_log) < max_turns:

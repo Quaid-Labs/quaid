@@ -7569,6 +7569,123 @@ class TestRecallFastHookInjectContract:
         assert meta["counts"]["graph_discoveries"] == 1
         assert bundle is None
 
+    def test_run_recall_store_plan_filters_out_of_window_after_merge(self):
+        import datastore.memorydb.memory_graph as mg
+
+        def _fake_vector(*args, **kwargs):
+            return (
+                [
+                    {
+                        "id": "hist-2023",
+                        "text": "The 2023 window row is in scope",
+                        "category": "fact",
+                        "similarity": 0.91,
+                        "source_date": "2023-06-01",
+                    },
+                    {
+                        "id": "future-2024",
+                        "text": "The 2024 row must not leak into a 2023 window",
+                        "category": "fact",
+                        "similarity": 1.0,
+                        "source_date": "2024-01-15",
+                    },
+                ],
+                {"selected_path": "vector", "phases_ms": {"total_ms": 1}},
+                None,
+            )
+
+        def _fake_graph(*args, **kwargs):
+            return (
+                [
+                    {
+                        "id": "old-2022",
+                        "text": "The 2022 graph row must not leak into a 2023 window",
+                        "category": "graph",
+                        "similarity": 0.98,
+                        "source_date": "2022-11-01",
+                    }
+                ],
+                {"selected_path": "graph_aware", "phases_ms": {"total_ms": 1}},
+                None,
+            )
+
+        registry = {
+            "vector": {"recall": _fake_vector, "recall_fast": _fake_vector},
+            "graph": {"recall": _fake_graph, "recall_fast": _fake_graph},
+            "docs": {"recall": lambda *a, **k: ([], {}, None), "recall_fast": lambda *a, **k: ([], {}, None)},
+        }
+
+        with patch.object(mg, "_get_recall_store_registry", return_value=registry):
+            rows, meta, bundle = mg._run_recall_store_plan(
+                "hist",
+                stores=["vector", "graph"],
+                limit=5,
+                owner_id="quaid",
+                min_similarity=0.6,
+                planner_profile="full",
+                planned_queries=["hist"],
+                planner_meta={"planned_stores": ["vector", "graph"]},
+                fast_mode=False,
+                graph_depth=1,
+                common_kwargs={
+                    "date_from": "2023-01-01",
+                    "date_to": "2023-12-31",
+                },
+            )
+
+        assert [row["id"] for row in rows] == ["hist-2023"]
+        assert meta["planned_stores"] == ["vector", "graph"]
+        assert bundle is None
+
+    def test_recall_final_merge_filters_out_of_window_branch_rows(self):
+        import datastore.memorydb.memory_graph as mg
+
+        branch_rows = [
+            {
+                "id": "future-2024",
+                "text": "The 2024 branch row must not survive final bounded recall",
+                "category": "fact",
+                "similarity": 1.0,
+                "source_date": "2024-02-01",
+            },
+            {
+                "id": "hist-2023",
+                "text": "The 2023 branch row is in scope",
+                "category": "fact",
+                "similarity": 0.9,
+                "source_date": "2023-05-01",
+            },
+            {
+                "id": "old-2022",
+                "text": "The 2022 branch row must not survive final bounded recall",
+                "category": "fact",
+                "similarity": 0.89,
+                "source_date": "2022-12-31",
+            },
+        ]
+
+        with patch.object(mg, "_recall_once", return_value=(branch_rows, {"selected_path": "test"})):
+            rows, meta = mg.recall(
+                "hist",
+                limit=5,
+                owner_id="quaid",
+                use_routing=False,
+                use_multi_pass=False,
+                use_reranker=False,
+                include_graph_traversal=False,
+                include_co_session=False,
+                include_mmr=False,
+                max_turns=1,
+                planned_queries=["hist"],
+                planner_meta={"planned_stores": ["vector"], "used_llm": False},
+                date_from="2023-01-01",
+                date_to="2023-12-31",
+                return_meta=True,
+            )
+
+        assert [row["id"] for row in rows] == ["hist-2023"]
+        assert meta["query"] == "hist"
+
     def test_graph_store_recall_expands_terminal_graph_entity_to_attached_fact(self, tmp_path):
         import datastore.memorydb.memory_graph as mg
 
