@@ -5455,6 +5455,104 @@ def _legacy_search_dated_project_logs(
     return limited
 
 
+def _filter_docs_chunks_by_date_bounds(
+    chunks: Optional[List[Dict[str, Any]]],
+    *,
+    query: str,
+    date_from: Optional[str],
+    date_to: Optional[str],
+) -> List[Dict[str, Any]]:
+    """Strictly enforce date bounds on docs chunks returned from PROJECT.log."""
+    if not date_from and not date_to:
+        return list(chunks or [])
+    query_terms = _docs_project_log_query_terms(query)
+    bounded: List[Dict[str, Any]] = []
+    for raw in chunks or []:
+        if not isinstance(raw, dict):
+            continue
+        source = str(raw.get("source") or raw.get("source_file") or "")
+        if Path(source).name != "PROJECT.log":
+            continue
+        filtered = _filter_docs_project_log_content_by_date(
+            str(raw.get("content") or ""),
+            date_from=date_from,
+            date_to=date_to,
+            query_terms=query_terms,
+        )
+        if not filtered:
+            continue
+        content, latest_date, _best_score = filtered
+        chunk = dict(raw)
+        chunk["content"] = content
+        chunk["source"] = source
+        chunk["source_date"] = latest_date
+        bounded.append(chunk)
+    return bounded
+
+
+def _with_strict_date_bounded_docs_bundle(
+    rag: Any,
+    *,
+    query: str,
+    bundle: Dict[str, Any],
+    limit: int,
+    project: Optional[str],
+    docs: Optional[List[str]],
+    date_from: Optional[str],
+    date_to: Optional[str],
+) -> Dict[str, Any]:
+    """Apply memory-style post-merge date enforcement to docs bundles."""
+    if not date_from and not date_to:
+        return bundle
+
+    raw_chunks = bundle.get("chunks") if isinstance(bundle, dict) else []
+    bounded_chunks = _filter_docs_chunks_by_date_bounds(
+        raw_chunks if isinstance(raw_chunks, list) else [],
+        query=query,
+        date_from=date_from,
+        date_to=date_to,
+    )
+    if not bounded_chunks:
+        try:
+            bounded_chunks = _legacy_search_dated_project_logs(
+                rag,
+                query=query,
+                limit=limit,
+                project=project,
+                docs=docs,
+                date_from=date_from,
+                date_to=date_to,
+            )
+        except RuntimeError as exc:
+            if _is_fail_hard_mode():
+                raise
+            logger.warning("Date-bounded docs PROJECT.log fallback failed: %s", exc)
+            bounded_chunks = []
+
+    inferred_project = (project or bundle.get("project")) if isinstance(bundle, dict) else project
+    infer_project = getattr(rag, "infer_project_from_chunks", None)
+    if not inferred_project and callable(infer_project):
+        inferred_project = infer_project(bounded_chunks)
+
+    bounded_bundle = dict(bundle) if isinstance(bundle, dict) else {}
+    bounded_bundle["chunks"] = bounded_chunks[: max(1, int(limit or 1))]
+    bounded_bundle["project"] = inferred_project
+    bounded_bundle["project_md"] = None
+    telemetry = dict(bounded_bundle.get("telemetry") or {})
+    telemetry.update({
+        "query": query,
+        "requested_project": project,
+        "resolved_project": inferred_project,
+        "requested_docs": list(docs or []),
+        "chunk_count": len(bounded_bundle["chunks"]),
+        "project_md_attached": False,
+        "date_from": date_from,
+        "date_to": date_to,
+    })
+    bounded_bundle["telemetry"] = telemetry
+    return bounded_bundle
+
+
 def _search_docs_bundle_compat(
     rag: Any,
     *,
@@ -5467,6 +5565,8 @@ def _search_docs_bundle_compat(
     date_to: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Call DocsRAG bundle search while preserving strict date-bounded semantics."""
+    date_from = _normalize_recall_date_bound(date_from)
+    date_to = _normalize_recall_date_bound(date_to)
     bundle_kwargs = {
         "query": query,
         "limit": limit,
@@ -5483,7 +5583,17 @@ def _search_docs_bundle_compat(
         and _callable_accepts_kwarg(bundle_fn, "date_to")
     )
     if not has_date_bounds or bundle_accepts_dates:
-        return bundle_fn(**_filter_supported_kwargs(bundle_fn, bundle_kwargs))
+        bundle = bundle_fn(**_filter_supported_kwargs(bundle_fn, bundle_kwargs))
+        return _with_strict_date_bounded_docs_bundle(
+            rag,
+            query=query,
+            bundle=bundle,
+            limit=limit,
+            project=project,
+            docs=docs,
+            date_from=date_from,
+            date_to=date_to,
+        )
 
     search_fn = getattr(rag, "search_docs", None)
     if not callable(search_fn):
@@ -5499,6 +5609,7 @@ def _search_docs_bundle_compat(
         return _build_date_bounded_docs_bundle(
             rag,
             query=query,
+            limit=limit,
             chunks=chunks,
             project=project,
             docs=docs,
@@ -5521,6 +5632,7 @@ def _search_docs_bundle_compat(
         return _build_date_bounded_docs_bundle(
             rag,
             query=query,
+            limit=limit,
             chunks=chunks,
             project=project,
             docs=docs,
@@ -5532,6 +5644,7 @@ def _search_docs_bundle_compat(
     return _build_date_bounded_docs_bundle(
         rag,
         query=query,
+        limit=limit,
         chunks=chunks,
         project=project,
         docs=docs,
@@ -5544,6 +5657,7 @@ def _build_date_bounded_docs_bundle(
     rag: Any,
     *,
     query: str,
+    limit: int,
     chunks: Optional[List[Dict[str, Any]]],
     project: Optional[str],
     docs: Optional[List[str]],
@@ -5570,7 +5684,16 @@ def _build_date_bounded_docs_bundle(
         "date_to": date_to,
     }
     bundle["telemetry"] = telemetry
-    return bundle
+    return _with_strict_date_bounded_docs_bundle(
+        rag,
+        query=query,
+        bundle=bundle,
+        limit=limit,
+        project=project,
+        docs=docs,
+        date_from=date_from,
+        date_to=date_to,
+    )
 
 
 def _docs_store_recall(
