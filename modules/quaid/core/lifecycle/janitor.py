@@ -2134,6 +2134,7 @@ def _run_supervisor_janitor_request(*, instance: Optional[str] = None) -> int:
         "janitor_complete",
         level="info" if success else "error",
         task="all",
+        # Supervisor-owned janitor requests are apply-only; dry-runs stay on the direct path.
         dry_run=False,
         supervisor_owned=True,
         status=status,

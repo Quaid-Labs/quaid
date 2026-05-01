@@ -95,6 +95,7 @@ def test_global_project_cleanup_paths_normalize_mixed_case_input(project_registr
     )
     assert lookup("MIXED-CLEANUP") is not None
     assert link("MIXED-CLEANUP", instance="benchrunner") is True
+    # Only project names normalize; instance identifiers remain exact.
     assert unlink("mixed-cleanup", instance="BENCHRUNNER") is False
     assert unlink("MIXED-CLEANUP", instance="benchrunner") is True
     assert remove("MIXED-CLEANUP", force=True) is True
