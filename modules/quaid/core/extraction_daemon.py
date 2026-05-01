@@ -464,26 +464,13 @@ def _pid_alive(pid: int) -> bool:
 
 def _all_process_commands_with_env() -> list[tuple[int, str]]:
     """Return (pid, command-with-env) rows for process scanning."""
-    commands = [
-        # Linux/procps: BSD "-x" requires a BSD personality, but "-e" works
-        # and "eww" still includes the full environment needed for ownership.
-        ["ps", "eww", "-eo", "pid=,command="],
-        # macOS/BSD fallbacks.
-        ["ps", "eww", "-axo", "pid=,command="],
-        ["ps", "axeww", "-o", "pid=,command="],
-    ]
-    for ps_command in commands:
-        try:
-            result = subprocess.run(
-                ps_command,
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-        except Exception:
-            continue
-        if result.returncode != 0 or not str(result.stdout or "").strip():
-            continue
+    try:
+        result = subprocess.run(
+            ["ps", "eww", "-axo", "pid=,command="],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
         rows: list[tuple[int, str]] = []
         for raw_line in StringIO(result.stdout).read().splitlines():
             line = str(raw_line or "").strip()
@@ -496,9 +483,9 @@ def _all_process_commands_with_env() -> list[tuple[int, str]]:
                 continue
             command = parts[1] if len(parts) > 1 else ""
             rows.append((pid, command))
-        if rows:
-            return rows
-    return []
+        return rows
+    except Exception:
+        return []
 
 
 def _command_has_env_value(command: str, key: str, value: str) -> bool:

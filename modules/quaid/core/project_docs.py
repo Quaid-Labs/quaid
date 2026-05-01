@@ -497,30 +497,19 @@ def _supervisor_command_matches(command: str) -> bool:
 def _matching_supervisor_pids(*, quaid_home: Optional[Path] = None) -> List[int]:
     home = (quaid_home.resolve() if quaid_home is not None else get_quaid_home().resolve())
     home_marker = f"QUAID_HOME={home}"
-    commands = [
-        ["ps", "eww", "-eo", "pid=,command="],
-        ["ps", "eww", "-ax", "-o", "pid=", "-o", "command="],
-        ["ps", "eww", "-axo", "pid=,command="],
-        ["ps", "axeww", "-o", "pid=,command="],
-    ]
-    output = ""
-    for ps_command in commands:
-        try:
-            result = subprocess.run(
-                ps_command,
-                capture_output=True,
-                text=True,
-                timeout=2,
-            )
-        except Exception:
-            continue
-        if result.returncode == 0 and str(result.stdout or "").strip():
-            output = str(result.stdout or "")
-            break
-    if not output:
+    try:
+        result = subprocess.run(
+            ["ps", "eww", "-ax", "-o", "pid=", "-o", "command="],
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+    except Exception:
+        return []
+    if result.returncode != 0:
         return []
     matches: List[int] = []
-    for raw in output.splitlines():
+    for raw in (result.stdout or "").splitlines():
         line = str(raw or "").strip()
         if not line:
             continue

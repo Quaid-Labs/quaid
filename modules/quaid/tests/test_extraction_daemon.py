@@ -363,39 +363,6 @@ def test_matching_daemon_pids_does_not_match_instance_prefix(monkeypatch):
     ) == [101]
 
 
-def test_all_process_commands_with_env_skips_empty_ps_fallback(monkeypatch):
-    calls = []
-
-    class Result:
-        def __init__(self, stdout="", returncode=0):
-            self.stdout = stdout
-            self.returncode = returncode
-
-    def fake_run(command, **_kwargs):
-        calls.append(command)
-        if len(calls) == 1:
-            return Result(stdout="", returncode=0)
-        return Result(
-            stdout=(
-                "101 /usr/bin/python3 /tmp/core/extraction_daemon.py _worker "
-                "QUAID_HOME=/tmp/quaid QUAID_INSTANCE=benchrunner QUAID_DAEMON=1\n"
-            ),
-            returncode=0,
-        )
-
-    monkeypatch.setattr(extraction_daemon.subprocess, "run", fake_run)
-
-    assert extraction_daemon._all_process_commands_with_env() == [
-        (
-            101,
-            "/usr/bin/python3 /tmp/core/extraction_daemon.py _worker "
-            "QUAID_HOME=/tmp/quaid QUAID_INSTANCE=benchrunner QUAID_DAEMON=1",
-        )
-    ]
-    assert calls[0] == ["ps", "eww", "-eo", "pid=,command="]
-    assert len(calls) == 2
-
-
 def test_matching_daemon_pids_can_include_foreground_run(monkeypatch):
     home = "/Users/admin/.quaid"
     worker = "/opt/homebrew/bin/python3 /Users/admin/.quaid/plugins/quaid/core/extraction_daemon.py _worker"
