@@ -1982,19 +1982,22 @@ def _auto_provision_from_env_if_needed() -> None:
     if not home or not instance:
         return
     adapter_type_hint = _canonical_adapter_id(explicit_adapter_type) or _adapter_type_from_instance_id(instance)
-    if (
-        instance_origin in {"project_env", "cwd"}
-        and adapter_type_hint
-        and _adapter_supports_project_dir_binding(adapter_type_hint)
-    ):
+    if adapter_type_hint and _adapter_supports_project_dir_binding(adapter_type_hint):
         binding_project_dir = ""
-        for row in project_env_rows:
-            if row["adapter_id"] == adapter_type_hint:
-                binding_project_dir = row["project_dir"]
-                break
+        if instance_origin in {"project_env", "env"}:
+            for row in project_env_rows:
+                if row["adapter_id"] == adapter_type_hint:
+                    binding_project_dir = row["project_dir"]
+                    break
         if not binding_project_dir and instance_origin == "cwd":
             binding_project_dir = os.getcwd()
-        if binding_project_dir:
+        if (
+            binding_project_dir
+            and (
+                instance_origin in {"project_env", "cwd"}
+                or not _read_project_instance_binding(home, adapter_type_hint, binding_project_dir)
+            )
+        ):
             _write_project_instance_binding(home, adapter_type_hint, binding_project_dir, instance)
     silo_root = Path(home) / "instances" / instance
     config_path = silo_root / "config.json"
