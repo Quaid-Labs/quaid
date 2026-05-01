@@ -709,6 +709,70 @@ def test_claude_code_session_start_clear_queues_prior_session_signal(
     assert sig["meta"]["reason"] == "session_start_transition"
 
 
+def test_claude_code_session_start_compact_arms_identity_bridge(
+    monkeypatch, tmp_path, cursor_dir
+):
+    projects_dir = tmp_path / "projects"
+    identity_dir = tmp_path / "identity"
+    project_quaid = projects_dir / "quaid"
+    project_quaid.mkdir(parents=True, exist_ok=True)
+    identity_dir.mkdir(parents=True, exist_ok=True)
+    (identity_dir / "USER.md").write_text("The office plant is named Bartholomew.", encoding="utf-8")
+    (identity_dir / "SOUL.md").write_text("SOUL live", encoding="utf-8")
+    (identity_dir / "ENVIRONMENT.md").write_text("It is a fiddle-leaf fig.", encoding="utf-8")
+    (project_quaid / "TOOLS.md").write_text("# Tools\ncompact docs", encoding="utf-8")
+    (project_quaid / "AGENTS.md").write_text("# Agents\ncompact agents", encoding="utf-8")
+
+    rules_dir = tmp_path / ".claude" / "rules"
+    data_dir = tmp_path / "data"
+    adapter = _adapter_mock()
+    adapter.adapter_id.return_value = "claude-code"
+    adapter.projects_dir.return_value = projects_dir
+    adapter.identity_dir.return_value = identity_dir
+    adapter.data_dir.return_value = data_dir
+    adapter.get_base_context_files.return_value = {}
+    adapter.get_cli_tools_snippet.return_value = ""
+    adapter.check_session_transition.return_value = None
+    adapter.store_auth_token.return_value = tmp_path / ".auth-token"
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "claude-code-test")
+    monkeypatch.setattr("lib.adapter.get_adapter", lambda: adapter)
+    monkeypatch.setattr("core.extraction_daemon.ensure_alive", lambda: None)
+    monkeypatch.setattr("core.extraction_daemon.read_cursor", lambda session_id: {"transcript_path": ""})
+    monkeypatch.setattr("core.extraction_daemon.write_cursor", lambda *args, **kwargs: None)
+    monkeypatch.setattr("core.extraction_daemon.write_signal", lambda **kwargs: tmp_path / "sig.json")
+    monkeypatch.setattr("core.interface.hooks._check_janitor_health", lambda: "")
+    monkeypatch.setattr("core.interface.hooks._get_deferred_notice_hint", lambda: "")
+    monkeypatch.setattr("core.interface.hooks._get_pending_context", lambda: "")
+    monkeypatch.setattr("core.interface.hooks._build_runtime_context_block", lambda: "[Quaid runtime]")
+
+    _out, err, _content = _run_hook_session_init(
+        {
+            "session_id": "sess-auto-compact",
+            "cwd": str(tmp_path),
+            "matcher": "compact",
+            "source": "compact",
+        },
+        monkeypatch=monkeypatch,
+        rules_dir=rules_dir,
+    )
+
+    assert "context-refresh" in err
+    assert "Bartholomew" in (rules_dir / "quaid-user-md.md").read_text(encoding="utf-8")
+    assert "fiddle-leaf fig" in (rules_dir / "quaid-environment-md.md").read_text(encoding="utf-8")
+    marker_file = data_dir / "context-refresh-compaction" / "sess-auto-compact.json"
+    latest_file = data_dir / "context-refresh-compaction" / "_latest.json"
+    assert marker_file.is_file()
+    assert latest_file.is_file()
+    marker_payload = json.loads(marker_file.read_text(encoding="utf-8"))
+    latest_payload = json.loads(latest_file.read_text(encoding="utf-8"))
+    assert marker_payload["reason"] == "session_start_compact"
+    assert marker_payload["source"] == "hook_session_init_compact"
+    assert latest_payload["reason"] == "session_start_compact"
+    assert latest_payload["source"] == "hook_session_init_compact"
+
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------

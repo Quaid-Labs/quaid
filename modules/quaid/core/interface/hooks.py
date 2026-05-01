@@ -2410,6 +2410,32 @@ def _maybe_compaction_refresh_context_artifacts(hook_input: dict, *, is_precompa
     _write_rules_context_sections(hook_input, sections, label="context-refresh")
 
 
+def _is_compact_session_start(hook_input: dict) -> bool:
+    if not isinstance(hook_input, dict):
+        return False
+    keys = (
+        "matcher",
+        "source",
+        "reason",
+        "hook_event_name",
+        "hookEventName",
+        "subtype",
+        "event",
+        "event_name",
+        "eventName",
+    )
+    values: list[str] = []
+    for key in keys:
+        values.append(str(hook_input.get(key) or ""))
+    for container_key in ("hook", "payload", "context"):
+        nested = hook_input.get(container_key)
+        if not isinstance(nested, dict):
+            continue
+        for key in keys:
+            values.append(str(nested.get(key) or ""))
+    return any("compact" in value.lower() for value in values)
+
+
 def _build_turn_based_refresh_context(session_id: str, *, prompt: str = "") -> str:
     if not _should_emit_turn_based_refresh(session_id, prompt=prompt):
         return ""
@@ -2853,6 +2879,29 @@ def hook_session_init(args):
 
     current_session_id = _extract_hook_session_id(hook_input)
     _seed_turn_based_refresh_state(current_session_id)
+
+    if current_session_id and _is_compact_session_start(hook_input):
+        try:
+            # Claude Code auto-compact starts a new session with matcher=compact
+            # but may skip the PreCompact hook. Arm the same one-shot identity
+            # bridge here so the first post-compact turn still gets fresh identity.
+            _maybe_compaction_refresh_context_artifacts(hook_input, is_precompact=True)
+            _arm_compaction_refresh_marker(
+                current_session_id,
+                reason="session_start_compact",
+                source="hook_session_init_compact",
+            )
+            _write_hook_trace("hook.session_init.compaction_context_refreshed", {
+                "session_id": current_session_id,
+                "strategy": _context_refresh_strategy(),
+                "reason": "session_start_compact",
+            })
+        except Exception as _e:
+            print(f"[quaid][session-init] compaction context refresh error: {_e}", file=sys.stderr)
+            _write_hook_trace("hook.session_init.compaction_context_refresh_error", {
+                "session_id": current_session_id,
+                "error": str(_e)[:500],
+            })
 
     # Refresh the adapter's auth token from the session-scoped CC OAuth token.
     # CLAUDE_CODE_OAUTH_TOKEN is a properly API-scoped token that CC injects
