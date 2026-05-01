@@ -928,6 +928,9 @@ def _read_cursor_file(cursor_file: Path, fallback_session_id: str) -> Dict[str, 
         "transcript_path": "",
         "internal": False,
         "transcript_size_bytes": 0,
+        "transcript_mtime_ns": 0,
+        "transcript_inode": 0,
+        "transcript_device": 0,
         "cursor_key": cursor_file.stem,
     }
     if not cursor_file.is_file():
@@ -943,6 +946,9 @@ def _read_cursor_file(cursor_file: Path, fallback_session_id: str) -> Dict[str, 
             "transcript_path": data.get("transcript_path", ""),
             "internal": bool(data.get("internal", False)),
             "transcript_size_bytes": int(data.get("transcript_size_bytes", 0) or 0),
+            "transcript_mtime_ns": int(data.get("transcript_mtime_ns", 0) or 0),
+            "transcript_inode": int(data.get("transcript_inode", 0) or 0),
+            "transcript_device": int(data.get("transcript_device", 0) or 0),
             "cursor_key": cursor_key or cursor_file.stem,
         }
     except (json.JSONDecodeError, ValueError, OSError):
@@ -996,12 +1002,22 @@ def read_cursor(session_id: str, *, source_key: Optional[str] = None) -> Dict[st
 
 
 def _transcript_size_bytes(transcript_path: str) -> int:
+    return int(_transcript_stat_metadata(transcript_path).get("size_bytes", 0) or 0)
+
+
+def _transcript_stat_metadata(transcript_path: str) -> Dict[str, int]:
     try:
-        return int(os.path.getsize(transcript_path))
+        st = os.stat(transcript_path)
+        return {
+            "size_bytes": int(st.st_size),
+            "mtime_ns": int(getattr(st, "st_mtime_ns", 0) or 0),
+            "inode": int(getattr(st, "st_ino", 0) or 0),
+            "device": int(getattr(st, "st_dev", 0) or 0),
+        }
     except OSError as exc:
         if _should_raise_transcript_stat_error(transcript_path, exc):
             raise
-        return 0
+        return {"size_bytes": 0, "mtime_ns": 0, "inode": 0, "device": 0}
 
 
 def _should_raise_transcript_stat_error(transcript_path: str, exc: OSError) -> bool:
@@ -1144,7 +1160,8 @@ def write_cursor(
     cursor_key = _cursor_storage_key(session_id, source_key)
     cursor_dir = _cursor_dir()
     cursor_file = cursor_dir / f"{cursor_key}.json"
-    current_size_bytes = _transcript_size_bytes(transcript_path)
+    current_stat = _transcript_stat_metadata(transcript_path)
+    current_size_bytes = int(current_stat.get("size_bytes", 0) or 0)
     if cursor_file.is_file():
         existing = _read_cursor_file(cursor_file, session_id)
         existing_offset = int(existing.get("line_offset", 0) or 0)
@@ -1160,7 +1177,21 @@ def write_cursor(
             existing_size_bytes
             and current_size_bytes < existing_size_bytes
         )
-        if same_source and int(line_offset) < existing_offset and not source_shrank:
+        same_size_rebased = False
+        if existing_size_bytes and current_size_bytes == existing_size_bytes:
+            current_mtime_ns = int(current_stat.get("mtime_ns", 0) or 0)
+            current_inode = int(current_stat.get("inode", 0) or 0)
+            current_device = int(current_stat.get("device", 0) or 0)
+            existing_mtime_ns = int(existing.get("transcript_mtime_ns", 0) or 0)
+            existing_inode = int(existing.get("transcript_inode", 0) or 0)
+            existing_device = int(existing.get("transcript_device", 0) or 0)
+            same_size_rebased = bool(
+                (existing_mtime_ns and current_mtime_ns and current_mtime_ns != existing_mtime_ns)
+                or (existing_inode and current_inode and current_inode != existing_inode)
+                or (existing_device and current_device and current_device != existing_device)
+            )
+        source_rebased = source_shrank or same_size_rebased
+        if same_source and int(line_offset) < existing_offset and not source_rebased:
             logger.warning(
                 "refusing to rewind cursor %s for unchanged transcript source "
                 "(requested=%d existing=%d path=%s)",
@@ -1177,6 +1208,9 @@ def write_cursor(
         "transcript_path": transcript_path,
         "internal": bool(internal),
         "transcript_size_bytes": current_size_bytes,
+        "transcript_mtime_ns": int(current_stat.get("mtime_ns", 0) or 0),
+        "transcript_inode": int(current_stat.get("inode", 0) or 0),
+        "transcript_device": int(current_stat.get("device", 0) or 0),
         "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
     try:

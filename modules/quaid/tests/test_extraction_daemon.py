@@ -3610,6 +3610,27 @@ class TestCursorRoundTrip:
         result = extraction_daemon.read_cursor("sess-shrink", source_key=source_key)
         assert result["line_offset"] == 0
 
+    def test_write_cursor_allows_same_source_rewind_after_same_size_rebase(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
+
+        transcript_path = tmp_path / "session.jsonl"
+        initial = "line one\nline two\nline three\n"
+        transcript_path.write_text(initial, encoding="utf-8")
+        source_key = extraction_daemon._signal_source_cursor_key("sess-rebase", str(transcript_path))
+        extraction_daemon.write_cursor("sess-rebase", 3, str(transcript_path), source_key=source_key)
+
+        first_stat = transcript_path.stat()
+        replacement = "rebased transcript".ljust(len(initial), "x")
+        assert len(replacement.encode("utf-8")) == first_stat.st_size
+        transcript_path.write_text(replacement, encoding="utf-8")
+        os.utime(transcript_path, (first_stat.st_mtime + 10, first_stat.st_mtime + 10))
+
+        extraction_daemon.write_cursor("sess-rebase", 0, str(transcript_path), source_key=source_key)
+
+        result = extraction_daemon.read_cursor("sess-rebase", source_key=source_key)
+        assert result["line_offset"] == 0
+
     def test_cursor_file_is_per_session(self, monkeypatch, tmp_path):
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
         monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
