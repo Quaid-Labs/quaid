@@ -5317,9 +5317,14 @@ notify_user(${JSON.stringify(message)})
             appendSystemContext = appendSystemContext
               ? `${appendSystemContext}\n\n${identityContext}`
               : identityContext;
+            // OC can drop appendSystemContext on some hook paths. Mirror identity
+            // to prependContext like memory injection so M7 canary facts survive
+            // /new and /compact even when system-context mutation is ignored.
+            prependContextParts.push(identityContext);
             writeHookTrace("hook.identity_context_injected", {
               session_id: promptSessionId,
               len: identityContext.length,
+              targets: ["appendSystemContext", "prependContext"],
             });
           }
         } catch (err: unknown) {

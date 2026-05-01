@@ -4266,9 +4266,11 @@ ${missingUserOverride}` : missingUserOverride;
             appendSystemContext = appendSystemContext ? `${appendSystemContext}
 
 ${identityContext}` : identityContext;
+            prependContextParts.push(identityContext);
             writeHookTrace("hook.identity_context_injected", {
               session_id: promptSessionId,
-              len: identityContext.length
+              len: identityContext.length,
+              targets: ["appendSystemContext", "prependContext"]
             });
           }
         } catch (err) {

@@ -1631,6 +1631,7 @@ describe("openclaw deferred notices", () => {
       },
     );
     expect(combinedSystemContext(first)).toContain("basalt-harbor");
+    expect(String(first?.prependContext || "")).toContain("basalt-harbor");
 
     fs.writeFileSync(
       path.join(identityDir, "USER.md"),
@@ -1654,6 +1655,7 @@ describe("openclaw deferred notices", () => {
       },
     );
     expect(combinedSystemContext(stillGated)).toContain("Bartholomew");
+    expect(String(stillGated?.prependContext || "")).toContain("Bartholomew");
 
     await commandNewHandler(
       {
@@ -1765,6 +1767,7 @@ describe("openclaw deferred notices", () => {
       },
     );
     expect(combinedSystemContext(startup)).toContain("Bartholomew");
+    expect(String(startup?.prependContext || "")).toContain("Bartholomew");
 
     const graded = await beforePromptBuildHandler(
       {
@@ -1783,6 +1786,8 @@ describe("openclaw deferred notices", () => {
     );
     expect(combinedSystemContext(graded)).toContain("Bartholomew");
     expect(combinedSystemContext(graded)).toContain("fiddle-leaf fig");
+    expect(String(graded?.prependContext || "")).toContain("Bartholomew");
+    expect(String(graded?.prependContext || "")).toContain("fiddle-leaf fig");
 
     warn.mockRestore();
     log.mockRestore();
