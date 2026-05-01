@@ -2,7 +2,6 @@
 
 import argparse
 import hashlib
-import http.client
 import json
 import logging
 import math
@@ -258,99 +257,6 @@ _STRUCTURAL_ANCHOR_KINDS = frozenset({
     "assistant_callback_anchor",
 })
 
-_ASSISTANT_STRUCTURAL_EDGE_SKIP_KINDS = frozenset({
-    "assistant_option_bullet_anchor",
-    "assistant_option_list_anchor",
-    "assistant_plan_anchor",
-    "assistant_callback_anchor",
-})
-
-_EDGE_BACKFILL_KEYWORDS = (
-    "married",
-    "married to",
-    "spouse",
-    "husband",
-    "wife",
-    "parent",
-    "mother",
-    "father",
-    "son",
-    "daughter",
-    "child",
-    "sibling",
-    "sister",
-    "brother",
-    "lives with",
-    "engaged to",
-    "dating",
-    "'s partner",
-    " partner is",
-    "her partner",
-    "his partner",
-    "their partner",
-    "my partner",
-    "our partner",
-    "'s friend",
-    " friend is",
-    "her friend",
-    "his friend",
-    "their friend",
-    "my friend",
-    "our friend",
-    "'s colleague",
-    " colleague is",
-    "her colleague",
-    "his colleague",
-    "their colleague",
-    "my colleague",
-    "our colleague",
-    "'s neighbour",
-    "'s neighbor",
-    " neighbour is",
-    " neighbor is",
-    "her neighbour",
-    "his neighbour",
-    "their neighbour",
-    "my neighbour",
-    "our neighbour",
-    "her neighbor",
-    "his neighbor",
-    "their neighbor",
-    "my neighbor",
-    "our neighbor",
-    "works at",
-    "works for",
-    "works as",
-    "works on",
-    "employed",
-    "lives in",
-    "lives at",
-    "lives near",
-    "lives next to",
-    "born in",
-    "born on",
-    "grew up in",
-    "moved to",
-    "from ",
-    "has a dog",
-    "has a cat",
-    "has a pet",
-)
-
-_EDGE_BACKFILL_ASSISTANT_SUMMARY_PREFIXES = (
-    "the assistant suggested ",
-    "the assistant recommended ",
-    "the assistant offered ",
-    "the assistant listed ",
-    "the assistant shared ",
-    "the assistant mentioned ",
-    "assistant suggested ",
-    "assistant recommended ",
-    "assistant offered ",
-    "assistant listed ",
-    "assistant shared ",
-    "assistant mentioned ",
-)
 
 def _canonicalize_owner_alias(name: str, owner_full: Optional[str] = None) -> str:
     """Normalize owner aliases in extracted edge entities to the canonical owner name."""
@@ -376,6 +282,7 @@ def _is_placeholder_entity_name(name: str, owner_full: Optional[str] = None) -> 
         return not owner or owner.lower() == "the user"
     return any(lowered.startswith(prefix) for prefix in _ENTITY_PLACEHOLDER_PREFIXES)
 
+
 def _load_node_attributes_blob(raw: Any) -> Dict[str, Any]:
     if isinstance(raw, dict):
         return dict(raw)
@@ -397,27 +304,6 @@ def _is_protected_structural_anchor(attrs: Dict[str, Any]) -> bool:
     kind = _structural_anchor_kind_from_attrs(attrs)
     return bool(kind and kind in _STRUCTURAL_ANCHOR_KINDS)
 
-
-def _looks_like_relationship_backfill_fact(text: str, attrs: Optional[Dict[str, Any]] = None) -> bool:
-    """Return True when a fact is specific enough to justify relationship edge backfill.
-
-    This is a candidate-discovery filter, not a lexical edge extractor. The goal is
-    to keep janitor from sending clearly non-relationship rows like podcast titles or
-    assistant recommendation summaries into the relationship extractor.
-    """
-    lowered = str(text or "").strip().lower()
-    if not lowered:
-        return False
-
-    attrs = attrs or {}
-    kind = _structural_anchor_kind_from_attrs(attrs)
-    if kind in _ASSISTANT_STRUCTURAL_EDGE_SKIP_KINDS:
-        return False
-
-    if any(lowered.startswith(prefix) for prefix in _EDGE_BACKFILL_ASSISTANT_SUMMARY_PREFIXES):
-        return False
-
-    return any(keyword in lowered for keyword in _EDGE_BACKFILL_KEYWORDS)
 
 def _default_owner_id() -> str:
     """Get the default owner ID from config."""
@@ -504,6 +390,7 @@ def _merge_nodes_into(
     max_confidence = max((n.confidence for n in originals), default=0.9)
     total_confirms = sum(n.confirmation_count for n in originals)
     max_storage = max((n.storage_strength for n in originals), default=0.0)
+    merged_text = _prefer_relative_temporal_source_text(merged_text, originals)
     # Use the earliest created_at
     created_dates = [n.created_at for n in originals if n.created_at]
     earliest_created = min(created_dates) if created_dates else None
@@ -1716,8 +1603,8 @@ For each pair, decide:
 - merge: same fact reworded, OR one fact subsumes the other (contains all the same info plus more detail).
 - keep_both: genuinely different information.
 
-When merging, the merged_text should be the MORE SPECIFIC/DETAILED version. If Fact B says "Maya has a dog" and Fact A says "Maya has a dog named Biscuit", merge and keep "Maya has a dog named Biscuit".
-For facts, the merged_text MUST be at least 3 words (subject + verb + object). Never produce a bare noun phrase like "Montrose, Houston" for a fact — instead write "Maya lives in Montrose, Houston". Entity names (people, places) can be 1-2 words.
+When merging, the merged_text should be the MORE SPECIFIC/DETAILED version. If Fact B says "Alex has a dog" and Fact A says "Alex has a dog named Scout", merge and keep "Alex has a dog named Scout".
+For facts, the merged_text MUST be at least 3 words (subject + verb + object). Never produce a bare noun phrase like "Montrose, Houston" for a fact — instead write "Alex lives in Montrose, Houston". Entity names (people, places) can be 1-2 words.
 
 IMPORTANT: Negation flips meaning. "likes X" vs "doesn't like X" = keep_both.
 
@@ -2401,56 +2288,6 @@ def _resolve_entity_node(graph: MemoryGraph, name: str, node_type: str,
 
 EDGE_BATCH_SIZE = 25  # Safety cap for edge extraction batch size
 
-_EDGE_BATCH_RETRYABLE_ERROR_MARKERS = frozenset(
-    {
-        "error_type=IncompleteRead",
-        "error_type=TimeoutError",
-        "error_type=ConnectionError",
-        "error_type=URLError",
-    }
-)
-
-
-def _edge_batch_root_error(exc: BaseException) -> BaseException:
-    seen = set()
-    current: BaseException = exc
-    while True:
-        marker = id(current)
-        if marker in seen:
-            return current
-        seen.add(marker)
-        nxt = getattr(current, "__cause__", None) or getattr(current, "__context__", None)
-        if not isinstance(nxt, BaseException):
-            return current
-        current = nxt
-
-
-def _is_retryable_edge_batch_error(exc: BaseException) -> bool:
-    current = _edge_batch_root_error(exc)
-    if isinstance(
-        current,
-        (
-            TimeoutError,
-            ConnectionError,
-            OSError,
-            urllib.error.URLError,
-            http.client.IncompleteRead,
-        ),
-    ):
-        return True
-    text = str(exc or "")
-    return any(marker in text for marker in _EDGE_BATCH_RETRYABLE_ERROR_MARKERS)
-
-
-def _edge_batch_retry_reason(exc: BaseException) -> str:
-    root = _edge_batch_root_error(exc)
-    detail = str(root or "").replace("\n", " ").strip()
-    if len(detail) > 160:
-        detail = detail[:157].rstrip() + "..."
-    if not detail:
-        detail = type(root).__name__
-    return f"Batch edge extraction transport failed ({type(root).__name__}: {detail})"
-
 
 def batch_extract_edges(facts: List[Dict[str, Any]], graph: MemoryGraph,
                         metrics: JanitorMetrics,
@@ -2539,18 +2376,8 @@ Respond with a JSON array of {len(facts)} objects, one per fact in order:
 
 JSON array only:"""
 
-    try:
-        response, duration = call_deep_reasoning(
-            prompt,
-            max_tokens=300 * len(facts),
-            timeout=DEEP_REASONING_TIMEOUT,
-        )
-    except Exception as exc:
-        if _is_retryable_edge_batch_error(exc):
-            retried = _retry_in_smaller_batches(_edge_batch_retry_reason(exc))
-            if retried is not None:
-                return retried
-        raise
+    response, duration = call_deep_reasoning(prompt, max_tokens=300 * len(facts),
+                                   timeout=DEEP_REASONING_TIMEOUT)
     metrics.add_llm_call(duration)
 
     if not response:
@@ -2672,17 +2499,22 @@ def backfill_edges(
     if not hasattr(graph, "_get_conn"):
         return result
 
-    # Find fact nodes that have no edge linked via source_fact_id. Use a broad SQL
-    # prefilter first, then a stricter Python filter so generic title fragments like
-    # "Needs a Friend" do not enter relationship extraction.
-    kw_clauses = " OR ".join(f"LOWER(n.name) LIKE ?" for _ in _EDGE_BACKFILL_KEYWORDS)
-    kw_params = [f"%{kw}%" for kw in _EDGE_BACKFILL_KEYWORDS]
-    scan_limit = max(max_facts * 8, 200)
+    # Find fact nodes that have no edge linked via source_fact_id, filtering
+    # to nodes that plausibly describe relationships (contain key terms).
+    relationship_keywords = (
+        "married", "spouse", "husband", "wife", "partner",
+        "parent", "mother", "father", "son", "daughter", "child",
+        "sibling", "sister", "brother", "works at", "employed",
+        "lives in", "lives at", "friend", "colleague", "neighbour", "neighbor",
+        "has a dog", "has a cat", "has a pet",
+    )
+    kw_clauses = " OR ".join(f"LOWER(n.name) LIKE ?" for _ in relationship_keywords)
+    kw_params = [f"%{kw}%" for kw in relationship_keywords]
 
     with graph._get_conn() as conn:
         rows = conn.execute(
             f"""
-            SELECT n.id, n.name, n.owner_id, n.attributes
+            SELECT n.id, n.name, n.owner_id
             FROM nodes n
             WHERE n.type = 'Fact'
               AND n.status IN ('active', 'approved', 'pending')
@@ -2693,19 +2525,10 @@ def backfill_edges(
             ORDER BY n.created_at DESC
             LIMIT ?
             """,
-            kw_params + [scan_limit],
+            kw_params + [max_facts],
         ).fetchall()
 
-    facts = []
-    filtered_out = 0
-    for row in rows:
-        attrs = _load_node_attributes_blob(row["attributes"] if "attributes" in row.keys() else None)
-        if not _looks_like_relationship_backfill_fact(row["name"], attrs):
-            filtered_out += 1
-            continue
-        facts.append({"id": row["id"], "text": row["name"], "owner_id": row["owner_id"]})
-        if len(facts) >= max_facts:
-            break
+    facts = [{"id": row["id"], "text": row["name"], "owner_id": row["owner_id"]} for row in rows]
     result["found"] = len(facts)
 
     if not facts:
@@ -2713,8 +2536,6 @@ def backfill_edges(
         return result
 
     print(f"  Found {len(facts)} relationship facts with no linked edges.")
-    if filtered_out:
-        print(f"  Skipped {filtered_out} non-relationship candidates during edge backfill prefilter.")
 
     if dry_run:
         for f in facts[:5]:
@@ -2849,15 +2670,15 @@ CONFIRM (use in ~90% of cases): The two texts convey the same core information, 
 worded differently. Rephrasing, adding minor detail, or slight rewording = CONFIRM.
 Examples of CONFIRM:
   - "Carol doesn't like spicy food" vs "Carol and spicy food don't mix" → same fact
-  - "Maya is in Austin" vs "Maya lives in Austin" → same fact
-  - "Maya's partner is David" vs "Maya lives with her partner David" → same fact
+  - "Alex is in Austin" vs "Alex lives in Austin" → same fact
+  - "Alex's partner is Jordan" vs "Alex lives with their partner Jordan" → same fact
   - "She started running in January" vs "She began running in January" → same fact
 
 REVERSE (use sparingly): The texts contain genuinely DIFFERENT information — different
 subjects, different claims, or materially different facts that would be lost if merged.
 Examples of REVERSE:
-  - "Maya started at TechFlow" vs "Maya left TechFlow" → different events
-  - "Maya likes Italian food" vs "Maya is allergic to shellfish" → different facts
+  - "Alex started at TechFlow" vs "Alex left TechFlow" → different events
+  - "Alex likes Italian food" vs "Alex is allergic to shellfish" → different facts
   - "The app uses React" vs "The app uses Vue" → contradictory, both should exist
 
 When in doubt, CONFIRM. Losing a duplicate costs nothing; losing a unique fact is permanent.
@@ -3023,6 +2844,7 @@ def review_decayed_memories(
     def _invoke_batch(batch_num: int, batch: List[Dict[str, Any]]) -> Dict[str, Any]:
         numbered = []
         for i, entry in enumerate(batch):
+            entry_attrs = _load_node_attributes_blob(entry.get("node_attributes"))
             numbered.append(
                 f'{i+1}. Queue ID: {entry["id"]}\n'
                 f'   Text: "{entry["node_text"]}"\n'
@@ -3031,7 +2853,9 @@ def review_decayed_memories(
                 f'   Access count: {entry.get("access_count", 0)}\n'
                 f'   Last accessed: {entry.get("last_accessed", "unknown")}\n'
                 f'   Created: {entry.get("created_at_node", "unknown")}\n'
-                f'   Verified: {"yes" if entry.get("verified") else "no"}'
+                f'   Verified: {"yes" if entry.get("verified") else "no"}\n'
+                f'   Speaker: {entry.get("node_speaker") or "unknown"}\n'
+                f'   Structural anchor: {_structural_anchor_kind_from_attrs(entry_attrs) or "none"}'
             )
 
         owner = _owner_display_name()
@@ -3044,6 +2868,8 @@ For each memory, decide:
   (these should live in documentation, not the memory DB).
 - EXTEND: Personal facts that are still true but not recently relevant (reset decay timer)
 - PIN: Identity facts (names, relationships, birthdays), core preferences, permanent knowledge (never decays again)
+- Structural anchors (specific exact options, adopted plans, callbacks) should not be deleted only
+  for age; prefer EXTEND or PIN.
 
 {chr(10).join(numbered)}
 
@@ -3096,6 +2922,10 @@ JSON array only:"""
             action = item.get("action", "").upper()
             reason = decay_prompt_tag + item.get("reason", "")
             node_id = entry["node_id"]
+            node_attrs = _load_node_attributes_blob(entry.get("node_attributes"))
+            if action == "DELETE" and _is_protected_structural_anchor(node_attrs):
+                action = "EXTEND"
+                reason = (reason + " [override: protected structural anchor]").strip()
 
             if action == "DELETE":
                 if not dry_run:
@@ -3362,7 +3192,7 @@ def review_pending_memories(
             conn.execute("SELECT COUNT(*) FROM nodes WHERE status = 'pending'").fetchone()[0]
         )
         q = """
-            SELECT id, type, name, created_at, verified, confidence, source, session_id, speaker
+            SELECT id, type, name, created_at, verified, confidence, source, session_id, speaker, attributes
             FROM nodes
             WHERE status = 'pending'
             ORDER BY created_at DESC
@@ -3408,6 +3238,9 @@ CRITERIA:
   choices, tests, and concrete implementation constraints.
 - KEEP: Assistant-originated technical guidance when it captures a concrete project decision,
   implementation detail, or operational state.
+- KEEP: Facts tagged with structural_anchor_kind. These are exact user or assistant anchors
+  preserved from transcript structure (for example specific named options, adopted plans,
+  or callbacks) and should survive review.
 - DELETE: Conversational filler, generic platitudes, motivational chatter, one-off social
   suggestions with no lasting value, obvious duplicates, and vague/unactionable statements.
 - DELETE: Generic tool boilerplate not tied to a specific project/work context.
@@ -3535,13 +3368,18 @@ Respond with a JSON array only, no markdown fencing:
     for batch_num, batch_rows in enumerate(batches, 1):
         batch_data = []
         for row in batch_rows:
+            attrs = _load_node_attributes_blob(row["attributes"] if "attributes" in row.keys() else None)
             batch_data.append({
                 "id": row["id"],
                 "text": row["name"],
                 "type": row["type"],
                 "created_at": row["created_at"],
                 "source": row["source"],
-                "speaker": row["speaker"] if "speaker" in row.keys() else None
+                "speaker": row["speaker"] if "speaker" in row.keys() else None,
+                "source_type": attrs.get("source_type"),
+                "domains": attrs.get("domains"),
+                "provenance_confidence": attrs.get("provenance_confidence"),
+                "structural_anchor_kind": _structural_anchor_kind_from_attrs(attrs),
             })
         user_message = f"Review batch {batch_num}/{total_batches} ({len(batch_data)} memories):\n\n{json.dumps(batch_data, indent=2)}"
         print(f"\n  Batch {batch_num}/{total_batches} ({len(batch_data)} memories)...")
@@ -3839,13 +3677,33 @@ def apply_review_decisions_from_list(graph: MemoryGraph, decisions: List[Dict[st
             if row:
                 source_value = row["source"]
                 speaker_value = row["speaker"]
-                try:
-                    attrs = json.loads(row["attributes"] or "{}")
-                    if isinstance(attrs, dict):
-                        source_type = attrs.get("source_type")
-                except Exception:
-                    source_type = None
+                attrs = _load_node_attributes_blob(row["attributes"])
+                source_type = attrs.get("source_type")
+                structural_anchor_kind = _structural_anchor_kind_from_attrs(attrs)
+            else:
+                attrs = {}
+                structural_anchor_kind = None
             if action == "DELETE":
+                if _is_protected_structural_anchor(attrs):
+                    _diag_log_decision(
+                        "review_decision_delete_overridden",
+                        dry_run=bool(dry_run),
+                        memory_id=memory_id,
+                        current_status=current_status,
+                        current_text=current_text,
+                        source=source_value,
+                        speaker=speaker_value,
+                        source_type=source_type,
+                        structural_anchor_kind=structural_anchor_kind,
+                        reason=reason,
+                    )
+                    if not dry_run:
+                        conn.execute(
+                            "UPDATE nodes SET status = 'approved' WHERE id = ?",
+                            (memory_id,),
+                        )
+                    kept += 1
+                    continue
                 _diag_log_decision(
                     "review_decision_delete",
                     dry_run=bool(dry_run),
@@ -3855,6 +3713,7 @@ def apply_review_decisions_from_list(graph: MemoryGraph, decisions: List[Dict[st
                     source=source_value,
                     speaker=speaker_value,
                     source_type=source_type,
+                    structural_anchor_kind=structural_anchor_kind,
                     reason=reason,
                 )
                 if dry_run:
@@ -3880,6 +3739,8 @@ def apply_review_decisions_from_list(graph: MemoryGraph, decisions: List[Dict[st
 
             elif action == "FIX" and "new_text" in decision:
                 new_text = decision["new_text"]
+                if current_text:
+                    new_text = _prefer_protected_source_text(new_text, [current_text])
                 new_edges = decision.get("edges", [])
                 _diag_log_decision(
                     "review_decision_fix",
@@ -3890,6 +3751,7 @@ def apply_review_decisions_from_list(graph: MemoryGraph, decisions: List[Dict[st
                     source=source_value,
                     speaker=speaker_value,
                     source_type=source_type,
+                    structural_anchor_kind=structural_anchor_kind,
                     new_text=new_text,
                     reason=reason,
                     new_edges_count=len(new_edges or []),
@@ -3953,6 +3815,7 @@ def apply_review_decisions_from_list(graph: MemoryGraph, decisions: List[Dict[st
                     source=source_value,
                     speaker=speaker_value,
                     source_type=source_type,
+                    structural_anchor_kind=structural_anchor_kind,
                     reason=reason,
                 )
                 if not dry_run:
@@ -3979,8 +3842,8 @@ def apply_review_decisions_from_list(graph: MemoryGraph, decisions: List[Dict[st
 
 # ── Temporal resolution (no LLM) ────────────────────────────────────────
 
-# Regex patterns for relative temporal references
-_RELATIVE_TEMPORAL_PATTERNS = [
+# Regex patterns for relative temporal references that map to an exact day.
+_EXACT_DAY_TEMPORAL_PATTERNS = [
     (r'\btomorrow\b', 1),
     (r'\byesterday\b', -1),
     (r'\btoday\b', 0),
@@ -3988,6 +3851,30 @@ _RELATIVE_TEMPORAL_PATTERNS = [
     (r'\bthis morning\b', 0),
     (r'\bthis afternoon\b', 0),
     (r'\bthis evening\b', 0),
+]
+
+# Coarse spans are intentionally not resolved to a single day. Rewriting
+# "last week" or "next month" into a specific calendar date overstates what
+# the source text actually said.
+_COARSE_TEMPORAL_PATTERNS = [
+    r'\bnext week\b',
+    r'\blast week\b',
+    r'\bnext month\b',
+    r'\blast month\b',
+    r'\bnext year\b',
+    r'\blast year\b',
+]
+
+# Compiled regex to detect ANY relative temporal reference
+_TEMPORAL_DETECTOR = re.compile(
+    '|'.join([pat for pat, _ in _EXACT_DAY_TEMPORAL_PATTERNS] + _COARSE_TEMPORAL_PATTERNS),
+    re.IGNORECASE
+)
+_EXACT_DAY_TEMPORAL_DETECTOR = re.compile(
+    '|'.join(pat for pat, _ in _EXACT_DAY_TEMPORAL_PATTERNS),
+    re.IGNORECASE,
+)
+_ALL_TEMPORAL_PATTERNS = _EXACT_DAY_TEMPORAL_PATTERNS + [
     (r'\bnext week\b', 7),
     (r'\blast week\b', -7),
     (r'\bnext month\b', 30),
@@ -3996,31 +3883,88 @@ _RELATIVE_TEMPORAL_PATTERNS = [
     (r'\blast year\b', -365),
 ]
 
-# Compiled regex to detect ANY relative temporal reference
-_TEMPORAL_DETECTOR = re.compile(
-    '|'.join(pat for pat, _ in _RELATIVE_TEMPORAL_PATTERNS),
-    re.IGNORECASE
+_REVISIT_SOURCE_CUE_RE = re.compile(
+    r"\b(again|went back|go(?:ne)? back|back there|returned|return(?:ed)? to|"
+    r"recently|this weekend|that weekend|still amazing|still great|still good)\b",
+    re.IGNORECASE,
 )
+_DATE_RELATION_SOURCE_CUE_RE = re.compile(
+    r"\b(day after|the day after|next day|following day|day before|the day before|"
+    r"same day|back[- ]to[- ]back|back to back)\b",
+    re.IGNORECASE,
+)
+_EXPLICIT_ISO_DATE_RE = re.compile(r"\b20\d{2}-\d{2}-\d{2}\b")
+_SOURCE_SURFACE_STOPWORDS = {
+    "about", "again", "after", "amazing", "around", "back", "before", "day",
+    "from", "good", "great", "have", "near", "really", "restaurant", "still",
+    "that", "their", "them", "they", "this", "went", "with",
+}
 
 
-def _resolve_relative_date(text: str, created_at: str) -> Optional[str]:
-    """Replace relative temporal references with absolute dates.
+def _protected_source_tokens(text: str) -> set[str]:
+    return {
+        token
+        for token in re.findall(r"[a-z0-9][a-z0-9'-]*", str(text or "").lower())
+        if len(token) >= 4 and token not in _SOURCE_SURFACE_STOPWORDS
+    }
 
-    Returns the fixed text, or None if no changes needed.
-    """
-    if not _TEMPORAL_DETECTOR.search(text):
+
+def _shares_same_event_surface(source_text: str, candidate_text: str) -> bool:
+    source_tokens = _protected_source_tokens(source_text)
+    candidate_tokens = _protected_source_tokens(candidate_text)
+    if not source_tokens or not candidate_tokens:
+        return False
+    shared = len(source_tokens & candidate_tokens)
+    minimum = min(len(source_tokens), len(candidate_tokens))
+    return shared >= 3 and (shared / max(1, minimum)) >= 0.45
+
+
+def _prefer_protected_source_text(candidate_text: str, original_texts: List[str]) -> str:
+    candidate = str(candidate_text or "").strip()
+    if not candidate:
+        return candidate_text
+    lower_candidate = candidate.lower()
+    for original_text in original_texts or []:
+        source_text = str(original_text or "").strip()
+        if not source_text or source_text == candidate:
+            continue
+        lower_source = source_text.lower()
+        if not _shares_same_event_surface(source_text, candidate):
+            continue
+        if _TEMPORAL_DETECTOR.search(lower_source) and _EXPLICIT_ISO_DATE_RE.search(lower_candidate):
+            return source_text
+        if _REVISIT_SOURCE_CUE_RE.search(lower_source) and not _REVISIT_SOURCE_CUE_RE.search(lower_candidate):
+            return source_text
+        if _DATE_RELATION_SOURCE_CUE_RE.search(lower_source) and not _DATE_RELATION_SOURCE_CUE_RE.search(lower_candidate):
+            return source_text
+    return candidate_text
+
+
+def _normalize_temporal_merge_text(text: str) -> str:
+    normalized = " ".join(str(text or "").split()).strip().lower()
+    normalized = normalized.rstrip(".!?")
+    return normalized
+
+
+def _resolve_relative_date_with_patterns(
+    text: str,
+    created_at: str,
+    *,
+    patterns: List[Tuple[str, int]],
+    detector: re.Pattern[str],
+) -> Optional[str]:
+    """Resolve relative temporal references using the supplied pattern set."""
+    if not detector.search(text):
         return None
 
     try:
-        # Parse created_at (ISO format: 2026-02-05T15:16:27.535993)
         base_date = datetime.fromisoformat(created_at).date()
     except (ValueError, TypeError):
         return None
 
     new_text = text
     changed = False
-    for pattern, delta_days in _RELATIVE_TEMPORAL_PATTERNS:
-        # Loop to replace ALL occurrences of each pattern (not just the first)
+    for pattern, delta_days in patterns:
         while True:
             match = re.search(pattern, new_text, re.IGNORECASE)
             if not match:
@@ -4033,11 +3977,8 @@ def _resolve_relative_date(text: str, created_at: str) -> Optional[str]:
     if not changed:
         return None
 
-    # Fix tense: if the resolved date is in the past, adjust "is meeting" → "met" etc.
-    # This is best-effort for common patterns
     today = datetime.now().date()
     if base_date < today:
-        # Simple tense fixes for common patterns
         new_text = re.sub(r'\bis meeting\b', 'met', new_text)
         new_text = re.sub(r'\bis having\b', 'had', new_text)
         new_text = re.sub(r'\bis going to\b', 'went to', new_text)
@@ -4045,11 +3986,47 @@ def _resolve_relative_date(text: str, created_at: str) -> Optional[str]:
         new_text = re.sub(r'\bwill meet\b', 'met', new_text)
         new_text = re.sub(r'\bwill have\b', 'had', new_text)
         new_text = re.sub(r'\bwill visit\b', 'visited', new_text)
-        # "shows the next run as on 2026-02-03" → clean up awkward phrasing
         new_text = re.sub(r'\bas on (\d{4}-\d{2}-\d{2})\b', r'as \1', new_text)
         new_text = re.sub(r'\bnow shows\b', 'showed', new_text)
 
     return new_text
+
+
+def _prefer_relative_temporal_source_text(merged_text: str, originals: List[Any]) -> str:
+    """Keep source-relative/revisit wording when rewrites flatten event structure."""
+    candidate = _normalize_temporal_merge_text(merged_text)
+    if not candidate:
+        return merged_text
+    for node in originals or []:
+        original_text = str(getattr(node, "name", "") or "").strip()
+        created_at = str(getattr(node, "created_at", "") or "").strip()
+        if not original_text or not created_at or not _TEMPORAL_DETECTOR.search(original_text):
+            continue
+        resolved = _resolve_relative_date_with_patterns(
+            original_text,
+            created_at,
+            patterns=_ALL_TEMPORAL_PATTERNS,
+            detector=_TEMPORAL_DETECTOR,
+        )
+        if resolved and _normalize_temporal_merge_text(resolved) == candidate:
+            return original_text
+    return _prefer_protected_source_text(
+        merged_text,
+        [str(getattr(node, "name", "") or "").strip() for node in (originals or [])],
+    )
+
+
+def _resolve_relative_date(text: str, created_at: str) -> Optional[str]:
+    """Replace relative temporal references with absolute dates.
+
+    Returns the fixed text, or None if no changes needed.
+    """
+    return _resolve_relative_date_with_patterns(
+        text,
+        created_at,
+        patterns=_EXACT_DAY_TEMPORAL_PATTERNS,
+        detector=_EXACT_DAY_TEMPORAL_DETECTOR,
+    )
 
 
 def resolve_temporal_references(graph: MemoryGraph, dry_run: bool = True,

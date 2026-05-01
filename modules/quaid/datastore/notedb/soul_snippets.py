@@ -32,6 +32,12 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from lib.llm_clients import call_deep_reasoning, parse_json_response
 from config import get_config
 from lib.fail_policy import is_fail_hard_enabled
+from lib.identity_markdown import (
+    identity_stub_content,
+    is_identity_markdown_file,
+    sanitize_identity_markdown_path,
+    strip_legacy_identity_guidance,
+)
 from lib.markdown import strip_protected_regions
 from lib.runtime_context import (
     get_identity_dir as _runtime_identity_dir,
@@ -95,13 +101,23 @@ def _ensure_project_file(filename: str) -> Path:
     project_path.parent.mkdir(parents=True, exist_ok=True)
     root_path = _root_file_path(filename)
     if root_path.exists():
-        _atomic_write_text(project_path, root_path.read_text(encoding="utf-8"))
+        root_text = root_path.read_text(encoding="utf-8")
+        if is_identity_markdown_file(filename):
+            root_text = strip_legacy_identity_guidance(filename, root_text)
+        _atomic_write_text(project_path, root_text)
     else:
-        _atomic_write_text(project_path, f"# {filename.removesuffix('.md')}\n")
+        stub = identity_stub_content(filename) if is_identity_markdown_file(filename) else f"# {filename.removesuffix('.md')}\n"
+        _atomic_write_text(project_path, stub)
     return project_path
 
 
-def _resolve_writable_file_path(filename: str, *, allow_create_project: bool = False) -> Optional[Path]:
+def _resolve_writable_file_path(
+    filename: str,
+    *,
+    allow_create_project: bool = False,
+    sanitize_identity: bool = True,
+    seed_identity: bool = True,
+) -> Optional[Path]:
     """Resolve the writable markdown target for note distillation/snippet folding.
 
     Identity files live canonically under the instance identity dir. The
@@ -112,11 +128,19 @@ def _resolve_writable_file_path(filename: str, *, allow_create_project: bool = F
     """
     root_path = _root_file_path(filename)
     if root_path.exists():
+        if sanitize_identity and is_identity_markdown_file(filename):
+            sanitize_identity_markdown_path(root_path, filename)
         return root_path
     project_path = _project_file_path(filename)
     if filename in {"SOUL.md", "USER.md", "ENVIRONMENT.md"} and project_path.exists():
+        if not seed_identity:
+            return project_path
         root_path.parent.mkdir(parents=True, exist_ok=True)
-        _atomic_write_text(root_path, project_path.read_text(encoding="utf-8"))
+        seeded = strip_legacy_identity_guidance(
+            filename,
+            project_path.read_text(encoding="utf-8"),
+        )
+        _atomic_write_text(root_path, seeded)
         logger.info("Seeded missing identity file from project base: %s", root_path)
         return root_path
     if project_path.exists():
@@ -337,8 +361,8 @@ _FILE_VOICE_GUIDANCE = {
         "Deployed uninvited, it feels like surveillance. The information is identical. The judgment "
         "about activation is the entire difference.'\n"
         "Examples of BAD entries (move these to USER.md):\n"
-        "  'Maya uses humor as punctuation' → observation about the user\n"
-        "  'IF Maya contacts late at night THEN treat as distress' → behavioral rule (NOWHERE — "
+        "  'Alex uses humor as punctuation' → observation about the user\n"
+        "  'IF Alex contacts late at night THEN treat as distress' → behavioral rule (NOWHERE — "
         "reformulate as understanding)\n"
         "IMMEDIATE CORRECTION RULE: Evolved behaviors in this file have LOWER authority than explicit "
         "user instructions in the base context files. If the user ever pushes back on or corrects a "
@@ -356,10 +380,10 @@ _FILE_VOICE_GUIDANCE = {
         "NOT be treated as a menu of subjects to surface unless the user clearly invites them.\n"
         "The Sensitivity section holds UNDERSTANDING of why certain topics carry weight — genuine "
         "comprehension of what they MEAN to this person. Not 'surface only when asked' (that's a "
-        "rule) but the full emotional context that makes judgment possible. Example: 'Linda's "
-        "diabetes is the heaviest thing Maya carries. It connects to her grandmother's unmanaged "
-        "diabetes, to the distance between Austin and Houston, to the fear that parents get older. "
-        "Linda is self-conscious about the diagnosis. This is Maya's story to tell, in her own "
+        "rule) but the full emotional context that makes judgment possible. Example: 'A parent's "
+        "diabetes is the heaviest thing Alex carries. It connects to family history, distance, "
+        "and the fear that parents get older. The parent is self-conscious about the diagnosis. "
+        "This is Alex's story to tell, in their own "
         "time, to whomever she chooses.' The depth of understanding IS the privacy protection — "
         "when you truly understand what something means to someone, you know when to speak and "
         "when to stay quiet.\n"
@@ -958,30 +982,12 @@ def _prompt_visible_body(parent_content: str, project_content: str = "") -> Tupl
 
 
 def _project_guidance_reference(project_content: str, *, max_lines: int = 40) -> str:
-    """Condense the companion template into lightweight reference guidance."""
-    visible_project, _ = strip_protected_regions(project_content or "")
-    if not visible_project.strip():
-        return ""
+    """Legacy no-op.
 
-    kept: List[str] = []
-    for raw_line in visible_project.splitlines():
-        stripped = raw_line.strip()
-        if not stripped:
-            if kept and kept[-1] != "":
-                kept.append("")
-            continue
-        if stripped.startswith("<!--") or stripped.startswith("# "):
-            continue
-        if stripped.startswith("Purpose:") or stripped.startswith("## ") or stripped.startswith("- "):
-            kept.append(stripped)
-
-    if not kept:
-        return ""
-
-    trimmed = kept[:max_lines]
-    if len(kept) > max_lines:
-        trimmed.append("...")
-    return "\n".join(trimmed).strip()
+    Identity writing guidance now lives in janitor-internal prompt text and repo
+    docs, not in companion markdown files that can bleed into agent context.
+    """
+    return ""
 
 
 def build_distillation_prompt(
@@ -1008,9 +1014,7 @@ def build_distillation_prompt(
     last_distilled = state.get(filename, {}).get("last_distilled", "never")
 
     visible_content, _, mutable_body = _prompt_visible_body(parent_content, project_content)
-    project_reference = _project_guidance_reference(project_content)
     mutable_body_block = mutable_body or "_No evolved body yet beyond the base guidance._"
-    project_reference_block = project_reference or "_No companion guidance file present._"
 
     return f"""You are reviewing journal entries to decide what should become part of the permanent core identity file.
 
@@ -1022,11 +1026,6 @@ Current mutable body of {filename} ({current_lines}/{max_lines} lines total):
 Current full {filename} for anchor/reference:
 ```
 {visible_content}
-```
-
-Reference guidance from projects/quaid/{filename} (heuristics only — not schema, law, or mandatory section structure):
-```
-{project_reference_block}
 ```
 
 RECENT SIGNAL (journal entries):
@@ -1054,7 +1053,6 @@ Guidelines for {filename}:
 - Return at most 2 additions total, and only when the signal cannot be captured by editing existing content.
 - The journal preserves the texture. The core file preserves the signal.
 - The template and section names are guidance, not law. If the best distilled result merges, renames, or ignores a section, do that.
-- Treat the companion `projects/quaid/{filename}` file as background guidance only. Do not preserve its wording or structure just because it exists.
 - If nothing deserves to be added, return empty additions and edits.
 
 SORTING RULE — audit entries on every pass:
@@ -1084,6 +1082,19 @@ Respond as JSON:
   ],
   "captured_dates": ["2026-02-10", "2026-02-09"]
 }}"""
+
+
+def _build_distillation_retry_prompt(prompt: str) -> str:
+    """Append strict JSON instructions for a distillation retry."""
+    return (
+        f"{prompt}\n\n"
+        "RETRY REQUIREMENTS:\n"
+        "- Your previous response was malformed or truncated.\n"
+        "- Return exactly one valid JSON object and nothing else.\n"
+        "- Do not use markdown fences.\n"
+        "- Keep \"reasoning\" under 12 words, or use an empty string.\n"
+        "- If there are no durable changes, return empty additions and edits.\n"
+    )
 
 
 def _normalize_distillation_result(filename: str, result: Dict[str, Any]) -> Dict[str, Any]:
@@ -1164,7 +1175,11 @@ def apply_distillation(filename: str, result: Dict[str, Any],
     """
     stats = {"additions": 0, "edits": 0, "recovered_edits": 0, "errors": []}
 
-    file_path = _resolve_writable_file_path(filename)
+    file_path = _resolve_writable_file_path(
+        filename,
+        sanitize_identity=not dry_run,
+        seed_identity=not dry_run,
+    )
     if file_path is None:
         stats["errors"].append(f"File not found: {filename}")
         return stats
@@ -1337,6 +1352,8 @@ def read_parent_file(filename: str) -> str:
     parent_path = _root_file_path(filename)
     if not parent_path.exists():
         return ""
+    if is_identity_markdown_file(filename):
+        sanitize_identity_markdown_path(parent_path, filename)
     return parent_path.read_text(encoding='utf-8')
 
 
@@ -1592,9 +1609,7 @@ def build_review_prompt(all_snippets: Dict[str, Dict[str, Any]]) -> str:
         snippet_list = "\n".join(f"  {i+1}. {s}" for i, s in enumerate(snippets))
 
         visible_content, _, mutable_body = _prompt_visible_body(parent_content, project_content)
-        project_reference = _project_guidance_reference(project_content)
         mutable_body_block = mutable_body or "_No evolved body yet beyond the base guidance._"
-        project_reference_block = project_reference or "_No companion guidance file present._"
 
         size_budget = (
             f"Token cap: {max_tokens} (do not exceed)"
@@ -1615,11 +1630,6 @@ Current mutable body:
 Current full file for anchor/reference:
 ```
 {visible_content}
-```
-
-Reference guidance from projects/quaid/{filename} (heuristics only — not schema or law):
-```
-{project_reference_block}
 ```
 
 RECENT SIGNAL (new snippets):
@@ -2070,9 +2080,15 @@ def run_journal_distillation(
 
             result = parse_json_response(response_text)
             if not result:
+                retry_text = ""
+                retry_duration = None
+                print(
+                    f"  Journal distillation parse failure for {filename} window "
+                    f"{window_idx}/{len(windows)}; retrying once with strict JSON instructions"
+                )
                 _append_review_telemetry({
                     "task": "journal_distillation",
-                    "status": "parse_failed",
+                    "status": "parse_retry",
                     "file": filename,
                     "window": window_idx,
                     "window_count": len(windows),
@@ -2083,13 +2099,75 @@ def run_journal_distillation(
                     "duration_s": float(duration or 0.0),
                     "response_preview": response_text[:200],
                 })
-                msg = (
-                    f"Parse failed for {filename} window {window_idx}/{len(windows)}: "
-                    f"{response_text[:200]}"
-                )
-                print(f"  Deep Reasoning distillation failed:{msg}")
-                all_errors.append(msg)
-                continue
+                try:
+                    retry_text, retry_duration = call_deep_reasoning(
+                        _build_distillation_retry_prompt(prompt),
+                        system_prompt=system_prompt,
+                        max_tokens=max_tokens,
+                        timeout=llm_timeout,
+                    )
+                except Exception as exc:
+                    _append_review_telemetry({
+                        "task": "journal_distillation",
+                        "status": "retry_error",
+                        "file": filename,
+                        "window": window_idx,
+                        "window_count": len(windows),
+                        "items": len(window_entries),
+                        "prompt_tokens": prompt_tokens,
+                        "max_output_tokens": max_tokens,
+                        "timeout_s": llm_timeout,
+                        "error_type": type(exc).__name__,
+                        "error": str(exc),
+                    })
+                    raise
+
+                if retry_text:
+                    result = parse_json_response(retry_text)
+                    if result:
+                        response_text = retry_text
+                        duration = float(duration or 0.0) + float(retry_duration or 0.0)
+                        _append_review_telemetry({
+                            "task": "journal_distillation",
+                            "status": "retry_ok",
+                            "file": filename,
+                            "window": window_idx,
+                            "window_count": len(windows),
+                            "items": len(window_entries),
+                            "prompt_tokens": prompt_tokens,
+                            "max_output_tokens": max_tokens,
+                            "timeout_s": llm_timeout,
+                            "duration_s": float(retry_duration or 0.0),
+                            "response_chars": len(retry_text),
+                        })
+
+                if not result:
+                    response_preview = retry_text[:200] if retry_text else response_text[:200]
+                    duration_s = (
+                        float(duration or 0.0) + float(retry_duration or 0.0)
+                        if retry_duration is not None
+                        else float(duration or 0.0)
+                    )
+                    _append_review_telemetry({
+                        "task": "journal_distillation",
+                        "status": "parse_failed",
+                        "file": filename,
+                        "window": window_idx,
+                        "window_count": len(windows),
+                        "items": len(window_entries),
+                        "prompt_tokens": prompt_tokens,
+                        "max_output_tokens": max_tokens,
+                        "timeout_s": llm_timeout,
+                        "duration_s": duration_s,
+                        "response_preview": response_preview,
+                    })
+                    msg = (
+                        f"Parse failed for {filename} window {window_idx}/{len(windows)}: "
+                        f"{response_preview}"
+                    )
+                    print(f"  Deep Reasoning distillation failed:{msg}")
+                    all_errors.append(msg)
+                    continue
 
             result = _normalize_distillation_result(filename, result)
 

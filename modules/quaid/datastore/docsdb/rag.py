@@ -186,7 +186,7 @@ def _path_suffix_candidates(path_value: str, workspace: Optional[Path] = None) -
     Doc chunk rows can retain absolute source paths from an earlier instance root
     (for example copied benchmark/eval-only runs). Project-scoped filtering should
     therefore match both the current absolute prefix and stable relative suffixes
-    like ``projects/recipe-app`` or ``projects/recipe-app/tests/auth.test.js``.
+    like ``projects/project-alpha`` or ``projects/project-alpha/tests/auth.test.js``.
     """
     raw = str(path_value or "").strip()
     if not raw:
@@ -225,7 +225,7 @@ def _docs_query_terms(query: str) -> List[str]:
         "the", "a", "an", "and", "or", "to", "for", "of", "in", "on", "at",
         "is", "are", "was", "were", "be", "do", "does", "did", "how", "what",
         "which", "who", "when", "where", "why", "current", "currently",
-        "recipe", "app",
+        "app",
     }
     out: List[str] = []
     for term in raw_terms:
@@ -274,7 +274,7 @@ def _docs_source_penalty(query_terms: List[str], source_file: str) -> float:
         or file_name.startswith(("sample-", "seed-", "fixture-", "mock-", "example-"))
     )
     if fixture_signals and not asks_for_fixture:
-        penalty += 0.14
+        penalty += 0.24
 
     is_history_log = "/log/" in path_lower or file_name.endswith(".log")
     if is_history_log and not asks_for_history:
@@ -358,6 +358,14 @@ def _docs_scaffold_penalty(
     return penalty
 
 
+def _docs_is_generic_overview_header(header_lower: str) -> bool:
+    """Return true for broad project overview headings, independent of project name."""
+    normalized = re.sub(r"^#+\s*", "", str(header_lower or "").strip()).strip()
+    if not normalized:
+        return False
+    return normalized in {"overview", "project overview"} or normalized.startswith("project:")
+
+
 def _docs_rank_score(query_terms: List[str], query: str, source_file: str, section_header: Optional[str], content: str, similarity: float) -> float:
     """Blend semantic similarity with lightweight lexical/path features.
 
@@ -407,7 +415,7 @@ def _docs_rank_score(query_terms: List[str], query: str, source_file: str, secti
     wants_impl = any(term in implementation_terms for term in query_terms)
     if wants_impl and file_name in {"project.md", "readme.md", "tools.md", "agents.md"}:
         score -= 0.12
-    if wants_impl and header_lower in {"# project: recipe app", "# recipe app", "## overview", "# overview"}:
+    if wants_impl and _docs_is_generic_overview_header(header_lower):
         score -= 0.06
     if wants_impl:
         score -= _docs_source_penalty(query_terms, source_file)

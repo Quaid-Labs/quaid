@@ -9983,6 +9983,8 @@ def _should_fast_drill_follow_up(
     if bailout_reason.endswith("_fallback_off"):
         return False, gate_eval, reasons, gate_intent
     if "docs" in planned_stores:
+        # Fast drill is a memory-lane retry. Docs lanes already fan out through
+        # docs RAG; re-adding docs drill needs a generic docs-quality gate.
         return False, gate_eval, reasons, gate_intent
 
     if gate_eval.get("needs_validation"):
