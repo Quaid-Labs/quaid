@@ -160,6 +160,20 @@ class TestRegisterAndGet:
         with pytest.raises(ValueError, match="Use move-file to reassign ownership explicitly"):
             r.register("docs/test.md", project="proj-b", title="V2")
 
+    def test_register_rejects_non_canonical_project_name(self, setup_env):
+        r = _get_registry()
+
+        with pytest.raises(ValueError, match="Invalid project name"):
+            r.register("docs/test.md", project="livetest-agentmsg-CDX", title="Bad Lane")
+
+        assert r.list_docs() == []
+
+    def test_list_rejects_non_canonical_project_filter(self, setup_env):
+        r = _get_registry()
+
+        with pytest.raises(ValueError, match="Invalid project name"):
+            r.list_docs(project="livetest-agentmsg-CDX")
+
     def test_register_with_source_files(self, setup_env):
         r = _get_registry()
         r.register("docs/api.md", project="test-project",
@@ -668,6 +682,11 @@ class TestCreateProjectConfig:
         r = _get_registry()
         with pytest.raises(ValueError, match="Invalid project name"):
             r.create_project("../../etc")
+
+    def test_rejects_uppercase_name(self, setup_env):
+        r = _get_registry()
+        with pytest.raises(ValueError, match="Invalid project name"):
+            r.create_project("Livetest-Agentmsg-CDX")
 
     def test_rejects_empty_name(self, setup_env):
         r = _get_registry()

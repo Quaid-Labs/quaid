@@ -27,6 +27,7 @@ Operations:
 
 import json
 import os
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -73,6 +74,16 @@ def _adapter_name() -> str:
         return "standalone"
 
 
+_PROJECT_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+
+
+def _validate_project_name(name: str) -> str:
+    project_name = str(name or "").strip()
+    if not _PROJECT_NAME_RE.match(project_name):
+        raise ValueError(f"Invalid project name: {name!r} (must be lowercase kebab-case)")
+    return project_name
+
+
 def register(
     name: str,
     canonical_path: str,
@@ -87,6 +98,7 @@ def register(
 
     Returns the project entry.
     """
+    name = _validate_project_name(name)
     with registry_lock():
         data = _load()
         now = datetime.now().isoformat()
@@ -122,6 +134,7 @@ def register(
 
 def mark_deleted(name: str) -> None:
     """Remember an explicit project deletion so docs reconciliation cannot resurrect it."""
+    name = _validate_project_name(name)
     with registry_lock():
         data = _load()
         data.setdefault("deleted_projects", {})[name] = datetime.now().isoformat()
@@ -130,6 +143,7 @@ def mark_deleted(name: str) -> None:
 
 def clear_deleted(name: str) -> None:
     """Clear an explicit delete marker when a user recreates a project."""
+    name = _validate_project_name(name)
     with registry_lock():
         data = _load()
         if name in data.get("deleted_projects", {}):
@@ -139,6 +153,7 @@ def clear_deleted(name: str) -> None:
 
 def is_deleted(name: str) -> bool:
     """Return whether a project has an explicit delete marker."""
+    name = _validate_project_name(name)
     return name in _load().get("deleted_projects", {})
 
 
@@ -151,6 +166,7 @@ def link(name: str, instance: Optional[str] = None, create_symlink: bool = False
     Returns True if the link was added, False if already linked or project
     not found.
     """
+    name = _validate_project_name(name)
     with registry_lock():
         data = _load()
         if name not in data["projects"]:
@@ -208,6 +224,7 @@ def unlink(name: str, instance: Optional[str] = None) -> bool:
 
     Returns True if unlinked, False if not found or not linked.
     """
+    name = _validate_project_name(name)
     with registry_lock():
         data = _load()
         if name not in data["projects"]:
@@ -227,6 +244,7 @@ def unlink(name: str, instance: Optional[str] = None) -> bool:
 
 def lookup(name: str) -> Optional[Dict[str, Any]]:
     """Look up a project by name. Returns entry dict or None."""
+    name = _validate_project_name(name)
     data = _load()
     if name in data.get("deleted_projects", {}):
         return None
@@ -246,6 +264,7 @@ def remove(name: str, force: bool = False) -> bool:
     If force=False and other instances are still tracking, raises ValueError.
     Returns True if removed.
     """
+    name = _validate_project_name(name)
     with registry_lock():
         data = _load()
         if name not in data["projects"]:

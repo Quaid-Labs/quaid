@@ -57,6 +57,20 @@ def test_docs_registration_creates_canonical_project_entry(project_registry_env)
     assert "benchrunner" in entry["instances"]
 
 
+def test_global_project_register_rejects_non_canonical_project_name(project_registry_env):
+    from lib.project_registry import register
+
+    project_dir = project_registry_env["visible_home"] / "projects" / "livetest-agentmsg-cdx"
+    project_dir.mkdir(parents=True)
+
+    with pytest.raises(ValueError, match="Invalid project name"):
+        register(
+            name="livetest-agentmsg-CDX",
+            canonical_path=str(project_dir),
+            link_current_instance=False,
+        )
+
+
 def test_project_list_reconciles_existing_docs_registry_project_rows(project_registry_env):
     from core.project_registry import list_projects
     from datastore.docsdb.registry import DocsRegistry

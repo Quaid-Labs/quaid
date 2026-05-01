@@ -137,17 +137,16 @@ def _workspace() -> Path:
 def _visible_home() -> Path:
     return get_visible_quaid_home()
 
-# Strict project name validation — prevents path traversal
-_PROJECT_NAME_RE = re.compile(r'^[a-zA-Z0-9][a-zA-Z0-9_-]*$')
+# Strict project name validation — mirrors core.project_registry/project_docs.
+_PROJECT_NAME_RE = re.compile(r'^[a-z0-9][a-z0-9-]*$')
 
 
 def _validate_project_name(name: str) -> None:
-    """Validate project name is safe for filesystem use."""
+    """Validate project name is canonical lowercase kebab-case."""
     if not name or not _PROJECT_NAME_RE.match(name):
         raise ValueError(
             f"Invalid project name: '{name}'. "
-            "Use alphanumeric characters, hyphens, and underscores only. "
-            "Must start with a letter or digit."
+            "Project names must be lowercase kebab-case."
         )
 
 
@@ -600,6 +599,7 @@ class DocsRegistry:
 
     def save_project_definition(self, name: str, defn, *, link_current_instance: bool = True):
         """Upsert a project definition to DB."""
+        name = self._registry_project_name(name)
         self._write_project_definition_row(name, defn)
         self._ensure_global_project_entry(
             name,
@@ -619,6 +619,11 @@ class DocsRegistry:
         name = str(project or "").strip()
         if not name or name == "default":
             return None
+        _validate_project_name(name)
+        return name
+
+    def _registry_project_name(self, project: Optional[str]) -> str:
+        name = str(project or "").strip() or "default"
         _validate_project_name(name)
         return name
 
@@ -896,6 +901,7 @@ class DocsRegistry:
         allow_project_reassign: bool = False,
     ) -> int:
         """Register a document in the registry. Returns the row ID."""
+        project = self._registry_project_name(project)
         if not file_path or not file_path.strip():
             raise ValueError("file_path must be a non-empty string")
         resolved = Path(file_path.strip()).expanduser().resolve()
@@ -1013,6 +1019,7 @@ class DocsRegistry:
         state: str = "active",
     ) -> List[Dict[str, Any]]:
         """List registry entries with optional filters."""
+        project = self._registry_project_name(project) if project is not None else None
         query = "SELECT * FROM doc_registry WHERE state = ?"
         params: list = [state]
 
@@ -1125,6 +1132,8 @@ class DocsRegistry:
                 updates[field] = normalized or None
         if "auto_update" in updates:
             updates["auto_update"] = 1 if updates["auto_update"] else 0
+        if "project" in updates:
+            updates["project"] = self._registry_project_name(updates["project"])
 
         set_clause = ", ".join(f"{k} = ?" for k in updates)
         params = list(updates.values()) + [file_path]
@@ -1356,6 +1365,7 @@ class DocsRegistry:
 
         Returns list of newly registered file paths.
         """
+        project_name = self._registry_project_name(project_name)
         cfg = self._get_config()
         defn = cfg.projects.definitions.get(project_name)
         if not defn:
@@ -1409,6 +1419,7 @@ class DocsRegistry:
 
         Returns list of newly registered file paths.
         """
+        project_name = self._registry_project_name(project_name)
         cfg = self._get_config()
         defn = cfg.projects.definitions.get(project_name)
         if not defn:
@@ -1755,6 +1766,7 @@ class DocsRegistry:
 
         Returns: {"moved": bool, "new_path": str}
         """
+        to_project = self._registry_project_name(to_project)
         # Guard: target project must exist
         cfg = self._get_config()
         if to_project not in cfg.projects.definitions:
@@ -1786,6 +1798,7 @@ class DocsRegistry:
 
         Returns: {"total": N, "exists": N, "missing": [...], "orphans": [...]}
         """
+        project_name = self._registry_project_name(project_name)
         cfg = self._get_config()
         defn = cfg.projects.definitions.get(project_name)
 
