@@ -321,6 +321,17 @@ def test_start_daemon_exports_quaid_home_to_worker_env(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(extraction_daemon, "_pid_path", lambda: pid_path)
     monkeypatch.setattr(extraction_daemon, "_log_path", lambda: tmp_path / "daemon.log")
+
+    from core import project_docs
+    real_scrub = project_docs.scrub_background_process_env
+
+    def fake_scrub(env):
+        assert env["QUAID_INSTANCE"] == "codex-livetest"
+        scrubbed = real_scrub(env)
+        assert "QUAID_INSTANCE" not in scrubbed
+        return scrubbed
+
+    monkeypatch.setattr(project_docs, "scrub_background_process_env", fake_scrub)
     monkeypatch.setattr(extraction_daemon.subprocess, "Popen", _FakePopen)
     monkeypatch.setattr(extraction_daemon.time, "sleep", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(extraction_daemon, "read_pid", fake_read_pid)
@@ -340,6 +351,34 @@ def test_start_daemon_exports_quaid_home_to_worker_env(monkeypatch, tmp_path):
     assert "QUAID_SUPERVISOR_TOKEN" not in captured["env"]
     assert "MEMORY_DB_PATH" not in captured["env"]
     assert "MEMORY_ARCHIVE_DB_PATH" not in captured["env"]
+
+
+def test_start_daemon_refuses_missing_instance_before_spawn(monkeypatch, tmp_path):
+    from lib.instance import InstanceError
+
+    spawned = []
+
+    monkeypatch.delenv("QUAID_INSTANCE", raising=False)
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path / "home"))
+    monkeypatch.setattr(extraction_daemon.subprocess, "Popen", lambda *_args, **_kwargs: spawned.append(True))
+
+    with pytest.raises(InstanceError, match="QUAID_INSTANCE environment variable is not set"):
+        extraction_daemon.start_daemon()
+
+    assert spawned == []
+
+
+def test_start_daemon_refuses_empty_resolved_instance_before_spawn(monkeypatch, tmp_path):
+    spawned = []
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path / "home"))
+    monkeypatch.setattr(extraction_daemon, "_instance_id", lambda: "")
+    monkeypatch.setattr(extraction_daemon.subprocess, "Popen", lambda *_args, **_kwargs: spawned.append(True))
+
+    with pytest.raises(RuntimeError, match="cannot start extraction daemon without QUAID_INSTANCE"):
+        extraction_daemon.start_daemon()
+
+    assert spawned == []
 
 
 def test_matching_daemon_pids_does_not_match_instance_prefix(monkeypatch):

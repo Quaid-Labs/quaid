@@ -6027,7 +6027,11 @@ def start_daemon() -> int:
 
     Uses flock on PID file to prevent concurrent starts (B001).
     """
+    # Capture before scrub_background_process_env clears QUAID_INSTANCE; the
+    # worker process still needs the validated instance stamped back in.
     instance = _instance_id()
+    if not instance:
+        raise RuntimeError("cannot start extraction daemon without QUAID_INSTANCE")
     # B001: Acquire exclusive lock on PID file to prevent TOCTOU race
     pid_file = _pid_path()
     pid_file.parent.mkdir(parents=True, exist_ok=True)
