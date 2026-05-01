@@ -773,6 +773,48 @@ def test_claude_code_session_start_compact_arms_identity_bridge(
     assert latest_payload["source"] == "hook_session_init_compact"
 
 
+def test_claude_code_session_start_compact_detector_prefers_exact_matcher():
+    from core.interface import hooks
+
+    assert hooks._is_compact_session_start({"matcher": "compact"}) is True
+    assert hooks._is_compact_session_start({"source": "compact"}) is True
+    assert hooks._is_compact_session_start({"payload": {"matcher": "compact"}}) is True
+    assert hooks._is_compact_session_start({"matcher": "manual", "source": "compact_legacy"}) is False
+    assert hooks._is_compact_session_start({"matcher": "context_compact"}) is False
+    assert hooks._is_compact_session_start({"source": "compact_legacy"}) is True
+
+
+def test_compaction_marker_arm_sweeps_stale_per_session_markers(tmp_path, mock_adapter):
+    from core.interface import hooks
+
+    data_dir = tmp_path / "data"
+    marker_dir = data_dir / "context-refresh-compaction"
+    marker_dir.mkdir(parents=True)
+    mock_adapter.data_dir.return_value = data_dir
+    old_created_at = int(time.time()) - 900
+    fresh_created_at = int(time.time())
+    stale_marker = marker_dir / "old-session.json"
+    fresh_marker = marker_dir / "fresh-session.json"
+    stale_marker.write_text(
+        json.dumps({"session_id": "old-session", "created_at": old_created_at}) + "\n",
+        encoding="utf-8",
+    )
+    fresh_marker.write_text(
+        json.dumps({"session_id": "fresh-session", "created_at": fresh_created_at}) + "\n",
+        encoding="utf-8",
+    )
+
+    hooks._arm_compaction_refresh_marker(
+        "new-session",
+        reason="session_start_compact",
+        source="hook_session_init_compact",
+    )
+
+    assert not stale_marker.exists()
+    assert fresh_marker.exists()
+    assert (marker_dir / "new-session.json").is_file()
+
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------

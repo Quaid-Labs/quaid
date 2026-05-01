@@ -669,12 +669,38 @@ class ClaudeCodeAdapter(QuaidAdapter):
         command = self._scan_lifecycle_candidates(hook_input)
         if command:
             return command
+        containers = [hook_input] if isinstance(hook_input, dict) else []
+        for container_key in ("hook", "payload", "context"):
+            nested = hook_input.get(container_key) if isinstance(hook_input, dict) else None
+            if isinstance(nested, dict):
+                containers.append(nested)
+        matcher_values = [
+            str(container.get("matcher") or "").strip().lower()
+            for container in containers
+            if str(container.get("matcher") or "").strip()
+        ]
+        if matcher_values:
+            if any(value == "compact" for value in matcher_values):
+                return "/compact"
+        elif any(
+            "compact" in str(container.get(key) or "").lower()
+            for container in containers
+            for key in (
+                "source",
+                "reason",
+                "hook_event_name",
+                "hookEventName",
+                "subtype",
+                "event",
+                "event_name",
+                "eventName",
+            )
+        ):
+            return "/compact"
         source = " ".join(
             str(hook_input.get(key) or "")
             for key in ("source", "reason", "hook_event_name", "hookEventName")
         ).lower()
-        if "compact" in source:
-            return "/compact"
         if "clear" in source or "reset" in source:
             return "/clear"
         return "/new"

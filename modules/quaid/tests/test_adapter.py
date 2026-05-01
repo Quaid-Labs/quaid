@@ -1122,6 +1122,15 @@ class TestClaudeCodeAdapter:
         assert signal["meta"]["command"] == "/compact"
         assert adapter._read_session_transition_state()["session_id"] == "cda9980c-8b21-4a32-918c-a93c34588e06"
 
+    def test_transition_command_prefers_exact_compact_matcher(self):
+        adapter = ClaudeCodeAdapter()
+
+        assert adapter._transition_command_for_hook({"matcher": "compact"}) == "/compact"
+        assert adapter._transition_command_for_hook({"payload": {"matcher": "compact"}}) == "/compact"
+        assert adapter._transition_command_for_hook({"source": "compact"}) == "/compact"
+        assert adapter._transition_command_for_hook({"matcher": "manual", "source": "compact_legacy"}) == "/new"
+        assert adapter._transition_command_for_hook({"matcher": "context_compact"}) == "/new"
+
     def test_pending_context_default_ttl_drops_stale_entries(self, tmp_path, monkeypatch):
         monkeypatch.setenv("QUAID_INSTANCE", "claude-code-pending-ttl")
         adapter = ClaudeCodeAdapter(home=tmp_path)

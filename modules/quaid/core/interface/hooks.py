@@ -1724,6 +1724,27 @@ def _context_refresh_compaction_latest_marker_path() -> Path | None:
         return None
 
 
+def _sweep_stale_compaction_refresh_markers(marker_dir: Path, *, now: int, ttl_seconds: int = 10 * 60) -> None:
+    try:
+        marker_files = list(marker_dir.glob("*.json")) if marker_dir.is_dir() else []
+    except Exception:
+        return
+    for marker_file in marker_files:
+        if marker_file.name == "_latest.json":
+            continue
+        try:
+            payload = json.loads(marker_file.read_text(encoding="utf-8"))
+            created_at = int(payload.get("created_at") or 0) if isinstance(payload, dict) else 0
+        except Exception:
+            created_at = 0
+        if not created_at or now - created_at <= ttl_seconds:
+            continue
+        try:
+            marker_file.unlink()
+        except Exception:
+            pass
+
+
 def _arm_compaction_refresh_marker(
     session_id: str,
     *,
@@ -1743,6 +1764,7 @@ def _arm_compaction_refresh_marker(
             "source": source,
         }
         marker_path.parent.mkdir(parents=True, exist_ok=True)
+        _sweep_stale_compaction_refresh_markers(marker_path.parent, now=marker_payload["created_at"])
         marker_path.write_text(
             json.dumps(
                 marker_payload,
@@ -2413,8 +2435,21 @@ def _maybe_compaction_refresh_context_artifacts(hook_input: dict, *, is_precompa
 def _is_compact_session_start(hook_input: dict) -> bool:
     if not isinstance(hook_input, dict):
         return False
+    containers = [hook_input]
+    for container_key in ("hook", "payload", "context"):
+        nested = hook_input.get(container_key)
+        if isinstance(nested, dict):
+            containers.append(nested)
+
+    matcher_values = [
+        str(container.get("matcher") or "").strip().lower()
+        for container in containers
+        if str(container.get("matcher") or "").strip()
+    ]
+    if matcher_values:
+        return any(value == "compact" for value in matcher_values)
+
     keys = (
-        "matcher",
         "source",
         "reason",
         "hook_event_name",
@@ -2425,12 +2460,7 @@ def _is_compact_session_start(hook_input: dict) -> bool:
         "eventName",
     )
     values: list[str] = []
-    for key in keys:
-        values.append(str(hook_input.get(key) or ""))
-    for container_key in ("hook", "payload", "context"):
-        nested = hook_input.get(container_key)
-        if not isinstance(nested, dict):
-            continue
+    for nested in containers:
         for key in keys:
             values.append(str(nested.get(key) or ""))
     return any("compact" in value.lower() for value in values)
@@ -2615,9 +2645,10 @@ def hook_extract(args):
     try:
         _maybe_compaction_refresh_context_artifacts(hook_input, is_precompact=is_precompact)
         if is_precompact and session_id:
-            # Intentional belt-and-suspenders with hook-inject's /compact arm:
-            # CC versions vary on whether PreCompact, UserPromptSubmit, or both
-            # fire. Marker writes are idempotent; the next prompt consumes one.
+            # Intentional belt-and-suspenders with hook-inject /compact and
+            # SessionStart matcher=compact arms: CC versions vary on which
+            # lifecycle hook fires. Marker writes are idempotent; stale per-id
+            # markers from old pre-rotation sessions are swept on later arms.
             _arm_compaction_refresh_marker(
                 session_id,
                 reason="precompact_hook",
