@@ -1237,6 +1237,76 @@ class TestClaudeCodeAdapter:
         assert "/clear" not in transcript
         assert "Can you remind me where Priya works?" in transcript
 
+    def test_parse_session_jsonl_strips_embedded_assistant_quaid_notice_paragraph(self, tmp_path):
+        path = tmp_path / "claude-quaid-notice-inline.jsonl"
+        path.write_text(
+            json.dumps(
+                {
+                    "type": "assistant",
+                    "message": {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": (
+                                    "Welcome back.\n\n"
+                                    "Quaid notice: Two provider errors — invalid-model-m6-probe is hitting a 404. "
+                                    "Check the fastReasoning/deepReasoning model settings in config.json.\n\n"
+                                    "Tell me what you want to do next."
+                                ),
+                            }
+                        ],
+                    },
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        adapter = ClaudeCodeAdapter()
+        transcript = adapter.parse_session_jsonl(path)
+        assert "Quaid notice:" not in transcript
+        assert "invalid-model-m6-probe" not in transcript
+        assert "Welcome back." in transcript
+        assert "Tell me what you want to do next." in transcript
+
+    def test_parse_session_jsonl_strips_assistant_pending_quaid_notice_commentary(self, tmp_path):
+        path = tmp_path / "claude-quaid-notice-commentary.jsonl"
+        path.write_text(
+            "\n".join(
+                [
+                    json.dumps(
+                        {
+                            "type": "assistant",
+                            "message": {
+                                "role": "assistant",
+                                "content": [
+                                    {
+                                        "type": "text",
+                                        "text": "You started a new interaction. I’m checking the pending Quaid notice first, then I’ll reply directly.",
+                                    }
+                                ],
+                            },
+                        }
+                    ),
+                    json.dumps(
+                        {
+                            "type": "user",
+                            "message": {
+                                "role": "user",
+                                "content": [{"type": "text", "text": "What did I say about my sister?"}],
+                            },
+                        }
+                    ),
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        adapter = ClaudeCodeAdapter()
+        transcript = adapter.parse_session_jsonl(path)
+        assert "pending Quaid notice" not in transcript
+        assert "What did I say about my sister?" in transcript
+
     def test_resolve_prompt_submit_signal_returns_session_end_for_clear_command(self):
         adapter = ClaudeCodeAdapter()
         signal = adapter.resolve_prompt_submit_signal({"prompt": "/clear"})
