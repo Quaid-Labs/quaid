@@ -272,6 +272,37 @@ function getInstanceId(agentLabel = "main") {
   }
   return _QUAID_PREFIX ? `${_QUAID_PREFIX}-${label}` : label;
 }
+function readRegisteredOpenClawAgentLabels() {
+  const labels = [];
+  try {
+    const cfgPath = _resolveOpenClawConfigPath();
+    if (!cfgPath || !fs.existsSync(cfgPath)) {
+      return [];
+    }
+    const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
+    const agents = cfg?.agents;
+    if (!agents || typeof agents !== "object") {
+      return [];
+    }
+    const list = Array.isArray(agents.list) ? agents.list : [];
+    for (const row of list) {
+      const label = String(row?.id || "").trim().toLowerCase();
+      if (label) labels.push(label);
+    }
+    for (const key of Object.keys(agents)) {
+      const label = String(key || "").trim().toLowerCase();
+      if (label && !["defaults", "list"].includes(label)) {
+        labels.push(label);
+      }
+    }
+  } catch (err) {
+    writeHookTrace("instance.agent_registry_scan_error", {
+      error: String(err?.message || err)
+    });
+    return [];
+  }
+  return Array.from(new Set(labels)).filter((label) => label && label !== "main");
+}
 function getDaemonSignalDir(agentId = "main") {
   const instanceId = getInstanceId(agentId);
   return instanceId ? path.join(WORKSPACE, "instances", instanceId, "data", "extraction-signals") : path.join(WORKSPACE, "data", "extraction-signals");
@@ -336,6 +367,9 @@ function readInstalledAtMs() {
 const sessionTranscriptPaths = /* @__PURE__ */ new Map();
 const sessionIdToAgentId = /* @__PURE__ */ new Map();
 const provisionedAgentInstances = /* @__PURE__ */ new Set();
+let registeredAgentProvisionSignature = "";
+let registeredAgentProvisionLastScanMs = 0;
+const REGISTERED_AGENT_PROVISION_SCAN_MS = 3e4;
 const subagentParentSessionIds = /* @__PURE__ */ new Map();
 const registeredSubagentSessions = /* @__PURE__ */ new Set();
 const QUAID_SESSION_PRESERVE_DIR = path.join(QUAID_LOGS_DIR, "quaid", "sessions");
@@ -500,6 +534,31 @@ function ensureAgentInstanceProvisioned(agentLabel, reason) {
     });
     return false;
   }
+}
+function provisionRegisteredAgentSilos(reason, nowMs = Date.now()) {
+  const labels = readRegisteredOpenClawAgentLabels();
+  const signature = labels.join("\0");
+  if (signature === registeredAgentProvisionSignature && nowMs - registeredAgentProvisionLastScanMs < REGISTERED_AGENT_PROVISION_SCAN_MS) {
+    return 0;
+  }
+  registeredAgentProvisionSignature = signature;
+  registeredAgentProvisionLastScanMs = nowMs;
+  let provisioned = 0;
+  for (const label of labels) {
+    const configPath = path.join(WORKSPACE, "instances", getInstanceId(label), "config.json");
+    const existedBefore = fs.existsSync(configPath);
+    if (ensureAgentInstanceProvisioned(label, reason)) {
+      provisioned += existedBefore ? 0 : 1;
+    }
+  }
+  if (labels.length > 0) {
+    writeHookTrace("instance.registered_agents_scanned", {
+      reason,
+      labels,
+      provisioned
+    });
+  }
+  return provisioned;
 }
 function deliverDeferredNoticesViaChannel(agentLabel, reason) {
   const instanceId = getInstanceId(agentLabel);
@@ -4823,6 +4882,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
       let lastStaleRecoverMs = 0;
       const tickSessionIndex = () => {
         try {
+          provisionRegisteredAgentSilos("session_index_agent_registry", Date.now());
           const data = readSessionsIndex();
           const recognizedEntries = [];
           for (const [key, row] of Object.entries(data || {})) {
@@ -6776,6 +6836,8 @@ const __test = {
   resolveConfiguredLLMTransport: _resolveConfiguredLLMTransport,
   resolveAgentLabelFromModelName,
   resolveHookAgentLabel,
+  readRegisteredOpenClawAgentLabels,
+  provisionRegisteredAgentSilos,
   isInternalSessionContext,
   isInternalTranscriptMessages,
   isMeaningfulUserTranscriptActivity,
