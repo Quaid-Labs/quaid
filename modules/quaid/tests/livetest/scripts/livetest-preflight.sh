@@ -1743,7 +1743,7 @@ PYEOF
         echo "  $PASS  OC Matrix config already present (homeserver=$MATRIX_HOMESERVER room=$MATRIX_ROOM_ID sender=$MATRIX_SENDER_USER_ID)"
     fi
     if [[ "$MATRIX_OPENCLAW_CHANGED" == "1" ]]; then
-        ssh "$REMOTE_HOST" 'launchctl kickstart -k "gui/$(id -u)/ai.openclaw.gateway" >/dev/null 2>&1 || openclaw gateway restart >/dev/null 2>&1 || true'
+        ssh "$REMOTE_HOST" 'launchctl kickstart -k "gui/$(id -u)/ai.openclaw.gateway" >/dev/null 2>&1 || (export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"; OPENCLAW_BIN="$(command -v openclaw || true)"; if [ -z "$OPENCLAW_BIN" ] && [ -x /opt/homebrew/bin/openclaw ]; then OPENCLAW_BIN=/opt/homebrew/bin/openclaw; fi; if [ -n "$OPENCLAW_BIN" ]; then "$OPENCLAW_BIN" gateway restart >/dev/null 2>&1; fi) || true'
         echo "  $PASS  requested OpenClaw gateway restart to pick up channels.matrix changes"
     fi
 fi
