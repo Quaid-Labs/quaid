@@ -387,6 +387,8 @@ _log_hook_command_invocation() {
   for arg in "$@"; do
     case "$arg" in
       --precompact)
+        # --precompact is currently hook-extract-only; keep the diagnostic
+        # label tied to the flag so future hook ownership changes are visible.
         event="PreCompact"
         sanitized_args="${sanitized_args:+$sanitized_args }--precompact"
         ;;
