@@ -475,17 +475,22 @@ def _all_process_commands_with_env() -> list[tuple[int, str]]:
         ["ps", "axeww", "-o", "pid=,command="],
     ]
     rows_by_pid: dict[int, str] = {}
+    failures: list[str] = []
     for ps_command in commands:
         try:
             result = subprocess.run(
                 ps_command,
                 capture_output=True,
                 text=True,
-                timeout=5,
+                timeout=2,
             )
-        except Exception:
+        except Exception as exc:
+            failures.append(f"{' '.join(ps_command)}: {exc}")
             continue
         if result.returncode != 0 or not str(result.stdout or "").strip():
+            failures.append(
+                f"{' '.join(ps_command)}: rc={result.returncode} stdout_len={len(str(result.stdout or ''))}"
+            )
             continue
         rows: list[tuple[int, str]] = []
         for raw_line in StringIO(result.stdout).read().splitlines():
@@ -504,6 +509,12 @@ def _all_process_commands_with_env() -> list[tuple[int, str]]:
             # usually longer and is required for instance ownership matching.
             if len(command) > len(rows_by_pid.get(pid, "")):
                 rows_by_pid[pid] = command
+    if not rows_by_pid:
+        logger.warning(
+            "process ownership ps scan returned no rows after %d variants: %s",
+            len(commands),
+            "; ".join(failures[-4:]) if failures else "no output",
+        )
     return sorted(rows_by_pid.items())
 
 

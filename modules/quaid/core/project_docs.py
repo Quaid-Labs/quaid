@@ -504,17 +504,23 @@ def _matching_supervisor_pids(*, quaid_home: Optional[Path] = None) -> List[int]
         ["ps", "axeww", "-o", "pid=,command="],
     ]
     matches: List[int] = []
+    failures: List[str] = []
+    saw_process_rows = False
     for ps_command in commands:
         try:
             result = subprocess.run(
                 ps_command,
                 capture_output=True,
                 text=True,
-                timeout=2,
+                timeout=1,
             )
-        except Exception:
+        except Exception as exc:
+            failures.append(f"{' '.join(ps_command)}: {exc}")
             continue
         if result.returncode != 0 or not str(result.stdout or "").strip():
+            failures.append(
+                f"{' '.join(ps_command)}: rc={result.returncode} stdout_len={len(str(result.stdout or ''))}"
+            )
             continue
         for raw in str(result.stdout or "").splitlines():
             line = str(raw or "").strip()
@@ -527,6 +533,7 @@ def _matching_supervisor_pids(*, quaid_home: Optional[Path] = None) -> List[int]
                 pid = int(parts[0])
             except ValueError:
                 continue
+            saw_process_rows = True
             command = parts[1]
             if not _supervisor_command_matches(command):
                 continue
@@ -534,6 +541,13 @@ def _matching_supervisor_pids(*, quaid_home: Optional[Path] = None) -> List[int]
                 continue
             if _pid_alive(pid):
                 matches.append(pid)
+    if not saw_process_rows:
+        logger.warning(
+            "project-docs supervisor ps scan returned no rows after %d variants for home=%s: %s",
+            len(commands),
+            home,
+            "; ".join(failures[-4:]) if failures else "no output",
+        )
     return sorted(set(matches))
 
 
