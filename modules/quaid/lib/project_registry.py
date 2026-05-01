@@ -153,6 +153,7 @@ def clear_deleted(name: str) -> None:
 
 def is_deleted(name: str) -> bool:
     """Return whether a project has an explicit delete marker."""
+    # Tolerant cleanup path: allow inspection of pre-existing non-canonical keys.
     name = str(name or "").strip()
     return name in _load().get("deleted_projects", {})
 
@@ -224,7 +225,9 @@ def unlink(name: str, instance: Optional[str] = None) -> bool:
 
     Returns True if unlinked, False if not found or not linked.
     """
-    name = _validate_project_name(name)
+    # Tolerant cleanup path: legacy registries can contain pre-canonical names.
+    # Creation/linking stays strict, but existing bad keys must be unlinkable.
+    name = str(name or "").strip()
     with registry_lock():
         data = _load()
         if name not in data["projects"]:
@@ -244,6 +247,7 @@ def unlink(name: str, instance: Optional[str] = None) -> bool:
 
 def lookup(name: str) -> Optional[Dict[str, Any]]:
     """Look up a project by name. Returns entry dict or None."""
+    # Tolerant cleanup path: allow inspection of pre-existing non-canonical keys.
     name = str(name or "").strip()
     data = _load()
     if name in data.get("deleted_projects", {}):
@@ -264,6 +268,7 @@ def remove(name: str, force: bool = False) -> bool:
     If force=False and other instances are still tracking, raises ValueError.
     Returns True if removed.
     """
+    # Tolerant cleanup path: allow deletion of pre-existing non-canonical keys.
     name = str(name or "").strip()
     with registry_lock():
         data = _load()

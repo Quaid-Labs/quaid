@@ -71,8 +71,8 @@ def test_global_project_register_rejects_non_canonical_project_name(project_regi
         )
 
 
-def test_global_project_read_and_remove_tolerate_existing_noncanonical_names(project_registry_env):
-    from lib.project_registry import is_deleted, list_all, lookup, remove
+def test_global_project_read_unlink_and_remove_tolerate_existing_noncanonical_names(project_registry_env):
+    from lib.project_registry import is_deleted, list_all, lookup, remove, unlink
 
     registry_path = project_registry_env["quaid_home"] / "project-registry.json"
     registry_path.parent.mkdir(parents=True, exist_ok=True)
@@ -82,7 +82,7 @@ def test_global_project_read_and_remove_tolerate_existing_noncanonical_names(pro
                 "projects": {
                     "OldUpper": {
                         "canonical_path": str(project_registry_env["visible_home"] / "projects" / "old-upper"),
-                        "instances": [],
+                        "instances": ["benchrunner", "other-instance"],
                         "created_at": "2026-05-01T00:00:00",
                         "description": "legacy invalid test project",
                     }
@@ -99,6 +99,8 @@ def test_global_project_read_and_remove_tolerate_existing_noncanonical_names(pro
     assert lookup("OldUpper") is not None
     assert is_deleted("DeletedUpper") is True
     assert "OldUpper" in list_all()
+    assert unlink("OldUpper", instance="benchrunner") is True
+    assert lookup("OldUpper")["instances"] == ["other-instance"]
     assert remove("OldUpper", force=True) is True
     assert lookup("OldUpper") is None
 
