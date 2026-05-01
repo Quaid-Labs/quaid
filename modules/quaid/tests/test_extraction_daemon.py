@@ -3571,6 +3571,45 @@ class TestCursorRoundTrip:
         result = extraction_daemon.read_cursor("sess-advance")
         assert result["line_offset"] == 10
 
+    def test_write_cursor_refuses_same_source_rewind_without_shrink(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
+
+        transcript_path = tmp_path / "session.jsonl"
+        transcript_path.write_text(
+            '{"role":"user","content":"one"}\n'
+            '{"role":"assistant","content":"two"}\n'
+            '{"role":"user","content":"three"}\n',
+            encoding="utf-8",
+        )
+        source_key = extraction_daemon._signal_source_cursor_key("sess-rewind", str(transcript_path))
+
+        extraction_daemon.write_cursor("sess-rewind", 3, str(transcript_path), source_key=source_key)
+        extraction_daemon.write_cursor("sess-rewind", 0, str(transcript_path), source_key=source_key)
+
+        result = extraction_daemon.read_cursor("sess-rewind", source_key=source_key)
+        assert result["line_offset"] == 3
+
+    def test_write_cursor_allows_same_source_rewind_after_shrink(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
+
+        transcript_path = tmp_path / "session.jsonl"
+        transcript_path.write_text(
+            '{"role":"user","content":"one"}\n'
+            '{"role":"assistant","content":"two"}\n'
+            '{"role":"user","content":"three"}\n',
+            encoding="utf-8",
+        )
+        source_key = extraction_daemon._signal_source_cursor_key("sess-shrink", str(transcript_path))
+        extraction_daemon.write_cursor("sess-shrink", 3, str(transcript_path), source_key=source_key)
+
+        transcript_path.write_text('{"role":"user","content":"rebased"}\n', encoding="utf-8")
+        extraction_daemon.write_cursor("sess-shrink", 0, str(transcript_path), source_key=source_key)
+
+        result = extraction_daemon.read_cursor("sess-shrink", source_key=source_key)
+        assert result["line_offset"] == 0
+
     def test_cursor_file_is_per_session(self, monkeypatch, tmp_path):
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
         monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
@@ -4410,6 +4449,62 @@ class TestRollingExtraction:
             assert state["semantic_buffer"] == "User: hi"
             assert state["semantic_buffer_tokens"] < 20
             assert state["buffered_line_offset"] == 2
+        finally:
+            if real_adapter is not None:
+                sys.modules["lib.adapter"] = real_adapter
+            else:
+                sys.modules.pop("lib.adapter", None)
+
+    def test_check_chunk_ready_sessions_skips_active_processing_lock(self, monkeypatch, tmp_path):
+        import sys
+        import types
+
+        transcript_path = tmp_path / "session.jsonl"
+        transcript_path.write_text(
+            '{"type":"event_msg","payload":{"type":"user_message","message":"large rolling note"}}\n',
+            encoding="utf-8",
+        )
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "rolling-inst")
+        session_id = "sess-roll-locked"
+        source_key = extraction_daemon._signal_source_cursor_key(session_id, str(transcript_path))
+        extraction_daemon.write_cursor(session_id, 0, str(transcript_path), source_key=source_key)
+        lock_path = extraction_daemon._processing_lock_path(source_key)
+        lock_path.write_text(
+            json.dumps({"session_id": source_key, "pid": os.getpid()}),
+            encoding="utf-8",
+        )
+
+        real_adapter = sys.modules.get("lib.adapter")
+        fake_adapter_mod = types.ModuleType("lib.adapter")
+
+        class _FakeAdapter(_OwnedTestAdapterMixin):
+            def parse_session_jsonl(self, path):
+                return "User: " + ("large " * 400)
+
+        fake_adapter_mod.get_adapter = lambda: _FakeAdapter()
+        sys.modules["lib.adapter"] = fake_adapter_mod
+
+        captured = []
+        monkeypatch.setattr(extraction_daemon, "_get_capture_chunk_tokens", lambda default=8000: 20)
+        monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
+        monkeypatch.setattr(
+            extraction_daemon,
+            "write_signal",
+            lambda signal_type, session_id, transcript_path, **kwargs: captured.append(
+                {
+                    "signal_type": signal_type,
+                    "session_id": session_id,
+                    "transcript_path": transcript_path,
+                }
+            ),
+        )
+
+        try:
+            extraction_daemon.check_chunk_ready_sessions()
+            assert captured == []
+            assert not extraction_daemon._rolling_state_path(session_id).exists()
         finally:
             if real_adapter is not None:
                 sys.modules["lib.adapter"] = real_adapter

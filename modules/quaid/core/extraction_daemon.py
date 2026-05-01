@@ -1144,13 +1144,39 @@ def write_cursor(
     cursor_key = _cursor_storage_key(session_id, source_key)
     cursor_dir = _cursor_dir()
     cursor_file = cursor_dir / f"{cursor_key}.json"
+    current_size_bytes = _transcript_size_bytes(transcript_path)
+    if cursor_file.is_file():
+        existing = _read_cursor_file(cursor_file, session_id)
+        existing_offset = int(existing.get("line_offset", 0) or 0)
+        existing_path = str(existing.get("transcript_path") or "").strip()
+        same_source = bool(
+            existing_path
+            and transcript_path
+            and _canonicalize_transcript_source_path(existing_path)
+            == _canonicalize_transcript_source_path(transcript_path)
+        )
+        existing_size_bytes = int(existing.get("transcript_size_bytes", 0) or 0)
+        source_shrank = bool(
+            existing_size_bytes
+            and current_size_bytes < existing_size_bytes
+        )
+        if same_source and int(line_offset) < existing_offset and not source_shrank:
+            logger.warning(
+                "refusing to rewind cursor %s for unchanged transcript source "
+                "(requested=%d existing=%d path=%s)",
+                cursor_key,
+                int(line_offset),
+                existing_offset,
+                transcript_path,
+            )
+            line_offset = existing_offset
     payload = {
         "session_id": session_id,
         "cursor_key": cursor_key,
         "line_offset": line_offset,
         "transcript_path": transcript_path,
         "internal": bool(internal),
-        "transcript_size_bytes": _transcript_size_bytes(transcript_path),
+        "transcript_size_bytes": current_size_bytes,
         "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
     try:
@@ -1482,6 +1508,17 @@ def _release_session_processing_lock(session_id: str, lock_fd: Optional[int]) ->
         _processing_lock_path(session_id).unlink()
     except OSError:
         pass
+
+
+def _processing_lock_active(session_id: str) -> bool:
+    """Return True when another live worker owns this source/session lock."""
+    lock_path = _processing_lock_path(session_id)
+    if not lock_path.is_file():
+        return False
+    holder_dead = _processing_lock_holder_dead(lock_path)
+    if _remove_stale_processing_lock(lock_path, holder_dead=holder_dead):
+        return False
+    return True
 
 
 def _rolling_state_path(session_id: str) -> Path:
@@ -5533,6 +5570,13 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
             continue
         source_key = _signal_source_cursor_key(str(session_id), str(transcript_path), cursor_data=data)
         if source_key in pending_source_keys:
+            continue
+        if _processing_lock_active(source_key):
+            logger.info(
+                "session %s has active extraction lock %s; skipping rolling scan until extraction completes",
+                session_id,
+                source_key,
+            )
             continue
 
         cursor_offset = int(data.get("line_offset", 0) or 0)
