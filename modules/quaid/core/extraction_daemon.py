@@ -3740,6 +3740,11 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             try:
                 _dup = json.loads(_dup_f.read_text(encoding="utf-8"))
                 if _dup.get("session_id") == session_id:
+                    if signal_type == "rolling" and _dup.get("type") in ("session_end", "reset", "compaction", "timeout"):
+                        # A rolling pass only stages threshold-crossing content.
+                        # Lifecycle/timeout signals must survive to drain any
+                        # preserved sub-threshold semantic tail.
+                        continue
                     _dup_priority = _SIGNAL_PRIORITY.get(_dup.get("type", ""), 99)
                     if _dup_priority < _current_priority:
                         # Higher-priority signal (e.g. rolling) — preserve it so it

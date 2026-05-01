@@ -5478,6 +5478,67 @@ class TestRollingExtraction:
             else:
                 sys.modules.pop("lib.adapter", None)
 
+    def test_process_signal_rolling_preserves_lifecycle_flush_for_residual_tail(self, monkeypatch, tmp_path):
+        import sys
+        import types
+
+        transcript_path = tmp_path / "session.jsonl"
+        transcript_path.write_text(
+            '{"role":"user","content":"short residual chunk"}\n',
+            encoding="utf-8",
+        )
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "rolling-inst")
+        session_id = "sess-roll-lifecycle"
+        extraction_daemon.write_cursor(session_id, 0, str(transcript_path))
+
+        real_adapter = sys.modules.get("lib.adapter")
+        fake_adapter_mod = types.ModuleType("lib.adapter")
+
+        class _FakeAdapter(_OwnedTestAdapterMixin):
+            def parse_session_jsonl(self, path):
+                return "User: short residual chunk"
+
+        fake_adapter_mod.StandaloneAdapter = object
+        fake_adapter_mod.get_adapter = lambda: _FakeAdapter()
+        sys.modules["lib.adapter"] = fake_adapter_mod
+
+        monkeypatch.setattr(extraction_daemon, "_get_capture_chunk_tokens", lambda default=8000: 1000)
+        monkeypatch.setattr(extraction_daemon, "_get_capture_chunk_max_lines", lambda default=0: 0)
+        monkeypatch.setattr(extraction_daemon, "_get_owner_id", lambda: "Owner")
+
+        try:
+            extraction_daemon.write_signal(
+                signal_type="session_end",
+                session_id=session_id,
+                transcript_path=str(transcript_path),
+                meta={"reason": "command:clear"},
+            )
+            extraction_daemon.write_signal(
+                signal_type="rolling",
+                session_id=session_id,
+                transcript_path=str(transcript_path),
+            )
+            rolling_signal = next(
+                signal for signal in extraction_daemon.read_pending_signals()
+                if signal["type"] == "rolling"
+            )
+            extraction_daemon.process_signal(rolling_signal)
+
+            pending = extraction_daemon.read_pending_signals()
+            assert [signal["type"] for signal in pending] == ["session_end"]
+            assert pending[0]["session_id"] == session_id
+            assert pending[0]["meta"]["reason"] == "command:clear"
+            state = extraction_daemon.read_rolling_state(session_id)
+            assert "short residual chunk" in state["semantic_buffer"]
+            assert state["semantic_buffer_tokens"] > 0
+        finally:
+            if real_adapter is not None:
+                sys.modules["lib.adapter"] = real_adapter
+            else:
+                sys.modules.pop("lib.adapter", None)
+
     def test_process_signal_rolling_requeues_continuation_for_below_budget_tail_without_line_cap(self, monkeypatch, tmp_path):
         import sys
         import types
