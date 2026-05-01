@@ -1079,58 +1079,6 @@ class TestClaudeCodeAdapter:
         assert adapter.get_session_path(sibling.stem) == sibling
         assert adapter.get_session_path(original.stem) is None
 
-    def test_check_session_transition_uses_cursor_when_state_lacks_transcript(self, tmp_path, monkeypatch):
-        project_dir = tmp_path / "cc-livetest"
-        project_dir.mkdir()
-        project_slug = instance_slug_from_project_dir(project_dir)
-        sessions_root = tmp_path / ".claude" / "projects"
-        session_dir = sessions_root / f"-{project_slug}"
-        session_dir.mkdir(parents=True)
-        ended = session_dir / "f122d61e-2927-480d-8071-0614b0f270f1.jsonl"
-        ended.write_text(
-            json.dumps({"type": "user", "message": {"role": "user", "content": "chunk one"}}) + "\n",
-            encoding="utf-8",
-        )
-        quaid_home = tmp_path / ".quaid"
-        instance_data = quaid_home / "instances" / "claude-code-cc-livetest" / "data"
-        cursor_dir = instance_data / "session-cursors"
-        cursor_dir.mkdir(parents=True)
-        (cursor_dir / "source-deadbeef.json").write_text(
-            json.dumps({
-                "session_id": "f122d61e-2927-480d-8071-0614b0f270f1",
-                "transcript_path": str(ended),
-            }) + "\n",
-            encoding="utf-8",
-        )
-
-        monkeypatch.setattr(Path, "home", lambda: tmp_path)
-        monkeypatch.setenv("QUAID_HOME", str(quaid_home))
-        monkeypatch.setenv("QUAID_INSTANCE", "claude-code-cc-livetest")
-        monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(project_dir))
-        adapter = ClaudeCodeAdapter(home=quaid_home)
-        monkeypatch.setattr(adapter, "data_dir", lambda: instance_data)
-        adapter._write_session_transition_state("f122d61e-2927-480d-8071-0614b0f270f1")
-
-        signal = adapter.check_session_transition(
-            {"session": {"id": "cda9980c-8b21-4a32-918c-a93c34588e06"}, "source": "compact"}
-        )
-
-        assert signal is not None
-        assert signal["ended_session_id"] == "f122d61e-2927-480d-8071-0614b0f270f1"
-        assert signal["ended_transcript_path"] == str(ended)
-        assert signal["signal_type"] == "session_end"
-        assert signal["meta"]["command"] == "/compact"
-        assert adapter._read_session_transition_state()["session_id"] == "cda9980c-8b21-4a32-918c-a93c34588e06"
-
-    def test_transition_command_prefers_exact_compact_matcher(self):
-        adapter = ClaudeCodeAdapter()
-
-        assert adapter._transition_command_for_hook({"matcher": "compact"}) == "/compact"
-        assert adapter._transition_command_for_hook({"payload": {"matcher": "compact"}}) == "/compact"
-        assert adapter._transition_command_for_hook({"source": "compact"}) == "/compact"
-        assert adapter._transition_command_for_hook({"matcher": "manual", "source": "compact_legacy"}) == "/new"
-        assert adapter._transition_command_for_hook({"matcher": "context_compact"}) == "/new"
-
     def test_pending_context_default_ttl_drops_stale_entries(self, tmp_path, monkeypatch):
         monkeypatch.setenv("QUAID_INSTANCE", "claude-code-pending-ttl")
         adapter = ClaudeCodeAdapter(home=tmp_path)

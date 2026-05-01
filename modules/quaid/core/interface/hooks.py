@@ -1724,27 +1724,6 @@ def _context_refresh_compaction_latest_marker_path() -> Path | None:
         return None
 
 
-def _sweep_stale_compaction_refresh_markers(marker_dir: Path, *, now: int, ttl_seconds: int = 10 * 60) -> None:
-    try:
-        marker_files = list(marker_dir.glob("*.json")) if marker_dir.is_dir() else []
-    except Exception:
-        return
-    for marker_file in marker_files:
-        if marker_file.name == "_latest.json":
-            continue
-        try:
-            payload = json.loads(marker_file.read_text(encoding="utf-8"))
-            created_at = int(payload.get("created_at") or 0) if isinstance(payload, dict) else 0
-        except Exception:
-            created_at = 0
-        if not created_at or now - created_at <= ttl_seconds:
-            continue
-        try:
-            marker_file.unlink()
-        except Exception:
-            pass
-
-
 def _arm_compaction_refresh_marker(
     session_id: str,
     *,
@@ -1764,7 +1743,6 @@ def _arm_compaction_refresh_marker(
             "source": source,
         }
         marker_path.parent.mkdir(parents=True, exist_ok=True)
-        _sweep_stale_compaction_refresh_markers(marker_path.parent, now=marker_payload["created_at"])
         marker_path.write_text(
             json.dumps(
                 marker_payload,
@@ -2432,40 +2410,6 @@ def _maybe_compaction_refresh_context_artifacts(hook_input: dict, *, is_precompa
     _write_rules_context_sections(hook_input, sections, label="context-refresh")
 
 
-def _is_compact_session_start(hook_input: dict) -> bool:
-    if not isinstance(hook_input, dict):
-        return False
-    containers = [hook_input]
-    for container_key in ("hook", "payload", "context"):
-        nested = hook_input.get(container_key)
-        if isinstance(nested, dict):
-            containers.append(nested)
-
-    matcher_values = [
-        str(container.get("matcher") or "").strip().lower()
-        for container in containers
-        if str(container.get("matcher") or "").strip()
-    ]
-    if matcher_values:
-        return any(value == "compact" for value in matcher_values)
-
-    keys = (
-        "source",
-        "reason",
-        "hook_event_name",
-        "hookEventName",
-        "subtype",
-        "event",
-        "event_name",
-        "eventName",
-    )
-    values: list[str] = []
-    for nested in containers:
-        for key in keys:
-            values.append(str(nested.get(key) or ""))
-    return any("compact" in value.lower() for value in values)
-
-
 def _build_turn_based_refresh_context(session_id: str, *, prompt: str = "") -> str:
     if not _should_emit_turn_based_refresh(session_id, prompt=prompt):
         return ""
@@ -2645,10 +2589,9 @@ def hook_extract(args):
     try:
         _maybe_compaction_refresh_context_artifacts(hook_input, is_precompact=is_precompact)
         if is_precompact and session_id:
-            # Intentional belt-and-suspenders with hook-inject /compact and
-            # SessionStart matcher=compact arms: CC versions vary on which
-            # lifecycle hook fires. Marker writes are idempotent; stale per-id
-            # markers from old pre-rotation sessions are swept on later arms.
+            # Intentional belt-and-suspenders with hook-inject's /compact arm:
+            # CC versions vary on whether PreCompact, UserPromptSubmit, or both
+            # fire. Marker writes are idempotent; the next prompt consumes one.
             _arm_compaction_refresh_marker(
                 session_id,
                 reason="precompact_hook",
@@ -2910,29 +2853,6 @@ def hook_session_init(args):
 
     current_session_id = _extract_hook_session_id(hook_input)
     _seed_turn_based_refresh_state(current_session_id)
-
-    if current_session_id and _is_compact_session_start(hook_input):
-        try:
-            # Claude Code auto-compact starts a new session with matcher=compact
-            # but may skip the PreCompact hook. Arm the same one-shot identity
-            # bridge here so the first post-compact turn still gets fresh identity.
-            _maybe_compaction_refresh_context_artifacts(hook_input, is_precompact=True)
-            _arm_compaction_refresh_marker(
-                current_session_id,
-                reason="session_start_compact",
-                source="hook_session_init_compact",
-            )
-            _write_hook_trace("hook.session_init.compaction_context_refreshed", {
-                "session_id": current_session_id,
-                "strategy": _context_refresh_strategy(),
-                "reason": "session_start_compact",
-            })
-        except Exception as _e:
-            print(f"[quaid][session-init] compaction context refresh error: {_e}", file=sys.stderr)
-            _write_hook_trace("hook.session_init.compaction_context_refresh_error", {
-                "session_id": current_session_id,
-                "error": str(_e)[:500],
-            })
 
     # Refresh the adapter's auth token from the session-scoped CC OAuth token.
     # CLAUDE_CODE_OAUTH_TOKEN is a properly API-scoped token that CC injects

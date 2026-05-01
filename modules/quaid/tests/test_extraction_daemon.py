@@ -4101,6 +4101,8 @@ class TestRollingExtraction:
                 return "User: My cat Luna sleeps on the windowsill every afternoon."
 
         fake_adapter_mod.get_adapter = lambda: _FakeAdapter()
+        fake_adapter_mod.quaid_projects_dir = lambda home: Path(home) / "projects"
+        fake_adapter_mod.quaid_tracking_dir = lambda home: Path(home) / ".git-tracking"
         sys.modules["lib.adapter"] = fake_adapter_mod
 
         captured = []
@@ -4217,6 +4219,8 @@ class TestRollingExtraction:
                 return ""
 
         fake_adapter_mod.get_adapter = lambda: _FakeAdapter()
+        fake_adapter_mod.quaid_projects_dir = lambda home: Path(home) / "projects"
+        fake_adapter_mod.quaid_tracking_dir = lambda home: Path(home) / ".git-tracking"
         sys.modules["lib.adapter"] = fake_adapter_mod
 
         try:
@@ -6847,6 +6851,8 @@ class TestRollingExtraction:
                 )
 
         fake_adapter_mod.get_adapter = lambda: _FakeAdapter()
+        fake_adapter_mod.quaid_projects_dir = lambda home: Path(home) / "projects"
+        fake_adapter_mod.quaid_tracking_dir = lambda home: Path(home) / ".git-tracking"
         sys.modules["lib.adapter"] = fake_adapter_mod
 
         import core.docs_updater_hook as docs_updater_mod

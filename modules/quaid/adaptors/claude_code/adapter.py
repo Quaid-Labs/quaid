@@ -582,121 +582,21 @@ class ClaudeCodeAdapter(QuaidAdapter):
     def _extract_hook_session_id(self, hook_input) -> str:
         if not isinstance(hook_input, dict):
             return ""
-        candidates: list[str] = []
-
-        def _candidate(value) -> str:
-            return str(value or "").strip()
-
         for key in ("session_id", "sessionId", "thread_id", "threadId", "conversation_id"):
-            candidates.append(_candidate(hook_input.get(key)))
-        session_obj = hook_input.get("session")
-        if isinstance(session_obj, dict):
-            candidates.extend([
-                _candidate(session_obj.get("id")),
-                _candidate(session_obj.get("session_id")),
-                _candidate(session_obj.get("sessionId")),
-                _candidate(session_obj.get("thread_id")),
-                _candidate(session_obj.get("threadId")),
-            ])
-        thread_obj = hook_input.get("thread")
-        if isinstance(thread_obj, dict):
-            candidates.extend([
-                _candidate(thread_obj.get("id")),
-                _candidate(thread_obj.get("session_id")),
-                _candidate(thread_obj.get("sessionId")),
-                _candidate(thread_obj.get("thread_id")),
-                _candidate(thread_obj.get("threadId")),
-            ])
+            value = str(hook_input.get(key) or "").strip()
+            if value:
+                return value
         transcript_path = str(hook_input.get("transcript_path") or "").strip()
         if transcript_path:
             match = self._SESSION_ID_FROM_TRANSCRIPT_RE.search(Path(transcript_path).name)
             if match:
-                candidates.append(_candidate(match.group(1)))
-        for value in candidates:
-            if value:
-                return value
+                return match.group(1)
         return ""
-
-    def _get_session_path_from_cursor(self, session_id: str) -> Optional[Path]:
-        """Return the transcript path this instance already recorded for a session."""
-        session_id = str(session_id or "").strip()
-        if not session_id:
-            return None
-        try:
-            from core.extraction_daemon import read_cursor
-
-            cursor = read_cursor(session_id)
-        except Exception:
-            if is_fail_hard_enabled():
-                raise
-            return None
-        candidates: list[tuple[int, float, Path]] = []
-
-        def add_candidate(raw: str) -> None:
-            raw = str(raw or "").strip()
-            if not raw:
-                return
-            path = Path(raw).expanduser()
-            try:
-                if not path.is_file():
-                    return
-                is_snapshot = 1 if "rolling-transcript-snapshots" in str(path) else 0
-                if is_snapshot or self.owns_session_path(path, session_id=session_id):
-                    candidates.append((is_snapshot, path.stat().st_mtime, path))
-            except OSError:
-                return
-
-        add_candidate(str((cursor or {}).get("transcript_path") or ""))
-        cursor_dir = self.data_dir() / "session-cursors"
-        try:
-            cursor_files = list(cursor_dir.glob("*.json")) if cursor_dir.is_dir() else []
-        except OSError:
-            cursor_files = []
-        for cursor_file in cursor_files:
-            try:
-                data = json.loads(cursor_file.read_text(encoding="utf-8"))
-            except Exception:
-                if is_fail_hard_enabled():
-                    raise
-                continue
-            if str(data.get("session_id") or "").strip() != session_id:
-                continue
-            add_candidate(str(data.get("transcript_path") or ""))
-        candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
-        return candidates[0][2] if candidates else None
 
     def _transition_command_for_hook(self, hook_input: dict) -> str:
         command = self._scan_lifecycle_candidates(hook_input)
         if command:
             return command
-        containers = [hook_input] if isinstance(hook_input, dict) else []
-        for container_key in ("hook", "payload", "context"):
-            nested = hook_input.get(container_key) if isinstance(hook_input, dict) else None
-            if isinstance(nested, dict):
-                containers.append(nested)
-        matcher_values = [
-            str(container.get("matcher") or "").strip().lower()
-            for container in containers
-            if str(container.get("matcher") or "").strip()
-        ]
-        if matcher_values:
-            if any(value == "compact" for value in matcher_values):
-                return "/compact"
-        elif any(
-            "compact" in str(container.get(key) or "").lower()
-            for container in containers
-            for key in (
-                "source",
-                "reason",
-                "hook_event_name",
-                "hookEventName",
-                "subtype",
-                "event",
-                "event_name",
-                "eventName",
-            )
-        ):
-            return "/compact"
         source = " ".join(
             str(hook_input.get(key) or "")
             for key in ("source", "reason", "hook_event_name", "hookEventName")
@@ -723,17 +623,15 @@ class ClaudeCodeAdapter(QuaidAdapter):
         last = self._read_session_transition_state()
         last_id = str(last.get("session_id") or "").strip()
         last_tx = str(last.get("transcript_path") or "").strip()
+        self._write_session_transition_state(current_id, current_tx)
 
         if not last_id or last_id == current_id:
-            self._write_session_transition_state(current_id, current_tx)
             return None
         if not last_tx or not Path(last_tx).is_file():
-            resolved = self._get_session_path_from_cursor(last_id) or self.get_session_path(last_id)
+            resolved = self.get_session_path(last_id)
             last_tx = str(resolved) if resolved else ""
         if not last_tx:
-            self._write_session_transition_state(current_id, current_tx)
             return None
-        self._write_session_transition_state(current_id, current_tx)
         return {
             "ended_session_id": last_id,
             "ended_transcript_path": last_tx,
