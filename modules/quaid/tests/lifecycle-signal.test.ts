@@ -585,6 +585,71 @@ describe("lifecycle signal detection", () => {
     }
   });
 
+  it("preserves live transcript-update content instead of older reset backup", async () => {
+    const baseDir = fs.mkdtempSync(path.join("/tmp", "quaid-oc-transcript-update-live-"));
+    const quaidHome = path.join(baseDir, ".quaid");
+    const visibleHome = path.join(baseDir, "quaid");
+    const openClawConfigPath = path.join(baseDir, ".openclaw", "openclaw.json");
+    const sessionsDir = path.join(baseDir, ".openclaw", "agents", "main", "sessions");
+    fs.mkdirSync(sessionsDir, { recursive: true });
+    fs.mkdirSync(path.dirname(openClawConfigPath), { recursive: true });
+    fs.writeFileSync(
+      openClawConfigPath,
+      JSON.stringify({ agents: { list: [{ id: "main", default: true }] } }),
+      "utf8",
+    );
+
+    try {
+      vi.stubEnv("HOME", baseDir);
+      vi.stubEnv("QUAID_HOME", quaidHome);
+      vi.stubEnv("QUAID_VISIBLE_HOME", visibleHome);
+      vi.stubEnv("OPENCLAW_CONFIG_PATH", openClawConfigPath);
+      vi.stubEnv("QUAID_INSTANCE", "openclaw-main");
+      vi.resetModules();
+      const isolatedAdapter = await import("../adaptors/openclaw/adapter.js");
+      const isolatedTest = isolatedAdapter.__test;
+      const sessionId = "120d2df8-3606-4196-8f59-e4ca137f2e1c";
+      const nativePath = path.join(sessionsDir, `${sessionId}.jsonl`);
+      const resetBackupPath = path.join(sessionsDir, `${sessionId}.jsonl.reset.2026-05-01T21-07-20.403Z`);
+      fs.writeFileSync(
+        resetBackupPath,
+        `${JSON.stringify({
+          type: "message",
+          message: {
+            role: "user",
+            content: "Older reset backup without the new ritual.".repeat(20),
+          },
+        })}\n`,
+        "utf8",
+      );
+      fs.writeFileSync(
+        nativePath,
+        `${JSON.stringify({
+          type: "message",
+          message: {
+            role: "user",
+            content: "My Friday pumpkin seed ritual uses smoked paprika and maple salt.",
+          },
+        })}\n`,
+        "utf8",
+      );
+
+      const preserved = isolatedTest.preserveSessionTranscript(
+        sessionId,
+        nativePath,
+        "transcript-update-late-content",
+      );
+
+      expect(preserved).toBeTruthy();
+      const preservedText = fs.readFileSync(String(preserved), "utf8");
+      expect(preservedText).toContain("pumpkin seed ritual");
+      expect(preservedText).not.toContain("Older reset backup");
+    } finally {
+      vi.unstubAllEnvs();
+      try { fs.rmSync(baseDir, { recursive: true, force: true }); } catch {}
+    }
+  });
+
   it("uses Quaid preserved transcript prefix when OC never writes the native transcript", async () => {
     const baseDir = fs.mkdtempSync(path.join("/tmp", "quaid-oc-preserved-prefix-fallback-"));
     const quaidHome = path.join(baseDir, ".quaid");
