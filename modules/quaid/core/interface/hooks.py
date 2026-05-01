@@ -1711,6 +1711,15 @@ def _context_refresh_compaction_marker_path(session_id: str) -> Path | None:
         return None
 
 
+def _context_refresh_compaction_latest_marker_path() -> Path | None:
+    try:
+        from lib.adapter import get_adapter
+
+        return get_adapter().data_dir() / "context-refresh-compaction" / "_latest.json"
+    except Exception:
+        return None
+
+
 def _arm_compaction_refresh_marker(session_id: str) -> None:
     if _context_refresh_strategy() != "compaction":
         return
@@ -1718,20 +1727,28 @@ def _arm_compaction_refresh_marker(session_id: str) -> None:
     if marker_path is None:
         return
     try:
+        marker_payload = {
+            "session_id": str(session_id or "").strip(),
+            "created_at": int(time.time()),
+            "reason": "compact_command",
+        }
         marker_path.parent.mkdir(parents=True, exist_ok=True)
         marker_path.write_text(
             json.dumps(
-                {
-                    "session_id": str(session_id or "").strip(),
-                    "created_at": int(time.time()),
-                    "reason": "compact_command",
-                },
+                marker_payload,
                 ensure_ascii=True,
                 indent=2,
             )
             + "\n",
             encoding="utf-8",
         )
+        latest_path = _context_refresh_compaction_latest_marker_path()
+        if latest_path is not None:
+            latest_path.parent.mkdir(parents=True, exist_ok=True)
+            latest_path.write_text(
+                json.dumps(marker_payload, ensure_ascii=True, indent=2) + "\n",
+                encoding="utf-8",
+            )
     except Exception:
         pass
 
@@ -1740,12 +1757,49 @@ def _consume_compaction_refresh_marker(session_id: str) -> bool:
     if _context_refresh_strategy() != "compaction":
         return False
     marker_path = _context_refresh_compaction_marker_path(session_id)
-    if marker_path is None or not isinstance(marker_path, Path) or not marker_path.is_file():
+    if marker_path is not None and isinstance(marker_path, Path) and marker_path.is_file():
+        try:
+            marker_path.unlink()
+        except Exception:
+            pass
+        latest_path = _context_refresh_compaction_latest_marker_path()
+        try:
+            if latest_path is not None and latest_path.is_file():
+                latest_path.unlink()
+        except Exception:
+            pass
+        return True
+
+    # Claude Code can move to a new session id during /compact before the next
+    # UserPromptSubmit. The bridge is still for the first post-compact turn, so
+    # keep a one-shot latest marker as a session-id rollover fallback.
+    latest_path = _context_refresh_compaction_latest_marker_path()
+    if latest_path is None or not isinstance(latest_path, Path) or not latest_path.is_file():
         return False
     try:
-        marker_path.unlink()
+        payload = json.loads(latest_path.read_text(encoding="utf-8"))
+        marker_session_id = str(payload.get("session_id") or "").strip()
+        created_at = int(payload.get("created_at") or 0)
+    except Exception:
+        marker_session_id = ""
+        created_at = 0
+    if created_at and int(time.time()) - created_at > 10 * 60:
+        try:
+            latest_path.unlink()
+        except Exception:
+            pass
+        return False
+    try:
+        latest_path.unlink()
     except Exception:
         pass
+    if marker_session_id:
+        old_marker_path = _context_refresh_compaction_marker_path(marker_session_id)
+        try:
+            if old_marker_path is not None and old_marker_path.is_file():
+                old_marker_path.unlink()
+        except Exception:
+            pass
     return True
 
 

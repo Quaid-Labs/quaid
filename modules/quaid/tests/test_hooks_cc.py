@@ -387,6 +387,81 @@ def test_claude_code_post_compact_turn_gets_identity_additional_context_under_ca
     assert out2.strip() == ""
 
 
+def test_claude_code_post_compact_turn_uses_identity_bridge_after_session_rollover(monkeypatch, tmp_path, cursor_dir):
+    from adaptors.claude_code.adapter import ClaudeCodeAdapter
+
+    transcript_path = tmp_path / "cc-compact-rollover.jsonl"
+    transcript_path.write_text(
+        json.dumps({"type": "user", "message": {"role": "user", "content": "/compact"}}) + "\n",
+        encoding="utf-8",
+    )
+    projects_dir = tmp_path / "projects"
+    identity_dir = tmp_path / "identity"
+    projects_dir.mkdir()
+    identity_dir.mkdir()
+    (identity_dir / "USER.md").write_text("The office plant is named Bartholomew.", encoding="utf-8")
+    (identity_dir / "SOUL.md").write_text("SOUL live", encoding="utf-8")
+    (identity_dir / "ENVIRONMENT.md").write_text("It is a fiddle-leaf fig.", encoding="utf-8")
+
+    rules_dir = tmp_path / ".claude" / "rules"
+    data_dir = tmp_path / "data"
+    monkeypatch.setenv("QUAID_RULES_DIR", str(rules_dir))
+
+    adapter = _adapter_mock()
+    cc_adapter = ClaudeCodeAdapter()
+    adapter.adapter_id.return_value = "claude-code"
+    adapter.resolve_prompt_submit_signal.side_effect = cc_adapter.resolve_prompt_submit_signal
+    adapter.projects_dir.return_value = projects_dir
+    adapter.identity_dir.return_value = identity_dir
+    adapter.data_dir.return_value = data_dir
+    adapter.get_base_context_files.return_value = {}
+    adapter.get_cli_tools_snippet.return_value = ""
+    adapter.get_pending_context.return_value = ""
+    adapter.get_deferred_notice_relay_context.return_value = ""
+
+    monkeypatch.setattr("core.extraction_daemon.write_signal", lambda **kwargs: tmp_path / "sig.json")
+    monkeypatch.setattr("core.extraction_daemon.ensure_alive", lambda: None)
+    monkeypatch.setattr("core.extraction_daemon.read_cursor", lambda session_id: {"transcript_path": str(transcript_path)})
+    monkeypatch.setattr("lib.adapter.get_adapter", lambda: adapter)
+
+    _run_hook_inject(
+        {
+            "session_id": "sess-before-compact",
+            "transcript_path": str(transcript_path),
+            "cwd": str(tmp_path),
+            "prompt": "/compact",
+        },
+        monkeypatch=monkeypatch,
+    )
+
+    assert (data_dir / "context-refresh-compaction" / "sess-before-compact.json").is_file()
+    assert (data_dir / "context-refresh-compaction" / "_latest.json").is_file()
+
+    def fail_recall(**kwargs):
+        pytest.fail("post-compact identity bridge should skip recall even after session rollover")
+
+    monkeypatch.setattr("core.interface.api.recall_fast", fail_recall)
+    monkeypatch.setattr("core.interface.api.projects_search_docs", lambda **kwargs: pytest.fail("post-compact identity bridge should skip docs even after session rollover"))
+
+    out, _err = _run_hook_inject(
+        {
+            "session_id": "sess-after-compact",
+            "transcript_path": str(transcript_path),
+            "cwd": str(tmp_path),
+            "prompt": "What is the office plant named?",
+        },
+        monkeypatch=monkeypatch,
+    )
+
+    payload = json.loads(out)
+    context = payload["hookSpecificOutput"]["additionalContext"]
+    assert "Quaid Refreshed Identity Context" in context
+    assert "Bartholomew" in context
+    assert "fiddle-leaf fig" in context
+    assert not (data_dir / "context-refresh-compaction" / "_latest.json").exists()
+    assert not (data_dir / "context-refresh-compaction" / "sess-before-compact.json").exists()
+
+
 def test_refresh_runtime_config_if_changed_reloads_and_resets_caches(monkeypatch, tmp_path):
     from core.interface import hooks
 
