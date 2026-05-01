@@ -60,6 +60,63 @@ def test_request_update_records_runtime_context(project_env, monkeypatch):
     assert request["requested_adapter_type"] == "codex"
 
 
+def test_start_worker_env_uses_pending_request_runtime_context(project_env, monkeypatch):
+    tmp_path, _src, _entry = project_env
+    from core import project_docs
+
+    monkeypatch.setenv("QUAID_INSTANCE", "codex-private-tmp-cdx-livetest")
+    monkeypatch.setenv("QUAID_ADAPTER_TYPE", "codex")
+    project_docs.request_update("demo", reason="manual-test", requested_by="pytest")
+    monkeypatch.delenv("QUAID_INSTANCE", raising=False)
+    monkeypatch.delenv("QUAID_ADAPTER_TYPE", raising=False)
+
+    captured = {}
+
+    class _FakePopen:
+        pid = 4242
+
+        def __init__(self, args, **kwargs):
+            captured["args"] = list(args)
+            captured["env"] = dict(kwargs.get("env") or {})
+
+    monkeypatch.setattr(project_docs.subprocess, "Popen", _FakePopen)
+    monkeypatch.setattr(project_docs, "_wait_for_pid", lambda *_args, **_kwargs: 4242)
+
+    assert project_docs.start_worker("demo") == 4242
+
+    assert captured["args"][-2:] == ["run", "demo"]
+    env = captured["env"]
+    assert env["QUAID_HOME"] == str(tmp_path)
+    assert env["QUAID_INSTANCE"] == "codex-private-tmp-cdx-livetest"
+    assert env["QUAID_ADAPTER_TYPE"] == "codex"
+    assert "MEMORY_DB_PATH" not in env
+
+
+def test_start_worker_env_uses_single_linked_instance_without_request(project_env, monkeypatch):
+    tmp_path, _src, _entry = project_env
+    from core import project_docs
+
+    monkeypatch.delenv("QUAID_INSTANCE", raising=False)
+    monkeypatch.delenv("QUAID_ADAPTER_TYPE", raising=False)
+    captured = {}
+
+    class _FakePopen:
+        pid = 4243
+
+        def __init__(self, _args, **kwargs):
+            captured["env"] = dict(kwargs.get("env") or {})
+
+    monkeypatch.setattr(project_docs.subprocess, "Popen", _FakePopen)
+    monkeypatch.setattr(project_docs, "_wait_for_pid", lambda *_args, **_kwargs: 4243)
+
+    assert project_docs.start_worker("demo") == 4243
+
+    env = captured["env"]
+    assert env["QUAID_HOME"] == str(tmp_path)
+    assert env["QUAID_INSTANCE"] == "pytest-runner"
+    assert "QUAID_ADAPTER_TYPE" not in env
+
+
 def test_get_project_entry_uses_raw_registry_without_instance_env(project_env, monkeypatch):
     _tmp_path, _src, _entry = project_env
     from core import project_docs

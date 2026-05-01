@@ -705,7 +705,12 @@ def _adapter_type_from_instance_name(instance_name: str) -> str:
         return ""
 
 
-def _project_runtime_hints(entry: Dict[str, Any], request: Optional[Dict[str, Any]] = None) -> Tuple[Optional[str], Optional[str]]:
+def _project_runtime_hints(
+    entry: Dict[str, Any],
+    request: Optional[Dict[str, Any]] = None,
+    *,
+    include_ambient_adapter: bool = True,
+) -> Tuple[Optional[str], Optional[str]]:
     from lib.instance import validate_instance_id
 
     linked_instances: List[str] = []
@@ -723,12 +728,33 @@ def _project_runtime_hints(entry: Dict[str, Any], request: Optional[Dict[str, An
     chosen_adapter = str((request or {}).get("requested_adapter_type") or "").strip().lower()
     if not chosen_adapter and chosen_instance:
         chosen_adapter = _adapter_type_from_instance_name(chosen_instance)
-    if not chosen_adapter:
+    if (
+        include_ambient_adapter
+        and not chosen_adapter
+        and (not chosen_instance or chosen_instance == ambient_instance)
+    ):
         chosen_adapter = str(os.environ.get("QUAID_ADAPTER_TYPE", "") or "").strip().lower()
     if not chosen_adapter and chosen_instance:
         chosen_adapter = _adapter_type_from_instance_name(chosen_instance)
 
     return (chosen_instance or None, chosen_adapter or None)
+
+
+def _apply_project_runtime_env(
+    env: Dict[str, str],
+    entry: Dict[str, Any],
+    request: Optional[Dict[str, Any]] = None,
+) -> Dict[str, str]:
+    chosen_instance, chosen_adapter = _project_runtime_hints(
+        entry,
+        request=request,
+        include_ambient_adapter=False,
+    )
+    if chosen_instance:
+        env["QUAID_INSTANCE"] = chosen_instance
+    if chosen_adapter:
+        env["QUAID_ADAPTER_TYPE"] = chosen_adapter
+    return env
 
 
 def _cross_instance_db_override_owner(raw_path: Optional[str], *, target_instance: Optional[str]) -> Optional[str]:
@@ -1815,9 +1841,13 @@ def start_worker(project: str) -> int:
         _worker_dir().mkdir(parents=True, exist_ok=True)
         log_path = worker_log_path(name)
         script = Path(__file__).parent / "project_docs_worker.py"
+        entry = get_project_entry(name)
+        request = read_update_request(name)
         env = scrub_background_process_env(dict(os.environ))
         for key in _DB_OVERRIDE_ENV_KEYS:
             env.pop(key, None)
+        env["QUAID_HOME"] = str(get_quaid_home())
+        env = _apply_project_runtime_env(env, entry, request=request)
         env.setdefault("QUAID_PROJECT_DOCS_WORKER_INTERVAL_SECONDS", "5")
         env = _hydrate_anthropic_api_key_from_shared_auth(env)
         env["QUAID_PROJECT_DOCS_WORKER_TOKEN"] = uuid.uuid4().hex
