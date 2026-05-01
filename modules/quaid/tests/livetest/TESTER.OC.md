@@ -152,8 +152,8 @@ project engagement.
 Check and restart the OC gateway:
 ```bash
 ssh REMOTE_HOST 'curl -sf http://localhost:18789/health && echo "ok" || echo "down"'
-ssh REMOTE_HOST 'pkill -f openclaw-gateway; sleep 2; \
-  nohup openclaw gateway > /tmp/oc-gw.log 2>&1 &'
+~/quaidcode/dev/modules/quaid/tests/livetest/scripts/livetest-openclaw-gateway-restart.sh \
+  --host REMOTE_HOST --restart
 ```
 
 ---
@@ -233,10 +233,8 @@ data = json.loads(p.read_text())
 data.setdefault("capture", {})["inactivity_timeout_minutes"] = 1
 p.write_text(json.dumps(data, indent=2) + "\n")
 PY'
-   ssh REMOTE_HOST 'openclaw gateway restart || true'
-   ssh REMOTE_HOST 'for i in $(seq 1 30); do \
-     curl -sf http://localhost:18789/health > /dev/null 2>&1 && echo "Gateway ready" && break \
-     || sleep 2; done'
+   ~/quaidcode/dev/modules/quaid/tests/livetest/scripts/livetest-openclaw-gateway-restart.sh \
+     --host REMOTE_HOST --restart
    ```
 
 2. Send a memorable fact via Matrix, then let it idle for >1 minute.
@@ -258,10 +256,8 @@ data = json.loads(p.read_text())
 data.setdefault("capture", {})["inactivity_timeout_minutes"] = 60
 p.write_text(json.dumps(data, indent=2) + "\n")
 PY'
-   ssh REMOTE_HOST 'openclaw gateway restart || true'
-   ssh REMOTE_HOST 'for i in $(seq 1 30); do \
-     curl -sf http://localhost:18789/health > /dev/null 2>&1 && echo "Gateway ready" && break \
-     || sleep 2; done'
+   ~/quaidcode/dev/modules/quaid/tests/livetest/scripts/livetest-openclaw-gateway-restart.sh \
+     --host REMOTE_HOST --restart
    ```
 
 **M2 Part C PASS criteria (OC):** Timeout fact extracted and stored. Daemon log shows

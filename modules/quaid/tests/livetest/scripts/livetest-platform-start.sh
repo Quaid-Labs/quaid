@@ -17,7 +17,7 @@
 #   -h, --help            Show this help
 #
 # What this starts:
-#   OC: openclaw gateway (if not already running), waits up to 60s for health
+#   OC: openclaw gateway (if not already healthy), waits for health
 #
 # CC and CDX do not need pre-start services — they are started by the tester
 # agent as part of the interactive session.
@@ -97,27 +97,11 @@ run_remote() {
 # --- OC gateway ---
 start_oc() {
     echo "--- OC gateway ---"
-    run_remote "start gateway if not running" \
-        "pgrep -f openclaw-gateway > /dev/null 2>&1 && echo 'Gateway already running' || (export PATH=\"/opt/homebrew/bin:/usr/local/bin:\$PATH\"; OPENCLAW_BIN=\"\$(command -v openclaw || true)\"; if [ -z \"\$OPENCLAW_BIN\" ] && [ -x /opt/homebrew/bin/openclaw ]; then OPENCLAW_BIN=/opt/homebrew/bin/openclaw; fi; if [ -z \"\$OPENCLAW_BIN\" ]; then echo 'openclaw not found in PATH or /opt/homebrew/bin' >&2; exit 127; fi; nohup \"\$OPENCLAW_BIN\" gateway > /tmp/oc-gw.log 2>&1 & echo \"Gateway started (\$OPENCLAW_BIN)\")"
-
+    local helper_args=(--start --host "$REMOTE_HOST")
     if [[ "$DRY_RUN" == "1" ]]; then
-        echo "     [dry-run] would wait for gateway health at http://localhost:18789/health"
-        return
+        helper_args+=(--dry-run)
     fi
-
-    echo "  >> waiting for gateway health (up to 60s)..."
-    local i
-    for i in $(seq 1 30); do
-        if ssh "$REMOTE_HOST" 'curl -sf http://localhost:18789/health > /dev/null 2>&1'; then
-            echo "  Gateway ready (${i}x2s elapsed)"
-            return
-        fi
-        sleep 2
-    done
-
-    echo "Error: OC gateway did not become healthy after 60s on $REMOTE_HOST" >&2
-    echo "Check /tmp/oc-gw.log on the remote host." >&2
-    exit 1
+    "$SCRIPT_DIR/livetest-openclaw-gateway-restart.sh" "${helper_args[@]}"
 }
 
 # --- Dispatch ---

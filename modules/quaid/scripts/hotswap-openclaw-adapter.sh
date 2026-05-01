@@ -106,11 +106,15 @@ for plugin_dir in "${PLUGIN_DIRS[@]}"; do
   ssh "$HOST" "mkdir -p $quoted_adapter_dir $quoted_core_dir"
   ssh "$HOST" "cat > $quoted_adapter_dir/adapter.ts" < "$LOCAL_ADAPTER_TS"
   ssh "$HOST" "cat > $quoted_adapter_dir/adapter.js" < "$LOCAL_ADAPTER_JS"
-  ssh "$HOST" "cat > $quoted_core_dir/session-timeout.ts" < "$LOCAL_TIMEOUT_TS"
-  ssh "$HOST" "cat > $quoted_core_dir/session-timeout.js" < "$LOCAL_TIMEOUT_JS"
+ssh "$HOST" "cat > $quoted_core_dir/session-timeout.ts" < "$LOCAL_TIMEOUT_TS"
+ssh "$HOST" "cat > $quoted_core_dir/session-timeout.js" < "$LOCAL_TIMEOUT_JS"
 done
 
-ssh "$HOST" 'export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"; if command -v openclaw >/dev/null 2>&1; then openclaw gateway restart; elif [ -x /opt/homebrew/bin/openclaw ]; then /opt/homebrew/bin/openclaw gateway restart; elif [ -x /usr/local/bin/openclaw ]; then /usr/local/bin/openclaw gateway restart; else echo "openclaw not found" >&2; exit 127; fi'
-ssh "$HOST" 'export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"; if command -v openclaw >/dev/null 2>&1; then openclaw gateway status || true; elif [ -x /opt/homebrew/bin/openclaw ]; then /opt/homebrew/bin/openclaw gateway status || true; elif [ -x /usr/local/bin/openclaw ]; then /usr/local/bin/openclaw gateway status || true; else echo "openclaw not found" >&2; fi'
+GATEWAY_RESTART_HELPER="$MOD_DIR/tests/livetest/scripts/livetest-openclaw-gateway-restart.sh"
+if [[ ! -x "$GATEWAY_RESTART_HELPER" ]]; then
+  echo "Missing gateway restart helper: $GATEWAY_RESTART_HELPER" >&2
+  exit 2
+fi
+"$GATEWAY_RESTART_HELPER" --host "$HOST" --restart
 
 echo "Applied: files synced and gateway restart requested on $HOST"

@@ -747,7 +747,8 @@ PYEOF
 
 **OC only** — ensure the OC gateway is running and has the expected models registered before the OC agent tries to install:
 ```bash
-ssh REMOTE_HOST 'pgrep -f openclaw-gateway > /dev/null 2>&1 || (nohup openclaw gateway > /tmp/oc-gw.log 2>&1 &); for i in $(seq 1 30); do curl -sf http://localhost:18789/health > /dev/null 2>&1 && echo "Gateway ready" && break || sleep 2; done'
+~/quaidcode/dev/modules/quaid/tests/livetest/scripts/livetest-openclaw-gateway-restart.sh \
+  --host REMOTE_HOST --start
 ```
 
 **OC only** — check gateway model list (informational — the OC installer uses hardcoded defaults, not /v1/models):
