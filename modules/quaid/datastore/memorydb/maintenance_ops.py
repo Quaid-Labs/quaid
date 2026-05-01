@@ -248,6 +248,108 @@ _ENTITY_PLACEHOLDER_PREFIXES = (
     "their ",
 )
 
+_STRUCTURAL_ANCHOR_KINDS = frozenset({
+    "explicit_user_structural_anchor",
+    "user_mirrored_idea_anchor",
+    "assistant_option_bullet_anchor",
+    "assistant_option_list_anchor",
+    "assistant_plan_anchor",
+    "assistant_callback_anchor",
+})
+
+_ASSISTANT_STRUCTURAL_EDGE_SKIP_KINDS = frozenset({
+    "assistant_option_bullet_anchor",
+    "assistant_option_list_anchor",
+    "assistant_plan_anchor",
+    "assistant_callback_anchor",
+})
+
+_EDGE_BACKFILL_KEYWORDS = (
+    "married",
+    "married to",
+    "spouse",
+    "husband",
+    "wife",
+    "parent",
+    "mother",
+    "father",
+    "son",
+    "daughter",
+    "child",
+    "sibling",
+    "sister",
+    "brother",
+    "lives with",
+    "engaged to",
+    "dating",
+    "'s partner",
+    " partner is",
+    "her partner",
+    "his partner",
+    "their partner",
+    "my partner",
+    "our partner",
+    "'s friend",
+    " friend is",
+    "her friend",
+    "his friend",
+    "their friend",
+    "my friend",
+    "our friend",
+    "'s colleague",
+    " colleague is",
+    "her colleague",
+    "his colleague",
+    "their colleague",
+    "my colleague",
+    "our colleague",
+    "'s neighbour",
+    "'s neighbor",
+    " neighbour is",
+    " neighbor is",
+    "her neighbour",
+    "his neighbour",
+    "their neighbour",
+    "my neighbour",
+    "our neighbour",
+    "her neighbor",
+    "his neighbor",
+    "their neighbor",
+    "my neighbor",
+    "our neighbor",
+    "works at",
+    "works for",
+    "works as",
+    "works on",
+    "employed",
+    "lives in",
+    "lives at",
+    "lives near",
+    "lives next to",
+    "born in",
+    "born on",
+    "grew up in",
+    "moved to",
+    "from ",
+    "has a dog",
+    "has a cat",
+    "has a pet",
+)
+
+_EDGE_BACKFILL_ASSISTANT_SUMMARY_PREFIXES = (
+    "the assistant suggested ",
+    "the assistant recommended ",
+    "the assistant offered ",
+    "the assistant listed ",
+    "the assistant shared ",
+    "the assistant mentioned ",
+    "assistant suggested ",
+    "assistant recommended ",
+    "assistant offered ",
+    "assistant listed ",
+    "assistant shared ",
+    "assistant mentioned ",
+)
 
 def _canonicalize_owner_alias(name: str, owner_full: Optional[str] = None) -> str:
     """Normalize owner aliases in extracted edge entities to the canonical owner name."""
@@ -273,6 +375,48 @@ def _is_placeholder_entity_name(name: str, owner_full: Optional[str] = None) -> 
         return not owner or owner.lower() == "the user"
     return any(lowered.startswith(prefix) for prefix in _ENTITY_PLACEHOLDER_PREFIXES)
 
+def _load_node_attributes_blob(raw: Any) -> Dict[str, Any]:
+    if isinstance(raw, dict):
+        return dict(raw)
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _structural_anchor_kind_from_attrs(attrs: Dict[str, Any]) -> Optional[str]:
+    kind = str((attrs or {}).get("structural_anchor_kind") or "").strip().lower()
+    return kind or None
+
+
+def _is_protected_structural_anchor(attrs: Dict[str, Any]) -> bool:
+    kind = _structural_anchor_kind_from_attrs(attrs)
+    return bool(kind and kind in _STRUCTURAL_ANCHOR_KINDS)
+
+
+def _looks_like_relationship_backfill_fact(text: str, attrs: Optional[Dict[str, Any]] = None) -> bool:
+    """Return True when a fact is specific enough to justify relationship edge backfill.
+
+    This is a candidate-discovery filter, not a lexical edge extractor. The goal is
+    to keep janitor from sending clearly non-relationship rows like podcast titles or
+    assistant recommendation summaries into the relationship extractor.
+    """
+    lowered = str(text or "").strip().lower()
+    if not lowered:
+        return False
+
+    attrs = attrs or {}
+    kind = _structural_anchor_kind_from_attrs(attrs)
+    if kind in _ASSISTANT_STRUCTURAL_EDGE_SKIP_KINDS:
+        return False
+
+    if any(lowered.startswith(prefix) for prefix in _EDGE_BACKFILL_ASSISTANT_SUMMARY_PREFIXES):
+        return False
+
+    return any(keyword in lowered for keyword in _EDGE_BACKFILL_KEYWORDS)
 
 def _default_owner_id() -> str:
     """Get the default owner ID from config."""
@@ -2467,22 +2611,17 @@ def backfill_edges(
     if not hasattr(graph, "_get_conn"):
         return result
 
-    # Find fact nodes that have no edge linked via source_fact_id, filtering
-    # to nodes that plausibly describe relationships (contain key terms).
-    relationship_keywords = (
-        "married", "spouse", "husband", "wife", "partner",
-        "parent", "mother", "father", "son", "daughter", "child",
-        "sibling", "sister", "brother", "works at", "employed",
-        "lives in", "lives at", "friend", "colleague", "neighbour", "neighbor",
-        "has a dog", "has a cat", "has a pet",
-    )
-    kw_clauses = " OR ".join(f"LOWER(n.name) LIKE ?" for _ in relationship_keywords)
-    kw_params = [f"%{kw}%" for kw in relationship_keywords]
+    # Find fact nodes that have no edge linked via source_fact_id. Use a broad SQL
+    # prefilter first, then a stricter Python filter so generic title fragments like
+    # "Needs a Friend" do not enter relationship extraction.
+    kw_clauses = " OR ".join(f"LOWER(n.name) LIKE ?" for _ in _EDGE_BACKFILL_KEYWORDS)
+    kw_params = [f"%{kw}%" for kw in _EDGE_BACKFILL_KEYWORDS]
+    scan_limit = max(max_facts * 8, 200)
 
     with graph._get_conn() as conn:
         rows = conn.execute(
             f"""
-            SELECT n.id, n.name, n.owner_id
+            SELECT n.id, n.name, n.owner_id, n.attributes
             FROM nodes n
             WHERE n.type = 'Fact'
               AND n.status IN ('active', 'approved', 'pending')
@@ -2493,10 +2632,19 @@ def backfill_edges(
             ORDER BY n.created_at DESC
             LIMIT ?
             """,
-            kw_params + [max_facts],
+            kw_params + [scan_limit],
         ).fetchall()
 
-    facts = [{"id": row["id"], "text": row["name"], "owner_id": row["owner_id"]} for row in rows]
+    facts = []
+    filtered_out = 0
+    for row in rows:
+        attrs = _load_node_attributes_blob(row["attributes"] if "attributes" in row.keys() else None)
+        if not _looks_like_relationship_backfill_fact(row["name"], attrs):
+            filtered_out += 1
+            continue
+        facts.append({"id": row["id"], "text": row["name"], "owner_id": row["owner_id"]})
+        if len(facts) >= max_facts:
+            break
     result["found"] = len(facts)
 
     if not facts:
@@ -2504,6 +2652,8 @@ def backfill_edges(
         return result
 
     print(f"  Found {len(facts)} relationship facts with no linked edges.")
+    if filtered_out:
+        print(f"  Skipped {filtered_out} non-relationship candidates during edge backfill prefilter.")
 
     if dry_run:
         for f in facts[:5]:

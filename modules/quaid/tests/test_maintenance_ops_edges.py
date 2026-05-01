@@ -217,6 +217,79 @@ def test_batch_extract_edges_retries_smaller_batches_when_batch_response_is_not_
     assert any("Batch edge response was not a list" in item["warning"] for item in metrics.warnings)
 
 
+def test_relationship_backfill_filter_rejects_media_title_noise_and_assistant_recommendations():
+    assert maintenance_ops._looks_like_relationship_backfill_fact(
+        "Conan O'Brien Needs a Friend — funny, light, great for runs."
+    ) is False
+    assert maintenance_ops._looks_like_relationship_backfill_fact(
+        "The assistant suggested Conan O'Brien Needs a Friend, Heavyweight, Smartless, Radiolab, and This American Life as running podcasts.",
+        {"source_type": "assistant"},
+    ) is False
+    assert maintenance_ops._looks_like_relationship_backfill_fact(
+        "Maya lives with her partner David."
+    ) is True
+
+
+def test_backfill_edges_skips_non_relationship_noise_before_llm_extraction():
+    rows = [
+        {
+            "id": "noise-1",
+            "name": "Conan O'Brien Needs a Friend — funny, light, great for runs.",
+            "owner_id": "default",
+            "attributes": "{}",
+        },
+        {
+            "id": "noise-2",
+            "name": "The assistant suggested Conan O'Brien Needs a Friend, Heavyweight, Smartless, Radiolab, and This American Life as running podcasts.",
+            "owner_id": "default",
+            "attributes": '{"source_type":"assistant"}',
+        },
+        {
+            "id": "fact-1",
+            "name": "Maya lives with her partner David.",
+            "owner_id": "default",
+            "attributes": "{}",
+        },
+    ]
+
+    class _DummyResult:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def fetchall(self):
+            return self._rows
+
+    class _Conn:
+        def execute(self, sql, params=()):
+            return _DummyResult(rows)
+
+    class _Graph:
+        @contextmanager
+        def _get_conn(self):
+            yield _Conn()
+
+    metrics = maintenance_ops.JanitorMetrics()
+    captured = {}
+
+    def _fake_batch_extract(facts, graph, metrics, relations_list):
+        captured["facts"] = facts
+        return [[] for _ in facts]
+
+    with patch.object(maintenance_ops, "batch_extract_edges", side_effect=_fake_batch_extract):
+        out = maintenance_ops.backfill_edges(
+            graph=_Graph(),
+            metrics=metrics,
+            dry_run=False,
+            max_facts=10,
+            owner_id="default",
+        )
+
+    assert out == {"found": 1, "edges_created": 0, "errors": 0}
+    assert captured["facts"] == [
+        {"id": "fact-1", "text": "Maya lives with her partner David.", "owner_id": "default"}
+    ]
+
+
 def test_review_pending_prompt_includes_domain_neutral_role_guardrails():
     captured = {}
 
