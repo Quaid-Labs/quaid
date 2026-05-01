@@ -24,6 +24,10 @@ DEFAULT_PLUGIN_DIRS=('~/.openclaw/extensions/quaid' '~/.quaid/plugins/quaid')
 PLUGIN_DIRS=()
 APPLY=0
 
+remote_quote() {
+  printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --host)
@@ -87,14 +91,16 @@ fi
 for plugin_dir in "${PLUGIN_DIRS[@]}"; do
   remote_adapter_dir="$plugin_dir/adaptors/openclaw"
   remote_core_dir="$plugin_dir/core"
-  ssh "$HOST" "mkdir -p $remote_adapter_dir $remote_core_dir"
+  quoted_adapter_dir="$(remote_quote "$remote_adapter_dir")"
+  quoted_core_dir="$(remote_quote "$remote_core_dir")"
+  ssh "$HOST" "mkdir -p $quoted_adapter_dir $quoted_core_dir"
   scp "$LOCAL_ADAPTER_TS" "$HOST:$remote_adapter_dir/adapter.ts"
   scp "$LOCAL_ADAPTER_JS" "$HOST:$remote_adapter_dir/adapter.js"
   scp "$LOCAL_TIMEOUT_TS" "$HOST:$remote_core_dir/session-timeout.ts"
   scp "$LOCAL_TIMEOUT_JS" "$HOST:$remote_core_dir/session-timeout.js"
 done
 
-ssh "$HOST" 'export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"; if command -v openclaw >/dev/null 2>&1; then openclaw gateway restart; elif [ -x /opt/homebrew/bin/openclaw ]; then /opt/homebrew/bin/openclaw gateway restart; else echo "openclaw not found" >&2; exit 127; fi'
-ssh "$HOST" 'export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"; if command -v openclaw >/dev/null 2>&1; then openclaw gateway status || true; elif [ -x /opt/homebrew/bin/openclaw ]; then /opt/homebrew/bin/openclaw gateway status || true; fi'
+ssh "$HOST" 'export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"; if command -v openclaw >/dev/null 2>&1; then openclaw gateway restart; elif [ -x /opt/homebrew/bin/openclaw ]; then /opt/homebrew/bin/openclaw gateway restart; elif [ -x /usr/local/bin/openclaw ]; then /usr/local/bin/openclaw gateway restart; else echo "openclaw not found" >&2; exit 127; fi'
+ssh "$HOST" 'export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"; if command -v openclaw >/dev/null 2>&1; then openclaw gateway status || true; elif [ -x /opt/homebrew/bin/openclaw ]; then /opt/homebrew/bin/openclaw gateway status || true; elif [ -x /usr/local/bin/openclaw ]; then /usr/local/bin/openclaw gateway status || true; else echo "openclaw not found" >&2; fi'
 
 echo "Applied: files synced and gateway restart requested on $HOST"
