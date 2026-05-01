@@ -20,7 +20,7 @@ type LoadedAdapter = {
 const childProcessState = vi.hoisted(() => ({
   daemonStartCalls: [] as Array<{ file: string; args: readonly string[]; env: Record<string, string | undefined> }>,
   daemonStatusCalls: [] as Array<{ file: string; args: readonly string[]; env: Record<string, string | undefined> }>,
-  daemonStatusByInstance: {} as Record<string, boolean[]>,
+  daemonStatusByInstance: {} as Record<string, Array<boolean | "throw" | "bad-json">>,
 }));
 
 vi.mock("node:child_process", async () => {
@@ -46,7 +46,14 @@ vi.mock("node:child_process", async () => {
           env,
         });
         const queued = childProcessState.daemonStatusByInstance[instance];
-        const running = Array.isArray(queued) && queued.length > 0 ? Boolean(queued.shift()) : true;
+        const next = Array.isArray(queued) && queued.length > 0 ? queued.shift() : true;
+        if (next === "throw") {
+          throw new Error("status transport failed");
+        }
+        if (next === "bad-json") {
+          return "not json";
+        }
+        const running = Boolean(next);
         return JSON.stringify({
           running,
           pid: running ? 12345 : null,
@@ -270,7 +277,7 @@ describe("openclaw auto-provision", () => {
     expect(beforeAgentStartRegisterHookCall).toBeTruthy();
 
     const beforeAgentStartHandler = beforeAgentStartCall?.[1];
-    childProcessState.daemonStatusByInstance["openclaw-m13test"] = [false, true];
+    childProcessState.daemonStatusByInstance["openclaw-m13test"] = ["throw", true];
     await beforeAgentStartHandler(
       { prependContext: "" },
       {

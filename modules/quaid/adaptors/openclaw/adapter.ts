@@ -2869,6 +2869,7 @@ type DaemonStatusProbe = {
   running: boolean;
   pid?: number | null;
   raw?: string;
+  error?: string;
 };
 
 function daemonCommandEnv(
@@ -2884,18 +2885,37 @@ function daemonCommandEnv(
 function readDaemonStatus(instanceId: string): DaemonStatusProbe {
   const target = String(instanceId || _QUAID_INSTANCE || "default").trim() || "default";
   const quaidBin = path.join(PYTHON_PLUGIN_ROOT, "quaid");
-  const raw = execFileSync(quaidBin, ["daemon", "status"], {
-    encoding: "utf-8",
-    timeout: 5_000,
-    env: daemonCommandEnv(target),
-  });
-  const parsed = JSON.parse(String(raw || "{}")) as Record<string, unknown>;
-  const pid = Number(parsed.pid);
-  return {
-    running: Boolean(parsed.running),
-    pid: Number.isFinite(pid) && pid > 0 ? pid : null,
-    raw: String(raw || ""),
-  };
+  try {
+    const raw = execFileSync(quaidBin, ["daemon", "status"], {
+      encoding: "utf-8",
+      timeout: 5_000,
+      env: daemonCommandEnv(target),
+    });
+    try {
+      const parsed = JSON.parse(String(raw || "{}")) as Record<string, unknown>;
+      const pid = Number(parsed.pid);
+      return {
+        running: Boolean(parsed.running),
+        pid: Number.isFinite(pid) && pid > 0 ? pid : null,
+        raw: String(raw || ""),
+      };
+    } catch (parseErr: unknown) {
+      return {
+        running: false,
+        pid: null,
+        raw: String(raw || ""),
+        error: `invalid daemon status JSON: ${String((parseErr as Error)?.message || parseErr)}`,
+      };
+    }
+  } catch (err: unknown) {
+    const maybeProcessError = err as { stdout?: unknown; stderr?: unknown; message?: string };
+    return {
+      running: false,
+      pid: null,
+      raw: String(maybeProcessError?.stdout || maybeProcessError?.stderr || ""),
+      error: String((err as Error)?.message || err),
+    };
+  }
 }
 
 function startDaemonForInstance(
@@ -2914,31 +2934,52 @@ function startDaemonForInstance(
 function ensureDaemonAlive(instanceId: string = _QUAID_INSTANCE): void {
   const target = String(instanceId || _QUAID_INSTANCE || "default").trim() || "default";
   try {
-    const startOutput = startDaemonForInstance(target);
+    let startOutput = "";
+    let startError = "";
+    try {
+      startOutput = startDaemonForInstance(target);
+    } catch (err: unknown) {
+      startError = String((err as Error)?.message || err);
+    }
     const status = readDaemonStatus(target);
     if (status.running) {
       writeHookTrace("daemon.ensure_alive", {
         instance_id: target,
         status: "running",
         pid: status.pid ?? null,
+        start_error: startError,
       });
       return;
     }
     writeHookTrace("daemon.ensure_alive.supervisor_miss", {
       instance_id: target,
+      reason: startError ? "start_failed" : (status.error ? "status_probe_failed" : "status_not_running"),
       start_output: String(startOutput || "").trim().slice(0, 240),
+      start_error: startError.slice(0, 240),
+      status_error: String(status.error || "").slice(0, 240),
+      status_output: String(status.raw || "").trim().slice(0, 240),
     });
 
-    const directOutput = startDaemonForInstance(target, {
-      QUAID_SUPERVISOR_DISABLE: "1",
-      QUAID_INSTANCE_MONITOR_WAIT_SECONDS: "0.5",
-    });
+    // Parallel hooks can both reach this path for the same sibling; daemon start
+    // is pidfile-locked and idempotent, so the extra direct attempt is benign.
+    let directOutput = "";
+    let directError = "";
+    try {
+      directOutput = startDaemonForInstance(target, {
+        QUAID_SUPERVISOR_DISABLE: "1",
+      });
+    } catch (err: unknown) {
+      directError = String((err as Error)?.message || err);
+    }
     const directStatus = readDaemonStatus(target);
     if (directStatus.running) {
       writeHookTrace("daemon.ensure_alive", {
         instance_id: target,
         status: "direct_fallback_running",
         pid: directStatus.pid ?? null,
+        start_error: startError,
+        status_error: status.error || "",
+        direct_error: directError,
       });
       return;
     }
@@ -2946,7 +2987,12 @@ function ensureDaemonAlive(instanceId: string = _QUAID_INSTANCE): void {
     writeHookTrace("daemon.ensure_alive.failed", {
       instance_id: target,
       start_output: String(startOutput || "").trim().slice(0, 240),
+      start_error: startError.slice(0, 240),
+      status_error: String(status.error || "").slice(0, 240),
+      status_output: String(status.raw || "").trim().slice(0, 240),
       direct_output: String(directOutput || "").trim().slice(0, 240),
+      direct_error: directError.slice(0, 240),
+      direct_status_error: String(directStatus.error || "").slice(0, 240),
       status: directStatus.raw?.slice(0, 500) || "",
     });
     if (isFailHardEnabled()) {
@@ -2964,6 +3010,7 @@ function ensureDaemonAlive(instanceId: string = _QUAID_INSTANCE): void {
 function pingDaemonAliveIfNeeded(instanceId: string = _QUAID_INSTANCE, nowMs: number = Date.now()): void {
   const target = String(instanceId || _QUAID_INSTANCE || "default").trim() || "default";
   const lastCheckMs = _lastDaemonAliveCheckMsByInstance.get(target) || 0;
+  // Treat a missing timestamp as "never checked"; tests may inject nowMs=0.
   if (lastCheckMs > 0 && nowMs - lastCheckMs <= _DAEMON_ALIVE_CHECK_INTERVAL_MS) {
     return;
   }

@@ -2271,18 +2271,37 @@ function daemonCommandEnv(instanceId, extra = {}) {
 function readDaemonStatus(instanceId) {
   const target = String(instanceId || _QUAID_INSTANCE || "default").trim() || "default";
   const quaidBin = path.join(PYTHON_PLUGIN_ROOT, "quaid");
-  const raw = execFileSync(quaidBin, ["daemon", "status"], {
-    encoding: "utf-8",
-    timeout: 5e3,
-    env: daemonCommandEnv(target)
-  });
-  const parsed = JSON.parse(String(raw || "{}"));
-  const pid = Number(parsed.pid);
-  return {
-    running: Boolean(parsed.running),
-    pid: Number.isFinite(pid) && pid > 0 ? pid : null,
-    raw: String(raw || "")
-  };
+  try {
+    const raw = execFileSync(quaidBin, ["daemon", "status"], {
+      encoding: "utf-8",
+      timeout: 5e3,
+      env: daemonCommandEnv(target)
+    });
+    try {
+      const parsed = JSON.parse(String(raw || "{}"));
+      const pid = Number(parsed.pid);
+      return {
+        running: Boolean(parsed.running),
+        pid: Number.isFinite(pid) && pid > 0 ? pid : null,
+        raw: String(raw || "")
+      };
+    } catch (parseErr) {
+      return {
+        running: false,
+        pid: null,
+        raw: String(raw || ""),
+        error: `invalid daemon status JSON: ${String(parseErr?.message || parseErr)}`
+      };
+    }
+  } catch (err) {
+    const maybeProcessError = err;
+    return {
+      running: false,
+      pid: null,
+      raw: String(maybeProcessError?.stdout || maybeProcessError?.stderr || ""),
+      error: String(err?.message || err)
+    };
+  }
 }
 function startDaemonForInstance(instanceId, extraEnv = {}) {
   const target = String(instanceId || _QUAID_INSTANCE || "default").trim() || "default";
@@ -2296,30 +2315,49 @@ function startDaemonForInstance(instanceId, extraEnv = {}) {
 function ensureDaemonAlive(instanceId = _QUAID_INSTANCE) {
   const target = String(instanceId || _QUAID_INSTANCE || "default").trim() || "default";
   try {
-    const startOutput = startDaemonForInstance(target);
+    let startOutput = "";
+    let startError = "";
+    try {
+      startOutput = startDaemonForInstance(target);
+    } catch (err) {
+      startError = String(err?.message || err);
+    }
     const status = readDaemonStatus(target);
     if (status.running) {
       writeHookTrace("daemon.ensure_alive", {
         instance_id: target,
         status: "running",
-        pid: status.pid ?? null
+        pid: status.pid ?? null,
+        start_error: startError
       });
       return;
     }
     writeHookTrace("daemon.ensure_alive.supervisor_miss", {
       instance_id: target,
-      start_output: String(startOutput || "").trim().slice(0, 240)
+      reason: startError ? "start_failed" : status.error ? "status_probe_failed" : "status_not_running",
+      start_output: String(startOutput || "").trim().slice(0, 240),
+      start_error: startError.slice(0, 240),
+      status_error: String(status.error || "").slice(0, 240),
+      status_output: String(status.raw || "").trim().slice(0, 240)
     });
-    const directOutput = startDaemonForInstance(target, {
-      QUAID_SUPERVISOR_DISABLE: "1",
-      QUAID_INSTANCE_MONITOR_WAIT_SECONDS: "0.5"
-    });
+    let directOutput = "";
+    let directError = "";
+    try {
+      directOutput = startDaemonForInstance(target, {
+        QUAID_SUPERVISOR_DISABLE: "1"
+      });
+    } catch (err) {
+      directError = String(err?.message || err);
+    }
     const directStatus = readDaemonStatus(target);
     if (directStatus.running) {
       writeHookTrace("daemon.ensure_alive", {
         instance_id: target,
         status: "direct_fallback_running",
-        pid: directStatus.pid ?? null
+        pid: directStatus.pid ?? null,
+        start_error: startError,
+        status_error: status.error || "",
+        direct_error: directError
       });
       return;
     }
@@ -2327,7 +2365,12 @@ function ensureDaemonAlive(instanceId = _QUAID_INSTANCE) {
     writeHookTrace("daemon.ensure_alive.failed", {
       instance_id: target,
       start_output: String(startOutput || "").trim().slice(0, 240),
+      start_error: startError.slice(0, 240),
+      status_error: String(status.error || "").slice(0, 240),
+      status_output: String(status.raw || "").trim().slice(0, 240),
       direct_output: String(directOutput || "").trim().slice(0, 240),
+      direct_error: directError.slice(0, 240),
+      direct_status_error: String(directStatus.error || "").slice(0, 240),
       status: directStatus.raw?.slice(0, 500) || ""
     });
     if (isFailHardEnabled()) {
