@@ -18,6 +18,7 @@ Lifecycle:
     quaid daemon start   — Fork, write PID, exit parent.
     quaid daemon stop    — Send SIGTERM to PID.
     quaid daemon status  — Check if PID is alive.
+    quaid daemon flush   — Process queued signals synchronously.
 
 Adapters ensure the daemon is alive on session init and launch it if not.
 Each QUAID_INSTANCE gets its own daemon with its own PID file, signal dir,
@@ -756,6 +757,13 @@ def read_pending_signals() -> List[Dict[str, Any]]:
                 pass
     signals.sort(key=_pending_signal_sort_key)
     return signals[:MAX_SIGNALS_PER_POLL]
+
+
+def _pending_signal_count() -> int:
+    sig_dir = _signal_dir()
+    if not sig_dir.is_dir():
+        return 0
+    return sum(1 for f in sig_dir.iterdir() if f.name.endswith(".json"))
 
 
 def mark_signal_processed(signal_data: Dict[str, Any]) -> None:
@@ -5654,6 +5662,88 @@ def daemon_loop(poll_interval: float = 5.0, idle_check_interval: float = 300.0) 
         logger.info("extraction daemon exited")
 
 
+def flush_pending_signals(
+    *,
+    timeout_seconds: float = 120.0,
+    poll_interval: float = 0.25,
+    max_passes: int = 0,
+) -> Dict[str, Any]:
+    """Synchronously drain currently queued extraction signals.
+
+    This uses the same process_signal path as the background daemon. If another
+    daemon process already owns a session lock, the signal remains on disk and
+    this helper waits for a later pass instead of corrupting shared state.
+    """
+    previous_daemon_env = os.environ.get("QUAID_DAEMON")
+    os.environ["QUAID_DAEMON"] = "1"
+    started = time.time()
+    deadline = started + max(0.0, float(timeout_seconds))
+    summary: Dict[str, Any] = {
+        "status": "running",
+        "attempted": 0,
+        "processed": 0,
+        "preserved": 0,
+        "errors": 0,
+        "passes": 0,
+        "remaining_signals": 0,
+        "elapsed_seconds": 0.0,
+        "instance": _instance_id(),
+        "instance_root": str(_instance_root()),
+    }
+
+    while True:
+        signals = read_pending_signals()
+        remaining = _pending_signal_count()
+        if not signals:
+            summary["remaining_signals"] = remaining
+            if remaining == 0:
+                summary["status"] = "drained"
+                break
+            if time.time() >= deadline:
+                summary["status"] = "timeout"
+                break
+            time.sleep(max(0.0, float(poll_interval)))
+            continue
+
+        summary["passes"] = int(summary["passes"]) + 1
+        for sig in signals:
+            summary["attempted"] = int(summary["attempted"]) + 1
+            sig_path_raw = str(sig.get("_signal_path") or "").strip()
+            sig_path = Path(sig_path_raw) if sig_path_raw else None
+            try:
+                process_signal(sig)
+            except _ProviderUnavailableError as exc:
+                summary["errors"] = int(summary["errors"]) + 1
+                logger.error("flush signal provider unavailable; signal preserved: %s", exc)
+            except Exception as exc:
+                summary["errors"] = int(summary["errors"]) + 1
+                logger.error("flush signal processing failed; signal preserved: %s", exc, exc_info=True)
+            if sig_path is not None and sig_path.exists():
+                summary["preserved"] = int(summary["preserved"]) + 1
+            else:
+                summary["processed"] = int(summary["processed"]) + 1
+
+        remaining = _pending_signal_count()
+        summary["remaining_signals"] = remaining
+        if remaining == 0:
+            summary["status"] = "drained"
+            break
+        if int(max_passes or 0) > 0 and int(summary["passes"]) >= int(max_passes):
+            summary["status"] = "max_passes"
+            break
+        if time.time() >= deadline:
+            summary["status"] = "timeout"
+            break
+        time.sleep(max(0.0, float(poll_interval)))
+
+    summary["elapsed_seconds"] = round(time.time() - started, 3)
+    if previous_daemon_env is None:
+        os.environ.pop("QUAID_DAEMON", None)
+    else:
+        os.environ["QUAID_DAEMON"] = previous_daemon_env
+    return summary
+
+
 # ---------------------------------------------------------------------------
 # Daemon lifecycle commands
 # ---------------------------------------------------------------------------
@@ -5935,6 +6025,11 @@ def main():
     subparsers.add_parser("stop", help="Stop the daemon")
     subparsers.add_parser("status", help="Check daemon status")
     subparsers.add_parser("run", help="Run in foreground (for debugging)")
+    flush_parser = subparsers.add_parser("flush", help="Process queued extraction signals now")
+    flush_parser.add_argument("--timeout", type=float, default=120.0, help="Seconds to wait for queue drain (default: 120)")
+    flush_parser.add_argument("--poll-interval", type=float, default=0.25, help="Seconds between retry passes (default: 0.25)")
+    flush_parser.add_argument("--max-passes", type=int, default=0, help="Maximum read/process passes; 0 means unlimited until timeout")
+    flush_parser.add_argument("--json", action="store_true", help="Print JSON summary")
     # Internal: spawned by start_daemon() via subprocess.Popen.  Not for direct use.
     subparsers.add_parser("_worker", help=argparse.SUPPRESS)
 
@@ -5949,6 +6044,31 @@ def main():
     elif args.command == "status":
         status = daemon_status()
         print(json.dumps(status, indent=2))
+    elif args.command == "flush":
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s [%(name)s] %(levelname)s %(message)s",
+        )
+        summary = flush_pending_signals(
+            timeout_seconds=args.timeout,
+            poll_interval=args.poll_interval,
+            max_passes=args.max_passes,
+        )
+        if args.json:
+            print(json.dumps(summary, indent=2))
+        else:
+            print(
+                "daemon flush: "
+                f"status={summary['status']} "
+                f"attempted={summary['attempted']} "
+                f"processed={summary['processed']} "
+                f"preserved={summary['preserved']} "
+                f"errors={summary['errors']} "
+                f"remaining={summary['remaining_signals']} "
+                f"elapsed={summary['elapsed_seconds']}s"
+            )
+        if summary.get("status") != "drained" or int(summary.get("errors", 0) or 0) > 0:
+            sys.exit(2)
     elif args.command == "run":
         # Foreground mode for debugging
         logging.basicConfig(

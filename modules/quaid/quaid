@@ -692,7 +692,7 @@ PYEOF
     echo ""
     echo "Maintenance:"
     echo "  janitor [args]       Run janitor pipeline"
-    echo "  daemon [cmd]         Extraction daemon (start|stop|status|run)"
+    echo "  daemon [cmd]         Extraction daemon (start|stop|status|run|flush)"
     echo "  notify [args]        Active + deferred operator notifications"
     echo ""
     echo "Docs:"

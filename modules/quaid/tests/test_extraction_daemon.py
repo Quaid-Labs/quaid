@@ -97,6 +97,55 @@ def test_daemon_loop_leaves_docs_refresh_to_project_docs_supervisor(monkeypatch)
     assert docs_refresh_calls == []
 
 
+def test_flush_pending_signals_drains_queue(monkeypatch, tmp_path):
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "flush-inst")
+    processed = []
+
+    extraction_daemon.write_signal("timeout", "sess-a", "/tmp/a.jsonl")
+    extraction_daemon.write_signal("session_end", "sess-b", "/tmp/b.jsonl")
+
+    def fake_process_signal(sig):
+        processed.append(sig["session_id"])
+        extraction_daemon.mark_signal_processed(sig)
+
+    monkeypatch.setattr(extraction_daemon, "process_signal", fake_process_signal)
+    monkeypatch.setattr(extraction_daemon.time, "sleep", lambda _seconds: None)
+
+    summary = extraction_daemon.flush_pending_signals(timeout_seconds=1.0, poll_interval=0.0)
+
+    assert summary["status"] == "drained"
+    assert summary["attempted"] == 2
+    assert summary["processed"] == 2
+    assert summary["remaining_signals"] == 0
+    assert set(processed) == {"sess-a", "sess-b"}
+
+
+def test_flush_pending_signals_retries_preserved_signal(monkeypatch, tmp_path):
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "flush-inst")
+    calls = 0
+
+    extraction_daemon.write_signal("timeout", "sess-a", "/tmp/a.jsonl")
+
+    def fake_process_signal(sig):
+        nonlocal calls
+        calls += 1
+        if calls >= 2:
+            extraction_daemon.mark_signal_processed(sig)
+
+    monkeypatch.setattr(extraction_daemon, "process_signal", fake_process_signal)
+    monkeypatch.setattr(extraction_daemon.time, "sleep", lambda _seconds: None)
+
+    summary = extraction_daemon.flush_pending_signals(timeout_seconds=1.0, poll_interval=0.0)
+
+    assert summary["status"] == "drained"
+    assert summary["attempted"] == 2
+    assert summary["processed"] == 1
+    assert summary["preserved"] == 1
+    assert summary["remaining_signals"] == 0
+
+
 def test_daemon_loop_exits_when_supervisor_disappears(monkeypatch):
     monkeypatch.setattr(extraction_daemon, "write_pid", lambda _pid: None)
     monkeypatch.setattr(extraction_daemon, "remove_pid", lambda: None)
