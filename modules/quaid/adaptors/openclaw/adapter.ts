@@ -2440,12 +2440,14 @@ function preserveSessionTranscript(sessionId: string, preferredPath: string | nu
     candidates.push(resetBackup);
   }
   const deduped = candidates.filter((candidate, index) => candidate && candidates.indexOf(candidate) === index);
-  // Transcript-update callbacks are authoritative for the live OC file. If a
-  // larger .reset.* backup also exists, selecting by size would overwrite the
-  // preserved mirror with stale pre-reset content and lose the just-arrived turn.
+  // Transcript-update callbacks (mirror and late-content) are authoritative for
+  // the live OC file. If a larger .reset.* backup also exists, selecting by size
+  // would overwrite the preserved mirror with stale pre-reset content and lose
+  // the just-arrived turn.
   const sourcePath = (
     reason.startsWith("transcript-update")
     && preferred
+    && transcriptPathExplicitlyMatchesSession(sid, preferred)
     && fs.existsSync(preferred)
   )
     ? preferred

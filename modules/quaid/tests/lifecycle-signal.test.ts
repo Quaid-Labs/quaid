@@ -650,6 +650,71 @@ describe("lifecycle signal detection", () => {
     }
   });
 
+  it("preserves reset backup for reset reasons even when live transcript exists", async () => {
+    const baseDir = fs.mkdtempSync(path.join("/tmp", "quaid-oc-transcript-reset-backup-"));
+    const quaidHome = path.join(baseDir, ".quaid");
+    const visibleHome = path.join(baseDir, "quaid");
+    const openClawConfigPath = path.join(baseDir, ".openclaw", "openclaw.json");
+    const sessionsDir = path.join(baseDir, ".openclaw", "agents", "main", "sessions");
+    fs.mkdirSync(sessionsDir, { recursive: true });
+    fs.mkdirSync(path.dirname(openClawConfigPath), { recursive: true });
+    fs.writeFileSync(
+      openClawConfigPath,
+      JSON.stringify({ agents: { list: [{ id: "main", default: true }] } }),
+      "utf8",
+    );
+
+    try {
+      vi.stubEnv("HOME", baseDir);
+      vi.stubEnv("QUAID_HOME", quaidHome);
+      vi.stubEnv("QUAID_VISIBLE_HOME", visibleHome);
+      vi.stubEnv("OPENCLAW_CONFIG_PATH", openClawConfigPath);
+      vi.stubEnv("QUAID_INSTANCE", "openclaw-main");
+      vi.resetModules();
+      const isolatedAdapter = await import("../adaptors/openclaw/adapter.js");
+      const isolatedTest = isolatedAdapter.__test;
+      const sessionId = "4d58be3c-b2c9-4132-a0c1-a6a72adf7a91";
+      const nativePath = path.join(sessionsDir, `${sessionId}.jsonl`);
+      const resetBackupPath = path.join(sessionsDir, `${sessionId}.jsonl.reset.2026-05-01T21-08-00.000Z`);
+      fs.writeFileSync(
+        nativePath,
+        `${JSON.stringify({
+          type: "message",
+          message: {
+            role: "user",
+            content: "Live transcript content should not win reset preservation.",
+          },
+        })}\n`,
+        "utf8",
+      );
+      fs.writeFileSync(
+        resetBackupPath,
+        `${JSON.stringify({
+          type: "message",
+          message: {
+            role: "user",
+            content: "Reset backup content should win reset preservation.",
+          },
+        })}\n`,
+        "utf8",
+      );
+
+      const preserved = isolatedTest.preserveSessionTranscript(
+        sessionId,
+        nativePath,
+        "before_reset",
+      );
+
+      expect(preserved).toBeTruthy();
+      const preservedText = fs.readFileSync(String(preserved), "utf8");
+      expect(preservedText).toContain("Reset backup content");
+      expect(preservedText).not.toContain("Live transcript content");
+    } finally {
+      vi.unstubAllEnvs();
+      try { fs.rmSync(baseDir, { recursive: true, force: true }); } catch {}
+    }
+  });
+
   it("uses Quaid preserved transcript prefix when OC never writes the native transcript", async () => {
     const baseDir = fs.mkdtempSync(path.join("/tmp", "quaid-oc-preserved-prefix-fallback-"));
     const quaidHome = path.join(baseDir, ".quaid");

@@ -1914,7 +1914,7 @@ function preserveSessionTranscript(sessionId, preferredPath, reason) {
     candidates.push(resetBackup);
   }
   const deduped = candidates.filter((candidate, index) => candidate && candidates.indexOf(candidate) === index);
-  const sourcePath = reason.startsWith("transcript-update") && preferred && fs.existsSync(preferred) ? preferred : selectBestTranscriptCandidate(deduped, {
+  const sourcePath = reason.startsWith("transcript-update") && preferred && transcriptPathExplicitlyMatchesSession(sid, preferred) && fs.existsSync(preferred) ? preferred : selectBestTranscriptCandidate(deduped, {
     preferResetBackup: reason.includes("reset")
   });
   if (!sourcePath) {
