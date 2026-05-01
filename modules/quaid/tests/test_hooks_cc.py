@@ -1224,8 +1224,16 @@ def test_hook_extract_precompact_refreshes_rules_context_from_identity_and_proje
     tools_rules = (rules_dir / "quaid-quaid-tools-md.md").read_text(encoding="utf-8")
     assert "Compaction refresh canary: vellum-orchid" in user_rules
     assert "refresh docs" in tools_rules
-    assert (tmp_path / "data" / "context-refresh-compaction" / f"{session_id}.json").is_file()
-    assert (tmp_path / "data" / "context-refresh-compaction" / "_latest.json").is_file()
+    marker_file = tmp_path / "data" / "context-refresh-compaction" / f"{session_id}.json"
+    latest_file = tmp_path / "data" / "context-refresh-compaction" / "_latest.json"
+    assert marker_file.is_file()
+    assert latest_file.is_file()
+    marker_payload = json.loads(marker_file.read_text(encoding="utf-8"))
+    latest_payload = json.loads(latest_file.read_text(encoding="utf-8"))
+    assert marker_payload["reason"] == "precompact_hook"
+    assert marker_payload["source"] == "hook_extract_precompact"
+    assert latest_payload["reason"] == "precompact_hook"
+    assert latest_payload["source"] == "hook_extract_precompact"
     assert "stale rules body" not in user_rules + tools_rules
 
 

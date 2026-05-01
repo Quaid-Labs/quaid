@@ -385,13 +385,28 @@ _log_hook_command_invocation() {
   if [[ "$CMD" == "hook-extract" && " $* " == *" --precompact "* ]]; then
     event="PreCompact"
   fi
+  local sanitized_args=()
+  local arg
+  for arg in "$@"; do
+    case "$arg" in
+      --precompact)
+        sanitized_args+=("$arg")
+        ;;
+      --*)
+        sanitized_args+=("[flag-redacted]")
+        ;;
+      *)
+        sanitized_args+=("[arg-redacted]")
+        ;;
+    esac
+  done
   printf '%s event=%q cmd=%q instance=%q cwd=%q args=%q\n' \
     "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
     "$event" \
     "$CMD" \
     "$instance" \
     "$PWD" \
-    "$*" >> "$log_dir/quaid-hook-command.log" 2>/dev/null || true
+    "${sanitized_args[*]}" >> "$log_dir/quaid-hook-command.log" 2>/dev/null || true
 }
 
 _log_hook_command_invocation "$@"

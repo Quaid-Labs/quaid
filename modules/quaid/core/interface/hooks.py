@@ -1720,7 +1720,12 @@ def _context_refresh_compaction_latest_marker_path() -> Path | None:
         return None
 
 
-def _arm_compaction_refresh_marker(session_id: str) -> None:
+def _arm_compaction_refresh_marker(
+    session_id: str,
+    *,
+    reason: str = "compact_command",
+    source: str = "hook_inject",
+) -> None:
     if _context_refresh_strategy() != "compaction":
         return
     marker_path = _context_refresh_compaction_marker_path(session_id)
@@ -1730,7 +1735,8 @@ def _arm_compaction_refresh_marker(session_id: str) -> None:
         marker_payload = {
             "session_id": str(session_id or "").strip(),
             "created_at": int(time.time()),
-            "reason": "compact_command",
+            "reason": reason,
+            "source": source,
         }
         marker_path.parent.mkdir(parents=True, exist_ok=True)
         marker_path.write_text(
@@ -2579,7 +2585,14 @@ def hook_extract(args):
     try:
         _maybe_compaction_refresh_context_artifacts(hook_input, is_precompact=is_precompact)
         if is_precompact and session_id:
-            _arm_compaction_refresh_marker(session_id)
+            # Intentional belt-and-suspenders with hook-inject's /compact arm:
+            # CC versions vary on whether PreCompact, UserPromptSubmit, or both
+            # fire. Marker writes are idempotent; the next prompt consumes one.
+            _arm_compaction_refresh_marker(
+                session_id,
+                reason="precompact_hook",
+                source="hook_extract_precompact",
+            )
             _write_hook_trace("hook.extract.compaction_context_refreshed", {
                 "session_id": session_id,
                 "strategy": _context_refresh_strategy(),
@@ -2590,7 +2603,7 @@ def hook_extract(args):
         _write_hook_trace("hook.extract.compaction_context_refresh_error", {
             "session_id": session_id,
             "error": str(exc),
-            "source": "precompact" if is_precompact else "hook_extract",
+            "source": "precompact_context_refresh" if is_precompact else "hook_extract_context_refresh",
         })
 
     if not transcript_path:
