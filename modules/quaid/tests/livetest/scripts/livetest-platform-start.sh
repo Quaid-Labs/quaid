@@ -98,7 +98,7 @@ run_remote() {
 start_oc() {
     echo "--- OC gateway ---"
     run_remote "start gateway if not running" \
-        "pgrep -f openclaw-gateway > /dev/null 2>&1 && echo 'Gateway already running' || (nohup openclaw gateway > /tmp/oc-gw.log 2>&1 & echo 'Gateway started')"
+        "pgrep -f openclaw-gateway > /dev/null 2>&1 && echo 'Gateway already running' || (export PATH=\"/opt/homebrew/bin:/usr/local/bin:\$PATH\"; OPENCLAW_BIN=\"\$(command -v openclaw || true)\"; if [ -z \"\$OPENCLAW_BIN\" ] && [ -x /opt/homebrew/bin/openclaw ]; then OPENCLAW_BIN=/opt/homebrew/bin/openclaw; fi; if [ -z \"\$OPENCLAW_BIN\" ]; then echo 'openclaw not found in PATH or /opt/homebrew/bin' >&2; exit 127; fi; nohup \"\$OPENCLAW_BIN\" gateway > /tmp/oc-gw.log 2>&1 & echo \"Gateway started (\$OPENCLAW_BIN)\")"
 
     if [[ "$DRY_RUN" == "1" ]]; then
         echo "     [dry-run] would wait for gateway health at http://localhost:18789/health"
