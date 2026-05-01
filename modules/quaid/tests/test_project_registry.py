@@ -97,15 +97,13 @@ class TestCreateProject:
         assert get_project("my-app") is not None
         sync_docs.assert_called_once()
 
-    def test_rejects_invalid_name(self, mock_adapter):
-        with pytest.raises(ValueError, match="Invalid project name"):
-            create_project("My App")
+    def test_normalizes_project_name_to_lowercase(self, mock_adapter):
+        _, tmp_path = mock_adapter
+        with patch("core.project_registry._sync_docs_registry_project"):
+            create_project("My-App")
 
-        with pytest.raises(ValueError, match="Invalid project name"):
-            create_project("has spaces")
-
-        with pytest.raises(ValueError, match="Invalid project name"):
-            create_project("-starts-with-dash")
+        assert (tmp_path / "projects" / "my-app").is_dir()
+        assert get_project("MY-APP") is not None
 
     def test_rejects_duplicate(self, mock_adapter):
         create_project("my-app")

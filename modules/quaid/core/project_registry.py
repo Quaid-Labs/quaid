@@ -26,6 +26,10 @@ logger = logging.getLogger(__name__)
 _RULES_FILE_PREFIX = "quaid-"
 
 
+def _normalize_project_name(name: str) -> str:
+    return str(name or "").strip().lower()
+
+
 def _is_temp_canonical_path(path: Path) -> bool:
     try:
         resolved = Path(os.path.realpath(path.expanduser().resolve()))
@@ -43,6 +47,9 @@ def _sync_docs_registry_project(
     canonical: Path,
 ) -> None:
     """Mirror project metadata into the docs-registry source of truth."""
+    name = _normalize_project_name(name)
+    if not name:
+        return
     if _is_temp_canonical_path(canonical):
         logger.info(
             "Skipping docs-registry sync for temp project %s (%s)",
@@ -169,7 +176,7 @@ def _safe_remove_tracking_dir(path: Path, tracking_base: Path) -> bool:
 
 
 def _misc_project_instance_id(project_name: str) -> Optional[str]:
-    name = str(project_name or "").strip()
+    name = _normalize_project_name(project_name)
     if not name.startswith("misc--"):
         return None
     instance = name.removeprefix("misc--").strip()
@@ -184,7 +191,7 @@ def _misc_project_name(instance_id: str) -> str:
 
 
 def _is_reserved_project_name(name: str) -> bool:
-    project_name = str(name or "").strip()
+    project_name = _normalize_project_name(name)
     return project_name == "quaid" or project_name.startswith("misc--")
 
 
@@ -341,6 +348,18 @@ def _load_registry(*, quaid_home: Optional[Path] = None) -> Dict[str, Any]:
             return {"projects": {}, "deleted_projects": {}}
         if not isinstance(data.get("deleted_projects"), dict):
             data["deleted_projects"] = {}
+        projects: Dict[str, Any] = {}
+        for raw_name, entry in (data.get("projects") or {}).items():
+            name = _normalize_project_name(raw_name)
+            if name:
+                projects[name] = entry
+        data["projects"] = projects
+        deleted: Dict[str, Any] = {}
+        for raw_name, value in (data.get("deleted_projects") or {}).items():
+            name = _normalize_project_name(raw_name)
+            if name:
+                deleted[name] = value
+        data["deleted_projects"] = deleted
         return data
     except (json.JSONDecodeError, OSError) as e:
         logger.warning("Failed to read project registry: %s", e)
@@ -428,7 +447,7 @@ def list_projects_raw() -> Dict[str, Dict[str, Any]]:
 def get_project(name: str) -> Optional[Dict[str, Any]]:
     """Get a single project by name, or None if not found."""
     _reconcile_docs_registry_projects()
-    key = str(name or "").strip()
+    key = _normalize_project_name(name)
     with _registry_lock():
         data = _load_registry()
         if key in (data.get("deleted_projects") or {}):
@@ -441,7 +460,7 @@ def get_project(name: str) -> Optional[Dict[str, Any]]:
 
 def get_project_raw(name: str) -> Optional[Dict[str, Any]]:
     """Return a project entry without docs-registry reconciliation."""
-    key = str(name or "").strip()
+    key = _normalize_project_name(name)
     with _registry_lock():
         data = _load_registry()
         if key in (data.get("deleted_projects") or {}):
@@ -460,7 +479,7 @@ def project_exists_raw(name: str) -> bool:
     deleted project gets briefly resurrected while the delete transaction is
     still purging secondary stores.
     """
-    key = str(name or "").strip()
+    key = _normalize_project_name(name)
     with _registry_lock():
         data = _load_registry()
         if key in (data.get("deleted_projects") or {}):
@@ -470,7 +489,7 @@ def project_exists_raw(name: str) -> bool:
 
 def project_deleted_raw(name: str) -> bool:
     """Return whether a project is tombstoned in the global registry."""
-    key = str(name or "").strip()
+    key = _normalize_project_name(name)
     with _registry_lock():
         data = _load_registry()
         return key in (data.get("deleted_projects") or {})
@@ -485,7 +504,7 @@ def create_project(
     """Register a new project.
 
     Args:
-        name: Project name (lowercase, kebab-case)
+        name: Project name. Input is stored under its lowercase form.
         description: Human-readable description
         source_root: Path to user's project files (optional)
         initial_instance: Instance ID to associate. If None, reads from
@@ -496,11 +515,11 @@ def create_project(
         The project entry dict.
 
     Raises:
-        ValueError: If project already exists or name is invalid.
+        ValueError: If project already exists or the name is empty.
     """
-    import re
-    if not re.match(r"^[a-z0-9][a-z0-9-]*$", name):
-        raise ValueError(f"Invalid project name: {name!r} (must be lowercase kebab-case)")
+    name = _normalize_project_name(name)
+    if not name:
+        raise ValueError("Project name is required")
 
     quaid_home = _resolve_quaid_home()
     canonical = quaid_projects_dir(quaid_home) / name
@@ -589,6 +608,7 @@ def update_project(name: str, **updates: Any) -> Dict[str, Any]:
     Raises:
         KeyError: If project not found.
     """
+    name = _normalize_project_name(name)
     with _registry_lock():
         registry = _load_registry()
         if name not in registry["projects"]:
@@ -630,6 +650,7 @@ def link_project(name: str, *, instance_id: Optional[str] = None) -> Dict[str, A
     Raises:
         KeyError: If project not found.
     """
+    name = _normalize_project_name(name)
     with _registry_lock():
         registry = _load_registry()
         if name not in registry["projects"]:
@@ -716,6 +737,7 @@ def unlink_project(name: str) -> Dict[str, Any]:
     Raises:
         KeyError: If project not found.
     """
+    name = _normalize_project_name(name)
     _raise_if_reserved_project_mutation(name, "unlink")
     with _registry_lock():
         registry = _load_registry()
@@ -792,6 +814,7 @@ def delete_project(name: str) -> None:
     Raises:
         KeyError: If project not found.
     """
+    name = _normalize_project_name(name)
     _raise_if_reserved_project_mutation(name, "delete")
     quaid_home = _resolve_quaid_home()
     visible_home = _visible_home_from_hidden(quaid_home)
@@ -976,6 +999,8 @@ def rename_project(old_name: str, new_name: str) -> Dict[str, Any]:
     Raises:
         ValueError: If old_name does not exist or new_name is already taken.
     """
+    old_name = _normalize_project_name(old_name)
+    new_name = _normalize_project_name(new_name)
     from datastore.docsdb.registry import DocsRegistry
     registry = DocsRegistry()
     return registry.rename_project(old_name, new_name)
@@ -992,6 +1017,7 @@ def archive_project(name: str) -> Dict[str, Any]:
     Raises:
         ValueError: If project does not exist.
     """
+    name = _normalize_project_name(name)
     from datastore.docsdb.registry import DocsRegistry
     registry = DocsRegistry()
     return registry.archive_project(name)

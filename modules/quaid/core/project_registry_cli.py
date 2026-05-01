@@ -341,7 +341,7 @@ def main():
 
     # create
     create_p = subparsers.add_parser("create", help="Create a new project")
-    create_p.add_argument("name", help="Project name (lowercase kebab-case)")
+    create_p.add_argument("name", help="Project name (stored lowercase)")
     create_p.add_argument("--description", "-d", help="Project description")
     create_p.add_argument("--source-root", "-s", help="Path to source files")
     add_json_argument(create_p)

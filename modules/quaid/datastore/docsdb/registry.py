@@ -137,17 +137,8 @@ def _workspace() -> Path:
 def _visible_home() -> Path:
     return get_visible_quaid_home()
 
-# Strict project name validation — mirrors core.project_registry/project_docs.
-_PROJECT_NAME_RE = re.compile(r'^[a-z0-9][a-z0-9-]*$')
-
-
-def _validate_project_name(name: str) -> None:
-    """Validate project name is canonical lowercase kebab-case."""
-    if not name or not _PROJECT_NAME_RE.match(name):
-        raise ValueError(
-            f"Invalid project name: '{name}'. "
-            "Project names must be lowercase kebab-case."
-        )
+def _normalize_project_name(name: str) -> str:
+    return str(name or "").strip().lower()
 
 
 def _validate_inside_workspace(resolved_path: Path, label: str = "path") -> None:
@@ -524,6 +515,7 @@ class DocsRegistry:
 
     def get_project_definition(self, name: str):
         """Load a single project definition from DB."""
+        name = _normalize_project_name(name)
         from config import ProjectDefinition
         with get_connection(self.db_path) as conn:
             self._ensure_project_definitions_table(conn)
@@ -567,6 +559,9 @@ class DocsRegistry:
             return result
 
     def _write_project_definition_row(self, name: str, defn) -> None:
+        name = _normalize_project_name(name)
+        if not name:
+            raise ValueError("Project name is required")
         def _write():
             with get_connection(self.db_path) as conn:
                 conn.execute("""
@@ -599,7 +594,9 @@ class DocsRegistry:
 
     def save_project_definition(self, name: str, defn, *, link_current_instance: bool = True):
         """Upsert a project definition to DB."""
-        name = self._registry_project_name(name)
+        name = _normalize_project_name(name)
+        if not name:
+            raise ValueError("Project name is required")
         self._write_project_definition_row(name, defn)
         self._ensure_global_project_entry(
             name,
@@ -609,6 +606,7 @@ class DocsRegistry:
 
     def delete_project_definition(self, name: str):
         """Soft-delete a project definition (set state to 'deleted')."""
+        name = _normalize_project_name(name)
         with get_connection(self.db_path) as conn:
             conn.execute(
                 "UPDATE project_definitions SET state = 'deleted', updated_at = datetime('now') WHERE name = ?",
@@ -616,15 +614,9 @@ class DocsRegistry:
             )
 
     def _syncable_project_name(self, project: Optional[str]) -> Optional[str]:
-        name = str(project or "").strip()
+        name = _normalize_project_name(project or "")
         if not name or name == "default":
             return None
-        _validate_project_name(name)
-        return name
-
-    def _registry_project_name(self, project: Optional[str]) -> str:
-        name = str(project or "").strip() or "default"
-        _validate_project_name(name)
         return name
 
     def _source_root_from_paths(self, paths_in: Optional[List[str]]) -> Optional[str]:
@@ -901,7 +893,7 @@ class DocsRegistry:
         allow_project_reassign: bool = False,
     ) -> int:
         """Register a document in the registry. Returns the row ID."""
-        project = self._registry_project_name(project)
+        project = _normalize_project_name(project) or "default"
         if not file_path or not file_path.strip():
             raise ValueError("file_path must be a non-empty string")
         resolved = Path(file_path.strip()).expanduser().resolve()
@@ -1019,11 +1011,11 @@ class DocsRegistry:
         state: str = "active",
     ) -> List[Dict[str, Any]]:
         """List registry entries with optional filters."""
-        project = self._registry_project_name(project) if project is not None else None
         query = "SELECT * FROM doc_registry WHERE state = ?"
         params: list = [state]
 
         if project:
+            project = _normalize_project_name(project)
             query += " AND project = ?"
             params.append(project)
         if asset_type:
@@ -1133,7 +1125,7 @@ class DocsRegistry:
         if "auto_update" in updates:
             updates["auto_update"] = 1 if updates["auto_update"] else 0
         if "project" in updates:
-            updates["project"] = self._registry_project_name(updates["project"])
+            updates["project"] = _normalize_project_name(updates["project"]) or "default"
 
         set_clause = ", ".join(f"{k} = ?" for k in updates)
         params = list(updates.values()) + [file_path]
@@ -1246,6 +1238,7 @@ class DocsRegistry:
         """
         params: list = []
         if project:
+            project = _normalize_project_name(project)
             query += " AND project = ?"
             params.append(project)
 
@@ -1283,7 +1276,9 @@ class DocsRegistry:
 
         Returns path to created PROJECT.md.
         """
-        _validate_project_name(name)
+        name = _normalize_project_name(name)
+        if not name:
+            raise ValueError("Project name is required")
 
         # Guard: don't overwrite an existing project
         cfg = self._get_config()
@@ -1365,7 +1360,7 @@ class DocsRegistry:
 
         Returns list of newly registered file paths.
         """
-        project_name = self._registry_project_name(project_name)
+        project_name = _normalize_project_name(project_name)
         cfg = self._get_config()
         defn = cfg.projects.definitions.get(project_name)
         if not defn:
@@ -1419,7 +1414,7 @@ class DocsRegistry:
 
         Returns list of newly registered file paths.
         """
-        project_name = self._registry_project_name(project_name)
+        project_name = _normalize_project_name(project_name)
         cfg = self._get_config()
         defn = cfg.projects.definitions.get(project_name)
         if not defn:
@@ -1517,7 +1512,10 @@ class DocsRegistry:
 
         Returns: {"renamed": count, "dir_moved": bool}
         """
-        _validate_project_name(new_name)
+        old_name = _normalize_project_name(old_name)
+        new_name = _normalize_project_name(new_name)
+        if not old_name or not new_name:
+            raise ValueError("Project name is required")
 
         # Guard: old project must exist (in config or registry)
         cfg = self._get_config()
@@ -1618,6 +1616,7 @@ class DocsRegistry:
 
         Returns: {"archived": count, "dir_moved": bool}
         """
+        project_name = _normalize_project_name(project_name)
         # Guard: project must exist (in config or registry)
         cfg = self._get_config()
         has_config = project_name in cfg.projects.definitions
@@ -1670,6 +1669,7 @@ class DocsRegistry:
 
         Returns: {"deleted": count, "dir_deleted": bool}
         """
+        project_name = _normalize_project_name(project_name)
         # Guard: project must exist (in config or registry)
         cfg = self._get_config()
         has_config = project_name in cfg.projects.definitions
@@ -1766,7 +1766,7 @@ class DocsRegistry:
 
         Returns: {"moved": bool, "new_path": str}
         """
-        to_project = self._registry_project_name(to_project)
+        to_project = _normalize_project_name(to_project)
         # Guard: target project must exist
         cfg = self._get_config()
         if to_project not in cfg.projects.definitions:
@@ -1798,7 +1798,7 @@ class DocsRegistry:
 
         Returns: {"total": N, "exists": N, "missing": [...], "orphans": [...]}
         """
-        project_name = self._registry_project_name(project_name)
+        project_name = _normalize_project_name(project_name)
         cfg = self._get_config()
         defn = cfg.projects.definitions.get(project_name)
 

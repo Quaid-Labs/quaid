@@ -12,7 +12,6 @@ import fcntl
 import json
 import logging
 import os
-import re
 import signal
 import subprocess
 import sys
@@ -23,7 +22,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
-_PROJECT_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 PROJECT_LOG = "PROJECT.log"
 UPDATABLE_ROOT_DOCS = {"PROJECT.md", "TOOLS.md", "AGENTS.md"}
 SUPERVISOR_ROLE = "project-docs-supervisor"
@@ -53,9 +51,9 @@ def utc_now() -> str:
 
 
 def validate_project_name(project: str) -> str:
-    name = str(project or "").strip()
-    if not _PROJECT_RE.match(name):
-        raise ValueError(f"Invalid project name: {project!r}")
+    name = str(project or "").strip().lower()
+    if not name:
+        raise ValueError("Project name is required")
     return name
 
 

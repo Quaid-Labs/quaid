@@ -57,52 +57,29 @@ def test_docs_registration_creates_canonical_project_entry(project_registry_env)
     assert "benchrunner" in entry["instances"]
 
 
-def test_global_project_register_rejects_non_canonical_project_name(project_registry_env):
-    from lib.project_registry import register
+def test_project_names_are_normalized_to_lowercase(project_registry_env):
+    from core.project_registry import get_project
+    from datastore.docsdb.registry import DocsRegistry
 
-    project_dir = project_registry_env["visible_home"] / "projects" / "livetest-agentmsg-cdx"
+    visible_home = project_registry_env["visible_home"]
+    source_root = visible_home / "src" / "agentmsg-cdx"
+    source_root.mkdir(parents=True)
+    project_dir = visible_home / "projects" / "livetest-agentmsg-cdx"
     project_dir.mkdir(parents=True)
+    project_md = project_dir / "PROJECT.md"
+    project_md.write_text("# Agent Message CDX\n", encoding="utf-8")
 
-    with pytest.raises(ValueError, match="Invalid project name"):
-        register(
-            name="livetest-agentmsg-CDX",
-            canonical_path=str(project_dir),
-            link_current_instance=False,
-        )
-
-
-def test_global_project_read_unlink_and_remove_tolerate_existing_noncanonical_names(project_registry_env):
-    from lib.project_registry import is_deleted, list_all, lookup, remove, unlink
-
-    registry_path = project_registry_env["quaid_home"] / "project-registry.json"
-    registry_path.parent.mkdir(parents=True, exist_ok=True)
-    registry_path.write_text(
-        json.dumps(
-            {
-                "projects": {
-                    "OldUpper": {
-                        "canonical_path": str(project_registry_env["visible_home"] / "projects" / "old-upper"),
-                        "instances": ["benchrunner", "other-instance"],
-                        "created_at": "2026-05-01T00:00:00",
-                        "description": "legacy invalid test project",
-                    }
-                },
-                "deleted_projects": {
-                    "DeletedUpper": "2026-05-01T00:00:00",
-                },
-            }
-        )
-        + "\n",
-        encoding="utf-8",
+    registry = DocsRegistry()
+    registry.register(
+        str(project_md),
+        project="livetest-agentmsg-CDX",
+        source_files=[str(source_root / "app.py")],
+        registered_by="pytest",
     )
 
-    assert lookup("OldUpper") is not None
-    assert is_deleted("DeletedUpper") is True
-    assert "OldUpper" in list_all()
-    assert unlink("OldUpper", instance="benchrunner") is True
-    assert lookup("OldUpper")["instances"] == ["other-instance"]
-    assert remove("OldUpper", force=True) is True
-    assert lookup("OldUpper") is None
+    docs = registry.list_docs(project="LIVETEST-AGENTMSG-CDX")
+    assert docs and docs[0]["project"] == "livetest-agentmsg-cdx"
+    assert get_project("livetest-agentmsg-CDX") is not None
 
 
 def test_project_list_reconciles_existing_docs_registry_project_rows(project_registry_env):

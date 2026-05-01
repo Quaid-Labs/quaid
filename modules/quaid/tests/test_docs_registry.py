@@ -160,20 +160,6 @@ class TestRegisterAndGet:
         with pytest.raises(ValueError, match="Use move-file to reassign ownership explicitly"):
             r.register("docs/test.md", project="proj-b", title="V2")
 
-    def test_register_rejects_non_canonical_project_name(self, setup_env):
-        r = _get_registry()
-
-        with pytest.raises(ValueError, match="Invalid project name"):
-            r.register("docs/test.md", project="livetest-agentmsg-CDX", title="Bad Lane")
-
-        assert r.list_docs() == []
-
-    def test_list_rejects_non_canonical_project_filter(self, setup_env):
-        r = _get_registry()
-
-        with pytest.raises(ValueError, match="Invalid project name"):
-            r.list_docs(project="livetest-agentmsg-CDX")
-
     def test_register_with_source_files(self, setup_env):
         r = _get_registry()
         r.register("docs/api.md", project="test-project",
@@ -678,19 +664,15 @@ class TestCreateProjectConfig:
         assert entry is not None
         assert entry["project"] == "new-proj"
 
-    def test_rejects_invalid_name(self, setup_env):
+    def test_normalizes_project_name_to_lowercase(self, setup_env):
         r = _get_registry()
-        with pytest.raises(ValueError, match="Invalid project name"):
-            r.create_project("../../etc")
-
-    def test_rejects_uppercase_name(self, setup_env):
-        r = _get_registry()
-        with pytest.raises(ValueError, match="Invalid project name"):
-            r.create_project("Livetest-Agentmsg-CDX")
+        r.create_project("New-Proj")
+        assert r.get_project_definition("new-proj") is not None
+        assert (setup_env / "projects" / "new-proj").is_dir()
 
     def test_rejects_empty_name(self, setup_env):
         r = _get_registry()
-        with pytest.raises(ValueError, match="Invalid project name"):
+        with pytest.raises(ValueError, match="Project name is required"):
             r.create_project("")
 
     def test_preserves_markerized_seed_project_md(self, setup_env):
@@ -742,11 +724,11 @@ class TestRenameProjectGuards:
         with pytest.raises(ValueError, match="already has"):
             r.rename_project("proj-a", "proj-b")
 
-    def test_rejects_invalid_new_name(self, setup_env):
+    def test_normalizes_new_name(self, setup_env):
         r = _get_registry()
         r.register("docs/a.md", project="old-name")
-        with pytest.raises(ValueError, match="Invalid project name"):
-            r.rename_project("old-name", "../escape")
+        r.rename_project("old-name", "Renamed-Proj")
+        assert r.get_project_definition("renamed-proj") is not None
 
     def test_db_updated_after_rename(self, setup_env):
         """rename_project updates DB definition (source of truth)."""

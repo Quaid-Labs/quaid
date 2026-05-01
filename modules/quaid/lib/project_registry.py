@@ -27,7 +27,6 @@ Operations:
 
 import json
 import os
-import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -51,6 +50,18 @@ def _load() -> Dict[str, Any]:
             data["projects"] = {}
         if not isinstance(data.get("deleted_projects"), dict):
             data["deleted_projects"] = {}
+        projects: Dict[str, Any] = {}
+        for raw_name, entry in (data.get("projects") or {}).items():
+            name = _normalize_project_name(raw_name)
+            if name:
+                projects[name] = entry
+        data["projects"] = projects
+        deleted: Dict[str, Any] = {}
+        for raw_name, value in (data.get("deleted_projects") or {}).items():
+            name = _normalize_project_name(raw_name)
+            if name:
+                deleted[name] = value
+        data["deleted_projects"] = deleted
         return data
     except (json.JSONDecodeError, OSError):
         return {"projects": {}, "deleted_projects": {}}
@@ -65,6 +76,10 @@ def _save(data: Dict[str, Any]) -> None:
     tmp.replace(p)
 
 
+def _normalize_project_name(name: str) -> str:
+    return str(name or "").strip().lower()
+
+
 def _adapter_name() -> str:
     """Get current adapter instance ID from environment."""
     try:
@@ -72,16 +87,6 @@ def _adapter_name() -> str:
         return instance_id()
     except Exception:
         return "standalone"
-
-
-_PROJECT_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
-
-
-def _validate_project_name(name: str) -> str:
-    project_name = str(name or "").strip()
-    if not _PROJECT_NAME_RE.match(project_name):
-        raise ValueError(f"Invalid project name: {name!r} (must be lowercase kebab-case)")
-    return project_name
 
 
 def register(
@@ -98,7 +103,9 @@ def register(
 
     Returns the project entry.
     """
-    name = _validate_project_name(name)
+    name = _normalize_project_name(name)
+    if not name:
+        return {}
     with registry_lock():
         data = _load()
         now = datetime.now().isoformat()
@@ -134,7 +141,9 @@ def register(
 
 def mark_deleted(name: str) -> None:
     """Remember an explicit project deletion so docs reconciliation cannot resurrect it."""
-    name = _validate_project_name(name)
+    name = _normalize_project_name(name)
+    if not name:
+        return
     with registry_lock():
         data = _load()
         data.setdefault("deleted_projects", {})[name] = datetime.now().isoformat()
@@ -143,7 +152,9 @@ def mark_deleted(name: str) -> None:
 
 def clear_deleted(name: str) -> None:
     """Clear an explicit delete marker when a user recreates a project."""
-    name = _validate_project_name(name)
+    name = _normalize_project_name(name)
+    if not name:
+        return
     with registry_lock():
         data = _load()
         if name in data.get("deleted_projects", {}):
@@ -153,8 +164,7 @@ def clear_deleted(name: str) -> None:
 
 def is_deleted(name: str) -> bool:
     """Return whether a project has an explicit delete marker."""
-    # Tolerant cleanup path: allow inspection of pre-existing non-canonical keys.
-    name = str(name or "").strip()
+    name = _normalize_project_name(name)
     return name in _load().get("deleted_projects", {})
 
 
@@ -167,7 +177,9 @@ def link(name: str, instance: Optional[str] = None, create_symlink: bool = False
     Returns True if the link was added, False if already linked or project
     not found.
     """
-    name = _validate_project_name(name)
+    name = _normalize_project_name(name)
+    if not name:
+        return False
     with registry_lock():
         data = _load()
         if name not in data["projects"]:
@@ -225,9 +237,9 @@ def unlink(name: str, instance: Optional[str] = None) -> bool:
 
     Returns True if unlinked, False if not found or not linked.
     """
-    # Tolerant cleanup path: legacy registries can contain pre-canonical names.
-    # Creation/linking stays strict, but existing bad keys must be unlinkable.
-    name = str(name or "").strip()
+    name = _normalize_project_name(name)
+    if not name:
+        return False
     with registry_lock():
         data = _load()
         if name not in data["projects"]:
@@ -247,8 +259,7 @@ def unlink(name: str, instance: Optional[str] = None) -> bool:
 
 def lookup(name: str) -> Optional[Dict[str, Any]]:
     """Look up a project by name. Returns entry dict or None."""
-    # Tolerant cleanup path: allow inspection of pre-existing non-canonical keys.
-    name = str(name or "").strip()
+    name = _normalize_project_name(name)
     data = _load()
     if name in data.get("deleted_projects", {}):
         return None
@@ -268,8 +279,9 @@ def remove(name: str, force: bool = False) -> bool:
     If force=False and other instances are still tracking, raises ValueError.
     Returns True if removed.
     """
-    # Tolerant cleanup path: allow deletion of pre-existing non-canonical keys.
-    name = str(name or "").strip()
+    name = _normalize_project_name(name)
+    if not name:
+        return False
     with registry_lock():
         data = _load()
         if name not in data["projects"]:
@@ -293,6 +305,10 @@ def remove(name: str, force: bool = False) -> bool:
 
 def rename(name: str, new_name: str, canonical_path: Optional[str] = None) -> Dict[str, Any]:
     """Rename a project in the global registry while preserving metadata."""
+    name = _normalize_project_name(name)
+    new_name = _normalize_project_name(new_name)
+    if not name or not new_name:
+        raise KeyError(name or new_name)
     with registry_lock():
         data = _load()
         if name not in data["projects"]:
