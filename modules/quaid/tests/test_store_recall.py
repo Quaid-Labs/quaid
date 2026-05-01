@@ -5736,6 +5736,140 @@ class TestRecallFastHookInjectContract:
         assert bundle["telemetry"]["date_to"] == "2023-12-31"
         assert meta["counts"]["final_results"] == 1
 
+    def test_docs_store_recall_recovers_indexed_project_log_when_date_bundle_is_empty(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+
+        db_path = tmp_path / "docs.db"
+        with sqlite3.connect(db_path) as conn:
+            conn.execute(
+                """
+                CREATE TABLE doc_chunks (
+                    source_file TEXT,
+                    chunk_index INTEGER,
+                    content TEXT,
+                    section_header TEXT
+                )
+                """
+            )
+            conn.execute(
+                "INSERT INTO doc_chunks(source_file, chunk_index, content, section_header) VALUES (?, ?, ?, ?)",
+                (
+                    "projects/delta-agent/PROJECT.log",
+                    0,
+                    "\n".join(
+                        [
+                            "- [2023-03-02T10:00:00] delta-2023-marker launched the review lane",
+                            "- [2024-07-11T08:00:00] delta-2024-marker moved the review lane",
+                        ]
+                    ),
+                    None,
+                ),
+            )
+
+        class DateAwareDocsRAG:
+            def __init__(self):
+                self.db_path = db_path
+
+            def search_docs_bundle(
+                self,
+                query,
+                limit=5,
+                min_similarity=0.3,
+                project=None,
+                docs=None,
+                date_from=None,
+                date_to=None,
+            ):
+                return {
+                    "chunks": [],
+                    "project": project,
+                    "project_md": None,
+                    "telemetry": {
+                        "query": query,
+                        "requested_project": project,
+                        "date_from": date_from,
+                        "date_to": date_to,
+                    },
+                }
+
+            def infer_project_for_source(self, source_file):
+                return None
+
+            def infer_project_from_chunks(self, chunks):
+                return "delta-agent" if chunks else None
+
+        with patch("datastore.docsdb.rag.DocsRAG", return_value=DateAwareDocsRAG()):
+            rows, meta, bundle = mg._docs_store_recall(
+                "delta marker",
+                limit=5,
+                project="delta-agent",
+                date_from="2023-01-01",
+                date_to="2023-12-31",
+            )
+
+        docs_text = "\n".join(row["text"] for row in rows)
+        assert "delta-2023-marker" in docs_text
+        assert "delta-2024-marker" not in docs_text
+        assert bundle["chunks"][0]["source"].endswith("PROJECT.log")
+        assert bundle["chunks"][0]["source_date"] == "2023-03-02"
+        assert bundle["project_md"] is None
+        assert bundle["telemetry"]["chunk_count"] == 1
+        assert meta["counts"]["final_results"] == 1
+
+    def test_docs_store_recall_preserves_mixed_non_project_log_chunks_with_date_bounds(self):
+        import datastore.memorydb.memory_graph as mg
+
+        class DateAwareDocsRAG:
+            def search_docs_bundle(
+                self,
+                query,
+                limit=5,
+                min_similarity=0.3,
+                project=None,
+                docs=None,
+                date_from=None,
+                date_to=None,
+            ):
+                return {
+                    "chunks": [
+                        {
+                            "source": "projects/epsilon/PROJECT.log",
+                            "section_header": None,
+                            "content": "- [2024-07-11T08:00:00] epsilon-2024-marker is outside the requested window",
+                            "similarity": 0.91,
+                        },
+                        {
+                            "source": "projects/epsilon/README.md",
+                            "section_header": "# Design Notes",
+                            "content": "Evergreen epsilon architecture note",
+                            "similarity": 0.89,
+                        },
+                    ],
+                    "project": project,
+                    "project_md": "# Project overview should not attach for bounded recall",
+                    "telemetry": {"query": query, "requested_project": project},
+                }
+
+            def infer_project_from_chunks(self, chunks):
+                return "epsilon" if chunks else None
+
+        with patch("datastore.docsdb.rag.DocsRAG", return_value=DateAwareDocsRAG()):
+            rows, meta, bundle = mg._docs_store_recall(
+                "epsilon architecture",
+                limit=5,
+                project="epsilon",
+                date_from="2023-01-01",
+                date_to="2023-12-31",
+            )
+
+        docs_text = "\n".join(row["text"] for row in rows)
+        assert "Evergreen epsilon architecture note" in docs_text
+        assert "epsilon-2024-marker" not in docs_text
+        assert [chunk["source"] for chunk in bundle["chunks"]] == ["projects/epsilon/README.md"]
+        assert bundle["project_md"] is None
+        assert bundle["telemetry"]["chunk_count"] == 1
+        assert meta["counts"]["final_results"] == 1
+
     def test_docs_bundle_to_rows_preserves_project_and_source_date_for_dated_project_logs(self):
         import datastore.memorydb.memory_graph as mg
 
