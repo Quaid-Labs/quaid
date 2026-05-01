@@ -2129,6 +2129,13 @@ function buildExecCompletedHeartbeatVisibleReply(event) {
 }
 function writeDaemonSignal(sessionId, signalType, meta) {
   if (!sessionId) return null;
+  let preservedConversationFallback;
+  const getPreservedConversationFallback = () => {
+    if (preservedConversationFallback === void 0) {
+      preservedConversationFallback = resolvePreservedConversationTranscriptPath(sessionId);
+    }
+    return preservedConversationFallback;
+  };
   const mappedTranscriptPath = String(sessionTranscriptPaths.get(sessionId) || "").trim();
   const directPhysicalPath = getOpenClawSessionFile(sessionId);
   const transcriptPath = transcriptPathMatchesSession(sessionId, mappedTranscriptPath) || !fs.existsSync(directPhysicalPath) ? mappedTranscriptPath : "";
@@ -2141,7 +2148,7 @@ function writeDaemonSignal(sessionId, signalType, meta) {
     });
   }
   if (!transcriptPath) {
-    const preservedFallback = resolvePreservedConversationTranscriptPath(sessionId);
+    const preservedFallback = getPreservedConversationFallback();
     const candidates = [
       path.join(os.homedir(), ".openclaw", "agents", "main", "sessions", `${sessionId}.jsonl`),
       path.join(os.homedir(), ".openclaw", "sessions", `${sessionId}.jsonl`),
@@ -2165,7 +2172,7 @@ function writeDaemonSignal(sessionId, signalType, meta) {
       resolvedPath = backup;
       sessionTranscriptPaths.set(sessionId, backup);
     } else {
-      const preservedFallback = resolvePreservedConversationTranscriptPath(sessionId);
+      const preservedFallback = getPreservedConversationFallback();
       if (preservedFallback) {
         resolvedPath = preservedFallback;
         sessionTranscriptPaths.set(sessionId, preservedFallback);
@@ -2187,7 +2194,7 @@ function writeDaemonSignal(sessionId, signalType, meta) {
     return null;
   }
   const usePreservedFallbackIfAvailable = (reason) => {
-    const preserved = resolvePreservedConversationTranscriptPath(sessionId);
+    const preserved = getPreservedConversationFallback();
     if (!preserved) {
       return false;
     }

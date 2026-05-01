@@ -2700,6 +2700,13 @@ function writeDaemonSignal(
   meta?: Record<string, any>,
 ): string | null {
   if (!sessionId) return null;
+  let preservedConversationFallback: string | undefined;
+  const getPreservedConversationFallback = (): string => {
+    if (preservedConversationFallback === undefined) {
+      preservedConversationFallback = resolvePreservedConversationTranscriptPath(sessionId);
+    }
+    return preservedConversationFallback;
+  };
   const mappedTranscriptPath = String(sessionTranscriptPaths.get(sessionId) || "").trim();
   const directPhysicalPath = getOpenClawSessionFile(sessionId);
   const transcriptPath = transcriptPathMatchesSession(sessionId, mappedTranscriptPath) || !fs.existsSync(directPhysicalPath)
@@ -2715,7 +2722,7 @@ function writeDaemonSignal(
   }
   if (!transcriptPath) {
     // Try to resolve from OC sessions directories (multiple locations)
-    const preservedFallback = resolvePreservedConversationTranscriptPath(sessionId);
+    const preservedFallback = getPreservedConversationFallback();
     const candidates = [
       path.join(os.homedir(), ".openclaw", "agents", "main", "sessions", `${sessionId}.jsonl`),
       path.join(os.homedir(), ".openclaw", "sessions", `${sessionId}.jsonl`),
@@ -2742,7 +2749,7 @@ function writeDaemonSignal(
       resolvedPath = backup;
       sessionTranscriptPaths.set(sessionId, backup);
     } else {
-      const preservedFallback = resolvePreservedConversationTranscriptPath(sessionId);
+      const preservedFallback = getPreservedConversationFallback();
       if (preservedFallback) {
         resolvedPath = preservedFallback;
         sessionTranscriptPaths.set(sessionId, preservedFallback);
@@ -2765,7 +2772,7 @@ function writeDaemonSignal(
   }
 
   const usePreservedFallbackIfAvailable = (reason: string): boolean => {
-    const preserved = resolvePreservedConversationTranscriptPath(sessionId);
+    const preserved = getPreservedConversationFallback();
     if (!preserved) {
       return false;
     }

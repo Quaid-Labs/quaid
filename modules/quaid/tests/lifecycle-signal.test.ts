@@ -649,6 +649,62 @@ describe("lifecycle signal detection", () => {
     }
   });
 
+  it("rejects event-log-shaped preserved files for native transcript fallback", async () => {
+    const baseDir = fs.mkdtempSync(path.join("/tmp", "quaid-oc-preserved-event-log-reject-"));
+    const quaidHome = path.join(baseDir, ".quaid");
+    const visibleHome = path.join(baseDir, "quaid");
+    const openClawConfigPath = path.join(baseDir, ".openclaw", "openclaw.json");
+    fs.mkdirSync(path.dirname(openClawConfigPath), { recursive: true });
+    fs.writeFileSync(
+      openClawConfigPath,
+      JSON.stringify({ agents: { list: [{ id: "main", default: true }] } }),
+      "utf8",
+    );
+    fs.mkdirSync(path.join(quaidHome, "instances", "openclaw-main"), { recursive: true });
+    fs.writeFileSync(
+      path.join(quaidHome, "instances", "openclaw-main", "config.json"),
+      JSON.stringify({ retrieval: { fail_hard: false } }),
+      "utf8",
+    );
+
+    try {
+      vi.stubEnv("HOME", baseDir);
+      vi.stubEnv("QUAID_HOME", quaidHome);
+      vi.stubEnv("QUAID_VISIBLE_HOME", visibleHome);
+      vi.stubEnv("OPENCLAW_CONFIG_PATH", openClawConfigPath);
+      vi.stubEnv("QUAID_INSTANCE", "openclaw-main");
+      vi.resetModules();
+      const isolatedAdapter = await import("../adaptors/openclaw/adapter.js");
+      const isolatedTest = isolatedAdapter.__test;
+      const sessionId = "052c9665-a148-464f-bfda-b502139db588";
+      const prefixPath = path.join(
+        quaidHome,
+        "instances",
+        "openclaw-main",
+        "logs",
+        "quaid",
+        "sessions",
+        "052c9665.jsonl",
+      );
+      fs.mkdirSync(path.dirname(prefixPath), { recursive: true });
+      fs.writeFileSync(
+        prefixPath,
+        [
+          JSON.stringify({ ts: "2026-05-01T19:57:58Z", event: "buffer_write", session_id: sessionId }),
+          JSON.stringify({ ts: "2026-05-01T19:57:59Z", event: "timer_scheduled", session_id: sessionId }),
+        ].join("\n") + "\n",
+        "utf8",
+      );
+
+      expect(isolatedTest.looksLikeQuaidEventLogTranscript(prefixPath)).toBe(true);
+      expect(isolatedTest.resolvePreservedConversationTranscriptPath(sessionId)).toBe("");
+      expect(isolatedTest.writeDaemonSignal(sessionId, "reset", { source: "command:new" })).toBe(null);
+    } finally {
+      vi.unstubAllEnvs();
+      try { fs.rmSync(baseDir, { recursive: true, force: true }); } catch {}
+    }
+  });
+
   it("does not emit daemon signals that point at missing OC transcript files", async () => {
     const baseDir = fs.mkdtempSync(path.join("/tmp", "quaid-oc-missing-transcript-signal-"));
     const quaidHome = path.join(baseDir, ".quaid");
