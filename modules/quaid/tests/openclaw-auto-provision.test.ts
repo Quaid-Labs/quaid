@@ -19,6 +19,8 @@ type LoadedAdapter = {
 
 const childProcessState = vi.hoisted(() => ({
   daemonStartCalls: [] as Array<{ file: string; args: readonly string[]; env: Record<string, string | undefined> }>,
+  daemonStatusCalls: [] as Array<{ file: string; args: readonly string[]; env: Record<string, string | undefined> }>,
+  daemonStatusByInstance: {} as Record<string, boolean[]>,
 }));
 
 vi.mock("node:child_process", async () => {
@@ -34,6 +36,22 @@ vi.mock("node:child_process", async () => {
           env: (options?.env || {}) as Record<string, string | undefined>,
         });
         return "";
+      }
+      if (normalizedArgs[0] === "daemon" && normalizedArgs[1] === "status") {
+        const env = (options?.env || {}) as Record<string, string | undefined>;
+        const instance = String(env.QUAID_INSTANCE || "");
+        childProcessState.daemonStatusCalls.push({
+          file,
+          args: normalizedArgs,
+          env,
+        });
+        const queued = childProcessState.daemonStatusByInstance[instance];
+        const running = Array.isArray(queued) && queued.length > 0 ? Boolean(queued.shift()) : true;
+        return JSON.stringify({
+          running,
+          pid: running ? 12345 : null,
+          instance,
+        });
       }
       return actual.execFileSync(file, args as any, options);
     }) as typeof actual.execFileSync,
@@ -74,6 +92,8 @@ async function loadAdapterWithHomes(hiddenHome: string, visibleHome: string, ope
 
 afterEach(() => {
   childProcessState.daemonStartCalls = [];
+  childProcessState.daemonStatusCalls = [];
+  childProcessState.daemonStatusByInstance = {};
   vi.clearAllTimers();
   vi.useRealTimers();
   vi.restoreAllMocks();
@@ -250,6 +270,7 @@ describe("openclaw auto-provision", () => {
     expect(beforeAgentStartRegisterHookCall).toBeTruthy();
 
     const beforeAgentStartHandler = beforeAgentStartCall?.[1];
+    childProcessState.daemonStatusByInstance["openclaw-m13test"] = [false, true];
     await beforeAgentStartHandler(
       { prependContext: "" },
       {
@@ -273,6 +294,16 @@ describe("openclaw auto-provision", () => {
         (call) => String(call.env?.QUAID_INSTANCE || "") === "openclaw-m13test",
       ),
     ).toBe(true);
+    const m13DaemonStarts = childProcessState.daemonStartCalls.filter(
+      (call) => String(call.env?.QUAID_INSTANCE || "") === "openclaw-m13test",
+    );
+    expect(m13DaemonStarts).toHaveLength(2);
+    expect(String(m13DaemonStarts[1]?.env?.QUAID_SUPERVISOR_DISABLE || "")).toBe("1");
+    expect(
+      childProcessState.daemonStatusCalls.filter(
+        (call) => String(call.env?.QUAID_INSTANCE || "") === "openclaw-m13test",
+      ),
+    ).toHaveLength(2);
 
     const beforePromptBuildCall = api.on.mock.calls.find((call: any[]) =>
       call?.[0] === "before_prompt_build" && call?.[2]?.name === "memory-injection-prompt-build"

@@ -2865,24 +2865,106 @@ function writeDaemonSignal(
   }
 }
 
+type DaemonStatusProbe = {
+  running: boolean;
+  pid?: number | null;
+  raw?: string;
+};
+
+function daemonCommandEnv(
+  instanceId: string,
+  extra: Record<string, string | undefined> = {},
+): Record<string, string | undefined> {
+  return buildPythonEnv({
+    QUAID_INSTANCE: String(instanceId || "").trim() || undefined,
+    ...extra,
+  });
+}
+
+function readDaemonStatus(instanceId: string): DaemonStatusProbe {
+  const target = String(instanceId || _QUAID_INSTANCE || "default").trim() || "default";
+  const quaidBin = path.join(PYTHON_PLUGIN_ROOT, "quaid");
+  const raw = execFileSync(quaidBin, ["daemon", "status"], {
+    encoding: "utf-8",
+    timeout: 5_000,
+    env: daemonCommandEnv(target),
+  });
+  const parsed = JSON.parse(String(raw || "{}")) as Record<string, unknown>;
+  const pid = Number(parsed.pid);
+  return {
+    running: Boolean(parsed.running),
+    pid: Number.isFinite(pid) && pid > 0 ? pid : null,
+    raw: String(raw || ""),
+  };
+}
+
+function startDaemonForInstance(
+  instanceId: string,
+  extraEnv: Record<string, string | undefined> = {},
+): string {
+  const target = String(instanceId || _QUAID_INSTANCE || "default").trim() || "default";
+  const quaidBin = path.join(PYTHON_PLUGIN_ROOT, "quaid");
+  return execFileSync(quaidBin, ["daemon", "start"], {
+    encoding: "utf-8",
+    timeout: 10_000,
+    env: daemonCommandEnv(target, extraEnv),
+  });
+}
+
 function ensureDaemonAlive(instanceId: string = _QUAID_INSTANCE): void {
+  const target = String(instanceId || _QUAID_INSTANCE || "default").trim() || "default";
   try {
-    const quaidBin = path.join(PYTHON_PLUGIN_ROOT, "quaid");
-    execFileSync(quaidBin, ["daemon", "start"], {
-      encoding: "utf-8",
-      timeout: 10_000,
-      env: buildPythonEnv({ QUAID_INSTANCE: String(instanceId || "").trim() || undefined }),
+    const startOutput = startDaemonForInstance(target);
+    const status = readDaemonStatus(target);
+    if (status.running) {
+      writeHookTrace("daemon.ensure_alive", {
+        instance_id: target,
+        status: "running",
+        pid: status.pid ?? null,
+      });
+      return;
+    }
+    writeHookTrace("daemon.ensure_alive.supervisor_miss", {
+      instance_id: target,
+      start_output: String(startOutput || "").trim().slice(0, 240),
     });
+
+    const directOutput = startDaemonForInstance(target, {
+      QUAID_SUPERVISOR_DISABLE: "1",
+      QUAID_INSTANCE_MONITOR_WAIT_SECONDS: "0.5",
+    });
+    const directStatus = readDaemonStatus(target);
+    if (directStatus.running) {
+      writeHookTrace("daemon.ensure_alive", {
+        instance_id: target,
+        status: "direct_fallback_running",
+        pid: directStatus.pid ?? null,
+      });
+      return;
+    }
+    const message = `[quaid][daemon] ensure_alive failed for ${target}: daemon start returned without a running pid`;
+    writeHookTrace("daemon.ensure_alive.failed", {
+      instance_id: target,
+      start_output: String(startOutput || "").trim().slice(0, 240),
+      direct_output: String(directOutput || "").trim().slice(0, 240),
+      status: directStatus.raw?.slice(0, 500) || "",
+    });
+    if (isFailHardEnabled()) {
+      throw new Error(message);
+    }
+    console.warn(message);
   } catch (err: unknown) {
-    const target = String(instanceId || _QUAID_INSTANCE || "default").trim() || "default";
     console.warn(`[quaid][daemon] ensure_alive failed for ${target}: ${String((err as Error)?.message || err)}`);
+    if (isFailHardEnabled()) {
+      throw err;
+    }
   }
 }
 
 function pingDaemonAliveIfNeeded(instanceId: string = _QUAID_INSTANCE, nowMs: number = Date.now()): void {
   const target = String(instanceId || _QUAID_INSTANCE || "default").trim() || "default";
   const lastCheckMs = _lastDaemonAliveCheckMsByInstance.get(target) || 0;
-  if (nowMs - lastCheckMs <= _DAEMON_ALIVE_CHECK_INTERVAL_MS) {
+  if (lastCheckMs > 0 && nowMs - lastCheckMs <= _DAEMON_ALIVE_CHECK_INTERVAL_MS) {
     return;
   }
   _lastDaemonAliveCheckMsByInstance.set(target, nowMs);
