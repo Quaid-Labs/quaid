@@ -710,7 +710,7 @@ function deliverDeferredNoticesViaChannel(agentLabel: string, reason: string): n
     }
     let payload: { delivered?: number; items?: Array<{ kind?: string }> } = {};
     try {
-      payload = JSON.parse(String(result.stdout || "{}"));
+      payload = parseDeferredNoticePayload(String(result.stdout || ""));
     } catch (parseErr: unknown) {
       writeHookTrace("deferred_notice.delivery_parse_error", {
         instance_id: instanceId,
@@ -742,6 +742,39 @@ function deliverDeferredNoticesViaChannel(agentLabel: string, reason: string): n
       error: String((err as Error)?.message || err),
     });
     return 0;
+  }
+}
+
+function parseDeferredNoticePayload(stdout: string): { delivered?: number; items?: Array<{ kind?: string }> } {
+  const raw = String(stdout || "").trim();
+  if (!raw) {
+    return {};
+  }
+  try {
+    return JSON.parse(raw);
+  } catch (firstErr) {
+    const lines = raw.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    for (let index = lines.length - 1; index >= 0; index -= 1) {
+      const line = lines[index];
+      if (!line.startsWith("{")) {
+        continue;
+      }
+      try {
+        return JSON.parse(line);
+      } catch {
+        // Keep looking; OC notify wrappers can print route diagnostics before JSON.
+      }
+    }
+    const start = raw.indexOf("{");
+    const end = raw.lastIndexOf("}");
+    if (start >= 0 && end > start) {
+      try {
+        return JSON.parse(raw.slice(start, end + 1));
+      } catch {
+        // Preserve the original parse error; trace output already includes stdout.
+      }
+    }
+    throw firstErr;
   }
 }
 
@@ -8515,5 +8548,6 @@ export const __test = {
   resolveLifecycleFlushSessionCandidate,
   buildPreinjectEvidenceEntry,
   appendPreinjectEvidenceLog,
+  parseDeferredNoticePayload,
   NEW_KEY_FALLBACK_DELAY_MS,
 };

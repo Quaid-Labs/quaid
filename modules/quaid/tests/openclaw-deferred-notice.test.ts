@@ -155,6 +155,18 @@ afterEach(() => {
 });
 
 describe("openclaw deferred notices", () => {
+  it("parses deferred delivery JSON after notify route diagnostics", async () => {
+    vi.resetModules();
+    const module = await import("../adaptors/openclaw/adapter.js");
+    const payload = module.__test.parseDeferredNoticePayload(
+      "[notify] Sent to matrix:room:main\n" +
+        JSON.stringify({ delivered: 1, items: [{ kind: "janitor_health" }] }),
+    );
+
+    expect(payload.delivered).toBe(1);
+    expect(payload.items?.[0]?.kind).toBe("janitor_health");
+  });
+
   it("delivers deferred notices through before_prompt_build relay context", async () => {
     vi.useFakeTimers();
     vi.stubEnv("QUAID_DISABLE_NOTIFICATIONS", "1");

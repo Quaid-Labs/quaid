@@ -7907,6 +7907,94 @@ class TestRollingExtraction:
             }
         ]
 
+    def test_flushes_buffered_semantic_tail_when_source_cursor_has_internal_alias_boundary(
+        self, monkeypatch, tmp_path
+    ):
+        """A CDX rollout source cursor should flush when its stale internal alias proves a boundary."""
+        instance_id = os.environ.get("QUAID_INSTANCE", "pytest-runner")
+        short_id = "019de72f-3d06-7b81-a2c2-032cf6cb4569"
+        rollout_id = f"rollout-2026-05-02T05-35-25-{short_id}"
+        transcript = tmp_path / f"{rollout_id}.jsonl"
+        transcript.write_text(
+            '{"type":"event_msg","payload":{"type":"user_message","message":"The reading chair has a brass desk lamp."}}\n'
+            '{"type":"event_msg","payload":{"type":"agent_message","message":"Noted."}}\n',
+            encoding="utf-8",
+        )
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", instance_id)
+        source_key = extraction_daemon._signal_source_cursor_key(rollout_id, str(transcript))
+        extraction_daemon.write_cursor(
+            rollout_id,
+            1,
+            str(transcript),
+            source_key=source_key,
+            internal=False,
+        )
+        extraction_daemon.write_cursor(short_id, 1, str(transcript), internal=True)
+
+        rolling_dir = tmp_path / "instances" / instance_id / "data" / "rolling-extraction"
+        rolling_dir.mkdir(parents=True, exist_ok=True)
+        (rolling_dir / f"{rollout_id}.json").write_text(
+            json.dumps({
+                "session_id": rollout_id,
+                "transcript_path": str(transcript),
+                "processed_line_offset": 2,
+                "buffered_line_offset": 2,
+                "semantic_buffer": "User: The reading chair has a brass desk lamp.\n\nAssistant: Noted.",
+                "semantic_buffer_tokens": 14,
+                "raw_facts": [],
+                "raw_snippets": {},
+                "raw_journal": {},
+                "raw_project_logs": {},
+            }),
+            encoding="utf-8",
+        )
+
+        now = 1_700_000_000.0
+        os.utime(transcript, (now - 30, now - 30))
+
+        captured = []
+        class _FakeAdapter(_OwnedTestAdapterMixin):
+            def parse_session_jsonl(self, path):
+                messages = []
+                for raw in path.read_text(encoding="utf-8").splitlines():
+                    payload = json.loads(raw)
+                    event_payload = payload.get("payload", {})
+                    message = event_payload.get("message")
+                    if message:
+                        role = "Assistant" if event_payload.get("type") == "agent_message" else "User"
+                        messages.append(f"{role}: {message}")
+                return "\n\n".join(messages)
+
+        monkeypatch.setattr(extraction_daemon.time, "time", lambda: now)
+        monkeypatch.setattr(extraction_daemon, "_read_installed_at", lambda: now - 7200)
+        monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
+        monkeypatch.setattr(extraction_daemon, "_load_runtime_adapter", lambda: _FakeAdapter())
+        monkeypatch.setattr(
+            extraction_daemon,
+            "write_signal",
+            lambda signal_type, session_id, transcript_path, **kwargs: captured.append(
+                {
+                    "signal_type": signal_type,
+                    "session_id": session_id,
+                    "transcript_path": transcript_path,
+                    "meta": kwargs.get("meta", {}),
+                }
+            ),
+        )
+
+        extraction_daemon.check_idle_sessions(timeout_minutes=30)
+
+        assert captured == [
+            {
+                "signal_type": "session_end",
+                "session_id": rollout_id,
+                "transcript_path": str(transcript),
+                "meta": {"reason": "shadowed_internal_alias_boundary"},
+            }
+        ]
+
     def test_does_not_flush_cursor_end_staged_payload_without_newer_session(self, monkeypatch, tmp_path):
         """A cursor-end staged payload alone must not flush without explicit rollover evidence."""
         instance_id = os.environ.get("QUAID_INSTANCE", "pytest-runner")

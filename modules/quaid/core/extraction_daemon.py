@@ -1355,6 +1355,43 @@ def _cursor_shadowed_by_source_cursor(
     return True
 
 
+def _source_cursor_has_shadowed_internal_alias(
+    *,
+    source_key: str,
+    transcript_path: str,
+    source_cursor_data: Dict[str, Any],
+) -> bool:
+    """Return True when an internal alias cursor proves a source-key rollover boundary."""
+    if not source_key or not transcript_path:
+        return False
+    try:
+        source_offset = int(source_cursor_data.get("line_offset", 0) or 0)
+    except Exception:
+        source_offset = 0
+    for cursor_file in _cursor_dir().glob("*.json"):
+        if cursor_file.stem == source_key:
+            continue
+        try:
+            alias_cursor = json.loads(cursor_file.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        if not bool(alias_cursor.get("internal", False)):
+            continue
+        alias_path = str(alias_cursor.get("transcript_path") or "").strip()
+        if (
+            _canonicalize_transcript_source_path(alias_path)
+            != _canonicalize_transcript_source_path(transcript_path)
+        ):
+            continue
+        try:
+            alias_offset = int(alias_cursor.get("line_offset", 0) or 0)
+        except Exception:
+            alias_offset = 0
+        if source_offset >= alias_offset and not (source_offset == alias_offset == 0):
+            return True
+    return False
+
+
 def _pending_signal_source_keys(signals: List[Dict[str, Any]]) -> set[str]:
     keys: set[str] = set()
     for signal in signals:
@@ -5416,15 +5453,26 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
                 float(other["mtime"]) > mtime and str(other["session_id"]) != session_id
                 for other in cursor_rows
             )
-            if newer_session_exists:
+            internal_alias_boundary = _source_cursor_has_shadowed_internal_alias(
+                source_key=source_key,
+                transcript_path=transcript_path,
+                source_cursor_data=row_cursor_data,
+            )
+            if newer_session_exists or internal_alias_boundary:
                 logger.info(
-                    "session %s has pending rolling content and newer session activity detected, generating session_end flush",
+                    "session %s has pending rolling content and %s detected, generating session_end flush",
                     session_id,
+                    "newer session activity" if newer_session_exists else "shadowed internal alias boundary",
                 )
                 write_signal(
                     signal_type="session_end",
                     session_id=session_id,
                     transcript_path=transcript_path,
+                    meta=(
+                        {"reason": "shadowed_internal_alias_boundary"}
+                        if internal_alias_boundary and not newer_session_exists
+                        else None
+                    ),
                 )
                 continue
 
@@ -5465,7 +5513,7 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
         # Check if we already have a pending signal for this session
         if session_id in pending_session_ids:
             continue
-        source_key = _signal_source_cursor_key(session_id, transcript_path, cursor_data=data)
+        source_key = _signal_source_cursor_key(session_id, transcript_path, cursor_data=row_cursor_data)
         if source_key in pending_source_keys:
             continue
 
