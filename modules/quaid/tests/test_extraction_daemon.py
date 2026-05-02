@@ -3126,6 +3126,42 @@ def test_check_idle_sessions_timeout_signal_carries_compaction_metadata(monkeypa
     ]
 
 
+def test_check_idle_sessions_does_not_retimeout_lifecycle_closed_cursor(monkeypatch, tmp_path):
+    transcript_path = tmp_path / "session.jsonl"
+    transcript_path.write_text(
+        '{"role":"user","content":"hello"}\n{"role":"assistant","content":"hi"}\n',
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "pytest-runner")
+    extraction_daemon.write_cursor(
+        "sess-closed",
+        2,
+        str(transcript_path),
+        processed_signal_type="session_end",
+    )
+
+    now = 1_700_000_000.0
+    old_mtime = now - (10 * 60)
+    os.utime(transcript_path, (old_mtime, old_mtime))
+
+    captured = []
+    monkeypatch.setattr(extraction_daemon.time, "time", lambda: now)
+    monkeypatch.setattr(extraction_daemon, "_read_installed_at", lambda: now - 7200)
+    monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
+    monkeypatch.setattr(
+        extraction_daemon,
+        "write_signal",
+        lambda *args, **kwargs: captured.append((args, kwargs)),
+    )
+
+    extraction_daemon.check_idle_sessions(timeout_minutes=1)
+
+    assert captured == []
+    assert extraction_daemon.read_cursor("sess-closed")["processed_signal_type"] == "session_end"
+
+
 def test_check_idle_sessions_treats_file_growth_past_eof_cursor_as_new_content(monkeypatch, tmp_path):
     transcript_path = tmp_path / "session.jsonl"
     transcript_path.write_text(

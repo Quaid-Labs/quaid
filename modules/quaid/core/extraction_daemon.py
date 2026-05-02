@@ -894,6 +894,7 @@ def _finalize_no_payload_signal(
             int(next_cursor_offset),
             transcript_path,
             source_key=cursor_key,
+            processed_signal_type=signal_type,
         )
     if clear_state:
         clear_rolling_state(session_id)
@@ -929,6 +930,7 @@ def _read_cursor_file(cursor_file: Path, fallback_session_id: str) -> Dict[str, 
         "transcript_mtime_ns": 0,
         "transcript_inode": 0,
         "transcript_device": 0,
+        "processed_signal_type": "",
         "cursor_key": cursor_file.stem,
     }
     if not cursor_file.is_file():
@@ -947,6 +949,7 @@ def _read_cursor_file(cursor_file: Path, fallback_session_id: str) -> Dict[str, 
             "transcript_mtime_ns": int(data.get("transcript_mtime_ns", 0) or 0),
             "transcript_inode": int(data.get("transcript_inode", 0) or 0),
             "transcript_device": int(data.get("transcript_device", 0) or 0),
+            "processed_signal_type": str(data.get("processed_signal_type") or ""),
             "cursor_key": cursor_key or cursor_file.stem,
         }
     except (json.JSONDecodeError, ValueError, OSError):
@@ -1152,6 +1155,7 @@ def write_cursor(
     *,
     internal: bool = False,
     source_key: Optional[str] = None,
+    processed_signal_type: str = "",
 ) -> None:
     """Write extraction cursor after processing."""
     session_id = _validate_session_id(session_id)
@@ -1214,6 +1218,9 @@ def write_cursor(
         "transcript_device": int(current_stat.get("device", 0) or 0),
         "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
+    processed_signal_type = str(processed_signal_type or "").strip()
+    if processed_signal_type:
+        payload["processed_signal_type"] = processed_signal_type
     try:
         _atomic_write(cursor_file, json.dumps(payload))
     except OSError as e:
@@ -4792,6 +4799,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                     buffered_line_offset,
                     transcript_path,
                     source_key=lock_owner_key,
+                    processed_signal_type=signal_type,
                 )
                 mark_signal_processed(signal_data)
                 _cleanup_daemon_transcript_snapshot_path(transcript_path)
@@ -4814,6 +4822,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                     buffered_line_offset,
                     transcript_path,
                     source_key=lock_owner_key,
+                    processed_signal_type=signal_type,
                 )
                 if str(signal_meta.get("reason") or "") == "continued_chunk_budget":
                     flush_transcript_path = (
@@ -4853,6 +4862,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                 buffered_line_offset,
                 transcript_path,
                 source_key=lock_owner_key,
+                processed_signal_type=signal_type,
             )
             mark_signal_processed(signal_data)
             has_remaining_tail = buffered_line_offset > cursor_offset and total_lines > buffered_line_offset
@@ -5121,6 +5131,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             final_cursor_offset,
             transcript_path,
             source_key=lock_owner_key,
+            processed_signal_type=signal_type,
         )
         if staged_payload_sweep_signal and _semantic_buffer_has_content(staged_state):
             write_rolling_state(session_id, clear_staged_payload_from_state(staged_state))
@@ -5576,6 +5587,10 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
                 continue
 
         if cursor_at_end and not has_flushable_rolling_content:
+            terminal_signal_type = str(row_cursor_data.get("processed_signal_type") or "").strip()
+            if terminal_signal_type in ("session_end", "timeout", "reset", "compaction"):
+                _cursor_end_timeout_fired.add(session_id)
+                continue
             # All content already extracted via rolling, but session may be idle without /exit.
             # Fire timeout signal for genuinely idle sessions.
             # Only fires once per session — _cursor_end_timeout_fired prevents repeated signals
