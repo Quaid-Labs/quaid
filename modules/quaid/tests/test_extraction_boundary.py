@@ -28,7 +28,12 @@ def test_only_daemon_calls_run_extract_from_transcript():
     }
     violations: list[str] = []
 
-    for dirpath, dirnames, filenames in os.walk(repo_root, topdown=True):
+    def on_walk_error(exc: OSError) -> None:
+        if isinstance(exc, FileNotFoundError):
+            return
+        raise exc
+
+    for dirpath, dirnames, filenames in os.walk(repo_root, topdown=True, onerror=on_walk_error):
         dirnames[:] = [name for name in dirnames if name not in ignored_dirs]
         py_files = (Path(dirpath) / name for name in filenames if name.endswith(".py"))
         for py_file in py_files:
