@@ -1441,12 +1441,23 @@ def _retire_shadowed_internal_alias_rolling_state(
                     owned_offset,
                 )
             else:
-                logger.warning(
-                    "retained internal alias rolling state %s because buffered offset %d is ahead "
-                    "of source session %s offset %d",
+                merged_state = _merge_shadowed_internal_alias_rolling_state(
+                    source_session_id=source_session_id,
+                    source_state=source_state,
+                    alias_key=alias_key,
+                    alias_state=alias_state,
+                    transcript_path=transcript_path,
+                )
+                write_rolling_state(source_session_id, merged_state)
+                clear_rolling_state(alias_key)
+                source_state = read_rolling_state(source_session_id)
+                source_has_pending = _rolling_state_has_pending_content(source_state)
+                logger.info(
+                    "merged ahead rolling state for internal alias %s into source session %s "
+                    "(alias_offset=%d source_offset=%d)",
                     alias_key,
-                    alias_buffered_offset,
                     source_session_id,
+                    alias_buffered_offset,
                     owned_offset,
                 )
             continue
@@ -1464,6 +1475,101 @@ def _retire_shadowed_internal_alias_rolling_state(
             alias_key,
             source_session_id,
         )
+
+
+def _merge_shadowed_internal_alias_rolling_state(
+    *,
+    source_session_id: str,
+    source_state: Dict[str, Any],
+    alias_key: str,
+    alias_state: Dict[str, Any],
+    transcript_path: str,
+) -> Dict[str, Any]:
+    """Merge alias rolling state into source state without leaving an adoptable alias."""
+    merged = dict(source_state or {})
+    merged["session_id"] = source_session_id
+    merged["transcript_path"] = str(transcript_path or alias_state.get("transcript_path") or "")
+    merged["merged_from_alias_session_id"] = alias_key
+
+    source_text = str((source_state or {}).get("semantic_buffer", "") or "").strip()
+    alias_text = str((alias_state or {}).get("semantic_buffer", "") or "").strip()
+    if alias_text:
+        if not source_text:
+            semantic_buffer = alias_text
+        elif alias_text == source_text or alias_text in source_text:
+            semantic_buffer = source_text
+        elif source_text in alias_text:
+            semantic_buffer = alias_text
+        else:
+            semantic_buffer = f"{source_text}\n\n{alias_text}"
+        merged["semantic_buffer"] = semantic_buffer
+        try:
+            from lib.tokens import estimate_tokens
+            merged["semantic_buffer_tokens"] = estimate_tokens(semantic_buffer) if semantic_buffer else 0
+        except Exception:
+            merged["semantic_buffer_tokens"] = len(semantic_buffer.split()) if semantic_buffer else 0
+
+    for key in ("processed_line_offset", "buffered_line_offset"):
+        merged[key] = max(
+            int((source_state or {}).get(key, 0) or 0),
+            int((alias_state or {}).get(key, 0) or 0),
+        )
+
+    merged["carry_facts"] = _merge_unique_dict_rows(
+        list((source_state or {}).get("carry_facts", []) or []),
+        list((alias_state or {}).get("carry_facts", []) or []),
+    )
+    merged["raw_facts"] = _merge_unique_dict_rows(
+        list((source_state or {}).get("raw_facts", []) or []),
+        list((alias_state or {}).get("raw_facts", []) or []),
+    )
+    snippets = dict((source_state or {}).get("raw_snippets", {}) or {})
+    for filename, items in ((alias_state or {}).get("raw_snippets", {}) or {}).items():
+        snippets[str(filename)] = _merge_unique_strings(
+            snippets.get(str(filename), []),
+            list(items or []) if isinstance(items, list) else [],
+        )
+    merged["raw_snippets"] = snippets
+
+    journal = dict((source_state or {}).get("raw_journal", {}) or {})
+    for filename, text in ((alias_state or {}).get("raw_journal", {}) or {}).items():
+        if not isinstance(text, str) or not text.strip():
+            continue
+        if filename in journal and str(journal[filename] or "").strip():
+            if text.strip() not in str(journal[filename]):
+                journal[filename] = f"{str(journal[filename]).strip()}\n\n{text.strip()}"
+        else:
+            journal[filename] = text.strip()
+    merged["raw_journal"] = journal
+
+    project_logs = dict((source_state or {}).get("raw_project_logs", {}) or {})
+    for project_name, items in ((alias_state or {}).get("raw_project_logs", {}) or {}).items():
+        project_logs[str(project_name)] = _merge_project_log_entries(
+            project_logs.get(str(project_name), []),
+            list(items or []) if isinstance(items, list) else [],
+        )
+    merged["raw_project_logs"] = project_logs
+
+    for key in ("rolling_batches", "facts_skipped", "payload_duplicate_facts_collapsed", "carry_duplicate_facts_dropped"):
+        merged[key] = max(
+            int((source_state or {}).get(key, 0) or 0),
+            int((alias_state or {}).get(key, 0) or 0),
+        )
+    return merged
+
+
+def _merge_unique_dict_rows(existing: List[Dict[str, Any]], incoming: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in list(existing or []) + list(incoming or []):
+        if not isinstance(item, dict):
+            continue
+        key = json.dumps(item, sort_keys=True, default=str)
+        if key in seen:
+            continue
+        seen.add(key)
+        rows.append(dict(item))
+    return rows
 
 
 def _cursor_shadowed_by_source_cursor(

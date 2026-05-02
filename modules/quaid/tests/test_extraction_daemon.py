@@ -4998,6 +4998,62 @@ class TestRollingExtraction:
         source_state = extraction_daemon.read_rolling_state(rollout_id)
         assert source_state["semantic_buffer"] == "User: bronze table lamp"
 
+    def test_source_cursor_demote_merges_ahead_alias_rolling_state(self, monkeypatch, tmp_path):
+        transcript_path = tmp_path / "rollout-2026-05-02T05-35-25-019de72f-3d06-7b81-a2c2-032cf6cb4569.jsonl"
+        transcript_path.write_text(
+            '{"type":"event_msg","payload":{"type":"user_message","message":"bronze table lamp"}}\n'
+            '{"type":"event_msg","payload":{"type":"user_message","message":"silver reading shade"}}\n',
+            encoding="utf-8",
+        )
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "rolling-inst")
+        short_id = "019de72f-3d06-7b81-a2c2-032cf6cb4569"
+        rollout_id = f"rollout-2026-05-02T05-35-25-{short_id}"
+        source_key = extraction_daemon._signal_source_cursor_key(rollout_id, str(transcript_path))
+
+        extraction_daemon.write_cursor(short_id, 1, str(transcript_path), internal=True)
+        extraction_daemon.write_rolling_state(
+            rollout_id,
+            {
+                "session_id": rollout_id,
+                "transcript_path": str(transcript_path),
+                "processed_line_offset": 1,
+                "buffered_line_offset": 1,
+                "semantic_buffer": "User: bronze table lamp",
+                "semantic_buffer_tokens": 5,
+                "raw_facts": [],
+            },
+        )
+        extraction_daemon.write_rolling_state(
+            short_id,
+            {
+                "session_id": short_id,
+                "transcript_path": str(transcript_path),
+                "processed_line_offset": 2,
+                "buffered_line_offset": 2,
+                "semantic_buffer": "User: bronze table lamp\n\nUser: silver reading shade",
+                "semantic_buffer_tokens": 9,
+                "raw_facts": [],
+            },
+        )
+
+        extraction_daemon.write_cursor(
+            rollout_id,
+            1,
+            str(transcript_path),
+            internal=False,
+            source_key=source_key,
+        )
+
+        assert not (extraction_daemon._cursor_dir() / f"{short_id}.json").exists()
+        assert not extraction_daemon._rolling_state_path(short_id).exists()
+        source_state = extraction_daemon.read_rolling_state(rollout_id)
+        assert source_state["buffered_line_offset"] == 2
+        assert "bronze table lamp" in source_state["semantic_buffer"]
+        assert "silver reading shade" in source_state["semantic_buffer"]
+        assert source_state["merged_from_alias_session_id"] == short_id
+
     def test_process_signal_rolling_requeues_continuation_when_transcript_tail_remains(self, monkeypatch, tmp_path):
         import sys
         import types
