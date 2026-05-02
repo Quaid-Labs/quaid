@@ -181,7 +181,8 @@ describe("install daemon policy", () => {
     expect(preflightStart).toBeGreaterThan(-1);
     expect(preflightEnd).toBeGreaterThan(preflightStart);
     const preflightBlock = setupText.slice(preflightStart, preflightEnd);
-    expect(preflightBlock).toContain('const gatewayHealthCode = _gatewayHttpCode("/health", "GET", null);');
+    expect(preflightBlock).toContain('let gatewayHealthCode = _gatewayHttpCode("/health", "GET", null);');
+    expect(preflightBlock).toContain("await waitForGatewayWarmup(60_000)");
     expect(preflightBlock).not.toContain('["status"]');
     expect(preflightBlock).not.toContain('["gateway", "probe"]');
     expect(preflightBlock).not.toContain("runCliWithTimeout(bin, args, 8_000)");

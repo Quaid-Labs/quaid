@@ -3272,7 +3272,13 @@ async function step1_preflight() {
 
     // --- Gateway running ---
     s.message("Checking OpenClaw gateway status...");
-    const gatewayHealthCode = _gatewayHttpCode("/health", "GET", null);
+    let gatewayHealthCode = _gatewayHttpCode("/health", "GET", null);
+    if (gatewayHealthCode !== 200) {
+      s.message("Waiting for OpenClaw gateway to come online...");
+      if (await waitForGatewayWarmup(60_000)) {
+        gatewayHealthCode = _gatewayHttpCode("/health", "GET", null);
+      }
+    }
     if (gatewayHealthCode !== 200) {
       s.stop(C.red("Gateway offline"), 2);
       note(
