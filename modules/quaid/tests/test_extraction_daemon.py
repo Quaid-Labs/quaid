@@ -7076,6 +7076,8 @@ class TestRollingExtraction:
                 return "unused when semantic buffer is present"
 
         fake_adapter_mod.get_adapter = lambda: _FakeAdapter()
+        fake_adapter_mod.quaid_projects_dir = lambda home: Path(home) / "projects"
+        fake_adapter_mod.quaid_tracking_dir = lambda home: Path(home) / ".git-tracking"
         sys.modules["lib.adapter"] = fake_adapter_mod
 
         import core.docs_updater_hook as docs_updater_mod
@@ -7171,6 +7173,14 @@ class TestRollingExtraction:
                 {"event": event, "session_id": session_id, **data}
             ),
         )
+        monkeypatch.setattr(extraction_daemon, "_warm_payload_embeddings", lambda facts: {
+            "requested": len(facts),
+            "unique": len(facts),
+            "cache_hits": 0,
+            "warmed": len(facts),
+            "failed": 0,
+            "skipped_empty": 0,
+        })
 
         try:
             extraction_daemon.write_signal(
@@ -7371,6 +7381,14 @@ class TestRollingExtraction:
                 {"event": event, "session_id": session_id, **data}
             ),
         )
+        monkeypatch.setattr(extraction_daemon, "_warm_payload_embeddings", lambda facts: {
+            "requested": len(facts),
+            "unique": len(facts),
+            "cache_hits": 0,
+            "warmed": len(facts),
+            "failed": 0,
+            "skipped_empty": 0,
+        })
 
         try:
             extraction_daemon.write_signal(
