@@ -7937,7 +7937,7 @@ class TestRollingExtraction:
         ]
 
     def test_shadowed_internal_alias_boundary_preserves_semantic_buffer_without_signal(
-        self, monkeypatch, tmp_path
+        self, monkeypatch, tmp_path, caplog
     ):
         """A stale CDX alias boundary must not synthesize a lifecycle DB flush."""
         instance_id = os.environ.get("QUAID_INSTANCE", "pytest-runner")
@@ -8000,6 +8000,7 @@ class TestRollingExtraction:
         monkeypatch.setattr(extraction_daemon, "_read_installed_at", lambda: now - 7200)
         monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
         monkeypatch.setattr(extraction_daemon, "_load_runtime_adapter", lambda: _FakeAdapter())
+        caplog.set_level("ERROR", logger="quaid.daemon")
         monkeypatch.setattr(
             extraction_daemon,
             "write_signal",
@@ -8019,6 +8020,11 @@ class TestRollingExtraction:
         state = extraction_daemon.read_rolling_state(rollout_id)
         assert "brass desk lamp" in state["semantic_buffer"]
         assert state["buffered_line_offset"] == 2
+        assert "CURSOR_HEAL_REQUIRED STUCK CURSOR HEAL" in caplog.text
+        assert f"session {rollout_id}" in caplog.text
+        assert "source_offset=1" in caplog.text
+        assert "alias_offset=1" in caplog.text
+        assert "recovery path" in caplog.text
 
     def test_does_not_flush_cursor_end_staged_payload_without_newer_session(self, monkeypatch, tmp_path):
         """A cursor-end staged payload alone must not flush without explicit rollover evidence."""

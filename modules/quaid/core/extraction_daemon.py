@@ -1412,6 +1412,7 @@ def _source_cursor_has_shadowed_internal_alias(
     source_key: str,
     transcript_path: str,
     source_cursor_data: Dict[str, Any],
+    details: Optional[Dict[str, Any]] = None,
 ) -> bool:
     """Return True when an internal alias cursor proves a source-key rollover boundary."""
     if not source_key or not transcript_path:
@@ -1446,6 +1447,14 @@ def _source_cursor_has_shadowed_internal_alias(
         # CDX sibling rollouts create an internal short-id alias once the
         # source cursor catches up; fresh zero-offset aliases are not a boundary.
         if source_offset >= alias_offset and not (source_offset == alias_offset == 0):
+            if details is not None:
+                details.update({
+                    "alias_cursor": cursor_file.name,
+                    "alias_session_id": str(alias_cursor.get("session_id") or cursor_file.stem),
+                    "alias_offset": alias_offset,
+                    "alias_updated_at": str(alias_cursor.get("updated_at") or ""),
+                    "source_offset": source_offset,
+                })
             return True
     return False
 
@@ -5513,10 +5522,12 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
                 float(other["mtime"]) > mtime and str(other["session_id"]) != session_id
                 for other in cursor_rows
             )
+            alias_boundary_details: Dict[str, Any] = {}
             internal_alias_boundary = _source_cursor_has_shadowed_internal_alias(
                 source_key=source_key,
                 transcript_path=transcript_path,
                 source_cursor_data=row_cursor_data,
+                details=alias_boundary_details,
             )
             if newer_session_exists:
                 logger.info(
@@ -5530,10 +5541,23 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
                 )
                 continue
             if internal_alias_boundary:
-                logger.info(
-                    "session %s has pending rolling content and shadowed internal alias boundary; "
-                    "preserving semantic buffer until a real lifecycle or timeout boundary",
+                logger.error(
+                    "CURSOR_HEAL_REQUIRED STUCK CURSOR HEAL: session %s source_key=%s "
+                    "transcript_path=%s source_offset=%s alias_cursor=%s "
+                    "alias_session_id=%s alias_offset=%s alias_updated_at=%s "
+                    "upstream_reason=internal alias cursor was marked internal=true "
+                    "from earlier startup/maintenance-only classification; source cursor now "
+                    "owns non-internal content. This is a recovery path; real sibling init "
+                    "or lifecycle closure should have prevented this. Preserving semantic "
+                    "buffer until a real lifecycle or timeout boundary.",
                     session_id,
+                    source_key,
+                    transcript_path,
+                    alias_boundary_details.get("source_offset", ""),
+                    alias_boundary_details.get("alias_cursor", ""),
+                    alias_boundary_details.get("alias_session_id", ""),
+                    alias_boundary_details.get("alias_offset", ""),
+                    alias_boundary_details.get("alias_updated_at", ""),
                 )
                 continue
 
