@@ -987,44 +987,32 @@ class TestCreateEdgeAtomicity:
         assert node_count == 0
         assert edge_count == 0
 
-    def test_create_edge_vec_upsert_warns_when_fail_hard_disabled(self, tmp_path, caplog):
+    def test_create_edge_create_missing_skips_structural_entity_embeddings(self, tmp_path):
         from datastore.memorydb.memory_graph import create_edge
 
-        graph, _ = _make_graph(tmp_path, "create_edge_vec_warn.db")
-        caplog.set_level("WARNING")
+        graph, _ = _make_graph(tmp_path, "create_edge_structural_no_embed.db")
 
         with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
-             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
              patch("datastore.memorydb.memory_graph._lib_has_vec", return_value=True), \
-             patch("datastore.memorydb.memory_graph._is_fail_hard_mode", return_value=False), \
-             patch.object(graph, "_ensure_vec_table", side_effect=RuntimeError("vec unavailable")):
+             patch.object(graph, "_ensure_vec_table", side_effect=AssertionError("vec upsert should not run")), \
+             patch.object(graph, "get_embedding", side_effect=AssertionError("embedding should not run")):
             result = create_edge(
-                subject_name="Alice Example",
-                relation="friend_of",
-                object_name="Bob Example",
+                subject_name="Rachel",
+                relation="parent_of",
+                object_name="Ethan",
                 owner_id="quaid",
             )
 
         assert result["status"] == "created"
-        assert "failed vec_nodes upsert" in caplog.text
-
-    def test_create_edge_vec_upsert_raises_when_fail_hard_enabled(self, tmp_path):
-        from datastore.memorydb.memory_graph import create_edge
-
-        graph, _ = _make_graph(tmp_path, "create_edge_vec_failhard.db")
-
-        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
-             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
-             patch("datastore.memorydb.memory_graph._lib_has_vec", return_value=True), \
-             patch("datastore.memorydb.memory_graph._is_fail_hard_mode", return_value=True), \
-             patch.object(graph, "_ensure_vec_table", side_effect=RuntimeError("vec unavailable")):
-            with pytest.raises(RuntimeError, match="Vector index upsert failed during create_edge"):
-                create_edge(
-                    subject_name="Alice Example",
-                    relation="friend_of",
-                    object_name="Bob Example",
-                    owner_id="quaid",
-                )
+        assert result["subject_created"] is True
+        assert result["object_created"] is True
+        with graph._get_conn() as conn:
+            rows = conn.execute(
+                "SELECT name, embedding FROM nodes WHERE name IN (?, ?) ORDER BY name",
+                ("Ethan", "Rachel"),
+            ).fetchall()
+        assert [row["name"] for row in rows] == ["Ethan", "Rachel"]
+        assert all(row["embedding"] is None for row in rows)
 
     def test_create_edge_rejects_sentence_like_entity_labels(self, tmp_path):
         from datastore.memorydb.memory_graph import create_edge

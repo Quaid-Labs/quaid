@@ -15374,11 +15374,8 @@ def create_edge(
         return None
 
     def _insert_entity(conn: sqlite3.Connection, node: Node) -> None:
-        if not node.embedding:
-            embed_text = node.name
-            if node.attributes:
-                embed_text += " " + " ".join(str(v) for v in node.attributes.values() if v)
-            node.embedding = graph.get_embedding(embed_text)
+        # create_edge-created entities are structural graph anchors resolved by
+        # exact name traversal; do not block edge writes on embedding latency.
         if not node.content_hash:
             node.content_hash = content_hash(node.name)
         now_iso = _now_iso()
@@ -15425,24 +15422,6 @@ def create_edge(
             node.last_confirmed_at,
             node.keywords,
         ))
-        if node.embedding and _lib_has_vec():
-            packed = graph._pack_embedding(node.embedding)
-            try:
-                graph._ensure_vec_table(conn, node.embedding)
-                conn.execute(
-                    "INSERT OR REPLACE INTO vec_nodes(node_id, embedding) VALUES (?, ?)",
-                    (node.id, packed),
-                )
-            except Exception as exc:
-                logger.warning(
-                    "create_edge inserted entity %s but failed vec_nodes upsert: %s",
-                    node.id,
-                    exc,
-                )
-                if _is_fail_hard_mode():
-                    raise RuntimeError(
-                        "Vector index upsert failed during create_edge while fail-hard mode is enabled"
-                    ) from exc
 
     def _edge_exists(conn: sqlite3.Connection, source_id: str, target_id: str, rel: str) -> bool:
         row = conn.execute(
