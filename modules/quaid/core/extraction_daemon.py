@@ -1230,6 +1230,12 @@ def write_cursor(
                 legacy_file.unlink()
         except OSError:
             pass
+        if not bool(internal):
+            _retire_shadowed_internal_alias_cursors(
+                source_key=cursor_key,
+                transcript_path=transcript_path,
+                source_offset=int(line_offset or 0),
+            )
 
 
 def _canonicalize_transcript_source_path(transcript_path: str) -> str:
@@ -1308,6 +1314,52 @@ def _read_cursor_with_source_compat(session_id: str, source_key: Optional[str]) 
         except TypeError:
             pass
     return read_cursor(session_id)
+
+
+def _retire_shadowed_internal_alias_cursors(
+    *,
+    source_key: str,
+    transcript_path: str,
+    source_offset: int,
+) -> None:
+    """Remove stale internal aliases once a source-key cursor owns real content."""
+    if not source_key or not transcript_path or source_offset <= 0:
+        return
+    try:
+        cursor_files = list(_cursor_dir().glob("*.json"))
+    except OSError:
+        return
+    for cursor_file in cursor_files:
+        if cursor_file.stem == source_key:
+            continue
+        try:
+            alias_cursor = json.loads(cursor_file.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        if not bool(alias_cursor.get("internal", False)):
+            continue
+        alias_path = str(alias_cursor.get("transcript_path") or "").strip()
+        if (
+            _canonicalize_transcript_source_path(alias_path)
+            != _canonicalize_transcript_source_path(transcript_path)
+        ):
+            continue
+        try:
+            alias_offset = int(alias_cursor.get("line_offset", 0) or 0)
+        except Exception:
+            alias_offset = 0
+        if source_offset < alias_offset:
+            continue
+        try:
+            cursor_file.unlink()
+            logger.info(
+                "retired internal alias cursor %s after source cursor %s reached offset %d",
+                cursor_file.name,
+                source_key,
+                source_offset,
+            )
+        except OSError:
+            continue
 
 
 def _cursor_shadowed_by_source_cursor(
@@ -5466,21 +5518,22 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
                 transcript_path=transcript_path,
                 source_cursor_data=row_cursor_data,
             )
-            if newer_session_exists or internal_alias_boundary:
+            if newer_session_exists:
                 logger.info(
-                    "session %s has pending rolling content and %s detected, generating session_end flush",
+                    "session %s has pending rolling content and newer session activity detected, generating session_end flush",
                     session_id,
-                    "newer session activity" if newer_session_exists else "shadowed internal alias boundary",
                 )
                 write_signal(
                     signal_type="session_end",
                     session_id=session_id,
                     transcript_path=transcript_path,
-                    meta=(
-                        {"reason": "shadowed_internal_alias_boundary"}
-                        if internal_alias_boundary and not newer_session_exists
-                        else None
-                    ),
+                )
+                continue
+            if internal_alias_boundary:
+                logger.info(
+                    "session %s has pending rolling content and shadowed internal alias boundary; "
+                    "preserving semantic buffer until a real lifecycle or timeout boundary",
+                    session_id,
                 )
                 continue
 

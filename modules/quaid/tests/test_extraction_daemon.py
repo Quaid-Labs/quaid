@@ -4899,6 +4899,35 @@ class TestRollingExtraction:
             cursor_data=cursor_data,
         ) is True
 
+    def test_source_cursor_demote_retires_shadowed_internal_alias(self, monkeypatch, tmp_path):
+        transcript_path = tmp_path / "rollout-2026-05-02T05-35-25-019de72f-3d06-7b81-a2c2-032cf6cb4569.jsonl"
+        transcript_path.write_text(
+            '{"type":"event_msg","payload":{"type":"user_message","message":"first real sibling note"}}\n',
+            encoding="utf-8",
+        )
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "rolling-inst")
+        short_id = "019de72f-3d06-7b81-a2c2-032cf6cb4569"
+        rollout_id = f"rollout-2026-05-02T05-35-25-{short_id}"
+        source_key = extraction_daemon._signal_source_cursor_key(rollout_id, str(transcript_path))
+
+        extraction_daemon.write_cursor(short_id, 1, str(transcript_path), internal=True)
+        alias_file = extraction_daemon._cursor_dir() / f"{short_id}.json"
+        assert alias_file.exists()
+
+        extraction_daemon.write_cursor(
+            rollout_id,
+            1,
+            str(transcript_path),
+            internal=False,
+            source_key=source_key,
+        )
+
+        assert not alias_file.exists()
+        source_cursor = extraction_daemon.read_cursor(rollout_id, source_key=source_key)
+        assert source_cursor["internal"] is False
+
     def test_process_signal_rolling_requeues_continuation_when_transcript_tail_remains(self, monkeypatch, tmp_path):
         import sys
         import types
@@ -7907,10 +7936,10 @@ class TestRollingExtraction:
             }
         ]
 
-    def test_flushes_buffered_semantic_tail_when_source_cursor_has_internal_alias_boundary(
+    def test_shadowed_internal_alias_boundary_preserves_semantic_buffer_without_signal(
         self, monkeypatch, tmp_path
     ):
-        """A CDX rollout source cursor should flush when its stale internal alias proves a boundary."""
+        """A stale CDX alias boundary must not synthesize a lifecycle DB flush."""
         instance_id = os.environ.get("QUAID_INSTANCE", "pytest-runner")
         short_id = "019de72f-3d06-7b81-a2c2-032cf6cb4569"
         rollout_id = f"rollout-2026-05-02T05-35-25-{short_id}"
@@ -7986,14 +8015,10 @@ class TestRollingExtraction:
 
         extraction_daemon.check_idle_sessions(timeout_minutes=30)
 
-        assert captured == [
-            {
-                "signal_type": "session_end",
-                "session_id": rollout_id,
-                "transcript_path": str(transcript),
-                "meta": {"reason": "shadowed_internal_alias_boundary"},
-            }
-        ]
+        assert captured == []
+        state = extraction_daemon.read_rolling_state(rollout_id)
+        assert "brass desk lamp" in state["semantic_buffer"]
+        assert state["buffered_line_offset"] == 2
 
     def test_does_not_flush_cursor_end_staged_payload_without_newer_session(self, monkeypatch, tmp_path):
         """A cursor-end staged payload alone must not flush without explicit rollover evidence."""
