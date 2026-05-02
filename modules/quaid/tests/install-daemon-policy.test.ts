@@ -183,6 +183,7 @@ describe("install daemon policy", () => {
     const preflightBlock = setupText.slice(preflightStart, preflightEnd);
     expect(preflightBlock).toContain('let gatewayHealthCode = _gatewayHttpCode("/health", "GET", null);');
     expect(preflightBlock).toContain("await waitForGatewayWarmup(60_000)");
+    expect(preflightBlock).toContain("_sanitizeOpenClawGatewayBlockingStaleQuaidRegistration()");
     expect(preflightBlock).not.toContain('["status"]');
     expect(preflightBlock).not.toContain('["gateway", "probe"]');
     expect(preflightBlock).not.toContain("runCliWithTimeout(bin, args, 8_000)");
@@ -308,6 +309,19 @@ describe("install daemon policy", () => {
     expect(precleanBlock).not.toContain("_removeOpenClawPluginsAllowQuaid();");
     expect(setupText).not.toContain("function _sanitizeOpenClawMemorySlot()");
     expect(setupText).not.toContain("function _removeOpenClawPluginsAllowQuaid()");
+  });
+
+  it("OpenClaw preflight only clears stale Quaid plugin records when install path is missing", () => {
+    const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+    const setupText = fs.readFileSync(path.join(repoRoot, "setup-quaid.mjs"), "utf8");
+
+    expect(setupText).toContain("function _sanitizeOpenClawGatewayBlockingStaleQuaidRegistration()");
+    expect(setupText).toContain("if (installPath && fs.existsSync(installPath)) return false;");
+    expect(setupText).toContain("if (!installPath && fs.existsSync(defaultExtensionDir)) return false;");
+    expect(setupText).toContain("delete plugins.entries.quaid;");
+    expect(setupText).toContain("delete plugins.slots.memory;");
+    expect(setupText).toContain("delete plugins.installs.quaid;");
+    expect(setupText).toContain("Cleared stale Quaid plugin registration; restarting OpenClaw gateway...");
   });
 
   it("OpenClaw validation treats plugin-list visibility as diagnostic after direct registration passes", () => {

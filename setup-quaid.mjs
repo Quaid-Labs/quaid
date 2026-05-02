@@ -2520,6 +2520,56 @@ function _sanitizeOpenClawPluginInstallSources() {
   }
 }
 
+function _sanitizeOpenClawGatewayBlockingStaleQuaidRegistration() {
+  const cfgPath = path.join(os.homedir(), ".openclaw", "openclaw.json");
+  const tmpPath = `${cfgPath}.tmp-${process.pid}-${Date.now()}`;
+  try {
+    const raw = fs.readFileSync(cfgPath, "utf8");
+    const parsed = JSON.parse(raw);
+    const plugins = parsed.plugins;
+    if (!plugins || typeof plugins !== "object") return false;
+
+    const installRec = plugins?.installs?.quaid || plugins?.installRecords?.quaid || parsed?.installRecords?.quaid;
+    const installPath = String(installRec?.installPath || "").trim();
+    const defaultExtensionDir = path.join(os.homedir(), ".openclaw", "extensions", "quaid");
+    if (installPath && fs.existsSync(installPath)) return false;
+    if (!installPath && fs.existsSync(defaultExtensionDir)) return false;
+
+    let changed = false;
+    if (plugins.entries && typeof plugins.entries === "object" && plugins.entries.quaid) {
+      delete plugins.entries.quaid;
+      changed = true;
+    }
+    if (plugins.slots && typeof plugins.slots === "object" && String(plugins.slots.memory || "").trim() === "quaid") {
+      delete plugins.slots.memory;
+      changed = true;
+    }
+    if (plugins.installs && typeof plugins.installs === "object" && plugins.installs.quaid) {
+      delete plugins.installs.quaid;
+      changed = true;
+    }
+    if (plugins.installRecords && typeof plugins.installRecords === "object" && plugins.installRecords.quaid) {
+      delete plugins.installRecords.quaid;
+      changed = true;
+    }
+    if (parsed.installRecords && typeof parsed.installRecords === "object" && parsed.installRecords.quaid) {
+      delete parsed.installRecords.quaid;
+      changed = true;
+    }
+
+    if (!changed) return false;
+    fs.writeFileSync(tmpPath, JSON.stringify(parsed, null, 2) + "\n", "utf8");
+    fs.renameSync(tmpPath, cfgPath);
+    return true;
+  } catch {
+    return false;
+  } finally {
+    try {
+      if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
+    } catch {}
+  }
+}
+
 function _ensureOpenClawPluginsAllowQuaid() {
   const cfgPath = path.join(os.homedir(), ".openclaw", "openclaw.json");
   const tmpPath = `${cfgPath}.tmp-${process.pid}-${Date.now()}`;
@@ -3269,12 +3319,20 @@ async function step1_preflight() {
       );
       bail("OpenClaw is not installed.");
     }
+    const cfgCli = "openclaw";
 
     // --- Gateway running ---
     s.message("Checking OpenClaw gateway status...");
     let gatewayHealthCode = _gatewayHttpCode("/health", "GET", null);
     if (gatewayHealthCode !== 200) {
       s.message("Waiting for OpenClaw gateway to come online...");
+      if (await waitForGatewayWarmup(60_000)) {
+        gatewayHealthCode = _gatewayHttpCode("/health", "GET", null);
+      }
+    }
+    if (gatewayHealthCode !== 200 && _sanitizeOpenClawGatewayBlockingStaleQuaidRegistration()) {
+      s.message("Cleared stale Quaid plugin registration; restarting OpenClaw gateway...");
+      spawnSync(cfgCli, ["gateway", "restart"], { encoding: "utf8", stdio: "pipe" });
       if (await waitForGatewayWarmup(60_000)) {
         gatewayHealthCode = _gatewayHttpCode("/health", "GET", null);
       }
@@ -3292,7 +3350,6 @@ async function step1_preflight() {
     }
 
     // --- Onboarding / agents list ---
-    const cfgCli = "openclaw";
     s.message("Checking OpenClaw agent configuration...");
     let hasAgent = _readAgentsList(cfgCli).some((a) => a && typeof a === "object" && a.id);
     if (!hasAgent) {
