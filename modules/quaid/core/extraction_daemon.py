@@ -1300,6 +1300,25 @@ def _signal_source_cursor_key(
     return f"source-{digest}"
 
 
+def _transcript_path_uuid(transcript_path: str) -> str:
+    raw = str(transcript_path or "").strip()
+    if not raw:
+        return ""
+    uuid_match = _SESSION_ID_UUID_RE.search(os.path.basename(raw))
+    return uuid_match.group(0).lower() if uuid_match else ""
+
+
+def _is_bare_uuid_session_for_transcript(session_id: str, transcript_path: str) -> bool:
+    source_uuid = _transcript_path_uuid(transcript_path)
+    return bool(source_uuid and str(session_id or "").strip().lower() == source_uuid)
+
+
+def _is_rollout_session_alias(session_id: str, transcript_path: str) -> bool:
+    raw = str(session_id or "").strip().lower()
+    source_uuid = _transcript_path_uuid(transcript_path)
+    return bool(source_uuid and raw.startswith("rollout-") and source_uuid in raw)
+
+
 def _signal_meta_cursor_key(session_id: str, meta: Any) -> str:
     if not isinstance(meta, dict):
         return ""
@@ -1688,6 +1707,93 @@ def _pending_signal_source_keys(signals: List[Dict[str, Any]]) -> set[str]:
         except Exception:
             continue
     return keys
+
+
+def _cursor_row_preference(row: Dict[str, Any]) -> Tuple[int, int, float, str]:
+    """Sort key for duplicate cursor rows that describe one transcript source."""
+    session_id = str(row.get("session_id") or "")
+    transcript_path = str(row.get("transcript_path") or "")
+    if _is_bare_uuid_session_for_transcript(session_id, transcript_path):
+        alias_rank = 0
+    elif _is_rollout_session_alias(session_id, transcript_path):
+        alias_rank = 2
+    else:
+        alias_rank = 1
+    cursor_offset = int(row.get("cursor_offset", 0) or 0)
+    return (
+        -cursor_offset,
+        alias_rank,
+        -float(row.get("mtime", 0.0) or 0.0),
+        session_id,
+    )
+
+
+def _drop_duplicate_semantic_rollout_state(row: Dict[str, Any], preferred: Dict[str, Any]) -> None:
+    """Remove a rollout semantic buffer that a preferred bare UUID row can drain."""
+    session_id = str(row.get("session_id") or "").strip()
+    transcript_path = str(row.get("transcript_path") or "").strip()
+    preferred_session_id = str(preferred.get("session_id") or "").strip()
+    preferred_path = str(preferred.get("transcript_path") or "").strip()
+    if not session_id or not transcript_path or session_id == preferred_session_id:
+        return
+    if not _is_bare_uuid_session_for_transcript(preferred_session_id, preferred_path):
+        return
+    if not _is_rollout_session_alias(session_id, transcript_path):
+        return
+    if (
+        _canonicalize_transcript_source_path(transcript_path)
+        != _canonicalize_transcript_source_path(preferred_path)
+    ):
+        return
+    state = read_rolling_state(session_id)
+    if not _rolling_state_has_pending_content(state) or staged_state_has_payload(state):
+        return
+    clear_rolling_state(session_id)
+    logger.info(
+        "retired duplicate rollout semantic buffer %s in favor of bare UUID session %s for source %s",
+        session_id,
+        preferred_session_id,
+        row.get("source_key", ""),
+    )
+
+
+def _dedupe_cursor_rows_by_source(cursor_rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Prefer one active cursor row per source to avoid alias double timeouts."""
+    by_source: Dict[str, List[Dict[str, Any]]] = {}
+    for row in cursor_rows:
+        source_key = str(row.get("source_key") or "").strip()
+        if not source_key:
+            try:
+                source_key = _signal_source_cursor_key(
+                    str(row.get("session_id") or ""),
+                    str(row.get("transcript_path") or ""),
+                    cursor_data=row.get("cursor_data") if isinstance(row.get("cursor_data"), dict) else None,
+                )
+            except Exception:
+                source_key = ""
+        row["source_key"] = source_key
+        by_source.setdefault(source_key or f"session:{row.get('session_id')}", []).append(row)
+
+    keep_ids: set[int] = set()
+    for source_key, rows in by_source.items():
+        if len(rows) == 1:
+            keep_ids.add(id(rows[0]))
+            continue
+        preferred = min(rows, key=_cursor_row_preference)
+        keep_ids.add(id(preferred))
+        for row in rows:
+            if row is preferred:
+                continue
+            _drop_duplicate_semantic_rollout_state(row, preferred)
+            logger.info(
+                "session %s cursor for source %s shadowed by preferred session %s; "
+                "skipping duplicate timeout scan",
+                row.get("session_id", ""),
+                source_key,
+                preferred.get("session_id", ""),
+            )
+
+    return [row for row in cursor_rows if id(row) in keep_ids]
 
 
 def _deferred_extraction_dir() -> Path:
@@ -5710,6 +5816,11 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
         except OSError:
             continue
 
+        try:
+            source_key = _signal_source_cursor_key(str(session_id), str(transcript_path), cursor_data=data)
+        except Exception:
+            source_key = ""
+
         cursor_rows.append({
             "session_id": session_id,
             "transcript_path": transcript_path,
@@ -5719,7 +5830,11 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
             "current_size_bytes": _transcript_size_bytes(transcript_path),
             "mtime": mtime,
             "cursor_data": data,
+            "cursor_file": cursor_file,
+            "source_key": source_key,
         })
+
+    cursor_rows = _dedupe_cursor_rows_by_source(cursor_rows)
 
     # Process recently-active sessions first. Old stale cursors can be expensive
     # to re-extract and should not starve the session that just crossed its idle

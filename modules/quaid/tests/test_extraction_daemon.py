@@ -8408,6 +8408,76 @@ class TestRollingExtraction:
         assert "CURSOR_HEAL_REQUIRED STUCK CURSOR HEAL" in caplog.text
         assert "action=real timeout boundary reached" in caplog.text
 
+    def test_timeout_scan_prefers_bare_uuid_over_rollout_alias(
+        self, monkeypatch, tmp_path
+    ):
+        """One transcript source must not queue parallel rollout and UUID timeouts."""
+        instance_id = os.environ.get("QUAID_INSTANCE", "pytest-runner")
+        short_id = "019de7b7-2c7a-75f3-b7a1-6b85e53f3baa"
+        rollout_id = f"rollout-2026-05-02T08-03-54-{short_id}"
+        transcript = tmp_path / f"{rollout_id}.jsonl"
+        transcript.write_text(
+            '{"type":"event_msg","payload":{"type":"user_message","message":"The floating shelf has a slate desk clock."}}\n',
+            encoding="utf-8",
+        )
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", instance_id)
+        source_key = extraction_daemon._signal_source_cursor_key(rollout_id, str(transcript))
+        bare_alias_key = extraction_daemon._signal_source_cursor_key(short_id, "")
+        extraction_daemon.write_cursor(rollout_id, 0, str(transcript), source_key=source_key)
+        extraction_daemon.write_cursor(short_id, 0, str(transcript), source_key=bare_alias_key)
+        extraction_daemon.write_rolling_state(
+            rollout_id,
+            {
+                "session_id": rollout_id,
+                "transcript_path": str(transcript),
+                "processed_line_offset": 1,
+                "buffered_line_offset": 1,
+                "semantic_buffer": "User: The floating shelf has a slate desk clock.",
+                "semantic_buffer_tokens": 9,
+                "raw_facts": [],
+                "raw_snippets": {},
+                "raw_journal": {},
+                "raw_project_logs": {},
+            },
+        )
+
+        now = 1_700_000_000.0
+        os.utime(transcript, (now - 3600, now - 3600))
+
+        class _FakeAdapter(_OwnedTestAdapterMixin):
+            def parse_session_jsonl(self, path):
+                return "User: The floating shelf has a slate desk clock."
+
+        captured = []
+        monkeypatch.setattr(extraction_daemon.time, "time", lambda: now)
+        monkeypatch.setattr(extraction_daemon, "_read_installed_at", lambda: now - 7200)
+        monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
+        monkeypatch.setattr(extraction_daemon, "_load_runtime_adapter", lambda: _FakeAdapter())
+        monkeypatch.setattr(
+            extraction_daemon,
+            "write_signal",
+            lambda signal_type, session_id, transcript_path, **kwargs: captured.append(
+                {
+                    "signal_type": signal_type,
+                    "session_id": session_id,
+                    "transcript_path": transcript_path,
+                }
+            ),
+        )
+
+        extraction_daemon.check_idle_sessions(timeout_minutes=30)
+
+        assert captured == [
+            {
+                "signal_type": "timeout",
+                "session_id": short_id,
+                "transcript_path": str(transcript),
+            }
+        ]
+        assert not extraction_daemon._rolling_state_path(rollout_id).exists()
+
     def test_does_not_flush_cursor_end_staged_payload_without_newer_session(self, monkeypatch, tmp_path):
         """A cursor-end staged payload alone must not flush without explicit rollover evidence."""
         instance_id = os.environ.get("QUAID_INSTANCE", "pytest-runner")
