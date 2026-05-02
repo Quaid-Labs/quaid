@@ -2924,10 +2924,12 @@ function writeDaemonSignal(
   const fname = `${Date.now()}_${process.pid}_${signalType}.json`;
   const sigPath = path.join(signalDir, fname);
   try {
-    fs.writeFileSync(sigPath, JSON.stringify(payload), { mode: 0o600 });
     // Signal writers must also act as daemon wakeup points so extraction
-    // resumes even when no normal prompt path fires after a crash.
+    // resumes even when no normal prompt path fires after a crash. Wake before
+    // writing so a freshly started daemon cannot consume the returned path
+    // before callers that inspect the signal file can read it.
     pingDaemonAliveIfNeeded(agentLabel ? getInstanceId(agentLabel) : _QUAID_INSTANCE);
+    fs.writeFileSync(sigPath, JSON.stringify(payload), { mode: 0o600 });
     console.log(`[quaid][daemon-signal] wrote ${signalType} signal for session=${sessionId} path=${sigPath}`);
     return sigPath;
   } catch (err: unknown) {
@@ -4917,8 +4919,15 @@ function _rewriteAgentRecallAutoInjectQuery(query: string): string | undefined {
     const aboutMatch = raw.match(/\babout\s+([A-Z][A-Za-z0-9'_-]*(?:\s+[A-Z][A-Za-z0-9'_-]*){0,2})\b/);
     const entity = String(aboutMatch?.[1] || "").trim();
     if (entity) {
-      return `${entity} recalled remembered`;
+      const suffix = /\b(?:surprise|surprised|surprising)\b/.test(normalized)
+        ? "surprising anecdote funny moment"
+        : "";
+      return `${entity} recalled remembered ${suffix}`.trim();
     }
+  }
+
+  if (/\b(?:architecture|architectural|decision)\b/.test(normalized) && /\bapi\b/.test(normalized)) {
+    return `${raw} GraphQL REST compatibility migration Apollo`;
   }
 
   return undefined;
