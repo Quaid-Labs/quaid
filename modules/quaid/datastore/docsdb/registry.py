@@ -220,6 +220,20 @@ def _to_registry_path(abs_path: Path) -> str:
         return str(resolved)
 
 
+def _cli_register_file_path(raw_path: str) -> str:
+    """Resolve CLI relative paths from the caller's cwd before registry insert."""
+    value = str(raw_path or "").strip()
+    if not value:
+        return value
+    path = Path(value).expanduser()
+    if path.is_absolute():
+        return value
+    cwd_path = (Path.cwd() / path).resolve()
+    if cwd_path.exists():
+        return _to_registry_path(cwd_path)
+    return value
+
+
 def _why_read_entry(doc: Dict[str, Any]) -> str:
     description = str(doc.get("description") or "").strip()
     if description:
@@ -2131,7 +2145,7 @@ def main():
 
     # register
     reg_p = subparsers.add_parser("register", help="Register a document")
-    reg_p.add_argument("file_path", help="File path (workspace-relative)")
+    reg_p.add_argument("file_path", help="File path (absolute or current-directory relative)")
     reg_p.add_argument("--project", default="default", help="Project name")
     reg_p.add_argument("--type", dest="asset_type", default="doc", help="Asset type")
     reg_p.add_argument("--title", help="Document title")
@@ -2209,8 +2223,9 @@ def main():
                 source_files = json.loads(source_files[0])
             except json.JSONDecodeError:
                 pass  # Not valid JSON, treat as literal path
+        file_path = _cli_register_file_path(args.file_path)
         row_id = registry.register(
-            file_path=args.file_path,
+            file_path=file_path,
             project=args.project,
             asset_type=args.asset_type,
             title=args.title,
@@ -2219,9 +2234,9 @@ def main():
             source_files=source_files,
         )
         if args.json:
-            print(json.dumps({"id": row_id, "file_path": args.file_path, "project": args.project}))
+            print(json.dumps({"id": row_id, "file_path": file_path, "project": args.project}))
         else:
-            print(f"Registered: {args.file_path} (project={args.project}, id={row_id})")
+            print(f"Registered: {file_path} (project={args.project}, id={row_id})")
 
     elif args.command == "list":
         docs = registry.list_docs(project=args.project, asset_type=args.asset_type)
