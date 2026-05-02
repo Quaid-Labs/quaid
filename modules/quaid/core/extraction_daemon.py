@@ -1368,7 +1368,11 @@ def _source_cursor_has_shadowed_internal_alias(
         source_offset = int(source_cursor_data.get("line_offset", 0) or 0)
     except Exception:
         source_offset = 0
-    for cursor_file in _cursor_dir().glob("*.json"):
+    try:
+        cursor_files = list(_cursor_dir().glob("*.json"))
+    except OSError:
+        return False
+    for cursor_file in cursor_files:
         if cursor_file.stem == source_key:
             continue
         try:
@@ -1387,6 +1391,8 @@ def _source_cursor_has_shadowed_internal_alias(
             alias_offset = int(alias_cursor.get("line_offset", 0) or 0)
         except Exception:
             alias_offset = 0
+        # CDX sibling rollouts create an internal short-id alias once the
+        # source cursor catches up; fresh zero-offset aliases are not a boundary.
         if source_offset >= alias_offset and not (source_offset == alias_offset == 0):
             return True
     return False
@@ -5446,6 +5452,8 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
         )
 
         if has_flushable_rolling_content and session_id not in pending_session_ids:
+            # Use the sorted-row cursor payload here; the earlier raw loop
+            # variable may refer to a different cursor after cursor_rows sorting.
             source_key = _signal_source_cursor_key(session_id, transcript_path, cursor_data=row_cursor_data)
             if source_key in pending_source_keys:
                 continue

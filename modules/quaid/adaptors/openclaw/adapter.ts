@@ -753,6 +753,8 @@ function parseDeferredNoticePayload(stdout: string): { delivered?: number; items
   try {
     return JSON.parse(raw);
   } catch (firstErr) {
+    // OC notify stdout is expected to contain at most one trailing JSON object
+    // after optional route diagnostics; prefer the last JSON-looking line.
     const lines = raw.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
     for (let index = lines.length - 1; index >= 0; index -= 1) {
       const line = lines[index];
@@ -762,7 +764,7 @@ function parseDeferredNoticePayload(stdout: string): { delivered?: number; items
       try {
         return JSON.parse(line);
       } catch {
-        // Keep looking; OC notify wrappers can print route diagnostics before JSON.
+        // Keep looking; wrapper diagnostics can print before the payload line.
       }
     }
     const start = raw.indexOf("{");
