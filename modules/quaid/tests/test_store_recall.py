@@ -1548,7 +1548,7 @@ class TestRecallBasic:
             )
             exact = mg.store(
                 "Baxter hides a sapphire tug ring beneath the pantry mat and rings a brass midnight triangle before bed",
-                owner_id="solomon-steadman",
+                owner_id="test-owner-alpha",
                 skip_dedup=True,
                 created_at="2026-04-22T13:17:09",
             )
@@ -3708,7 +3708,7 @@ class TestRecallTelemetry:
                 "planned_stores": ["vector"],
                 "query_shape": "focused",
             },
-            owner_id="solomon-steadman",
+            owner_id="test-owner-alpha",
             current_rows=[
                 {
                     "text": "maybe we do a facetime thing for her like she calls during dinner actually",
@@ -6158,7 +6158,7 @@ class TestRecallFastHookInjectContract:
                 "what does Mei do",
                 stores=["vector", "graph"],
                 limit=5,
-                owner_id="solomon-steadman",
+                owner_id="test-owner-alpha",
                 min_similarity=0.6,
                 planner_profile="full",
                 planned_queries=["what does Mei do"],
@@ -7882,7 +7882,7 @@ class TestRecallFastHookInjectContract:
              patch.object(mg, "_lib_get_embedding", side_effect=_fake_get_embedding):
             result = mg.store(
                 "Mei runs a ceramics practice out of their garage in Osaka",
-                owner_id="solomon-steadman",
+                owner_id="test-owner-alpha",
                 subject_entity_name="Mei",
                 skip_dedup=True,
             )
@@ -7906,7 +7906,7 @@ class TestRecallFastHookInjectContract:
              patch.object(mg, "_lib_get_embedding", side_effect=_fake_get_embedding):
             result = mg.store(
                 "メイ は 大阪 で 陶芸 の 仕事 を している",
-                owner_id="solomon-steadman",
+                owner_id="test-owner-alpha",
                 subject_entity_name="メイ",
                 skip_dedup=True,
             )
@@ -7965,14 +7965,18 @@ class TestRecallFastHookInjectContract:
         graph.add_edge(mg.Edge.create(kai.id, mei.id, "spouse_of"))
         graph.add_edge(mg.Edge.create(mei.id, ceramics.id, "has_fact"))
 
-        fake_cfg = SimpleNamespace(users=SimpleNamespace(identities={}))
+        fake_cfg = SimpleNamespace(
+            users=SimpleNamespace(
+                identities={"test-owner-alpha": SimpleNamespace(person_node_name="Solomon Steadman")}
+            )
+        )
         with patch.object(mg, "get_graph", return_value=graph), \
              patch.object(mg, "_HAS_CONFIG", True), \
              patch.object(mg, "_get_memory_config", return_value=fake_cfg), \
              patch.object(mg, "extract_entities_from_text", return_value=[]):
             payload = mg.graph_aware_recall(
                 "what does my partner's brother's wife do",
-                owner_id="solomon-steadman",
+                owner_id="test-owner-alpha",
                 limit=8,
                 graph_depth=3,
                 candidate_pool=[],
@@ -8008,7 +8012,7 @@ class TestRecallFastHookInjectContract:
              patch.object(mg, "extract_entities_from_text", return_value=[mei]):
             payload = mg.graph_aware_recall(
                 "what does Mei do",
-                owner_id="solomon-steadman",
+                owner_id="test-owner-alpha",
                 limit=5,
                 graph_depth=2,
                 candidate_pool=[],
@@ -8045,7 +8049,7 @@ class TestRecallFastHookInjectContract:
              patch.object(mg, "extract_entities_from_text", return_value=[mei]):
             payload = mg.graph_aware_recall(
                 "what does Mei do",
-                owner_id="solomon-steadman",
+                owner_id="test-owner-alpha",
                 limit=5,
                 graph_depth=2,
                 candidate_pool=[],
@@ -8078,7 +8082,7 @@ class TestRecallFastHookInjectContract:
              patch.object(mg, "_get_memory_config", return_value=fake_cfg):
             payload = mg.graph_aware_recall(
                 "what does Mei do",
-                owner_id="solomon-steadman",
+                owner_id="test-owner-alpha",
                 limit=5,
                 graph_depth=2,
                 candidate_pool=[],
@@ -8116,7 +8120,11 @@ class TestRecallFastHookInjectContract:
         graph.add_edge(mg.Edge.create(kai.id, mei.id, "spouse_of"))
         graph.add_edge(mg.Edge.create(mei.id, ceramics.id, "has_fact"))
 
-        fake_cfg = SimpleNamespace(users=SimpleNamespace(identities={}))
+        fake_cfg = SimpleNamespace(
+            users=SimpleNamespace(
+                identities={"test-owner-alpha": SimpleNamespace(person_node_name="Solomon Steadman")}
+            )
+        )
         candidate_pool = [
             {
                 "id": ceramics.id,
@@ -8133,7 +8141,7 @@ class TestRecallFastHookInjectContract:
                 "what does my partner's brother's wife do",
                 stores=["graph"],
                 limit=5,
-                owner_id="solomon-steadman",
+                owner_id="test-owner-alpha",
                 min_similarity=0.6,
                 planner_profile="fast",
                 planned_queries=None,
@@ -8173,7 +8181,11 @@ class TestRecallFastHookInjectContract:
         graph.add_edge(mg.Edge.create(mei.id, lives_osaka.id, "has_fact"))
         graph.add_edge(mg.Edge.create(mei.id, ceramics.id, "has_fact"))
 
-        fake_cfg = SimpleNamespace(users=SimpleNamespace(identities={}))
+        fake_cfg = SimpleNamespace(
+            users=SimpleNamespace(
+                identities={"test-owner-alpha": SimpleNamespace(person_node_name="Solomon Steadman")}
+            )
+        )
         with patch.object(mg, "get_graph", return_value=graph), \
              patch.object(mg, "_HAS_CONFIG", True), \
              patch.object(mg, "_get_memory_config", return_value=fake_cfg), \
@@ -8182,7 +8194,7 @@ class TestRecallFastHookInjectContract:
                 "what does my partner's brother's wife do",
                 stores=["graph"],
                 limit=5,
-                owner_id="solomon-steadman",
+                owner_id="test-owner-alpha",
                 min_similarity=0.6,
                 planner_profile="fast",
                 planned_queries=None,
@@ -8216,7 +8228,11 @@ class TestRecallFastHookInjectContract:
         graph.add_edge(mg.Edge.create(mei.id, ceramics.id, "has_fact"))
         graph.add_edge(mg.Edge.create(mei.id, tea.id, "has_fact"))
 
-        fake_cfg = SimpleNamespace(users=SimpleNamespace(identities={}))
+        fake_cfg = SimpleNamespace(
+            users=SimpleNamespace(
+                identities={"test-owner-alpha": SimpleNamespace(person_node_name="Solomon Steadman")}
+            )
+        )
         with patch.object(mg, "get_graph", return_value=graph), \
              patch.object(mg, "_HAS_CONFIG", True), \
              patch.object(mg, "_get_memory_config", return_value=fake_cfg), \
@@ -8225,7 +8241,7 @@ class TestRecallFastHookInjectContract:
                 "what does my partners brothers wife do",
                 stores=["graph"],
                 limit=5,
-                owner_id="solomon-steadman",
+                owner_id="test-owner-alpha",
                 min_similarity=0.6,
                 planner_profile="fast",
                 planned_queries=None,
@@ -8264,7 +8280,11 @@ class TestRecallFastHookInjectContract:
         graph.add_edge(mg.Edge.create(kai.id, wife.id, "has_fact"))
         graph.add_edge(mg.Edge.create(mei.id, ceramics.id, "has_fact"))
 
-        fake_cfg = SimpleNamespace(users=SimpleNamespace(identities={}))
+        fake_cfg = SimpleNamespace(
+            users=SimpleNamespace(
+                identities={"test-owner-alpha": SimpleNamespace(person_node_name="Solomon Steadman")}
+            )
+        )
         candidate_pool = [
             {"id": boat.id, "text": boat.name, "category": "fact", "similarity": 0.93},
             {"id": marriage.id, "text": marriage.name, "category": "fact", "similarity": 0.92},
@@ -8278,7 +8298,7 @@ class TestRecallFastHookInjectContract:
                 "what does my partners brothers wife do",
                 stores=["graph"],
                 limit=3,
-                owner_id="solomon-steadman",
+                owner_id="test-owner-alpha",
                 min_similarity=0.6,
                 planner_profile="fast",
                 planned_queries=None,
@@ -8320,7 +8340,7 @@ class TestRecallFastHookInjectContract:
 
         fake_cfg = SimpleNamespace(
             users=SimpleNamespace(
-                identities={"solomon-steadman": SimpleNamespace(person_node_name="Solomon Steadman")}
+                identities={"test-owner-alpha": SimpleNamespace(person_node_name="Solomon Steadman")}
             )
         )
         candidate_pool = [
@@ -8336,7 +8356,7 @@ class TestRecallFastHookInjectContract:
                 "what does my partner's brother's wife do",
                 stores=["graph"],
                 limit=5,
-                owner_id="solomon-steadman",
+                owner_id="test-owner-alpha",
                 min_similarity=0.6,
                 planner_profile="fast",
                 planned_queries=None,
@@ -8385,7 +8405,7 @@ class TestRecallFastHookInjectContract:
                 "what does Mei do",
                 stores=["graph"],
                 limit=5,
-                owner_id="solomon-steadman",
+                owner_id="test-owner-alpha",
                 min_similarity=0.6,
                 planner_profile="fast",
                 planned_queries=None,
@@ -8431,7 +8451,7 @@ class TestRecallFastHookInjectContract:
                 "what does Mei do",
                 stores=["graph"],
                 limit=5,
-                owner_id="solomon-steadman",
+                owner_id="test-owner-alpha",
                 min_similarity=0.6,
                 planner_profile="fast",
                 planned_queries=None,
@@ -8523,7 +8543,7 @@ class TestRecallFastHookInjectContract:
 
         fake_cfg = SimpleNamespace(
             users=SimpleNamespace(
-                identities={"solomon-steadman": SimpleNamespace(person_node_name="Solomon Steadman")}
+                identities={"test-owner-alpha": SimpleNamespace(person_node_name="Solomon Steadman")}
             )
         )
         candidate_pool = [
@@ -8539,7 +8559,7 @@ class TestRecallFastHookInjectContract:
                 "what does my partners brothers wife do",
                 stores=["graph"],
                 limit=5,
-                owner_id="solomon-steadman",
+                owner_id="test-owner-alpha",
                 min_similarity=0.6,
                 planner_profile="fast",
                 planned_queries=None,
