@@ -80,6 +80,9 @@ _TRIVIAL_TIMEOUT_USER_TURNS = {
     "thank you",
 }
 _TRANSCRIPT_ROLE_RE = re.compile(r"^\s*(User|Assistant|System):\s*(.*)$", re.IGNORECASE)
+_TRANSCRIPT_CLASS_INTERNAL_MAINTENANCE = "internal_maintenance"
+_TRANSCRIPT_CLASS_IGNORE_CONTENT = "ignore_content"
+_TRANSCRIPT_CLASS_MEANINGFUL_USER_CONTENT = "meaningful_user_content"
 
 # Session ID validation (B008)
 _SESSION_ID_RE = re.compile(r"^[a-zA-Z0-9_-]{1,128}$")
@@ -3971,23 +3974,35 @@ def _is_internal_transcript_session(
     transcript_path: str,
     adapter=None,
 ) -> bool:
-    """Return True when a non-empty raw transcript sanitizes to nothing."""
+    """Return True only for host/lifecycle maintenance transcripts."""
+    return (
+        _classify_transcript_session(session_id, transcript_path, adapter=adapter)
+        == _TRANSCRIPT_CLASS_INTERNAL_MAINTENANCE
+    )
+
+
+def _classify_transcript_session(
+    session_id: str,
+    transcript_path: str,
+    adapter=None,
+) -> str:
+    """Classify transcript content before timeout/internal cursor handling."""
     try:
         if not transcript_path or not os.path.isfile(transcript_path):
-            return False
+            return _TRANSCRIPT_CLASS_MEANINGFUL_USER_CONTENT
         total_lines = count_transcript_lines(transcript_path)
         if total_lines <= 0:
-            return False
+            return _TRANSCRIPT_CLASS_MEANINGFUL_USER_CONTENT
         active_adapter = adapter if adapter is not None else _load_runtime_adapter()
         if active_adapter is None:
-            return False
+            return _TRANSCRIPT_CLASS_MEANINGFUL_USER_CONTENT
         transcript_text = active_adapter.parse_session_jsonl(Path(transcript_path))
         stripped = (transcript_text or "").strip()
         if not stripped:
-            return True
-        return not _transcript_has_meaningful_timeout_user_content(stripped)
+            return _TRANSCRIPT_CLASS_INTERNAL_MAINTENANCE
+        return _classify_timeout_transcript_content(stripped)
     except Exception:
-        return False
+        return _TRANSCRIPT_CLASS_MEANINGFUL_USER_CONTENT
 
 
 def _iter_parsed_transcript_turns(transcript_text: str) -> List[Tuple[str, str]]:
@@ -4033,17 +4048,30 @@ def _is_short_timeout_greeting_user_turn(text: str) -> bool:
 
 
 def _transcript_has_meaningful_timeout_user_content(transcript_text: str) -> bool:
-    """Return True when parsed transcript text has user content worth timing out.
+    """Return True when parsed transcript text has user content worth timing out."""
+    return (
+        _classify_timeout_transcript_content(transcript_text)
+        == _TRANSCRIPT_CLASS_MEANINGFUL_USER_CONTENT
+    )
+
+
+def _classify_timeout_transcript_content(transcript_text: str) -> str:
+    """Split true maintenance wrappers from user content that should be ignored.
 
     OpenClaw can leave a post-/new session in a startup/handshake-only state for
     several minutes while the real queued user message is still delayed. Treating
     those wrappers as extractable advances the cursor before the real message
-    arrives, so idle scans should freeze them as internal maintenance until a
-    non-trivial user turn appears.
+    arrives, so idle scans should freeze only true maintenance wrappers as
+    internal. Short greetings and NO_REPLY-only turns are ignored content, not
+    internal maintenance.
     """
     turns = _iter_parsed_transcript_turns(transcript_text)
     if not turns:
-        return not _is_timeout_startup_user_turn(transcript_text)
+        return (
+            _TRANSCRIPT_CLASS_INTERNAL_MAINTENANCE
+            if _is_timeout_startup_user_turn(transcript_text)
+            else _TRANSCRIPT_CLASS_MEANINGFUL_USER_CONTENT
+        )
     saw_user = False
     saw_startup_wrapper = False
     saw_no_reply_assistant = False
@@ -4059,29 +4087,37 @@ def _transcript_has_meaningful_timeout_user_content(transcript_text: str) -> boo
             continue
         non_startup_user_turns.append(content)
     if not saw_user:
-        return False
+        return (
+            _TRANSCRIPT_CLASS_IGNORE_CONTENT
+            if saw_no_reply_assistant
+            else _TRANSCRIPT_CLASS_INTERNAL_MAINTENANCE
+        )
     if saw_startup_wrapper and all(
         _is_short_timeout_greeting_user_turn(turn)
         for turn in non_startup_user_turns
     ):
-        return False
+        return (
+            _TRANSCRIPT_CLASS_IGNORE_CONTENT
+            if non_startup_user_turns
+            else _TRANSCRIPT_CLASS_INTERNAL_MAINTENANCE
+        )
     if saw_no_reply_assistant and non_startup_user_turns and all(
         _is_short_timeout_greeting_user_turn(turn)
         for turn in non_startup_user_turns
     ):
-        # OC can leave the post-/new greeting transcript as the only parsed
-        # content while the real Matrix prompt is still queued in the host.
-        # Do not let that wrapper consume the timeout cursor before the prompt
-        # materializes in the session file.
-        return False
+        return _TRANSCRIPT_CLASS_IGNORE_CONTENT
     if saw_startup_wrapper:
-        return bool(non_startup_user_turns)
+        return (
+            _TRANSCRIPT_CLASS_MEANINGFUL_USER_CONTENT
+            if non_startup_user_turns
+            else _TRANSCRIPT_CLASS_INTERNAL_MAINTENANCE
+        )
     for role, content in turns:
         if role != "user":
             continue
         if content.strip():
-            return True
-    return False
+            return _TRANSCRIPT_CLASS_MEANINGFUL_USER_CONTENT
+    return _TRANSCRIPT_CLASS_IGNORE_CONTENT
 
 
 def _advance_internal_session_cursor_to_end(
@@ -4108,6 +4144,30 @@ def _advance_internal_session_cursor_to_end(
     _cursor_end_timeout_fired.add(session_id)
 
 
+def _advance_ignored_session_cursor_to_end(
+    session_id: str,
+    transcript_path: str,
+    *,
+    cursor_key: Optional[str] = None,
+) -> None:
+    """Consume non-extractable user chatter without marking the cursor internal."""
+    total_lines = 0
+    try:
+        if transcript_path and os.path.isfile(transcript_path):
+            total_lines = count_transcript_lines(transcript_path)
+    except OSError:
+        total_lines = 0
+    write_cursor(
+        session_id,
+        total_lines,
+        transcript_path,
+        internal=False,
+        source_key=cursor_key,
+    )
+    clear_rolling_state(session_id)
+    _cursor_end_timeout_fired.add(session_id)
+
+
 def _reconcile_internal_cursor_state(
     session_id: str,
     transcript_path: str,
@@ -4122,6 +4182,7 @@ def _reconcile_internal_cursor_state(
     States:
     - "frozen": cursor is marked internal and no new transcript lines arrived.
     - "advanced": transcript is still internal-only; cursor advanced unless advance_internal=False.
+    - "ignored": transcript has only non-extractable user chatter; cursor consumed as non-internal.
     - "unfrozen": transcript gained non-internal content past a frozen cursor.
     - "not_internal": transcript is not internal and cursor was not frozen.
     """
@@ -4146,7 +4207,8 @@ def _reconcile_internal_cursor_state(
     if cursor_internal and total_lines <= cursor_offset and source_unchanged and size_unchanged:
         return "frozen"
 
-    if _is_internal_transcript_session(session_id, transcript_path, adapter=adapter):
+    transcript_class = _classify_transcript_session(session_id, transcript_path, adapter=adapter)
+    if transcript_class == _TRANSCRIPT_CLASS_INTERNAL_MAINTENANCE:
         if not advance_internal:
             return "advanced"
         _advance_internal_session_cursor_to_end(
@@ -4155,6 +4217,13 @@ def _reconcile_internal_cursor_state(
             cursor_key=cursor_key,
         )
         return "advanced"
+    if transcript_class == _TRANSCRIPT_CLASS_IGNORE_CONTENT:
+        _advance_ignored_session_cursor_to_end(
+            session_id,
+            transcript_path,
+            cursor_key=cursor_key,
+        )
+        return "ignored"
 
     if cursor_internal:
         rebased_offset = cursor_offset
@@ -4353,6 +4422,11 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
         return
     if internal_state == "advanced":
         logger.info("[%s] session %s: internal maintenance transcript, advancing cursor to EOF", label, session_id)
+        mark_signal_processed(signal_data)
+        _release_session_processing_lock(lock_owner_key, lock_fd)
+        return
+    if internal_state == "ignored":
+        logger.info("[%s] session %s: ignored non-extractable transcript content", label, session_id)
         mark_signal_processed(signal_data)
         _release_session_processing_lock(lock_owner_key, lock_fd)
         return
@@ -4978,25 +5052,51 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             else:
                 transcript_text = f"{buffered_text}\n\n{tail_text}" if buffered_text and tail_text else (buffered_text or tail_text)
 
+        timeout_transcript_class = (
+            _classify_timeout_transcript_content(transcript_text)
+            if (
+                signal_type == "timeout"
+                and not rolling_mode
+                and not staged_payload_sweep_signal
+                and transcript_text.strip()
+                and not _rolling_state_has_pending_content(staged_state)
+            )
+            else _TRANSCRIPT_CLASS_MEANINGFUL_USER_CONTENT
+        )
         if (
             signal_type == "timeout"
             and not rolling_mode
             and not staged_payload_sweep_signal
             and transcript_text.strip()
             and not _rolling_state_has_pending_content(staged_state)
-            and not _transcript_has_meaningful_timeout_user_content(transcript_text)
+            and timeout_transcript_class != _TRANSCRIPT_CLASS_MEANINGFUL_USER_CONTENT
         ):
-            logger.info(
-                "[%s] session %s: timeout transcript contains only startup/greeting content; "
-                "marking cursor internal and waiting for real user content",
-                label,
-                session_id,
-            )
-            _advance_internal_session_cursor_to_end(
-                session_id,
-                transcript_path,
-                cursor_key=lock_owner_key,
-            )
+            if timeout_transcript_class == _TRANSCRIPT_CLASS_INTERNAL_MAINTENANCE:
+                logger.info(
+                    "[%s] session %s: timeout transcript contains only startup content; "
+                    "marking cursor internal and waiting for real user content",
+                    label,
+                    session_id,
+                )
+                _advance_internal_session_cursor_to_end(
+                    session_id,
+                    transcript_path,
+                    cursor_key=lock_owner_key,
+                )
+                noop_reason = "internal_timeout"
+            else:
+                logger.info(
+                    "[%s] session %s: timeout transcript contains only ignored user content; "
+                    "advancing non-internal cursor",
+                    label,
+                    session_id,
+                )
+                _advance_ignored_session_cursor_to_end(
+                    session_id,
+                    transcript_path,
+                    cursor_key=lock_owner_key,
+                )
+                noop_reason = "ignored_timeout"
             _finalize_no_payload_signal(
                 session_id=session_id,
                 transcript_path=transcript_path,
@@ -5004,7 +5104,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                 lock_owner_key=lock_owner_key,
                 lock_fd=lock_fd,
                 cursor_key=lock_owner_key,
-                emit_noop_metric=lambda: _emit_noop_flush_metric("internal_timeout"),
+                emit_noop_metric=lambda: _emit_noop_flush_metric(noop_reason),
             )
             return
 
@@ -5840,6 +5940,13 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
                 data.get("transcript_size_bytes", 0),
             )
             continue
+        if internal_state == "ignored":
+            logger.info(
+                "session %s has only ignored user content during idle scan; "
+                "advancing non-internal cursor to EOF",
+                session_id,
+            )
+            continue
         if internal_state == "unfrozen":
             logger.info(
                 "session %s gained non-internal content past a frozen internal cursor during idle scan",
@@ -6157,6 +6264,13 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
                     "session %s is internal maintenance-only during rolling scan, advancing cursor to EOF",
                     session_id,
                 )
+            continue
+        if internal_state == "ignored":
+            logger.info(
+                "session %s has only ignored user content during rolling scan; "
+                "advancing non-internal cursor to EOF",
+                session_id,
+            )
             continue
         if internal_state == "unfrozen":
             logger.info(

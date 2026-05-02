@@ -2139,6 +2139,82 @@ def test_check_idle_sessions_advances_internal_session_cursor_to_eof(monkeypatch
     assert cursor["internal"] is True
 
 
+def test_timeout_classifier_treats_startup_greeting_as_ignore_not_internal():
+    transcript = (
+        "User: A new session was started via /new or /reset.\n"
+        "Assistant: NO_REPLY\n"
+        "User: Hello"
+    )
+
+    assert (
+        extraction_daemon._classify_timeout_transcript_content(transcript)
+        == extraction_daemon._TRANSCRIPT_CLASS_IGNORE_CONTENT
+    )
+    assert not extraction_daemon._transcript_has_meaningful_timeout_user_content(transcript)
+
+
+def test_reconcile_consumes_startup_greeting_without_internal_cursor(monkeypatch, tmp_path):
+    import sys
+    import types
+
+    transcript_path = tmp_path / "startup-greeting.jsonl"
+    transcript_path.write_text(
+        '{"role":"user","content":"A new session was started via /new or /reset."}\n'
+        '{"role":"assistant","content":"NO_REPLY"}\n'
+        '{"role":"user","content":"Hello"}\n',
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "pytest-runner")
+    extraction_daemon.write_cursor("sess-startup-greeting", 0, str(transcript_path))
+
+    real_adapter = sys.modules.get("lib.adapter")
+    fake_adapter_mod = types.ModuleType("lib.adapter")
+
+    class _FakeAdapter(_OwnedTestAdapterMixin):
+        def parse_session_jsonl(self, path):
+            assert path == transcript_path
+            return (
+                "User: A new session was started via /new or /reset.\n"
+                "Assistant: NO_REPLY\n"
+                "User: Hello"
+            )
+
+    fake_adapter_mod.get_adapter = lambda: _FakeAdapter()
+    sys.modules["lib.adapter"] = fake_adapter_mod
+
+    try:
+        state = extraction_daemon._reconcile_internal_cursor_state(
+            "sess-startup-greeting",
+            str(transcript_path),
+        )
+    finally:
+        if real_adapter is not None:
+            sys.modules["lib.adapter"] = real_adapter
+        else:
+            sys.modules.pop("lib.adapter", None)
+
+    cursor = extraction_daemon.read_cursor("sess-startup-greeting")
+    assert state == "ignored"
+    assert cursor["line_offset"] == 3
+    assert cursor["internal"] is False
+
+
+def test_timeout_classifier_keeps_real_startup_user_turn_meaningful():
+    transcript = (
+        "User: A new session was started via /new or /reset.\n"
+        "Assistant: NO_REPLY\n"
+        "User: Pumpkin paprika maple-salt ritual belongs to the sibling instance."
+    )
+
+    assert (
+        extraction_daemon._classify_timeout_transcript_content(transcript)
+        == extraction_daemon._TRANSCRIPT_CLASS_MEANINGFUL_USER_CONTENT
+    )
+    assert extraction_daemon._transcript_has_meaningful_timeout_user_content(transcript)
+
+
 def test_process_signal_merges_subagent_transcript_with_per_turn_labels(monkeypatch, tmp_path):
     parent_path = tmp_path / "parent.jsonl"
     child_path = tmp_path / "child.jsonl"
