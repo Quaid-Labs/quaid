@@ -2278,7 +2278,7 @@ def _rule_filename_for_context_section(section: str, index: int) -> str:
     if normalized in {"SYSTEM WARNING", "base-context-files"}:
         return f"{_RULES_FILE_PREFIX}00-runtime.md"
     if normalized in {"USER.md", "SOUL.md", "ENVIRONMENT.md"}:
-        return f"{_RULES_FILE_PREFIX}{_rules_slug(normalized)}.md"
+        return f"{_RULES_FILE_PREFIX}{_rules_slug(Path(normalized).stem)}.md"
     if normalized.startswith("adapter-compatibility/"):
         return f"{_RULES_FILE_PREFIX}adapter-compatibility.md"
     if normalized == "adapter-cli":

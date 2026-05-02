@@ -272,10 +272,15 @@ def test_claude_code_inject_refreshes_rules_context_for_compact_command(monkeypa
     assert sig["session_id"] == "sess-cc-compact"
     assert sig["transcript_path"] == str(transcript_path)
     assert sig["meta"]["command"] == "/compact"
-    user_rules = (rules_dir / "quaid-user-md.md").read_text(encoding="utf-8")
-    env_rules = (rules_dir / "quaid-environment-md.md").read_text(encoding="utf-8")
+    user_rules = (rules_dir / "quaid-user.md").read_text(encoding="utf-8")
+    soul_rules = (rules_dir / "quaid-soul.md").read_text(encoding="utf-8")
+    env_rules = (rules_dir / "quaid-environment.md").read_text(encoding="utf-8")
     assert "Bartholomew" in user_rules
+    assert "SOUL live" in soul_rules
     assert "fiddle-leaf fig" in env_rules
+    assert not (rules_dir / "quaid-user-md.md").exists()
+    assert not (rules_dir / "quaid-soul-md.md").exists()
+    assert not (rules_dir / "quaid-environment-md.md").exists()
     assert "context-refresh" in err
     marker_file = tmp_path / "data" / "context-refresh-compaction" / "sess-cc-compact.json"
     assert marker_file.is_file()
@@ -343,8 +348,8 @@ def test_claude_code_post_compact_turn_gets_identity_additional_context_under_ca
 
     marker_path = data_dir / "context-refresh-compaction" / "sess-cc-compact-followup.json"
     assert marker_path.is_file()
-    user_rules = (rules_dir / "quaid-user-md.md").read_text(encoding="utf-8")
-    env_rules = (rules_dir / "quaid-environment-md.md").read_text(encoding="utf-8")
+    user_rules = (rules_dir / "quaid-user.md").read_text(encoding="utf-8")
+    env_rules = (rules_dir / "quaid-environment.md").read_text(encoding="utf-8")
     assert "Bartholomew" in user_rules
     assert "fiddle-leaf fig" in env_rules
 
@@ -1224,7 +1229,7 @@ def test_hook_extract_precompact_refreshes_rules_context_from_identity_and_proje
     assert "context-refresh" in err
     assert not legacy_rules_file.exists()
     assert (rules_dir / "quaid-projects.md.bak").read_text(encoding="utf-8") == "stale rules body"
-    user_rules = (rules_dir / "quaid-user-md.md").read_text(encoding="utf-8")
+    user_rules = (rules_dir / "quaid-user.md").read_text(encoding="utf-8")
     tools_rules = (rules_dir / "quaid-quaid-tools-md.md").read_text(encoding="utf-8")
     assert "Compaction refresh canary: vellum-orchid" in user_rules
     assert "refresh docs" in tools_rules
@@ -2048,7 +2053,7 @@ class TestHookSessionInitRegistryAugmentation:
         assert not legacy_file.exists()
         assert (rules_dir / "quaid-projects.md.bak").read_text(encoding="utf-8") == "legacy combined rules"
         assert not stale_file.exists()
-        assert (rules_dir / "quaid-user-md.md").is_file()
+        assert (rules_dir / "quaid-user.md").is_file()
         assert (rules_dir / "quaid-currentproject-project-catalog.md").is_file()
         assert "migrated" in err
         assert "removed" in err
