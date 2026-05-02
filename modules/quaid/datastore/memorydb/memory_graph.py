@@ -5121,11 +5121,15 @@ def _docs_bundle_to_rows(bundle: Optional[Dict[str, Any]], limit: int) -> List[D
         if isinstance(scope_hint, dict) and str(scope_hint.get("type") or "") == "unlinked_project_candidates":
             candidates = scope_hint.get("candidates")
             if isinstance(candidates, list):
-                names = [
-                    str(item.get("project") or "").strip()
-                    for item in candidates
-                    if isinstance(item, dict) and str(item.get("project") or "").strip()
-                ]
+                names = []
+                for item in candidates:
+                    if not isinstance(item, dict):
+                        continue
+                    project = str(item.get("project") or "").strip()
+                    if not project:
+                        continue
+                    path = str(item.get("path") or "").strip()
+                    names.append(f"{project} ({path})" if path else project)
                 if names:
                     out.append(
                         {

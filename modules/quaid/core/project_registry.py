@@ -24,10 +24,20 @@ from lib.project_registry_lock import registry_lock, registry_lock_path, registr
 
 logger = logging.getLogger(__name__)
 _RULES_FILE_PREFIX = "quaid-"
+_PROJECT_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 
 
 def _normalize_project_name(name: str) -> str:
     return str(name or "").strip().lower()
+
+
+def _validate_project_name(name: str) -> str:
+    normalized = _normalize_project_name(name)
+    if not normalized:
+        raise ValueError("Project name is required")
+    if not _PROJECT_NAME_RE.fullmatch(normalized):
+        raise ValueError(f"Invalid project name: {name!r}")
+    return normalized
 
 
 def _is_temp_canonical_path(path: Path) -> bool:
@@ -517,9 +527,7 @@ def create_project(
     Raises:
         ValueError: If project already exists or the name is empty.
     """
-    name = _normalize_project_name(name)
-    if not name:
-        raise ValueError("Project name is required")
+    name = _validate_project_name(name)
 
     quaid_home = _resolve_quaid_home()
     canonical = quaid_projects_dir(quaid_home) / name
