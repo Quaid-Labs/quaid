@@ -2906,6 +2906,35 @@ class TestRecallTelemetry:
         assert "only classify stores/project" in captured["prompt"]
         assert captured["timeout"] == 60.0
 
+    def test_plan_fanout_queries_full_preserves_relation_chain_graph_when_llm_downgrades(self):
+        import datastore.memorydb.memory_graph as mg
+
+        class _Graph:
+            def get_known_relations(self):
+                return ["spouse_of", "sibling_of"]
+
+        def _fake_call_fast_reasoning(*, prompt, **kwargs):
+            assert "Add 'graph'" in prompt
+            return ('{"stores":["vector"],"queries":["positional family relationship"]}', {})
+
+        with patch.object(mg, "get_graph", return_value=_Graph()), \
+             patch.object(mg, "get_edge_keywords", return_value={}), \
+             patch.object(
+                 mg,
+                 "parse_json_response",
+                 return_value={"stores": ["vector"], "queries": ["positional family relationship"]},
+             ), patch("lib.llm_clients.call_fast_reasoning", side_effect=_fake_call_fast_reasoning):
+            queries, meta = mg._plan_fanout_queries(
+                "what does my partner's brother's wife do",
+                timeout_s=60.0,
+                return_meta=True,
+                planner_profile="full",
+            )
+
+        assert queries == ["what does my partner's brother's wife do"]
+        assert meta["bailout_reason"] == "preserve_short_exact_query"
+        assert meta["planned_stores"] == ["vector", "graph"]
+
     def test_single_structural_exact_query_recognizes_hyphenated_codeword(self):
         import datastore.memorydb.memory_graph as mg
 
@@ -8014,8 +8043,8 @@ class TestRecallFastHookInjectContract:
         graph.add_edge(mg.Edge.create(sibling.id, terminal.id, "spouse_of"))
         graph.add_edge(mg.Edge.create(sibling.id, spouse_fact.id, "has_fact"))
         # The extracted fact mentions the reached terminal person but was not
-        # linked as Mei --has_fact--> fact. Recall should recover that missing
-        # edge from the explicit entity mention instead of relying on vectors.
+        # linked as terminal --has_fact--> fact. Recall should recover that
+        # missing edge from the explicit entity mention instead of relying on vectors.
 
         fake_cfg = SimpleNamespace(
             users=SimpleNamespace(

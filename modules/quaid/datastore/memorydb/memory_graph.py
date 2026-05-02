@@ -11804,6 +11804,13 @@ def _plan_fanout_queries(
                 meta["freshness_preferred"] = bool(parsed.get("freshness_preferred"))
             if "docs" in planned_default_stores and "docs" not in planned_stores:
                 planned_stores = _planner_store_plan([*planned_stores, "docs"])
+            default_relation_chain_graph = (
+                "graph" in planned_default_stores
+                and len(_relation_chain_groups_for_query(clean)) >= 2
+                and _has_relation_chain_structure(clean)
+            )
+            if default_relation_chain_graph and "graph" not in planned_stores:
+                planned_stores = _planner_store_plan([*planned_stores, "graph"])
         else:
             planned_stores = planned_default_stores
             planned_project = default_project
