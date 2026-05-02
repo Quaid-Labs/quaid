@@ -1234,6 +1234,7 @@ def write_cursor(
         # Once they carry non-internal content, retire stale short-id aliases.
         if not bool(internal):
             _retire_shadowed_internal_alias_cursors(
+                source_session_id=session_id,
                 source_key=cursor_key,
                 transcript_path=transcript_path,
                 source_offset=int(line_offset or 0),
@@ -1320,6 +1321,7 @@ def _read_cursor_with_source_compat(session_id: str, source_key: Optional[str]) 
 
 def _retire_shadowed_internal_alias_cursors(
     *,
+    source_session_id: str,
     source_key: str,
     transcript_path: str,
     source_offset: int,
@@ -1359,6 +1361,14 @@ def _retire_shadowed_internal_alias_cursors(
             alias_offset = 0
         if source_offset < alias_offset:
             continue
+        alias_session_id = str(alias_cursor.get("session_id") or cursor_file.stem).strip()
+        _retire_shadowed_internal_alias_rolling_state(
+            source_session_id=source_session_id,
+            alias_session_id=alias_session_id,
+            alias_state_key=cursor_file.stem,
+            transcript_path=transcript_path,
+            source_offset=source_offset,
+        )
         try:
             cursor_file.unlink()
             logger.info(
@@ -1377,6 +1387,83 @@ def _retire_shadowed_internal_alias_cursors(
                 exc,
             )
             continue
+
+
+def _retire_shadowed_internal_alias_rolling_state(
+    *,
+    source_session_id: str,
+    alias_session_id: str,
+    alias_state_key: str,
+    transcript_path: str,
+    source_offset: int,
+) -> None:
+    """Move or drop stale alias rolling state when source-key ownership is proven."""
+    source_session_id = _validate_session_id(source_session_id)
+    alias_keys: List[str] = []
+    for candidate in (alias_session_id, alias_state_key):
+        raw = str(candidate or "").strip()
+        if not raw:
+            continue
+        try:
+            key = _validate_session_id(raw)
+        except Exception:
+            continue
+        if key != source_session_id and key not in alias_keys:
+            alias_keys.append(key)
+    if not alias_keys:
+        return
+
+    source_state = read_rolling_state(source_session_id)
+    source_has_pending = _rolling_state_has_pending_content(source_state)
+    for alias_key in alias_keys:
+        alias_state = read_rolling_state(alias_key)
+        if not _rolling_state_has_pending_content(alias_state):
+            clear_rolling_state(alias_key)
+            continue
+        alias_path = str(alias_state.get("transcript_path") or "").strip()
+        if (
+            alias_path
+            and _canonicalize_transcript_source_path(alias_path)
+            != _canonicalize_transcript_source_path(transcript_path)
+        ):
+            continue
+        alias_buffered_offset = int(alias_state.get("buffered_line_offset", 0) or 0)
+        source_buffered_offset = int(source_state.get("buffered_line_offset", 0) or 0)
+        if source_has_pending:
+            owned_offset = max(source_buffered_offset, int(source_offset or 0))
+            if alias_buffered_offset <= owned_offset:
+                clear_rolling_state(alias_key)
+                logger.info(
+                    "retired duplicate rolling state for internal alias %s after source session %s "
+                    "owned buffered offset %d",
+                    alias_key,
+                    source_session_id,
+                    owned_offset,
+                )
+            else:
+                logger.warning(
+                    "retained internal alias rolling state %s because buffered offset %d is ahead "
+                    "of source session %s offset %d",
+                    alias_key,
+                    alias_buffered_offset,
+                    source_session_id,
+                    owned_offset,
+                )
+            continue
+
+        migrated = dict(alias_state)
+        migrated["session_id"] = source_session_id
+        migrated["transcript_path"] = str(transcript_path or alias_state.get("transcript_path") or "")
+        migrated["adopted_from_alias_session_id"] = alias_key
+        write_rolling_state(source_session_id, migrated)
+        clear_rolling_state(alias_key)
+        source_state = read_rolling_state(source_session_id)
+        source_has_pending = _rolling_state_has_pending_content(source_state)
+        logger.info(
+            "re-homed rolling state for internal alias %s into source session %s",
+            alias_key,
+            source_session_id,
+        )
 
 
 def _cursor_shadowed_by_source_cursor(
