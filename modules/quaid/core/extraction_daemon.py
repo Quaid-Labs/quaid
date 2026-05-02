@@ -3952,12 +3952,15 @@ def _should_skip_newly_discovered_orphan_transcript(transcript_path: Path, now_t
             return False
         mtime = transcript_path.stat().st_mtime
     except OSError:
+        # If we cannot stat the host file, do not fabricate a new cursor for it.
         return True
     except Exception:
         return False
     now = time.time() if now_ts is None else float(now_ts)
     if mtime >= installed_at:
         return False
+    # Recently touched pre-install files may still be active host sessions. Only
+    # skip old orphans that have sat untouched past the startup grace window.
     if now - mtime <= _DISCOVERY_STALE_ORPHAN_GRACE_SECONDS:
         return False
     return True
