@@ -666,6 +666,52 @@ class TestExtractFromTranscript:
         assert result["explicit_structural_anchor_facts"] == 1
         assert texts[0] == "Mi ritual de viernes es tostar semillas de calabaza con la clave cedro-plantilla-4821"
 
+    def test_prefixed_turn_parser_accepts_codex_row_timestamps(self):
+        from ingest import extract as extract_mod
+
+        turns = extract_mod._iter_prefixed_turns(
+            "[2026-05-02T14:29:21.414Z] User: My shelf marker is cedar-lantern-4821.\n\n"
+            "[2026-05-02T14:29:23.024Z] Assistant: Noted."
+        )
+
+        assert turns == [
+            ("user", "My shelf marker is cedar-lantern-4821."),
+            ("assistant", "Noted."),
+        ]
+
+    @patch("ingest.extract.call_deep_reasoning")
+    def test_extraction_defaults_created_at_to_transcript_timestamp(self, mock_llm):
+        from ingest.extract import extract_from_transcript
+
+        mock_llm.return_value = (json.dumps({
+            "chunk_assessment": "usable",
+            "facts": [
+                {
+                    "text": "The reading chair has a brass desk lamp beside it",
+                    "category": "fact",
+                    "speaker": "user",
+                    "domains": ["household"],
+                    "extraction_confidence": "high",
+                    "privacy": "private",
+                }
+            ],
+            "soul_snippets": {},
+            "journal_entries": {},
+            "project_logs": {},
+        }), 0.1)
+
+        result = extract_from_transcript(
+            transcript=(
+                "[2026-05-02T14:29:21.414Z] User: The reading chair has a brass desk lamp beside it.\n\n"
+                "[2026-05-02T14:29:23.024Z] Assistant: Noted."
+            ),
+            owner_id="Solomon Steadman",
+            session_id="rollout-2026-05-02T14-28-38-019de917-68bb-7922-a85b-4c154596e703",
+            dry_run=True,
+        )
+
+        assert result["raw_facts"][0]["created_at"] == "2026-05-02T14:29:21+00:00"
+
     @patch("ingest.extract.call_deep_reasoning")
     def test_assistant_named_option_anchor_is_preserved_when_llm_omits_it(self, mock_llm):
         from ingest.extract import extract_from_transcript

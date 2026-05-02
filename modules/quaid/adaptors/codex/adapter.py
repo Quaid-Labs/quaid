@@ -89,6 +89,7 @@ class CodexAdapter(QuaidAdapter):
         r"([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})$",
         flags=re.IGNORECASE,
     )
+    _ROW_TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}[T ][0-2]\d:[0-5]\d")
 
     def __init__(self, home: Optional[Path] = None):
         self._home = home
@@ -663,6 +664,11 @@ class CodexAdapter(QuaidAdapter):
         value = re.sub(r"\n{3,}", "\n\n", value).strip()
         return value
 
+    @classmethod
+    def _row_timestamp(cls, row: dict) -> str:
+        value = str(row.get("timestamp") or "").strip()
+        return value if cls._ROW_TIMESTAMP_RE.match(value) else ""
+
     @staticmethod
     def _extract_lifecycle_command(text: str) -> str:
         value = str(text or "").strip()
@@ -769,17 +775,28 @@ class CodexAdapter(QuaidAdapter):
                         session_source_type = "subagent"
                     continue
                 payload = obj.get("payload") if isinstance(obj.get("payload"), dict) else {}
+                row_timestamp = self._row_timestamp(obj)
 
                 if record_type == "event_msg":
                     payload_type = str(payload.get("type") or "").strip()
                     if payload_type == "user_message":
                         text = str(payload.get("message") or "").strip()
                         if text:
-                            messages.append({"role": "user", "content": text, "source_type": session_source_type})
+                            messages.append({
+                                "role": "user",
+                                "content": text,
+                                "source_type": session_source_type,
+                                "timestamp": row_timestamp,
+                            })
                     elif payload_type == "agent_message":
                         text = str(payload.get("message") or "").strip()
                         if text:
-                            messages.append({"role": "assistant", "content": text, "source_type": session_source_type})
+                            messages.append({
+                                "role": "assistant",
+                                "content": text,
+                                "source_type": session_source_type,
+                                "timestamp": row_timestamp,
+                            })
                     continue
 
                 if record_type == "response_item" and str(payload.get("type") or "").strip() == "message":
@@ -799,7 +816,12 @@ class CodexAdapter(QuaidAdapter):
                         text_parts.append(content.strip())
                     text = "\n".join(text_parts).strip()
                     if text:
-                        fallback_messages.append({"role": role, "content": text, "source_type": session_source_type})
+                        fallback_messages.append({
+                            "role": role,
+                            "content": text,
+                            "source_type": session_source_type,
+                            "timestamp": row_timestamp,
+                        })
 
         selected = messages if messages else fallback_messages
         deduped = []
@@ -810,7 +832,17 @@ class CodexAdapter(QuaidAdapter):
                 continue
             deduped.append(message)
             last_pair = pair
-        return self.build_transcript(deduped)
+        return self._build_timestamped_transcript(deduped)
+
+    def _build_timestamped_transcript(self, messages: list[dict]) -> str:
+        parts = []
+        for message in messages:
+            rendered = self.build_transcript([message]).strip()
+            if not rendered:
+                continue
+            timestamp = str(message.get("timestamp") or "").strip()
+            parts.append(f"[{timestamp}] {rendered}" if timestamp else rendered)
+        return "\n\n".join(parts)
 
     @classmethod
     def _path_session_id(cls, path: Path) -> str:

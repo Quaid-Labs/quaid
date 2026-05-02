@@ -1791,6 +1791,38 @@ class TestCodexAdapter:
         assert transcript.count("Assistant: First answer") == 1
         assert "fallback answer" not in transcript
 
+    def test_parse_session_jsonl_preserves_codex_row_timestamps(self, tmp_path):
+        path = tmp_path / "rollout-timestamps.jsonl"
+        path.write_text(
+            "\n".join(
+                [
+                    json.dumps({
+                        "timestamp": "2026-05-02T14:29:21.414Z",
+                        "type": "event_msg",
+                        "payload": {
+                            "type": "user_message",
+                            "message": "The reading chair has a brass desk lamp beside it.",
+                        },
+                    }),
+                    json.dumps({
+                        "timestamp": "2026-05-02T14:29:23.024Z",
+                        "type": "event_msg",
+                        "payload": {
+                            "type": "agent_message",
+                            "message": "Noted.",
+                        },
+                    }),
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        adapter = CodexAdapter()
+        transcript = adapter.parse_session_jsonl(path)
+
+        assert "[2026-05-02T14:29:21.414Z] User: The reading chair has a brass desk lamp" in transcript
+        assert "[2026-05-02T14:29:23.024Z] Assistant: Noted." in transcript
+
     def test_parse_session_jsonl_marks_thread_spawn_children_as_subagent(self, tmp_path):
         path = tmp_path / "rollout-subagent.jsonl"
         path.write_text(

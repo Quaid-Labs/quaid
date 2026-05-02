@@ -1989,6 +1989,20 @@ def test_timeout_classifier_treats_short_startup_turn_as_ignore_not_internal(tur
     assert not extraction_daemon._transcript_has_meaningful_timeout_user_content(transcript)
 
 
+def test_timeout_classifier_ignores_structural_turn_timestamps():
+    transcript = (
+        "[2026-05-02T14:29:12.371Z] User: A new session was started via /new or /reset.\n"
+        "[2026-05-02T14:29:12.371Z] Assistant: NO_REPLY\n"
+        "[2026-05-02T14:29:21.414Z] User: Hola"
+    )
+
+    assert (
+        extraction_daemon._classify_timeout_transcript_content(transcript)
+        == extraction_daemon._TRANSCRIPT_CLASS_IGNORE_CONTENT
+    )
+    assert not extraction_daemon._transcript_has_meaningful_timeout_user_content(transcript)
+
+
 def test_reconcile_consumes_short_startup_turn_without_internal_cursor(monkeypatch, tmp_path):
     import sys
     import types

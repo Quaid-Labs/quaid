@@ -52,6 +52,9 @@ logger = logging.getLogger(__name__)
 
 _SESSION_DATE_RE = re.compile(r"(?<!\d)(\d{4}-\d{2}-\d{2})(?!\d)")
 _ISO_DATE_ANCHOR_RE = re.compile(r"\b\d{4}-\d{2}-\d{2}\b")
+_TRANSCRIPT_TIMESTAMP_RE = re.compile(
+    r"\d{4}-\d{2}-\d{2}[T ][0-2]\d:[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?"
+)
 
 
 def _project_log_date_for_payload(session_id: str) -> Optional[str]:
@@ -77,6 +80,13 @@ def _normalize_extracted_timestamp(value: Any) -> Optional[str]:
     except ValueError:
         return None
     return parsed.isoformat(timespec="seconds")
+
+
+def _first_transcript_timestamp_hint(transcript_text: str) -> Optional[str]:
+    match = _TRANSCRIPT_TIMESTAMP_RE.search(str(transcript_text or ""))
+    if not match:
+        return None
+    return _normalize_extracted_timestamp(match.group(0))
 
 
 def _timestamp_sort_key(value: Any) -> Tuple[int, str]:
@@ -1083,7 +1093,7 @@ def _collapse_duplicate_payload_facts(facts: List[Dict[str, Any]]) -> Tuple[List
 
 
 _SPEAKER_PREFIX_RE = re.compile(
-    r"^\s*(User|Assistant|Agent|System|Tool|Developer):\s*(.*)$",
+    r"^\s*(?:\[\d{4}-\d{2}-\d{2}[T ][^\]]+\]\s*)?(User|Assistant|Agent|System|Tool|Developer):\s*(.*)$",
     re.IGNORECASE,
 )
 _INJECTED_MEMORIES_RE = re.compile(r"<injected_memories\b[^>]*>.*?</injected_memories>", re.IGNORECASE | re.DOTALL)
@@ -2453,6 +2463,7 @@ def _merge_parsed_payloads(
     session_date_hint: Optional[str] = None,
 ) -> None:
     """Merge extracted payloads into top-level accumulators in chunk order."""
+    effective_date_hint = _first_transcript_timestamp_hint(transcript_text) or session_date_hint
     for parsed in payloads:
         result["chunks_processed"] = int(result.get("chunks_processed", 0) or 0) + 1
         parsed_facts = parsed.get("facts", []) or []
@@ -2469,7 +2480,7 @@ def _merge_parsed_payloads(
                 valid_facts.append(
                     _normalize_fact_temporal_hint(
                         raw_fact,
-                        default_created_at=session_date_hint,
+                        default_created_at=effective_date_hint,
                     )
                 )
             if invalid_fact_count:
@@ -2480,7 +2491,7 @@ def _merge_parsed_payloads(
             valid_facts = _filter_unsupported_specificity_facts(
                 valid_facts,
                 transcript_text=transcript_text,
-                session_date_hint=session_date_hint,
+                session_date_hint=effective_date_hint,
                 result=result,
                 label=label,
                 chunk_label=chunk_label,
@@ -2501,7 +2512,7 @@ def _merge_parsed_payloads(
         for project_name, items in (parsed.get("project_logs", {}) or {}).items():
             cleaned = _normalize_project_log_entries(
                 items,
-                default_created_at=session_date_hint,
+                default_created_at=effective_date_hint,
             )
             if cleaned:
                 all_project_logs.setdefault(str(project_name), []).extend(cleaned)

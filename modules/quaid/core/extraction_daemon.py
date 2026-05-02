@@ -70,7 +70,10 @@ _SIGNAL_POLL_PRIORITY = {
 _ROLLING_INTERNAL_ADVANCE_GRACE_SECONDS = 60.0
 _DISCOVERY_STALE_ORPHAN_GRACE_SECONDS = 10 * 60
 _IGNORED_TIMEOUT_USER_TURN_MAX_CHARS = 12
-_TRANSCRIPT_ROLE_RE = re.compile(r"^\s*(User|Assistant|System):\s*(.*)$", re.IGNORECASE)
+_TRANSCRIPT_ROLE_RE = re.compile(
+    r"^\s*(?:\[\d{4}-\d{2}-\d{2}[T ][^\]]+\]\s*)?(User|Assistant|System):\s*(.*)$",
+    re.IGNORECASE,
+)
 _TRANSCRIPT_CLASS_INTERNAL_MAINTENANCE = "internal_maintenance"
 _TRANSCRIPT_CLASS_IGNORE_CONTENT = "ignore_content"
 _TRANSCRIPT_CLASS_MEANINGFUL_USER_CONTENT = "meaningful_user_content"
