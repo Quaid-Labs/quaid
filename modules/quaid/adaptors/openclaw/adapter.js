@@ -2309,8 +2309,8 @@ function writeDaemonSignal(sessionId, signalType, meta) {
   const fname = `${Date.now()}_${process.pid}_${signalType}.json`;
   const sigPath = path.join(signalDir, fname);
   try {
-    fs.writeFileSync(sigPath, JSON.stringify(payload), { mode: 384 });
     pingDaemonAliveIfNeeded(agentLabel ? getInstanceId(agentLabel) : _QUAID_INSTANCE);
+    fs.writeFileSync(sigPath, JSON.stringify(payload), { mode: 384 });
     console.log(`[quaid][daemon-signal] wrote ${signalType} signal for session=${sessionId} path=${sigPath}`);
     return sigPath;
   } catch (err) {

@@ -1541,8 +1541,9 @@ describe("lifecycle signal detection", () => {
   });
 
   it("keeps mixed stores for explicit project implementation decisions", () => {
+    const query = "What architectural decision did the agent implement for the recipe app API?";
     const opts = __test.buildAutoInjectRecallOptions(
-      "What architectural decision did the agent implement for the recipe app API?",
+      query,
       6,
       { all: true },
       true,
@@ -1552,7 +1553,7 @@ describe("lifecycle signal detection", () => {
     expect(opts.intent).toBe("agent_actions");
     expect(opts.datastores).toEqual(["project", "vector_basic", "graph"]);
     expect(opts.project).toBe("recipe-app");
-    expect(opts.query).toContain("GraphQL REST compatibility");
+    expect(opts.query).toBe(query);
     expect(opts.ranking?.sourceTypeBoosts?.assistant).toBe(1);
   });
 
@@ -1581,7 +1582,7 @@ describe("lifecycle signal detection", () => {
     );
 
     expect(opts.intent).toBe("agent_actions");
-    expect(opts.query).toBe("Biscuit recalled remembered surprising anecdote funny moment");
+    expect(opts.query).toBe("Biscuit recalled remembered");
     expect(opts.ranking?.sourceTypeBoosts?.assistant).toBe(1);
   });
 

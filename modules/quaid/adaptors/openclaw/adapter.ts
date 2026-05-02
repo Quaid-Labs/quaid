@@ -2924,10 +2924,12 @@ function writeDaemonSignal(
   const fname = `${Date.now()}_${process.pid}_${signalType}.json`;
   const sigPath = path.join(signalDir, fname);
   try {
-    fs.writeFileSync(sigPath, JSON.stringify(payload), { mode: 0o600 });
     // Signal writers must also act as daemon wakeup points so extraction
-    // resumes even when no normal prompt path fires after a crash.
+    // resumes even when no normal prompt path fires after a crash. Wake before
+    // writing so a freshly started daemon cannot consume the returned path
+    // before callers that inspect the signal file can read it.
     pingDaemonAliveIfNeeded(agentLabel ? getInstanceId(agentLabel) : _QUAID_INSTANCE);
+    fs.writeFileSync(sigPath, JSON.stringify(payload), { mode: 0o600 });
     console.log(`[quaid][daemon-signal] wrote ${signalType} signal for session=${sessionId} path=${sigPath}`);
     return sigPath;
   } catch (err: unknown) {
