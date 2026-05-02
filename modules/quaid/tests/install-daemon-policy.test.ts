@@ -322,6 +322,8 @@ describe("install daemon policy", () => {
     expect(setupText).toContain("delete plugins.slots.memory;");
     expect(setupText).toContain("delete plugins.installs.quaid;");
     expect(setupText).toContain("Cleared stale Quaid plugin registration; restarting OpenClaw gateway...");
+    expect(setupText).toContain("Starting foreground OpenClaw gateway recovery...");
+    expect(setupText).toContain('_startForegroundOpenClawGateway(cfgCli, "stale Quaid plugin preflight recovery")');
   });
 
   it("OpenClaw validation treats plugin-list visibility as diagnostic after direct registration passes", () => {

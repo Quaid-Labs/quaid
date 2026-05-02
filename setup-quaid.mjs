@@ -3336,6 +3336,15 @@ async function step1_preflight() {
       if (await waitForGatewayWarmup(60_000)) {
         gatewayHealthCode = _gatewayHttpCode("/health", "GET", null);
       }
+      if (gatewayHealthCode !== 200 && _foregroundGatewayRecoveryEnabled()) {
+        s.message("Starting foreground OpenClaw gateway recovery...");
+        if (
+          _startForegroundOpenClawGateway(cfgCli, "stale Quaid plugin preflight recovery")
+          && await waitForGatewayWarmup(60_000)
+        ) {
+          gatewayHealthCode = _gatewayHttpCode("/health", "GET", null);
+        }
+      }
     }
     if (gatewayHealthCode !== 200) {
       s.stop(C.red("Gateway offline"), 2);
