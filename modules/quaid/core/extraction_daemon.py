@@ -1225,15 +1225,6 @@ def write_cursor(
                 legacy_file.unlink()
         except OSError:
             pass
-        # Source-keyed cursor writes are authoritative for a transcript source.
-        # Once they carry non-internal content, retire stale short-id aliases.
-        if not bool(internal):
-            _retire_shadowed_internal_alias_cursors(
-                source_session_id=session_id,
-                source_key=cursor_key,
-                transcript_path=transcript_path,
-                source_offset=int(line_offset or 0),
-            )
 
 
 def _canonicalize_transcript_source_path(transcript_path: str) -> str:
@@ -1295,25 +1286,6 @@ def _signal_source_cursor_key(
     return f"source-{digest}"
 
 
-def _transcript_path_uuid(transcript_path: str) -> str:
-    raw = str(transcript_path or "").strip()
-    if not raw:
-        return ""
-    uuid_match = _SESSION_ID_UUID_RE.search(os.path.basename(raw))
-    return uuid_match.group(0).lower() if uuid_match else ""
-
-
-def _is_bare_uuid_session_for_transcript(session_id: str, transcript_path: str) -> bool:
-    source_uuid = _transcript_path_uuid(transcript_path)
-    return bool(source_uuid and str(session_id or "").strip().lower() == source_uuid)
-
-
-def _is_rollout_session_alias(session_id: str, transcript_path: str) -> bool:
-    raw = str(session_id or "").strip().lower()
-    source_uuid = _transcript_path_uuid(transcript_path)
-    return bool(source_uuid and raw.startswith("rollout-") and source_uuid in raw)
-
-
 def _signal_meta_cursor_key(session_id: str, meta: Any) -> str:
     if not isinstance(meta, dict):
         return ""
@@ -1331,259 +1303,6 @@ def _read_cursor_with_source_compat(session_id: str, source_key: Optional[str]) 
         except TypeError:
             pass
     return read_cursor(session_id)
-
-
-def _retire_shadowed_internal_alias_cursors(
-    *,
-    source_session_id: str,
-    source_key: str,
-    transcript_path: str,
-    source_offset: int,
-) -> None:
-    """Remove stale internal aliases once a source-key cursor owns real content.
-
-    This is adapter-agnostic: CDX sibling rollout exposed the bad state, but any
-    stale internal alias for the same transcript source should be retired.
-    """
-    if not source_key or not transcript_path:
-        return
-    # Offset zero is still bootstrap; wait until the source cursor owns content.
-    if source_offset <= 0:
-        return
-    try:
-        cursor_files = list(_cursor_dir().glob("*.json"))
-    except OSError:
-        return
-    for cursor_file in cursor_files:
-        if cursor_file.stem == source_key:
-            continue
-        try:
-            alias_cursor = json.loads(cursor_file.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            continue
-        if not bool(alias_cursor.get("internal", False)):
-            continue
-        alias_path = str(alias_cursor.get("transcript_path") or "").strip()
-        if (
-            _canonicalize_transcript_source_path(alias_path)
-            != _canonicalize_transcript_source_path(transcript_path)
-        ):
-            continue
-        try:
-            alias_offset = int(alias_cursor.get("line_offset", 0) or 0)
-        except Exception:
-            alias_offset = 0
-        if source_offset < alias_offset:
-            continue
-        alias_session_id = str(alias_cursor.get("session_id") or cursor_file.stem).strip()
-        _retire_shadowed_internal_alias_rolling_state(
-            source_session_id=source_session_id,
-            alias_session_id=alias_session_id,
-            alias_state_key=cursor_file.stem,
-            transcript_path=transcript_path,
-            source_offset=source_offset,
-        )
-        try:
-            cursor_file.unlink()
-            logger.info(
-                "retired internal alias cursor %s after source cursor %s reached offset %d",
-                cursor_file.name,
-                source_key,
-                source_offset,
-            )
-        except OSError as exc:
-            logger.warning(
-                "failed to retire internal alias cursor %s after source cursor %s "
-                "reached offset %d: %s",
-                cursor_file.name,
-                source_key,
-                source_offset,
-                exc,
-            )
-            continue
-
-
-def _retire_shadowed_internal_alias_rolling_state(
-    *,
-    source_session_id: str,
-    alias_session_id: str,
-    alias_state_key: str,
-    transcript_path: str,
-    source_offset: int,
-) -> None:
-    """Move or drop stale alias rolling state when source-key ownership is proven."""
-    source_session_id = _validate_session_id(source_session_id)
-    alias_keys: List[str] = []
-    for candidate in (alias_session_id, alias_state_key):
-        raw = str(candidate or "").strip()
-        if not raw:
-            continue
-        try:
-            key = _validate_session_id(raw)
-        except Exception:
-            continue
-        if key != source_session_id and key not in alias_keys:
-            alias_keys.append(key)
-    if not alias_keys:
-        return
-
-    source_state = read_rolling_state(source_session_id)
-    source_has_pending = _rolling_state_has_pending_content(source_state)
-    for alias_key in alias_keys:
-        alias_state = read_rolling_state(alias_key)
-        if not _rolling_state_has_pending_content(alias_state):
-            clear_rolling_state(alias_key)
-            continue
-        alias_path = str(alias_state.get("transcript_path") or "").strip()
-        if (
-            alias_path
-            and _canonicalize_transcript_source_path(alias_path)
-            != _canonicalize_transcript_source_path(transcript_path)
-        ):
-            continue
-        alias_buffered_offset = int(alias_state.get("buffered_line_offset", 0) or 0)
-        source_buffered_offset = int(source_state.get("buffered_line_offset", 0) or 0)
-        if source_has_pending:
-            owned_offset = max(source_buffered_offset, int(source_offset or 0))
-            if alias_buffered_offset <= owned_offset:
-                clear_rolling_state(alias_key)
-                logger.info(
-                    "retired duplicate rolling state for internal alias %s after source session %s "
-                    "owned buffered offset %d",
-                    alias_key,
-                    source_session_id,
-                    owned_offset,
-                )
-            else:
-                merged_state = _merge_shadowed_internal_alias_rolling_state(
-                    source_session_id=source_session_id,
-                    source_state=source_state,
-                    alias_key=alias_key,
-                    alias_state=alias_state,
-                    transcript_path=transcript_path,
-                )
-                write_rolling_state(source_session_id, merged_state)
-                clear_rolling_state(alias_key)
-                source_state = read_rolling_state(source_session_id)
-                source_has_pending = _rolling_state_has_pending_content(source_state)
-                logger.info(
-                    "merged ahead rolling state for internal alias %s into source session %s "
-                    "(alias_offset=%d source_offset=%d)",
-                    alias_key,
-                    source_session_id,
-                    alias_buffered_offset,
-                    owned_offset,
-                )
-            continue
-
-        migrated = dict(alias_state)
-        migrated["session_id"] = source_session_id
-        migrated["transcript_path"] = str(transcript_path or alias_state.get("transcript_path") or "")
-        migrated["adopted_from_alias_session_id"] = alias_key
-        write_rolling_state(source_session_id, migrated)
-        clear_rolling_state(alias_key)
-        source_state = read_rolling_state(source_session_id)
-        source_has_pending = _rolling_state_has_pending_content(source_state)
-        logger.info(
-            "re-homed rolling state for internal alias %s into source session %s",
-            alias_key,
-            source_session_id,
-        )
-
-
-def _merge_shadowed_internal_alias_rolling_state(
-    *,
-    source_session_id: str,
-    source_state: Dict[str, Any],
-    alias_key: str,
-    alias_state: Dict[str, Any],
-    transcript_path: str,
-) -> Dict[str, Any]:
-    """Merge alias rolling state into source state without leaving an adoptable alias."""
-    merged = dict(source_state or {})
-    merged["session_id"] = source_session_id
-    merged["transcript_path"] = str(transcript_path or alias_state.get("transcript_path") or "")
-    merged["merged_from_alias_session_id"] = alias_key
-
-    source_text = str((source_state or {}).get("semantic_buffer", "") or "").strip()
-    alias_text = str((alias_state or {}).get("semantic_buffer", "") or "").strip()
-    if alias_text:
-        if not source_text:
-            semantic_buffer = alias_text
-        elif alias_text == source_text or alias_text in source_text:
-            semantic_buffer = source_text
-        elif source_text in alias_text:
-            semantic_buffer = alias_text
-        else:
-            semantic_buffer = f"{source_text}\n\n{alias_text}"
-        merged["semantic_buffer"] = semantic_buffer
-        try:
-            from lib.tokens import estimate_tokens
-            merged["semantic_buffer_tokens"] = estimate_tokens(semantic_buffer) if semantic_buffer else 0
-        except Exception:
-            merged["semantic_buffer_tokens"] = len(semantic_buffer.split()) if semantic_buffer else 0
-
-    for key in ("processed_line_offset", "buffered_line_offset"):
-        merged[key] = max(
-            int((source_state or {}).get(key, 0) or 0),
-            int((alias_state or {}).get(key, 0) or 0),
-        )
-
-    merged["carry_facts"] = _merge_unique_dict_rows(
-        list((source_state or {}).get("carry_facts", []) or []),
-        list((alias_state or {}).get("carry_facts", []) or []),
-    )
-    merged["raw_facts"] = _merge_unique_dict_rows(
-        list((source_state or {}).get("raw_facts", []) or []),
-        list((alias_state or {}).get("raw_facts", []) or []),
-    )
-    snippets = dict((source_state or {}).get("raw_snippets", {}) or {})
-    for filename, items in ((alias_state or {}).get("raw_snippets", {}) or {}).items():
-        snippets[str(filename)] = _merge_unique_strings(
-            snippets.get(str(filename), []),
-            list(items or []) if isinstance(items, list) else [],
-        )
-    merged["raw_snippets"] = snippets
-
-    journal = dict((source_state or {}).get("raw_journal", {}) or {})
-    for filename, text in ((alias_state or {}).get("raw_journal", {}) or {}).items():
-        if not isinstance(text, str) or not text.strip():
-            continue
-        if filename in journal and str(journal[filename] or "").strip():
-            if text.strip() not in str(journal[filename]):
-                journal[filename] = f"{str(journal[filename]).strip()}\n\n{text.strip()}"
-        else:
-            journal[filename] = text.strip()
-    merged["raw_journal"] = journal
-
-    project_logs = dict((source_state or {}).get("raw_project_logs", {}) or {})
-    for project_name, items in ((alias_state or {}).get("raw_project_logs", {}) or {}).items():
-        project_logs[str(project_name)] = _merge_project_log_entries(
-            project_logs.get(str(project_name), []),
-            list(items or []) if isinstance(items, list) else [],
-        )
-    merged["raw_project_logs"] = project_logs
-
-    for key in ("rolling_batches", "facts_skipped", "payload_duplicate_facts_collapsed", "carry_duplicate_facts_dropped"):
-        merged[key] = max(
-            int((source_state or {}).get(key, 0) or 0),
-            int((alias_state or {}).get(key, 0) or 0),
-        )
-    return merged
-
-
-def _merge_unique_dict_rows(existing: List[Dict[str, Any]], incoming: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    rows: List[Dict[str, Any]] = []
-    seen: set[str] = set()
-    for item in list(existing or []) + list(incoming or []):
-        if not isinstance(item, dict):
-            continue
-        key = json.dumps(item, sort_keys=True, default=str)
-        if key in seen:
-            continue
-        seen.add(key)
-        rows.append(dict(item))
-    return rows
 
 
 def _cursor_shadowed_by_source_cursor(
@@ -1631,58 +1350,6 @@ def _cursor_shadowed_by_source_cursor(
     return True
 
 
-def _source_cursor_has_shadowed_internal_alias(
-    *,
-    source_key: str,
-    transcript_path: str,
-    source_cursor_data: Dict[str, Any],
-    details: Optional[Dict[str, Any]] = None,
-) -> bool:
-    """Return True when an internal alias cursor proves a source-key rollover boundary."""
-    if not source_key or not transcript_path:
-        return False
-    try:
-        source_offset = int(source_cursor_data.get("line_offset", 0) or 0)
-    except Exception:
-        source_offset = 0
-    try:
-        cursor_files = list(_cursor_dir().glob("*.json"))
-    except OSError:
-        return False
-    for cursor_file in cursor_files:
-        if cursor_file.stem == source_key:
-            continue
-        try:
-            alias_cursor = json.loads(cursor_file.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            continue
-        if not bool(alias_cursor.get("internal", False)):
-            continue
-        alias_path = str(alias_cursor.get("transcript_path") or "").strip()
-        if (
-            _canonicalize_transcript_source_path(alias_path)
-            != _canonicalize_transcript_source_path(transcript_path)
-        ):
-            continue
-        try:
-            alias_offset = int(alias_cursor.get("line_offset", 0) or 0)
-        except Exception:
-            alias_offset = 0
-        # CDX sibling rollouts create an internal short-id alias once the
-        # source cursor catches up; fresh zero-offset aliases are not a boundary.
-        if source_offset >= alias_offset and not (source_offset == alias_offset == 0):
-            if details is not None:
-                details.update({
-                    "alias_cursor": cursor_file.name,
-                    "alias_session_id": str(alias_cursor.get("session_id") or cursor_file.stem),
-                    "alias_offset": alias_offset,
-                    "alias_updated_at": str(alias_cursor.get("updated_at") or ""),
-                    "source_offset": source_offset,
-                })
-            return True
-    return False
-
-
 def _pending_signal_source_keys(signals: List[Dict[str, Any]]) -> set[str]:
     keys: set[str] = set()
     for signal in signals:
@@ -1702,99 +1369,6 @@ def _pending_signal_source_keys(signals: List[Dict[str, Any]]) -> set[str]:
         except Exception:
             continue
     return keys
-
-
-def _cursor_row_preference(row: Dict[str, Any]) -> Tuple[int, int, float, str]:
-    """Sort key for duplicate cursor rows that describe one transcript source."""
-    session_id = str(row.get("session_id") or "")
-    transcript_path = str(row.get("transcript_path") or "")
-    if _is_bare_uuid_session_for_transcript(session_id, transcript_path):
-        alias_rank = 0
-    elif _is_rollout_session_alias(session_id, transcript_path):
-        alias_rank = 2
-    else:
-        alias_rank = 1
-    cursor_offset = int(row.get("cursor_offset", 0) or 0)
-    return (
-        -cursor_offset,
-        alias_rank,
-        -float(row.get("mtime", 0.0) or 0.0),
-        session_id,
-    )
-
-
-def _drop_duplicate_semantic_rollout_state(row: Dict[str, Any], preferred: Dict[str, Any]) -> None:
-    """Remove a rollout semantic buffer that a preferred bare UUID row can drain."""
-    session_id = str(row.get("session_id") or "").strip()
-    transcript_path = str(row.get("transcript_path") or "").strip()
-    preferred_session_id = str(preferred.get("session_id") or "").strip()
-    preferred_path = str(preferred.get("transcript_path") or "").strip()
-    if not session_id or not transcript_path or session_id == preferred_session_id:
-        return
-    if not _is_bare_uuid_session_for_transcript(preferred_session_id, preferred_path):
-        return
-    if not _is_rollout_session_alias(session_id, transcript_path):
-        return
-    if (
-        _canonicalize_transcript_source_path(transcript_path)
-        != _canonicalize_transcript_source_path(preferred_path)
-    ):
-        return
-    state = read_rolling_state(session_id)
-    if not _rolling_state_has_pending_content(state) or staged_state_has_payload(state):
-        return
-    clear_rolling_state(session_id)
-    logger.info(
-        "retired duplicate rollout semantic buffer %s in favor of bare UUID session %s for source %s",
-        session_id,
-        preferred_session_id,
-        row.get("source_key", ""),
-    )
-
-
-def _drop_duplicate_semantic_rollout_states_for_preferred(preferred: Dict[str, Any]) -> None:
-    for row in list(preferred.get("shadowed_source_rows", []) or []):
-        if isinstance(row, dict):
-            _drop_duplicate_semantic_rollout_state(row, preferred)
-
-
-def _dedupe_cursor_rows_by_source(cursor_rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Prefer one active cursor row per source to avoid alias double timeouts."""
-    by_source: Dict[str, List[Dict[str, Any]]] = {}
-    for row in cursor_rows:
-        source_key = str(row.get("source_key") or "").strip()
-        if not source_key:
-            try:
-                source_key = _signal_source_cursor_key(
-                    str(row.get("session_id") or ""),
-                    str(row.get("transcript_path") or ""),
-                    cursor_data=row.get("cursor_data") if isinstance(row.get("cursor_data"), dict) else None,
-                )
-            except Exception:
-                source_key = ""
-        row["source_key"] = source_key
-        by_source.setdefault(source_key or f"session:{row.get('session_id')}", []).append(row)
-
-    keep_ids: set[int] = set()
-    for source_key, rows in by_source.items():
-        if len(rows) == 1:
-            keep_ids.add(id(rows[0]))
-            continue
-        preferred = min(rows, key=_cursor_row_preference)
-        keep_ids.add(id(preferred))
-        for row in rows:
-            if row is preferred:
-                continue
-            preferred.setdefault("shadowed_source_rows", []).append(row)
-            logger.info(
-                "session %s cursor for source %s shadowed by preferred session %s; "
-                "skipping duplicate timeout scan",
-                row.get("session_id", ""),
-                source_key,
-                preferred.get("session_id", ""),
-            )
-
-    return [row for row in cursor_rows if id(row) in keep_ids]
 
 
 def _deferred_extraction_dir() -> Path:
@@ -3138,35 +2712,6 @@ def read_transcript_slice(transcript_path: str, from_line: int) -> List[str]:
     return lines
 
 
-def read_transcript_line_range(transcript_path: str, from_line: int, to_line: int) -> List[str]:
-    """Read transcript lines in [from_line, to_line) without losing raw metadata."""
-    try:
-        start = max(0, int(from_line or 0))
-        stop = max(start, int(to_line or 0))
-    except Exception:
-        return []
-    if stop <= start:
-        return []
-    lines = []
-    try:
-        with open(transcript_path, "r", encoding="utf-8", errors="replace") as f:
-            for i, line in enumerate(f):
-                if i < start:
-                    continue
-                if i >= stop:
-                    break
-                lines.append(line)
-                if len(lines) >= MAX_TRANSCRIPT_LINES:
-                    logger.warning(
-                        "transcript %s: range capped at %d lines (%d:%d)",
-                        transcript_path, MAX_TRANSCRIPT_LINES, start, stop,
-                    )
-                    break
-    except OSError as e:
-        logger.error("failed reading transcript range %s: %s", transcript_path, e)
-    return lines
-
-
 def _parse_transcript_lines(lines: List[str], adapter=None) -> str:
     """Parse raw session JSONL lines into the semantic transcript text the model sees."""
     if not lines:
@@ -3193,10 +2738,6 @@ def _parse_transcript_lines(lines: List[str], adapter=None) -> str:
                 os.unlink(tmp_path)
             except OSError:
                 pass
-
-
-def _parsed_text_has_timestamp_context(text: str) -> bool:
-    return bool(re.search(r"\d{4}-\d{2}-\d{2}[T ][0-2]\d:[0-5]\d", str(text or "")))
 
 
 def _append_semantic_buffer(state: Dict[str, Any], parsed_text: str, line_offset: int) -> Dict[str, Any]:
@@ -5011,21 +4552,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                     chunk_line_budget=chunk_line_budget,
                 )
                 refreshed_semantic_buffer_for_nonrolling = False
-            raw_buffered_text = ""
-            if buffered_line_offset > cursor_offset and transcript_path and os.path.isfile(transcript_path):
-                raw_buffered_lines = read_transcript_line_range(
-                    transcript_path,
-                    cursor_offset,
-                    buffered_line_offset,
-                )
-                if raw_buffered_lines:
-                    raw_buffered_text = _parse_transcript_lines(raw_buffered_lines, adapter=adapter)
-            semantic_buffer_text = str(staged_state.get("semantic_buffer", "") or "").strip()
-            buffered_text = (
-                raw_buffered_text
-                if _parsed_text_has_timestamp_context(raw_buffered_text)
-                else semantic_buffer_text
-            )
+            buffered_text = str(staged_state.get("semantic_buffer", "") or "").strip()
             tail_text = str(transcript_text or "").strip()
             if staged_semantic_buffer_for_nonrolling and staged_fresh_semantic_buffer_for_nonrolling:
                 # The fresh tail was appended into semantic_buffer and staged above.
@@ -5950,11 +5477,6 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
         except OSError:
             continue
 
-        try:
-            source_key = _signal_source_cursor_key(str(session_id), str(transcript_path), cursor_data=data)
-        except Exception:
-            source_key = ""
-
         cursor_rows.append({
             "session_id": session_id,
             "transcript_path": transcript_path,
@@ -5964,11 +5486,7 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
             "current_size_bytes": _transcript_size_bytes(transcript_path),
             "mtime": mtime,
             "cursor_data": data,
-            "cursor_file": cursor_file,
-            "source_key": source_key,
         })
-
-    cursor_rows = _dedupe_cursor_rows_by_source(cursor_rows)
 
     # Process recently-active sessions first. Old stale cursors can be expensive
     # to re-extract and should not starve the session that just crossed its idle
@@ -6019,22 +5537,12 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
         )
 
         if has_flushable_rolling_content and session_id not in pending_session_ids:
-            # Use the sorted-row cursor payload here; the earlier raw loop
-            # variable may refer to a different cursor after cursor_rows sorting.
             source_key = _signal_source_cursor_key(session_id, transcript_path, cursor_data=row_cursor_data)
             if source_key in pending_source_keys:
-                _drop_duplicate_semantic_rollout_states_for_preferred(row)
                 continue
             newer_session_exists = any(
                 float(other["mtime"]) > mtime and str(other["session_id"]) != session_id
                 for other in cursor_rows
-            )
-            alias_boundary_details: Dict[str, Any] = {}
-            internal_alias_boundary = _source_cursor_has_shadowed_internal_alias(
-                source_key=source_key,
-                transcript_path=transcript_path,
-                source_cursor_data=row_cursor_data,
-                details=alias_boundary_details,
             )
             if newer_session_exists:
                 logger.info(
@@ -6046,39 +5554,7 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
                     session_id=session_id,
                     transcript_path=transcript_path,
                 )
-                _drop_duplicate_semantic_rollout_states_for_preferred(row)
                 continue
-            alias_boundary_idle = bool(
-                internal_alias_boundary
-                and mtime >= installed_at_ts
-                and (now - mtime) >= timeout_seconds
-            )
-            if internal_alias_boundary:
-                recovery_action = (
-                    "real timeout boundary reached; allowing normal timeout signal"
-                    if alias_boundary_idle
-                    else "preserving semantic buffer until a real lifecycle or timeout boundary"
-                )
-                logger.error(
-                    "CURSOR_HEAL_REQUIRED STUCK CURSOR HEAL: session %s source_key=%s "
-                    "transcript_path=%s source_offset=%s alias_cursor=%s "
-                    "alias_session_id=%s alias_offset=%s alias_updated_at=%s "
-                    "upstream_reason=internal alias cursor was marked internal=true "
-                    "from earlier startup/maintenance-only classification; source cursor now "
-                    "owns non-internal content. This is a recovery path; real sibling init "
-                    "or lifecycle closure should have prevented this. action=%s.",
-                    session_id,
-                    source_key,
-                    transcript_path,
-                    alias_boundary_details.get("source_offset", ""),
-                    alias_boundary_details.get("alias_cursor", ""),
-                    alias_boundary_details.get("alias_session_id", ""),
-                    alias_boundary_details.get("alias_offset", ""),
-                    alias_boundary_details.get("alias_updated_at", ""),
-                    recovery_action,
-                )
-                if not alias_boundary_idle:
-                    continue
 
         if cursor_at_end and not has_flushable_rolling_content:
             # All content already extracted via rolling, but session may be idle without /exit.
@@ -6103,7 +5579,6 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
                         supports_compaction_control=_adapter_supports_compaction_control(),
                         meta={"compact_on_timeout": _get_compact_on_timeout()},
                     )
-                    _drop_duplicate_semantic_rollout_states_for_preferred(row)
                     _cursor_end_timeout_fired.add(session_id)
             continue
 
@@ -6118,9 +5593,8 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
         # Check if we already have a pending signal for this session
         if session_id in pending_session_ids:
             continue
-        source_key = _signal_source_cursor_key(session_id, transcript_path, cursor_data=row_cursor_data)
+        source_key = _signal_source_cursor_key(session_id, transcript_path, cursor_data=data)
         if source_key in pending_source_keys:
-            _drop_duplicate_semantic_rollout_states_for_preferred(row)
             continue
 
         logger.info(
@@ -6135,7 +5609,6 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
             supports_compaction_control=_adapter_supports_compaction_control(),
             meta={"compact_on_timeout": _get_compact_on_timeout()},
         )
-        _drop_duplicate_semantic_rollout_states_for_preferred(row)
 
 
 def _effective_idle_timeout_minutes(
