@@ -969,6 +969,12 @@ Concrete rules:
   having received a STATUS from it, something went wrong — either the tester
   made the ruling internally but did not post, or the mailbox notification did
   not surface. In either case, stop and reconcile before advancing.
+- **Record dashboard timing per cell.** When briefing a lane for a milestone,
+  run `tests/livetest/scripts/livetest-dashboard-cell.sh start <LANE> <MILESTONE>`.
+  When grading it, run
+  `tests/livetest/scripts/livetest-dashboard-cell.sh finish <LANE> <MILESTONE> <STATUS>`.
+  The finish step writes cells like `PASS 5m` or `PASS-PWN 12m`; use
+  `start --force` for explicit retests that should overwrite a closed cell.
 - **Tester must not auto-advance.** After a milestone passes the tester must
   wait for coordinator `ACK + next milestone` before moving on. If you see a
   tester starting the next milestone on its own, rein it in and require

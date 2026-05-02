@@ -206,6 +206,7 @@ exclusively via SSH — they cannot accidentally affect the local machine.
 | `verify-cc-session-capture.sh` | Verify the CC lane created a real Claude transcript on the remote (hooks present, project instance pinned, fresh `~/.claude/projects/.../*.jsonl`, hook trace exists) before treating M2 as a runtime extraction issue. |
 | `livetest-dashboard.sh` | Serve a local live-test dashboard at `dashboard.html`, reading `dashboard.log` (title + CSV matrix + notes). |
 | `livetest-dashboard-new-run.sh` | Create/reset `dashboard.log` from `dashboard_template.log` for a new run. |
+| `livetest-dashboard-cell.sh` | Record per-lane/per-milestone start times and write final dashboard cells as `STATUS Xm`. |
 | `livetest-dashboard-autostart-install.sh` | Install/load a user LaunchAgent so dashboard starts automatically on login/system start (macOS). |
 | `livetest-dashboard-autostart-uninstall.sh` | Unload/remove the dashboard LaunchAgent (macOS). |
 | `tmux-msg.sh` | Direct pane message delivery. Use normal mode for inter-agent messages and `--no-chrome` for CC/CDX user-visible test content. |
@@ -275,6 +276,21 @@ CSV format:
 - Optional `#` comment lines are ignored (template uses these for milestone hints)
 - Status text is freeform (`PASS`, `FAIL`, `RUNNING`, `BLOCKED`, etc.)
 - Notes go after `---` in freeform text
+
+Per-cell timing:
+
+```bash
+cd ~/quaidcode/dev/modules/quaid
+tests/livetest/scripts/livetest-dashboard-cell.sh start OC M2
+tests/livetest/scripts/livetest-dashboard-cell.sh finish OC M2 PASS-PWN
+```
+
+`start` records the current UTC time for the `(lane, milestone)` pair and marks
+the cell `RUNNING` when the existing cell is open (`PENDING`, `RUNNING`, empty).
+Use `--force` for an explicit retest that should overwrite a closed cell.
+`finish` writes the final status plus elapsed time rounded to the nearest minute,
+for example `PASS 5m` or `PASS-PWN 12m`. Timing state lives in the gitignored
+`tests/livetest/.dashboard-timing.json`.
 
 Example:
 

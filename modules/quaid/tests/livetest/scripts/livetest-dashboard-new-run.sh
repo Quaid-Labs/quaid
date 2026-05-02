@@ -66,6 +66,7 @@ if [[ -f "$TARGET_LOG" && "$FORCE" -ne 1 ]]; then
 fi
 
 cp "$TEMPLATE_LOG" "$TARGET_LOG"
+rm -f "$LIVETEST_DIR/.dashboard-timing.json" "$LIVETEST_DIR"/.dashboard-timing.json.tmp.*
 
 if [[ -n "$TITLE" ]]; then
   PYTHON_BIN="${QUAID_PYTHON_BIN:-python3}"
