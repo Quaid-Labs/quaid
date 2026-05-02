@@ -1433,7 +1433,7 @@ def test_process_signal_does_not_reextract_tail_after_nonrolling_semantic_stage(
     assert len(published_payloads[0]["raw_facts"]) == 1
 
 
-def test_process_signal_uses_raw_timestamped_lines_for_buffered_semantic_state(monkeypatch, tmp_path):
+def _run_buffered_semantic_boundary_flush(monkeypatch, tmp_path, *, adapter_mode: str, raw_range_missing: bool = False):
     from lib.adapter import set_adapter, reset_adapter
     from ingest import extract as extract_mod
     from core import ingest_runtime
@@ -1479,6 +1479,7 @@ def test_process_signal_uses_raw_timestamped_lines_for_buffered_semantic_state(m
             "processed_line_offset": 2,
             "buffered_line_offset": 2,
             "semantic_buffer": (
+                "SEMANTIC BUFFER: "
                 "User: this sibling3 reading chair has a bronze table lamp beside it.\n\n"
                 "Assistant: Noted: the sibling3 reading chair has a bronze table lamp beside it."
             ),
@@ -1496,6 +1497,8 @@ def test_process_signal_uses_raw_timestamped_lines_for_buffered_semantic_state(m
             return tmp_path
 
         def parse_session_jsonl(self, path):
+            if adapter_mode == "no_timestamp":
+                return "RAW WITHOUT TIMESTAMP: bronze table lamp"
             rows = []
             for raw in Path(path).read_text(encoding="utf-8").splitlines():
                 payload = json.loads(raw)
@@ -1508,6 +1511,8 @@ def test_process_signal_uses_raw_timestamped_lines_for_buffered_semantic_state(m
             return False
 
     extract_calls = []
+    if raw_range_missing:
+        monkeypatch.setattr(extraction_daemon, "read_transcript_line_range", lambda *_args, **_kwargs: [])
 
     def fake_extract_from_transcript(transcript, **_kwargs):
         extract_calls.append(transcript)
@@ -1549,9 +1554,48 @@ def test_process_signal_uses_raw_timestamped_lines_for_buffered_semantic_state(m
     finally:
         reset_adapter()
 
+    return extract_calls
+
+
+def test_process_signal_uses_raw_timestamped_lines_for_buffered_semantic_state(monkeypatch, tmp_path):
+    extract_calls = _run_buffered_semantic_boundary_flush(
+        monkeypatch,
+        tmp_path,
+        adapter_mode="timestamp",
+    )
+
     assert len(extract_calls) == 1
     assert "2026-05-02T07:47:40Z User:" in extract_calls[0]
     assert "bronze table lamp" in extract_calls[0]
+
+
+def test_process_signal_falls_back_to_semantic_buffer_when_raw_range_lacks_timestamp(
+    monkeypatch, tmp_path
+):
+    extract_calls = _run_buffered_semantic_boundary_flush(
+        monkeypatch,
+        tmp_path,
+        adapter_mode="no_timestamp",
+    )
+
+    assert extract_calls == [
+        "SEMANTIC BUFFER: User: this sibling3 reading chair has a bronze table lamp beside it.\n\n"
+        "Assistant: Noted: the sibling3 reading chair has a bronze table lamp beside it."
+    ]
+
+
+def test_process_signal_falls_back_to_semantic_buffer_when_raw_range_missing(monkeypatch, tmp_path):
+    extract_calls = _run_buffered_semantic_boundary_flush(
+        monkeypatch,
+        tmp_path,
+        adapter_mode="timestamp",
+        raw_range_missing=True,
+    )
+
+    assert extract_calls == [
+        "SEMANTIC BUFFER: User: this sibling3 reading chair has a bronze table lamp beside it.\n\n"
+        "Assistant: Noted: the sibling3 reading chair has a bronze table lamp beside it."
+    ]
 
 
 def test_summarize_fact_result_buckets_groups_duplicate_and_skip_reasons():
