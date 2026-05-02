@@ -46,6 +46,10 @@ function isLocalOnlyEmail(email) {
   return /\.local\s*$/i.test(String(email || '').trim());
 }
 
+function isAnthropicNoreply(email) {
+  return /(^|[<\s])[^<\s@]+@anthropic\.com\s*$/i.test(String(email || '').trim());
+}
+
 const localName = runAllowFail('git config user.name');
 const localEmail = runAllowFail('git config user.email');
 const localConfig = loadLocalConfig(localConfigPath);
@@ -56,7 +60,9 @@ const expectedEmail = REQUIRED_OWNER_EMAIL;
 const allowedIdentityPairs = new Set([`${expectedName}\x00${expectedEmail}`]);
 const bannedMessagePatterns = [
   /co-authored-by:/i,
-  /claude code/i,
+  /co-authored-by:\s*claude code(?:\s+[^\n<]*)?/i,
+  /generated\s+(?:with|by)\s+(?:\[)?claude code(?:\])?/i,
+  /noreply@anthropic\.com/i,
   /\b[a-z0-9][a-z0-9._-]*\.local(?=$|[\s,;:)\]}>/"'`])/i,
   /\b[a-z0-9._%+-]+@[a-z0-9.-]+\.local\b/i,
 ];
@@ -138,6 +144,9 @@ if (!raw.ok) {
     if (isLocalOnlyEmail(authorEmail)) {
       failures.push(`${id}: author email "${authorEmail}" is local-only`);
     }
+    if (isAnthropicNoreply(authorEmail)) {
+      failures.push(`${id}: author email "${authorEmail}" is blocked attribution`);
+    }
     if (!allowedIdentityPairs.has(`${committerName}\x00${committerEmail}`)) {
       failures.push(
         `${id}: committer is "${committerName} <${committerEmail}>", expected one of allowed owner identities`,
@@ -145,6 +154,9 @@ if (!raw.ok) {
     }
     if (isLocalOnlyEmail(committerEmail)) {
       failures.push(`${id}: committer email "${committerEmail}" is local-only`);
+    }
+    if (isAnthropicNoreply(committerEmail)) {
+      failures.push(`${id}: committer email "${committerEmail}" is blocked attribution`);
     }
     const message = `${subject}\n${body}`;
     for (const pattern of bannedMessagePatterns) {
