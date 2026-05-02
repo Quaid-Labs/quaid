@@ -1757,6 +1757,12 @@ def _drop_duplicate_semantic_rollout_state(row: Dict[str, Any], preferred: Dict[
     )
 
 
+def _drop_duplicate_semantic_rollout_states_for_preferred(preferred: Dict[str, Any]) -> None:
+    for row in list(preferred.get("shadowed_source_rows", []) or []):
+        if isinstance(row, dict):
+            _drop_duplicate_semantic_rollout_state(row, preferred)
+
+
 def _dedupe_cursor_rows_by_source(cursor_rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Prefer one active cursor row per source to avoid alias double timeouts."""
     by_source: Dict[str, List[Dict[str, Any]]] = {}
@@ -1784,7 +1790,7 @@ def _dedupe_cursor_rows_by_source(cursor_rows: List[Dict[str, Any]]) -> List[Dic
         for row in rows:
             if row is preferred:
                 continue
-            _drop_duplicate_semantic_rollout_state(row, preferred)
+            preferred.setdefault("shadowed_source_rows", []).append(row)
             logger.info(
                 "session %s cursor for source %s shadowed by preferred session %s; "
                 "skipping duplicate timeout scan",
@@ -5889,6 +5895,7 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
             # variable may refer to a different cursor after cursor_rows sorting.
             source_key = _signal_source_cursor_key(session_id, transcript_path, cursor_data=row_cursor_data)
             if source_key in pending_source_keys:
+                _drop_duplicate_semantic_rollout_states_for_preferred(row)
                 continue
             newer_session_exists = any(
                 float(other["mtime"]) > mtime and str(other["session_id"]) != session_id
@@ -5911,6 +5918,7 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
                     session_id=session_id,
                     transcript_path=transcript_path,
                 )
+                _drop_duplicate_semantic_rollout_states_for_preferred(row)
                 continue
             alias_boundary_idle = bool(
                 internal_alias_boundary
@@ -5967,6 +5975,7 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
                         supports_compaction_control=_adapter_supports_compaction_control(),
                         meta={"compact_on_timeout": _get_compact_on_timeout()},
                     )
+                    _drop_duplicate_semantic_rollout_states_for_preferred(row)
                     _cursor_end_timeout_fired.add(session_id)
             continue
 
@@ -5983,6 +5992,7 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
             continue
         source_key = _signal_source_cursor_key(session_id, transcript_path, cursor_data=row_cursor_data)
         if source_key in pending_source_keys:
+            _drop_duplicate_semantic_rollout_states_for_preferred(row)
             continue
 
         logger.info(
@@ -5997,6 +6007,7 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
             supports_compaction_control=_adapter_supports_compaction_control(),
             meta={"compact_on_timeout": _get_compact_on_timeout()},
         )
+        _drop_duplicate_semantic_rollout_states_for_preferred(row)
 
 
 def _effective_idle_timeout_minutes(
