@@ -290,7 +290,9 @@ the cell `RUNNING` when the existing cell is open (`PENDING`, `RUNNING`, empty).
 Use `--force` for an explicit retest that should overwrite a closed cell.
 `finish` writes the final status plus elapsed time rounded to the nearest minute,
 for example `PASS 5m` or `PASS-PWN 12m`. Timing state lives in the gitignored
-`tests/livetest/.dashboard-timing.json`.
+`tests/livetest/.dashboard-timing.json`, and `livetest-dashboard-new-run.sh`
+clears that timing state when it resets `dashboard.log`. If `finish` has no
+recorded start, it still writes the requested status but omits the duration.
 
 Example:
 

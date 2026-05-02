@@ -182,19 +182,20 @@ def command_start(args: argparse.Namespace) -> int:
     stamp, epoch = parse_time(args.at)
     state = load_state(state_path)
     key = state_key(log_path, title_for(lines), args.lane, args.milestone)
-    state["starts"][key] = {
+    entry = {
         "lane": args.lane.strip().upper(),
         "milestone": args.milestone.strip().upper(),
         "log": str(log_path),
         "started_at": iso(stamp),
         "started_epoch": epoch,
     }
-    save_state(state_path, state)
     if not args.no_update:
         old, new = set_cell(log_path, args.lane, args.milestone, args.status, force=args.force)
         if old == new and old.strip().lower() not in OPEN_STATUSES and not args.force:
-            print(f"[dashboard-cell] start recorded; existing closed cell preserved: {args.milestone} {args.lane} = {old}")
+            print(f"[dashboard-cell] start not recorded; existing closed cell preserved: {args.milestone} {args.lane} = {old}")
             return 0
+    state["starts"][key] = entry
+    save_state(state_path, state)
     print(f"[dashboard-cell] start {args.milestone} {args.lane} at {iso(stamp)}")
     return 0
 
@@ -225,8 +226,8 @@ def command_finish(args: argparse.Namespace) -> int:
     else:
         value = status
         print(f"[dashboard-cell] warning: no recorded start for {args.milestone} {args.lane}; writing status without duration", file=sys.stderr)
-    save_state(state_path, state)
     old, new = set_cell(log_path, args.lane, args.milestone, value, force=True)
+    save_state(state_path, state)
     print(f"[dashboard-cell] finish {args.milestone} {args.lane}: {old or '<empty>'} -> {new} at {iso(stamp)}")
     return 0
 
