@@ -1230,6 +1230,8 @@ def write_cursor(
                 legacy_file.unlink()
         except OSError:
             pass
+        # Source-keyed cursor writes are authoritative for a transcript source.
+        # Once they carry non-internal content, retire stale short-id aliases.
         if not bool(internal):
             _retire_shadowed_internal_alias_cursors(
                 source_key=cursor_key,
@@ -1322,8 +1324,15 @@ def _retire_shadowed_internal_alias_cursors(
     transcript_path: str,
     source_offset: int,
 ) -> None:
-    """Remove stale internal aliases once a source-key cursor owns real content."""
-    if not source_key or not transcript_path or source_offset <= 0:
+    """Remove stale internal aliases once a source-key cursor owns real content.
+
+    This is adapter-agnostic: CDX sibling rollout exposed the bad state, but any
+    stale internal alias for the same transcript source should be retired.
+    """
+    if not source_key or not transcript_path:
+        return
+    # Offset zero is still bootstrap; wait until the source cursor owns content.
+    if source_offset <= 0:
         return
     try:
         cursor_files = list(_cursor_dir().glob("*.json"))
@@ -1358,7 +1367,15 @@ def _retire_shadowed_internal_alias_cursors(
                 source_key,
                 source_offset,
             )
-        except OSError:
+        except OSError as exc:
+            logger.warning(
+                "failed to retire internal alias cursor %s after source cursor %s "
+                "reached offset %d: %s",
+                cursor_file.name,
+                source_key,
+                source_offset,
+                exc,
+            )
             continue
 
 
@@ -5540,7 +5557,17 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
                     transcript_path=transcript_path,
                 )
                 continue
+            alias_boundary_idle = bool(
+                internal_alias_boundary
+                and mtime >= installed_at_ts
+                and (now - mtime) >= timeout_seconds
+            )
             if internal_alias_boundary:
+                recovery_action = (
+                    "real timeout boundary reached; allowing normal timeout signal"
+                    if alias_boundary_idle
+                    else "preserving semantic buffer until a real lifecycle or timeout boundary"
+                )
                 logger.error(
                     "CURSOR_HEAL_REQUIRED STUCK CURSOR HEAL: session %s source_key=%s "
                     "transcript_path=%s source_offset=%s alias_cursor=%s "
@@ -5548,8 +5575,7 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
                     "upstream_reason=internal alias cursor was marked internal=true "
                     "from earlier startup/maintenance-only classification; source cursor now "
                     "owns non-internal content. This is a recovery path; real sibling init "
-                    "or lifecycle closure should have prevented this. Preserving semantic "
-                    "buffer until a real lifecycle or timeout boundary.",
+                    "or lifecycle closure should have prevented this. action=%s.",
                     session_id,
                     source_key,
                     transcript_path,
@@ -5558,8 +5584,10 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
                     alias_boundary_details.get("alias_session_id", ""),
                     alias_boundary_details.get("alias_offset", ""),
                     alias_boundary_details.get("alias_updated_at", ""),
+                    recovery_action,
                 )
-                continue
+                if not alias_boundary_idle:
+                    continue
 
         if cursor_at_end and not has_flushable_rolling_content:
             # All content already extracted via rolling, but session may be idle without /exit.
