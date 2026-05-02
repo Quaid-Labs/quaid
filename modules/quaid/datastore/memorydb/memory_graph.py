@@ -9801,6 +9801,35 @@ def _normalize_recall_date_bound(value: Any) -> Optional[str]:
     return match.group(1)
 
 
+def _first_present_config_value(config: Dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        if key in config and config.get(key) not in (None, ""):
+            return config.get(key)
+    return None
+
+
+def _resolve_recall_command_date_bounds(
+    config: Dict[str, Any],
+    *,
+    cli_date_from: Optional[str] = None,
+    cli_date_to: Optional[str] = None,
+) -> Tuple[Optional[Any], Optional[Any]]:
+    """Resolve recall CLI/config date aliases to canonical bounds."""
+    cfg = config if isinstance(config, dict) else {}
+    date_range = cfg.get("date_range") if isinstance(cfg.get("date_range"), dict) else {}
+    date_from = (
+        cli_date_from
+        or _first_present_config_value(cfg, "date_from", "dateFrom", "after", "since")
+        or _first_present_config_value(date_range, "from", "date_from", "dateFrom", "after", "since")
+    )
+    date_to = (
+        cli_date_to
+        or _first_present_config_value(cfg, "date_to", "dateTo", "before", "until", "as_of", "asOf")
+        or _first_present_config_value(date_range, "to", "date_to", "dateTo", "before", "until", "as_of", "asOf")
+    )
+    return date_from, date_to
+
+
 def _recall_row_temporal_date(row: Dict[str, Any]) -> str:
     """Best available source/record date for recall date filtering."""
     for key in ("source_date", "valid_from", "created_at"):
@@ -16357,9 +16386,12 @@ if __name__ == "__main__":
         #   "depth": 1,
         #   "date_from": "YYYY-MM-DD",
         #   "date_to": "YYYY-MM-DD",
+        #   "dateFrom": "YYYY-MM-DD",
+        #   "dateTo": "YYYY-MM-DD",
         #   "after": "YYYY-MM-DD",
         #   "before": "YYYY-MM-DD",
         #   "as_of": "YYYY-MM-DD",
+        #   "asOf": "YYYY-MM-DD",
         #   "session_id": null,
         #   "current_session_id": null,
         #   "compaction_time": null,
@@ -16371,6 +16403,10 @@ if __name__ == "__main__":
         recall_p.add_argument("query", nargs="+", help="Search query (last token parsed as JSON config if it starts with '{')")
         recall_p.add_argument("--json", action="store_true", help="JSON output")
         recall_p.add_argument("--debug", action="store_true", help="Show scoring breakdown per result")
+        recall_p.add_argument("--date-from", "--date_from", dest="date_from", default=None, help="Only return memories from this date onward (YYYY-MM-DD)")
+        recall_p.add_argument("--date-to", "--date_to", dest="date_to", default=None, help="Only return memories up to this date (YYYY-MM-DD)")
+        recall_p.add_argument("--after", "--since", dest="date_from", help="Alias for --date-from")
+        recall_p.add_argument("--before", "--until", "--as-of", "--as_of", "--asOf", dest="date_to", help="Alias for --date-to")
 
         recall_fast_p = subparsers.add_parser("recall-fast", help="Fast pre-injection recall with HyDE fanout")
         recall_fast_p.add_argument("query", nargs="+", help="Search query")
@@ -16761,21 +16797,10 @@ if __name__ == "__main__":
             session_id      = cfg.get("session_id")
             current_session_id = cfg.get("current_session_id")
             compaction_time = cfg.get("compaction_time")
-            date_range      = cfg.get("date_range") if isinstance(cfg.get("date_range"), dict) else {}
-            date_from       = (
-                cfg.get("date_from")
-                or cfg.get("after")
-                or cfg.get("since")
-                or date_range.get("from")
-                or date_range.get("after")
-            )
-            date_to         = (
-                cfg.get("date_to")
-                or cfg.get("before")
-                or cfg.get("until")
-                or cfg.get("as_of")
-                or date_range.get("to")
-                or date_range.get("before")
+            date_from, date_to = _resolve_recall_command_date_bounds(
+                cfg,
+                cli_date_from=getattr(args, "date_from", None),
+                cli_date_to=getattr(args, "date_to", None),
             )
             archive         = cfg.get("archive", False)
             candidate_pool  = cfg.get("candidate_pool")

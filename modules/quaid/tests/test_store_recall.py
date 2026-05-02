@@ -54,6 +54,26 @@ def _make_graph(tmp_path):
     return graph, db_file
 
 
+def test_recall_command_date_bounds_accepts_canonical_and_camelcase_asof_aliases():
+    import datastore.memorydb.memory_graph as mg
+
+    assert mg._resolve_recall_command_date_bounds({"as_of": "2024-06-30"}) == (None, "2024-06-30")
+    assert mg._resolve_recall_command_date_bounds({"asOf": "2024-06-30"}) == (None, "2024-06-30")
+    assert mg._resolve_recall_command_date_bounds({"dateTo": "2024-06-30"}) == (None, "2024-06-30")
+    assert mg._resolve_recall_command_date_bounds({"dateFrom": "2024-01-01"}) == ("2024-01-01", None)
+    assert mg._resolve_recall_command_date_bounds({"date_range": {"asOf": "2024-06-30"}}) == (None, "2024-06-30")
+
+
+def test_recall_command_date_bounds_cli_values_override_config_aliases():
+    import datastore.memorydb.memory_graph as mg
+
+    assert mg._resolve_recall_command_date_bounds(
+        {"asOf": "2024-12-31", "dateFrom": "2024-01-01"},
+        cli_date_from="2023-01-01",
+        cli_date_to="2023-12-31",
+    ) == ("2023-01-01", "2023-12-31")
+
+
 def test_print_recall_results_emits_empty_message(capsys):
     from datastore.memorydb.memory_graph import _print_recall_results
 
