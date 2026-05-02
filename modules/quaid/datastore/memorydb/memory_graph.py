@@ -3429,6 +3429,71 @@ def _render_bidirectional_graph_text(
     return f"{anchor_name} → {relation} → {related_name}"
 
 
+def _text_mentions_graph_anchor(text: str, anchor_text: str) -> bool:
+    anchor = " ".join(str(anchor_text or "").split()).strip()
+    haystack = str(text or "")
+    if not anchor or not haystack:
+        return False
+    if anchor.isascii():
+        if len(anchor) < 3:
+            return False
+        return re.search(
+            rf"(?<![A-Za-z0-9_]){re.escape(anchor.lower())}(?![A-Za-z0-9_])",
+            haystack.lower(),
+        ) is not None
+    return anchor in haystack
+
+
+def _graph_mentioned_fact_nodes(
+    graph: "MemoryGraph",
+    *,
+    anchor_text: str,
+    seen_ids: set,
+    limit: int = 12,
+) -> List["Node"]:
+    """Find fact rows that explicitly mention a reached graph anchor.
+
+    This is a bounded recovery path for missing subject->fact graph edges. It is
+    only a literal entity-name bridge; semantic interpretation still belongs to
+    the normal vector/graph ranking paths.
+    """
+    anchor = " ".join(str(anchor_text or "").split()).strip()
+    if not anchor:
+        return []
+    try:
+        with graph._get_conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM nodes
+                WHERE LOWER(type) = 'fact'
+                  AND name LIKE ?
+                  AND superseded_by IS NULL
+                  AND (status IS NULL OR status IN ('approved', 'pending', 'active'))
+                ORDER BY confirmation_count DESC, accessed_at DESC, created_at DESC
+                LIMIT ?
+                """,
+                (f"%{anchor}%", max(1, int(limit or 1))),
+            ).fetchall()
+    except Exception:
+        return []
+
+    facts: List["Node"] = []
+    for row in rows:
+        try:
+            fact = graph._row_to_node(row)
+        except Exception:
+            continue
+        if not fact or str(getattr(fact, "id", "") or "") in seen_ids:
+            continue
+        if str(getattr(fact, "type", "") or "").lower() != "fact":
+            continue
+        if not _text_mentions_graph_anchor(str(getattr(fact, "name", "") or ""), anchor):
+            continue
+        facts.append(fact)
+    return facts
+
+
 def _graph_attached_fact_rows(
     graph: "MemoryGraph",
     *,
@@ -3462,6 +3527,47 @@ def _graph_attached_fact_rows(
         term in relation_descriptor_terms for term in normalized_relation_query_terms
     )
     candidates: List[Tuple[Tuple[int, int, int, int, float], Dict[str, Any]]] = []
+
+    def _score_and_add_fact_row(fact: "Node", *, via: str, via_relation: str, path_relation: str) -> None:
+        fact_attrs = fact.attributes if isinstance(fact.attributes, dict) else {}
+        fact_score = max(0.60, min(0.995, max(float(anchor_score or 0.0), 0.0) + 0.02))
+        row = {
+            "id": fact.id,
+            "text": _sanitize_for_context(fact.name),
+            "category": "fact",
+            "similarity": round(fact_score, 3),
+            "verified": fact.verified,
+            "pinned": fact.pinned,
+            "via": via,
+            "via_relation": via_relation,
+            "hop_depth": int(hop_depth or 0) + 1,
+            "source_name": anchor_text,
+            "graph_path": f"{graph_path} --{path_relation}--> {fact.name}",
+            **_node_recall_temporal_fields(fact),
+            "domains": _domains_from_attrs(fact_attrs),
+            "project": fact_attrs.get("project"),
+            "source_type": fact_attrs.get("source_type"),
+            "structural_anchor_kind": fact_attrs.get("structural_anchor_kind"),
+            "extraction_confidence": getattr(fact, "extraction_confidence", None),
+            "privacy": getattr(fact, "privacy", None),
+            "owner_id": getattr(fact, "owner_id", None),
+        }
+        _annotate_graph_traversal_fields(
+            row,
+            list(relation_sequence or []) + [via_relation],
+            discovery_kind=via,
+        )
+        fact_text = str(fact.name or "").lower()
+        query_overlap = sum(1 for term in query_terms if term in fact_text)
+        explicit_overlap = sum(1 for term in explicit_anchor_terms if term in fact_text)
+        anchor_text_hit = 1 if lower_anchor_text and lower_anchor_text in fact_text else 0
+        informative_token_count = len(_extract_distinctive_query_terms(fact_text, limit=12))
+        if relation_only_query:
+            score_key = (informative_token_count, explicit_overlap, anchor_text_hit, query_overlap, fact_score)
+        else:
+            score_key = (query_overlap, explicit_overlap, anchor_text_hit, informative_token_count, fact_score)
+        candidates.append((score_key, row))
+
     for edge in edges:
         if str(getattr(edge, "relation", "") or "") != "has_fact":
             continue
@@ -3474,44 +3580,37 @@ def _graph_attached_fact_rows(
             continue
         if not fact or str(getattr(fact, "type", "") or "").lower() != "fact":
             continue
-        fact_attrs = fact.attributes if isinstance(fact.attributes, dict) else {}
-        fact_score = max(0.60, min(0.995, max(float(anchor_score or 0.0), 0.0) + 0.02))
-        row = {
-            "id": fact.id,
-            "text": _sanitize_for_context(fact.name),
-            "category": "fact",
-            "similarity": round(fact_score, 3),
-            "verified": fact.verified,
-            "pinned": fact.pinned,
-            "via": "graph_attached_fact",
-            "via_relation": "has_fact",
-            "hop_depth": int(hop_depth or 0) + 1,
-            "source_name": anchor_text,
-            "graph_path": f"{graph_path} --has_fact--> {fact.name}",
-            **_node_recall_temporal_fields(fact),
-            "domains": _domains_from_attrs(fact_attrs),
-            "project": fact_attrs.get("project"),
-            "source_type": fact_attrs.get("source_type"),
-            "structural_anchor_kind": fact_attrs.get("structural_anchor_kind"),
-            "extraction_confidence": getattr(fact, "extraction_confidence", None),
-            "privacy": getattr(fact, "privacy", None),
-            "owner_id": getattr(fact, "owner_id", None),
-        }
-        _annotate_graph_traversal_fields(
-            row,
-            list(relation_sequence or []) + ["has_fact"],
-            discovery_kind="graph_attached_fact",
+        _score_and_add_fact_row(
+            fact,
+            via="graph_attached_fact",
+            via_relation="has_fact",
+            path_relation="has_fact",
         )
-        fact_text = str(fact.name or "").lower()
-        query_overlap = sum(1 for term in query_terms if term in fact_text)
-        explicit_overlap = sum(1 for term in explicit_anchor_terms if term in fact_text)
-        anchor_text_hit = 1 if lower_anchor_text and lower_anchor_text in fact_text else 0
-        informative_token_count = len(_extract_distinctive_query_terms(fact_text, limit=12))
-        if relation_only_query:
-            score_key = (informative_token_count, explicit_overlap, anchor_text_hit, query_overlap, fact_score)
-        else:
-            score_key = (query_overlap, explicit_overlap, anchor_text_hit, informative_token_count, fact_score)
-        candidates.append((score_key, row))
+
+    explicit_anchor_hit = _text_mentions_graph_anchor(str(query or ""), anchor_text)
+    try:
+        query_relation_groups = _relation_chain_groups_for_query(str(query or ""))
+    except Exception:
+        query_relation_groups = []
+    relation_sequence_groups = _relation_groups_for_sequence(list(relation_sequence or []))
+    terminal_relation_chain_anchor = bool(query_relation_groups) and (
+        _prefix_relation_group_match_length(relation_sequence_groups, query_relation_groups)
+        >= len(query_relation_groups)
+    )
+    if terminal_relation_chain_anchor or explicit_anchor_hit:
+        for fact in _graph_mentioned_fact_nodes(
+            graph,
+            anchor_text=anchor_text,
+            seen_ids=seen_ids,
+            limit=max(4, int(per_anchor_limit or 1) * 4),
+        ):
+            _score_and_add_fact_row(
+                fact,
+                via="graph_mentioned_fact",
+                via_relation="mentions",
+                path_relation="mentions",
+            )
+
     candidates.sort(key=lambda item: item[0], reverse=True)
     for _score, row in candidates[: max(1, int(per_anchor_limit or 1))]:
         seen_ids.add(str(row.get("id") or ""))

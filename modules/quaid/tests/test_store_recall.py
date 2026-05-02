@@ -7994,6 +7994,56 @@ class TestRecallFastHookInjectContract:
         assert "ceramics practice" in attached[0]["text"]
         assert attached[0]["via_relation"] == "has_fact"
 
+    def test_graph_aware_recall_relation_chain_recovers_terminal_fact_missing_has_fact_edge(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _ = _make_graph(tmp_path)
+        owner = mg.Node.create("Person", "Alex Doe")
+        partner = mg.Node.create("Person", "Morgan")
+        sibling = mg.Node.create("Person", "Jordan")
+        terminal = mg.Node.create("Person", "Riley")
+        spouse_fact = mg.Node.create("Fact", "Jordan is married to Riley")
+        ceramics = mg.Node.create(
+            "Fact",
+            "Jordan's wife Riley runs a ceramics practice out of their garage",
+        )
+        for node in (owner, partner, sibling, terminal, spouse_fact, ceramics):
+            graph.add_node(node, embed=False)
+        graph.add_edge(mg.Edge.create(owner.id, partner.id, "spouse_of"))
+        graph.add_edge(mg.Edge.create(sibling.id, partner.id, "sibling_of"))
+        graph.add_edge(mg.Edge.create(sibling.id, terminal.id, "spouse_of"))
+        graph.add_edge(mg.Edge.create(sibling.id, spouse_fact.id, "has_fact"))
+        # The extracted fact mentions the reached terminal person but was not
+        # linked as Mei --has_fact--> fact. Recall should recover that missing
+        # edge from the explicit entity mention instead of relying on vectors.
+
+        fake_cfg = SimpleNamespace(
+            users=SimpleNamespace(
+                identities={"alex-doe": SimpleNamespace(person_node_name="Alex Doe")}
+            )
+        )
+        with patch.object(mg, "get_graph", return_value=graph), \
+             patch.object(mg, "_HAS_CONFIG", True), \
+             patch.object(mg, "_get_memory_config", return_value=fake_cfg), \
+             patch.object(mg, "extract_entities_from_text", return_value=[]):
+            payload = mg.graph_aware_recall(
+                "what does my partner's brother's wife do",
+                owner_id="alex-doe",
+                limit=8,
+                graph_depth=3,
+                candidate_pool=[],
+            )
+
+        recovered = [
+            row for row in payload["graph_results"]
+            if row.get("id") == ceramics.id
+        ]
+        assert recovered
+        assert recovered[0]["via"] == "graph_mentioned_fact"
+        assert recovered[0]["via_relation"] == "mentions"
+        assert "Morgan --sibling_of--> Jordan --spouse_of--> Riley" in recovered[0]["graph_path"]
+        assert "ceramics practice" in recovered[0]["text"]
+
     def test_graph_aware_recall_named_entity_includes_anchor_attached_fact(self, tmp_path):
         import datastore.memorydb.memory_graph as mg
 
