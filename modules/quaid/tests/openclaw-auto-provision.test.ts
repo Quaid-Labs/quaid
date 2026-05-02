@@ -11,6 +11,9 @@ type AdapterTestApi = {
   shouldMirrorTranscriptUpdateToPreservedCopy: (sessionKey: string) => boolean;
   resolveAgentLabelFromModelName: (modelName: unknown) => string;
   resolveHookAgentLabel: (event: any, ctx: any) => string;
+  rememberSessionTranscriptPath: (sessionId: string, transcriptPath: string, source?: string, opts?: Record<string, unknown>) => boolean;
+  preserveSessionTranscript: (sessionId: string, preferredPath: string, reason: string) => string | null;
+  writeDaemonSignal: (sessionId: string, signalType: "compaction" | "reset" | "session_end" | "timeout", meta?: Record<string, unknown>) => string | null;
 };
 type LoadedAdapter = {
   plugin: AdapterPlugin;
@@ -181,6 +184,62 @@ describe("openclaw auto-provision", () => {
     log.mockRestore();
     error.mockRestore();
     fs.rmSync(home, { recursive: true, force: true });
+  });
+
+  it("routes daemon signals to the agent silo named by the OC transcript path", async () => {
+    const home = makeTempDir("quaid-oc-agent-signal-route-home-");
+    const hiddenHome = path.join(home, ".quaid");
+    const visibleHome = path.join(home, "quaid");
+    const openClawRoot = path.join(home, ".openclaw");
+    const openClawConfigPath = path.join(openClawRoot, "openclaw.json");
+    const repoModulesRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+    const linkedModulesRoot = path.join(hiddenHome, "modules", "quaid");
+    const sessionId = "86d47463-3140-476d-89f5-13c566d123a1";
+    const transcriptPath = path.join(openClawRoot, "agents", "m5iso004100", "sessions", `${sessionId}.jsonl`);
+
+    fs.mkdirSync(path.dirname(linkedModulesRoot), { recursive: true });
+    fs.symlinkSync(repoModulesRoot, linkedModulesRoot, "dir");
+    fs.mkdirSync(path.dirname(transcriptPath), { recursive: true });
+    fs.writeFileSync(
+      transcriptPath,
+      `${JSON.stringify({ role: "user", content: "The reading chair has a brass desk lamp." })}\n`,
+      "utf8",
+    );
+    writeJson(path.join(hiddenHome, "instances", "openclaw-main", "config.json"), {
+      adapter: { type: "openclaw" },
+      retrieval: { failHard: false },
+      plugins: { strict: false },
+    });
+    fs.mkdirSync(path.join(hiddenHome, "instances", "openclaw-main", "data"), { recursive: true });
+    fs.mkdirSync(path.dirname(openClawConfigPath), { recursive: true });
+    writeJson(openClawConfigPath, {
+      agents: {
+        list: [{ id: "main", default: true }],
+      },
+      env: {
+        vars: {
+          QUAID_INSTANCE: "openclaw-main",
+        },
+      },
+    });
+
+    const { testApi } = await loadAdapterWithHomes(hiddenHome, visibleHome, openClawConfigPath);
+    expect(testApi.rememberSessionTranscriptPath(
+      sessionId,
+      transcriptPath,
+      "transcript-update-resolved-session-id",
+      { trustedSessionMapping: true },
+    )).toBe(true);
+    const preservedPath = testApi.preserveSessionTranscript(sessionId, transcriptPath, "command-new");
+    expect(preservedPath).toBeTruthy();
+
+    const sigPath = testApi.writeDaemonSignal(sessionId, "session_end", { source: "session_end" });
+
+    expect(sigPath).toBeTruthy();
+    expect(String(sigPath)).toContain(`${path.sep}instances${path.sep}openclaw-m5iso004100${path.sep}`);
+    expect(String(sigPath)).not.toContain(`${path.sep}instances${path.sep}openclaw-main${path.sep}`);
+    const payload = JSON.parse(fs.readFileSync(String(sigPath), "utf8"));
+    expect(payload.transcript_path).toBe(preservedPath);
   });
 
   it("auto-provisions a non-default agent silo on first before_agent_start hook touch", async () => {

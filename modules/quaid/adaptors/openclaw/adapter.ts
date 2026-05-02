@@ -552,6 +552,27 @@ function resolveAgentLabelFromSessionKey(sessionKey: string | undefined | null):
   return String(parts[1] || "").trim().toLowerCase();
 }
 
+function resolveAgentLabelFromSessionFilePath(sessionFile: unknown): string {
+  const raw = String(sessionFile || "").trim();
+  if (!raw) return "";
+  const parts = path.resolve(raw).split(path.sep);
+  for (let idx = 0; idx < parts.length - 2; idx += 1) {
+    if (parts[idx] !== "agents") continue;
+    if (parts[idx + 2] !== "sessions") continue;
+    return String(parts[idx + 1] || "").trim().toLowerCase();
+  }
+  return "";
+}
+
+function rememberSessionAgentLabelFromTranscriptPath(sessionId: string, sessionFile: unknown): void {
+  const sid = String(sessionId || "").trim();
+  const label = resolveAgentLabelFromSessionFilePath(sessionFile);
+  if (!sid || !label) return;
+  const current = String(sessionIdToAgentId.get(sid) || "").trim().toLowerCase();
+  if (current && current !== "main" && label === "main") return;
+  sessionIdToAgentId.set(sid, label);
+}
+
 function resolveAgentLabelFromModelName(modelName: unknown): string {
   const raw = String(modelName || "").trim().toLowerCase();
   if (!raw) {
@@ -1617,6 +1638,7 @@ function rememberSessionTranscriptPath(
     return false;
   }
   sessionTranscriptPaths.set(sid, candidate);
+  rememberSessionAgentLabelFromTranscriptPath(sid, candidate);
   return true;
 }
 
@@ -2462,6 +2484,7 @@ function preserveSessionTranscript(sessionId: string, preferredPath: string | nu
     });
     return null;
   }
+  rememberSessionAgentLabelFromTranscriptPath(sid, sourcePath);
   const destPath = getPreservedSessionFile(sid);
   try {
     fs.mkdirSync(path.dirname(destPath), { recursive: true });
@@ -2869,7 +2892,14 @@ function writeDaemonSignal(
   // Route to the agent's own Quaid silo if known, otherwise the primary instance.
   // For non-primary OC agents (multi-agent), derive the silo from the agent label.
   // For the primary instance (label absent or "main"), use DAEMON_SIGNAL_DIR directly.
-  const agentLabel = sessionIdToAgentId.get(sessionId);
+  const mappedAgentLabel = String(sessionIdToAgentId.get(sessionId) || "").trim().toLowerCase();
+  const pathAgentLabel = resolveAgentLabelFromSessionFilePath(resolvedPath);
+  const agentLabel = mappedAgentLabel && mappedAgentLabel !== "main"
+    ? mappedAgentLabel
+    : (pathAgentLabel || mappedAgentLabel);
+  if (pathAgentLabel && pathAgentLabel !== mappedAgentLabel) {
+    sessionIdToAgentId.set(sessionId, pathAgentLabel);
+  }
   const signalDir = (!agentLabel || agentLabel === "main")
     ? DAEMON_SIGNAL_DIR
     : getDaemonSignalDir(agentLabel);

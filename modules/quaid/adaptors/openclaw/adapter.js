@@ -376,6 +376,25 @@ function resolveAgentLabelFromSessionKey(sessionKey) {
   }
   return String(parts[1] || "").trim().toLowerCase();
 }
+function resolveAgentLabelFromSessionFilePath(sessionFile) {
+  const raw = String(sessionFile || "").trim();
+  if (!raw) return "";
+  const parts = path.resolve(raw).split(path.sep);
+  for (let idx = 0; idx < parts.length - 2; idx += 1) {
+    if (parts[idx] !== "agents") continue;
+    if (parts[idx + 2] !== "sessions") continue;
+    return String(parts[idx + 1] || "").trim().toLowerCase();
+  }
+  return "";
+}
+function rememberSessionAgentLabelFromTranscriptPath(sessionId, sessionFile) {
+  const sid = String(sessionId || "").trim();
+  const label = resolveAgentLabelFromSessionFilePath(sessionFile);
+  if (!sid || !label) return;
+  const current = String(sessionIdToAgentId.get(sid) || "").trim().toLowerCase();
+  if (current && current !== "main" && label === "main") return;
+  sessionIdToAgentId.set(sid, label);
+}
 function resolveAgentLabelFromModelName(modelName) {
   const raw = String(modelName || "").trim().toLowerCase();
   if (!raw) {
@@ -1219,6 +1238,7 @@ function rememberSessionTranscriptPath(sessionId, filePath, source, opts) {
     return false;
   }
   sessionTranscriptPaths.set(sid, candidate);
+  rememberSessionAgentLabelFromTranscriptPath(sid, candidate);
   return true;
 }
 function isInternalSessionContext(event, ctx) {
@@ -1925,6 +1945,7 @@ function preserveSessionTranscript(sessionId, preferredPath, reason) {
     });
     return null;
   }
+  rememberSessionAgentLabelFromTranscriptPath(sid, sourcePath);
   const destPath = getPreservedSessionFile(sid);
   try {
     fs.mkdirSync(path.dirname(destPath), { recursive: true });
@@ -2265,7 +2286,12 @@ function writeDaemonSignal(sessionId, signalType, meta) {
     console.log(`[quaid][daemon-signal] suppressed stale ${signalType} signal for session=${sessionId} after post-command user content`);
     return null;
   }
-  const agentLabel = sessionIdToAgentId.get(sessionId);
+  const mappedAgentLabel = String(sessionIdToAgentId.get(sessionId) || "").trim().toLowerCase();
+  const pathAgentLabel = resolveAgentLabelFromSessionFilePath(resolvedPath);
+  const agentLabel = mappedAgentLabel && mappedAgentLabel !== "main" ? mappedAgentLabel : pathAgentLabel || mappedAgentLabel;
+  if (pathAgentLabel && pathAgentLabel !== mappedAgentLabel) {
+    sessionIdToAgentId.set(sessionId, pathAgentLabel);
+  }
   const signalDir = !agentLabel || agentLabel === "main" ? DAEMON_SIGNAL_DIR : getDaemonSignalDir(agentLabel);
   try {
     fs.mkdirSync(signalDir, { recursive: true });
