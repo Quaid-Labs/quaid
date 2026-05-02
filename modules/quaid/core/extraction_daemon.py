@@ -69,16 +69,7 @@ _SIGNAL_POLL_PRIORITY = {
 }
 _ROLLING_INTERNAL_ADVANCE_GRACE_SECONDS = 60.0
 _DISCOVERY_STALE_ORPHAN_GRACE_SECONDS = 10 * 60
-_TRIVIAL_TIMEOUT_USER_TURNS = {
-    "hello",
-    "hi",
-    "hey",
-    "ack",
-    "ok",
-    "okay",
-    "thanks",
-    "thank you",
-}
+_IGNORED_TIMEOUT_USER_TURN_MAX_CHARS = 12
 _TRANSCRIPT_ROLE_RE = re.compile(r"^\s*(User|Assistant|System):\s*(.*)$", re.IGNORECASE)
 _TRANSCRIPT_CLASS_INTERNAL_MAINTENANCE = "internal_maintenance"
 _TRANSCRIPT_CLASS_IGNORE_CONTENT = "ignore_content"
@@ -4036,15 +4027,12 @@ def _is_timeout_startup_user_turn(text: str) -> bool:
     return False
 
 
-def _is_short_timeout_greeting_user_turn(text: str) -> bool:
+def _is_short_ignored_timeout_user_turn(text: str) -> bool:
     value = str(text or "").strip()
     if not value:
         return True
-    lowered = value.lower()
-    normalized = re.sub(r"[\s.!?,;:'\"`]+", " ", lowered).strip()
-    if normalized in _TRIVIAL_TIMEOUT_USER_TURNS:
-        return True
-    return False
+    normalized = re.sub(r"\s+", " ", value).strip()
+    return len(normalized) <= _IGNORED_TIMEOUT_USER_TURN_MAX_CHARS
 
 
 def _transcript_has_meaningful_timeout_user_content(transcript_text: str) -> bool:
@@ -4062,7 +4050,7 @@ def _classify_timeout_transcript_content(transcript_text: str) -> str:
     several minutes while the real queued user message is still delayed. Treating
     those wrappers as extractable advances the cursor before the real message
     arrives, so idle scans should freeze only true maintenance wrappers as
-    internal. Short greetings and NO_REPLY-only turns are ignored content, not
+    internal. Short NO_REPLY-associated user turns are ignored content, not
     internal maintenance.
     """
     turns = _iter_parsed_transcript_turns(transcript_text)
@@ -4093,7 +4081,7 @@ def _classify_timeout_transcript_content(transcript_text: str) -> str:
             else _TRANSCRIPT_CLASS_INTERNAL_MAINTENANCE
         )
     if saw_startup_wrapper and all(
-        _is_short_timeout_greeting_user_turn(turn)
+        _is_short_ignored_timeout_user_turn(turn)
         for turn in non_startup_user_turns
     ):
         return (
@@ -4102,7 +4090,7 @@ def _classify_timeout_transcript_content(transcript_text: str) -> str:
             else _TRANSCRIPT_CLASS_INTERNAL_MAINTENANCE
         )
     if saw_no_reply_assistant and non_startup_user_turns and all(
-        _is_short_timeout_greeting_user_turn(turn)
+        _is_short_ignored_timeout_user_turn(turn)
         for turn in non_startup_user_turns
     ):
         return _TRANSCRIPT_CLASS_IGNORE_CONTENT

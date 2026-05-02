@@ -2139,11 +2139,12 @@ def test_check_idle_sessions_advances_internal_session_cursor_to_eof(monkeypatch
     assert cursor["internal"] is True
 
 
-def test_timeout_classifier_treats_startup_greeting_as_ignore_not_internal():
+@pytest.mark.parametrize("turn", ["Hello", "Hola", "こんにちは"])
+def test_timeout_classifier_treats_short_startup_turn_as_ignore_not_internal(turn):
     transcript = (
         "User: A new session was started via /new or /reset.\n"
         "Assistant: NO_REPLY\n"
-        "User: Hello"
+        f"User: {turn}"
     )
 
     assert (
@@ -2153,11 +2154,11 @@ def test_timeout_classifier_treats_startup_greeting_as_ignore_not_internal():
     assert not extraction_daemon._transcript_has_meaningful_timeout_user_content(transcript)
 
 
-def test_reconcile_consumes_startup_greeting_without_internal_cursor(monkeypatch, tmp_path):
+def test_reconcile_consumes_short_startup_turn_without_internal_cursor(monkeypatch, tmp_path):
     import sys
     import types
 
-    transcript_path = tmp_path / "startup-greeting.jsonl"
+    transcript_path = tmp_path / "startup-short-turn.jsonl"
     transcript_path.write_text(
         '{"role":"user","content":"A new session was started via /new or /reset."}\n'
         '{"role":"assistant","content":"NO_REPLY"}\n'
@@ -2167,7 +2168,7 @@ def test_reconcile_consumes_startup_greeting_without_internal_cursor(monkeypatch
 
     monkeypatch.setenv("QUAID_HOME", str(tmp_path))
     monkeypatch.setenv("QUAID_INSTANCE", "pytest-runner")
-    extraction_daemon.write_cursor("sess-startup-greeting", 0, str(transcript_path))
+    extraction_daemon.write_cursor("sess-startup-short-turn", 0, str(transcript_path))
 
     real_adapter = sys.modules.get("lib.adapter")
     fake_adapter_mod = types.ModuleType("lib.adapter")
@@ -2186,7 +2187,7 @@ def test_reconcile_consumes_startup_greeting_without_internal_cursor(monkeypatch
 
     try:
         state = extraction_daemon._reconcile_internal_cursor_state(
-            "sess-startup-greeting",
+            "sess-startup-short-turn",
             str(transcript_path),
         )
     finally:
@@ -2195,7 +2196,7 @@ def test_reconcile_consumes_startup_greeting_without_internal_cursor(monkeypatch
         else:
             sys.modules.pop("lib.adapter", None)
 
-    cursor = extraction_daemon.read_cursor("sess-startup-greeting")
+    cursor = extraction_daemon.read_cursor("sess-startup-short-turn")
     assert state == "ignored"
     assert cursor["line_offset"] == 3
     assert cursor["internal"] is False
