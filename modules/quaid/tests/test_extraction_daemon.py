@@ -1433,6 +1433,127 @@ def test_process_signal_does_not_reextract_tail_after_nonrolling_semantic_stage(
     assert len(published_payloads[0]["raw_facts"]) == 1
 
 
+def test_process_signal_uses_raw_timestamped_lines_for_buffered_semantic_state(monkeypatch, tmp_path):
+    from lib.adapter import set_adapter, reset_adapter
+    from ingest import extract as extract_mod
+    from core import ingest_runtime
+    from core.runtime import notify as notify_mod
+
+    session_id = "rollout-2026-05-02T07-47-40-019de7a8-50eb-74e2-aaa4-884d785b9637"
+    transcript_path = tmp_path / f"{session_id}.jsonl"
+    transcript_path.write_text(
+        (
+            '{"timestamp":"2026-05-02T07:47:40Z","role":"user",'
+            '"content":"this sibling3 reading chair has a bronze table lamp beside it"}\n'
+            '{"timestamp":"2026-05-02T07:47:46Z","role":"assistant",'
+            '"content":"Noted: the sibling3 reading chair has a bronze table lamp beside it."}\n'
+        ),
+        encoding="utf-8",
+    )
+    signal_path = tmp_path / "session-end-signal.json"
+    signal_path.write_text("{}", encoding="utf-8")
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "pytest-runner")
+    monkeypatch.setattr(extraction_daemon, "_get_owner_id", lambda: "owner-1")
+    monkeypatch.setattr(extraction_daemon, "_read_usage_totals", lambda: {})
+    monkeypatch.setattr(extraction_daemon, "_get_capture_chunk_tokens", lambda: 10_000)
+    monkeypatch.setattr(extraction_daemon, "_get_capture_chunk_max_lines", lambda: 100)
+    monkeypatch.setattr(extraction_daemon, "_warm_payload_embeddings", lambda _facts: {
+        "requested": 0,
+        "unique": 0,
+        "cache_hits": 0,
+        "warmed": 0,
+        "failed": 0,
+    })
+    monkeypatch.setattr(notify_mod, "notify_memory_extraction", lambda **_kwargs: None)
+    monkeypatch.setattr(ingest_runtime, "run_session_logs_ingest", lambda **_kwargs: {"status": "indexed"})
+
+    source_key = extraction_daemon._signal_source_cursor_key(session_id, str(transcript_path))
+    extraction_daemon.write_cursor(session_id, 0, str(transcript_path), source_key=source_key)
+    extraction_daemon.write_rolling_state(
+        session_id,
+        {
+            "session_id": session_id,
+            "transcript_path": str(transcript_path),
+            "processed_line_offset": 2,
+            "buffered_line_offset": 2,
+            "semantic_buffer": (
+                "User: this sibling3 reading chair has a bronze table lamp beside it.\n\n"
+                "Assistant: Noted: the sibling3 reading chair has a bronze table lamp beside it."
+            ),
+            "semantic_buffer_tokens": 37,
+            "raw_facts": [],
+            "raw_snippets": {},
+            "raw_journal": {},
+            "raw_project_logs": {},
+            "carry_facts": [],
+        },
+    )
+
+    class _Adapter(_OwnedTestAdapterMixin):
+        def instance_root(self):
+            return tmp_path
+
+        def parse_session_jsonl(self, path):
+            rows = []
+            for raw in Path(path).read_text(encoding="utf-8").splitlines():
+                payload = json.loads(raw)
+                rows.append(
+                    f"{payload.get('timestamp')} {str(payload.get('role')).title()}: {payload.get('content')}"
+                )
+            return "\n".join(rows)
+
+        def is_subagent_session(self, session_id, transcript_path=None):
+            return False
+
+    extract_calls = []
+
+    def fake_extract_from_transcript(transcript, **_kwargs):
+        extract_calls.append(transcript)
+        return {
+            "chunks_processed": 1,
+            "chunks_total": 1,
+            "unclassified_empty_payloads": 0,
+            "raw_facts": [],
+            "facts": [],
+            "raw_snippets": {},
+            "raw_journal": {},
+            "raw_project_logs": {},
+            "carry_facts": [],
+        }
+
+    set_adapter(_Adapter())
+    try:
+        monkeypatch.setattr(extract_mod, "extract_from_transcript", fake_extract_from_transcript)
+        monkeypatch.setattr(
+            extract_mod,
+            "apply_extracted_payloads",
+            lambda payload, **_kwargs: {
+                "facts_stored": 0,
+                "facts_skipped": 0,
+                "edges_created": 0,
+                "facts": [],
+                "snippets": {},
+                "journal": {},
+                "project_log_metrics": {},
+            },
+        )
+
+        extraction_daemon.process_signal({
+            "session_id": session_id,
+            "type": "session_end",
+            "transcript_path": str(transcript_path),
+            "_signal_path": str(signal_path),
+        })
+    finally:
+        reset_adapter()
+
+    assert len(extract_calls) == 1
+    assert "2026-05-02T07:47:40Z User:" in extract_calls[0]
+    assert "bronze table lamp" in extract_calls[0]
+
+
 def test_summarize_fact_result_buckets_groups_duplicate_and_skip_reasons():
     summary = extraction_daemon._summarize_fact_result_buckets([
         {"status": "duplicate", "reason": "Already stored"},

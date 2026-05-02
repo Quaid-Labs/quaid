@@ -3031,6 +3031,35 @@ def read_transcript_slice(transcript_path: str, from_line: int) -> List[str]:
     return lines
 
 
+def read_transcript_line_range(transcript_path: str, from_line: int, to_line: int) -> List[str]:
+    """Read transcript lines in [from_line, to_line) without losing raw metadata."""
+    try:
+        start = max(0, int(from_line or 0))
+        stop = max(start, int(to_line or 0))
+    except Exception:
+        return []
+    if stop <= start:
+        return []
+    lines = []
+    try:
+        with open(transcript_path, "r", encoding="utf-8", errors="replace") as f:
+            for i, line in enumerate(f):
+                if i < start:
+                    continue
+                if i >= stop:
+                    break
+                lines.append(line)
+                if len(lines) >= MAX_TRANSCRIPT_LINES:
+                    logger.warning(
+                        "transcript %s: range capped at %d lines (%d:%d)",
+                        transcript_path, MAX_TRANSCRIPT_LINES, start, stop,
+                    )
+                    break
+    except OSError as e:
+        logger.error("failed reading transcript range %s: %s", transcript_path, e)
+    return lines
+
+
 def _parse_transcript_lines(lines: List[str], adapter=None) -> str:
     """Parse raw session JSONL lines into the semantic transcript text the model sees."""
     if not lines:
@@ -3057,6 +3086,10 @@ def _parse_transcript_lines(lines: List[str], adapter=None) -> str:
                 os.unlink(tmp_path)
             except OSError:
                 pass
+
+
+def _parsed_text_has_timestamp_context(text: str) -> bool:
+    return bool(re.search(r"\d{4}-\d{2}-\d{2}[T ][0-2]\d:[0-5]\d", str(text or "")))
 
 
 def _append_semantic_buffer(state: Dict[str, Any], parsed_text: str, line_offset: int) -> Dict[str, Any]:
@@ -4771,7 +4804,21 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                     chunk_line_budget=chunk_line_budget,
                 )
                 refreshed_semantic_buffer_for_nonrolling = False
-            buffered_text = str(staged_state.get("semantic_buffer", "") or "").strip()
+            raw_buffered_text = ""
+            if buffered_line_offset > cursor_offset and transcript_path and os.path.isfile(transcript_path):
+                raw_buffered_lines = read_transcript_line_range(
+                    transcript_path,
+                    cursor_offset,
+                    buffered_line_offset,
+                )
+                if raw_buffered_lines:
+                    raw_buffered_text = _parse_transcript_lines(raw_buffered_lines, adapter=adapter)
+            semantic_buffer_text = str(staged_state.get("semantic_buffer", "") or "").strip()
+            buffered_text = (
+                raw_buffered_text
+                if _parsed_text_has_timestamp_context(raw_buffered_text)
+                else semantic_buffer_text
+            )
             tail_text = str(transcript_text or "").strip()
             if staged_semantic_buffer_for_nonrolling and staged_fresh_semantic_buffer_for_nonrolling:
                 # The fresh tail was appended into semantic_buffer and staged above.
