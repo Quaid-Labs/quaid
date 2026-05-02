@@ -68,6 +68,7 @@ _SIGNAL_POLL_PRIORITY = {
     "compaction": 4,
 }
 _ROLLING_INTERNAL_ADVANCE_GRACE_SECONDS = 60.0
+_DISCOVERY_STALE_ORPHAN_GRACE_SECONDS = 10 * 60
 _TRIVIAL_TIMEOUT_USER_TURNS = {
     "hello",
     "hi",
@@ -3872,6 +3873,16 @@ def _ensure_discovered_session_cursors(adapter=None) -> int:
         source_cursor_key = _signal_source_cursor_key(session_id, str(transcript_path))
         cursor_file = _cursor_dir() / f"{source_cursor_key}.json"
         legacy_cursor_file = _cursor_dir() / f"{session_id}.json"
+        if (
+            not cursor_file.exists()
+            and not legacy_cursor_file.exists()
+            and _should_skip_newly_discovered_orphan_transcript(transcript_path)
+        ):
+            logger.info(
+                "skipping stale discovered transcript without existing cursor: %s",
+                transcript_path,
+            )
+            continue
         if cursor_file.exists() or legacy_cursor_file.exists():
             cursor_data = read_cursor(session_id, source_key=source_cursor_key)
             existing_path = str(cursor_data.get("transcript_path") or "").strip()
@@ -3931,6 +3942,25 @@ def _discovered_transcript_supersedes_cursor(existing_path: str, transcript_path
         return current.stat().st_mtime > existing.stat().st_mtime
     except OSError:
         return False
+
+
+def _should_skip_newly_discovered_orphan_transcript(transcript_path: Path, now_ts: Optional[float] = None) -> bool:
+    """Avoid turning stale host transcripts into fresh timeout work on startup."""
+    try:
+        installed_at = _read_installed_at()
+        if installed_at <= 0:
+            return False
+        mtime = transcript_path.stat().st_mtime
+    except OSError:
+        return True
+    except Exception:
+        return False
+    now = time.time() if now_ts is None else float(now_ts)
+    if mtime >= installed_at:
+        return False
+    if now - mtime <= _DISCOVERY_STALE_ORPHAN_GRACE_SECONDS:
+        return False
+    return True
 
 
 def _is_internal_transcript_session(

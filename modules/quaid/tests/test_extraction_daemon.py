@@ -909,6 +909,98 @@ def test_codex_discovery_skips_rollouts_from_other_instances(monkeypatch, tmp_pa
     assert [cursor["transcript_path"] for cursor in cursors] == [str(m13_rollout)]
 
 
+def test_discovery_skips_stale_orphan_rollout_without_cursor(monkeypatch, tmp_path):
+    from adaptors.codex.adapter import CodexAdapter
+
+    project_dir = tmp_path / "cdx-livetest-sibling3"
+    project_dir.mkdir()
+    monkeypatch.setattr(
+        "adaptors.codex.adapter.instance_slug_from_project_dir",
+        lambda raw: Path(str(raw)).name,
+    )
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path / ".quaid"))
+    monkeypatch.setenv("QUAID_INSTANCE", "codex-cdx-livetest-sibling3")
+    monkeypatch.setenv("CODEX_PROJECT_DIR", str(project_dir))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+    sessions_root = tmp_path / ".codex" / "sessions" / "2026" / "05" / "02"
+    sessions_root.mkdir(parents=True)
+    old_rollout = sessions_root / "rollout-2026-05-02T07-57-38-019de7b1-6ee5-7162-8fac-42022facb1d9.jsonl"
+    old_rollout.write_text(
+        json.dumps({
+            "type": "session_meta",
+            "payload": {
+                "id": "019de7b1-6ee5-7162-8fac-42022facb1d9",
+                "cwd": str(project_dir),
+            },
+        }) + "\n",
+        encoding="utf-8",
+    )
+    installed_at = 1_700_000_000.0
+    old_mtime = installed_at - 3600
+    os.utime(old_rollout, (old_mtime, old_mtime))
+    monkeypatch.setattr(extraction_daemon, "_read_installed_at", lambda: installed_at)
+    monkeypatch.setattr(extraction_daemon.time, "time", lambda: installed_at + 60)
+
+    discovered = extraction_daemon._ensure_discovered_session_cursors(
+        CodexAdapter(home=tmp_path / ".quaid")
+    )
+
+    assert discovered == 0
+    cursor_dir = (
+        tmp_path
+        / ".quaid"
+        / "instances"
+        / "codex-cdx-livetest-sibling3"
+        / "data"
+        / "session-cursors"
+    )
+    assert not list(cursor_dir.glob("*.json")) if cursor_dir.exists() else True
+
+
+def test_discovery_keeps_stale_rollout_with_existing_cursor(monkeypatch, tmp_path):
+    from adaptors.codex.adapter import CodexAdapter
+
+    project_dir = tmp_path / "cdx-livetest-sibling3"
+    project_dir.mkdir()
+    monkeypatch.setattr(
+        "adaptors.codex.adapter.instance_slug_from_project_dir",
+        lambda raw: Path(str(raw)).name,
+    )
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path / ".quaid"))
+    monkeypatch.setenv("QUAID_INSTANCE", "codex-cdx-livetest-sibling3")
+    monkeypatch.setenv("CODEX_PROJECT_DIR", str(project_dir))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+    sessions_root = tmp_path / ".codex" / "sessions" / "2026" / "05" / "02"
+    sessions_root.mkdir(parents=True)
+    old_rollout = sessions_root / "rollout-2026-05-02T07-57-38-019de7b1-6ee5-7162-8fac-42022facb1d9.jsonl"
+    old_rollout.write_text(
+        json.dumps({
+            "type": "session_meta",
+            "payload": {
+                "id": "019de7b1-6ee5-7162-8fac-42022facb1d9",
+                "cwd": str(project_dir),
+            },
+        }) + "\n",
+        encoding="utf-8",
+    )
+    source_key = extraction_daemon._signal_source_cursor_key(old_rollout.stem, str(old_rollout))
+    extraction_daemon.write_cursor(old_rollout.stem, 0, str(old_rollout), source_key=source_key)
+    installed_at = 1_700_000_000.0
+    old_mtime = installed_at - 3600
+    os.utime(old_rollout, (old_mtime, old_mtime))
+    monkeypatch.setattr(extraction_daemon, "_read_installed_at", lambda: installed_at)
+    monkeypatch.setattr(extraction_daemon.time, "time", lambda: installed_at + 60)
+
+    discovered = extraction_daemon._ensure_discovered_session_cursors(
+        CodexAdapter(home=tmp_path / ".quaid")
+    )
+
+    assert discovered == 0
+    assert extraction_daemon.read_cursor(old_rollout.stem, source_key=source_key)["transcript_path"] == str(old_rollout)
+
+
 def test_clear_rolling_state_removes_payload_matched_stale_file(monkeypatch, tmp_path):
     monkeypatch.setenv("QUAID_HOME", str(tmp_path))
     instance_id = os.environ.get("QUAID_INSTANCE", "pytest-runner")
