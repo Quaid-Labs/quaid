@@ -2,7 +2,7 @@
 # livetest-session-init.sh - Create the canonical local livetest tmux layout.
 #
 # Usage:
-#   livetest-session-init.sh [--config PATH] [--force] [--skip-nudges] [--run-label LABEL] [--dry-run]
+#   livetest-session-init.sh [--config PATH] [--force|--restart-testers] [--skip-nudges] [--run-label LABEL] [--dry-run]
 #
 # Creates one local tmux window per enabled lane:
 #   - left pane:  local tester agent from tester.cli
@@ -23,13 +23,17 @@ DRY_RUN=0
 RUN_LABEL="livetest"
 
 usage() {
-    sed -n '2,/^$/{ s/^# //; s/^#//; p }' "$0"
+    sed -n '2,/^$/{
+        s/^# //
+        s/^#//
+        p
+    }' "$0"
 }
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --config) CONFIG_PATH="$2"; shift 2 ;;
-        --force) FORCE=1; shift ;;
+        --force|--restart-testers) FORCE=1; shift ;;
         --skip-nudges) SKIP_NUDGES=1; shift ;;
         --run-label) RUN_LABEL="$2"; shift 2 ;;
         --dry-run) DRY_RUN=1; shift ;;
@@ -76,6 +80,7 @@ TESTER_CLI="$(read_config tester.cli)"
 
 SESSION="${SESSION:-livetest}"
 TESTER_CLI="${TESTER_CLI:-codex --yolo}"
+TESTER_AGENT_DIR="$HOME/quaidcode/util/agents/codex-livetester"
 
 if [[ -z "$REMOTE_HOST" ]]; then
     echo "Error: remote.host must be set in $CONFIG_PATH" >&2
@@ -84,6 +89,11 @@ fi
 
 if ! command -v tmux >/dev/null 2>&1; then
     echo "Error: tmux is required on the local coordinator machine" >&2
+    exit 1
+fi
+
+if [[ ! -d "$TESTER_AGENT_DIR" ]]; then
+    echo "Error: tester agent directory not found at '$TESTER_AGENT_DIR'" >&2
     exit 1
 fi
 
@@ -123,8 +133,9 @@ ensure_session_for_force_kill() {
 
 create_lane_window() {
     local lane="$1"
-    local ssh_cmd
+    local ssh_cmd tester_cmd
     ssh_cmd="ssh $(shell_quote "$REMOTE_HOST")"
+    tester_cmd="cd $(shell_quote "$TESTER_AGENT_DIR") && exec $TESTER_CLI"
 
     if window_exists "$lane"; then
         if [[ "$FORCE" != "1" ]]; then
@@ -136,9 +147,9 @@ create_lane_window() {
     fi
 
     if ! session_exists; then
-        tmux new-session -d -s "$SESSION" -n "$lane" "$TESTER_CLI"
+        tmux new-session -d -s "$SESSION" -n "$lane" "$tester_cmd"
     else
-        tmux new-window -d -t "$SESSION:" -n "$lane" "$TESTER_CLI"
+        tmux new-window -d -t "$SESSION:" -n "$lane" "$tester_cmd"
     fi
 
     tmux split-window -h -t "$SESSION:$lane.0" "$ssh_cmd"
@@ -162,6 +173,7 @@ echo "  Config     : $CONFIG_PATH"
 echo "  Session    : $SESSION"
 echo "  Remote     : $REMOTE_HOST"
 echo "  Tester CLI : $TESTER_CLI"
+echo "  Tester CWD : $TESTER_AGENT_DIR"
 echo "  Lanes      : ${lanes[*]}"
 echo "  Force      : $FORCE"
 echo "  Nudges     : $([[ "$SKIP_NUDGES" == "1" ]] && echo skipped || echo enabled)"

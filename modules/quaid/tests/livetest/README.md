@@ -200,7 +200,7 @@ exclusively via SSH — they cannot accidentally affect the local machine.
 |--------|---------|
 | `livetest-presnapshot-preflight.sh` | **Run before overnight loops or when platform drift is suspected.** Clones the current base VM, applies slow platform CLI upgrades, refreshes VM Claude OAuth credentials, runs final harness cleanup such as stale OpenClaw silo pruning, and refreshes the base snapshot only if maintenance changed the clone. |
 | `livetest-preflight.sh` | **Run before every run.** Verifies remote ≠ local, checks SSH, hard-errors on platform version drift unless `--allow-platform-drift '<reason>'` is provided, wipes the remote, syncs the dev tree, seeds credentials, and starts platform services. Hard-aborts if the remote host matches the local machine. |
-| `livetest-session-init.sh` | Create the canonical local `livetest` tmux session/windows, launch tester panes, open SSH panes to the remote, and start tester nudge loops. |
+| `livetest-session-init.sh` | Create the canonical local `livetest` tmux session/windows, launch tester panes from `~/quaidcode/util/agents/codex-livetester`, open SSH panes to the remote, and start tester nudge loops. Use `--restart-testers` or `--force` to kill/recreate existing lane windows between runs. |
 | `livetest-wipe.sh` | Wipe Quaid from the remote. `--platform all` for full wipe, `--platform cc` for CC-only wipe while OC is live. Called by preflight; can also be run standalone. |
 | `livetest-platform-start.sh` | Start platform services on the remote (OC gateway + health check). Called by preflight; can also be run standalone. |
 | `verify-cc-session-capture.sh` | Verify the CC lane created a real Claude transcript on the remote (hooks present, project instance pinned, fresh `~/.claude/projects/.../*.jsonl`, hook trace exists) before treating M2 as a runtime extraction issue. |
@@ -448,9 +448,11 @@ changes after the run completes.
 **SSH hangs on first command** — Check that key-based auth is set up and the
 remote shell profile does not print output (common with `.zshrc` completion noise).
 
-**Tester agent runs out of context** — Kill the tester window and relaunch with
-the tester CLI from `livetest-config.json`. Send the tester its SKILL.md and the
-current milestone on first message.
+**Tester agent runs out of context** — Re-run `livetest-session-init.sh
+--restart-testers` to kill/recreate the lane windows and relaunch each tester
+from `~/quaidcode/util/agents/codex-livetester` with the tester CLI from
+`livetest-config.json`. Send the tester its SKILL.md and the current milestone
+on first message.
 
 **Platform install silent / no output** — M0 explicitly checks that the
 platform showed the pre-install survey, confirmed main-branch install provenance,

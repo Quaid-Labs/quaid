@@ -395,8 +395,9 @@ This is a hard rule.
   remote. Testers never run on the remote host.
 - `livetest-session-init.sh` (preflight setup helper) creates the session,
   windows, and panes, launches the tester CLI in each left pane, opens the SSH
-  shells on the right, and starts the nudge loops. Run it once at the start of
-  a run.
+  shells on the right, and starts the nudge loops. It launches testers from
+  `~/quaidcode/util/agents/codex-livetester`. Run it once at the start of a
+  run, or use `--restart-testers` to kill/recreate lane windows between runs.
 - On first message to each tester, send `TESTER.SKILL.md` plus the lane's
   `TESTER.{OC,CC,CDX}.md` supplement, the tester's own pane address, and your
   coordinator pane address (from `tmux.coordinator_pane` in config). Without
