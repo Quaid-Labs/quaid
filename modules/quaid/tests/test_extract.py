@@ -713,6 +713,40 @@ class TestExtractFromTranscript:
         assert result["raw_facts"][0]["created_at"] == "2026-05-02T14:29:21+00:00"
 
     @patch("ingest.extract.call_deep_reasoning")
+    def test_extraction_prefers_transcript_timestamp_over_same_day_date_only_fact(self, mock_llm):
+        from ingest.extract import extract_from_transcript
+
+        mock_llm.return_value = (json.dumps({
+            "chunk_assessment": "usable",
+            "facts": [
+                {
+                    "text": "The green velvet armchair has a marble side table beside it",
+                    "category": "fact",
+                    "speaker": "user",
+                    "domains": ["household"],
+                    "extraction_confidence": "high",
+                    "privacy": "private",
+                    "created_at": "2026-05-02",
+                }
+            ],
+            "soul_snippets": {},
+            "journal_entries": {},
+            "project_logs": {},
+        }), 0.1)
+
+        result = extract_from_transcript(
+            transcript=(
+                "[2026-05-02T14:49:46.911Z] User: The green velvet armchair has a marble side table beside it.\n\n"
+                "[2026-05-02T14:49:49.302Z] Assistant: Noted."
+            ),
+            owner_id="Solomon Steadman",
+            session_id="rollout-2026-05-02T14-49-28-019de92a-7bf6-7d72-8ef1-bb553cfd9d21",
+            dry_run=True,
+        )
+
+        assert result["raw_facts"][0]["created_at"] == "2026-05-02T14:49:46+00:00"
+
+    @patch("ingest.extract.call_deep_reasoning")
     def test_assistant_named_option_anchor_is_preserved_when_llm_omits_it(self, mock_llm):
         from ingest.extract import extract_from_transcript
 

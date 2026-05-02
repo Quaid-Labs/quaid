@@ -119,9 +119,18 @@ def _normalize_fact_temporal_hint(
 ) -> Dict[str, Any]:
     """Normalize fact created_at and backfill with a session/date hint when absent."""
     normalized = dict(fact or {})
-    created_at = _normalize_extracted_timestamp(normalized.get("created_at"))
+    raw_created_at = str(normalized.get("created_at") or "").strip()
+    created_at = _normalize_extracted_timestamp(raw_created_at)
+    fallback_created_at = _normalize_extracted_timestamp(default_created_at)
+    if (
+        created_at
+        and fallback_created_at
+        and re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw_created_at)
+        and raw_created_at == fallback_created_at[:10]
+    ):
+        created_at = fallback_created_at
     if not created_at:
-        created_at = _normalize_extracted_timestamp(default_created_at)
+        created_at = fallback_created_at
     if created_at:
         normalized["created_at"] = created_at
     else:
