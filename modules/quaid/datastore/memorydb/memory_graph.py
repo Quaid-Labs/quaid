@@ -14924,7 +14924,29 @@ def store(
                                 if _lib_has_vec():
                                     conn_cm = nullcontext(_conn) if _conn is not None else graph._get_conn()
                                     with conn_cm as conn:
-                                        conn.execute("DELETE FROM vec_nodes WHERE node_id = ?", (existing.id,))
+                                        try:
+                                            conn.execute("DELETE FROM vec_nodes WHERE node_id = ?", (existing.id,))
+                                        except sqlite3.OperationalError as exc:
+                                            if "no such table: vec_nodes" not in str(exc).lower():
+                                                logger.warning(
+                                                    "subsume update failed vec_nodes cleanup for %s: %s",
+                                                    existing.id,
+                                                    exc,
+                                                )
+                                                if _is_fail_hard_mode():
+                                                    raise RuntimeError(
+                                                        "Vector index cleanup failed during subsume update while fail-hard mode is enabled"
+                                                    ) from exc
+                                        except Exception as exc:
+                                            logger.warning(
+                                                "subsume update failed vec_nodes cleanup for %s: %s",
+                                                existing.id,
+                                                exc,
+                                            )
+                                            if _is_fail_hard_mode():
+                                                raise RuntimeError(
+                                                    "Vector index cleanup failed during subsume update while fail-hard mode is enabled"
+                                                ) from exc
                             graph.update_node(existing, conn=_conn)
                             if (update_if_dup and verified) or subsumes == "a_subsumes_b":
                                 return _with_dedup_telemetry({

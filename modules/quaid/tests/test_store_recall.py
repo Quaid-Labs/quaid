@@ -2140,6 +2140,7 @@ class TestStoreDedup:
 
         with graph._get_conn() as conn:
             existing_row = conn.execute("SELECT * FROM nodes WHERE id = ?", (created["id"],)).fetchone()
+            conn.execute("DROP TABLE IF EXISTS vec_nodes")
 
         vec_meta = {
             "vec_query_count": 1,
@@ -2938,7 +2939,8 @@ class TestRecallTelemetry:
                 "walnut-umbrella-7142 retrieval canary marker",
                 owner_id="quaid",
                 status="approved",
-            )
+            ),
+            embed=False,
         )
         exact_node = graph.get_node(node_id)
         assert exact_node is not None
