@@ -180,6 +180,36 @@ class TestRegisterAndGet:
         assert r._resolve_path(entry["file_path"]).resolve() == doc_path.resolve()
         assert r.get("STATUS.md") is None
 
+    def test_cli_register_rejects_missing_file_path(self, setup_env, monkeypatch, capsys):
+        from datastore.docsdb import registry as registry_mod
+
+        visible_home = setup_env.parents[1]
+        source_root = visible_home / "projects" / "livetest-agentmsg-xp-src"
+        source_root.mkdir(parents=True, exist_ok=True)
+
+        monkeypatch.chdir(source_root)
+        monkeypatch.setattr(registry_mod.tempfile, "gettempdir", lambda: str(setup_env / "tmp"))
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "registry.py",
+                "register",
+                "api.py",
+                "--project",
+                "test-project",
+            ],
+        )
+
+        with pytest.raises(SystemExit):
+            registry_mod.main()
+
+        captured = capsys.readouterr()
+        assert "File not found: api.py" in captured.err
+
+        r = _get_registry()
+        assert r.list_docs() == []
+
     def test_register_upsert_same_project(self, setup_env):
         r = _get_registry()
         id1 = r.register("docs/test.md", project="proj-a", title="V1")

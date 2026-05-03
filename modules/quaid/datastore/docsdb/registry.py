@@ -233,11 +233,18 @@ def _cli_register_file_path(raw_path: str) -> str:
         return value
     path = Path(value).expanduser()
     if path.is_absolute():
+        resolved = path.resolve()
+        if not resolved.exists():
+            raise FileNotFoundError(f"File not found: {value}")
+        if not resolved.is_file():
+            raise IsADirectoryError(f"Not a file: {value}")
         return value
     cwd_path = (Path.cwd() / path).resolve()
-    if cwd_path.exists():
-        return _to_registry_path(cwd_path)
-    return value
+    if not cwd_path.exists():
+        raise FileNotFoundError(f"File not found: {value} (resolved to {cwd_path})")
+    if not cwd_path.is_file():
+        raise IsADirectoryError(f"Not a file: {value} (resolved to {cwd_path})")
+    return _to_registry_path(cwd_path)
 
 
 def _why_read_entry(doc: Dict[str, Any]) -> str:
@@ -2229,7 +2236,10 @@ def main():
                 source_files = json.loads(source_files[0])
             except json.JSONDecodeError:
                 pass  # Not valid JSON, treat as literal path
-        file_path = _cli_register_file_path(args.file_path)
+        try:
+            file_path = _cli_register_file_path(args.file_path)
+        except (FileNotFoundError, IsADirectoryError) as exc:
+            parser.error(str(exc))
         row_id = registry.register(
             file_path=file_path,
             project=args.project,
