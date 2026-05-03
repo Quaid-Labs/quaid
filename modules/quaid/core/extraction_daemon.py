@@ -4824,25 +4824,9 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                     source_key=lock_owner_key,
                     processed_signal_type=signal_type,
                 )
-                if str(signal_meta.get("reason") or "") == "continued_chunk_budget":
-                    flush_transcript_path = (
-                        str(signal_meta.get("source_transcript_path") or "").strip()
-                        if _is_daemon_owned_transcript_snapshot_path(transcript_path)
-                        else ""
-                    ) or transcript_path
-                    write_signal(
-                        signal_type="session_end",
-                        session_id=session_id,
-                        transcript_path=flush_transcript_path,
-                        meta={
-                            "reason": "continued_rolling_tail_flush",
-                            "source_signal": "rolling",
-                            "source_cursor_key": lock_owner_key,
-                        },
-                )
                 mark_signal_processed(signal_data)
-                # Keep the stable snapshot while the semantic tail is deferred.
-                # The queued lifecycle drain reads the semantic buffer from state.
+                # Keep the stable snapshot while the semantic tail is deferred;
+                # idle/newer-session scans need a live cursor target to flush it.
                 return
             staged_state = _stage_semantic_buffer_payload(
                 session_id=session_id,
