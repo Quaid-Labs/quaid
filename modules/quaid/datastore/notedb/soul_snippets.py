@@ -189,43 +189,33 @@ def _atomic_write_text(path: Path, content: str) -> None:
 
 
 def _refresh_generated_memory_projection() -> None:
-    """Keep root ENVIRONMENT.md aligned with generated ENVIRONMENT.snippets.md when safe.
+    """Remove legacy generated ENVIRONMENT projections from authored identity.
 
-    OpenClaw's live answer path still reads ENVIRONMENT.md directly in some flows.
-    To avoid clobbering user-authored content, only rewrite the root file if it
-    is missing or already marked as Quaid-generated projection content.
+    Pending snippets remain in *.snippets.md. Identity files are authored
+    content only; hook/rules rendering can expose snippet queues as system
+    context without writing scaffolding into ENVIRONMENT.md.
     """
-    snippets_path = _visible_instance_dir() / "ENVIRONMENT.snippets.md"
     memory_path = _root_file_path("ENVIRONMENT.md")
     existing = memory_path.read_text(encoding="utf-8") if memory_path.exists() else ""
-    legacy_projection = bool(_LEGACY_GENERATED_MEMORY_PROJECTION_MARKER_RE.search(existing))
-    if existing and _GENERATED_MEMORY_PROJECTION_MARKER not in existing and not legacy_projection:
+    legacy_match = _LEGACY_GENERATED_MEMORY_PROJECTION_MARKER_RE.search(existing)
+    marker_pos = existing.find(_GENERATED_MEMORY_PROJECTION_MARKER)
+    positions = [pos for pos in [marker_pos, legacy_match.start() if legacy_match else -1] if pos >= 0]
+    if not existing or not positions:
         return
-
-    lines = [
-        "# MEMORY",
-        "",
-        _GENERATED_MEMORY_PROJECTION_MARKER,
-        "<!-- sourced from ENVIRONMENT.snippets.md until native injection is reliable -->",
-        "",
-    ]
-    if snippets_path.exists():
-        lines.append("## Extracted Memory")
-        lines.append("")
-        lines.append(snippets_path.read_text(encoding="utf-8").strip())
-    else:
-        lines.append("_No extracted memory facts projected yet._")
-    lines.append("")
-    _atomic_write_text(memory_path, "\n".join(lines))
+    prefix = existing[: min(positions)].strip()
+    meaningful_prefix = [line.strip() for line in prefix.splitlines() if line.strip()]
+    if len(meaningful_prefix) == 1 and meaningful_prefix[0].lower() in {"# memory", "# environment"}:
+        prefix = ""
+    _atomic_write_text(memory_path, f"{prefix.rstrip()}\n" if prefix else "")
 
 
 def _refresh_generated_user_snippets_projection() -> None:
-    """Append/update a managed USER snippet block inside root USER.md.
+    """Remove legacy managed USER snippet blocks from authored USER.md.
 
-    OpenClaw fresh-session startup still reads USER.md directly. Preserve any
-    user-authored content and only replace the managed projection block.
+    The marker constants stay in code because they are needed to detect and
+    clean older projected blocks. New pending snippets stay in USER.snippets.md
+    and are rendered by hooks as system context, not as USER.md scaffolding.
     """
-    snippets_path = _visible_instance_dir() / "USER.snippets.md"
     user_path = _root_file_path("USER.md")
     existing = user_path.read_text(encoding="utf-8") if user_path.exists() else "# USER\n"
 
@@ -233,28 +223,9 @@ def _refresh_generated_user_snippets_projection() -> None:
         rf"\n?{re.escape(_GENERATED_USER_SNIPPETS_START)}[\s\S]*?{re.escape(_GENERATED_USER_SNIPPETS_END)}\n?",
         re.MULTILINE,
     )
-    if not snippets_path.exists():
-        if _GENERATED_USER_SNIPPETS_START in existing and _GENERATED_USER_SNIPPETS_END in existing:
-            updated = block_pattern.sub("\n\n", existing).rstrip() + "\n"
-            _atomic_write_text(user_path, updated)
-        return
-
-    projected_body = "\n".join([
-        _GENERATED_USER_SNIPPETS_START,
-        "## Pending User Snippets",
-        "",
-        "<!-- sourced from USER.snippets.md until native injection is reliable -->",
-        "",
-        snippets_path.read_text(encoding="utf-8").strip(),
-        _GENERATED_USER_SNIPPETS_END,
-    ])
-
     if _GENERATED_USER_SNIPPETS_START in existing and _GENERATED_USER_SNIPPETS_END in existing:
-        updated = block_pattern.sub(f"\n\n{projected_body}\n", existing).rstrip() + "\n"
-    else:
-        updated = existing.rstrip() + "\n\n" + projected_body + "\n"
-
-    _atomic_write_text(user_path, updated)
+        updated = block_pattern.sub("\n\n", existing).rstrip() + "\n"
+        _atomic_write_text(user_path, updated)
 
 
 def _refresh_generated_projection_hygiene() -> None:
@@ -1899,6 +1870,7 @@ def apply_decisions(
     if not dry_run:
         for filename, processed in processed_snippets.items():
             _clear_processed_snippets(filename, processed)
+        _refresh_generated_projection_hygiene()
 
     return stats
 
