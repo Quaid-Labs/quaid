@@ -55,6 +55,12 @@ from lib.runtime_context import get_quaid_home, get_visible_quaid_home, get_work
 
 logger = logging.getLogger(__name__)
 
+ASYNC_REGISTRATION_NOTICE = (
+    "Async registration started; document indexing runs shortly through "
+    "the project-docs supervisor. Run `quaid docs update --apply` if you need "
+    "a deterministic indexing point now."
+)
+
 
 def _fail_hard_enabled() -> bool:
     try:
@@ -2234,9 +2240,16 @@ def main():
             source_files=source_files,
         )
         if args.json:
-            print(json.dumps({"id": row_id, "file_path": file_path, "project": args.project}))
+            print(json.dumps({
+                "id": row_id,
+                "file_path": file_path,
+                "project": args.project,
+                "indexing": "async",
+                "message": ASYNC_REGISTRATION_NOTICE,
+            }))
         else:
             print(f"Registered: {file_path} (project={args.project}, id={row_id})")
+            print(ASYNC_REGISTRATION_NOTICE)
 
     elif args.command == "list":
         docs = registry.list_docs(project=args.project, asset_type=args.asset_type)

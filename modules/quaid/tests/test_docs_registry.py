@@ -171,6 +171,8 @@ class TestRegisterAndGet:
 
         payload = json.loads(capsys.readouterr().out)
         assert payload["file_path"] == "projects/livetest-agentmsg-xp-src/STATUS.md"
+        assert payload["indexing"] == "async"
+        assert "project-docs supervisor" in payload["message"]
 
         r = _get_registry()
         entry = r.get(payload["file_path"])
