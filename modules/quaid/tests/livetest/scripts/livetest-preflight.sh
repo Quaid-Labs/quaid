@@ -1642,7 +1642,7 @@ if _is_private_homeserver(homeserver):
         network_cfg = {}
         matrix_cfg["network"] = network_cfg
     network_cfg["dangerouslyAllowPrivateNetwork"] = True
-    matrix_cfg["allowPrivateNetwork"] = True
+matrix_cfg.pop("allowPrivateNetwork", None)
 matrix_cfg["autoJoin"] = "allowlist"
 matrix_cfg["autoJoinAllowlist"] = _merge_allowlist(matrix_cfg.get("autoJoinAllowlist"), room_id)
 matrix_cfg["groupPolicy"] = "allowlist"
@@ -1668,7 +1668,7 @@ if not isinstance(room_entry, dict):
     room_entry = {}
 groups_cfg[room_id] = room_entry
 room_entry["enabled"] = True
-room_entry["allow"] = True
+room_entry.pop("allow", None)
 room_entry["requireMention"] = False
 room_tools = room_entry.get("tools")
 if not isinstance(room_tools, dict):

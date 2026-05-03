@@ -64,6 +64,42 @@ describe("OpenClaw matrix config preservation", () => {
     fs.rmSync(root, { recursive: true, force: true });
   });
 
+  it("normalizes legacy matrix fields before restoring preserved config", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "quaid-oc-matrix-"));
+    const cfgPath = path.join(root, "openclaw.json");
+    writeJson(cfgPath, {
+      plugins: {
+        allow: ["matrix"],
+        entries: { matrix: { enabled: true } },
+      },
+      channels: {
+        matrix: {
+          enabled: true,
+          homeserver: "http://127.0.0.1:8008",
+          accessToken: "secret",
+          allowPrivateNetwork: true,
+          groups: {
+            "!room:localhost": {
+              allow: true,
+              requireMention: false,
+            },
+          },
+        },
+      },
+    });
+
+    const snapshot = captureOpenClawMatrixConfig(cfgPath);
+    writeJson(cfgPath, { plugins: { allow: [], entries: {} }, channels: {} });
+    restoreOpenClawMatrixConfig(cfgPath, snapshot);
+    const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
+
+    expect(cfg.channels.matrix.allowPrivateNetwork).toBeUndefined();
+    expect(cfg.channels.matrix.network.dangerouslyAllowPrivateNetwork).toBe(true);
+    expect(cfg.channels.matrix.groups["!room:localhost"].allow).toBeUndefined();
+    expect(cfg.channels.matrix.groups["!room:localhost"].enabled).toBe(true);
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
   it("does nothing when there was no matrix state to preserve", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "quaid-oc-matrix-"));
     const cfgPath = path.join(root, "openclaw.json");

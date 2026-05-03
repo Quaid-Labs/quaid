@@ -406,6 +406,20 @@ describe("install daemon policy", () => {
     expect(setupText).toContain('await _reassertOpenClawPostRestartState("hook configuration", preservedOpenClawMatrixConfig);');
   });
 
+  it("livetest preflight seeds OpenClaw Matrix with current non-legacy schema", () => {
+    const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+    const preflightText = fs.readFileSync(
+      path.join(repoRoot, "modules/quaid/tests/livetest/scripts/livetest-preflight.sh"),
+      "utf8",
+    );
+
+    expect(preflightText).toContain('network_cfg["dangerouslyAllowPrivateNetwork"] = True');
+    expect(preflightText).toContain('matrix_cfg.pop("allowPrivateNetwork", None)');
+    expect(preflightText).toContain('room_entry.pop("allow", None)');
+    expect(preflightText).not.toContain('matrix_cfg["allowPrivateNetwork"] = True');
+    expect(preflightText).not.toContain('room_entry["allow"] = True');
+  });
+
   it("OpenClaw install acquires a host-level config lock before preflight writes", () => {
     const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
     const setupText = fs.readFileSync(path.join(repoRoot, "setup-quaid.mjs"), "utf8");
