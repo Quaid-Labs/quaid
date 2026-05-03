@@ -59,6 +59,116 @@ def test_daemon_loop_preserves_signal_when_processing_raises(monkeypatch):
     assert marked == []
 
 
+def test_stage_semantic_buffer_payload_uses_configured_extract_wall_timeout(monkeypatch):
+    import ingest.extract as extract_mod
+
+    calls = []
+
+    def fake_extract_from_transcript(**kwargs):
+        calls.append(kwargs)
+        return {
+            "raw_facts": [],
+            "raw_snippets": {},
+            "raw_journal": {},
+            "raw_project_logs": {},
+            "carry_facts": [],
+            "facts_skipped": 0,
+            "chunks_processed": 1,
+            "chunks_total": 1,
+            "root_chunks": 1,
+            "split_events": 0,
+            "split_child_chunks": 0,
+            "leaf_chunks": 1,
+            "max_split_depth": 0,
+            "deep_calls": 1,
+            "repair_calls": 0,
+            "assessment_usable": 1,
+            "assessment_nothing_usable": 0,
+            "assessment_needs_smaller_chunk": 0,
+            "unclassified_empty_payloads": 0,
+        }
+
+    monkeypatch.setattr(extract_mod, "extract_from_transcript", fake_extract_from_transcript)
+    monkeypatch.setattr(extraction_daemon, "_warm_payload_embeddings", lambda facts: {
+        "requested": 0,
+        "unique": 0,
+        "cache_hits": 0,
+        "warmed": 0,
+        "failed": 0,
+        "skipped_empty": 0,
+    })
+    monkeypatch.setattr(extraction_daemon, "write_rolling_state", lambda *args, **kwargs: None)
+    monkeypatch.setattr(extraction_daemon, "write_rolling_metric", lambda *args, **kwargs: None)
+    monkeypatch.setattr(extraction_daemon, "_write_rolling_debug_dump", lambda *args, **kwargs: None)
+    monkeypatch.setattr(extraction_daemon, "_write_extraction_buffer_log", lambda *args, **kwargs: None)
+
+    extraction_daemon._stage_semantic_buffer_payload(
+        session_id="sess-stage",
+        signal_type="rolling",
+        transcript_path="/tmp/sess-stage.jsonl",
+        label="daemon-rolling",
+        owner="Owner",
+        staged_state={"semantic_buffer": "User: OBD large transcript", "semantic_buffer_tokens": 10},
+        buffered_line_offset=1,
+        new_lines=["User: OBD large transcript"],
+        semantic_buffer_metrics={"raw_lines_added": 1, "semantic_chars_added": 26, "semantic_tokens_added": 10},
+        chunk_budget=1500,
+        chunk_line_budget=200,
+    )
+
+    assert len(calls) == 1
+    assert "wall_timeout_seconds" not in calls[0]
+
+
+def test_stage_semantic_buffer_payload_raises_on_partial_chunks_when_fail_hard(monkeypatch):
+    import ingest.extract as extract_mod
+
+    deferred = []
+
+    monkeypatch.setattr(
+        extract_mod,
+        "extract_from_transcript",
+        lambda **kwargs: {
+            "raw_facts": [],
+            "raw_snippets": {},
+            "raw_journal": {},
+            "raw_project_logs": {},
+            "carry_facts": [],
+            "facts_skipped": 0,
+            "chunks_processed": 7,
+            "chunks_total": 31,
+            "unclassified_empty_payloads": 0,
+        },
+    )
+    monkeypatch.setattr(extraction_daemon, "_warm_payload_embeddings", lambda facts: {
+        "requested": 0,
+        "unique": 0,
+        "cache_hits": 0,
+        "warmed": 0,
+        "failed": 0,
+        "skipped_empty": 0,
+    })
+    monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: True)
+    monkeypatch.setattr(extraction_daemon, "_save_deferred_extraction", lambda **kwargs: deferred.append(kwargs))
+
+    with pytest.raises(RuntimeError, match="24/31 chunks failed extraction while failHard is enabled"):
+        extraction_daemon._stage_semantic_buffer_payload(
+            session_id="sess-stage",
+            signal_type="rolling",
+            transcript_path="/tmp/sess-stage.jsonl",
+            label="daemon-rolling",
+            owner="Owner",
+            staged_state={"semantic_buffer": "User: OBD large transcript", "semantic_buffer_tokens": 10},
+            buffered_line_offset=1,
+            new_lines=["User: OBD large transcript"],
+            semantic_buffer_metrics={"raw_lines_added": 1, "semantic_chars_added": 26, "semantic_tokens_added": 10},
+            chunk_budget=1500,
+            chunk_line_budget=200,
+        )
+
+    assert deferred == []
+
+
 def test_daemon_loop_leaves_docs_refresh_to_project_docs_supervisor(monkeypatch):
     pending_signal = {"session_id": "sess-late", "type": "session_end"}
     read_calls = 0

@@ -2944,7 +2944,6 @@ def _stage_semantic_buffer_payload(
         session_id=session_id,
         dry_run=True,
         carry_facts=list(staged_state.get("carry_facts", []) or []),
-        wall_timeout_seconds=600.0,
     )
     stage_embedding_stats = _warm_payload_embeddings(stage_result.get("raw_facts", []) or [])
     chunks_processed = int(stage_result.get("chunks_processed", 0) or 0)
@@ -2958,6 +2957,11 @@ def _stage_semantic_buffer_payload(
         )
     failed_chunks = chunks_total - chunks_processed - unclassified_empty
     if failed_chunks > 0:
+        if _fail_hard_enabled():
+            raise RuntimeError(
+                f"[{label}] session {session_id}: {failed_chunks}/{chunks_total} "
+                "chunks failed extraction while failHard is enabled"
+            )
         logger.error(
             "[%s] session %s: %d/%d chunks failed extraction "
             "(non-provider failure); saving transcript for janitor recovery",
@@ -4922,6 +4926,11 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                 )
             _failed_chunks = chunks_total - chunks_processed - unclassified_empty
             if _failed_chunks > 0:
+                if _fail_hard_enabled():
+                    raise RuntimeError(
+                        f"[{label}] session {session_id}: FLUSH — {_failed_chunks}/{chunks_total} "
+                        "chunks failed extraction while failHard is enabled"
+                    )
                 # Provider outages raise ProviderUnavailableError and kill the daemon
                 # before we get here. This path handles non-provider failures only.
                 logger.error(
