@@ -1710,6 +1710,142 @@ def test_process_signal_uses_adapter_resolved_transcript_when_signal_path_missin
     assert "cobalt-postage-oc" in captured.get("transcript", "")
 
 
+def test_process_signal_reextracts_relocated_transcript_when_content_changed(monkeypatch, tmp_path):
+    from lib.adapter import set_adapter, reset_adapter
+    from ingest import extract as extract_mod
+    from core import ingest_runtime
+    from core.runtime import notify as notify_mod
+
+    session_id = "a9029038-7a04-42a9-8828-c39f0290a8f7"
+    old_dir = tmp_path / ".openclaw" / "agents" / "main" / "sessions"
+    new_dir = tmp_path / ".quaid" / "instances" / "openclaw-main" / "logs" / "quaid" / "sessions"
+    old_dir.mkdir(parents=True)
+    new_dir.mkdir(parents=True)
+    old_path = old_dir / f"{session_id}.jsonl"
+    new_path = new_dir / f"{session_id}.jsonl"
+    old_path.write_text(
+        "\n".join([
+            '{"type":"session","id":"a902"}',
+            '{"type":"model_change"}',
+            '{"type":"thinking_level_change"}',
+            '{"type":"custom","customType":"model-snapshot"}',
+            '{"type":"message","message":{"role":"user","content":[{"type":"text","text":"ACK"}]}}',
+            '{"type":"custom_message","customType":"openclaw.runtime-context","content":"context"}',
+            '{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"ACK"}]}}',
+        ]) + "\n",
+        encoding="utf-8",
+    )
+    new_path.write_text(
+        "\n".join([
+            '{"type":"session","id":"a902"}',
+            '{"type":"model_change"}',
+            '{"type":"thinking_level_change"}',
+            '{"type":"custom","customType":"model-snapshot"}',
+            '{"type":"message","message":{"role":"user","content":[{"type":"text","text":"Niseko marker belongs in extracted memory and should not be skipped after relocation."}]}}',
+            '{"type":"custom_message","customType":"openclaw.runtime-context","content":"context"}',
+            '{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"ACK"}]}}',
+        ]) + "\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "openclaw-main")
+    source_key = extraction_daemon._signal_source_cursor_key(session_id, str(old_path))
+    extraction_daemon.write_cursor(
+        session_id,
+        7,
+        str(old_path),
+        source_key=source_key,
+        processed_signal_type="reset",
+    )
+    old_path.unlink()
+
+    captured = {}
+
+    class _Adapter(_OwnedTestAdapterMixin):
+        def instance_root(self):
+            return tmp_path / "instances" / "openclaw-main"
+
+        def parse_session_jsonl(self, path):
+            captured.setdefault("parsed_paths", []).append(str(path))
+            return "User: Niseko marker belongs in extracted memory.\nAssistant: ACK"
+
+        def is_subagent_session(self, session_id, transcript_path=None):
+            return False
+
+    set_adapter(_Adapter())
+    monkeypatch.setattr(extraction_daemon, "_get_owner_id", lambda: "owner-1")
+    monkeypatch.setattr(extraction_daemon, "_read_usage_totals", lambda: {})
+    monkeypatch.setattr(extraction_daemon, "_session_has_harvestable_subagents", lambda *args, **kwargs: False)
+    monkeypatch.setattr(extraction_daemon, "_warm_payload_embeddings", lambda _facts: {
+        "requested": 0,
+        "unique": 0,
+        "cache_hits": 0,
+        "warmed": 0,
+        "failed": 0,
+        "skipped_empty": 0,
+    })
+    monkeypatch.setattr(notify_mod, "notify_memory_extraction", lambda **_kwargs: None)
+    monkeypatch.setattr(ingest_runtime, "run_session_logs_ingest", lambda **_kwargs: {"status": "indexed"})
+
+    def fake_extract_from_transcript(transcript, **kwargs):
+        captured["transcript"] = transcript
+        return {
+            "chunks_processed": 1,
+            "chunks_total": 1,
+            "unclassified_empty_payloads": 0,
+            "raw_facts": [
+                {
+                    "text": "Solomon went skiing in Niseko.",
+                    "category": "fact",
+                    "domains": ["personal"],
+                    "extraction_confidence": "high",
+                }
+            ],
+            "facts": [],
+            "soul_snippets": {},
+            "journal_entries": {},
+            "project_logs": {},
+            "raw_snippets": {},
+            "raw_journal": {},
+            "raw_project_logs": {},
+            "carry_facts": [],
+        }
+
+    monkeypatch.setattr(extract_mod, "extract_from_transcript", fake_extract_from_transcript)
+    monkeypatch.setattr(
+        extract_mod,
+        "apply_extracted_payloads",
+        lambda *_args, **_kwargs: {
+            "facts_stored": 1,
+            "facts_skipped": 0,
+            "edges_created": 0,
+            "facts": [{"text": "Solomon went skiing in Niseko.", "status": "stored", "edges": []}],
+            "snippets": {},
+            "journal": {},
+            "project_log_metrics": {},
+        },
+    )
+
+    try:
+        signal_path = extraction_daemon.write_signal(
+            signal_type="session_end",
+            session_id=session_id,
+            transcript_path=str(new_path),
+        )
+        signal_data = json.loads(signal_path.read_text(encoding="utf-8"))
+        signal_data["_signal_path"] = str(signal_path)
+
+        extraction_daemon.process_signal(signal_data)
+    finally:
+        reset_adapter()
+
+    assert "Niseko marker belongs" in captured["transcript"]
+    cursor = extraction_daemon.read_cursor(session_id, source_key=source_key)
+    assert cursor["line_offset"] == 7
+    assert cursor["transcript_path"] == str(new_path)
+
+
 def test_process_signal_does_not_reextract_tail_after_nonrolling_semantic_stage(monkeypatch, tmp_path):
     from lib.adapter import set_adapter, reset_adapter
     from ingest import extract as extract_mod

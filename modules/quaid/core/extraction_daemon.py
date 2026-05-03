@@ -4183,6 +4183,14 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             not _is_reset_rename
             and os.path.basename(cursor_transcript) == os.path.basename(transcript_path)
         )
+        _relocated_cursor_size_bytes = int(cursor_data.get("transcript_size_bytes", 0) or 0)
+        _relocated_current_size_bytes = _transcript_size_bytes(transcript_path) if _is_dir_relocation else 0
+        _relocated_content_changed = bool(
+            _is_dir_relocation
+            and _relocated_cursor_size_bytes
+            and _relocated_current_size_bytes
+            and _relocated_current_size_bytes != _relocated_cursor_size_bytes
+        )
         # Cross-directory reset rename: cursor is at a relocated path (dir2/X.jsonl)
         # and the new transcript is the .reset.* backup in the original directory
         # (dir1/X.jsonl.reset.<ts>).  The directory-level _is_reset_rename check
@@ -4232,6 +4240,14 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             logger.info(
                 "[%s] session %s: reset signal on backup path (%s -> %s), resetting cursor for full extraction",
                 label, session_id, cursor_transcript, transcript_path,
+            )
+            cursor_offset = 0
+        elif _is_dir_relocation and _relocated_content_changed:
+            logger.info(
+                "[%s] session %s: transcript directory relocation content changed "
+                "(%s -> %s, cursor_size=%d, current_size=%d), resetting cursor",
+                label, session_id, cursor_transcript, transcript_path,
+                _relocated_cursor_size_bytes, _relocated_current_size_bytes,
             )
             cursor_offset = 0
         elif _is_dir_relocation and signal_type != "reset":
