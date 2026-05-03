@@ -301,7 +301,6 @@ class _LazyMemoryService:
 
 _memory = _LazyMemoryService()
 
-DEFAULT_EXTRACT_WALL_SECONDS = 2400.0
 DEFAULT_EXTRACT_OUTPUT_TOKENS = 16384
 EXTRACT_RETRY_TARGET_TOKENS = 8000
 MIN_EXTRACT_RETRY_TOKENS = 4000
@@ -322,35 +321,6 @@ def _load_soul_snippets_module():
 def _content_hash(text: str) -> str:
     normalized = " ".join(str(text or "").lower().split())
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
-
-
-def _get_extract_wall_timeout_seconds() -> float:
-    """Resolve total extraction wall-clock budget for a single transcript.
-
-    This is intentionally generic runtime behavior. Callers with unusually large
-    transcripts can raise the budget via env without changing the per-call LLM
-    timeout policy.
-    """
-    raw = str(os.environ.get("QUAID_EXTRACT_WALL_TIMEOUT", "") or "").strip()
-    if not raw:
-        return DEFAULT_EXTRACT_WALL_SECONDS
-    try:
-        value = float(raw)
-    except Exception:
-        logger.warning(
-            "[extract] invalid QUAID_EXTRACT_WALL_TIMEOUT=%r; defaulting to %.1fs",
-            raw,
-            DEFAULT_EXTRACT_WALL_SECONDS,
-        )
-        return DEFAULT_EXTRACT_WALL_SECONDS
-    if value <= 0:
-        logger.warning(
-            "[extract] non-positive QUAID_EXTRACT_WALL_TIMEOUT=%r; defaulting to %.1fs",
-            raw,
-            DEFAULT_EXTRACT_WALL_SECONDS,
-        )
-        return DEFAULT_EXTRACT_WALL_SECONDS
-    return value
 
 
 def _extract_carry_context_enabled() -> bool:
@@ -2605,19 +2575,10 @@ def _extract_chunk_payloads(
     chunk_label: str,
     system_prompt: str,
     carry_facts: List[Dict[str, Any]],
-    extract_deadline: float,
     split_depth: int = 0,
     telemetry: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
     """Extract a chunk, recursively splitting if the model cannot produce usable JSON."""
-    remaining = extract_deadline - time.time()
-    if remaining <= 0:
-        logger.warning(
-            "[extract] %s chunk %s: extraction deadline exhausted before chunk processing",
-            label,
-            chunk_label,
-        )
-        return []
     if isinstance(telemetry, dict):
         telemetry["chunk_calls"] = int(telemetry.get("chunk_calls", 0) or 0) + 1
         telemetry["max_split_depth"] = max(
@@ -2632,7 +2593,6 @@ def _extract_chunk_payloads(
         prompt=user_message,
         system_prompt=system_prompt,
         max_tokens=_extraction_max_output_tokens(),
-        timeout=max(1.0, remaining),
     )
 
     if not response_text:
@@ -2750,7 +2710,6 @@ def _extract_chunk_payloads(
                         chunk_label=f"{chunk_label}.{sub_idx}",
                         system_prompt=system_prompt,
                         carry_facts=carry_facts,
-                        extract_deadline=extract_deadline,
                         split_depth=split_depth + 1,
                         telemetry=telemetry,
                     )
@@ -3543,6 +3502,8 @@ def extract_from_transcript(
         write_snippets: Whether to write soul snippets.
         write_journal: Whether to write journal entries.
         dry_run: If True, parse and plan but don't store anything.
+        wall_timeout_seconds: Deprecated no-op. Extraction processes every chunk;
+            per-provider request timeouts are enforced by the LLM client.
 
     Returns:
         {
@@ -3709,7 +3670,6 @@ def extract_from_transcript(
         carry_facts = []
     parallel_root_workers = int(result["parallel_root_workers"] or 1)
     effective_parallel_root_workers = 1
-    extract_deadline = time.time() + (wall_timeout_seconds if wall_timeout_seconds is not None else _get_extract_wall_timeout_seconds())
 
     def _process_root_chunk(ci: int, chunk: str, local_carry_facts: List[Dict[str, Any]], telemetry: Dict[str, Any]) -> List[Dict[str, Any]]:
         return _extract_chunk_payloads(
@@ -3718,7 +3678,6 @@ def extract_from_transcript(
             chunk_label=str(ci + 1),
             system_prompt=system_prompt,
             carry_facts=local_carry_facts,
-            extract_deadline=extract_deadline,
             telemetry=telemetry,
         )
 
@@ -3740,12 +3699,6 @@ def extract_from_transcript(
                     continue
                 if len(transcript_chunks) > 1:
                     logger.info(f"[extract] {label}: chunk {ci + 1}/{len(transcript_chunks)} ({len(chunk)} chars)")
-                remaining = extract_deadline - time.time()
-                if remaining <= 0:
-                    logger.warning(
-                        f"[extract] {label}: extraction deadline reached before parallel chunk {ci + 1}/{len(transcript_chunks)}"
-                    )
-                    break
                 local_telemetry = {
                     "chunks_processed": 0,
                     "split_events": 0,
@@ -3795,14 +3748,6 @@ def extract_from_transcript(
 
             if len(transcript_chunks) > 1:
                 logger.info(f"[extract] {label}: chunk {ci + 1}/{len(transcript_chunks)} ({len(chunk)} chars)")
-
-            remaining = extract_deadline - time.time()
-            if remaining <= 0:
-                logger.warning(
-                    f"[extract] {label}: extraction deadline reached after {ci}/{len(transcript_chunks)} chunks; "
-                    "stopping further chunk processing"
-                )
-                break
 
             parsed_payloads = _process_root_chunk(ci, chunk, carry_facts, result)
             if not parsed_payloads:

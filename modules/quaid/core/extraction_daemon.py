@@ -5244,6 +5244,8 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
         )
 
     except Exception as e:
+        if _fail_hard_enabled():
+            raise
         should_write_flush_error = (
             not rolling_mode
             and signal_type in ("compaction", "reset", "session_end", "timeout")

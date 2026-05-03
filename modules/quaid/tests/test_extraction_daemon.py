@@ -169,6 +169,112 @@ def test_stage_semantic_buffer_payload_raises_on_partial_chunks_when_fail_hard(m
     assert deferred == []
 
 
+def test_process_signal_partial_stage_chunks_escape_when_fail_hard(monkeypatch, tmp_path):
+    import ingest.extract as extract_mod
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
+
+    transcript = tmp_path / "transcript.jsonl"
+    transcript.write_text('{"role":"user","content":"OBD large transcript"}\n', encoding="utf-8")
+    signal_dir = tmp_path / "signals"
+    signal_dir.mkdir()
+
+    staged_state = {
+        "semantic_buffer": "User: OBD large transcript",
+        "semantic_buffer_tokens": 100,
+        "buffered_line_offset": 1,
+        "processed_line_offset": 0,
+        "transcript_path": str(transcript),
+    }
+    deferred = []
+    marked = []
+    released = []
+
+    real_registry = sys.modules.get("core.subagent_registry")
+    real_adapter = sys.modules.get("lib.adapter")
+
+    fake_registry = types.ModuleType("core.subagent_registry")
+    fake_registry.is_registered_subagent = lambda sid: False
+    fake_registry.get_harvestable = lambda sid: []
+    fake_registry.mark_harvested = lambda sid, cid: None
+    sys.modules["core.subagent_registry"] = fake_registry
+
+    fake_adapter_mod = types.ModuleType("lib.adapter")
+
+    class _FakeAdapter(_OwnedTestAdapterMixin):
+        def parse_session_jsonl(self, path):
+            return "User: OBD large transcript"
+
+    fake_adapter_mod.get_adapter = lambda: _FakeAdapter()
+    sys.modules["lib.adapter"] = fake_adapter_mod
+
+    monkeypatch.setattr(
+        extract_mod,
+        "extract_from_transcript",
+        lambda **kwargs: {
+            "raw_facts": [],
+            "raw_snippets": {},
+            "raw_journal": {},
+            "raw_project_logs": {},
+            "carry_facts": [],
+            "facts_skipped": 0,
+            "chunks_processed": 7,
+            "chunks_total": 31,
+            "unclassified_empty_payloads": 0,
+        },
+    )
+    monkeypatch.setattr(extraction_daemon, "_reload_config_if_changed", lambda reason: None)
+    monkeypatch.setattr(extraction_daemon, "_read_rolling_state_for_signal", lambda sid, path: (dict(staged_state), sid))
+    monkeypatch.setattr(extraction_daemon, "_signal_source_cursor_key", lambda *args, **kwargs: "source-key")
+    monkeypatch.setattr(extraction_daemon, "_acquire_session_processing_lock", lambda key: 123)
+    monkeypatch.setattr(extraction_daemon, "_release_session_processing_lock", lambda key, fd: released.append((key, fd)))
+    monkeypatch.setattr(
+        extraction_daemon,
+        "_read_cursor_with_source_compat",
+        lambda sid, key: {"line_offset": 0, "transcript_path": str(transcript)},
+    )
+    monkeypatch.setattr(extraction_daemon, "_signal_dir", lambda: signal_dir)
+    monkeypatch.setattr(extraction_daemon, "_cursor_or_adapter_owns_transcript_path", lambda *args, **kwargs: True)
+    monkeypatch.setattr(extraction_daemon, "count_transcript_lines", lambda path: 1)
+    monkeypatch.setattr(extraction_daemon, "_get_capture_chunk_tokens", lambda default=8000: 10)
+    monkeypatch.setattr(extraction_daemon, "_get_capture_chunk_max_lines", lambda default=0: 0)
+    monkeypatch.setattr(extraction_daemon, "read_transcript_token_window", lambda *args, **kwargs: [])
+    monkeypatch.setattr(extraction_daemon, "_get_owner_id", lambda: "owner-id")
+    monkeypatch.setattr(extraction_daemon, "_warm_payload_embeddings", lambda facts: {
+        "requested": 0,
+        "unique": 0,
+        "cache_hits": 0,
+        "warmed": 0,
+        "failed": 0,
+        "skipped_empty": 0,
+    })
+    monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: True)
+    monkeypatch.setattr(extraction_daemon, "_save_deferred_extraction", lambda **kwargs: deferred.append(kwargs))
+    monkeypatch.setattr(extraction_daemon, "mark_signal_processed", lambda signal: marked.append(signal))
+
+    try:
+        with pytest.raises(RuntimeError, match="24/31 chunks failed extraction while failHard is enabled"):
+            extraction_daemon.process_signal({
+                "session_id": "sess-obd",
+                "type": "rolling",
+                "transcript_path": str(transcript),
+            })
+    finally:
+        if real_registry is not None:
+            sys.modules["core.subagent_registry"] = real_registry
+        else:
+            sys.modules.pop("core.subagent_registry", None)
+        if real_adapter is not None:
+            sys.modules["lib.adapter"] = real_adapter
+        else:
+            sys.modules.pop("lib.adapter", None)
+
+    assert deferred == []
+    assert marked == []
+    assert released == [("source-key", 123)]
+
+
 def test_daemon_loop_leaves_docs_refresh_to_project_docs_supervisor(monkeypatch):
     pending_signal = {"session_id": "sess-late", "type": "session_end"}
     read_calls = 0
@@ -5968,6 +6074,7 @@ class TestRollingExtraction:
         )
         extraction_daemon.write_cursor("sess-roll", 0, str(transcript_path))
         monkeypatch.setattr(extraction_daemon, "_get_owner_id", lambda: "Owner")
+        monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: False)
         monkeypatch.setattr(extraction_daemon, "_rolling_ready_threshold", lambda chunk_budget: 1)
 
         real_registry = sys.modules.get("core.subagent_registry")
@@ -7783,6 +7890,7 @@ class TestRollingExtraction:
         )
         extraction_daemon.write_cursor("sess-roll", 0, str(transcript_path))
         monkeypatch.setattr(extraction_daemon, "_get_owner_id", lambda: "Owner")
+        monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: False)
         monkeypatch.setattr(extraction_daemon, "_rolling_ready_threshold", lambda chunk_budget: 1)
 
         real_registry = sys.modules.get("core.subagent_registry")

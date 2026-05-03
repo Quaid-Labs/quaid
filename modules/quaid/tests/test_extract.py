@@ -1,7 +1,6 @@
 """Tests for extract.py — Memory extraction from conversation transcripts."""
 
 import importlib
-import itertools
 import json
 import os
 import sys
@@ -360,18 +359,6 @@ class TestParseSessionJsonl:
 # ---------------------------------------------------------------------------
 
 class TestExtractFromTranscript:
-    def test_extract_wall_timeout_defaults_to_2400(self, monkeypatch):
-        from ingest.extract import _get_extract_wall_timeout_seconds
-
-        monkeypatch.delenv("QUAID_EXTRACT_WALL_TIMEOUT", raising=False)
-        assert _get_extract_wall_timeout_seconds() == 2400.0
-
-    def test_extract_wall_timeout_respects_env_override(self, monkeypatch):
-        from ingest.extract import _get_extract_wall_timeout_seconds
-
-        monkeypatch.setenv("QUAID_EXTRACT_WALL_TIMEOUT", "7200")
-        assert _get_extract_wall_timeout_seconds() == 7200.0
-
     def test_extract_carry_and_parallel_env_helpers(self, monkeypatch):
         from ingest.extract import (
             _extract_carry_context_enabled,
@@ -3917,10 +3904,9 @@ class TestExtractFromTranscript:
         assert result["repair_calls"] == 1
         assert result["unclassified_empty_payloads"] == 0
 
-    @patch("ingest.extract.time.time")
     @patch("lib.batch_utils.chunk_text_by_tokens")
     @patch("ingest.extract.call_deep_reasoning")
-    def test_stops_processing_when_extract_deadline_expires(self, mock_llm, mock_chunk, mock_time):
+    def test_wall_timeout_parameter_does_not_stop_chunk_processing(self, mock_llm, mock_chunk):
         from ingest.extract import extract_from_transcript
 
         mock_chunk.return_value = [
@@ -3928,21 +3914,17 @@ class TestExtractFromTranscript:
             "User: second chunk",
         ]
         mock_llm.return_value = (json.dumps({"facts": []}), 0.4)
-        # deadline init, outer chunk1 remaining check, inner chunk1 remaining
-        # check, outer chunk2 remaining check (expired). Use an unbounded
-        # iterator so incidental logging calls that touch time.time() cannot
-        # exhaust the mock in CI.
-        mock_time.side_effect = itertools.chain([100.0, 100.0, 100.0, 701.0], itertools.repeat(701.0))
 
         result = extract_from_transcript(
             transcript="dummy",
             owner_id="test",
-            label="deadline-test",
-            wall_timeout_seconds=600.0,  # pin so test is independent of DEFAULT_EXTRACT_WALL_SECONDS
+            label="no-wall-deadline-test",
+            wall_timeout_seconds=0.001,
         )
 
         assert result["facts_stored"] == 0
-        assert mock_llm.call_count == 1
+        assert result["chunks_total"] == 2
+        assert mock_llm.call_count == 2
 
     @patch("lib.batch_utils.chunk_text_by_tokens")
     @patch("ingest.extract.call_deep_reasoning")
