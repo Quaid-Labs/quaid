@@ -146,9 +146,9 @@ This depends on stronger plugin and datastore contracts than exist today, and is
 
 ## Release Status
 
-Quaid `v0.3.1` is the first installable public release. LLM routing is adapter- and config-driven (`deep_reasoning` / `fast_reasoning`), with provider/model resolution handled through the gateway provider layer. Ollama remains the default embeddings path.
+Quaid `v0.3.2` is the current installable public release. LLM routing is adapter- and config-driven (`deep_reasoning` / `fast_reasoning`), with provider/model resolution handled through the gateway provider layer. Ollama remains the default embeddings path.
 
-Known limitations for **v0.3.1**:
+Known limitations for **v0.3.2**:
 - Parallel-session targeting for `/new` and `/reset` extraction still has edge cases.
 - Multi-user workloads are partially supported but not fully hardened under heavy concurrency.
 - Windows is not supported. macOS and Linux only.
@@ -181,7 +181,7 @@ We're actively testing and refining the system against benchmarks and welcome co
 - [Maintainer Lifecycle](docs/MAINTAINER-LIFECYCLE.md) — Safe branch/release model for post-user operation
 - [Contributing](CONTRIBUTING.md) — PR expectations, validation, and AI-assisted contribution policy
 - [Good First Issues](docs/GOOD-FIRST-ISSUES.md) — Small scoped tasks for new contributors
-- [v0.3.1 Notes](docs/releases/v0.3.1.md) — Release highlights, compatibility, and known limitations
+- [v0.3.2 Notes](docs/releases/v0.3.2.md) — Release highlights, compatibility, and known limitations
 - [Roadmap](ROADMAP.md) — What's coming next
 - [AI Install Guide](docs/AI-INSTALL.md) — If you're an AI that's been asked to install Quaid, read and follow these instructions
 
