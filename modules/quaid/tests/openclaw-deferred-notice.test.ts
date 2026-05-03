@@ -666,6 +666,79 @@ describe("openclaw deferred notices", () => {
     removeTempDir(fixture.home);
   });
 
+  it("relays deferred notices as visible replies from before_agent_reply user turns", async () => {
+    vi.useFakeTimers();
+    const fixture = seedDeferredNoticeFixture(
+      "quaid-oc-deferred-user-reply-home-",
+      "openclaw-main",
+      "[Quaid] Deferred notice on user reply trigger.",
+    );
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const plugin = await loadAdapterWithHomes(
+      fixture.hiddenHome,
+      fixture.visibleHome,
+      fixture.openClawConfigPath,
+      "openclaw-main",
+    );
+    const api = makeFakeApi();
+    plugin.register(api as any);
+
+    const deferredReplyCall = api.on.mock.calls.find((call: any[]) =>
+      call?.[0] === "before_agent_reply" && call?.[2]?.name === "deferred-notice-channel-relay"
+    );
+    expect(deferredReplyCall).toBeTruthy();
+
+    const relayResult = await deferredReplyCall?.[1](
+      { sessionId: "session-main-user", sessionKey: "agent:main:tui-main" },
+      { sessionId: "session-main-user", sessionKey: "agent:main:tui-main", agentId: "main", trigger: "user" },
+    );
+    expect(relayResult?.handled).toBe(true);
+    expect(relayResult?.reason).toBe("deferred_notice_visible_relay");
+    expect(String(relayResult?.reply?.text || "")).toContain("Quaid notice:");
+    expect(String(relayResult?.reply?.text || "")).toContain("Deferred notice on user reply trigger");
+
+    const drained = JSON.parse(fs.readFileSync(fixture.noticeFile, "utf8"));
+    const pending = Array.isArray(drained?.requests)
+      ? drained.requests.filter((item: any) => String(item?.status || "").trim().toLowerCase() === "pending")
+      : [];
+    const delivered = Array.isArray(drained?.requests)
+      ? drained.requests.filter((item: any) => String(item?.status || "").trim().toLowerCase() === "delivered")
+      : [];
+    expect(pending).toHaveLength(0);
+    expect(delivered).toHaveLength(1);
+
+    warn.mockRestore();
+    log.mockRestore();
+    error.mockRestore();
+    removeTempDir(fixture.home);
+  });
+
+  it("parses deferred delivery JSON after notify stdout chatter", async () => {
+    const fixture = seedDeferredNoticeFixture(
+      "quaid-oc-deferred-json-parse-home-",
+      "openclaw-main",
+      "[Quaid] Deferred notice parser fixture.",
+    );
+    await loadAdapterWithHomes(
+      fixture.hiddenHome,
+      fixture.visibleHome,
+      fixture.openClawConfigPath,
+      "openclaw-main",
+    );
+    const adapterModule = await import("../adaptors/openclaw/adapter.js");
+
+    const payload = (adapterModule as any).__test.parseJsonObjectFromProcessStdout(
+      '[notify] Sent to matrix:!room\n{\n  "delivered": 1,\n  "items": []\n}\n',
+    );
+
+    expect(payload.delivered).toBe(1);
+    removeTempDir(fixture.home);
+  });
+
   it("delivers changed invalid model config through deferred channel notices", async () => {
     vi.stubEnv("QUAID_DISABLE_NOTIFICATIONS", "1");
     const home = makeTempDir("quaid-oc-provider-drift-home-");

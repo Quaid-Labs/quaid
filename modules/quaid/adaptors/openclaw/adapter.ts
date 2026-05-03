@@ -705,6 +705,24 @@ function ensureAgentInstanceProvisioned(agentLabel: string, reason: string): boo
   }
 }
 
+function parseJsonObjectFromProcessStdout<T extends Record<string, unknown>>(stdout: string): T {
+  const raw = String(stdout || "").trim();
+  if (!raw) {
+    return {} as T;
+  }
+  try {
+    return JSON.parse(raw) as T;
+  } catch (directErr: unknown) {
+    const objectStart = raw.indexOf("{");
+    if (objectStart >= 0) {
+      try {
+        return JSON.parse(raw.slice(objectStart)) as T;
+      } catch {}
+    }
+    throw directErr;
+  }
+}
+
 function deliverDeferredNoticesViaChannel(agentLabel: string, reason: string): number {
   const instanceId = getInstanceId(agentLabel);
   const notifyScript = path.join(PYTHON_PLUGIN_ROOT, "core", "runtime", "notify.py");
@@ -731,7 +749,7 @@ function deliverDeferredNoticesViaChannel(agentLabel: string, reason: string): n
     }
     let payload: { delivered?: number; items?: Array<{ kind?: string }> } = {};
     try {
-      payload = JSON.parse(String(result.stdout || "{}"));
+      payload = parseJsonObjectFromProcessStdout(String(result.stdout || "{}"));
     } catch (parseErr: unknown) {
       writeHookTrace("deferred_notice.delivery_parse_error", {
         instance_id: instanceId,
@@ -764,6 +782,82 @@ function deliverDeferredNoticesViaChannel(agentLabel: string, reason: string): n
     });
     return 0;
   }
+}
+
+function drainDeferredNoticeMessagesForAgent(agentLabel: string, reason: string): string[] {
+  const instanceId = getInstanceId(agentLabel);
+  const script = [
+    "import json, sys",
+    `sys.path.insert(0, ${JSON.stringify(PYTHON_PLUGIN_ROOT)})`,
+    "from lib.agent_notice import drain_deferred_notices",
+    "drained = drain_deferred_notices(limit=50)",
+    "messages = [str(item.get('message') or '').strip() for item in list(drained or []) if isinstance(item, dict) and str(item.get('message') or '').strip()]",
+    "kinds = [str(item.get('kind') or '').strip() for item in list(drained or []) if isinstance(item, dict)]",
+    "print(json.dumps({'drained': len(drained), 'messages': messages, 'kinds': kinds}))",
+  ].join("\n");
+  try {
+    const result = spawnSync(PYTHON_BIN, ["-c", script], {
+      encoding: "utf8",
+      timeout: 30_000,
+      env: buildPythonEnv({ QUAID_INSTANCE: instanceId }) as NodeJS.ProcessEnv,
+    });
+    if (result.error || result.status !== 0) {
+      writeHookTrace("deferred_notice.reply_relay_error", {
+        instance_id: instanceId,
+        agent_label: agentLabel,
+        reason,
+        status: typeof result.status === "number" ? result.status : null,
+        stderr: String(result.stderr || "").trim().slice(0, 500),
+        error: String(result.error?.message || ""),
+      });
+      return [];
+    }
+    let payload: { drained?: number; messages?: string[]; kinds?: string[] } = {};
+    try {
+      payload = parseJsonObjectFromProcessStdout(String(result.stdout || "{}"));
+    } catch (parseErr: unknown) {
+      writeHookTrace("deferred_notice.reply_relay_parse_error", {
+        instance_id: instanceId,
+        agent_label: agentLabel,
+        reason,
+        stdout: String(result.stdout || "").trim().slice(0, 500),
+        error: String((parseErr as Error)?.message || parseErr),
+      });
+      return [];
+    }
+    const messages = Array.isArray(payload?.messages)
+      ? payload.messages.map((message) => String(message || "").trim()).filter(Boolean)
+      : [];
+    if (messages.length > 0) {
+      writeHookTrace("deferred_notice.reply_relay_context", {
+        instance_id: instanceId,
+        agent_label: agentLabel,
+        reason,
+        count: Math.max(0, Number(payload?.drained || 0) || 0),
+        kinds: Array.isArray(payload?.kinds) ? payload.kinds.slice(0, 8) : [],
+      });
+    }
+    return messages;
+  } catch (err: unknown) {
+    writeHookTrace("deferred_notice.reply_relay_error", {
+      instance_id: instanceId,
+      agent_label: agentLabel,
+      reason,
+      error: String((err as Error)?.message || err),
+    });
+    return [];
+  }
+}
+
+function buildDeferredNoticeVisibleReply(messages: string[]): string {
+  const clean = messages.map((message) => String(message || "").trim()).filter(Boolean);
+  if (!clean.length) {
+    return "";
+  }
+  if (clean.length === 1) {
+    return `Quaid notice: ${clean[0]}`;
+  }
+  return `Quaid notices:\n${clean.map((message) => `- ${message}`).join("\n")}`;
 }
 
 function drainDeferredNoticeRelayContextForAgent(agentLabel: string, reason: string): string {
@@ -5876,6 +5970,22 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
     onChecked("before_agent_reply", async (event: any, ctx: any) => {
       if (isInternalSessionContext(event, ctx)) return;
       const promptAgentLabel = resolveHookAgentLabel(event, ctx);
+      const trigger = String(ctx?.trigger || "user").trim().toLowerCase();
+      if (trigger === "user") {
+        const messages = drainDeferredNoticeMessagesForAgent(promptAgentLabel, "before_agent_reply");
+        const replyText = buildDeferredNoticeVisibleReply(messages);
+        if (!replyText) return;
+        writeHookTrace("deferred_notice.reply_relay_visible_reply", {
+          agent_label: promptAgentLabel,
+          session_id: String(ctx?.sessionId || event?.sessionId || ""),
+          count: messages.length,
+        });
+        return {
+          handled: true,
+          reason: "deferred_notice_visible_relay",
+          reply: { text: replyText },
+        };
+      }
       deliverDeferredNoticesViaChannel(promptAgentLabel, "before_agent_reply");
     }, {
       name: "deferred-notice-channel-relay",
@@ -8518,6 +8628,8 @@ export const __test = {
   selectMissingUserMessageRecoveryMessage,
   buildMissingUserMessageOverride,
   shouldPersistAutoInjectionDedup,
+  parseJsonObjectFromProcessStdout,
+  buildDeferredNoticeVisibleReply,
   deliverDeferredNoticesViaChannel,
   extractOpenAICodexAccountId: _extractOpenAICodexAccountId,
   extractOpenAICodexText: _extractOpenAICodexText,
