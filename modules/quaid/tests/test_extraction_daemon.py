@@ -1710,7 +1710,16 @@ def test_process_signal_uses_adapter_resolved_transcript_when_signal_path_missin
     assert "cobalt-postage-oc" in captured.get("transcript", "")
 
 
-def test_process_signal_reextracts_relocated_transcript_when_content_changed(monkeypatch, tmp_path):
+@pytest.mark.parametrize(
+    "cursor_fixture",
+    ["size_mismatch", "zero_size_identity_changed"],
+    ids=["size-mismatch", "zero-size-identity-changed"],
+)
+def test_process_signal_reextracts_relocated_transcript_when_content_changed(
+    monkeypatch,
+    tmp_path,
+    cursor_fixture,
+):
     from lib.adapter import set_adapter, reset_adapter
     from ingest import extract as extract_mod
     from core import ingest_runtime
@@ -1723,18 +1732,21 @@ def test_process_signal_reextracts_relocated_transcript_when_content_changed(mon
     new_dir.mkdir(parents=True)
     old_path = old_dir / f"{session_id}.jsonl"
     new_path = new_dir / f"{session_id}.jsonl"
-    old_path.write_text(
-        "\n".join([
-            '{"type":"session","id":"a902"}',
-            '{"type":"model_change"}',
-            '{"type":"thinking_level_change"}',
-            '{"type":"custom","customType":"model-snapshot"}',
-            '{"type":"message","message":{"role":"user","content":[{"type":"text","text":"ACK"}]}}',
-            '{"type":"custom_message","customType":"openclaw.runtime-context","content":"context"}',
-            '{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"ACK"}]}}',
-        ]) + "\n",
-        encoding="utf-8",
-    )
+    if cursor_fixture == "zero_size_identity_changed":
+        old_path.write_text("", encoding="utf-8")
+    else:
+        old_path.write_text(
+            "\n".join([
+                '{"type":"session","id":"a902"}',
+                '{"type":"model_change"}',
+                '{"type":"thinking_level_change"}',
+                '{"type":"custom","customType":"model-snapshot"}',
+                '{"type":"message","message":{"role":"user","content":[{"type":"text","text":"ACK"}]}}',
+                '{"type":"custom_message","customType":"openclaw.runtime-context","content":"context"}',
+                '{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"ACK"}]}}',
+            ]) + "\n",
+            encoding="utf-8",
+        )
     new_path.write_text(
         "\n".join([
             '{"type":"session","id":"a902"}',

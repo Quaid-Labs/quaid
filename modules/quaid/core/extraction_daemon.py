@@ -4183,13 +4183,48 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             not _is_reset_rename
             and os.path.basename(cursor_transcript) == os.path.basename(transcript_path)
         )
+        _relocated_current_stat = _transcript_stat_metadata(transcript_path) if _is_dir_relocation else {}
         _relocated_cursor_size_bytes = int(cursor_data.get("transcript_size_bytes", 0) or 0)
-        _relocated_current_size_bytes = _transcript_size_bytes(transcript_path) if _is_dir_relocation else 0
-        _relocated_content_changed = bool(
-            _is_dir_relocation
-            and _relocated_cursor_size_bytes
+        _relocated_current_size_bytes = int(_relocated_current_stat.get("size_bytes", 0) or 0)
+        _relocated_cursor_mtime_ns = int(cursor_data.get("transcript_mtime_ns", 0) or 0)
+        _relocated_current_mtime_ns = int(_relocated_current_stat.get("mtime_ns", 0) or 0)
+        _relocated_cursor_inode = int(cursor_data.get("transcript_inode", 0) or 0)
+        _relocated_current_inode = int(_relocated_current_stat.get("inode", 0) or 0)
+        _relocated_cursor_device = int(cursor_data.get("transcript_device", 0) or 0)
+        _relocated_current_device = int(_relocated_current_stat.get("device", 0) or 0)
+        _relocated_file_identity_changed = bool(
+            (
+                _relocated_cursor_mtime_ns
+                and _relocated_current_mtime_ns
+                and _relocated_current_mtime_ns != _relocated_cursor_mtime_ns
+            )
+            or (
+                _relocated_cursor_inode
+                and _relocated_current_inode
+                and _relocated_current_inode != _relocated_cursor_inode
+            )
+            or (
+                _relocated_cursor_device
+                and _relocated_current_device
+                and _relocated_current_device != _relocated_cursor_device
+            )
+        )
+        _relocated_size_changed = bool(
+            _relocated_cursor_size_bytes
             and _relocated_current_size_bytes
             and _relocated_current_size_bytes != _relocated_cursor_size_bytes
+        )
+        # A zero-size cursor can come from an early maintenance/reset pass over
+        # an empty handshake file. If the later relocated transcript has content
+        # and file identity changed, do not let that stale EOF cursor shadow it.
+        _relocated_zero_size_cursor_rebased = bool(
+            not _relocated_cursor_size_bytes
+            and _relocated_current_size_bytes
+            and _relocated_file_identity_changed
+        )
+        _relocated_content_changed = bool(
+            _is_dir_relocation
+            and (_relocated_size_changed or _relocated_zero_size_cursor_rebased)
         )
         # Cross-directory reset rename: cursor is at a relocated path (dir2/X.jsonl)
         # and the new transcript is the .reset.* backup in the original directory
