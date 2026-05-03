@@ -1,21 +1,21 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-04-15",
+  "updated_at": "2026-05-03",
   "evidence": {
     "unit": {
-      "sha": "8131f5cc52e467c6e669c01f64afa48c9703baf0",
-      "recorded_at": "2026-04-15T10:08:23.590Z",
-      "notes": ""
+      "sha": "7f2f76d211ff28ece9348b27297943c123e4bca1",
+      "recorded_at": "2026-05-03T15:27:01.315Z",
+      "notes": "Run 179 release-readiness prepush full gate PASS"
     },
     "ci": {
-      "sha": "8131f5cc52e467c6e669c01f64afa48c9703baf0",
-      "recorded_at": "2026-04-15T10:08:23.651Z",
-      "notes": ""
+      "sha": "7f2f76d211ff28ece9348b27297943c123e4bca1",
+      "recorded_at": "2026-05-03T15:27:01.379Z",
+      "notes": "GitHub Quaid CI and CodeQL post-promotion PASS"
     },
     "xp": {
-      "sha": "8131f5cc52e467c6e669c01f64afa48c9703baf0",
-      "recorded_at": "2026-04-15T10:08:23.713Z",
-      "notes": ""
+      "sha": "7f2f76d211ff28ece9348b27297943c123e4bca1",
+      "recorded_at": "2026-05-03T15:27:01.445Z",
+      "notes": "Run 179 XP and GLOBAL PASS"
     }
   }
 }
