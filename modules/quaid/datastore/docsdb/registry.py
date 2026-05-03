@@ -234,21 +234,6 @@ def _cli_register_file_path(raw_path: str) -> str:
     return value
 
 
-def _cli_index_registered_doc(registry: "DocsRegistry", file_path: str, asset_type: str) -> int:
-    """Index a just-registered CLI doc so it is recallable before the supervisor sweep."""
-    if str(asset_type or "doc").strip().lower() != "doc":
-        return 0
-    resolved = registry._resolve_path(file_path).resolve()
-    if not resolved.is_file():
-        return 0
-    from datastore.docsdb.rag import DocsRAG
-
-    chunks = int(DocsRAG(registry.db_path).index_document(str(resolved)) or 0)
-    if chunks > 0:
-        registry.update_timestamps(file_path, indexed_at=datetime.now().isoformat())
-    return chunks
-
-
 def _why_read_entry(doc: Dict[str, Any]) -> str:
     description = str(doc.get("description") or "").strip()
     if description:
@@ -2159,7 +2144,7 @@ def main():
     subparsers = parser.add_subparsers(dest="command", help="Command")
 
     # register
-    reg_p = subparsers.add_parser("register", help="Register and index a document")
+    reg_p = subparsers.add_parser("register", help="Register a document")
     reg_p.add_argument("file_path", help="File path (absolute or current-directory relative)")
     reg_p.add_argument("--project", default="default", help="Project name")
     reg_p.add_argument("--type", dest="asset_type", default="doc", help="Asset type")
@@ -2248,18 +2233,10 @@ def main():
             auto_update=args.auto_update,
             source_files=source_files,
         )
-        indexed_chunks = _cli_index_registered_doc(registry, file_path, args.asset_type)
         if args.json:
-            print(json.dumps({
-                "id": row_id,
-                "file_path": file_path,
-                "project": args.project,
-                "indexed_chunks": indexed_chunks,
-            }))
+            print(json.dumps({"id": row_id, "file_path": file_path, "project": args.project}))
         else:
             print(f"Registered: {file_path} (project={args.project}, id={row_id})")
-            if indexed_chunks:
-                print(f"Indexed: {file_path} ({indexed_chunks} chunks)")
 
     elif args.command == "list":
         docs = registry.list_docs(project=args.project, asset_type=args.asset_type)
