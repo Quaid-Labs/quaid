@@ -23,6 +23,18 @@ Under the hood, Quaid is an **active knowledge layer** for long-running agents. 
 curl -fsSL https://raw.githubusercontent.com/quaid-labs/quaid/main/install.sh | bash
 ```
 
+**Installing with an AI agent:**
+
+Give this to your agent:
+
+```text
+Install Quaid for me.
+
+First read and follow https://github.com/quaid-labs/quaid/blob/main/docs/AI-INSTALL.md exactly. Run the mandatory pre-install survey before installing anything. Use the platform/adapter for the agent you are currently running in unless I specify another one. Use my name as the owner name; if you do not know it, ask me before the survey. Show me the survey, wait for my approval, then install Quaid and run the health checks.
+```
+
+Agent instructions live in [AI-INSTALL.md](docs/AI-INSTALL.md).
+
 After install, start here:
 - [User Guide](projects/quaid/USER-GUIDE.md) — day-1 usage, project system basics, and where Quaid stores its files
 
