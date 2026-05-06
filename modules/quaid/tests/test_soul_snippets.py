@@ -2082,6 +2082,47 @@ class TestSnippetReview:
         assert result["folded"] == 0
         assert result["discarded"] == 0
 
+    @patch("datastore.notedb.soul_snippets.call_deep_reasoning")
+    def test_single_snippet_empty_decisions_retries_once(self, mock_opus, workspace_dir, mock_config):
+        """A singleton empty-decisions response should get one stricter retry."""
+        (workspace_dir / "ENVIRONMENT.snippets.md").write_text(
+            "# ENVIRONMENT.md — Pending Snippets\n\n"
+            "## Compaction — 2026-03-01 07:21:32\n"
+            "- The user uses the assistant as a casual conversation partner, not yet as a task/reminder tool.\n"
+        )
+        (workspace_dir / "identity" / "ENVIRONMENT.md").write_text(
+            "# Shared Moments\n\n"
+            "## Our History\n\n"
+            "(populated through conversation)\n\n"
+            "## What the World Is Teaching Me\n\n"
+            "(populated through conversation)\n"
+        )
+        mock_opus.side_effect = [
+            (json.dumps({"decisions": []}), 0.5),
+            (json.dumps({
+                "decisions": [
+                    {
+                        "file": "ENVIRONMENT.md",
+                        "snippet_index": 1,
+                        "action": "DISCARD",
+                        "reason": "Better handled as a retrievable user fact.",
+                    }
+                ]
+            }), 0.5),
+        ]
+
+        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.notedb.soul_snippets import run_soul_snippets_review
+            result = run_soul_snippets_review(dry_run=True)
+
+        assert result["total_snippets"] == 1
+        assert result["discarded"] == 1
+        assert result["errors"] == []
+        assert mock_opus.call_count == 2
+        retry_prompt = mock_opus.call_args_list[1].args[0]
+        assert "RETRY REQUIRED" in retry_prompt
+        assert "Do not return an empty decisions array." in retry_prompt
+
 
 # =============================================================================
 # Dual system independence tests

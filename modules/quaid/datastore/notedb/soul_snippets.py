@@ -1684,6 +1684,43 @@ Respond with JSON. Example with all three action types:
 }}"""
 
 
+def _build_single_snippet_retry_prompt(
+    prompt: str,
+    *,
+    filename: str,
+    window_label: str,
+    response_text: str,
+) -> str:
+    """Build a narrow retry prompt when the model omitted a singleton decision."""
+    response_preview = (response_text or "")[:1000]
+    return f"""{prompt}
+
+RETRY REQUIRED:
+Your previous response for {filename} window {window_label} returned no decisions.
+This window contains exactly one snippet, so you must return exactly one decision.
+
+Return JSON only with this shape:
+{{
+  "decisions": [
+    {{
+      "file": "{filename}",
+      "snippet_index": 1,
+      "action": "FOLD|REWRITE|DISCARD",
+      "insert_after": "END",
+      "reason": "why this is the correct decision"
+    }}
+  ]
+}}
+
+If the snippet should not be folded into {filename}, return a DISCARD decision.
+Do not return an empty decisions array.
+
+Previous response:
+```text
+{response_preview}
+```"""
+
+
 def apply_decisions(
     decisions: List[Dict[str, Any]],
     all_snippets: Dict[str, Dict[str, Any]],
@@ -2366,7 +2403,82 @@ def run_soul_snippets_review(
                     "duration_s": float(duration or 0.0),
                     "response_preview": response_text[:200],
                 })
-                if len(window_snippets) > 1:
+                if parsed and not decisions and len(window_snippets) == 1:
+                    retry_prompt = _build_single_snippet_retry_prompt(
+                        prompt,
+                        filename=filename,
+                        window_label=window_label,
+                        response_text=response_text,
+                    )
+                    retry_prompt_tokens = estimate_tokens(retry_prompt)
+                    print(
+                        f"  Snippet review returned no decisions for {filename} "
+                        f"window {window_label}; retrying singleton window"
+                    )
+                    _append_review_telemetry({
+                        "task": "snippet_review",
+                        "status": "empty_decisions_retry_start",
+                        "file": filename,
+                        "window": window_label,
+                        "window_count": len(windows),
+                        "items": len(window_snippets),
+                        "prompt_tokens": retry_prompt_tokens,
+                        "max_output_tokens": max_tokens,
+                        "timeout_s": llm_timeout,
+                    })
+                    try:
+                        retry_response_text, retry_duration = call_deep_reasoning(
+                            retry_prompt,
+                            system_prompt=system_prompt,
+                            max_tokens=max_tokens,
+                            timeout=llm_timeout,
+                        )
+                    except Exception as exc:
+                        _append_review_telemetry({
+                            "task": "snippet_review",
+                            "status": "empty_decisions_retry_error",
+                            "file": filename,
+                            "window": window_label,
+                            "window_count": len(windows),
+                            "items": len(window_snippets),
+                            "prompt_tokens": retry_prompt_tokens,
+                            "max_output_tokens": max_tokens,
+                            "timeout_s": llm_timeout,
+                            "error_type": type(exc).__name__,
+                            "error": str(exc),
+                        })
+                        raise
+                    retry_parsed = parse_json_response(retry_response_text or "")
+                    retry_decisions = retry_parsed.get("decisions", []) if retry_parsed else []
+                    _append_review_telemetry({
+                        "task": "snippet_review",
+                        "status": "empty_decisions_retry_ok" if retry_decisions else "empty_decisions_retry_failed",
+                        "file": filename,
+                        "window": window_label,
+                        "window_count": len(windows),
+                        "items": len(window_snippets),
+                        "prompt_tokens": retry_prompt_tokens,
+                        "max_output_tokens": max_tokens,
+                        "timeout_s": llm_timeout,
+                        "duration_s": float(retry_duration or 0.0),
+                        "response_chars": len(retry_response_text or ""),
+                        "decisions": len(retry_decisions),
+                        "response_preview": (retry_response_text or "")[:200],
+                    })
+                    if retry_decisions:
+                        response_text = retry_response_text or ""
+                        duration = retry_duration
+                        parsed = retry_parsed
+                        decisions = retry_decisions
+                    else:
+                        print(
+                            f"  Snippet review retry still returned no decisions for "
+                            f"{filename} window {window_label}"
+                        )
+                if decisions:
+                    # Continue into the normal successful decision path below.
+                    pass
+                elif len(window_snippets) > 1:
                     mid = len(window_snippets) // 2
                     print(
                         f"  Snippet review parse/decision failure for {filename} window {window_label}; "
@@ -2377,16 +2489,17 @@ def run_soul_snippets_review(
                         (f"{window_label}b", window_snippets[mid:]),
                     ] + pending_windows
                     continue
-                if not parsed:
-                    stats["errors"].append(
-                        f"Snippet review parse failed for {filename} window {window_label}: "
-                        f"{response_text[:200]}"
-                    )
                 else:
-                    stats["errors"].append(
-                        f"No decisions returned for {filename} window {window_label}"
-                    )
-                continue
+                    if not parsed:
+                        stats["errors"].append(
+                            f"Snippet review parse failed for {filename} window {window_label}: "
+                            f"{response_text[:200]}"
+                        )
+                    else:
+                        stats["errors"].append(
+                            f"No decisions returned for {filename} window {window_label}"
+                        )
+                    continue
 
             _append_review_telemetry({
                 "task": "snippet_review",
