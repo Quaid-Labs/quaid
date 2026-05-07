@@ -3361,10 +3361,18 @@ def _prefix_relation_group_match_length(row_groups: List[str], intent_groups: Li
     return matched
 
 
-def _rank_graph_row_for_relation_chain(row: Dict[str, Any], relation_groups: List[str]) -> Tuple[int, int, int, int, float]:
+def _terminal_relation_chain_match(row_groups: List[str], intent_groups: List[str]) -> int:
+    if not row_groups or not intent_groups:
+        return 0
+    path_groups = [group for group in row_groups if group != "has_fact"]
+    return int(path_groups == intent_groups)
+
+
+def _rank_graph_row_for_relation_chain(row: Dict[str, Any], relation_groups: List[str]) -> Tuple[int, int, int, int, int, float]:
     row_groups = _graph_row_relation_groups(row)
     ordered_hits = _ordered_relation_group_match_length(row_groups, relation_groups)
     prefix_hits = _prefix_relation_group_match_length(row_groups, relation_groups)
+    terminal_hits = _terminal_relation_chain_match(row_groups, relation_groups)
     fact_bonus = 1 if str(row.get("via") or "") == "graph_attached_fact" or str(row.get("category") or "").lower() == "fact" else 0
     try:
         depth = int(row.get("hop_depth") or row.get("depth") or 0)
@@ -3374,27 +3382,27 @@ def _rank_graph_row_for_relation_chain(row: Dict[str, Any], relation_groups: Lis
         similarity = float(row.get("similarity") or 0.0)
     except Exception:
         similarity = 0.0
-    return ordered_hits, prefix_hits, fact_bonus, depth, similarity
+    return ordered_hits, prefix_hits, terminal_hits, fact_bonus, depth, similarity
 
 
-def _relation_chain_sort_key(row: Dict[str, Any], relation_groups: List[str]) -> Tuple[int, int, int, int, float]:
-    ordered_hits, prefix_hits, fact_bonus, depth, similarity = _rank_graph_row_for_relation_chain(
+def _relation_chain_sort_key(row: Dict[str, Any], relation_groups: List[str]) -> Tuple[int, int, int, int, int, float]:
+    ordered_hits, prefix_hits, terminal_hits, fact_bonus, depth, similarity = _rank_graph_row_for_relation_chain(
         row,
         relation_groups,
     )
-    return ordered_hits, prefix_hits, fact_bonus, -depth, similarity
+    return ordered_hits, prefix_hits, terminal_hits, fact_bonus, -depth, similarity
 
 
 def _boost_relation_chain_row_scores(rows: List[Dict[str, Any]], relation_groups: List[str]) -> None:
     for row in rows:
-        ordered_hits, prefix_hits, fact_bonus, depth, current_similarity = _rank_graph_row_for_relation_chain(
+        ordered_hits, prefix_hits, terminal_hits, fact_bonus, depth, current_similarity = _rank_graph_row_for_relation_chain(
             row,
             relation_groups,
         )
         graph_like = str(row.get("via") or "").startswith("graph") or str(row.get("category") or "").lower() == "graph"
         if ordered_hits >= 2 or (ordered_hits >= 1 and fact_bonus):
             cap = 0.996 if fact_bonus else 0.994
-            target = 0.86 + (0.03 * ordered_hits) + (0.02 * prefix_hits) + (0.02 * fact_bonus) - (0.01 * max(depth - 1, 0))
+            target = 0.86 + (0.03 * ordered_hits) + (0.02 * prefix_hits) + (0.02 * terminal_hits) + (0.02 * fact_bonus) - (0.01 * max(depth - 1, 0))
             row["similarity"] = round(max(
                 current_similarity,
                 min(cap, target),
@@ -4149,6 +4157,10 @@ def graph_aware_recall(
         graph_depth = max(graph_depth, len(relation_chain_groups))
         results["meta"]["graph_depth"] = int(graph_depth)
 
+    # A terse relation chain such as "partner brother occupation" has no
+    # named starting entity but still describes the owner's relationship graph.
+    query_entities = extract_entities_from_text(query)
+
     # 1. Pronoun resolution
     if has_owner_pronoun(query):
         owner_person = resolve_owner_person(owner_id)
@@ -4157,6 +4169,14 @@ def graph_aware_recall(
             owner_anchor_id = owner_person.id
             owner_anchor_name = owner_person.name
             results["source_breakdown"]["pronoun_resolved"] = True
+            results["source_breakdown"]["owner_person"] = owner_person.name
+    elif relation_chain_query and not query_entities:
+        owner_person = resolve_owner_person(owner_id)
+        if owner_person:
+            expand_from.append(owner_person.id)
+            owner_anchor_id = owner_person.id
+            owner_anchor_name = owner_person.name
+            results["source_breakdown"]["owner_relation_chain_inferred"] = True
             results["source_breakdown"]["owner_person"] = owner_person.name
 
     # 2. Vector search (fact-only): keep direct hits strictly factual, then
@@ -4242,10 +4262,9 @@ def graph_aware_recall(
             relation_chain_path_by_node = {}
             relation_chain_sequence_by_node = {}
 
-    # 3. Extract entities from query before fact-subject backfill so explicit
+    # 3. Use named entities from query before fact-subject backfill so explicit
     # named anchors (for example "Mei") expand ahead of inferred relation
     # subjects such as "Kai's wife is Mei".
-    query_entities = extract_entities_from_text(query)
     for entity in query_entities:
         expand_from.append(entity.id)
         results["entities_found"].append({
