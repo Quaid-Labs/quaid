@@ -3204,6 +3204,28 @@ class TestSourceChunkStorage:
         assert [row["chunk_index"] for row in rows] == [4, 6]
         assert [row["text"] for row in rows] == ["First chunk", "Second chunk"]
 
+    def test_list_source_chunks_can_return_latest_session_index(self, tmp_path):
+        """Ingest can append chunks without reading an unbounded session history."""
+        graph, _db_file = _make_graph(tmp_path)
+
+        graph.store_source_chunks(
+            ["First chunk", "Second chunk", "Third chunk"],
+            owner_id="douglas",
+            session_id="session-latest",
+            start_index=7,
+        )
+
+        rows = graph.list_source_chunks(
+            owner_id="douglas",
+            session_id="session-latest",
+            order="desc",
+            limit=1,
+        )
+
+        assert len(rows) == 1
+        assert rows[0]["chunk_index"] == 9
+        assert rows[0]["text"] == "Third chunk"
+
     def test_store_session_chunks_links_navigation_and_window(self, tmp_path):
         """Session chunks form a scalar linked list and can be expanded by id."""
         graph, _db_file = _make_graph(tmp_path)

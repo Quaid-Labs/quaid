@@ -1410,6 +1410,7 @@ class MemoryGraph:
         domains: Optional[List[str]] = None,
         project: Optional[str] = None,
         limit: int = 100,
+        order: str = "asc",
     ) -> List[Dict[str, Any]]:
         clauses: List[str] = []
         params: List[Any] = []
@@ -1433,13 +1434,18 @@ class MemoryGraph:
             normalized_limit = max(1, min(int(limit), 1000))
         except Exception:
             normalized_limit = 100
+        order_key = str(order or "asc").strip().lower()
+        if order_key == "desc":
+            order_by = "chunk_index DESC, created_at DESC, chunk_id DESC"
+        else:
+            order_by = "chunk_index ASC, created_at ASC, chunk_id ASC"
         with self._get_conn() as conn:
             self._ensure_source_chunks_table(conn)
             rows = conn.execute(
                 f"""
                 SELECT * FROM source_chunks
                 {where}
-                ORDER BY chunk_index ASC, created_at ASC, chunk_id ASC
+                ORDER BY {order_by}
                 LIMIT ?
                 """,
                 [*params, normalized_limit],

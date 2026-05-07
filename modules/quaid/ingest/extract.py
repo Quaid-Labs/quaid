@@ -339,6 +339,12 @@ class _LazyMemoryService:
     def store_source_chunk(self, *args, **kwargs):
         return self._svc().store_source_chunk(*args, **kwargs)
 
+    def store_source_chunks(self, *args, **kwargs):
+        return self._svc().store_source_chunks(*args, **kwargs)
+
+    def list_source_chunks(self, *args, **kwargs):
+        return self._svc().list_source_chunks(*args, **kwargs)
+
     def store_session_chunk(self, *args, **kwargs):
         return self._svc().store_session_chunk(*args, **kwargs)
 
@@ -351,6 +357,7 @@ MIN_EXTRACT_RETRY_TOKENS = 4000
 MAX_EXTRACT_SPLIT_DEPTH = 4
 DEFAULT_EXTRACT_PUBLISH_BATCH_SIZE = 100
 MIN_REPAIR_OUTPUT_TOKENS = 4096
+DEFAULT_SESSION_MICROCHUNK_TOKENS = 1200
 _SOUL_SNIPPETS_MODULE = None
 
 
@@ -386,6 +393,114 @@ def _build_extraction_source_chunk_descriptor(
     }
 
 
+def _split_session_source_microchunks(
+    text: str,
+    *,
+    max_tokens: int = DEFAULT_SESSION_MICROCHUNK_TOKENS,
+) -> List[str]:
+    """Split persisted session evidence into embedding-safe microchunks."""
+    normalized = str(text or "").strip()
+    if not normalized:
+        return []
+    try:
+        limit = int(max_tokens)
+    except Exception:
+        limit = DEFAULT_SESSION_MICROCHUNK_TOKENS
+    limit = max(128, limit)
+    if estimate_tokens(normalized) <= limit:
+        return [normalized]
+
+    from lib.batch_utils import chunk_by_tokens, chunk_text_by_tokens
+
+    out: List[str] = []
+
+    def _append_bounded(piece: str) -> None:
+        piece = str(piece or "").strip()
+        if not piece:
+            return
+        if estimate_tokens(piece) <= limit:
+            out.append(piece)
+            return
+        line_chunks = chunk_text_by_tokens(piece, max_tokens=limit, split_on="\n")
+        if len(line_chunks) > 1:
+            for line_chunk in line_chunks:
+                _append_bounded(line_chunk)
+            return
+        words = piece.split()
+        if not words:
+            return
+        bounded_words: List[str] = []
+        for word in words:
+            if estimate_tokens(word) <= limit:
+                bounded_words.append(word)
+                continue
+            current = ""
+            for char in word:
+                candidate = current + char
+                if current and estimate_tokens(candidate) > limit:
+                    bounded_words.append(current)
+                    current = char
+                else:
+                    current = candidate
+            if current:
+                bounded_words.append(current)
+        for word_chunk in chunk_by_tokens(bounded_words, max_tokens=limit, separator=" "):
+            chunk_text = " ".join(word_chunk).strip()
+            if chunk_text:
+                out.append(chunk_text)
+
+    for paragraph_chunk in chunk_text_by_tokens(normalized, max_tokens=limit, split_on="\n\n"):
+        _append_bounded(paragraph_chunk)
+    return out or [normalized]
+
+
+def _source_chunk_match_tokens(text: Any) -> set[str]:
+    tokens: set[str] = set()
+    for raw in " ".join(str(text or "").lower().split()).split(" "):
+        token = raw.strip(".,;:!?()[]{}\"'`<>")
+        if len(token) >= 3:
+            tokens.add(token)
+    return tokens
+
+
+def _fact_source_match_text(fact: Dict[str, Any]) -> str:
+    parts = [
+        fact.get("text"),
+        fact.get("content"),
+        fact.get("keywords"),
+        fact.get("subject_entity_name"),
+        fact.get("object_entity_name"),
+    ]
+    return " ".join(str(part or "") for part in parts if part)
+
+
+def _select_source_chunk_for_fact(
+    fact: Dict[str, Any],
+    chunks: List[Dict[str, Any]],
+) -> Optional[str]:
+    if not chunks:
+        return None
+    fact_tokens = _source_chunk_match_tokens(_fact_source_match_text(fact))
+    if not fact_tokens:
+        return str(chunks[0].get("chunk_id") or "").strip() or None
+    best_chunk_id: Optional[str] = None
+    best_key: Tuple[int, float, int] = (0, 0.0, 0)
+    for idx, chunk in enumerate(chunks):
+        chunk_id = str(chunk.get("chunk_id") or "").strip()
+        if not chunk_id:
+            continue
+        chunk_tokens = _source_chunk_match_tokens(chunk.get("text"))
+        overlap = len(fact_tokens & chunk_tokens)
+        ratio = overlap / max(1, len(fact_tokens))
+        key = (overlap, ratio, -idx)
+        if best_chunk_id is None or key > best_key:
+            best_chunk_id = chunk_id
+            best_key = key
+    if best_key[0] <= 0:
+        return str(chunks[0].get("chunk_id") or "").strip() or None
+    return best_chunk_id
+
+
 def _store_payload_source_chunks(
     result: Dict[str, Any],
     *,
@@ -395,12 +510,12 @@ def _store_payload_source_chunks(
     source_channel: Optional[str],
     source_conversation_id: Optional[str],
     source_author_id: Optional[str],
-) -> Dict[str, str]:
+) -> Dict[str, List[Dict[str, Any]]]:
     """Materialize staged source chunk descriptors at publish time."""
-    ref_to_chunk_id: Dict[str, str] = {}
+    ref_to_chunks: Dict[str, List[Dict[str, Any]]] = {}
     descriptors = list(result.get("raw_source_chunks", []) or [])
     if not descriptors:
-        return ref_to_chunk_id
+        return ref_to_chunks
     referenced_refs = {
         str(fact.get("_source_chunk_ref") or fact.get("source_chunk_ref") or "").strip()
         for fact in list(result.get("raw_facts", []) or [])
@@ -408,8 +523,10 @@ def _store_payload_source_chunks(
     }
     referenced_refs = {ref for ref in referenced_refs if ref}
     if not referenced_refs:
-        return ref_to_chunk_id
+        return ref_to_chunks
     seen_refs: set[str] = set()
+    next_chunk_index = 0
+    session_chunk_offsets: Dict[Tuple[str, str], int] = {}
     for raw in descriptors:
         if not isinstance(raw, dict):
             continue
@@ -429,13 +546,41 @@ def _store_payload_source_chunks(
             continue
         if not chunk_session_id:
             chunk_session_id = source_key
+        owner_session_key = (str(owner_id or "").strip(), chunk_session_id)
+        if owner_session_key not in session_chunk_offsets:
+            try:
+                existing = _memory.list_source_chunks(
+                    owner_id=owner_id,
+                    session_id=chunk_session_id,
+                    order="desc",
+                    limit=1,
+                )
+                latest_existing = next((row for row in existing if isinstance(row, dict)), None)
+                max_existing_index = int(latest_existing.get("chunk_index", -1)) if latest_existing else -1
+            except Exception as exc:
+                if is_fail_hard_enabled():
+                    raise RuntimeError("Failed to inspect existing session chunks") from exc
+                logger.warning(
+                    "[extract] %s source chunk %s: failed to inspect existing session chunks: %s",
+                    label,
+                    ref,
+                    exc,
+                    exc_info=True,
+                )
+                max_existing_index = -1
+            session_chunk_offsets[owner_session_key] = max_existing_index + 1
+        next_chunk_index = session_chunk_offsets[owner_session_key]
+        microchunks = _split_session_source_microchunks(text)
+        if not microchunks:
+            continue
         try:
-            stored = _memory.store_source_chunk(
-                text=text,
+            stored_rows = _memory.store_source_chunks(
+                chunks=microchunks,
                 owner_id=owner_id,
                 source_id=source_key,
                 session_id=chunk_session_id,
-                chunk_index=int(raw.get("chunk_index", 0) or 0),
+                start_index=next_chunk_index,
+                chunk_kind="micro",
                 source_channel=raw.get("source_channel") or source_channel,
                 source_conversation_id=chunk_source_conversation_id,
                 conversation_id=raw.get("conversation_id") or chunk_source_conversation_id,
@@ -453,8 +598,8 @@ def _store_payload_source_chunks(
             )
             result["source_chunks_failed"] = int(result.get("source_chunks_failed", 0) or 0) + 1
             continue
-        chunk_id = str((stored or {}).get("chunk_id") or "").strip()
-        if not chunk_id:
+        stored_chunks = [row for row in list(stored_rows or []) if isinstance(row, dict)]
+        if not stored_chunks or any(not str(row.get("chunk_id") or "").strip() for row in stored_chunks):
             result["source_chunks_failed"] = int(result.get("source_chunks_failed", 0) or 0) + 1
             if is_fail_hard_enabled():
                 raise RuntimeError("Source chunk store returned no chunk_id")
@@ -464,20 +609,26 @@ def _store_payload_source_chunks(
                 ref,
             )
             continue
-        ref_to_chunk_id[ref] = chunk_id
-        status = str((stored or {}).get("status") or "").strip()
-        if status == "existing":
-            result["source_chunks_existing"] = int(result.get("source_chunks_existing", 0) or 0) + 1
-        else:
-            result["source_chunks_stored"] = int(result.get("source_chunks_stored", 0) or 0) + 1
-    return ref_to_chunk_id
+        session_chunk_offsets[owner_session_key] = next_chunk_index + len(stored_chunks)
+        ref_to_chunks[ref] = stored_chunks
+        result["source_chunks_micro_split"] = int(result.get("source_chunks_micro_split", 0) or 0) + max(
+            0,
+            len(stored_chunks) - 1,
+        )
+        for stored in stored_chunks:
+            status = str((stored or {}).get("status") or "").strip()
+            if status == "existing":
+                result["source_chunks_existing"] = int(result.get("source_chunks_existing", 0) or 0) + 1
+            else:
+                result["source_chunks_stored"] = int(result.get("source_chunks_stored", 0) or 0) + 1
+    return ref_to_chunks
 
 
 def _attach_materialized_source_chunk_ids(
     raw_facts: List[Any],
-    ref_to_chunk_id: Dict[str, str],
+    ref_to_chunks: Dict[str, Any],
 ) -> List[Any]:
-    if not ref_to_chunk_id:
+    if not ref_to_chunks:
         return raw_facts
     out: List[Any] = []
     for fact in raw_facts:
@@ -487,7 +638,13 @@ def _attach_materialized_source_chunk_ids(
         item = dict(fact)
         if not str(item.get("_source_chunk_id") or item.get("source_chunk_id") or "").strip():
             ref = str(item.get("_source_chunk_ref") or item.get("source_chunk_ref") or "").strip()
-            chunk_id = ref_to_chunk_id.get(ref)
+            stored = ref_to_chunks.get(ref)
+            if isinstance(stored, str):
+                chunk_id = stored
+            elif isinstance(stored, list):
+                chunk_id = _select_source_chunk_for_fact(item, stored)
+            else:
+                chunk_id = None
             if chunk_id:
                 item["_source_chunk_id"] = chunk_id
         out.append(item)

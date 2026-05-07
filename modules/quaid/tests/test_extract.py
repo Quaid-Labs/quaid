@@ -2472,21 +2472,30 @@ class TestExtractFromTranscript:
         assert all("_carry_bucket" not in fact for fact in persisted)
 
     @patch("ingest.extract.call_deep_reasoning")
-    @patch("ingest.extract._memory.store_source_chunk")
+    @patch("ingest.extract._memory.list_source_chunks", return_value=[])
+    @patch("ingest.extract._memory.store_source_chunks")
     @patch("ingest.extract._memory.store")
     @patch("ingest.extract._memory.create_edge")
     def test_apply_extracted_payloads_can_publish_prior_dry_run_result(
         self,
         mock_edge,
         mock_store,
-        mock_store_source_chunk,
+        mock_store_source_chunks,
+        _mock_list_source_chunks,
         mock_llm,
         mock_opus_response,
     ):
         from ingest.extract import apply_extracted_payloads, extract_from_transcript
 
         mock_llm.return_value = (mock_opus_response, 1.0)
-        mock_store_source_chunk.return_value = {"chunk_id": "sch_staged", "status": "created"}
+        mock_store_source_chunks.return_value = [
+            {
+                "chunk_id": "sch_staged",
+                "status": "created",
+                "text": "User: I like coffee\n\nAssistant: noted",
+                "chunk_index": 0,
+            }
+        ]
         mock_store.side_effect = [
             {
                 "id": "node-1",
@@ -2553,7 +2562,7 @@ class TestExtractFromTranscript:
 
         assert staged["raw_source_chunks"]
         assert all("_source_chunk_ref" in fact for fact in staged["raw_facts"])
-        mock_store_source_chunk.assert_not_called()
+        mock_store_source_chunks.assert_not_called()
 
         staged["facts_stored"] = 0
         staged["facts_skipped"] = 0
@@ -2596,7 +2605,12 @@ class TestExtractFromTranscript:
         assert applied["dedup_token_prefilter_terms"] == 11
         assert applied["dedup_token_prefilter_skips"] == 0
         assert mock_store.call_count == 2
-        assert mock_store_source_chunk.call_count == 1
+        assert mock_store_source_chunks.call_count == 1
+        source_chunk_call = mock_store_source_chunks.call_args.kwargs
+        assert source_chunk_call["chunks"] == ["User: I like coffee\n\nAssistant: noted"]
+        assert source_chunk_call["session_id"] == "sess-stage"
+        assert source_chunk_call["start_index"] == 0
+        assert source_chunk_call["chunk_kind"] == "micro"
         assert {call.kwargs["source_chunk_id"] for call in mock_store.call_args_list} == {"sch_staged"}
         first_call = mock_store.call_args_list[0].kwargs
         second_call = mock_store.call_args_list[1].kwargs
@@ -2793,17 +2807,26 @@ class TestExtractFromTranscript:
         assert all_facts[0]["_source_chunk_ref"] == "chunk:unitref"
         assert all_facts[0]["_source_chunk_index"] == "1"
 
-    @patch("ingest.extract._memory.store_source_chunk")
+    @patch("ingest.extract._memory.list_source_chunks", return_value=[])
+    @patch("ingest.extract._memory.store_source_chunks")
     @patch("ingest.extract._memory.store")
     def test_extract_from_transcript_stores_source_chunk_and_links_facts(
         self,
         mock_store,
-        mock_store_source_chunk,
+        mock_store_source_chunks,
+        _mock_list_source_chunks,
         mock_opus_response,
     ):
         from ingest.extract import extract_from_transcript
 
-        mock_store_source_chunk.return_value = {"chunk_id": "sch_extract_1", "status": "created"}
+        mock_store_source_chunks.return_value = [
+            {
+                "chunk_id": "sch_extract_1",
+                "status": "created",
+                "text": "User: I like coffee\n\nAssistant: noted",
+                "chunk_index": 0,
+            }
+        ]
         mock_store.return_value = {"id": "node-1", "status": "created", "dedup_telemetry": {}}
 
         with patch("ingest.extract.call_deep_reasoning", return_value=(mock_opus_response, 1.0)):
@@ -2821,16 +2844,19 @@ class TestExtractFromTranscript:
             )
 
         assert result["source_chunks_stored"] == 1
-        assert mock_store_source_chunk.call_args.kwargs["session_id"] == "sess-chunklink"
-        assert mock_store_source_chunk.call_args.kwargs["chunk_index"] == 0
+        assert mock_store_source_chunks.call_args.kwargs["session_id"] == "sess-chunklink"
+        assert mock_store_source_chunks.call_args.kwargs["start_index"] == 0
+        assert mock_store_source_chunks.call_args.kwargs["chunk_kind"] == "micro"
         assert mock_store.call_count == 2
         assert {call.kwargs["source_chunk_id"] for call in mock_store.call_args_list} == {"sch_extract_1"}
 
     @patch("ingest.extract.is_fail_hard_enabled", return_value=True)
-    @patch("ingest.extract._memory.store_source_chunk", side_effect=RuntimeError("chunk store failed"))
+    @patch("ingest.extract._memory.list_source_chunks", return_value=[])
+    @patch("ingest.extract._memory.store_source_chunks", side_effect=RuntimeError("chunk store failed"))
     def test_apply_extracted_payloads_raises_when_source_chunk_store_fails_under_failhard(
         self,
-        _mock_store_source_chunk,
+        _mock_store_source_chunks,
+        _mock_list_source_chunks,
         _mock_fail_hard,
     ):
         from ingest.extract import apply_extracted_payloads
@@ -2879,10 +2905,12 @@ class TestExtractFromTranscript:
             )
 
     @patch("ingest.extract.is_fail_hard_enabled", return_value=True)
-    @patch("ingest.extract._memory.store_source_chunk", return_value={"status": "created"})
+    @patch("ingest.extract._memory.list_source_chunks", return_value=[])
+    @patch("ingest.extract._memory.store_source_chunks", return_value=[{"status": "created"}])
     def test_apply_extracted_payloads_raises_when_source_chunk_store_returns_no_id_under_failhard(
         self,
-        _mock_store_source_chunk,
+        _mock_store_source_chunks,
+        _mock_list_source_chunks,
         _mock_fail_hard,
     ):
         from ingest.extract import apply_extracted_payloads
@@ -2972,24 +3000,31 @@ class TestExtractFromTranscript:
         assert applied["facts_stored"] == 1
         assert mock_store.call_args.kwargs["source_chunk_id"] == "sch_fact_evidence"
 
-    @patch("ingest.extract._memory.store_source_chunk")
+    @patch("ingest.extract._memory.list_source_chunks", return_value=[])
+    @patch("ingest.extract._memory.store_source_chunks")
     @patch("ingest.extract._memory.store")
     def test_apply_extracted_payloads_maps_each_fact_to_its_referenced_chunk(
         self,
         mock_store,
-        mock_store_source_chunk,
+        mock_store_source_chunks,
+        _mock_list_source_chunks,
     ):
         from ingest.extract import apply_extracted_payloads
 
         mock_store.return_value = {"id": "n-source-chunk", "status": "created", "dedup_telemetry": {}}
 
-        def _store_chunk(**kwargs):
-            return {
-                "chunk_id": f"sch_chunk_{kwargs['chunk_index']}",
-                "status": "created",
-            }
+        def _store_chunks(**kwargs):
+            return [
+                {
+                    "chunk_id": f"sch_chunk_{kwargs['start_index'] + offset}",
+                    "status": "created",
+                    "text": text,
+                    "chunk_index": kwargs["start_index"] + offset,
+                }
+                for offset, text in enumerate(kwargs["chunks"])
+            ]
 
-        mock_store_source_chunk.side_effect = _store_chunk
+        mock_store_source_chunks.side_effect = _store_chunks
         payload = {
             "raw_facts": [
                 {
@@ -3064,18 +3099,138 @@ class TestExtractFromTranscript:
         assert applied["facts_stored"] == 2
         assert applied["source_chunks_stored"] == 2
         assert applied["source_chunks_failed"] == 0
-        assert [call.kwargs["chunk_index"] for call in mock_store_source_chunk.call_args_list] == [0, 1]
+        assert [call.kwargs["start_index"] for call in mock_store_source_chunks.call_args_list] == [0, 1]
+        assert [call.kwargs["chunk_kind"] for call in mock_store_source_chunks.call_args_list] == ["micro", "micro"]
         assert [call.kwargs["source_chunk_id"] for call in mock_store.call_args_list] == [
             "sch_chunk_0",
             "sch_chunk_1",
         ]
 
-    @patch("ingest.extract._memory.store_source_chunk")
+    def test_split_session_source_microchunks_bounds_large_transcripts(self):
+        from ingest.extract import _split_session_source_microchunks, estimate_tokens
+
+        long_text = "\n\n".join(
+            [
+                "User: Ada keeps the launch checklist in the red binder " * 8,
+                "Assistant: acknowledged " * 8,
+                "User: Berto keeps the rover manual in cabinet seven " * 8,
+            ]
+        )
+
+        chunks = _split_session_source_microchunks(long_text, max_tokens=128)
+
+        assert len(chunks) > 1
+        assert all(estimate_tokens(chunk) <= 128 for chunk in chunks)
+        assert "red binder" in " ".join(chunks)
+        assert "cabinet seven" in " ".join(chunks)
+
+        unbroken_chunks = _split_session_source_microchunks("x" * 50000, max_tokens=128)
+        assert len(unbroken_chunks) > 1
+        assert all(estimate_tokens(chunk) <= 128 for chunk in unbroken_chunks)
+
+    @patch(
+        "ingest.extract._split_session_source_microchunks",
+        return_value=[
+            "User: Ada keeps the launch checklist in the red binder.",
+            "Assistant: acknowledged.",
+            "User: Berto keeps the rover manual in cabinet seven.",
+        ],
+    )
+    @patch("ingest.extract._memory.list_source_chunks", return_value=[{"chunk_index": 4}])
+    @patch("ingest.extract._memory.store_source_chunks")
+    @patch("ingest.extract._memory.store")
+    def test_apply_extracted_payloads_microchunks_source_and_links_best_matching_fact(
+        self,
+        mock_store,
+        mock_store_source_chunks,
+        _mock_list_source_chunks,
+        _mock_split_microchunks,
+    ):
+        from ingest.extract import apply_extracted_payloads
+
+        mock_store.return_value = {"id": "n-source-chunk", "status": "created", "dedup_telemetry": {}}
+
+        def _store_chunks(**kwargs):
+            return [
+                {
+                    "chunk_id": f"sch_micro_{kwargs['start_index'] + offset}",
+                    "status": "created",
+                    "text": text,
+                    "chunk_index": kwargs["start_index"] + offset,
+                }
+                for offset, text in enumerate(kwargs["chunks"])
+            ]
+
+        mock_store_source_chunks.side_effect = _store_chunks
+        payload = {
+            "raw_facts": [
+                {
+                    "text": "Ada keeps the launch checklist in the red binder.",
+                    "category": "fact",
+                    "speaker": "user",
+                    "domains": ["project"],
+                    "extraction_confidence": "high",
+                    "_source_chunk_ref": "chunk:long",
+                },
+                {
+                    "text": "Berto keeps the rover manual in cabinet seven.",
+                    "category": "fact",
+                    "speaker": "user",
+                    "domains": ["project"],
+                    "extraction_confidence": "high",
+                    "_source_chunk_ref": "chunk:long",
+                },
+            ],
+            "raw_source_chunks": [
+                {
+                    "source_chunk_ref": "chunk:long",
+                    "text": "oversized root transcript text",
+                    "source_id": "sess-microchunk",
+                    "session_id": "sess-microchunk",
+                    "chunk_index": 0,
+                },
+            ],
+            "raw_snippets": {},
+            "raw_journal": {},
+            "raw_project_logs": {},
+            "facts": [],
+            "snippets": {},
+            "journal": {},
+            "project_logs": {},
+            "project_log_metrics": {},
+            "facts_stored": 0,
+            "facts_skipped": 0,
+            "edges_created": 0,
+            "dry_run": False,
+        }
+
+        applied = apply_extracted_payloads(
+            payload,
+            owner_id="test",
+            label="flush",
+            session_id="sess-microchunk",
+            dry_run=False,
+        )
+
+        assert applied["facts_stored"] == 2
+        assert applied["source_chunks_stored"] == 3
+        assert applied["source_chunks_micro_split"] == 2
+        chunk_call = mock_store_source_chunks.call_args.kwargs
+        assert chunk_call["start_index"] == 5
+        assert chunk_call["chunk_kind"] == "micro"
+        assert [call.kwargs["source_chunk_id"] for call in mock_store.call_args_list] == [
+            "sch_micro_5",
+            "sch_micro_7",
+        ]
+
+    @patch("ingest.extract._memory.list_source_chunks", return_value=[])
+    @patch("ingest.extract._memory.store_source_chunks")
     @patch("ingest.extract._memory.store")
     def test_apply_extracted_payloads_skips_orphan_chunk_descriptors_and_leaves_missing_refs_unlinked(
         self,
         mock_store,
-        mock_store_source_chunk,
+        mock_store_source_chunks,
+        mock_list_source_chunks,
     ):
         from ingest.extract import apply_extracted_payloads
 
@@ -3125,7 +3280,8 @@ class TestExtractFromTranscript:
         assert applied["facts_stored"] == 1
         assert applied["source_chunks_stored"] == 0
         assert applied["source_chunks_failed"] == 0
-        mock_store_source_chunk.assert_not_called()
+        mock_store_source_chunks.assert_not_called()
+        mock_list_source_chunks.assert_not_called()
         assert mock_store.call_args.kwargs["source_chunk_id"] is None
 
     @patch("ingest.extract._memory.store")
