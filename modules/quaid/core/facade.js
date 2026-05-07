@@ -1796,9 +1796,14 @@ Consider running: docs staleness updater (update-stale --apply)`;
           id: item.id ? String(item.id) : void 0,
           domains,
           sourceType,
-          sourceChunkId: item.source_chunk_id || item.sourceChunkId || void 0,
+          sourceChunkId: item.session_chunk_id || item.source_chunk_id || item.sourceChunkId || void 0,
+          sessionChunkId: item.session_chunk_id || item.sessionChunkId || void 0,
           chunkId: item.chunk_id || item.chunkId || void 0,
           chunkIndex: typeof item.chunk_index === "number" ? item.chunk_index : typeof item.chunkIndex === "number" ? item.chunkIndex : void 0,
+          sessionId: item.session_id || item.sessionId || void 0,
+          nextChunkId: item.next_chunk_id || item.nextChunkId || void 0,
+          messageId: item.message_id || item.messageId || void 0,
+          messagePairId: item.message_pair_id || item.messagePairId || void 0,
           contentHash: item.content_hash || item.contentHash || void 0,
           tokenCount: typeof item.token_count === "number" ? item.token_count : typeof item.tokenCount === "number" ? item.tokenCount : void 0,
           outputTokenCount: typeof item.output_token_count === "number" ? item.output_token_count : typeof item.outputTokenCount === "number" ? item.outputTokenCount : void 0,
@@ -2420,6 +2425,12 @@ ${allNotes.map((n) => `- ${n}`).join("\n")}
     const via = String(result.via || "").toLowerCase();
     return via === "vector" || via === "vector_basic" || via === "vector_technical";
   }
+  function isSessionChunkRecallResult(result) {
+    const via = String(result.via || "").toLowerCase();
+    const category = String(result.category || "").toLowerCase();
+    const sourceType = String(result.sourceType || "").toLowerCase();
+    return via === "session_chunks" || category === "session_chunk" || category === "source_chunk" || sourceType === "session_chunk" || sourceType === "source_chunk";
+  }
   function normalizeClaimText(text) {
     return String(text || "").toLowerCase().replace(/\[[^\]]+\]/g, " ").replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
   }
@@ -2601,6 +2612,11 @@ ${allNotes.map((n) => `- ${n}`).join("\n")}
     const formatMemoryLine = (m, label = m.category) => {
       const temporalLabel = formatTemporalLabel(m);
       const projectLabel = m.project ? ` | project ${m.project}` : "";
+      if (isSessionChunkRecallResult(m)) {
+        const chunkId = String(m.sessionChunkId || m.sourceChunkId || m.chunkId || m.id || "").trim();
+        const chunkLabel = chunkId ? ` | chunk ${chunkId}` : "";
+        return `- session_evidence${chunkLabel} | ${m.text}${projectLabel}${temporalLabel}`;
+      }
       return `- ${label} | ${m.text}${projectLabel}${temporalLabel}`;
     };
     const graphAnchorExpansions = sorted.filter((m) => isGraphAnchorExpansion(m));
@@ -2695,6 +2711,7 @@ ${lines.join("\n")}
     const graphResults = results.filter((r) => ((r.via || "") === "graph" || r.category === "graph") && !isGraphAnchorExpansion(r));
     const journalResults = results.filter((r) => (r.via || "") === "journal");
     const projectResults = results.filter((r) => (r.via || "") === "project");
+    const sessionChunkResults = results.filter((r) => isSessionChunkRecallResult(r));
     const avgSimilarity = vectorResults.length > 0 ? vectorResults.reduce((sum, r) => sum + (r.similarity || 0), 0) / vectorResults.length : 0;
     const maxSimilarity = vectorResults.length > 0 ? Math.max(...vectorResults.map((r) => Number(r.similarity || 0))) : 0;
     const hasHighExtractionConfidence = vectorResults.some((r) => Number(r.extractionConfidence || 0) >= 0.8);
@@ -2745,13 +2762,33 @@ ${lines.join("\n")}
 `;
       });
     }
+    if (sessionChunkResults.length > 0) {
+      if (vectorResults.length > 0 || graphResults.length > 0 || graphExpansionResults.length > 0 || journalResults.length > 0 || projectResults.length > 0) text += "\n";
+      text += "**Session Evidence:**\n";
+      sessionChunkResults.forEach((r, i) => {
+        const chunkId = String(r.sessionChunkId || r.sourceChunkId || r.chunkId || r.id || "").trim();
+        const sessionId = String(r.sessionId || "").trim();
+        const nextChunkId = String(r.nextChunkId || "").trim();
+        const chunkIndex = Number.isFinite(Number(r.chunkIndex)) ? `#${Number(r.chunkIndex)}` : "";
+        const refs = [
+          sessionId ? `session:${sessionId}` : "",
+          chunkId ? `chunk:${chunkId}${chunkIndex}` : "",
+          nextChunkId ? `next:${nextChunkId}` : ""
+        ].filter(Boolean).join(" ");
+        const refText = refs ? ` [${refs}]` : "";
+        const expandHint = chunkId ? " expand:get_session_chunk(before/after)" : "";
+        text += `${i + 1}. [MEMORY] [session_evidence]${refText} ${r.text} (${Math.round((r.similarity || 0) * 100)}%${expandHint})
+`;
+      });
+    }
     return {
       text,
       breakdown: {
         vector_count: vectorResults.length,
         graph_count: graphResults.length + graphExpansionResults.length,
         journal_count: journalResults.length,
-        project_count: projectResults.length
+        project_count: projectResults.length,
+        session_count: sessionChunkResults.length
       }
     };
   }
@@ -2762,12 +2799,14 @@ ${lines.join("\n")}
       if (via === "graph" || via === "graph_anchor_expansion" || category === "graph") return "graph";
       if (via === "journal") return "journal";
       if (via === "project") return "project";
+      if (via === "session_chunks" || category === "session_chunk" || category === "source_chunk") return "session";
       return "vector";
     });
     const vectorCount = classified.filter((k) => k === "vector").length;
     const graphCount = classified.filter((k) => k === "graph").length;
     const journalCount = classified.filter((k) => k === "journal").length;
     const projectCount = classified.filter((k) => k === "project").length;
+    const sessionCount = classified.filter((k) => k === "session").length;
     return {
       memories: results.map((m) => ({
         text: m.text,
@@ -2780,6 +2819,7 @@ ${lines.join("\n")}
         graph_count: Number(breakdown?.graph_count ?? graphCount),
         journal_count: Number(breakdown?.journal_count ?? journalCount),
         project_count: Number(breakdown?.project_count ?? projectCount),
+        session_count: Number(breakdown?.session_count ?? sessionCount),
         query,
         mode
       }

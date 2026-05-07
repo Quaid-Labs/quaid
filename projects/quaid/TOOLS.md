@@ -51,7 +51,7 @@ quaid stats
 
 **Temporal filters:** `date_from`/`date_to` use `temporal_dimension`: `auto`, `occurred`, `mentioned`, or `record`.
 
-**Chunk evidence:** default recall omits chunks. Use `--include-chunks` or `include_chunks:true`; cap with `max_chunk_tokens` and `max_total_chunk_tokens`. Returned chunk ids can be expanded by the session-chunk fetch surface.
+**Chunk evidence:** default recall omits chunks. Use `--include-chunks` or `include_chunks:true`; cap with `max_chunk_tokens` and `max_total_chunk_tokens`. `session_chunks` results show chunk ids; expand with the session-chunk fetch surface.
 
 **Output flags:** `--json` (machine-readable), `--debug` (scoring breakdown)
 

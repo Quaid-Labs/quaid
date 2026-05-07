@@ -1822,14 +1822,28 @@ describe("QuaidFacade", () => {
       { text: "graph memory", category: "graph", similarity: 0.8, via: "graph" },
       { text: "journal memory", category: "fact", similarity: 0.6, via: "journal" },
       { text: "project memory", category: "fact", similarity: 0.65, via: "project" },
+      {
+        text: "[session_chunk] session-a#1: User: exact receipt context",
+        category: "session_chunk",
+        similarity: 0.9,
+        via: "session_chunks",
+        sessionChunkId: "sch_1",
+        sessionId: "session-a",
+        chunkIndex: 1,
+        nextChunkId: "sch_2",
+      },
     ]);
     expect(out.text).toContain("Direct Matches");
     expect(out.text).toContain("Graph Discoveries");
+    expect(out.text).toContain("Session Evidence");
+    expect(out.text).toContain("chunk:sch_1#1");
+    expect(out.text).toContain("expand:get_session_chunk");
     expect(out.breakdown).toEqual({
       vector_count: 1,
       graph_count: 1,
       journal_count: 1,
       project_count: 1,
+      session_count: 1,
     });
   });
 
@@ -1840,6 +1854,7 @@ describe("QuaidFacade", () => {
         { text: "v1", category: "fact", similarity: 0.71, via: "vector" },
         { text: "g1", category: "graph", similarity: 0.82, via: "graph" },
         { text: "j1", category: "fact", similarity: 0.63, via: "journal" },
+        { text: "s1", category: "session_chunk", similarity: 0.77, via: "session_chunks" },
       ],
       "who leads project alpha",
       "tool",
@@ -1848,12 +1863,14 @@ describe("QuaidFacade", () => {
       { text: "v1", similarity: 71, via: "vector", category: "fact" },
       { text: "g1", similarity: 82, via: "graph", category: "graph" },
       { text: "j1", similarity: 63, via: "journal", category: "fact" },
+      { text: "s1", similarity: 77, via: "session_chunks", category: "session_chunk" },
     ]);
     expect(payload.source_breakdown).toEqual({
       vector_count: 1,
       graph_count: 1,
       journal_count: 1,
       project_count: 0,
+      session_count: 1,
       query: "who leads project alpha",
       mode: "tool",
     });
@@ -1865,7 +1882,7 @@ describe("QuaidFacade", () => {
       [{ text: "v1", category: "fact", similarity: 0.5, via: "vector" }],
       "query",
       "auto_inject",
-      { vector_count: 5, graph_count: 2, journal_count: 0, project_count: 0 },
+      { vector_count: 5, graph_count: 2, journal_count: 0, project_count: 0, session_count: 0 },
     );
     expect(payload.source_breakdown.vector_count).toBe(5);
     expect(payload.source_breakdown.graph_count).toBe(2);

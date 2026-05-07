@@ -92,8 +92,13 @@ export type MemoryResult = {
   domains?: string[];
   sourceType?: string;
   sourceChunkId?: string;
+  sessionChunkId?: string;
   chunkId?: string;
   chunkIndex?: number;
+  sessionId?: string;
+  nextChunkId?: string;
+  messageId?: string;
+  messagePairId?: string;
   contentHash?: string;
   tokenCount?: number;
   outputTokenCount?: number;
@@ -346,6 +351,7 @@ export type QuaidFacade = {
       graph_count: number;
       journal_count: number;
       project_count: number;
+      session_count: number;
     };
   };
   buildRecallNotificationPayload: (
@@ -357,6 +363,7 @@ export type QuaidFacade = {
       graph_count: number;
       journal_count?: number;
       project_count?: number;
+      session_count?: number;
     },
   ) => {
     memories: Array<{
@@ -370,6 +377,7 @@ export type QuaidFacade = {
       graph_count: number;
       journal_count: number;
       project_count: number;
+      session_count: number;
       query: string;
       mode: "tool" | "auto_inject";
     };
@@ -2518,9 +2526,14 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
           id: item.id ? String(item.id) : undefined,
           domains,
           sourceType,
-          sourceChunkId: item.source_chunk_id || item.sourceChunkId || undefined,
+          sourceChunkId: item.session_chunk_id || item.source_chunk_id || item.sourceChunkId || undefined,
+          sessionChunkId: item.session_chunk_id || item.sessionChunkId || undefined,
           chunkId: item.chunk_id || item.chunkId || undefined,
           chunkIndex: typeof item.chunk_index === "number" ? item.chunk_index : (typeof item.chunkIndex === "number" ? item.chunkIndex : undefined),
+          sessionId: item.session_id || item.sessionId || undefined,
+          nextChunkId: item.next_chunk_id || item.nextChunkId || undefined,
+          messageId: item.message_id || item.messageId || undefined,
+          messagePairId: item.message_pair_id || item.messagePairId || undefined,
           contentHash: item.content_hash || item.contentHash || undefined,
           tokenCount: typeof item.token_count === "number" ? item.token_count : (typeof item.tokenCount === "number" ? item.tokenCount : undefined),
           outputTokenCount: typeof item.output_token_count === "number" ? item.output_token_count : (typeof item.outputTokenCount === "number" ? item.outputTokenCount : undefined),
@@ -3212,6 +3225,17 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
     return via === "vector" || via === "vector_basic" || via === "vector_technical";
   }
 
+  function isSessionChunkRecallResult(result: MemoryResult): boolean {
+    const via = String(result.via || "").toLowerCase();
+    const category = String(result.category || "").toLowerCase();
+    const sourceType = String(result.sourceType || "").toLowerCase();
+    return via === "session_chunks"
+      || category === "session_chunk"
+      || category === "source_chunk"
+      || sourceType === "session_chunk"
+      || sourceType === "source_chunk";
+  }
+
   function normalizeClaimText(text: string): string {
     return String(text || "")
       .toLowerCase()
@@ -3424,6 +3448,11 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
     const formatMemoryLine = (m: MemoryResult, label = m.category): string => {
       const temporalLabel = formatTemporalLabel(m);
       const projectLabel = m.project ? ` | project ${m.project}` : "";
+      if (isSessionChunkRecallResult(m)) {
+        const chunkId = String(m.sessionChunkId || m.sourceChunkId || m.chunkId || m.id || "").trim();
+        const chunkLabel = chunkId ? ` | chunk ${chunkId}` : "";
+        return `- session_evidence${chunkLabel} | ${m.text}${projectLabel}${temporalLabel}`;
+      }
       return `- ${label} | ${m.text}${projectLabel}${temporalLabel}`;
     };
     const graphAnchorExpansions = sorted.filter((m) => isGraphAnchorExpansion(m));
@@ -3542,6 +3571,7 @@ ${lines.join("\n")}
     const graphResults = results.filter((r) => ((r.via || "") === "graph" || r.category === "graph") && !isGraphAnchorExpansion(r));
     const journalResults = results.filter((r) => (r.via || "") === "journal");
     const projectResults = results.filter((r) => (r.via || "") === "project");
+    const sessionChunkResults = results.filter((r) => isSessionChunkRecallResult(r));
 
     const avgSimilarity = vectorResults.length > 0
       ? vectorResults.reduce((sum, r) => sum + (r.similarity || 0), 0) / vectorResults.length
@@ -3599,6 +3629,24 @@ ${lines.join("\n")}
         text += `${i + 1}. [MEMORY] ${r.text} (${Math.round((r.similarity || 0) * 100)}%)\n`;
       });
     }
+    if (sessionChunkResults.length > 0) {
+      if (vectorResults.length > 0 || graphResults.length > 0 || graphExpansionResults.length > 0 || journalResults.length > 0 || projectResults.length > 0) text += "\n";
+      text += "**Session Evidence:**\n";
+      sessionChunkResults.forEach((r, i) => {
+        const chunkId = String(r.sessionChunkId || r.sourceChunkId || r.chunkId || r.id || "").trim();
+        const sessionId = String(r.sessionId || "").trim();
+        const nextChunkId = String(r.nextChunkId || "").trim();
+        const chunkIndex = Number.isFinite(Number(r.chunkIndex)) ? `#${Number(r.chunkIndex)}` : "";
+        const refs = [
+          sessionId ? `session:${sessionId}` : "",
+          chunkId ? `chunk:${chunkId}${chunkIndex}` : "",
+          nextChunkId ? `next:${nextChunkId}` : "",
+        ].filter(Boolean).join(" ");
+        const refText = refs ? ` [${refs}]` : "";
+        const expandHint = chunkId ? " expand:get_session_chunk(before/after)" : "";
+        text += `${i + 1}. [MEMORY] [session_evidence]${refText} ${r.text} (${Math.round((r.similarity || 0) * 100)}%${expandHint})\n`;
+      });
+    }
     return {
       text,
       breakdown: {
@@ -3606,6 +3654,7 @@ ${lines.join("\n")}
         graph_count: graphResults.length + graphExpansionResults.length,
         journal_count: journalResults.length,
         project_count: projectResults.length,
+        session_count: sessionChunkResults.length,
       },
     };
   }
@@ -3619,6 +3668,7 @@ ${lines.join("\n")}
       graph_count: number;
       journal_count?: number;
       project_count?: number;
+      session_count?: number;
     },
   ): {
     memories: Array<{
@@ -3632,6 +3682,7 @@ ${lines.join("\n")}
       graph_count: number;
       journal_count: number;
       project_count: number;
+      session_count: number;
       query: string;
       mode: "tool" | "auto_inject";
     };
@@ -3642,6 +3693,7 @@ ${lines.join("\n")}
       if (via === "graph" || via === "graph_anchor_expansion" || category === "graph") return "graph" as const;
       if (via === "journal") return "journal" as const;
       if (via === "project") return "project" as const;
+      if (via === "session_chunks" || category === "session_chunk" || category === "source_chunk") return "session" as const;
       // Backward-compatible default: missing/unknown via counts as vector.
       return "vector" as const;
     });
@@ -3649,6 +3701,7 @@ ${lines.join("\n")}
     const graphCount = classified.filter((k) => k === "graph").length;
     const journalCount = classified.filter((k) => k === "journal").length;
     const projectCount = classified.filter((k) => k === "project").length;
+    const sessionCount = classified.filter((k) => k === "session").length;
     return {
       memories: results.map((m) => ({
         text: m.text,
@@ -3661,6 +3714,7 @@ ${lines.join("\n")}
         graph_count: Number(breakdown?.graph_count ?? graphCount),
         journal_count: Number(breakdown?.journal_count ?? journalCount),
         project_count: Number(breakdown?.project_count ?? projectCount),
+        session_count: Number(breakdown?.session_count ?? sessionCount),
         query,
         mode,
       },
