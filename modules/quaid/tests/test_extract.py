@@ -700,6 +700,39 @@ class TestExtractFromTranscript:
         assert result["raw_facts"][0]["created_at"] == "2026-05-02T14:29:21+00:00"
         assert result["raw_facts"][0]["mentioned_at"] == "2026-05-02T14:29:21+00:00"
 
+    @patch("ingest.extract._current_utc_timestamp", return_value="2026-05-07T03:42:00+00:00")
+    @patch("ingest.extract.call_deep_reasoning")
+    def test_extraction_defaults_mentioned_at_without_source_timestamp(self, mock_llm, mock_now):
+        from ingest.extract import extract_from_transcript
+
+        mock_llm.return_value = (json.dumps({
+            "chunk_assessment": "usable",
+            "facts": [
+                {
+                    "text": "Solomon Steadman keeps a ceramic compass on the desk",
+                    "category": "fact",
+                    "speaker": "user",
+                    "domains": ["personal"],
+                    "extraction_confidence": "high",
+                    "privacy": "shared",
+                }
+            ],
+            "soul_snippets": {},
+            "journal_entries": {},
+            "project_logs": {},
+        }), 0.1)
+
+        result = extract_from_transcript(
+            transcript="User: I keep a ceramic compass on the desk.\n\nAssistant: Noted.",
+            owner_id="Solomon Steadman",
+            dry_run=True,
+        )
+
+        fact = result["raw_facts"][0]
+        assert fact["mentioned_at"] == "2026-05-07T03:42:00+00:00"
+        assert "created_at" not in fact
+        assert mock_now.called
+
     @patch("ingest.extract.call_deep_reasoning")
     def test_extraction_prefers_transcript_timestamp_over_same_day_date_only_fact(self, mock_llm):
         from ingest.extract import extract_from_transcript
@@ -4709,6 +4742,16 @@ class TestLoadPrompt:
         prompt = _load_extraction_prompt()
         assert "Do not invent a more specific anchor than the transcript actually provides." in prompt
         assert "Never manufacture an exact calendar date" in prompt
+
+    def test_prompt_requires_temporal_provenance_contract(self):
+        from ingest.extract import _load_extraction_prompt
+
+        prompt = _load_extraction_prompt()
+        assert "TEMPORAL PROVENANCE (per fact)" in prompt
+        assert '"mentioned_at"' in prompt
+        assert '"occurred_start"' in prompt
+        assert "Do not copy the message timestamp into `occurred_start`" in prompt
+        assert '"May 2023" -> `occurred_start: "2023-05-01"`' in prompt
 
     def test_truncated_array_scanner_stops_on_mid_string_truncation(self):
         from ingest.extract import _complete_json_objects_from_array

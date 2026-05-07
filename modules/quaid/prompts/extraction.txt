@@ -114,6 +114,16 @@ Examples:
 - "User flew to Tokyo last week" → keywords: "travel japan trip flight asia"
 - "User prefers dark mode" → keywords: "ui theme display settings appearance"
 
+TEMPORAL PROVENANCE (per fact):
+- Always distinguish the event time from the source/record time.
+- `created_at` and `mentioned_at` are the transcript message time that introduced the fact. If the transcript line has a timestamp, copy that timestamp into both fields.
+- `occurred_start` and `occurred_end` are when the fact or event happened. Include them when the source text explicitly states a date, time, month, year, or bounded range for the event itself.
+- Do not copy the message timestamp into `occurred_start` or `occurred_end` unless the fact says the event happened at that message time.
+- For a stated month range, use the first and last calendar day. Example: "May 2023" -> `occurred_start: "2023-05-01"`, `occurred_end: "2023-05-31"`.
+- For a stated single day, set both `occurred_start` and `occurred_end` to that day.
+- Omit `occurred_start` and `occurred_end` only when no event-time anchor is explicitly stated or derivable from transcript metadata.
+- Example: if a user message sent in 2026 says "Back in May 2023 I attended a leatherworking workshop", the fact's `mentioned_at` is in 2026 and its `occurred_start`/`occurred_end` are the May 2023 range.
+
 PRIVACY CLASSIFICATION (per fact):
 - "private": ONLY for secrets, surprises, hidden gifts, sensitive finances, health diagnoses,
   passwords, or anything explicitly meant to be hidden from specific people.
@@ -181,6 +191,7 @@ Respond with JSON only:
       "speaker": "user|agent",
       "source": "user|agent|subagent|both|tool",
       "created_at": "optional ISO timestamp or YYYY-MM-DD from the transcript message that introduced the fact",
+      "mentioned_at": "optional ISO timestamp or YYYY-MM-DD from the transcript message that introduced the fact",
       "occurred_start": "optional ISO timestamp or YYYY-MM-DD for when the fact/event happened, if explicitly stated",
       "occurred_end": "optional ISO timestamp or YYYY-MM-DD for the end of the event/range, if explicitly stated",
       "category": "fact|preference|decision|relationship",

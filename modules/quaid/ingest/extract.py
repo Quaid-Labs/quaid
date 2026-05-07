@@ -121,16 +121,22 @@ def _prefer_later_timestamp(first: Any, second: Any) -> Optional[str]:
     return a or b
 
 
+def _current_utc_timestamp() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
 def _normalize_fact_temporal_hint(
     fact: Dict[str, Any],
     *,
     default_created_at: Optional[str] = None,
+    default_mentioned_at: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Normalize fact temporal metadata and backfill source mention time."""
     normalized = dict(fact or {})
     raw_created_at = str(normalized.get("created_at") or "").strip()
     created_at = _normalize_extracted_timestamp(raw_created_at)
     fallback_created_at = _normalize_extracted_timestamp(default_created_at)
+    fallback_mentioned_at = _normalize_extracted_timestamp(default_mentioned_at) or fallback_created_at
     if (
         created_at
         and fallback_created_at
@@ -156,7 +162,11 @@ def _normalize_fact_temporal_hint(
         normalized["occurred_end"] = occurred_end
     else:
         normalized.pop("occurred_end", None)
-    mentioned_at = _normalize_extracted_timestamp(normalized.get("mentioned_at")) or fallback_created_at or created_at
+    mentioned_at = (
+        _normalize_extracted_timestamp(normalized.get("mentioned_at"))
+        or fallback_mentioned_at
+        or created_at
+    )
     if mentioned_at:
         normalized["mentioned_at"] = mentioned_at
     else:
@@ -996,6 +1006,7 @@ def _repair_non_json_extraction_payload(
         "    {\n"
         '      "text": string,\n'
         '      "created_at": optional string,\n'
+        '      "mentioned_at": optional string,\n'
         '      "occurred_start": optional string,\n'
         '      "occurred_end": optional string,\n'
         '      "category": string,\n'
@@ -2630,11 +2641,13 @@ def _merge_parsed_payloads(
     chunk_label: str,
     label: str,
     session_date_hint: Optional[str] = None,
+    mention_date_hint: Optional[str] = None,
     source_chunk_id: Optional[str] = None,
     source_chunk_ref: Optional[str] = None,
 ) -> None:
     """Merge extracted payloads into top-level accumulators in chunk order."""
     effective_date_hint = _first_transcript_timestamp_hint(transcript_text) or session_date_hint
+    effective_mention_hint = effective_date_hint or mention_date_hint
     for parsed in payloads:
         result["chunks_processed"] = int(result.get("chunks_processed", 0) or 0) + 1
         parsed_facts = parsed.get("facts", []) or []
@@ -2651,6 +2664,7 @@ def _merge_parsed_payloads(
                 normalized_fact = _normalize_fact_temporal_hint(
                     raw_fact,
                     default_created_at=effective_date_hint,
+                    default_mentioned_at=effective_mention_hint,
                 )
                 if source_chunk_id:
                     normalized_fact["_source_chunk_id"] = source_chunk_id
@@ -2946,6 +2960,7 @@ def apply_extracted_payloads(
 ) -> Dict[str, Any]:
     """Store/publish a previously extracted raw payload bundle."""
     session_date_hint = _project_log_date_for_payload(session_id or "")
+    publish_mentioned_at = session_date_hint or _current_utc_timestamp()
     result.setdefault("source_chunks_stored", 0)
     result.setdefault("source_chunks_existing", 0)
     result.setdefault("source_chunks_failed", 0)
@@ -2966,6 +2981,7 @@ def apply_extracted_payloads(
         _normalize_fact_temporal_hint(
             fact,
             default_created_at=session_date_hint,
+            default_mentioned_at=publish_mentioned_at,
         )
         if isinstance(fact, dict)
         else fact
@@ -3893,6 +3909,7 @@ def extract_from_transcript(
     all_journal: Dict[str, str] = {}
     all_project_logs: Dict[str, List[Dict[str, Any]]] = {}
     session_date_hint = _project_log_date_for_payload(session_id or "")
+    extraction_mentioned_at = _current_utc_timestamp()
     # carry_facts enables cross-invocation carryover: the daemon passes in
     # facts from previous extraction runs in the same session so chunk
     # context is maintained across compaction boundaries.
@@ -3983,6 +4000,7 @@ def extract_from_transcript(
                 label=label,
                 transcript_text=transcript_chunks[ci],
                 session_date_hint=session_date_hint,
+                mention_date_hint=extraction_mentioned_at,
                 source_chunk_ref=source_chunk_ref,
             )
     else:
@@ -4021,6 +4039,7 @@ def extract_from_transcript(
                 label=label,
                 transcript_text=chunk,
                 session_date_hint=session_date_hint,
+                mention_date_hint=extraction_mentioned_at,
                 source_chunk_ref=source_chunk_ref,
             )
 
