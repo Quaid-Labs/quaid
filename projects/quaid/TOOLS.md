@@ -14,6 +14,8 @@ Quaid is an active knowledge layer. Use the Quaid CLI via your Bash tool — no 
 quaid recall "query"                    # default stores: vector + graph
 quaid recall "query" '{"stores": ["vector", "graph", "docs"]}'
 quaid recall "query" '{"stores": ["docs"], "project": "quaid"}'  # docs only
+quaid recall "exact wording" '{"stores": ["source_chunks"]}'      # raw transcript chunks only
+quaid recall "query" --include-chunks --max-chunk-tokens 256      # attach linked evidence chunks
 quaid store "text"                      # manual memory insertion
 quaid get-node <id>
 quaid get-edges <id>
@@ -24,14 +26,18 @@ quaid stats
 **recall config JSON** (all fields optional):
 ```json
 {
-  "stores": ["vector", "graph", "docs"],
+  "stores": ["vector", "graph", "docs", "source_chunks"],
   "limit": 5,
   "domain_filter": {"technical": true},
   "domain_boost": ["technical", "project"],
   "project": "quaid",
   "fast": false,
   "date_from": "YYYY-MM-DD",
-  "date_to": "YYYY-MM-DD"
+  "date_to": "YYYY-MM-DD",
+  "temporal_dimension": "auto",
+  "include_chunks": false,
+  "max_chunk_tokens": 512,
+  "max_total_chunk_tokens": 2048
 }
 ```
 
@@ -39,8 +45,13 @@ quaid stats
 - `vector` — semantic + FTS hybrid search across all memories (domain-filtered by `domain_filter`/`domain_boost`)
 - `graph` — graph-aware recall with edge traversal (expands via relationship edges)
 - `docs` — project docs RAG; returns chunks plus the relevant `PROJECT.md` when a project is set or confidently inferred
+- `source_chunks` — owner-scoped raw transcript chunks; use for exact wording/source evidence
 
 **`domain_filter` vs `domain_boost`:** Default to `domain_boost` (soft preference). Use `domain_filter` only when you must exclude other domains entirely.
+
+**Temporal filters:** `date_from`/`date_to` use `temporal_dimension`: `auto`, `occurred`, `mentioned`, or `record`.
+
+**Chunk evidence:** default recall omits chunks. Use `--include-chunks` or `include_chunks:true`; cap with `max_chunk_tokens` and `max_total_chunk_tokens`.
 
 **Output flags:** `--json` (machine-readable), `--debug` (scoring breakdown)
 
