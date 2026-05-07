@@ -854,16 +854,16 @@ describe("QuaidFacade", () => {
     expect(JSON.parse(cfgArg!).timeout_ms).toBe(32000);
   });
 
-  it("recallWithDiagnostics preserves source_chunks-only store requests", async () => {
+  it("recallWithDiagnostics preserves session_chunks-only store requests", async () => {
     const execPython = vi.fn(async (command: string) => {
       if (command === "recall") {
         return JSON.stringify({
           contract: "quaid.recall.v1",
           results: [
             {
-              text: "[source_chunk] session-source#0: User: exact transcript context",
-              category: "source_chunk",
-              source_type: "source_chunk",
+              text: "[session_chunk] session-source#0: User: exact transcript context",
+              category: "session_chunk",
+              source_type: "session_chunk",
               similarity: 0.95,
               source_chunk_id: "sch_test",
               chunk_id: "sch_test",
@@ -872,7 +872,7 @@ describe("QuaidFacade", () => {
               truncated: false,
             },
           ],
-          meta: { planned_stores: ["source_chunks"] },
+          meta: { planned_stores: ["session_chunks"] },
         });
       }
       return "{}";
@@ -882,7 +882,7 @@ describe("QuaidFacade", () => {
       query: "exact transcript context",
       limit: 5,
       routeStores: false,
-      datastores: ["source_chunks"],
+      datastores: ["session_chunks"],
       expandGraph: false,
       maxChunkTokens: 12,
       maxTotalChunkTokens: 20,
@@ -892,19 +892,19 @@ describe("QuaidFacade", () => {
     const cfgArg = recallArgs.find((a: string) => a.startsWith("{"));
     const cfg = JSON.parse(cfgArg!);
 
-    expect(cfg.stores).toEqual(["source_chunks"]);
+    expect(cfg.stores).toEqual(["session_chunks"]);
     expect(cfg.max_chunk_tokens).toBe(12);
     expect(cfg.max_total_chunk_tokens).toBe(20);
-    expect(diagnostics?.meta?.planned_stores).toEqual(["source_chunks"]);
+    expect(diagnostics?.meta?.planned_stores).toEqual(["session_chunks"]);
     expect(results[0]).toMatchObject({
-      category: "source_chunk",
-      sourceType: "source_chunk",
+      category: "session_chunk",
+      sourceType: "session_chunk",
       sourceChunkId: "sch_test",
       chunkId: "sch_test",
       chunkIndex: 0,
       outputTokenCount: 4,
       truncated: false,
-      via: "source_chunks",
+      via: "session_chunks",
     });
   });
 

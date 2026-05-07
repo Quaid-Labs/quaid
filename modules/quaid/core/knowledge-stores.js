@@ -80,19 +80,19 @@ const STORE_REGISTRY = [
     ]
   },
   {
-    key: "source_chunks",
-    description: "Opt-in transcript/source chunk recall for exact source context and evidence.",
+    key: "session_chunks",
+    description: "Opt-in session transcript chunk recall for exact wording and evidence.",
     defaultWhenExpandGraph: false,
     defaultWhenFlatRecall: false,
     options: [
       {
         key: "max_chunk_tokens",
-        description: "Maximum output tokens per returned source chunk.",
+        description: "Maximum output tokens per returned session chunk.",
         valueType: "number"
       },
       {
         key: "max_total_chunk_tokens",
-        description: "Maximum aggregate output tokens across returned source chunks.",
+        description: "Maximum aggregate output tokens across returned session chunks.",
         valueType: "number"
       }
     ]
@@ -108,7 +108,7 @@ function getKnowledgeDatastoreKeys() {
   return STORE_REGISTRY.map((s) => s.key);
 }
 function getRoutableDatastoreKeys() {
-  return STORE_REGISTRY.map((s) => s.key).filter((k) => k !== "vector" && k !== "source_chunks");
+  return STORE_REGISTRY.map((s) => s.key).filter((k) => k !== "vector" && k !== "session_chunks");
 }
 function normalizeKnowledgeDatastores(datastores, expandGraph) {
   const allowed = new Set(getKnowledgeDatastoreKeys());
@@ -116,7 +116,8 @@ function normalizeKnowledgeDatastores(datastores, expandGraph) {
   if (!Array.isArray(datastores) || datastores.length === 0) return defaults;
   const normalized = [];
   for (const raw of datastores) {
-    const value = String(raw || "").trim().toLowerCase();
+    const rawValue = String(raw || "").trim().toLowerCase();
+    const value = rawValue === "source_chunks" ? "session_chunks" : rawValue;
     if (!allowed.has(value) || normalized.includes(value)) continue;
     normalized.push(value);
   }

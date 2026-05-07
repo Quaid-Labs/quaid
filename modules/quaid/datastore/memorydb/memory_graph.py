@@ -12,6 +12,7 @@ __all__ = [
     "store", "recall", "create_edge", "get_graph", "initialize_db",
     "list_domains", "register_domain",
     "store_source_chunk", "store_source_chunks", "list_source_chunks", "get_source_chunk",
+    "store_session_chunk", "store_session_chunks", "list_session_chunks", "get_session_chunk",
     # Graph management
     "hard_delete_node", "soft_delete", "forget", "get_memory",
     # Contradiction pipeline
@@ -265,12 +266,17 @@ class Edge:
 
 @dataclass
 class SourceChunk:
-    """Stable source/transcript chunk stored as evidence provenance."""
+    """Stable session transcript chunk stored as evidence provenance."""
     chunk_id: str
     text: str
     source_id: Optional[str] = None
     session_id: Optional[str] = None
     chunk_index: int = 0
+    chunk_kind: str = "session"
+    parent_chunk_id: Optional[str] = None
+    next_chunk_id: Optional[str] = None
+    message_id: Optional[str] = None
+    message_pair_id: Optional[str] = None
     content_hash: str = ""
     token_count: int = 0
     owner_id: Optional[str] = None
@@ -1058,8 +1064,14 @@ class MemoryGraph:
                 source_id TEXT,
                 session_id TEXT,
                 chunk_index INTEGER NOT NULL,
+                chunk_kind TEXT DEFAULT 'session',
+                parent_chunk_id TEXT,
+                next_chunk_id TEXT,
+                message_id TEXT,
+                message_pair_id TEXT,
                 content_hash TEXT NOT NULL,
                 text TEXT NOT NULL,
+                embedding BLOB,
                 token_count INTEGER DEFAULT 0,
                 owner_id TEXT,
                 source_channel TEXT,
@@ -1077,12 +1089,31 @@ class MemoryGraph:
             )
             """
         )
+        existing_cols = {
+            str(row[1])
+            for row in conn.execute("PRAGMA table_info(source_chunks)").fetchall()
+        }
+        for col, typedef in [
+            ("chunk_kind", "TEXT DEFAULT 'session'"),
+            ("parent_chunk_id", "TEXT"),
+            ("next_chunk_id", "TEXT"),
+            ("message_id", "TEXT"),
+            ("message_pair_id", "TEXT"),
+            ("embedding", "BLOB"),
+        ]:
+            if col in existing_cols:
+                continue
+            conn.execute(f"ALTER TABLE source_chunks ADD COLUMN {col} {typedef}")
         for stmt in (
             "CREATE INDEX IF NOT EXISTS idx_source_chunks_session_index ON source_chunks(owner_id, session_id, chunk_index, created_at)",
             "CREATE INDEX IF NOT EXISTS idx_source_chunks_source_index ON source_chunks(owner_id, source_id, chunk_index, created_at)",
             "CREATE INDEX IF NOT EXISTS idx_source_chunks_content_hash ON source_chunks(content_hash)",
             "CREATE INDEX IF NOT EXISTS idx_source_chunks_conversation ON source_chunks(owner_id, source_conversation_id, chunk_index)",
             "CREATE INDEX IF NOT EXISTS idx_source_chunks_project ON source_chunks(owner_id, project, chunk_index)",
+            "CREATE INDEX IF NOT EXISTS idx_source_chunks_next ON source_chunks(owner_id, next_chunk_id)",
+            "CREATE INDEX IF NOT EXISTS idx_source_chunks_parent ON source_chunks(owner_id, parent_chunk_id)",
+            "CREATE INDEX IF NOT EXISTS idx_source_chunks_message ON source_chunks(owner_id, message_id)",
+            "CREATE INDEX IF NOT EXISTS idx_source_chunks_pair ON source_chunks(owner_id, message_pair_id)",
         ):
             conn.execute(stmt)
 
@@ -1097,8 +1128,14 @@ class MemoryGraph:
             "source_id": row["source_id"],
             "session_id": row["session_id"],
             "chunk_index": int(row["chunk_index"] or 0),
+            "chunk_kind": row["chunk_kind"] if "chunk_kind" in row.keys() else "session",
+            "parent_chunk_id": row["parent_chunk_id"] if "parent_chunk_id" in row.keys() else None,
+            "next_chunk_id": row["next_chunk_id"] if "next_chunk_id" in row.keys() else None,
+            "message_id": row["message_id"] if "message_id" in row.keys() else None,
+            "message_pair_id": row["message_pair_id"] if "message_pair_id" in row.keys() else None,
             "content_hash": row["content_hash"],
             "text": row["text"],
+            "has_embedding": bool(row["embedding"]) if "embedding" in row.keys() else False,
             "token_count": int(row["token_count"] or 0),
             "owner_id": row["owner_id"],
             "source_channel": row["source_channel"],
@@ -1122,6 +1159,11 @@ class MemoryGraph:
         source_id: Optional[str] = None,
         session_id: Optional[str] = None,
         chunk_index: int = 0,
+        chunk_kind: str = "session",
+        parent_chunk_id: Optional[str] = None,
+        next_chunk_id: Optional[str] = None,
+        message_id: Optional[str] = None,
+        message_pair_id: Optional[str] = None,
         owner_id: Optional[str] = None,
         source_channel: Optional[str] = None,
         source_conversation_id: Optional[str] = None,
@@ -1135,9 +1177,10 @@ class MemoryGraph:
         project: Optional[str] = None,
         token_count: Optional[int] = None,
         created_at: Optional[str] = None,
+        embed: bool = True,
         conn: Optional[sqlite3.Connection] = None,
     ) -> Dict[str, Any]:
-        """Append a stable transcript/source chunk without changing recall output.
+        """Append a stable session transcript chunk.
 
         Same content at the same owner/source/index returns the existing chunk.
         Changed content at the same index appends another row; callers that need
@@ -1145,9 +1188,9 @@ class MemoryGraph:
         """
         normalized_text = _normalize_source_chunk_text(text)
         if not normalized_text:
-            raise ValueError("Source chunk text cannot be empty")
-        if not source_id and not session_id:
-            raise ValueError("source_id or session_id is required for source chunks")
+            raise ValueError("Session chunk text cannot be empty")
+        if not session_id:
+            raise ValueError("session_id is required for session chunks")
         try:
             normalized_index = int(chunk_index)
         except Exception as exc:
@@ -1167,12 +1210,17 @@ class MemoryGraph:
         owner_id = str(owner_id).strip() or "default"
         source_id = str(source_id or session_id or "").strip() or None
         session_id = str(session_id or "").strip() or None
+        chunk_kind = str(chunk_kind or "session").strip().lower() or "session"
+        parent_chunk_id = str(parent_chunk_id or "").strip() or None
+        next_chunk_id = str(next_chunk_id or "").strip() or None
+        message_id = str(message_id or "").strip() or None
+        message_pair_id = str(message_pair_id or "").strip() or None
         if conversation_id and not source_conversation_id:
             source_conversation_id = conversation_id
         project = _normalize_project_tag(project)
         domains = _sanitize_domains_for_project(domains, project)
         if privacy not in {"private", "shared", "public"}:
-            raise ValueError(f"Unsupported source chunk privacy: {privacy!r}")
+            raise ValueError(f"Unsupported session chunk privacy: {privacy!r}")
         if source_type is not None:
             source_type = str(source_type).strip().lower() or None
             if source_type == "agent":
@@ -1183,12 +1231,29 @@ class MemoryGraph:
         created = created_at or now_iso
         count = int(token_count) if token_count is not None else int(_lib_estimate_tokens(normalized_text))
         count = max(0, count)
+        packed_embedding: Optional[bytes] = None
+        if embed:
+            try:
+                embedding = self.get_embedding(normalized_text)
+                if embedding:
+                    packed_embedding = self._pack_embedding(embedding)
+                elif _is_fail_hard_mode():
+                    raise RuntimeError("embedding provider returned no session chunk embedding")
+            except Exception as exc:
+                if _is_fail_hard_mode():
+                    raise RuntimeError("Failed to embed session chunk while failHard is enabled") from exc
+                logger.warning("store_source_chunk failed to embed session chunk; lexical recall remains available: %s", exc)
         chunk = SourceChunk.create(
             normalized_text,
             source_id=source_id,
             session_id=session_id,
             chunk_index=normalized_index,
             owner_id=owner_id,
+            chunk_kind=chunk_kind,
+            parent_chunk_id=parent_chunk_id,
+            next_chunk_id=next_chunk_id,
+            message_id=message_id,
+            message_pair_id=message_pair_id,
             token_count=count,
             source_channel=source_channel,
             source_conversation_id=source_conversation_id,
@@ -1211,10 +1276,11 @@ class MemoryGraph:
                 """
                 INSERT OR IGNORE INTO source_chunks
                 (chunk_id, source_id, session_id, chunk_index, content_hash, text,
-                 token_count, owner_id, source_channel, source_conversation_id,
+                 chunk_kind, parent_chunk_id, next_chunk_id, message_id, message_pair_id,
+                 embedding, token_count, owner_id, source_channel, source_conversation_id,
                  conversation_id, source_author_id, source_type, privacy,
                  visibility_scope, sensitivity, domains, project, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     chunk.chunk_id,
@@ -1223,6 +1289,12 @@ class MemoryGraph:
                     chunk.chunk_index,
                     chunk.content_hash,
                     chunk.text,
+                    chunk.chunk_kind,
+                    chunk.parent_chunk_id,
+                    chunk.next_chunk_id,
+                    chunk.message_id,
+                    chunk.message_pair_id,
+                    packed_embedding,
                     chunk.token_count,
                     chunk.owner_id,
                     chunk.source_channel,
@@ -1255,6 +1327,7 @@ class MemoryGraph:
         session_id: Optional[str] = None,
         owner_id: Optional[str] = None,
         start_index: int = 0,
+        link_chunks: bool = True,
         **kwargs: Any,
     ) -> List[Dict[str, Any]]:
         out: List[Dict[str, Any]] = []
@@ -1271,7 +1344,60 @@ class MemoryGraph:
                     **kwargs,
                 )
             )
+        normalized_session_id = str(session_id or "").strip()
+        normalized_owner_id = str(owner_id or "").strip()
+        if link_chunks and out and normalized_session_id:
+            with self._get_conn() as conn:
+                self._ensure_source_chunks_table(conn)
+                self._relink_session_chunks(
+                    conn,
+                    owner_id=normalized_owner_id or str(out[0].get("owner_id") or "").strip(),
+                    session_id=normalized_session_id,
+                )
+            refreshed = self.list_source_chunks(
+                owner_id=normalized_owner_id or str(out[0].get("owner_id") or "").strip() or None,
+                session_id=normalized_session_id,
+                limit=max(len(out) + 10, 100),
+            )
+            by_id = {str(row.get("chunk_id") or ""): row for row in refreshed}
+            out = [by_id.get(str(row.get("chunk_id") or ""), row) for row in out]
         return out
+
+    def store_session_chunk(self, text: str, **kwargs: Any) -> Dict[str, Any]:
+        """Store one public session chunk; source_* names remain DB internals."""
+        return self.store_source_chunk(text, **kwargs)
+
+    def store_session_chunks(self, chunks: List[str], **kwargs: Any) -> List[Dict[str, Any]]:
+        """Store ordered session chunks and refresh their scalar linked list."""
+        return self.store_source_chunks(chunks, **kwargs)
+
+    def _relink_session_chunks(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        owner_id: Optional[str],
+        session_id: str,
+    ) -> None:
+        owner_key = str(owner_id or "").strip()
+        session_key = str(session_id or "").strip()
+        if not owner_key or not session_key:
+            return
+        rows = conn.execute(
+            """
+            SELECT chunk_id
+            FROM source_chunks
+            WHERE owner_id = ? AND session_id = ?
+            ORDER BY chunk_index ASC, created_at ASC, chunk_id ASC
+            """,
+            (owner_key, session_key),
+        ).fetchall()
+        chunk_ids = [str(row["chunk_id"] or "").strip() for row in rows if str(row["chunk_id"] or "").strip()]
+        for idx, chunk_id in enumerate(chunk_ids):
+            next_id = chunk_ids[idx + 1] if idx + 1 < len(chunk_ids) else None
+            conn.execute(
+                "UPDATE source_chunks SET next_chunk_id = ?, updated_at = ? WHERE chunk_id = ?",
+                (next_id, _now_iso(), chunk_id),
+            )
 
     def list_source_chunks(
         self,
@@ -1326,6 +1452,10 @@ class MemoryGraph:
             ]
         return out
 
+    def list_session_chunks(self, **kwargs: Any) -> List[Dict[str, Any]]:
+        """List public session chunks."""
+        return self.list_source_chunks(**kwargs)
+
     def get_source_chunk(
         self,
         chunk_id: str,
@@ -1333,6 +1463,8 @@ class MemoryGraph:
         owner_id: Optional[str] = None,
         domains: Optional[List[str]] = None,
         project: Optional[str] = None,
+        before: int = 0,
+        after: int = 0,
     ) -> Optional[Dict[str, Any]]:
         rows = self.list_source_chunks(
             chunk_id=chunk_id,
@@ -1341,7 +1473,78 @@ class MemoryGraph:
             project=project,
             limit=1,
         )
-        return rows[0] if rows else None
+        if not rows:
+            return None
+        chunk = rows[0]
+        if before or after:
+            chunk["window"] = self._session_chunk_window(
+                chunk,
+                owner_id=owner_id,
+                before=before,
+                after=after,
+            )
+            chunk["window_center_chunk_id"] = chunk.get("chunk_id")
+        return chunk
+
+    def get_session_chunk(self, chunk_id: str, **kwargs: Any) -> Optional[Dict[str, Any]]:
+        """Fetch one session chunk by id, optionally with linked-list context."""
+        return self.get_source_chunk(chunk_id, **kwargs)
+
+    def _session_chunk_window(
+        self,
+        chunk: Dict[str, Any],
+        *,
+        owner_id: Optional[str],
+        before: int,
+        after: int,
+    ) -> List[Dict[str, Any]]:
+        try:
+            before_count = max(0, min(int(before or 0), 20))
+        except Exception:
+            before_count = 0
+        try:
+            after_count = max(0, min(int(after or 0), 20))
+        except Exception:
+            after_count = 0
+        center_id = str(chunk.get("chunk_id") or "").strip()
+        row_owner = str(owner_id or chunk.get("owner_id") or "").strip()
+        if not center_id or not row_owner:
+            return [chunk]
+        previous: List[Dict[str, Any]] = []
+        current_id = center_id
+        with self._get_conn() as conn:
+            self._ensure_source_chunks_table(conn)
+            for _ in range(before_count):
+                row = conn.execute(
+                    """
+                    SELECT * FROM source_chunks
+                    WHERE owner_id = ? AND next_chunk_id = ?
+                    ORDER BY chunk_index DESC, created_at DESC, chunk_id DESC
+                    LIMIT 1
+                    """,
+                    (row_owner, current_id),
+                ).fetchone()
+                if not row:
+                    break
+                item = self._row_to_source_chunk(row)
+                previous.append(item)
+                current_id = str(item.get("chunk_id") or "").strip()
+            following: List[Dict[str, Any]] = []
+            next_id = str(chunk.get("next_chunk_id") or "").strip()
+            for _ in range(after_count):
+                if not next_id:
+                    break
+                row = conn.execute(
+                    "SELECT * FROM source_chunks WHERE owner_id = ? AND chunk_id = ?",
+                    (row_owner, next_id),
+                ).fetchone()
+                if not row:
+                    break
+                item = self._row_to_source_chunk(row)
+                following.append(item)
+                next_id = str(item.get("next_chunk_id") or "").strip()
+        previous.reverse()
+        return [*previous, chunk, *following]
 
     # ==========================================================================
     # Node Operations
@@ -4623,12 +4826,12 @@ def register_domain(domain: str, description: str = "", active: bool = True) -> 
 
 
 def store_source_chunk(text: str, **kwargs: Any) -> Dict[str, Any]:
-    """Store one stable source chunk in the active memory DB."""
+    """Store one stable session chunk in the active memory DB."""
     return get_graph().store_source_chunk(text, **kwargs)
 
 
 def store_source_chunks(chunks: List[str], **kwargs: Any) -> List[Dict[str, Any]]:
-    """Store source chunks using deterministic per-source chunk IDs."""
+    """Store session chunks using deterministic per-session chunk IDs."""
     return get_graph().store_source_chunks(chunks, **kwargs)
 
 
@@ -4638,8 +4841,28 @@ def list_source_chunks(**kwargs: Any) -> List[Dict[str, Any]]:
 
 
 def get_source_chunk(chunk_id: str, **kwargs: Any) -> Optional[Dict[str, Any]]:
-    """Fetch one stored source chunk by ID."""
+    """Fetch one stored session chunk by ID."""
     return get_graph().get_source_chunk(chunk_id, **kwargs)
+
+
+def store_session_chunk(text: str, **kwargs: Any) -> Dict[str, Any]:
+    """Public alias for storing one session chunk."""
+    return get_graph().store_session_chunk(text, **kwargs)
+
+
+def store_session_chunks(chunks: List[str], **kwargs: Any) -> List[Dict[str, Any]]:
+    """Public alias for storing ordered session chunks."""
+    return get_graph().store_session_chunks(chunks, **kwargs)
+
+
+def list_session_chunks(**kwargs: Any) -> List[Dict[str, Any]]:
+    """Public alias for listing session chunks."""
+    return get_graph().list_session_chunks(**kwargs)
+
+
+def get_session_chunk(chunk_id: str, **kwargs: Any) -> Optional[Dict[str, Any]]:
+    """Public alias for fetching one session chunk by ID."""
+    return get_graph().get_session_chunk(chunk_id, **kwargs)
 
 
 def search(
@@ -5645,6 +5868,11 @@ def _source_chunk_recall_payload(chunk: Dict[str, Any], *, max_chunk_tokens: int
         "source_id": chunk.get("source_id"),
         "session_id": chunk.get("session_id"),
         "chunk_index": chunk.get("chunk_index"),
+        "chunk_kind": chunk.get("chunk_kind"),
+        "parent_chunk_id": chunk.get("parent_chunk_id"),
+        "next_chunk_id": chunk.get("next_chunk_id"),
+        "message_id": chunk.get("message_id"),
+        "message_pair_id": chunk.get("message_pair_id"),
         "content_hash": chunk.get("content_hash"),
         "source_channel": chunk.get("source_channel"),
         "source_conversation_id": chunk.get("source_conversation_id"),
@@ -5822,6 +6050,7 @@ def _prepare_recall_output_rows(
         max_total_chunk_tokens=max_total_chunk_tokens,
     )
     output_meta = dict(meta or {})
+    output_meta["session_chunks"] = source_chunk_meta
     output_meta["source_chunks"] = source_chunk_meta
     return output_rows, output_meta
 
@@ -5887,10 +6116,12 @@ def _resolve_recall_store_request(cfg: Dict[str, Any]) -> Tuple[List[str], Dict[
 
 
 def _normalize_store_plan(stores: Optional[List[str]]) -> List[str]:
-    allowed = {"vector", "graph", "docs", "source_chunks"}
+    allowed = {"vector", "graph", "docs", "session_chunks"}
     out: List[str] = []
     for store in list(stores or []):
         name = str(store or "").strip().lower()
+        if name == "source_chunks":
+            name = "session_chunks"
         if name in allowed and name not in out:
             out.append(name)
     return out or ["vector"]
@@ -6701,36 +6932,41 @@ def _source_chunk_store_recall(
     max_chunk_tokens: Optional[int] = None,
     max_total_chunk_tokens: Optional[int] = None,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any], Optional[Dict[str, Any]]]:
-    """Opt-in source chunk recall lane for exact transcript/source context."""
+    """Opt-in session chunk recall lane for exact transcript context."""
     started = time.monotonic()
     token_limit = _normalize_source_chunk_output_token_limit(max_chunk_tokens)
     total_token_limit = _normalize_source_chunk_total_token_limit(max_total_chunk_tokens)
     terms = _source_chunk_query_terms(query, limit=10)
     meta: Dict[str, Any] = {
-        "selected_path": "source_chunk_store",
+        "selected_path": "session_chunk_store",
         "query_terms_count": len(terms),
         "max_chunk_tokens": token_limit,
         "max_total_chunk_tokens": total_token_limit,
         "counts": {"final_results": 0},
-        "source_chunk_telemetry": {
+        "session_chunk_telemetry": {
             "owner_scoped": bool(str(owner_id or "").strip()),
             "omitted": 0,
             "output_token_count": 0,
+            "semantic_candidate_count": 0,
+            "lexical_candidate_count": 0,
         },
     }
     if not str(owner_id or "").strip():
         if _is_fail_hard_mode():
-            raise RuntimeError("source_chunks recall requires owner_id")
-        logger.warning("[recall] source_chunks store requested without owner_id; returning no chunks")
+            raise RuntimeError("session_chunks recall requires owner_id")
+        logger.warning("[recall] session_chunks store requested without owner_id; returning no chunks")
         meta["stop_reason"] = "missing_owner"
-        meta["phases_ms"] = {"total_ms": round((time.monotonic() - started) * 1000)}
-        return [], meta, None
-    if not terms:
-        meta["stop_reason"] = "no_query_terms"
         meta["phases_ms"] = {"total_ms": round((time.monotonic() - started) * 1000)}
         return [], meta, None
 
     graph = get_graph()
+    query_embedding: Optional[List[float]] = None
+    try:
+        query_embedding = graph.get_embedding(query)
+    except Exception as exc:
+        if _is_fail_hard_mode():
+            raise RuntimeError("session_chunks recall failed while embedding query") from exc
+        logger.warning("[recall] session_chunks embedding unavailable; using lexical search only: %s", exc)
     clauses = ["owner_id = ?"]
     params: List[Any] = [str(owner_id).strip()]
     normalized_project = _normalize_project_tag(project)
@@ -6746,13 +6982,6 @@ def _source_chunk_store_recall(
     if source_channel:
         clauses.append("source_channel = ?")
         params.append(str(source_channel))
-
-    like_terms = sorted(terms, key=lambda value: (len(value), value), reverse=True)[:5]
-    like_clauses: List[str] = []
-    for term in like_terms:
-        like_clauses.append("LOWER(text) LIKE ?")
-        params.append(f"%{term}%")
-    clauses.append("(" + " OR ".join(like_clauses) + ")")
 
     requested_domain_filter = (
         isinstance(domain, dict)
@@ -6775,17 +7004,19 @@ def _source_chunk_store_recall(
                 ORDER BY created_at DESC, chunk_index ASC, chunk_id ASC
                 LIMIT ?
                 """,
-                [*params, max(limit * 8, 24)],
+                [*params, max(limit * 64, 512)],
             ).fetchall()
     except Exception as exc:
         if _is_fail_hard_mode():
-            raise RuntimeError("source_chunks recall failed while reading chunks") from exc
-        logger.warning("[recall] source_chunks store failed; returning no chunks: %s", exc, exc_info=True)
+            raise RuntimeError("session_chunks recall failed while reading chunks") from exc
+        logger.warning("[recall] session_chunks store failed; returning no chunks: %s", exc, exc_info=True)
         meta["failed"] = True
         meta["phases_ms"] = {"total_ms": round((time.monotonic() - started) * 1000)}
         return [], meta, None
 
     candidates: List[Tuple[Tuple[float, str], Dict[str, Any]]] = []
+    lexical_candidate_count = 0
+    semantic_candidate_count = 0
     for row in rows:
         chunk = graph._row_to_source_chunk(row)
         chunk_domains = set(_normalize_domains(chunk.get("domains")))
@@ -6793,10 +7024,33 @@ def _source_chunk_store_recall(
             continue
         text = str(chunk.get("text") or "")
         overlap = sum(1 for term in terms if _text_contains_anchor_term(text, term))
-        if overlap <= 0:
+        lexical_score = 0.0
+        if overlap > 0:
+            exact_bonus = 0.05 if " ".join(str(query or "").lower().split()) in text.lower() else 0.0
+            lexical_score = min(0.99, 0.35 + (0.55 * (overlap / max(1, len(terms)))) + exact_bonus)
+            lexical_candidate_count += 1
+        semantic_score = 0.0
+        if query_embedding and row["embedding"]:
+            try:
+                semantic_score = max(0.0, min(0.99, graph.cosine_similarity(query_embedding, graph._unpack_embedding(row["embedding"]))))
+            except Exception as exc:
+                if _is_fail_hard_mode():
+                    raise RuntimeError("session_chunks recall failed while scoring chunk embedding") from exc
+                logger.warning("[recall] session_chunks embedding score failed for %s: %s", chunk.get("chunk_id"), exc)
+                semantic_score = 0.0
+        if semantic_score >= 0.60:
+            semantic_candidate_count += 1
+        score = max(lexical_score, semantic_score)
+        if lexical_score <= 0 and semantic_score < 0.60:
             continue
-        exact_bonus = 0.05 if " ".join(str(query or "").lower().split()) in text.lower() else 0.0
-        score = min(0.99, 0.35 + (0.55 * (overlap / max(1, len(terms)))) + exact_bonus)
+        match_modes = []
+        if lexical_score > 0:
+            match_modes.append("lexical")
+        if semantic_score >= 0.60:
+            match_modes.append("semantic")
+        chunk["match_modes"] = match_modes
+        chunk["lexical_score"] = round(float(lexical_score), 3)
+        chunk["semantic_score"] = round(float(semantic_score), 3)
         candidates.append(((score, str(chunk.get("created_at") or "")), chunk))
     candidates.sort(key=lambda item: item[0], reverse=True)
 
@@ -6818,21 +7072,28 @@ def _source_chunk_store_recall(
         output_tokens = int(payload.get("output_token_count") or 0)
         consumed_tokens += output_tokens
         chunk_id = str(payload.get("chunk_id") or "").strip()
-        source_label = str(payload.get("source_id") or payload.get("session_id") or "source").strip()
-        prefix = f"[source_chunk] {source_label}"
+        source_label = str(payload.get("session_id") or payload.get("source_id") or "session").strip()
+        prefix = f"[session_chunk] {source_label}"
         if payload.get("chunk_index") is not None:
             prefix += f"#{payload.get('chunk_index')}"
         out.append({
             "id": chunk_id,
             "text": f"{prefix}: {payload.get('text')}",
-            "category": "source_chunk",
-            "source_type": "source_chunk",
+            "category": "session_chunk",
+            "source_type": "session_chunk",
+            "via": "session_chunks",
             "similarity": round(float(score), 3),
             "chunk_id": chunk_id,
             "source_chunk_id": chunk_id,
+            "session_chunk_id": chunk_id,
             "session_id": payload.get("session_id"),
             "source_id": payload.get("source_id"),
             "chunk_index": payload.get("chunk_index"),
+            "chunk_kind": payload.get("chunk_kind"),
+            "parent_chunk_id": payload.get("parent_chunk_id"),
+            "next_chunk_id": payload.get("next_chunk_id"),
+            "message_id": payload.get("message_id"),
+            "message_pair_id": payload.get("message_pair_id"),
             "content_hash": payload.get("content_hash"),
             "owner_id": chunk.get("owner_id"),
             "domains": _normalize_domains(payload.get("domains")),
@@ -6846,15 +7107,21 @@ def _source_chunk_store_recall(
             "output_token_count": output_tokens,
             "truncated": payload.get("truncated"),
             "created_at": payload.get("created_at"),
+            "match_modes": list(chunk.get("match_modes") or []),
+            "lexical_score": chunk.get("lexical_score"),
+            "semantic_score": chunk.get("semantic_score"),
         })
     meta["counts"] = {"final_results": len(out)}
-    meta["source_chunk_telemetry"] = {
-        **dict(meta.get("source_chunk_telemetry") or {}),
+    meta["session_chunk_telemetry"] = {
+        **dict(meta.get("session_chunk_telemetry") or {}),
         "candidate_count": len(candidates),
         "omitted": omitted,
         "output_token_count": consumed_tokens,
         "domain_filter_applied": not include_all_domains,
+        "semantic_candidate_count": semantic_candidate_count,
+        "lexical_candidate_count": lexical_candidate_count,
     }
+    meta["source_chunk_telemetry"] = dict(meta["session_chunk_telemetry"])
     meta["phases_ms"] = {"total_ms": round((time.monotonic() - started) * 1000)}
     return _validate_recall_result_rows(out), meta, None
 
@@ -6936,7 +7203,7 @@ def _graph_store_recall(
 
 
 def _validate_recall_store_registry(registry: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
-    for store in ("vector", "docs", "graph", "source_chunks"):
+    for store in ("vector", "docs", "graph", "session_chunks"):
         spec = registry.get(store)
         if not isinstance(spec, dict):
             raise RuntimeError(f"recall store registry missing store '{store}'")
@@ -6960,7 +7227,7 @@ def _get_recall_store_registry() -> Dict[str, Dict[str, Any]]:
             "recall": _graph_store_recall,
             "recall_fast": _graph_store_recall,
         },
-        "source_chunks": {
+        "session_chunks": {
             "recall": _source_chunk_store_recall,
             "recall_fast": _source_chunk_store_recall,
         },
@@ -7144,7 +7411,7 @@ def _run_recall_store_plan(
                     candidate_pool=graph_candidate_pool,
                 ),
             ))
-        elif store == "source_chunks":
+        elif store == "session_chunks":
             callables.append(lambda store=store, handler=handler: (
                 store,
                 handler(
@@ -7339,11 +7606,12 @@ def _run_recall_store_plan(
     if rrf_shadow_meta.get("enabled") or rrf_shadow_meta.get("failed"):
         meta["rrf_shadow"] = rrf_shadow_meta
     for store_name, store_meta in store_meta_entries:
-        if store_name != "source_chunks":
+        if store_name != "session_chunks":
             continue
-        source_chunk_telemetry = store_meta.get("source_chunk_telemetry")
-        if isinstance(source_chunk_telemetry, dict):
-            meta["source_chunk_telemetry"] = dict(source_chunk_telemetry)
+        session_chunk_telemetry = store_meta.get("session_chunk_telemetry") or store_meta.get("source_chunk_telemetry")
+        if isinstance(session_chunk_telemetry, dict):
+            meta["session_chunk_telemetry"] = dict(session_chunk_telemetry)
+            meta["source_chunk_telemetry"] = dict(session_chunk_telemetry)
     if preserved_docs_rows:
         meta["preserved_docs_rows"] = preserved_docs_rows
     # Preserve lexical planner diagnostics from vector recall even when the
@@ -9485,10 +9753,10 @@ def _merge_recall_batches(batches: List[List[Dict[str, Any]]], limit: int) -> Li
 
 def _rrf_recall_row_identity(row: Dict[str, Any]) -> str:
     source_type = str(row.get("source_type") or row.get("category") or "").strip().lower()
-    if source_type == "source_chunk":
-        chunk_id = str(row.get("chunk_id") or row.get("source_chunk_id") or "").strip()
+    if source_type in {"source_chunk", "session_chunk"}:
+        chunk_id = str(row.get("chunk_id") or row.get("session_chunk_id") or row.get("source_chunk_id") or "").strip()
         if chunk_id:
-            return f"source_chunk:{chunk_id}"
+            return f"session_chunk:{chunk_id}"
     if _is_graph_anchor_expansion_row(row):
         return "|".join([
             "graph_anchor_expansion",
@@ -9637,9 +9905,9 @@ def _coerce_bool_config(value: Any, default: bool) -> bool:
 
 
 def _should_apply_rrf_store_plan_fusion(normalized_stores: List[str]) -> bool:
-    """Enable active RRF only for the explicit vector+source_chunks lane."""
+    """Enable active RRF only for the explicit vector+session_chunks lane."""
     stores = [str(store or "").strip() for store in normalized_stores or []]
-    if set(stores) != {"vector", "source_chunks"}:
+    if set(stores) != {"vector", "session_chunks"}:
         return False
     cfg = _get_retrieval_lightweight_config()
     raw = getattr(cfg, "store_plan_rrf_fusion", None)
@@ -13958,8 +14226,8 @@ def _plan_fanout_queries(
     prompt = (
         f"Generate 1 to {max_queries} search queries to find relevant stored knowledge for this message.\n"
         "Rules:\n"
-        '- Return JSON only: {"queries": ["..."], "stores": ["vector","graph","docs","source_chunks"], "project": "project-alpha", "freshness_preferred": false}\n'
-        '- "stores" is optional, but when present it must be an array containing any of: "vector", "graph", "docs", "source_chunks".\n'
+        '- Return JSON only: {"queries": ["..."], "stores": ["vector","graph","docs","session_chunks"], "project": "project-alpha", "freshness_preferred": false}\n'
+        '- "stores" is optional, but when present it must be an array containing any of: "vector", "graph", "docs", "session_chunks".\n'
         '- "project" is optional and should be set only when the message clearly names a project.\n'
         '- "freshness_preferred" is optional. Set it true only when the user asks for current/latest/current-state information or an open-ended schedule date, and not for explicit historical/as-of date lookups.\n'
         "- If the message is just a greeting, acknowledgement, filler, or otherwise has no meaningful information need, return an empty list.\n"
@@ -13982,8 +14250,8 @@ def _plan_fanout_queries(
         "- Add 'graph' only for explicit relationship, family, or causal multi-hop questions.\n"
         "- Add 'docs' for codebase, architecture, schema, API, tests, source-file, project history/as-of, exact project lists, labels, constants, config, or value questions.\n"
         "- Prefer ['vector','docs'] over docs-only when project history or lived context may matter.\n"
-        "- Add 'source_chunks' only when raw transcript/source wording or exact conversation evidence may be needed.\n"
-        "- Prefer ['vector','source_chunks'] over source_chunks-only when extracted facts may also answer.\n"
+        "- Add 'session_chunks' only when raw session wording or exact conversation evidence may be needed.\n"
+        "- Prefer ['vector','session_chunks'] over session_chunks-only when extracted facts may also answer.\n"
         f"{conservative_guidance}\n"
         f"Message: {clean}"
     )
@@ -14168,12 +14436,14 @@ def _fast_drill_timeout_ms_from_remaining(
 
 
 def _normalize_planned_stores(value: Any) -> List[str]:
-    allowed = {"vector", "graph", "docs", "source_chunks"}
+    allowed = {"vector", "graph", "docs", "session_chunks"}
     if not isinstance(value, list):
         return []
     out: List[str] = []
     for item in value:
         store_name = str(item or "").strip().lower()
+        if store_name == "source_chunks":
+            store_name = "session_chunks"
         if store_name in allowed and store_name not in out:
             out.append(store_name)
     return out
@@ -18793,9 +19063,9 @@ if __name__ == "__main__":
         recall_p.add_argument("--after", "--since", dest="date_from", help="Alias for --date-from")
         recall_p.add_argument("--before", "--until", "--as-of", "--as_of", "--asOf", dest="date_to", help="Alias for --date-to")
         recall_p.add_argument("--temporal-dimension", "--temporal_dimension", choices=["auto", "occurred", "mentioned", "record"], default=None, help="Date axis for date filters")
-        recall_p.add_argument("--include-chunks", "--include_chunks", action="store_true", help="Include bounded source chunk evidence for linked facts")
-        recall_p.add_argument("--max-chunk-tokens", "--max_chunk_tokens", type=int, default=None, help="Max tokens per included source chunk")
-        recall_p.add_argument("--max-total-chunk-tokens", "--max_total_chunk_tokens", type=int, default=None, help="Aggregate token cap for all included source chunks")
+        recall_p.add_argument("--include-chunks", "--include_chunks", action="store_true", help="Include bounded session chunk evidence for linked facts")
+        recall_p.add_argument("--max-chunk-tokens", "--max_chunk_tokens", type=int, default=None, help="Max tokens per included session chunk")
+        recall_p.add_argument("--max-total-chunk-tokens", "--max_total_chunk_tokens", type=int, default=None, help="Aggregate token cap for all included session chunks")
 
         recall_fast_p = subparsers.add_parser("recall-fast", help="Fast pre-injection recall with HyDE fanout")
         recall_fast_p.add_argument("query", nargs="+", help="Search query")
@@ -18811,9 +19081,9 @@ if __name__ == "__main__":
         recall_fast_p.add_argument("--timeout-ms", type=int, default=None, help="Override overall fast-recall timeout budget")
         recall_fast_p.add_argument("--planner-profile", choices=["off", "fast", "aggressive"], default="fast",
                                    help="Planner fanout profile for fast recall (default: fast)")
-        recall_fast_p.add_argument("--include-chunks", "--include_chunks", action="store_true", help="Include bounded source chunk evidence for linked facts")
-        recall_fast_p.add_argument("--max-chunk-tokens", "--max_chunk_tokens", type=int, default=None, help="Max tokens per included source chunk")
-        recall_fast_p.add_argument("--max-total-chunk-tokens", "--max_total_chunk_tokens", type=int, default=None, help="Aggregate token cap for all included source chunks")
+        recall_fast_p.add_argument("--include-chunks", "--include_chunks", action="store_true", help="Include bounded session chunk evidence for linked facts")
+        recall_fast_p.add_argument("--max-chunk-tokens", "--max_chunk_tokens", type=int, default=None, help="Max tokens per included session chunk")
+        recall_fast_p.add_argument("--max-total-chunk-tokens", "--max_total_chunk_tokens", type=int, default=None, help="Aggregate token cap for all included session chunks")
         recall_fast_p.add_argument("--json", action="store_true", help="JSON output including recall metadata")
         recall_fast_p.add_argument("--debug", action="store_true", help="Show scoring breakdown for each result")
 

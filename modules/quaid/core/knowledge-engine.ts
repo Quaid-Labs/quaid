@@ -119,7 +119,7 @@ export function createKnowledgeEngine<TMemoryResult extends { text: string; simi
         || viaRaw === "graph"
         || viaRaw === "journal"
         || viaRaw === "project"
-        || viaRaw === "source_chunks"
+        || viaRaw === "session_chunks"
       )
         ? viaRaw
         : "vector";
@@ -659,11 +659,11 @@ ${projectHints}
           return recallFromProjectStore(ctx.query, ctx.limit, project, docs, ctx.opts.dateFrom, ctx.opts.dateTo);
         },
       },
-      source_chunks: {
-        key: "source_chunks",
+      session_chunks: {
+        key: "session_chunks",
         recall: async (ctx) => {
-          const maxChunkTokensRaw = Number(storeOption(ctx.opts, "source_chunks", "max_chunk_tokens"));
-          const maxTotalChunkTokensRaw = Number(storeOption(ctx.opts, "source_chunks", "max_total_chunk_tokens"));
+          const maxChunkTokensRaw = Number(storeOption(ctx.opts, "session_chunks", "max_chunk_tokens"));
+          const maxTotalChunkTokensRaw = Number(storeOption(ctx.opts, "session_chunks", "max_total_chunk_tokens"));
           const maxChunkTokens = Number.isFinite(maxChunkTokensRaw)
             ? maxChunkTokensRaw
             : ctx.opts.maxChunkTokens;
@@ -671,7 +671,7 @@ ${projectHints}
             ? maxTotalChunkTokensRaw
             : ctx.opts.maxTotalChunkTokens;
           return deps.recallMemory(ctx.query, ctx.limit, {
-            stores: ["source_chunks"],
+            stores: ["session_chunks"],
             domain: ctx.opts.domain || { all: true },
             domainBoost: ctx.opts.domainBoost,
             project: ctx.opts.project,

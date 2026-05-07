@@ -1788,7 +1788,7 @@ Consider running: docs staleness updater (update-stale --apply)`;
         const sourceType = item.source_type || item.sourceType || void 0;
         const sourceKind = String(sourceType || "").trim().toLowerCase();
         const categoryKind = category.trim().toLowerCase();
-        const via = item.via || (categoryKind === "source_chunk" || sourceKind === "source_chunk" ? "source_chunks" : void 0) || (expandGraph ? void 0 : "vector");
+        const via = item.via || (categoryKind === "source_chunk" || categoryKind === "session_chunk" || sourceKind === "source_chunk" || sourceKind === "session_chunk" ? "session_chunks" : void 0) || (expandGraph ? void 0 : "vector");
         results.push({
           text,
           category,
@@ -1928,8 +1928,8 @@ Consider running: docs staleness updater (update-stale --apply)`;
         if (category === "docs" || sourceType === "docs") {
           return { ...r, via: "project" };
         }
-        if (category === "source_chunk" || sourceType === "source_chunk") {
-          return { ...r, via: "source_chunks" };
+        if (category === "source_chunk" || category === "session_chunk" || sourceType === "source_chunk" || sourceType === "session_chunk") {
+          return { ...r, via: "session_chunks" };
         }
         if (expandGraph && (category === "graph" || r.relation || r.graphPath)) {
           return { ...r, via: "graph" };
@@ -2347,8 +2347,9 @@ ${allNotes.map((n) => `- ${n}`).join("\n")}
     const resolvedDateTo = resolveRecallDateTo(opts);
     const selectedStores = normalizeKnowledgeDatastores(datastores, expandGraph);
     const shouldRouteStores = routeStores ?? !Array.isArray(datastores);
-    const bridgeOnlyStores = /* @__PURE__ */ new Set(["vector", "vector_basic", "vector_technical", "graph", "project", "source_chunks"]);
-    const sourceChunkOptions = datastoreOptions?.source_chunks || {};
+    const bridgeOnlyStores = /* @__PURE__ */ new Set(["vector", "vector_basic", "vector_technical", "graph", "project", "session_chunks"]);
+    const rawDatastoreOptions = datastoreOptions;
+    const sourceChunkOptions = rawDatastoreOptions?.session_chunks || rawDatastoreOptions?.source_chunks || {};
     const maxChunkTokensFromStore = Number(sourceChunkOptions.max_chunk_tokens);
     const maxTotalChunkTokensFromStore = Number(sourceChunkOptions.max_total_chunk_tokens);
     if (!shouldRouteStores && selectedStores.length > 0 && selectedStores.every((store) => bridgeOnlyStores.has(store))) {

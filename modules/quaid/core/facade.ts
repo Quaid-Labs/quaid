@@ -2508,7 +2508,7 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
         const sourceKind = String(sourceType || "").trim().toLowerCase();
         const categoryKind = category.trim().toLowerCase();
         const via = item.via
-          || (categoryKind === "source_chunk" || sourceKind === "source_chunk" ? "source_chunks" : undefined)
+          || (categoryKind === "source_chunk" || categoryKind === "session_chunk" || sourceKind === "source_chunk" || sourceKind === "session_chunk" ? "session_chunks" : undefined)
           || (expandGraph ? undefined : "vector");
 
         results.push({
@@ -2694,8 +2694,8 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
         if (category === "docs" || sourceType === "docs") {
           return { ...r, via: "project" as const };
         }
-        if (category === "source_chunk" || sourceType === "source_chunk") {
-          return { ...r, via: "source_chunks" as const };
+        if (category === "source_chunk" || category === "session_chunk" || sourceType === "source_chunk" || sourceType === "session_chunk") {
+          return { ...r, via: "session_chunks" as const };
         }
         if (expandGraph && (category === "graph" || r.relation || r.graphPath)) {
           return { ...r, via: "graph" as const };
@@ -3124,8 +3124,9 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
     const resolvedDateTo = resolveRecallDateTo(opts);
     const selectedStores = normalizeKnowledgeDatastores(datastores, expandGraph);
     const shouldRouteStores = routeStores ?? !Array.isArray(datastores);
-    const bridgeOnlyStores = new Set(["vector", "vector_basic", "vector_technical", "graph", "project", "source_chunks"]);
-    const sourceChunkOptions = datastoreOptions?.source_chunks || {};
+    const bridgeOnlyStores = new Set(["vector", "vector_basic", "vector_technical", "graph", "project", "session_chunks"]);
+    const rawDatastoreOptions = datastoreOptions as Partial<Record<string, Record<string, unknown>>> | undefined;
+    const sourceChunkOptions = rawDatastoreOptions?.session_chunks || rawDatastoreOptions?.source_chunks || {};
     const maxChunkTokensFromStore = Number((sourceChunkOptions as Record<string, unknown>).max_chunk_tokens);
     const maxTotalChunkTokensFromStore = Number((sourceChunkOptions as Record<string, unknown>).max_total_chunk_tokens);
     if (!shouldRouteStores && selectedStores.length > 0 && selectedStores.every((store) => bridgeOnlyStores.has(store))) {

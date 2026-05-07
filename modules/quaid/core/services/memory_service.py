@@ -150,6 +150,28 @@ class DatastoreMemoryService(MemoryServicePort):
         assert_multi_user_runtime_ready(require_read=True)
         return get_memory_source_chunk(chunk_id=chunk_id, **kwargs)
 
+    def store_session_chunk(
+        self,
+        text: str,
+        owner_id: str,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        return self.store_source_chunk(text=text, owner_id=owner_id, **kwargs)
+
+    def store_session_chunks(
+        self,
+        chunks: List[str],
+        owner_id: str,
+        **kwargs: Any,
+    ) -> List[Dict[str, Any]]:
+        return self.store_source_chunks(chunks=chunks, owner_id=owner_id, **kwargs)
+
+    def list_session_chunks(self, **kwargs: Any) -> List[Dict[str, Any]]:
+        return self.list_source_chunks(**kwargs)
+
+    def get_session_chunk(self, chunk_id: str, **kwargs: Any) -> Optional[Dict[str, Any]]:
+        return self.get_source_chunk(chunk_id=chunk_id, **kwargs)
+
     def recall(
         self,
         query: str,

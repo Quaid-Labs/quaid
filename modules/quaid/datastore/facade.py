@@ -22,6 +22,10 @@ from datastore.memorydb.memory_graph import (
     store_source_chunks as store_memory_source_chunks,
     list_source_chunks as list_memory_source_chunks,
     get_source_chunk as get_memory_source_chunk,
+    store_session_chunk as store_memory_session_chunk,
+    store_session_chunks as store_memory_session_chunks,
+    list_session_chunks as list_memory_session_chunks,
+    get_session_chunk as get_memory_session_chunk,
 )
 
 __all__ = [
@@ -41,4 +45,8 @@ __all__ = [
     "store_memory_source_chunks",
     "list_memory_source_chunks",
     "get_memory_source_chunk",
+    "store_memory_session_chunk",
+    "store_memory_session_chunks",
+    "list_memory_session_chunks",
+    "get_memory_session_chunk",
 ]

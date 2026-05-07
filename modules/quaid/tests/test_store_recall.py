@@ -51,6 +51,7 @@ def _make_graph(tmp_path):
     db_file = tmp_path / "test.db"
     with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
         graph = MemoryGraph(db_path=db_file)
+    graph.get_embedding = MagicMock(side_effect=_fake_get_embedding)
     return graph, db_file
 
 
@@ -3067,7 +3068,17 @@ class TestSourceChunkStorage:
             after = conn.execute(
                 "SELECT 1 FROM sqlite_master WHERE type='table' AND name='source_chunks'"
             ).fetchone()
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(source_chunks)").fetchall()}
         assert after is not None
+        assert {
+            "session_id",
+            "chunk_kind",
+            "parent_chunk_id",
+            "next_chunk_id",
+            "message_id",
+            "message_pair_id",
+            "embedding",
+        }.issubset(columns)
 
     def test_store_source_chunk_has_stable_id_for_same_content(self, tmp_path):
         """Same source/index/content stores once and returns the existing chunk."""
@@ -3162,7 +3173,7 @@ class TestSourceChunkStorage:
 
         with pytest.raises(ValueError, match="cannot be empty"):
             graph.store_source_chunk("   ", owner_id="douglas", session_id="session-4")
-        with pytest.raises(ValueError, match="source_id or session_id"):
+        with pytest.raises(ValueError, match="session_id is required"):
             graph.store_source_chunk("A valid source chunk body", owner_id="douglas")
         with pytest.raises(ValueError, match="non-negative"):
             graph.store_source_chunk(
@@ -3171,7 +3182,7 @@ class TestSourceChunkStorage:
                 session_id="session-4",
                 chunk_index=-1,
             )
-        with pytest.raises(ValueError, match="Unsupported source chunk privacy"):
+        with pytest.raises(ValueError, match="Unsupported session chunk privacy"):
             graph.store_source_chunk(
                 "A valid source chunk body",
                 owner_id="douglas",
@@ -3192,6 +3203,61 @@ class TestSourceChunkStorage:
 
         assert [row["chunk_index"] for row in rows] == [4, 6]
         assert [row["text"] for row in rows] == ["First chunk", "Second chunk"]
+
+    def test_store_session_chunks_links_navigation_and_window(self, tmp_path):
+        """Session chunks form a scalar linked list and can be expanded by id."""
+        graph, _db_file = _make_graph(tmp_path)
+
+        rows = graph.store_session_chunks(
+            ["User: First turn.\nAssistant: First reply.", "User: Second turn.", "User: Third turn."],
+            owner_id="douglas",
+            session_id="session-linked",
+            message_pair_id="pair-1",
+            chunk_kind="micro",
+        )
+
+        assert [row["next_chunk_id"] for row in rows] == [rows[1]["chunk_id"], rows[2]["chunk_id"], None]
+        assert all(row["session_id"] == "session-linked" for row in rows)
+        assert all(row["message_pair_id"] == "pair-1" for row in rows)
+        expanded = graph.get_session_chunk(rows[1]["chunk_id"], owner_id="douglas", before=1, after=1)
+        assert expanded is not None
+        assert [row["chunk_id"] for row in expanded["window"]] == [row["chunk_id"] for row in rows]
+
+    def test_session_chunk_store_plan_uses_semantic_chunk_embeddings(self, tmp_path):
+        """session_chunks searches embedded chunks even when lexical terms do not overlap."""
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _db_file = _make_graph(tmp_path)
+        chunk = graph.store_session_chunk(
+            "User: The receipt is in the pantry drawer.",
+            owner_id="miko",
+            session_id="session-semantic",
+            chunk_index=0,
+        )
+
+        def _fake_similarity(query_embedding, chunk_embedding):
+            return 0.92 if query_embedding and chunk_embedding else 0.0
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch.object(graph, "cosine_similarity", side_effect=_fake_similarity):
+            rows, meta, _bundle = mg._run_recall_store_plan(
+                "proof of purchase storage place",
+                stores=["session_chunks"],
+                limit=3,
+                owner_id="miko",
+                min_similarity=0.0,
+                planner_profile="off",
+                planned_queries=["proof of purchase storage place"],
+                planner_meta={"planned_stores": ["session_chunks"]},
+                fast_mode=False,
+                common_kwargs={"max_chunk_tokens": 50},
+            )
+
+        assert rows
+        assert rows[0]["chunk_id"] == chunk["chunk_id"]
+        assert rows[0]["category"] == "session_chunk"
+        assert rows[0]["match_modes"] == ["semantic"]
+        assert meta["session_chunk_telemetry"]["semantic_candidate_count"] == 1
 
     def test_store_fact_persists_source_chunk_id(self, tmp_path):
         """Facts can carry a durable pointer to the source chunk that produced them."""
@@ -3302,14 +3368,14 @@ class TestSourceChunkStorage:
         chunk_row = next(row for row in chunk_rows if row["id"] == stored["id"])
         assert "source_chunk" not in default_row
         assert "source_chunk_id" not in default_row
-        assert "source_chunks" not in default_meta
+        assert "session_chunks" not in default_meta
         assert chunk_row["source_chunk_id"] == chunk["chunk_id"]
         assert chunk_row["source_chunk"]["chunk_id"] == chunk["chunk_id"]
         assert chunk_row["source_chunk"]["text"].startswith("User: Douglas archived")
         assert chunk_row["source_chunk"]["output_token_count"] <= 5
         assert chunk_row["source_chunk"]["truncated"] is True
-        assert chunk_meta["source_chunks"]["attached"] == 1
-        assert chunk_meta["source_chunks"]["max_chunk_tokens"] == 5
+        assert chunk_meta["session_chunks"]["attached"] == 1
+        assert chunk_meta["session_chunks"]["max_chunk_tokens"] == 5
 
     def test_recall_include_chunks_respects_aggregate_source_chunk_cap(self, tmp_path):
         """include_chunks cannot let many evidence chunks crowd out the recall response."""
@@ -3370,10 +3436,10 @@ class TestSourceChunkStorage:
         assert attached_rows[0]["source_chunk"]["output_token_count"] <= 1
         assert "source_chunk_id" in omitted_rows[0]
         assert "source_chunk" not in omitted_rows[0]
-        assert meta["source_chunks"]["attached"] == 1
-        assert meta["source_chunks"]["omitted"] == 1
-        assert meta["source_chunks"]["output_token_count"] <= 1
-        assert meta["source_chunks"]["max_total_chunk_tokens"] == 1
+        assert meta["session_chunks"]["attached"] == 1
+        assert meta["session_chunks"]["omitted"] == 1
+        assert meta["session_chunks"]["output_token_count"] <= 1
+        assert meta["session_chunks"]["max_total_chunk_tokens"] == 1
 
     def test_recall_include_chunks_raises_on_missing_source_chunk_under_failhard(self, tmp_path):
         """Explicit source chunk dereference is failHard-correct when evidence is missing."""
@@ -3453,8 +3519,8 @@ class TestSourceChunkStorage:
         assert row["source_chunk_id"] == other_owner_chunk["chunk_id"]
         assert row["source_chunk_missing"] is True
         assert "source_chunk" not in row
-        assert meta["source_chunks"]["attached"] == 0
-        assert meta["source_chunks"]["missing"] == 1
+        assert meta["session_chunks"]["attached"] == 0
+        assert meta["session_chunks"]["missing"] == 1
 
     def test_recall_include_chunks_marks_missing_chunk_when_failhard_disabled(self, tmp_path):
         """Missing opt-in evidence is visible but non-fatal when failHard is disabled."""
@@ -3500,11 +3566,11 @@ class TestSourceChunkStorage:
         assert row["source_chunk_id"] == chunk["chunk_id"]
         assert row["source_chunk_missing"] is True
         assert "source_chunk" not in row
-        assert meta["source_chunks"]["attached"] == 0
-        assert meta["source_chunks"]["missing"] == 1
+        assert meta["session_chunks"]["attached"] == 0
+        assert meta["session_chunks"]["missing"] == 1
 
     def test_source_chunk_store_plan_returns_opt_in_chunk_rows(self, tmp_path):
-        """The source_chunks store is an explicit transcript-context lane."""
+        """The session_chunks store is an explicit transcript-context lane."""
         import datastore.memorydb.memory_graph as mg
 
         graph, _db_file = _make_graph(tmp_path)
@@ -3521,13 +3587,13 @@ class TestSourceChunkStorage:
         with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph):
             rows, meta, bundle = mg._run_recall_store_plan(
                 "Miko hiking receipt pantry drawer",
-                stores=["source_chunks"],
+                stores=["session_chunks"],
                 limit=3,
                 owner_id="miko",
                 min_similarity=0.0,
                 planner_profile="off",
                 planned_queries=["Miko hiking receipt pantry drawer"],
-                planner_meta={"planned_stores": ["source_chunks"], "planned_project": "life-log"},
+                planner_meta={"planned_stores": ["session_chunks"], "planned_project": "life-log"},
                 fast_mode=False,
                 common_kwargs={
                     "domain": {"personal": True, "all": False},
@@ -3539,17 +3605,17 @@ class TestSourceChunkStorage:
 
         assert bundle is None
         assert len(rows) == 1
-        assert rows[0]["category"] == "source_chunk"
-        assert rows[0]["source_type"] == "source_chunk"
+        assert rows[0]["category"] == "session_chunk"
+        assert rows[0]["source_type"] == "session_chunk"
         assert rows[0]["chunk_id"] == chunk["chunk_id"]
         assert rows[0]["source_chunk_id"] == chunk["chunk_id"]
         assert "hiking receipt" in rows[0]["text"]
-        assert meta["planned_stores"] == ["source_chunks"]
-        assert meta["store_runs"][0]["store"] == "source_chunks"
+        assert meta["planned_stores"] == ["session_chunks"]
+        assert meta["store_runs"][0]["store"] == "session_chunks"
         assert meta["store_runs"][0]["result_count"] == 1
 
     def test_source_chunk_store_plan_is_explicit_not_default(self, tmp_path):
-        """Source chunks are not inserted into the default vector store plan."""
+        """Session chunks are not inserted into the default vector store plan."""
         import datastore.memorydb.memory_graph as mg
 
         graph, _db_file = _make_graph(tmp_path)
@@ -3561,7 +3627,8 @@ class TestSourceChunkStorage:
         )
 
         assert mg._normalize_store_plan(None) == ["vector"]
-        assert mg._planner_store_plan(["source_chunks"]) == ["source_chunks"]
+        assert mg._planner_store_plan(["session_chunks"]) == ["session_chunks"]
+        assert mg._planner_store_plan(["source_chunks"]) == ["session_chunks"]
 
         with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
              patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
@@ -3580,10 +3647,10 @@ class TestSourceChunkStorage:
 
         assert rows == []
         assert meta["planned_stores"] == ["vector"]
-        assert all(row.get("category") != "source_chunk" for row in rows)
+        assert all(row.get("category") != "session_chunk" for row in rows)
 
     def test_source_chunk_store_plan_enforces_owner_isolation(self, tmp_path):
-        """The source_chunks lane cannot read another owner's transcript evidence."""
+        """The session_chunks lane cannot read another owner's transcript evidence."""
         import datastore.memorydb.memory_graph as mg
 
         graph, _db_file = _make_graph(tmp_path)
@@ -3597,23 +3664,23 @@ class TestSourceChunkStorage:
         with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph):
             rows, meta, _bundle = mg._run_recall_store_plan(
                 "deployment receipt private drawer",
-                stores=["source_chunks"],
+                stores=["session_chunks"],
                 limit=3,
                 owner_id="douglas",
                 min_similarity=0.0,
                 planner_profile="off",
                 planned_queries=["deployment receipt private drawer"],
-                planner_meta={"planned_stores": ["source_chunks"]},
+                planner_meta={"planned_stores": ["session_chunks"]},
                 fast_mode=False,
                 common_kwargs={},
             )
 
         assert rows == []
-        assert meta["store_runs"][0]["store"] == "source_chunks"
+        assert meta["store_runs"][0]["store"] == "session_chunks"
         assert meta["store_runs"][0]["result_count"] == 0
 
     def test_source_chunk_store_plan_respects_aggregate_cap(self, tmp_path):
-        """The source_chunks lane has the same aggregate output budget guard."""
+        """The session_chunks lane has the same aggregate output budget guard."""
         import datastore.memorydb.memory_graph as mg
 
         graph, _db_file = _make_graph(tmp_path)
@@ -3633,13 +3700,13 @@ class TestSourceChunkStorage:
         with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph):
             rows, meta, _bundle = mg._run_recall_store_plan(
                 "Miko receipt",
-                stores=["source_chunks"],
+                stores=["session_chunks"],
                 limit=5,
                 owner_id="miko",
                 min_similarity=0.0,
                 planner_profile="off",
                 planned_queries=["Miko receipt"],
-                planner_meta={"planned_stores": ["source_chunks"]},
+                planner_meta={"planned_stores": ["session_chunks"]},
                 fast_mode=False,
                 common_kwargs={
                     "max_chunk_tokens": 50,
@@ -3655,7 +3722,7 @@ class TestSourceChunkStorage:
         assert source_meta["output_token_count"] <= 1
 
     def test_source_chunk_store_plan_preserves_mixed_store_telemetry(self, tmp_path):
-        """Mixed vector+source_chunks plans expose source chunk lane telemetry."""
+        """Mixed vector+session_chunks plans expose source chunk lane telemetry."""
         import datastore.memorydb.memory_graph as mg
         from datastore.memorydb.memory_graph import store
 
@@ -3678,13 +3745,13 @@ class TestSourceChunkStorage:
             )
             rows, meta, _bundle = mg._run_recall_store_plan(
                 "Miko hiking receipt pantry drawer",
-                stores=["vector", "source_chunks"],
+                stores=["vector", "session_chunks"],
                 limit=5,
                 owner_id="miko",
                 min_similarity=0.0,
                 planner_profile="off",
                 planned_queries=["Miko hiking receipt pantry drawer"],
-                planner_meta={"planned_stores": ["vector", "source_chunks"]},
+                planner_meta={"planned_stores": ["vector", "session_chunks"]},
                 fast_mode=False,
                 common_kwargs={
                     "domain": {"all": True},
@@ -3693,12 +3760,12 @@ class TestSourceChunkStorage:
                 },
             )
 
-        assert any(row.get("category") == "source_chunk" for row in rows)
-        assert meta["planned_stores"] == ["vector", "source_chunks"]
+        assert any(row.get("category") == "session_chunk" for row in rows)
+        assert meta["planned_stores"] == ["vector", "session_chunks"]
         assert meta["source_chunk_telemetry"]["candidate_count"] >= 1
         assert meta["source_chunk_telemetry"]["output_token_count"] > 0
         assert meta["rrf_shadow"]["enabled"] is True
-        assert meta["rrf_shadow"]["branch_counts"]["source_chunks"] >= 1
+        assert meta["rrf_shadow"]["branch_counts"]["session_chunks"] >= 1
 
     def test_rrf_shadow_does_not_change_store_plan_ordering_when_active_fusion_disabled(self):
         """Shadow telemetry remains observational when active RRF fusion is disabled."""
@@ -3710,7 +3777,7 @@ class TestSourceChunkStorage:
             "min_similarity": 0.0,
             "planner_profile": "off",
             "planned_queries": ["Miko receipt"],
-            "planner_meta": {"planned_stores": ["vector", "source_chunks"]},
+            "planner_meta": {"planned_stores": ["vector", "session_chunks"]},
             "fast_mode": False,
             "common_kwargs": {},
         }
@@ -3736,21 +3803,21 @@ class TestSourceChunkStorage:
                     "recall": lambda *_a, **_k: ([], {}, None),
                     "recall_fast": lambda *_a, **_k: ([], {}, None),
                 },
-                "source_chunks": {
+                "session_chunks": {
                     "recall": lambda *_a, **_k: (
                         [
                             {
                                 "chunk_id": "sch-b",
                                 "source_chunk_id": "sch-b",
                                 "text": "bravo chunk",
-                                "category": "source_chunk",
-                                "source_type": "source_chunk",
+                                "category": "session_chunk",
+                                "source_type": "session_chunk",
                                 "similarity": 0.80,
                             }
                         ],
                         {
-                            "selected_path": "source_chunk_store",
-                            "source_chunk_telemetry": {"candidate_count": 1, "output_token_count": 2},
+                            "selected_path": "session_chunk_store",
+                            "session_chunk_telemetry": {"candidate_count": 1, "output_token_count": 2},
                             "phases_ms": {"total_ms": 1},
                         },
                         None,
@@ -3763,7 +3830,7 @@ class TestSourceChunkStorage:
              patch.object(mg, "_should_apply_rrf_store_plan_fusion", return_value=False):
             rows_with_shadow, meta, _ = mg._run_recall_store_plan(
                 "Miko receipt",
-                stores=["vector", "source_chunks"],
+                stores=["vector", "session_chunks"],
                 **common,
             )
 
@@ -3772,7 +3839,7 @@ class TestSourceChunkStorage:
              patch.object(mg, "_shadow_rrf_recall_store_plan", return_value={"enabled": False, "reason": "disabled"}):
             rows_without_shadow, _meta_without_shadow, _ = mg._run_recall_store_plan(
                 "Miko receipt",
-                stores=["vector", "source_chunks"],
+                stores=["vector", "session_chunks"],
                 **common,
             )
 
@@ -3782,12 +3849,12 @@ class TestSourceChunkStorage:
         assert rows_with_shadow == rows_without_shadow
         assert meta["rrf_shadow"]["enabled"] is True
         comparison = meta["rrf_shadow"]["comparison"]
-        assert comparison["current_top_keys"] == ["id:fact-c", "id:fact-a", "source_chunk:sch-b"]
-        assert comparison["rrf_top_keys"] == ["id:fact-c", "source_chunk:sch-b", "id:fact-a"]
+        assert comparison["current_top_keys"] == ["id:fact-c", "id:fact-a", "session_chunk:sch-b"]
+        assert comparison["rrf_top_keys"] == ["id:fact-c", "session_chunk:sch-b", "id:fact-a"]
         assert comparison["same_top_order"] is False
         assert comparison["displacement_count"] == 2
         assert comparison["max_abs_displacement"] == 1
-        assert comparison["branch_contribution"] == {"vector": 2, "source_chunks": 1}
+        assert comparison["branch_contribution"] == {"vector": 2, "session_chunks": 1}
 
     def test_rrf_fusion_promotes_source_chunk_in_explicit_mixed_plan(self):
         import datastore.memorydb.memory_graph as mg
@@ -3813,21 +3880,21 @@ class TestSourceChunkStorage:
                     "recall": lambda *_a, **_k: ([], {}, None),
                     "recall_fast": lambda *_a, **_k: ([], {}, None),
                 },
-                "source_chunks": {
+                "session_chunks": {
                     "recall": lambda *_a, **_k: (
                         [
                             {
                                 "chunk_id": "sch-b",
                                 "source_chunk_id": "sch-b",
                                 "text": "bravo chunk",
-                                "category": "source_chunk",
-                                "source_type": "source_chunk",
+                                "category": "session_chunk",
+                                "source_type": "session_chunk",
                                 "similarity": 0.80,
                             }
                         ],
                         {
-                            "selected_path": "source_chunk_store",
-                            "source_chunk_telemetry": {"candidate_count": 1, "output_token_count": 2},
+                            "selected_path": "session_chunk_store",
+                            "session_chunk_telemetry": {"candidate_count": 1, "output_token_count": 2},
                             "phases_ms": {"total_ms": 1},
                         },
                         None,
@@ -3840,13 +3907,13 @@ class TestSourceChunkStorage:
              patch.object(mg, "_should_apply_rrf_store_plan_fusion", return_value=True):
             rows, meta, _ = mg._run_recall_store_plan(
                 "Miko receipt",
-                stores=["vector", "source_chunks"],
+                stores=["vector", "session_chunks"],
                 limit=3,
                 owner_id="miko",
                 min_similarity=0.0,
                 planner_profile="off",
                 planned_queries=["Miko receipt"],
-                planner_meta={"planned_stores": ["vector", "source_chunks"]},
+                planner_meta={"planned_stores": ["vector", "session_chunks"]},
                 fast_mode=False,
                 common_kwargs={},
             )
@@ -3854,7 +3921,7 @@ class TestSourceChunkStorage:
         assert [row.get("id") or row.get("chunk_id") for row in rows] == ["fact-c", "sch-b", "fact-a"]
         assert meta["rrf_fusion"]["enabled"] is True
         assert meta["rrf_fusion"]["mode"] == "active"
-        assert meta["rrf_fusion"]["applied_to_stores"] == ["vector", "source_chunks"]
+        assert meta["rrf_fusion"]["applied_to_stores"] == ["vector", "session_chunks"]
         assert meta["rrf_shadow"]["comparison_suppressed_reason"] == "active_rrf_fusion"
         assert "comparison" not in meta["rrf_shadow"]
 
@@ -3864,28 +3931,28 @@ class TestSourceChunkStorage:
         with patch.object(mg, "_get_retrieval_lightweight_config", return_value=SimpleNamespace()):
             assert mg._should_apply_rrf_store_plan_fusion([]) is False
             assert mg._should_apply_rrf_store_plan_fusion(["vector"]) is False
-            assert mg._should_apply_rrf_store_plan_fusion(["source_chunks"]) is False
+            assert mg._should_apply_rrf_store_plan_fusion(["session_chunks"]) is False
             assert mg._should_apply_rrf_store_plan_fusion(["vector", "graph"]) is False
-            assert mg._should_apply_rrf_store_plan_fusion(["graph", "source_chunks"]) is False
-            assert mg._should_apply_rrf_store_plan_fusion(["vector", "graph", "source_chunks"]) is False
-            assert mg._should_apply_rrf_store_plan_fusion(["vector", "source_chunks"]) is True
+            assert mg._should_apply_rrf_store_plan_fusion(["graph", "session_chunks"]) is False
+            assert mg._should_apply_rrf_store_plan_fusion(["vector", "graph", "session_chunks"]) is False
+            assert mg._should_apply_rrf_store_plan_fusion(["vector", "session_chunks"]) is True
         with patch.object(
             mg,
             "_get_retrieval_lightweight_config",
             return_value=SimpleNamespace(store_plan_rrf_fusion=False),
         ):
-            assert mg._should_apply_rrf_store_plan_fusion(["vector", "source_chunks"]) is False
+            assert mg._should_apply_rrf_store_plan_fusion(["vector", "session_chunks"]) is False
 
     def test_rrf_shadow_comparison_reports_rrf_only_candidates(self):
         import datastore.memorydb.memory_graph as mg
 
         shadow = {
             "enabled": True,
-            "top_keys": ["id:a", "id:b", "source_chunk:sch-c"],
+            "top_keys": ["id:a", "id:b", "session_chunk:sch-c"],
             "top_rows": [
                 {"key": "id:a", "source_ranks": {"vector": 1}},
                 {"key": "id:b", "source_ranks": {"graph": 1}},
-                {"key": "source_chunk:sch-c", "source_ranks": {"source_chunks": 1}},
+                {"key": "session_chunk:sch-c", "source_ranks": {"session_chunks": 1}},
             ],
         }
 
@@ -3899,9 +3966,9 @@ class TestSourceChunkStorage:
         )
 
         comparison = annotated["comparison"]
-        assert comparison["rrf_only_top_keys"] == ["id:b", "source_chunk:sch-c"]
+        assert comparison["rrf_only_top_keys"] == ["id:b", "session_chunk:sch-c"]
         assert comparison["current_only_top_keys"] == ["id:d"]
-        assert [row["key"] for row in comparison["rrf_only_top_rows"]] == ["id:b", "source_chunk:sch-c"]
+        assert [row["key"] for row in comparison["rrf_only_top_rows"]] == ["id:b", "session_chunk:sch-c"]
 
     def test_source_chunk_store_plan_requires_owner_under_failhard(self, tmp_path):
         """Ownerless source chunk lookup cannot fail open under failHard."""
@@ -3920,22 +3987,22 @@ class TestSourceChunkStorage:
             with pytest.raises(RuntimeError, match="requires owner_id"):
                 mg._run_recall_store_plan(
                     "Miko hiking receipt",
-                    stores=["source_chunks"],
+                    stores=["session_chunks"],
                     limit=3,
                     owner_id=None,
                     min_similarity=0.0,
                     planner_profile="off",
                     planned_queries=["Miko hiking receipt"],
-                    planner_meta={"planned_stores": ["source_chunks"]},
+                    planner_meta={"planned_stores": ["session_chunks"]},
                     fast_mode=False,
                     common_kwargs={},
                 )
 
     def test_source_chunks_single_store_uses_store_plan_runner(self):
-        """source_chunks-only recall must not fall through to vector-only recall."""
+        """session_chunks-only recall must not fall through to vector-only recall."""
         import datastore.memorydb.memory_graph as mg
 
-        assert mg._should_run_recall_store_plan(["source_chunks"], use_fast=False) is True
+        assert mg._should_run_recall_store_plan(["session_chunks"], use_fast=False) is True
         assert mg._should_run_recall_store_plan(["docs"], use_fast=False) is True
         assert mg._should_run_recall_store_plan(["vector"], use_fast=False) is False
         assert mg._should_run_recall_store_plan(["vector"], use_fast=True) is True
@@ -4190,7 +4257,7 @@ class TestRecallTelemetry:
         def _fake_call_fast_reasoning(*, prompt, **kwargs):
             captured["prompt"] = prompt
             return (
-                '{"stores":["vector","source_chunks"],'
+                '{"stores":["vector","session_chunks"],'
                 '"queries":["Miko hiking receipt pantry drawer"]}',
                 {},
             )
@@ -4199,7 +4266,7 @@ class TestRecallTelemetry:
             mg,
             "parse_json_response",
             return_value={
-                "stores": ["vector", "source_chunks"],
+                "stores": ["vector", "session_chunks"],
                 "queries": ["Miko hiking receipt pantry drawer"],
             },
         ), patch("lib.llm_clients.call_fast_reasoning", side_effect=_fake_call_fast_reasoning):
@@ -4213,8 +4280,8 @@ class TestRecallTelemetry:
         assert queries == ["What exactly did Miko say about the hiking receipt?"]
         assert meta["used_llm"] is True
         assert meta["bailout_reason"] == "preserve_short_exact_query"
-        assert meta["planned_stores"] == ["vector", "source_chunks"]
-        assert "source_chunks" in captured["prompt"]
+        assert meta["planned_stores"] == ["vector", "session_chunks"]
+        assert "session_chunks" in captured["prompt"]
         assert mg._normalize_store_plan(None) == ["vector"]
 
     def test_plan_fanout_queries_full_preserves_relation_chain_graph_when_llm_downgrades(self):
@@ -6667,7 +6734,7 @@ class TestRecallFastHookInjectContract:
     def _registry_with_source_chunks(registry):
         registry = dict(registry)
         registry.setdefault(
-            "source_chunks",
+            "session_chunks",
             {
                 "recall": lambda *a, **k: ([], {}, None),
                 "recall_fast": lambda *a, **k: ([], {}, None),
@@ -7344,7 +7411,7 @@ class TestRecallFastHookInjectContract:
             "vector": {"recall": lambda *a, **k: None, "recall_fast": lambda *a, **k: None},
             "docs": {"recall": lambda *a, **k: None},
             "graph": {"recall": lambda *a, **k: None, "recall_fast": lambda *a, **k: None},
-            "source_chunks": {"recall": lambda *a, **k: None, "recall_fast": lambda *a, **k: None},
+            "session_chunks": {"recall": lambda *a, **k: None, "recall_fast": lambda *a, **k: None},
         }
 
         with patch.object(mg, "_get_recall_store_registry", return_value=bad_registry):
@@ -10658,19 +10725,19 @@ class TestRecallFastHookInjectContract:
                 ("vector", [
                     {"id": "fact-1", "text": "Miko keeps the receipt in the drawer", "similarity": 0.91},
                 ]),
-                ("source_chunks", [
+                ("session_chunks", [
                     {
                         "chunk_id": "sch_receipt",
                         "source_chunk_id": "sch_receipt",
-                        "category": "source_chunk",
-                        "source_type": "source_chunk",
+                        "category": "session_chunk",
+                        "source_type": "session_chunk",
                         "text": "User: Miko keeps the receipt in the drawer.",
                         "similarity": 0.70,
                     },
                     {
                         "source_chunk_id": "sch_receipt",
-                        "category": "source_chunk",
-                        "source_type": "source_chunk",
+                        "category": "session_chunk",
+                        "source_type": "session_chunk",
                         "text": "Duplicate source chunk row",
                         "similarity": 0.60,
                     },
@@ -10681,9 +10748,9 @@ class TestRecallFastHookInjectContract:
         )
 
         assert meta["candidate_count"] == 2
-        chunk_rows = [row for row in fused if row.get("source_type") == "source_chunk"]
+        chunk_rows = [row for row in fused if row.get("source_type") == "session_chunk"]
         assert len(chunk_rows) == 1
-        assert chunk_rows[0]["source_ranks"] == {"source_chunks": 1}
+        assert chunk_rows[0]["source_ranks"] == {"session_chunks": 1}
 
     def test_reciprocal_rank_fuse_recall_branches_raises_on_malformed_row_under_failhard(self):
         import datastore.memorydb.memory_graph as mg

@@ -169,15 +169,21 @@ CREATE TABLE IF NOT EXISTS node_domains (
 CREATE INDEX IF NOT EXISTS idx_node_domains_domain_node ON node_domains(domain, node_id);
 CREATE INDEX IF NOT EXISTS idx_node_domains_node_domain ON node_domains(node_id, domain);
 
--- Source chunks - stable transcript/source slices used as evidence provenance.
+-- Session chunks - stable transcript slices used as evidence provenance.
 -- Fact-to-chunk links and recall evidence output are layered on top separately.
 CREATE TABLE IF NOT EXISTS source_chunks (
     chunk_id TEXT PRIMARY KEY,
     source_id TEXT,
     session_id TEXT,
     chunk_index INTEGER NOT NULL,
+    chunk_kind TEXT DEFAULT 'session',
+    parent_chunk_id TEXT,
+    next_chunk_id TEXT,
+    message_id TEXT,
+    message_pair_id TEXT,
     content_hash TEXT NOT NULL,
     text TEXT NOT NULL,
+    embedding BLOB,
     token_count INTEGER DEFAULT 0,
     owner_id TEXT,
     source_channel TEXT,
@@ -203,6 +209,14 @@ CREATE INDEX IF NOT EXISTS idx_source_chunks_conversation
     ON source_chunks(owner_id, source_conversation_id, chunk_index);
 CREATE INDEX IF NOT EXISTS idx_source_chunks_project
     ON source_chunks(owner_id, project, chunk_index);
+CREATE INDEX IF NOT EXISTS idx_source_chunks_next
+    ON source_chunks(owner_id, next_chunk_id);
+CREATE INDEX IF NOT EXISTS idx_source_chunks_parent
+    ON source_chunks(owner_id, parent_chunk_id);
+CREATE INDEX IF NOT EXISTS idx_source_chunks_message
+    ON source_chunks(owner_id, message_id);
+CREATE INDEX IF NOT EXISTS idx_source_chunks_pair
+    ON source_chunks(owner_id, message_pair_id);
 
 -- Contradictions table - detected conflicting facts
 CREATE TABLE IF NOT EXISTS contradictions (

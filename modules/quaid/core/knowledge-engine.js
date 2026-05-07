@@ -21,7 +21,7 @@ function createKnowledgeEngine(deps) {
       const simRaw = Number(obj.similarity);
       const similarity = Number.isFinite(simRaw) ? Math.max(0, Math.min(1, simRaw)) : 0.5;
       const viaRaw = String(obj.via || "").trim().toLowerCase();
-      const via = viaRaw === "vector" || viaRaw === "graph" || viaRaw === "journal" || viaRaw === "project" || viaRaw === "source_chunks" ? viaRaw : "vector";
+      const via = viaRaw === "vector" || viaRaw === "graph" || viaRaw === "journal" || viaRaw === "project" || viaRaw === "session_chunks" ? viaRaw : "vector";
       const shaped = {
         text,
         category,
@@ -475,15 +475,15 @@ intent: ${intent}`;
           return recallFromProjectStore(ctx.query, ctx.limit, project, docs, ctx.opts.dateFrom, ctx.opts.dateTo);
         }
       },
-      source_chunks: {
-        key: "source_chunks",
+      session_chunks: {
+        key: "session_chunks",
         recall: async (ctx) => {
-          const maxChunkTokensRaw = Number(storeOption(ctx.opts, "source_chunks", "max_chunk_tokens"));
-          const maxTotalChunkTokensRaw = Number(storeOption(ctx.opts, "source_chunks", "max_total_chunk_tokens"));
+          const maxChunkTokensRaw = Number(storeOption(ctx.opts, "session_chunks", "max_chunk_tokens"));
+          const maxTotalChunkTokensRaw = Number(storeOption(ctx.opts, "session_chunks", "max_total_chunk_tokens"));
           const maxChunkTokens = Number.isFinite(maxChunkTokensRaw) ? maxChunkTokensRaw : ctx.opts.maxChunkTokens;
           const maxTotalChunkTokens = Number.isFinite(maxTotalChunkTokensRaw) ? maxTotalChunkTokensRaw : ctx.opts.maxTotalChunkTokens;
           return deps.recallMemory(ctx.query, ctx.limit, {
-            stores: ["source_chunks"],
+            stores: ["session_chunks"],
             domain: ctx.opts.domain || { all: true },
             domainBoost: ctx.opts.domainBoost,
             project: ctx.opts.project,

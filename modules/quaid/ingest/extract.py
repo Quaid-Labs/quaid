@@ -339,6 +339,9 @@ class _LazyMemoryService:
     def store_source_chunk(self, *args, **kwargs):
         return self._svc().store_source_chunk(*args, **kwargs)
 
+    def store_session_chunk(self, *args, **kwargs):
+        return self._svc().store_session_chunk(*args, **kwargs)
+
 
 _memory = _LazyMemoryService()
 
@@ -374,7 +377,7 @@ def _build_extraction_source_chunk_descriptor(
         "source_chunk_ref": f"chunk:{ref_hash}",
         "text": str(chunk),
         "source_id": source_key,
-        "session_id": session_id,
+        "session_id": session_id or source_key,
         "chunk_index": int(chunk_index),
         "source_channel": source_channel,
         "source_conversation_id": source_conversation_id,
@@ -424,6 +427,8 @@ def _store_payload_source_chunks(
         source_key = str(raw.get("source_id") or chunk_session_id or chunk_source_conversation_id or "").strip()
         if not source_key:
             continue
+        if not chunk_session_id:
+            chunk_session_id = source_key
         try:
             stored = _memory.store_source_chunk(
                 text=text,

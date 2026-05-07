@@ -34,10 +34,13 @@ describe("knowledge orchestrator", () => {
       "vector_basic",
       "graph",
     ]);
-    expect(engine.normalizeKnowledgeDatastores(["source_chunks"], false)).toEqual([
-      "source_chunks",
+    expect(engine.normalizeKnowledgeDatastores(["session_chunks"], false)).toEqual([
+      "session_chunks",
     ]);
-    expect(engine.normalizeKnowledgeDatastores(undefined, false)).not.toContain("source_chunks");
+    expect(engine.normalizeKnowledgeDatastores(["source_chunks"], false)).toEqual([
+      "session_chunks",
+    ]);
+    expect(engine.normalizeKnowledgeDatastores(undefined, false)).not.toContain("session_chunks");
   });
 
   it("throws when router fails and fail-open is not enabled", async () => {
@@ -143,10 +146,10 @@ describe("knowledge orchestrator", () => {
     expect(callFastRouter).toHaveBeenCalledTimes(2);
   });
 
-  it("rejects source_chunks when returned by the LLM router", async () => {
+  it("rejects session_chunks when returned by the LLM router", async () => {
     const callFastRouter = vi
-      .fn(async () => '{"query":"one","datastores":["source_chunks"]}')
-      .mockResolvedValueOnce('{"query":"two","datastores":["source_chunks"]}');
+      .fn(async () => '{"query":"one","datastores":["session_chunks"]}')
+      .mockResolvedValueOnce('{"query":"two","datastores":["session_chunks"]}');
 
     const engine = createKnowledgeEngine<Result>({
       workspace: "/tmp",
@@ -409,18 +412,18 @@ describe("knowledge orchestrator", () => {
     );
   });
 
-  it("runs source_chunks only when explicitly requested and preserves chunk metadata", async () => {
+  it("runs session_chunks only when explicitly requested and preserves chunk metadata", async () => {
     const recallMemory = vi.fn(async () => [
       {
-        text: "[source_chunk] session-1#0: User: exact transcript context",
-        category: "source_chunk",
+        text: "[session_chunk] session-1#0: User: exact transcript context",
+        category: "session_chunk",
         similarity: 0.94,
-        sourceType: "source_chunk",
+        sourceType: "session_chunk",
         sourceChunkId: "sch_test",
         chunkId: "sch_test",
         outputTokenCount: 4,
         truncated: false,
-        via: "source_chunks",
+        via: "session_chunks",
       },
     ]);
     const engine = createKnowledgeEngine<Result>({
@@ -432,7 +435,7 @@ describe("knowledge orchestrator", () => {
     });
 
     const out = await engine.recall("exact transcript context", 3, {
-      datastores: ["source_chunks"],
+      datastores: ["session_chunks"],
       expandGraph: false,
       graphDepth: 1,
       domain: { all: true },
@@ -444,14 +447,14 @@ describe("knowledge orchestrator", () => {
       "exact transcript context",
       3,
       expect.objectContaining({
-        stores: ["source_chunks"],
+        stores: ["session_chunks"],
         maxChunkTokens: 12,
         maxTotalChunkTokens: 20,
       }),
     );
     expect(out[0]).toMatchObject({
-      category: "source_chunk",
-      via: "source_chunks",
+      category: "session_chunk",
+      via: "session_chunks",
       sourceChunkId: "sch_test",
       chunkId: "sch_test",
       outputTokenCount: 4,
