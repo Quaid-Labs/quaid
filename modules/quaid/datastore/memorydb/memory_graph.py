@@ -3936,6 +3936,7 @@ def _graph_attached_fact_rows(
     def _score_and_add_fact_row(fact: "Node", *, via: str, via_relation: str, path_relation: str) -> None:
         fact_attrs = fact.attributes if isinstance(fact.attributes, dict) else {}
         fact_score = max(0.60, min(0.995, max(float(anchor_score or 0.0), 0.0) + 0.02))
+        linked_fact_priority = 1 if via == "graph_attached_fact" else 0
         row = {
             "id": fact.id,
             "text": _sanitize_for_context(fact.name),
@@ -3969,9 +3970,9 @@ def _graph_attached_fact_rows(
         anchor_text_hit = 1 if lower_anchor_text and lower_anchor_text in fact_text else 0
         informative_token_count = len(_extract_distinctive_query_terms(fact_text, limit=12))
         if relation_only_query:
-            score_key = (informative_token_count, explicit_overlap, anchor_text_hit, query_overlap, fact_score)
+            score_key = (linked_fact_priority, informative_token_count, explicit_overlap, anchor_text_hit, query_overlap, fact_score)
         else:
-            score_key = (query_overlap, explicit_overlap, anchor_text_hit, informative_token_count, fact_score)
+            score_key = (linked_fact_priority, query_overlap, explicit_overlap, anchor_text_hit, informative_token_count, fact_score)
         candidates.append((score_key, row))
 
     for edge in edges:
@@ -4018,8 +4019,13 @@ def _graph_attached_fact_rows(
             )
 
     candidates.sort(key=lambda item: item[0], reverse=True)
-    for _score, row in candidates[: max(1, int(per_anchor_limit or 1))]:
-        seen_ids.add(str(row.get("id") or ""))
+    for _score, row in candidates:
+        if len(rows) >= max(1, int(per_anchor_limit or 1)):
+            break
+        row_id = str(row.get("id") or "")
+        if row_id in seen_ids:
+            continue
+        seen_ids.add(row_id)
         rows.append(row)
     return rows
 

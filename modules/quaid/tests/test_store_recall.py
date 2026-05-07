@@ -10073,6 +10073,56 @@ class TestRecallFastHookInjectContract:
         assert "ceramics practice" in rows[0]["text"]
         assert rows[0]["via"] == "graph_attached_fact"
 
+    def test_graph_store_relation_chain_keeps_direct_terminal_facts_ahead_of_mention_bridges(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _ = _make_graph(tmp_path)
+        solomon = mg.Node.create("Person", "Solomon Steadman")
+        yuni = mg.Node.create("Person", "Yuni")
+        kai = mg.Node.create("Person", "Kai")
+        boat = mg.Node.create("Fact", "Kai builds boats")
+        long_mentions = [
+            mg.Node.create("Fact", "Travel-wise, we went to Hokkaido in January 2024 for Kai's birthday skiing in Niseko for four days then a slower week in Sapporo"),
+            mg.Node.create("Fact", "Kai's wife Mei runs a ceramics practice out of their garage with kiln schedules and clay suppliers"),
+            mg.Node.create("Fact", "Yuni's brother Kai lives near the covered market in Osaka beside the evening train line"),
+            mg.Node.create("Fact", "Kai keeps a blue notebook for family travel notes, studio errands, and weekend supply lists"),
+        ]
+        for node in (solomon, yuni, kai, boat, *long_mentions):
+            graph.add_node(node, embed=False)
+        graph.add_edge(mg.Edge.create(solomon.id, yuni.id, "spouse_of"))
+        graph.add_edge(mg.Edge.create(kai.id, yuni.id, "sibling_of"))
+        graph.add_edge(mg.Edge.create(kai.id, boat.id, "has_fact"))
+
+        fake_cfg = SimpleNamespace(
+            users=SimpleNamespace(
+                identities={"test-owner-alpha": SimpleNamespace(person_node_name="Solomon Steadman")}
+            )
+        )
+        with patch.object(mg, "get_graph", return_value=graph), \
+             patch.object(mg, "_HAS_CONFIG", True), \
+             patch.object(mg, "_get_memory_config", return_value=fake_cfg), \
+             patch.object(mg, "extract_entities_from_text", return_value=[]):
+            rows, meta, bundle = mg._run_recall_store_plan(
+                "what does my partner brother do",
+                stores=["graph"],
+                limit=5,
+                owner_id="test-owner-alpha",
+                min_similarity=0.6,
+                planner_profile="fast",
+                planned_queries=None,
+                planner_meta={"planned_stores": ["graph"]},
+                fast_mode=False,
+                graph_depth=2,
+                common_kwargs={"candidate_pool": []},
+            )
+
+        assert bundle is None
+        assert meta["store_runs"][0]["selected_path"] == "graph_aware"
+        assert any(row["id"] == boat.id for row in rows)
+        boat_row = next(row for row in rows if row["id"] == boat.id)
+        assert boat_row["via"] == "graph_attached_fact"
+        assert boat_row["graph_relation_sequence"] == ["spouse_of", "sibling_of", "has_fact"]
+
     def test_graph_store_relation_chain_prefers_guided_owner_path_over_shorter_ambiguous_sibling_path(self, tmp_path):
         import datastore.memorydb.memory_graph as mg
 
