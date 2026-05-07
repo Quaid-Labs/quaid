@@ -307,7 +307,7 @@ class RetrievalConfig:
     reranker_timeout_ms: int = 15_000  # Full-recall reranker wall timeout; preinject disables reranker entirely
     # Tuning parameters (externalized from hardcoded values)
     rrf_k: int = 60  # RRF fusion constant
-    store_plan_rrf_fusion: bool = True  # Use RRF for explicit source_chunks mixed-store plans
+    store_plan_rrf_fusion: bool = True  # Use RRF for explicit session_chunks mixed-store plans
     reranker_blend: float = 0.5  # Blend weight: reranker vs original score
     composite_relevance_weight: float = 0.60  # Weight for relevance in composite score
     composite_recency_weight: float = 0.20  # Weight for recency
