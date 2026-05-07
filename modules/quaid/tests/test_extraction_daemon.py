@@ -1982,6 +1982,148 @@ def test_process_signal_reextracts_relocated_transcript_when_content_changed(
     assert cursor["transcript_path"] == str(new_path)
 
 
+def test_process_signal_requeues_when_transcript_rebases_during_flush(monkeypatch, tmp_path):
+    from lib.adapter import set_adapter, reset_adapter
+    from ingest import extract as extract_mod
+    from core import ingest_runtime
+    from core.runtime import notify as notify_mod
+
+    session_id = "4cf66ab6-0a02-4c1d-9a76-3a9a5dc5c44e"
+    sessions_dir = tmp_path / ".quaid" / "instances" / "openclaw-main" / "logs" / "quaid" / "sessions"
+    sessions_dir.mkdir(parents=True)
+    transcript_path = sessions_dir / f"{session_id}.jsonl"
+
+    def _rows(marker: str) -> str:
+        return "\n".join([
+            f'{{"type":"session","id":"{session_id}"}}',
+            '{"type":"model_change"}',
+            '{"type":"thinking_level_change"}',
+            '{"type":"custom","customType":"model-snapshot"}',
+            f'{{"type":"message","message":{{"role":"user","content":[{{"type":"text","text":"{marker}"}}]}}}}',
+            '{"type":"custom_message","customType":"openclaw.runtime-context","content":"context"}',
+            '{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"ACK"}]}}',
+        ]) + "\n"
+
+    transcript_path.write_text(
+        _rows(
+            "chunk-one Kinesis marker with enough surrounding context for the daemon "
+            "to treat this as extractable user memory content"
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "openclaw-main")
+    source_key = extraction_daemon._signal_source_cursor_key(session_id, str(transcript_path))
+    captured = {}
+    parse_calls = {"count": 0}
+
+    class _Adapter(_OwnedTestAdapterMixin):
+        def instance_root(self):
+            return tmp_path / "instances" / "openclaw-main"
+
+        def parse_session_jsonl(self, path):
+            parse_calls["count"] += 1
+            if parse_calls["count"] == 2:
+                transcript_path.write_text(
+                    _rows(
+                        "chunk-two Baxter orange linen notebook Emília Rosa with enough "
+                        "surrounding context to represent a real OpenClaw transcript rebase"
+                    ),
+                    encoding="utf-8",
+                )
+            return (
+                "User: chunk-one Kinesis marker with enough parsed semantic context "
+                "to enter the extraction path cleanly.\nAssistant: ACK"
+            )
+
+        def is_subagent_session(self, session_id, transcript_path=None):
+            return False
+
+    set_adapter(_Adapter())
+    monkeypatch.setattr(extraction_daemon, "_get_owner_id", lambda: "owner-1")
+    monkeypatch.setattr(extraction_daemon, "_read_usage_totals", lambda: {})
+    monkeypatch.setattr(extraction_daemon, "_session_has_harvestable_subagents", lambda *args, **kwargs: False)
+    monkeypatch.setattr(extraction_daemon, "_warm_payload_embeddings", lambda _facts: {
+        "requested": 0,
+        "unique": 0,
+        "cache_hits": 0,
+        "warmed": 0,
+        "failed": 0,
+        "skipped_empty": 0,
+    })
+    monkeypatch.setattr(notify_mod, "notify_memory_extraction", lambda **_kwargs: None)
+    monkeypatch.setattr(ingest_runtime, "run_session_logs_ingest", lambda **_kwargs: {"status": "indexed"})
+
+    def fake_extract_from_transcript(transcript, **kwargs):
+        captured["transcript"] = transcript
+        return {
+            "chunks_processed": 1,
+            "chunks_total": 1,
+            "unclassified_empty_payloads": 0,
+            "raw_facts": [
+                {
+                    "text": "Solomon uses a Kinesis keyboard.",
+                    "category": "fact",
+                    "domains": ["personal"],
+                    "extraction_confidence": "high",
+                }
+            ],
+            "facts": [],
+            "soul_snippets": {},
+            "journal_entries": {},
+            "project_logs": {},
+            "raw_snippets": {},
+            "raw_journal": {},
+            "raw_project_logs": {},
+            "carry_facts": [],
+        }
+
+    monkeypatch.setattr(extract_mod, "extract_from_transcript", fake_extract_from_transcript)
+    monkeypatch.setattr(
+        extract_mod,
+        "apply_extracted_payloads",
+        lambda *_args, **_kwargs: {
+            "facts_stored": 1,
+            "facts_skipped": 0,
+            "edges_created": 0,
+            "facts": [{"text": "Solomon uses a Kinesis keyboard.", "status": "stored", "edges": []}],
+            "snippets": {},
+            "journal": {},
+            "project_log_metrics": {},
+        },
+    )
+
+    try:
+        signal_path = extraction_daemon.write_signal(
+            signal_type="session_end",
+            session_id=session_id,
+            transcript_path=str(transcript_path),
+        )
+        signal_data = json.loads(signal_path.read_text(encoding="utf-8"))
+        signal_data["_signal_path"] = str(signal_path)
+
+        extraction_daemon.process_signal(signal_data)
+    finally:
+        reset_adapter()
+
+    assert "chunk-one Kinesis marker" in captured["transcript"]
+    assert "Baxter orange linen" in transcript_path.read_text(encoding="utf-8")
+
+    cursor = extraction_daemon.read_cursor(session_id, source_key=source_key)
+    assert cursor["line_offset"] == 0
+    assert cursor["transcript_path"] == str(transcript_path)
+
+    queued = [
+        json.loads(path.read_text(encoding="utf-8"))
+        for path in extraction_daemon._signal_dir().glob("*.json")
+    ]
+    assert len(queued) == 1
+    assert queued[0]["type"] == "session_end"
+    assert queued[0]["meta"]["reason"] == "transcript_rebased_during_flush"
+    assert queued[0]["meta"]["source_cursor_key"] == source_key
+
+
 def test_process_signal_does_not_reextract_tail_after_nonrolling_semantic_stage(monkeypatch, tmp_path):
     from lib.adapter import set_adapter, reset_adapter
     from ingest import extract as extract_mod

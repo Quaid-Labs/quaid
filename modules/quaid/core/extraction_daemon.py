@@ -1021,6 +1021,33 @@ def _transcript_stat_metadata(transcript_path: str) -> Dict[str, int]:
         return {"size_bytes": 0, "mtime_ns": 0, "inode": 0, "device": 0}
 
 
+def _transcript_line_window_digest(transcript_path: str, start_line: int, line_count: int) -> Dict[str, Any]:
+    """Hash a bounded transcript line window for rebase detection."""
+    start = max(0, int(start_line or 0))
+    count = max(0, int(line_count or 0))
+    digest = hashlib.blake2b(digest_size=16)
+    lines_read = 0
+    if count <= 0:
+        return {"start_line": start, "line_count": 0, "digest": ""}
+    try:
+        with open(transcript_path, "r", encoding="utf-8", errors="replace") as f:
+            for i, line in enumerate(f):
+                if i < start:
+                    continue
+                if lines_read >= count:
+                    break
+                digest.update(line.encode("utf-8", "replace"))
+                lines_read += 1
+    except OSError as exc:
+        if _should_raise_transcript_stat_error(transcript_path, exc):
+            raise
+    return {
+        "start_line": start,
+        "line_count": lines_read,
+        "digest": digest.hexdigest() if lines_read else "",
+    }
+
+
 def _should_raise_transcript_stat_error(transcript_path: str, exc: OSError) -> bool:
     if not str(transcript_path or "").strip():
         return False
@@ -4460,6 +4487,14 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             )
             cursor_offset = 0
 
+    transcript_read_guard_start = int(cursor_offset or 0)
+    transcript_read_guard_count = max(0, int(total_lines or 0) - transcript_read_guard_start)
+    transcript_read_guard_digest = _transcript_line_window_digest(
+        transcript_path,
+        transcript_read_guard_start,
+        transcript_read_guard_count,
+    )
+
     chunk_budget = _get_capture_chunk_tokens()
     chunk_line_budget = _get_capture_chunk_max_lines()
     semantic_buffer_metrics = {
@@ -5207,6 +5242,32 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                 )
             except Exception:
                 final_cursor_offset = int(buffered_line_offset or cursor_offset or 0)
+        transcript_rebased_followup = False
+        if (
+            not rolling_mode
+            and not staged_payload_sweep_signal
+            and transcript_read_guard_count > 0
+            and final_cursor_offset >= transcript_read_guard_start + transcript_read_guard_count
+        ):
+            current_guard_digest = _transcript_line_window_digest(
+                transcript_path,
+                transcript_read_guard_start,
+                transcript_read_guard_count,
+            )
+            if current_guard_digest != transcript_read_guard_digest:
+                logger.warning(
+                    "[%s] session %s: transcript changed while flush was in flight; "
+                    "not advancing cursor past offset %d and queueing follow-up extraction "
+                    "(path=%s, read_guard=%s, current_guard=%s)",
+                    label,
+                    session_id,
+                    cursor_offset,
+                    transcript_path,
+                    json.dumps(transcript_read_guard_digest, sort_keys=True),
+                    json.dumps(current_guard_digest, sort_keys=True),
+                )
+                final_cursor_offset = int(cursor_offset or 0)
+                transcript_rebased_followup = True
         write_cursor(
             session_id,
             final_cursor_offset,
@@ -5329,7 +5390,21 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             assessment_nothing_usable=int(flush_payload.get("assessment_nothing_usable", 0) or 0),
             assessment_needs_smaller_chunk=int(flush_payload.get("assessment_needs_smaller_chunk", 0) or 0),
             unclassified_empty_payloads=int(flush_payload.get("unclassified_empty_payloads", 0) or 0),
+            transcript_rebased_during_flush=transcript_rebased_followup,
         )
+        if transcript_rebased_followup:
+            write_signal(
+                signal_type="session_end",
+                session_id=session_id,
+                transcript_path=transcript_path,
+                meta={
+                    "reason": "transcript_rebased_during_flush",
+                    "source_cursor_key": lock_owner_key,
+                    "prior_cursor_offset": int(cursor_offset or 0),
+                    "read_guard_start": transcript_read_guard_start,
+                    "read_guard_count": transcript_read_guard_count,
+                },
+            )
 
     except Exception as e:
         if _fail_hard_enabled():
