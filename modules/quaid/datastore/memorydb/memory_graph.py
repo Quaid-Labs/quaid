@@ -7,10 +7,11 @@ SQLite + Ollama embeddings for fully local memory storage.
 # Public API — everything else is internal (tests may import _ prefixed functions)
 __all__ = [
     # Data types
-    "MemoryGraph", "Node", "Edge",
+    "MemoryGraph", "Node", "Edge", "SourceChunk",
     # Core operations (CLI / plugin entry points)
     "store", "recall", "create_edge", "get_graph", "initialize_db",
     "list_domains", "register_domain",
+    "store_source_chunk", "store_source_chunks", "list_source_chunks", "get_source_chunk",
     # Graph management
     "hard_delete_node", "soft_delete", "forget", "get_memory",
     # Contradiction pipeline
@@ -191,11 +192,15 @@ class Node:
     confidence: float = 0.5
     source: Optional[str] = None
     source_id: Optional[str] = None
+    source_chunk_id: Optional[str] = None
     origin_package_id: Optional[str] = None
     origin_version_id: Optional[str] = None
     privacy: str = "shared"  # private, shared, public
     valid_from: Optional[str] = None
     valid_until: Optional[str] = None
+    occurred_start: Optional[str] = None
+    occurred_end: Optional[str] = None
+    mentioned_at: Optional[str] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
     accessed_at: Optional[str] = None
@@ -258,10 +263,88 @@ class Edge:
         )
 
 
+@dataclass
+class SourceChunk:
+    """Stable source/transcript chunk stored as evidence provenance."""
+    chunk_id: str
+    text: str
+    source_id: Optional[str] = None
+    session_id: Optional[str] = None
+    chunk_index: int = 0
+    content_hash: str = ""
+    token_count: int = 0
+    owner_id: Optional[str] = None
+    source_channel: Optional[str] = None
+    source_conversation_id: Optional[str] = None
+    conversation_id: Optional[str] = None
+    source_author_id: Optional[str] = None
+    source_type: Optional[str] = None
+    privacy: str = "shared"
+    visibility_scope: str = "source_shared"
+    sensitivity: str = "normal"
+    domains: List[str] = field(default_factory=list)
+    project: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+    @classmethod
+    def create(
+        cls,
+        text: str,
+        *,
+        source_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        chunk_index: int = 0,
+        owner_id: Optional[str] = None,
+        **kwargs: Any,
+    ) -> "SourceChunk":
+        normalized_text = _normalize_source_chunk_text(text)
+        digest = _source_chunk_content_hash(normalized_text)
+        return cls(
+            chunk_id=_source_chunk_id(
+                source_id=source_id,
+                session_id=session_id,
+                chunk_index=chunk_index,
+                content_hash=digest,
+                owner_id=owner_id,
+            ),
+            text=normalized_text,
+            source_id=source_id,
+            session_id=session_id,
+            chunk_index=chunk_index,
+            content_hash=digest,
+            owner_id=owner_id,
+            **kwargs,
+        )
+
+
 def content_hash(text: str) -> str:
     """Compute SHA256 hash of normalized text for fast exact-dedup detection."""
     normalized = " ".join(text.lower().split())
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def _normalize_source_chunk_text(text: str) -> str:
+    return str(text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+
+
+def _source_chunk_content_hash(text: str) -> str:
+    normalized = _normalize_source_chunk_text(text)
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def _source_chunk_id(
+    *,
+    source_id: Optional[str],
+    session_id: Optional[str],
+    chunk_index: int,
+    content_hash: str,
+    owner_id: Optional[str] = None,
+) -> str:
+    source_key = str(source_id or session_id or "").strip()
+    owner_key = str(owner_id or "").strip()
+    raw = "\x1f".join([owner_key, source_key, str(int(chunk_index)), str(content_hash)])
+    return "sch_" + hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
 
 
 class MemoryGraph:
@@ -273,6 +356,7 @@ class MemoryGraph:
         "nodes_fts",
         "domain_registry",
         "node_domains",
+        "source_chunks",
         "contradictions",
         "dedup_log",
         "decay_review_queue",
@@ -324,6 +408,7 @@ class MemoryGraph:
                 ("content_hash", "TEXT"),
                 ("superseded_by", "TEXT"),
                 ("knowledge_type", "TEXT DEFAULT 'fact'"),
+                ("source_chunk_id", "TEXT"),
             ]:
                 try:
                     conn.execute(f"ALTER TABLE nodes ADD COLUMN {col} {typedef}")
@@ -361,6 +446,19 @@ class MemoryGraph:
                 except sqlite3.OperationalError:
                     pass  # Column already exists
 
+            # Additive temporal provenance: distinguish when a fact happened
+            # from when Quaid learned or was told it. Recall behavior is routed
+            # separately; these fields are storage-only until that layer opts in.
+            for col, typedef in [
+                ("occurred_start", "TEXT"),
+                ("occurred_end", "TEXT"),
+                ("mentioned_at", "TEXT"),
+            ]:
+                try:
+                    conn.execute(f"ALTER TABLE nodes ADD COLUMN {col} {typedef}")
+                except sqlite3.OperationalError:
+                    pass  # Column already exists
+
             # Migrate: add keywords column to nodes
             try:
                 conn.execute("ALTER TABLE nodes ADD COLUMN keywords TEXT")
@@ -384,6 +482,7 @@ class MemoryGraph:
 
             for stmt in [
                 "CREATE INDEX IF NOT EXISTS idx_nodes_origin_package_id ON nodes(origin_package_id)",
+                "CREATE INDEX IF NOT EXISTS idx_nodes_source_chunk ON nodes(source_chunk_id)",
                 "CREATE INDEX IF NOT EXISTS idx_edges_origin_package_id ON edges(origin_package_id)",
             ]:
                 try:
@@ -947,6 +1046,304 @@ class MemoryGraph:
         return set(active_map.keys())
 
     # ==========================================================================
+    # Source Chunk Operations
+    # ==========================================================================
+
+    def _ensure_source_chunks_table(self, conn: sqlite3.Connection) -> None:
+        """Repair additive source chunk storage for already-open legacy DBs."""
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS source_chunks (
+                chunk_id TEXT PRIMARY KEY,
+                source_id TEXT,
+                session_id TEXT,
+                chunk_index INTEGER NOT NULL,
+                content_hash TEXT NOT NULL,
+                text TEXT NOT NULL,
+                token_count INTEGER DEFAULT 0,
+                owner_id TEXT,
+                source_channel TEXT,
+                source_conversation_id TEXT,
+                conversation_id TEXT,
+                source_author_id TEXT,
+                source_type TEXT,
+                privacy TEXT DEFAULT 'shared' CHECK(privacy IN ('private', 'shared', 'public')),
+                visibility_scope TEXT DEFAULT 'source_shared',
+                sensitivity TEXT DEFAULT 'normal',
+                domains TEXT DEFAULT '[]',
+                project TEXT,
+                created_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT DEFAULT (datetime('now'))
+            )
+            """
+        )
+        for stmt in (
+            "CREATE INDEX IF NOT EXISTS idx_source_chunks_session_index ON source_chunks(owner_id, session_id, chunk_index, created_at)",
+            "CREATE INDEX IF NOT EXISTS idx_source_chunks_source_index ON source_chunks(owner_id, source_id, chunk_index, created_at)",
+            "CREATE INDEX IF NOT EXISTS idx_source_chunks_content_hash ON source_chunks(content_hash)",
+            "CREATE INDEX IF NOT EXISTS idx_source_chunks_conversation ON source_chunks(owner_id, source_conversation_id, chunk_index)",
+            "CREATE INDEX IF NOT EXISTS idx_source_chunks_project ON source_chunks(owner_id, project, chunk_index)",
+        ):
+            conn.execute(stmt)
+
+    def _row_to_source_chunk(self, row: sqlite3.Row) -> Dict[str, Any]:
+        domains_raw = row["domains"] if "domains" in row.keys() else "[]"
+        try:
+            domains = json.loads(domains_raw) if domains_raw else []
+        except (TypeError, ValueError):
+            domains = []
+        return {
+            "chunk_id": row["chunk_id"],
+            "source_id": row["source_id"],
+            "session_id": row["session_id"],
+            "chunk_index": int(row["chunk_index"] or 0),
+            "content_hash": row["content_hash"],
+            "text": row["text"],
+            "token_count": int(row["token_count"] or 0),
+            "owner_id": row["owner_id"],
+            "source_channel": row["source_channel"],
+            "source_conversation_id": row["source_conversation_id"],
+            "conversation_id": row["conversation_id"],
+            "source_author_id": row["source_author_id"],
+            "source_type": row["source_type"],
+            "privacy": row["privacy"],
+            "visibility_scope": row["visibility_scope"],
+            "sensitivity": row["sensitivity"],
+            "domains": _normalize_domains(domains),
+            "project": row["project"],
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        }
+
+    def store_source_chunk(
+        self,
+        text: str,
+        *,
+        source_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        chunk_index: int = 0,
+        owner_id: Optional[str] = None,
+        source_channel: Optional[str] = None,
+        source_conversation_id: Optional[str] = None,
+        conversation_id: Optional[str] = None,
+        source_author_id: Optional[str] = None,
+        source_type: Optional[str] = None,
+        privacy: str = "shared",
+        visibility_scope: Optional[str] = None,
+        sensitivity: Optional[str] = None,
+        domains: Optional[List[str]] = None,
+        project: Optional[str] = None,
+        token_count: Optional[int] = None,
+        created_at: Optional[str] = None,
+        conn: Optional[sqlite3.Connection] = None,
+    ) -> Dict[str, Any]:
+        """Append a stable transcript/source chunk without changing recall output.
+
+        Same content at the same owner/source/index returns the existing chunk.
+        Changed content at the same index appends another row; callers that need
+        the latest evolving chunk should take the last row for that chunk_index.
+        """
+        normalized_text = _normalize_source_chunk_text(text)
+        if not normalized_text:
+            raise ValueError("Source chunk text cannot be empty")
+        if not source_id and not session_id:
+            raise ValueError("source_id or session_id is required for source chunks")
+        try:
+            normalized_index = int(chunk_index)
+        except Exception as exc:
+            raise ValueError(f"chunk_index must be an integer, got {chunk_index!r}") from exc
+        if normalized_index < 0:
+            raise ValueError("chunk_index must be non-negative")
+
+        if not owner_id:
+            try:
+                owner_id = _get_memory_config().users.default_owner
+            except Exception as exc:
+                logger.warning(
+                    "store_source_chunk failed to read default owner; using 'default': %s",
+                    exc,
+                )
+                owner_id = "default"
+        owner_id = str(owner_id).strip() or "default"
+        source_id = str(source_id or session_id or "").strip() or None
+        session_id = str(session_id or "").strip() or None
+        if conversation_id and not source_conversation_id:
+            source_conversation_id = conversation_id
+        project = _normalize_project_tag(project)
+        domains = _sanitize_domains_for_project(domains, project)
+        if privacy not in {"private", "shared", "public"}:
+            raise ValueError(f"Unsupported source chunk privacy: {privacy!r}")
+        if source_type is not None:
+            source_type = str(source_type).strip().lower() or None
+            if source_type == "agent":
+                source_type = "assistant"
+        visibility_scope = str(visibility_scope or "source_shared").strip() or "source_shared"
+        sensitivity = str(sensitivity or "normal").strip() or "normal"
+        now_iso = _now_iso()
+        created = created_at or now_iso
+        count = int(token_count) if token_count is not None else int(_lib_estimate_tokens(normalized_text))
+        count = max(0, count)
+        chunk = SourceChunk.create(
+            normalized_text,
+            source_id=source_id,
+            session_id=session_id,
+            chunk_index=normalized_index,
+            owner_id=owner_id,
+            token_count=count,
+            source_channel=source_channel,
+            source_conversation_id=source_conversation_id,
+            conversation_id=conversation_id or source_conversation_id,
+            source_author_id=source_author_id,
+            source_type=source_type,
+            privacy=privacy,
+            visibility_scope=visibility_scope,
+            sensitivity=sensitivity,
+            domains=domains,
+            project=project,
+            created_at=created,
+            updated_at=now_iso,
+        )
+
+        conn_cm = nullcontext(conn) if conn is not None else self._get_conn()
+        with conn_cm as active_conn:
+            self._ensure_source_chunks_table(active_conn)
+            cursor = active_conn.execute(
+                """
+                INSERT OR IGNORE INTO source_chunks
+                (chunk_id, source_id, session_id, chunk_index, content_hash, text,
+                 token_count, owner_id, source_channel, source_conversation_id,
+                 conversation_id, source_author_id, source_type, privacy,
+                 visibility_scope, sensitivity, domains, project, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    chunk.chunk_id,
+                    chunk.source_id,
+                    chunk.session_id,
+                    chunk.chunk_index,
+                    chunk.content_hash,
+                    chunk.text,
+                    chunk.token_count,
+                    chunk.owner_id,
+                    chunk.source_channel,
+                    chunk.source_conversation_id,
+                    chunk.conversation_id,
+                    chunk.source_author_id,
+                    chunk.source_type,
+                    chunk.privacy,
+                    chunk.visibility_scope,
+                    chunk.sensitivity,
+                    json.dumps(chunk.domains, sort_keys=True),
+                    chunk.project,
+                    chunk.created_at or now_iso,
+                    chunk.updated_at or now_iso,
+                ),
+            )
+            row = active_conn.execute(
+                "SELECT * FROM source_chunks WHERE chunk_id = ?",
+                (chunk.chunk_id,),
+            ).fetchone()
+        out = self._row_to_source_chunk(row) if row else asdict(chunk)
+        out["status"] = "created" if cursor.rowcount > 0 else "existing"
+        return out
+
+    def store_source_chunks(
+        self,
+        chunks: List[str],
+        *,
+        source_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        owner_id: Optional[str] = None,
+        start_index: int = 0,
+        **kwargs: Any,
+    ) -> List[Dict[str, Any]]:
+        out: List[Dict[str, Any]] = []
+        for offset, text in enumerate(chunks or []):
+            if not _normalize_source_chunk_text(text):
+                continue
+            out.append(
+                self.store_source_chunk(
+                    text,
+                    source_id=source_id,
+                    session_id=session_id,
+                    owner_id=owner_id,
+                    chunk_index=start_index + offset,
+                    **kwargs,
+                )
+            )
+        return out
+
+    def list_source_chunks(
+        self,
+        *,
+        chunk_id: Optional[str] = None,
+        source_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        owner_id: Optional[str] = None,
+        source_conversation_id: Optional[str] = None,
+        domains: Optional[List[str]] = None,
+        project: Optional[str] = None,
+        limit: int = 100,
+    ) -> List[Dict[str, Any]]:
+        clauses: List[str] = []
+        params: List[Any] = []
+        for column, value in [
+            ("chunk_id", chunk_id),
+            ("source_id", source_id),
+            ("session_id", session_id),
+            ("owner_id", owner_id),
+            ("source_conversation_id", source_conversation_id),
+        ]:
+            if value is not None:
+                clauses.append(f"{column} = ?")
+                params.append(str(value))
+        normalized_project = _normalize_project_tag(project)
+        if normalized_project:
+            clauses.append("project = ?")
+            params.append(normalized_project)
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        requested_domains = set(_normalize_domains(domains))
+        try:
+            normalized_limit = max(1, min(int(limit), 1000))
+        except Exception:
+            normalized_limit = 100
+        with self._get_conn() as conn:
+            self._ensure_source_chunks_table(conn)
+            rows = conn.execute(
+                f"""
+                SELECT * FROM source_chunks
+                {where}
+                ORDER BY chunk_index ASC, created_at ASC, chunk_id ASC
+                LIMIT ?
+                """,
+                [*params, normalized_limit],
+            ).fetchall()
+        out = [self._row_to_source_chunk(row) for row in rows]
+        if requested_domains:
+            out = [
+                row for row in out
+                if requested_domains.intersection(set(_normalize_domains(row.get("domains"))))
+            ]
+        return out
+
+    def get_source_chunk(
+        self,
+        chunk_id: str,
+        *,
+        owner_id: Optional[str] = None,
+        domains: Optional[List[str]] = None,
+        project: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        rows = self.list_source_chunks(
+            chunk_id=chunk_id,
+            owner_id=owner_id,
+            domains=domains,
+            project=project,
+            limit=1,
+        )
+        return rows[0] if rows else None
+
+    # ==========================================================================
     # Node Operations
     # ==========================================================================
 
@@ -979,13 +1376,14 @@ class MemoryGraph:
             active_conn.execute("""
                 INSERT OR REPLACE INTO nodes
                 (id, type, name, attributes, embedding, verified, pinned, confidence,
-                 source, source_id, origin_package_id, origin_version_id,
+                 source, source_id, source_chunk_id, origin_package_id, origin_version_id,
                  privacy, valid_from, valid_until,
+                 occurred_start, occurred_end, mentioned_at,
                  created_at, updated_at, accessed_at, access_count, storage_strength, owner_id, session_id,
                  fact_type, knowledge_type, extraction_confidence, status, speaker, speaker_entity_id,
                  conversation_id, visibility_scope, sensitivity, provenance_confidence,
                  content_hash, superseded_by, confirmation_count, last_confirmed_at, keywords)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 node.id, node.type, node.name,
                 json.dumps(node.attributes),
@@ -993,10 +1391,11 @@ class MemoryGraph:
                 1 if node.verified else 0,
                 1 if node.pinned else 0,
                 node.confidence,
-                node.source, node.source_id,
+                node.source, node.source_id, node.source_chunk_id,
                 node.origin_package_id, node.origin_version_id,
                 node.privacy,
                 node.valid_from, node.valid_until,
+                node.occurred_start, node.occurred_end, node.mentioned_at,
                 node.created_at or now_iso,
                 now_iso,
                 node.accessed_at or now_iso,
@@ -1079,8 +1478,9 @@ class MemoryGraph:
                 UPDATE nodes SET
                     type = ?, name = ?, attributes = ?, embedding = ?,
                     verified = ?, pinned = ?, confidence = ?,
-                    source = ?, source_id = ?, origin_package_id = ?, origin_version_id = ?, privacy = ?,
+                    source = ?, source_id = ?, source_chunk_id = ?, origin_package_id = ?, origin_version_id = ?, privacy = ?,
                     valid_from = ?, valid_until = ?,
+                    occurred_start = ?, occurred_end = ?, mentioned_at = ?,
                     updated_at = ?, accessed_at = ?, access_count = ?,
                     storage_strength = ?,
                     owner_id = ?, session_id = ?,
@@ -1099,10 +1499,11 @@ class MemoryGraph:
                 1 if node.verified else 0,
                 1 if node.pinned else 0,
                 node.confidence,
-                node.source, node.source_id,
+                node.source, node.source_id, node.source_chunk_id,
                 node.origin_package_id, node.origin_version_id,
                 node.privacy,
                 node.valid_from, node.valid_until,
+                node.occurred_start, node.occurred_end, node.mentioned_at,
                 now_iso,
                 node.accessed_at or now_iso,
                 node.access_count,
@@ -1307,11 +1708,15 @@ class MemoryGraph:
             confidence=row['confidence'],
             source=row['source'],
             source_id=row['source_id'],
+            source_chunk_id=row['source_chunk_id'] if 'source_chunk_id' in row.keys() else None,
             origin_package_id=row['origin_package_id'] if 'origin_package_id' in row.keys() else None,
             origin_version_id=row['origin_version_id'] if 'origin_version_id' in row.keys() else None,
             privacy=row['privacy'],
             valid_from=row['valid_from'],
             valid_until=row['valid_until'],
+            occurred_start=row['occurred_start'] if 'occurred_start' in row.keys() else None,
+            occurred_end=row['occurred_end'] if 'occurred_end' in row.keys() else None,
+            mentioned_at=row['mentioned_at'] if 'mentioned_at' in row.keys() else None,
             created_at=row['created_at'],
             updated_at=row['updated_at'],
             accessed_at=row['accessed_at'],
@@ -3548,6 +3953,7 @@ def _graph_attached_fact_rows(
             "project": fact_attrs.get("project"),
             "source_type": fact_attrs.get("source_type"),
             "structural_anchor_kind": fact_attrs.get("structural_anchor_kind"),
+            "keywords": getattr(fact, "keywords", None),
             "extraction_confidence": getattr(fact, "extraction_confidence", None),
             "privacy": getattr(fact, "privacy", None),
             "owner_id": getattr(fact, "owner_id", None),
@@ -3629,6 +4035,7 @@ def graph_aware_recall(
     project: Optional[str] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
+    temporal_dimension: Optional[str] = None,
     timeout_ms: Optional[int] = None,
     fast_mode: bool = False,
     candidate_pool: Optional[List[Dict[str, Any]]] = None,
@@ -3653,6 +4060,7 @@ def graph_aware_recall(
         graph_depth = 1
     date_from = _normalize_recall_date_bound(date_from)
     date_to = _normalize_recall_date_bound(date_to)
+    temporal_dimension = _normalize_recall_temporal_dimension(temporal_dimension)
     graph = get_graph()
 
     results = {
@@ -3740,6 +4148,7 @@ def graph_aware_recall(
             project=project,
             date_from=date_from,
             date_to=date_to,
+            temporal_dimension=temporal_dimension,
             use_multi_pass=False,
             use_reranker=False,
             include_graph_traversal=False,
@@ -3759,6 +4168,7 @@ def graph_aware_recall(
             direct_all,
             date_from=date_from,
             date_to=date_to,
+            temporal_dimension=temporal_dimension,
         )
     direct = [r for r in direct_all if str(r.get("category", "")).lower() == "fact"]
     results["direct_results"] = direct[:limit]  # Ensure limit is respected
@@ -3958,11 +4368,13 @@ def graph_aware_recall(
             results["direct_results"],
             date_from=date_from,
             date_to=date_to,
+            temporal_dimension=temporal_dimension,
         )
         results["graph_results"] = _filter_recall_rows_by_date_bounds(
             results["graph_results"],
             date_from=date_from,
             date_to=date_to,
+            temporal_dimension=temporal_dimension,
         )
 
     results["source_breakdown"]["graph_count"] = len(results["graph_results"])
@@ -4081,6 +4493,26 @@ def register_domain(domain: str, description: str = "", active: bool = True) -> 
         "active": bool(active),
         "active_domains": sorted(active_domains.keys()),
     }
+
+
+def store_source_chunk(text: str, **kwargs: Any) -> Dict[str, Any]:
+    """Store one stable source chunk in the active memory DB."""
+    return get_graph().store_source_chunk(text, **kwargs)
+
+
+def store_source_chunks(chunks: List[str], **kwargs: Any) -> List[Dict[str, Any]]:
+    """Store source chunks using deterministic per-source chunk IDs."""
+    return get_graph().store_source_chunks(chunks, **kwargs)
+
+
+def list_source_chunks(**kwargs: Any) -> List[Dict[str, Any]]:
+    """List stored source chunks without changing recall behavior."""
+    return get_graph().list_source_chunks(**kwargs)
+
+
+def get_source_chunk(chunk_id: str, **kwargs: Any) -> Optional[Dict[str, Any]]:
+    """Fetch one stored source chunk by ID."""
+    return get_graph().get_source_chunk(chunk_id, **kwargs)
 
 
 def search(
@@ -4375,6 +4807,7 @@ def _compute_composite_score(
     intent: str = "GENERAL",
     prefer_fresh: bool = False,
     target_date: str = "",
+    temporal_dimension: Any = None,
 ) -> float:
     """Compute composite score mixing search relevance, recency, and frequency.
 
@@ -4484,7 +4917,14 @@ def _compute_composite_score(
     if prefer_fresh and temporal_penalty > 0.0:
         temporal_penalty = min(0.6, temporal_penalty * 1.5)
     composite = max(0.0, composite - temporal_penalty)
-    composite = max(0.0, composite + _asof_temporal_score_delta(node, target_date))
+    composite = max(
+        0.0,
+        composite + _asof_temporal_score_delta(
+            node,
+            target_date,
+            temporal_dimension=temporal_dimension,
+        ),
+    )
 
     return min(composite, 1.0)
 
@@ -4729,6 +5169,11 @@ def _rerank_via_llm(query: str, candidates: List[tuple], instruction: str, confi
 
         elapsed_ms = int((time.monotonic() - start_monotonic) * 1000)
         if elapsed_ms > reranker_timeout_ms:
+            if _is_fail_hard_mode():
+                raise RuntimeError(
+                    "Recall reranker exceeded its timeout while failHard is enabled "
+                    f"(elapsed_ms={elapsed_ms}, timeout_ms={reranker_timeout_ms})"
+                )
             logger.info(
                 "[memory][reranker] slow response (%sms > %sms limit); returning original ranking",
                 elapsed_ms,
@@ -4737,6 +5182,8 @@ def _rerank_via_llm(query: str, candidates: List[tuple], instruction: str, confi
             return [(node, score) for node, score in candidates]
 
         if not response:
+            if _is_fail_hard_mode():
+                raise RuntimeError("Recall reranker returned no response while failHard is enabled")
             return [(node, score) for node, score in candidates]
 
         # Parse responses: "1. 4\n2. 0\n..."
@@ -4785,6 +5232,11 @@ def _rerank_via_llm(query: str, candidates: List[tuple], instruction: str, confi
         return reranked
     except Exception as exc:
         elapsed_ms = int((time.monotonic() - start_monotonic) * 1000)
+        if _is_fail_hard_mode():
+            raise RuntimeError(
+                "Recall reranker failed while failHard is enabled "
+                f"(elapsed_ms={elapsed_ms}, timeout_ms={reranker_timeout_ms}, cause={type(exc).__name__}: {exc})"
+            ) from exc
         if elapsed_ms >= reranker_timeout_ms:
             logger.info(
                 "[memory][reranker] slow response (%sms, limit=%sms); returning original ranking",
@@ -5013,7 +5465,256 @@ def _validate_docs_bundle(bundle: Any) -> Dict[str, Any]:
     }
 
 
-def _return_validated_recall(rows: Any, meta: Optional[Dict[str, Any]], return_meta: bool) -> Any:
+def _normalize_source_chunk_output_token_limit(max_chunk_tokens: Optional[int]) -> int:
+    try:
+        value = int(max_chunk_tokens) if max_chunk_tokens is not None else 512
+    except (TypeError, ValueError):
+        value = 512
+    return max(1, min(value, 4000))
+
+
+def _normalize_source_chunk_total_token_limit(max_total_chunk_tokens: Optional[int]) -> int:
+    try:
+        value = int(max_total_chunk_tokens) if max_total_chunk_tokens is not None else 2048
+    except (TypeError, ValueError):
+        value = 2048
+    return max(1, min(value, 16000))
+
+
+def _truncate_source_chunk_output_text(text: str, *, max_chunk_tokens: int) -> Tuple[str, bool, int]:
+    clean = str(text or "")
+    token_count = int(_lib_estimate_tokens(clean))
+    if token_count <= max_chunk_tokens:
+        return clean, False, token_count
+
+    lo = 0
+    hi = len(clean)
+    best = ""
+    best_tokens = 0
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        candidate = clean[:mid].rstrip()
+        candidate_tokens = int(_lib_estimate_tokens(candidate))
+        if candidate_tokens <= max_chunk_tokens:
+            best = candidate
+            best_tokens = candidate_tokens
+            lo = mid + 1
+        else:
+            hi = mid - 1
+    return best, True, best_tokens
+
+
+def _source_chunk_recall_payload(chunk: Dict[str, Any], *, max_chunk_tokens: int) -> Dict[str, Any]:
+    text, truncated, output_tokens = _truncate_source_chunk_output_text(
+        str(chunk.get("text") or ""),
+        max_chunk_tokens=max_chunk_tokens,
+    )
+    return {
+        "chunk_id": chunk.get("chunk_id"),
+        "text": text,
+        "truncated": bool(truncated),
+        "output_token_count": int(output_tokens),
+        "token_count": int(chunk.get("token_count") or 0),
+        "source_id": chunk.get("source_id"),
+        "session_id": chunk.get("session_id"),
+        "chunk_index": chunk.get("chunk_index"),
+        "content_hash": chunk.get("content_hash"),
+        "source_channel": chunk.get("source_channel"),
+        "source_conversation_id": chunk.get("source_conversation_id"),
+        "conversation_id": chunk.get("conversation_id"),
+        "source_author_id": chunk.get("source_author_id"),
+        "source_type": chunk.get("source_type"),
+        "privacy": chunk.get("privacy"),
+        "visibility_scope": chunk.get("visibility_scope"),
+        "sensitivity": chunk.get("sensitivity"),
+        "domains": chunk.get("domains"),
+        "project": chunk.get("project"),
+        "created_at": chunk.get("created_at"),
+    }
+
+
+def _attach_source_chunks_to_recall_rows(
+    rows: Any,
+    *,
+    max_chunk_tokens: Optional[int] = None,
+    max_total_chunk_tokens: Optional[int] = None,
+) -> Tuple[Any, Dict[str, Any]]:
+    """Attach bounded source chunk evidence to already-selected recall rows."""
+    if rows is None:
+        normalized_rows: List[Any] = []
+    elif isinstance(rows, list):
+        normalized_rows = [dict(row) if isinstance(row, dict) else row for row in rows]
+    else:
+        normalized_rows = rows
+    token_limit = _normalize_source_chunk_output_token_limit(max_chunk_tokens)
+    total_token_limit = _normalize_source_chunk_total_token_limit(max_total_chunk_tokens)
+    summary = {
+        "requested": True,
+        "attached": 0,
+        "missing": 0,
+        "omitted": 0,
+        "linked_rows": 0,
+        "max_chunk_tokens": token_limit,
+        "max_total_chunk_tokens": total_token_limit,
+        "output_token_count": 0,
+        "failed": False,
+    }
+    if not isinstance(normalized_rows, list) or not normalized_rows:
+        return normalized_rows, summary
+
+    row_ids = [
+        str(row.get("id") or "").strip()
+        for row in normalized_rows
+        if isinstance(row, dict) and str(row.get("id") or "").strip()
+    ]
+    try:
+        graph = get_graph()
+        id_to_link: Dict[str, Tuple[Optional[str], Optional[str]]] = {}
+        chunk_owner_pairs: set[Tuple[str, str]] = set()
+        with graph._get_conn() as conn:
+            if row_ids:
+                placeholders = ",".join("?" for _ in row_ids)
+                for db_row in conn.execute(
+                    f"SELECT id, source_chunk_id, owner_id FROM nodes WHERE id IN ({placeholders})",
+                    row_ids,
+                ).fetchall():
+                    chunk_id = str(db_row["source_chunk_id"] or "").strip() or None
+                    owner = str(db_row["owner_id"] or "").strip() or None
+                    id_to_link[str(db_row["id"])] = (chunk_id, owner)
+                    if chunk_id and owner:
+                        chunk_owner_pairs.add((chunk_id, owner))
+            for row in normalized_rows:
+                if not isinstance(row, dict):
+                    continue
+                row_chunk_id = str(row.get("source_chunk_id") or "").strip()
+                row_owner = str(row.get("owner_id") or "").strip()
+                if row_chunk_id and row_owner:
+                    chunk_owner_pairs.add((row_chunk_id, row_owner))
+            chunks_by_key: Dict[Tuple[str, str], Dict[str, Any]] = {}
+            if chunk_owner_pairs:
+                graph._ensure_source_chunks_table(conn)
+                sorted_pairs = sorted(chunk_owner_pairs)
+                clauses = " OR ".join("(chunk_id = ? AND owner_id = ?)" for _ in sorted_pairs)
+                params = [value for pair in sorted_pairs for value in pair]
+                for db_row in conn.execute(
+                    f"SELECT * FROM source_chunks WHERE {clauses}",
+                    params,
+                ).fetchall():
+                    chunk = graph._row_to_source_chunk(db_row)
+                    chunk_id = str(chunk.get("chunk_id") or "").strip()
+                    chunk_owner = str(chunk.get("owner_id") or "").strip()
+                    if chunk_id and chunk_owner:
+                        chunks_by_key[(chunk_id, chunk_owner)] = chunk
+    except Exception as exc:
+        if _is_fail_hard_mode():
+            raise RuntimeError("Failed to attach source chunks to recall results") from exc
+        logger.warning(
+            "[recall] include_chunks failed while reading source chunks: %s",
+            exc,
+            exc_info=True,
+        )
+        summary["failed"] = True
+        return normalized_rows, summary
+
+    for row in normalized_rows:
+        if not isinstance(row, dict):
+            continue
+        row_id = str(row.get("id") or "").strip()
+        chunk_id = str(row.get("source_chunk_id") or "").strip() or None
+        row_owner = str(row.get("owner_id") or "").strip() or None
+        if not chunk_id and row_id:
+            chunk_id, linked_owner = id_to_link.get(row_id, (None, None))
+            row_owner = row_owner or linked_owner
+        if not chunk_id:
+            continue
+        summary["linked_rows"] += 1
+        row["source_chunk_id"] = chunk_id
+        if not row_owner:
+            summary["missing"] += 1
+            row["source_chunk_missing"] = True
+            if _is_fail_hard_mode():
+                raise RuntimeError(
+                    f"Recall result source chunk owner missing: result={row_id} chunk={chunk_id}"
+                )
+            logger.warning(
+                "[recall] include_chunks owner missing for result %s chunk %s",
+                row_id,
+                chunk_id,
+            )
+            continue
+        chunk = chunks_by_key.get((chunk_id, row_owner))
+        if not chunk:
+            summary["missing"] += 1
+            row["source_chunk_missing"] = True
+            if _is_fail_hard_mode():
+                raise RuntimeError(f"Recall result references missing source chunk: {chunk_id}")
+            logger.warning("[recall] include_chunks missing source chunk %s for result %s", chunk_id, row_id)
+            continue
+        chunk_owner = str(chunk.get("owner_id") or "").strip() or None
+        if chunk_owner != row_owner:
+            summary["missing"] += 1
+            row["source_chunk_missing"] = True
+            if _is_fail_hard_mode():
+                raise RuntimeError(
+                    f"Recall result source chunk owner mismatch: result={row_id} chunk={chunk_id}"
+                )
+            logger.warning(
+                "[recall] include_chunks owner mismatch for result %s chunk %s",
+                row_id,
+                chunk_id,
+            )
+            continue
+        remaining_tokens = total_token_limit - int(summary.get("output_token_count") or 0)
+        if remaining_tokens <= 0:
+            summary["omitted"] += 1
+            row["source_chunk_omitted"] = True
+            continue
+        row_token_limit = min(token_limit, remaining_tokens)
+        source_chunk = _source_chunk_recall_payload(chunk, max_chunk_tokens=row_token_limit)
+        row["source_chunk"] = source_chunk
+        summary["output_token_count"] = int(summary.get("output_token_count") or 0) + int(
+            source_chunk.get("output_token_count") or 0
+        )
+        summary["attached"] += 1
+    return normalized_rows, summary
+
+
+def _prepare_recall_output_rows(
+    rows: Any,
+    meta: Optional[Dict[str, Any]],
+    *,
+    include_chunks: bool = False,
+    max_chunk_tokens: Optional[int] = None,
+    max_total_chunk_tokens: Optional[int] = None,
+) -> Tuple[Any, Optional[Dict[str, Any]]]:
+    if not include_chunks:
+        return rows, meta
+    output_rows, source_chunk_meta = _attach_source_chunks_to_recall_rows(
+        rows,
+        max_chunk_tokens=max_chunk_tokens,
+        max_total_chunk_tokens=max_total_chunk_tokens,
+    )
+    output_meta = dict(meta or {})
+    output_meta["source_chunks"] = source_chunk_meta
+    return output_rows, output_meta
+
+
+def _return_validated_recall(
+    rows: Any,
+    meta: Optional[Dict[str, Any]],
+    return_meta: bool,
+    *,
+    include_chunks: bool = False,
+    max_chunk_tokens: Optional[int] = None,
+    max_total_chunk_tokens: Optional[int] = None,
+) -> Any:
+    rows, meta = _prepare_recall_output_rows(
+        rows,
+        meta,
+        include_chunks=include_chunks,
+        max_chunk_tokens=max_chunk_tokens,
+        max_total_chunk_tokens=max_total_chunk_tokens,
+    )
     validated_rows = _validate_recall_result_rows(rows)
     if isinstance(meta, dict):
         _attach_recall_meta(validated_rows, meta)
@@ -5059,7 +5760,7 @@ def _resolve_recall_store_request(cfg: Dict[str, Any]) -> Tuple[List[str], Dict[
 
 
 def _normalize_store_plan(stores: Optional[List[str]]) -> List[str]:
-    allowed = {"vector", "graph", "docs"}
+    allowed = {"vector", "graph", "docs", "source_chunks"}
     out: List[str] = []
     for store in list(stores or []):
         name = str(store or "").strip().lower()
@@ -5074,6 +5775,12 @@ def _planner_store_plan(stores: Optional[List[str]]) -> List[str]:
     if "vector" not in out and ("docs" in out or "graph" in out):
         out.insert(0, "vector")
     return out
+
+
+def _should_run_recall_store_plan(store_names: Optional[List[str]], *, use_fast: bool) -> bool:
+    """Use the store-plan runner for fast, mixed, or non-vector explicit stores."""
+    normalized = _normalize_store_plan(store_names)
+    return bool(use_fast) or len(normalized) > 1 or any(store != "vector" for store in normalized)
 
 
 def _infer_edge_entity_type(name: str, relation: str, is_subject: bool) -> str:
@@ -5379,6 +6086,10 @@ def _filter_supported_kwargs(fn: Any, kwargs: Dict[str, Any]) -> Dict[str, Any]:
     if any(param.kind == inspect.Parameter.VAR_KEYWORD for param in params.values()):
         return dict(kwargs)
     return {key: value for key, value in kwargs.items() if key in params}
+
+
+_RECALL_JSON_PLANNER_MAX_TOKENS = 768
+_LEXICAL_ANCHOR_JSON_PLANNER_MAX_TOKENS = 512
 
 
 _DOCS_PROJECT_LOG_LINE_DATE_RE = re.compile(
@@ -5834,6 +6545,193 @@ def _docs_store_recall(
     return rows, meta, bundle
 
 
+def _source_chunk_query_terms(query: str, *, limit: int = 10) -> List[str]:
+    terms: List[str] = []
+    seen: set[str] = set()
+    for raw in list(_extract_explicit_query_anchor_terms(query, limit=limit)) + list(
+        _extract_distinctive_query_terms(query, limit=limit)
+    ):
+        term = " ".join(str(raw or "").split()).strip().lower()
+        if not term or term in seen:
+            continue
+        seen.add(term)
+        terms.append(term)
+        if len(terms) >= limit:
+            break
+    return terms
+
+
+def _source_chunk_store_recall(
+    query: str,
+    *,
+    owner_id: Optional[str],
+    limit: int,
+    domain: Optional[Dict[str, bool]],
+    project: Optional[str],
+    current_session_id: Optional[str] = None,
+    source_channel: Optional[str] = None,
+    source_conversation_id: Optional[str] = None,
+    max_chunk_tokens: Optional[int] = None,
+    max_total_chunk_tokens: Optional[int] = None,
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any], Optional[Dict[str, Any]]]:
+    """Opt-in source chunk recall lane for exact transcript/source context."""
+    started = time.monotonic()
+    token_limit = _normalize_source_chunk_output_token_limit(max_chunk_tokens)
+    total_token_limit = _normalize_source_chunk_total_token_limit(max_total_chunk_tokens)
+    terms = _source_chunk_query_terms(query, limit=10)
+    meta: Dict[str, Any] = {
+        "selected_path": "source_chunk_store",
+        "query_terms_count": len(terms),
+        "max_chunk_tokens": token_limit,
+        "max_total_chunk_tokens": total_token_limit,
+        "counts": {"final_results": 0},
+        "source_chunk_telemetry": {
+            "owner_scoped": bool(str(owner_id or "").strip()),
+            "omitted": 0,
+            "output_token_count": 0,
+        },
+    }
+    if not str(owner_id or "").strip():
+        if _is_fail_hard_mode():
+            raise RuntimeError("source_chunks recall requires owner_id")
+        logger.warning("[recall] source_chunks store requested without owner_id; returning no chunks")
+        meta["stop_reason"] = "missing_owner"
+        meta["phases_ms"] = {"total_ms": round((time.monotonic() - started) * 1000)}
+        return [], meta, None
+    if not terms:
+        meta["stop_reason"] = "no_query_terms"
+        meta["phases_ms"] = {"total_ms": round((time.monotonic() - started) * 1000)}
+        return [], meta, None
+
+    graph = get_graph()
+    clauses = ["owner_id = ?"]
+    params: List[Any] = [str(owner_id).strip()]
+    normalized_project = _normalize_project_tag(project)
+    if normalized_project:
+        clauses.append("project = ?")
+        params.append(normalized_project)
+    if current_session_id:
+        clauses.append("session_id = ?")
+        params.append(str(current_session_id))
+    if source_conversation_id:
+        clauses.append("source_conversation_id = ?")
+        params.append(str(source_conversation_id))
+    if source_channel:
+        clauses.append("source_channel = ?")
+        params.append(str(source_channel))
+
+    like_terms = sorted(terms, key=lambda value: (len(value), value), reverse=True)[:5]
+    like_clauses: List[str] = []
+    for term in like_terms:
+        like_clauses.append("LOWER(text) LIKE ?")
+        params.append(f"%{term}%")
+    clauses.append("(" + " OR ".join(like_clauses) + ")")
+
+    requested_domain_filter = (
+        isinstance(domain, dict)
+        and any(
+            bool(v) and _normalize_domain_tag(k) and _normalize_domain_tag(k) != "all"
+            for k, v in domain.items()
+        )
+    )
+    active_domains = _active_domains_for_filter(graph) if requested_domain_filter else set()
+    include_all_domains, included_domains = _normalize_domain_filter(domain, active_domains)
+
+    try:
+        with graph._get_conn() as conn:
+            graph._ensure_source_chunks_table(conn)
+            rows = conn.execute(
+                f"""
+                SELECT *
+                FROM source_chunks
+                WHERE {" AND ".join(clauses)}
+                ORDER BY created_at DESC, chunk_index ASC, chunk_id ASC
+                LIMIT ?
+                """,
+                [*params, max(limit * 8, 24)],
+            ).fetchall()
+    except Exception as exc:
+        if _is_fail_hard_mode():
+            raise RuntimeError("source_chunks recall failed while reading chunks") from exc
+        logger.warning("[recall] source_chunks store failed; returning no chunks: %s", exc, exc_info=True)
+        meta["failed"] = True
+        meta["phases_ms"] = {"total_ms": round((time.monotonic() - started) * 1000)}
+        return [], meta, None
+
+    candidates: List[Tuple[Tuple[float, str], Dict[str, Any]]] = []
+    for row in rows:
+        chunk = graph._row_to_source_chunk(row)
+        chunk_domains = set(_normalize_domains(chunk.get("domains")))
+        if not include_all_domains and included_domains and not chunk_domains.intersection(included_domains):
+            continue
+        text = str(chunk.get("text") or "")
+        overlap = sum(1 for term in terms if _text_contains_anchor_term(text, term))
+        if overlap <= 0:
+            continue
+        exact_bonus = 0.05 if " ".join(str(query or "").lower().split()) in text.lower() else 0.0
+        score = min(0.99, 0.35 + (0.55 * (overlap / max(1, len(terms)))) + exact_bonus)
+        candidates.append(((score, str(chunk.get("created_at") or "")), chunk))
+    candidates.sort(key=lambda item: item[0], reverse=True)
+
+    out: List[Dict[str, Any]] = []
+    consumed_tokens = 0
+    omitted = 0
+    for (score, _created), chunk in candidates:
+        if len(out) >= max(1, int(limit or 1)):
+            omitted += 1
+            continue
+        remaining = total_token_limit - consumed_tokens
+        if remaining <= 0:
+            omitted += 1
+            continue
+        payload = _source_chunk_recall_payload(
+            chunk,
+            max_chunk_tokens=min(token_limit, remaining),
+        )
+        output_tokens = int(payload.get("output_token_count") or 0)
+        consumed_tokens += output_tokens
+        chunk_id = str(payload.get("chunk_id") or "").strip()
+        source_label = str(payload.get("source_id") or payload.get("session_id") or "source").strip()
+        prefix = f"[source_chunk] {source_label}"
+        if payload.get("chunk_index") is not None:
+            prefix += f"#{payload.get('chunk_index')}"
+        out.append({
+            "id": chunk_id,
+            "text": f"{prefix}: {payload.get('text')}",
+            "category": "source_chunk",
+            "source_type": "source_chunk",
+            "similarity": round(float(score), 3),
+            "chunk_id": chunk_id,
+            "source_chunk_id": chunk_id,
+            "session_id": payload.get("session_id"),
+            "source_id": payload.get("source_id"),
+            "chunk_index": payload.get("chunk_index"),
+            "content_hash": payload.get("content_hash"),
+            "owner_id": chunk.get("owner_id"),
+            "domains": _normalize_domains(payload.get("domains")),
+            "project": payload.get("project"),
+            "privacy": payload.get("privacy"),
+            "source_channel": payload.get("source_channel"),
+            "source_conversation_id": payload.get("source_conversation_id"),
+            "conversation_id": payload.get("conversation_id"),
+            "source_author_id": payload.get("source_author_id"),
+            "token_count": payload.get("token_count"),
+            "output_token_count": output_tokens,
+            "truncated": payload.get("truncated"),
+            "created_at": payload.get("created_at"),
+        })
+    meta["counts"] = {"final_results": len(out)}
+    meta["source_chunk_telemetry"] = {
+        **dict(meta.get("source_chunk_telemetry") or {}),
+        "candidate_count": len(candidates),
+        "omitted": omitted,
+        "output_token_count": consumed_tokens,
+        "domain_filter_applied": not include_all_domains,
+    }
+    meta["phases_ms"] = {"total_ms": round((time.monotonic() - started) * 1000)}
+    return _validate_recall_result_rows(out), meta, None
+
+
 def _graph_store_recall(
     query: str,
     *,
@@ -5845,6 +6743,7 @@ def _graph_store_recall(
     project: Optional[str],
     date_from: Optional[str],
     date_to: Optional[str],
+    temporal_dimension: Optional[str] = None,
     depth: int,
     timeout_ms: Optional[int] = None,
     fast_mode: bool = False,
@@ -5861,6 +6760,7 @@ def _graph_store_recall(
         project=project,
         date_from=date_from,
         date_to=date_to,
+        temporal_dimension=temporal_dimension,
         timeout_ms=timeout_ms,
         fast_mode=fast_mode,
         candidate_pool=candidate_pool,
@@ -5895,6 +6795,7 @@ def _graph_store_recall(
             combined,
             date_from=date_from,
             date_to=date_to,
+            temporal_dimension=temporal_dimension,
         )
     meta = dict(payload.get("meta") or {})
     counts = dict(meta.get("counts") or {})
@@ -5908,7 +6809,7 @@ def _graph_store_recall(
 
 
 def _validate_recall_store_registry(registry: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
-    for store in ("vector", "docs", "graph"):
+    for store in ("vector", "docs", "graph", "source_chunks"):
         spec = registry.get(store)
         if not isinstance(spec, dict):
             raise RuntimeError(f"recall store registry missing store '{store}'")
@@ -5931,6 +6832,10 @@ def _get_recall_store_registry() -> Dict[str, Dict[str, Any]]:
         "graph": {
             "recall": _graph_store_recall,
             "recall_fast": _graph_store_recall,
+        },
+        "source_chunks": {
+            "recall": _source_chunk_store_recall,
+            "recall_fast": _source_chunk_store_recall,
         },
     }
     return _validate_recall_store_registry(registry)
@@ -6105,10 +7010,27 @@ def _run_recall_store_plan(
                     project=planned_project,
                     date_from=kwargs.get("date_from"),
                     date_to=kwargs.get("date_to"),
+                    temporal_dimension=kwargs.get("temporal_dimension"),
                     depth=graph_depth,
                     timeout_ms=kwargs.get("timeout_ms"),
                     fast_mode=fast_mode,
                     candidate_pool=graph_candidate_pool,
+                ),
+            ))
+        elif store == "source_chunks":
+            callables.append(lambda store=store, handler=handler: (
+                store,
+                handler(
+                    query,
+                    owner_id=owner_id,
+                    limit=max(1, min(limit, 6 if fast_mode else 8)),
+                    domain=kwargs.get("domain"),
+                    project=planned_project,
+                    current_session_id=kwargs.get("current_session_id"),
+                    source_channel=kwargs.get("source_channel"),
+                    source_conversation_id=kwargs.get("source_conversation_id"),
+                    max_chunk_tokens=kwargs.get("max_chunk_tokens"),
+                    max_total_chunk_tokens=kwargs.get("max_total_chunk_tokens"),
                 ),
             ))
 
@@ -6131,6 +7053,7 @@ def _run_recall_store_plan(
     base_meta: Optional[Dict[str, Any]] = None
     vector_meta: Optional[Dict[str, Any]] = None
     store_meta_entries: List[Tuple[str, Dict[str, Any]]] = []
+    rrf_named_batches: List[Tuple[str, List[Dict[str, Any]]]] = []
     for idx, output in enumerate(outputs):
         store_name = normalized_stores[idx] if idx < len(normalized_stores) else "unknown"
         if isinstance(output, Exception):
@@ -6169,6 +7092,7 @@ def _run_recall_store_plan(
             docs_rows.extend(rows)
         meta = dict(meta or {})
         store_meta_entries.append((store, meta))
+        rrf_named_batches.append((store, list(rows)))
         if rows:
             merged_batches.append(rows)
         if bundle:
@@ -6208,7 +7132,20 @@ def _run_recall_store_plan(
     merge_limit = max(limit, limit * 2 if fast_mode else limit)
     if not fast_mode and len(normalized_stores) > 1:
         merge_limit = max(merge_limit, limit * 2)
-    merged = _merge_recall_batches(merged_batches, limit=merge_limit)
+    rrf_shadow_meta = _shadow_rrf_recall_store_plan(rrf_named_batches, limit=merge_limit)
+    rrf_fusion_meta: Dict[str, Any] = {"enabled": False}
+    rrf_fused_rows: Optional[List[Dict[str, Any]]] = None
+    if _should_apply_rrf_store_plan_fusion(normalized_stores):
+        rrf_fused_rows, rrf_fusion_meta = _active_rrf_recall_store_plan(
+            rrf_named_batches,
+            normalized_stores=normalized_stores,
+            limit=merge_limit,
+        )
+    merged = (
+        rrf_fused_rows
+        if rrf_fused_rows is not None
+        else _merge_recall_batches(merged_batches, limit=merge_limit)
+    )
     relation_chain_groups = _relation_chain_groups_for_query(query)
     relation_chain_query = (
         len(relation_chain_groups) >= 2
@@ -6229,6 +7166,7 @@ def _run_recall_store_plan(
             merged,
             date_from=kwargs.get("date_from"),
             date_to=kwargs.get("date_to"),
+            temporal_dimension=kwargs.get("temporal_dimension"),
             keep_undated=True,
         )
     final_rows = merged[:limit]
@@ -6243,7 +7181,17 @@ def _run_recall_store_plan(
             final_rows,
             date_from=kwargs.get("date_from"),
             date_to=kwargs.get("date_to"),
+            temporal_dimension=kwargs.get("temporal_dimension"),
             keep_undated=True,
+        )
+    if rrf_fusion_meta.get("enabled"):
+        rrf_shadow_meta = dict(rrf_shadow_meta)
+        rrf_shadow_meta["comparison_suppressed_reason"] = "active_rrf_fusion"
+    else:
+        rrf_shadow_meta = _annotate_rrf_shadow_comparison(
+            rrf_shadow_meta,
+            final_rows,
+            limit=limit,
         )
     if _store_meta_result_count(base_meta) <= 0:
         for _, candidate_meta in store_meta_entries:
@@ -6259,6 +7207,16 @@ def _run_recall_store_plan(
     meta["planned_stores"] = normalized_stores
     meta["planned_project"] = planned_project
     meta["store_runs"] = store_runs
+    if rrf_fusion_meta.get("enabled") or rrf_fusion_meta.get("failed"):
+        meta["rrf_fusion"] = rrf_fusion_meta
+    if rrf_shadow_meta.get("enabled") or rrf_shadow_meta.get("failed"):
+        meta["rrf_shadow"] = rrf_shadow_meta
+    for store_name, store_meta in store_meta_entries:
+        if store_name != "source_chunks":
+            continue
+        source_chunk_telemetry = store_meta.get("source_chunk_telemetry")
+        if isinstance(source_chunk_telemetry, dict):
+            meta["source_chunk_telemetry"] = dict(source_chunk_telemetry)
     if preserved_docs_rows:
         meta["preserved_docs_rows"] = preserved_docs_rows
     # Preserve lexical planner diagnostics from vector recall even when the
@@ -6548,8 +7506,12 @@ def _recall_once(
     use_lightweight_config: bool = False,
     track_access: bool = True,
     relative_temporal_freshness: bool = False,
+    temporal_dimension: Optional[str] = None,
     low_signal_retry: bool = True,
     timeout_ms: Optional[int] = None,
+    include_chunks: bool = False,
+    max_chunk_tokens: Optional[int] = None,
+    max_total_chunk_tokens: Optional[int] = None,
     return_meta: bool = False,
 ) -> Any:
     """
@@ -6570,8 +7532,9 @@ def _recall_once(
         use_intent: Whether to classify query intent for fusion weight tuning
         use_multi_pass: Whether to attempt a second-pass broader search on low-quality results
         use_reranker: Override config reranker_enabled (None = use config)
-        date_from: Only return memories created on or after this date (YYYY-MM-DD)
-        date_to: Only return memories created on or before this date (YYYY-MM-DD)
+        date_from: Only return memories on or after this date (YYYY-MM-DD)
+        date_to: Only return memories on or before this date (YYYY-MM-DD)
+        temporal_dimension: Date axis for filters: auto, occurred, mentioned, or record.
         domain: Optional domain filter map (default {"all": true})
         project: Optional project label filter
     """
@@ -6579,6 +7542,7 @@ def _recall_once(
         return []
     date_from = _normalize_recall_date_bound(date_from)
     date_to = _normalize_recall_date_bound(date_to)
+    temporal_dimension = _normalize_recall_temporal_dimension(temporal_dimension)
 
     import time as _time
     _recall_start = _time.monotonic()
@@ -6931,6 +7895,7 @@ def _recall_once(
             intent=intent,
             prefer_fresh=prefer_fresh,
             target_date=target_date,
+            temporal_dimension=temporal_dimension,
         )
         # Apply intent-based type boost
         type_boost_applied = 1.0
@@ -7034,6 +7999,7 @@ def _recall_once(
                 intent=intent,
                 prefer_fresh=prefer_fresh,
                 target_date=target_date,
+                temporal_dimension=temporal_dimension,
             )
             if type_boosts and node.type in type_boosts:
                 composite = min(composite * type_boosts[node.type], 1.0)
@@ -7404,6 +8370,7 @@ def _recall_once(
                                 intent=intent,
                                 prefer_fresh=prefer_fresh,
                                 target_date=target_date,
+                                temporal_dimension=temporal_dimension,
                             )
                             if type_boosts and node.type in type_boosts:
                                 composite = min(composite * type_boosts[node.type], 1.0)
@@ -7457,14 +8424,16 @@ def _recall_once(
     # filtered out, leaving older in-range facts unreachable.
     if date_from or date_to:
         def _node_in_date_range(node: Node) -> bool:
-            date_part = _node_temporal_date(node)
-            if not date_part:
-                return False
-            if date_from and date_part < date_from:
-                return False
-            if date_to and date_part > date_to:
-                return False
-            return True
+            start_date, end_date, _basis = _node_temporal_bounds(
+                node,
+                temporal_dimension=temporal_dimension,
+            )
+            return _date_bounds_overlap_filter(
+                start_date,
+                end_date,
+                date_from=date_from,
+                date_to=date_to,
+            )
         scored_results = [
             (node, score)
             for node, score in scored_results
@@ -7475,6 +8444,7 @@ def _recall_once(
         scored_results,
         freshness_preferred=prefer_fresh,
         target_date=target_date,
+        temporal_dimension=temporal_dimension,
     )
 
     # Apply MMR diversity (select diverse top-N from candidates)
@@ -7518,6 +8488,7 @@ def _recall_once(
             "domains": _domains_from_attrs(_attrs),
             "source_type": _attrs.get("source_type"),
             "structural_anchor_kind": _attrs.get("structural_anchor_kind"),
+            "keywords": getattr(node, "keywords", None),
             "project": _attrs.get("project"),
             "source_channel": _attrs.get("source_channel"),
             "source_conversation_id": _attrs.get("source_conversation_id"),
@@ -7573,12 +8544,16 @@ def _recall_once(
                         co_node = graph._row_to_node(row)
                         if co_node.id not in seen_ids and (not owner_id or co_node.owner_id == owner_id):
                             if date_from or date_to:
-                                date_part = _node_temporal_date(co_node)
-                                if not date_part:
-                                    continue
-                                if date_from and date_part < date_from:
-                                    continue
-                                if date_to and date_part > date_to:
+                                start_date, end_date, _basis = _node_temporal_bounds(
+                                    co_node,
+                                    temporal_dimension=temporal_dimension,
+                                )
+                                if not _date_bounds_overlap_filter(
+                                    start_date,
+                                    end_date,
+                                    date_from=date_from,
+                                    date_to=date_to,
+                                ):
                                     continue
                             co_attrs = co_node.attributes if isinstance(co_node.attributes, dict) else {}
                             semantic_score = 0.4
@@ -7594,6 +8569,7 @@ def _recall_once(
                                 intent=intent,
                                 prefer_fresh=prefer_fresh,
                                 target_date=target_date,
+                                temporal_dimension=temporal_dimension,
                             )
                             rank_score = min(
                                 rank_score * _compute_query_fit_multiplier(
@@ -7866,14 +8842,16 @@ def _recall_once(
     # filter, including co-session and graph traversal expansions.
     if date_from or date_to:
         def _in_date_range(r: Dict[str, Any]) -> bool:
-            date_part = _recall_row_temporal_date(r)
-            if not date_part:
-                return False
-            if date_from and date_part < date_from:
-                return False
-            if date_to and date_part > date_to:
-                return False
-            return True
+            start_date, end_date, _basis = _row_temporal_bounds(
+                r,
+                temporal_dimension=temporal_dimension,
+            )
+            return _date_bounds_overlap_filter(
+                start_date,
+                end_date,
+                date_from=date_from,
+                date_to=date_to,
+            )
         output = [r for r in output if _in_date_range(r)]
 
     anchor_expansion_mode = "cheap" if not include_graph_traversal else "rich"
@@ -7924,14 +8902,16 @@ def _recall_once(
             ]
         if date_from or date_to:
             def _anchor_in_date_range(r: Dict[str, Any]) -> bool:
-                date_part = _recall_row_temporal_date(r)
-                if not date_part:
-                    return False
-                if date_from and date_part < date_from:
-                    return False
-                if date_to and date_part > date_to:
-                    return False
-                return True
+                start_date, end_date, _basis = _row_temporal_bounds(
+                    r,
+                    temporal_dimension=temporal_dimension,
+                )
+                return _date_bounds_overlap_filter(
+                    start_date,
+                    end_date,
+                    date_from=date_from,
+                    date_to=date_to,
+                )
             output = [r for r in output if _anchor_in_date_range(r)]
 
     # Sort by similarity and limit
@@ -8073,6 +9053,7 @@ def _recall_once(
                 "project": requested_project,
                 "date_from": date_from,
                 "date_to": date_to,
+                "temporal_dimension": temporal_dimension,
                 "use_routing": bool(use_routing),
                 "use_multi_pass": bool(use_multi_pass),
                 "include_graph_traversal": bool(include_graph_traversal),
@@ -8153,20 +9134,38 @@ def _recall_once(
                         compaction_time=compaction_time,
                         date_from=date_from,
                         date_to=date_to,
+                        temporal_dimension=temporal_dimension,
                         debug=False,
                         domain=domain,
                         domain_boost=domain_boost,
                         low_signal_retry=False,
+                        include_chunks=include_chunks,
+                        max_chunk_tokens=max_chunk_tokens,
+                        max_total_chunk_tokens=max_total_chunk_tokens,
                         return_meta=True,
                     )
                     if len(retry_output) > len(final_output):
                         retry_meta = dict(retry_meta or {})
                         retry_meta["retry_from_low_signal"] = True
-                        return _return_validated_recall(retry_output, retry_meta, return_meta)
+                        return _return_validated_recall(
+                            retry_output,
+                            retry_meta,
+                            return_meta,
+                            include_chunks=include_chunks,
+                            max_chunk_tokens=max_chunk_tokens,
+                            max_total_chunk_tokens=max_total_chunk_tokens,
+                        )
                 except Exception:
                     pass
 
-    return _return_validated_recall(final_output, recall_once_meta, return_meta)
+    return _return_validated_recall(
+        final_output,
+        recall_once_meta,
+        return_meta,
+        include_chunks=include_chunks,
+        max_chunk_tokens=max_chunk_tokens,
+        max_total_chunk_tokens=max_total_chunk_tokens,
+    )
 
 
 def _plan_recall_queries(query: str, max_queries: int = 3) -> List[str]:
@@ -8346,6 +9345,268 @@ def _merge_recall_batches(batches: List[List[Dict[str, Any]]], limit: int) -> Li
     merged = list(by_id.values()) + fallback_rows
     merged.sort(key=lambda x: float(x.get("similarity", 0.0)), reverse=True)
     return merged[: max(1, limit)]
+
+
+def _rrf_recall_row_identity(row: Dict[str, Any]) -> str:
+    source_type = str(row.get("source_type") or row.get("category") or "").strip().lower()
+    if source_type == "source_chunk":
+        chunk_id = str(row.get("chunk_id") or row.get("source_chunk_id") or "").strip()
+        if chunk_id:
+            return f"source_chunk:{chunk_id}"
+    if _is_graph_anchor_expansion_row(row):
+        return "|".join([
+            "graph_anchor_expansion",
+            str(row.get("anchor_id") or ""),
+            str(row.get("id") or ""),
+            str(row.get("via_relation") or ""),
+            str(row.get("text") or ""),
+        ])
+    row_id = str(row.get("id") or "").strip()
+    if row_id:
+        return f"id:{row_id}"
+    return f"text:{str(row.get('text') or '').strip()}"
+
+
+def _reciprocal_rank_fuse_recall_branches(
+    branches: List[Tuple[str, List[Dict[str, Any]]]],
+    *,
+    limit: int,
+    k: Optional[int] = None,
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """Fuse named ranked recall branches with RRF without mutating inputs."""
+    if limit <= 0:
+        return [], {"enabled": True, "k": max(1, int(k or 1)), "branch_count": 0, "candidate_count": 0}
+    if k is None:
+        try:
+            k = _get_configured_rrf_k(60)
+        except Exception:
+            if _is_fail_hard_mode():
+                raise
+            k = 60
+    try:
+        rrf_k = max(1, int(k or 60))
+    except (TypeError, ValueError):
+        if _is_fail_hard_mode():
+            raise
+        rrf_k = 60
+
+    scores: Dict[str, float] = {}
+    source_ranks: Dict[str, Dict[str, int]] = {}
+    rows_by_key: Dict[str, Dict[str, Any]] = {}
+    branch_counts: Dict[str, int] = {}
+
+    for branch_name, branch_rows in branches or []:
+        name = str(branch_name or "").strip() or "unnamed"
+        if not isinstance(branch_rows, list):
+            if _is_fail_hard_mode():
+                raise RuntimeError(f"RRF branch '{name}' is not a list")
+            logger.warning("RRF branch %s is not a list; skipping", name)
+            continue
+        seen_in_branch: Set[str] = set()
+        accepted = 0
+        for rank, row in enumerate(branch_rows, 1):
+            if not isinstance(row, dict):
+                if _is_fail_hard_mode():
+                    raise RuntimeError(f"RRF branch '{name}' row {rank} is not a dict")
+                logger.warning("RRF branch %s row %d is not a dict; skipping", name, rank)
+                continue
+            key = _rrf_recall_row_identity(row)
+            if not key or key in seen_in_branch:
+                continue
+            seen_in_branch.add(key)
+            accepted += 1
+            scores[key] = scores.get(key, 0.0) + (1.0 / float(rrf_k + rank))
+            source_ranks.setdefault(key, {})[name] = rank
+            existing = rows_by_key.get(key)
+            if existing is None or float(row.get("similarity") or 0.0) > float(existing.get("similarity") or 0.0):
+                rows_by_key[key] = dict(row)
+        branch_counts[name] = accepted
+
+    ordered_keys = sorted(
+        scores,
+        key=lambda key: (
+            scores[key],
+            len(source_ranks.get(key) or {}),
+            float((rows_by_key.get(key) or {}).get("similarity") or 0.0),
+        ),
+        reverse=True,
+    )
+    fused: List[Dict[str, Any]] = []
+    for rank, key in enumerate(ordered_keys[: max(1, int(limit or 1))], 1):
+        row = dict(rows_by_key[key])
+        row["rrf_score"] = scores[key]
+        row["rrf_rank"] = rank
+        row["source_ranks"] = dict(source_ranks.get(key) or {})
+        fused.append(row)
+
+    meta = {
+        "enabled": True,
+        "k": rrf_k,
+        "branch_count": len(branch_counts),
+        "branch_counts": branch_counts,
+        "candidate_count": len(scores),
+        "returned_count": len(fused),
+        "top_keys": ordered_keys[: max(1, int(limit or 1))],
+    }
+    return fused, meta
+
+
+def _shadow_rrf_recall_store_plan(
+    named_batches: List[Tuple[str, List[Dict[str, Any]]]],
+    *,
+    limit: int,
+) -> Dict[str, Any]:
+    if len(named_batches) < 2:
+        return {"enabled": False, "reason": "single_branch"}
+    try:
+        fused, meta = _reciprocal_rank_fuse_recall_branches(
+            named_batches,
+            limit=max(1, int(limit or 1)),
+        )
+    except Exception:
+        if _is_fail_hard_mode():
+            raise
+        logger.warning("RRF shadow fusion failed; continuing without shadow telemetry", exc_info=True)
+        return {"enabled": False, "failed": True}
+    meta["top_rows"] = [
+        {
+            "key": _rrf_recall_row_identity(row),
+            "rank": int(row.get("rrf_rank") or 0),
+            "score": float(row.get("rrf_score") or 0.0),
+            "source_ranks": dict(row.get("source_ranks") or {}),
+            "category": row.get("category"),
+            "source_type": row.get("source_type"),
+            "id": row.get("id"),
+            "chunk_id": row.get("chunk_id") or row.get("source_chunk_id"),
+            "text": str(row.get("text") or "")[:160],
+        }
+        for row in fused[: min(len(fused), 5)]
+    ]
+    return meta
+
+
+def _coerce_bool_config(value: Any, default: bool) -> bool:
+    if value is None:
+        return bool(default)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    normalized = str(value).strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    return bool(default)
+
+
+def _should_apply_rrf_store_plan_fusion(normalized_stores: List[str]) -> bool:
+    """Enable active RRF only for the explicit vector+source_chunks lane."""
+    stores = [str(store or "").strip() for store in normalized_stores or []]
+    if set(stores) != {"vector", "source_chunks"}:
+        return False
+    cfg = _get_retrieval_lightweight_config()
+    raw = getattr(cfg, "store_plan_rrf_fusion", None)
+    if raw is None:
+        raw = getattr(cfg, "storePlanRrfFusion", True)
+    return _coerce_bool_config(raw, True)
+
+
+def _active_rrf_recall_store_plan(
+    named_batches: List[Tuple[str, List[Dict[str, Any]]]],
+    *,
+    normalized_stores: List[str],
+    limit: int,
+) -> Tuple[Optional[List[Dict[str, Any]]], Dict[str, Any]]:
+    try:
+        fused, meta = _reciprocal_rank_fuse_recall_branches(
+            named_batches,
+            limit=max(1, int(limit or 1)),
+        )
+    except Exception:
+        if _is_fail_hard_mode():
+            raise
+        logger.warning("RRF active fusion failed; falling back to legacy merge", exc_info=True)
+        return None, {"enabled": False, "failed": True}
+    out = dict(meta)
+    out["enabled"] = True
+    out["mode"] = "active"
+    out["applied_to_stores"] = list(normalized_stores or [])
+    return fused, out
+
+
+def _annotate_rrf_shadow_comparison(
+    shadow_meta: Dict[str, Any],
+    final_rows: List[Dict[str, Any]],
+    *,
+    limit: int,
+) -> Dict[str, Any]:
+    if not isinstance(shadow_meta, dict) or not shadow_meta.get("enabled"):
+        return shadow_meta
+    top_limit = max(1, int(limit or 1))
+    current_keys = [
+        _rrf_recall_row_identity(row)
+        for row in (final_rows or [])[:top_limit]
+        if isinstance(row, dict)
+    ]
+    rrf_keys = [
+        str(key)
+        for key in list(shadow_meta.get("top_keys") or [])[:top_limit]
+        if str(key)
+    ]
+    current_pos = {key: idx + 1 for idx, key in enumerate(current_keys)}
+    rrf_pos = {key: idx + 1 for idx, key in enumerate(rrf_keys)}
+    displacement: List[Dict[str, Any]] = []
+    max_abs_displacement = 0
+    for key in rrf_keys:
+        current_rank = current_pos.get(key)
+        rrf_rank = rrf_pos.get(key)
+        if current_rank is None or rrf_rank is None:
+            continue
+        delta = current_rank - rrf_rank
+        if delta:
+            max_abs_displacement = max(max_abs_displacement, abs(delta))
+            displacement.append({
+                "key": key,
+                "current_rank": current_rank,
+                "rrf_rank": rrf_rank,
+                "delta": delta,
+            })
+
+    rrf_only = [key for key in rrf_keys if key not in current_pos]
+    current_only = [key for key in current_keys if key not in rrf_pos]
+    rrf_only_set = set(rrf_only)
+    top_rows = [
+        row for row in list(shadow_meta.get("top_rows") or [])
+        if isinstance(row, dict)
+    ]
+    branch_contribution: Dict[str, int] = {}
+    for row in top_rows:
+        source_ranks = row.get("source_ranks")
+        if not isinstance(source_ranks, dict):
+            continue
+        for branch in source_ranks:
+            key = str(branch or "").strip()
+            if key:
+                branch_contribution[key] = branch_contribution.get(key, 0) + 1
+
+    out = dict(shadow_meta)
+    out["comparison"] = {
+        "current_top_keys": current_keys,
+        "rrf_top_keys": rrf_keys,
+        "same_top_order": current_keys == rrf_keys,
+        "displacement_count": len(displacement),
+        "max_abs_displacement": max_abs_displacement,
+        "displacement": displacement[:top_limit],
+        "rrf_only_top_keys": rrf_only,
+        "current_only_top_keys": current_only,
+        "rrf_only_top_rows": [
+            row for row in top_rows
+            if str(row.get("key") or "") in rrf_only_set
+        ],
+        "branch_contribution": branch_contribution,
+    }
+    return out
 
 
 def _prioritize_fast_anchor_direct_rows(query: str, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -9221,6 +10482,17 @@ def _lexical_anchor_planner_timeout_s(
     timeout_ms: Optional[int],
 ) -> float:
     cap_s = _LEXICAL_ANCHOR_MAX_TIMEOUT_S
+    if timeout_ms is not None and not fast_context:
+        try:
+            explicit_budget_s = max(0.2, float(timeout_ms) / 1000.0)
+            if explicit_budget_s > _LEXICAL_ANCHOR_MAX_TIMEOUT_S:
+                explicit_cap_s = max(
+                    _LEXICAL_ANCHOR_MAX_TIMEOUT_S,
+                    float(_LEXICAL_ANCHOR_EXPLICIT_TIMEOUT_CAP_MS) / 1000.0,
+                )
+                cap_s = min(explicit_cap_s, explicit_budget_s)
+        except (TypeError, ValueError):
+            pass
     if fast_context:
         cap_s = min(cap_s, _LEXICAL_ANCHOR_FAST_MAX_TIMEOUT_S)
         if timeout_ms is not None:
@@ -9350,9 +10622,12 @@ def _plan_query_anchor_terms(
         meta["used_llm"] = True
         result, _ = call_fast_reasoning(
             prompt=prompt,
-            max_tokens=120,
+            max_tokens=_LEXICAL_ANCHOR_JSON_PLANNER_MAX_TOKENS,
             timeout=timeout_s,
-            system_prompt="You output compact JSON for lexical anchor extraction. No prose.",
+            system_prompt=(
+                "You output exactly one compact JSON object for lexical anchor extraction. "
+                "No markdown, prose, explanation, or reasoning."
+            ),
             max_retries=max_retries,
         )
         if result is None:
@@ -9639,7 +10914,12 @@ def _row_matches_requirement(row: Dict[str, Any], requirement: str) -> bool:
             )
         )
     if requirement == "causal":
-        return bool(re.search(r"\b(because|reason|motivat|cause|caused|led to|due to|to help|to support|so that|which matters)\b", lower))
+        return bool(
+            re.search(
+                r"\b(because|reason|motivat|cause|caused|led to|due to|to help|to support|so that|which matters)\b",
+                lower,
+            )
+        )
     if requirement == "enumeration":
         comma_count = text.count(",")
         semicolon_count = text.count(";")
@@ -9674,12 +10954,16 @@ def _text_contains_anchor_term(text: str, term: str) -> bool:
     if not clean_term:
         return False
     clean_text = str(text or "").lower()
+    if not clean_term.isascii():
+        return clean_term in clean_text
     return bool(re.search(rf"(?<!\w){re.escape(clean_term)}(?!\w)", clean_text, flags=re.UNICODE))
 
 
 def _node_searchable_text(node: Node) -> str:
     """Return the text surface FTS can match for a node."""
     parts: List[str] = [str(getattr(node, "name", "") or "")]
+    if getattr(node, "keywords", None):
+        parts.append(str(getattr(node, "keywords") or ""))
     attrs = getattr(node, "attributes", None)
     if isinstance(attrs, dict) and attrs:
         try:
@@ -9763,6 +11047,590 @@ def _search_nodes_by_query_terms(
     return [(node, float(rank)) for rank, (node, _overlap, _created) in enumerate(scored[:limit], 1)]
 
 
+def _facet_rescue_query_terms(query: str, anchor_terms: List[str], *, limit: int = 6) -> List[str]:
+    """Language-preserving fallback facet terms from the query itself."""
+    anchor_set = {" ".join(str(term or "").split()).strip().lower() for term in anchor_terms or []}
+    out: List[str] = []
+    seen: Set[str] = set(anchor_set)
+    for term in _extract_distinctive_query_terms(query, limit=24):
+        clean = " ".join(str(term or "").split()).strip().lower()
+        if not clean or clean in seen:
+            continue
+        seen.add(clean)
+        out.append(clean)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _facet_rescue_anchor_terms(
+    graph: "MemoryGraph",
+    query: str,
+    *,
+    owner_id: Optional[str],
+    limit: int = 4,
+) -> List[str]:
+    """Find query entity anchors without assuming English capitalization."""
+    query_text = " ".join(str(query or "").split()).strip()
+    query_fold = query_text.casefold()
+    out: List[str] = []
+    seen: Set[str] = set()
+
+    def _add(term: str) -> None:
+        clean = " ".join(str(term or "").split()).strip()
+        key = clean.casefold()
+        if not clean or key in seen:
+            return
+        seen.add(key)
+        out.append(clean)
+
+    for term in _extract_explicit_query_anchor_terms(query_text, limit=limit):
+        _add(term)
+
+    try:
+        owner_clause = "AND (n.owner_id = ? OR n.owner_id IS NULL)" if owner_id else ""
+        params: List[Any] = [query_text, query_fold]
+        if owner_id:
+            params.append(owner_id)
+        params.append(max(16, int(limit or 1) * 8))
+        with graph._get_conn() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT n.*
+                FROM nodes n
+                WHERE LOWER(n.type) IN ('person', 'place', 'pet', 'entity', 'concept', 'organization')
+                  AND length(n.name) >= 2
+                  AND (instr(?, n.name) > 0 OR instr(?, lower(n.name)) > 0)
+                  AND (n.status IS NULL OR n.status IN ('approved', 'pending', 'active'))
+                  AND n.deleted_at IS NULL
+                  AND n.superseded_by IS NULL
+                  {owner_clause}
+                ORDER BY length(n.name) DESC, COALESCE(n.updated_at, n.created_at, n.accessed_at, '') DESC
+                LIMIT ?
+                """,
+                params,
+            ).fetchall()
+        for row in rows:
+            node = graph._row_to_node(row)
+            if str(getattr(node, "type", "") or "").strip().lower() in _LOW_INFO_ENTITY_CATEGORIES:
+                _add(str(getattr(node, "name", "") or ""))
+                if len(out) >= limit:
+                    break
+    except Exception:
+        if _is_fail_hard_mode():
+            raise
+
+    if len(out) < limit:
+        lookup_terms = list(out) + _extract_distinctive_query_terms(query_text, limit=16)
+        for node, _rank in _search_nodes_by_query_terms(
+            graph,
+            lookup_terms,
+            limit=max(16, int(limit or 1) * 8),
+            owner_id=owner_id,
+        ):
+            node_type = str(getattr(node, "type", "") or "").strip().lower()
+            node_name = " ".join(str(getattr(node, "name", "") or "").split()).strip()
+            if node_type not in _LOW_INFO_ENTITY_CATEGORIES or not node_name:
+                continue
+            if node_name.casefold() not in query_fold:
+                continue
+            _add(node_name)
+            if len(out) >= limit:
+                break
+
+    return out[:limit]
+
+
+def _should_run_explicit_entity_facet_rescue(
+    query: str,
+    rows: List[Dict[str, Any]],
+    *,
+    intent: Optional[str] = None,
+    anchor_terms: Optional[List[str]] = None,
+) -> bool:
+    if not anchor_terms:
+        return False
+    return bool(_facet_rescue_query_terms(query, anchor_terms, limit=1))
+
+
+def _score_facet_rescue_row(
+    query: str,
+    row: Dict[str, Any],
+    *,
+    anchor_terms: List[str],
+    facet_terms: List[str],
+) -> float:
+    text = str((row or {}).get("text") or "")
+    search_text = " ".join([
+        text,
+        str((row or {}).get("keywords") or ""),
+    ]).lower()
+
+    anchor_hit = any(_text_contains_anchor_term(search_text, term) for term in anchor_terms)
+    facet_hit_count = sum(
+        1 for term in facet_terms
+        if term and (term in search_text or _text_contains_anchor_term(search_text, term))
+    )
+
+    score = 0.72
+    if anchor_hit:
+        score += 0.08
+    if (
+        str((row or {}).get("via_relation") or "") == "has_fact"
+        or str((row or {}).get("via") or "").startswith("facet_rescue_attached_fact")
+    ):
+        score += 0.04
+    if facet_hit_count:
+        score += min(0.18, 0.06 * facet_hit_count)
+
+    return round(max(0.0, min(0.985, score)), 4)
+
+
+def _facet_rescue_attached_fact_rows(
+    graph: "MemoryGraph",
+    *,
+    anchor_node: Node,
+    anchor_text: str,
+    anchor_score: float,
+    limit: int,
+) -> List[Dict[str, Any]]:
+    """Return a broad attached-fact pool for caller-side facet scoring."""
+    try:
+        edges = list(graph.get_edges(anchor_node.id, direction="both"))
+    except Exception as exc:
+        if _is_fail_hard_mode():
+            raise
+        logger.warning("Recall facet rescue failed to fetch graph edges for %s: %s", anchor_node.id, exc)
+        return []
+    rows: List[Dict[str, Any]] = []
+    seen_ids: Set[str] = set()
+    for edge in edges:
+        if str(getattr(edge, "relation", "") or "") != "has_fact":
+            continue
+        fact_id = edge.target_id if edge.source_id == anchor_node.id else edge.source_id
+        if not fact_id or fact_id in seen_ids:
+            continue
+        seen_ids.add(fact_id)
+        try:
+            fact = graph.get_node(fact_id)
+        except Exception as exc:
+            if _is_fail_hard_mode():
+                raise
+            logger.warning("Recall facet rescue failed to fetch attached fact %s: %s", fact_id, exc)
+            continue
+        if not fact or str(getattr(fact, "type", "") or "").lower() != "fact":
+            continue
+        row = _build_recall_row_from_node(fact, similarity=max(0.72, min(0.90, float(anchor_score or 0.0))))
+        row["via"] = "facet_rescue_attached_fact"
+        row["via_relation"] = "has_fact"
+        row["source_name"] = anchor_text
+        row["graph_path"] = f"{anchor_text} --has_fact--> {fact.name}"
+        row["_facet_rescue"] = True
+        _annotate_graph_traversal_fields(row, ["has_fact"], discovery_kind="facet_rescue_attached_fact")
+        rows.append(row)
+        if len(rows) >= max(1, int(limit or 1)):
+            break
+    return rows
+
+
+_FACET_RESCUE_MEMORY_TYPES = {"fact", "preference", "decision", "relationship"}
+
+
+def _facet_rescue_lexical_memory_rows(
+    graph: "MemoryGraph",
+    *,
+    anchor_terms: List[str],
+    facet_terms: List[str],
+    owner_id: Optional[str],
+    limit: int,
+) -> List[Dict[str, Any]]:
+    """Scan memory rows by entity + facet text/keywords.
+
+    This covers valid memories whose subject->fact graph edge is missing. It is
+    still bounded and lexical: explicit entity mention plus a query-language
+    facet/keyword match are required.
+
+    TODO(recall): replace ad hoc query-term lexical matching with a datastore
+    lexical contract before adding curated facet/relation vocabulary. That
+    contract should be multilingual and data-backed, not hardcoded English
+    rules in the core recall path.
+    """
+    anchors = [
+        " ".join(str(term or "").split()).strip().lower()
+        for term in anchor_terms or []
+        if " ".join(str(term or "").split()).strip()
+    ][:4]
+    facets = [
+        " ".join(str(term or "").split()).strip().lower()
+        for term in facet_terms or []
+        if " ".join(str(term or "").split()).strip()
+    ][:16]
+    if not anchors or not facets:
+        return []
+
+    anchor_clauses: List[str] = []
+    params: List[Any] = []
+    for anchor in anchors:
+        anchor_clauses.append("LOWER(COALESCE(n.name, '') || ' ' || COALESCE(n.keywords, '')) LIKE ?")
+        params.append(f"%{anchor}%")
+    facet_clauses: List[str] = []
+    for facet in facets:
+        facet_clauses.append("LOWER(COALESCE(n.name, '') || ' ' || COALESCE(n.keywords, '')) LIKE ?")
+        params.append(f"%{facet}%")
+
+    owner_clause = "AND (n.owner_id = ? OR n.owner_id IS NULL)" if owner_id else ""
+    if owner_id:
+        params.append(owner_id)
+    params.append(max(32, min(240, int(limit or 1) * 24)))
+
+    try:
+        with graph._get_conn() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT n.*
+                FROM nodes n
+                WHERE LOWER(n.type) IN ('fact', 'preference', 'decision', 'relationship')
+                  AND ({' OR '.join(anchor_clauses)})
+                  AND ({' OR '.join(facet_clauses)})
+                  AND (n.status IS NULL OR n.status IN ('approved', 'pending', 'active'))
+                  AND n.deleted_at IS NULL
+                  AND n.superseded_by IS NULL
+                  {owner_clause}
+                ORDER BY COALESCE(n.updated_at, n.created_at, n.accessed_at, '') DESC, n.rowid DESC
+                LIMIT ?
+                """,
+                params,
+            ).fetchall()
+    except Exception:
+        if _is_fail_hard_mode():
+            raise
+        return []
+
+    out: List[Dict[str, Any]] = []
+    seen: Set[str] = set()
+    for row in rows:
+        node = graph._row_to_node(row)
+        if str(getattr(node, "type", "") or "").strip().lower() not in _FACET_RESCUE_MEMORY_TYPES:
+            continue
+        if node.id in seen:
+            continue
+        seen.add(node.id)
+        rec = _build_recall_row_from_node(node, similarity=0.82)
+        rec["via"] = "facet_rescue_lexical"
+        rec["_facet_rescue"] = True
+        out.append(rec)
+        if len(out) >= max(1, int(limit or 1)):
+            break
+    return out
+
+
+def _recover_explicit_entity_facet_rows(
+    query: str,
+    rows: List[Dict[str, Any]],
+    *,
+    owner_id: Optional[str],
+    limit: int,
+    intent: Optional[str] = None,
+    domain: Optional[Dict[str, bool]] = None,
+    include_unscoped: bool = True,
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """Recover stored entity facts for property/list questions before final truncation.
+
+    This is intentionally deterministic and generic. It does not know about any
+    benchmark schema; it only uses explicit query entities plus same-language
+    query terms to rescue already-stored graph facts.
+    """
+    meta: Dict[str, Any] = {
+        "applied": False,
+        "candidate_count": 0,
+        "anchor_terms": [],
+        "facet_terms": [],
+        "error": None,
+    }
+    if limit <= 0:
+        return [], meta
+    try:
+        graph = get_graph()
+        anchor_terms = _facet_rescue_anchor_terms(
+            graph,
+            query,
+            owner_id=owner_id,
+            limit=4,
+        )
+        if not _should_run_explicit_entity_facet_rescue(
+            query,
+            rows,
+            intent=intent,
+            anchor_terms=anchor_terms,
+        ):
+            return [], meta
+
+        facet_terms: List[str] = []
+        facet_seen: Set[str] = set()
+        for term in _facet_rescue_query_terms(query, anchor_terms, limit=8):
+            clean = " ".join(str(term or "").split()).strip().lower()
+            if not clean or clean in facet_seen:
+                continue
+            facet_seen.add(clean)
+            facet_terms.append(clean)
+            if len(facet_terms) >= 8:
+                break
+        if not facet_terms:
+            return [], meta
+        meta["anchor_terms"] = list(anchor_terms)
+        meta["facet_terms"] = list(facet_terms)
+
+        existing_ids = {str((row or {}).get("id") or "") for row in rows if str((row or {}).get("id") or "")}
+        candidates_by_id: Dict[str, Dict[str, Any]] = {}
+        active_domains = _active_domains_for_filter(graph) if domain else set()
+        include_all_domains, included_domains = _normalize_domain_filter(domain, active_domains)
+
+        def _row_in_domain_scope(row: Dict[str, Any]) -> bool:
+            if include_all_domains:
+                return True
+            if not included_domains:
+                return False
+            row_domains = set(_domains_from_attrs({"domains": row.get("domains")}))
+            if row_domains:
+                return bool(row_domains & included_domains)
+            return bool(include_unscoped)
+
+        def _add_candidate(row: Dict[str, Any]) -> None:
+            rid = str((row or {}).get("id") or "").strip()
+            if not rid:
+                return
+            if not _row_in_domain_scope(row):
+                return
+            score = _score_facet_rescue_row(
+                query,
+                row,
+                anchor_terms=anchor_terms,
+                facet_terms=facet_terms,
+            )
+            if score < 0.76:
+                return
+            candidate = dict(row)
+            candidate["similarity"] = score
+            candidate["via"] = candidate.get("via") or "facet_rescue"
+            candidate["_facet_rescue"] = True
+            prev = candidates_by_id.get(rid)
+            if prev is None or (
+                float(candidate.get("similarity", 0.0))
+                > float(prev.get("similarity", 0.0))
+            ):
+                candidates_by_id[rid] = candidate
+
+        for anchor in anchor_terms:
+            anchor_key = " ".join(str(anchor or "").split()).strip().casefold()
+            anchor_nodes: List[Node] = []
+            for node, _rank in _search_nodes_by_query_terms(
+                graph,
+                [anchor],
+                limit=12,
+                owner_id=owner_id,
+            ):
+                node_name = str(getattr(node, "name", "") or "").strip().casefold()
+                node_type = str(getattr(node, "type", "") or "").strip().lower()
+                if node_type in _LOW_INFO_ENTITY_CATEGORIES and node_name == anchor_key:
+                    anchor_nodes.append(node)
+            for anchor_node in anchor_nodes[:2]:
+                for row in _facet_rescue_attached_fact_rows(
+                    graph,
+                    anchor_node=anchor_node,
+                    anchor_text=str(getattr(anchor_node, "name", "") or anchor),
+                    anchor_score=0.84,
+                    limit=max(40, int(limit or 1) * 8),
+                ):
+                    _add_candidate(row)
+                attached_rows = _graph_attached_fact_rows(
+                    graph,
+                    anchor_node=anchor_node,
+                    anchor_text=str(getattr(anchor_node, "name", "") or anchor),
+                    anchor_score=0.82,
+                    graph_path=str(getattr(anchor_node, "name", "") or anchor),
+                    relation_sequence=[],
+                    hop_depth=0,
+                    seen_ids=set(existing_ids) | set(candidates_by_id.keys()),
+                    query=query,
+                    per_anchor_limit=max(3, min(10, int(limit or 1) * 2)),
+                )
+                for row in attached_rows:
+                    _add_candidate(row)
+
+            for row in _facet_rescue_lexical_memory_rows(
+                graph,
+                anchor_terms=[anchor],
+                facet_terms=facet_terms,
+                owner_id=owner_id,
+                limit=max(24, int(limit or 1) * 8),
+            ):
+                _add_candidate(row)
+
+            lexical_term_sets: List[List[str]] = []
+            for facet in facet_terms:
+                lexical_term_sets.append([anchor, facet])
+                pieces = [
+                    piece for piece in re.findall(r"[\w][\w._'-]*", facet, flags=re.UNICODE)
+                    if len(piece) >= 4 and piece not in _QUERY_STOPWORDS
+                ]
+                if pieces:
+                    lexical_term_sets.append([anchor] + pieces)
+
+            for term_set in lexical_term_sets[:8]:
+                for node, _rank in _search_nodes_by_query_terms(
+                    graph,
+                    term_set,
+                    limit=max(12, int(limit or 1) * 4),
+                    owner_id=owner_id,
+                ):
+                    if str(getattr(node, "type", "") or "").strip().lower() not in _FACET_RESCUE_MEMORY_TYPES:
+                        continue
+                    row = _build_recall_row_from_node(
+                        node,
+                        similarity=0.80,
+                    )
+                    _add_candidate(row)
+
+        def _facet_sort_key(row: Dict[str, Any]) -> Tuple[int, float, int]:
+            search_text = " ".join([
+                str((row or {}).get("text") or ""),
+                str((row or {}).get("keywords") or ""),
+            ]).lower()
+            overlap = sum(
+                1 for term in facet_terms
+                if term and (term in search_text or _text_contains_anchor_term(search_text, term))
+            )
+            return (
+                overlap,
+                float((row or {}).get("similarity", 0.0) or 0.0),
+                len(str((row or {}).get("keywords") or "")),
+            )
+
+        recovered = sorted(
+            candidates_by_id.values(),
+            key=_facet_sort_key,
+            reverse=True,
+        )[: max(1, min(12, int(limit or 1)))]
+        meta["applied"] = bool(recovered)
+        meta["candidate_count"] = len(recovered)
+        return recovered, meta
+    except Exception as exc:
+        meta["error"] = f"{type(exc).__name__}: {exc}"
+        if _is_fail_hard_mode():
+            raise RuntimeError("Recall facet rescue failed while failHard is enabled") from exc
+        logger.warning("Recall facet rescue failed; proceeding without rescued rows: %s", exc)
+        return [], meta
+
+
+def _filter_low_information_rows_for_query(
+    rows: List[Dict[str, Any]],
+    query: str,
+    *,
+    intent: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Drop bare entity anchors from answer context unless the query needs identity."""
+    out: List[Dict[str, Any]] = []
+    for row in rows or []:
+        if _is_low_information_entity_result(row) and not _should_preserve_low_information_entity_result(
+            row,
+            query,
+            intent=intent,
+        ):
+            continue
+        out.append(row)
+    return out
+
+
+def _facet_rescue_reservation_count(
+    query: str,
+    *,
+    intent: Optional[str],
+    limit: int,
+) -> int:
+    if limit <= 1:
+        return 0
+    return min(limit - 1, max(2, min(4, int(round(limit * 0.4)))))
+
+
+def _select_final_recall_rows_with_facet_rescue(
+    query: str,
+    rows: List[Dict[str, Any]],
+    *,
+    limit: int,
+    intent: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Reserve a few slots for high-signal rescued evidence before truncation."""
+    if limit <= 0:
+        return []
+    filtered = _filter_low_information_rows_for_query(rows, query, intent=intent)
+    if not filtered:
+        return []
+
+    def _key(row: Dict[str, Any]) -> str:
+        return str(row.get("id") or row.get("text") or "")
+
+    facet_rows = [
+        row for row in filtered
+        if row.get("_facet_rescue") and float(row.get("similarity", 0.0) or 0.0) >= 0.82
+    ]
+    if not facet_rows:
+        return filtered[:limit]
+
+    query_terms = _extract_distinctive_query_terms(query, limit=12)
+
+    def _facet_signal(row: Dict[str, Any]) -> int:
+        search_text = " ".join([
+            str((row or {}).get("text") or ""),
+            str((row or {}).get("keywords") or ""),
+        ]).lower()
+        return sum(
+            1 for term in query_terms
+            if term and (term in search_text or _text_contains_anchor_term(search_text, term))
+        )
+
+    facet_rows.sort(
+        key=lambda row: (
+            _facet_signal(row),
+            float(row.get("similarity", 0.0) or 0.0),
+            len(str(row.get("keywords") or "")),
+        ),
+        reverse=True,
+    )
+    reserve_count = min(len(facet_rows), _facet_rescue_reservation_count(query, intent=intent, limit=limit))
+    reserved = facet_rows[:reserve_count]
+    reserved_keys = {_key(row) for row in reserved}
+
+    selected: List[Dict[str, Any]] = []
+    selected_keys: Set[str] = set()
+    primary_slots = max(0, limit - len(reserved))
+    for row in filtered:
+        key = _key(row)
+        if not key or key in selected_keys or key in reserved_keys:
+            continue
+        selected.append(row)
+        selected_keys.add(key)
+        if len(selected) >= primary_slots:
+            break
+    for row in reserved:
+        key = _key(row)
+        if not key or key in selected_keys:
+            continue
+        selected.append(row)
+        selected_keys.add(key)
+        if len(selected) >= limit:
+            break
+    if len(selected) < limit:
+        for row in filtered:
+            key = _key(row)
+            if not key or key in selected_keys:
+                continue
+            selected.append(row)
+            selected_keys.add(key)
+            if len(selected) >= limit:
+                break
+    return selected[:limit]
+
+
 def _parse_recall_timestamp(value: Any) -> Optional[datetime]:
     raw = str(value or "").strip()
     if not raw:
@@ -9797,8 +11665,123 @@ def _normalize_recall_date_bound(value: Any) -> Optional[str]:
     if not match:
         raise ValueError(
             f"Recall date filters must be concrete YYYY-MM-DD dates, got {raw!r}"
-        )
+    )
     return match.group(1)
+
+
+def _normalize_recall_temporal_dimension(value: Any) -> str:
+    """Normalize which temporal axis date-bounded recall should use."""
+    raw = str(value or "").strip().lower().replace("-", "_")
+    if not raw:
+        return "auto"
+    aliases = {
+        "auto": "auto",
+        "occurred": "occurred",
+        "occurred_at": "occurred",
+        "occurred_start": "occurred",
+        "occurred_end": "occurred",
+        "mentioned": "mentioned",
+        "mentioned_at": "mentioned",
+        "record": "record",
+        "created_at": "record",
+    }
+    normalized = aliases.get(raw)
+    if normalized is None:
+        raise ValueError(
+            "temporal_dimension must be one of auto, occurred, mentioned, or record "
+            f"(got {value!r})"
+        )
+    return normalized
+
+
+def _temporal_date_bounds_from_values(
+    start_value: Any,
+    end_value: Any = None,
+) -> Tuple[str, str]:
+    start = _date_part(start_value)
+    end = _date_part(end_value)
+    if start and end and end < start:
+        start, end = end, start
+    if start and not end:
+        end = start
+    if end and not start:
+        start = end
+    return start, end
+
+
+def _row_temporal_bounds(
+    row: Dict[str, Any],
+    *,
+    temporal_dimension: Any = None,
+) -> Tuple[str, str, str]:
+    """Return date bounds and the axis used for date-bounded recall rows."""
+    dimension = _normalize_recall_temporal_dimension(temporal_dimension)
+    row = row or {}
+
+    if dimension == "mentioned":
+        start, end = _temporal_date_bounds_from_values(
+            row.get("mentioned_at") or row.get("source_date") or row.get("created_at")
+        )
+        return start, end, "mentioned"
+
+    if dimension == "record":
+        start, end = _temporal_date_bounds_from_values(row.get("created_at"))
+        return start, end, "record"
+
+    # Occurred-time is preferred for explicit event filters. Older rows that do
+    # not have occurrence fields fall back to the prior source/valid/record
+    # behavior so existing memories remain searchable.
+    occurred_start = row.get("occurred_start") or row.get("valid_from")
+    occurred_end = row.get("occurred_end") or row.get("valid_until")
+    if occurred_start or occurred_end:
+        start, end = _temporal_date_bounds_from_values(occurred_start, occurred_end)
+        return start, end, "occurred"
+
+    source_date = row.get("source_date")
+    if source_date:
+        start, end = _temporal_date_bounds_from_values(source_date)
+        return start, end, "source"
+
+    if dimension == "occurred":
+        start, end = _temporal_date_bounds_from_values(row.get("created_at"))
+        return start, end, "record_fallback"
+
+    start, end = _temporal_date_bounds_from_values(row.get("created_at"))
+    return start, end, "record"
+
+
+def _date_bounds_overlap_filter(
+    start_date: str,
+    end_date: str,
+    *,
+    date_from: Optional[str],
+    date_to: Optional[str],
+) -> bool:
+    if not start_date:
+        return False
+    effective_end = end_date or start_date
+    if date_from and effective_end < date_from:
+        return False
+    if date_to and start_date > date_to:
+        return False
+    return True
+
+
+def _node_temporal_bounds(
+    node: "Node",
+    *,
+    temporal_dimension: Any = None,
+) -> Tuple[str, str, str]:
+    row = {
+        "occurred_start": getattr(node, "occurred_start", None),
+        "occurred_end": getattr(node, "occurred_end", None),
+        "mentioned_at": getattr(node, "mentioned_at", None),
+        "valid_from": getattr(node, "valid_from", None),
+        "valid_until": getattr(node, "valid_until", None),
+        "created_at": getattr(node, "created_at", None),
+        "source_date": _source_date_from_session_id(getattr(node, "session_id", None)),
+    }
+    return _row_temporal_bounds(row, temporal_dimension=temporal_dimension)
 
 
 def _first_present_config_value(config: Dict[str, Any], *keys: str) -> Any:
@@ -9830,13 +11813,34 @@ def _resolve_recall_command_date_bounds(
     return date_from, date_to
 
 
-def _recall_row_temporal_date(row: Dict[str, Any]) -> str:
+def _resolve_recall_command_temporal_dimension(
+    config: Dict[str, Any],
+    *,
+    cli_temporal_dimension: Optional[str] = None,
+) -> str:
+    cfg = config if isinstance(config, dict) else {}
+    return _normalize_recall_temporal_dimension(
+        cli_temporal_dimension
+        or _first_present_config_value(
+            cfg,
+            "temporal_dimension",
+            "temporalDimension",
+            "time_dimension",
+            "timeDimension",
+            "date_dimension",
+            "dateDimension",
+        )
+    )
+
+
+def _recall_row_temporal_date(
+    row: Dict[str, Any],
+    *,
+    temporal_dimension: Any = None,
+) -> str:
     """Best available source/record date for recall date filtering."""
-    for key in ("source_date", "valid_from", "created_at"):
-        date_part = _date_part((row or {}).get(key))
-        if date_part:
-            return date_part
-    return ""
+    start, _end, _basis = _row_temporal_bounds(row or {}, temporal_dimension=temporal_dimension)
+    return start
 
 
 def _filter_recall_rows_by_date_bounds(
@@ -9845,8 +11849,13 @@ def _filter_recall_rows_by_date_bounds(
     date_from: Optional[str],
     date_to: Optional[str],
     keep_undated: bool = False,
+    temporal_dimension: Any = None,
 ) -> List[Dict[str, Any]]:
-    """Return only recall rows whose best temporal date falls within bounds."""
+    """Return rows whose selected temporal interval overlaps the requested bounds.
+
+    Matching rows are annotated in-place with temporal_filter_basis so downstream
+    debug output can show which stored time axis was used.
+    """
     normalized_from = _normalize_recall_date_bound(date_from)
     normalized_to = _normalize_recall_date_bound(date_to)
     if not normalized_from and not normalized_to:
@@ -9855,15 +11864,19 @@ def _filter_recall_rows_by_date_bounds(
     for row in rows or []:
         if not isinstance(row, dict):
             continue
-        date_part = _recall_row_temporal_date(row)
-        if not date_part:
+        start_date, end_date, basis = _row_temporal_bounds(
+            row,
+            temporal_dimension=temporal_dimension,
+        )
+        if not start_date:
             if keep_undated:
                 filtered.append(row)
             continue
-        if normalized_from and date_part < normalized_from:
+        if normalized_from and (end_date or start_date) < normalized_from:
             continue
-        if normalized_to and date_part > normalized_to:
+        if normalized_to and start_date > normalized_to:
             continue
+        row.setdefault("temporal_filter_basis", basis)
         filtered.append(row)
     return filtered
 
@@ -9886,6 +11899,9 @@ def _node_recall_temporal_fields(node: Node) -> Dict[str, Any]:
     """Temporal fields required by serialized recall date filters."""
     source_date = _source_date_from_session_id(getattr(node, "session_id", None))
     return {
+        "occurred_start": getattr(node, "occurred_start", None),
+        "occurred_end": getattr(node, "occurred_end", None),
+        "mentioned_at": getattr(node, "mentioned_at", None),
         "created_at": getattr(node, "created_at", None),
         "valid_from": getattr(node, "valid_from", None),
         "valid_until": getattr(node, "valid_until", None),
@@ -9919,24 +11935,25 @@ def _resolve_fast_recall_date_bounds(
     return normalized_from, normalized_to, inferred_to
 
 
-def _node_temporal_date(node: Node) -> str:
+def _node_temporal_date(node: Node, *, temporal_dimension: Any = None) -> str:
     """Best available event/source date for temporal ranking."""
-    for value in (
-        node.valid_from,
-        _source_date_from_session_id(node.session_id),
-        node.created_at,
-    ):
-        date_part = _date_part(value)
-        if date_part:
-            return date_part
-    return ""
+    start, _end, _basis = _node_temporal_bounds(
+        node,
+        temporal_dimension=temporal_dimension,
+    )
+    return start
 
 
-def _asof_temporal_score_delta(node: Node, target_date: str) -> float:
+def _asof_temporal_score_delta(
+    node: Node,
+    target_date: str,
+    *,
+    temporal_dimension: Any = None,
+) -> float:
     """Small generic ranking nudge for explicit dated historical queries."""
     if not target_date:
         return 0.0
-    node_date = _node_temporal_date(node)
+    node_date = _node_temporal_date(node, temporal_dimension=temporal_dimension)
     if not node_date:
         return 0.0
     try:
@@ -9962,6 +11979,7 @@ def _apply_relative_temporal_freshness_rerank(
     *,
     freshness_preferred: bool,
     target_date: str,
+    temporal_dimension: Any = None,
 ) -> List[Tuple["Node", float]]:
     """Prefer newer temporal candidates for current/open-ended schedule queries.
 
@@ -9976,7 +11994,7 @@ def _apply_relative_temporal_freshness_rerank(
 
     dated: List[Tuple[Node, float, datetime]] = []
     for node, score in scored_results:
-        date_part = _node_temporal_date(node)
+        date_part = _node_temporal_date(node, temporal_dimension=temporal_dimension)
         if not date_part:
             continue
         try:
@@ -9998,7 +12016,7 @@ def _apply_relative_temporal_freshness_rerank(
     max_boost = 0.12
     reranked: List[Tuple[Node, float]] = []
     for node, score in scored_results:
-        date_part = _node_temporal_date(node)
+        date_part = _node_temporal_date(node, temporal_dimension=temporal_dimension)
         if not date_part:
             reranked.append((node, score))
             continue
@@ -10016,7 +12034,7 @@ def _apply_relative_temporal_freshness_rerank(
 
 def _collect_recall_temporal_markers(row: Dict[str, Any]) -> List[datetime]:
     markers: List[datetime] = []
-    for key in ("valid_from", "source_date", "created_at", "valid_until"):
+    for key in ("occurred_start", "occurred_end", "mentioned_at", "valid_from", "source_date", "created_at", "valid_until"):
         parsed = _parse_recall_timestamp((row or {}).get(key))
         if parsed is not None:
             markers.append(parsed)
@@ -10799,6 +12817,7 @@ def _build_recall_row_from_node(
         "owner_id": node.owner_id,
         "_multi_pass": False,
         "domains": attrs.get("domains"),
+        "keywords": getattr(node, "keywords", None),
         "source_type": attrs.get("source_type"),
         "project": attrs.get("project"),
         "source_channel": str(attrs.get("source_channel") or "").strip().lower() or None,
@@ -11602,11 +13621,11 @@ def _plan_fanout_queries(
             fail_hard=fail_hard,
             meta=meta,
         )
-        if timeout_like:
+        if timeout_like and not fail_hard:
             # The fast fanout planner is a best-effort query-expansion gate.
             # If it times out, use the original query rather than fail the
-            # entire recall path. Non-timeout planner failures still obey
-            # failHard below.
+            # entire recall path. Under failHard, LLM/provider failures must
+            # surface instead of being scored as degraded recall.
             return _finish([clean], "planner_timeout_fallback")
         if fail_hard:
             # failHard=true means dev: surface planner failures loudly rather than
@@ -11759,8 +13778,8 @@ def _plan_fanout_queries(
     prompt = (
         f"Generate 1 to {max_queries} search queries to find relevant stored knowledge for this message.\n"
         "Rules:\n"
-        '- Return JSON only: {"queries": ["..."], "stores": ["vector","graph","docs"], "project": "project-alpha", "freshness_preferred": false}\n'
-        '- "stores" is optional, but when present it must be an array containing any of: "vector", "graph", "docs".\n'
+        '- Return JSON only: {"queries": ["..."], "stores": ["vector","graph","docs","source_chunks"], "project": "project-alpha", "freshness_preferred": false}\n'
+        '- "stores" is optional, but when present it must be an array containing any of: "vector", "graph", "docs", "source_chunks".\n'
         '- "project" is optional and should be set only when the message clearly names a project.\n'
         '- "freshness_preferred" is optional. Set it true only when the user asks for current/latest/current-state information or an open-ended schedule date, and not for explicit historical/as-of date lookups.\n'
         "- If the message is just a greeting, acknowledgement, filler, or otherwise has no meaningful information need, return an empty list.\n"
@@ -11783,6 +13802,8 @@ def _plan_fanout_queries(
         "- Add 'graph' only for explicit relationship, family, or causal multi-hop questions.\n"
         "- Add 'docs' for codebase, architecture, schema, API, tests, source-file, project history/as-of, exact project lists, labels, constants, config, or value questions.\n"
         "- Prefer ['vector','docs'] over docs-only when project history or lived context may matter.\n"
+        "- Add 'source_chunks' only when raw transcript/source wording or exact conversation evidence may be needed.\n"
+        "- Prefer ['vector','source_chunks'] over source_chunks-only when extracted facts may also answer.\n"
         f"{conservative_guidance}\n"
         f"Message: {clean}"
     )
@@ -11800,9 +13821,12 @@ def _plan_fanout_queries(
         )
         result, _ = call_fast_reasoning(
             prompt=prompt,
-            max_tokens=200,
+            max_tokens=_RECALL_JSON_PLANNER_MAX_TOKENS,
             timeout=timeout_s,
-            system_prompt="You output compact JSON for memory retrieval. No prose.",
+            system_prompt=(
+                "You output exactly one compact JSON object for memory retrieval. "
+                "No markdown, no prose, no reasoning."
+            ),
             max_retries=max(0, int(max_retries or 0)),
         )
         if result is None:
@@ -11931,12 +13955,16 @@ def _resolve_lexical_anchor_timeout_ms(
 
 
 _FAST_DRILL_RESERVE_MS = 250
-_FAST_DRILL_MIN_TIMEOUT_MS = 500
-_FAST_DRILL_MAX_TIMEOUT_MS = 1200
+_FAST_DRILL_MIN_TIMEOUT_MS = 4000
+_FAST_DRILL_MAX_TIMEOUT_MS = 8000
 _FAST_DRILL_MIN_REMAINING_MS = _FAST_DRILL_RESERVE_MS + _FAST_DRILL_MIN_TIMEOUT_MS
 
 
-def _fast_drill_timeout_ms_from_remaining(remaining_ms: Optional[int]) -> Optional[int]:
+def _fast_drill_timeout_ms_from_remaining(
+    remaining_ms: Optional[int],
+    *,
+    explicit_timeout_ms: Optional[int] = None,
+) -> Optional[int]:
     if remaining_ms is None:
         return None
     try:
@@ -11945,11 +13973,22 @@ def _fast_drill_timeout_ms_from_remaining(remaining_ms: Optional[int]) -> Option
         return None
     if usable_ms < _FAST_DRILL_MIN_TIMEOUT_MS:
         return None
-    return min(_FAST_DRILL_MAX_TIMEOUT_MS, usable_ms)
+    max_timeout_ms = _FAST_DRILL_MAX_TIMEOUT_MS
+    if explicit_timeout_ms is not None:
+        try:
+            explicit_budget_ms = int(explicit_timeout_ms)
+        except (TypeError, ValueError):
+            explicit_budget_ms = 0
+        if explicit_budget_ms > 0:
+            max_timeout_ms = max(
+                _FAST_DRILL_MAX_TIMEOUT_MS,
+                explicit_budget_ms - _FAST_DRILL_RESERVE_MS,
+            )
+    return min(max_timeout_ms, usable_ms)
 
 
 def _normalize_planned_stores(value: Any) -> List[str]:
-    allowed = {"vector", "graph", "docs"}
+    allowed = {"vector", "graph", "docs", "source_chunks"}
     if not isinstance(value, list):
         return []
     out: List[str] = []
@@ -12284,9 +14323,13 @@ def recall_fast(
     domain: Optional[Dict[str, bool]] = None,
     domain_boost: Optional[Any] = None,
     project: Optional[str] = None,
+    temporal_dimension: Optional[str] = None,
     timeout_ms: Optional[int] = None,
     planner_profile: str = "fast",
     return_meta: bool = False,
+    include_chunks: bool = False,
+    max_chunk_tokens: Optional[int] = None,
+    max_total_chunk_tokens: Optional[int] = None,
 ) -> Any:
     """Pre-injection recall: thin wrapper over recall() with single-pass settings."""
     import time as _time
@@ -12348,6 +14391,7 @@ def recall_fast(
         date_from=date_from,
         date_to=date_to,
     )
+    temporal_dimension = _normalize_recall_temporal_dimension(temporal_dimension)
     effective_limit = min(limit, 6 if planner_profile == "aggressive" else 8)
     planner_timeout_s = _recall_planner_timeout_s(timeout_ms, fast_mode=True)
     planner_started = _time.monotonic()
@@ -12434,6 +14478,7 @@ def recall_fast(
             "compaction_time": compaction_time,
             "date_from": date_from,
             "date_to": date_to,
+            "temporal_dimension": temporal_dimension,
             "source_channel": source_channel,
             "source_conversation_id": source_conversation_id,
             "source_author_id": source_author_id,
@@ -12447,6 +14492,8 @@ def recall_fast(
             "domain_boost": domain_boost,
             "project": planned_project,
             "timeout_ms": timeout_ms,
+            "max_chunk_tokens": max_chunk_tokens,
+            "max_total_chunk_tokens": max_total_chunk_tokens,
         },
     )
     meta = dict(meta or {})
@@ -12557,7 +14604,10 @@ def recall_fast(
         drill_initial_timeout_ms = timeout_ms
         if recall_fast_deadline is not None:
             fast_drill_remaining_ms = int(round((recall_fast_deadline - _time.monotonic()) * 1000))
-            drill_initial_timeout_ms = _fast_drill_timeout_ms_from_remaining(fast_drill_remaining_ms)
+            drill_initial_timeout_ms = _fast_drill_timeout_ms_from_remaining(
+                fast_drill_remaining_ms,
+                explicit_timeout_ms=timeout_ms,
+            )
             if drill_initial_timeout_ms is None:
                 meta["quality_gate"] = {
                     "evaluation": gate_eval,
@@ -12575,6 +14625,13 @@ def recall_fast(
                     intent=gate_intent,
                     limit=effective_limit,
                     include_relation_keywords=False,
+                )
+                rows, meta = _prepare_recall_output_rows(
+                    rows,
+                    meta,
+                    include_chunks=include_chunks,
+                    max_chunk_tokens=max_chunk_tokens,
+                    max_total_chunk_tokens=max_total_chunk_tokens,
                 )
                 _attach_recall_meta(rows, meta)
                 _trace_m15(
@@ -12623,7 +14680,10 @@ def recall_fast(
                 "planned_project": planned_project,
             }
         else:
-            drill_budget_s = min(1.2, max(0.1, float(drill_initial_timeout_ms or 1200) / 1000.0))
+            drill_budget_s = max(
+                float(_FAST_DRILL_MIN_TIMEOUT_MS) / 1000.0,
+                float(drill_initial_timeout_ms or _FAST_DRILL_MIN_TIMEOUT_MS) / 1000.0,
+            )
             _trace_m15(
                 "memory_graph.recall_fast.drill_planner_call",
                 query=query,
@@ -12680,7 +14740,10 @@ def recall_fast(
             drill_timeout_ms = drill_initial_timeout_ms
             if recall_fast_deadline is not None:
                 remaining = int(round((recall_fast_deadline - _time.monotonic()) * 1000))
-                drill_timeout_ms = _fast_drill_timeout_ms_from_remaining(remaining)
+                drill_timeout_ms = _fast_drill_timeout_ms_from_remaining(
+                    remaining,
+                    explicit_timeout_ms=timeout_ms,
+                )
                 if drill_timeout_ms is None:
                     meta["quality_gate"] = {
                         "evaluation": gate_eval,
@@ -12698,6 +14761,13 @@ def recall_fast(
                         intent=gate_intent,
                         limit=effective_limit,
                         include_relation_keywords=False,
+                    )
+                    rows, meta = _prepare_recall_output_rows(
+                        rows,
+                        meta,
+                        include_chunks=include_chunks,
+                        max_chunk_tokens=max_chunk_tokens,
+                        max_total_chunk_tokens=max_total_chunk_tokens,
                     )
                     _attach_recall_meta(rows, meta)
                     _trace_m15(
@@ -12738,6 +14808,8 @@ def recall_fast(
                         "domain_boost": domain_boost,
                         "project": planned_project,
                         "timeout_ms": drill_timeout_ms,
+                        "max_chunk_tokens": max_chunk_tokens,
+                        "max_total_chunk_tokens": max_total_chunk_tokens,
                     },
                 )
             except Exception as exc:
@@ -12773,6 +14845,13 @@ def recall_fast(
                     intent=gate_intent,
                     limit=effective_limit,
                     include_relation_keywords=False,
+                )
+                rows, meta = _prepare_recall_output_rows(
+                    rows,
+                    meta,
+                    include_chunks=include_chunks,
+                    max_chunk_tokens=max_chunk_tokens,
+                    max_total_chunk_tokens=max_total_chunk_tokens,
                 )
                 _attach_recall_meta(rows, meta)
                 _trace_m15(
@@ -12862,6 +14941,13 @@ def recall_fast(
                 limit=effective_limit,
                 include_relation_keywords=False,
             )
+    rows, meta = _prepare_recall_output_rows(
+        rows,
+        meta,
+        include_chunks=include_chunks,
+        max_chunk_tokens=max_chunk_tokens,
+        max_total_chunk_tokens=max_total_chunk_tokens,
+    )
     _attach_recall_meta(rows, meta)
     _trace_m15(
         "memory_graph.recall_fast.exit",
@@ -12887,6 +14973,8 @@ def _drill_plan_queries(
     and short result summaries, then suggests queries to fill gaps.
     """
     import time as _time
+    if not raise_on_error:
+        raise_on_error = _is_fail_hard_mode()
     started = _time.monotonic()
     meta = {
         "query": query,
@@ -12989,9 +15077,12 @@ def _drill_plan_queries(
         meta["used_llm"] = True
         result, _ = call_fast_reasoning(
             prompt=prompt,
-            max_tokens=200,
+            max_tokens=_RECALL_JSON_PLANNER_MAX_TOKENS,
             timeout=timeout_s,
-            system_prompt="You output compact JSON for retrieval drilling. No prose.",
+            system_prompt=(
+                "You output exactly one compact JSON object for retrieval drilling. "
+                "No markdown, no prose, no reasoning."
+            ),
             max_retries=max(0, int(max_retries or 0)),
         )
         parsed = parse_json_response(result)
@@ -13077,6 +15168,10 @@ def recall(
     planned_queries: Optional[List[str]] = None,
     planner_meta: Optional[Dict[str, Any]] = None,
     relative_temporal_freshness: bool = False,
+    temporal_dimension: Optional[str] = None,
+    include_chunks: bool = False,
+    max_chunk_tokens: Optional[int] = None,
+    max_total_chunk_tokens: Optional[int] = None,
 ) -> Any:
     """Orchestrated recall with iterative drilling.
 
@@ -13092,6 +15187,8 @@ def recall(
             recall runs until it has enough evidence or completes its turns.
     """
     import time as _time
+
+    temporal_dimension = _normalize_recall_temporal_dimension(temporal_dimension)
 
     if not query or not query.strip():
         meta = {
@@ -13215,6 +15312,7 @@ def recall(
             compaction_time=compaction_time,
             date_from=date_from,
             date_to=date_to,
+            temporal_dimension=temporal_dimension,
             source_channel=source_channel,
             source_conversation_id=source_conversation_id,
             source_author_id=source_author_id,
@@ -13242,6 +15340,9 @@ def recall(
             planned_queries=[query],
             planner_meta=exact_planner_meta,
             relative_temporal_freshness=False,
+            include_chunks=include_chunks,
+            max_chunk_tokens=max_chunk_tokens,
+            max_total_chunk_tokens=max_total_chunk_tokens,
         )
 
     # Load config
@@ -13294,6 +15395,7 @@ def recall(
         compaction_time=compaction_time,
         date_from=date_from,
         date_to=date_to,
+        temporal_dimension=temporal_dimension,
         source_channel=source_channel,
         source_conversation_id=source_conversation_id,
         source_author_id=source_author_id,
@@ -13313,6 +15415,8 @@ def recall(
         use_lightweight_config=use_lightweight_config,
         track_access=track_access,
         relative_temporal_freshness=bool(relative_temporal_freshness),
+        max_chunk_tokens=max_chunk_tokens,
+        max_total_chunk_tokens=max_total_chunk_tokens,
     )
     gate_intent = "GENERAL"
     if use_intent:
@@ -13506,14 +15610,34 @@ def recall(
         merged = _prioritize_deliberate_fresh_direct_anchor_rows(query, merged)
         merged = _prioritize_date_relation_callback_rows(query, merged)
         merged = _prioritize_named_entity_activity_anchor_rows(query, merged)
+        facet_rescue_rows, facet_rescue_meta = _recover_explicit_entity_facet_rows(
+            query,
+            merged,
+            owner_id=owner_id,
+            limit=limit,
+            intent=gate_intent,
+            domain=domain,
+            include_unscoped=include_unscoped,
+        )
+        if facet_rescue_rows:
+            merged = _merge_recall_batches(
+                [merged, facet_rescue_rows],
+                limit=max(limit * 2, len(merged) + len(facet_rescue_rows)),
+            )
         if date_from or date_to:
             merged = _filter_recall_rows_by_date_bounds(
                 merged,
                 date_from=date_from,
                 date_to=date_to,
+                temporal_dimension=temporal_dimension,
                 keep_undated=True,
             )
-        final = merged[:limit]
+        final = _select_final_recall_rows_with_facet_rescue(
+            query,
+            merged,
+            limit=limit,
+            intent=gate_intent,
+        )
         total_elapsed = (_time.monotonic() - recall_start) * 1000
         total_planner_ms = sum(
             max(0, int(round(float((turn.get("planner") or {}).get("elapsed_ms", 0) or 0))))
@@ -13566,13 +15690,21 @@ def recall(
                 limit=limit,
                 include_relation_keywords=not use_lightweight_config,
             ),
+            "facet_rescue": facet_rescue_meta,
             "stop_reason": stop_reason,
             "bailout_counts": bailout_counts,
         }
         lexical_summary = _summarize_branch_lexical_anchor(all_branch_metas)
         if lexical_summary is not None:
             meta["lexical_anchor"] = lexical_summary
-        return _return_validated_recall(final, meta, return_meta)
+        return _return_validated_recall(
+            final,
+            meta,
+            return_meta,
+            include_chunks=include_chunks,
+            max_chunk_tokens=max_chunk_tokens,
+            max_total_chunk_tokens=max_total_chunk_tokens,
+        )
 
     # --- Turn 2+: Drill loop ---
     # Skip drill turns when fanout returned no results: there is nothing to
@@ -13782,14 +15914,34 @@ def recall(
     merged = _prioritize_deliberate_fresh_direct_anchor_rows(query, merged)
     merged = _prioritize_date_relation_callback_rows(query, merged)
     merged = _prioritize_named_entity_activity_anchor_rows(query, merged)
+    facet_rescue_rows, facet_rescue_meta = _recover_explicit_entity_facet_rows(
+        query,
+        merged,
+        owner_id=owner_id,
+        limit=limit,
+        intent=gate_intent,
+        domain=domain,
+        include_unscoped=include_unscoped,
+    )
+    if facet_rescue_rows:
+        merged = _merge_recall_batches(
+            [merged, facet_rescue_rows],
+            limit=max(limit * 2, len(merged) + len(facet_rescue_rows)),
+        )
     if date_from or date_to:
         merged = _filter_recall_rows_by_date_bounds(
             merged,
             date_from=date_from,
             date_to=date_to,
+            temporal_dimension=temporal_dimension,
             keep_undated=True,
         )
-    final = merged[:limit]
+    final = _select_final_recall_rows_with_facet_rescue(
+        query,
+        merged,
+        limit=limit,
+        intent=gate_intent,
+    )
     total_elapsed = (_time.monotonic() - recall_start) * 1000
     if stop_reason == "max_turns" and len(drill_log) < max_turns:
         stop_reason = "completed"
@@ -13863,6 +16015,7 @@ def recall(
             limit=limit,
             include_relation_keywords=not use_lightweight_config,
         ),
+        "facet_rescue": facet_rescue_meta,
         "stop_reason": stop_reason,
         "bailout_counts": bailout_counts,
         "fanout_count": len(turn_phase_details[0]["fanout"]["queries"]) if turn_phase_details else 0,
@@ -13892,7 +16045,14 @@ def recall(
             "turn_count": len(turn_phase_details),
             "search_query_count": len(all_searched),
         }
-    return _return_validated_recall(final, meta, return_meta)
+    return _return_validated_recall(
+        final,
+        meta,
+        return_meta,
+        include_chunks=include_chunks,
+        max_chunk_tokens=max_chunk_tokens,
+        max_total_chunk_tokens=max_total_chunk_tokens,
+    )
 
 
 def _check_injection_blocklist(text: str) -> Optional[str]:
@@ -14481,6 +16641,7 @@ def store(
     privacy: str = "shared",
     source: Optional[str] = None,
     source_id: Optional[str] = None,
+    source_chunk_id: Optional[str] = None,
     owner_id: Optional[str] = None,
     session_id: Optional[str] = None,
     fact_type: str = "mutable",
@@ -14509,6 +16670,9 @@ def store(
     subject_entity_id: Optional[str] = None,  # canonical subject entity id
     subject_entity_name: Optional[str] = None,  # exact named entity this fact is about
     structural_anchor_kind: Optional[str] = None,  # exact-anchor preservation marker
+    occurred_start: Optional[str] = None,  # When the fact/event happened (range start)
+    occurred_end: Optional[str] = None,  # When the fact/event happened (range end)
+    mentioned_at: Optional[str] = None,  # When Quaid learned/was told the fact
     created_at: Optional[str] = None,  # Override created_at timestamp (ISO format)
     accessed_at: Optional[str] = None,  # Override accessed_at timestamp (ISO format)
     _conn: Optional[sqlite3.Connection] = None,
@@ -14603,6 +16767,8 @@ def store(
         subject_entity_name = " ".join(str(subject_entity_name).split()).strip() or None
     if structural_anchor_kind is not None:
         structural_anchor_kind = str(structural_anchor_kind).strip().lower() or None
+    if source_chunk_id is not None:
+        source_chunk_id = str(source_chunk_id).strip() or None
     
     # Map category to type
     type_map = {
@@ -14684,6 +16850,10 @@ def store(
             or subject_entity_id
             or subject_entity_name
             or structural_anchor_kind
+            or occurred_start
+            or occurred_end
+            or mentioned_at
+            or source_chunk_id
         ):
             return
         attrs = existing.attributes if isinstance(existing.attributes, dict) else (existing.attributes or {})
@@ -14712,6 +16882,10 @@ def store(
             existing.source = source
         if source_id and (source_type_upgrade or not existing.source_id):
             existing.source_id = source_id
+        if source_chunk_id and not existing.source_chunk_id:
+            existing.source_chunk_id = source_chunk_id
+        if source_chunk_id and not attrs.get("source_chunk_id"):
+            attrs["source_chunk_id"] = source_chunk_id
         if target_datastore and not attrs.get("target_datastore"):
             attrs["target_datastore"] = target_datastore
         if speaker and not existing.speaker:
@@ -14759,6 +16933,12 @@ def store(
             and not attrs.get("structural_anchor_kind")
         ):
             attrs["structural_anchor_kind"] = structural_anchor_kind
+        if occurred_start and not existing.occurred_start:
+            existing.occurred_start = occurred_start
+        if occurred_end and not existing.occurred_end:
+            existing.occurred_end = occurred_end
+        if mentioned_at and not existing.mentioned_at:
+            existing.mentioned_at = mentioned_at
         if speaker_entity_id and not existing.speaker_entity_id:
             existing.speaker_entity_id = speaker_entity_id
         if conversation_id and not existing.conversation_id:
@@ -15163,6 +17343,9 @@ def store(
     node.owner_id = owner_id
     node.session_id = session_id
     node.keywords = keywords
+    node.occurred_start = occurred_start
+    node.occurred_end = occurred_end
+    node.mentioned_at = mentioned_at
     if created_at:
         node.created_at = created_at
     if accessed_at:
@@ -15203,6 +17386,7 @@ def store(
         or subject_entity_id
         or subject_entity_name
         or structural_anchor_kind
+        or source_chunk_id
     ):
         attrs = json.loads(node.attributes) if isinstance(node.attributes, str) else (node.attributes or {})
         if source_type:
@@ -15239,6 +17423,8 @@ def store(
             attrs["subject_entity_name"] = subject_entity_name
         if structural_anchor_kind:
             attrs["structural_anchor_kind"] = structural_anchor_kind
+        if source_chunk_id:
+            attrs["source_chunk_id"] = source_chunk_id
         node.attributes = attrs
 
     injection_match = None
@@ -15255,6 +17441,7 @@ def store(
         node.status = status
     node.embedding = embedding  # Reuse the embedding we already computed
     node.content_hash = text_hash  # Reuse the hash we already computed
+    node.source_chunk_id = source_chunk_id
     try:
         node_id = graph.add_node(node, embed=False, conn=_conn)  # Don't re-embed
     except (ValueError, RuntimeError) as exc:
@@ -15413,11 +17600,12 @@ def create_edge(
             INSERT OR REPLACE INTO nodes
             (id, type, name, attributes, embedding, verified, pinned, confidence,
              source, source_id, privacy, valid_from, valid_until,
+             occurred_start, occurred_end, mentioned_at,
              created_at, updated_at, accessed_at, access_count, storage_strength, owner_id, session_id,
              fact_type, knowledge_type, extraction_confidence, status, speaker, speaker_entity_id,
              conversation_id, visibility_scope, sensitivity, provenance_confidence,
              content_hash, superseded_by, confirmation_count, last_confirmed_at, keywords)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             node.id, node.type, node.name,
             json.dumps(node.attributes),
@@ -15428,6 +17616,7 @@ def create_edge(
             node.source, node.source_id,
             node.privacy,
             node.valid_from, node.valid_until,
+            node.occurred_start, node.occurred_end, node.mentioned_at,
             node.created_at or now_iso,
             now_iso,
             node.accessed_at or now_iso,
@@ -15672,6 +17861,7 @@ def get_memory(node_id: str) -> Optional[Dict[str, Any]]:
             "pinned": node.pinned,
             "confidence": node.confidence,
             "owner_id": node.owner_id,
+            "source_chunk_id": node.source_chunk_id,
             "created_at": node.created_at,
             "updated_at": node.updated_at,
             "attributes": node.attributes
@@ -16392,6 +18582,10 @@ if __name__ == "__main__":
         #   "before": "YYYY-MM-DD",
         #   "as_of": "YYYY-MM-DD",
         #   "asOf": "YYYY-MM-DD",
+        #   "temporal_dimension": "auto|occurred|mentioned|record",
+        #   "include_chunks": false,
+        #   "max_chunk_tokens": 512,
+        #   "max_total_chunk_tokens": 2048,
         #   "session_id": null,
         #   "current_session_id": null,
         #   "compaction_time": null,
@@ -16407,6 +18601,10 @@ if __name__ == "__main__":
         recall_p.add_argument("--date-to", "--date_to", dest="date_to", default=None, help="Only return memories up to this date (YYYY-MM-DD)")
         recall_p.add_argument("--after", "--since", dest="date_from", help="Alias for --date-from")
         recall_p.add_argument("--before", "--until", "--as-of", "--as_of", "--asOf", dest="date_to", help="Alias for --date-to")
+        recall_p.add_argument("--temporal-dimension", "--temporal_dimension", choices=["auto", "occurred", "mentioned", "record"], default=None, help="Date axis for date filters")
+        recall_p.add_argument("--include-chunks", "--include_chunks", action="store_true", help="Include bounded source chunk evidence for linked facts")
+        recall_p.add_argument("--max-chunk-tokens", "--max_chunk_tokens", type=int, default=None, help="Max tokens per included source chunk")
+        recall_p.add_argument("--max-total-chunk-tokens", "--max_total_chunk_tokens", type=int, default=None, help="Aggregate token cap for all included source chunks")
 
         recall_fast_p = subparsers.add_parser("recall-fast", help="Fast pre-injection recall with HyDE fanout")
         recall_fast_p.add_argument("query", nargs="+", help="Search query")
@@ -16415,12 +18613,16 @@ if __name__ == "__main__":
         recall_fast_p.add_argument("--min-similarity", type=float, default=0.60, help="Min similarity threshold (default: 0.60)")
         recall_fast_p.add_argument("--date-from", default=None, help="Only return memories from this date onward (YYYY-MM-DD)")
         recall_fast_p.add_argument("--date-to", default=None, help="Only return memories up to this date (YYYY-MM-DD)")
+        recall_fast_p.add_argument("--temporal-dimension", "--temporal_dimension", choices=["auto", "occurred", "mentioned", "record"], default=None, help="Date axis for date filters")
         recall_fast_p.add_argument("--domain-filter", default='{"all": true}', help='Domain filter JSON, e.g. {"all":true} or {"technical":true}')
         recall_fast_p.add_argument("--domain-boost", default="[]", help='Domain boost JSON array, e.g. ["technical","project"]')
         recall_fast_p.add_argument("--project", default=None, help="Filter by project/domain label")
         recall_fast_p.add_argument("--timeout-ms", type=int, default=None, help="Override overall fast-recall timeout budget")
         recall_fast_p.add_argument("--planner-profile", choices=["off", "fast", "aggressive"], default="fast",
                                    help="Planner fanout profile for fast recall (default: fast)")
+        recall_fast_p.add_argument("--include-chunks", "--include_chunks", action="store_true", help="Include bounded source chunk evidence for linked facts")
+        recall_fast_p.add_argument("--max-chunk-tokens", "--max_chunk_tokens", type=int, default=None, help="Max tokens per included source chunk")
+        recall_fast_p.add_argument("--max-total-chunk-tokens", "--max_total_chunk_tokens", type=int, default=None, help="Aggregate token cap for all included source chunks")
         recall_fast_p.add_argument("--json", action="store_true", help="JSON output including recall metadata")
         recall_fast_p.add_argument("--debug", action="store_true", help="Show scoring breakdown for each result")
 
@@ -16802,10 +19004,17 @@ if __name__ == "__main__":
                 cli_date_from=getattr(args, "date_from", None),
                 cli_date_to=getattr(args, "date_to", None),
             )
+            temporal_dimension = _resolve_recall_command_temporal_dimension(
+                cfg,
+                cli_temporal_dimension=getattr(args, "temporal_dimension", None),
+            )
             archive         = cfg.get("archive", False)
             candidate_pool  = cfg.get("candidate_pool")
             planner_profile = cfg.get("planner_profile", "full")
             timeout_ms      = cfg.get("timeout_ms")
+            include_chunks  = bool(getattr(args, "include_chunks", False) or cfg.get("include_chunks", False))
+            max_chunk_tokens = cfg.get("max_chunk_tokens", getattr(args, "max_chunk_tokens", None))
+            max_total_chunk_tokens = cfg.get("max_total_chunk_tokens", getattr(args, "max_total_chunk_tokens", None))
             planned_queries = None
             planned_meta = None
 
@@ -16899,14 +19108,17 @@ if __name__ == "__main__":
                     compaction_time=compaction_time,
                     date_from=date_from,
                     date_to=date_to,
+                    temporal_dimension=temporal_dimension,
                     debug=use_debug,
                     domain=domain_filter,
                     domain_boost=domain_boost,
                     project=project,
                     timeout_ms=timeout_ms,
                     candidate_pool=candidate_pool,
+                    max_chunk_tokens=max_chunk_tokens,
+                    max_total_chunk_tokens=max_total_chunk_tokens,
                 )
-                if use_fast or len(store_names) > 1 or "graph" in store_names:
+                if _should_run_recall_store_plan(store_names, use_fast=bool(use_fast)):
                     results, meta, docs_bundle = _run_recall_store_plan(
                         query,
                         stores=store_names,
@@ -16921,8 +19133,22 @@ if __name__ == "__main__":
                         common_kwargs=common_kwargs,
                     )
                     if use_json:
+                        results, meta = _prepare_recall_output_rows(
+                            results,
+                            meta,
+                            include_chunks=include_chunks,
+                            max_chunk_tokens=max_chunk_tokens,
+                            max_total_chunk_tokens=max_total_chunk_tokens,
+                        )
                         json_payload = _build_recall_json_payload(results, meta=meta, docs=docs_bundle)
                     else:
+                        results, meta = _prepare_recall_output_rows(
+                            results,
+                            meta,
+                            include_chunks=include_chunks,
+                            max_chunk_tokens=max_chunk_tokens,
+                            max_total_chunk_tokens=max_total_chunk_tokens,
+                        )
                         text_memory_results = results
                         _print_recall_results(text_memory_results)
                         if docs_bundle:
@@ -16938,11 +19164,15 @@ if __name__ == "__main__":
                         compaction_time=compaction_time,
                         date_from=date_from,
                         date_to=date_to,
+                        temporal_dimension=temporal_dimension,
                         debug=use_debug,
                         domain=domain_filter,
                         domain_boost=domain_boost,
                         project=project,
                         timeout_ms=timeout_ms,
+                        include_chunks=include_chunks,
+                        max_chunk_tokens=max_chunk_tokens,
+                        max_total_chunk_tokens=max_total_chunk_tokens,
                     )
                     if use_fast:
                         recall_kwargs['use_multi_pass'] = False
@@ -17042,12 +19272,16 @@ if __name__ == "__main__":
                 min_similarity=args.min_similarity,
                 date_from=getattr(args, "date_from", None),
                 date_to=getattr(args, "date_to", None),
+                temporal_dimension=getattr(args, "temporal_dimension", None),
                 debug=getattr(args, "debug", False),
                 domain=domain_filter,
                 domain_boost=domain_boost,
                 project=getattr(args, "project", None),
                 timeout_ms=getattr(args, "timeout_ms", None),
                 planner_profile=getattr(args, "planner_profile", "fast"),
+                include_chunks=getattr(args, "include_chunks", False),
+                max_chunk_tokens=getattr(args, "max_chunk_tokens", None),
+                max_total_chunk_tokens=getattr(args, "max_total_chunk_tokens", None),
                 return_meta=True,
             )
             if args.json:

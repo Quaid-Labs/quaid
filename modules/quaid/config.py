@@ -66,6 +66,21 @@ def _truthy_env(name: str) -> bool:
     return value in {"1", "true", "yes", "on"}
 
 
+def _config_bool(value: Any, default: bool) -> bool:
+    if value is None:
+        return bool(default)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    normalized = str(value).strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    return bool(default)
+
+
 def _workspace_root() -> Path:
     """Get workspace root from runtime context."""
     return get_workspace_dir()
@@ -292,6 +307,7 @@ class RetrievalConfig:
     reranker_timeout_ms: int = 15_000  # Full-recall reranker wall timeout; preinject disables reranker entirely
     # Tuning parameters (externalized from hardcoded values)
     rrf_k: int = 60  # RRF fusion constant
+    store_plan_rrf_fusion: bool = True  # Use RRF for explicit source_chunks mixed-store plans
     reranker_blend: float = 0.5  # Blend weight: reranker vs original score
     composite_relevance_weight: float = 0.60  # Weight for relevance in composite score
     composite_recency_weight: float = 0.20  # Weight for recency
@@ -662,6 +678,7 @@ _KNOWN_RETRIEVAL_KEYS = {
     "reranker_instruction",
     "reranker_timeout_ms",
     "rrf_k",
+    "store_plan_rrf_fusion",
     "reranker_blend",
     "composite_relevance_weight",
     "composite_recency_weight",
@@ -1278,6 +1295,7 @@ def _load_config_inner() -> MemoryConfig:
         reranker_instruction=reranker_data.get('instruction', 'Given a personal memory query, determine if this memory is relevant to the query'),
         reranker_timeout_ms=int(retrieval_data.get('reranker_timeout_ms', retrieval_data.get('rerankerTimeoutMs', 15000))),
         rrf_k=retrieval_data.get('rrf_k', 60),
+        store_plan_rrf_fusion=_config_bool(retrieval_data.get('store_plan_rrf_fusion', retrieval_data.get('storePlanRrfFusion', True)), True),
         reranker_blend=retrieval_data.get('reranker_blend', 0.5),
         composite_relevance_weight=retrieval_data.get('composite_relevance_weight', 0.60),
         composite_recency_weight=retrieval_data.get('composite_recency_weight', 0.20),

@@ -18,6 +18,10 @@ from datastore.memorydb.memory_graph import (
     forget as forget_memory,
     get_memory as get_memory_by_id,
     create_edge,
+    store_source_chunk as store_memory_source_chunk,
+    store_source_chunks as store_memory_source_chunks,
+    list_source_chunks as list_memory_source_chunks,
+    get_source_chunk as get_memory_source_chunk,
 )
 
 __all__ = [
@@ -33,4 +37,8 @@ __all__ = [
     "forget_memory",
     "get_memory_by_id",
     "create_edge",
+    "store_memory_source_chunk",
+    "store_memory_source_chunks",
+    "list_memory_source_chunks",
+    "get_memory_source_chunk",
 ]

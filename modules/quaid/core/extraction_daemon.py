@@ -1581,6 +1581,7 @@ def read_rolling_state(session_id: str) -> Dict[str, Any]:
             "raw_snippets": {},
             "raw_journal": {},
             "raw_project_logs": {},
+            "raw_source_chunks": [],
             "rolling_batches": 0,
             "processed_line_offset": 0,
             "buffered_line_offset": 0,
@@ -1607,6 +1608,7 @@ def read_rolling_state(session_id: str) -> Dict[str, Any]:
             "raw_snippets": {},
             "raw_journal": {},
             "raw_project_logs": {},
+            "raw_source_chunks": [],
             "rolling_batches": 0,
             "processed_line_offset": 0,
             "buffered_line_offset": 0,
@@ -1630,6 +1632,7 @@ def read_rolling_state(session_id: str) -> Dict[str, Any]:
             "raw_snippets": {},
             "raw_journal": {},
             "raw_project_logs": {},
+            "raw_source_chunks": [],
             "rolling_batches": 0,
             "processed_line_offset": 0,
             "buffered_line_offset": 0,
@@ -1651,6 +1654,7 @@ def read_rolling_state(session_id: str) -> Dict[str, Any]:
     data.setdefault("raw_snippets", {})
     data.setdefault("raw_journal", {})
     data.setdefault("raw_project_logs", {})
+    data.setdefault("raw_source_chunks", [])
     data.setdefault("rolling_batches", 0)
     data.setdefault("processed_line_offset", 0)
     data.setdefault("buffered_line_offset", int(data.get("processed_line_offset", 0) or 0))
@@ -2104,6 +2108,10 @@ def merge_staged_payloads(state: Dict[str, Any], payload_result: Dict[str, Any])
             list(items or []) if isinstance(items, list) else [],
         )
     merged["raw_project_logs"] = project_logs
+    merged["raw_source_chunks"] = _merge_source_chunk_descriptors(
+        merged.get("raw_source_chunks", []),
+        payload_result.get("raw_source_chunks", []),
+    )
     merged["rolling_batches"] = int(merged.get("rolling_batches", 0) or 0) + 1
     merged["facts_skipped"] = int(merged.get("facts_skipped", 0) or 0) + int(payload_result.get("facts_skipped", 0) or 0)
     merged["payload_duplicate_facts_collapsed"] = int(
@@ -2143,6 +2151,25 @@ def _has_text_payload(value: Any) -> bool:
     return False
 
 
+def _merge_source_chunk_descriptors(existing: Any, incoming: Any) -> List[Dict[str, Any]]:
+    """Merge staged source chunk descriptors by stable extraction-local ref."""
+    merged: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    fallback_index = 0
+    for value in list(existing or []) + list(incoming or []):
+        if not isinstance(value, dict):
+            continue
+        ref = str(value.get("source_chunk_ref") or value.get("_source_chunk_ref") or "").strip()
+        if not ref:
+            ref = f"unref:{fallback_index}"
+            fallback_index += 1
+        if ref in seen:
+            continue
+        seen.add(ref)
+        merged.append(dict(value))
+    return merged
+
+
 def staged_state_has_payload(state: Dict[str, Any]) -> bool:
     return bool(
         _has_text_payload(state.get("raw_facts"))
@@ -2159,6 +2186,7 @@ def clear_staged_payload_from_state(state: Dict[str, Any]) -> Dict[str, Any]:
     cleaned["raw_snippets"] = {}
     cleaned["raw_journal"] = {}
     cleaned["raw_project_logs"] = {}
+    cleaned["raw_source_chunks"] = []
     cleaned["rolling_batches"] = 0
     cleaned["facts_skipped"] = 0
     cleaned["payload_duplicate_facts_collapsed"] = 0
@@ -2270,6 +2298,7 @@ def build_flush_payload(state: Dict[str, Any], tail_result: Optional[Dict[str, A
         "raw_snippets": dict(state.get("raw_snippets", {}) or {}),
         "raw_journal": dict(state.get("raw_journal", {}) or {}),
         "raw_project_logs": dict(state.get("raw_project_logs", {}) or {}),
+        "raw_source_chunks": list(state.get("raw_source_chunks", []) or []),
         "carry_facts": list((tail_result or {}).get("carry_facts", state.get("carry_facts", [])) or []),
         "chunks_processed": int(state.get("chunks_processed", 0) or 0),
         "chunks_total": int(state.get("chunks_total", 0) or 0),
@@ -2305,6 +2334,10 @@ def build_flush_payload(state: Dict[str, Any], tail_result: Optional[Dict[str, A
     from ingest.extract import collapse_duplicate_payload_facts
     combined["raw_facts"], extra_collapsed = collapse_duplicate_payload_facts(combined["raw_facts"])
     combined["payload_duplicate_facts_collapsed"] += int(extra_collapsed)
+    combined["raw_source_chunks"] = _merge_source_chunk_descriptors(
+        combined.get("raw_source_chunks", []),
+        tail_result.get("raw_source_chunks", []),
+    )
     for filename, items in (tail_result.get("raw_snippets", {}) or {}).items():
         combined["raw_snippets"][str(filename)] = _merge_unique_strings(
             combined["raw_snippets"].get(str(filename), []),
@@ -2397,6 +2430,10 @@ def _append_payload_result(
     from ingest.extract import collapse_duplicate_payload_facts
     payload["raw_facts"], extra_collapsed = collapse_duplicate_payload_facts(payload["raw_facts"])
     payload["payload_duplicate_facts_collapsed"] += int(extra_collapsed)
+    payload["raw_source_chunks"] = _merge_source_chunk_descriptors(
+        payload.get("raw_source_chunks", []),
+        extra_result.get("raw_source_chunks", []),
+    )
     payload["raw_snippets"] = {
         **dict(payload.get("raw_snippets", {}) or {}),
         **{

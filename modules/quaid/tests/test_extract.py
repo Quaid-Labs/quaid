@@ -698,6 +698,7 @@ class TestExtractFromTranscript:
         )
 
         assert result["raw_facts"][0]["created_at"] == "2026-05-02T14:29:21+00:00"
+        assert result["raw_facts"][0]["mentioned_at"] == "2026-05-02T14:29:21+00:00"
 
     @patch("ingest.extract.call_deep_reasoning")
     def test_extraction_prefers_transcript_timestamp_over_same_day_date_only_fact(self, mock_llm):
@@ -732,6 +733,46 @@ class TestExtractFromTranscript:
         )
 
         assert result["raw_facts"][0]["created_at"] == "2026-05-02T14:49:46+00:00"
+        assert result["raw_facts"][0]["mentioned_at"] == "2026-05-02T14:49:46+00:00"
+
+    @patch("ingest.extract.call_deep_reasoning")
+    def test_extraction_preserves_occurred_range_separate_from_mentioned_at(self, mock_llm):
+        from ingest.extract import extract_from_transcript
+
+        mock_llm.return_value = (json.dumps({
+            "chunk_assessment": "usable",
+            "facts": [
+                {
+                    "text": "Melanie attended the May 2023 art workshop",
+                    "category": "fact",
+                    "speaker": "user",
+                    "domains": ["personal"],
+                    "extraction_confidence": "high",
+                    "privacy": "shared",
+                    "occurred_start": "2023-05-01",
+                    "occurred_end": "2023-05-31",
+                }
+            ],
+            "soul_snippets": {},
+            "journal_entries": {},
+            "project_logs": {},
+        }), 0.1)
+
+        result = extract_from_transcript(
+            transcript=(
+                "[2026-05-02T14:49:46.911Z] User: Melanie told me she attended "
+                "the May 2023 art workshop.\n\n"
+                "[2026-05-02T14:49:49.302Z] Assistant: Noted."
+            ),
+            owner_id="Solomon Steadman",
+            dry_run=True,
+        )
+
+        fact = result["raw_facts"][0]
+        assert fact["occurred_start"] == "2023-05-01T23:59:59"
+        assert fact["occurred_end"] == "2023-05-31T23:59:59"
+        assert fact["mentioned_at"] == "2026-05-02T14:49:46+00:00"
+        assert fact["created_at"] == "2026-05-02T14:49:46+00:00"
 
     @patch("ingest.extract.call_deep_reasoning")
     def test_assistant_named_option_anchor_is_preserved_when_llm_omits_it(self, mock_llm):
@@ -2359,12 +2400,21 @@ class TestExtractFromTranscript:
         assert all("_carry_bucket" not in fact for fact in persisted)
 
     @patch("ingest.extract.call_deep_reasoning")
+    @patch("ingest.extract._memory.store_source_chunk")
     @patch("ingest.extract._memory.store")
     @patch("ingest.extract._memory.create_edge")
-    def test_apply_extracted_payloads_can_publish_prior_dry_run_result(self, mock_edge, mock_store, mock_llm, mock_opus_response):
+    def test_apply_extracted_payloads_can_publish_prior_dry_run_result(
+        self,
+        mock_edge,
+        mock_store,
+        mock_store_source_chunk,
+        mock_llm,
+        mock_opus_response,
+    ):
         from ingest.extract import apply_extracted_payloads, extract_from_transcript
 
         mock_llm.return_value = (mock_opus_response, 1.0)
+        mock_store_source_chunk.return_value = {"chunk_id": "sch_staged", "status": "created"}
         mock_store.side_effect = [
             {
                 "id": "node-1",
@@ -2429,6 +2479,10 @@ class TestExtractFromTranscript:
             dry_run=True,
         )
 
+        assert staged["raw_source_chunks"]
+        assert all("_source_chunk_ref" in fact for fact in staged["raw_facts"])
+        mock_store_source_chunk.assert_not_called()
+
         staged["facts_stored"] = 0
         staged["facts_skipped"] = 0
         staged["edges_created"] = 0
@@ -2448,6 +2502,7 @@ class TestExtractFromTranscript:
         )
 
         assert applied["facts_stored"] == 2
+        assert applied["source_chunks_stored"] == 1
         assert applied["edges_created"] == 1
         assert applied["dedup_hash_exact_hits"] == 1
         assert applied["dedup_scanned_rows"] == 7
@@ -2469,6 +2524,8 @@ class TestExtractFromTranscript:
         assert applied["dedup_token_prefilter_terms"] == 11
         assert applied["dedup_token_prefilter_skips"] == 0
         assert mock_store.call_count == 2
+        assert mock_store_source_chunk.call_count == 1
+        assert {call.kwargs["source_chunk_id"] for call in mock_store.call_args_list} == {"sch_staged"}
         first_call = mock_store.call_args_list[0].kwargs
         second_call = mock_store.call_args_list[1].kwargs
         assert first_call["confidence"] == pytest.approx(0.9)
@@ -2537,6 +2594,467 @@ class TestExtractFromTranscript:
         assert call["provenance_confidence"] == pytest.approx(0.9)
         assert call["created_at"] == "2026-03-12T23:59:59"
         assert sorted(call["domains"]) == ["health", "personal"]
+
+    @patch("ingest.extract._memory.store")
+    def test_apply_extracted_payloads_passes_temporal_provenance_to_store(self, mock_store):
+        from ingest.extract import apply_extracted_payloads
+
+        mock_store.return_value = {"id": "n-time", "status": "created", "dedup_telemetry": {}}
+
+        payload = {
+            "raw_facts": [
+                {
+                    "text": "Maya attended the spring pottery workshop",
+                    "category": "fact",
+                    "speaker": "user",
+                    "domains": ["personal"],
+                    "extraction_confidence": "high",
+                    "privacy": "shared",
+                    "created_at": "2026-05-06T10:31:00",
+                    "occurred_start": "2026-03-01T23:59:59",
+                    "occurred_end": "2026-03-31T23:59:59",
+                    "mentioned_at": "2026-05-06T10:30:00",
+                },
+            ],
+            "raw_snippets": {},
+            "raw_journal": {},
+            "raw_project_logs": {},
+            "facts": [],
+            "snippets": {},
+            "journal": {},
+            "project_logs": {},
+            "project_log_metrics": {},
+            "facts_stored": 0,
+            "facts_skipped": 0,
+            "edges_created": 0,
+            "dry_run": False,
+        }
+
+        applied = apply_extracted_payloads(
+            payload,
+            owner_id="test",
+            label="flush",
+            session_id="sess-time",
+            dry_run=False,
+        )
+
+        assert applied["facts_stored"] == 1
+        call = mock_store.call_args.kwargs
+        assert call["created_at"] == "2026-05-06T10:31:00"
+        assert call["occurred_start"] == "2026-03-01T23:59:59"
+        assert call["occurred_end"] == "2026-03-31T23:59:59"
+        assert call["mentioned_at"] == "2026-05-06T10:30:00"
+
+    def test_merge_parsed_payloads_attaches_source_chunk_id_to_facts(self):
+        from ingest.extract import _merge_parsed_payloads
+
+        all_facts = []
+        result = {
+            "chunks_processed": 0,
+            "facts_skipped": 0,
+            "unsupported_specificity_facts_dropped": 0,
+        }
+
+        _merge_parsed_payloads(
+            [
+                {
+                    "facts": [
+                        {
+                            "text": "Ada stores the launch checklist in the red binder.",
+                            "category": "fact",
+                            "speaker": "user",
+                            "domains": ["project"],
+                            "extraction_confidence": "high",
+                        }
+                    ]
+                }
+            ],
+            transcript_text="User: Ada stores the launch checklist in the red binder.",
+            all_facts=all_facts,
+            all_snippets={},
+            all_journal={},
+            all_project_logs={},
+            result=result,
+            chunk_label="1",
+            label="unit",
+            source_chunk_id="sch_testchunk",
+        )
+
+        assert all_facts[0]["_source_chunk_id"] == "sch_testchunk"
+        assert all_facts[0]["_source_chunk_index"] == "1"
+
+    def test_merge_parsed_payloads_attaches_source_chunk_ref_to_staged_facts(self):
+        from ingest.extract import _merge_parsed_payloads
+
+        all_facts = []
+        result = {
+            "chunks_processed": 0,
+            "facts_skipped": 0,
+            "unsupported_specificity_facts_dropped": 0,
+        }
+
+        _merge_parsed_payloads(
+            [
+                {
+                    "facts": [
+                        {
+                            "text": "Ada stores the launch checklist in the red binder.",
+                            "category": "fact",
+                            "speaker": "user",
+                            "domains": ["project"],
+                            "extraction_confidence": "high",
+                        }
+                    ]
+                }
+            ],
+            transcript_text="User: Ada stores the launch checklist in the red binder.",
+            all_facts=all_facts,
+            all_snippets={},
+            all_journal={},
+            all_project_logs={},
+            result=result,
+            chunk_label="1",
+            label="unit",
+            source_chunk_ref="chunk:unitref",
+        )
+
+        assert all_facts[0]["_source_chunk_ref"] == "chunk:unitref"
+        assert all_facts[0]["_source_chunk_index"] == "1"
+
+    @patch("ingest.extract._memory.store_source_chunk")
+    @patch("ingest.extract._memory.store")
+    def test_extract_from_transcript_stores_source_chunk_and_links_facts(
+        self,
+        mock_store,
+        mock_store_source_chunk,
+        mock_opus_response,
+    ):
+        from ingest.extract import extract_from_transcript
+
+        mock_store_source_chunk.return_value = {"chunk_id": "sch_extract_1", "status": "created"}
+        mock_store.return_value = {"id": "node-1", "status": "created", "dedup_telemetry": {}}
+
+        with patch("ingest.extract.call_deep_reasoning", return_value=(mock_opus_response, 1.0)):
+            result = extract_from_transcript(
+                transcript="User: I like coffee\n\nAssistant: noted",
+                owner_id="test",
+                label="chunklink",
+                session_id="sess-chunklink",
+                source_channel="test",
+                source_conversation_id="conv-chunklink",
+                source_author_id="author-chunklink",
+                write_snippets=False,
+                write_journal=False,
+                dry_run=False,
+            )
+
+        assert result["source_chunks_stored"] == 1
+        assert mock_store_source_chunk.call_args.kwargs["session_id"] == "sess-chunklink"
+        assert mock_store_source_chunk.call_args.kwargs["chunk_index"] == 0
+        assert mock_store.call_count == 2
+        assert {call.kwargs["source_chunk_id"] for call in mock_store.call_args_list} == {"sch_extract_1"}
+
+    @patch("ingest.extract.is_fail_hard_enabled", return_value=True)
+    @patch("ingest.extract._memory.store_source_chunk", side_effect=RuntimeError("chunk store failed"))
+    def test_apply_extracted_payloads_raises_when_source_chunk_store_fails_under_failhard(
+        self,
+        _mock_store_source_chunk,
+        _mock_fail_hard,
+    ):
+        from ingest.extract import apply_extracted_payloads
+
+        payload = {
+            "raw_facts": [
+                {
+                    "text": "Ada keeps the launch checklist in the red binder.",
+                    "category": "fact",
+                    "speaker": "user",
+                    "domains": ["project"],
+                    "extraction_confidence": "high",
+                    "_source_chunk_ref": "chunk:failhard",
+                },
+            ],
+            "raw_source_chunks": [
+                {
+                    "source_chunk_ref": "chunk:failhard",
+                    "text": "User: Ada keeps the launch checklist in the red binder.",
+                    "source_id": "sess-failhard",
+                    "session_id": "sess-failhard",
+                    "chunk_index": 0,
+                }
+            ],
+            "raw_snippets": {},
+            "raw_journal": {},
+            "raw_project_logs": {},
+            "facts": [],
+            "snippets": {},
+            "journal": {},
+            "project_logs": {},
+            "project_log_metrics": {},
+            "facts_stored": 0,
+            "facts_skipped": 0,
+            "edges_created": 0,
+            "dry_run": False,
+        }
+
+        with pytest.raises(RuntimeError, match="Failed to store extraction source chunk"):
+            apply_extracted_payloads(
+                payload,
+                owner_id="test",
+                label="flush",
+                session_id="sess-failhard",
+                dry_run=False,
+            )
+
+    @patch("ingest.extract.is_fail_hard_enabled", return_value=True)
+    @patch("ingest.extract._memory.store_source_chunk", return_value={"status": "created"})
+    def test_apply_extracted_payloads_raises_when_source_chunk_store_returns_no_id_under_failhard(
+        self,
+        _mock_store_source_chunk,
+        _mock_fail_hard,
+    ):
+        from ingest.extract import apply_extracted_payloads
+
+        payload = {
+            "raw_facts": [
+                {
+                    "text": "Ada keeps the launch checklist in the red binder.",
+                    "category": "fact",
+                    "speaker": "user",
+                    "domains": ["project"],
+                    "extraction_confidence": "high",
+                    "_source_chunk_ref": "chunk:noid",
+                },
+            ],
+            "raw_source_chunks": [
+                {
+                    "source_chunk_ref": "chunk:noid",
+                    "text": "User: Ada keeps the launch checklist in the red binder.",
+                    "source_id": "sess-noid",
+                    "session_id": "sess-noid",
+                    "chunk_index": 0,
+                }
+            ],
+            "raw_snippets": {},
+            "raw_journal": {},
+            "raw_project_logs": {},
+            "facts": [],
+            "snippets": {},
+            "journal": {},
+            "project_logs": {},
+            "project_log_metrics": {},
+            "facts_stored": 0,
+            "facts_skipped": 0,
+            "edges_created": 0,
+            "dry_run": False,
+        }
+
+        with pytest.raises(RuntimeError, match="Source chunk store returned no chunk_id"):
+            apply_extracted_payloads(
+                payload,
+                owner_id="test",
+                label="flush",
+                session_id="sess-noid",
+                dry_run=False,
+            )
+
+    @patch("ingest.extract._memory.store")
+    def test_apply_extracted_payloads_passes_source_chunk_id_to_store(self, mock_store):
+        from ingest.extract import apply_extracted_payloads
+
+        mock_store.return_value = {"id": "n-source-chunk", "status": "created", "dedup_telemetry": {}}
+
+        payload = {
+            "raw_facts": [
+                {
+                    "text": "Ada keeps the launch checklist in the red binder.",
+                    "category": "fact",
+                    "speaker": "user",
+                    "domains": ["project"],
+                    "extraction_confidence": "high",
+                    "_source_chunk_id": "sch_fact_evidence",
+                },
+            ],
+            "raw_snippets": {},
+            "raw_journal": {},
+            "raw_project_logs": {},
+            "facts": [],
+            "snippets": {},
+            "journal": {},
+            "project_logs": {},
+            "project_log_metrics": {},
+            "facts_stored": 0,
+            "facts_skipped": 0,
+            "edges_created": 0,
+            "dry_run": False,
+        }
+
+        applied = apply_extracted_payloads(
+            payload,
+            owner_id="test",
+            label="flush",
+            session_id="sess-source-chunk",
+            dry_run=False,
+        )
+
+        assert applied["facts_stored"] == 1
+        assert mock_store.call_args.kwargs["source_chunk_id"] == "sch_fact_evidence"
+
+    @patch("ingest.extract._memory.store_source_chunk")
+    @patch("ingest.extract._memory.store")
+    def test_apply_extracted_payloads_maps_each_fact_to_its_referenced_chunk(
+        self,
+        mock_store,
+        mock_store_source_chunk,
+    ):
+        from ingest.extract import apply_extracted_payloads
+
+        mock_store.return_value = {"id": "n-source-chunk", "status": "created", "dedup_telemetry": {}}
+
+        def _store_chunk(**kwargs):
+            return {
+                "chunk_id": f"sch_chunk_{kwargs['chunk_index']}",
+                "status": "created",
+            }
+
+        mock_store_source_chunk.side_effect = _store_chunk
+        payload = {
+            "raw_facts": [
+                {
+                    "text": "Ada keeps the launch checklist in the red binder.",
+                    "category": "fact",
+                    "speaker": "user",
+                    "domains": ["project"],
+                    "extraction_confidence": "high",
+                    "_source_chunk_ref": "chunk:first",
+                },
+                {
+                    "text": "Berto keeps the rover manual in cabinet seven.",
+                    "category": "fact",
+                    "speaker": "user",
+                    "domains": ["project"],
+                    "extraction_confidence": "high",
+                    "_source_chunk_ref": "chunk:second",
+                },
+            ],
+            "raw_source_chunks": [
+                {
+                    "source_chunk_ref": "chunk:first",
+                    "text": "User: Ada keeps the launch checklist in the red binder.",
+                    "source_id": "sess-multichunk",
+                    "session_id": "sess-multichunk",
+                    "chunk_index": 0,
+                },
+                {
+                    "source_chunk_ref": "chunk:unused",
+                    "text": "User: Cora labels the backup battery with blue tape.",
+                    "source_id": "sess-multichunk",
+                    "session_id": "sess-multichunk",
+                    "chunk_index": 2,
+                },
+                {
+                    "source_chunk_ref": "chunk:first",
+                    "text": "User: Ada keeps the launch checklist in the red binder.",
+                    "source_id": "sess-multichunk",
+                    "session_id": "sess-multichunk",
+                    "chunk_index": 0,
+                },
+                {
+                    "source_chunk_ref": "chunk:second",
+                    "text": "User: Berto keeps the rover manual in cabinet seven.",
+                    "source_id": "sess-multichunk",
+                    "session_id": "sess-multichunk",
+                    "chunk_index": 1,
+                },
+            ],
+            "raw_snippets": {},
+            "raw_journal": {},
+            "raw_project_logs": {},
+            "facts": [],
+            "snippets": {},
+            "journal": {},
+            "project_logs": {},
+            "project_log_metrics": {},
+            "facts_stored": 0,
+            "facts_skipped": 0,
+            "edges_created": 0,
+            "dry_run": False,
+        }
+
+        applied = apply_extracted_payloads(
+            payload,
+            owner_id="test",
+            label="flush",
+            session_id="sess-multichunk",
+            dry_run=False,
+        )
+
+        assert applied["facts_stored"] == 2
+        assert applied["source_chunks_stored"] == 2
+        assert applied["source_chunks_failed"] == 0
+        assert [call.kwargs["chunk_index"] for call in mock_store_source_chunk.call_args_list] == [0, 1]
+        assert [call.kwargs["source_chunk_id"] for call in mock_store.call_args_list] == [
+            "sch_chunk_0",
+            "sch_chunk_1",
+        ]
+
+    @patch("ingest.extract._memory.store_source_chunk")
+    @patch("ingest.extract._memory.store")
+    def test_apply_extracted_payloads_skips_orphan_chunk_descriptors_and_leaves_missing_refs_unlinked(
+        self,
+        mock_store,
+        mock_store_source_chunk,
+    ):
+        from ingest.extract import apply_extracted_payloads
+
+        mock_store.return_value = {"id": "n-orphan-source-chunk", "status": "created", "dedup_telemetry": {}}
+        payload = {
+            "raw_facts": [
+                {
+                    "text": "Ada keeps the launch checklist in the red binder.",
+                    "category": "fact",
+                    "speaker": "user",
+                    "domains": ["project"],
+                    "extraction_confidence": "high",
+                    "_source_chunk_ref": "chunk:missing",
+                },
+            ],
+            "raw_source_chunks": [
+                {
+                    "source_chunk_ref": "chunk:unused",
+                    "text": "User: This descriptor has no extracted fact.",
+                    "source_id": "sess-orphan",
+                    "session_id": "sess-orphan",
+                    "chunk_index": 0,
+                },
+            ],
+            "raw_snippets": {},
+            "raw_journal": {},
+            "raw_project_logs": {},
+            "facts": [],
+            "snippets": {},
+            "journal": {},
+            "project_logs": {},
+            "project_log_metrics": {},
+            "facts_stored": 0,
+            "facts_skipped": 0,
+            "edges_created": 0,
+            "dry_run": False,
+        }
+
+        applied = apply_extracted_payloads(
+            payload,
+            owner_id="test",
+            label="flush",
+            session_id="sess-orphan",
+            dry_run=False,
+        )
+
+        assert applied["facts_stored"] == 1
+        assert applied["source_chunks_stored"] == 0
+        assert applied["source_chunks_failed"] == 0
+        mock_store_source_chunk.assert_not_called()
+        assert mock_store.call_args.kwargs["source_chunk_id"] is None
 
     @patch("ingest.extract._memory.store")
     def test_apply_extracted_payloads_honors_subagent_source_overrides(self, mock_store):

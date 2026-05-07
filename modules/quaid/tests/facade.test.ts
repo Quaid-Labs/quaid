@@ -854,6 +854,60 @@ describe("QuaidFacade", () => {
     expect(JSON.parse(cfgArg!).timeout_ms).toBe(32000);
   });
 
+  it("recallWithDiagnostics preserves source_chunks-only store requests", async () => {
+    const execPython = vi.fn(async (command: string) => {
+      if (command === "recall") {
+        return JSON.stringify({
+          contract: "quaid.recall.v1",
+          results: [
+            {
+              text: "[source_chunk] session-source#0: User: exact transcript context",
+              category: "source_chunk",
+              source_type: "source_chunk",
+              similarity: 0.95,
+              source_chunk_id: "sch_test",
+              chunk_id: "sch_test",
+              chunk_index: 0,
+              output_token_count: 4,
+              truncated: false,
+            },
+          ],
+          meta: { planned_stores: ["source_chunks"] },
+        });
+      }
+      return "{}";
+    });
+    const facade = createQuaidFacade(makeMockDeps({ execPython }));
+    const { results, diagnostics } = await facade.recallWithDiagnostics({
+      query: "exact transcript context",
+      limit: 5,
+      routeStores: false,
+      datastores: ["source_chunks"],
+      expandGraph: false,
+      maxChunkTokens: 12,
+      maxTotalChunkTokens: 20,
+    });
+    const recallCall = execPython.mock.calls.find((args) => args[0] === "recall");
+    const recallArgs: string[] = recallCall?.[1] ?? [];
+    const cfgArg = recallArgs.find((a: string) => a.startsWith("{"));
+    const cfg = JSON.parse(cfgArg!);
+
+    expect(cfg.stores).toEqual(["source_chunks"]);
+    expect(cfg.max_chunk_tokens).toBe(12);
+    expect(cfg.max_total_chunk_tokens).toBe(20);
+    expect(diagnostics?.meta?.planned_stores).toEqual(["source_chunks"]);
+    expect(results[0]).toMatchObject({
+      category: "source_chunk",
+      sourceType: "source_chunk",
+      sourceChunkId: "sch_test",
+      chunkId: "sch_test",
+      chunkIndex: 0,
+      outputTokenCount: 4,
+      truncated: false,
+      via: "source_chunks",
+    });
+  });
+
   it("recallWithDiagnostics with expandGraph preserves both vector and graph results", async () => {
     const execPython = vi.fn(async (command: string) => {
       if (command === "recall") {

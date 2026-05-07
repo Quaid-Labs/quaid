@@ -1,4 +1,4 @@
-export type KnowledgeDatastore = "vector" | "vector_basic" | "vector_technical" | "graph" | "journal" | "project";
+export type KnowledgeDatastore = "vector" | "vector_basic" | "vector_technical" | "graph" | "journal" | "project" | "source_chunks";
 export type DomainFilter = Record<string, boolean>;
 export type SourceType = "user" | "assistant" | "both" | "tool" | "import";
 export type RecallIntent = "general" | "agent_actions" | "relationship" | "technical";
@@ -99,6 +99,24 @@ const STORE_REGISTRY: KnowledgeDatastoreSpec[] = [
       },
     ],
   },
+  {
+    key: "source_chunks",
+    description: "Opt-in transcript/source chunk recall for exact source context and evidence.",
+    defaultWhenExpandGraph: false,
+    defaultWhenFlatRecall: false,
+    options: [
+      {
+        key: "max_chunk_tokens",
+        description: "Maximum output tokens per returned source chunk.",
+        valueType: "number",
+      },
+      {
+        key: "max_total_chunk_tokens",
+        description: "Maximum aggregate output tokens across returned source chunks.",
+        valueType: "number",
+      },
+    ],
+  },
 ];
 
 export function getKnowledgeDatastoreRegistry(): KnowledgeDatastoreSpec[] {
@@ -113,8 +131,9 @@ export function getKnowledgeDatastoreKeys(): KnowledgeDatastore[] {
 }
 
 export function getRoutableDatastoreKeys(): KnowledgeDatastore[] {
-  // "vector" is an aggregate store; planner should route to concrete datastores.
-  return STORE_REGISTRY.map((s) => s.key).filter((k) => k !== "vector");
+  // "vector" is an aggregate store. "source_chunks" exposes raw transcript
+  // context, so keep it explicit-only rather than LLM-router selectable.
+  return STORE_REGISTRY.map((s) => s.key).filter((k) => k !== "vector" && k !== "source_chunks");
 }
 
 export function normalizeKnowledgeDatastores(datastores: unknown, expandGraph: boolean): KnowledgeDatastore[] {

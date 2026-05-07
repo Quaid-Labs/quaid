@@ -112,12 +112,21 @@ def _prefer_earlier_timestamp(first: Any, second: Any) -> Optional[str]:
     return a or b
 
 
+def _prefer_later_timestamp(first: Any, second: Any) -> Optional[str]:
+    """Pick the latest valid timestamp, preferring any valid value over missing."""
+    a = _normalize_extracted_timestamp(first)
+    b = _normalize_extracted_timestamp(second)
+    if a and b:
+        return a if _timestamp_sort_key(a) >= _timestamp_sort_key(b) else b
+    return a or b
+
+
 def _normalize_fact_temporal_hint(
     fact: Dict[str, Any],
     *,
     default_created_at: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Normalize fact created_at and backfill with a session/date hint when absent."""
+    """Normalize fact temporal metadata and backfill source mention time."""
     normalized = dict(fact or {})
     raw_created_at = str(normalized.get("created_at") or "").strip()
     created_at = _normalize_extracted_timestamp(raw_created_at)
@@ -135,6 +144,24 @@ def _normalize_fact_temporal_hint(
         normalized["created_at"] = created_at
     else:
         normalized.pop("created_at", None)
+    occurred_start = _normalize_extracted_timestamp(
+        normalized.get("occurred_start") or normalized.get("occurred_at")
+    )
+    occurred_end = _normalize_extracted_timestamp(normalized.get("occurred_end"))
+    if occurred_start:
+        normalized["occurred_start"] = occurred_start
+    else:
+        normalized.pop("occurred_start", None)
+    if occurred_end:
+        normalized["occurred_end"] = occurred_end
+    else:
+        normalized.pop("occurred_end", None)
+    mentioned_at = _normalize_extracted_timestamp(normalized.get("mentioned_at")) or fallback_created_at or created_at
+    if mentioned_at:
+        normalized["mentioned_at"] = mentioned_at
+    else:
+        normalized.pop("mentioned_at", None)
+    normalized.pop("occurred_at", None)
     return normalized
 
 
@@ -298,6 +325,9 @@ class _LazyMemoryService:
     def store(self, *args, **kwargs):
         return self._svc().store(*args, **kwargs)
 
+    def store_source_chunk(self, *args, **kwargs):
+        return self._svc().store_source_chunk(*args, **kwargs)
+
 
 _memory = _LazyMemoryService()
 
@@ -308,6 +338,144 @@ MAX_EXTRACT_SPLIT_DEPTH = 4
 DEFAULT_EXTRACT_PUBLISH_BATCH_SIZE = 100
 MIN_REPAIR_OUTPUT_TOKENS = 4096
 _SOUL_SNIPPETS_MODULE = None
+
+
+def _build_extraction_source_chunk_descriptor(
+    chunk: str,
+    *,
+    label: str,
+    session_id: Optional[str],
+    chunk_index: int,
+    source_channel: Optional[str],
+    source_conversation_id: Optional[str],
+    source_author_id: Optional[str],
+) -> Optional[Dict[str, Any]]:
+    """Describe the raw transcript chunk that produced extracted facts."""
+    if not str(chunk or "").strip():
+        return None
+    source_key = str(session_id or source_conversation_id or "").strip()
+    if not source_key:
+        return None
+    ref_hash = hashlib.sha256(
+        "\x1f".join([source_key, str(int(chunk_index)), str(chunk or "")]).encode("utf-8")
+    ).hexdigest()[:16]
+    return {
+        "source_chunk_ref": f"chunk:{ref_hash}",
+        "text": str(chunk),
+        "source_id": source_key,
+        "session_id": session_id,
+        "chunk_index": int(chunk_index),
+        "source_channel": source_channel,
+        "source_conversation_id": source_conversation_id,
+        "conversation_id": source_conversation_id,
+        "source_author_id": source_author_id,
+    }
+
+
+def _store_payload_source_chunks(
+    result: Dict[str, Any],
+    *,
+    owner_id: str,
+    label: str,
+    session_id: Optional[str],
+    source_channel: Optional[str],
+    source_conversation_id: Optional[str],
+    source_author_id: Optional[str],
+) -> Dict[str, str]:
+    """Materialize staged source chunk descriptors at publish time."""
+    ref_to_chunk_id: Dict[str, str] = {}
+    descriptors = list(result.get("raw_source_chunks", []) or [])
+    if not descriptors:
+        return ref_to_chunk_id
+    referenced_refs = {
+        str(fact.get("_source_chunk_ref") or fact.get("source_chunk_ref") or "").strip()
+        for fact in list(result.get("raw_facts", []) or [])
+        if isinstance(fact, dict)
+    }
+    referenced_refs = {ref for ref in referenced_refs if ref}
+    if not referenced_refs:
+        return ref_to_chunk_id
+    seen_refs: set[str] = set()
+    for raw in descriptors:
+        if not isinstance(raw, dict):
+            continue
+        ref = str(raw.get("source_chunk_ref") or raw.get("_source_chunk_ref") or "").strip()
+        if not ref or ref not in referenced_refs or ref in seen_refs:
+            continue
+        seen_refs.add(ref)
+        text = str(raw.get("text") or "").strip()
+        if not text:
+            continue
+        chunk_session_id = str(raw.get("session_id") or session_id or "").strip() or None
+        chunk_source_conversation_id = str(
+            raw.get("source_conversation_id") or source_conversation_id or ""
+        ).strip() or None
+        source_key = str(raw.get("source_id") or chunk_session_id or chunk_source_conversation_id or "").strip()
+        if not source_key:
+            continue
+        try:
+            stored = _memory.store_source_chunk(
+                text=text,
+                owner_id=owner_id,
+                source_id=source_key,
+                session_id=chunk_session_id,
+                chunk_index=int(raw.get("chunk_index", 0) or 0),
+                source_channel=raw.get("source_channel") or source_channel,
+                source_conversation_id=chunk_source_conversation_id,
+                conversation_id=raw.get("conversation_id") or chunk_source_conversation_id,
+                source_author_id=raw.get("source_author_id") or source_author_id,
+            )
+        except Exception as exc:
+            if is_fail_hard_enabled():
+                raise RuntimeError("Failed to store extraction source chunk") from exc
+            logger.warning(
+                "[extract] %s source chunk %s: failed to store source chunk: %s",
+                label,
+                ref,
+                exc,
+                exc_info=True,
+            )
+            result["source_chunks_failed"] = int(result.get("source_chunks_failed", 0) or 0) + 1
+            continue
+        chunk_id = str((stored or {}).get("chunk_id") or "").strip()
+        if not chunk_id:
+            result["source_chunks_failed"] = int(result.get("source_chunks_failed", 0) or 0) + 1
+            if is_fail_hard_enabled():
+                raise RuntimeError("Source chunk store returned no chunk_id")
+            logger.warning(
+                "[extract] %s source chunk %s: store returned no chunk_id",
+                label,
+                ref,
+            )
+            continue
+        ref_to_chunk_id[ref] = chunk_id
+        status = str((stored or {}).get("status") or "").strip()
+        if status == "existing":
+            result["source_chunks_existing"] = int(result.get("source_chunks_existing", 0) or 0) + 1
+        else:
+            result["source_chunks_stored"] = int(result.get("source_chunks_stored", 0) or 0) + 1
+    return ref_to_chunk_id
+
+
+def _attach_materialized_source_chunk_ids(
+    raw_facts: List[Any],
+    ref_to_chunk_id: Dict[str, str],
+) -> List[Any]:
+    if not ref_to_chunk_id:
+        return raw_facts
+    out: List[Any] = []
+    for fact in raw_facts:
+        if not isinstance(fact, dict):
+            out.append(fact)
+            continue
+        item = dict(fact)
+        if not str(item.get("_source_chunk_id") or item.get("source_chunk_id") or "").strip():
+            ref = str(item.get("_source_chunk_ref") or item.get("source_chunk_ref") or "").strip()
+            chunk_id = ref_to_chunk_id.get(ref)
+            if chunk_id:
+                item["_source_chunk_id"] = chunk_id
+        out.append(item)
+    return out
 
 
 def _load_soul_snippets_module():
@@ -828,6 +996,8 @@ def _repair_non_json_extraction_payload(
         "    {\n"
         '      "text": string,\n'
         '      "created_at": optional string,\n'
+        '      "occurred_start": optional string,\n'
+        '      "occurred_end": optional string,\n'
         '      "category": string,\n'
         '      "subject_entity_name": optional string,\n'
         '      "domains": [string],\n'
@@ -969,6 +1139,8 @@ def _fact_provenance_specificity(fact: Dict[str, Any]) -> int:
         score += 5
     if str((fact or {}).get("_source_id", "") or "").strip():
         score += 5
+    if str((fact or {}).get("_source_chunk_id") or (fact or {}).get("source_chunk_id") or "").strip():
+        score += 3
     return score
 
 
@@ -1018,11 +1190,11 @@ def _merge_duplicate_fact_entries(primary: Dict[str, Any], duplicate: Dict[str, 
             merged[key] = other.get(key)
 
     if _fact_provenance_specificity(other) > _fact_provenance_specificity(merged):
-        for key in ("source", "_source_label", "_source_id"):
+        for key in ("source", "_source_label", "_source_id", "_source_chunk_id", "source_chunk_id", "_source_chunk_index"):
             if other.get(key):
                 merged[key] = other.get(key)
     else:
-        for key in ("source", "_source_label", "_source_id"):
+        for key in ("source", "_source_label", "_source_id", "_source_chunk_id", "source_chunk_id", "_source_chunk_index"):
             if not merged.get(key) and other.get(key):
                 merged[key] = other.get(key)
 
@@ -1034,6 +1206,21 @@ def _merge_duplicate_fact_entries(primary: Dict[str, Any], duplicate: Dict[str, 
         merged["created_at"] = merged_created_at
     else:
         merged.pop("created_at", None)
+    merged_occurred_start = _prefer_earlier_timestamp(merged.get("occurred_start"), other.get("occurred_start"))
+    if merged_occurred_start:
+        merged["occurred_start"] = merged_occurred_start
+    else:
+        merged.pop("occurred_start", None)
+    merged_occurred_end = _prefer_later_timestamp(merged.get("occurred_end"), other.get("occurred_end"))
+    if merged_occurred_end:
+        merged["occurred_end"] = merged_occurred_end
+    else:
+        merged.pop("occurred_end", None)
+    merged_mentioned_at = _prefer_earlier_timestamp(merged.get("mentioned_at"), other.get("mentioned_at"))
+    if merged_mentioned_at:
+        merged["mentioned_at"] = merged_mentioned_at
+    else:
+        merged.pop("mentioned_at", None)
 
     return merged
 
@@ -2259,6 +2446,9 @@ def _slim_carry_fact(fact: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         "privacy",
         "domains",
         "created_at",
+        "occurred_start",
+        "occurred_end",
+        "mentioned_at",
     ):
         value = fact.get(key)
         if value:
@@ -2440,6 +2630,8 @@ def _merge_parsed_payloads(
     chunk_label: str,
     label: str,
     session_date_hint: Optional[str] = None,
+    source_chunk_id: Optional[str] = None,
+    source_chunk_ref: Optional[str] = None,
 ) -> None:
     """Merge extracted payloads into top-level accumulators in chunk order."""
     effective_date_hint = _first_transcript_timestamp_hint(transcript_text) or session_date_hint
@@ -2456,12 +2648,17 @@ def _merge_parsed_payloads(
                 if not isinstance(raw_fact.get("text"), str):
                     invalid_fact_count += 1
                     continue
-                valid_facts.append(
-                    _normalize_fact_temporal_hint(
-                        raw_fact,
-                        default_created_at=effective_date_hint,
-                    )
+                normalized_fact = _normalize_fact_temporal_hint(
+                    raw_fact,
+                    default_created_at=effective_date_hint,
                 )
+                if source_chunk_id:
+                    normalized_fact["_source_chunk_id"] = source_chunk_id
+                    normalized_fact["_source_chunk_index"] = chunk_label
+                elif source_chunk_ref:
+                    normalized_fact["_source_chunk_ref"] = source_chunk_ref
+                    normalized_fact["_source_chunk_index"] = chunk_label
+                valid_facts.append(normalized_fact)
             if invalid_fact_count:
                 logger.warning(
                     f"[extract] {label} chunk {chunk_label}: skipped {invalid_fact_count} invalid fact payload(s)"
@@ -2749,6 +2946,22 @@ def apply_extracted_payloads(
 ) -> Dict[str, Any]:
     """Store/publish a previously extracted raw payload bundle."""
     session_date_hint = _project_log_date_for_payload(session_id or "")
+    result.setdefault("source_chunks_stored", 0)
+    result.setdefault("source_chunks_existing", 0)
+    result.setdefault("source_chunks_failed", 0)
+    raw_facts = list(result.get("raw_facts", []) or [])
+    if not dry_run:
+        ref_to_chunk_id = _store_payload_source_chunks(
+            result,
+            owner_id=owner_id,
+            label=label,
+            session_id=session_id,
+            source_channel=source_channel,
+            source_conversation_id=source_conversation_id,
+            source_author_id=source_author_id,
+        )
+        raw_facts = _attach_materialized_source_chunk_ids(raw_facts, ref_to_chunk_id)
+        result["raw_facts"] = raw_facts
     facts = [
         _normalize_fact_temporal_hint(
             fact,
@@ -2756,7 +2969,7 @@ def apply_extracted_payloads(
         )
         if isinstance(fact, dict)
         else fact
-        for fact in list(result.get("raw_facts", []) or [])
+        for fact in raw_facts
     ]
     facts, collapsed_duplicates = _collapse_duplicate_payload_facts(facts)
     all_snippets = dict(result.get("raw_snippets", {}) or {})
@@ -3110,6 +3323,7 @@ def apply_extracted_payloads(
         knowledge_type = "preference" if category == "preference" else "fact"
         source_label = str(fact.get("_source_label") or f"{label}-extraction")
         source_id_value = str(fact.get("_source_id") or session_id or "")
+        source_chunk_id = str(fact.get("_source_chunk_id") or fact.get("source_chunk_id") or "").strip() or None
         speaker_label, source_type = _normalize_fact_provenance(
             fact,
             label=label,
@@ -3139,6 +3353,7 @@ def apply_extracted_payloads(
                 privacy=privacy,
                 source=source_label,
                 source_id=source_id_value or session_id,
+                source_chunk_id=source_chunk_id,
                 owner_id=owner_id,
                 session_id=session_id,
                 knowledge_type=knowledge_type,
@@ -3158,6 +3373,9 @@ def apply_extracted_payloads(
                 participant_entity_ids=participant_entity_ids,
                 source_author_id=source_author_id,
                 created_at=fact.get("created_at"),
+                occurred_start=fact.get("occurred_start"),
+                occurred_end=fact.get("occurred_end"),
+                mentioned_at=fact.get("mentioned_at"),
                 structural_anchor_kind=fact.get("structural_anchor_kind"),
                 _conn=write_conn,
                 _dedup_rowid_max=dedup_rowid_max,
@@ -3274,6 +3492,7 @@ def apply_extracted_payloads(
                         knowledge_type = "preference" if category == "preference" else "fact"
                         source_label = str(fact.get("_source_label") or f"{label}-extraction")
                         source_id_value = str(fact.get("_source_id") or session_id or "")
+                        source_chunk_id = str(fact.get("_source_chunk_id") or fact.get("source_chunk_id") or "").strip() or None
                         speaker_label, source_type = _normalize_fact_provenance(
                             fact,
                             label=label,
@@ -3291,6 +3510,7 @@ def apply_extracted_payloads(
                             privacy=privacy,
                             source=source_label,
                             source_id=source_id_value or session_id,
+                            source_chunk_id=source_chunk_id,
                             owner_id=owner_id,
                             session_id=session_id,
                             knowledge_type=knowledge_type,
@@ -3310,6 +3530,9 @@ def apply_extracted_payloads(
                             participant_entity_ids=participant_entity_ids,
                             source_author_id=source_author_id,
                             created_at=fact.get("created_at"),
+                            occurred_start=fact.get("occurred_start"),
+                            occurred_end=fact.get("occurred_end"),
+                            mentioned_at=fact.get("mentioned_at"),
                             structural_anchor_kind=fact.get("structural_anchor_kind"),
                             _conn=write_conn,
                             _dedup_rowid_min_exclusive=external_rowid_seen,
@@ -3526,6 +3749,7 @@ def extract_from_transcript(
                 "facts": [], "snippets": {}, "journal": {}, "project_logs": {},
                 "project_log_metrics": {}, "dry_run": dry_run,
                 "raw_facts": [], "raw_snippets": {}, "raw_journal": {}, "raw_project_logs": {},
+                "raw_source_chunks": [],
                 "carry_facts": [],
                 "chunks_processed": 0, "chunks_total": 0,
                 "carry_context_enabled": _extract_carry_context_enabled(),
@@ -3542,6 +3766,9 @@ def extract_from_transcript(
                 "carry_duplicate_facts_dropped": 0,
                 "artifact_facts_dropped": 0,
                 "unsupported_specificity_facts_dropped": 0,
+                "source_chunks_stored": 0,
+                "source_chunks_existing": 0,
+                "source_chunks_failed": 0,
                 "circuit_breaker": breaker.status,
             }
     except Exception:
@@ -3562,6 +3789,7 @@ def extract_from_transcript(
         "raw_snippets": {},
         "raw_journal": {},
         "raw_project_logs": {},
+        "raw_source_chunks": [],
         "carry_facts": [],
         "chunks_processed": 0,
         "chunks_total": 0,
@@ -3584,6 +3812,9 @@ def extract_from_transcript(
         "carry_duplicate_facts_dropped": 0,
         "artifact_facts_dropped": 0,
         "unsupported_specificity_facts_dropped": 0,
+        "source_chunks_stored": 0,
+        "source_chunks_existing": 0,
+        "source_chunks_failed": 0,
     }
 
     if not transcript or not transcript.strip():
@@ -3689,7 +3920,7 @@ def extract_from_transcript(
             label,
             effective_parallel_root_workers,
         )
-        root_results: Dict[int, Tuple[List[Dict[str, Any]], Dict[str, Any]]] = {}
+        root_results: Dict[int, Tuple[List[Dict[str, Any]], Dict[str, Any], Optional[str]]] = {}
         with concurrent.futures.ThreadPoolExecutor(
             max_workers=effective_parallel_root_workers
         ) as executor:
@@ -3699,6 +3930,19 @@ def extract_from_transcript(
                     continue
                 if len(transcript_chunks) > 1:
                     logger.info(f"[extract] {label}: chunk {ci + 1}/{len(transcript_chunks)} ({len(chunk)} chars)")
+                source_chunk_ref = None
+                source_chunk_descriptor = _build_extraction_source_chunk_descriptor(
+                        chunk,
+                        label=label,
+                        session_id=session_id,
+                        chunk_index=ci,
+                        source_channel=source_channel,
+                        source_conversation_id=source_conversation_id,
+                        source_author_id=source_author_id,
+                    )
+                if source_chunk_descriptor:
+                    result["raw_source_chunks"].append(source_chunk_descriptor)
+                    source_chunk_ref = str(source_chunk_descriptor.get("source_chunk_ref") or "").strip() or None
                 local_telemetry = {
                     "chunks_processed": 0,
                     "split_events": 0,
@@ -3718,13 +3962,13 @@ def extract_from_transcript(
                     "artifact_facts_dropped": 0,
                 }
                 future = executor.submit(_process_root_chunk, ci, chunk, [], local_telemetry)
-                future_map[future] = (ci, local_telemetry)
+                future_map[future] = (ci, local_telemetry, source_chunk_ref)
             for future in concurrent.futures.as_completed(future_map):
-                ci, local_telemetry = future_map[future]
-                root_results[ci] = (future.result(), local_telemetry)
+                ci, local_telemetry, source_chunk_ref = future_map[future]
+                root_results[ci] = (future.result(), local_telemetry, source_chunk_ref)
 
         for ci in sorted(root_results):
-            parsed_payloads, local_telemetry = root_results[ci]
+            parsed_payloads, local_telemetry, source_chunk_ref = root_results[ci]
             _merge_extract_telemetry(result, local_telemetry)
             if not parsed_payloads:
                 continue
@@ -3739,6 +3983,7 @@ def extract_from_transcript(
                 label=label,
                 transcript_text=transcript_chunks[ci],
                 session_date_hint=session_date_hint,
+                source_chunk_ref=source_chunk_ref,
             )
     else:
         result["parallel_root_workers"] = 1
@@ -3749,6 +3994,19 @@ def extract_from_transcript(
             if len(transcript_chunks) > 1:
                 logger.info(f"[extract] {label}: chunk {ci + 1}/{len(transcript_chunks)} ({len(chunk)} chars)")
 
+            source_chunk_ref = None
+            source_chunk_descriptor = _build_extraction_source_chunk_descriptor(
+                    chunk,
+                    label=label,
+                    session_id=session_id,
+                    chunk_index=ci,
+                    source_channel=source_channel,
+                    source_conversation_id=source_conversation_id,
+                    source_author_id=source_author_id,
+                )
+            if source_chunk_descriptor:
+                result["raw_source_chunks"].append(source_chunk_descriptor)
+                source_chunk_ref = str(source_chunk_descriptor.get("source_chunk_ref") or "").strip() or None
             parsed_payloads = _process_root_chunk(ci, chunk, carry_facts, result)
             if not parsed_payloads:
                 continue
@@ -3763,6 +4021,7 @@ def extract_from_transcript(
                 label=label,
                 transcript_text=chunk,
                 session_date_hint=session_date_hint,
+                source_chunk_ref=source_chunk_ref,
             )
 
     anchor_transcript = _canonicalize_explicit_anchor_transcript(transcript, owner_id=owner_id)

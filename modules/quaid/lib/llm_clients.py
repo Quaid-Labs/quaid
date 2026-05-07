@@ -714,10 +714,14 @@ def call_llm(system_prompt: str, user_message: str,
                 requested_model=model,
             )
             if result.truncated:
-                logger.warning(
-                    "[llm_clients] Response truncated (max_tokens) for model=%s",
-                    result.model,
+                message = (
+                    "LLM response truncated by max_tokens "
+                    f"(provider={provider_name}, tier={resolved_tier}, "
+                    f"model={result.model or model}, max_tokens={max_tokens})"
                 )
+                logger.warning("[llm_clients] %s", message)
+                if is_fail_hard_enabled():
+                    raise RuntimeError(f"{message} while failHard is enabled")
             if result.text is None:
                 raise RuntimeError(
                     "No response from provider "

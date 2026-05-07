@@ -472,6 +472,7 @@ OpenClaw plugin (Total Recall / quaid) that:
 - Store metadata and default selection now live in `core/knowledge-stores.ts` (`.js` runtime pair).
 - Orchestrator consumes that registry for normalization/routing defaults instead of hardcoded store lists.
 - Adapter consumes registry-rendered guidance text for `memory_recall` tool instructions so store docs stay aligned with runtime behavior.
+- `source_chunks` is the transcript/source evidence store. Defaults still exclude it, but the Python recall planner may select it for exact wording or raw conversation evidence queries; explicit callers can request it with `stores:["source_chunks"]` or `stores:["vector","source_chunks"]`.
 
 **Extraction prioritization (bug-bash update):**
 - Prompt now enforces explicit priority order:

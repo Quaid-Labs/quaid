@@ -577,6 +577,40 @@ class TestCallLlmProvider:
             result, _duration = llm_clients.call_llm("system", "user", max_retries=0)
         assert result is None
 
+    def test_truncated_response_raises_when_failhard_enabled(self, test_adapter):
+        """Provider-side max_tokens truncation must not be treated as valid output."""
+        import core.llm.clients as llm_clients
+
+        def truncated_response(*_args, **_kwargs):
+            return LLMResult(
+                text='{"queries":["partial"',
+                duration=0.01,
+                model="haiku-test",
+                truncated=True,
+            )
+
+        test_adapter._llm.llm_call = truncated_response
+        with patch("core.llm.clients.is_fail_hard_enabled", return_value=True):
+            with pytest.raises(RuntimeError, match="truncated.*failHard is enabled"):
+                llm_clients.call_llm("system", "user", max_retries=0, model_tier="fast")
+
+    def test_truncated_response_can_degrade_when_failhard_disabled(self, test_adapter):
+        """Non-failHard callers keep the old degraded path, but still get a warning."""
+        import core.llm.clients as llm_clients
+
+        def truncated_response(*_args, **_kwargs):
+            return LLMResult(
+                text="partial text",
+                duration=0.01,
+                model="haiku-test",
+                truncated=True,
+            )
+
+        test_adapter._llm.llm_call = truncated_response
+        with patch("core.llm.clients.is_fail_hard_enabled", return_value=False):
+            result, _duration = llm_clients.call_llm("system", "user", max_retries=0, model_tier="fast")
+        assert result == "partial text"
+
     def test_config_error_raises_when_failhard_disabled(self, test_adapter):
         import core.llm.clients as llm_clients
 

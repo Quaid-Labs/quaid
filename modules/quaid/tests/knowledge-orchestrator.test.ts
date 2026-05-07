@@ -6,6 +6,10 @@ type Result = {
   category: string;
   similarity: number;
   sourceType?: string;
+  sourceChunkId?: string;
+  chunkId?: string;
+  outputTokenCount?: number;
+  truncated?: boolean;
   id?: string;
   via?: string;
 };
@@ -30,6 +34,10 @@ describe("knowledge orchestrator", () => {
       "vector_basic",
       "graph",
     ]);
+    expect(engine.normalizeKnowledgeDatastores(["source_chunks"], false)).toEqual([
+      "source_chunks",
+    ]);
+    expect(engine.normalizeKnowledgeDatastores(undefined, false)).not.toContain("source_chunks");
   });
 
   it("throws when router fails and fail-open is not enabled", async () => {
@@ -132,6 +140,24 @@ describe("knowledge orchestrator", () => {
 
     await expect(engine.routeRecallPlan("x", false, "fast"))
       .rejects.toThrow("failed to produce valid structured output");
+    expect(callFastRouter).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects source_chunks when returned by the LLM router", async () => {
+    const callFastRouter = vi
+      .fn(async () => '{"query":"one","datastores":["source_chunks"]}')
+      .mockResolvedValueOnce('{"query":"two","datastores":["source_chunks"]}');
+
+    const engine = createKnowledgeEngine<Result>({
+      workspace: "/tmp",
+      getMemoryConfig: () => ({}),
+      isSystemEnabled: () => false,
+      callFastRouter,
+      recallMemory: vi.fn(async () => []),
+    });
+
+    await expect(engine.routeRecallPlan("x", false, "fast"))
+      .rejects.toThrow("router returned no valid datastores");
     expect(callFastRouter).toHaveBeenCalledTimes(2);
   });
 
@@ -381,6 +407,56 @@ describe("knowledge orchestrator", () => {
       3,
       expect.objectContaining({ domain: { technical: true } }),
     );
+  });
+
+  it("runs source_chunks only when explicitly requested and preserves chunk metadata", async () => {
+    const recallMemory = vi.fn(async () => [
+      {
+        text: "[source_chunk] session-1#0: User: exact transcript context",
+        category: "source_chunk",
+        similarity: 0.94,
+        sourceType: "source_chunk",
+        sourceChunkId: "sch_test",
+        chunkId: "sch_test",
+        outputTokenCount: 4,
+        truncated: false,
+        via: "source_chunks",
+      },
+    ]);
+    const engine = createKnowledgeEngine<Result>({
+      workspace: "/tmp",
+      getMemoryConfig: () => ({}),
+      isSystemEnabled: () => false,
+      callFastRouter: vi.fn(async () => '{"datastores":["vector"]}'),
+      recallMemory,
+    });
+
+    const out = await engine.recall("exact transcript context", 3, {
+      datastores: ["source_chunks"],
+      expandGraph: false,
+      graphDepth: 1,
+      domain: { all: true },
+      maxChunkTokens: 12,
+      maxTotalChunkTokens: 20,
+    });
+
+    expect(recallMemory).toHaveBeenCalledWith(
+      "exact transcript context",
+      3,
+      expect.objectContaining({
+        stores: ["source_chunks"],
+        maxChunkTokens: 12,
+        maxTotalChunkTokens: 20,
+      }),
+    );
+    expect(out[0]).toMatchObject({
+      category: "source_chunk",
+      via: "source_chunks",
+      sourceChunkId: "sch_test",
+      chunkId: "sch_test",
+      outputTokenCount: 4,
+      truncated: false,
+    });
   });
 
   it("handles recall planning within latency budget for mocked dependencies", async () => {

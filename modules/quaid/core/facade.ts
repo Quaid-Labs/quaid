@@ -91,6 +91,13 @@ export type MemoryResult = {
   similarity: number;
   domains?: string[];
   sourceType?: string;
+  sourceChunkId?: string;
+  chunkId?: string;
+  chunkIndex?: number;
+  contentHash?: string;
+  tokenCount?: number;
+  outputTokenCount?: number;
+  truncated?: boolean;
   verified?: boolean;
   id?: string;
   extractionConfidence?: number;
@@ -274,6 +281,8 @@ export type FacadeRecallOptions = {
   docs?: string[];
   datastoreOptions?: Partial<Record<KnowledgeDatastore, Record<string, unknown>>>;
   timeoutMs?: number;
+  maxChunkTokens?: number;
+  maxTotalChunkTokens?: number;
   failOpen?: boolean;
 };
 
@@ -2494,20 +2503,35 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
           return undefined;
         })();
 
+        const category = String(item.category || "fact");
+        const sourceType = item.source_type || item.sourceType || undefined;
+        const sourceKind = String(sourceType || "").trim().toLowerCase();
+        const categoryKind = category.trim().toLowerCase();
+        const via = item.via
+          || (categoryKind === "source_chunk" || sourceKind === "source_chunk" ? "source_chunks" : undefined)
+          || (expandGraph ? undefined : "vector");
+
         results.push({
           text,
-          category: String(item.category || "fact"),
+          category,
           similarity: Number(item.similarity) || 0.5,
           id: item.id ? String(item.id) : undefined,
           domains,
-          sourceType: item.source_type || item.sourceType || undefined,
+          sourceType,
+          sourceChunkId: item.source_chunk_id || item.sourceChunkId || undefined,
+          chunkId: item.chunk_id || item.chunkId || undefined,
+          chunkIndex: typeof item.chunk_index === "number" ? item.chunk_index : (typeof item.chunkIndex === "number" ? item.chunkIndex : undefined),
+          contentHash: item.content_hash || item.contentHash || undefined,
+          tokenCount: typeof item.token_count === "number" ? item.token_count : (typeof item.tokenCount === "number" ? item.tokenCount : undefined),
+          outputTokenCount: typeof item.output_token_count === "number" ? item.output_token_count : (typeof item.outputTokenCount === "number" ? item.outputTokenCount : undefined),
+          truncated: typeof item.truncated === "boolean" ? item.truncated : undefined,
           extractionConfidence: typeof item.extraction_confidence === "number" ? item.extraction_confidence : undefined,
           createdAt: item.created_at || item.createdAt || undefined,
           validFrom: item.valid_from || item.validFrom || undefined,
           validUntil: item.valid_until || item.validUntil || undefined,
           privacy: item.privacy || undefined,
           ownerId: item.owner_id || item.ownerId || undefined,
-          via: item.via || (expandGraph ? undefined : "vector"),
+          via,
           speaker: item.speaker || undefined,
         });
       }
@@ -2652,6 +2676,8 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
     if (dateTo) cfg["date_to"] = dateTo;
     if (opts.fast) cfg["fast"] = true;
     if (opts.timeoutMs) cfg["timeout_ms"] = opts.timeoutMs;
+    if (opts.maxChunkTokens) cfg["max_chunk_tokens"] = opts.maxChunkTokens;
+    if (opts.maxTotalChunkTokens) cfg["max_total_chunk_tokens"] = opts.maxTotalChunkTokens;
     if (expandGraph && opts.depth) cfg["depth"] = opts.depth;
     if (opts.candidatePool && Array.isArray(opts.candidatePool) && opts.candidatePool.length > 0) {
       cfg["candidate_pool"] = opts.candidatePool;
@@ -2667,6 +2693,9 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
         const sourceType = String(r.sourceType || (r as MemoryResult & { source_type?: string }).source_type || "").trim().toLowerCase();
         if (category === "docs" || sourceType === "docs") {
           return { ...r, via: "project" as const };
+        }
+        if (category === "source_chunk" || sourceType === "source_chunk") {
+          return { ...r, via: "source_chunks" as const };
         }
         if (expandGraph && (category === "graph" || r.relation || r.graphPath)) {
           return { ...r, via: "graph" as const };
@@ -3050,7 +3079,7 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
       query, limit = 10, expandGraph = true, graphDepth = 1,
       datastores, routeStores, reasoning = "fast", intent = "general",
       ranking, domain = { all: true }, domainBoost, project,
-      docs, datastoreOptions, failOpen,
+      docs, datastoreOptions, failOpen, maxChunkTokens, maxTotalChunkTokens,
     } = opts;
     const resolvedDateFrom = resolveRecallDateFrom(opts);
     const resolvedDateTo = resolveRecallDateTo(opts);
@@ -3072,6 +3101,8 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
         dateTo: resolvedDateTo,
         docs,
         datastoreOptions,
+        maxChunkTokens,
+        maxTotalChunkTokens,
       };
       return knowledgeEngine.recall(q, limit, {
         ...recallOpts,
@@ -3087,13 +3118,16 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
     const {
       query, limit = 10, expandGraph = true, graphDepth = 1,
       datastores, routeStores, reasoning = "fast", domain = { all: true }, domainBoost, project,
-      timeoutMs,
+      timeoutMs, datastoreOptions, maxChunkTokens, maxTotalChunkTokens,
     } = opts;
     const resolvedDateFrom = resolveRecallDateFrom(opts);
     const resolvedDateTo = resolveRecallDateTo(opts);
     const selectedStores = normalizeKnowledgeDatastores(datastores, expandGraph);
     const shouldRouteStores = routeStores ?? !Array.isArray(datastores);
-    const bridgeOnlyStores = new Set(["vector", "vector_basic", "vector_technical", "graph", "project"]);
+    const bridgeOnlyStores = new Set(["vector", "vector_basic", "vector_technical", "graph", "project", "source_chunks"]);
+    const sourceChunkOptions = datastoreOptions?.source_chunks || {};
+    const maxChunkTokensFromStore = Number((sourceChunkOptions as Record<string, unknown>).max_chunk_tokens);
+    const maxTotalChunkTokensFromStore = Number((sourceChunkOptions as Record<string, unknown>).max_total_chunk_tokens);
     if (!shouldRouteStores && selectedStores.length > 0 && selectedStores.every((store) => bridgeOnlyStores.has(store))) {
       const { results, meta } = await recallMemoryFromBridgeDetailed(query, limit, {
         stores: selectedStores as RecallMemoryOpts["stores"],
@@ -3105,6 +3139,8 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
         depth: graphDepth,
         fast: reasoning === "fast",
         timeoutMs,
+        maxChunkTokens: maxChunkTokens ?? (Number.isFinite(maxChunkTokensFromStore) ? maxChunkTokensFromStore : undefined),
+        maxTotalChunkTokens: maxTotalChunkTokens ?? (Number.isFinite(maxTotalChunkTokensFromStore) ? maxTotalChunkTokensFromStore : undefined),
       });
       return { results, diagnostics: { meta } };
     }

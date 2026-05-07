@@ -31,6 +31,10 @@ from datastore.facade import (
     register_memory_domain,
     forget_memory,
     get_memory_by_id,
+    store_memory_source_chunk,
+    store_memory_source_chunks,
+    list_memory_source_chunks,
+    get_memory_source_chunk,
 )
 
 
@@ -87,6 +91,64 @@ class DatastoreMemoryService(MemoryServicePort):
             domains=domains,
             **kwargs,
         )
+
+    def store_source_chunk(
+        self,
+        text: str,
+        owner_id: str,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        _ensure_identity_runtime_bootstrap()
+        assert_multi_user_runtime_ready(require_write=True)
+        identity_payload = {
+            "source_channel": kwargs.get("source_channel"),
+            "source_conversation_id": kwargs.get("source_conversation_id"),
+            "source_author_id": kwargs.get("source_author_id"),
+            "speaker_entity_id": kwargs.get("speaker_entity_id"),
+            "subject_entity_id": kwargs.get("subject_entity_id"),
+            "participant_entity_ids": kwargs.get("participant_entity_ids"),
+        }
+        enforce_write_contract(identity_payload)
+        resolved = enrich_identity_payload(identity_payload)
+        for key in ("source_channel", "source_conversation_id", "source_author_id"):
+            value = resolved.get(key)
+            if key not in kwargs or kwargs.get(key) in (None, ""):
+                kwargs[key] = value
+        return store_memory_source_chunk(text=text, owner_id=owner_id, **kwargs)
+
+    def store_source_chunks(
+        self,
+        chunks: List[str],
+        owner_id: str,
+        **kwargs: Any,
+    ) -> List[Dict[str, Any]]:
+        _ensure_identity_runtime_bootstrap()
+        assert_multi_user_runtime_ready(require_write=True)
+        identity_payload = {
+            "source_channel": kwargs.get("source_channel"),
+            "source_conversation_id": kwargs.get("source_conversation_id"),
+            "source_author_id": kwargs.get("source_author_id"),
+            "speaker_entity_id": kwargs.get("speaker_entity_id"),
+            "subject_entity_id": kwargs.get("subject_entity_id"),
+            "participant_entity_ids": kwargs.get("participant_entity_ids"),
+        }
+        enforce_write_contract(identity_payload)
+        resolved = enrich_identity_payload(identity_payload)
+        for key in ("source_channel", "source_conversation_id", "source_author_id"):
+            value = resolved.get(key)
+            if key not in kwargs or kwargs.get(key) in (None, ""):
+                kwargs[key] = value
+        return store_memory_source_chunks(chunks=chunks, owner_id=owner_id, **kwargs)
+
+    def list_source_chunks(self, **kwargs: Any) -> List[Dict[str, Any]]:
+        _ensure_identity_runtime_bootstrap()
+        assert_multi_user_runtime_ready(require_read=True)
+        return list_memory_source_chunks(**kwargs)
+
+    def get_source_chunk(self, chunk_id: str, **kwargs: Any) -> Optional[Dict[str, Any]]:
+        _ensure_identity_runtime_bootstrap()
+        assert_multi_user_runtime_ready(require_read=True)
+        return get_memory_source_chunk(chunk_id=chunk_id, **kwargs)
 
     def recall(
         self,

@@ -98,6 +98,7 @@ def test_stage_semantic_buffer_payload_uses_configured_extract_wall_timeout(monk
         "skipped_empty": 0,
     })
     monkeypatch.setattr(extraction_daemon, "write_rolling_state", lambda *args, **kwargs: None)
+
     monkeypatch.setattr(extraction_daemon, "write_rolling_metric", lambda *args, **kwargs: None)
     monkeypatch.setattr(extraction_daemon, "_write_rolling_debug_dump", lambda *args, **kwargs: None)
     monkeypatch.setattr(extraction_daemon, "_write_extraction_buffer_log", lambda *args, **kwargs: None)
@@ -118,6 +119,129 @@ def test_stage_semantic_buffer_payload_uses_configured_extract_wall_timeout(monk
 
     assert len(calls) == 1
     assert "wall_timeout_seconds" not in calls[0]
+
+
+def test_rolling_payload_merge_and_flush_preserve_source_chunk_descriptors():
+    state = {
+        "raw_facts": [
+            {
+                "text": "Ada stores the launch checklist in the red binder.",
+                "_source_chunk_ref": "chunk:stage",
+            }
+        ],
+        "raw_source_chunks": [
+            {
+                "source_chunk_ref": "chunk:stage",
+                "text": "User: Ada stores the launch checklist in the red binder.",
+                "source_id": "sess-stage",
+                "session_id": "sess-stage",
+                "chunk_index": 0,
+            }
+        ],
+        "raw_snippets": {},
+        "raw_journal": {},
+        "raw_project_logs": {},
+        "carry_facts": [],
+    }
+    next_payload = {
+        "raw_facts": [
+            {
+                "text": "Berto keeps the rover manual in cabinet seven.",
+                "_source_chunk_ref": "chunk:next",
+            }
+        ],
+        "raw_source_chunks": [
+            {
+                "source_chunk_ref": "chunk:next",
+                "text": "User: Berto keeps the rover manual in cabinet seven.",
+                "source_id": "sess-stage",
+                "session_id": "sess-stage",
+                "chunk_index": 1,
+            }
+        ],
+        "raw_snippets": {},
+        "raw_journal": {},
+        "raw_project_logs": {},
+        "carry_facts": [],
+    }
+
+    merged = extraction_daemon.merge_staged_payloads(state, next_payload)
+    assert {chunk["source_chunk_ref"] for chunk in merged["raw_source_chunks"]} == {
+        "chunk:stage",
+        "chunk:next",
+    }
+    assert extraction_daemon.staged_state_has_payload(merged)
+    assert not extraction_daemon.staged_state_has_payload({"raw_source_chunks": merged["raw_source_chunks"]})
+
+    tail_payload = {
+        "raw_facts": [
+            {
+                "text": "Cora labels the backup battery with blue tape.",
+                "_source_chunk_ref": "chunk:tail",
+            }
+        ],
+        "raw_source_chunks": [
+            {
+                "source_chunk_ref": "chunk:tail",
+                "text": "User: Cora labels the backup battery with blue tape.",
+                "source_id": "sess-stage",
+                "session_id": "sess-stage",
+                "chunk_index": 2,
+            }
+        ],
+        "raw_snippets": {},
+        "raw_journal": {},
+        "raw_project_logs": {},
+        "carry_facts": [],
+    }
+
+    flush_payload = extraction_daemon.build_flush_payload(merged, tail_payload)
+    assert {chunk["source_chunk_ref"] for chunk in flush_payload["raw_source_chunks"]} == {
+        "chunk:stage",
+        "chunk:next",
+        "chunk:tail",
+    }
+
+    cleaned = extraction_daemon.clear_staged_payload_from_state(flush_payload)
+    assert cleaned["raw_source_chunks"] == []
+
+
+def test_merge_source_chunk_descriptors_retains_multiple_unref_descriptors():
+    merged = extraction_daemon._merge_source_chunk_descriptors(
+        [
+            {
+                "text": "User: Ada stores the launch checklist in the red binder.",
+                "session_id": "sess-unref",
+                "chunk_index": 0,
+            },
+            {
+                "source_chunk_ref": "chunk:stable",
+                "text": "User: Berto keeps the rover manual in cabinet seven.",
+                "session_id": "sess-unref",
+                "chunk_index": 1,
+            },
+        ],
+        [
+            {
+                "text": "User: Cora labels the backup battery with blue tape.",
+                "session_id": "sess-unref",
+                "chunk_index": 2,
+            },
+            {
+                "_source_chunk_ref": "chunk:stable",
+                "text": "User: Duplicate descriptor should collapse by stable ref.",
+                "session_id": "sess-unref",
+                "chunk_index": 3,
+            },
+        ],
+    )
+
+    assert [chunk["chunk_index"] for chunk in merged] == [0, 1, 2]
+    assert [chunk["text"] for chunk in merged] == [
+        "User: Ada stores the launch checklist in the red binder.",
+        "User: Berto keeps the rover manual in cabinet seven.",
+        "User: Cora labels the backup battery with blue tape.",
+    ]
 
 
 def test_stage_semantic_buffer_payload_raises_on_partial_chunks_when_fail_hard(monkeypatch):

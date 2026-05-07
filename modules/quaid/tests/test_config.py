@@ -1273,6 +1273,23 @@ class TestConfigPathResolution:
         finally:
             config._config = old_config
 
+    def test_retrieval_store_plan_rrf_fusion_respects_config(self, tmp_path):
+        import config
+        old_config = config._config
+        config._config = None
+        try:
+            config_file = tmp_path / "config.json"
+            config_file.write_text(json.dumps({
+                "retrieval": {
+                    "storePlanRrfFusion": "false"
+                }
+            }))
+            with patch.object(config, "_config_paths", lambda: [config_file]):
+                cfg = load_config()
+                assert cfg.retrieval.store_plan_rrf_fusion is False
+        finally:
+            config._config = old_config
+
     def test_retrieval_use_hyde_respects_config(self, tmp_path):
         import config
         old_config = config._config

@@ -260,6 +260,7 @@ Notes:
 | `retrieval.reranker_instruction` | `str` | `"Given a personal memory query, determine if this memory is relevant to the query"` |  |
 | `retrieval.reranker_timeout_ms` | `int` | `15000` | Full-recall reranker wall timeout; preinject disables reranker entirely |
 | `retrieval.rrf_k` | `int` | `60` | RRF fusion constant |
+| `retrieval.store_plan_rrf_fusion` | `bool` | `true` | Enable active RRF merge only for explicit `vector` + `source_chunks` store plans |
 | `retrieval.reranker_blend` | `float` | `0.5` | Blend weight: reranker vs original score |
 | `retrieval.composite_relevance_weight` | `float` | `0.6` | Weight for relevance in composite score |
 | `retrieval.composite_recency_weight` | `float` | `0.2` | Weight for recency |

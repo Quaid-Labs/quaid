@@ -25,6 +25,24 @@ class MemoryServicePort(Protocol):
         **kwargs: Any,
     ) -> Dict[str, Any]: ...
 
+    def store_source_chunk(
+        self,
+        text: str,
+        owner_id: str,
+        **kwargs: Any,
+    ) -> Dict[str, Any]: ...
+
+    def store_source_chunks(
+        self,
+        chunks: List[str],
+        owner_id: str,
+        **kwargs: Any,
+    ) -> List[Dict[str, Any]]: ...
+
+    def list_source_chunks(self, **kwargs: Any) -> List[Dict[str, Any]]: ...
+
+    def get_source_chunk(self, chunk_id: str, **kwargs: Any) -> Optional[Dict[str, Any]]: ...
+
     def recall(
         self,
         query: str,

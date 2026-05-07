@@ -1784,20 +1784,32 @@ Consider running: docs staleness updater (update-stale --apply)`;
           }
           return void 0;
         })();
+        const category = String(item.category || "fact");
+        const sourceType = item.source_type || item.sourceType || void 0;
+        const sourceKind = String(sourceType || "").trim().toLowerCase();
+        const categoryKind = category.trim().toLowerCase();
+        const via = item.via || (categoryKind === "source_chunk" || sourceKind === "source_chunk" ? "source_chunks" : void 0) || (expandGraph ? void 0 : "vector");
         results.push({
           text,
-          category: String(item.category || "fact"),
+          category,
           similarity: Number(item.similarity) || 0.5,
           id: item.id ? String(item.id) : void 0,
           domains,
-          sourceType: item.source_type || item.sourceType || void 0,
+          sourceType,
+          sourceChunkId: item.source_chunk_id || item.sourceChunkId || void 0,
+          chunkId: item.chunk_id || item.chunkId || void 0,
+          chunkIndex: typeof item.chunk_index === "number" ? item.chunk_index : typeof item.chunkIndex === "number" ? item.chunkIndex : void 0,
+          contentHash: item.content_hash || item.contentHash || void 0,
+          tokenCount: typeof item.token_count === "number" ? item.token_count : typeof item.tokenCount === "number" ? item.tokenCount : void 0,
+          outputTokenCount: typeof item.output_token_count === "number" ? item.output_token_count : typeof item.outputTokenCount === "number" ? item.outputTokenCount : void 0,
+          truncated: typeof item.truncated === "boolean" ? item.truncated : void 0,
           extractionConfidence: typeof item.extraction_confidence === "number" ? item.extraction_confidence : void 0,
           createdAt: item.created_at || item.createdAt || void 0,
           validFrom: item.valid_from || item.validFrom || void 0,
           validUntil: item.valid_until || item.validUntil || void 0,
           privacy: item.privacy || void 0,
           ownerId: item.owner_id || item.ownerId || void 0,
-          via: item.via || (expandGraph ? void 0 : "vector"),
+          via,
           speaker: item.speaker || void 0
         });
       }
@@ -1899,6 +1911,8 @@ Consider running: docs staleness updater (update-stale --apply)`;
     if (dateTo) cfg["date_to"] = dateTo;
     if (opts.fast) cfg["fast"] = true;
     if (opts.timeoutMs) cfg["timeout_ms"] = opts.timeoutMs;
+    if (opts.maxChunkTokens) cfg["max_chunk_tokens"] = opts.maxChunkTokens;
+    if (opts.maxTotalChunkTokens) cfg["max_total_chunk_tokens"] = opts.maxTotalChunkTokens;
     if (expandGraph && opts.depth) cfg["depth"] = opts.depth;
     if (opts.candidatePool && Array.isArray(opts.candidatePool) && opts.candidatePool.length > 0) {
       cfg["candidate_pool"] = opts.candidatePool;
@@ -1913,6 +1927,9 @@ Consider running: docs staleness updater (update-stale --apply)`;
         const sourceType = String(r.sourceType || r.source_type || "").trim().toLowerCase();
         if (category === "docs" || sourceType === "docs") {
           return { ...r, via: "project" };
+        }
+        if (category === "source_chunk" || sourceType === "source_chunk") {
+          return { ...r, via: "source_chunks" };
         }
         if (expandGraph && (category === "graph" || r.relation || r.graphPath)) {
           return { ...r, via: "graph" };
@@ -2276,7 +2293,9 @@ ${allNotes.map((n) => `- ${n}`).join("\n")}
       project,
       docs,
       datastoreOptions,
-      failOpen
+      failOpen,
+      maxChunkTokens,
+      maxTotalChunkTokens
     } = opts;
     const resolvedDateFrom = resolveRecallDateFrom(opts);
     const resolvedDateTo = resolveRecallDateTo(opts);
@@ -2295,7 +2314,9 @@ ${allNotes.map((n) => `- ${n}`).join("\n")}
         dateFrom: resolvedDateFrom,
         dateTo: resolvedDateTo,
         docs,
-        datastoreOptions
+        datastoreOptions,
+        maxChunkTokens,
+        maxTotalChunkTokens
       };
       return knowledgeEngine.recall(q, limit, {
         ...recallOpts,
@@ -2317,13 +2338,19 @@ ${allNotes.map((n) => `- ${n}`).join("\n")}
       domain = { all: true },
       domainBoost,
       project,
-      timeoutMs
+      timeoutMs,
+      datastoreOptions,
+      maxChunkTokens,
+      maxTotalChunkTokens
     } = opts;
     const resolvedDateFrom = resolveRecallDateFrom(opts);
     const resolvedDateTo = resolveRecallDateTo(opts);
     const selectedStores = normalizeKnowledgeDatastores(datastores, expandGraph);
     const shouldRouteStores = routeStores ?? !Array.isArray(datastores);
-    const bridgeOnlyStores = /* @__PURE__ */ new Set(["vector", "vector_basic", "vector_technical", "graph", "project"]);
+    const bridgeOnlyStores = /* @__PURE__ */ new Set(["vector", "vector_basic", "vector_technical", "graph", "project", "source_chunks"]);
+    const sourceChunkOptions = datastoreOptions?.source_chunks || {};
+    const maxChunkTokensFromStore = Number(sourceChunkOptions.max_chunk_tokens);
+    const maxTotalChunkTokensFromStore = Number(sourceChunkOptions.max_total_chunk_tokens);
     if (!shouldRouteStores && selectedStores.length > 0 && selectedStores.every((store) => bridgeOnlyStores.has(store))) {
       const { results: results2, meta } = await recallMemoryFromBridgeDetailed(query, limit, {
         stores: selectedStores,
@@ -2334,7 +2361,9 @@ ${allNotes.map((n) => `- ${n}`).join("\n")}
         dateTo: resolvedDateTo,
         depth: graphDepth,
         fast: reasoning === "fast",
-        timeoutMs
+        timeoutMs,
+        maxChunkTokens: maxChunkTokens ?? (Number.isFinite(maxChunkTokensFromStore) ? maxChunkTokensFromStore : void 0),
+        maxTotalChunkTokens: maxTotalChunkTokens ?? (Number.isFinite(maxTotalChunkTokensFromStore) ? maxTotalChunkTokensFromStore : void 0)
       });
       return { results: results2, diagnostics: { meta } };
     }

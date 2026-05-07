@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS nodes (
     confidence REAL DEFAULT 0.5,            -- 0-1 confidence score
     source TEXT,                            -- Where this came from (file, message, etc.)
     source_id TEXT,                         -- Message ID or file path
+    source_chunk_id TEXT,                   -- Optional source_chunks.chunk_id evidence provenance
 
     -- Import provenance (null = locally created / user-evolved state)
     origin_package_id TEXT,                 -- Imported package or lineage identifier
@@ -48,6 +49,9 @@ CREATE TABLE IF NOT EXISTS nodes (
     -- Temporal validity
     valid_from TEXT,                        -- ISO8601 datetime
     valid_until TEXT,                       -- ISO8601 datetime (null = still valid)
+    occurred_start TEXT,                    -- ISO8601 datetime/range start for when the fact happened
+    occurred_end TEXT,                      -- ISO8601 datetime/range end for when the fact happened
+    mentioned_at TEXT,                      -- ISO8601 datetime for when Quaid learned/was told the fact
 
     -- Content integrity
     content_hash TEXT,                      -- SHA256 of name text (fast exact-dedup pre-filter)
@@ -122,6 +126,7 @@ CREATE INDEX IF NOT EXISTS idx_nodes_privacy ON nodes(privacy);
 CREATE INDEX IF NOT EXISTS idx_nodes_verified ON nodes(verified);
 CREATE INDEX IF NOT EXISTS idx_nodes_pinned ON nodes(pinned);
 CREATE INDEX IF NOT EXISTS idx_nodes_source ON nodes(source);
+CREATE INDEX IF NOT EXISTS idx_nodes_source_chunk ON nodes(source_chunk_id);
 CREATE INDEX IF NOT EXISTS idx_nodes_origin_package_id ON nodes(origin_package_id);
 CREATE INDEX IF NOT EXISTS idx_nodes_owner ON nodes(owner_id);
 CREATE INDEX IF NOT EXISTS idx_nodes_owner_status ON nodes(owner_id, status);
@@ -163,6 +168,41 @@ CREATE TABLE IF NOT EXISTS node_domains (
 
 CREATE INDEX IF NOT EXISTS idx_node_domains_domain_node ON node_domains(domain, node_id);
 CREATE INDEX IF NOT EXISTS idx_node_domains_node_domain ON node_domains(node_id, domain);
+
+-- Source chunks - stable transcript/source slices used as evidence provenance.
+-- Fact-to-chunk links and recall evidence output are layered on top separately.
+CREATE TABLE IF NOT EXISTS source_chunks (
+    chunk_id TEXT PRIMARY KEY,
+    source_id TEXT,
+    session_id TEXT,
+    chunk_index INTEGER NOT NULL,
+    content_hash TEXT NOT NULL,
+    text TEXT NOT NULL,
+    token_count INTEGER DEFAULT 0,
+    owner_id TEXT,
+    source_channel TEXT,
+    source_conversation_id TEXT,            -- External/source-native thread/group/conversation scope
+    conversation_id TEXT,                   -- Internal normalized conversation alias when available
+    source_author_id TEXT,
+    source_type TEXT,
+    privacy TEXT DEFAULT 'shared' CHECK(privacy IN ('private', 'shared', 'public')),
+    visibility_scope TEXT DEFAULT 'source_shared', -- Open policy vocabulary; mirrors node provenance metadata
+    sensitivity TEXT DEFAULT 'normal',      -- Open policy vocabulary; mirrors node provenance metadata
+    domains TEXT DEFAULT '[]',
+    project TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_source_chunks_session_index
+    ON source_chunks(owner_id, session_id, chunk_index, created_at);
+CREATE INDEX IF NOT EXISTS idx_source_chunks_source_index
+    ON source_chunks(owner_id, source_id, chunk_index, created_at);
+CREATE INDEX IF NOT EXISTS idx_source_chunks_content_hash
+    ON source_chunks(content_hash);
+CREATE INDEX IF NOT EXISTS idx_source_chunks_conversation
+    ON source_chunks(owner_id, source_conversation_id, chunk_index);
+CREATE INDEX IF NOT EXISTS idx_source_chunks_project
+    ON source_chunks(owner_id, project, chunk_index);
 
 -- Contradictions table - detected conflicting facts
 CREATE TABLE IF NOT EXISTS contradictions (

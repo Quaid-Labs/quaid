@@ -29,6 +29,8 @@ export type TotalRecallOptions = {
   reasoning?: "fast" | "deep";
   failOpen?: boolean;
   fast?: boolean;
+  maxChunkTokens?: number;
+  maxTotalChunkTokens?: number;
 };
 
 export type RecallMemoryOpts = {
@@ -42,6 +44,8 @@ export type RecallMemoryOpts = {
   fast?: boolean;
   timeoutMs?: number;
   candidatePool?: unknown[];
+  maxChunkTokens?: number;
+  maxTotalChunkTokens?: number;
 };
 
 export type RoutedRecallPlan = {
@@ -110,7 +114,13 @@ export function createKnowledgeEngine<TMemoryResult extends { text: string; simi
       const simRaw = Number(obj.similarity);
       const similarity = Number.isFinite(simRaw) ? Math.max(0, Math.min(1, simRaw)) : 0.5;
       const viaRaw = String(obj.via || "").trim().toLowerCase();
-      const via = (viaRaw === "vector" || viaRaw === "graph" || viaRaw === "journal" || viaRaw === "project")
+      const via = (
+        viaRaw === "vector"
+        || viaRaw === "graph"
+        || viaRaw === "journal"
+        || viaRaw === "project"
+        || viaRaw === "source_chunks"
+      )
         ? viaRaw
         : "vector";
       const shaped: Record<string, unknown> = {
@@ -121,6 +131,19 @@ export function createKnowledgeEngine<TMemoryResult extends { text: string; simi
       };
       if (typeof obj.id === "string" && obj.id.trim()) shaped.id = obj.id.trim();
       if (typeof obj.sourceType === "string" && obj.sourceType.trim()) shaped.sourceType = obj.sourceType.trim();
+      const sourceChunkId = String(obj.sourceChunkId || obj.source_chunk_id || "").trim();
+      const chunkId = String(obj.chunkId || obj.chunk_id || "").trim();
+      const contentHash = String(obj.contentHash || obj.content_hash || "").trim();
+      if (sourceChunkId) shaped.sourceChunkId = sourceChunkId;
+      if (chunkId) shaped.chunkId = chunkId;
+      if (contentHash) shaped.contentHash = contentHash;
+      if (typeof obj.chunkIndex === "number" && Number.isFinite(obj.chunkIndex)) shaped.chunkIndex = obj.chunkIndex;
+      if (typeof obj.chunk_index === "number" && Number.isFinite(obj.chunk_index)) shaped.chunkIndex = obj.chunk_index;
+      if (typeof obj.tokenCount === "number" && Number.isFinite(obj.tokenCount)) shaped.tokenCount = obj.tokenCount;
+      if (typeof obj.token_count === "number" && Number.isFinite(obj.token_count)) shaped.tokenCount = obj.token_count;
+      if (typeof obj.outputTokenCount === "number" && Number.isFinite(obj.outputTokenCount)) shaped.outputTokenCount = obj.outputTokenCount;
+      if (typeof obj.output_token_count === "number" && Number.isFinite(obj.output_token_count)) shaped.outputTokenCount = obj.output_token_count;
+      if (typeof obj.truncated === "boolean") shaped.truncated = obj.truncated;
       if (typeof obj.createdAt === "string" && obj.createdAt.trim()) shaped.createdAt = obj.createdAt.trim();
       if (typeof obj.validFrom === "string" && obj.validFrom.trim()) shaped.validFrom = obj.validFrom.trim();
       if (typeof obj.validUntil === "string" && obj.validUntil.trim()) shaped.validUntil = obj.validUntil.trim();
@@ -634,6 +657,30 @@ ${projectHints}
             ? docsRaw.map((d) => String(d || "").trim()).filter(Boolean)
             : ctx.opts.docs;
           return recallFromProjectStore(ctx.query, ctx.limit, project, docs, ctx.opts.dateFrom, ctx.opts.dateTo);
+        },
+      },
+      source_chunks: {
+        key: "source_chunks",
+        recall: async (ctx) => {
+          const maxChunkTokensRaw = Number(storeOption(ctx.opts, "source_chunks", "max_chunk_tokens"));
+          const maxTotalChunkTokensRaw = Number(storeOption(ctx.opts, "source_chunks", "max_total_chunk_tokens"));
+          const maxChunkTokens = Number.isFinite(maxChunkTokensRaw)
+            ? maxChunkTokensRaw
+            : ctx.opts.maxChunkTokens;
+          const maxTotalChunkTokens = Number.isFinite(maxTotalChunkTokensRaw)
+            ? maxTotalChunkTokensRaw
+            : ctx.opts.maxTotalChunkTokens;
+          return deps.recallMemory(ctx.query, ctx.limit, {
+            stores: ["source_chunks"],
+            domain: ctx.opts.domain || { all: true },
+            domainBoost: ctx.opts.domainBoost,
+            project: ctx.opts.project,
+            dateFrom: ctx.opts.dateFrom,
+            dateTo: ctx.opts.dateTo,
+            fast: ctx.opts.fast,
+            maxChunkTokens,
+            maxTotalChunkTokens,
+          });
         },
       },
     };

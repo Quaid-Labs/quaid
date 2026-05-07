@@ -78,6 +78,24 @@ const STORE_REGISTRY = [
         valueType: "string_array"
       }
     ]
+  },
+  {
+    key: "source_chunks",
+    description: "Opt-in transcript/source chunk recall for exact source context and evidence.",
+    defaultWhenExpandGraph: false,
+    defaultWhenFlatRecall: false,
+    options: [
+      {
+        key: "max_chunk_tokens",
+        description: "Maximum output tokens per returned source chunk.",
+        valueType: "number"
+      },
+      {
+        key: "max_total_chunk_tokens",
+        description: "Maximum aggregate output tokens across returned source chunks.",
+        valueType: "number"
+      }
+    ]
   }
 ];
 function getKnowledgeDatastoreRegistry() {
@@ -90,7 +108,7 @@ function getKnowledgeDatastoreKeys() {
   return STORE_REGISTRY.map((s) => s.key);
 }
 function getRoutableDatastoreKeys() {
-  return STORE_REGISTRY.map((s) => s.key).filter((k) => k !== "vector");
+  return STORE_REGISTRY.map((s) => s.key).filter((k) => k !== "vector" && k !== "source_chunks");
 }
 function normalizeKnowledgeDatastores(datastores, expandGraph) {
   const allowed = new Set(getKnowledgeDatastoreKeys());

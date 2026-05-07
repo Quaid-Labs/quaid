@@ -102,6 +102,39 @@ def test_print_recall_results_handles_docs_rows_without_id(capsys):
     assert "|ID:/tmp/m10-test-doc.md:3|" in captured.out
 
 
+def test_reranker_raises_on_llm_failure_when_failhard_enabled():
+    import datastore.memorydb.memory_graph as mg
+
+    node = SimpleNamespace(id="n1", name="Caroline went to the LGBTQ support group")
+
+    with patch(
+        "lib.llm_clients.call_fast_reasoning",
+        side_effect=RuntimeError("The read operation timed out"),
+    ), patch.object(mg, "_is_fail_hard_mode", return_value=True):
+        with pytest.raises(RuntimeError, match="Recall reranker failed while failHard is enabled"):
+            mg._rerank_via_llm(
+                "When did Caroline go to the LGBTQ support group?",
+                [(node, 0.9)],
+                "Rank memories",
+            )
+
+
+def test_reranker_falls_back_on_llm_failure_when_failhard_disabled():
+    import datastore.memorydb.memory_graph as mg
+
+    node = SimpleNamespace(id="n1", name="Caroline went to the LGBTQ support group")
+
+    with patch(
+        "lib.llm_clients.call_fast_reasoning",
+        side_effect=RuntimeError("The read operation timed out"),
+    ), patch.object(mg, "_is_fail_hard_mode", return_value=False):
+        assert mg._rerank_via_llm(
+            "When did Caroline go to the LGBTQ support group?",
+            [(node, 0.9)],
+            "Rank memories",
+        ) == [(node, 0.9)]
+
+
 def test_ollama_healthy_retries_before_marking_provider_unhealthy():
     import datastore.memorydb.memory_graph as mg
 
@@ -1797,14 +1830,29 @@ class TestRecallBasic:
             fast_context=False,
             timeout_ms=3000,
         ) == 8.0
+        assert mg._lexical_anchor_planner_timeout_s(
+            22500,
+            fast_context=False,
+            timeout_ms=90000,
+        ) == 22.5
+        assert mg._lexical_anchor_planner_timeout_s(
+            45000,
+            fast_context=False,
+            timeout_ms=90000,
+        ) == 30.0
 
     def test_fast_drill_timeout_reserves_preinject_budget_tail(self):
         import datastore.memorydb.memory_graph as mg
 
-        assert mg._fast_drill_timeout_ms_from_remaining(3000) == 1200
-        assert mg._fast_drill_timeout_ms_from_remaining(1500) == 1200
-        assert mg._fast_drill_timeout_ms_from_remaining(900) == 650
+        assert mg._fast_drill_timeout_ms_from_remaining(3000) is None
+        assert mg._fast_drill_timeout_ms_from_remaining(4250) == 4000
+        assert mg._fast_drill_timeout_ms_from_remaining(5000) == 4750
+        assert mg._fast_drill_timeout_ms_from_remaining(900) is None
         assert mg._fast_drill_timeout_ms_from_remaining(749) is None
+        assert mg._fast_drill_timeout_ms_from_remaining(
+            30000,
+            explicit_timeout_ms=30000,
+        ) == 29750
 
     def test_fast_anchor_priority_keeps_fresh_direct_hit_above_graph_context(self):
         import datastore.memorydb.memory_graph as mg
@@ -2684,6 +2732,1170 @@ class TestGatewayRecoveryScan:
 class TestTimestampOverride:
     """Tests for created_at/accessed_at override in store()."""
 
+    def test_temporal_provenance_columns_added_to_legacy_db(self, tmp_path):
+        """Existing DBs get additive occurrence/mention columns on open."""
+        from datastore.memorydb.memory_graph import MemoryGraph
+
+        db_file = tmp_path / "legacy.db"
+        schema_path = Path(__file__).resolve().parents[1] / "datastore" / "memorydb" / "schema.sql"
+        schema = schema_path.read_text()
+        legacy_schema = "\n".join(
+            line for line in schema.splitlines()
+            if not line.strip().startswith(("occurred_start ", "occurred_end ", "mentioned_at "))
+        )
+        with sqlite3.connect(db_file) as conn:
+            conn.executescript(legacy_schema)
+            before = {row[1] for row in conn.execute("PRAGMA table_info(nodes)").fetchall()}
+        assert "occurred_start" not in before
+        assert "occurred_end" not in before
+        assert "mentioned_at" not in before
+
+        MemoryGraph(db_path=db_file)
+
+        with sqlite3.connect(db_file) as conn:
+            after = {row[1] for row in conn.execute("PRAGMA table_info(nodes)").fetchall()}
+        assert {"occurred_start", "occurred_end", "mentioned_at"}.issubset(after)
+
+    def test_store_with_temporal_provenance_fields(self, tmp_path):
+        """store() persists occurred and mentioned timestamps without affecting created_at."""
+        from datastore.memorydb.memory_graph import store
+        graph, db_file = _make_graph(tmp_path)
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+            result = store(
+                "Douglas moved to Seattle in June",
+                owner_id="douglas",
+                skip_dedup=True,
+                occurred_start="2025-06-01",
+                occurred_end="2025-06-30",
+                mentioned_at="2026-05-06T10:30:00",
+                created_at="2026-05-06T10:31:00",
+            )
+            assert result["status"] == "created"
+            node = graph.get_node(result["id"])
+            assert node.occurred_start == "2025-06-01"
+            assert node.occurred_end == "2025-06-30"
+            assert node.mentioned_at == "2026-05-06T10:30:00"
+            assert node.created_at == "2026-05-06T10:31:00"
+
+        with sqlite3.connect(db_file) as conn:
+            row = conn.execute(
+                "SELECT occurred_start, occurred_end, mentioned_at, created_at FROM nodes WHERE id = ?",
+                (result["id"],),
+            ).fetchone()
+        assert row == (
+            "2025-06-01",
+            "2025-06-30",
+            "2026-05-06T10:30:00",
+            "2026-05-06T10:31:00",
+        )
+
+    def test_duplicate_store_backfills_temporal_provenance(self, tmp_path):
+        """Duplicate-update paths preserve new temporal provenance when first learned later."""
+        from datastore.memorydb.memory_graph import store
+        graph, _db_file = _make_graph(tmp_path)
+        text = "Douglas moved to Seattle in June"
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+            first = store(text, owner_id="douglas", skip_dedup=True)
+            second = store(
+                text,
+                owner_id="douglas",
+                occurred_start="2025-06-01",
+                occurred_end="2025-06-30",
+                mentioned_at="2026-05-06T10:30:00",
+            )
+
+        assert second["status"] == "duplicate"
+        assert second["id"] == first["id"]
+        node = graph.get_node(first["id"])
+        assert node.occurred_start == "2025-06-01"
+        assert node.occurred_end == "2025-06-30"
+        assert node.mentioned_at == "2026-05-06T10:30:00"
+
+    def test_date_bounds_can_filter_by_occurred_or_mentioned_dimension(self, tmp_path):
+        """Date-bounded recall can choose event time separately from mention time."""
+        import datastore.memorydb.memory_graph as mg
+        from datastore.memorydb.memory_graph import recall, store
+
+        graph, _db_file = _make_graph(tmp_path)
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
+             patch.object(mg, "_ollama_healthy", return_value=True):
+            store(
+                "Douglas moved to Seattle",
+                owner_id="douglas",
+                skip_dedup=True,
+                occurred_start="2025-06-01",
+                occurred_end="2025-06-30",
+                mentioned_at="2026-05-06T10:30:00",
+                created_at="2026-05-06T10:31:00",
+            )
+            store(
+                "Douglas adopted a rescue dog",
+                owner_id="douglas",
+                skip_dedup=True,
+                occurred_start="2026-05-06",
+                mentioned_at="2025-06-15T09:00:00",
+                created_at="2025-06-15T09:01:00",
+            )
+
+            occurred_rows = recall(
+                "Douglas",
+                owner_id="douglas",
+                limit=5,
+                date_from="2025-06-15",
+                date_to="2025-06-15",
+                temporal_dimension="occurred",
+                use_routing=False,
+                use_aliases=False,
+                use_multi_pass=False,
+                use_reranker=False,
+                include_graph_traversal=False,
+                include_co_session=False,
+                include_mmr=False,
+                include_lexical_anchor_shaping=False,
+                low_signal_retry=False,
+                track_access=False,
+            )
+            mentioned_rows = recall(
+                "Douglas",
+                owner_id="douglas",
+                limit=5,
+                date_from="2025-06-15",
+                date_to="2025-06-15",
+                temporal_dimension="mentioned",
+                use_routing=False,
+                use_aliases=False,
+                use_multi_pass=False,
+                use_reranker=False,
+                include_graph_traversal=False,
+                include_co_session=False,
+                include_mmr=False,
+                include_lexical_anchor_shaping=False,
+                low_signal_retry=False,
+                track_access=False,
+            )
+            record_rows = recall(
+                "Douglas",
+                owner_id="douglas",
+                limit=5,
+                date_from="2025-06-15",
+                date_to="2025-06-15",
+                temporal_dimension="record",
+                use_routing=False,
+                use_aliases=False,
+                use_multi_pass=False,
+                use_reranker=False,
+                include_graph_traversal=False,
+                include_co_session=False,
+                include_mmr=False,
+                include_lexical_anchor_shaping=False,
+                low_signal_retry=False,
+                track_access=False,
+            )
+
+        occurred_text = " ".join(row["text"] for row in occurred_rows)
+        mentioned_text = " ".join(row["text"] for row in mentioned_rows)
+        record_text = " ".join(row["text"] for row in record_rows)
+        assert "moved to Seattle" in occurred_text
+        assert "adopted a rescue dog" not in occurred_text
+        assert "adopted a rescue dog" in mentioned_text
+        assert "moved to Seattle" not in mentioned_text
+        assert "adopted a rescue dog" in record_text
+        assert "moved to Seattle" not in record_text
+        assert occurred_rows[0]["temporal_filter_basis"] == "occurred"
+        assert mentioned_rows[0]["temporal_filter_basis"] == "mentioned"
+        assert record_rows[0]["temporal_filter_basis"] == "record"
+
+    def test_temporal_auto_prefers_valid_range_over_source_date(self):
+        """Auto mode treats valid_from/until as event-time when occurrence is absent."""
+        import datastore.memorydb.memory_graph as mg
+
+        rows = [
+            {
+                "text": "The source was recorded later, but the fact was valid in March",
+                "valid_from": "2025-03-01",
+                "valid_until": "2025-03-31",
+                "source_date": "2026-05-06",
+                "created_at": "2026-05-06T10:00:00",
+            }
+        ]
+
+        filtered = mg._filter_recall_rows_by_date_bounds(
+            rows,
+            date_from="2025-03-15",
+            date_to="2025-03-15",
+        )
+
+        assert filtered == rows
+        assert filtered[0]["temporal_filter_basis"] == "occurred"
+
+    def test_temporal_occurred_falls_back_to_created_for_legacy_rows(self, tmp_path):
+        """Explicit occurred filters still find old rows with no occurrence fields."""
+        import datastore.memorydb.memory_graph as mg
+        from datastore.memorydb.memory_graph import recall, store
+        graph, _db_file = _make_graph(tmp_path)
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
+             patch.object(mg, "_ollama_healthy", return_value=True):
+            store(
+                "Evelyn archived the receipt bundle",
+                owner_id="evelyn",
+                skip_dedup=True,
+                created_at="2025-04-10T09:15:00",
+            )
+            rows = recall(
+                "Evelyn receipt",
+                owner_id="evelyn",
+                limit=5,
+                date_from="2025-04-10",
+                date_to="2025-04-10",
+                temporal_dimension="occurred",
+                use_routing=False,
+                use_aliases=False,
+                use_multi_pass=False,
+                use_reranker=False,
+                include_graph_traversal=False,
+                include_co_session=False,
+                include_mmr=False,
+                include_lexical_anchor_shaping=False,
+                low_signal_retry=False,
+                track_access=False,
+            )
+
+        target = next(row for row in rows if "archived the receipt bundle" in row["text"])
+        assert target["temporal_filter_basis"] == "record_fallback"
+
+    def test_temporal_filter_can_keep_undated_rows(self):
+        """Store-plan callers can keep undated fallback rows after bounded filters."""
+        import datastore.memorydb.memory_graph as mg
+
+        rows = [
+            {"text": "undated fallback"},
+            {"text": "dated row", "created_at": "2025-05-01T00:00:00"},
+        ]
+
+        filtered = mg._filter_recall_rows_by_date_bounds(
+            rows,
+            date_from="2025-05-01",
+            date_to="2025-05-01",
+            keep_undated=True,
+            temporal_dimension="record",
+        )
+
+        assert [row["text"] for row in filtered] == ["undated fallback", "dated row"]
+        assert filtered[1]["temporal_filter_basis"] == "record"
+
+    def test_recall_command_temporal_dimension_aliases(self):
+        import datastore.memorydb.memory_graph as mg
+
+        assert mg._resolve_recall_command_temporal_dimension({"temporal_dimension": "occurred"}) == "occurred"
+        assert mg._resolve_recall_command_temporal_dimension({"timeDimension": "mentioned_at"}) == "mentioned"
+        assert mg._resolve_recall_command_temporal_dimension(
+            {"temporal_dimension": "record"},
+            cli_temporal_dimension="occurred",
+        ) == "occurred"
+        assert mg._resolve_recall_command_temporal_dimension({"date_dimension": "created_at"}) == "record"
+        assert mg._resolve_recall_command_temporal_dimension({}) == "auto"
+
+
+class TestSourceChunkStorage:
+    """Tests for additive source chunk evidence storage."""
+
+    def test_source_chunks_table_added_to_legacy_db(self, tmp_path):
+        """Existing DBs get additive source_chunks storage on open."""
+        from datastore.memorydb.memory_graph import MemoryGraph
+
+        db_file = tmp_path / "legacy.db"
+        schema_path = Path(__file__).resolve().parents[1] / "datastore" / "memorydb" / "schema.sql"
+        with sqlite3.connect(db_file) as conn:
+            conn.executescript(schema_path.read_text())
+            conn.execute("DROP TABLE source_chunks")
+            before = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='source_chunks'"
+            ).fetchone()
+        assert before is None
+
+        MemoryGraph(db_path=db_file)
+
+        with sqlite3.connect(db_file) as conn:
+            after = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='source_chunks'"
+            ).fetchone()
+        assert after is not None
+
+    def test_store_source_chunk_has_stable_id_for_same_content(self, tmp_path):
+        """Same source/index/content stores once and returns the existing chunk."""
+        graph, _db_file = _make_graph(tmp_path)
+
+        first = graph.store_source_chunk(
+            "User: Douglas moved to Seattle.\nAssistant: Noted.",
+            owner_id="douglas",
+            source_id="session-file-1",
+            session_id="session-1",
+            chunk_index=0,
+            domains=["personal"],
+            project="life-log",
+        )
+        second = graph.store_source_chunk(
+            "User: Douglas moved to Seattle.\nAssistant: Noted.",
+            owner_id="douglas",
+            source_id="session-file-1",
+            session_id="session-1",
+            chunk_index=0,
+            domains=["personal"],
+            project="life-log",
+        )
+
+        assert first["chunk_id"] == second["chunk_id"]
+        assert first["status"] == "created"
+        assert second["status"] == "existing"
+        assert first["content_hash"] == second["content_hash"]
+        assert first["token_count"] > 0
+
+        rows = graph.list_source_chunks(owner_id="douglas", session_id="session-1")
+        assert [row["chunk_id"] for row in rows] == [first["chunk_id"]]
+        assert rows[0]["domains"] == ["personal"]
+        assert rows[0]["project"] == "life-log"
+
+    def test_store_source_chunk_changed_content_appends_new_row(self, tmp_path):
+        """Changed content at the same source/index creates a new append-only chunk."""
+        graph, _db_file = _make_graph(tmp_path)
+
+        first = graph.store_source_chunk(
+            "Turn one: Douglas likes kayaking.",
+            owner_id="douglas",
+            source_id="session-file-2",
+            session_id="session-2",
+            chunk_index=0,
+        )
+        second = graph.store_source_chunk(
+            "Turn one: Douglas likes climbing.",
+            owner_id="douglas",
+            source_id="session-file-2",
+            session_id="session-2",
+            chunk_index=0,
+        )
+
+        assert first["chunk_id"] != second["chunk_id"]
+        assert first["status"] == "created"
+        assert second["status"] == "created"
+        rows = graph.list_source_chunks(owner_id="douglas", session_id="session-2")
+        assert len(rows) == 2
+        assert {row["content_hash"] for row in rows} == {first["content_hash"], second["content_hash"]}
+
+    def test_source_chunk_owner_and_domain_filters_preserve_isolation(self, tmp_path):
+        """Source chunk lookups respect owner and domain filters."""
+        graph, _db_file = _make_graph(tmp_path)
+
+        private = graph.store_source_chunk(
+            "Private session note for Douglas.",
+            owner_id="douglas",
+            source_id="shared-source",
+            session_id="session-3",
+            chunk_index=0,
+            domains=["personal"],
+        )
+        graph.store_source_chunk(
+            "Work session note for Ada.",
+            owner_id="ada",
+            source_id="shared-source",
+            session_id="session-3",
+            chunk_index=0,
+            domains=["work"],
+        )
+
+        douglas_rows = graph.list_source_chunks(owner_id="douglas", session_id="session-3")
+        assert [row["chunk_id"] for row in douglas_rows] == [private["chunk_id"]]
+        assert graph.list_source_chunks(owner_id="douglas", domains=["work"]) == []
+        assert graph.get_source_chunk(private["chunk_id"], owner_id="ada") is None
+        assert graph.get_source_chunk(private["chunk_id"], owner_id="douglas")["text"].startswith("Private session")
+
+    def test_source_chunk_rejects_invalid_inputs(self, tmp_path):
+        """Source chunk storage fails loudly on malformed input."""
+        graph, _db_file = _make_graph(tmp_path)
+
+        with pytest.raises(ValueError, match="cannot be empty"):
+            graph.store_source_chunk("   ", owner_id="douglas", session_id="session-4")
+        with pytest.raises(ValueError, match="source_id or session_id"):
+            graph.store_source_chunk("A valid source chunk body", owner_id="douglas")
+        with pytest.raises(ValueError, match="non-negative"):
+            graph.store_source_chunk(
+                "A valid source chunk body",
+                owner_id="douglas",
+                session_id="session-4",
+                chunk_index=-1,
+            )
+        with pytest.raises(ValueError, match="Unsupported source chunk privacy"):
+            graph.store_source_chunk(
+                "A valid source chunk body",
+                owner_id="douglas",
+                session_id="session-4",
+                privacy="secret",
+            )
+
+    def test_store_source_chunks_skips_empty_entries(self, tmp_path):
+        """Batch chunk storage skips empty chunk entries and keeps ordering."""
+        graph, _db_file = _make_graph(tmp_path)
+
+        rows = graph.store_source_chunks(
+            ["First chunk", " ", "Second chunk"],
+            owner_id="douglas",
+            session_id="session-5",
+            start_index=4,
+        )
+
+        assert [row["chunk_index"] for row in rows] == [4, 6]
+        assert [row["text"] for row in rows] == ["First chunk", "Second chunk"]
+
+    def test_store_fact_persists_source_chunk_id(self, tmp_path):
+        """Facts can carry a durable pointer to the source chunk that produced them."""
+        from datastore.memorydb.memory_graph import get_memory, store
+
+        graph, _db_file = _make_graph(tmp_path)
+        chunk = graph.store_source_chunk(
+            "User: Douglas archived the Seattle adoption papers.",
+            owner_id="douglas",
+            session_id="session-6",
+            chunk_index=0,
+        )
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+            result = store(
+                "Douglas archived the Seattle adoption papers",
+                owner_id="douglas",
+                source="extract",
+                source_id="session-6",
+                source_chunk_id=chunk["chunk_id"],
+            )
+
+            assert result["status"] == "created"
+            node = graph.get_node(result["id"])
+            assert node.source_chunk_id == chunk["chunk_id"]
+            assert get_memory(result["id"])["source_chunk_id"] == chunk["chunk_id"]
+
+    def test_duplicate_store_backfills_source_chunk_id(self, tmp_path):
+        """Dedup updates preserve evidence provenance when a later extraction has it."""
+        from datastore.memorydb.memory_graph import store
+
+        graph, _db_file = _make_graph(tmp_path)
+        chunk = graph.store_source_chunk(
+            "User: Evelyn keeps the blue folder in the hallway cabinet.",
+            owner_id="evelyn",
+            session_id="session-7",
+            chunk_index=0,
+        )
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+            first = store(
+                "Evelyn keeps the blue folder in the hallway cabinet",
+                owner_id="evelyn",
+                source="extract",
+                source_id="session-7",
+            )
+            second = store(
+                "Evelyn keeps the blue folder in the hallway cabinet",
+                owner_id="evelyn",
+                source="extract",
+                source_id="session-7",
+                source_chunk_id=chunk["chunk_id"],
+            )
+
+        assert first["status"] == "created"
+        assert second["status"] in {"duplicate", "updated"}
+        assert graph.get_node(first["id"]).source_chunk_id == chunk["chunk_id"]
+
+    def test_recall_include_chunks_attaches_bounded_source_context_only_when_requested(self, tmp_path):
+        """Source chunks are opt-in recall evidence metadata, not default recall output."""
+        from datastore.memorydb.memory_graph import recall, store
+
+        graph, _db_file = _make_graph(tmp_path)
+        chunk = graph.store_source_chunk(
+            (
+                "User: Douglas archived the Seattle adoption papers in the blue cabinet. "
+                "Assistant: Noted with cabinet and paper context."
+            ),
+            owner_id="douglas",
+            session_id="session-8",
+            chunk_index=0,
+            domains=["personal"],
+        )
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+            stored = store(
+                "Douglas archived the Seattle adoption papers",
+                owner_id="douglas",
+                source="extract",
+                source_id="session-8",
+                source_chunk_id=chunk["chunk_id"],
+                domains=["personal"],
+                skip_dedup=True,
+            )
+            default_rows, default_meta = recall(
+                "Douglas Seattle adoption papers",
+                owner_id="douglas",
+                use_routing=False,
+                min_similarity=0.0,
+                max_turns=1,
+                return_meta=True,
+            )
+            chunk_rows, chunk_meta = recall(
+                "Douglas Seattle adoption papers",
+                owner_id="douglas",
+                use_routing=False,
+                min_similarity=0.0,
+                max_turns=1,
+                include_chunks=True,
+                max_chunk_tokens=5,
+                return_meta=True,
+            )
+
+        default_row = next(row for row in default_rows if row["id"] == stored["id"])
+        chunk_row = next(row for row in chunk_rows if row["id"] == stored["id"])
+        assert "source_chunk" not in default_row
+        assert "source_chunk_id" not in default_row
+        assert "source_chunks" not in default_meta
+        assert chunk_row["source_chunk_id"] == chunk["chunk_id"]
+        assert chunk_row["source_chunk"]["chunk_id"] == chunk["chunk_id"]
+        assert chunk_row["source_chunk"]["text"].startswith("User: Douglas archived")
+        assert chunk_row["source_chunk"]["output_token_count"] <= 5
+        assert chunk_row["source_chunk"]["truncated"] is True
+        assert chunk_meta["source_chunks"]["attached"] == 1
+        assert chunk_meta["source_chunks"]["max_chunk_tokens"] == 5
+
+    def test_recall_include_chunks_respects_aggregate_source_chunk_cap(self, tmp_path):
+        """include_chunks cannot let many evidence chunks crowd out the recall response."""
+        from datastore.memorydb.memory_graph import recall, store
+
+        graph, _db_file = _make_graph(tmp_path)
+        first_chunk = graph.store_source_chunk(
+            "User: Miko keeps the hiking receipt in the pantry drawer.",
+            owner_id="miko",
+            session_id="session-aggregate-cap",
+            chunk_index=0,
+        )
+        second_chunk = graph.store_source_chunk(
+            "User: Miko keeps the warranty card in the hallway notebook.",
+            owner_id="miko",
+            session_id="session-aggregate-cap",
+            chunk_index=1,
+        )
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+            first = store(
+                "Miko keeps the hiking receipt in the pantry drawer",
+                owner_id="miko",
+                source="extract",
+                source_id="session-aggregate-cap",
+                source_chunk_id=first_chunk["chunk_id"],
+                skip_dedup=True,
+            )
+            second = store(
+                "Miko keeps the warranty card in the hallway notebook",
+                owner_id="miko",
+                source="extract",
+                source_id="session-aggregate-cap",
+                source_chunk_id=second_chunk["chunk_id"],
+                skip_dedup=True,
+            )
+            rows, meta = recall(
+                "Miko receipt drawer warranty notebook",
+                owner_id="miko",
+                use_routing=False,
+                include_lexical_anchor_shaping=False,
+                min_similarity=0.0,
+                max_turns=1,
+                limit=5,
+                include_chunks=True,
+                max_chunk_tokens=50,
+                max_total_chunk_tokens=1,
+                return_meta=True,
+            )
+
+        linked_rows = [row for row in rows if row.get("id") in {first["id"], second["id"]}]
+        assert len(linked_rows) == 2
+        attached_rows = [row for row in linked_rows if row.get("source_chunk")]
+        omitted_rows = [row for row in linked_rows if row.get("source_chunk_omitted") is True]
+        assert len(attached_rows) == 1
+        assert len(omitted_rows) == 1
+        assert attached_rows[0]["source_chunk"]["output_token_count"] <= 1
+        assert "source_chunk_id" in omitted_rows[0]
+        assert "source_chunk" not in omitted_rows[0]
+        assert meta["source_chunks"]["attached"] == 1
+        assert meta["source_chunks"]["omitted"] == 1
+        assert meta["source_chunks"]["output_token_count"] <= 1
+        assert meta["source_chunks"]["max_total_chunk_tokens"] == 1
+
+    def test_recall_include_chunks_raises_on_missing_source_chunk_under_failhard(self, tmp_path):
+        """Explicit source chunk dereference is failHard-correct when evidence is missing."""
+        from datastore.memorydb.memory_graph import recall, store
+
+        graph, _db_file = _make_graph(tmp_path)
+        chunk = graph.store_source_chunk(
+            "User: Evelyn keeps the blue folder in the hallway cabinet.",
+            owner_id="evelyn",
+            session_id="session-9",
+            chunk_index=0,
+        )
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+            store(
+                "Evelyn keeps the blue folder in the hallway cabinet",
+                owner_id="evelyn",
+                source="extract",
+                source_id="session-9",
+                source_chunk_id=chunk["chunk_id"],
+                skip_dedup=True,
+            )
+
+        with graph._get_conn() as conn:
+            conn.execute("DELETE FROM source_chunks WHERE chunk_id = ?", (chunk["chunk_id"],))
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
+             patch("datastore.memorydb.memory_graph._is_fail_hard_mode", return_value=True):
+            with pytest.raises(RuntimeError, match="missing source chunk"):
+                recall(
+                    "Evelyn blue folder hallway cabinet",
+                    owner_id="evelyn",
+                    use_routing=False,
+                    include_lexical_anchor_shaping=False,
+                    min_similarity=0.0,
+                    max_turns=1,
+                    include_chunks=True,
+                    return_meta=True,
+                )
+
+    def test_recall_include_chunks_does_not_attach_cross_owner_chunk(self, tmp_path):
+        """A fact cannot dereference a chunk owned by a different owner."""
+        from datastore.memorydb.memory_graph import recall, store
+
+        graph, _db_file = _make_graph(tmp_path)
+        other_owner_chunk = graph.store_source_chunk(
+            "User: Ada keeps a private deployment note in the green notebook.",
+            owner_id="ada",
+            session_id="session-cross-owner",
+            chunk_index=0,
+        )
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+            stored = store(
+                "Douglas keeps the deployment checklist in the blue notebook",
+                owner_id="douglas",
+                source="extract",
+                source_id="session-cross-owner",
+                source_chunk_id=other_owner_chunk["chunk_id"],
+                skip_dedup=True,
+            )
+            rows, meta = recall(
+                "Douglas deployment checklist blue notebook",
+                owner_id="douglas",
+                use_routing=False,
+                include_lexical_anchor_shaping=False,
+                min_similarity=0.0,
+                max_turns=1,
+                include_chunks=True,
+                return_meta=True,
+            )
+
+        row = next(row for row in rows if row["id"] == stored["id"])
+        assert row["source_chunk_id"] == other_owner_chunk["chunk_id"]
+        assert row["source_chunk_missing"] is True
+        assert "source_chunk" not in row
+        assert meta["source_chunks"]["attached"] == 0
+        assert meta["source_chunks"]["missing"] == 1
+
+    def test_recall_include_chunks_marks_missing_chunk_when_failhard_disabled(self, tmp_path):
+        """Missing opt-in evidence is visible but non-fatal when failHard is disabled."""
+        from datastore.memorydb.memory_graph import recall, store
+
+        graph, _db_file = _make_graph(tmp_path)
+        chunk = graph.store_source_chunk(
+            "User: Miko keeps the plant watering card near the basil pot.",
+            owner_id="miko",
+            session_id="session-missing-soft",
+            chunk_index=0,
+        )
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+            stored = store(
+                "Miko keeps the plant watering card near the basil pot",
+                owner_id="miko",
+                source="extract",
+                source_id="session-missing-soft",
+                source_chunk_id=chunk["chunk_id"],
+                skip_dedup=True,
+            )
+
+        with graph._get_conn() as conn:
+            conn.execute("DELETE FROM source_chunks WHERE chunk_id = ?", (chunk["chunk_id"],))
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
+             patch("datastore.memorydb.memory_graph._is_fail_hard_mode", return_value=False):
+            rows, meta = recall(
+                "Miko plant watering card basil pot",
+                owner_id="miko",
+                use_routing=False,
+                include_lexical_anchor_shaping=False,
+                min_similarity=0.0,
+                max_turns=1,
+                include_chunks=True,
+                return_meta=True,
+            )
+
+        row = next(row for row in rows if row["id"] == stored["id"])
+        assert row["source_chunk_id"] == chunk["chunk_id"]
+        assert row["source_chunk_missing"] is True
+        assert "source_chunk" not in row
+        assert meta["source_chunks"]["attached"] == 0
+        assert meta["source_chunks"]["missing"] == 1
+
+    def test_source_chunk_store_plan_returns_opt_in_chunk_rows(self, tmp_path):
+        """The source_chunks store is an explicit transcript-context lane."""
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _db_file = _make_graph(tmp_path)
+        chunk = graph.store_source_chunk(
+            "User: Miko keeps the hiking receipt in the pantry drawer.",
+            owner_id="miko",
+            session_id="session-source-store",
+            source_id="transcript-source-store",
+            chunk_index=0,
+            domains=["personal"],
+            project="life-log",
+        )
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph):
+            rows, meta, bundle = mg._run_recall_store_plan(
+                "Miko hiking receipt pantry drawer",
+                stores=["source_chunks"],
+                limit=3,
+                owner_id="miko",
+                min_similarity=0.0,
+                planner_profile="off",
+                planned_queries=["Miko hiking receipt pantry drawer"],
+                planner_meta={"planned_stores": ["source_chunks"], "planned_project": "life-log"},
+                fast_mode=False,
+                common_kwargs={
+                    "domain": {"personal": True, "all": False},
+                    "project": "life-log",
+                    "max_chunk_tokens": 50,
+                    "max_total_chunk_tokens": 200,
+                },
+            )
+
+        assert bundle is None
+        assert len(rows) == 1
+        assert rows[0]["category"] == "source_chunk"
+        assert rows[0]["source_type"] == "source_chunk"
+        assert rows[0]["chunk_id"] == chunk["chunk_id"]
+        assert rows[0]["source_chunk_id"] == chunk["chunk_id"]
+        assert "hiking receipt" in rows[0]["text"]
+        assert meta["planned_stores"] == ["source_chunks"]
+        assert meta["store_runs"][0]["store"] == "source_chunks"
+        assert meta["store_runs"][0]["result_count"] == 1
+
+    def test_source_chunk_store_plan_is_explicit_not_default(self, tmp_path):
+        """Source chunks are not inserted into the default vector store plan."""
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _db_file = _make_graph(tmp_path)
+        graph.store_source_chunk(
+            "User: Miko keeps the hiking receipt in the pantry drawer.",
+            owner_id="miko",
+            session_id="session-default-store",
+            chunk_index=0,
+        )
+
+        assert mg._normalize_store_plan(None) == ["vector"]
+        assert mg._planner_store_plan(["source_chunks"]) == ["source_chunks"]
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+            rows, meta, _bundle = mg._run_recall_store_plan(
+                "Miko hiking receipt pantry drawer",
+                stores=["vector"],
+                limit=3,
+                owner_id="miko",
+                min_similarity=0.0,
+                planner_profile="off",
+                planned_queries=["Miko hiking receipt pantry drawer"],
+                planner_meta={"planned_stores": ["vector"]},
+                fast_mode=False,
+                common_kwargs={},
+            )
+
+        assert rows == []
+        assert meta["planned_stores"] == ["vector"]
+        assert all(row.get("category") != "source_chunk" for row in rows)
+
+    def test_source_chunk_store_plan_enforces_owner_isolation(self, tmp_path):
+        """The source_chunks lane cannot read another owner's transcript evidence."""
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _db_file = _make_graph(tmp_path)
+        graph.store_source_chunk(
+            "User: Ada keeps the deployment receipt in the private drawer.",
+            owner_id="ada",
+            session_id="session-owner-store",
+            chunk_index=0,
+        )
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph):
+            rows, meta, _bundle = mg._run_recall_store_plan(
+                "deployment receipt private drawer",
+                stores=["source_chunks"],
+                limit=3,
+                owner_id="douglas",
+                min_similarity=0.0,
+                planner_profile="off",
+                planned_queries=["deployment receipt private drawer"],
+                planner_meta={"planned_stores": ["source_chunks"]},
+                fast_mode=False,
+                common_kwargs={},
+            )
+
+        assert rows == []
+        assert meta["store_runs"][0]["store"] == "source_chunks"
+        assert meta["store_runs"][0]["result_count"] == 0
+
+    def test_source_chunk_store_plan_respects_aggregate_cap(self, tmp_path):
+        """The source_chunks lane has the same aggregate output budget guard."""
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _db_file = _make_graph(tmp_path)
+        graph.store_source_chunk(
+            "User: Miko keeps the hiking receipt in the pantry drawer.",
+            owner_id="miko",
+            session_id="session-source-cap",
+            chunk_index=0,
+        )
+        graph.store_source_chunk(
+            "User: Miko keeps the receipt copy in the hallway notebook.",
+            owner_id="miko",
+            session_id="session-source-cap",
+            chunk_index=1,
+        )
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph):
+            rows, meta, _bundle = mg._run_recall_store_plan(
+                "Miko receipt",
+                stores=["source_chunks"],
+                limit=5,
+                owner_id="miko",
+                min_similarity=0.0,
+                planner_profile="off",
+                planned_queries=["Miko receipt"],
+                planner_meta={"planned_stores": ["source_chunks"]},
+                fast_mode=False,
+                common_kwargs={
+                    "max_chunk_tokens": 50,
+                    "max_total_chunk_tokens": 1,
+                },
+            )
+
+        assert len(rows) == 1
+        assert rows[0]["output_token_count"] <= 1
+        source_meta = meta["source_chunk_telemetry"]
+        assert source_meta["candidate_count"] == 2
+        assert source_meta["omitted"] == 1
+        assert source_meta["output_token_count"] <= 1
+
+    def test_source_chunk_store_plan_preserves_mixed_store_telemetry(self, tmp_path):
+        """Mixed vector+source_chunks plans expose source chunk lane telemetry."""
+        import datastore.memorydb.memory_graph as mg
+        from datastore.memorydb.memory_graph import store
+
+        graph, _db_file = _make_graph(tmp_path)
+        graph.store_source_chunk(
+            "User: Miko keeps the hiking receipt in the pantry drawer.",
+            owner_id="miko",
+            session_id="session-source-mixed",
+            chunk_index=0,
+        )
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+            store(
+                "Miko keeps the hiking receipt in the pantry drawer",
+                owner_id="miko",
+                source="extract",
+                source_id="session-source-mixed",
+                skip_dedup=True,
+            )
+            rows, meta, _bundle = mg._run_recall_store_plan(
+                "Miko hiking receipt pantry drawer",
+                stores=["vector", "source_chunks"],
+                limit=5,
+                owner_id="miko",
+                min_similarity=0.0,
+                planner_profile="off",
+                planned_queries=["Miko hiking receipt pantry drawer"],
+                planner_meta={"planned_stores": ["vector", "source_chunks"]},
+                fast_mode=False,
+                common_kwargs={
+                    "domain": {"all": True},
+                    "max_chunk_tokens": 50,
+                    "max_total_chunk_tokens": 200,
+                },
+            )
+
+        assert any(row.get("category") == "source_chunk" for row in rows)
+        assert meta["planned_stores"] == ["vector", "source_chunks"]
+        assert meta["source_chunk_telemetry"]["candidate_count"] >= 1
+        assert meta["source_chunk_telemetry"]["output_token_count"] > 0
+        assert meta["rrf_shadow"]["enabled"] is True
+        assert meta["rrf_shadow"]["branch_counts"]["source_chunks"] >= 1
+
+    def test_rrf_shadow_does_not_change_store_plan_ordering_when_active_fusion_disabled(self):
+        """Shadow telemetry remains observational when active RRF fusion is disabled."""
+        import datastore.memorydb.memory_graph as mg
+
+        common = {
+            "limit": 3,
+            "owner_id": "miko",
+            "min_similarity": 0.0,
+            "planner_profile": "off",
+            "planned_queries": ["Miko receipt"],
+            "planner_meta": {"planned_stores": ["vector", "source_chunks"]},
+            "fast_mode": False,
+            "common_kwargs": {},
+        }
+
+        def _fake_registry():
+            return {
+                "vector": {
+                    "recall": lambda *_a, **_k: (
+                        [
+                            {"id": "fact-c", "text": "charlie", "category": "fact", "similarity": 0.95},
+                            {"id": "fact-a", "text": "alpha", "category": "fact", "similarity": 0.90},
+                        ],
+                        {"selected_path": "vector", "phases_ms": {"total_ms": 1}},
+                        None,
+                    ),
+                    "recall_fast": lambda *_a, **_k: ([], {}, None),
+                },
+                "docs": {
+                    "recall": lambda *_a, **_k: ([], {}, None),
+                    "recall_fast": lambda *_a, **_k: ([], {}, None),
+                },
+                "graph": {
+                    "recall": lambda *_a, **_k: ([], {}, None),
+                    "recall_fast": lambda *_a, **_k: ([], {}, None),
+                },
+                "source_chunks": {
+                    "recall": lambda *_a, **_k: (
+                        [
+                            {
+                                "chunk_id": "sch-b",
+                                "source_chunk_id": "sch-b",
+                                "text": "bravo chunk",
+                                "category": "source_chunk",
+                                "source_type": "source_chunk",
+                                "similarity": 0.80,
+                            }
+                        ],
+                        {
+                            "selected_path": "source_chunk_store",
+                            "source_chunk_telemetry": {"candidate_count": 1, "output_token_count": 2},
+                            "phases_ms": {"total_ms": 1},
+                        },
+                        None,
+                    ),
+                    "recall_fast": lambda *_a, **_k: ([], {}, None),
+                },
+            }
+
+        with patch.object(mg, "_get_recall_store_registry", side_effect=_fake_registry), \
+             patch.object(mg, "_should_apply_rrf_store_plan_fusion", return_value=False):
+            rows_with_shadow, meta, _ = mg._run_recall_store_plan(
+                "Miko receipt",
+                stores=["vector", "source_chunks"],
+                **common,
+            )
+
+        with patch.object(mg, "_get_recall_store_registry", side_effect=_fake_registry), \
+             patch.object(mg, "_should_apply_rrf_store_plan_fusion", return_value=False), \
+             patch.object(mg, "_shadow_rrf_recall_store_plan", return_value={"enabled": False, "reason": "disabled"}):
+            rows_without_shadow, _meta_without_shadow, _ = mg._run_recall_store_plan(
+                "Miko receipt",
+                stores=["vector", "source_chunks"],
+                **common,
+            )
+
+        assert [row.get("id") or row.get("chunk_id") for row in rows_with_shadow] == [
+            row.get("id") or row.get("chunk_id") for row in rows_without_shadow
+        ]
+        assert rows_with_shadow == rows_without_shadow
+        assert meta["rrf_shadow"]["enabled"] is True
+        comparison = meta["rrf_shadow"]["comparison"]
+        assert comparison["current_top_keys"] == ["id:fact-c", "id:fact-a", "source_chunk:sch-b"]
+        assert comparison["rrf_top_keys"] == ["id:fact-c", "source_chunk:sch-b", "id:fact-a"]
+        assert comparison["same_top_order"] is False
+        assert comparison["displacement_count"] == 2
+        assert comparison["max_abs_displacement"] == 1
+        assert comparison["branch_contribution"] == {"vector": 2, "source_chunks": 1}
+
+    def test_rrf_fusion_promotes_source_chunk_in_explicit_mixed_plan(self):
+        import datastore.memorydb.memory_graph as mg
+
+        def _fake_registry():
+            return {
+                "vector": {
+                    "recall": lambda *_a, **_k: (
+                        [
+                            {"id": "fact-c", "text": "charlie", "category": "fact", "similarity": 0.95},
+                            {"id": "fact-a", "text": "alpha", "category": "fact", "similarity": 0.90},
+                        ],
+                        {"selected_path": "vector", "phases_ms": {"total_ms": 1}},
+                        None,
+                    ),
+                    "recall_fast": lambda *_a, **_k: ([], {}, None),
+                },
+                "docs": {
+                    "recall": lambda *_a, **_k: ([], {}, None),
+                    "recall_fast": lambda *_a, **_k: ([], {}, None),
+                },
+                "graph": {
+                    "recall": lambda *_a, **_k: ([], {}, None),
+                    "recall_fast": lambda *_a, **_k: ([], {}, None),
+                },
+                "source_chunks": {
+                    "recall": lambda *_a, **_k: (
+                        [
+                            {
+                                "chunk_id": "sch-b",
+                                "source_chunk_id": "sch-b",
+                                "text": "bravo chunk",
+                                "category": "source_chunk",
+                                "source_type": "source_chunk",
+                                "similarity": 0.80,
+                            }
+                        ],
+                        {
+                            "selected_path": "source_chunk_store",
+                            "source_chunk_telemetry": {"candidate_count": 1, "output_token_count": 2},
+                            "phases_ms": {"total_ms": 1},
+                        },
+                        None,
+                    ),
+                    "recall_fast": lambda *_a, **_k: ([], {}, None),
+                },
+            }
+
+        with patch.object(mg, "_get_recall_store_registry", side_effect=_fake_registry), \
+             patch.object(mg, "_should_apply_rrf_store_plan_fusion", return_value=True):
+            rows, meta, _ = mg._run_recall_store_plan(
+                "Miko receipt",
+                stores=["vector", "source_chunks"],
+                limit=3,
+                owner_id="miko",
+                min_similarity=0.0,
+                planner_profile="off",
+                planned_queries=["Miko receipt"],
+                planner_meta={"planned_stores": ["vector", "source_chunks"]},
+                fast_mode=False,
+                common_kwargs={},
+            )
+
+        assert [row.get("id") or row.get("chunk_id") for row in rows] == ["fact-c", "sch-b", "fact-a"]
+        assert meta["rrf_fusion"]["enabled"] is True
+        assert meta["rrf_fusion"]["mode"] == "active"
+        assert meta["rrf_fusion"]["applied_to_stores"] == ["vector", "source_chunks"]
+        assert meta["rrf_shadow"]["comparison_suppressed_reason"] == "active_rrf_fusion"
+        assert "comparison" not in meta["rrf_shadow"]
+
+    def test_rrf_fusion_activation_is_limited_to_source_chunk_mixed_plans(self):
+        import datastore.memorydb.memory_graph as mg
+
+        with patch.object(mg, "_get_retrieval_lightweight_config", return_value=SimpleNamespace()):
+            assert mg._should_apply_rrf_store_plan_fusion([]) is False
+            assert mg._should_apply_rrf_store_plan_fusion(["vector"]) is False
+            assert mg._should_apply_rrf_store_plan_fusion(["source_chunks"]) is False
+            assert mg._should_apply_rrf_store_plan_fusion(["vector", "graph"]) is False
+            assert mg._should_apply_rrf_store_plan_fusion(["graph", "source_chunks"]) is False
+            assert mg._should_apply_rrf_store_plan_fusion(["vector", "graph", "source_chunks"]) is False
+            assert mg._should_apply_rrf_store_plan_fusion(["vector", "source_chunks"]) is True
+        with patch.object(
+            mg,
+            "_get_retrieval_lightweight_config",
+            return_value=SimpleNamespace(store_plan_rrf_fusion=False),
+        ):
+            assert mg._should_apply_rrf_store_plan_fusion(["vector", "source_chunks"]) is False
+
+    def test_rrf_shadow_comparison_reports_rrf_only_candidates(self):
+        import datastore.memorydb.memory_graph as mg
+
+        shadow = {
+            "enabled": True,
+            "top_keys": ["id:a", "id:b", "source_chunk:sch-c"],
+            "top_rows": [
+                {"key": "id:a", "source_ranks": {"vector": 1}},
+                {"key": "id:b", "source_ranks": {"graph": 1}},
+                {"key": "source_chunk:sch-c", "source_ranks": {"source_chunks": 1}},
+            ],
+        }
+
+        annotated = mg._annotate_rrf_shadow_comparison(
+            shadow,
+            [
+                {"id": "a", "text": "alpha", "similarity": 0.95},
+                {"id": "d", "text": "delta", "similarity": 0.90},
+            ],
+            limit=3,
+        )
+
+        comparison = annotated["comparison"]
+        assert comparison["rrf_only_top_keys"] == ["id:b", "source_chunk:sch-c"]
+        assert comparison["current_only_top_keys"] == ["id:d"]
+        assert [row["key"] for row in comparison["rrf_only_top_rows"]] == ["id:b", "source_chunk:sch-c"]
+
+    def test_source_chunk_store_plan_requires_owner_under_failhard(self, tmp_path):
+        """Ownerless source chunk lookup cannot fail open under failHard."""
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _db_file = _make_graph(tmp_path)
+        graph.store_source_chunk(
+            "User: Miko keeps the hiking receipt in the pantry drawer.",
+            owner_id="miko",
+            session_id="session-owner-required",
+            chunk_index=0,
+        )
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._is_fail_hard_mode", return_value=True):
+            with pytest.raises(RuntimeError, match="requires owner_id"):
+                mg._run_recall_store_plan(
+                    "Miko hiking receipt",
+                    stores=["source_chunks"],
+                    limit=3,
+                    owner_id=None,
+                    min_similarity=0.0,
+                    planner_profile="off",
+                    planned_queries=["Miko hiking receipt"],
+                    planner_meta={"planned_stores": ["source_chunks"]},
+                    fast_mode=False,
+                    common_kwargs={},
+                )
+
+    def test_source_chunks_single_store_uses_store_plan_runner(self):
+        """source_chunks-only recall must not fall through to vector-only recall."""
+        import datastore.memorydb.memory_graph as mg
+
+        assert mg._should_run_recall_store_plan(["source_chunks"], use_fast=False) is True
+        assert mg._should_run_recall_store_plan(["docs"], use_fast=False) is True
+        assert mg._should_run_recall_store_plan(["vector"], use_fast=False) is False
+        assert mg._should_run_recall_store_plan(["vector"], use_fast=True) is True
+
     def test_store_with_created_at_override(self, tmp_path):
         """store() with created_at sets the node's created_at in DB."""
         from datastore.memorydb.memory_graph import store
@@ -2925,6 +4137,41 @@ class TestRecallTelemetry:
         assert meta["planned_stores"] == ["vector", "graph"]
         assert "only classify stores/project" in captured["prompt"]
         assert captured["timeout"] == 60.0
+
+    def test_plan_fanout_queries_allows_llm_planned_source_chunks(self):
+        import datastore.memorydb.memory_graph as mg
+
+        captured = {}
+
+        def _fake_call_fast_reasoning(*, prompt, **kwargs):
+            captured["prompt"] = prompt
+            return (
+                '{"stores":["vector","source_chunks"],'
+                '"queries":["Miko hiking receipt pantry drawer"]}',
+                {},
+            )
+
+        with patch.object(
+            mg,
+            "parse_json_response",
+            return_value={
+                "stores": ["vector", "source_chunks"],
+                "queries": ["Miko hiking receipt pantry drawer"],
+            },
+        ), patch("lib.llm_clients.call_fast_reasoning", side_effect=_fake_call_fast_reasoning):
+            queries, meta = mg._plan_fanout_queries(
+                "What exactly did Miko say about the hiking receipt?",
+                timeout_s=60.0,
+                return_meta=True,
+                planner_profile="full",
+            )
+
+        assert queries == ["What exactly did Miko say about the hiking receipt?"]
+        assert meta["used_llm"] is True
+        assert meta["bailout_reason"] == "preserve_short_exact_query"
+        assert meta["planned_stores"] == ["vector", "source_chunks"]
+        assert "source_chunks" in captured["prompt"]
+        assert mg._normalize_store_plan(None) == ["vector"]
 
     def test_plan_fanout_queries_full_preserves_relation_chain_graph_when_llm_downgrades(self):
         import datastore.memorydb.memory_graph as mg
@@ -4733,7 +5980,7 @@ class TestRecallTelemetry:
         with patch.object(
             mg,
             "_recall_store_plan_timeout_s",
-            return_value=0.5,
+            return_value=3.0,
         ), patch.object(
             mg,
             "_plan_fanout_queries",
@@ -4763,6 +6010,10 @@ class TestRecallTelemetry:
                 ["preserved_exact_low_overlap"],
                 "GENERAL",
             ),
+        ), patch.object(
+            mg,
+            "_drill_plan_queries",
+            side_effect=AssertionError("LLM drill planner should not run without enough budget"),
         ):
             rows, meta = mg.recall_fast(
                 "What do you know about Baxter and his blue bandana?",
@@ -4990,6 +6241,33 @@ class TestRecallTelemetry:
         assert "cross-language or code-identifier query variant" in captured["prompt"]
         assert meta["planner_profile"] == "aggressive"
 
+    def test_plan_fanout_queries_uses_json_budget_with_strict_prompt(self):
+        import datastore.memorydb.memory_graph as mg
+
+        captured = {}
+
+        def _fake_call_fast_reasoning(*, prompt, **kwargs):
+            captured["max_tokens"] = kwargs.get("max_tokens")
+            captured["system_prompt"] = kwargs.get("system_prompt")
+            return ('{"queries":["Maya career timeline"],"stores":["vector"]}', {})
+
+        with patch.object(
+            mg,
+            "parse_json_response",
+            return_value={"queries": ["Maya career timeline"], "stores": ["vector"]},
+        ), patch("lib.llm_clients.call_fast_reasoning", side_effect=_fake_call_fast_reasoning):
+            queries, meta = mg._plan_fanout_queries(
+                "Walk me through Maya's career timeline",
+                timeout_s=60.0,
+                return_meta=True,
+            )
+
+        assert queries == ["Walk me through Maya's career timeline", "Maya career timeline"]
+        assert meta["used_llm"] is True
+        assert captured["max_tokens"] >= 512
+        assert "No markdown" in captured["system_prompt"]
+        assert "no reasoning" in captured["system_prompt"]
+
     def test_plan_fanout_queries_fast_uses_llm_to_classify_non_ascii_short_exact_stores(self):
         import datastore.memorydb.memory_graph as mg
 
@@ -5135,7 +6413,7 @@ class TestRecallTelemetry:
         assert "planner_timeout_ms=" in str(exc.value)
         assert "planner_elapsed_ms=" in str(exc.value)
 
-    def test_plan_fanout_queries_times_out_to_base_query_when_failhard_enabled(self):
+    def test_plan_fanout_queries_raises_on_planner_timeout_when_failhard_enabled(self):
         import datastore.memorydb.memory_graph as mg
         query = "How should Maya migrate from SQLite to PostgreSQL while preserving old REST clients and avoiding downtime during the cutover?"
 
@@ -5143,6 +6421,21 @@ class TestRecallTelemetry:
             "lib.llm_clients.call_fast_reasoning",
             side_effect=RuntimeError("Anthropic API error: The read operation timed out"),
         ), patch("lib.fail_policy.is_fail_hard_enabled", return_value=True):
+            with pytest.raises(RuntimeError, match="read operation timed out"):
+                mg._plan_fanout_queries(
+                    query,
+                    return_meta=True,
+                    planner_profile="fast",
+                )
+
+    def test_plan_fanout_queries_times_out_to_base_query_when_failhard_disabled(self):
+        import datastore.memorydb.memory_graph as mg
+        query = "How should Maya migrate from SQLite to PostgreSQL while preserving old REST clients and avoiding downtime during the cutover?"
+
+        with patch(
+            "lib.llm_clients.call_fast_reasoning",
+            side_effect=RuntimeError("Anthropic API error: The read operation timed out"),
+        ), patch("lib.fail_policy.is_fail_hard_enabled", return_value=False):
             queries, meta = mg._plan_fanout_queries(
                 query,
                 return_meta=True,
@@ -5201,6 +6494,46 @@ class TestRecallTelemetry:
         assert "cross-language or code-identifier variant" in captured["prompt"]
         assert meta["queries_count"] == len(queries)
         assert meta["done"] is False
+
+    def test_drill_plan_queries_uses_json_budget_with_strict_prompt(self):
+        import datastore.memorydb.memory_graph as mg
+
+        query = "How long has Caroline had her current group of friends for?"
+        current_results = [
+            {
+                "id": "a",
+                "text": "Caroline has known her current friend support system for 4 years",
+                "similarity": 0.91,
+                "category": "fact",
+            }
+        ]
+        captured = {}
+
+        def _fake_call_fast_reasoning(*, prompt, **kwargs):
+            captured["max_tokens"] = kwargs.get("max_tokens")
+            captured["system_prompt"] = kwargs.get("system_prompt")
+            return ('{"queries":["Caroline current friend support system duration"],"done":false}', {})
+
+        with patch.object(
+            mg,
+            "parse_json_response",
+            return_value={
+                "queries": ["Caroline current friend support system duration"],
+                "done": False,
+            },
+        ), patch("lib.llm_clients.call_fast_reasoning", side_effect=_fake_call_fast_reasoning):
+            queries, meta = mg._drill_plan_queries(
+                query,
+                current_results,
+                already_searched=[query],
+                return_meta=True,
+            )
+
+        assert queries == ["Caroline current friend support system duration"]
+        assert meta["used_llm"] is True
+        assert captured["max_tokens"] >= 512
+        assert "No markdown" in captured["system_prompt"]
+        assert "no reasoning" in captured["system_prompt"]
 
     def test_recall_fast_always_uses_planner(self):
         import datastore.memorydb.memory_graph as mg
@@ -5285,6 +6618,18 @@ class TestRecallFastHookInjectContract:
       - empty result is [] not None and not a tuple
       - result items also have "similarity" and "category" keys (format_memories uses them)
     """
+
+    @staticmethod
+    def _registry_with_source_chunks(registry):
+        registry = dict(registry)
+        registry.setdefault(
+            "source_chunks",
+            {
+                "recall": lambda *a, **k: ([], {}, None),
+                "recall_fast": lambda *a, **k: ([], {}, None),
+            },
+        )
+        return registry
 
     def test_recall_fast_result_items_have_text_key(self):
         """Each item returned by recall_fast() must have a 'text' key.
@@ -5493,7 +6838,7 @@ class TestRecallFastHookInjectContract:
             "graph": {"recall": lambda *a, **k: ([], {}, None), "recall_fast": lambda *a, **k: ([], {}, None)},
         }
 
-        with patch.object(mg, "_get_recall_store_registry", return_value=registry):
+        with patch.object(mg, "_get_recall_store_registry", return_value=self._registry_with_source_chunks(registry)):
             rows, meta, _ = mg._run_recall_store_plan(
                 "As of 2026-03-08, what dietary labels did the recipe app support?",
                 stores=["vector", "docs"],
@@ -5559,7 +6904,7 @@ class TestRecallFastHookInjectContract:
             "graph": {"recall": lambda *a, **k: ([], {}, None), "recall_fast": lambda *a, **k: ([], {}, None)},
         }
 
-        with patch.object(mg, "_get_recall_store_registry", return_value=registry):
+        with patch.object(mg, "_get_recall_store_registry", return_value=self._registry_with_source_chunks(registry)):
             rows, meta, _ = mg._run_recall_store_plan(
                 "As of 2026-03-18, what test suites existed for the recipe app?",
                 stores=["vector", "docs"],
@@ -5955,6 +7300,7 @@ class TestRecallFastHookInjectContract:
             "vector": {"recall": lambda *a, **k: None, "recall_fast": lambda *a, **k: None},
             "docs": {"recall": lambda *a, **k: None},
             "graph": {"recall": lambda *a, **k: None, "recall_fast": lambda *a, **k: None},
+            "source_chunks": {"recall": lambda *a, **k: None, "recall_fast": lambda *a, **k: None},
         }
 
         with patch.object(mg, "_get_recall_store_registry", return_value=bad_registry):
@@ -6071,7 +7417,7 @@ class TestRecallFastHookInjectContract:
             "docs": {"recall": lambda *a, **k: ([], {}, None), "recall_fast": lambda *a, **k: ([], {}, None)},
         }
 
-        with patch.object(mg, "_get_recall_store_registry", return_value=registry):
+        with patch.object(mg, "_get_recall_store_registry", return_value=self._registry_with_source_chunks(registry)):
             rows, meta, _ = mg._run_recall_store_plan(
                 "Who is my niece?",
                 stores=["vector", "graph"],
@@ -6119,7 +7465,7 @@ class TestRecallFastHookInjectContract:
             "docs": {"recall": lambda *a, **k: ([], {}, None), "recall_fast": lambda *a, **k: ([], {}, None)},
         }
 
-        with patch.object(mg, "_get_recall_store_registry", return_value=registry):
+        with patch.object(mg, "_get_recall_store_registry", return_value=self._registry_with_source_chunks(registry)):
             rows, meta, _ = mg._run_recall_store_plan(
                 "half marathon date change reason postponed rescheduled",
                 stores=["vector", "graph"],
@@ -6203,7 +7549,7 @@ class TestRecallFastHookInjectContract:
             "docs": {"recall": lambda *a, **k: ([], {}, None), "recall_fast": lambda *a, **k: ([], {}, None)},
         }
 
-        with patch.object(mg, "_get_recall_store_registry", return_value=registry), \
+        with patch.object(mg, "_get_recall_store_registry", return_value=self._registry_with_source_chunks(registry)), \
              patch.object(mg, "_relation_chain_groups_for_query", return_value=[]):
             rows, meta, _ = mg._run_recall_store_plan(
                 "what does Mei do",
@@ -6301,7 +7647,7 @@ class TestRecallFastHookInjectContract:
             "docs": {"recall": lambda *a, **k: ([], {}, None), "recall_fast": lambda *a, **k: ([], {}, None)},
         }
 
-        with patch.object(mg, "_get_recall_store_registry", return_value=registry):
+        with patch.object(mg, "_get_recall_store_registry", return_value=self._registry_with_source_chunks(registry)):
             rows, meta, _ = mg._run_recall_store_plan(
                 "my family",
                 stores=["vector", "graph"],
@@ -6354,7 +7700,7 @@ class TestRecallFastHookInjectContract:
             "graph": {"recall": _fake_graph, "recall_fast": _fake_graph},
         }
 
-        with patch.object(mg, "_get_recall_store_registry", return_value=registry):
+        with patch.object(mg, "_get_recall_store_registry", return_value=self._registry_with_source_chunks(registry)):
             rows, meta, _ = mg._run_recall_store_plan(
                 "exercise habits recent plans",
                 stores=["vector", "docs", "graph"],
@@ -6395,7 +7741,7 @@ class TestRecallFastHookInjectContract:
             "graph": {"recall": lambda *a, **k: ([], {}, None), "recall_fast": lambda *a, **k: ([], {}, None)},
         }
 
-        with patch.object(mg, "_get_recall_store_registry", return_value=registry):
+        with patch.object(mg, "_get_recall_store_registry", return_value=self._registry_with_source_chunks(registry)):
             with pytest.raises(RuntimeError, match="docs registry corrupted"):
                 mg._run_recall_store_plan(
                     "exercise habits recent plans",
@@ -6905,6 +8251,31 @@ class TestRecallFastHookInjectContract:
 
         assert captured["timeout"] == 8.0
         assert meta["timeout_ms"] == 8000
+
+    def test_plan_query_anchor_terms_uses_safe_json_budget_with_strict_prompt(self):
+        import datastore.memorydb.memory_graph as mg
+
+        captured = {}
+
+        def _fake_call_fast_reasoning(**kwargs):
+            captured.update(kwargs)
+            return '{"anchors": ["Maya", "Stripe"]}', {}
+
+        with patch.object(mg, "call_fast_reasoning", side_effect=_fake_call_fast_reasoning):
+            anchors, meta = mg._plan_query_anchor_terms(
+                "What happened with Maya's transition to Stripe?",
+                timeout_s=0.5,
+                max_retries=0,
+            )
+
+        assert anchors == ["maya", "stripe"]
+        assert meta["source"] == "llm"
+        assert captured["max_tokens"] == mg._LEXICAL_ANCHOR_JSON_PLANNER_MAX_TOKENS
+        assert captured["max_tokens"] >= 512
+        system_prompt = captured["system_prompt"].lower()
+        assert "exactly one compact json object" in system_prompt
+        assert "no markdown" in system_prompt
+        assert "reasoning" in system_prompt
 
     def test_plan_query_anchor_terms_keeps_multi_entity_queries_above_two_anchors(self):
         import datastore.memorydb.memory_graph as mg
@@ -7800,7 +9171,7 @@ class TestRecallFastHookInjectContract:
             "docs": {"recall": lambda *a, **k: ([], {}, None), "recall_fast": lambda *a, **k: ([], {}, None)},
         }
 
-        with patch.object(mg, "_get_recall_store_registry", return_value=registry):
+        with patch.object(mg, "_get_recall_store_registry", return_value=self._registry_with_source_chunks(registry)):
             rows, meta, bundle = mg._run_recall_store_plan(
                 "hist",
                 stores=["vector", "graph"],
@@ -7870,6 +9241,272 @@ class TestRecallFastHookInjectContract:
 
         assert [row["id"] for row in rows] == ["hist-2023"]
         assert meta["query"] == "hist"
+
+    def test_recall_final_merge_recovers_attached_fact_from_placeholder_result(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _ = _make_graph(tmp_path)
+        person = mg.Node.create("Person", "Rin Arlo", owner_id="quaid")
+        origin = mg.Node.create("Fact", "Rin Arlo's origin place is Kevala.", owner_id="quaid")
+        graph.add_node(person, embed=False)
+        graph.add_node(origin, embed=False)
+        graph.add_edge(mg.Edge.create(person.id, origin.id, "has_fact"))
+
+        branch_rows = [
+            {
+                "id": "move-placeholder",
+                "text": "Rin Arlo moved away after the fellowship.",
+                "category": "fact",
+                "similarity": 0.93,
+                "owner_id": "quaid",
+            },
+            {
+                "id": "routine",
+                "text": "Rin Arlo keeps a quiet morning routine.",
+                "category": "fact",
+                "similarity": 0.91,
+                "owner_id": "quaid",
+            },
+        ]
+
+        with patch.object(mg, "get_graph", return_value=graph), \
+             patch.object(mg, "_recall_once", return_value=(branch_rows, {"selected_path": "test"})):
+            rows, meta = mg.recall(
+                "Where did Rin Arlo move from after the fellowship?",
+                limit=2,
+                owner_id="quaid",
+                use_routing=False,
+                use_multi_pass=False,
+                use_reranker=False,
+                include_graph_traversal=False,
+                include_co_session=False,
+                include_mmr=False,
+                max_turns=1,
+                planned_queries=["Where did Rin Arlo move from after the fellowship?"],
+                planner_meta={"planned_stores": ["vector"], "used_llm": False},
+                return_meta=True,
+            )
+
+        assert any("Kevala" in row["text"] for row in rows)
+        assert meta["facet_rescue"]["applied"] is True
+
+    def test_facet_rescue_expands_entity_attached_facts_for_list_query(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _ = _make_graph(tmp_path)
+        person = mg.Node.create("Person", "Nora Vale", owner_id="quaid")
+        existing = mg.Node.create(
+            "Fact",
+            "Nora Vale practices kite design on Monday mornings.",
+            owner_id="quaid",
+        )
+        rituals = mg.Node.create(
+            "Fact",
+            "Nora Vale keeps ceramic glazing, tide walks, and kite repairs as weekly rituals.",
+            owner_id="quaid",
+        )
+        graph.add_node(person, embed=False)
+        graph.add_node(existing, embed=False)
+        graph.add_node(rituals, embed=False)
+        graph.add_edge(mg.Edge.create(person.id, existing.id, "has_fact"))
+        graph.add_edge(mg.Edge.create(person.id, rituals.id, "has_fact"))
+
+        current_rows = [
+            {
+                "id": existing.id,
+                "text": existing.name,
+                "category": "fact",
+                "similarity": 0.9,
+                "owner_id": "quaid",
+            }
+        ]
+
+        with patch.object(mg, "get_graph", return_value=graph):
+            rescued, meta = mg._recover_explicit_entity_facet_rows(
+                "Which rituals does Nora Vale keep?",
+                current_rows,
+                owner_id="quaid",
+                limit=5,
+                intent="GENERAL",
+            )
+
+        assert any(row["id"] == rituals.id for row in rescued)
+        assert meta["applied"] is True
+
+    def test_facet_rescue_can_recover_from_empty_first_pass(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _ = _make_graph(tmp_path)
+        person = mg.Node.create("Person", "Taro Min", owner_id="quaid")
+        craft = mg.Node.create(
+            "Fact",
+            "Taro Min repairs brass lanterns during the night market.",
+            owner_id="quaid",
+        )
+        graph.add_node(person, embed=False)
+        graph.add_node(craft, embed=False)
+        graph.add_edge(mg.Edge.create(person.id, craft.id, "has_fact"))
+
+        with patch.object(mg, "get_graph", return_value=graph):
+            rescued, meta = mg._recover_explicit_entity_facet_rows(
+                "What does Taro Min repair during the night market?",
+                [],
+                owner_id="quaid",
+                limit=5,
+                intent="GENERAL",
+            )
+
+        assert any("brass lanterns" in row["text"] for row in rescued)
+        assert meta["applied"] is True
+
+    def test_facet_rescue_uses_db_entity_anchor_for_non_ascii_query(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _ = _make_graph(tmp_path)
+        meiling = mg.Node.create("Person", "美玲", owner_id="quaid")
+        music = mg.Node.create(
+            "Fact",
+            "美玲喜欢现代音乐，例如云门合唱团。",
+            owner_id="quaid",
+        )
+        graph.add_node(meiling, embed=False)
+        graph.add_node(music, embed=False)
+        graph.add_edge(mg.Edge.create(meiling.id, music.id, "has_fact"))
+
+        with patch.object(mg, "get_graph", return_value=graph):
+            rescued, meta = mg._recover_explicit_entity_facet_rows(
+                "美玲喜欢什么现代音乐？",
+                [],
+                owner_id="quaid",
+                limit=5,
+                intent="GENERAL",
+            )
+
+        assert any("云门合唱团" in row["text"] for row in rescued)
+        assert meta["applied"] is True
+        assert meta["anchor_terms"] == ["美玲"]
+
+    def test_facet_rescue_uses_query_language_terms_not_english_only_triggers(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _ = _make_graph(tmp_path)
+        lucia = mg.Node.create("Person", "Lucia", owner_id="quaid")
+        music = mg.Node.create(
+            "Preference",
+            "A Lucia le gusta la musica moderna de Rosal.",
+            owner_id="quaid",
+            keywords="Lucia musica moderna Rosal gusto",
+        )
+        graph.add_node(lucia, embed=False)
+        graph.add_node(music, embed=False)
+
+        with patch.object(mg, "get_graph", return_value=graph):
+            rescued, meta = mg._recover_explicit_entity_facet_rows(
+                "Que musica moderna le gusta a Lucia?",
+                [],
+                owner_id="quaid",
+                limit=5,
+                intent="GENERAL",
+            )
+
+        assert any("Rosal" in row["text"] for row in rescued)
+        assert meta["applied"] is True
+        assert {"musica", "moderna"} & set(meta["facet_terms"])
+
+    def test_facet_rescue_respects_domain_filter(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _ = _make_graph(tmp_path)
+        nimbus = mg.Node.create("Person", "Nimbus", owner_id="quaid")
+        technical = mg.Node.create(
+            "Fact",
+            "Nimbus added Docker compose deployment to recipe app.",
+            owner_id="quaid",
+            attributes={"domains": ["technical"]},
+        )
+        graph.add_node(nimbus, embed=False)
+        graph.add_node(technical, embed=False)
+        graph.add_edge(mg.Edge.create(nimbus.id, technical.id, "has_fact"))
+
+        with patch.object(mg, "get_graph", return_value=graph):
+            rescued, meta = mg._recover_explicit_entity_facet_rows(
+                "Nimbus recipe app family",
+                [],
+                owner_id="quaid",
+                limit=5,
+                intent="GENERAL",
+                domain={"personal": True},
+            )
+
+        assert rescued == []
+        assert meta["candidate_count"] == 0
+
+    def test_facet_rescue_scans_keyword_rows_when_graph_edge_is_missing(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _ = _make_graph(tmp_path)
+        ivo = mg.Node.create("Person", "Ivo Marin", owner_id="quaid")
+        clarinet = mg.Node.create(
+            "Preference",
+            "Ivo Marin plays clarinet in the harbor ensemble.",
+            owner_id="quaid",
+            keywords="Ivo Marin clarinet rehearsals instrument ensemble",
+            attributes={"domains": ["personal"]},
+        )
+        graph.add_node(ivo, embed=False)
+        graph.add_node(clarinet, embed=False)
+
+        with patch.object(mg, "get_graph", return_value=graph):
+            rescued, meta = mg._recover_explicit_entity_facet_rows(
+                "What does Ivo Marin play?",
+                [],
+                owner_id="quaid",
+                limit=5,
+                intent="GENERAL",
+            )
+
+        assert any("clarinet" in row["text"].lower() for row in rescued)
+        assert meta["applied"] is True
+
+    def test_final_selection_reserves_facet_rescue_rows_and_drops_bare_entity(self):
+        import datastore.memorydb.memory_graph as mg
+
+        rows = [
+            {"id": "entity", "text": "Nora Vale", "category": "person", "similarity": 1.0},
+            {"id": "generic-1", "text": "Nora Vale has a greenhouse.", "category": "fact", "similarity": 1.0},
+            {"id": "generic-2", "text": "Nora Vale visited the Grand Canyon.", "category": "fact", "similarity": 0.99},
+            {"id": "generic-3", "text": "Nora Vale knows Rin Arlo.", "category": "fact", "similarity": 0.98},
+            {
+                "id": "facet-1",
+                "text": "Nora Vale keeps tide walks as a weekly ritual.",
+                "category": "fact",
+                "similarity": 0.91,
+                "_facet_rescue": True,
+                "via": "facet_rescue_lexical",
+                "keywords": "Nora Vale rituals tide walks weekly",
+            },
+            {
+                "id": "facet-2",
+                "text": "Nora Vale repairs kites as a weekly ritual.",
+                "category": "fact",
+                "similarity": 0.90,
+                "_facet_rescue": True,
+                "via": "facet_rescue_lexical",
+                "keywords": "Nora Vale rituals kites weekly",
+            },
+        ]
+
+        selected = mg._select_final_recall_rows_with_facet_rescue(
+            "Which rituals does Nora Vale keep weekly?",
+            rows,
+            limit=4,
+            intent="GENERAL",
+        )
+
+        texts = [row["text"] for row in selected]
+        assert "Nora Vale" not in texts
+        assert any("tide walks" in text for text in texts)
+        assert any("repairs kites" in text for text in texts)
 
     def test_graph_store_recall_expands_terminal_graph_entity_to_attached_fact(self, tmp_path):
         import datastore.memorydb.memory_graph as mg
@@ -8766,6 +10403,87 @@ class TestRecallFastHookInjectContract:
         assert merged[0]["graph_discovery_kind"] == "graph_attached_fact"
         assert merged[0]["graph_relation_sequence"] == ["spouse_of", "sibling_of", "spouse_of", "has_fact"]
         assert merged[0]["graph_path"].startswith("Solomon --spouse_of--> Yuni")
+
+    def test_reciprocal_rank_fuse_recall_branches_merges_source_ranks(self):
+        import datastore.memorydb.memory_graph as mg
+
+        fused, meta = mg._reciprocal_rank_fuse_recall_branches(
+            [
+                ("vector", [
+                    {"id": "a", "text": "alpha", "similarity": 0.95},
+                    {"id": "b", "text": "bravo", "similarity": 0.50},
+                ]),
+                ("graph", [
+                    {"id": "b", "text": "bravo via graph", "similarity": 0.80},
+                    {"id": "c", "text": "charlie", "similarity": 0.70},
+                ]),
+            ],
+            limit=3,
+            k=60,
+        )
+
+        assert meta["candidate_count"] == 3
+        assert fused[0]["id"] == "b"
+        assert fused[0]["rrf_rank"] == 1
+        assert fused[0]["source_ranks"] == {"vector": 2, "graph": 1}
+        assert fused[0]["similarity"] == 0.80
+
+    def test_reciprocal_rank_fuse_recall_branches_uses_chunk_identity(self):
+        import datastore.memorydb.memory_graph as mg
+
+        fused, meta = mg._reciprocal_rank_fuse_recall_branches(
+            [
+                ("vector", [
+                    {"id": "fact-1", "text": "Miko keeps the receipt in the drawer", "similarity": 0.91},
+                ]),
+                ("source_chunks", [
+                    {
+                        "chunk_id": "sch_receipt",
+                        "source_chunk_id": "sch_receipt",
+                        "category": "source_chunk",
+                        "source_type": "source_chunk",
+                        "text": "User: Miko keeps the receipt in the drawer.",
+                        "similarity": 0.70,
+                    },
+                    {
+                        "source_chunk_id": "sch_receipt",
+                        "category": "source_chunk",
+                        "source_type": "source_chunk",
+                        "text": "Duplicate source chunk row",
+                        "similarity": 0.60,
+                    },
+                ]),
+            ],
+            limit=5,
+            k=60,
+        )
+
+        assert meta["candidate_count"] == 2
+        chunk_rows = [row for row in fused if row.get("source_type") == "source_chunk"]
+        assert len(chunk_rows) == 1
+        assert chunk_rows[0]["source_ranks"] == {"source_chunks": 1}
+
+    def test_reciprocal_rank_fuse_recall_branches_raises_on_malformed_row_under_failhard(self):
+        import datastore.memorydb.memory_graph as mg
+
+        with patch.object(mg, "_is_fail_hard_mode", return_value=True):
+            with pytest.raises(RuntimeError, match="row 1 is not a dict"):
+                mg._reciprocal_rank_fuse_recall_branches(
+                    [("vector", ["bad-row"])],  # type: ignore[list-item]
+                    limit=5,
+                    k=60,
+                )
+
+    def test_shadow_rrf_recall_store_plan_reraises_under_failhard(self):
+        import datastore.memorydb.memory_graph as mg
+
+        with patch.object(mg, "_is_fail_hard_mode", return_value=True), \
+             patch.object(mg, "_reciprocal_rank_fuse_recall_branches", side_effect=RuntimeError("rrf failed")):
+            with pytest.raises(RuntimeError, match="rrf failed"):
+                mg._shadow_rrf_recall_store_plan(
+                    [("vector", []), ("graph", [])],
+                    limit=5,
+                )
 
     def test_graph_aware_recall_does_not_relation_filter_multi_hop_depth(self, tmp_path):
         import datastore.memorydb.memory_graph as mg
