@@ -1140,6 +1140,46 @@ PYEOF" 2>/dev/null | tr -d '\r'
     fi
 fi
 fi
+
+# --- Step 4d: Ensure openclaw gateway can resolve matrix-js-sdk ---
+# OpenClaw's gateway imports matrix-js-sdk at runtime but the npm distribution
+# has not bundled it inside its own node_modules in observed versions
+# (>=2026.5.2). Without this dependency present in
+# /opt/homebrew/lib/node_modules/openclaw/node_modules/matrix-js-sdk the
+# matrix channel crashes with "Cannot find package 'matrix-js-sdk'" and
+# auto-restarts indefinitely, breaking M1 SUP-02 (matrix canary) and every
+# subsequent OC milestone that relies on the bot reply path.
+#
+# This step idempotently checks the openclaw global module dir for
+# matrix-js-sdk and installs the pinned version when missing. It runs whether
+# or not openclaw was upgraded above, because a fresh openclaw install also
+# lacks the dep.
+oc_enabled_for_matrix="$(read_config platforms.oc.enabled)"
+if [[ "$oc_enabled_for_matrix" == "true" ]]; then
+    OPENCLAW_MATRIX_JS_SDK_PIN="${OPENCLAW_MATRIX_JS_SDK_PIN:-41.4.0}"
+    echo "[4d/8] Ensuring openclaw gateway has matrix-js-sdk@${OPENCLAW_MATRIX_JS_SDK_PIN}..."
+    matrix_check="$(ssh "$REMOTE_HOST" "set -e; export PATH=\"/opt/homebrew/bin:\$HOME/.local/bin:\$PATH\"; eval \"\$(/opt/homebrew/bin/brew shellenv 2>/dev/null)\" 2>/dev/null || true; OC_ROOT=\"\$(npm root -g 2>/dev/null)/openclaw\"; if [[ ! -d \"\$OC_ROOT\" ]]; then echo MISSING_OC; exit 0; fi; PKG=\"\$OC_ROOT/node_modules/matrix-js-sdk/package.json\"; if [[ ! -f \"\$PKG\" ]]; then echo MISSING; exit 0; fi; node -e 'console.log(require(process.argv[1]).version)' \"\$PKG\" 2>/dev/null || echo UNKNOWN" 2>&1)"
+
+    if [[ "$matrix_check" == "MISSING_OC" ]]; then
+        echo "  openclaw global module not present; skipping matrix-js-sdk install"
+    elif [[ "$matrix_check" == "$OPENCLAW_MATRIX_JS_SDK_PIN" ]]; then
+        echo "  matrix-js-sdk already at ${OPENCLAW_MATRIX_JS_SDK_PIN}, skipping install"
+    else
+        case "$matrix_check" in
+            MISSING)  echo "  matrix-js-sdk not found in openclaw global module; installing ${OPENCLAW_MATRIX_JS_SDK_PIN}..." ;;
+            UNKNOWN)  echo "  matrix-js-sdk present but version unreadable; reinstalling ${OPENCLAW_MATRIX_JS_SDK_PIN}..." ;;
+            *)        echo "  matrix-js-sdk currently ${matrix_check}; reinstalling pinned ${OPENCLAW_MATRIX_JS_SDK_PIN}..." ;;
+        esac
+        install_output=""
+        if install_output="$(ssh "$REMOTE_HOST" "set -e; export PATH=\"/opt/homebrew/bin:\$HOME/.local/bin:\$PATH\"; eval \"\$(/opt/homebrew/bin/brew shellenv 2>/dev/null)\" 2>/dev/null || true; OC_ROOT=\"\$(npm root -g)/openclaw\"; cd \"\$OC_ROOT\" && npm install --no-audit --no-fund 'matrix-js-sdk@${OPENCLAW_MATRIX_JS_SDK_PIN}'" 2>&1)"; then
+            echo "  matrix-js-sdk@${OPENCLAW_MATRIX_JS_SDK_PIN} installed"
+        else
+            echo "  WARN: matrix-js-sdk install failed (continuing — OC matrix lane will be down):"
+            printf '%s\n' "$install_output" | tail -5 | sed 's/^/    /'
+        fi
+    fi
+fi
+
 echo "  [4/8] platform CLI check complete"
 
 # --- Step 5: Wipe ---
