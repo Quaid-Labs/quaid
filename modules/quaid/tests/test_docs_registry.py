@@ -93,6 +93,28 @@ class TestEnsureTable:
         r.ensure_table()
         r.ensure_table()  # Second call should not error
 
+    def test_project_definition_write_handles_fresh_memory_connections(self, setup_env, monkeypatch):
+        """Project-definition writes initialize schema on their active connection."""
+        from config import ProjectDefinition
+        from datastore.docsdb.registry import DocsRegistry
+
+        r = DocsRegistry(db_path=Path(":memory:"), seed_projects=False)
+        monkeypatch.setattr(r, "_ensure_global_project_entry", lambda *args, **kwargs: True)
+
+        r.save_project_definition(
+            "memory-proj",
+            ProjectDefinition(label="Memory Project", home_dir="projects/memory-proj/"),
+        )
+
+    def test_register_handles_fresh_memory_connections(self, setup_env, monkeypatch):
+        """Document registration initializes schema on its active connection."""
+        from datastore.docsdb.registry import DocsRegistry
+
+        r = DocsRegistry(db_path=Path(":memory:"), seed_projects=False)
+        monkeypatch.setattr(r, "_ensure_global_project_entry", lambda *args, **kwargs: True)
+
+        assert r.register("durable-docs/example.md", project="memory-proj") == 1
+
     def test_doc_registry_has_identity_columns(self, setup_env):
         """Forward-compatible identity/source columns are present."""
         r = _get_registry()

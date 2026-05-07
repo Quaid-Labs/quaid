@@ -420,64 +420,67 @@ class DocsRegistry:
             )
         """)
 
-    def ensure_table(self):
-        """Create doc_registry table if it doesn't exist."""
+    def _ensure_doc_registry_table(self, conn) -> None:
+        """Create doc_registry table and additive columns on this connection."""
         def _ensure_column(conn, table: str, column: str, definition: str) -> None:
             cols = {r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
             if column not in cols:
                 conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
-        with get_connection(self.db_path) as conn:
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS doc_registry (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    file_path TEXT NOT NULL UNIQUE,
-                    project TEXT NOT NULL DEFAULT 'default',
-                    asset_type TEXT NOT NULL DEFAULT 'doc',
-                    title TEXT,
-                    description TEXT,
-                    tags TEXT DEFAULT '[]',
-                    state TEXT NOT NULL DEFAULT 'active',
-                    auto_update INTEGER DEFAULT 0,
-                    source_files TEXT,
-                    last_indexed_at TEXT,
-                    last_modified_at TEXT,
-                    registered_at TEXT NOT NULL DEFAULT (datetime('now')),
-                    registered_by TEXT DEFAULT 'system'
-                )
-            """)
-            # Forward-compatible identity/source scope context (additive only).
-            _ensure_column(conn, "doc_registry", "source_channel", "TEXT")
-            _ensure_column(conn, "doc_registry", "source_conversation_id", "TEXT")
-            _ensure_column(conn, "doc_registry", "source_author_id", "TEXT")
-            _ensure_column(conn, "doc_registry", "speaker_entity_id", "TEXT")
-            _ensure_column(conn, "doc_registry", "subject_entity_id", "TEXT")
-            _ensure_column(conn, "doc_registry", "conversation_id", "TEXT")
-            _ensure_column(conn, "doc_registry", "visibility_scope", "TEXT DEFAULT 'source_shared'")
-            _ensure_column(conn, "doc_registry", "sensitivity", "TEXT DEFAULT 'normal'")
-            _ensure_column(conn, "doc_registry", "participant_entity_ids", "TEXT DEFAULT '[]'")
-            _ensure_column(conn, "doc_registry", "provenance_confidence", "REAL")
-            conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_doc_registry_project
-                ON doc_registry(project)
-            """)
-            conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_doc_registry_state
-                ON doc_registry(state)
-            """)
-            conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_doc_registry_type
-                ON doc_registry(asset_type)
-            """)
-            conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_doc_registry_source_scope
-                ON doc_registry(source_channel, source_conversation_id)
-            """)
-            conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_doc_registry_subject_state
-                ON doc_registry(subject_entity_id, state)
-            """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS doc_registry (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                file_path TEXT NOT NULL UNIQUE,
+                project TEXT NOT NULL DEFAULT 'default',
+                asset_type TEXT NOT NULL DEFAULT 'doc',
+                title TEXT,
+                description TEXT,
+                tags TEXT DEFAULT '[]',
+                state TEXT NOT NULL DEFAULT 'active',
+                auto_update INTEGER DEFAULT 0,
+                source_files TEXT,
+                last_indexed_at TEXT,
+                last_modified_at TEXT,
+                registered_at TEXT NOT NULL DEFAULT (datetime('now')),
+                registered_by TEXT DEFAULT 'system'
+            )
+        """)
+        # Forward-compatible identity/source scope context (additive only).
+        _ensure_column(conn, "doc_registry", "source_channel", "TEXT")
+        _ensure_column(conn, "doc_registry", "source_conversation_id", "TEXT")
+        _ensure_column(conn, "doc_registry", "source_author_id", "TEXT")
+        _ensure_column(conn, "doc_registry", "speaker_entity_id", "TEXT")
+        _ensure_column(conn, "doc_registry", "subject_entity_id", "TEXT")
+        _ensure_column(conn, "doc_registry", "conversation_id", "TEXT")
+        _ensure_column(conn, "doc_registry", "visibility_scope", "TEXT DEFAULT 'source_shared'")
+        _ensure_column(conn, "doc_registry", "sensitivity", "TEXT DEFAULT 'normal'")
+        _ensure_column(conn, "doc_registry", "participant_entity_ids", "TEXT DEFAULT '[]'")
+        _ensure_column(conn, "doc_registry", "provenance_confidence", "REAL")
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_doc_registry_project
+            ON doc_registry(project)
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_doc_registry_state
+            ON doc_registry(state)
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_doc_registry_type
+            ON doc_registry(asset_type)
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_doc_registry_source_scope
+            ON doc_registry(source_channel, source_conversation_id)
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_doc_registry_subject_state
+            ON doc_registry(subject_entity_id, state)
+        """)
 
+    def ensure_table(self):
+        """Create doc_registry table if it doesn't exist."""
+        with get_connection(self.db_path) as conn:
+            self._ensure_doc_registry_table(conn)
             # Project definitions table — DB is source of truth (replaces JSON)
             self._ensure_project_definitions_table(conn)
 
@@ -591,6 +594,7 @@ class DocsRegistry:
             raise ValueError("Project name is required")
         def _write():
             with get_connection(self.db_path) as conn:
+                self._ensure_project_definitions_table(conn)
                 conn.execute("""
                     INSERT INTO project_definitions
                         (name, label, home_dir, source_roots, auto_index, patterns, exclude, description, state, updated_at)
@@ -938,6 +942,7 @@ class DocsRegistry:
             link_current_instance=link_current_instance,
         )
         with get_connection(self.db_path) as conn:
+            self._ensure_doc_registry_table(conn)
             existing = conn.execute(
                 "SELECT project, state FROM doc_registry WHERE file_path = ?",
                 (file_path,),

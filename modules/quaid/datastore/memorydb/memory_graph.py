@@ -9308,6 +9308,8 @@ def _merge_recall_batches(batches: List[List[Dict[str, Any]]], limit: int) -> Li
 
     def _merge_row_variants(preferred: Dict[str, Any], alternate: Dict[str, Any]) -> Dict[str, Any]:
         merged = dict(preferred)
+        if merged.get("_debug") is None and isinstance(alternate.get("_debug"), dict):
+            merged["_debug"] = dict(alternate["_debug"])
         if not _has_structured_graph_discovery(merged) and _has_structured_graph_discovery(alternate):
             for key in graph_meta_keys:
                 if alternate.get(key) is not None:
@@ -9321,6 +9323,13 @@ def _merge_recall_batches(batches: List[List[Dict[str, Any]]], limit: int) -> Li
             for key in graph_meta_keys:
                 if merged.get(key) is None and alternate.get(key) is not None:
                     merged[key] = alternate.get(key)
+        if isinstance(merged.get("_debug"), dict):
+            debug_payload = dict(merged["_debug"])
+            try:
+                debug_payload["composite_score"] = round(float(merged.get("similarity", 0.0)), 4)
+            except (TypeError, ValueError):
+                pass
+            merged["_debug"] = debug_payload
         return merged
 
     by_id: Dict[str, Dict[str, Any]] = {}
