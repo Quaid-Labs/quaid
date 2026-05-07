@@ -2976,6 +2976,25 @@ def _normalize_relation_query_tokens(text: str) -> List[str]:
     return tokens
 
 
+def _schema_group_for_relation_alias_tokens(tokens: List[str]) -> str:
+    token_key = tuple(str(token or "").strip().lower() for token in tokens if str(token or "").strip())
+    if not token_key:
+        return ""
+    for group, aliases in _SCHEMA_RELATION_GROUP_TOKENS.items():
+        for alias in set(aliases) | {group}:
+            if tuple(_normalize_relation_query_tokens(alias)) == token_key:
+                return group
+    return ""
+
+
+def _relation_candidate_priority(tokens: List[str], relation: str) -> int:
+    schema_group = _schema_group_for_relation_alias_tokens(tokens)
+    if not schema_group:
+        return 1
+    relation_group = _canonical_relation_group_for_relation(relation)
+    return 0 if relation_group == schema_group else 2
+
+
 def _ordered_relation_matches_for_query(query: str) -> List[str]:
     lowered = str(query or "").lower()
     tokens = _normalize_relation_query_tokens(query)
@@ -3000,7 +3019,7 @@ def _ordered_relation_matches_for_query(query: str) -> List[str]:
                 raw_matches.append((index, index + len(normalized_keyword), clean_relation))
                 start = index + max(1, len(normalized_keyword))
 
-    candidates: List[Tuple[List[str], str]] = []
+    candidates: List[Tuple[List[str], str, int]] = []
     seen_candidates: set[Tuple[Tuple[str, ...], str]] = set()
     for relation, keywords in keyword_map.items():
         clean_relation = str(relation or "").strip()
@@ -3014,7 +3033,11 @@ def _ordered_relation_matches_for_query(query: str) -> List[str]:
             if key in seen_candidates:
                 continue
             seen_candidates.add(key)
-            candidates.append((normalized_tokens, clean_relation))
+            candidates.append((
+                normalized_tokens,
+                clean_relation,
+                _relation_candidate_priority(normalized_tokens, clean_relation),
+            ))
     for relation, relation_tokens in _relation_tokens_for_runtime().items():
         clean_relation = str(relation or "").strip()
         if not clean_relation:
@@ -3024,7 +3047,11 @@ def _ordered_relation_matches_for_query(query: str) -> List[str]:
             if key in seen_candidates:
                 continue
             seen_candidates.add(key)
-            candidates.append(([token], clean_relation))
+            candidates.append((
+                [token],
+                clean_relation,
+                _relation_candidate_priority([token], clean_relation),
+            ))
     for group, aliases in _SCHEMA_RELATION_GROUP_TOKENS.items():
         for alias in sorted(set(aliases) | {group}, key=lambda item: (-len(str(item).split()), -len(str(item)), str(item))):
             normalized_tokens = _normalize_relation_query_tokens(alias)
@@ -3034,9 +3061,13 @@ def _ordered_relation_matches_for_query(query: str) -> List[str]:
             if key in seen_candidates:
                 continue
             seen_candidates.add(key)
-            candidates.append((normalized_tokens, group))
+            candidates.append((
+                normalized_tokens,
+                group,
+                _relation_candidate_priority(normalized_tokens, group),
+            ))
 
-    candidates.sort(key=lambda item: (-len(item[0]), -sum(len(token) for token in item[0]), item[1]))
+    candidates.sort(key=lambda item: (-len(item[0]), -sum(len(token) for token in item[0]), item[2], item[1]))
     matches: List[str] = []
     if raw_matches:
         occupied: List[Tuple[int, int]] = []
@@ -3049,11 +3080,11 @@ def _ordered_relation_matches_for_query(query: str) -> List[str]:
         return matches
     index = 0
     while index < len(tokens):
-        matched: Optional[Tuple[List[str], str]] = None
-        for relation_tokens, relation in candidates:
+        matched: Optional[Tuple[List[str], str, int]] = None
+        for relation_tokens, relation, priority in candidates:
             width = len(relation_tokens)
             if tokens[index:index + width] == relation_tokens:
-                matched = (relation_tokens, relation)
+                matched = (relation_tokens, relation, priority)
                 break
         if matched is None:
             index += 1
