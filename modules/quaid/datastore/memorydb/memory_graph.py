@@ -3368,12 +3368,71 @@ def _terminal_relation_chain_match(row_groups: List[str], intent_groups: List[st
     return int(path_groups == intent_groups)
 
 
-def _rank_graph_row_for_relation_chain(row: Dict[str, Any], relation_groups: List[str]) -> Tuple[int, int, int, int, int, float]:
+_RELATION_CHAIN_ACTIVITY_QUERY_TERMS = {
+    "career",
+    "careers",
+    "employed",
+    "employment",
+    "employer",
+    "job",
+    "jobs",
+    "occupation",
+    "occupations",
+    "profession",
+    "professions",
+    "role",
+    "roles",
+    "work",
+    "works",
+}
+_RELATION_CHAIN_ACTIVITY_FACT_TERMS = {
+    "career",
+    "careers",
+    "employed",
+    "employment",
+    "employer",
+    "job",
+    "jobs",
+    "occupation",
+    "occupations",
+    "profession",
+    "professions",
+    "role",
+    "roles",
+    "work",
+    "worked",
+    "working",
+    "works",
+}
+
+
+def _relation_chain_activity_answer_score(query: Optional[str], row: Dict[str, Any]) -> int:
+    query_tokens = set(_normalize_relation_query_tokens(query or ""))
+    activity_query = bool(query_tokens & _RELATION_CHAIN_ACTIVITY_QUERY_TERMS) or bool(
+        _NAMED_ENTITY_ACTIVITY_QUERY_RE.search(str(query or "").lower())
+    )
+    if not activity_query:
+        return 0
+    searchable = " ".join([
+        str((row or {}).get("text") or ""),
+        str((row or {}).get("keywords") or ""),
+        str((row or {}).get("graph_path") or ""),
+    ]).lower()
+    return int(any(_text_contains_anchor_term(searchable, term) for term in _RELATION_CHAIN_ACTIVITY_FACT_TERMS))
+
+
+def _rank_graph_row_for_relation_chain(
+    row: Dict[str, Any],
+    relation_groups: List[str],
+    *,
+    query: Optional[str] = None,
+) -> Tuple[int, int, int, int, int, int, float]:
     row_groups = _graph_row_relation_groups(row)
     ordered_hits = _ordered_relation_group_match_length(row_groups, relation_groups)
     prefix_hits = _prefix_relation_group_match_length(row_groups, relation_groups)
     terminal_hits = _terminal_relation_chain_match(row_groups, relation_groups)
     fact_bonus = 1 if str(row.get("via") or "") == "graph_attached_fact" or str(row.get("category") or "").lower() == "fact" else 0
+    activity_answer = _relation_chain_activity_answer_score(query, row)
     try:
         depth = int(row.get("hop_depth") or row.get("depth") or 0)
     except Exception:
@@ -3382,27 +3441,39 @@ def _rank_graph_row_for_relation_chain(row: Dict[str, Any], relation_groups: Lis
         similarity = float(row.get("similarity") or 0.0)
     except Exception:
         similarity = 0.0
-    return ordered_hits, prefix_hits, terminal_hits, fact_bonus, depth, similarity
+    return ordered_hits, prefix_hits, terminal_hits, activity_answer, fact_bonus, depth, similarity
 
 
-def _relation_chain_sort_key(row: Dict[str, Any], relation_groups: List[str]) -> Tuple[int, int, int, int, int, float]:
-    ordered_hits, prefix_hits, terminal_hits, fact_bonus, depth, similarity = _rank_graph_row_for_relation_chain(
+def _relation_chain_sort_key(
+    row: Dict[str, Any],
+    relation_groups: List[str],
+    *,
+    query: Optional[str] = None,
+) -> Tuple[int, int, int, int, int, int, float]:
+    ordered_hits, prefix_hits, terminal_hits, activity_answer, fact_bonus, depth, similarity = _rank_graph_row_for_relation_chain(
         row,
         relation_groups,
+        query=query,
     )
-    return ordered_hits, prefix_hits, terminal_hits, fact_bonus, -depth, similarity
+    return ordered_hits, prefix_hits, terminal_hits, activity_answer, fact_bonus, -depth, similarity
 
 
-def _boost_relation_chain_row_scores(rows: List[Dict[str, Any]], relation_groups: List[str]) -> None:
+def _boost_relation_chain_row_scores(
+    rows: List[Dict[str, Any]],
+    relation_groups: List[str],
+    *,
+    query: Optional[str] = None,
+) -> None:
     for row in rows:
-        ordered_hits, prefix_hits, terminal_hits, fact_bonus, depth, current_similarity = _rank_graph_row_for_relation_chain(
+        ordered_hits, prefix_hits, terminal_hits, activity_answer, fact_bonus, depth, current_similarity = _rank_graph_row_for_relation_chain(
             row,
             relation_groups,
+            query=query,
         )
         graph_like = str(row.get("via") or "").startswith("graph") or str(row.get("category") or "").lower() == "graph"
         if ordered_hits >= 2 or (ordered_hits >= 1 and fact_bonus):
             cap = 0.996 if fact_bonus else 0.994
-            target = 0.86 + (0.03 * ordered_hits) + (0.02 * prefix_hits) + (0.02 * terminal_hits) + (0.02 * fact_bonus) - (0.01 * max(depth - 1, 0))
+            target = 0.86 + (0.03 * ordered_hits) + (0.02 * prefix_hits) + (0.02 * terminal_hits) + (0.01 * activity_answer) + (0.02 * fact_bonus) - (0.01 * max(depth - 1, 0))
             row["similarity"] = round(max(
                 current_similarity,
                 min(cap, target),
@@ -4413,9 +4484,9 @@ def graph_aware_recall(
             break
 
     if relation_chain_query and results["graph_results"]:
-        _boost_relation_chain_row_scores(results["graph_results"], relation_chain_groups)
+        _boost_relation_chain_row_scores(results["graph_results"], relation_chain_groups, query=query)
         results["graph_results"].sort(
-            key=lambda row: _relation_chain_sort_key(row, relation_chain_groups),
+            key=lambda row: _relation_chain_sort_key(row, relation_chain_groups, query=query),
             reverse=True,
         )
 
@@ -6828,7 +6899,7 @@ def _graph_store_recall(
         and _has_relation_chain_structure(query)
     )
     if relation_chain_query and combined:
-        _boost_relation_chain_row_scores(combined, relation_chain_groups)
+        _boost_relation_chain_row_scores(combined, relation_chain_groups, query=query)
     try:
         graph = get_graph()
         _, anchor_expansions = _expand_high_confidence_entity_anchors(
@@ -6843,7 +6914,7 @@ def _graph_store_recall(
         if anchor_expansions:
             combined.extend(anchor_expansions)
             if relation_chain_query:
-                _boost_relation_chain_row_scores(combined, relation_chain_groups)
+                _boost_relation_chain_row_scores(combined, relation_chain_groups, query=query)
     except Exception:
         pass
     if date_from or date_to:
@@ -7208,9 +7279,9 @@ def _run_recall_store_plan(
         and _has_relation_chain_structure(query)
     )
     if relation_chain_query and merged:
-        _boost_relation_chain_row_scores(merged, relation_chain_groups)
+        _boost_relation_chain_row_scores(merged, relation_chain_groups, query=query)
         merged.sort(
-            key=lambda row: _relation_chain_sort_key(row, relation_chain_groups),
+            key=lambda row: _relation_chain_sort_key(row, relation_chain_groups, query=query),
             reverse=True,
         )
     if fast_mode:
@@ -16023,6 +16094,17 @@ def recall(
     merged = _prioritize_deliberate_fresh_direct_anchor_rows(query, merged)
     merged = _prioritize_date_relation_callback_rows(query, merged)
     merged = _prioritize_named_entity_activity_anchor_rows(query, merged)
+    relation_chain_groups = _relation_chain_groups_for_query(query)
+    relation_chain_query = (
+        len(relation_chain_groups) >= 2
+        and _has_relation_chain_structure(query)
+    )
+    if relation_chain_query and merged:
+        _boost_relation_chain_row_scores(merged, relation_chain_groups, query=query)
+        merged.sort(
+            key=lambda row: _relation_chain_sort_key(row, relation_chain_groups, query=query),
+            reverse=True,
+        )
     facet_rescue_rows, facet_rescue_meta = _recover_explicit_entity_facet_rows(
         query,
         merged,

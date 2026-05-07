@@ -10154,15 +10154,21 @@ class TestRecallFastHookInjectContract:
         yuni = mg.Node.create("Person", "Yuni")
         kai = mg.Node.create("Person", "Kai")
         mei = mg.Node.create("Person", "Mei")
+        brother = mg.Node.create("Fact", "Solomon Steadman's partner Yuni has a brother named Kai")
+        lives = mg.Node.create("Fact", "Yuni's brother Kai lives in Osaka")
         boat = mg.Node.create("Fact", "Kai works at a small boatbuilding studio")
+        wife = mg.Node.create("Fact", "Kai's wife is named Mei")
         ceramics = mg.Node.create("Fact", "Kai's wife Mei runs a ceramics practice out of their garage")
-        for node in (solomon, yuni, kai, mei, boat, ceramics):
+        for node in (solomon, yuni, kai, mei, brother, lives, boat, wife, ceramics):
             graph.add_node(node, embed=False)
         graph.add_edge(mg.Edge.create(solomon.id, yuni.id, "knows"))
         graph.add_edge(mg.Edge.create(solomon.id, yuni.id, "spouse_of"))
         graph.add_edge(mg.Edge.create(yuni.id, kai.id, "sibling_of"))
         graph.add_edge(mg.Edge.create(kai.id, mei.id, "spouse_of"))
+        graph.add_edge(mg.Edge.create(kai.id, brother.id, "has_fact"))
+        graph.add_edge(mg.Edge.create(kai.id, lives.id, "has_fact"))
         graph.add_edge(mg.Edge.create(kai.id, boat.id, "has_fact"))
+        graph.add_edge(mg.Edge.create(kai.id, wife.id, "has_fact"))
         graph.add_edge(mg.Edge.create(mei.id, ceramics.id, "has_fact"))
 
         fake_cfg = SimpleNamespace(
@@ -10209,15 +10215,21 @@ class TestRecallFastHookInjectContract:
         yuni = mg.Node.create("Person", "Yuni")
         kai = mg.Node.create("Person", "Kai")
         mei = mg.Node.create("Person", "Mei")
+        brother = mg.Node.create("Fact", "Solomon Steadman's partner Yuni has a brother named Kai")
+        lives = mg.Node.create("Fact", "Yuni's brother Kai lives in Osaka")
         boat = mg.Node.create("Fact", "Kai works at a small boatbuilding studio")
+        wife = mg.Node.create("Fact", "Kai's wife is named Mei")
         ceramics = mg.Node.create("Fact", "Kai's wife Mei runs a ceramics practice out of their garage")
-        for node in (solomon, yuni, kai, mei, boat, ceramics):
+        for node in (solomon, yuni, kai, mei, brother, lives, boat, wife, ceramics):
             graph.add_node(node, embed=False)
         graph.add_edge(mg.Edge.create(solomon.id, yuni.id, "knows"))
         graph.add_edge(mg.Edge.create(solomon.id, yuni.id, "spouse_of"))
         graph.add_edge(mg.Edge.create(yuni.id, kai.id, "sibling_of"))
         graph.add_edge(mg.Edge.create(kai.id, mei.id, "spouse_of"))
+        graph.add_edge(mg.Edge.create(kai.id, brother.id, "has_fact"))
+        graph.add_edge(mg.Edge.create(kai.id, lives.id, "has_fact"))
         graph.add_edge(mg.Edge.create(kai.id, boat.id, "has_fact"))
+        graph.add_edge(mg.Edge.create(kai.id, wife.id, "has_fact"))
         graph.add_edge(mg.Edge.create(mei.id, ceramics.id, "has_fact"))
 
         fake_cfg = SimpleNamespace(
@@ -10226,7 +10238,10 @@ class TestRecallFastHookInjectContract:
             )
         )
         candidate_pool = [
+            {"id": brother.id, "text": brother.name, "category": "fact", "similarity": 1.0},
+            {"id": lives.id, "text": lives.name, "category": "fact", "similarity": 0.99},
             {"id": ceramics.id, "text": ceramics.name, "category": "fact", "similarity": 0.94},
+            {"id": wife.id, "text": wife.name, "category": "fact", "similarity": 0.93},
             {"id": boat.id, "text": boat.name, "category": "fact", "similarity": 0.58},
         ]
         with patch.object(mg, "get_graph", return_value=graph), \
