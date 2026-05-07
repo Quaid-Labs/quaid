@@ -1155,7 +1155,7 @@ fi
 # or not openclaw was upgraded above, because a fresh openclaw install also
 # lacks the dep.
 oc_enabled_for_matrix="$(read_config platforms.oc.enabled)"
-if [[ "$oc_enabled_for_matrix" == "true" ]]; then
+if [[ "$oc_enabled_for_matrix" == "True" || "$oc_enabled_for_matrix" == "true" ]]; then
     OPENCLAW_MATRIX_JS_SDK_PIN="${OPENCLAW_MATRIX_JS_SDK_PIN:-41.4.0}"
     echo "[4d/8] Ensuring openclaw gateway has matrix-js-sdk@${OPENCLAW_MATRIX_JS_SDK_PIN}..."
     matrix_check="$(ssh "$REMOTE_HOST" "set -e; export PATH=\"/opt/homebrew/bin:\$HOME/.local/bin:\$PATH\"; eval \"\$(/opt/homebrew/bin/brew shellenv 2>/dev/null)\" 2>/dev/null || true; OC_ROOT=\"\$(npm root -g 2>/dev/null)/openclaw\"; if [[ ! -d \"\$OC_ROOT\" ]]; then echo MISSING_OC; exit 0; fi; PKG=\"\$OC_ROOT/node_modules/matrix-js-sdk/package.json\"; if [[ ! -f \"\$PKG\" ]]; then echo MISSING; exit 0; fi; node -e 'console.log(require(process.argv[1]).version)' \"\$PKG\" 2>/dev/null || echo UNKNOWN" 2>&1)"
