@@ -2666,6 +2666,8 @@ def _merge_parsed_payloads(
                     raw_fact,
                     default_created_at=effective_date_hint,
                     default_mentioned_at=effective_mention_hint,
+                    # effective_mention_hint is structural when present: transcript
+                    # timestamp, session hint, or caller wall-clock fallback.
                     prefer_default_mentioned_at=True,
                 )
                 if source_chunk_id:

@@ -2952,6 +2952,29 @@ class TestTimestampOverride:
                     temporal_dimension="occurred",
                 )
 
+    def test_temporal_filter_warns_and_excludes_malformed_selected_axis_without_failhard(self, caplog):
+        """Production-default date filters warn and exclude corrupted temporal rows."""
+        import datastore.memorydb.memory_graph as mg
+
+        rows = [
+            {
+                "text": "The row has a corrupted occurrence date",
+                "occurred_start": "not-a-date",
+                "created_at": "2026-05-07T05:10:00",
+            }
+        ]
+
+        with patch.object(mg, "_is_fail_hard_mode", return_value=False), caplog.at_level("WARNING"):
+            filtered = mg._filter_recall_rows_by_date_bounds(
+                rows,
+                date_from="2026-05-07",
+                date_to="2026-05-07",
+                temporal_dimension="occurred",
+            )
+
+        assert filtered == []
+        assert "Invalid temporal value for occurred_start" in caplog.text
+
     def test_temporal_occurred_falls_back_to_created_for_legacy_rows(self, tmp_path):
         """Explicit occurred filters still find old rows with no occurrence fields."""
         import datastore.memorydb.memory_graph as mg
