@@ -225,7 +225,15 @@ export class TestMemoryInterface {
   }
 
   async search(query: string, owner: string = 'testuser', limit: number = 5, minSimilarity: number = 0.3): Promise<any[]> {
-    const cfg: Record<string, unknown> = { stores: ["vector"], owner, limit, min_similarity: minSimilarity }
+    const cfg: Record<string, unknown> = {
+      stores: ["vector"],
+      owner,
+      limit,
+      min_similarity: minSimilarity,
+      // This fixture runs with QUAID_DISABLE_LLM=1; keep search deterministic
+      // instead of invoking the failHard fanout planner with a disabled provider.
+      planner_profile: "off",
+    }
     const args = [query, JSON.stringify(cfg)]
     const result = await this.callPython("recall", args)
 
