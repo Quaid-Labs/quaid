@@ -11660,10 +11660,39 @@ def _date_part(value: Any) -> str:
     raw = str(value or "").strip()
     if not raw:
         return ""
-    match = re.search(r"\b(20\d{2}-\d{2}-\d{2})\b", raw)
+    match = re.search(r"\b(\d{4}-\d{2}-\d{2})\b", raw)
     if match:
-        return match.group(1)
-    return raw.split("T", 1)[0] if "T" in raw else raw[:10]
+        candidate = match.group(1)
+        try:
+            datetime.strptime(candidate, "%Y-%m-%d")
+        except ValueError:
+            return ""
+        return candidate
+    candidate = raw.split("T", 1)[0] if "T" in raw else raw[:10]
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", candidate):
+        return ""
+    try:
+        datetime.strptime(candidate, "%Y-%m-%d")
+    except ValueError:
+        return ""
+    return candidate
+
+
+def _temporal_value_is_present(value: Any) -> bool:
+    return bool(str(value or "").strip())
+
+
+def _temporal_date_part_for_bounds(value: Any, field_name: str) -> str:
+    date = _date_part(value)
+    if not date and _temporal_value_is_present(value):
+        message = (
+            f"Invalid temporal value for {field_name}: expected YYYY-MM-DD or ISO timestamp, "
+            f"got {str(value).strip()!r}"
+        )
+        if _is_fail_hard_mode():
+            raise ValueError(message)
+        logger.warning("[memory_graph] %s", message)
+    return date
 
 
 def _normalize_recall_date_bound(value: Any) -> Optional[str]:
@@ -11706,9 +11735,12 @@ def _normalize_recall_temporal_dimension(value: Any) -> str:
 def _temporal_date_bounds_from_values(
     start_value: Any,
     end_value: Any = None,
+    *,
+    start_field: str = "temporal_start",
+    end_field: str = "temporal_end",
 ) -> Tuple[str, str]:
-    start = _date_part(start_value)
-    end = _date_part(end_value)
+    start = _temporal_date_part_for_bounds(start_value, start_field)
+    end = _temporal_date_part_for_bounds(end_value, end_field)
     if start and end and end < start:
         start, end = end, start
     if start and not end:
@@ -11729,12 +11761,19 @@ def _row_temporal_bounds(
 
     if dimension == "mentioned":
         start, end = _temporal_date_bounds_from_values(
-            row.get("mentioned_at") or row.get("source_date") or row.get("created_at")
+            row.get("mentioned_at") or row.get("source_date") or row.get("created_at"),
+            start_field=(
+                "mentioned_at"
+                if _temporal_value_is_present(row.get("mentioned_at"))
+                else "source_date"
+                if _temporal_value_is_present(row.get("source_date"))
+                else "created_at"
+            ),
         )
         return start, end, "mentioned"
 
     if dimension == "record":
-        start, end = _temporal_date_bounds_from_values(row.get("created_at"))
+        start, end = _temporal_date_bounds_from_values(row.get("created_at"), start_field="created_at")
         return start, end, "record"
 
     # Occurred-time is preferred for explicit event filters. Older rows that do
@@ -11743,19 +11782,24 @@ def _row_temporal_bounds(
     occurred_start = row.get("occurred_start") or row.get("valid_from")
     occurred_end = row.get("occurred_end") or row.get("valid_until")
     if occurred_start or occurred_end:
-        start, end = _temporal_date_bounds_from_values(occurred_start, occurred_end)
+        start, end = _temporal_date_bounds_from_values(
+            occurred_start,
+            occurred_end,
+            start_field="occurred_start" if row.get("occurred_start") else "valid_from",
+            end_field="occurred_end" if row.get("occurred_end") else "valid_until",
+        )
         return start, end, "occurred"
 
     source_date = row.get("source_date")
     if source_date:
-        start, end = _temporal_date_bounds_from_values(source_date)
+        start, end = _temporal_date_bounds_from_values(source_date, start_field="source_date")
         return start, end, "source"
 
     if dimension == "occurred":
-        start, end = _temporal_date_bounds_from_values(row.get("created_at"))
+        start, end = _temporal_date_bounds_from_values(row.get("created_at"), start_field="created_at")
         return start, end, "record_fallback"
 
-    start, end = _temporal_date_bounds_from_values(row.get("created_at"))
+    start, end = _temporal_date_bounds_from_values(row.get("created_at"), start_field="created_at")
     return start, end, "record"
 
 

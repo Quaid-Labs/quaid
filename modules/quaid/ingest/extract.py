@@ -130,6 +130,7 @@ def _normalize_fact_temporal_hint(
     *,
     default_created_at: Optional[str] = None,
     default_mentioned_at: Optional[str] = None,
+    prefer_default_mentioned_at: bool = False,
 ) -> Dict[str, Any]:
     """Normalize fact temporal metadata and backfill source mention time."""
     normalized = dict(fact or {})
@@ -162,11 +163,11 @@ def _normalize_fact_temporal_hint(
         normalized["occurred_end"] = occurred_end
     else:
         normalized.pop("occurred_end", None)
-    mentioned_at = (
-        _normalize_extracted_timestamp(normalized.get("mentioned_at"))
-        or fallback_mentioned_at
-        or created_at
-    )
+    extracted_mentioned_at = _normalize_extracted_timestamp(normalized.get("mentioned_at"))
+    if prefer_default_mentioned_at:
+        mentioned_at = fallback_mentioned_at or extracted_mentioned_at or created_at
+    else:
+        mentioned_at = extracted_mentioned_at or fallback_mentioned_at or created_at
     if mentioned_at:
         normalized["mentioned_at"] = mentioned_at
     else:
@@ -2665,6 +2666,7 @@ def _merge_parsed_payloads(
                     raw_fact,
                     default_created_at=effective_date_hint,
                     default_mentioned_at=effective_mention_hint,
+                    prefer_default_mentioned_at=True,
                 )
                 if source_chunk_id:
                     normalized_fact["_source_chunk_id"] = source_chunk_id
@@ -2982,6 +2984,7 @@ def apply_extracted_payloads(
             fact,
             default_created_at=session_date_hint,
             default_mentioned_at=publish_mentioned_at,
+            prefer_default_mentioned_at=bool(session_date_hint),
         )
         if isinstance(fact, dict)
         else fact

@@ -2931,6 +2931,27 @@ class TestTimestampOverride:
         assert filtered == rows
         assert filtered[0]["temporal_filter_basis"] == "occurred"
 
+    def test_temporal_filter_raises_on_malformed_selected_axis_under_failhard(self):
+        """Date-bounded recall validates the selected temporal axis instead of string-comparing garbage."""
+        import datastore.memorydb.memory_graph as mg
+
+        rows = [
+            {
+                "text": "The row has a corrupted occurrence date",
+                "occurred_start": "not-a-date",
+                "created_at": "2026-05-07T05:10:00",
+            }
+        ]
+
+        with patch.object(mg, "_is_fail_hard_mode", return_value=True):
+            with pytest.raises(ValueError, match="occurred_start"):
+                mg._filter_recall_rows_by_date_bounds(
+                    rows,
+                    date_from="2026-05-07",
+                    date_to="2026-05-07",
+                    temporal_dimension="occurred",
+                )
+
     def test_temporal_occurred_falls_back_to_created_for_legacy_rows(self, tmp_path):
         """Explicit occurred filters still find old rows with no occurrence fields."""
         import datastore.memorydb.memory_graph as mg

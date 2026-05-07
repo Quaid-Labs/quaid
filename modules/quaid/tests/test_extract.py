@@ -808,6 +808,45 @@ class TestExtractFromTranscript:
         assert fact["created_at"] == "2026-05-02T14:49:46+00:00"
 
     @patch("ingest.extract.call_deep_reasoning")
+    def test_extraction_prefers_source_mention_time_over_llm_mentioned_at(self, mock_llm):
+        from ingest.extract import extract_from_transcript
+
+        mock_llm.return_value = (json.dumps({
+            "chunk_assessment": "usable",
+            "facts": [
+                {
+                    "text": "Melanie attended the May 2023 art workshop",
+                    "category": "fact",
+                    "speaker": "user",
+                    "domains": ["personal"],
+                    "extraction_confidence": "high",
+                    "privacy": "shared",
+                    "mentioned_at": "2025-01-13T23:59:59",
+                    "occurred_start": "2023-05-01",
+                    "occurred_end": "2023-05-31",
+                }
+            ],
+            "soul_snippets": {},
+            "journal_entries": {},
+            "project_logs": {},
+        }), 0.1)
+
+        result = extract_from_transcript(
+            transcript=(
+                "[2026-05-07T05:10:21.414Z] User: Melanie told me she attended "
+                "the May 2023 art workshop.\n\n"
+                "[2026-05-07T05:10:23.024Z] Assistant: Noted."
+            ),
+            owner_id="Solomon Steadman",
+            dry_run=True,
+        )
+
+        fact = result["raw_facts"][0]
+        assert fact["mentioned_at"] == "2026-05-07T05:10:21+00:00"
+        assert fact["occurred_start"] == "2023-05-01T23:59:59"
+        assert fact["occurred_end"] == "2023-05-31T23:59:59"
+
+    @patch("ingest.extract.call_deep_reasoning")
     def test_assistant_named_option_anchor_is_preserved_when_llm_omits_it(self, mock_llm):
         from ingest.extract import extract_from_transcript
 
