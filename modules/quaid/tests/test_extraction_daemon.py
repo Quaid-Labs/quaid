@@ -1982,7 +1982,21 @@ def test_process_signal_reextracts_relocated_transcript_when_content_changed(
     assert cursor["transcript_path"] == str(new_path)
 
 
-def test_process_signal_requeues_when_transcript_rebases_during_flush(monkeypatch, tmp_path):
+@pytest.mark.parametrize(
+    ("rebase_retry_count", "expect_followup", "guard_reread_error"),
+    [
+        (0, True, False),
+        (extraction_daemon.TRANSCRIPT_REBASE_MAX_RETRIES, False, False),
+        (0, True, True),
+    ],
+)
+def test_process_signal_requeues_when_transcript_rebases_during_flush(
+    monkeypatch,
+    tmp_path,
+    rebase_retry_count,
+    expect_followup,
+    guard_reread_error,
+):
     from lib.adapter import set_adapter, reset_adapter
     from ingest import extract as extract_mod
     from core import ingest_runtime
@@ -2016,7 +2030,16 @@ def test_process_signal_requeues_when_transcript_rebases_during_flush(monkeypatc
     monkeypatch.setenv("QUAID_INSTANCE", "openclaw-main")
     source_key = extraction_daemon._signal_source_cursor_key(session_id, str(transcript_path))
     captured = {}
+    rolling_metrics = []
     parse_calls = {"count": 0}
+    digest_calls = {"count": 0}
+    real_digest = extraction_daemon._transcript_line_window_digest
+
+    def guarded_digest(*args, **kwargs):
+        digest_calls["count"] += 1
+        if guard_reread_error and digest_calls["count"] == 2:
+            raise OSError("transcript disappeared during rebase guard")
+        return real_digest(*args, **kwargs)
 
     class _Adapter(_OwnedTestAdapterMixin):
         def instance_root(self):
@@ -2054,6 +2077,12 @@ def test_process_signal_requeues_when_transcript_rebases_during_flush(monkeypatc
     })
     monkeypatch.setattr(notify_mod, "notify_memory_extraction", lambda **_kwargs: None)
     monkeypatch.setattr(ingest_runtime, "run_session_logs_ingest", lambda **_kwargs: {"status": "indexed"})
+    monkeypatch.setattr(
+        extraction_daemon,
+        "write_rolling_metric",
+        lambda event, session_id, **data: rolling_metrics.append({"event": event, "session_id": session_id, **data}),
+    )
+    monkeypatch.setattr(extraction_daemon, "_transcript_line_window_digest", guarded_digest)
 
     def fake_extract_from_transcript(transcript, **kwargs):
         captured["transcript"] = transcript
@@ -2099,6 +2128,7 @@ def test_process_signal_requeues_when_transcript_rebases_during_flush(monkeypatc
             signal_type="session_end",
             session_id=session_id,
             transcript_path=str(transcript_path),
+            meta={"transcript_rebase_retry_count": rebase_retry_count} if rebase_retry_count else None,
         )
         signal_data = json.loads(signal_path.read_text(encoding="utf-8"))
         signal_data["_signal_path"] = str(signal_path)
@@ -2113,15 +2143,25 @@ def test_process_signal_requeues_when_transcript_rebases_during_flush(monkeypatc
     cursor = extraction_daemon.read_cursor(session_id, source_key=source_key)
     assert cursor["line_offset"] == 0
     assert cursor["transcript_path"] == str(transcript_path)
+    assert rolling_metrics
+    assert rolling_metrics[-1]["transcript_rebased_during_flush"] is True
+    assert rolling_metrics[-1]["transcript_rebase_retry_count"] == rebase_retry_count
+    assert rolling_metrics[-1]["transcript_rebase_retry_limit_reached"] is (not expect_followup)
+    assert rolling_metrics[-1]["transcript_rebase_reread_failed"] is guard_reread_error
 
     queued = [
         json.loads(path.read_text(encoding="utf-8"))
         for path in extraction_daemon._signal_dir().glob("*.json")
     ]
-    assert len(queued) == 1
-    assert queued[0]["type"] == "session_end"
-    assert queued[0]["meta"]["reason"] == "transcript_rebased_during_flush"
-    assert queued[0]["meta"]["source_cursor_key"] == source_key
+    if expect_followup:
+        assert len(queued) == 1
+        assert queued[0]["type"] == "session_end"
+        assert queued[0]["meta"]["reason"] == "transcript_rebased_during_flush"
+        assert queued[0]["meta"]["source_cursor_key"] == source_key
+        assert queued[0]["meta"]["transcript_rebase_retry_count"] == rebase_retry_count + 1
+        assert queued[0]["meta"]["transcript_rebase_max_retries"] == extraction_daemon.TRANSCRIPT_REBASE_MAX_RETRIES
+    else:
+        assert queued == []
 
 
 def test_process_signal_does_not_reextract_tail_after_nonrolling_semantic_stage(monkeypatch, tmp_path):

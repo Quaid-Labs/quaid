@@ -103,6 +103,8 @@ MAX_TRANSCRIPT_LINES = 50_000
 # Max signals to process per poll cycle (B031)
 MAX_SIGNALS_PER_POLL = 100
 
+TRANSCRIPT_REBASE_MAX_RETRIES = 3
+
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
@@ -1022,7 +1024,7 @@ def _transcript_stat_metadata(transcript_path: str) -> Dict[str, int]:
 
 
 def _transcript_line_window_digest(transcript_path: str, start_line: int, line_count: int) -> Dict[str, Any]:
-    """Hash a bounded transcript line window for rebase detection."""
+    """Hash the unread transcript line window for rebase detection."""
     start = max(0, int(start_line or 0))
     count = max(0, int(line_count or 0))
     digest = hashlib.blake2b(digest_size=16)
@@ -1054,6 +1056,15 @@ def _should_raise_transcript_stat_error(transcript_path: str, exc: OSError) -> b
     if isinstance(exc, FileNotFoundError):
         return False
     return _fail_hard_enabled()
+
+
+def _transcript_rebase_retry_count(meta: Any) -> int:
+    if not isinstance(meta, dict):
+        return 0
+    try:
+        return max(0, int(meta.get("transcript_rebase_retry_count") or 0))
+    except (TypeError, ValueError):
+        return 0
 
 
 def _fail_hard_enabled() -> bool:
@@ -3875,6 +3886,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             session_id,
         )
     signal_meta = signal_data.get("meta") if isinstance(signal_data.get("meta"), dict) else {}
+    transcript_rebase_retry_count = _transcript_rebase_retry_count(signal_meta)
     staged_payload_sweep_signal = bool(signal_meta.get("staged_payload_sweep")) or (
         str(signal_meta.get("reason") or "") == "rolling_stage_flush"
     )
@@ -5242,32 +5254,57 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                 )
             except Exception:
                 final_cursor_offset = int(buffered_line_offset or cursor_offset or 0)
+        transcript_rebased_during_flush = False
         transcript_rebased_followup = False
+        transcript_rebase_retry_limit_reached = False
+        transcript_rebase_reread_failed = False
         if (
             not rolling_mode
             and not staged_payload_sweep_signal
             and transcript_read_guard_count > 0
             and final_cursor_offset >= transcript_read_guard_start + transcript_read_guard_count
         ):
-            current_guard_digest = _transcript_line_window_digest(
-                transcript_path,
-                transcript_read_guard_start,
-                transcript_read_guard_count,
-            )
-            if current_guard_digest != transcript_read_guard_digest:
+            try:
+                current_guard_digest = _transcript_line_window_digest(
+                    transcript_path,
+                    transcript_read_guard_start,
+                    transcript_read_guard_count,
+                )
+            except OSError as exc:
+                transcript_rebase_reread_failed = True
+                current_guard_digest = {
+                    "start_line": transcript_read_guard_start,
+                    "line_count": 0,
+                    "digest": "",
+                    "read_error": type(exc).__name__,
+                }
+            if transcript_rebase_reread_failed or current_guard_digest != transcript_read_guard_digest:
+                transcript_rebased_during_flush = True
                 logger.warning(
                     "[%s] session %s: transcript changed while flush was in flight; "
                     "not advancing cursor past offset %d and queueing follow-up extraction "
-                    "(path=%s, read_guard=%s, current_guard=%s)",
+                    "(path=%s, read_guard=%s, current_guard=%s, retry_count=%d)",
                     label,
                     session_id,
                     cursor_offset,
                     transcript_path,
                     json.dumps(transcript_read_guard_digest, sort_keys=True),
                     json.dumps(current_guard_digest, sort_keys=True),
+                    transcript_rebase_retry_count,
                 )
                 final_cursor_offset = int(cursor_offset or 0)
-                transcript_rebased_followup = True
+                if transcript_rebase_retry_count >= TRANSCRIPT_REBASE_MAX_RETRIES:
+                    transcript_rebase_retry_limit_reached = True
+                    logger.error(
+                        "[%s] session %s: transcript rebase follow-up retry limit reached (%d); "
+                        "leaving cursor at offset %d without queueing another synthetic signal",
+                        label,
+                        session_id,
+                        transcript_rebase_retry_count,
+                        final_cursor_offset,
+                    )
+                else:
+                    transcript_rebased_followup = True
         write_cursor(
             session_id,
             final_cursor_offset,
@@ -5390,7 +5427,10 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             assessment_nothing_usable=int(flush_payload.get("assessment_nothing_usable", 0) or 0),
             assessment_needs_smaller_chunk=int(flush_payload.get("assessment_needs_smaller_chunk", 0) or 0),
             unclassified_empty_payloads=int(flush_payload.get("unclassified_empty_payloads", 0) or 0),
-            transcript_rebased_during_flush=transcript_rebased_followup,
+            transcript_rebased_during_flush=transcript_rebased_during_flush,
+            transcript_rebase_retry_count=transcript_rebase_retry_count,
+            transcript_rebase_retry_limit_reached=transcript_rebase_retry_limit_reached,
+            transcript_rebase_reread_failed=transcript_rebase_reread_failed,
         )
         if transcript_rebased_followup:
             write_signal(
@@ -5403,6 +5443,8 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                     "prior_cursor_offset": int(cursor_offset or 0),
                     "read_guard_start": transcript_read_guard_start,
                     "read_guard_count": transcript_read_guard_count,
+                    "transcript_rebase_retry_count": transcript_rebase_retry_count + 1,
+                    "transcript_rebase_max_retries": TRANSCRIPT_REBASE_MAX_RETRIES,
                 },
             )
 
