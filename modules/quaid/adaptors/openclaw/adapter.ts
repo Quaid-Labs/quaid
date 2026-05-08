@@ -3680,6 +3680,65 @@ function getContextRefreshStrategy(config: any = getMemoryConfig()): "compaction
   return raw === "turn_based" ? "turn_based" : "compaction";
 }
 
+const REFRESHED_IDENTITY_CONTEXT_TURNS = 3;
+const REFRESHED_IDENTITY_CONTEXT_MAX_CHARS = 9_500;
+const IDENTITY_CONTEXT_FILES = ["USER.md", "SOUL.md", "ENVIRONMENT.md"] as const;
+
+function clipRefreshedIdentityText(text: string, maxChars: number): string {
+  const raw = String(text || "").trim();
+  if (raw.length <= maxChars) return raw;
+  const marker = "\n\n[... older identity lines omitted to keep this refresh under the hook context limit ...]\n\n";
+  const available = Math.max(200, maxChars - marker.length);
+  return `${marker}${raw.slice(Math.max(0, raw.length - available)).trimStart()}`;
+}
+
+function buildRefreshedIdentityContext(instanceId: string, maxChars: number = REFRESHED_IDENTITY_CONTEXT_MAX_CHARS): string {
+  const normalizedInstance = String(instanceId || "").trim();
+  if (!normalizedInstance) return "";
+  const identityDir = path.join(VISIBLE_WORKSPACE, "instances", normalizedInstance);
+  const sections: Array<{ filename: string; content: string }> = [];
+  for (const filename of IDENTITY_CONTEXT_FILES) {
+    const filePath = path.join(identityDir, filename);
+    try {
+      if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) continue;
+      const content = fs.readFileSync(filePath, "utf8").trim();
+      if (content) sections.push({ filename, content });
+    } catch (err: unknown) {
+      if (isFailHardEnabled() && !isMissingFileError(err)) throw err;
+      console.warn(`[quaid] Refreshed identity context skipped ${filename}: ${(err as Error)?.message || String(err)}`);
+      writeHookTrace("hook.identity_refresh.read_error", {
+        filename,
+        error: String((err as Error)?.message || err),
+      });
+    }
+  }
+  if (sections.length === 0) return "";
+  const header = (
+    "<quaid_system_message>\n"
+    + "# Quaid Refreshed Identity Context\n\n"
+    + "MANDATORY: Quaid refreshed this identity context from USER.md, SOUL.md, and ENVIRONMENT.md. "
+    + "Treat these identity-file facts as authoritative over conflicting recalled memories. "
+    + "Answer the current user from this identity context when it is relevant.\n\n"
+  );
+  const footer = "\n</quaid_system_message>";
+  const headingOverhead = sections.reduce((total, section) => total + `## ${section.filename}\n\n`.length + 2, 0);
+  const available = Math.max(0, maxChars - header.length - footer.length - headingOverhead);
+  if (available <= 0) return "";
+  const perFileBudget = Math.max(200, Math.floor(available / sections.length));
+  const body = sections
+    .map(({ filename, content }) => {
+      const clipped = clipRefreshedIdentityText(content, perFileBudget);
+      return clipped ? `## ${filename}\n\n${clipped}` : "";
+    })
+    .filter(Boolean)
+    .join("\n\n");
+  if (!body) return "";
+  const context = `${header}${body}${footer}`;
+  if (context.length <= maxChars) return context;
+  const bodyBudget = Math.max(200, maxChars - header.length - footer.length);
+  return `${header}${clipRefreshedIdentityText(body, bodyBudget)}${footer}`;
+}
+
 type AdapterContractDeclarations = {
   enabled: boolean;
   tools: Set<string>;
@@ -5462,6 +5521,57 @@ notify_user(${JSON.stringify(message)})
     //      gated by a Set. Belongs in before_agent_start when OC adds support.
     //   2. Recall auto-injection — per-message, semantically relevant memories.
     const projectDocsInjectedSessions = new Set<string>();
+    const refreshedIdentityContextTurns = new Map<string, number>();
+    const armRefreshedIdentityContext = (refreshKey: string, source: string): void => {
+      const key = String(refreshKey || "").trim();
+      if (!key) return;
+      const prior = Math.max(0, Number(refreshedIdentityContextTurns.get(key) || 0) || 0);
+      refreshedIdentityContextTurns.set(key, Math.max(prior, REFRESHED_IDENTITY_CONTEXT_TURNS));
+      writeHookTrace("hook.identity_refresh.armed", {
+        refresh_key: key,
+        source,
+        turns: refreshedIdentityContextTurns.get(key) || 0,
+      });
+    };
+    const consumeRefreshedIdentityContext = (refreshKeys: string[], instanceId: string): string => {
+      const keys = Array.from(
+        new Set(
+          refreshKeys
+            .map((key) => String(key || "").trim())
+            .filter(Boolean),
+        ),
+      );
+      if (keys.length === 0) return "";
+      const turns = keys.reduce(
+        (maxTurns, key) => Math.max(maxTurns, Math.max(0, Number(refreshedIdentityContextTurns.get(key) || 0) || 0)),
+        0,
+      );
+      if (turns <= 0) return "";
+      for (const key of keys) {
+        refreshedIdentityContextTurns.delete(key);
+      }
+      const context = buildRefreshedIdentityContext(instanceId);
+      if (!context) {
+        writeHookTrace("hook.identity_refresh.empty", {
+          refresh_keys: keys,
+          instance_id: instanceId,
+        });
+        return "";
+      }
+      const remaining = turns - 1;
+      if (remaining > 0) {
+        for (const key of keys) {
+          refreshedIdentityContextTurns.set(key, remaining);
+        }
+      }
+      writeHookTrace("hook.identity_refresh.injected", {
+        refresh_keys: keys,
+        instance_id: instanceId,
+        remaining_turns: Math.max(0, remaining),
+        len: context.length,
+      });
+      return context;
+    };
     const armProjectContextRefresh = (
       refreshKey: string,
       source: string,
@@ -5472,6 +5582,7 @@ notify_user(${JSON.stringify(message)})
       const strategy = getContextRefreshStrategy(getMemoryConfig());
       if (options.requireCompactionStrategy && strategy !== "compaction") return;
       const wasTracked = projectDocsInjectedSessions.delete(key);
+      armRefreshedIdentityContext(key, source);
       writeHookTrace(options.traceName || "hook.context_refresh.armed", {
         refresh_key: key,
         source,
@@ -5584,6 +5695,13 @@ notify_user(${JSON.stringify(message)})
           console.warn(`[quaid] Identity context injection failed: ${(err as Error)?.message || String(err)}`);
         }
         const sessionKeyDocs = resolveProjectDocsRefreshKey(event, ctx, promptSessionId);
+        const refreshedIdentityContext = consumeRefreshedIdentityContext(
+          [sessionKeyDocs, promptSessionId],
+          promptInstanceId,
+        );
+        if (refreshedIdentityContext) {
+          prependContextParts.push(refreshedIdentityContext);
+        }
         writeHookTrace("hook.docs_gate_check", {
           session_id: sessionKeyDocs,
           in_set: projectDocsInjectedSessions.has(sessionKeyDocs),
@@ -5604,6 +5722,11 @@ notify_user(${JSON.stringify(message)})
           } catch (err: unknown) {
             console.warn(`[quaid] Project docs injection failed: ${(err as Error)?.message || String(err)}`);
           }
+        }
+        if (refreshedIdentityContext) {
+          appendSystemContext = appendSystemContext
+            ? `${appendSystemContext}\n\n${refreshedIdentityContext}`
+            : refreshedIdentityContext;
         }
         // Prepend mandatory file-placement rules on EVERY turn (not just first).
         // appendSystemContext (project docs) is gated once per session — expensive.

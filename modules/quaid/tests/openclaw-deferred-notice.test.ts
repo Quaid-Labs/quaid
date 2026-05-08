@@ -1712,6 +1712,7 @@ describe("openclaw deferred notices", () => {
       },
     );
     expect(combinedSystemContext(first)).toContain("basalt-harbor");
+    expect(combinedSystemContext(first)).not.toContain("Quaid Refreshed Identity Context");
     expect(String(first?.prependContext || "")).toContain("basalt-harbor");
 
     fs.writeFileSync(
@@ -1736,6 +1737,7 @@ describe("openclaw deferred notices", () => {
       },
     );
     expect(combinedSystemContext(stillGated)).toContain("Bartholomew");
+    expect(combinedSystemContext(stillGated)).not.toContain("Quaid Refreshed Identity Context");
     expect(String(stillGated?.prependContext || "")).toContain("Bartholomew");
 
     await commandNewHandler(
@@ -1767,8 +1769,10 @@ describe("openclaw deferred notices", () => {
         trigger: "user",
       },
     );
+    expect(combinedSystemContext(refreshed)).toContain("Quaid Refreshed Identity Context");
     expect(combinedSystemContext(refreshed)).toContain("Bartholomew");
     expect(combinedSystemContext(refreshed)).toContain("fiddle-leaf fig");
+    expect(String(refreshed?.prependContext || "")).toContain("Quaid Refreshed Identity Context");
     expect(String(refreshed?.prependContext || "")).toContain("Bartholomew");
     expect(String(refreshed?.prependContext || "")).toContain("fiddle-leaf fig");
 
@@ -1849,7 +1853,9 @@ describe("openclaw deferred notices", () => {
         trigger: "user",
       },
     );
+    expect(combinedSystemContext(startup)).toContain("Quaid Refreshed Identity Context");
     expect(combinedSystemContext(startup)).toContain("Bartholomew");
+    expect(String(startup?.prependContext || "")).toContain("Quaid Refreshed Identity Context");
     expect(String(startup?.prependContext || "")).toContain("Bartholomew");
 
     const graded = await beforePromptBuildHandler(
@@ -1867,8 +1873,10 @@ describe("openclaw deferred notices", () => {
         trigger: "user",
       },
     );
+    expect(combinedSystemContext(graded)).toContain("Quaid Refreshed Identity Context");
     expect(combinedSystemContext(graded)).toContain("Bartholomew");
     expect(combinedSystemContext(graded)).toContain("fiddle-leaf fig");
+    expect(String(graded?.prependContext || "")).toContain("Quaid Refreshed Identity Context");
     expect(String(graded?.prependContext || "")).toContain("Bartholomew");
     expect(String(graded?.prependContext || "")).toContain("fiddle-leaf fig");
 
