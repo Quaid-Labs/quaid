@@ -1544,18 +1544,20 @@ def cmd_update_stale(
     project_name = str(project or "").strip() or None
     registry = None
     if project_name:
-        from datastore.docsdb.registry import DocsRegistry
+        from datastore.docsdb.registry import DocsRegistry, _normalize_project_name
 
+        requested_project_name = project_name
+        project_name = _normalize_project_name(project_name) or None
         registry = DocsRegistry()
         list_projects = getattr(registry, "list_projects", None)
         if callable(list_projects):
             visible_projects = {
-                str(entry.get("name") or "").strip()
+                _normalize_project_name(str(entry.get("name") or "").strip())
                 for entry in list_projects()
-                if str(entry.get("name") or "").strip()
+                if _normalize_project_name(str(entry.get("name") or "").strip())
             }
             if project_name not in visible_projects:
-                raise RuntimeError(f"Project not found for docs update: {project_name}")
+                raise RuntimeError(f"Project not found for docs update: {requested_project_name}")
     project = project_name
     stale = check_staleness(project=project)
     purposes = get_doc_purposes()

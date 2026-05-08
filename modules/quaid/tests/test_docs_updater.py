@@ -1001,6 +1001,44 @@ class TestCmdUpdateStaleNeverIndexed:
             with pytest.raises(RuntimeError, match="Project not found for docs update: missing-proj"):
                 updater.cmd_update_stale(dry_run=False, project="missing-proj")
 
+    def test_update_stale_normalizes_explicit_project_case(self, tmp_path, monkeypatch):
+        with _adapter_patch(tmp_path):
+            from datastore.docsdb import updater
+
+            class _FakeRegistry:
+                def list_projects(self):
+                    return [{"name": "livetest-agentmsg-cdx"}]
+
+                def list_docs(self, project=None):
+                    captured["list_docs_project"] = project
+                    return []
+
+            class _FakeRag:
+                def needs_reindex_many(self, paths):
+                    return {}
+
+            captured = {}
+            indexed_projects = []
+
+            monkeypatch.setattr("datastore.docsdb.registry.DocsRegistry", _FakeRegistry)
+            monkeypatch.setattr("datastore.docsdb.rag.DocsRAG", _FakeRag)
+            monkeypatch.setattr(
+                updater,
+                "check_staleness",
+                lambda project=None: captured.update({"staleness_project": project}) or {},
+            )
+
+            count = updater.cmd_update_stale(
+                dry_run=False,
+                project="livetest-agentmsg-CDX",
+                project_log_indexer=lambda project=None: indexed_projects.append(project) or 0,
+            )
+
+            assert count == 0
+            assert captured["staleness_project"] == "livetest-agentmsg-cdx"
+            assert captured["list_docs_project"] == "livetest-agentmsg-cdx"
+            assert indexed_projects == ["livetest-agentmsg-cdx"]
+
     def test_reindexes_registry_doc_when_timestamp_exists_but_chunks_are_missing(self, tmp_path, monkeypatch):
         with _adapter_patch(tmp_path) as iroot:
             from datastore.docsdb import updater
