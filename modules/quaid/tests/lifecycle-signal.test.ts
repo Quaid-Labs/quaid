@@ -1134,18 +1134,29 @@ describe("lifecycle signal detection", () => {
     }
   });
 
-  it("keys duplicate auto-inject hook surfaces by agent and normalized query", () => {
-    const first = __test.autoInjectTurnKey("main", "What do you know about my dog Baxter?");
-    const duplicate = __test.autoInjectTurnKey("main", "  what   do you know about my dog Baxter? ");
-    const otherAgent = __test.autoInjectTurnKey("worker", "What do you know about my dog Baxter?");
+  it("keys duplicate auto-inject hook surfaces by agent, session, and normalized query", () => {
+    const sessionKey = "agent:main:matrix:direct:@quaid-test-bot:localhost";
+    const first = __test.autoInjectTurnKey("main", "What do you know about my dog Baxter?", sessionKey);
+    const duplicate = __test.autoInjectTurnKey("main", "  what   do you know about my dog Baxter? ", sessionKey);
+    const otherAgent = __test.autoInjectTurnKey("worker", "What do you know about my dog Baxter?", sessionKey);
+    const otherSession = __test.autoInjectTurnKey(
+      "main",
+      "What do you know about my dog Baxter?",
+      "agent:main:matrix:direct:@another-user:localhost",
+    );
 
     expect(duplicate).toBe(first);
     expect(otherAgent).not.toBe(first);
+    expect(otherSession).not.toBe(first);
   });
 
   it("briefly reuses completed auto-inject outcomes for duplicate hook surfaces", () => {
     __test.clearAutoInjectTurnCaches();
-    const turnKey = __test.autoInjectTurnKey("main", "What grinder do I use for espresso?");
+    const turnKey = __test.autoInjectTurnKey(
+      "main",
+      "What grinder do I use for espresso?",
+      "agent:main:matrix:direct:@quaid-test-bot:localhost",
+    );
     const outcome = {
       allMemories: [{ id: "m1", text: "Solomon owns a Baratza Encore grinder." }],
       recallDiagnostics: { mode: "test" },

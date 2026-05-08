@@ -3335,10 +3335,12 @@ const _beforePromptBuildInFlightByTurn = /* @__PURE__ */ new Map();
 const AUTO_INJECT_COMPLETED_TURN_CACHE_TTL_MS = 5e3;
 const AUTO_INJECT_COMPLETED_TURN_CACHE_MAX = 32;
 const _beforePromptBuildCompletedByTurn = /* @__PURE__ */ new Map();
-function _autoInjectTurnKey(agentLabel, query) {
+function _autoInjectTurnKey(agentLabel, query, sessionScope) {
   const normalizedAgent = String(agentLabel || "main").trim().toLowerCase() || "main";
+  const normalizedSession = String(sessionScope || "").trim().toLowerCase() || "unknown-session";
   const normalizedQuery = String(query || "").trim().replace(/\s+/g, " ").toLowerCase().slice(0, 500);
   return `${normalizedAgent}
+${normalizedSession}
 ${normalizedQuery}`;
 }
 function _pruneCompletedAutoInjectTurns(nowMs = Date.now()) {
@@ -4641,7 +4643,14 @@ ${deferredNoticeRelayContext}` : deferredNoticeRelayContext;
           queuedStartupRecovery,
           missingUserRecovery
         });
-        const turnKey = _autoInjectTurnKey(promptAgentLabel, query);
+        const turnSessionScope = firstNonEmptyString(
+          event?.sessionKey,
+          ctx?.sessionKey,
+          event?.targetSessionKey,
+          ctx?.targetSessionKey,
+          promptSessionId
+        );
+        const turnKey = _autoInjectTurnKey(promptAgentLabel, query, turnSessionScope);
         let turnPromise = _beforePromptBuildInFlightByTurn.get(turnKey);
         const completedTurnOutcome = turnPromise ? null : _getCompletedAutoInjectTurn(turnKey, nowMs);
         let createdTurnPromise = false;

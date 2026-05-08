@@ -4153,10 +4153,11 @@ const AUTO_INJECT_COMPLETED_TURN_CACHE_TTL_MS = 5_000;
 const AUTO_INJECT_COMPLETED_TURN_CACHE_MAX = 32;
 const _beforePromptBuildCompletedByTurn = new Map<string, { outcome: AutoInjectTurnOutcome; expiresAtMs: number }>();
 
-function _autoInjectTurnKey(agentLabel: string, query: string): string {
+function _autoInjectTurnKey(agentLabel: string, query: string, sessionScope?: string): string {
   const normalizedAgent = String(agentLabel || "main").trim().toLowerCase() || "main";
+  const normalizedSession = String(sessionScope || "").trim().toLowerCase() || "unknown-session";
   const normalizedQuery = String(query || "").trim().replace(/\s+/g, " ").toLowerCase().slice(0, 500);
-  return `${normalizedAgent}\n${normalizedQuery}`;
+  return `${normalizedAgent}\n${normalizedSession}\n${normalizedQuery}`;
 }
 
 function _pruneCompletedAutoInjectTurns(nowMs: number = Date.now()): void {
@@ -5773,7 +5774,14 @@ notify_user(${JSON.stringify(message)})
         // (OC reuses the TUI session key for callConfiguredLLM openresponses sessions).
         // Duplicate hook surfaces for the same Matrix prompt share the prepared injection
         // so the mutating hook path is not starved by the non-mutating event-bus path.
-        const turnKey = _autoInjectTurnKey(promptAgentLabel, query);
+        const turnSessionScope = firstNonEmptyString(
+          event?.sessionKey,
+          ctx?.sessionKey,
+          event?.targetSessionKey,
+          ctx?.targetSessionKey,
+          promptSessionId,
+        );
+        const turnKey = _autoInjectTurnKey(promptAgentLabel, query, turnSessionScope);
         let turnPromise = _beforePromptBuildInFlightByTurn.get(turnKey);
         const completedTurnOutcome = turnPromise ? null : _getCompletedAutoInjectTurn(turnKey, nowMs);
         let createdTurnPromise = false;
