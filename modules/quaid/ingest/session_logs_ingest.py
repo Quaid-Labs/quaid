@@ -49,6 +49,37 @@ def _build_transcript_from_session_file(path: Path) -> str:
     return get_adapter_instance().parse_session_jsonl(path)
 
 
+def _looks_like_session_jsonl(text: str) -> bool:
+    seen_json_object = False
+    seen_session_shape = False
+    for raw_line in str(text or "").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            return False
+        if not isinstance(obj, dict):
+            return False
+        seen_json_object = True
+        keys = {str(key) for key in obj.keys()}
+        if {"type", "message", "payload", "role"} & keys:
+            seen_session_shape = True
+        if "usage" in keys and {"stop_reason", "stop_sequence", "stop_details"} & keys:
+            seen_session_shape = True
+    return seen_json_object and seen_session_shape
+
+
+def _read_transcript_path(path: Path) -> str:
+    text = path.read_text(encoding="utf-8")
+    if _looks_like_session_jsonl(text):
+        # Daemon lifecycle calls pass host JSONL here; SessionDB must store the
+        # adapter-normalized conversational transcript, not raw platform records.
+        return _build_transcript_from_session_file(path)
+    return text
+
+
 def _resolve_transcript_source(
     *,
     session_id: str,
@@ -58,7 +89,7 @@ def _resolve_transcript_source(
     if transcript_path:
         p = Path(str(transcript_path)).expanduser()
         if p.exists() and p.is_file():
-            return p, p.read_text(encoding="utf-8"), "transcript_path"
+            return p, _read_transcript_path(p), "transcript_path"
 
     if session_file:
         p = Path(str(session_file)).expanduser()

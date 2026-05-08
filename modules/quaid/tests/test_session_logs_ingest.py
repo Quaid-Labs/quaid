@@ -46,6 +46,50 @@ def test_ingest_from_transcript_path(monkeypatch, tmp_path):
     assert kwargs["conversation_id"] == "chat-42"
     assert kwargs["participant_ids"] == ["user:owner", "agent:quaid"]
     assert kwargs["participant_aliases"] == {"operator-alias": "user:owner"}
+    assert kwargs["transcript"] == "User: hello\n\nAssistant: hi"
+
+
+def test_transcript_path_jsonl_is_adapter_parsed_before_sessiondb(monkeypatch, tmp_path):
+    adapter = TestAdapter(tmp_path)
+    set_adapter(adapter)
+
+    fake_bridge = MagicMock()
+    fake_bridge.store_session_transcript.return_value = {"status": "indexed", "session_id": "sess-jsonl", "chunks": 1}
+    monkeypatch.setattr("ingest.session_logs_ingest.get_session_memory_bridge", lambda: fake_bridge)
+
+    provider_payload = {
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 900, "output_tokens": 12},
+    }
+    raw_session = tmp_path / "session.jsonl"
+    raw_session.write_text(
+        "\n".join(
+            [
+                json.dumps({"type": "session_meta", "payload": {"cwd": str(tmp_path)}}),
+                json.dumps({"role": "user", "content": "The Hokkaido route includes Niseko for four days."}),
+                json.dumps({"role": "assistant", "content": json.dumps(provider_payload)}),
+                json.dumps({"role": "assistant", "content": "Noted."}),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    out = session_logs_ingest._run(
+        session_id="sess-jsonl",
+        owner_id="quaid",
+        label="SessionEnd",
+        transcript_path=str(raw_session),
+    )
+
+    assert out["status"] == "indexed"
+    transcript = fake_bridge.store_session_transcript.call_args.kwargs["transcript"]
+    assert "User: The Hokkaido route includes Niseko for four days." in transcript
+    assert "Assistant: Noted." in transcript
+    assert "session_meta" not in transcript
+    assert "stop_reason" not in transcript
+    assert "input_tokens" not in transcript
 
 
 def test_normalize_participant_aliases_accepts_json_object_string():

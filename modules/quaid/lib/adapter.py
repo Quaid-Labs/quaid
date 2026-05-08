@@ -422,6 +422,21 @@ class QuaidAdapter(abc.ABC):
             return True
         return self.filter_system_messages(text)
 
+    @staticmethod
+    def _is_provider_response_metadata_text(text: str) -> bool:
+        """Return True for whole-message provider response metadata JSON."""
+        value = str(text or "").strip()
+        if not (value.startswith("{") and value.endswith("}")):
+            return False
+        try:
+            payload = json.loads(value)
+        except json.JSONDecodeError:
+            return False
+        if not isinstance(payload, dict):
+            return False
+        keys = {str(key) for key in payload.keys()}
+        return "usage" in keys and bool(keys & {"stop_reason", "stop_sequence", "stop_details"})
+
     @classmethod
     def strip_quaid_system_messages(cls, text: str) -> str:
         """Strip all <quaid_system_message>...</quaid_system_message> blocks within text.
@@ -496,6 +511,9 @@ class QuaidAdapter(abc.ABC):
                     b.get("text", "") for b in text if isinstance(b, dict)
                 )
             if not isinstance(text, str):
+                continue
+
+            if role == "assistant" and self._is_provider_response_metadata_text(text):
                 continue
 
             text = re.sub(

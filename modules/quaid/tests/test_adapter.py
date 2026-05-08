@@ -1237,6 +1237,57 @@ class TestClaudeCodeAdapter:
         assert "/clear" not in transcript
         assert "Can you remind me where Priya works?" in transcript
 
+    def test_parse_session_jsonl_filters_assistant_provider_response_metadata(self, tmp_path):
+        path = tmp_path / "claude-provider-metadata.jsonl"
+        provider_payload = {
+            "stop_reason": "end_turn",
+            "stop_sequence": None,
+            "stop_details": {"type": "stop_sequence"},
+            "usage": {"input_tokens": 1200, "output_tokens": 18},
+        }
+        path.write_text(
+            "\n".join(
+                [
+                    json.dumps(
+                        {
+                            "type": "user",
+                            "message": {
+                                "role": "user",
+                                "content": [{"type": "text", "text": "The brass lamp is beside the reading chair."}],
+                            },
+                        }
+                    ),
+                    json.dumps(
+                        {
+                            "type": "assistant",
+                            "message": {
+                                "role": "assistant",
+                                "content": [{"type": "text", "text": json.dumps(provider_payload)}],
+                            },
+                        }
+                    ),
+                    json.dumps(
+                        {
+                            "type": "assistant",
+                            "message": {
+                                "role": "assistant",
+                                "content": [{"type": "text", "text": "Noted."}],
+                            },
+                        }
+                    ),
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        adapter = ClaudeCodeAdapter()
+        transcript = adapter.parse_session_jsonl(path)
+
+        assert "The brass lamp is beside the reading chair." in transcript
+        assert "Assistant: Noted." in transcript
+        assert "stop_reason" not in transcript
+        assert "input_tokens" not in transcript
+
     def test_resolve_prompt_submit_signal_returns_session_end_for_clear_command(self):
         adapter = ClaudeCodeAdapter()
         signal = adapter.resolve_prompt_submit_signal({"prompt": "/clear"})
