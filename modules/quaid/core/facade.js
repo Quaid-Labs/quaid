@@ -2842,7 +2842,7 @@ ${lines.join("\n")}
     if (!filtered.length) return null;
     const uniqueSessionId = extractSessionId(eventMessages || [], context);
     const priorInjectionLog = readInjectionLog(uniqueSessionId);
-    let previouslyInjected = loadInjectedMemoryKeys(uniqueSessionId);
+    let previouslyInjected = persistDedup === false ? [] : loadInjectedMemoryKeys(uniqueSessionId);
     let newMemories = filtered.filter((m) => !previouslyInjected.includes(m.id || m.text));
     const visibleRoles = Array.isArray(eventMessages) ? eventMessages.map((msg) => String(msg?.role || "").trim().toLowerCase()).filter((role) => role === "user" || role === "assistant") : [];
     const visibleTurnCount = visibleRoles.length;
@@ -2859,17 +2859,19 @@ ${lines.join("\n")}
     const prependContext = existingPrependContext ? `${existingPrependContext}
 
 ${formatted}` : formatted;
-    saveInjectedMemoryKeys(
-      uniqueSessionId,
-      previouslyInjected,
-      toInject,
-      maxInjectionIdsPerSession,
-      {
-        persistDedup,
-        visibleTurnCount,
-        sessionKey
-      }
-    );
+    if (persistDedup !== false) {
+      saveInjectedMemoryKeys(
+        uniqueSessionId,
+        previouslyInjected,
+        toInject,
+        maxInjectionIdsPerSession,
+        {
+          persistDedup,
+          visibleTurnCount,
+          sessionKey
+        }
+      );
+    }
     return { prependContext, toInject, uniqueSessionId };
   }
   function buildExtractionCompletionNotificationPayload(params) {

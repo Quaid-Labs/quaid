@@ -1164,6 +1164,31 @@ function shouldPersistAutoInjectionDedup(params) {
   if (!source) return true;
   return !(source === "message_received_cache_queued_startup" || source === "message_received_cache" || source === "transcript_tail" || source === "rawprompt_recovered");
 }
+function shouldAnchorAutoInjectionFromRecoveredUser(querySource) {
+  const source = String(querySource || "").trim().toLowerCase();
+  return source === "message_received_cache" || source === "message_received_cache_queued_startup" || source === "transcript_tail" || source === "rawprompt_recovered";
+}
+function buildAutoInjectPreparationMessages(params) {
+  const eventMessages = Array.isArray(params.eventMessages) ? params.eventMessages : [];
+  const hasVisibleUserMessage = eventMessages.some(
+    (message) => String(message?.role || "").trim().toLowerCase() === "user" && Boolean(extractSessionMessageText(message).trim())
+  );
+  const query = String(params.query || "").trim();
+  if (!shouldAnchorAutoInjectionFromRecoveredUser(params.querySource) || hasVisibleUserMessage || query.length < 3) {
+    return eventMessages;
+  }
+  const timestampMs = Number(params.timestampMs || 0);
+  const sessionKey = String(params.sessionKey || "").trim();
+  return [
+    ...eventMessages,
+    {
+      role: "user",
+      content: query,
+      ...Number.isFinite(timestampMs) && timestampMs > 0 ? { timestamp: timestampMs } : {},
+      ...sessionKey ? { sessionKey } : {}
+    }
+  ];
+}
 function selectAutoInjectQuery(event, lastUserMessageQuery, nowMs = Date.now(), currentSessionId) {
   const rawPrompt = String(event?.prompt || "").trim();
   const eventMessages = Array.isArray(event?.messages) ? event.messages : [];
@@ -4784,6 +4809,20 @@ ${deferredNoticeRelayContext}` : deferredNoticeRelayContext;
           queuedStartupRecovery,
           missingUserRecovery
         });
+        const preparationSessionKey = firstNonEmptyString(
+          event?.sessionKey,
+          ctx?.sessionKey,
+          event?.targetSessionKey,
+          ctx?.targetSessionKey,
+          resolveSessionKeyForSessionId(promptSessionId)
+        );
+        const autoInjectPreparationMessages = buildAutoInjectPreparationMessages({
+          eventMessages,
+          query,
+          querySource,
+          sessionKey: preparationSessionKey,
+          timestampMs: Number(lastUserMessageQuery?.sourceTimestampMs || 0)
+        });
         const turnSessionScope = firstNonEmptyString(
           event?.sessionKey,
           ctx?.sessionKey,
@@ -4894,7 +4933,7 @@ ${deferredNoticeRelayContext}` : deferredNoticeRelayContext;
             });
             const injection2 = promptFacade.prepareAutoInjectionContext({
               allMemories: allMemories2,
-              eventMessages: event.messages || [],
+              eventMessages: autoInjectPreparationMessages,
               context: ctx,
               existingPrependContext: void 0,
               injectLimit,
@@ -7284,6 +7323,8 @@ const __test = {
   selectMissingUserMessageRecoveryMessage,
   buildMissingUserMessageOverride,
   shouldPersistAutoInjectionDedup,
+  shouldAnchorAutoInjectionFromRecoveredUser,
+  buildAutoInjectPreparationMessages,
   parseJsonObjectFromProcessStdout,
   buildDeferredNoticeVisibleReply,
   deliverDeferredNoticesViaChannel,

@@ -1523,6 +1523,34 @@ describe("lifecycle signal detection", () => {
     })).toBe(false);
   });
 
+  it("anchors auto-inject preparation on cached user text when OC prompt payload is empty", () => {
+    const anchored = __test.buildAutoInjectPreparationMessages({
+      eventMessages: [],
+      query: "What grinder do I use for my Flair 58 espresso setup?",
+      querySource: "message_received_cache",
+      sessionKey: "agent:main:matrix:direct:@quaid-test-bot:localhost",
+      timestampMs: 1778267431707,
+    });
+
+    expect(anchored).toHaveLength(1);
+    expect(anchored[0]).toEqual(expect.objectContaining({
+      role: "user",
+      content: "What grinder do I use for my Flair 58 espresso setup?",
+      sessionKey: "agent:main:matrix:direct:@quaid-test-bot:localhost",
+      timestamp: 1778267431707,
+    }));
+    expect(__test.buildAutoInjectPreparationMessages({
+      eventMessages: [{ role: "user", content: "visible body already exists" }],
+      query: "What grinder do I use?",
+      querySource: "message_received_cache",
+    })).toHaveLength(1);
+    expect(__test.buildAutoInjectPreparationMessages({
+      eventMessages: [],
+      query: "What grinder do I use?",
+      querySource: "event_text_scrubbed",
+    })).toHaveLength(0);
+  });
+
   it("uses routed stores for generic auto-inject when pre-injection pass is enabled", () => {
     const opts = __test.buildAutoInjectRecallOptions(
       "What grinder do I use for my Flair 58 espresso setup?",

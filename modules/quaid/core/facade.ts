@@ -3747,7 +3747,7 @@ ${lines.join("\n")}
 
     const uniqueSessionId = extractSessionId(eventMessages || [], context);
     const priorInjectionLog = readInjectionLog(uniqueSessionId);
-    let previouslyInjected = loadInjectedMemoryKeys(uniqueSessionId);
+    let previouslyInjected = persistDedup === false ? [] : loadInjectedMemoryKeys(uniqueSessionId);
     let newMemories = filtered.filter((m) => !previouslyInjected.includes(m.id || m.text));
     const visibleRoles = Array.isArray(eventMessages)
       ? eventMessages
@@ -3770,17 +3770,19 @@ ${lines.join("\n")}
       ? `${existingPrependContext}\n\n${formatted}`
       : formatted;
 
-    saveInjectedMemoryKeys(
-      uniqueSessionId,
-      previouslyInjected,
-      toInject,
-      maxInjectionIdsPerSession,
-      {
-        persistDedup,
-        visibleTurnCount,
-        sessionKey,
-      },
-    );
+    if (persistDedup !== false) {
+      saveInjectedMemoryKeys(
+        uniqueSessionId,
+        previouslyInjected,
+        toInject,
+        maxInjectionIdsPerSession,
+        {
+          persistDedup,
+          visibleTurnCount,
+          sessionKey,
+        },
+      );
+    }
     return { prependContext, toInject, uniqueSessionId };
   }
 

@@ -226,6 +226,122 @@ describe("openclaw deferred notices", () => {
     removeTempDir(fixture.home);
   });
 
+  it("delivers cached-user auto-injection when OC prompt-build body is empty", async () => {
+    vi.stubEnv("QUAID_DISABLE_NOTIFICATIONS", "1");
+    const fixture = seedDeferredNoticeFixture(
+      "quaid-oc-cached-user-inject-home-",
+      "openclaw-main",
+      "[Quaid] cached-user injection fixture",
+    );
+    const configPath = path.join(fixture.hiddenHome, "instances", "openclaw-main", "config.json");
+    const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+    writeJson(configPath, {
+      ...config,
+      systems: { memory: true, projects: false },
+      retrieval: { ...config.retrieval, autoInject: true },
+    });
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () => ({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      text: async () => "OK",
+    } as any));
+
+    const plugin = await loadAdapterWithHomes(
+      fixture.hiddenHome,
+      fixture.visibleHome,
+      fixture.openClawConfigPath,
+      "openclaw-main",
+    );
+    const adapterModule = await import("../adaptors/openclaw/adapter.js");
+    const testApi = (adapterModule as any).__test;
+    testApi.clearAutoInjectTurnCaches();
+    const api = makeFakeApi();
+    plugin.register(api as any);
+
+    const beforePromptBuildCall = api.on.mock.calls.find((call: any[]) =>
+      call?.[0] === "before_prompt_build" && call?.[2]?.name === "memory-injection-prompt-build"
+    );
+    const messageReceivedCall = api.on.mock.calls.find((call: any[]) =>
+      call?.[0] === "message_received" && call?.[2]?.name === "message-received-command-memory-extraction"
+    );
+    expect(beforePromptBuildCall).toBeTruthy();
+    expect(messageReceivedCall).toBeTruthy();
+
+    const beforePromptBuildHandler = beforePromptBuildCall?.[1];
+    const messageReceivedHandler = messageReceivedCall?.[1];
+    const sessionId = "session-empty-body-cached-user";
+    const sessionKey = "agent:main:matrix:direct:@quaid-test-bot:localhost";
+    const query = "What grinder do I use for my espresso setup?";
+    await messageReceivedHandler(
+      { text: query, sessionId, sessionKey, timestamp: 1778267431707 },
+      { sessionId, sessionKey, agentId: "main", trigger: "user" },
+    );
+
+    const memory = {
+      id: "mem-baratza",
+      text: "Solomon owns a Baratza Encore grinder and a Flair 58 espresso setup.",
+      similarity: 1,
+      via: "vector",
+      category: "fact",
+    };
+    const turnKey = testApi.autoInjectTurnKey("main", query, sessionKey);
+    testApi.rememberCompletedAutoInjectTurn(turnKey, {
+      allMemories: [memory],
+      recallDiagnostics: { mode: "test" },
+      injection: {
+        toInject: [memory],
+        prependContext: [
+          "<injected_memories>",
+          "- fact | Solomon owns a Baratza Encore grinder and a Flair 58 espresso setup.",
+          "</injected_memories>",
+        ].join("\n"),
+      },
+    }, Date.now());
+
+    const event = {
+      prependContext: "",
+      prompt: "",
+      body: "",
+      cleanedBody: "",
+      messages: [],
+      sessionId,
+      sessionKey,
+    };
+    const result = await beforePromptBuildHandler(event, {
+      sessionId,
+      sessionKey,
+      agentId: "main",
+      trigger: "user",
+    });
+
+    expect(fetchMock).toHaveBeenCalled();
+    expect(String(result?.prependContext || "")).toContain("Baratza Encore");
+    expect(String((event as any).prependContext || "")).toContain("Baratza Encore");
+    expect(log.mock.calls.some((call) => String(call.join(" ")).includes("Auto-injected 1 memories"))).toBe(true);
+    const preinjectPath = path.join(fixture.hiddenHome, "instances", "openclaw-main", "logs", "daemon", "preinject.jsonl");
+    const preinjectRows = fs.readFileSync(preinjectPath, "utf8")
+      .split(/\r?\n/)
+      .filter((line) => line.trim())
+      .map((line) => JSON.parse(line));
+    expect(preinjectRows.at(-1)).toEqual(expect.objectContaining({
+      sessionId,
+      sessionKey,
+      source: "message_received_cache",
+      injectedCount: 1,
+    }));
+
+    fetchMock.mockRestore();
+    warn.mockRestore();
+    log.mockRestore();
+    error.mockRestore();
+    removeTempDir(fixture.home);
+  });
+
   it("delivers deferred notices through before_prompt_build relay context", async () => {
     vi.useFakeTimers();
     vi.stubEnv("QUAID_DISABLE_NOTIFICATIONS", "1");

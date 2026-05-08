@@ -1751,6 +1751,18 @@ describe("QuaidFacade", () => {
     expect(realTurn?.toInject.map((m) => m.id)).toEqual(["m1"]);
     expect(facade.loadInjectedMemoryKeys("sess-auto-recovery")).toEqual(["m1"]);
 
+    const laterRecoverySurface = facade.prepareAutoInjectionContext({
+      allMemories: baseMemories,
+      eventMessages: [],
+      context: { sessionId: "sess-auto-recovery" },
+      existingPrependContext: "",
+      injectLimit: 5,
+      maxInjectionIdsPerSession: 100,
+      persistDedup: false,
+    });
+    expect(laterRecoverySurface?.toInject.map((m) => m.id)).toEqual(["m1"]);
+    expect(facade.loadInjectedMemoryKeys("sess-auto-recovery")).toEqual(["m1"]);
+
     await rm(workspace, { recursive: true, force: true });
   });
 
