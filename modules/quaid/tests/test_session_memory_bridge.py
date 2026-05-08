@@ -50,7 +50,10 @@ class FakeMemoryService:
         for row in self.rows:
             if row["chunk_id"] == chunk_id and row["owner_id"] == owner_id:
                 return row
-        if kwargs.get("fail_hard") and any(row["chunk_id"] == chunk_id for row in self.rows):
+        if kwargs.get("fail_hard") and any(
+            row["chunk_id"] == chunk_id and row["owner_id"] != owner_id
+            for row in self.rows
+        ):
             raise RuntimeError("Session chunk owner mismatch")
         return None
 

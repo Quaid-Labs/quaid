@@ -1523,7 +1523,7 @@ class MemoryGraph:
         project: Optional[str] = None,
         before: int = 0,
         after: int = 0,
-        fail_hard: Optional[bool] = None,
+        fail_hard: bool = False,
     ) -> Optional[Dict[str, Any]]:
         rows = self.list_source_chunks(
             chunk_id=chunk_id,
@@ -1533,8 +1533,7 @@ class MemoryGraph:
             limit=1,
         )
         if not rows:
-            effective_fail_hard = bool(fail_hard) if fail_hard is not None else _is_fail_hard_mode()
-            if effective_fail_hard and owner_id:
+            if fail_hard and owner_id:
                 owner = str(owner_id or "").strip()
                 chunk = str(chunk_id or "").strip()
                 if chunk and owner:
