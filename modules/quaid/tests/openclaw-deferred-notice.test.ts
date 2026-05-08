@@ -72,6 +72,15 @@ function combinedSystemContext(result: any): string {
   return `${String(result?.prependSystemContext || "")}\n${String(result?.appendSystemContext || "")}`;
 }
 
+function readHookTraceEvents(hiddenHome: string, instanceId: string): any[] {
+  const tracePath = path.join(hiddenHome, "instances", instanceId, "logs", "quaid-hook-trace.jsonl");
+  if (!fs.existsSync(tracePath)) return [];
+  return fs.readFileSync(tracePath, "utf8")
+    .split(/\r?\n/)
+    .filter((line) => line.trim())
+    .map((line) => JSON.parse(line));
+}
+
 async function loadAdapterWithHomes(
   hiddenHome: string,
   visibleHome: string,
@@ -155,6 +164,68 @@ afterEach(() => {
 });
 
 describe("openclaw deferred notices", () => {
+  it("skips prompt-build injection for timestamped slug-generator sessions", async () => {
+    vi.stubEnv("QUAID_DISABLE_NOTIFICATIONS", "1");
+    const fixture = seedDeferredNoticeFixture(
+      "quaid-oc-slug-generator-internal-home-",
+      "openclaw-main",
+      "[Quaid] slug-generator fixture",
+    );
+    const configPath = path.join(fixture.hiddenHome, "instances", "openclaw-main", "config.json");
+    const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+    writeJson(configPath, {
+      ...config,
+      systems: { memory: true, projects: false },
+      retrieval: { ...config.retrieval, autoInject: true },
+    });
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const plugin = await loadAdapterWithHomes(
+      fixture.hiddenHome,
+      fixture.visibleHome,
+      fixture.openClawConfigPath,
+      "openclaw-main",
+    );
+    const api = makeFakeApi();
+    plugin.register(api as any);
+
+    const beforePromptBuildCall = api.on.mock.calls.find((call: any[]) =>
+      call?.[0] === "before_prompt_build" && call?.[2]?.name === "memory-injection-prompt-build"
+    );
+    expect(beforePromptBuildCall).toBeTruthy();
+
+    const beforePromptBuildHandler = beforePromptBuildCall?.[1];
+    const event = {
+      prependContext: "",
+      prompt: "Generate a short title for this chat",
+      messages: [{ role: "user", content: "What grinder do I use for my espresso setup?" }],
+      sessionId: "slug-generator-1778267431707",
+      sessionKey: "agent:main:slug-generator-1778267431707",
+    };
+    const result = await beforePromptBuildHandler(event, {
+      sessionId: "slug-generator-1778267431707",
+      sessionKey: "agent:main:slug-generator-1778267431707",
+      agentId: "main",
+      trigger: "user",
+    });
+
+    expect(result).toBeUndefined();
+    expect(event.prependContext).toBe("");
+    expect(log.mock.calls.some((call) => String(call.join(" ")).includes("Auto-injected"))).toBe(false);
+    const traceEvents = readHookTraceEvents(fixture.hiddenHome, "openclaw-main").map((row) => String(row.event || ""));
+    expect(traceEvents).toContain("hook.debug.invoke");
+    expect(traceEvents).not.toContain("hook.before_prompt_build.query_extracted");
+    expect(traceEvents).not.toContain("hook.before_prompt_build.injection_applied");
+
+    warn.mockRestore();
+    log.mockRestore();
+    error.mockRestore();
+    removeTempDir(fixture.home);
+  });
+
   it("delivers deferred notices through before_prompt_build relay context", async () => {
     vi.useFakeTimers();
     vi.stubEnv("QUAID_DISABLE_NOTIFICATIONS", "1");
