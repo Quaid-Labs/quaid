@@ -108,24 +108,19 @@ Because the system leans heavily on LLM reasoning, Quaid naturally scales with A
 
 ## Future Forward
 
-### A New Open Standard For Portability
+### Portable Agent State
 
 _“We Can Remember It for You Wholesale.”_
 
 Skills give an agent behavior. Quaid gives it understanding.
 
-A long-term goal is portable agent identity: a complete package of domain knowledge, project context, and learned behavior that can be exported from one runtime and imported into another with high parity.
-
-We are currently forming an open draft standard for this and asking for community feedback before implementation, especially from security experts.
-
-Draft standard direction: [EGO Core 0001 (Draft)](docs/specs/EGO-CORE-0001-draft.md)
-Community discussion: [github.com/Quaid-Labs/quaid/discussions/3](https://github.com/Quaid-Labs/quaid/discussions/3)
+A long-term goal is portable agent state: domain knowledge, project context, and learned behavior that can move between runtimes with high parity.
 
 This is vision, not a released feature.
 
 ### Extensible Data Layer
 
-Quaid is being designed to be extensible not only at the platform-adaptor layer, but eventually at the datastore and ingest layers as well. The long-term direction is for Quaid to act as an open coordination layer for AI knowledge systems: accepting multiple datastore types and input pipelines, enforcing clear boundaries between them in core, and making those boundaries exportable and importable through modular `.ego` artifacts.
+Quaid is being designed to be extensible not only at the platform-adaptor layer, but eventually at the datastore and ingest layers as well. The long-term direction is for Quaid to act as an open coordination layer for AI knowledge systems: accepting multiple datastore types and input pipelines, enforcing clear boundaries between them in core, and making those boundaries portable across runtimes.
 
 This would allow Quaid to accept third-party memory solutions through the same core harness, and would make future datatypes, such as spatial telemetry for robotics, easy to plug into the architecture.
 
