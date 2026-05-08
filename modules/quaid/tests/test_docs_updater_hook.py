@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 from core.docs_updater_hook import (
     update_project_docs,
     _build_update_context,
+    _FAST_GATE_MAX_TOKENS,
 )
 from datastore.docsdb.updater import apply_edit_blocks
 
@@ -115,3 +116,54 @@ class TestUpdateProjectDocs:
         }]
         metrics = update_project_docs(snapshots)
         assert metrics["projects_checked"] == 0
+
+    def test_fast_gate_uses_non_truncating_token_budget(self, tmp_path):
+        project_dir = tmp_path / "projects" / "my-app"
+        project_dir.mkdir(parents=True)
+        (project_dir / "PROJECT.md").write_text("# Project\n\nInitial.", encoding="utf-8")
+        snapshots = [{
+            "project": "my-app",
+            "is_initial": False,
+            "diff": "diff --git a/main.py b/main.py\n+print('hello')",
+            "changes": [{"status": "M", "path": "main.py", "old_path": None}],
+        }]
+
+        with patch("datastore.docsdb.updater.classify_doc_change") as mock_classify, \
+             patch("core.project_registry.get_project", return_value={"canonical_path": str(project_dir)}), \
+             patch("lib.llm_clients.call_fast_reasoning", return_value=("NO: documentation is already current.", 0.1)) as fast:
+            mock_classify.return_value = {
+                "classification": "significant",
+                "confidence": 0.5,
+                "reasons": ["borderline"],
+            }
+
+            metrics = update_project_docs(snapshots)
+
+        assert metrics["docs_skipped"] == 1
+        fast.assert_called_once()
+        assert fast.call_args.kwargs["max_tokens"] == _FAST_GATE_MAX_TOKENS
+        assert _FAST_GATE_MAX_TOKENS > 50
+
+    def test_fast_gate_failure_raises_when_fail_hard_enabled(self, tmp_path):
+        project_dir = tmp_path / "projects" / "my-app"
+        project_dir.mkdir(parents=True)
+        (project_dir / "PROJECT.md").write_text("# Project\n\nInitial.", encoding="utf-8")
+        snapshots = [{
+            "project": "my-app",
+            "is_initial": False,
+            "diff": "diff --git a/main.py b/main.py\n+print('hello')",
+            "changes": [{"status": "M", "path": "main.py", "old_path": None}],
+        }]
+
+        with patch("datastore.docsdb.updater.classify_doc_change") as mock_classify, \
+             patch("core.project_registry.get_project", return_value={"canonical_path": str(project_dir)}), \
+             patch("core.docs_updater_hook.is_fail_hard_enabled", return_value=True), \
+             patch("lib.llm_clients.call_fast_reasoning", side_effect=RuntimeError("truncated while failHard is enabled")):
+            mock_classify.return_value = {
+                "classification": "significant",
+                "confidence": 0.5,
+                "reasons": ["borderline"],
+            }
+
+            with pytest.raises(RuntimeError, match="truncated"):
+                update_project_docs(snapshots)

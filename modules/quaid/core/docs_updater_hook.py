@@ -14,11 +14,14 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from lib.fail_policy import is_fail_hard_enabled
+
 logger = logging.getLogger(__name__)
 
 # Root-level project docs that can be auto-updated from source diffs/logs.
 # PROJECT.log remains append-only and must never be edited by this path.
 _UPDATABLE_ROOT_DOCS = {"PROJECT.md", "TOOLS.md", "AGENTS.md"}
+_FAST_GATE_MAX_TOKENS = 200
 
 
 def update_project_docs(
@@ -165,6 +168,8 @@ def _update_project(
             else:
                 metrics["docs_skipped"] += 1
         except Exception as e:
+            if is_fail_hard_enabled():
+                raise
             logger.warning("[docs-hook] Failed to update %s: %s", doc_path, e)
             metrics["errors"] += 1
 
@@ -235,7 +240,7 @@ def _update_single_doc(
             )
             gate_response, _ = call_fast_reasoning(
                 gate_prompt,
-                max_tokens=50,
+                max_tokens=_FAST_GATE_MAX_TOKENS,
                 timeout=10,
                 system_prompt="Answer with YES or NO first, then one short sentence.",
             )
@@ -243,6 +248,8 @@ def _update_single_doc(
                 logger.info("[docs-hook] Fast Reasoning gate: skip %s — %s", doc_name, gate_response.strip())
                 return False
         except Exception as e:
+            if is_fail_hard_enabled():
+                raise
             logger.warning("[docs-hook] Fast Reasoning gate failed for %s: %s", doc_name, e)
 
     # Call Deep Reasoning for the actual update
