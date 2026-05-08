@@ -3864,6 +3864,8 @@ def _reconcile_internal_cursor_state(
             internal=False,
             source_key=cursor_key,
         )
+        if rebased_offset == 0:
+            clear_rolling_state(session_id)
         return "unfrozen"
 
     return "not_internal"

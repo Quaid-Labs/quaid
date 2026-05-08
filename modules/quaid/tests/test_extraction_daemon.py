@@ -3562,21 +3562,40 @@ def test_check_chunk_ready_sessions_unfreezes_internal_cursor_when_real_turn_arr
 
     captured = []
     buffered_from_lines = []
+    buffer_states = []
     monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
-    monkeypatch.setattr(extraction_daemon, "read_rolling_state", lambda _sid: {})
+    extraction_daemon.write_rolling_state(
+        session_id,
+        {
+            "transcript_path": str(transcript_path),
+            "buffered_line_offset": initial_lines,
+            "semantic_buffer": "stale internal startup buffer",
+            "semantic_buffer_tokens": 4,
+        },
+    )
 
     def fake_buffer_transcript_tail(path, from_line, state, adapter=None, **kwargs):
         buffered_from_lines.append(from_line)
+        buffer_states.append(dict(state or {}))
+        if from_line == 0:
+            semantic_tokens = 12
+            semantic_buffer = (
+                "User: My sister Clara likes alpacas, lives in Boise, "
+                "and runs a kiln studio every weekend."
+            )
+        else:
+            semantic_tokens = 4
+            semantic_buffer = "User: weekend."
         return (
             {
                 "buffered_line_offset": initial_lines + 1,
-                "semantic_buffer": "User: My sister Clara likes alpacas, lives in Boise, and runs a kiln studio every weekend.",
-                "semantic_buffer_tokens": 12,
+                "semantic_buffer": semantic_buffer,
+                "semantic_buffer_tokens": semantic_tokens,
             },
             {
                 "raw_lines_added": 1,
-                "semantic_chars_added": 36,
-                "semantic_tokens_added": 12,
+                "semantic_chars_added": len(semantic_buffer),
+                "semantic_tokens_added": semantic_tokens,
                 "buffered_line_offset": initial_lines + 1,
             },
         )
@@ -3608,6 +3627,8 @@ def test_check_chunk_ready_sessions_unfreezes_internal_cursor_when_real_turn_arr
     assert cursor["line_offset"] == 0
     assert cursor["internal"] is False
     assert buffered_from_lines == [0]
+    assert buffer_states[0]["buffered_line_offset"] == 0
+    assert buffer_states[0]["semantic_buffer_tokens"] == 0
     assert captured == [
         {
             "signal_type": "rolling",
@@ -3668,7 +3689,6 @@ def test_check_chunk_ready_sessions_flushes_subthreshold_tail_after_internal_cur
     captured = []
     buffered_from_lines = []
     monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
-    monkeypatch.setattr(extraction_daemon, "read_rolling_state", lambda _sid: {})
 
     def fake_buffer_transcript_tail(path, from_line, state, adapter=None, **kwargs):
         buffered_from_lines.append(from_line)
