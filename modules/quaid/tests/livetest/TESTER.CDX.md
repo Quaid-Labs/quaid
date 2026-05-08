@@ -86,6 +86,20 @@ assert models.get(\"fastReasoning\") in (\"gpt-5.4-mini\", \"claude-haiku-4-5\")
 assert models.get(\"deepReasoning\") in (\"gpt-5.4\", \"claude-sonnet-4-5\"), models"'
 ```
 
+**CDX M6 Part B provider-error sentinel path:**
+Use `~/.quaid/shared/config/codex/config.json` for the invalid model sentinel
+described in `livetest-guide/M6.md`. Do **not** write the sentinel to an
+instance-local `codex/config.json` under the CDX instance root: that file is not
+part of Quaid's active model-resolution chain. The effective CDX chain is:
+
+1. `~/.quaid/shared/config/global/config.json`
+2. `~/.quaid/shared/config/codex/config.json`
+3. `~/.quaid/instances/CDX_INSTANCE/config.json`
+
+The Part B sentinel must modify the layer that currently provides
+`models.fastReasoning` and `models.deepReasoning`; in normal livetest installs,
+that is `shared/config/codex/config.json`.
+
 ---
 
 ## Sending Messages
