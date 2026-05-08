@@ -55,6 +55,7 @@ class CodexAdapter(QuaidAdapter):
         "session_start_output_mode": "additional_context",
         "session_start_include_pending_context": True,
         "platform_config_scope": "codex",
+        "prompt_model_config_probe": True,
     }
 
     _HOOK_STATUS_LINE_RE = re.compile(

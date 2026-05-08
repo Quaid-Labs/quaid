@@ -567,6 +567,107 @@ def _provider_failure_notice_message(exc: Exception) -> str:
     return f"[Quaid error] [provider] {text}"
 
 
+def _prompt_model_probe_state_path() -> Path | None:
+    try:
+        from lib.adapter import get_adapter
+
+        data_dir = get_adapter().data_dir()
+    except Exception:
+        return None
+    try:
+        return Path(data_dir) / "prompt-model-config-probe.json"
+    except Exception:
+        return None
+
+
+def _runtime_config_fingerprint() -> str:
+    snapshot = _runtime_config_snapshot()
+    if not snapshot:
+        return ""
+    if not any(int(mtime_ns) >= 0 for _path, mtime_ns in snapshot):
+        return ""
+    payload = json.dumps(list(snapshot), sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _read_prompt_model_probe_state() -> Dict[str, Any]:
+    path = _prompt_model_probe_state_path()
+    if path is None or not path.is_file():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        return payload if isinstance(payload, dict) else {}
+    except Exception:
+        logger.warning("Failed reading prompt model probe state", exc_info=True)
+        return {}
+
+
+def _write_prompt_model_probe_state(payload: Dict[str, Any]) -> None:
+    path = _prompt_model_probe_state_path()
+    if path is None:
+        return
+    tmp_path: Path | None = None
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = path.with_suffix(f".tmp.{os.getpid()}")
+        tmp_path.write_text(json.dumps(payload), encoding="utf-8")
+        os.replace(tmp_path, path)
+    except Exception:
+        logger.warning("Failed writing prompt model probe state", exc_info=True)
+        if tmp_path is not None:
+            try:
+                tmp_path.unlink()
+            except Exception:
+                pass
+
+
+def _validate_prompt_model_config_for_hook(adapter_id: str) -> str:
+    """Return an inline provider notice when Codex prompt-time config is broken."""
+    if str(adapter_id or "").strip().lower() != "codex":
+        return ""
+    if not bool(_adapter_capability("prompt_model_config_probe", False)):
+        return ""
+    fingerprint = _runtime_config_fingerprint()
+    if not fingerprint:
+        return ""
+    state = _read_prompt_model_probe_state()
+    if state.get("fingerprint") == fingerprint:
+        if state.get("status") == "ok":
+            return ""
+        cached_message = str(state.get("message") or "").strip()
+        if state.get("status") == "error" and cached_message:
+            return cached_message
+
+    try:
+        from lib.llm_clients import call_fast_reasoning
+
+        call_fast_reasoning(
+            "Reply with OK only.",
+            max_tokens=4,
+            timeout=20,
+            system_prompt="You are a Quaid model configuration health check.",
+            max_retries=0,
+        )
+    except Exception as exc:
+        notice = _provider_failure_notice_message(exc)
+        _write_prompt_model_probe_state({
+            "fingerprint": fingerprint,
+            "status": "error",
+            "message": notice,
+            "error_type": type(exc).__name__,
+        })
+        _write_hook_trace("hook.inject.model_config_error", {
+            "adapter": adapter_id,
+            "error_type": type(exc).__name__,
+            "error": str(exc)[:500],
+        })
+        return notice
+
+    _write_prompt_model_probe_state({"fingerprint": fingerprint, "status": "ok"})
+    _write_hook_trace("hook.inject.model_config_validated", {"adapter": adapter_id})
+    return ""
+
+
 def _strip_tools_domain_block(doc_file: str, content: str) -> str:
     if doc_file != "TOOLS.md":
         return content
@@ -1168,6 +1269,18 @@ def hook_inject(args):
             "New memories may not be processed until Quaid recovers. "
             f"{_safe_agent_error(e)}"
         )
+
+    try:
+        from lib.adapter import get_adapter
+
+        model_config_notice = _validate_prompt_model_config_for_hook(get_adapter().adapter_id())
+        if model_config_notice:
+            direct_notices.append(model_config_notice)
+    except Exception as e:
+        if _is_provider_failure(e):
+            direct_notices.append(_provider_failure_notice_message(e))
+        else:
+            raise
 
     # Ensure a cursor exists for this session so the daemon can discover it
     # for timeout extraction.  Lightweight: skips if cursor already exists.

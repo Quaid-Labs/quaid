@@ -697,6 +697,60 @@ def test_codex_hook_inject_still_surfaces_provider_error_when_fail_hard_enabled(
     assert "invalid-model-xyzzy" in context
 
 
+def test_codex_hook_inject_probes_prompt_model_config(monkeypatch, tmp_path):
+    from core.interface import hooks
+
+    adapter = _adapter_mock()
+    adapter.get_pending_context.return_value = ""
+    adapter.resolve_prompt_submit_signal.return_value = None
+    adapter.adapter_id.return_value = "codex"
+    adapter.get_session_path.return_value = None
+    adapter.get_sessions_dir.return_value = str(tmp_path / "sessions")
+    adapter.instance_root.return_value = tmp_path
+    adapter.data_dir.return_value = tmp_path / "data"
+
+    monkeypatch.setattr("lib.adapter.get_adapter", lambda: adapter)
+    monkeypatch.setattr("lib.adapter._ensure_instance_projects_bootstrapped", lambda _adapter: None)
+    monkeypatch.setattr("core.extraction_daemon.ensure_alive", lambda: None)
+    monkeypatch.setattr("core.extraction_daemon.read_cursor", lambda sid: {"line_offset": 0, "transcript_path": ""})
+    monkeypatch.setattr("core.extraction_daemon.write_cursor", lambda *args: None)
+    monkeypatch.setattr(hooks, "_get_pending_context", lambda: "")
+    monkeypatch.setattr(hooks, "_get_deferred_notice_hint", lambda: "")
+    monkeypatch.setattr(hooks, "_get_owner_id", lambda: "codex-owner")
+    monkeypatch.setattr(
+        hooks,
+        "_adapter_capability",
+        lambda key, default=None: True if key == "prompt_model_config_probe" else default,
+    )
+    monkeypatch.setattr(
+        hooks,
+        "_runtime_config_snapshot",
+        lambda: ((str(tmp_path / "codex" / "config.json"), 123),),
+    )
+
+    with patch(
+        "lib.llm_clients.call_fast_reasoning",
+        side_effect=RuntimeError(
+            "Quaid could not access its fast language model provider: model=invalid-model-m6-probe"
+        ),
+    ) as probe, patch("core.interface.api.recall_fast", return_value=([], None)), \
+         patch("core.interface.api.projects_search_docs", return_value=None):
+        out, _err = _run_hook_inject(
+            {
+                "prompt": "What do you know about Maya?",
+                "session_id": "sess-codex-provider-probe",
+                "cwd": str(tmp_path),
+            },
+            monkeypatch=monkeypatch,
+        )
+
+    probe.assert_called_once()
+    payload = json.loads(out)
+    context = payload["hookSpecificOutput"]["additionalContext"]
+    assert "[Quaid error] [provider]" in context
+    assert "invalid-model-m6-probe" in context
+
+
 def test_codex_provider_failure_does_not_relay_after_next_successful_turn(monkeypatch, tmp_path):
     from core.interface import hooks
 
