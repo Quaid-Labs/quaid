@@ -39,6 +39,7 @@ def _adapter_mock():
                 "deferred_notice_relay": True,
                 "session_cwd_path_template": "{cwd_encoded}/{session_id}.jsonl",
                 "platform_config_scope": "claude-code",
+                "prompt_model_config_probe": True,
             },
             "codex": {
                 "deferred_notice_relay": True,
@@ -336,6 +337,7 @@ def test_claude_code_post_compact_turn_gets_identity_additional_context_under_ca
     monkeypatch.setattr("core.extraction_daemon.write_signal", fake_write_signal)
     monkeypatch.setattr("core.extraction_daemon.ensure_alive", lambda: None)
     monkeypatch.setattr("core.extraction_daemon.read_cursor", lambda session_id: {"transcript_path": str(transcript_path)})
+    monkeypatch.setattr("core.interface.hooks._runtime_config_snapshot", lambda: tuple())
     monkeypatch.setattr("lib.adapter.get_adapter", lambda: adapter)
     _run_hook_inject(
         {
@@ -490,6 +492,7 @@ def test_refresh_runtime_config_if_changed_reloads_and_resets_caches(monkeypatch
         lambda *, sources: cleared.append(set(sources)),
     )
     monkeypatch.setattr(hooks, "_HOOK_RUNTIME_CONFIG_SNAPSHOT", None)
+    monkeypatch.setattr(hooks, "_read_runtime_config_snapshot_state", lambda: None)
 
     assert hooks._refresh_runtime_config_if_changed("test") is False
 
@@ -749,6 +752,7 @@ def mock_adapter(tmp_path, sessions_dir, monkeypatch):
 
     monkeypatch.setattr("core.interface.hooks._get_pending_context", lambda: "")
     monkeypatch.setattr("core.interface.hooks._get_deferred_notice_hint", lambda: "")
+    monkeypatch.setattr("core.interface.hooks._runtime_config_snapshot", lambda: tuple())
     monkeypatch.setattr("lib.adapter.get_adapter", lambda: adapter)
     monkeypatch.setattr("core.interface.hooks._get_owner_id", lambda: "test-owner")
     return adapter
@@ -876,7 +880,8 @@ class TestHookInjectCursorSeeding:
         write_calls = []
         monkeypatch.setattr(extraction_daemon, "write_cursor", lambda *a: write_calls.append(a))
 
-        with patch("core.interface.api.recall_fast", return_value=[]):
+        with patch("core.interface.api.recall_fast", return_value=[]), \
+             patch("core.interface.api.projects_search_docs", return_value=None):
             out, err = _run_hook_inject(
                 {
                     "prompt": "this has no session id",
@@ -1308,7 +1313,8 @@ class TestHookInjectRecallResilience:
         monkeypatch.setattr("core.interface.hooks._get_deferred_notice_relay_context", lambda: "")
         monkeypatch.setattr("core.interface.hooks._get_quaid_agents_baseline_context", lambda: "")
 
-        with patch("core.interface.api.recall_fast", return_value=[]):
+        with patch("core.interface.api.recall_fast", return_value=[]), \
+             patch("core.interface.api.projects_search_docs", return_value=None):
             out, err = _run_hook_inject(
                 {
                     "prompt": "nothing in memory",
@@ -1412,6 +1418,49 @@ class TestHookInjectRecallResilience:
         context = payload["hookSpecificOutput"]["additionalContext"]
         assert "[Quaid error] [provider]" in context
         assert "invalid-model-xyzzy" in context
+
+    def test_hook_inject_probes_prompt_model_config_when_recall_succeeds(
+        self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
+    ):
+        from core import extraction_daemon
+        from core.interface import hooks
+
+        mock_adapter.adapter_id.return_value = "claude-code"
+        mock_adapter.instance_root.return_value = tmp_path
+        mock_adapter.data_dir.return_value = tmp_path / "data"
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "claude-code-test")
+        monkeypatch.setattr(extraction_daemon, "write_cursor", lambda *a: None)
+        monkeypatch.setattr("lib.fail_policy.is_fail_hard_enabled", lambda: True)
+        monkeypatch.setattr("core.interface.hooks._get_deferred_notice_relay_context", lambda: "")
+        monkeypatch.setattr(
+            hooks,
+            "_runtime_config_snapshot",
+            lambda: ((str(tmp_path / "claude-code" / "config.json"), 123),),
+        )
+
+        with patch(
+            "lib.llm_clients.call_fast_reasoning",
+            side_effect=RuntimeError(
+                "Quaid could not access its fast language model provider: model=invalid-model-m6-probe"
+            ),
+        ) as probe, patch("core.interface.api.recall_fast", return_value=([], None)), \
+             patch("core.interface.api.projects_search_docs", return_value=None):
+            out, _err = _run_hook_inject(
+                {
+                    "prompt": "What grinder do I use?",
+                    "session_id": "sess-cc-provider-probe",
+                    "cwd": "/Users/x",
+                },
+                monkeypatch=monkeypatch,
+            )
+
+        probe.assert_called_once()
+        assert probe.call_args.kwargs["timeout"] == 8
+        payload = json.loads(out)
+        context = payload["hookSpecificOutput"]["additionalContext"]
+        assert "[Quaid error] [provider]" in context
+        assert "invalid-model-m6-probe" in context
 
     def test_recall_fast_provider_failure_does_not_relay_after_next_successful_turn(
         self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch

@@ -43,6 +43,7 @@ class ClaudeCodeAdapter(QuaidAdapter):
         "deferred_notice_relay": True,
         "session_cwd_path_template": "{cwd_encoded}/{session_id}.jsonl",
         "platform_config_scope": "claude-code",
+        "prompt_model_config_probe": True,
     }
 
     _QUAID_MEMORY_CONTEXT_RE = re.compile(
