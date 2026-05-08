@@ -1034,7 +1034,7 @@ function extractOpenClawEventTimestampMs(event, ctx) {
 }
 function isOpenClawTransientSessionId(value) {
   const sid = String(value || "").trim().toLowerCase();
-  return Boolean(sid) && (sid === "slug-generator" || sid.includes(":slug-generator") || sid.includes("slug-generator:"));
+  return Boolean(sid) && (sid === "slug-generator" || /^slug-generator(?:$|[-_:])/.test(sid) || sid.includes(":slug-generator") || sid.includes("slug-generator:"));
 }
 function selectQueuedStartupRecoveryMessage(event, lastUserMessageQuery, nowMs = Date.now(), currentSessionId) {
   if (!lastUserMessageQuery) return null;

@@ -1312,6 +1312,7 @@ function isOpenClawTransientSessionId(value: unknown): boolean {
   const sid = String(value || "").trim().toLowerCase();
   return Boolean(sid) && (
     sid === "slug-generator"
+    || /^slug-generator(?:$|[-_:])/.test(sid)
     || sid.includes(":slug-generator")
     || sid.includes("slug-generator:")
   );
