@@ -3358,6 +3358,7 @@ function _pruneCompletedAutoInjectTurns(nowMs = Date.now()) {
 function _rememberCompletedAutoInjectTurn(turnKey, outcome, nowMs = Date.now()) {
   const key = String(turnKey || "").trim();
   if (!key) return;
+  if (outcome.modelConfigNotice) return;
   _pruneCompletedAutoInjectTurns(nowMs);
   _beforePromptBuildCompletedByTurn.set(key, {
     outcome,
