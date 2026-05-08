@@ -5701,6 +5701,11 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
                 "session %s gained non-internal content past a frozen internal cursor during idle scan",
                 session_id,
             )
+            data = _read_cursor_with_source_compat(
+                str(session_id),
+                str(data.get("cursor_key") or "").strip() or None,
+            )
+            transcript_path = str(data.get("transcript_path") or transcript_path)
 
         # Skip registered subagents — their transcripts are merged into parent extraction
         if session_id in registered_subagents:
@@ -5976,6 +5981,12 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
                 "session %s gained non-internal content past a frozen internal cursor during rolling scan",
                 session_id,
             )
+            data = _read_cursor_with_source_compat(
+                str(session_id),
+                str(data.get("cursor_key") or "").strip() or None,
+            )
+            transcript_path = str(data.get("transcript_path") or transcript_path)
+        unfroze_internal_cursor = internal_state == "unfrozen"
         if session_id in pending_session_ids:
             continue
         source_key = _signal_source_cursor_key(str(session_id), str(transcript_path), cursor_data=data)
@@ -6022,6 +6033,24 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
             or semantic_tokens >= near_budget_threshold
         )
         if not should_signal:
+            if unfroze_internal_cursor and semantic_tokens > 0:
+                logger.info(
+                    "session %s recovered %d semantic tokens past a frozen internal cursor; "
+                    "generating session_end flush",
+                    session_id,
+                    semantic_tokens,
+                )
+                write_signal(
+                    signal_type="session_end",
+                    session_id=session_id,
+                    transcript_path=transcript_path,
+                    meta={
+                        "reason": "internal_cursor_unfrozen_flush",
+                        "source_cursor_key": source_key,
+                        "semantic_buffer_tokens": semantic_tokens,
+                        "buffered_line_offset": buffered_line_offset,
+                    },
+                )
             continue
 
         if semantic_tokens >= chunk_budget:

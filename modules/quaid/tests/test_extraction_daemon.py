@@ -3620,6 +3620,118 @@ def test_check_chunk_ready_sessions_unfreezes_internal_cursor_when_real_turn_arr
     ]
 
 
+def test_check_chunk_ready_sessions_flushes_subthreshold_tail_after_internal_cursor_unfreezes(
+    monkeypatch,
+    tmp_path,
+):
+    import sys
+    import types
+
+    transcript_path = tmp_path / "sibling-session.jsonl"
+    transcript_path.write_text(
+        (
+            '{"role":"assistant","content":"[quaid][session-init] Loading project context"}\n'
+            '{"role":"assistant","content":"Loading large sibling system prompt"}\n'
+            '{"role":"assistant","content":"Ready"}\n'
+        ),
+        encoding="utf-8",
+    )
+
+    session_id = "sess-sibling-unfreeze"
+    initial_lines = extraction_daemon.count_transcript_lines(str(transcript_path))
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "pytest-runner")
+    extraction_daemon.write_cursor(session_id, initial_lines, str(transcript_path), internal=True)
+
+    with transcript_path.open("a", encoding="utf-8") as handle:
+        handle.write(
+            '{"role":"user","content":"The reading chair for this instance has a brass desk lamp beside it."}\n'
+        )
+
+    real_adapter = sys.modules.get("lib.adapter")
+    fake_adapter_mod = types.ModuleType("lib.adapter")
+
+    class _FakeAdapter(_OwnedTestAdapterMixin):
+        def parse_session_jsonl(self, path):
+            text = Path(path).read_text(encoding="utf-8")
+            if "brass desk lamp" in text:
+                return "User: The reading chair for this instance has a brass desk lamp beside it."
+            return ""
+
+    fake_adapter_mod.get_adapter = lambda: _FakeAdapter()
+    sys.modules["lib.adapter"] = fake_adapter_mod
+
+    captured = []
+    buffered_from_lines = []
+    monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
+    monkeypatch.setattr(extraction_daemon, "read_rolling_state", lambda _sid: {})
+
+    def fake_buffer_transcript_tail(path, from_line, state, adapter=None, **kwargs):
+        buffered_from_lines.append(from_line)
+        return (
+            {
+                "buffered_line_offset": initial_lines + 1,
+                "semantic_buffer": (
+                    "User: The reading chair for this instance has a brass desk lamp beside it."
+                ),
+                "semantic_buffer_tokens": 25,
+            },
+            {
+                "raw_lines_added": 1,
+                "semantic_chars_added": 72,
+                "semantic_tokens_added": 25,
+                "buffered_line_offset": initial_lines + 1,
+            },
+        )
+
+    monkeypatch.setattr(extraction_daemon, "_buffer_transcript_tail", fake_buffer_transcript_tail)
+    monkeypatch.setattr(extraction_daemon, "write_rolling_state", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        extraction_daemon,
+        "write_signal",
+        lambda signal_type, session_id, transcript_path, **kwargs: captured.append(
+            {
+                "signal_type": signal_type,
+                "session_id": session_id,
+                "transcript_path": transcript_path,
+                "meta": kwargs.get("meta", {}),
+            }
+        ),
+    )
+
+    try:
+        extraction_daemon.check_chunk_ready_sessions(chunk_tokens=1500)
+    finally:
+        if real_adapter is not None:
+            sys.modules["lib.adapter"] = real_adapter
+        else:
+            sys.modules.pop("lib.adapter", None)
+
+    cursor = extraction_daemon.read_cursor(session_id)
+    source_key = extraction_daemon._signal_source_cursor_key(
+        session_id,
+        str(transcript_path),
+        cursor_data=cursor,
+    )
+    assert cursor["line_offset"] == initial_lines
+    assert cursor["internal"] is False
+    assert buffered_from_lines == [initial_lines]
+    assert captured == [
+        {
+            "signal_type": "session_end",
+            "session_id": session_id,
+            "transcript_path": str(transcript_path),
+            "meta": {
+                "reason": "internal_cursor_unfrozen_flush",
+                "source_cursor_key": source_key,
+                "semantic_buffer_tokens": 25,
+                "buffered_line_offset": initial_lines + 1,
+            },
+        }
+    ]
+
+
 def test_process_signal_unfreezes_internal_cursor_when_real_turn_arrives_after_session_start_noise(
     monkeypatch,
     tmp_path,
@@ -7653,6 +7765,8 @@ class TestRollingExtraction:
                 return "unused when semantic buffer is present"
 
         fake_adapter_mod.get_adapter = lambda: _FakeAdapter()
+        fake_adapter_mod.quaid_projects_dir = lambda home: Path(home) / "projects"
+        fake_adapter_mod.quaid_tracking_dir = lambda home: Path(home) / ".git-tracking"
         sys.modules["lib.adapter"] = fake_adapter_mod
 
         import core.docs_updater_hook as docs_updater_mod
