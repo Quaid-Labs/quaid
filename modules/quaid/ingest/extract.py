@@ -378,6 +378,8 @@ MIN_EXTRACT_RETRY_TOKENS = 4000
 MAX_EXTRACT_SPLIT_DEPTH = 4
 DEFAULT_EXTRACT_PUBLISH_BATCH_SIZE = 100
 MIN_REPAIR_OUTPUT_TOKENS = 4096
+# SessionDB microchunks are intentionally much smaller than legacy source
+# chunks. They are recall probes that carry pair_id/microchunk_id for expansion.
 DEFAULT_SESSION_MICROCHUNK_TOKENS = 40
 _SOUL_SNIPPETS_MODULE = None
 

@@ -7,6 +7,9 @@ from typing import Any, Dict, List, Optional
 
 from lib.tokens import estimate_tokens
 
+# Intentional SessionDB default: microchunks are cheap recall probes, not the
+# older coarse transcript evidence chunks. Keep them small enough to inject as
+# "possible match" context and expand by pair_id only when needed.
 DEFAULT_MICROCHUNK_TOKENS = 40
 _ROLE_RE = re.compile(r"^\s*(?:\[[^\]]+\]\s*)?([A-Za-z][A-Za-z _-]{0,32})\s*:\s*(.*)$")
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
