@@ -167,3 +167,27 @@ class TestUpdateProjectDocs:
 
             with pytest.raises(RuntimeError, match="truncated"):
                 update_project_docs(snapshots)
+
+    def test_per_doc_update_failure_raises_when_fail_hard_enabled(self, tmp_path):
+        project_dir = tmp_path / "projects" / "my-app"
+        project_dir.mkdir(parents=True)
+        (project_dir / "PROJECT.md").write_text("# Project\n\nInitial.", encoding="utf-8")
+        snapshots = [{
+            "project": "my-app",
+            "is_initial": False,
+            "diff": "diff --git a/main.py b/main.py\n+print('hello')",
+            "changes": [{"status": "M", "path": "main.py", "old_path": None}],
+        }]
+
+        with patch("datastore.docsdb.updater.classify_doc_change") as mock_classify, \
+             patch("core.project_registry.get_project", return_value={"canonical_path": str(project_dir)}), \
+             patch("core.docs_updater_hook.is_fail_hard_enabled", return_value=True), \
+             patch("core.docs_updater_hook._update_single_doc", side_effect=RuntimeError("doc update failed")):
+            mock_classify.return_value = {
+                "classification": "significant",
+                "confidence": 0.8,
+                "reasons": ["clear doc update"],
+            }
+
+            with pytest.raises(RuntimeError, match="doc update failed"):
+                update_project_docs(snapshots)
