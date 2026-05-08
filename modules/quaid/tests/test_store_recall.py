@@ -10453,6 +10453,74 @@ class TestRecallFastHookInjectContract:
         assert boat_row["via"] == "graph_attached_fact"
         assert boat_row["graph_relation_sequence"] == ["spouse_of", "sibling_of", "has_fact"]
 
+    def test_mixed_store_relation_chain_uses_owner_graph_without_recursive_seed_recall(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _ = _make_graph(tmp_path)
+        solomon = mg.Node.create("Person", "Solomon Steadman")
+        yuni = mg.Node.create("Person", "Yuni")
+        kai = mg.Node.create("Person", "Kai")
+        brother = mg.Node.create("Fact", "Solomon Steadman's partner Yuni has a brother named Kai")
+        lives = mg.Node.create("Fact", "Yuni's brother Kai lives in Osaka")
+        boat = mg.Node.create("Fact", "Kai works at a small boatbuilding studio")
+        wife = mg.Node.create("Fact", "Kai's wife is named Mei")
+        for node in (solomon, yuni, kai, brother, lives, boat, wife):
+            graph.add_node(node, embed=False)
+        graph.add_edge(mg.Edge.create(solomon.id, yuni.id, "spouse_of"))
+        graph.add_edge(mg.Edge.create(kai.id, yuni.id, "sibling_of"))
+        graph.add_edge(mg.Edge.create(kai.id, brother.id, "has_fact"))
+        graph.add_edge(mg.Edge.create(kai.id, lives.id, "has_fact"))
+        graph.add_edge(mg.Edge.create(kai.id, boat.id, "has_fact"))
+        graph.add_edge(mg.Edge.create(kai.id, wife.id, "has_fact"))
+
+        fake_cfg = SimpleNamespace(
+            users=SimpleNamespace(
+                identities={"test-owner-alpha": SimpleNamespace(person_node_name="Solomon Steadman")}
+            )
+        )
+        base_registry = mg._get_recall_store_registry()
+
+        def fake_vector_recall(*_args, **_kwargs):
+            return (
+                [
+                    {"id": lives.id, "text": lives.name, "category": "fact", "similarity": 0.99},
+                    {"id": brother.id, "text": brother.name, "category": "fact", "similarity": 0.98},
+                ],
+                {"selected_path": "vector", "counts": {"returned": 2}},
+                None,
+            )
+
+        registry = dict(base_registry)
+        registry["vector"] = {"recall": fake_vector_recall, "recall_fast": fake_vector_recall}
+
+        with patch.object(mg, "get_graph", return_value=graph), \
+             patch.object(mg, "_HAS_CONFIG", True), \
+             patch.object(mg, "_get_memory_config", return_value=fake_cfg), \
+             patch.object(mg, "extract_entities_from_text", return_value=[]), \
+             patch.object(mg, "_get_recall_store_registry", return_value=registry), \
+             patch.object(mg, "recall", side_effect=AssertionError("graph lane should not run recursive seed recall")):
+            rows, meta, bundle = mg._run_recall_store_plan(
+                "what does my partner's brother do?",
+                stores=["vector", "graph"],
+                limit=5,
+                owner_id="test-owner-alpha",
+                min_similarity=0.6,
+                planner_profile="full",
+                planned_queries=["what does my partner's brother do?"],
+                planner_meta={"planned_stores": ["vector", "graph"]},
+                fast_mode=False,
+                graph_depth=1,
+                common_kwargs={},
+            )
+
+        assert bundle is None
+        assert meta["planned_stores"] == ["vector", "graph"]
+        assert meta["store_runs"][1]["selected_path"] == "graph_aware"
+        assert rows
+        assert rows[0]["id"] == boat.id
+        assert rows[0]["via"] == "graph_attached_fact"
+        assert rows[0]["graph_relation_sequence"] == ["spouse_of", "sibling_of", "has_fact"]
+
     def test_graph_store_relation_chain_schema_alias_beats_dynamic_knows_keyword(self, tmp_path):
         import datastore.memorydb.memory_graph as mg
 

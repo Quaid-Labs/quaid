@@ -7444,6 +7444,11 @@ def _run_recall_store_plan(
     handler_name = "recall_fast" if fast_mode else "recall"
     kwargs = dict(common_kwargs or {})
     planned_project = (planner_meta or {}).get("planned_project") or kwargs.get("project")
+    relation_chain_groups_for_plan = _relation_chain_groups_for_query(query)
+    relation_chain_query_for_plan = (
+        len(relation_chain_groups_for_plan) >= 2
+        and _has_relation_chain_structure(query)
+    )
 
     callables = []
     for store in normalized_stores:
@@ -7475,11 +7480,13 @@ def _run_recall_store_plan(
             ))
         elif store == "graph":
             graph_candidate_pool = kwargs.get("candidate_pool")
-            if graph_candidate_pool is None and fast_mode and "vector" in normalized_stores:
-                # The vector lane is already running in this store plan. In the
-                # fast auto-inject path, avoid making the graph lane pay for a
-                # second base vector recall before it can traverse owner/entity
-                # anchors.
+            if graph_candidate_pool is None and "vector" in normalized_stores and (
+                fast_mode or relation_chain_query_for_plan
+            ):
+                # The vector lane is already running in this store plan. Fast
+                # auto-inject and owner-style relation-chain graph recall should
+                # not pay for a second recursive base recall before graph
+                # traversal can follow the relationship path.
                 graph_candidate_pool = []
             callables.append(lambda store=store, handler=handler, graph_candidate_pool=graph_candidate_pool: (
                 store,
@@ -7629,11 +7636,8 @@ def _run_recall_store_plan(
         if rrf_fused_rows is not None
         else _merge_recall_batches(merged_batches, limit=merge_limit)
     )
-    relation_chain_groups = _relation_chain_groups_for_query(query)
-    relation_chain_query = (
-        len(relation_chain_groups) >= 2
-        and _has_relation_chain_structure(query)
-    )
+    relation_chain_groups = relation_chain_groups_for_plan
+    relation_chain_query = relation_chain_query_for_plan
     if relation_chain_query and merged:
         _boost_relation_chain_row_scores(merged, relation_chain_groups, query=query)
         merged.sort(
