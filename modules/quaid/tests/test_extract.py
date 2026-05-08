@@ -2473,7 +2473,7 @@ class TestExtractFromTranscript:
 
     @patch("ingest.extract.call_deep_reasoning")
     @patch("ingest.extract._session_bridge.list_session_chunks", return_value=[])
-    @patch("ingest.extract._session_bridge.store_session_chunks")
+    @patch("ingest.extract._session_bridge.store_session_source_text")
     @patch("ingest.extract._memory.store")
     @patch("ingest.extract._memory.create_edge")
     def test_apply_extracted_payloads_can_publish_prior_dry_run_result(
@@ -2607,7 +2607,7 @@ class TestExtractFromTranscript:
         assert mock_store.call_count == 2
         assert mock_store_source_chunks.call_count == 1
         source_chunk_call = mock_store_source_chunks.call_args.kwargs
-        assert source_chunk_call["chunks"] == ["User: I like coffee\n\nAssistant: noted"]
+        assert source_chunk_call["text"] == "User: I like coffee\n\nAssistant: noted"
         assert source_chunk_call["session_id"] == "sess-stage"
         assert source_chunk_call["start_index"] == 0
         assert source_chunk_call["chunk_kind"] == "micro"
@@ -2808,7 +2808,7 @@ class TestExtractFromTranscript:
         assert all_facts[0]["_source_chunk_index"] == "1"
 
     @patch("ingest.extract._session_bridge.list_session_chunks", return_value=[])
-    @patch("ingest.extract._session_bridge.store_session_chunks")
+    @patch("ingest.extract._session_bridge.store_session_source_text")
     @patch("ingest.extract._memory.store")
     def test_extract_from_transcript_stores_source_chunk_and_links_facts(
         self,
@@ -2852,7 +2852,7 @@ class TestExtractFromTranscript:
 
     @patch("ingest.extract.is_fail_hard_enabled", return_value=True)
     @patch("ingest.extract._session_bridge.list_session_chunks", return_value=[])
-    @patch("ingest.extract._session_bridge.store_session_chunks", side_effect=RuntimeError("chunk store failed"))
+    @patch("ingest.extract._session_bridge.store_session_source_text", side_effect=RuntimeError("chunk store failed"))
     def test_apply_extracted_payloads_raises_when_source_chunk_store_fails_under_failhard(
         self,
         _mock_store_source_chunks,
@@ -2906,7 +2906,7 @@ class TestExtractFromTranscript:
 
     @patch("ingest.extract.is_fail_hard_enabled", return_value=True)
     @patch("ingest.extract._session_bridge.list_session_chunks", return_value=[])
-    @patch("ingest.extract._session_bridge.store_session_chunks", return_value=[{"status": "created"}])
+    @patch("ingest.extract._session_bridge.store_session_source_text", return_value=[{"status": "created"}])
     def test_apply_extracted_payloads_raises_when_source_chunk_store_returns_no_id_under_failhard(
         self,
         _mock_store_source_chunks,
@@ -3001,7 +3001,7 @@ class TestExtractFromTranscript:
         assert mock_store.call_args.kwargs["source_chunk_id"] == "sch_fact_evidence"
 
     @patch("ingest.extract._session_bridge.list_session_chunks", return_value=[])
-    @patch("ingest.extract._session_bridge.store_session_chunks")
+    @patch("ingest.extract._session_bridge.store_session_source_text")
     @patch("ingest.extract._memory.store")
     def test_apply_extracted_payloads_maps_each_fact_to_its_referenced_chunk(
         self,
@@ -3016,12 +3016,11 @@ class TestExtractFromTranscript:
         def _store_chunks(**kwargs):
             return [
                 {
-                    "chunk_id": f"sch_chunk_{kwargs['start_index'] + offset}",
+                    "chunk_id": f"sch_chunk_{kwargs['start_index']}",
                     "status": "created",
-                    "text": text,
-                    "chunk_index": kwargs["start_index"] + offset,
+                    "text": kwargs["text"],
+                    "chunk_index": kwargs["start_index"],
                 }
-                for offset, text in enumerate(kwargs["chunks"])
             ]
 
         mock_store_source_chunks.side_effect = _store_chunks
@@ -3128,29 +3127,25 @@ class TestExtractFromTranscript:
         assert len(unbroken_chunks) > 1
         assert all(estimate_tokens(chunk) <= 128 for chunk in unbroken_chunks)
 
-    @patch(
-        "ingest.extract._split_session_source_microchunks",
-        return_value=[
-            "User: Ada keeps the launch checklist in the red binder.",
-            "Assistant: acknowledged.",
-            "User: Berto keeps the rover manual in cabinet seven.",
-        ],
-    )
     @patch("ingest.extract._session_bridge.list_session_chunks", return_value=[{"chunk_index": 4}])
-    @patch("ingest.extract._session_bridge.store_session_chunks")
+    @patch("ingest.extract._session_bridge.store_session_source_text")
     @patch("ingest.extract._memory.store")
     def test_apply_extracted_payloads_microchunks_source_and_links_best_matching_fact(
         self,
         mock_store,
         mock_store_source_chunks,
         _mock_list_source_chunks,
-        _mock_split_microchunks,
     ):
         from ingest.extract import apply_extracted_payloads
 
         mock_store.return_value = {"id": "n-source-chunk", "status": "created", "dedup_telemetry": {}}
 
         def _store_chunks(**kwargs):
+            chunks = [
+                "User: Ada keeps the launch checklist in the red binder.",
+                "Assistant: acknowledged.",
+                "User: Berto keeps the rover manual in cabinet seven.",
+            ]
             return [
                 {
                     "chunk_id": f"sch_micro_{kwargs['start_index'] + offset}",
@@ -3158,7 +3153,7 @@ class TestExtractFromTranscript:
                     "text": text,
                     "chunk_index": kwargs["start_index"] + offset,
                 }
-                for offset, text in enumerate(kwargs["chunks"])
+                for offset, text in enumerate(chunks)
             ]
 
         mock_store_source_chunks.side_effect = _store_chunks
@@ -3224,7 +3219,7 @@ class TestExtractFromTranscript:
         ]
 
     @patch("ingest.extract._session_bridge.list_session_chunks", return_value=[])
-    @patch("ingest.extract._session_bridge.store_session_chunks")
+    @patch("ingest.extract._session_bridge.store_session_source_text")
     @patch("ingest.extract._memory.store")
     def test_apply_extracted_payloads_skips_orphan_chunk_descriptors_and_leaves_missing_refs_unlinked(
         self,

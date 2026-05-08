@@ -191,6 +191,9 @@ def _cross_instance_override_owner(path: Path) -> str | None:
         "memory.db",
         "memory.sqlite",
         "memory.sqlite3",
+        "session.db",
+        "session.sqlite",
+        "session.sqlite3",
         "memory_archive.db",
         "memory_archive.sqlite",
         "memory_archive.sqlite3",
@@ -241,6 +244,29 @@ def get_db_path_lightweight() -> Path:
     from lib.instance import instance_root
 
     return instance_root() / p
+
+
+def get_session_db_path() -> Path:
+    """Get the session datastore database path.
+
+    SessionDB is a separate datastore from MemoryDB. Test setups that redirect
+    MEMORY_DB_PATH get a sibling session.db by default so isolated test homes do
+    not leak session rows into the developer instance.
+    """
+    env_path = _validated_memory_override("SESSION_DB_PATH")
+    if env_path is not None:
+        return env_path
+
+    memory_override = _validated_memory_override("MEMORY_DB_PATH")
+    if memory_override is not None:
+        return memory_override.with_name("session.db")
+
+    cfg = _get_cfg()
+    raw = str(getattr(getattr(cfg, "database", None), "session_path", "") or "").strip()
+    if raw:
+        p = Path(raw).expanduser()
+        return p if p.is_absolute() else _workspace_root() / p
+    return _workspace_root() / "data" / "session.db"
 
 
 def get_archive_db_path() -> Path:

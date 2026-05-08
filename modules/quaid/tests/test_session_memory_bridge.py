@@ -17,6 +17,8 @@ class FakeMemoryService:
         out = []
         start = int(kwargs.get("start_index", 0) or 0)
         session_id = kwargs.get("session_id")
+        pair_ids = list(kwargs.get("message_pair_ids") or [])
+        microchunk_ids = list(kwargs.get("microchunk_ids") or [])
         for offset, text in enumerate(chunks):
             row = {
                 "chunk_id": f"sch-{owner_id}-{session_id}-{start + offset}",
@@ -29,6 +31,8 @@ class FakeMemoryService:
                 "source_conversation_id": kwargs.get("source_conversation_id"),
                 "conversation_id": kwargs.get("conversation_id"),
                 "source_author_id": kwargs.get("source_author_id"),
+                "message_pair_id": pair_ids[offset] if offset < len(pair_ids) else kwargs.get("message_pair_id"),
+                "microchunk_id": microchunk_ids[offset] if offset < len(microchunk_ids) else kwargs.get("microchunk_id"),
                 "status": "created",
             }
             out.append(row)
@@ -80,6 +84,23 @@ def test_bridge_normalizes_session_chunk_metadata():
     assert bridge.get_session_chunk(rows[0]["chunk_id"], owner_id="owner-2") is None
 
 
+def test_datastore_bridge_registers_and_dispatches_callbacks():
+    from core.services.datastore_bridge import DatastoreBridge
+
+    bridge = DatastoreBridge()
+    bridge.register_store(
+        name="sessiondb",
+        provides=["microchunk_id"],
+        consumes=["memory_chunk_id"],
+        callbacks={"fetch": lambda microchunk_id: {"microchunk_id": microchunk_id}},
+    )
+
+    assert bridge.call("sessiondb", "fetch", microchunk_id="mic-1") == {"microchunk_id": "mic-1"}
+    assert bridge.list_routes()["sessiondb"]["provides"] == ["microchunk_id"]
+    with pytest.raises(RuntimeError, match="route is not registered"):
+        bridge.assert_route("sessiondb", "missing")
+
+
 def test_bridge_indexes_session_transcript_through_core_contract():
     from core.services.session_memory_bridge import DatastoreSessionMemoryBridge
 
@@ -117,6 +138,76 @@ def test_bridge_indexes_session_transcript_through_core_contract():
     assert captured["participant_aliases"] == {"A": "user-a"}
     assert captured["message_count"] == 2
     assert captured["topic_hint"] == "topic"
+
+
+def test_bridge_projects_sessiondb_microchunks_to_memorydb(monkeypatch, tmp_path):
+    from core.services.datastore_bridge import DatastoreBridge
+    from core.services.session_memory_bridge import DatastoreSessionMemoryBridge
+    from datastore.memorydb.memory_graph import MemoryGraph
+    from datastore.sessiondb import session_store
+
+    monkeypatch.setenv("MEMORY_DB_PATH", str(tmp_path / "memory.db"))
+    monkeypatch.setenv("SESSION_DB_PATH", str(tmp_path / "session.db"))
+    memory = MemoryGraph(db_path=tmp_path / "memory.db")
+    bridge = DatastoreSessionMemoryBridge(memory_service=memory, datastore_bridge=DatastoreBridge())
+
+    rows = bridge.store_session_source_text(
+        text=(
+            "User: Ada stores the launch checklist in the red binder.\n"
+            "Assistant: Noted.\n"
+            "User: Berto keeps the rover manual in cabinet seven."
+        ),
+        owner_id="owner-bridge",
+        session_id="sess-bridge",
+        source_id="source-bridge",
+        start_index=8,
+        max_microchunk_tokens=16,
+        embed=False,
+    )
+
+    assert rows
+    assert all(row["microchunk_id"] for row in rows)
+    assert all(row["message_pair_id"] for row in rows)
+    stored_rows = memory.list_session_chunks(owner_id="owner-bridge", session_id="sess-bridge")
+    assert {row["microchunk_id"] for row in stored_rows} == {row["microchunk_id"] for row in rows}
+    first_micro = session_store.fetch_microchunk(
+        microchunk_id=rows[0]["microchunk_id"],
+        owner_id="owner-bridge",
+    )
+    assert first_micro["memory_chunk_id"] == rows[0]["chunk_id"]
+    expanded = bridge.expand_microchunk(rows[0]["microchunk_id"], owner_id="owner-bridge", after=1)
+    assert expanded["pair"]["pair_id"] == rows[0]["message_pair_id"]
+    assert expanded["window"]
+
+
+def test_sessiondb_appends_pair_chain_across_extraction_boundaries(monkeypatch, tmp_path):
+    from datastore.sessiondb import session_store
+
+    monkeypatch.setenv("SESSION_DB_PATH", str(tmp_path / "session.db"))
+    first = session_store.store_session_source_text(
+        text="User: First fact is in the red binder.\nAssistant: acknowledged.",
+        owner_id="owner-chain",
+        session_id="sess-chain",
+        source_id="source-a",
+        chunk_index=0,
+        max_microchunk_tokens=12,
+    )
+    second = session_store.store_session_source_text(
+        text="User: Second fact is in cabinet seven.\nAssistant: acknowledged.",
+        owner_id="owner-chain",
+        session_id="sess-chain",
+        source_id="source-b",
+        chunk_index=1,
+        max_microchunk_tokens=12,
+    )
+
+    first_pair = first["pairs"][0]
+    second_pair = second["pairs"][0]
+    reloaded_first = session_store.fetch_pair(pair_id=first_pair["pair_id"], owner_id="owner-chain")
+    assert reloaded_first["next_pair_id"] == second_pair["pair_id"]
+    assert second_pair["next_pair_id"] is None
+    assert first["microchunks"]
+    assert all(row["pair_id"] == first_pair["pair_id"] for row in first["microchunks"])
 
 
 def test_bridge_preserves_memorydb_chunk_idempotency_and_updates(tmp_path):

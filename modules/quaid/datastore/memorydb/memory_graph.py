@@ -277,6 +277,7 @@ class SourceChunk:
     next_chunk_id: Optional[str] = None
     message_id: Optional[str] = None
     message_pair_id: Optional[str] = None
+    microchunk_id: Optional[str] = None
     content_hash: str = ""
     token_count: int = 0
     owner_id: Optional[str] = None
@@ -1069,6 +1070,7 @@ class MemoryGraph:
                 next_chunk_id TEXT,
                 message_id TEXT,
                 message_pair_id TEXT,
+                microchunk_id TEXT,
                 content_hash TEXT NOT NULL,
                 text TEXT NOT NULL,
                 embedding BLOB,
@@ -1099,6 +1101,7 @@ class MemoryGraph:
             ("next_chunk_id", "TEXT"),
             ("message_id", "TEXT"),
             ("message_pair_id", "TEXT"),
+            ("microchunk_id", "TEXT"),
             ("embedding", "BLOB"),
         ]:
             if col in existing_cols:
@@ -1114,6 +1117,7 @@ class MemoryGraph:
             "CREATE INDEX IF NOT EXISTS idx_source_chunks_parent ON source_chunks(owner_id, parent_chunk_id)",
             "CREATE INDEX IF NOT EXISTS idx_source_chunks_message ON source_chunks(owner_id, message_id)",
             "CREATE INDEX IF NOT EXISTS idx_source_chunks_pair ON source_chunks(owner_id, message_pair_id)",
+            "CREATE INDEX IF NOT EXISTS idx_source_chunks_microchunk ON source_chunks(owner_id, microchunk_id)",
         ):
             conn.execute(stmt)
 
@@ -1133,6 +1137,7 @@ class MemoryGraph:
             "next_chunk_id": row["next_chunk_id"] if "next_chunk_id" in row.keys() else None,
             "message_id": row["message_id"] if "message_id" in row.keys() else None,
             "message_pair_id": row["message_pair_id"] if "message_pair_id" in row.keys() else None,
+            "microchunk_id": row["microchunk_id"] if "microchunk_id" in row.keys() else None,
             "content_hash": row["content_hash"],
             "text": row["text"],
             "has_embedding": bool(row["embedding"]) if "embedding" in row.keys() else False,
@@ -1164,6 +1169,7 @@ class MemoryGraph:
         next_chunk_id: Optional[str] = None,
         message_id: Optional[str] = None,
         message_pair_id: Optional[str] = None,
+        microchunk_id: Optional[str] = None,
         owner_id: Optional[str] = None,
         source_channel: Optional[str] = None,
         source_conversation_id: Optional[str] = None,
@@ -1215,6 +1221,7 @@ class MemoryGraph:
         next_chunk_id = str(next_chunk_id or "").strip() or None
         message_id = str(message_id or "").strip() or None
         message_pair_id = str(message_pair_id or "").strip() or None
+        microchunk_id = str(microchunk_id or "").strip() or None
         if conversation_id and not source_conversation_id:
             source_conversation_id = conversation_id
         project = _normalize_project_tag(project)
@@ -1254,6 +1261,7 @@ class MemoryGraph:
             next_chunk_id=next_chunk_id,
             message_id=message_id,
             message_pair_id=message_pair_id,
+            microchunk_id=microchunk_id,
             token_count=count,
             source_channel=source_channel,
             source_conversation_id=source_conversation_id,
@@ -1276,11 +1284,11 @@ class MemoryGraph:
                 """
                 INSERT OR IGNORE INTO source_chunks
                 (chunk_id, source_id, session_id, chunk_index, content_hash, text,
-                 chunk_kind, parent_chunk_id, next_chunk_id, message_id, message_pair_id,
+                 chunk_kind, parent_chunk_id, next_chunk_id, message_id, message_pair_id, microchunk_id,
                  embedding, token_count, owner_id, source_channel, source_conversation_id,
                  conversation_id, source_author_id, source_type, privacy,
                  visibility_scope, sensitivity, domains, project, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     chunk.chunk_id,
@@ -1294,6 +1302,7 @@ class MemoryGraph:
                     chunk.next_chunk_id,
                     chunk.message_id,
                     chunk.message_pair_id,
+                    chunk.microchunk_id,
                     packed_embedding,
                     chunk.token_count,
                     chunk.owner_id,
@@ -1331,9 +1340,24 @@ class MemoryGraph:
         **kwargs: Any,
     ) -> List[Dict[str, Any]]:
         out: List[Dict[str, Any]] = []
+        raw_message_pair_ids = kwargs.pop("message_pair_ids", None)
+        raw_microchunk_ids = kwargs.pop("microchunk_ids", None)
+        message_pair_ids = list(raw_message_pair_ids) if raw_message_pair_ids is not None else None
+        microchunk_ids = list(raw_microchunk_ids) if raw_microchunk_ids is not None else None
         for offset, text in enumerate(chunks or []):
             if not _normalize_source_chunk_text(text):
                 continue
+            per_kwargs = dict(kwargs)
+            if message_pair_ids is not None:
+                try:
+                    per_kwargs["message_pair_id"] = message_pair_ids[offset]
+                except (IndexError, TypeError):
+                    per_kwargs["message_pair_id"] = None
+            if microchunk_ids is not None:
+                try:
+                    per_kwargs["microchunk_id"] = microchunk_ids[offset]
+                except (IndexError, TypeError):
+                    per_kwargs["microchunk_id"] = None
             out.append(
                 self.store_source_chunk(
                     text,
@@ -1341,7 +1365,7 @@ class MemoryGraph:
                     session_id=session_id,
                     owner_id=owner_id,
                     chunk_index=start_index + offset,
-                    **kwargs,
+                    **per_kwargs,
                 )
             )
         normalized_session_id = str(session_id or "").strip()
@@ -1407,6 +1431,7 @@ class MemoryGraph:
         session_id: Optional[str] = None,
         owner_id: Optional[str] = None,
         source_conversation_id: Optional[str] = None,
+        microchunk_id: Optional[str] = None,
         domains: Optional[List[str]] = None,
         project: Optional[str] = None,
         limit: int = 100,
@@ -1420,6 +1445,7 @@ class MemoryGraph:
             ("session_id", session_id),
             ("owner_id", owner_id),
             ("source_conversation_id", source_conversation_id),
+            ("microchunk_id", microchunk_id),
         ]:
             if value is not None:
                 clauses.append(f"{column} = ?")
@@ -5879,6 +5905,7 @@ def _source_chunk_recall_payload(chunk: Dict[str, Any], *, max_chunk_tokens: int
         "next_chunk_id": chunk.get("next_chunk_id"),
         "message_id": chunk.get("message_id"),
         "message_pair_id": chunk.get("message_pair_id"),
+        "microchunk_id": chunk.get("microchunk_id"),
         "content_hash": chunk.get("content_hash"),
         "source_channel": chunk.get("source_channel"),
         "source_conversation_id": chunk.get("source_conversation_id"),
@@ -7100,6 +7127,7 @@ def _source_chunk_store_recall(
             "next_chunk_id": payload.get("next_chunk_id"),
             "message_id": payload.get("message_id"),
             "message_pair_id": payload.get("message_pair_id"),
+            "microchunk_id": payload.get("microchunk_id"),
             "content_hash": payload.get("content_hash"),
             "owner_id": chunk.get("owner_id"),
             "domains": _normalize_domains(payload.get("domains")),

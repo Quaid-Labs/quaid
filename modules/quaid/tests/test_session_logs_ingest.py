@@ -1,6 +1,6 @@
 import json
 import sys
-from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 from ingest import session_logs_ingest
 from lib.adapter import TestAdapter, reset_adapter, set_adapter
@@ -18,14 +18,9 @@ def test_ingest_from_transcript_path(monkeypatch, tmp_path):
     adapter = TestAdapter(tmp_path); set_adapter(adapter)
     monkeypatch.setenv("MEMORY_DB_PATH", str(tmp_path / "memory.db"))
 
-    captured = {}
-
-    def _fake_call(command, args):
-        captured["command"] = command
-        captured["args"] = list(args)
-        return {"status": "indexed", "session_id": "sess-a", "chunks": 1}
-
-    monkeypatch.setattr("ingest.session_logs_ingest._call_session_logs_cli", _fake_call)
+    fake_bridge = MagicMock()
+    fake_bridge.store_session_transcript.return_value = {"status": "indexed", "session_id": "sess-a", "chunks": 1}
+    monkeypatch.setattr("ingest.session_logs_ingest.get_session_memory_bridge", lambda: fake_bridge)
 
     transcript = tmp_path / "t.txt"
     transcript.write_text("User: hello\n\nAssistant: hi", encoding="utf-8")
@@ -44,50 +39,13 @@ def test_ingest_from_transcript_path(monkeypatch, tmp_path):
     )
 
     assert out["status"] == "indexed"
-    assert captured["command"] == "ingest"
-    assert "--session-id" in captured["args"]
-    assert "sess-a" in captured["args"]
-    assert "--owner" in captured["args"]
-    assert "quaid" in captured["args"]
-    assert "--source-channel" in captured["args"]
-    assert "telegram" in captured["args"]
-    assert "--conversation-id" in captured["args"]
-    assert "chat-42" in captured["args"]
-
-
-def test_call_session_logs_cli_includes_exit_code_and_streams(monkeypatch, tmp_path):
-    adapter = TestAdapter(tmp_path); set_adapter(adapter)
-
-    def _fake_run(*_args, **_kwargs):
-        return SimpleNamespace(returncode=7, stderr="boom", stdout="fallback")
-
-    monkeypatch.setattr("ingest.session_logs_ingest.subprocess.run", _fake_run)
-
-    try:
-        session_logs_ingest._call_session_logs_cli("ingest", ["--session-id", "s1"])
-    except RuntimeError as exc:
-        msg = str(exc)
-        assert "exit=7" in msg
-        assert "stderr: boom" in msg
-        assert "stdout: fallback" in msg
-    else:
-        raise AssertionError("expected RuntimeError")
-
-
-def test_call_session_logs_cli_uses_module_entrypoint(monkeypatch, tmp_path):
-    adapter = TestAdapter(tmp_path); set_adapter(adapter)
-    captured = {}
-
-    def _fake_run(cmd, **_kwargs):
-        captured["cmd"] = list(cmd)
-        return SimpleNamespace(returncode=0, stderr="", stdout='{"ok": true}')
-
-    monkeypatch.setattr("ingest.session_logs_ingest.subprocess.run", _fake_run)
-    out = session_logs_ingest._call_session_logs_cli("list", ["--limit", "5"])
-
-    assert out["ok"] is True
-    assert captured["cmd"][:3] == ["python3", "-m", "datastore.memorydb.session_logs"]
-    assert captured["cmd"][3:] == ["list", "--limit", "5"]
+    kwargs = fake_bridge.store_session_transcript.call_args.kwargs
+    assert kwargs["session_id"] == "sess-a"
+    assert kwargs["owner_id"] == "quaid"
+    assert kwargs["source_channel"] == "telegram"
+    assert kwargs["conversation_id"] == "chat-42"
+    assert kwargs["participant_ids"] == ["user:owner", "agent:quaid"]
+    assert kwargs["participant_aliases"] == {"operator-alias": "user:owner"}
 
 
 def test_normalize_participant_aliases_accepts_json_object_string():
@@ -106,27 +64,20 @@ def test_normalize_participant_aliases_rejects_non_object_json():
 
 def test_main_accepts_json_flag_for_list_and_load(monkeypatch, tmp_path, capsys):
     adapter = TestAdapter(tmp_path); set_adapter(adapter)
-    captured = []
-
-    def _fake_call(command, args):
-        captured.append((command, list(args)))
-        if command == "list":
-            return {"sessions": [{"session_id": "sess-json"}]}
-        return {"session": {"session_id": "sess-json"}}
-
-    monkeypatch.setattr("ingest.session_logs_ingest._call_session_logs_cli", _fake_call)
+    fake_bridge = MagicMock()
+    fake_bridge.list_session_transcripts.return_value = [{"session_id": "sess-json"}]
+    fake_bridge.load_session_transcript.return_value = {"session_id": "sess-json"}
+    monkeypatch.setattr("ingest.session_logs_ingest.get_session_memory_bridge", lambda: fake_bridge)
 
     monkeypatch.setattr(sys, "argv", ["session_logs_ingest.py", "list", "--limit", "1", "--json"])
     assert session_logs_ingest.main() == 0
     listed = json.loads(capsys.readouterr().out)
-    assert listed["sessions"][0]["session_id"] == "sess-json"
+    assert listed[0]["session_id"] == "sess-json"
 
     monkeypatch.setattr(sys, "argv", ["session_logs_ingest.py", "load", "--session-id", "sess-json", "--json"])
     assert session_logs_ingest.main() == 0
     loaded = json.loads(capsys.readouterr().out)
-    assert loaded["session"]["session_id"] == "sess-json"
+    assert loaded["session_id"] == "sess-json"
 
-    assert captured == [
-        ("list", ["--limit", "1"]),
-        ("load", ["--session-id", "sess-json"]),
-    ]
+    fake_bridge.list_session_transcripts.assert_called_once_with(limit=1, owner_id=None)
+    fake_bridge.load_session_transcript.assert_called_once_with(session_id="sess-json", owner_id=None)

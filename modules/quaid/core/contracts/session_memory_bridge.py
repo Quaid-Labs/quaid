@@ -34,9 +34,21 @@ class SessionMemoryBridgePort(Protocol):
         **kwargs: Any,
     ) -> List[Dict[str, Any]]: ...
 
+    def store_session_source_text(
+        self,
+        *,
+        text: str,
+        owner_id: str,
+        session_id: str,
+        source_id: Optional[str] = None,
+        **kwargs: Any,
+    ) -> List[Dict[str, Any]]: ...
+
     def list_session_chunks(self, *, owner_id: str, **kwargs: Any) -> List[Dict[str, Any]]: ...
 
     def get_session_chunk(self, chunk_id: str, *, owner_id: str, **kwargs: Any) -> Optional[Dict[str, Any]]: ...
+
+    def expand_microchunk(self, microchunk_id: str, *, owner_id: str, **kwargs: Any) -> Optional[Dict[str, Any]]: ...
 
     def list_session_transcripts(self, *, owner_id: Optional[str] = None, limit: int = 5) -> List[Dict[str, Any]]: ...
 

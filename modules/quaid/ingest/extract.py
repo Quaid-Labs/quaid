@@ -360,6 +360,9 @@ class _LazySessionMemoryBridge:
     def store_session_chunks(self, *args, **kwargs):
         return self._svc().store_session_chunks(*args, **kwargs)
 
+    def store_session_source_text(self, *args, **kwargs):
+        return self._svc().store_session_source_text(*args, **kwargs)
+
     def list_session_chunks(self, *args, **kwargs):
         return self._svc().list_session_chunks(*args, **kwargs)
 
@@ -375,7 +378,7 @@ MIN_EXTRACT_RETRY_TOKENS = 4000
 MAX_EXTRACT_SPLIT_DEPTH = 4
 DEFAULT_EXTRACT_PUBLISH_BATCH_SIZE = 100
 MIN_REPAIR_OUTPUT_TOKENS = 4096
-DEFAULT_SESSION_MICROCHUNK_TOKENS = 1200
+DEFAULT_SESSION_MICROCHUNK_TOKENS = 40
 _SOUL_SNIPPETS_MODULE = None
 
 
@@ -417,59 +420,9 @@ def _split_session_source_microchunks(
     max_tokens: int = DEFAULT_SESSION_MICROCHUNK_TOKENS,
 ) -> List[str]:
     """Split persisted session evidence into embedding-safe microchunks."""
-    normalized = str(text or "").strip()
-    if not normalized:
-        return []
-    try:
-        limit = int(max_tokens)
-    except Exception:
-        limit = DEFAULT_SESSION_MICROCHUNK_TOKENS
-    limit = max(128, limit)
-    if estimate_tokens(normalized) <= limit:
-        return [normalized]
+    from lib.session_text import split_microchunks
 
-    from lib.batch_utils import chunk_by_tokens, chunk_text_by_tokens
-
-    out: List[str] = []
-
-    def _append_bounded(piece: str) -> None:
-        piece = str(piece or "").strip()
-        if not piece:
-            return
-        if estimate_tokens(piece) <= limit:
-            out.append(piece)
-            return
-        line_chunks = chunk_text_by_tokens(piece, max_tokens=limit, split_on="\n")
-        if len(line_chunks) > 1:
-            for line_chunk in line_chunks:
-                _append_bounded(line_chunk)
-            return
-        words = piece.split()
-        if not words:
-            return
-        bounded_words: List[str] = []
-        for word in words:
-            if estimate_tokens(word) <= limit:
-                bounded_words.append(word)
-                continue
-            current = ""
-            for char in word:
-                candidate = current + char
-                if current and estimate_tokens(candidate) > limit:
-                    bounded_words.append(current)
-                    current = char
-                else:
-                    current = candidate
-            if current:
-                bounded_words.append(current)
-        for word_chunk in chunk_by_tokens(bounded_words, max_tokens=limit, separator=" "):
-            chunk_text = " ".join(word_chunk).strip()
-            if chunk_text:
-                out.append(chunk_text)
-
-    for paragraph_chunk in chunk_text_by_tokens(normalized, max_tokens=limit, split_on="\n\n"):
-        _append_bounded(paragraph_chunk)
-    return out or [normalized]
+    return split_microchunks(text, max_tokens=max_tokens)
 
 
 def _source_chunk_match_tokens(text: Any) -> set[str]:
@@ -588,21 +541,20 @@ def _store_payload_source_chunks(
                 max_existing_index = -1
             session_chunk_offsets[owner_session_key] = max_existing_index + 1
         next_chunk_index = session_chunk_offsets[owner_session_key]
-        microchunks = _split_session_source_microchunks(text)
-        if not microchunks:
-            continue
         try:
-            stored_rows = _session_bridge.store_session_chunks(
-                chunks=microchunks,
+            stored_rows = _session_bridge.store_session_source_text(
+                text=text,
                 owner_id=owner_id,
                 source_id=source_key,
                 session_id=chunk_session_id,
                 start_index=next_chunk_index,
+                chunk_index=int(raw.get("chunk_index", next_chunk_index) or next_chunk_index),
                 chunk_kind="micro",
                 source_channel=raw.get("source_channel") or source_channel,
                 source_conversation_id=chunk_source_conversation_id,
                 conversation_id=raw.get("conversation_id") or chunk_source_conversation_id,
                 source_author_id=raw.get("source_author_id") or source_author_id,
+                max_microchunk_tokens=DEFAULT_SESSION_MICROCHUNK_TOKENS,
             )
         except Exception as exc:
             if is_fail_hard_enabled():
