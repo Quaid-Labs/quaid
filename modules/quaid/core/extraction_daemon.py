@@ -1217,6 +1217,13 @@ def write_cursor(
             existing_size_bytes
             and current_size_bytes < existing_size_bytes
         )
+        # Internal cursors mark content that was skipped rather than extracted.
+        # If that file later grows, a lower offset may be the correct recovery
+        # path so the newly meaningful transcript can be re-buffered in full.
+        source_grew_after_internal_skip = bool(
+            existing.get("internal")
+            and current_size_bytes > existing_size_bytes
+        )
         same_size_rebased = False
         if existing_size_bytes and current_size_bytes == existing_size_bytes:
             current_mtime_ns = int(current_stat.get("mtime_ns", 0) or 0)
@@ -1233,7 +1240,7 @@ def write_cursor(
                 or (existing_inode and current_inode and current_inode != existing_inode)
                 or (existing_device and current_device and current_device != existing_device)
             )
-        source_rebased = source_shrank or same_size_rebased
+        source_rebased = source_shrank or same_size_rebased or source_grew_after_internal_skip
         if same_source and int(line_offset) < existing_offset and not source_rebased:
             logger.warning(
                 "refusing to rewind cursor %s for unchanged transcript source "
@@ -3845,7 +3852,10 @@ def _reconcile_internal_cursor_state(
 
     if cursor_internal:
         rebased_offset = cursor_offset
-        if total_lines <= cursor_offset and (not source_unchanged or not size_unchanged):
+        if not source_unchanged or not size_unchanged:
+            # Internal cursors are advanced without extraction. Once the same
+            # session becomes meaningful after a transcript rewrite or append,
+            # the frozen EOF offset is no longer trustworthy.
             rebased_offset = 0
         write_cursor(
             session_id,

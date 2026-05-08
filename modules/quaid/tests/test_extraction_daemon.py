@@ -3561,12 +3561,13 @@ def test_check_chunk_ready_sessions_unfreezes_internal_cursor_when_real_turn_arr
     sys.modules["lib.adapter"] = fake_adapter_mod
 
     captured = []
+    buffered_from_lines = []
     monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
     monkeypatch.setattr(extraction_daemon, "read_rolling_state", lambda _sid: {})
-    monkeypatch.setattr(
-        extraction_daemon,
-        "_buffer_transcript_tail",
-        lambda path, from_line, state, adapter=None, **kwargs: (
+
+    def fake_buffer_transcript_tail(path, from_line, state, adapter=None, **kwargs):
+        buffered_from_lines.append(from_line)
+        return (
             {
                 "buffered_line_offset": initial_lines + 1,
                 "semantic_buffer": "User: My sister Clara likes alpacas, lives in Boise, and runs a kiln studio every weekend.",
@@ -3578,8 +3579,9 @@ def test_check_chunk_ready_sessions_unfreezes_internal_cursor_when_real_turn_arr
                 "semantic_tokens_added": 12,
                 "buffered_line_offset": initial_lines + 1,
             },
-        ),
-    )
+        )
+
+    monkeypatch.setattr(extraction_daemon, "_buffer_transcript_tail", fake_buffer_transcript_tail)
     monkeypatch.setattr(extraction_daemon, "write_rolling_state", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
         extraction_daemon,
@@ -3603,8 +3605,9 @@ def test_check_chunk_ready_sessions_unfreezes_internal_cursor_when_real_turn_arr
             sys.modules.pop("lib.adapter", None)
 
     cursor = extraction_daemon.read_cursor(session_id)
-    assert cursor["line_offset"] == initial_lines
+    assert cursor["line_offset"] == 0
     assert cursor["internal"] is False
+    assert buffered_from_lines == [0]
     assert captured == [
         {
             "signal_type": "rolling",
@@ -3714,9 +3717,9 @@ def test_check_chunk_ready_sessions_flushes_subthreshold_tail_after_internal_cur
         str(transcript_path),
         cursor_data=cursor,
     )
-    assert cursor["line_offset"] == initial_lines
+    assert cursor["line_offset"] == 0
     assert cursor["internal"] is False
-    assert buffered_from_lines == [initial_lines]
+    assert buffered_from_lines == [0]
     assert captured == [
         {
             "signal_type": "session_end",
