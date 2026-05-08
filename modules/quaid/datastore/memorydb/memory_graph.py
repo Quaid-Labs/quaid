@@ -15382,6 +15382,7 @@ def recall_fast(
                         "compaction_time": compaction_time,
                         "date_from": date_from,
                         "date_to": date_to,
+                        "temporal_dimension": temporal_dimension,
                         "source_channel": source_channel,
                         "source_conversation_id": source_conversation_id,
                         "source_author_id": source_author_id,

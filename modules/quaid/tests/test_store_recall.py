@@ -5032,6 +5032,76 @@ class TestRecallTelemetry:
         assert meta["quality_gate"]["fast_drill_queries"] == run_calls[1]["planned_queries"]
         assert meta["phases_ms"]["fast_drill_wall_ms"] == 90
 
+    def test_recall_fast_passes_temporal_dimension_to_fast_drill_store_plan(self):
+        import datastore.memorydb.memory_graph as mg
+
+        seen_dimensions = []
+
+        def _fake_run(query, *, stores, limit, owner_id, min_similarity, planner_profile, planned_queries, planner_meta, fast_mode, graph_depth, common_kwargs):
+            seen_dimensions.append((common_kwargs or {}).get("temporal_dimension"))
+            if len(seen_dimensions) == 1:
+                return (
+                    [{"id": "first", "text": "Initial low-overlap row", "category": "fact", "similarity": 0.72}],
+                    {"phases_ms": {"total_ms": 50, "store_plan_wall_ms": 50}, "turn_details": [{"turn": 1}]},
+                    None,
+                )
+            return (
+                [{"id": "second", "text": "Fast-drill validated row", "category": "fact", "similarity": 0.88}],
+                {"phases_ms": {"total_ms": 40, "store_plan_wall_ms": 40}, "store_runs": [{"store": "vector", "result_count": 1}]},
+                None,
+            )
+
+        with patch.object(
+            mg,
+            "_recall_store_plan_timeout_s",
+            return_value=5.0,
+        ), patch.object(
+            mg,
+            "_plan_fanout_queries",
+            return_value=(
+                ["When did the ledger change?"],
+                {
+                    "query": "When did the ledger change?",
+                    "used_llm": False,
+                    "bailout_reason": "preserve_short_exact_query",
+                    "queries_count": 1,
+                    "elapsed_ms": 20,
+                    "query_shape": "focused",
+                    "planned_stores": ["vector"],
+                    "planned_project": None,
+                },
+            ),
+        ), patch.object(
+            mg,
+            "_run_recall_store_plan",
+            side_effect=_fake_run,
+        ), patch.object(
+            mg,
+            "_should_fast_drill_follow_up",
+            return_value=(
+                True,
+                {"ready": True, "needs_validation": True, "overlap_ratio": 0.5},
+                ["preserved_exact_low_overlap"],
+                "GENERAL",
+            ),
+        ), patch.object(
+            mg,
+            "_build_fast_drill_fallback_queries",
+            return_value=["When did the ledger change?", "ledger change occurred date"],
+        ), patch.object(
+            mg,
+            "_evaluate_quality_gate_readiness",
+            return_value={"ready": True, "needs_validation": False},
+        ):
+            rows, _meta = mg.recall_fast(
+                "When did the ledger change?",
+                temporal_dimension="occurred",
+                return_meta=True,
+            )
+
+        assert rows[0]["id"] == "second"
+        assert seen_dimensions == ["occurred", "occurred"]
+
     def test_build_fast_drill_fallback_queries_prefers_assistant_anchor_when_assistant_coverage_is_missing(self):
         import datastore.memorydb.memory_graph as mg
 
