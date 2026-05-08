@@ -3831,6 +3831,8 @@ def _reconcile_internal_cursor_state(
 
     if cursor_internal and total_lines <= cursor_offset and source_unchanged and size_unchanged:
         return "frozen"
+    if not cursor_internal and total_lines <= 0 and current_size_bytes <= 0:
+        return "not_internal"
 
     transcript_class = _classify_transcript_session(session_id, transcript_path, adapter=adapter)
     if transcript_class == _TRANSCRIPT_CLASS_INTERNAL_MAINTENANCE:
