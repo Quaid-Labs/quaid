@@ -29,6 +29,12 @@ class _OwnedTestAdapterMixin:
         return home
 
 
+def _stub_successful_session_logs_ingest(monkeypatch):
+    import core.ingest_runtime as ingest_runtime
+
+    monkeypatch.setattr(ingest_runtime, "run_session_logs_ingest", lambda **_kwargs: {"status": "indexed"})
+
+
 def test_daemon_loop_preserves_signal_when_processing_raises(monkeypatch):
     signal_payload = {"session_id": "sess-1", "type": "reset"}
     marked = []
@@ -1566,6 +1572,7 @@ def test_process_signal_allows_current_instance_cursor_owned_transcript(monkeypa
 
     monkeypatch.setenv("QUAID_HOME", str(tmp_path))
     monkeypatch.setenv("QUAID_INSTANCE", "codex-m13test")
+    _stub_successful_session_logs_ingest(monkeypatch)
     transcript_path = tmp_path / "rollout-2026-04-26T18-43-04-old-thread.jsonl"
     transcript_path.write_text(
         (
@@ -1660,6 +1667,7 @@ def test_process_signal_uses_cursor_transcript_when_signal_path_missing(monkeypa
 
     monkeypatch.setenv("QUAID_HOME", str(tmp_path))
     monkeypatch.setenv("QUAID_INSTANCE", "pytest-runner")
+    _stub_successful_session_logs_ingest(monkeypatch)
     monkeypatch.setattr(
         extraction_daemon,
         "read_cursor",
@@ -2767,6 +2775,7 @@ def test_process_signal_merges_subagent_transcript_with_per_turn_labels(monkeypa
     set_adapter(_FakeAdapter())
 
     monkeypatch.setattr(extraction_daemon, "_get_owner_id", lambda: "owner-1")
+    _stub_successful_session_logs_ingest(monkeypatch)
     monkeypatch.setattr(extraction_daemon, "read_cursor", lambda sid: {"line_offset": 0, "transcript_path": str(parent_path)})
     monkeypatch.setattr(extraction_daemon, "count_transcript_lines", lambda p: 1)
     monkeypatch.setattr(extraction_daemon, "read_transcript_slice", lambda path, from_line: ['{"role":"user","content":"hello"}\n'])
@@ -3633,6 +3642,7 @@ def test_process_signal_unfreezes_internal_cursor_when_real_turn_arrives_after_s
 
     monkeypatch.setenv("QUAID_HOME", str(tmp_path))
     monkeypatch.setenv("QUAID_INSTANCE", "pytest-runner")
+    _stub_successful_session_logs_ingest(monkeypatch)
     extraction_daemon.write_cursor(session_id, initial_lines, str(transcript_path), internal=True)
 
     with transcript_path.open("a", encoding="utf-8") as handle:
@@ -4397,6 +4407,7 @@ class TestSignalRoundTrip:
 
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
         monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
+        _stub_successful_session_logs_ingest(monkeypatch)
 
         shared_uuid = "12345678-1234-1234-1234-1234567890ab"
         transcript_path = tmp_path / f"rollout-20260418-{shared_uuid}.jsonl"

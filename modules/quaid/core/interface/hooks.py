@@ -623,9 +623,7 @@ def _write_prompt_model_probe_state(payload: Dict[str, Any]) -> None:
 
 
 def _validate_prompt_model_config_for_hook(adapter_id: str) -> str:
-    """Return an inline provider notice when Codex prompt-time config is broken."""
-    if str(adapter_id or "").strip().lower() != "codex":
-        return ""
+    """Return an inline provider notice when the active adapter opts into probing."""
     if not bool(_adapter_capability("prompt_model_config_probe", False)):
         return ""
     fingerprint = _runtime_config_fingerprint()
