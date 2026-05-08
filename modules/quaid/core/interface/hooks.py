@@ -35,6 +35,7 @@ from typing import Any, Dict, List
 
 logger = logging.getLogger(__name__)
 _HOOK_RUNTIME_CONFIG_SNAPSHOT: tuple[tuple[str, int], ...] | None = None
+_PROMPT_MODEL_CONFIG_PROBE_TIMEOUT_SECONDS = 8
 _RULES_FILE_PREFIX = "quaid-"
 _LEGACY_RULES_FILE = "quaid-projects.md"
 _COMPACT_IDENTITY_CONTEXT_MAX_CHARS = 9000
@@ -644,7 +645,7 @@ def _validate_prompt_model_config_for_hook(adapter_id: str) -> str:
         call_fast_reasoning(
             "Reply with OK only.",
             max_tokens=4,
-            timeout=20,
+            timeout=_PROMPT_MODEL_CONFIG_PROBE_TIMEOUT_SECONDS,
             system_prompt="You are a Quaid model configuration health check.",
             max_retries=0,
         )
