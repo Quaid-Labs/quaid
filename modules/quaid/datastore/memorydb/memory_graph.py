@@ -1349,15 +1349,23 @@ class MemoryGraph:
                 continue
             per_kwargs = dict(kwargs)
             if message_pair_ids is not None:
-                try:
-                    per_kwargs["message_pair_id"] = message_pair_ids[offset]
-                except (IndexError, TypeError):
+                if offset >= len(message_pair_ids):
+                    msg = "store_source_chunks received fewer message_pair_ids than non-empty chunks"
+                    if _is_fail_hard_mode():
+                        raise RuntimeError(msg)
+                    logger.error("%s; dropping pair link for session_id=%s offset=%s", msg, session_id, offset)
                     per_kwargs["message_pair_id"] = None
+                else:
+                    per_kwargs["message_pair_id"] = message_pair_ids[offset]
             if microchunk_ids is not None:
-                try:
-                    per_kwargs["microchunk_id"] = microchunk_ids[offset]
-                except (IndexError, TypeError):
+                if offset >= len(microchunk_ids):
+                    msg = "store_source_chunks received fewer microchunk_ids than non-empty chunks"
+                    if _is_fail_hard_mode():
+                        raise RuntimeError(msg)
+                    logger.error("%s; dropping microchunk link for session_id=%s offset=%s", msg, session_id, offset)
                     per_kwargs["microchunk_id"] = None
+                else:
+                    per_kwargs["microchunk_id"] = microchunk_ids[offset]
             out.append(
                 self.store_source_chunk(
                     text,

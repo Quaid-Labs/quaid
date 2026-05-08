@@ -21,10 +21,12 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from lib.config import get_session_db_path
 from lib.database import get_connection
+from lib.fail_policy import is_fail_hard_enabled
 from lib.session_text import DEFAULT_MICROCHUNK_TOKENS, parse_message_pairs, split_microchunks
 from lib.tokens import estimate_tokens
 
 logger = logging.getLogger(__name__)
+
 
 def _utcnow_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -215,7 +217,10 @@ def _session_summary(row: Any) -> Dict[str, Any]:
     for key, fallback in [("participant_ids", []), ("participant_aliases", {})]:
         try:
             data[key] = json.loads(data.get(key) or json.dumps(fallback))
-        except Exception:
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            if is_fail_hard_enabled():
+                raise RuntimeError(f"sessiondb row has invalid JSON in {key}") from exc
+            logger.warning("sessiondb row has invalid JSON in %s; using %r: %s", key, fallback, exc)
             data[key] = fallback
     return data
 
@@ -262,7 +267,10 @@ def _latest_tail_pair(conn, *, owner_id: str, session_id: str, exclude_pair_ids:
         params,
     ).fetchall()
     if len(rows) > 1:
-        raise RuntimeError(f"session pair chain has multiple tails for session_id={session_id}")
+        raise RuntimeError(
+            f"session pair chain has multiple tails for session_id={session_id}; "
+            "this is a hard SessionDB invariant and cannot be repaired safely in-line"
+        )
     return str(rows[0]["pair_id"]) if rows else None
 
 
@@ -319,8 +327,8 @@ def store_session_source_text(
                     _clean(conversation_id or source_conversation_id) or None,
                     len(pairs),
                     pairs[0]["user_text"][:140] if pairs else "",
-                    None,
-                    None,
+                    body,
+                    content,
                     now,
                     now,
                 ),
@@ -466,12 +474,14 @@ def store_session_source_text(
     finally:
         try:
             os.close(lock_fd)
-        except Exception:
-            pass
+        except OSError as exc:
+            logger.error("failed to close sessiondb lock fd for session_id=%s: %s", sid, exc)
         try:
             os.unlink(lock_file)
-        except Exception:
+        except FileNotFoundError:
             pass
+        except OSError as exc:
+            logger.error("failed to remove sessiondb lock file %s for session_id=%s: %s", lock_file, sid, exc)
 
 
 def index_session_log(

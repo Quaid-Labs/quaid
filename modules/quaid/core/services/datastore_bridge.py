@@ -8,11 +8,13 @@ links remain owned by the datastores themselves.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 from threading import RLock
 from typing import Any, Callable, Dict, Iterable, Mapping, Set
 
 
 Callback = Callable[..., Any]
+logger = logging.getLogger(__name__)
 
 
 def _name(value: Any, *, label: str) -> str:
@@ -70,6 +72,8 @@ class DatastoreBridge:
         with self._lock:
             if not replace and store_name in self._stores:
                 raise RuntimeError(f"Datastore bridge store already registered: {store_name}")
+            if replace and store_name in self._stores:
+                logger.warning("Datastore bridge replacing existing store registration: %s", store_name)
             self._stores[store_name] = registration
         return registration
 
