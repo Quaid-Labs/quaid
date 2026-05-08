@@ -3209,6 +3209,39 @@ class TestSourceChunkStorage:
         assert rows[0]["domains"] == ["personal"]
         assert rows[0]["project"] == "life-log"
 
+    def test_store_source_chunk_backfills_links_on_existing_content(self, tmp_path):
+        """SessionDB projection can attach microchunk ids to prior extracted chunks."""
+        graph, _db_file = _make_graph(tmp_path)
+
+        first = graph.store_source_chunk(
+            "User: Rowan keeps the spare badge in the cedar box.",
+            owner_id="rowan",
+            source_id="session-file-backfill",
+            session_id="session-backfill",
+            chunk_index=0,
+            embed=False,
+        )
+        second = graph.store_source_chunk(
+            "User: Rowan keeps the spare badge in the cedar box.",
+            owner_id="rowan",
+            source_id="session-file-backfill",
+            session_id="session-backfill",
+            chunk_index=0,
+            parent_chunk_id="sessiondb-chunk-1",
+            message_pair_id="pair-backfill-1",
+            microchunk_id="micro-backfill-1",
+            embed=False,
+        )
+
+        assert second["status"] == "existing"
+        assert second["chunk_id"] == first["chunk_id"]
+        assert second["parent_chunk_id"] == "sessiondb-chunk-1"
+        assert second["message_pair_id"] == "pair-backfill-1"
+        assert second["microchunk_id"] == "micro-backfill-1"
+        rows = graph.list_source_chunks(owner_id="rowan", session_id="session-backfill")
+        assert len(rows) == 1
+        assert rows[0]["microchunk_id"] == "micro-backfill-1"
+
     def test_store_source_chunk_changed_content_appends_new_row(self, tmp_path):
         """Changed content at the same source/index creates a new append-only chunk."""
         graph, _db_file = _make_graph(tmp_path)

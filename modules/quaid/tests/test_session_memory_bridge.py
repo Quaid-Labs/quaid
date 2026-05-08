@@ -180,6 +180,46 @@ def test_bridge_projects_sessiondb_microchunks_to_memorydb(monkeypatch, tmp_path
     assert expanded["window"]
 
 
+def test_bridge_projects_indexed_session_transcript_microchunks(monkeypatch, tmp_path):
+    from core.services.datastore_bridge import DatastoreBridge
+    from core.services.session_memory_bridge import DatastoreSessionMemoryBridge
+    from datastore.memorydb.memory_graph import MemoryGraph
+    from datastore.sessiondb import session_store
+
+    monkeypatch.setenv("MEMORY_DB_PATH", str(tmp_path / "memory.db"))
+    monkeypatch.setenv("SESSION_DB_PATH", str(tmp_path / "session.db"))
+    memory = MemoryGraph(db_path=tmp_path / "memory.db")
+    bridge = DatastoreSessionMemoryBridge(memory_service=memory, datastore_bridge=DatastoreBridge())
+
+    result = bridge.store_session_transcript(
+        session_id="sess-transcript",
+        transcript=(
+            "User: Mira left the kiln key inside the green ledger.\n"
+            "Assistant: I will remember that.\n"
+            "User: Tomas keeps the clay receipt in drawer two."
+        ),
+        owner_id="owner-transcript",
+        label="daemon-session_end",
+        source_path="/tmp/sess-transcript.jsonl",
+        source_channel="openclaw",
+        conversation_id="room-transcript",
+        message_count=4,
+    )
+
+    assert result["status"] == "indexed"
+    assert result["microchunks_stored"] > 0
+    rows = memory.list_session_chunks(owner_id="owner-transcript", session_id="sess-transcript")
+    assert rows
+    assert all(row["microchunk_id"] for row in rows)
+    assert all(row["message_pair_id"] for row in rows)
+    assert {row["source_channel"] for row in rows} == {"openclaw"}
+    first_micro = session_store.fetch_microchunk(
+        microchunk_id=rows[0]["microchunk_id"],
+        owner_id="owner-transcript",
+    )
+    assert first_micro["memory_chunk_id"] == rows[0]["chunk_id"]
+
+
 def test_sessiondb_appends_pair_chain_across_extraction_boundaries(monkeypatch, tmp_path):
     from datastore.sessiondb import session_store
 

@@ -568,6 +568,9 @@ def index_session_log(
         "status": "unchanged" if prev and str(prev["content_hash"]) == content else "indexed",
         "session_id": sid,
         "message_count": msg_count,
+        "chunk": chunk_result.get("chunk") or {},
+        "pairs": list(chunk_result.get("pairs") or []),
+        "microchunks": list(chunk_result.get("microchunks") or []),
         "pairs_stored": len(chunk_result.get("pairs") or []),
         "microchunks_stored": len(chunk_result.get("microchunks") or []),
     }

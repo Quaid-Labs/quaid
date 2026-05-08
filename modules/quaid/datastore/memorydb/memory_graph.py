@@ -1320,6 +1320,24 @@ class MemoryGraph:
                     chunk.updated_at or now_iso,
                 ),
             )
+            if cursor.rowcount <= 0 and (parent_chunk_id or message_pair_id or microchunk_id):
+                active_conn.execute(
+                    """
+                    UPDATE source_chunks
+                    SET parent_chunk_id = COALESCE(NULLIF(parent_chunk_id, ''), ?),
+                        message_pair_id = COALESCE(NULLIF(message_pair_id, ''), ?),
+                        microchunk_id = COALESCE(NULLIF(microchunk_id, ''), ?),
+                        updated_at = ?
+                    WHERE chunk_id = ?
+                    """,
+                    (
+                        parent_chunk_id,
+                        message_pair_id,
+                        microchunk_id,
+                        now_iso,
+                        chunk.chunk_id,
+                    ),
+                )
             row = active_conn.execute(
                 "SELECT * FROM source_chunks WHERE chunk_id = ?",
                 (chunk.chunk_id,),

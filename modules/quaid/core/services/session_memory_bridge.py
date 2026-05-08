@@ -178,7 +178,7 @@ class DatastoreSessionMemoryBridge(SessionMemoryBridgePort):
         text = str(transcript or "").strip()
         if not text:
             return {"status": "skipped", "reason": "empty_transcript", "session_id": sid}
-        return self._datastore_bridge.call(
+        result = self._datastore_bridge.call(
             "sessiondb",
             "store_session_transcript",
             session_id=sid,
@@ -193,6 +193,21 @@ class DatastoreSessionMemoryBridge(SessionMemoryBridgePort):
             message_count=int(message_count or 0),
             topic_hint=_clean(topic_hint),
         )
+        if isinstance(result, dict) and result.get("status") not in {"skipped"}:
+            self._project_sessiondb_microchunks_to_memorydb(
+                session_result=result,
+                owner_id=_owner(owner_id),
+                session_id=sid,
+                source_id=_optional(source_path) or sid,
+                source_channel=source_channel,
+                source_conversation_id=conversation_id,
+                conversation_id=conversation_id,
+                source_author_id=None,
+                start_index=0,
+                chunk_kind="micro",
+                embed=False,
+            )
+        return result
 
     def index_session_log(self, **kwargs: Any) -> Dict[str, Any]:
         """Compatibility alias for callers that use indexing terminology."""
@@ -264,15 +279,47 @@ class DatastoreSessionMemoryBridge(SessionMemoryBridgePort):
         microchunks = [row for row in list((session_result or {}).get("microchunks") or []) if isinstance(row, dict)]
         if not microchunks:
             return []
+        return self._project_sessiondb_microchunks_to_memorydb(
+            session_result=session_result or {},
+            owner_id=owner,
+            session_id=sid,
+            source_id=_optional(source_id) or sid,
+            source_channel=source_channel,
+            source_conversation_id=source_conversation_id,
+            conversation_id=conversation_id,
+            source_author_id=source_author_id,
+            start_index=int(start_index or 0),
+            chunk_kind="micro",
+            **kwargs,
+        )
+
+    def _project_sessiondb_microchunks_to_memorydb(
+        self,
+        *,
+        session_result: Dict[str, Any],
+        owner_id: str,
+        session_id: str,
+        source_id: Optional[str],
+        source_channel: Optional[str],
+        source_conversation_id: Optional[str],
+        conversation_id: Optional[str],
+        source_author_id: Optional[str],
+        start_index: int,
+        chunk_kind: str,
+        **kwargs: Any,
+    ) -> List[Dict[str, Any]]:
+        microchunks = [row for row in list((session_result or {}).get("microchunks") or []) if isinstance(row, dict)]
+        if not microchunks:
+            return []
         memory_rows = self._datastore_bridge.call(
             "memorydb",
             "store_session_chunks",
             chunks=[str(row.get("text") or "") for row in microchunks],
-            owner_id=owner,
-            source_id=_optional(source_id) or sid,
-            session_id=sid,
+            owner_id=owner_id,
+            source_id=_optional(source_id) or session_id,
+            session_id=session_id,
             start_index=int(start_index or 0),
-            chunk_kind="micro",
+            chunk_kind=chunk_kind,
             parent_chunk_id=str(((session_result or {}).get("chunk") or {}).get("chunk_id") or "").strip() or None,
             message_pair_ids=[str(row.get("pair_id") or "").strip() or None for row in microchunks],
             microchunk_ids=[str(row.get("microchunk_id") or "").strip() or None for row in microchunks],
@@ -294,7 +341,7 @@ class DatastoreSessionMemoryBridge(SessionMemoryBridgePort):
                     "attach_memory_chunk",
                     microchunk_id=microchunk_id,
                     memory_chunk_id=memory_chunk_id,
-                    owner_id=owner,
+                    owner_id=owner_id,
                 )
             item = dict(memory_row)
             item.setdefault("microchunk_id", microchunk_id)
