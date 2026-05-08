@@ -3831,9 +3831,6 @@ def _reconcile_internal_cursor_state(
 
     if cursor_internal and total_lines <= cursor_offset and source_unchanged and size_unchanged:
         return "frozen"
-    if not cursor_internal and total_lines <= 0 and current_size_bytes <= 0:
-        return "not_internal"
-
     transcript_class = _classify_transcript_session(session_id, transcript_path, adapter=adapter)
     if transcript_class == _TRANSCRIPT_CLASS_INTERNAL_MAINTENANCE:
         if not advance_internal:
@@ -5683,16 +5680,34 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
             cursor_data=data,
         ):
             continue
+        current_size_bytes = _transcript_size_bytes(str(transcript_path))
+        cursor_size_bytes = int(data.get("transcript_size_bytes", 0) or 0)
+        transcript_grew_since_cursor = current_size_bytes > cursor_size_bytes
         internal_state = _reconcile_internal_cursor_state(
             session_id,
             transcript_path,
             cursor_data=data,
             cursor_key=str(data.get("cursor_key") or "").strip() or None,
             adapter=adapter,
+            advance_internal=not transcript_grew_since_cursor,
         )
         if internal_state == "frozen":
             continue
         if internal_state == "advanced":
+            if transcript_grew_since_cursor:
+                write_cursor(
+                    session_id,
+                    int(data.get("line_offset", 0) or 0),
+                    str(transcript_path),
+                    internal=False,
+                    source_key=str(data.get("cursor_key") or "").strip() or None,
+                )
+                logger.info(
+                    "session %s appears internal maintenance-only during idle scan; "
+                    "leaving cursor offset unchanged because transcript grew since cursor",
+                    session_id,
+                )
+                continue
             logger.info(
                 "session %s marked internal maintenance-only during idle scan; "
                 "advancing cursor to EOF and skipping timeout (transcript=%s, "
@@ -5736,7 +5751,7 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
             "cursor_offset": int(data.get("line_offset", 0) or 0),
             "cursor_size_bytes": int(data.get("transcript_size_bytes", 0) or 0),
             "has_cursor_size_bytes": "transcript_size_bytes" in data,
-            "current_size_bytes": _transcript_size_bytes(transcript_path),
+            "current_size_bytes": current_size_bytes,
             "mtime": mtime,
             "cursor_data": data,
         })

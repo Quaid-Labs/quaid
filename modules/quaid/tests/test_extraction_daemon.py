@@ -2652,30 +2652,36 @@ def test_check_idle_sessions_advances_internal_session_cursor_to_eof(monkeypatch
     assert cursor["internal"] is True
 
 
-def test_check_idle_sessions_does_not_freeze_empty_session(monkeypatch, tmp_path):
+def test_check_idle_sessions_does_not_freeze_parse_empty_growth(monkeypatch, tmp_path):
     import sys
     import types
 
-    transcript_path = tmp_path / "empty-session.jsonl"
+    transcript_path = tmp_path / "parse-empty-grown-session.jsonl"
     transcript_path.write_text("", encoding="utf-8")
 
     monkeypatch.setenv("QUAID_HOME", str(tmp_path))
     monkeypatch.setenv("QUAID_INSTANCE", "pytest-runner")
-    extraction_daemon.write_cursor("sess-empty-initial", 0, str(transcript_path))
+    session_id = "sess-parse-empty-grown"
+    extraction_daemon.write_cursor(session_id, 0, str(transcript_path))
+    transcript_path.write_text(
+        '{"role":"user","content":"new startup row not parseable yet"}\n',
+        encoding="utf-8",
+    )
 
     real_adapter = sys.modules.get("lib.adapter")
     fake_adapter_mod = types.ModuleType("lib.adapter")
 
-    class _FailIfParsedAdapter(_OwnedTestAdapterMixin):
+    class _ParseEmptyAdapter(_OwnedTestAdapterMixin):
         def parse_session_jsonl(self, path):
-            raise AssertionError(f"empty session should not be classified as internal: {path}")
+            assert path == transcript_path
+            return ""
 
-    fake_adapter_mod.get_adapter = lambda: _FailIfParsedAdapter()
+    fake_adapter_mod.get_adapter = lambda: _ParseEmptyAdapter()
     sys.modules["lib.adapter"] = fake_adapter_mod
 
     captured = []
     now = 1_700_000_000.0
-    os.utime(transcript_path, (now, now))
+    os.utime(transcript_path, (now - 120, now - 120))
     monkeypatch.setattr(extraction_daemon.time, "time", lambda: now)
     monkeypatch.setattr(extraction_daemon, "_read_installed_at", lambda: 0.0)
     monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
@@ -2693,10 +2699,10 @@ def test_check_idle_sessions_does_not_freeze_empty_session(monkeypatch, tmp_path
         else:
             sys.modules.pop("lib.adapter", None)
 
-    cursor = extraction_daemon.read_cursor("sess-empty-initial")
+    cursor = extraction_daemon.read_cursor(session_id)
     assert captured == []
     assert cursor["line_offset"] == 0
-    assert cursor["transcript_size_bytes"] == 0
+    assert cursor["transcript_size_bytes"] > 0
     assert not cursor.get("internal")
 
 
