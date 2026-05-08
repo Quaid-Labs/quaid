@@ -213,3 +213,45 @@ def test_quaid_cli_ignores_stale_inherited_quaid_home_when_installed_home_exists
     assert "cd:" not in result.stderr
     assert str(installed_home / "shared" / "config" / "global" / "config.json") in result.stderr
     assert str(visible_home) not in result.stderr
+
+
+def test_quaid_session_expand_microchunk_cli(tmp_path: Path, monkeypatch) -> None:
+    from datastore.sessiondb import session_store
+
+    repo_root = Path(__file__).resolve().parents[1]
+    quaid_bin = repo_root / "quaid"
+
+    home = tmp_path / "home"
+    quaid_home = home / ".quaid"
+    quaid_home.mkdir(parents=True)
+    session_db = tmp_path / "session.db"
+    monkeypatch.setenv("SESSION_DB_PATH", str(session_db))
+
+    stored = session_store.store_session_source_text(
+        text="User: Mira keeps the ferry receipt in the red notebook.\nAssistant: Noted.",
+        owner_id="owner-cli",
+        session_id="sess-cli",
+        source_id="source-cli",
+        max_microchunk_tokens=16,
+    )
+    microchunk_id = stored["microchunks"][0]["microchunk_id"]
+
+    env = {
+        **os.environ,
+        "HOME": str(home),
+        "QUAID_HOME": str(quaid_home),
+        "SESSION_DB_PATH": str(session_db),
+        "QUAID_PYTHON_BIN": os.environ.get("QUAID_PYTHON_BIN", "python3"),
+    }
+    result = subprocess.run(
+        [str(quaid_bin), "session", "expand-microchunk", microchunk_id, "--owner", "owner-cli"],
+        cwd=tmp_path,
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert "expanded_pair:" in result.stdout
+    assert "User: Mira keeps the ferry receipt in the red notebook." in result.stdout
+    assert "Assistant: Noted." in result.stdout
