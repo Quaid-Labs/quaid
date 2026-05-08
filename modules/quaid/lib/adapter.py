@@ -25,6 +25,7 @@ from __future__ import annotations
 import abc
 import importlib
 import json
+import logging
 import os
 import re
 import shutil
@@ -42,6 +43,8 @@ from lib.host import HostInfo
 if TYPE_CHECKING:
     from lib.providers import EmbeddingsProvider, LLMProvider
     from lib.instance_manager import InstanceManager
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -424,7 +427,7 @@ class QuaidAdapter(abc.ABC):
 
     @staticmethod
     def _is_provider_response_metadata_text(text: str) -> bool:
-        """Return True for whole-message provider response metadata JSON."""
+        """Return True for Anthropic-style whole-message provider metadata JSON."""
         value = str(text or "").strip()
         if not (value.startswith("{") and value.endswith("}")):
             return False
@@ -514,6 +517,7 @@ class QuaidAdapter(abc.ABC):
                 continue
 
             if role == "assistant" and self._is_provider_response_metadata_text(text):
+                logger.debug("Filtered assistant provider response metadata from transcript")
                 continue
 
             text = re.sub(

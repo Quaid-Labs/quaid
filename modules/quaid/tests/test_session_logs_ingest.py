@@ -92,6 +92,48 @@ def test_transcript_path_jsonl_is_adapter_parsed_before_sessiondb(monkeypatch, t
     assert "input_tokens" not in transcript
 
 
+def test_transcript_path_malformed_jsonl_after_session_shape_still_uses_adapter(monkeypatch, tmp_path):
+    adapter = TestAdapter(tmp_path)
+    set_adapter(adapter)
+
+    fake_bridge = MagicMock()
+    fake_bridge.store_session_transcript.return_value = {"status": "indexed", "session_id": "sess-malformed", "chunks": 1}
+    monkeypatch.setattr("ingest.session_logs_ingest.get_session_memory_bridge", lambda: fake_bridge)
+
+    provider_payload = {
+        "stop_reason": "end_turn",
+        "usage": {"input_tokens": 800, "output_tokens": 8},
+    }
+    raw_session = tmp_path / "session-malformed.jsonl"
+    raw_session.write_text(
+        "\n".join(
+            [
+                json.dumps({"role": "user", "content": "The ferry from Aomori reaches Hakodate before lunch."}),
+                "{malformed-json",
+                json.dumps({"role": "assistant", "content": json.dumps(provider_payload)}),
+                json.dumps({"role": "assistant", "content": "Logged."}),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    out = session_logs_ingest._run(
+        session_id="sess-malformed",
+        owner_id="quaid",
+        label="SessionEnd",
+        transcript_path=str(raw_session),
+    )
+
+    assert out["status"] == "indexed"
+    transcript = fake_bridge.store_session_transcript.call_args.kwargs["transcript"]
+    assert "User: The ferry from Aomori reaches Hakodate before lunch." in transcript
+    assert "Assistant: Logged." in transcript
+    assert "malformed-json" not in transcript
+    assert "stop_reason" not in transcript
+    assert "input_tokens" not in transcript
+
+
 def test_normalize_participant_aliases_accepts_json_object_string():
     out = session_logs_ingest._normalize_participant_aliases('{" operator-alias ":" user:owner ","":"x"}')
     assert out == {"operator-alias": "user:owner"}

@@ -1288,6 +1288,36 @@ class TestClaudeCodeAdapter:
         assert "stop_reason" not in transcript
         assert "input_tokens" not in transcript
 
+    def test_parse_session_jsonl_keeps_assistant_json_without_provider_stop_metadata(self, tmp_path):
+        path = tmp_path / "claude-assistant-json.jsonl"
+        assistant_payload = {
+            "usage": {"meaning": "normal assistant-authored JSON"},
+            "summary": "The blue drawer holds the hiking map.",
+        }
+        path.write_text(
+            "\n".join(
+                [
+                    json.dumps(
+                        {
+                            "type": "assistant",
+                            "message": {
+                                "role": "assistant",
+                                "content": [{"type": "text", "text": json.dumps(assistant_payload)}],
+                            },
+                        }
+                    ),
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        adapter = ClaudeCodeAdapter()
+        transcript = adapter.parse_session_jsonl(path)
+
+        assert "Assistant:" in transcript
+        assert "usage" in transcript
+        assert "The blue drawer holds the hiking map." in transcript
+
     def test_resolve_prompt_submit_signal_returns_session_end_for_clear_command(self):
         adapter = ClaudeCodeAdapter()
         signal = adapter.resolve_prompt_submit_signal({"prompt": "/clear"})

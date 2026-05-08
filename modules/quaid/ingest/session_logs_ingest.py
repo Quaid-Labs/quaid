@@ -9,11 +9,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 from core.services.session_memory_bridge import get_session_memory_bridge
 from lib.runtime_context import get_adapter_instance
+
+logger = logging.getLogger(__name__)
 
 
 def _normalize_session_id(value: Any) -> str:
@@ -59,12 +62,21 @@ def _looks_like_session_jsonl(text: str) -> bool:
         try:
             obj = json.loads(line)
         except json.JSONDecodeError:
+            if seen_session_shape:
+                logger.warning(
+                    "Malformed row in session JSONL transcript; routing through adapter parser",
+                    exc_info=True,
+                )
+                return True
             return False
         if not isinstance(obj, dict):
+            if seen_session_shape:
+                logger.warning("Non-object row in session JSONL transcript; routing through adapter parser")
+                return True
             return False
         seen_json_object = True
         keys = {str(key) for key in obj.keys()}
-        if {"type", "message", "payload", "role"} & keys:
+        if {"type", "message", "payload"} & keys or {"role", "content"} <= keys:
             seen_session_shape = True
         if "usage" in keys and {"stop_reason", "stop_sequence", "stop_details"} & keys:
             seen_session_shape = True
