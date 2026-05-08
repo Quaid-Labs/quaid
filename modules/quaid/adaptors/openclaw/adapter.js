@@ -4452,6 +4452,10 @@ notify_user(${JSON.stringify(message)})
     };
     const projectDocsInjectedSessions = /* @__PURE__ */ new Set();
     const refreshedIdentityContextTurns = /* @__PURE__ */ new Map();
+    const identityRefreshInstanceKey = (instanceId) => {
+      const normalized = String(instanceId || "").trim();
+      return normalized ? `instance:${normalized}` : "";
+    };
     const armRefreshedIdentityContext = (refreshKey, source) => {
       const key = String(refreshKey || "").trim();
       if (!key) return;
@@ -4532,6 +4536,10 @@ notify_user(${JSON.stringify(message)})
           traceName: "hook.context_refresh.lifecycle_armed"
         });
       }
+      armRefreshedIdentityContext(
+        identityRefreshInstanceKey(getInstanceId(resolveHookAgentLabel(event, ctx))),
+        `${source}:instance`
+      );
     };
     const beforePromptBuildHandler = async (event, ctx) => {
       if (isInternalSessionContext(event, ctx)) return;
@@ -4600,7 +4608,7 @@ ${identityContext}` : identityContext;
         }
         const sessionKeyDocs = resolveProjectDocsRefreshKey(event, ctx, promptSessionId);
         const refreshedIdentityContext = consumeRefreshedIdentityContext(
-          [sessionKeyDocs, promptSessionId],
+          [sessionKeyDocs, promptSessionId, identityRefreshInstanceKey(promptInstanceId)],
           promptInstanceId
         );
         if (refreshedIdentityContext) {

@@ -1821,18 +1821,20 @@ describe("openclaw deferred notices", () => {
 
     const beforePromptBuildHandler = beforePromptBuildCall?.[1];
     const commandNewHandler = commandNewCall?.[1];
-    const sessionKey = "agent:main:matrix:direct:@quaid-test-bot:localhost";
-    const sessionId = "session-m7-startup-consumes-docs";
+    const startupSessionKey = "agent:main:hook:startup-boundary";
+    const startupSessionId = "session-m7-startup-boundary";
+    const gradedSessionKey = "agent:main:matrix:direct:@quaid-test-bot:localhost";
+    const gradedSessionId = "session-m7-graded-turn";
 
     await commandNewHandler(
       {
         action: "new",
-        sessionId,
-        sessionKey,
+        sessionId: startupSessionId,
+        sessionKey: startupSessionKey,
       },
       {
-        sessionId,
-        sessionKey,
+        sessionId: startupSessionId,
+        sessionKey: startupSessionKey,
         agentId: "main",
         trigger: "user",
       },
@@ -1843,12 +1845,12 @@ describe("openclaw deferred notices", () => {
         prependContext: "",
         prompt: "Hello",
         messages: [{ role: "user", content: "Hello" }],
-        sessionId,
-        sessionKey,
+        sessionId: startupSessionId,
+        sessionKey: startupSessionKey,
       },
       {
-        sessionId,
-        sessionKey,
+        sessionId: startupSessionId,
+        sessionKey: startupSessionKey,
         agentId: "main",
         trigger: "user",
       },
@@ -1863,12 +1865,12 @@ describe("openclaw deferred notices", () => {
         prependContext: "",
         prompt: "What's the office plant named?",
         messages: [{ role: "user", content: "What's the office plant named?" }],
-        sessionId,
-        sessionKey,
+        sessionId: gradedSessionId,
+        sessionKey: gradedSessionKey,
       },
       {
-        sessionId,
-        sessionKey,
+        sessionId: gradedSessionId,
+        sessionKey: gradedSessionKey,
         agentId: "main",
         trigger: "user",
       },

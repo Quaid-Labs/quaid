@@ -5522,6 +5522,10 @@ notify_user(${JSON.stringify(message)})
     //   2. Recall auto-injection — per-message, semantically relevant memories.
     const projectDocsInjectedSessions = new Set<string>();
     const refreshedIdentityContextTurns = new Map<string, number>();
+    const identityRefreshInstanceKey = (instanceId: string): string => {
+      const normalized = String(instanceId || "").trim();
+      return normalized ? `instance:${normalized}` : "";
+    };
     const armRefreshedIdentityContext = (refreshKey: string, source: string): void => {
       const key = String(refreshKey || "").trim();
       if (!key) return;
@@ -5613,6 +5617,10 @@ notify_user(${JSON.stringify(message)})
           traceName: "hook.context_refresh.lifecycle_armed",
         });
       }
+      armRefreshedIdentityContext(
+        identityRefreshInstanceKey(getInstanceId(resolveHookAgentLabel(event, ctx))),
+        `${source}:instance`,
+      );
     };
 
     const beforePromptBuildHandler = async (event: any, ctx: any): Promise<{ prependContext?: string; prependSystemContext?: string; appendSystemContext?: string } | undefined> => {
@@ -5696,7 +5704,7 @@ notify_user(${JSON.stringify(message)})
         }
         const sessionKeyDocs = resolveProjectDocsRefreshKey(event, ctx, promptSessionId);
         const refreshedIdentityContext = consumeRefreshedIdentityContext(
-          [sessionKeyDocs, promptSessionId],
+          [sessionKeyDocs, promptSessionId, identityRefreshInstanceKey(promptInstanceId)],
           promptInstanceId,
         );
         if (refreshedIdentityContext) {
