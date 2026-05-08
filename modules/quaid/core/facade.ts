@@ -3747,6 +3747,9 @@ ${lines.join("\n")}
 
     const uniqueSessionId = extractSessionId(eventMessages || [], context);
     const priorInjectionLog = readInjectionLog(uniqueSessionId);
+    // Recovery surfaces cannot prove the model received the injection. Do not
+    // let durable dedup suppress them, and do not write uncertain delivery state.
+    // Restart detection below is intentionally irrelevant when persistDedup=false.
     let previouslyInjected = persistDedup === false ? [] : loadInjectedMemoryKeys(uniqueSessionId);
     let newMemories = filtered.filter((m) => !previouslyInjected.includes(m.id || m.text));
     const visibleRoles = Array.isArray(eventMessages)

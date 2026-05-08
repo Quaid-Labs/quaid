@@ -1525,6 +1525,9 @@ function shouldPersistAutoInjectionDedup(params: {
   );
 }
 
+// Keep this source list aligned with shouldPersistAutoInjectionDedup(): these
+// surfaces recovered a user query outside OC's normal prompt body, so delivery is
+// uncertain until we anchor that recovered text for injection preparation.
 function shouldAnchorAutoInjectionFromRecoveredUser(querySource: string): boolean {
   const source = String(querySource || "").trim().toLowerCase();
   return (
