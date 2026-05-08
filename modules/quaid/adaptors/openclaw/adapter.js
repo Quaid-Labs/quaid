@@ -4582,7 +4582,27 @@ ${projectPlacementContext}` : projectPlacementContext;
         }
         return result;
       };
+      const promptModelConfigSessionKey = String(
+        event?.sessionKey || ctx?.sessionKey || event?.targetSessionKey || ctx?.targetSessionKey || ""
+      ).trim();
+      let promptModelConfigValidationStarted = false;
+      let promptModelConfigValidationNotice = "";
+      const validatePromptModelConfigForTurn = async () => {
+        if (promptModelConfigValidationStarted) {
+          return promptModelConfigValidationNotice;
+        }
+        promptModelConfigValidationStarted = true;
+        promptModelConfigValidationNotice = await validatePromptModelConfigIfChanged(
+          promptAgentLabel,
+          promptModelConfigSessionKey
+        );
+        return promptModelConfigValidationNotice;
+      };
       try {
+        const autoInjectEnabled = isAutoInjectEnabled(getMemoryConfig2());
+        if (autoInjectEnabled) {
+          await validatePromptModelConfigForTurn();
+        }
         const deferredNoticeRelayContext = drainDeferredNoticeRelayContextForAgent(
           promptAgentLabel,
           "before_prompt_build"
@@ -4634,7 +4654,6 @@ ${deferredNoticeRelayContext}` : deferredNoticeRelayContext;
         if (promptFacade.isInternalMaintenancePrompt(query)) {
           return withDocs({ prependContext: event.prependContext });
         }
-        const autoInjectEnabled = isAutoInjectEnabled(getMemoryConfig2());
         const lowQualityQuery = promptFacade.isLowQualityQuery(query);
         const autoInjectK = promptFacade.computeDynamicK();
         const injectLimit = autoInjectK;
@@ -4686,10 +4705,7 @@ ${deferredNoticeRelayContext}` : deferredNoticeRelayContext;
                 skipReason: "auto_inject_disabled"
               };
             }
-            const modelConfigNotice2 = await validatePromptModelConfigIfChanged(
-              promptAgentLabel,
-              String(event?.sessionKey || ctx?.sessionKey || event?.targetSessionKey || ctx?.targetSessionKey || "").trim()
-            );
+            const modelConfigNotice2 = await validatePromptModelConfigForTurn();
             if (modelConfigNotice2) {
               writeHookTrace("hook.before_prompt_build.model_config_short_circuit", {
                 query: query.slice(0, 80),

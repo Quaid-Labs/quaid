@@ -1318,7 +1318,7 @@ describe("openclaw deferred notices", () => {
     );
     expect(beforePromptBuildCall).toBeTruthy();
 
-    await beforePromptBuildCall?.[1](
+    const result = await beforePromptBuildCall?.[1](
       {
         prependContext: "",
         prompt: "What do you remember about my family?",
@@ -1333,6 +1333,11 @@ describe("openclaw deferred notices", () => {
     );
 
     expect(fetchMock).toHaveBeenCalled();
+    const systemContext = combinedSystemContext(result);
+    expect(systemContext).not.toContain("stale pending provider notice");
+    expect(systemContext).not.toContain("stale delivered provider notice");
+    expect(String(result?.prependContext || "")).not.toContain("stale pending provider notice");
+    expect(String(result?.prependContext || "")).not.toContain("stale delivered provider notice");
     const payload = JSON.parse(fs.readFileSync(noticeFile, "utf8"));
     expect(Array.isArray(payload?.requests)).toBe(true);
     expect(payload.requests).toHaveLength(1);

@@ -5682,8 +5682,30 @@ notify_user(${JSON.stringify(message)})
         }
         return result;
       };
+      const promptModelConfigSessionKey = String(
+        event?.sessionKey || ctx?.sessionKey || event?.targetSessionKey || ctx?.targetSessionKey || "",
+      ).trim();
+      let promptModelConfigValidationStarted = false;
+      let promptModelConfigValidationNotice = "";
+      const validatePromptModelConfigForTurn = async (): Promise<string> => {
+        if (promptModelConfigValidationStarted) {
+          return promptModelConfigValidationNotice;
+        }
+        promptModelConfigValidationStarted = true;
+        promptModelConfigValidationNotice = await validatePromptModelConfigIfChanged(
+          promptAgentLabel,
+          promptModelConfigSessionKey,
+        );
+        return promptModelConfigValidationNotice;
+      };
 
       try {
+        const autoInjectEnabled = isAutoInjectEnabled(getMemoryConfig());
+        if (autoInjectEnabled) {
+          // Clear stale provider deferred notices before the relay drain can
+          // inject them into this turn after a config restore.
+          await validatePromptModelConfigForTurn();
+        }
         const deferredNoticeRelayContext = drainDeferredNoticeRelayContextForAgent(
           promptAgentLabel,
           "before_prompt_build",
@@ -5749,7 +5771,6 @@ notify_user(${JSON.stringify(message)})
           return withDocs({ prependContext: event.prependContext });
         }
 
-        const autoInjectEnabled = isAutoInjectEnabled(getMemoryConfig());
         const lowQualityQuery = promptFacade.isLowQualityQuery(query);
 
         // Auto-inject always bypasses the LLM router to keep latency low.
@@ -5817,10 +5838,7 @@ notify_user(${JSON.stringify(message)})
                 skipReason: "auto_inject_disabled",
               };
             }
-            const modelConfigNotice = await validatePromptModelConfigIfChanged(
-              promptAgentLabel,
-              String(event?.sessionKey || ctx?.sessionKey || event?.targetSessionKey || ctx?.targetSessionKey || "").trim(),
-            );
+            const modelConfigNotice = await validatePromptModelConfigForTurn();
             if (modelConfigNotice) {
               writeHookTrace("hook.before_prompt_build.model_config_short_circuit", {
                 query: query.slice(0, 80),
