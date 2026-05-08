@@ -3232,12 +3232,27 @@ class TestSourceChunkStorage:
             microchunk_id="micro-backfill-1",
             embed=False,
         )
+        third = graph.store_source_chunk(
+            "User: Rowan keeps the spare badge in the cedar box.",
+            owner_id="rowan",
+            source_id="session-file-backfill",
+            session_id="session-backfill",
+            chunk_index=0,
+            parent_chunk_id="sessiondb-chunk-2",
+            message_pair_id="pair-backfill-2",
+            microchunk_id="micro-backfill-2",
+            embed=False,
+        )
 
         assert second["status"] == "existing"
         assert second["chunk_id"] == first["chunk_id"]
         assert second["parent_chunk_id"] == "sessiondb-chunk-1"
         assert second["message_pair_id"] == "pair-backfill-1"
         assert second["microchunk_id"] == "micro-backfill-1"
+        assert third["status"] == "existing"
+        assert third["parent_chunk_id"] == "sessiondb-chunk-1"
+        assert third["message_pair_id"] == "pair-backfill-1"
+        assert third["microchunk_id"] == "micro-backfill-1"
         rows = graph.list_source_chunks(owner_id="rowan", session_id="session-backfill")
         assert len(rows) == 1
         assert rows[0]["microchunk_id"] == "micro-backfill-1"
