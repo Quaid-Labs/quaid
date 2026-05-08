@@ -1180,6 +1180,7 @@ const COMMAND_HOOK_REPLAY_AFTER_MESSAGE_SUPPRESS_MS = Math.min(
 );
 
 const OPENCLAW_INTERNAL_CONTEXT_RE = /<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>[\s\S]*?<<<END_OPENCLAW_INTERNAL_CONTEXT>>>/gi;
+const QUAID_INJECTED_MEMORIES_RE = /<injected_memories>[\s\S]*?<\/injected_memories>/gi;
 const PROMPT_RELAY_SKIP_RE = /^(A new session|Read HEARTBEAT|HEARTBEAT|You are being asked to|You are running as a subagent|You are a subagent|\/\w|Exec failed)/;
 const OPENCLAW_QUEUED_SESSION_START_RE =
   /\n*(?:\[Queued messages while agent was busy\]\s*\n+)?---\s*\n?Queued\s*#\d+\s*(?:\([^)]+\))?\s*\nA new session was started via \/new or \/reset\.[\s\S]*$/i;
@@ -1237,6 +1238,10 @@ function stripOpenClawInternalContext(raw: string): string {
   return String(raw || "").replace(OPENCLAW_INTERNAL_CONTEXT_RE, "").trim();
 }
 
+function stripQuaidInjectedMemoryBlocks(raw: string): string {
+  return String(raw || "").replace(QUAID_INJECTED_MEMORIES_RE, "").trim();
+}
+
 function scrubAutoInjectQuery(raw: string): string {
   return stripOpenClawInternalContext(raw)
     // Strip queued OC startup wrapper blocks from /new or /reset handoff prompts.
@@ -1245,7 +1250,7 @@ function scrubAutoInjectQuery(raw: string): string {
     .replace(OPENCLAW_QUEUED_LABEL_RE, "\n")
     // Strip our own prior injections that OC persists back into future turns
     .replace(/<tool_hint>[\s\S]*?<\/tool_hint>/gi, "")
-    .replace(/<injected_memories>[\s\S]*?<\/injected_memories>/gi, "")
+    .replace(QUAID_INJECTED_MEMORIES_RE, "")
     // Strip OC metadata block BEFORE bracket-strip so that when raw starts
     // with "Sender (untrusted metadata):...json...[Wed...] message", the [Wed...]
     // prefix becomes leading after metadata removal and is caught by the bracket step.
@@ -4144,11 +4149,60 @@ type AutoInjectTurnOutcome = {
 // while still skipping different prompts that arrive during recall to prevent
 // recall→LLM→recall recursion from internal OpenClaw calls.
 const _beforePromptBuildInFlightByTurn = new Map<string, Promise<AutoInjectTurnOutcome>>();
+const AUTO_INJECT_COMPLETED_TURN_CACHE_TTL_MS = 5_000;
+const AUTO_INJECT_COMPLETED_TURN_CACHE_MAX = 32;
+const _beforePromptBuildCompletedByTurn = new Map<string, { outcome: AutoInjectTurnOutcome; expiresAtMs: number }>();
 
 function _autoInjectTurnKey(agentLabel: string, query: string): string {
   const normalizedAgent = String(agentLabel || "main").trim().toLowerCase() || "main";
   const normalizedQuery = String(query || "").trim().replace(/\s+/g, " ").toLowerCase().slice(0, 500);
   return `${normalizedAgent}\n${normalizedQuery}`;
+}
+
+function _pruneCompletedAutoInjectTurns(nowMs: number = Date.now()): void {
+  for (const [key, value] of _beforePromptBuildCompletedByTurn.entries()) {
+    if (value.expiresAtMs <= nowMs) {
+      _beforePromptBuildCompletedByTurn.delete(key);
+    }
+  }
+  while (_beforePromptBuildCompletedByTurn.size > AUTO_INJECT_COMPLETED_TURN_CACHE_MAX) {
+    const oldestKey = _beforePromptBuildCompletedByTurn.keys().next().value;
+    if (!oldestKey) break;
+    _beforePromptBuildCompletedByTurn.delete(oldestKey);
+  }
+}
+
+function _rememberCompletedAutoInjectTurn(
+  turnKey: string,
+  outcome: AutoInjectTurnOutcome,
+  nowMs: number = Date.now(),
+): void {
+  const key = String(turnKey || "").trim();
+  if (!key) return;
+  _pruneCompletedAutoInjectTurns(nowMs);
+  _beforePromptBuildCompletedByTurn.set(key, {
+    outcome,
+    expiresAtMs: nowMs + AUTO_INJECT_COMPLETED_TURN_CACHE_TTL_MS,
+  });
+  _pruneCompletedAutoInjectTurns(nowMs);
+}
+
+function _getCompletedAutoInjectTurn(turnKey: string, nowMs: number = Date.now()): AutoInjectTurnOutcome | null {
+  _pruneCompletedAutoInjectTurns(nowMs);
+  const key = String(turnKey || "").trim();
+  if (!key) return null;
+  const cached = _beforePromptBuildCompletedByTurn.get(key);
+  if (!cached) return null;
+  if (cached.expiresAtMs <= nowMs) {
+    _beforePromptBuildCompletedByTurn.delete(key);
+    return null;
+  }
+  return cached.outcome;
+}
+
+function _clearAutoInjectTurnCaches(): void {
+  _beforePromptBuildInFlightByTurn.clear();
+  _beforePromptBuildCompletedByTurn.clear();
 }
 
 // Rate-limit for daemon liveness pings from before_prompt_build.
@@ -5604,18 +5658,27 @@ notify_user(${JSON.stringify(message)})
       const mergePrependContext = (base?: string): string | undefined => {
         const parts = [
           ...prependContextParts,
-          stripOpenClawInternalContext(base || ""),
+          stripQuaidInjectedMemoryBlocks(stripOpenClawInternalContext(base || "")),
         ].filter(Boolean);
         return parts.length ? parts.join("\n\n") : undefined;
       };
       const withDocs = (base: { prependContext?: string }) => {
         const mergedPrependContext = mergePrependContext(base.prependContext);
-        return {
+        const result = {
           ...base,
           ...(mergedPrependContext ? { prependContext: mergedPrependContext } : {}),
           ...(prependSystemContext ? { prependSystemContext } : {}),
           ...(appendSystemContext ? { appendSystemContext } : {}),
         };
+        // Some OC paths consult the mutable event object while registerHook paths
+        // consume the returned object. Populate both so duplicate hook surfaces
+        // cannot prepare/log injection without delivering it to the model.
+        if (event && typeof event === "object") {
+          if (result.prependContext) event.prependContext = result.prependContext;
+          if (result.prependSystemContext) event.prependSystemContext = result.prependSystemContext;
+          if (result.appendSystemContext) event.appendSystemContext = result.appendSystemContext;
+        }
+        return result;
       };
 
       try {
@@ -5712,6 +5775,16 @@ notify_user(${JSON.stringify(message)})
         // so the mutating hook path is not starved by the non-mutating event-bus path.
         const turnKey = _autoInjectTurnKey(promptAgentLabel, query);
         let turnPromise = _beforePromptBuildInFlightByTurn.get(turnKey);
+        const completedTurnOutcome = turnPromise ? null : _getCompletedAutoInjectTurn(turnKey, nowMs);
+        let createdTurnPromise = false;
+        if (!turnPromise && completedTurnOutcome) {
+          turnPromise = Promise.resolve(completedTurnOutcome);
+          writeHookTrace("hook.before_prompt_build.duplicate_completed_reuse", {
+            query: query.slice(0, 80),
+            active_turns: _beforePromptBuildInFlightByTurn.size,
+            has_injection: Boolean(completedTurnOutcome.injection),
+          });
+        }
         if (!turnPromise && _beforePromptBuildInFlightByTurn.size > 0) {
           writeHookTrace("hook.before_prompt_build.reentrant_skip", {
             query: query.slice(0, 80),
@@ -5821,11 +5894,15 @@ notify_user(${JSON.stringify(message)})
             });
             return { allMemories, recallDiagnostics, injection, modelConfigNotice: modelConfigNotice || undefined };
           })();
+          createdTurnPromise = true;
           _beforePromptBuildInFlightByTurn.set(turnKey, turnPromise);
           turnPromise.then(
-            () => {
+            (outcome) => {
               if (_beforePromptBuildInFlightByTurn.get(turnKey) === turnPromise) {
                 _beforePromptBuildInFlightByTurn.delete(turnKey);
+              }
+              if (createdTurnPromise) {
+                _rememberCompletedAutoInjectTurn(turnKey, outcome, Date.now());
               }
             },
             () => {
@@ -8607,7 +8684,12 @@ export const __test = {
   resolveAdapterMemoryDbPath,
   resolveAdapterFacadeRuntimePaths,
   scrubAutoInjectQuery,
+  stripQuaidInjectedMemoryBlocks,
   autoInjectTurnKey: _autoInjectTurnKey,
+  rememberCompletedAutoInjectTurn: _rememberCompletedAutoInjectTurn,
+  getCompletedAutoInjectTurn: _getCompletedAutoInjectTurn,
+  clearAutoInjectTurnCaches: _clearAutoInjectTurnCaches,
+  AUTO_INJECT_COMPLETED_TURN_CACHE_TTL_MS,
   buildAutoInjectRecallOptions: _buildAutoInjectRecallOptions,
   buildFacadeRecallOptions: _buildFacadeRecallOptions,
   buildPythonEnv,

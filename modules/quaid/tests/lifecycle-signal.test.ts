@@ -1143,6 +1143,25 @@ describe("lifecycle signal detection", () => {
     expect(otherAgent).not.toBe(first);
   });
 
+  it("briefly reuses completed auto-inject outcomes for duplicate hook surfaces", () => {
+    __test.clearAutoInjectTurnCaches();
+    const turnKey = __test.autoInjectTurnKey("main", "What grinder do I use for espresso?");
+    const outcome = {
+      allMemories: [{ id: "m1", text: "Solomon owns a Baratza Encore grinder." }],
+      recallDiagnostics: { mode: "test" },
+      injection: {
+        toInject: [{ id: "m1", text: "Solomon owns a Baratza Encore grinder." }],
+        prependContext: "<injected_memories>\n- Solomon owns a Baratza Encore grinder.\n</injected_memories>",
+      },
+    };
+
+    __test.rememberCompletedAutoInjectTurn(turnKey, outcome, 1_000);
+
+    expect(__test.getCompletedAutoInjectTurn(turnKey, 1_000)).toBe(outcome);
+    expect(__test.getCompletedAutoInjectTurn(turnKey, 1_000 + __test.AUTO_INJECT_COMPLETED_TURN_CACHE_TTL_MS + 1)).toBe(null);
+    __test.clearAutoInjectTurnCaches();
+  });
+
   it("prefers session-key agent label over conflicting explicit agent ids", () => {
     const label = __test.resolveHookAgentLabel(
       {

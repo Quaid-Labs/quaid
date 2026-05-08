@@ -944,6 +944,7 @@ const COMMAND_HOOK_REPLAY_AFTER_MESSAGE_SUPPRESS_MS = Math.min(
   15e3
 );
 const OPENCLAW_INTERNAL_CONTEXT_RE = /<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>[\s\S]*?<<<END_OPENCLAW_INTERNAL_CONTEXT>>>/gi;
+const QUAID_INJECTED_MEMORIES_RE = /<injected_memories>[\s\S]*?<\/injected_memories>/gi;
 const PROMPT_RELAY_SKIP_RE = /^(A new session|Read HEARTBEAT|HEARTBEAT|You are being asked to|You are running as a subagent|You are a subagent|\/\w|Exec failed)/;
 const OPENCLAW_QUEUED_SESSION_START_RE = /\n*(?:\[Queued messages while agent was busy\]\s*\n+)?---\s*\n?Queued\s*#\d+\s*(?:\([^)]+\))?\s*\nA new session was started via \/new or \/reset\.[\s\S]*$/i;
 const OPENCLAW_SESSION_START_BOILERPLATE_RE = /(?:^|\n)\s*A new session was started via \/new or \/reset\.[\s\S]*$/i;
@@ -986,8 +987,11 @@ function extractLifecycleSlashAction(raw) {
 function stripOpenClawInternalContext(raw) {
   return String(raw || "").replace(OPENCLAW_INTERNAL_CONTEXT_RE, "").trim();
 }
+function stripQuaidInjectedMemoryBlocks(raw) {
+  return String(raw || "").replace(QUAID_INJECTED_MEMORIES_RE, "").trim();
+}
 function scrubAutoInjectQuery(raw) {
-  return stripOpenClawInternalContext(raw).replace(OPENCLAW_QUEUED_SESSION_START_RE, "").replace(OPENCLAW_SESSION_START_BOILERPLATE_RE, "").replace(OPENCLAW_QUEUED_LABEL_RE, "\n").replace(/<tool_hint>[\s\S]*?<\/tool_hint>/gi, "").replace(/<injected_memories>[\s\S]*?<\/injected_memories>/gi, "").replace(/\w[\w\s]* \(untrusted metadata\):[\s\S]*?```[\s\S]*?```/gi, "").replace(/^```[\w]*\r?\n[\s\S]*?```\s*/i, "").replace(/^System:\s*/i, "").replace(/^\s*(\[.*?\]\s*)+/s, "").replace(/^---\s*/m, "").replace(/\n{3,}/g, "\n\n").trim();
+  return stripOpenClawInternalContext(raw).replace(OPENCLAW_QUEUED_SESSION_START_RE, "").replace(OPENCLAW_SESSION_START_BOILERPLATE_RE, "").replace(OPENCLAW_QUEUED_LABEL_RE, "\n").replace(/<tool_hint>[\s\S]*?<\/tool_hint>/gi, "").replace(QUAID_INJECTED_MEMORIES_RE, "").replace(/\w[\w\s]* \(untrusted metadata\):[\s\S]*?```[\s\S]*?```/gi, "").replace(/^```[\w]*\r?\n[\s\S]*?```\s*/i, "").replace(/^System:\s*/i, "").replace(/^\s*(\[.*?\]\s*)+/s, "").replace(/^---\s*/m, "").replace(/\n{3,}/g, "\n\n").trim();
 }
 function isQueuedSessionStartupWrapper(raw) {
   const text = String(raw || "");
@@ -3328,11 +3332,52 @@ const DOCS_RAG = path.join(PYTHON_PLUGIN_ROOT, "datastore/docsdb/rag.py");
 const DOCS_REGISTRY = path.join(PYTHON_PLUGIN_ROOT, "datastore/docsdb/registry.py");
 const EVENTS_SCRIPT = path.join(PYTHON_PLUGIN_ROOT, "core/runtime/events.py");
 const _beforePromptBuildInFlightByTurn = /* @__PURE__ */ new Map();
+const AUTO_INJECT_COMPLETED_TURN_CACHE_TTL_MS = 5e3;
+const AUTO_INJECT_COMPLETED_TURN_CACHE_MAX = 32;
+const _beforePromptBuildCompletedByTurn = /* @__PURE__ */ new Map();
 function _autoInjectTurnKey(agentLabel, query) {
   const normalizedAgent = String(agentLabel || "main").trim().toLowerCase() || "main";
   const normalizedQuery = String(query || "").trim().replace(/\s+/g, " ").toLowerCase().slice(0, 500);
   return `${normalizedAgent}
 ${normalizedQuery}`;
+}
+function _pruneCompletedAutoInjectTurns(nowMs = Date.now()) {
+  for (const [key, value] of _beforePromptBuildCompletedByTurn.entries()) {
+    if (value.expiresAtMs <= nowMs) {
+      _beforePromptBuildCompletedByTurn.delete(key);
+    }
+  }
+  while (_beforePromptBuildCompletedByTurn.size > AUTO_INJECT_COMPLETED_TURN_CACHE_MAX) {
+    const oldestKey = _beforePromptBuildCompletedByTurn.keys().next().value;
+    if (!oldestKey) break;
+    _beforePromptBuildCompletedByTurn.delete(oldestKey);
+  }
+}
+function _rememberCompletedAutoInjectTurn(turnKey, outcome, nowMs = Date.now()) {
+  const key = String(turnKey || "").trim();
+  if (!key) return;
+  _pruneCompletedAutoInjectTurns(nowMs);
+  _beforePromptBuildCompletedByTurn.set(key, {
+    outcome,
+    expiresAtMs: nowMs + AUTO_INJECT_COMPLETED_TURN_CACHE_TTL_MS
+  });
+  _pruneCompletedAutoInjectTurns(nowMs);
+}
+function _getCompletedAutoInjectTurn(turnKey, nowMs = Date.now()) {
+  _pruneCompletedAutoInjectTurns(nowMs);
+  const key = String(turnKey || "").trim();
+  if (!key) return null;
+  const cached = _beforePromptBuildCompletedByTurn.get(key);
+  if (!cached) return null;
+  if (cached.expiresAtMs <= nowMs) {
+    _beforePromptBuildCompletedByTurn.delete(key);
+    return null;
+  }
+  return cached.outcome;
+}
+function _clearAutoInjectTurnCaches() {
+  _beforePromptBuildInFlightByTurn.clear();
+  _beforePromptBuildCompletedByTurn.clear();
 }
 const _lastDaemonAliveCheckMsByInstance = /* @__PURE__ */ new Map();
 const _DAEMON_ALIVE_CHECK_INTERVAL_MS = 6e4;
@@ -4515,18 +4560,24 @@ ${projectPlacementContext}` : projectPlacementContext;
       const mergePrependContext = (base) => {
         const parts = [
           ...prependContextParts,
-          stripOpenClawInternalContext(base || "")
+          stripQuaidInjectedMemoryBlocks(stripOpenClawInternalContext(base || ""))
         ].filter(Boolean);
         return parts.length ? parts.join("\n\n") : void 0;
       };
       const withDocs = (base) => {
         const mergedPrependContext = mergePrependContext(base.prependContext);
-        return {
+        const result = {
           ...base,
           ...mergedPrependContext ? { prependContext: mergedPrependContext } : {},
           ...prependSystemContext ? { prependSystemContext } : {},
           ...appendSystemContext ? { appendSystemContext } : {}
         };
+        if (event && typeof event === "object") {
+          if (result.prependContext) event.prependContext = result.prependContext;
+          if (result.prependSystemContext) event.prependSystemContext = result.prependSystemContext;
+          if (result.appendSystemContext) event.appendSystemContext = result.appendSystemContext;
+        }
+        return result;
       };
       try {
         const deferredNoticeRelayContext = drainDeferredNoticeRelayContextForAgent(
@@ -4592,6 +4643,16 @@ ${deferredNoticeRelayContext}` : deferredNoticeRelayContext;
         });
         const turnKey = _autoInjectTurnKey(promptAgentLabel, query);
         let turnPromise = _beforePromptBuildInFlightByTurn.get(turnKey);
+        const completedTurnOutcome = turnPromise ? null : _getCompletedAutoInjectTurn(turnKey, nowMs);
+        let createdTurnPromise = false;
+        if (!turnPromise && completedTurnOutcome) {
+          turnPromise = Promise.resolve(completedTurnOutcome);
+          writeHookTrace("hook.before_prompt_build.duplicate_completed_reuse", {
+            query: query.slice(0, 80),
+            active_turns: _beforePromptBuildInFlightByTurn.size,
+            has_injection: Boolean(completedTurnOutcome.injection)
+          });
+        }
         if (!turnPromise && _beforePromptBuildInFlightByTurn.size > 0) {
           writeHookTrace("hook.before_prompt_build.reentrant_skip", {
             query: query.slice(0, 80),
@@ -4695,11 +4756,15 @@ ${deferredNoticeRelayContext}` : deferredNoticeRelayContext;
             });
             return { allMemories: allMemories2, recallDiagnostics: recallDiagnostics2, injection: injection2, modelConfigNotice: modelConfigNotice2 || void 0 };
           })();
+          createdTurnPromise = true;
           _beforePromptBuildInFlightByTurn.set(turnKey, turnPromise);
           turnPromise.then(
-            () => {
+            (outcome) => {
               if (_beforePromptBuildInFlightByTurn.get(turnKey) === turnPromise) {
                 _beforePromptBuildInFlightByTurn.delete(turnKey);
+              }
+              if (createdTurnPromise) {
+                _rememberCompletedAutoInjectTurn(turnKey, outcome, Date.now());
               }
             },
             () => {
@@ -7046,7 +7111,12 @@ const __test = {
   resolveAdapterMemoryDbPath,
   resolveAdapterFacadeRuntimePaths,
   scrubAutoInjectQuery,
+  stripQuaidInjectedMemoryBlocks,
   autoInjectTurnKey: _autoInjectTurnKey,
+  rememberCompletedAutoInjectTurn: _rememberCompletedAutoInjectTurn,
+  getCompletedAutoInjectTurn: _getCompletedAutoInjectTurn,
+  clearAutoInjectTurnCaches: _clearAutoInjectTurnCaches,
+  AUTO_INJECT_COMPLETED_TURN_CACHE_TTL_MS,
   buildAutoInjectRecallOptions: _buildAutoInjectRecallOptions,
   buildFacadeRecallOptions: _buildFacadeRecallOptions,
   buildPythonEnv,

@@ -182,8 +182,9 @@ describe("openclaw deferred notices", () => {
     );
     expect(beforePromptBuildCall).toBeTruthy();
 
+    const event = { prompt: "Hey, what is up?", sessionId: "session-main-visible", sessionKey: "agent:main:tui-main" };
     const result = await beforePromptBuildCall?.[1](
-      { prompt: "Hey, what is up?", sessionId: "session-main-visible", sessionKey: "agent:main:tui-main" },
+      event,
       { sessionId: "session-main-visible", sessionKey: "agent:main:tui-main", agentId: "main", trigger: "user" },
     );
 
@@ -191,6 +192,8 @@ describe("openclaw deferred notices", () => {
     expect(systemContext).toContain("MANDATORY: Quaid has active notices for the human user.");
     expect(systemContext).toContain("silver lantern is ready");
     expect(String(result?.prependContext || "")).toContain("silver lantern is ready");
+    expect(String((event as any).prependContext || "")).toContain("silver lantern is ready");
+    expect(String((event as any).appendSystemContext || "")).toContain("silver lantern is ready");
 
     const drained = JSON.parse(fs.readFileSync(fixture.noticeFile, "utf8"));
     const pending = Array.isArray(drained?.requests)
