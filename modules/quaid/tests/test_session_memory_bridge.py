@@ -46,10 +46,12 @@ class FakeMemoryService:
             if row["owner_id"] == owner_id and (not session_id or row["session_id"] == session_id)
         ]
 
-    def get_session_chunk(self, chunk_id, *, owner_id, **_kwargs):
+    def get_session_chunk(self, chunk_id, *, owner_id, **kwargs):
         for row in self.rows:
             if row["chunk_id"] == chunk_id and row["owner_id"] == owner_id:
                 return row
+        if kwargs.get("fail_hard") and any(row["chunk_id"] == chunk_id for row in self.rows):
+            raise RuntimeError("Session chunk owner mismatch")
         return None
 
 
@@ -82,6 +84,8 @@ def test_bridge_normalizes_session_chunk_metadata():
 
     assert bridge.list_session_chunks(owner_id="owner-1", session_id="session-1") == rows
     assert bridge.get_session_chunk(rows[0]["chunk_id"], owner_id="owner-2") is None
+    with pytest.raises(RuntimeError, match="owner mismatch"):
+        bridge.get_session_chunk(rows[0]["chunk_id"], owner_id="owner-2", fail_hard=True)
 
 
 def test_datastore_bridge_registers_and_dispatches_callbacks():

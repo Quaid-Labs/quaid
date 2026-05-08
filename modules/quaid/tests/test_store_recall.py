@@ -3308,6 +3308,8 @@ class TestSourceChunkStorage:
         assert [row["chunk_id"] for row in douglas_rows] == [private["chunk_id"]]
         assert graph.list_source_chunks(owner_id="douglas", domains=["work"]) == []
         assert graph.get_source_chunk(private["chunk_id"], owner_id="ada") is None
+        with pytest.raises(RuntimeError, match="owner mismatch"):
+            graph.get_session_chunk(private["chunk_id"], owner_id="ada", fail_hard=True)
         assert graph.get_source_chunk(private["chunk_id"], owner_id="douglas")["text"].startswith("Private session")
 
     def test_source_chunk_rejects_invalid_inputs(self, tmp_path):
