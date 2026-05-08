@@ -5278,6 +5278,35 @@ class TestRollingExtraction:
         assert metric["final_facts_stored"] == 0
         assert metric["final_facts_skipped"] == 0
 
+    def test_session_log_bridge_failure_raises_on_failhard_no_new_content(self, monkeypatch, tmp_path):
+        import core.ingest_runtime as ingest_runtime
+
+        transcript_path = tmp_path / "session.jsonl"
+        transcript_path.write_text(
+            '{"role":"user","content":"hello"}\n',
+            encoding="utf-8",
+        )
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "rolling-inst")
+        extraction_daemon.write_cursor("sess-session-log-fail", 1, str(transcript_path))
+        monkeypatch.setattr(extraction_daemon, "_session_has_harvestable_subagents", lambda *args, **kwargs: False)
+        monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: True)
+        monkeypatch.setattr(
+            ingest_runtime,
+            "run_session_logs_ingest",
+            lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("bridge down")),
+        )
+
+        extraction_daemon.write_signal(
+            signal_type="session_end",
+            session_id="sess-session-log-fail",
+            transcript_path=str(transcript_path),
+        )
+
+        with pytest.raises(RuntimeError, match="session_logs ingest failed"):
+            extraction_daemon.process_signal(extraction_daemon.read_pending_signals()[0])
+
     @pytest.mark.parametrize("signal_type", ["compaction", "timeout"])
     def test_process_signal_noop_does_not_recreate_empty_rolling_state(
         self, monkeypatch, tmp_path, signal_type

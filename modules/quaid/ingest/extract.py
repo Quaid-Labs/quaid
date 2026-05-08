@@ -35,7 +35,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from lib.llm_clients import call_deep_reasoning, parse_json_response
 from config import get_config
-from core.services.memory_service import get_memory_service
 from core.docs.updater import enqueue_project_logs
 from core.lifecycle import soul_snippets as soul_snippets_runtime
 from lib.runtime_context import (
@@ -351,6 +350,25 @@ class _LazyMemoryService:
 
 _memory = _LazyMemoryService()
 
+
+class _LazySessionMemoryBridge:
+    def _svc(self):
+        from core.services.session_memory_bridge import get_session_memory_bridge as _runtime_get_session_memory_bridge
+
+        return _runtime_get_session_memory_bridge()
+
+    def store_session_chunks(self, *args, **kwargs):
+        return self._svc().store_session_chunks(*args, **kwargs)
+
+    def list_session_chunks(self, *args, **kwargs):
+        return self._svc().list_session_chunks(*args, **kwargs)
+
+    def get_session_chunk(self, *args, **kwargs):
+        return self._svc().get_session_chunk(*args, **kwargs)
+
+
+_session_bridge = _LazySessionMemoryBridge()
+
 DEFAULT_EXTRACT_OUTPUT_TOKENS = 16384
 EXTRACT_RETRY_TARGET_TOKENS = 8000
 MIN_EXTRACT_RETRY_TOKENS = 4000
@@ -549,7 +567,7 @@ def _store_payload_source_chunks(
         owner_session_key = (str(owner_id or "").strip(), chunk_session_id)
         if owner_session_key not in session_chunk_offsets:
             try:
-                existing = _memory.list_source_chunks(
+                existing = _session_bridge.list_session_chunks(
                     owner_id=owner_id,
                     session_id=chunk_session_id,
                     order="desc",
@@ -574,7 +592,7 @@ def _store_payload_source_chunks(
         if not microchunks:
             continue
         try:
-            stored_rows = _memory.store_source_chunks(
+            stored_rows = _session_bridge.store_session_chunks(
                 chunks=microchunks,
                 owner_id=owner_id,
                 source_id=source_key,

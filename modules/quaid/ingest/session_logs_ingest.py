@@ -9,12 +9,10 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
-import subprocess
-import tempfile
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from core.services.session_memory_bridge import get_session_memory_bridge
 from lib.runtime_context import get_adapter_instance
 
 
@@ -49,39 +47,6 @@ def _normalize_participant_aliases(value: Any) -> Optional[Dict[str, str]]:
 
 def _build_transcript_from_session_file(path: Path) -> str:
     return get_adapter_instance().parse_session_jsonl(path)
-
-
-_SESSION_LOGS_MODULE = "datastore.memorydb.session_logs"
-
-
-def _call_session_logs_cli(command: str, args: list[str]) -> Dict[str, Any]:
-    env = dict(os.environ)
-    plugin_root = str(Path(__file__).resolve().parents[1])
-    current_pp = str(env.get("PYTHONPATH", "")).strip()
-    env["PYTHONPATH"] = plugin_root if not current_pp else f"{plugin_root}:{current_pp}"
-    proc = subprocess.run(
-        ["python3", "-m", _SESSION_LOGS_MODULE, command, *args],
-        cwd=plugin_root,
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=120,
-        check=False,
-    )
-    if proc.returncode != 0:
-        stderr_text = (proc.stderr or "").strip()
-        stdout_text = (proc.stdout or "").strip()
-        detail_parts = []
-        if stderr_text:
-            detail_parts.append(f"stderr: {stderr_text}")
-        if stdout_text:
-            detail_parts.append(f"stdout: {stdout_text}")
-        detail = " | ".join(detail_parts) if detail_parts else f"session_logs {command} failed"
-        raise RuntimeError(f"session_logs {command} failed (exit={proc.returncode}): {detail}")
-    try:
-        return json.loads(proc.stdout or "{}")
-    except Exception as exc:
-        raise RuntimeError(f"session_logs {command} returned invalid JSON: {exc}") from exc
 
 
 def _resolve_transcript_source(
@@ -136,31 +101,19 @@ def _run(
             "source_kind": source_kind,
         }
 
-    with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".txt", delete=False) as tmp:
-        tmp.write(transcript)
-        tmp_path = tmp.name
-    try:
-        result = _call_session_logs_cli(
-            "ingest",
-            [
-                "--session-id", sid,
-                "--owner", str(owner_id or "default"),
-                "--label", str(label or "unknown"),
-                "--transcript-file", tmp_path,
-                *(["--source-channel", str(source_channel)] if source_channel else []),
-                *(["--conversation-id", str(conversation_id)] if conversation_id else []),
-                *(["--participant-ids", ",".join(str(p).strip() for p in (participant_ids or []) if str(p).strip())] if participant_ids else []),
-                *(["--participant-aliases", json.dumps(normalized_aliases or {}, ensure_ascii=True)] if normalized_aliases else []),
-                "--message-count", str(int(message_count or 0)),
-                "--topic-hint", str(topic_hint or ""),
-                *(["--source-path", str(src_path)] if src_path else []),
-            ],
-        )
-    finally:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
+    result = get_session_memory_bridge().store_session_transcript(
+        session_id=sid,
+        owner_id=str(owner_id or "default"),
+        label=str(label or "unknown"),
+        transcript=transcript,
+        source_path=str(src_path) if src_path else None,
+        source_channel=source_channel,
+        conversation_id=conversation_id,
+        participant_ids=participant_ids or [],
+        participant_aliases=normalized_aliases or {},
+        message_count=int(message_count or 0),
+        topic_hint=topic_hint,
+    )
     result["source_kind"] = source_kind
     return result
 
@@ -243,11 +196,17 @@ def main() -> int:
         return 0 if out.get("status") not in {"failed", "error"} else 1
 
     if args.command == "list":
-        print(json.dumps(_call_session_logs_cli("list", ["--limit", str(int(args.limit or 5)), *(["--owner", str(args.owner)] if args.owner else [])])))
+        print(json.dumps(get_session_memory_bridge().list_session_transcripts(
+            limit=int(args.limit or 5),
+            owner_id=str(args.owner) if args.owner else None,
+        )))
         return 0
 
     if args.command == "load":
-        print(json.dumps(_call_session_logs_cli("load", ["--session-id", str(args.session_id), *(["--owner", str(args.owner)] if args.owner else [])])))
+        print(json.dumps(get_session_memory_bridge().load_session_transcript(
+            session_id=str(args.session_id),
+            owner_id=str(args.owner) if args.owner else None,
+        )))
         return 0
 
     parser.print_help()

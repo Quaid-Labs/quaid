@@ -4626,6 +4626,8 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                                 label, session_id, sl_status,
                                 f" ({sl_reason})" if sl_reason else "")
                 except Exception as e:
+                    if _fail_hard_enabled():
+                        raise RuntimeError("session_logs ingest failed (no-new-content path)") from e
                     logger.warning("[%s] session %s: session_logs ingest failed (no-new-content path): %s",
                                    label, session_id, e)
             _finalize_no_payload_signal(
@@ -5235,6 +5237,8 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                         label, session_id, sl_status,
                         f" ({sl_reason})" if sl_reason else "")
         except Exception as e:
+            if _fail_hard_enabled():
+                raise RuntimeError("session_logs ingest failed") from e
             logger.warning("[%s] session %s: session_logs ingest failed: %s", label, session_id, e)
 
         _write_extraction_buffer_log(

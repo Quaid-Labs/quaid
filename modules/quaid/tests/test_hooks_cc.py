@@ -307,6 +307,7 @@ def test_claude_code_post_compact_turn_gets_identity_additional_context_under_ca
 
     rules_dir = tmp_path / ".claude" / "rules"
     data_dir = tmp_path / "data"
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
     monkeypatch.setenv("QUAID_RULES_DIR", str(rules_dir))
 
     written_signals = []
