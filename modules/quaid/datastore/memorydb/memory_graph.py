@@ -4747,6 +4747,15 @@ def graph_aware_recall(
             temporal_dimension=temporal_dimension,
         )
 
+    results["direct_results"] = _enforce_recall_rows_temporal_axis_validity(
+        results["direct_results"],
+        temporal_dimension=temporal_dimension,
+    )
+    results["graph_results"] = _enforce_recall_rows_temporal_axis_validity(
+        results["graph_results"],
+        temporal_dimension=temporal_dimension,
+    )
+
     results["source_breakdown"]["graph_count"] = len(results["graph_results"])
     results["source_breakdown"]["vector_count"] = len(results["direct_results"])
     results["meta"]["counts"] = {
@@ -7233,6 +7242,10 @@ def _graph_store_recall(
             date_to=date_to,
             temporal_dimension=temporal_dimension,
         )
+    combined = _enforce_recall_rows_temporal_axis_validity(
+        combined,
+        temporal_dimension=temporal_dimension,
+    )
     meta = dict(payload.get("meta") or {})
     counts = dict(meta.get("counts") or {})
     counts["graph_discoveries"] = _count_graph_discovery_rows(combined)
@@ -7620,6 +7633,10 @@ def _run_recall_store_plan(
             temporal_dimension=kwargs.get("temporal_dimension"),
             keep_undated=True,
         )
+    final_rows = _enforce_recall_rows_temporal_axis_validity(
+        final_rows,
+        temporal_dimension=kwargs.get("temporal_dimension"),
+    )
     if rrf_fusion_meta.get("enabled"):
         rrf_shadow_meta = dict(rrf_shadow_meta)
         rrf_shadow_meta["comparison_suppressed_reason"] = "active_rrf_fusion"
@@ -9396,6 +9413,10 @@ def _recall_once(
                     participant_filtered.append(row)
             output = participant_filtered
 
+    output = _enforce_recall_rows_temporal_axis_validity(
+        output,
+        temporal_dimension=temporal_dimension,
+    )
     output.sort(key=lambda x: x["similarity"], reverse=True)
     final_output = _select_final_recall_rows(
         output,
@@ -12367,6 +12388,80 @@ def _filter_recall_rows_by_date_bounds(
         if normalized_to and start_date > normalized_to:
             continue
         row.setdefault("temporal_filter_basis", basis)
+        filtered.append(row)
+    return filtered
+
+
+def _selected_temporal_values_for_dimension(
+    row: Dict[str, Any],
+    *,
+    temporal_dimension: Any = None,
+) -> List[Tuple[str, Any]]:
+    """Return the stored values selected by an explicit recall temporal axis."""
+    dimension = _normalize_recall_temporal_dimension(temporal_dimension)
+    row = row or {}
+    if dimension == "mentioned":
+        if _temporal_value_is_present(row.get("mentioned_at")):
+            return [("mentioned_at", row.get("mentioned_at"))]
+        if _temporal_value_is_present(row.get("source_date")):
+            return [("source_date", row.get("source_date"))]
+        if _temporal_value_is_present(row.get("created_at")):
+            return [("created_at", row.get("created_at"))]
+        return []
+    if dimension == "record":
+        return [("created_at", row.get("created_at"))] if _temporal_value_is_present(row.get("created_at")) else []
+    if dimension == "occurred":
+        values: List[Tuple[str, Any]] = []
+        if _temporal_value_is_present(row.get("occurred_start")):
+            values.append(("occurred_start", row.get("occurred_start")))
+        if _temporal_value_is_present(row.get("occurred_end")):
+            values.append(("occurred_end", row.get("occurred_end")))
+        if values:
+            return values
+        if _temporal_value_is_present(row.get("valid_from")):
+            values.append(("valid_from", row.get("valid_from")))
+        if _temporal_value_is_present(row.get("valid_until")):
+            values.append(("valid_until", row.get("valid_until")))
+        if values:
+            return values
+        if _temporal_value_is_present(row.get("source_date")):
+            return [("source_date", row.get("source_date"))]
+        if _temporal_value_is_present(row.get("created_at")):
+            return [("created_at", row.get("created_at"))]
+    return []
+
+
+def _enforce_recall_rows_temporal_axis_validity(
+    rows: List[Dict[str, Any]],
+    *,
+    temporal_dimension: Any = None,
+) -> List[Dict[str, Any]]:
+    """Validate explicit temporal-axis rows even when no date range is supplied."""
+    dimension = _normalize_recall_temporal_dimension(temporal_dimension)
+    if dimension == "auto":
+        return list(rows or [])
+    filtered: List[Dict[str, Any]] = []
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        invalid: Optional[Tuple[str, Any]] = None
+        for field_name, value in _selected_temporal_values_for_dimension(
+            row,
+            temporal_dimension=dimension,
+        ):
+            if not _date_part(value):
+                invalid = (field_name, value)
+                break
+        if invalid is not None:
+            field_name, value = invalid
+            message = (
+                f"Invalid temporal value for {field_name}: expected YYYY-MM-DD or ISO timestamp, "
+                f"got {str(value).strip()!r}"
+            )
+            if _is_fail_hard_mode():
+                raise ValueError(message)
+            logger.warning("[memory_graph] %s", message)
+            continue
         filtered.append(row)
     return filtered
 
@@ -16130,6 +16225,10 @@ def recall(
             limit=limit,
             intent=gate_intent,
         )
+        final = _enforce_recall_rows_temporal_axis_validity(
+            final,
+            temporal_dimension=temporal_dimension,
+        )
         total_elapsed = (_time.monotonic() - recall_start) * 1000
         total_planner_ms = sum(
             max(0, int(round(float((turn.get("planner") or {}).get("elapsed_ms", 0) or 0))))
@@ -16444,6 +16543,10 @@ def recall(
         merged,
         limit=limit,
         intent=gate_intent,
+    )
+    final = _enforce_recall_rows_temporal_axis_validity(
+        final,
+        temporal_dimension=temporal_dimension,
     )
     total_elapsed = (_time.monotonic() - recall_start) * 1000
     if stop_reason == "max_turns" and len(drill_log) < max_turns:

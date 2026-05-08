@@ -2976,6 +2976,101 @@ class TestTimestampOverride:
         assert filtered == []
         assert "Invalid temporal value for occurred_start" in caplog.text
 
+    def test_recall_raises_on_malformed_occurred_axis_under_failhard(self, tmp_path):
+        """Full recall validates explicit temporal axes even without date bounds."""
+        import datastore.memorydb.memory_graph as mg
+        from datastore.memorydb.memory_graph import recall, store
+
+        graph, _db_file = _make_graph(tmp_path)
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
+             patch.object(mg, "_ollama_healthy", return_value=True):
+            stored = store(
+                "Solomon attended a leatherworking workshop led by Mura Sensei",
+                owner_id="solomon",
+                skip_dedup=True,
+                occurred_start="2023-05-01T23:59:59",
+                occurred_end="2023-05-31T23:59:59",
+                created_at="2026-05-08T06:46:24",
+            )
+            with graph._get_conn() as conn:
+                conn.execute(
+                    "UPDATE nodes SET occurred_start = 'not-a-date' WHERE id = ?",
+                    (stored["id"],),
+                )
+
+            with patch.object(mg, "_is_fail_hard_mode", return_value=True):
+                with pytest.raises(ValueError, match="occurred_start"):
+                    recall(
+                        "leatherworking workshop Mura Sensei",
+                        owner_id="solomon",
+                        limit=5,
+                        temporal_dimension="occurred",
+                        use_routing=False,
+                        use_aliases=False,
+                        use_multi_pass=False,
+                        use_reranker=False,
+                        include_graph_traversal=False,
+                        include_co_session=False,
+                        include_mmr=False,
+                        include_lexical_anchor_shaping=False,
+                        low_signal_retry=False,
+                        track_access=False,
+                    )
+
+    def test_recall_excludes_malformed_occurred_axis_without_failhard(self, tmp_path, caplog):
+        """Non-failHard recall logs and excludes malformed selected-axis rows."""
+        import datastore.memorydb.memory_graph as mg
+        from datastore.memorydb.memory_graph import recall, store
+
+        graph, _db_file = _make_graph(tmp_path)
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
+             patch.object(mg, "_ollama_healthy", return_value=True):
+            bad = store(
+                "Solomon attended a leatherworking workshop led by Mura Sensei",
+                owner_id="solomon",
+                skip_dedup=True,
+                occurred_start="2023-05-01T23:59:59",
+                occurred_end="2023-05-31T23:59:59",
+                created_at="2026-05-08T06:46:24",
+            )
+            good = store(
+                "Solomon keeps a clean leatherworking note after the workshop",
+                owner_id="solomon",
+                skip_dedup=True,
+                occurred_start="2023-05-02T23:59:59",
+                occurred_end="2023-05-02T23:59:59",
+                created_at="2026-05-08T06:47:24",
+            )
+            with graph._get_conn() as conn:
+                conn.execute(
+                    "UPDATE nodes SET occurred_start = 'not-a-date' WHERE id = ?",
+                    (bad["id"],),
+                )
+
+            with patch.object(mg, "_is_fail_hard_mode", return_value=False), caplog.at_level("WARNING"):
+                rows = recall(
+                    "leatherworking workshop",
+                    owner_id="solomon",
+                    limit=5,
+                    temporal_dimension="occurred",
+                    use_routing=False,
+                    use_aliases=False,
+                    use_multi_pass=False,
+                    use_reranker=False,
+                    include_graph_traversal=False,
+                    include_co_session=False,
+                    include_mmr=False,
+                    include_lexical_anchor_shaping=False,
+                    low_signal_retry=False,
+                    track_access=False,
+                )
+
+        assert bad["id"] not in {row["id"] for row in rows}
+        assert good["id"] in {row["id"] for row in rows}
+        assert "Invalid temporal value for occurred_start" in caplog.text
+
     def test_temporal_occurred_falls_back_to_created_for_legacy_rows(self, tmp_path):
         """Explicit occurred filters still find old rows with no occurrence fields."""
         import datastore.memorydb.memory_graph as mg
