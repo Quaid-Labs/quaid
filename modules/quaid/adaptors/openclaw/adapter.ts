@@ -1025,10 +1025,7 @@ function hasProviderDeferredNoticesForAgent(agentLabel: string): boolean {
       if (source === "provider" || source === "llm_config") {
         return true;
       }
-      // Legacy agent_notice rows may have the generated Quaid source only in
-      // the formatted message; treat our structured prefix as provider-owned.
-      const message = String(item.message || "").trim().toLowerCase();
-      return message.includes("[quaid error] [provider]") || message.includes("[quaid error] [llm_config]");
+      return false;
     });
   } catch (err: unknown) {
     writeHookTrace("deferred_notice.provider_probe_check_error", {

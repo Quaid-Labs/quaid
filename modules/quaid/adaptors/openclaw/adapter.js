@@ -826,8 +826,7 @@ function hasProviderDeferredNoticesForAgent(agentLabel) {
       if (source === "provider" || source === "llm_config") {
         return true;
       }
-      const message = String(item.message || "").trim().toLowerCase();
-      return message.includes("[quaid error] [provider]") || message.includes("[quaid error] [llm_config]");
+      return false;
     });
   } catch (err) {
     writeHookTrace("deferred_notice.provider_probe_check_error", {
