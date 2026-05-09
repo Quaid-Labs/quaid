@@ -7862,11 +7862,21 @@ class TestRecallFastHookInjectContract:
                     "project": "recipe-app",
                     "candidate_pool": [{"id": "n1"}],
                     "min_similarity": 0.2,
+                    "use_aliases": True,
+                    "use_intent": False,
+                    "include_graph_traversal": True,
+                    "planned_queries": ["wrong"],
+                    "planner_meta": {"planned_stores": ["wrong"]},
                 },
             )
 
         assert "candidate_pool" not in captured["kwargs"]
         assert captured["kwargs"]["min_similarity"] == 0.6
+        assert captured["kwargs"]["use_aliases"] is False
+        assert captured["kwargs"]["use_intent"] is True
+        assert captured["kwargs"]["include_graph_traversal"] is False
+        assert captured["kwargs"]["planned_queries"] == ["Maya work"]
+        assert captured["kwargs"]["planner_meta"] == {"planned_stores": ["vector"]}
 
     def test_vector_store_recall_disables_routing_in_fast_mode(self):
         import datastore.memorydb.memory_graph as mg

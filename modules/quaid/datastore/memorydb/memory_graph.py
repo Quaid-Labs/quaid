@@ -6433,6 +6433,30 @@ def _merge_docs_bundles(existing: Optional[Dict[str, Any]], incoming: Optional[D
     }
 
 
+_VECTOR_STORE_EXPLICIT_KWARGS = frozenset({
+    "candidate_pool",
+    "min_similarity",
+    "use_routing",
+    "use_aliases",
+    "use_intent",
+    "use_multi_pass",
+    "use_reranker",
+    "low_signal_retry",
+    "max_turns",
+    "planner_profile",
+    "include_graph_traversal",
+    "include_co_session",
+    "include_mmr",
+    "include_lexical_anchor_shaping",
+    "lexical_anchor_planner_mode",
+    "use_lightweight_config",
+    "track_access",
+    "return_meta",
+    "planned_queries",
+    "planner_meta",
+})
+
+
 def _vector_store_recall(
     query: str,
     *,
@@ -6445,8 +6469,11 @@ def _vector_store_recall(
     common_kwargs: Dict[str, Any],
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any], Optional[Dict[str, Any]]]:
     vector_kwargs = dict(common_kwargs or {})
-    vector_kwargs.pop("candidate_pool", None)
-    vector_kwargs.pop("min_similarity", None)
+    vector_kwargs = {
+        key: value
+        for key, value in vector_kwargs.items()
+        if key not in _VECTOR_STORE_EXPLICIT_KWARGS
+    }
     vector_kwargs["relative_temporal_freshness"] = bool(
         vector_kwargs.get("relative_temporal_freshness")
         or (isinstance(planner_meta, dict) and planner_meta.get("freshness_preferred") is True)
