@@ -7966,6 +7966,199 @@ class TestRollingExtraction:
             else:
                 sys.modules.pop("core.runtime.notify", None)
 
+    def test_staged_flush_without_completed_rolling_batch_drains_semantic_buffer(self, monkeypatch, tmp_path):
+        import sys
+        import types
+
+        transcript_path = tmp_path / "session.jsonl"
+        transcript_path.write_text(
+            '{"role":"user","content":"Chunk one stable memory"}\n'
+            '{"role":"user","content":"Chunk two Baxter orange linen notebook and Emilia Rosa markers"}\n',
+            encoding="utf-8",
+        )
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "rolling-inst")
+        instance_root = tmp_path / "instances" / "rolling-inst"
+        instance_root.mkdir(parents=True, exist_ok=True)
+        (instance_root / "config.json").write_text(
+            json.dumps({"adapter": {"type": "standalone"}}),
+            encoding="utf-8",
+        )
+        extraction_daemon.write_cursor("sess-roll", 2, str(transcript_path))
+        extraction_daemon.write_rolling_state(
+            "sess-roll",
+            {
+                "session_id": "sess-roll",
+                "transcript_path": str(transcript_path),
+                "processed_line_offset": 2,
+                "buffered_line_offset": 2,
+                "semantic_buffer": "User: Baxter uses the orange linen notebook and Emilia Rosa marker.",
+                "semantic_buffer_tokens": 435,
+                "rolling_batches": 0,
+                "carry_facts": [{"text": "Owner has stable carry context"}],
+                "raw_facts": [{"text": "Owner staged prior fact", "category": "fact"}],
+            },
+        )
+        monkeypatch.setattr(extraction_daemon, "_get_owner_id", lambda: "Owner")
+
+        real_registry = sys.modules.get("core.subagent_registry")
+        real_adapter = sys.modules.get("lib.adapter")
+        real_notify = sys.modules.get("core.runtime.notify")
+        fake_registry = types.ModuleType("core.subagent_registry")
+        fake_registry.is_registered_subagent = lambda sid: False
+        fake_registry.get_harvestable = lambda sid: []
+        fake_registry.mark_harvested = lambda sid, cid: None
+        fake_registry._registry_dir = lambda: tmp_path / "registry"
+        sys.modules["core.subagent_registry"] = fake_registry
+
+        fake_adapter_mod = types.ModuleType("lib.adapter")
+
+        class _FakeAdapter(_OwnedTestAdapterMixin):
+            def quaid_home(self):
+                return tmp_path
+
+            def instance_root(self):
+                return instance_root
+
+            def data_dir(self):
+                return instance_root / "data"
+
+            def parse_session_jsonl(self, path):
+                raise AssertionError("cursor is at EOF; semantic buffer should be drained directly")
+
+        fake_adapter_mod.get_adapter = lambda: _FakeAdapter()
+        fake_adapter_mod.quaid_projects_dir = lambda home: Path(home) / "projects"
+        fake_adapter_mod.quaid_tracking_dir = lambda home: Path(home) / ".git-tracking"
+        sys.modules["lib.adapter"] = fake_adapter_mod
+        fake_notify = types.ModuleType("core.runtime.notify")
+        fake_notify.notify_memory_extraction = lambda **kwargs: None
+        sys.modules["core.runtime.notify"] = fake_notify
+
+        import core.docs_updater_hook as docs_updater_mod
+        import core.ingest_runtime as ingest_runtime_mod
+        import core.project_registry as project_registry_mod
+        import ingest.extract as extract_mod
+
+        seen_transcripts = []
+        applied_payloads = []
+
+        monkeypatch.setattr(
+            extract_mod,
+            "extract_from_transcript",
+            lambda **kwargs: seen_transcripts.append(kwargs["transcript"]) or {
+                "facts_stored": 0,
+                "facts_skipped": 0,
+                "edges_created": 0,
+                "facts": [],
+                "snippets": {},
+                "journal": {},
+                "project_logs": {},
+                "project_log_metrics": {},
+                "dry_run": True,
+                "raw_facts": [{"text": "Owner uses the orange linen notebook", "category": "fact"}],
+                "raw_snippets": {},
+                "raw_journal": {},
+                "raw_project_logs": {},
+                "carry_facts": [{"text": "Owner uses the orange linen notebook"}],
+                "carry_duplicate_facts_dropped": 0,
+                "payload_duplicate_facts_collapsed": 0,
+                "chunks_processed": 1,
+                "chunks_total": 1,
+                "root_chunks": 1,
+                "split_events": 0,
+                "split_child_chunks": 0,
+                "leaf_chunks": 1,
+                "max_split_depth": 0,
+                "chunk_calls": 1,
+                "deep_calls": 1,
+                "repair_calls": 0,
+                "assessment_usable": 1,
+                "assessment_nothing_usable": 0,
+                "assessment_needs_smaller_chunk": 0,
+                "unclassified_empty_payloads": 0,
+            },
+        )
+        monkeypatch.setattr(
+            extract_mod,
+            "apply_extracted_payloads",
+            lambda payload, **kwargs: applied_payloads.append(payload) or {
+                **payload,
+                "facts_stored": len(payload.get("raw_facts", []) or []),
+                "facts_skipped": 0,
+                "edges_created": 0,
+                "facts": [],
+                "snippets": {},
+                "journal": {},
+                "project_logs": {},
+                "project_log_metrics": {},
+            },
+        )
+        monkeypatch.setattr(ingest_runtime_mod, "run_session_logs_ingest", lambda **kwargs: {"status": "indexed"})
+        monkeypatch.setattr(project_registry_mod, "snapshot_all_projects", lambda: [])
+        monkeypatch.setattr(docs_updater_mod, "update_project_docs", lambda snapshots, extraction_result: {"docs_updated": 0})
+        monkeypatch.setattr(extraction_daemon, "_warm_payload_embeddings", lambda facts: {
+            "requested": len(facts),
+            "unique": len(facts),
+            "cache_hits": 0,
+            "warmed": len(facts),
+            "failed": 0,
+            "skipped_empty": 0,
+        })
+        monkeypatch.setattr(
+            extraction_daemon,
+            "_read_usage_totals",
+            lambda: {
+                "calls": 0,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "fast_calls": 0,
+                "fast_input_tokens": 0,
+                "fast_output_tokens": 0,
+                "deep_calls": 0,
+                "deep_input_tokens": 0,
+                "deep_output_tokens": 0,
+            },
+        )
+
+        try:
+            extraction_daemon.write_signal(
+                signal_type="session_end",
+                session_id="sess-roll",
+                transcript_path=str(transcript_path),
+                meta={
+                    "reason": "rolling_stage_flush",
+                    "source_signal": "rolling",
+                    "staged_payload_sweep": True,
+                    "flush_staged_payload_only": True,
+                },
+            )
+            extraction_daemon.process_signal(extraction_daemon.read_pending_signals()[0])
+
+            assert seen_transcripts == [
+                "User: Baxter uses the orange linen notebook and Emilia Rosa marker."
+            ]
+            assert len(applied_payloads) == 1
+            assert [fact["text"] for fact in applied_payloads[0]["raw_facts"]] == [
+                "Owner staged prior fact",
+                "Owner uses the orange linen notebook",
+            ]
+            assert extraction_daemon.read_cursor("sess-roll")["line_offset"] == 2
+            assert not extraction_daemon._rolling_state_path("sess-roll").exists()
+        finally:
+            if real_registry is not None:
+                sys.modules["core.subagent_registry"] = real_registry
+            else:
+                sys.modules.pop("core.subagent_registry", None)
+            if real_adapter is not None:
+                sys.modules["lib.adapter"] = real_adapter
+            else:
+                sys.modules.pop("lib.adapter", None)
+            if real_notify is not None:
+                sys.modules["core.runtime.notify"] = real_notify
+            else:
+                sys.modules.pop("core.runtime.notify", None)
+
     def test_process_signal_session_end_emits_rolling_stage_before_flushing_over_budget_buffer(self, monkeypatch, tmp_path):
         import sys
         import types

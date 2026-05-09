@@ -4532,10 +4532,24 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
         int(cursor_offset or 0),
     )
     staged_semantic_ready = rolling_mode and _semantic_buffer_has_content(staged_state)
+    drain_unstaged_semantic_buffer_on_sweep = bool(
+        staged_payload_sweep_signal
+        and signal_type == "session_end"
+        and _semantic_buffer_has_content(staged_state)
+        and int(staged_state.get("rolling_batches", 0) or 0) <= 0
+    )
+    if drain_unstaged_semantic_buffer_on_sweep:
+        logger.info(
+            "[%s] session %s: rolling-stage flush has no completed rolling batch; "
+            "draining pending semantic buffer during lifecycle flush",
+            label,
+            session_id,
+        )
     flush_staged_payload_only = bool(
         staged_payload_sweep_signal
         and signal_meta.get("flush_staged_payload_only")
         and staged_state_has_payload(staged_state)
+        and not drain_unstaged_semantic_buffer_on_sweep
     )
     if total_lines > buffered_line_offset and not staged_semantic_ready and not flush_staged_payload_only:
         buffer_kwargs: Dict[str, Any] = {"adapter": adapter}
@@ -4703,7 +4717,11 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             transcript_text = adapter.parse_session_jsonl(Path(tmp_path))
         if rolling_mode:
             transcript_text = str(staged_state.get("semantic_buffer", "") or "").strip()
-        if not rolling_mode and not staged_payload_sweep_signal and _semantic_buffer_has_content(staged_state):
+        if (
+            not rolling_mode
+            and (not staged_payload_sweep_signal or drain_unstaged_semantic_buffer_on_sweep)
+            and _semantic_buffer_has_content(staged_state)
+        ):
             if int(staged_state.get("semantic_buffer_tokens", 0) or 0) >= chunk_budget:
                 operation_phase = "rolling_stage_extract"
                 staged_semantic_buffer_for_nonrolling = True
@@ -5335,7 +5353,11 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             source_key=lock_owner_key,
             processed_signal_type=signal_type,
         )
-        if staged_payload_sweep_signal and _semantic_buffer_has_content(staged_state):
+        if (
+            staged_payload_sweep_signal
+            and _semantic_buffer_has_content(staged_state)
+            and not drain_unstaged_semantic_buffer_on_sweep
+        ):
             write_rolling_state(session_id, clear_staged_payload_from_state(staged_state))
         else:
             clear_rolling_state(session_id)
