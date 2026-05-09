@@ -83,6 +83,11 @@ MMR diversity (lambda=0.7)
      ▼
 Multi-hop graph traversal (depth=2, score decay 0.7^depth)
      │
+     ├── Relation-chain shortcut: explicit multi-hop relationship queries can
+     │   run vector + graph store lanes before the normal multi-pass path.
+     │   Guided graph seeds, expanded merge windows, and graph metadata merge
+     │   preserve terminal relation-chain facts through RRF dedup/truncation.
+     │
      ▼
 Privacy filter + session dedup
      │
@@ -124,6 +129,19 @@ Multi-stage pipeline with RRF fusion, HyDE query expansion, intent awareness, an
 8. **MMR diversity** — Maximal Marginal Relevance (lambda=0.7) prevents redundant results
 9. **Multi-hop traversal** — bidirectional graph traversal, depth=2, hop score decay 0.7^depth, triggered from live relation types plus stored edge-keyword metadata rather than only fixed lexical buckets
 10. **Access tracking** — increments access_count and accessed_at on returned results
+
+For relation-chain queries with two or more planned relation groups, recall can
+take a store-plan shortcut before the regular multi-pass broadening path. The
+planner runs vector and graph store lanes through `_run_recall_store_plan`; if
+that shortcut times out and failHard is off, recall falls back to the normal
+multi-pass path. In failHard mode the timeout is re-raised. The graph lane uses
+guided prefix maps so intermediate and terminal nodes are expanded even when
+flat `has_fact` edges saturate the normal BFS buffer. RRF merge preserves graph
+metadata (`graph_path`, relation sequence, source/target names) when the vector
+row wins similarity for the same fact. For relation-chain plans, the merge
+window is expanded before the chain boost and then cut back to the normal
+`limit*2` window so lower-RRF but chain-complete facts are not discarded before
+ranking.
 
 ### Decay System (Ebbinghaus)
 
@@ -336,11 +354,24 @@ Key search functions:
 - Partial/fuzzy matching for entity names to handle variations
 - Owner pronoun resolution ("my", "our") maps to owner's Person node
 - FTS5 sync safety net: ensures FTS index stays consistent with nodes table
+- Query-requirement derivation recognizes assistant/AI-like terms across the
+  supported language set, including short multilingual forms such as `ki`,
+  `ia`, and Cyrillic `ии`, so queries about assistant activity route to the
+  right evidence requirements.
 
 **Graph traversal:**
 - `get_related(node_id, relation, depth)` — BFS traversal. Top 3 results get depth-2 traversal; related nodes scored with 0.7^depth decay.
 - `get_related_bidirectional(node_id, relations, depth)` — BFS traversal of BOTH inbound and outbound edges (default depth=2, max_results=20). Returns `(node, relation, direction, depth)` tuples. Early stop when max_results reached.
 - **BEAM search** — scored frontier expansion with adaptive LLM reranking for higher-quality graph traversal; falls back to BFS on error.
+
+**Store-plan recursion guard:**
+- `_vector_store_recall()` calls inner `recall()` for the vector lane. It strips
+  explicit recall kwargs via `_VECTOR_STORE_EXPLICIT_KWARGS` before the
+  `**kwargs` spread.
+- The vector lane copies `planner_meta` and removes `graph` from
+  `planned_stores` before the inner call. This keeps the vector lane vector-only
+  and prevents nested relation-chain store plans from recursing until the worker
+  pool timeout.
 
 **Edge Keywords (for graph expansion triggers):**
 - `get_edge_keywords()` — retrieves all relation→keywords mappings from DB
@@ -472,7 +503,7 @@ OpenClaw plugin (Total Recall / quaid) that:
 - Store metadata and default selection now live in `core/knowledge-stores.ts` (`.js` runtime pair).
 - Orchestrator consumes that registry for normalization/routing defaults instead of hardcoded store lists.
 - Adapter consumes registry-rendered guidance text for `memory_recall` tool instructions so store docs stay aligned with runtime behavior.
-- `session_chunks` is the raw session evidence store. Defaults still exclude it, but the Python recall planner may select it for exact wording or raw conversation evidence queries; explicit callers can request it with `stores:["session_chunks"]` or `stores:["vector","session_chunks"]`. Session chunk rows carry `session_id`, scalar navigation (`next_chunk_id`; previous is queried by `next_chunk_id=<id>`), optional `message_id` / `message_pair_id`, and embeddings for semantic + lexical chunk recall.
+- `session_chunks` is the raw session evidence store. Defaults still exclude it, but the Python recall planner may select it for exact wording or raw conversation evidence queries; explicit callers can request it with `stores:["session_chunks"]` or `stores:["vector","session_chunks"]`. Session chunk rows carry `session_id`, scalar navigation (`next_chunk_id`; previous is queried by `next_chunk_id=<id>`), optional `message_id` / `message_pair_id`, optional `microchunk_id`, and embeddings for semantic + lexical chunk recall. SessionDB projection passes per-chunk `message_pair_ids` and `microchunk_ids` lists through `store_session_chunks()`; `store_source_chunks()` maps each list item to the corresponding singular `message_pair_id` / `microchunk_id`. The singular `store_source_chunk()` path also accepts those plural lists as a compatibility surface and selects by `chunk_index` when a mixed runtime reaches the singular method directly.
 
 **Extraction prioritization (bug-bash update):**
 - Prompt now enforces explicit priority order:

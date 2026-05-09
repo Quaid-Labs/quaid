@@ -196,6 +196,13 @@ Rolling extraction has two phases:
    - This is the point where facts are actually published to the DB and dedup/store
      telemetry is finalized.
 
+There is one data-loss prevention variant of the flush path: if a
+`rolling_stage_flush` synthetic `session_end` arrives while rolling state has
+`rolling_batches <= 0` but a non-empty `semantic_buffer`, the daemon drains that
+unstaged buffer instead of treating the signal as staged-payload-only. This
+covers races where a session boundary arrives before the threshold-crossing
+rolling LLM stage has produced a completed batch.
+
 ### Frozen internal-cursor recovery
 
 Some adapters can start a session with host/system prompt noise before the first
@@ -212,10 +219,12 @@ Recovery then follows normal rolling semantics:
   `_ROLLING_INTERNAL_ADVANCE_GRACE_SECONDS`, the buffer remains in rolling state
   with `internal_cursor_unfrozen_pending_flush=true` so the next user chunk can
   cross the rolling threshold.
-- If the transcript goes quiet while the recovered buffer is still below
-  threshold, the daemon writes a synthetic `session_end` with
-  `meta.reason="internal_cursor_unfrozen_flush"` to prevent one-shot sessions
-  from stranding data forever.
+- If the recovered buffer stays below threshold, the daemon writes a synthetic
+  `session_end` with `meta.reason="internal_cursor_unfrozen_flush"` only after
+  the transcript is quiet *and* its mtime is outside
+  `_ROLLING_INTERNAL_ADVANCE_GRACE_SECONDS`. The `recently_modified` check is
+  applied on every scan while `internal_cursor_unfrozen_pending_flush=true`, not
+  only on the first unfreeze.
 
 This means an internal-cursor recovery may add up to one grace window before a
 subthreshold one-shot tail flushes, but active transcripts should continue
