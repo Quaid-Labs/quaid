@@ -3305,6 +3305,24 @@ class TestSourceChunkStorage:
         assert len(rows) == 1
         assert rows[0]["microchunk_id"] == "micro-backfill-1"
 
+    def test_store_source_chunk_accepts_projected_link_id_lists(self, tmp_path):
+        """Compatibility callers may pass per-chunk link lists through the singular path."""
+        graph, _db_file = _make_graph(tmp_path)
+
+        row = graph.store_source_chunk(
+            "User: Rowan keeps the ferry pass in the blue notebook.",
+            owner_id="rowan",
+            source_id="session-file-link-list",
+            session_id="session-link-list",
+            chunk_index=1,
+            message_pair_ids=["pair-link-0", "pair-link-1"],
+            microchunk_ids=["micro-link-0", "micro-link-1"],
+            embed=False,
+        )
+
+        assert row["message_pair_id"] == "pair-link-1"
+        assert row["microchunk_id"] == "micro-link-1"
+
     def test_store_source_chunk_changed_content_appends_new_row(self, tmp_path):
         """Changed content at the same source/index creates a new append-only chunk."""
         graph, _db_file = _make_graph(tmp_path)

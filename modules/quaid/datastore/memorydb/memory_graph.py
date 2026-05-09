@@ -1169,7 +1169,9 @@ class MemoryGraph:
         next_chunk_id: Optional[str] = None,
         message_id: Optional[str] = None,
         message_pair_id: Optional[str] = None,
+        message_pair_ids: Optional[Any] = None,
         microchunk_id: Optional[str] = None,
+        microchunk_ids: Optional[Any] = None,
         owner_id: Optional[str] = None,
         source_channel: Optional[str] = None,
         source_conversation_id: Optional[str] = None,
@@ -1203,6 +1205,19 @@ class MemoryGraph:
             raise ValueError(f"chunk_index must be an integer, got {chunk_index!r}") from exc
         if normalized_index < 0:
             raise ValueError("chunk_index must be non-negative")
+
+        if message_pair_id is None:
+            message_pair_id = self._select_source_chunk_link_id(
+                message_pair_ids,
+                chunk_index=normalized_index,
+                field_name="message_pair_ids",
+            )
+        if microchunk_id is None:
+            microchunk_id = self._select_source_chunk_link_id(
+                microchunk_ids,
+                chunk_index=normalized_index,
+                field_name="microchunk_ids",
+            )
 
         if not owner_id:
             try:
@@ -1345,6 +1360,38 @@ class MemoryGraph:
         out = self._row_to_source_chunk(row) if row else asdict(chunk)
         out["status"] = "created" if cursor.rowcount > 0 else "existing"
         return out
+
+    def _select_source_chunk_link_id(
+        self,
+        values: Any,
+        *,
+        chunk_index: int,
+        field_name: str,
+    ) -> Optional[str]:
+        if values is None:
+            return None
+        if isinstance(values, (str, bytes)):
+            return str(values).strip() or None
+        try:
+            items = list(values)
+        except TypeError:
+            return str(values).strip() or None
+        if not items:
+            return None
+        if len(items) == 1:
+            selected = items[0]
+        elif 0 <= chunk_index < len(items):
+            selected = items[chunk_index]
+        else:
+            msg = (
+                f"store_source_chunk received {field_name} but cannot map "
+                f"chunk_index={chunk_index} to a single link id"
+            )
+            if _is_fail_hard_mode():
+                raise RuntimeError(msg)
+            logger.error("%s; dropping source chunk link", msg)
+            return None
+        return str(selected or "").strip() or None
 
     def store_source_chunks(
         self,
