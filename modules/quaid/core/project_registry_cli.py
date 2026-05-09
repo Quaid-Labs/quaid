@@ -101,6 +101,27 @@ def _require_project_visible(name: str, project: Optional[Dict[str, Any]]) -> Di
     return project
 
 
+def _print_existing_project_context(name: str, project: Optional[Dict[str, Any]]) -> None:
+    """Explain create conflicts that are hidden by current-instance scoping."""
+    if not project:
+        return
+    instances = _dedupe_instances(project.get("instances", []))
+    current = _current_instance_id()
+    if instances:
+        print(
+            f"Existing project '{name}' is linked to instance(s): {', '.join(instances)}",
+            file=sys.stderr,
+        )
+    else:
+        print(f"Existing project '{name}' is not linked to any instance.", file=sys.stderr)
+    if current and current not in instances:
+        print(
+            f"Current instance '{current}' is not linked; run `quaid project link {name}` "
+            "to attach it, or delete the stale project before recreating it.",
+            file=sys.stderr,
+        )
+
+
 def cmd_list(args):
     from core.project_registry import list_projects
     projects = _scope_projects_to_current_instance(list_projects())
@@ -135,7 +156,7 @@ def cmd_list(args):
 
 
 def cmd_create(args):
-    from core.project_registry import create_project
+    from core.project_registry import create_project, get_project
     try:
         entry = create_project(
             args.name,
@@ -145,7 +166,15 @@ def cmd_create(args):
         print(f"Created project: {args.name}")
         if args.json:
             print(json.dumps(entry, indent=2))
-    except (ValueError, KeyError) as e:
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        if "already exists" in str(e).lower():
+            try:
+                _print_existing_project_context(args.name, get_project(args.name))
+            except Exception as context_exc:
+                print(f"Could not load existing project context: {context_exc}", file=sys.stderr)
+        sys.exit(1)
+    except KeyError as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
 

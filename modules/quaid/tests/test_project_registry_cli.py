@@ -163,11 +163,30 @@ class TestCmdCreate:
         assert parsed["description"] == "X"
 
     def test_valueerror_exits_with_one(self, capsys):
-        with patch("core.project_registry.create_project", side_effect=ValueError("already exists")):
+        with patch("core.project_registry.create_project", side_effect=ValueError("already exists")), \
+             patch("core.project_registry.get_project", return_value=None):
             with pytest.raises(SystemExit) as exc_info:
                 cli.cmd_create(_args(name="dup", description=None, source_root=None))
         assert exc_info.value.code == 1
         assert "already exists" in capsys.readouterr().err
+
+    def test_existing_project_error_reports_linked_instances_when_current_instance_hidden(self, capsys):
+        project = {
+            "description": "fixture",
+            "instances": ["standalone-runtime"],
+        }
+        with patch("core.project_registry.create_project", side_effect=ValueError("Project already exists: dup")), \
+             patch("core.project_registry.get_project", return_value=project), \
+             patch("core.project_registry_cli._current_instance_id", return_value="cc-livetest"):
+            with pytest.raises(SystemExit) as exc_info:
+                cli.cmd_create(_args(name="dup", description=None, source_root=None))
+
+        assert exc_info.value.code == 1
+        err = capsys.readouterr().err
+        assert "Project already exists: dup" in err
+        assert "standalone-runtime" in err
+        assert "cc-livetest" in err
+        assert "quaid project link dup" in err
 
     def test_keyerror_exits_with_one(self, capsys):
         with patch("core.project_registry.create_project", side_effect=KeyError("bad")):
