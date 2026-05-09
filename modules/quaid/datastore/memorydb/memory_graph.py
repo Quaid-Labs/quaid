@@ -5442,6 +5442,64 @@ def _fast_term_rescue_score(
     return min(rescue_score, 0.99)
 
 
+_ASSISTANT_PROVENANCE_SOURCE_TYPES = {"assistant", "subagent", "tool"}
+
+
+def _node_source_type(node: Node) -> str:
+    attrs = getattr(node, "attributes", None)
+    if isinstance(attrs, dict):
+        return str(attrs.get("source_type") or "").strip().lower()
+    return str(getattr(node, "source_type", "") or "").strip().lower()
+
+
+def _prefer_user_provenance_for_full_fit_rows(
+    results: List[tuple],
+    query: str,
+    *,
+    intent: str = "GENERAL",
+) -> List[tuple]:
+    """Keep assistant recollections below direct user evidence on normal queries."""
+    if len(results) <= 1:
+        return results
+    analysis = _derive_query_requirements(
+        query,
+        intent=intent,
+        include_relation_keywords=False,
+    )
+    if "assistant_source" in set(analysis.get("requirements") or []):
+        return results
+    query_terms = list(analysis.get("query_terms") or [])
+    if len(query_terms) < 2:
+        return results
+
+    indexed: List[Tuple[Node, float, int, str]] = []
+    for node, score in results:
+        overlap = _query_term_overlap({"text": _node_searchable_text(node)}, query_terms)
+        indexed.append((node, float(score), overlap, _node_source_type(node)))
+
+    full_fit_count = len(query_terms)
+    direct_full_scores = [
+        score
+        for _node, score, overlap, source_type in indexed
+        if overlap >= full_fit_count and source_type not in _ASSISTANT_PROVENANCE_SOURCE_TYPES
+    ]
+    if not direct_full_scores:
+        return results
+
+    direct_full_ceiling = max(direct_full_scores)
+    adjusted: List[tuple] = []
+    touched = False
+    for node, score, overlap, source_type in indexed:
+        adjusted_score = score
+        if overlap >= full_fit_count and source_type in _ASSISTANT_PROVENANCE_SOURCE_TYPES:
+            adjusted_score = min(score, max(0.0, direct_full_ceiling - 0.01))
+            touched = touched or adjusted_score != score
+        adjusted.append((node, adjusted_score))
+    if touched:
+        adjusted.sort(key=lambda item: float(item[1]), reverse=True)
+    return adjusted
+
+
 # ==========================================================================
 # Intent-Aware Query Classification
 # ==========================================================================
@@ -9035,6 +9093,12 @@ def _recall_once(
         temporal_dimension=temporal_dimension,
     )
 
+    scored_results = _prefer_user_provenance_for_full_fit_rows(
+        scored_results,
+        clean_query,
+        intent=intent,
+    )
+
     # Apply MMR diversity (select diverse top-N from candidates)
     _mmr_lambda = 0.7
     _mmr_candidate_cap = max(limit * 4, 12)
@@ -11422,7 +11486,7 @@ def _derive_query_requirements(
     query_terms = _extract_distinctive_query_terms(query)
     relation_matches = _relation_matches_for_query(query) if include_relation_keywords else []
     graph_like = bool(relation_matches) or _has_generic_graph_signal(query)
-    assistant_like = bool(re.search(r"\b(agent|assistant|ai)\b", lower))
+    assistant_like = bool(re.search(r"\b(agent|assistant|ai|ki|ia|ии)\b", lower))
     current_like = bool(
         re.search(r"\b(current|currently|latest|now|today|most recent|as of|still|yet)\b", lower)
     )

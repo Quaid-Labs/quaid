@@ -9553,6 +9553,17 @@ class TestRecallFastHookInjectContract:
 
         assert "identity" in analysis["requirements"]
 
+    def test_query_requirements_detect_multilingual_ai_source_terms(self):
+        import datastore.memorydb.memory_graph as mg
+
+        for query in (
+            "Was hat die KI ueber Ari Friday ritual gesagt?",
+            "O que a IA disse sobre Ari Friday ritual?",
+            "Что ИИ сказал про Ari Friday ritual?",
+        ):
+            analysis = mg._derive_query_requirements(query, intent="GENERAL")
+            assert "assistant_source" in analysis["requirements"]
+
     def test_relation_matches_use_live_relation_types_without_static_keyword_lists(self):
         import datastore.memorydb.memory_graph as mg
 
@@ -10340,6 +10351,127 @@ class TestRecallFastHookInjectContract:
 
         assert rows
         assert rows[0]["id"] == full_fit.id
+
+    def test_recall_prefers_user_provenance_over_assistant_full_fit_claim(self):
+        import datastore.memorydb.memory_graph as mg
+
+        user_fact = mg.Node.create(
+            "Preference",
+            "Ari keeps a Friday lantern ritual before the market walk.",
+            keywords="Friday lantern ritual",
+            attributes={"source_type": "user"},
+        )
+        assistant_fact = mg.Node.create(
+            "Preference",
+            "Ari's Friday ritual is strength work.",
+            keywords="Friday ritual strength work",
+            attributes={"source_type": "assistant"},
+        )
+
+        rows = mg._prefer_user_provenance_for_full_fit_rows(
+            [(assistant_fact, 0.98), (user_fact, 0.86)],
+            "What is Ari Friday ritual?",
+        )
+
+        assert [node.id for node, _score in rows] == [user_fact.id, assistant_fact.id]
+        assert rows[0][1] == 0.86
+        assert rows[1][1] < rows[0][1]
+
+    def test_recall_keeps_assistant_provenance_for_assistant_source_query(self):
+        import datastore.memorydb.memory_graph as mg
+
+        user_fact = mg.Node.create(
+            "Preference",
+            "Ari keeps a Friday lantern ritual before the market walk.",
+            keywords="Friday lantern ritual",
+            attributes={"source_type": "user"},
+        )
+        assistant_fact = mg.Node.create(
+            "Preference",
+            "The assistant said Ari's Friday ritual is strength work.",
+            keywords="assistant Friday ritual strength work",
+            attributes={"source_type": "assistant"},
+        )
+
+        rows = mg._prefer_user_provenance_for_full_fit_rows(
+            [(assistant_fact, 0.98), (user_fact, 0.86)],
+            "What did the assistant say about Ari Friday ritual?",
+        )
+
+        assert [node.id for node, _score in rows] == [assistant_fact.id, user_fact.id]
+        assert rows[0][1] == 0.98
+
+    def test_recall_keeps_assistant_provenance_for_multilingual_ai_source_query(self):
+        import datastore.memorydb.memory_graph as mg
+
+        user_fact = mg.Node.create(
+            "Preference",
+            "Ari keeps a Friday lantern ritual before the market walk.",
+            keywords="Friday lantern ritual",
+            attributes={"source_type": "user"},
+        )
+        assistant_fact = mg.Node.create(
+            "Preference",
+            "Die KI sagte, dass Aris Friday ritual strength work ist.",
+            keywords="KI Friday ritual strength work",
+            attributes={"source_type": "assistant"},
+        )
+
+        rows = mg._prefer_user_provenance_for_full_fit_rows(
+            [(assistant_fact, 0.98), (user_fact, 0.86)],
+            "Was hat die KI ueber Ari Friday ritual gesagt?",
+        )
+
+        assert [node.id for node, _score in rows] == [assistant_fact.id, user_fact.id]
+        assert rows[0][1] == 0.98
+
+    def test_recall_path_prefers_direct_user_fact_over_assistant_contamination(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _ = _make_graph(tmp_path)
+        user_fact = mg.Node.create(
+            "Preference",
+            "Ari keeps a Friday lantern ritual before the market walk.",
+            owner_id="quaid",
+            keywords="Friday lantern ritual",
+            attributes={"source_type": "user"},
+        )
+        assistant_fact = mg.Node.create(
+            "Preference",
+            "Ari's Friday ritual is strength work.",
+            owner_id="quaid",
+            keywords="Friday ritual strength work",
+            attributes={"source_type": "assistant"},
+        )
+        graph.add_node(user_fact, embed=False)
+        graph.add_node(assistant_fact, embed=False)
+
+        def fake_search_hybrid(_self, *_args, **_kwargs):
+            return [(assistant_fact, 0.98), (user_fact, 0.86)]
+
+        with patch.object(mg, "get_graph", return_value=graph), \
+             patch.object(mg.MemoryGraph, "search_hybrid", fake_search_hybrid), \
+             patch.object(mg, "get_edge_keywords", return_value={}):
+            rows, _meta = mg._recall_once(
+                "What is Ari Friday ritual?",
+                owner_id="quaid",
+                limit=5,
+                min_similarity=0.1,
+                use_routing=False,
+                use_aliases=False,
+                use_intent=True,
+                use_multi_pass=False,
+                use_reranker=False,
+                include_graph_traversal=False,
+                include_co_session=False,
+                include_mmr=False,
+                lexical_anchor_planner_mode="deterministic",
+                use_lightweight_config=False,
+                return_meta=True,
+            )
+
+        assert rows
+        assert rows[0]["id"] == user_fact.id
 
     def test_graph_store_recall_expands_terminal_graph_entity_to_attached_fact(self, tmp_path):
         import datastore.memorydb.memory_graph as mg
