@@ -376,6 +376,18 @@ describe("install daemon policy", () => {
     expect(setupText).toContain("failed to provision extension directory");
   });
 
+  it("OpenClaw hotswap expands remote home paths instead of creating literal tilde dirs", () => {
+    const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+    const hotswapText = fs.readFileSync(
+      path.join(repoRoot, "modules", "quaid", "scripts", "hotswap-openclaw-adapter.sh"),
+      "utf8",
+    );
+
+    expect(hotswapText).toContain("printf '$HOME'");
+    expect(hotswapText).toContain('printf "\\$HOME/\'%s\'"');
+    expect(hotswapText).not.toContain('printf "~/\'%s\'"');
+  });
+
   it("OpenClaw installer re-sanitizes native memory plugins after gateway reloads", () => {
     const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
     const setupText = fs.readFileSync(path.join(repoRoot, "setup-quaid.mjs"), "utf8");

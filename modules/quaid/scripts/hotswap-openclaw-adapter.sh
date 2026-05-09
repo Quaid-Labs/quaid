@@ -27,12 +27,12 @@ APPLY=0
 remote_quote() {
   local value="$1"
   if [[ "$value" == "~" ]]; then
-    printf "~"
+    printf '$HOME'
     return
   fi
   if [[ "$value" == "~/"* ]]; then
     local rest="${value#~/}"
-    printf "~/'%s'" "$(printf '%s' "$rest" | sed "s/'/'\\\\''/g")"
+    printf "\$HOME/'%s'" "$(printf '%s' "$rest" | sed "s/'/'\\\\''/g")"
     return
   fi
   printf "'%s'" "$(printf '%s' "$value" | sed "s/'/'\\\\''/g")"
