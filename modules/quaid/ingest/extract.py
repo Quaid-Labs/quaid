@@ -51,8 +51,14 @@ logger = logging.getLogger(__name__)
 
 _SESSION_DATE_RE = re.compile(r"(?<!\d)(\d{4}-\d{2}-\d{2})(?!\d)")
 _ISO_DATE_ANCHOR_RE = re.compile(r"\b\d{4}-\d{2}-\d{2}\b")
-_TRANSCRIPT_TIMESTAMP_RE = re.compile(
+_TRANSCRIPT_TIMESTAMP_PATTERN = (
     r"\d{4}-\d{2}-\d{2}[T ][0-2]\d:[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?"
+)
+_TRANSCRIPT_TIMESTAMP_RE = re.compile(_TRANSCRIPT_TIMESTAMP_PATTERN)
+_TIMESTAMPED_TRANSCRIPT_TURN_RE = re.compile(
+    rf"^\s*(?:\[(?P<bracketed>{_TRANSCRIPT_TIMESTAMP_PATTERN})\]|(?P<plain>{_TRANSCRIPT_TIMESTAMP_PATTERN}))"
+    r"\s+(?:User|Assistant|Agent|System|Tool|Developer):\s+",
+    re.IGNORECASE,
 )
 
 
@@ -82,10 +88,12 @@ def _normalize_extracted_timestamp(value: Any) -> Optional[str]:
 
 
 def _first_transcript_timestamp_hint(transcript_text: str) -> Optional[str]:
-    match = _TRANSCRIPT_TIMESTAMP_RE.search(str(transcript_text or ""))
-    if not match:
-        return None
-    return _normalize_extracted_timestamp(match.group(0))
+    for line in str(transcript_text or "").splitlines():
+        match = _TIMESTAMPED_TRANSCRIPT_TURN_RE.match(line)
+        if not match:
+            continue
+        return _normalize_extracted_timestamp(match.group("bracketed") or match.group("plain"))
+    return None
 
 
 def _timestamp_sort_key(value: Any) -> Tuple[int, str]:
@@ -134,22 +142,24 @@ def _normalize_fact_temporal_hint(
     """Normalize fact temporal metadata and backfill source mention time."""
     normalized = dict(fact or {})
     raw_created_at = str(normalized.get("created_at") or "").strip()
-    created_at = _normalize_extracted_timestamp(raw_created_at)
-    fallback_created_at = _normalize_extracted_timestamp(default_created_at)
-    fallback_mentioned_at = _normalize_extracted_timestamp(default_mentioned_at) or fallback_created_at
+    source_created_at = _normalize_extracted_timestamp(raw_created_at)
+    fallback_source_at = _normalize_extracted_timestamp(default_created_at)
+    fallback_mentioned_at = _normalize_extracted_timestamp(default_mentioned_at) or fallback_source_at
     if (
-        created_at
-        and fallback_created_at
+        source_created_at
+        and fallback_source_at
         and re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw_created_at)
-        and raw_created_at == fallback_created_at[:10]
+        and raw_created_at == fallback_source_at[:10]
     ):
-        created_at = fallback_created_at
-    if not created_at:
-        created_at = fallback_created_at
-    if created_at:
-        normalized["created_at"] = created_at
+        source_created_at = fallback_source_at
+    source_timestamp = source_created_at or fallback_source_at
+    # MemoryDB owns created_at as record/write time. Extracted source timestamps
+    # are source mention time and must not override the datastore record axis.
+    normalized.pop("created_at", None)
+    if source_timestamp:
+        normalized["_source_timestamp"] = source_timestamp
     else:
-        normalized.pop("created_at", None)
+        normalized.pop("_source_timestamp", None)
     occurred_start = _normalize_extracted_timestamp(
         normalized.get("occurred_start") or normalized.get("occurred_at")
     )
@@ -164,9 +174,9 @@ def _normalize_fact_temporal_hint(
         normalized.pop("occurred_end", None)
     extracted_mentioned_at = _normalize_extracted_timestamp(normalized.get("mentioned_at"))
     if prefer_default_mentioned_at:
-        mentioned_at = fallback_mentioned_at or extracted_mentioned_at or created_at
+        mentioned_at = fallback_mentioned_at or extracted_mentioned_at or source_timestamp
     else:
-        mentioned_at = extracted_mentioned_at or fallback_mentioned_at or created_at
+        mentioned_at = extracted_mentioned_at or source_timestamp or fallback_mentioned_at
     if mentioned_at:
         normalized["mentioned_at"] = mentioned_at
     else:
@@ -1347,11 +1357,15 @@ def _merge_duplicate_fact_entries(primary: Dict[str, Any], duplicate: Dict[str, 
     if _confidence_rank(other.get("extraction_confidence")) > _confidence_rank(merged.get("extraction_confidence")):
         merged["extraction_confidence"] = other.get("extraction_confidence")
 
-    merged_created_at = _prefer_earlier_timestamp(merged.get("created_at"), other.get("created_at"))
-    if merged_created_at:
-        merged["created_at"] = merged_created_at
+    merged.pop("created_at", None)
+    merged_source_timestamp = _prefer_earlier_timestamp(
+        merged.get("_source_timestamp"),
+        other.get("_source_timestamp"),
+    )
+    if merged_source_timestamp:
+        merged["_source_timestamp"] = merged_source_timestamp
     else:
-        merged.pop("created_at", None)
+        merged.pop("_source_timestamp", None)
     merged_occurred_start = _prefer_earlier_timestamp(merged.get("occurred_start"), other.get("occurred_start"))
     if merged_occurred_start:
         merged["occurred_start"] = merged_occurred_start
@@ -2906,9 +2920,12 @@ def _synthesize_project_logs_from_facts(
         if not project_name or not text:
             continue
         log_entry: Dict[str, Any] = {"text": text}
-        created_at = _normalize_extracted_timestamp(fact.get("created_at"))
-        if created_at:
-            log_entry["created_at"] = created_at
+        source_time = (
+            _normalize_extracted_timestamp(fact.get("_source_timestamp"))
+            or _normalize_extracted_timestamp(fact.get("created_at"))
+        )
+        if source_time:
+            log_entry["created_at"] = source_time
         synthesized.setdefault(project_name, []).append(log_entry)
     return {
         project_name: _normalize_project_log_entries(entries)
@@ -3527,7 +3544,6 @@ def apply_extracted_payloads(
                 conversation_id=source_conversation_id,
                 participant_entity_ids=participant_entity_ids,
                 source_author_id=source_author_id,
-                created_at=fact.get("created_at"),
                 occurred_start=fact.get("occurred_start"),
                 occurred_end=fact.get("occurred_end"),
                 mentioned_at=fact.get("mentioned_at"),
@@ -3684,7 +3700,6 @@ def apply_extracted_payloads(
                             conversation_id=source_conversation_id,
                             participant_entity_ids=participant_entity_ids,
                             source_author_id=source_author_id,
-                            created_at=fact.get("created_at"),
                             occurred_start=fact.get("occurred_start"),
                             occurred_end=fact.get("occurred_end"),
                             mentioned_at=fact.get("mentioned_at"),

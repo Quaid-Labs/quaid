@@ -5,8 +5,8 @@
 # The rolling transcript seeds a handful of recent dated facts, but date-range
 # recall needs entries spanning a wider window (including rows strictly before
 # any date_from we test). This script injects a fixed, known set of rows with
-# known `created_at` timestamps so the tester can write deterministic
-# assertions.
+# known occurred timestamps so the tester can write deterministic assertions.
+# `created_at` remains the insertion/record timestamp.
 #
 # Usage (run on the remote, inside the instance silo):
 #
@@ -29,12 +29,14 @@ import json
 import sqlite3
 import sys
 import uuid
+from datetime import datetime, timezone
 
 db_path = sys.argv[1]
 
 # Real nodes schema (relevant columns):
 #   id TEXT PK, type TEXT NOT NULL, name TEXT NOT NULL,
 #   attributes TEXT (JSON), status TEXT DEFAULT 'approved',
+#   occurred_start TEXT, occurred_end TEXT, mentioned_at TEXT,
 #   created_at TEXT, updated_at TEXT
 # There is no body or domain column. Domain metadata lives in attributes JSON.
 
@@ -72,21 +74,28 @@ try:
             replaced += cur.rowcount
         conn.commit()
 
-    # Insert fresh
-    for marker, created_at, domain, name in rows:
+    # Insert fresh. Historical event time belongs on occurred_*; record time is
+    # when Quaid writes the row.
+    inserted_at = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+    for marker, event_at, domain, name in rows:
         cur.execute(
             """
             INSERT INTO nodes
-                (id, type, name, attributes, status, created_at, updated_at)
-            VALUES (?, ?, ?, ?, 'approved', ?, ?)
+                (id, type, name, attributes, status,
+                 occurred_start, occurred_end, mentioned_at,
+                 created_at, updated_at)
+            VALUES (?, ?, ?, ?, 'approved', ?, ?, ?, ?, ?)
             """,
             (
                 str(uuid.uuid4()),
                 "Fact",
                 name,
                 json.dumps({"domains": [domain]}),
-                created_at,
-                created_at,
+                event_at,
+                event_at,
+                inserted_at,
+                inserted_at,
+                inserted_at,
             ),
         )
         inserted += 1

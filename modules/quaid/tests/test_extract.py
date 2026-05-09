@@ -666,8 +666,21 @@ class TestExtractFromTranscript:
             ("assistant", "Noted."),
         ]
 
+    def test_transcript_timestamp_hint_ignores_project_log_entry_dates(self):
+        from ingest import extract as extract_mod
+
+        assert extract_mod._first_transcript_timestamp_hint(
+            "- [2023-02-14T10:00:00] hist-amber-valentine-2023"
+        ) is None
+        assert (
+            extract_mod._first_transcript_timestamp_hint(
+                "[2026-05-02T14:29:21.414Z] User: My shelf marker is cedar-lantern-4821."
+            )
+            == "2026-05-02T14:29:21+00:00"
+        )
+
     @patch("ingest.extract.call_deep_reasoning")
-    def test_extraction_defaults_created_at_to_transcript_timestamp(self, mock_llm):
+    def test_extraction_defaults_mentioned_at_to_transcript_timestamp(self, mock_llm):
         from ingest.extract import extract_from_transcript
 
         mock_llm.return_value = (json.dumps({
@@ -697,8 +710,41 @@ class TestExtractFromTranscript:
             dry_run=True,
         )
 
-        assert result["raw_facts"][0]["created_at"] == "2026-05-02T14:29:21+00:00"
         assert result["raw_facts"][0]["mentioned_at"] == "2026-05-02T14:29:21+00:00"
+        assert "created_at" not in result["raw_facts"][0]
+
+    @patch("ingest.extract._current_utc_timestamp", return_value="2026-05-09T08:00:00+00:00")
+    @patch("ingest.extract.call_deep_reasoning")
+    def test_extraction_does_not_use_project_log_entry_date_as_created_at(self, mock_llm, _mock_now):
+        from ingest.extract import extract_from_transcript
+
+        mock_llm.return_value = (json.dumps({
+            "chunk_assessment": "usable",
+            "facts": [
+                {
+                    "text": "hist-amber-valentine-2023 was the amber-tinted valentine dinner",
+                    "category": "fact",
+                    "speaker": "assistant",
+                    "domains": ["personal"],
+                    "extraction_confidence": "high",
+                    "privacy": "shared",
+                }
+            ],
+            "soul_snippets": {},
+            "journal_entries": {},
+            "project_logs": {},
+        }), 0.1)
+
+        result = extract_from_transcript(
+            transcript="- [2023-02-14T10:00:00] hist-amber-valentine-2023: amber-tinted valentine dinner",
+            owner_id="Solomon Steadman",
+            session_id="project-log-index",
+            dry_run=True,
+        )
+
+        fact = result["raw_facts"][0]
+        assert "created_at" not in fact
+        assert fact["mentioned_at"] == "2026-05-09T08:00:00+00:00"
 
     @patch("ingest.extract._current_utc_timestamp", return_value="2026-05-07T03:42:00+00:00")
     @patch("ingest.extract.call_deep_reasoning")
@@ -765,8 +811,8 @@ class TestExtractFromTranscript:
             dry_run=True,
         )
 
-        assert result["raw_facts"][0]["created_at"] == "2026-05-02T14:49:46+00:00"
         assert result["raw_facts"][0]["mentioned_at"] == "2026-05-02T14:49:46+00:00"
+        assert "created_at" not in result["raw_facts"][0]
 
     @patch("ingest.extract.call_deep_reasoning")
     def test_extraction_preserves_occurred_range_separate_from_mentioned_at(self, mock_llm):
@@ -805,7 +851,7 @@ class TestExtractFromTranscript:
         assert fact["occurred_start"] == "2023-05-01T23:59:59"
         assert fact["occurred_end"] == "2023-05-31T23:59:59"
         assert fact["mentioned_at"] == "2026-05-02T14:49:46+00:00"
-        assert fact["created_at"] == "2026-05-02T14:49:46+00:00"
+        assert "created_at" not in fact
 
     @patch("ingest.extract.call_deep_reasoning")
     def test_extraction_prefers_source_mention_time_over_llm_mentioned_at(self, mock_llm):
@@ -2678,7 +2724,8 @@ class TestExtractFromTranscript:
         assert call["confidence"] == pytest.approx(0.9)
         assert call["extraction_confidence"] == pytest.approx(0.9)
         assert call["provenance_confidence"] == pytest.approx(0.9)
-        assert call["created_at"] == "2026-03-12T23:59:59"
+        assert "created_at" not in call
+        assert call["mentioned_at"] == "2026-03-12T23:59:59"
         assert sorted(call["domains"]) == ["health", "personal"]
 
     @patch("ingest.extract._memory.store")
@@ -2726,7 +2773,7 @@ class TestExtractFromTranscript:
 
         assert applied["facts_stored"] == 1
         call = mock_store.call_args.kwargs
-        assert call["created_at"] == "2026-05-06T10:31:00"
+        assert "created_at" not in call
         assert call["occurred_start"] == "2026-03-01T23:59:59"
         assert call["occurred_end"] == "2026-03-31T23:59:59"
         assert call["mentioned_at"] == "2026-05-06T10:30:00"
@@ -3517,7 +3564,7 @@ class TestExtractFromTranscript:
 
     @patch("ingest.extract.enqueue_project_logs")
     @patch("ingest.extract._memory.store")
-    def test_apply_extracted_payloads_facts_inherit_session_date_when_missing_created_at(
+    def test_apply_extracted_payloads_facts_use_session_date_as_mentioned_at_only(
         self,
         mock_store,
         mock_enqueue_project_logs,
@@ -3567,7 +3614,8 @@ class TestExtractFromTranscript:
             dry_run=False,
         )
 
-        assert mock_store.call_args.kwargs["created_at"] == "2026-03-12T23:59:59"
+        assert "created_at" not in mock_store.call_args.kwargs
+        assert mock_store.call_args.kwargs["mentioned_at"] == "2026-03-12T23:59:59"
         assert payload["project_log_metrics"]["entries_queued"] == 1
         mock_enqueue_project_logs.assert_called_once_with(
             {
