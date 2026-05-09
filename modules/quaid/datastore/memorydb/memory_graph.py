@@ -16181,6 +16181,8 @@ def recall(
                 max_total_chunk_tokens=max_total_chunk_tokens,
             )
         except TimeoutError as exc:
+            if _is_fail_hard_mode():
+                raise
             # The relation-chain store plan is an optional shortcut; the
             # established multi-pass recall path below remains authoritative.
             logger.warning(
