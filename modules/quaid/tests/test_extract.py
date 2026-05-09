@@ -678,6 +678,18 @@ class TestExtractFromTranscript:
             )
             == "2026-05-02T14:29:21+00:00"
         )
+        assert (
+            extract_mod._first_transcript_timestamp_hint(
+                "[2026-05-02T14:29:22.414Z] Subagent/User: Child task found Mendoza Malbec."
+            )
+            == "2026-05-02T14:29:22+00:00"
+        )
+        assert (
+            extract_mod._first_transcript_timestamp_hint(
+                "2026-05-02T14:29:23Z Subagent/Assistant: Child reply."
+            )
+            == "2026-05-02T14:29:23+00:00"
+        )
 
     @patch("ingest.extract.call_deep_reasoning")
     def test_extraction_defaults_mentioned_at_to_transcript_timestamp(self, mock_llm):
@@ -711,6 +723,7 @@ class TestExtractFromTranscript:
         )
 
         assert result["raw_facts"][0]["mentioned_at"] == "2026-05-02T14:29:21+00:00"
+        assert result["raw_facts"][0]["_source_timestamp"] == "2026-05-02T14:29:21+00:00"
         assert "created_at" not in result["raw_facts"][0]
 
     @patch("ingest.extract._current_utc_timestamp", return_value="2026-05-09T08:00:00+00:00")
@@ -745,6 +758,7 @@ class TestExtractFromTranscript:
         fact = result["raw_facts"][0]
         assert "created_at" not in fact
         assert fact["mentioned_at"] == "2026-05-09T08:00:00+00:00"
+        assert "_source_timestamp" not in fact
 
     @patch("ingest.extract._current_utc_timestamp", return_value="2026-05-07T03:42:00+00:00")
     @patch("ingest.extract.call_deep_reasoning")
@@ -812,6 +826,7 @@ class TestExtractFromTranscript:
         )
 
         assert result["raw_facts"][0]["mentioned_at"] == "2026-05-02T14:49:46+00:00"
+        assert result["raw_facts"][0]["_source_timestamp"] == "2026-05-02T14:49:46+00:00"
         assert "created_at" not in result["raw_facts"][0]
 
     @patch("ingest.extract.call_deep_reasoning")
@@ -851,6 +866,7 @@ class TestExtractFromTranscript:
         assert fact["occurred_start"] == "2023-05-01T23:59:59"
         assert fact["occurred_end"] == "2023-05-31T23:59:59"
         assert fact["mentioned_at"] == "2026-05-02T14:49:46+00:00"
+        assert fact["_source_timestamp"] == "2026-05-02T14:49:46+00:00"
         assert "created_at" not in fact
 
     @patch("ingest.extract.call_deep_reasoning")

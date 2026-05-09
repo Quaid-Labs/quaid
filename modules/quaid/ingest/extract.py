@@ -57,7 +57,7 @@ _TRANSCRIPT_TIMESTAMP_PATTERN = (
 _TRANSCRIPT_TIMESTAMP_RE = re.compile(_TRANSCRIPT_TIMESTAMP_PATTERN)
 _TIMESTAMPED_TRANSCRIPT_TURN_RE = re.compile(
     rf"^\s*(?:\[(?P<bracketed>{_TRANSCRIPT_TIMESTAMP_PATTERN})\]|(?P<plain>{_TRANSCRIPT_TIMESTAMP_PATTERN}))"
-    r"\s+(?:User|Assistant|Agent|System|Tool|Developer):\s+",
+    r"\s+(?:User|Assistant|Agent|System|Tool|Developer|Subagent/User|Subagent/Assistant):\s+",
     re.IGNORECASE,
 )
 
@@ -2605,7 +2605,7 @@ def _slim_carry_fact(fact: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         "keywords",
         "privacy",
         "domains",
-        "created_at",
+        "_source_timestamp",
         "occurred_start",
         "occurred_end",
         "mentioned_at",
@@ -2655,7 +2655,7 @@ def _render_carry_line(fact: Dict[str, Any]) -> str:
     speaker = str(fact.get("speaker", fact.get("source", "")) or "").strip().lower()
     conf = str(fact.get("extraction_confidence", "medium") or "medium").strip().lower()
     project = str(fact.get("project", "") or "").strip()
-    created_at = str(fact.get("created_at", "") or "").strip()
+    source_timestamp = str(fact.get("_source_timestamp", fact.get("mentioned_at", "")) or "").strip()
 
     meta_bits = [category]
     if speaker and speaker != "unknown":
@@ -2664,8 +2664,8 @@ def _render_carry_line(fact: Dict[str, Any]) -> str:
         meta_bits.append(conf)
     if project:
         meta_bits.append(f"project:{project}")
-    if created_at:
-        meta_bits.append(f"date:{created_at[:10]}")
+    if source_timestamp:
+        meta_bits.append(f"date:{source_timestamp[:10]}")
     line = f"- [{', '.join(meta_bits)}] {text}"
 
     edges = fact.get("edges", [])
@@ -2920,10 +2920,7 @@ def _synthesize_project_logs_from_facts(
         if not project_name or not text:
             continue
         log_entry: Dict[str, Any] = {"text": text}
-        source_time = (
-            _normalize_extracted_timestamp(fact.get("_source_timestamp"))
-            or _normalize_extracted_timestamp(fact.get("created_at"))
-        )
+        source_time = _normalize_extracted_timestamp(fact.get("_source_timestamp"))
         if source_time:
             log_entry["created_at"] = source_time
         synthesized.setdefault(project_name, []).append(log_entry)
