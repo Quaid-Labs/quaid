@@ -7940,7 +7940,7 @@ class TestRecallFastHookInjectContract:
                     common_kwargs={},
                 )
 
-    def test_vector_store_recall_strips_duplicate_kwargs_before_calling_recall(self):
+    def test_vector_store_recall_strips_duplicate_kwargs_and_graph_plan_before_calling_recall(self):
         import datastore.memorydb.memory_graph as mg
 
         captured = {}
@@ -7956,7 +7956,7 @@ class TestRecallFastHookInjectContract:
                 min_similarity=0.6,
                 planner_profile="fast",
                 planned_queries=["Maya work"],
-                planner_meta={"planned_stores": ["vector"]},
+                planner_meta={"planned_stores": ["vector", "docs", "graph"], "planned_project": "recipe-app"},
                 fast_mode=True,
                 common_kwargs={
                     "project": "recipe-app",
@@ -7976,7 +7976,10 @@ class TestRecallFastHookInjectContract:
         assert captured["kwargs"]["use_intent"] is True
         assert captured["kwargs"]["include_graph_traversal"] is False
         assert captured["kwargs"]["planned_queries"] == ["Maya work"]
-        assert captured["kwargs"]["planner_meta"] == {"planned_stores": ["vector"]}
+        assert captured["kwargs"]["planner_meta"] == {
+            "planned_stores": ["vector", "docs"],
+            "planned_project": "recipe-app",
+        }
 
     def test_vector_store_recall_disables_routing_in_fast_mode(self):
         import datastore.memorydb.memory_graph as mg

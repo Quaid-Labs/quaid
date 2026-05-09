@@ -6485,6 +6485,16 @@ def _vector_store_recall(
         date_to=vector_kwargs.get("date_to"),
         graph_seed=False,
     )
+    inner_planner_meta = None
+    if planner_meta is not None:
+        inner_planner_meta = dict(planner_meta)
+        if "planned_stores" in inner_planner_meta:
+            inner_planned_stores = [
+                store
+                for store in _planner_store_plan(inner_planner_meta.get("planned_stores") or ["vector"])
+                if store != "graph"
+            ]
+            inner_planner_meta["planned_stores"] = inner_planned_stores or ["vector"]
     results, meta = recall(
         query=query,
         limit=limit,
@@ -6506,7 +6516,7 @@ def _vector_store_recall(
         track_access=not fast_mode,
         return_meta=True,
         planned_queries=planned_queries,
-        planner_meta=planner_meta,
+        planner_meta=inner_planner_meta,
         **vector_kwargs,
     )
     return results, dict(meta or {}), None
