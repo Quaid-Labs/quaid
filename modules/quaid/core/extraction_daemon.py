@@ -4638,6 +4638,14 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                                 f" ({sl_reason})" if sl_reason else "")
                 except Exception as e:
                     if _fail_hard_enabled():
+                        logger.error(
+                            "[%s] session %s: session_logs ingest failed on no-new-content path; "
+                            "removing stale signal before failHard raise",
+                            label,
+                            session_id,
+                        )
+                        mark_signal_processed(signal_data)
+                        _release_session_processing_lock(lock_owner_key, lock_fd)
                         raise RuntimeError("session_logs ingest failed (no-new-content path)") from e
                     logger.warning("[%s] session %s: session_logs ingest failed (no-new-content path): %s",
                                    label, session_id, e)

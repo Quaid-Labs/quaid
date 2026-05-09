@@ -5507,6 +5507,10 @@ class TestRollingExtraction:
         with pytest.raises(RuntimeError, match="session_logs ingest failed"):
             extraction_daemon.process_signal(extraction_daemon.read_pending_signals()[0])
 
+        assert extraction_daemon.read_pending_signals() == []
+        lock_dir = tmp_path / "instances" / "rolling-inst" / "data" / "session-processing"
+        assert list(lock_dir.glob("*.lock")) == []
+
     @pytest.mark.parametrize("signal_type", ["compaction", "timeout"])
     def test_process_signal_noop_does_not_recreate_empty_rolling_state(
         self, monkeypatch, tmp_path, signal_type
