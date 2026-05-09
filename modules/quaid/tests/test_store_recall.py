@@ -4074,6 +4074,47 @@ class TestSourceChunkStorage:
         assert comparison["max_abs_displacement"] == 1
         assert comparison["branch_contribution"] == {"vector": 2, "session_chunks": 1}
 
+    def test_rrf_fusion_preserves_graph_metadata_on_duplicate_fact_id(self):
+        import datastore.memorydb.memory_graph as mg
+
+        fused, meta = mg._reciprocal_rank_fuse_recall_branches(
+            [
+                (
+                    "vector",
+                    [
+                        {
+                            "id": "kai-boatbuilding",
+                            "text": "Kai works at a small boatbuilding studio.",
+                            "category": "fact",
+                            "similarity": 0.99,
+                        }
+                    ],
+                ),
+                (
+                    "graph",
+                    [
+                        {
+                            "id": "kai-boatbuilding",
+                            "text": "Kai works at a small boatbuilding studio.",
+                            "category": "fact",
+                            "similarity": 0.72,
+                            "via": "graph_attached_fact",
+                            "graph_path": "Solomon --spouse_of--> Yuni --sibling_of--> Kai --has_fact--> Kai works at a small boatbuilding studio.",
+                            "graph_relation_sequence": ["spouse_of", "sibling_of", "has_fact"],
+                            "graph_discovery_kind": "graph_path",
+                        }
+                    ],
+                ),
+            ],
+            limit=3,
+        )
+
+        assert meta["top_keys"] == ["id:kai-boatbuilding"]
+        assert fused[0]["similarity"] == 0.99
+        assert fused[0]["graph_path"].startswith("Solomon --spouse_of--> Yuni")
+        assert fused[0]["graph_relation_sequence"] == ["spouse_of", "sibling_of", "has_fact"]
+        assert fused[0]["source_ranks"] == {"vector": 1, "graph": 1}
+
     def test_rrf_fusion_promotes_source_chunk_in_explicit_mixed_plan(self):
         import datastore.memorydb.memory_graph as mg
 

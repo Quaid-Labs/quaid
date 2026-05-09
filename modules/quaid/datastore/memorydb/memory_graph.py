@@ -9812,68 +9812,72 @@ def _is_low_information_message(query: str) -> bool:
     return False
 
 
-def _merge_recall_batches(batches: List[List[Dict[str, Any]]], limit: int) -> List[Dict[str, Any]]:
-    """Merge recall batches by memory id, keeping highest similarity variant."""
-    graph_meta_keys = (
-        "via",
-        "via_relation",
-        "graph_path",
-        "graph_relation_sequence",
-        "graph_relation_groups",
-        "graph_discovery_kind",
-        "source_name",
-        "hop_depth",
-        "depth",
-        "direction",
-        "relation",
-        "_graph_anchor_expansion",
-        "anchor_id",
-        "anchor_text",
-        "anchor_similarity",
-        "anchor_category",
-    )
+_GRAPH_RECALL_METADATA_KEYS = (
+    "via",
+    "via_relation",
+    "graph_path",
+    "graph_relation_sequence",
+    "graph_relation_groups",
+    "graph_discovery_kind",
+    "source_name",
+    "hop_depth",
+    "depth",
+    "direction",
+    "relation",
+    "_graph_anchor_expansion",
+    "anchor_id",
+    "anchor_text",
+    "anchor_similarity",
+    "anchor_category",
+)
 
-    def _graph_metadata_richness(row: Dict[str, Any]) -> Tuple[int, int, int, int]:
-        if not isinstance(row, dict) or not _has_structured_graph_discovery(row):
-            return (0, 0, 0, 0)
-        sequence = row.get("graph_relation_sequence")
-        if isinstance(sequence, list):
-            relation_count = sum(1 for item in sequence if str(item or "").strip())
-        else:
-            relation_count = 0
-        path_len = len(str(row.get("graph_path") or "").strip())
-        fact_bonus = 1 if str(row.get("via") or "") == "graph_attached_fact" else 0
-        try:
-            hop_depth = int(row.get("hop_depth") or row.get("depth") or 0)
-        except Exception:
-            hop_depth = 0
-        return (relation_count, fact_bonus, hop_depth, path_len)
 
-    def _merge_row_variants(preferred: Dict[str, Any], alternate: Dict[str, Any]) -> Dict[str, Any]:
-        merged = dict(preferred)
-        if merged.get("_debug") is None and isinstance(alternate.get("_debug"), dict):
-            merged["_debug"] = dict(alternate["_debug"])
-        if not _has_structured_graph_discovery(merged) and _has_structured_graph_discovery(alternate):
-            for key in graph_meta_keys:
+def _graph_metadata_richness(row: Dict[str, Any]) -> Tuple[int, int, int, int]:
+    if not isinstance(row, dict) or not _has_structured_graph_discovery(row):
+        return (0, 0, 0, 0)
+    sequence = row.get("graph_relation_sequence")
+    if isinstance(sequence, list):
+        relation_count = sum(1 for item in sequence if str(item or "").strip())
+    else:
+        relation_count = 0
+    path_len = len(str(row.get("graph_path") or "").strip())
+    fact_bonus = 1 if str(row.get("via") or "") == "graph_attached_fact" else 0
+    try:
+        hop_depth = int(row.get("hop_depth") or row.get("depth") or 0)
+    except Exception:
+        hop_depth = 0
+    return (relation_count, fact_bonus, hop_depth, path_len)
+
+
+def _merge_recall_row_variants(preferred: Dict[str, Any], alternate: Dict[str, Any]) -> Dict[str, Any]:
+    merged = dict(preferred)
+    if merged.get("_debug") is None and isinstance(alternate.get("_debug"), dict):
+        merged["_debug"] = dict(alternate["_debug"])
+    if not _has_structured_graph_discovery(merged) and _has_structured_graph_discovery(alternate):
+        for key in _GRAPH_RECALL_METADATA_KEYS:
+            if alternate.get(key) is not None:
+                merged[key] = alternate.get(key)
+    elif _has_structured_graph_discovery(merged) and _has_structured_graph_discovery(alternate):
+        if _graph_metadata_richness(alternate) > _graph_metadata_richness(merged):
+            for key in _GRAPH_RECALL_METADATA_KEYS:
                 if alternate.get(key) is not None:
                     merged[key] = alternate.get(key)
-        elif _has_structured_graph_discovery(merged) and _has_structured_graph_discovery(alternate):
-            if _graph_metadata_richness(alternate) > _graph_metadata_richness(merged):
-                for key in graph_meta_keys:
-                    if alternate.get(key) is not None:
-                        merged[key] = alternate.get(key)
-        else:
-            for key in graph_meta_keys:
-                if merged.get(key) is None and alternate.get(key) is not None:
-                    merged[key] = alternate.get(key)
-        if isinstance(merged.get("_debug"), dict):
-            debug_payload = dict(merged["_debug"])
-            try:
-                debug_payload["composite_score"] = round(float(merged.get("similarity", 0.0)), 4)
-            except (TypeError, ValueError):
-                pass
-            merged["_debug"] = debug_payload
-        return merged
+    else:
+        for key in _GRAPH_RECALL_METADATA_KEYS:
+            if merged.get(key) is None and alternate.get(key) is not None:
+                merged[key] = alternate.get(key)
+    if isinstance(merged.get("_debug"), dict):
+        debug_payload = dict(merged["_debug"])
+        try:
+            debug_payload["composite_score"] = round(float(merged.get("similarity", 0.0)), 4)
+        except (TypeError, ValueError):
+            pass
+        merged["_debug"] = debug_payload
+    return merged
+
+
+def _merge_recall_batches(batches: List[List[Dict[str, Any]]], limit: int) -> List[Dict[str, Any]]:
+    """Merge recall batches by memory id, keeping highest similarity variant."""
 
     by_id: Dict[str, Dict[str, Any]] = {}
     fallback_rows: List[Dict[str, Any]] = []
@@ -9890,9 +9894,9 @@ def _merge_recall_batches(batches: List[List[Dict[str, Any]]], limit: int) -> Li
                 by_id[rid] = row
                 continue
             if float(row.get("similarity", 0.0)) > float(prev.get("similarity", 0.0)):
-                by_id[rid] = _merge_row_variants(row, prev)
+                by_id[rid] = _merge_recall_row_variants(row, prev)
             else:
-                by_id[rid] = _merge_row_variants(prev, row)
+                by_id[rid] = _merge_recall_row_variants(prev, row)
 
     merged = list(by_id.values()) + fallback_rows
     merged.sort(key=lambda x: float(x.get("similarity", 0.0)), reverse=True)
@@ -9970,8 +9974,12 @@ def _reciprocal_rank_fuse_recall_branches(
             scores[key] = scores.get(key, 0.0) + (1.0 / float(rrf_k + rank))
             source_ranks.setdefault(key, {})[name] = rank
             existing = rows_by_key.get(key)
-            if existing is None or float(row.get("similarity") or 0.0) > float(existing.get("similarity") or 0.0):
+            if existing is None:
                 rows_by_key[key] = dict(row)
+            elif float(row.get("similarity") or 0.0) > float(existing.get("similarity") or 0.0):
+                rows_by_key[key] = _merge_recall_row_variants(row, existing)
+            else:
+                rows_by_key[key] = _merge_recall_row_variants(existing, row)
         branch_counts[name] = accepted
 
     ordered_keys = sorted(
