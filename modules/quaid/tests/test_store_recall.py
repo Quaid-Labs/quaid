@@ -4880,6 +4880,67 @@ class TestRecallTelemetry:
         assert captured["graph_depth"] == 2
         assert meta["planned_stores"] == ["vector", "graph"]
 
+    def test_deliberate_recall_falls_back_when_relation_chain_store_plan_times_out(self):
+        import datastore.memorydb.memory_graph as mg
+
+        captured = {}
+
+        class _Graph:
+            def get_known_relations(self):
+                return ["spouse_of", "sibling_of"]
+
+        def _fake_once(**kwargs):
+            captured["query"] = kwargs["query"]
+            captured["include_graph_traversal"] = kwargs["include_graph_traversal"]
+            return (
+                [
+                    {
+                        "id": "fallback-repair-studio",
+                        "text": "Yuni's brother runs a repair studio",
+                        "category": "fact",
+                        "similarity": 0.92,
+                    }
+                ],
+                {"counts": {"final_results": 1}, "phases_ms": {"total_ms": 1}},
+            )
+
+        with patch.object(mg, "get_graph", return_value=_Graph()), \
+             patch.object(mg, "get_edge_keywords", return_value={}), \
+             patch.object(mg, "_get_retrieval_lightweight_config", return_value=SimpleNamespace(multi_pass_gate=0.70)), \
+             patch.object(
+                 mg,
+                 "_plan_fanout_queries",
+                 return_value=(
+                     ["what does my partners brother do"],
+                     {
+                         "query": "what does my partners brother do",
+                         "used_llm": False,
+                         "queries_count": 1,
+                         "elapsed_ms": 0,
+                         "planner_profile": "full",
+                         "planned_stores": ["vector", "graph"],
+                         "planned_project": None,
+                         "freshness_preferred": False,
+                     },
+                 ),
+             ), patch.object(mg, "_run_recall_store_plan", side_effect=TimeoutError("1 (of 1) futures unfinished")), \
+             patch.object(mg, "_recall_once", side_effect=_fake_once):
+            rows, meta = mg.recall(
+                "what does my partners brother do",
+                owner_id="solomon",
+                return_meta=True,
+                use_intent=False,
+                use_lightweight_config=True,
+                max_turns=1,
+            )
+
+        assert rows and rows[0]["id"] == "fallback-repair-studio"
+        assert captured["query"] == "what does my partners brother do"
+        assert captured["include_graph_traversal"] is True
+        fallback = meta["turn_details"][0]["planner"]["store_plan_fallback"]
+        assert fallback["reason"] == "relation_chain_timeout"
+        assert fallback["error_type"] == "TimeoutError"
+
     def test_deliberate_recall_keeps_single_relation_graph_plan_on_branch_path(self):
         import datastore.memorydb.memory_graph as mg
 

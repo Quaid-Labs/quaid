@@ -16158,27 +16158,41 @@ def recall(
     )
     if turn1_relation_chain_query:
         store_plan_graph_depth = max(1, len(turn1_relation_chain_groups))
-        rows, meta, docs_bundle = _run_recall_store_plan(
-            query,
-            stores=planned_turn1_stores,
-            limit=limit,
-            owner_id=owner_id,
-            min_similarity=min_similarity,
-            planner_profile=planner_profile,
-            planned_queries=fanout_queries,
-            planner_meta=fanout_meta,
-            fast_mode=False,
-            graph_depth=store_plan_graph_depth,
-            common_kwargs=branch_common_kwargs,
-        )
-        return _return_validated_recall(
-            rows,
-            meta,
-            return_meta,
-            include_chunks=include_chunks,
-            max_chunk_tokens=max_chunk_tokens,
-            max_total_chunk_tokens=max_total_chunk_tokens,
-        )
+        try:
+            rows, meta, docs_bundle = _run_recall_store_plan(
+                query,
+                stores=planned_turn1_stores,
+                limit=limit,
+                owner_id=owner_id,
+                min_similarity=min_similarity,
+                planner_profile=planner_profile,
+                planned_queries=fanout_queries,
+                planner_meta=fanout_meta,
+                fast_mode=False,
+                graph_depth=store_plan_graph_depth,
+                common_kwargs=branch_common_kwargs,
+            )
+            return _return_validated_recall(
+                rows,
+                meta,
+                return_meta,
+                include_chunks=include_chunks,
+                max_chunk_tokens=max_chunk_tokens,
+                max_total_chunk_tokens=max_total_chunk_tokens,
+            )
+        except TimeoutError as exc:
+            # The relation-chain store plan is an optional shortcut; the
+            # established multi-pass recall path below remains authoritative.
+            logger.warning(
+                "relation-chain store-plan recall timed out; falling back to multi-pass recall: %s",
+                exc,
+            )
+            fanout_meta = dict(fanout_meta or {})
+            fanout_meta["store_plan_fallback"] = {
+                "reason": "relation_chain_timeout",
+                "error_type": type(exc).__name__,
+                "error": str(exc)[:240],
+            }
 
     remaining = None if deadline is None else (deadline - _time.monotonic())
     if remaining is not None and remaining <= 0.5:
