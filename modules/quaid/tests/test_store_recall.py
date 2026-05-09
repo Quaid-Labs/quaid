@@ -8251,6 +8251,82 @@ class TestRecallFastHookInjectContract:
         assert rows[0]["via"] == "graph_attached_fact"
         assert meta["planned_stores"] == ["vector", "graph"]
 
+    def test_mixed_store_relation_chain_boosts_graph_fact_before_merge_window_cut(self):
+        import datastore.memorydb.memory_graph as mg
+
+        vector_rows = [
+            {
+                "id": f"vector-distractor-{index}",
+                "text": f"High scoring vector distractor {index}",
+                "category": "fact",
+                "similarity": 0.99 - (index * 0.01),
+            }
+            for index in range(10)
+        ]
+        graph_rows = [
+            {
+                "id": f"graph-distractor-{index}",
+                "text": f"Direct graph distractor {index}",
+                "category": "fact",
+                "similarity": 0.88 - (index * 0.01),
+            }
+            for index in range(14)
+        ]
+        graph_rows.append({
+            "id": "kai-boatbuilding",
+            "text": "Kai works at a small boatbuilding studio.",
+            "category": "fact",
+            "similarity": 0.58,
+            "via": "graph_attached_fact",
+            "graph_path": "Solomon --spouse_of--> Yuni --sibling_of--> Kai --has_fact--> Kai works at a small boatbuilding studio.",
+            "graph_relation_sequence": ["spouse_of", "sibling_of", "has_fact"],
+            "graph_discovery_kind": "graph_path",
+        })
+
+        registry = {
+            "vector": {
+                "recall": lambda *_a, **_k: (
+                    list(vector_rows),
+                    {"selected_path": "vector", "phases_ms": {"total_ms": 1}},
+                    None,
+                ),
+                "recall_fast": lambda *_a, **_k: ([], {}, None),
+            },
+            "graph": {
+                "recall": lambda *_a, **_k: (
+                    list(graph_rows),
+                    {"selected_path": "graph_aware", "phases_ms": {"total_ms": 1}},
+                    None,
+                ),
+                "recall_fast": lambda *_a, **_k: ([], {}, None),
+            },
+            "docs": {
+                "recall": lambda *_a, **_k: ([], {}, None),
+                "recall_fast": lambda *_a, **_k: ([], {}, None),
+            },
+        }
+
+        with patch.object(mg, "_get_recall_store_registry", return_value=self._registry_with_source_chunks(registry)):
+            rows, meta, bundle = mg._run_recall_store_plan(
+                "what does my partner brother do",
+                stores=["vector", "graph"],
+                limit=5,
+                owner_id="test-owner-alpha",
+                min_similarity=0.6,
+                planner_profile="full",
+                planned_queries=["what does my partner brother do"],
+                planner_meta={"planned_stores": ["vector", "graph"]},
+                fast_mode=False,
+                graph_depth=3,
+                common_kwargs={},
+            )
+
+        assert bundle is None
+        assert meta["planned_stores"] == ["vector", "graph"]
+        assert rows[0]["id"] == "kai-boatbuilding"
+        assert rows[0]["graph_path"].startswith("Solomon --spouse_of--> Yuni")
+        assert rows[0]["graph_relation_sequence"] == ["spouse_of", "sibling_of", "has_fact"]
+
     def test_run_recall_store_plan_prefers_non_empty_store_meta_over_empty_vector_meta(self):
         import datastore.memorydb.memory_graph as mg
 

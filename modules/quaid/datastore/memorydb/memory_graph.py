@@ -7665,6 +7665,16 @@ def _run_recall_store_plan(
     merge_limit = max(limit, limit * 2 if fast_mode else limit)
     if not fast_mode and len(normalized_stores) > 1:
         merge_limit = max(merge_limit, limit * 2)
+    relation_chain_groups = relation_chain_groups_for_plan
+    relation_chain_query = relation_chain_query_for_plan
+    materialized_row_count = sum(
+        len(batch)
+        for batch in merged_batches
+        if isinstance(batch, list)
+    )
+    candidate_merge_limit = merge_limit
+    if relation_chain_query and materialized_row_count > merge_limit:
+        candidate_merge_limit = materialized_row_count
     rrf_shadow_meta = _shadow_rrf_recall_store_plan(rrf_named_batches, limit=merge_limit)
     rrf_fusion_meta: Dict[str, Any] = {"enabled": False}
     rrf_fused_rows: Optional[List[Dict[str, Any]]] = None
@@ -7672,21 +7682,20 @@ def _run_recall_store_plan(
         rrf_fused_rows, rrf_fusion_meta = _active_rrf_recall_store_plan(
             rrf_named_batches,
             normalized_stores=normalized_stores,
-            limit=merge_limit,
+            limit=candidate_merge_limit,
         )
     merged = (
         rrf_fused_rows
         if rrf_fused_rows is not None
-        else _merge_recall_batches(merged_batches, limit=merge_limit)
+        else _merge_recall_batches(merged_batches, limit=candidate_merge_limit)
     )
-    relation_chain_groups = relation_chain_groups_for_plan
-    relation_chain_query = relation_chain_query_for_plan
     if relation_chain_query and merged:
         _boost_relation_chain_row_scores(merged, relation_chain_groups, query=query)
         merged.sort(
             key=lambda row: _relation_chain_sort_key(row, relation_chain_groups, query=query),
             reverse=True,
         )
+        merged = merged[:merge_limit]
     if fast_mode:
         merged = _prioritize_fast_anchor_direct_rows(query, merged)
     merged = _prioritize_date_relation_callback_rows(query, merged)
