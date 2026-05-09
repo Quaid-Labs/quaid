@@ -7840,7 +7840,7 @@ class TestRecallFastHookInjectContract:
                     common_kwargs={},
                 )
 
-    def test_vector_store_recall_strips_candidate_pool_before_calling_recall(self):
+    def test_vector_store_recall_strips_duplicate_kwargs_before_calling_recall(self):
         import datastore.memorydb.memory_graph as mg
 
         captured = {}
@@ -7858,10 +7858,15 @@ class TestRecallFastHookInjectContract:
                 planned_queries=["Maya work"],
                 planner_meta={"planned_stores": ["vector"]},
                 fast_mode=True,
-                common_kwargs={"project": "recipe-app", "candidate_pool": [{"id": "n1"}]},
+                common_kwargs={
+                    "project": "recipe-app",
+                    "candidate_pool": [{"id": "n1"}],
+                    "min_similarity": 0.2,
+                },
             )
 
         assert "candidate_pool" not in captured["kwargs"]
+        assert captured["kwargs"]["min_similarity"] == 0.6
 
     def test_vector_store_recall_disables_routing_in_fast_mode(self):
         import datastore.memorydb.memory_graph as mg

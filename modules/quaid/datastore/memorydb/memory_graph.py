@@ -6446,6 +6446,7 @@ def _vector_store_recall(
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any], Optional[Dict[str, Any]]]:
     vector_kwargs = dict(common_kwargs or {})
     vector_kwargs.pop("candidate_pool", None)
+    vector_kwargs.pop("min_similarity", None)
     vector_kwargs["relative_temporal_freshness"] = bool(
         vector_kwargs.get("relative_temporal_freshness")
         or (isinstance(planner_meta, dict) and planner_meta.get("freshness_preferred") is True)
