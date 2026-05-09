@@ -5410,6 +5410,38 @@ def _apply_mmr(results: List[tuple], graph, limit: int, mmr_lambda: float = 0.7)
     return selected
 
 
+def _fast_term_rescue_score(
+    *,
+    overlap: int,
+    query_term_count: int,
+    rank: float,
+    min_similarity: float,
+    best_existing_score: float,
+    best_existing_overlap: int,
+) -> float:
+    """Score deterministic fast-inject lexical rescues.
+
+    A row that covers every distinctive query term is a direct lexical fit. In
+    hook preinject, that direct fit must not stay below hotter vector rows that
+    only cover part of the query surface.
+    """
+    overlap_ratio = overlap / max(1, query_term_count)
+    rescue_score = min(
+        0.98,
+        max(
+            float(min_similarity or 0.0),
+            0.58 + (overlap_ratio * 0.28) + max(0.0, (3.0 - float(rank or 0.0)) * 0.015),
+        ),
+    )
+    if (
+        query_term_count >= 2
+        and overlap >= query_term_count
+        and best_existing_overlap < query_term_count
+    ):
+        rescue_score = max(rescue_score, min(0.99, max(0.96, best_existing_score + 0.02)))
+    return min(rescue_score, 0.99)
+
+
 # ==========================================================================
 # Intent-Aware Query Classification
 # ==========================================================================
@@ -8754,6 +8786,10 @@ def _recall_once(
                     if term_rescue:
                         fts_rescue = list(fts_rescue or []) + list(term_rescue)
                 if fts_rescue:
+                    best_existing_score = max(
+                        (float(score) for _node, score in scored_results),
+                        default=float(min_similarity or 0.0),
+                    )
                     scored_by_id: Dict[str, Tuple[Node, float]] = {
                         node.id: (node, score)
                         for node, score in scored_results
@@ -8768,13 +8804,13 @@ def _recall_once(
                         overlap = _query_term_overlap({"text": _node_searchable_text(node)}, query_terms)
                         if overlap < min_overlap or overlap <= best_overlap:
                             continue
-                        overlap_ratio = overlap / max(1, len(query_terms))
-                        rescue_score = min(
-                            0.98,
-                            max(
-                                float(min_similarity or 0.0),
-                                0.58 + (overlap_ratio * 0.28) + max(0.0, (3.0 - float(fts_rank or 0.0)) * 0.015),
-                            ),
+                        rescue_score = _fast_term_rescue_score(
+                            overlap=overlap,
+                            query_term_count=len(query_terms),
+                            rank=float(fts_rank or 0.0),
+                            min_similarity=float(min_similarity or 0.0),
+                            best_existing_score=best_existing_score,
+                            best_existing_overlap=best_overlap,
                         )
                         existing = scored_by_id.get(node.id)
                         if existing is None:

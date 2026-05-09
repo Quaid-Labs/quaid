@@ -10265,6 +10265,82 @@ class TestRecallFastHookInjectContract:
         assert any("tide walks" in text for text in texts)
         assert any("repairs kites" in text for text in texts)
 
+    def test_fast_term_rescue_promotes_full_fit_above_partial_vector_hit(self):
+        import datastore.memorydb.memory_graph as mg
+
+        score = mg._fast_term_rescue_score(
+            overlap=2,
+            query_term_count=2,
+            rank=1.0,
+            min_similarity=0.60,
+            best_existing_score=0.95,
+            best_existing_overlap=1,
+        )
+
+        assert score > 0.95
+
+    def test_fast_term_rescue_does_not_promote_partial_fit(self):
+        import datastore.memorydb.memory_graph as mg
+
+        score = mg._fast_term_rescue_score(
+            overlap=1,
+            query_term_count=2,
+            rank=1.0,
+            min_similarity=0.60,
+            best_existing_score=0.95,
+            best_existing_overlap=1,
+        )
+
+        assert score < 0.95
+
+    def test_fast_term_rescue_ranks_full_fit_above_partial_vector_result(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _ = _make_graph(tmp_path)
+        partial = mg.Node.create(
+            "Fact",
+            "Ari does strength work on Tuesday and Friday.",
+            owner_id="quaid",
+            keywords="strength Tuesday Friday",
+        )
+        partial.created_at = "2026-05-09T16:31:00Z"
+        full_fit = mg.Node.create(
+            "Fact",
+            "Ari keeps a Friday lantern ritual before the market walk.",
+            owner_id="quaid",
+            keywords="Friday lantern ritual",
+        )
+        full_fit.created_at = "2026-05-09T16:32:25Z"
+        graph.add_node(partial, embed=False)
+        graph.add_node(full_fit, embed=False)
+
+        def fake_search_hybrid(_self, *_args, **_kwargs):
+            return [(partial, 0.95)]
+
+        with patch.object(mg, "get_graph", return_value=graph), \
+             patch.object(mg.MemoryGraph, "search_hybrid", fake_search_hybrid), \
+             patch.object(mg, "get_edge_keywords", return_value={}):
+            rows, _meta = mg._recall_once(
+                "What is Ari Friday ritual?",
+                owner_id="quaid",
+                limit=5,
+                min_similarity=0.1,
+                use_routing=False,
+                use_aliases=False,
+                use_intent=True,
+                use_multi_pass=False,
+                use_reranker=False,
+                include_graph_traversal=False,
+                include_co_session=False,
+                include_mmr=False,
+                lexical_anchor_planner_mode="deterministic",
+                use_lightweight_config=False,
+                return_meta=True,
+            )
+
+        assert rows
+        assert rows[0]["id"] == full_fit.id
+
     def test_graph_store_recall_expands_terminal_graph_entity_to_attached_fact(self, tmp_path):
         import datastore.memorydb.memory_graph as mg
 
