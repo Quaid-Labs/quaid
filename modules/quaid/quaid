@@ -477,20 +477,7 @@ print(json.dumps(register_domain(name, desc), indent=2))
 
   # Docs subsystem
   docs)
-    SUBCMD="${1:-help}"
-    shift 2>/dev/null || true
-    case "$SUBCMD" in
-      list)    exec "$PYTHON_BIN" "$SCRIPT_DIR/datastore/docsdb/registry.py" list "$@" ;;
-      check)   exec "$PYTHON_BIN" "$SCRIPT_DIR/datastore/docsdb/updater.py" check "$@" ;;
-      update)
-        if [[ "${1:-}" == --* || -z "${1:-}" ]]; then
-          exec "$PYTHON_BIN" "$SCRIPT_DIR/core/docs/updater.py" update-stale "$@"
-        fi
-        exec "$PYTHON_BIN" "$SCRIPT_DIR/core/project_docs_cli.py" update "$@"
-        ;;
-      changelog) exec "$PYTHON_BIN" "$SCRIPT_DIR/datastore/docsdb/updater.py" changelog "$@" ;;
-      *)       echo "Usage: quaid docs {list|check|update|changelog} [args...]"; exit 1 ;;
-    esac
+    exec "$PYTHON_BIN" "$SCRIPT_DIR/datastore/docsdb/docs_cli.py" "$@"
     ;;
 
   # Registry/projects subsystem (docs registry)
@@ -596,22 +583,7 @@ store|stats|recall|get-edges|get-node|delete-node|create-edge|add-edge|delete-ed
     ;;
 
   session)
-    SESSION_SUBCMD="${1:-help}"
-    shift 2>/dev/null || true
-    case "$SESSION_SUBCMD" in
-      expand-microchunk)
-        exec "$PYTHON_BIN" "$SCRIPT_DIR/core/session_cli.py" expand-microchunk "$@"
-        ;;
-      help|--help|-h)
-        exec "$PYTHON_BIN" "$SCRIPT_DIR/core/session_cli.py" --help
-        ;;
-      *)
-        echo "error: unsupported 'quaid session' command: ${SESSION_SUBCMD}" >&2
-        echo "session log indexing/loading is internal runtime plumbing" >&2
-        echo "Usage: quaid session expand-microchunk <microchunk_id> [--owner <owner_id>] [--before N] [--after N] [--json]" >&2
-        exit 1
-        ;;
-    esac
+    exec "$PYTHON_BIN" "$SCRIPT_DIR/core/session_cli.py" "$@"
     ;;
 
   claudecode|openclaw)

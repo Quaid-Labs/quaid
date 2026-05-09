@@ -99,12 +99,17 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
+    raw_args = list(sys.argv[1:] if argv is None else argv)
+    if not raw_args:
+        raw_args = ["--help"]
+    elif raw_args == ["help"]:
+        raw_args = ["--help"]
     parser = build_parser()
-    args = parser.parse_args(argv)
+    args = parser.parse_args(raw_args)
     if args.command == "expand-microchunk":
         return cmd_expand_microchunk(args)
     parser.print_help()
-    return 1
+    return 0
 
 
 if __name__ == "__main__":  # pragma: no cover
