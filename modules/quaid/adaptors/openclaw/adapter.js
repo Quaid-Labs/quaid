@@ -4557,7 +4557,8 @@ notify_user(${JSON.stringify(message)})
         refresh_keys: keys,
         instance_id: instanceId,
         remaining_turns: Math.max(0, remaining),
-        len: context.length
+        len: context.length,
+        targets: ["appendSystemContext", "prependContext", "prependSystemContext"]
       });
       return context;
     };

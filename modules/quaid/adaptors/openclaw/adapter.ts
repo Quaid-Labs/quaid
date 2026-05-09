@@ -5653,6 +5653,7 @@ notify_user(${JSON.stringify(message)})
         instance_id: instanceId,
         remaining_turns: Math.max(0, remaining),
         len: context.length,
+        targets: ["appendSystemContext", "prependContext", "prependSystemContext"],
       });
       return context;
     };
@@ -5788,6 +5789,8 @@ notify_user(${JSON.stringify(message)})
           promptInstanceId,
         );
         if (refreshedIdentityContext) {
+          // Retain prompt-prepend delivery for older OC hook paths; live M7
+          // delivery depends on prependSystemContext below.
           prependContextParts.push(refreshedIdentityContext);
         }
         writeHookTrace("hook.docs_gate_check", {
@@ -5818,7 +5821,8 @@ notify_user(${JSON.stringify(message)})
           // OC Matrix prompt assembly has dropped both appendSystemContext and
           // prependContext on live M7 runs. Put refreshes on the highest-priority
           // system-prepend surface as well so edited identity files are visible
-          // immediately after /new.
+          // immediately after /new. This appends after transient overrides and
+          // before the placement rules added below in the single string OC consumes.
           prependSystemContext = prependSystemContext
             ? `${prependSystemContext}\n\n${refreshedIdentityContext}`
             : refreshedIdentityContext;
