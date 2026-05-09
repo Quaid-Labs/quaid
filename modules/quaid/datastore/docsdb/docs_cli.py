@@ -10,8 +10,7 @@ from __future__ import annotations
 
 import os
 import sys
-from contextlib import contextmanager
-from typing import Callable, Dict, Iterator, List, Optional
+from typing import Callable, Dict, List, Optional
 
 
 PLUGIN_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -22,49 +21,33 @@ if PLUGIN_ROOT not in sys.path:
 Command = Callable[[List[str]], int]
 
 
-@contextmanager
-def _patched_argv(argv: List[str]) -> Iterator[None]:
-    previous = sys.argv[:]
-    sys.argv = argv
-    try:
-        yield
-    finally:
-        sys.argv = previous
-
-
-def _coerce_exit_code(value: object) -> int:
-    return int(value or 0)
-
-
 def cmd_list(argv: List[str]) -> int:
     from datastore.docsdb import registry
 
-    with _patched_argv(["docs_cli.py", "list", *argv]):
-        return _coerce_exit_code(registry.main())
+    return registry.main(["list", *argv])
 
 
 def cmd_check(argv: List[str]) -> int:
     from datastore.docsdb import updater
 
-    return _coerce_exit_code(updater.main(["check", *argv]))
+    return updater.main(["check", *argv])
 
 
 def cmd_update(argv: List[str]) -> int:
     if not argv or str(argv[0]).startswith("--"):
         from core.docs import updater
 
-        return _coerce_exit_code(updater.main(["update-stale", *argv]))
+        return updater.main(["update-stale", *argv])
 
     from core import project_docs_cli
 
-    with _patched_argv(["docs_cli.py", "update", *argv]):
-        return _coerce_exit_code(project_docs_cli.main())
+    return project_docs_cli.main(["update", *argv])
 
 
 def cmd_changelog(argv: List[str]) -> int:
     from datastore.docsdb import updater
 
-    return _coerce_exit_code(updater.main(["changelog", *argv]))
+    return updater.main(["changelog", *argv])
 
 
 commands: Dict[str, Command] = {

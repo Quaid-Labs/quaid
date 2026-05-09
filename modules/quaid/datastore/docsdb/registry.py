@@ -2157,7 +2157,7 @@ def _generate_project_md(registry: DocsRegistry, project_name: str, cfg) -> None
 # CLI
 # ============================================================================
 
-def main():
+def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="Document Registry")
     subparsers = parser.add_subparsers(dest="command", help="Command")
 
@@ -2225,11 +2225,11 @@ def main():
     sm_p.add_argument("--project", help="Filter by project")
     sm_p.add_argument("--json", action="store_true", help="JSON output")
 
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     if not args.command:
         parser.print_help()
-        return
+        return 0
 
     registry = DocsRegistry()
 
@@ -2390,11 +2390,12 @@ def main():
         result = registry.gc(dry_run=not args.apply)
         if args.json:
             print(json.dumps(result, default=str, indent=2))
+    return 0
 
 
 if __name__ == "__main__":
     try:
-        main()
+        sys.exit(main())
     except ValueError as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)

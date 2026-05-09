@@ -257,7 +257,7 @@ def test_quaid_session_expand_microchunk_cli(tmp_path: Path, monkeypatch) -> Non
     assert "Assistant: Noted." in result.stdout
 
 
-def test_quaid_session_delegates_help_to_session_cli(tmp_path: Path) -> None:
+def test_quaid_session_delegates_missing_command_to_session_cli(tmp_path: Path) -> None:
     repo_root = Path(__file__).resolve().parents[1]
     quaid_bin = repo_root / "quaid"
 
@@ -280,5 +280,32 @@ def test_quaid_session_delegates_help_to_session_cli(tmp_path: Path) -> None:
         text=True,
     )
 
-    assert result.returncode == 0
+    assert result.returncode == 1
     assert "Quaid session inspection CLI" in result.stdout
+
+
+def test_quaid_session_preserves_internal_plumbing_error(tmp_path: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    quaid_bin = repo_root / "quaid"
+
+    home = tmp_path / "home"
+    quaid_home = home / ".quaid"
+    quaid_home.mkdir(parents=True)
+
+    env = {
+        **os.environ,
+        "HOME": str(home),
+        "QUAID_HOME": str(quaid_home),
+        "QUAID_PYTHON_BIN": os.environ.get("QUAID_PYTHON_BIN", "python3"),
+    }
+    result = subprocess.run(
+        [str(quaid_bin), "session", "load-log"],
+        cwd=tmp_path,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 1
+    assert "session log indexing/loading is internal runtime plumbing" in result.stderr

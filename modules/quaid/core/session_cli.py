@@ -100,16 +100,25 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Optional[List[str]] = None) -> int:
     raw_args = list(sys.argv[1:] if argv is None else argv)
-    if not raw_args:
+    if raw_args == ["help"]:
         raw_args = ["--help"]
-    elif raw_args == ["help"]:
-        raw_args = ["--help"]
+    known_commands = {"expand-microchunk"}
+    help_args = {"-h", "--help"}
+    if raw_args and raw_args[0] not in known_commands and raw_args[0] not in help_args:
+        print(f"error: unsupported 'quaid session' command: {raw_args[0]}", file=sys.stderr)
+        print("session log indexing/loading is internal runtime plumbing", file=sys.stderr)
+        print(
+            "Usage: quaid session expand-microchunk <microchunk_id> "
+            "[--owner <owner_id>] [--before N] [--after N] [--json]",
+            file=sys.stderr,
+        )
+        return 1
     parser = build_parser()
     args = parser.parse_args(raw_args)
     if args.command == "expand-microchunk":
         return cmd_expand_microchunk(args)
     parser.print_help()
-    return 0
+    return 1
 
 
 if __name__ == "__main__":  # pragma: no cover

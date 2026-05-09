@@ -477,7 +477,7 @@ print(json.dumps(register_domain(name, desc), indent=2))
 
   # Docs subsystem
   docs)
-    exec "$PYTHON_BIN" "$SCRIPT_DIR/datastore/docsdb/docs_cli.py" "$@"
+    exec "$PYTHON_BIN" "$SCRIPT_DIR/core/datastore_cli.py" docs "$@"
     ;;
 
   # Registry/projects subsystem (docs registry)
@@ -583,7 +583,7 @@ store|stats|recall|get-edges|get-node|delete-node|create-edge|add-edge|delete-ed
     ;;
 
   session)
-    exec "$PYTHON_BIN" "$SCRIPT_DIR/core/session_cli.py" "$@"
+    exec "$PYTHON_BIN" "$SCRIPT_DIR/core/datastore_cli.py" session "$@"
     ;;
 
   claudecode|openclaw)

@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import sys
-
 from datastore.docsdb import docs_cli
 
 
@@ -10,14 +8,14 @@ def test_docs_cli_dispatches_list_to_docs_registry(monkeypatch) -> None:
 
     calls = []
 
-    def fake_main() -> int:
-        calls.append(sys.argv[:])
+    def fake_main(argv) -> int:
+        calls.append(list(argv))
         return 0
 
     monkeypatch.setattr(registry, "main", fake_main)
 
     assert docs_cli.main(["list", "--project", "demo"]) == 0
-    assert calls == [["docs_cli.py", "list", "--project", "demo"]]
+    assert calls == [["list", "--project", "demo"]]
 
 
 def test_docs_cli_dispatches_check_and_changelog_to_docs_updater(monkeypatch) -> None:
@@ -60,13 +58,14 @@ def test_docs_cli_update_with_project_routes_to_project_docs_cli(monkeypatch) ->
 
     calls = []
 
-    def fake_main() -> None:
-        calls.append(sys.argv[:])
+    def fake_main(argv) -> int:
+        calls.append(list(argv))
+        return 0
 
     monkeypatch.setattr(project_docs_cli, "main", fake_main)
 
     assert docs_cli.main(["update", "demo", "--json"]) == 0
-    assert calls == [["docs_cli.py", "update", "demo", "--json"]]
+    assert calls == [["update", "demo", "--json"]]
 
 
 def test_docs_cli_unknown_command_prints_usage(capsys) -> None:

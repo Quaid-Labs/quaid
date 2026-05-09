@@ -100,7 +100,7 @@ def cmd_supervisor(args) -> None:
             print(pid if pid else "not running")
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Quaid project docs supervisor CLI")
     parser.add_argument("--json", action="store_true", help="JSON output")
     sub = parser.add_subparsers(dest="command")
@@ -128,7 +128,7 @@ def main() -> None:
     sup_p.add_argument("--interval", type=float, help="Foreground run interval in seconds")
     add_json_argument(sup_p)
 
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     if args.command == "update":
         cmd_update(args)
     elif args.command == "status":
@@ -139,8 +139,9 @@ def main() -> None:
         cmd_supervisor(args)
     else:
         parser.print_help()
-        raise SystemExit(1)
+        return 1
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
