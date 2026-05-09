@@ -257,6 +257,65 @@ def test_quaid_session_expand_microchunk_cli(tmp_path: Path, monkeypatch) -> Non
     assert "Assistant: Noted." in result.stdout
 
 
+def test_quaid_session_expand_chunk_cli(tmp_path: Path, monkeypatch) -> None:
+    from datastore.memorydb.memory_graph import MemoryGraph
+
+    repo_root = Path(__file__).resolve().parents[1]
+    quaid_bin = repo_root / "quaid"
+
+    home = tmp_path / "home"
+    quaid_home = home / ".quaid"
+    quaid_home.mkdir(parents=True)
+    memory_db = tmp_path / "memory.db"
+    monkeypatch.setenv("MEMORY_DB_PATH", str(memory_db))
+
+    graph = MemoryGraph(db_path=memory_db)
+    rows = graph.store_session_chunks(
+        [
+            "User: Mira bought ferry tickets at the Lisbon kiosk.",
+            "Assistant: The receipt is in the red notebook.",
+            "User: The return time is written beside the map.",
+        ],
+        owner_id="owner-cli",
+        session_id="sess-cli",
+        source_id="sess-cli",
+    )
+    chunk_id = rows[1]["chunk_id"]
+
+    env = {
+        **os.environ,
+        "HOME": str(home),
+        "QUAID_HOME": str(quaid_home),
+        "MEMORY_DB_PATH": str(memory_db),
+        "QUAID_PYTHON_BIN": os.environ.get("QUAID_PYTHON_BIN", "python3"),
+    }
+    result = subprocess.run(
+        [
+            str(quaid_bin),
+            "session",
+            "expand-chunk",
+            chunk_id,
+            "--owner",
+            "owner-cli",
+            "--before",
+            "1",
+            "--after",
+            "1",
+        ],
+        cwd=tmp_path,
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert "chunk_id:" in result.stdout
+    assert "window:" in result.stdout
+    assert "User: Mira bought ferry tickets at the Lisbon kiosk." in result.stdout
+    assert "Assistant: The receipt is in the red notebook." in result.stdout
+    assert "User: The return time is written beside the map." in result.stdout
+
+
 def test_quaid_session_delegates_missing_command_to_session_cli(tmp_path: Path) -> None:
     repo_root = Path(__file__).resolve().parents[1]
     quaid_bin = repo_root / "quaid"

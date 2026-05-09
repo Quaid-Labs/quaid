@@ -725,6 +725,7 @@ PYEOF
     echo "  janitor [args]       Run janitor pipeline"
     echo "  daemon [cmd]         Extraction daemon (start|stop|status|run|flush)"
     echo "  notify [args]        Active + deferred operator notifications"
+    echo "  session expand-chunk <id>      Expand a MemoryDB session chunk window"
     echo "  session expand-microchunk <id> Expand a SessionDB microchunk to its pair"
     echo ""
     echo "Docs:"
