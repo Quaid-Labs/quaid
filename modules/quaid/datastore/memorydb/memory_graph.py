@@ -12305,10 +12305,6 @@ def _row_temporal_bounds(
         start, end = _temporal_date_bounds_from_values(source_date, start_field="source_date")
         return start, end, "source"
 
-    if dimension == "occurred":
-        start, end = _temporal_date_bounds_from_values(row.get("created_at"), start_field="created_at")
-        return start, end, "record_fallback"
-
     start, end = _temporal_date_bounds_from_values(row.get("created_at"), start_field="created_at")
     return start, end, "record"
 

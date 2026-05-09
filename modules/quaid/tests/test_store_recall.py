@@ -2932,6 +2932,27 @@ class TestTimestampOverride:
         assert filtered == rows
         assert filtered[0]["temporal_filter_basis"] == "occurred"
 
+    def test_temporal_auto_keeps_created_at_only_legacy_rows(self):
+        """Auto mode still falls back to record time for pre-temporal rows."""
+        import datastore.memorydb.memory_graph as mg
+
+        rows = [
+            {
+                "text": "Legacy row with only record time",
+                "created_at": "2025-04-10T09:15:00",
+            }
+        ]
+
+        filtered = mg._filter_recall_rows_by_date_bounds(
+            rows,
+            date_from="2025-04-10",
+            date_to="2025-04-10",
+            temporal_dimension="auto",
+        )
+
+        assert filtered == rows
+        assert filtered[0]["temporal_filter_basis"] == "record"
+
     def test_temporal_filter_raises_on_malformed_selected_axis_under_failhard(self):
         """Date-bounded recall validates the selected temporal axis instead of string-comparing garbage."""
         import datastore.memorydb.memory_graph as mg
@@ -3125,6 +3146,14 @@ class TestTimestampOverride:
         assert stored["id"] not in {row["id"] for row in occurred_rows}
         target = next(row for row in record_rows if row["id"] == stored["id"])
         assert target["temporal_filter_basis"] == "record"
+
+    def test_temporal_selected_occurred_values_do_not_fall_back_to_record_time(self):
+        import datastore.memorydb.memory_graph as mg
+
+        assert mg._selected_temporal_values_for_dimension(
+            {"created_at": "2025-04-10T09:15:00"},
+            temporal_dimension="occurred",
+        ) == []
 
     def test_temporal_filter_can_keep_undated_rows(self):
         """Store-plan callers can keep undated fallback rows after bounded filters."""
