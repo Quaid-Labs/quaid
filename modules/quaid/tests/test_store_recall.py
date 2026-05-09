@@ -3071,21 +3071,21 @@ class TestTimestampOverride:
         assert good["id"] in {row["id"] for row in rows}
         assert "Invalid temporal value for occurred_start" in caplog.text
 
-    def test_temporal_occurred_falls_back_to_created_for_legacy_rows(self, tmp_path):
-        """Explicit occurred filters still find old rows with no occurrence fields."""
+    def test_temporal_occurred_excludes_legacy_rows_without_occurred_start(self, tmp_path):
+        """Explicit occurred filters do not use record time for legacy rows."""
         import datastore.memorydb.memory_graph as mg
         from datastore.memorydb.memory_graph import recall, store
         graph, _db_file = _make_graph(tmp_path)
         with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
              patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
              patch.object(mg, "_ollama_healthy", return_value=True):
-            store(
+            stored = store(
                 "Evelyn archived the receipt bundle",
                 owner_id="evelyn",
                 skip_dedup=True,
                 created_at="2025-04-10T09:15:00",
             )
-            rows = recall(
+            occurred_rows = recall(
                 "Evelyn receipt",
                 owner_id="evelyn",
                 limit=5,
@@ -3103,9 +3103,28 @@ class TestTimestampOverride:
                 low_signal_retry=False,
                 track_access=False,
             )
+            record_rows = recall(
+                "Evelyn receipt",
+                owner_id="evelyn",
+                limit=5,
+                date_from="2025-04-10",
+                date_to="2025-04-10",
+                temporal_dimension="record",
+                use_routing=False,
+                use_aliases=False,
+                use_multi_pass=False,
+                use_reranker=False,
+                include_graph_traversal=False,
+                include_co_session=False,
+                include_mmr=False,
+                include_lexical_anchor_shaping=False,
+                low_signal_retry=False,
+                track_access=False,
+            )
 
-        target = next(row for row in rows if "archived the receipt bundle" in row["text"])
-        assert target["temporal_filter_basis"] == "record_fallback"
+        assert stored["id"] not in {row["id"] for row in occurred_rows}
+        target = next(row for row in record_rows if row["id"] == stored["id"])
+        assert target["temporal_filter_basis"] == "record"
 
     def test_temporal_filter_can_keep_undated_rows(self):
         """Store-plan callers can keep undated fallback rows after bounded filters."""

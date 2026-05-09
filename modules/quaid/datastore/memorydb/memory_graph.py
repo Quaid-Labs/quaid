@@ -7654,7 +7654,9 @@ def _run_recall_store_plan(
             date_from=kwargs.get("date_from"),
             date_to=kwargs.get("date_to"),
             temporal_dimension=kwargs.get("temporal_dimension"),
-            keep_undated=True,
+            keep_undated=_keep_undated_rows_for_temporal_dimension(
+                kwargs.get("temporal_dimension"),
+            ),
         )
     final_rows = merged[:limit]
     final_rows, preserved_docs_rows = _preserve_requested_docs_rows(
@@ -7669,7 +7671,9 @@ def _run_recall_store_plan(
             date_from=kwargs.get("date_from"),
             date_to=kwargs.get("date_to"),
             temporal_dimension=kwargs.get("temporal_dimension"),
-            keep_undated=True,
+            keep_undated=_keep_undated_rows_for_temporal_dimension(
+                kwargs.get("temporal_dimension"),
+            ),
         )
     final_rows = _enforce_recall_rows_temporal_axis_validity(
         final_rows,
@@ -12272,9 +12276,19 @@ def _row_temporal_bounds(
         start, end = _temporal_date_bounds_from_values(row.get("created_at"), start_field="created_at")
         return start, end, "record"
 
-    # Occurred-time is preferred for explicit event filters. Older rows that do
-    # not have occurrence fields fall back to the prior source/valid/record
-    # behavior so existing memories remain searchable.
+    if dimension == "occurred":
+        if not _temporal_value_is_present(row.get("occurred_start")):
+            return "", "", "occurred"
+        start, end = _temporal_date_bounds_from_values(
+            row.get("occurred_start"),
+            row.get("occurred_end"),
+            start_field="occurred_start",
+            end_field="occurred_end",
+        )
+        return start, end, "occurred"
+
+    # Auto mode keeps legacy rows searchable by falling back through historical
+    # event/source/record axes. Explicit dimensions above stay strict.
     occurred_start = row.get("occurred_start") or row.get("valid_from")
     occurred_end = row.get("occurred_end") or row.get("valid_until")
     if occurred_start or occurred_end:
@@ -12430,6 +12444,10 @@ def _filter_recall_rows_by_date_bounds(
     return filtered
 
 
+def _keep_undated_rows_for_temporal_dimension(temporal_dimension: Any) -> bool:
+    return _normalize_recall_temporal_dimension(temporal_dimension) == "auto"
+
+
 def _selected_temporal_values_for_dimension(
     row: Dict[str, Any],
     *,
@@ -12454,18 +12472,7 @@ def _selected_temporal_values_for_dimension(
             values.append(("occurred_start", row.get("occurred_start")))
         if _temporal_value_is_present(row.get("occurred_end")):
             values.append(("occurred_end", row.get("occurred_end")))
-        if values:
-            return values
-        if _temporal_value_is_present(row.get("valid_from")):
-            values.append(("valid_from", row.get("valid_from")))
-        if _temporal_value_is_present(row.get("valid_until")):
-            values.append(("valid_until", row.get("valid_until")))
-        if values:
-            return values
-        if _temporal_value_is_present(row.get("source_date")):
-            return [("source_date", row.get("source_date"))]
-        if _temporal_value_is_present(row.get("created_at")):
-            return [("created_at", row.get("created_at"))]
+        return values
     return []
 
 
@@ -16256,7 +16263,7 @@ def recall(
                 date_from=date_from,
                 date_to=date_to,
                 temporal_dimension=temporal_dimension,
-                keep_undated=True,
+                keep_undated=_keep_undated_rows_for_temporal_dimension(temporal_dimension),
             )
         final = _select_final_recall_rows_with_facet_rescue(
             query,
@@ -16575,7 +16582,7 @@ def recall(
             date_from=date_from,
             date_to=date_to,
             temporal_dimension=temporal_dimension,
-            keep_undated=True,
+            keep_undated=_keep_undated_rows_for_temporal_dimension(temporal_dimension),
         )
     final = _select_final_recall_rows_with_facet_rescue(
         query,
