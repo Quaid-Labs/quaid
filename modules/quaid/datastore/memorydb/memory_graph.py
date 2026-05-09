@@ -7449,11 +7449,6 @@ def _run_recall_store_plan(
         len(relation_chain_groups_for_plan) >= 2
         and _has_relation_chain_structure(query)
     )
-    if relation_chain_query_for_plan:
-        try:
-            graph_depth = max(int(graph_depth or 1), len(relation_chain_groups_for_plan))
-        except (TypeError, ValueError):
-            graph_depth = len(relation_chain_groups_for_plan)
 
     callables = []
     for store in normalized_stores:
@@ -16121,36 +16116,6 @@ def recall(
         relative_temporal_freshness
         or (isinstance(fanout_meta, dict) and fanout_meta.get("freshness_preferred") is True)
     )
-    planned_turn1_stores = _planner_store_plan(fanout_meta.get("planned_stores") or ["vector"])
-    turn1_relation_chain_groups = _relation_chain_groups_for_query(query)
-    turn1_relation_chain_query = (
-        "graph" in planned_turn1_stores
-        and len(turn1_relation_chain_groups) >= 2
-        and _has_relation_chain_structure(query)
-    )
-    if turn1_relation_chain_query:
-        store_plan_graph_depth = max(int(graph_depth or 1), len(turn1_relation_chain_groups))
-        rows, meta, docs_bundle = _run_recall_store_plan(
-            query,
-            stores=planned_turn1_stores,
-            limit=limit,
-            owner_id=owner_id,
-            min_similarity=min_similarity,
-            planner_profile=planner_profile,
-            planned_queries=fanout_queries,
-            planner_meta=fanout_meta,
-            fast_mode=False,
-            graph_depth=store_plan_graph_depth,
-            common_kwargs=branch_common_kwargs,
-        )
-        return _return_validated_recall(
-            rows,
-            meta,
-            return_meta,
-            include_chunks=include_chunks,
-            max_chunk_tokens=max_chunk_tokens,
-            max_total_chunk_tokens=max_total_chunk_tokens,
-        )
 
     remaining = None if deadline is None else (deadline - _time.monotonic())
     if remaining is not None and remaining <= 0.5:
