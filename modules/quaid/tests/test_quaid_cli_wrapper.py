@@ -316,6 +316,43 @@ def test_quaid_session_expand_chunk_cli(tmp_path: Path, monkeypatch) -> None:
     assert "User: The return time is written beside the map." in result.stdout
 
 
+def test_quaid_session_expand_chunk_not_found_exits_nonzero(tmp_path: Path, monkeypatch) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    quaid_bin = repo_root / "quaid"
+
+    home = tmp_path / "home"
+    quaid_home = home / ".quaid"
+    quaid_home.mkdir(parents=True)
+    memory_db = tmp_path / "memory.db"
+    monkeypatch.setenv("MEMORY_DB_PATH", str(memory_db))
+
+    env = {
+        **os.environ,
+        "HOME": str(home),
+        "QUAID_HOME": str(quaid_home),
+        "MEMORY_DB_PATH": str(memory_db),
+        "QUAID_PYTHON_BIN": os.environ.get("QUAID_PYTHON_BIN", "python3"),
+    }
+    result = subprocess.run(
+        [
+            str(quaid_bin),
+            "session",
+            "expand-chunk",
+            "missing-session-chunk",
+            "--owner",
+            "owner-cli",
+        ],
+        cwd=tmp_path,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 1
+    assert "session chunk not found: missing-session-chunk" in result.stderr
+
+
 def test_quaid_session_delegates_missing_command_to_session_cli(tmp_path: Path) -> None:
     repo_root = Path(__file__).resolve().parents[1]
     quaid_bin = repo_root / "quaid"
