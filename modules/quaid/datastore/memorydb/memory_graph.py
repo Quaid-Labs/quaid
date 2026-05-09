@@ -4664,6 +4664,10 @@ def graph_aware_recall(
                 break
 
     expand_from.extend(deferred_expand_from)
+    if relation_chain_query and relation_chain_path_by_node:
+        for guided_node_id in relation_chain_path_by_node:
+            if guided_node_id and guided_node_id not in expand_from:
+                expand_from.append(guided_node_id)
 
     # 5. Bidirectional graph expansion with relation filtering
     max_graph_results = max(limit * 2, 40) if relation_chain_query else limit * 2

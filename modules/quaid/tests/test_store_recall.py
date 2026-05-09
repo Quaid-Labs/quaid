@@ -10988,6 +10988,60 @@ class TestRecallFastHookInjectContract:
         assert rows[0]["graph_relation_sequence"] == ["spouse_of", "sibling_of", "has_fact"]
         assert "--knows-->" not in rows[0]["graph_path"]
 
+    def test_graph_store_relation_chain_expands_guided_nodes_when_owner_bfs_is_saturated(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _ = _make_graph(tmp_path)
+        solomon = mg.Node.create("Person", "Solomon Steadman")
+        yuni = mg.Node.create("Person", "Yuni")
+        kai = mg.Node.create("Person", "Kai")
+        boat = mg.Node.create("Fact", "Kai works at a small boatbuilding studio")
+        graph.add_node(solomon, embed=False)
+        graph.add_node(yuni, embed=False)
+        graph.add_node(kai, embed=False)
+        graph.add_node(boat, embed=False)
+        for index in range(25):
+            fact = mg.Node.create("Fact", f"Solomon generic owner fact {index}")
+            graph.add_node(fact, embed=False)
+            graph.add_edge(mg.Edge.create(solomon.id, fact.id, "has_fact"))
+        graph.add_edge(mg.Edge.create(solomon.id, yuni.id, "spouse_of"))
+        graph.add_edge(mg.Edge.create(yuni.id, kai.id, "sibling_of"))
+        graph.add_edge(mg.Edge.create(kai.id, boat.id, "has_fact"))
+
+        fake_cfg = SimpleNamespace(
+            users=SimpleNamespace(
+                identities={"test-owner-alpha": SimpleNamespace(person_node_name="Solomon Steadman")}
+            )
+        )
+        with patch.object(mg, "get_graph", return_value=graph), \
+             patch.object(mg, "_HAS_CONFIG", True), \
+             patch.object(mg, "_get_memory_config", return_value=fake_cfg), \
+             patch.object(mg, "extract_entities_from_text", return_value=[]), \
+             patch.object(mg, "get_edge_keywords", return_value={
+                 "spouse_of": ["partner"],
+                 "sibling_of": ["brother"],
+             }):
+            rows, meta, bundle = mg._run_recall_store_plan(
+                "what does my partner brother do",
+                stores=["graph"],
+                limit=3,
+                owner_id="test-owner-alpha",
+                min_similarity=0.6,
+                planner_profile="fast",
+                planned_queries=None,
+                planner_meta={"planned_stores": ["graph"]},
+                fast_mode=False,
+                graph_depth=2,
+                common_kwargs={"candidate_pool": []},
+            )
+
+        assert bundle is None
+        assert meta["store_runs"][0]["selected_path"] == "graph_aware"
+        assert rows
+        assert rows[0]["id"] == boat.id
+        assert rows[0]["graph_relation_sequence"] == ["spouse_of", "sibling_of", "has_fact"]
+        assert rows[0]["graph_path"].startswith("Solomon Steadman --spouse_of--> Yuni --sibling_of--> Kai")
+
     def test_graph_store_relation_chain_infers_owner_for_terse_chain_and_prefers_terminal_fact(self, tmp_path):
         import datastore.memorydb.memory_graph as mg
 
