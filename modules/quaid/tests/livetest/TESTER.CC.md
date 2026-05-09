@@ -122,6 +122,14 @@ project engagement.
 
 After `/exit` or `/compact`, wait **30–60 seconds** before checking the DB.
 
+CC startup transcripts can briefly contain only hook/system noise. If the daemon
+logs `gained non-internal content past a frozen internal cursor` during M2 Part B,
+continue the two-chunk rolling procedure. Recovered Chunk-1 content should remain
+buffered while the transcript is active so Chunk 2 can cross the rolling
+threshold. If `internal_cursor_unfrozen_flush` fires before Chunk 2 or inside the
+active rolling window, route W1; that flush is only for quiet subthreshold
+recovery tails.
+
 ---
 
 ## Timeout Extraction (M4)

@@ -212,6 +212,11 @@ the test session has a `rolling_flush` row with
 follow-up prompt that materialized `/new`. Treat earlier empty DB checks as
 "still extracting", not a failure.
 
+For CDX one-shot sessions recovered from a frozen internal cursor, a
+subthreshold recovered tail may wait for the rolling internal-cursor grace
+window before the daemon writes `internal_cursor_unfrozen_flush`. Do not fail the
+lane on an empty DB check before that quiet-window flush has had time to fire.
+
 **CDX does NOT have `quaid-hook-trace.jsonl`.** Do not check for this file — it is
 OC-native and will always be absent from CDX instance log directories. Checking for
 it and treating absence as a failure is a false-negative.

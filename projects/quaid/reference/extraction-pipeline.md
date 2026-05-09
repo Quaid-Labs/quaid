@@ -135,13 +135,13 @@ Up to 100 signals are processed per poll cycle (`MAX_SIGNALS_PER_POLL = 100`).
 
 | Field | Description |
 |-------|-------------|
-| `type` | Signal type: `compaction`, `reset`, `session_end`, or `timeout` |
+| `type` | Signal type: `compaction`, `reset`, `session_end`, `timeout`, or `rolling` |
 | `session_id` | Session identifier (alphanumeric + `_-`, max 128 chars) |
 | `transcript_path` | Absolute path to the adapter's `.jsonl` session file |
 | `adapter` | Adapter name: `"claude-code"`, `"openclaw"`, `"codex"`, `"unknown"` |
 | `supports_compaction_control` | Whether OC can delay compaction until extraction finishes |
 | `timestamp` | ISO-8601 UTC timestamp of when the signal was written |
-| `meta` | Reserved for future use, currently `{}` |
+| `meta` | Optional signal-specific metadata such as recovery reason, source cursor key, or chunk budget |
 
 ### Valid signal types
 
@@ -151,6 +151,7 @@ Up to 100 signals are processed per poll cycle (`MAX_SIGNALS_PER_POLL = 100`).
 | `reset` | Session reset (`/new`, `/reset`) | Cleared after extraction |
 | `session_end` | Session ended cleanly | Persisted for next extraction |
 | `timeout` | Session idle beyond threshold | Persisted for next extraction |
+| `rolling` | Sanitized transcript crossed `capture.chunk_tokens` | Staged, then flushed by terminal signal |
 
 Invalid signal types default to `session_end` with a warning log.
 
@@ -194,6 +195,32 @@ Rolling extraction has two phases:
      `apply_extracted_payloads()`.
    - This is the point where facts are actually published to the DB and dedup/store
      telemetry is finalized.
+
+### Frozen internal-cursor recovery
+
+Some adapters can start a session with host/system prompt noise before the first
+real user turn. The daemon may classify that startup-only transcript as
+internal-maintenance and mark the cursor as internal at EOF. If user content later
+appears past that frozen cursor, rolling scan unfreezes the cursor and rebases the
+rolling buffer to the start of the transcript so real content is not skipped.
+
+Recovery then follows normal rolling semantics:
+
+- If the recovered semantic buffer crosses `capture.chunk_tokens`, the daemon
+  writes a `rolling` signal.
+- If the recovered buffer is below threshold and the transcript is still inside
+  `_ROLLING_INTERNAL_ADVANCE_GRACE_SECONDS`, the buffer remains in rolling state
+  with `internal_cursor_unfrozen_pending_flush=true` so the next user chunk can
+  cross the rolling threshold.
+- If the transcript goes quiet while the recovered buffer is still below
+  threshold, the daemon writes a synthetic `session_end` with
+  `meta.reason="internal_cursor_unfrozen_flush"` to prevent one-shot sessions
+  from stranding data forever.
+
+This means an internal-cursor recovery may add up to one grace window before a
+subthreshold one-shot tail flushes, but active transcripts should continue
+accumulating toward rolling rather than being prematurely drained by
+`session_end`.
 
 ### Rolling state and telemetry files
 
@@ -817,7 +844,7 @@ circular imports.
 
 | Constant | Value | Description |
 |----------|-------|-------------|
-| `VALID_SIGNAL_TYPES` | `("compaction", "reset", "session_end", "timeout")` | Accepted signal types |
+| `VALID_SIGNAL_TYPES` | `("compaction", "reset", "session_end", "timeout", "rolling")` | Accepted signal types |
 | `MAX_TRANSCRIPT_LINES` | 50,000 | Max lines read per extraction |
 | `MAX_SIGNALS_PER_POLL` | 100 | Max signals processed per poll cycle |
 
