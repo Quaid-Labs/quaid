@@ -3726,6 +3726,12 @@ def test_check_chunk_ready_sessions_flushes_subthreshold_tail_after_internal_cur
         handle.write(
             '{"role":"user","content":"The reading chair for this instance has a brass desk lamp beside it."}\n'
         )
+    mtime = os.path.getmtime(transcript_path)
+    monkeypatch.setattr(
+        extraction_daemon.time,
+        "time",
+        lambda: mtime + extraction_daemon._ROLLING_INTERNAL_ADVANCE_GRACE_SECONDS + 1,
+    )
 
     real_adapter = sys.modules.get("lib.adapter")
     fake_adapter_mod = types.ModuleType("lib.adapter")
@@ -3803,6 +3809,124 @@ def test_check_chunk_ready_sessions_flushes_subthreshold_tail_after_internal_cur
                 "reason": "internal_cursor_unfrozen_flush",
                 "source_cursor_key": source_key,
                 "semantic_buffer_tokens": 25,
+                "buffered_line_offset": initial_lines + 1,
+            },
+        }
+    ]
+
+
+def test_check_chunk_ready_sessions_defers_recent_unfrozen_tail_until_quiet(
+    monkeypatch,
+    tmp_path,
+):
+    import sys
+    import types
+
+    transcript_path = tmp_path / "cc-session.jsonl"
+    transcript_path.write_text(
+        (
+            '{"role":"assistant","content":"[quaid][session-init] Loading project context"}\n'
+            '{"role":"assistant","content":"Loading Claude Code hooks"}\n'
+            '{"role":"assistant","content":"Ready"}\n'
+        ),
+        encoding="utf-8",
+    )
+
+    session_id = "sess-cc-unfreeze"
+    initial_lines = extraction_daemon.count_transcript_lines(str(transcript_path))
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "pytest-runner")
+    extraction_daemon.write_cursor(session_id, initial_lines, str(transcript_path), internal=True)
+
+    with transcript_path.open("a", encoding="utf-8") as handle:
+        handle.write(
+            '{"role":"user","content":"Chunk one has a long natural-language fact batch below the rolling threshold."}\n'
+        )
+    mtime = os.path.getmtime(transcript_path)
+    clock = {"now": mtime + 1}
+    monkeypatch.setattr(extraction_daemon.time, "time", lambda: clock["now"])
+
+    real_adapter = sys.modules.get("lib.adapter")
+    fake_adapter_mod = types.ModuleType("lib.adapter")
+
+    class _FakeAdapter(_OwnedTestAdapterMixin):
+        def parse_session_jsonl(self, path):
+            text = Path(path).read_text(encoding="utf-8")
+            if "long natural-language fact batch" in text:
+                return "User: Chunk one has a long natural-language fact batch below the rolling threshold."
+            return ""
+
+    fake_adapter_mod.get_adapter = lambda: _FakeAdapter()
+    sys.modules["lib.adapter"] = fake_adapter_mod
+
+    captured = []
+    buffered_from_lines = []
+    monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
+
+    def fake_buffer_transcript_tail(path, from_line, state, adapter=None, **kwargs):
+        buffered_from_lines.append(from_line)
+        return (
+            {
+                "buffered_line_offset": initial_lines + 1,
+                "semantic_buffer": "User: Chunk one has 1224 semantic tokens in production.",
+                "semantic_buffer_tokens": 1224,
+            },
+            {
+                "raw_lines_added": 1,
+                "semantic_chars_added": 56,
+                "semantic_tokens_added": 1224,
+                "buffered_line_offset": initial_lines + 1,
+            },
+        )
+
+    monkeypatch.setattr(extraction_daemon, "_buffer_transcript_tail", fake_buffer_transcript_tail)
+    monkeypatch.setattr(
+        extraction_daemon,
+        "write_signal",
+        lambda signal_type, session_id, transcript_path, **kwargs: captured.append(
+            {
+                "signal_type": signal_type,
+                "session_id": session_id,
+                "transcript_path": transcript_path,
+                "meta": kwargs.get("meta", {}),
+            }
+        ),
+    )
+
+    try:
+        extraction_daemon.check_chunk_ready_sessions(chunk_tokens=1500)
+        state = extraction_daemon.read_rolling_state(session_id)
+        assert captured == []
+        assert buffered_from_lines == [0]
+        assert state["semantic_buffer_tokens"] == 1224
+        assert state[extraction_daemon._INTERNAL_CURSOR_UNFROZEN_PENDING_FLUSH_KEY] is True
+
+        clock["now"] = mtime + extraction_daemon._ROLLING_INTERNAL_ADVANCE_GRACE_SECONDS + 1
+        extraction_daemon.check_chunk_ready_sessions(chunk_tokens=1500)
+    finally:
+        if real_adapter is not None:
+            sys.modules["lib.adapter"] = real_adapter
+        else:
+            sys.modules.pop("lib.adapter", None)
+
+    cursor = extraction_daemon.read_cursor(session_id)
+    source_key = extraction_daemon._signal_source_cursor_key(
+        session_id,
+        str(transcript_path),
+        cursor_data=cursor,
+    )
+    assert cursor["line_offset"] == 0
+    assert cursor["internal"] is False
+    assert captured == [
+        {
+            "signal_type": "session_end",
+            "session_id": session_id,
+            "transcript_path": str(transcript_path),
+            "meta": {
+                "reason": "internal_cursor_unfrozen_flush",
+                "source_cursor_key": source_key,
+                "semantic_buffer_tokens": 1224,
                 "buffered_line_offset": initial_lines + 1,
             },
         }

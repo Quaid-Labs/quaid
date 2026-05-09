@@ -68,6 +68,7 @@ _SIGNAL_POLL_PRIORITY = {
     "compaction": 4,
 }
 _ROLLING_INTERNAL_ADVANCE_GRACE_SECONDS = 60.0
+_INTERNAL_CURSOR_UNFROZEN_PENDING_FLUSH_KEY = "internal_cursor_unfrozen_pending_flush"
 _DISCOVERY_STALE_ORPHAN_GRACE_SECONDS = 10 * 60
 _IGNORED_TIMEOUT_USER_TURN_MAX_CHARS = 12
 _TRANSCRIPT_ROLE_RE = re.compile(
@@ -6075,6 +6076,8 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
                 max_tokens=chunk_budget,
                 max_lines=chunk_line_budget,
             )
+            if unfroze_internal_cursor and _semantic_buffer_has_content(state):
+                state[_INTERNAL_CURSOR_UNFROZEN_PENDING_FLUSH_KEY] = True
             write_rolling_state(session_id, state)
             buffered_line_offset = int(state.get("buffered_line_offset", buffered_line_offset) or buffered_line_offset)
 
@@ -6092,7 +6095,16 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
             or semantic_tokens >= near_budget_threshold
         )
         if not should_signal:
-            if unfroze_internal_cursor and semantic_tokens > 0:
+            pending_unfrozen_flush = bool(state.get(_INTERNAL_CURSOR_UNFROZEN_PENDING_FLUSH_KEY))
+            if semantic_tokens > 0 and (unfroze_internal_cursor or pending_unfrozen_flush):
+                if recently_modified:
+                    logger.info(
+                        "session %s recovered %d semantic tokens past a frozen internal cursor; "
+                        "deferring recovery flush while transcript remains active",
+                        session_id,
+                        semantic_tokens,
+                    )
+                    continue
                 logger.info(
                     "session %s recovered %d semantic tokens past a frozen internal cursor; "
                     "generating session_end flush",
