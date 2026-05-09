@@ -4696,6 +4696,9 @@ ${identityContext}` : identityContext;
           appendSystemContext = appendSystemContext ? `${appendSystemContext}
 
 ${refreshedIdentityContext}` : refreshedIdentityContext;
+          prependSystemContext = prependSystemContext ? `${prependSystemContext}
+
+${refreshedIdentityContext}` : refreshedIdentityContext;
         }
         if (promptInstanceId) {
           const miscPath = path.join(VISIBLE_WORKSPACE, "projects", `misc--${promptInstanceId}`);

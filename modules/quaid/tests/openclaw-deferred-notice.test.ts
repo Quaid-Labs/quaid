@@ -2109,6 +2109,9 @@ describe("openclaw deferred notices", () => {
     expect(combinedSystemContext(refreshed)).toContain("Quaid Refreshed Identity Context");
     expect(combinedSystemContext(refreshed)).toContain("Bartholomew");
     expect(combinedSystemContext(refreshed)).toContain("fiddle-leaf fig");
+    expect(String(refreshed?.prependSystemContext || "")).toContain("Quaid Refreshed Identity Context");
+    expect(String(refreshed?.prependSystemContext || "")).toContain("Bartholomew");
+    expect(String(refreshed?.prependSystemContext || "")).toContain("fiddle-leaf fig");
     expect(String(refreshed?.prependContext || "")).toContain("Quaid Refreshed Identity Context");
     expect(String(refreshed?.prependContext || "")).toContain("Bartholomew");
     expect(String(refreshed?.prependContext || "")).toContain("fiddle-leaf fig");
@@ -2215,6 +2218,9 @@ describe("openclaw deferred notices", () => {
     expect(combinedSystemContext(graded)).toContain("Quaid Refreshed Identity Context");
     expect(combinedSystemContext(graded)).toContain("Bartholomew");
     expect(combinedSystemContext(graded)).toContain("fiddle-leaf fig");
+    expect(String(graded?.prependSystemContext || "")).toContain("Quaid Refreshed Identity Context");
+    expect(String(graded?.prependSystemContext || "")).toContain("Bartholomew");
+    expect(String(graded?.prependSystemContext || "")).toContain("fiddle-leaf fig");
     expect(String(graded?.prependContext || "")).toContain("Quaid Refreshed Identity Context");
     expect(String(graded?.prependContext || "")).toContain("Bartholomew");
     expect(String(graded?.prependContext || "")).toContain("fiddle-leaf fig");

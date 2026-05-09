@@ -5815,6 +5815,13 @@ notify_user(${JSON.stringify(message)})
           appendSystemContext = appendSystemContext
             ? `${appendSystemContext}\n\n${refreshedIdentityContext}`
             : refreshedIdentityContext;
+          // OC Matrix prompt assembly has dropped both appendSystemContext and
+          // prependContext on live M7 runs. Put refreshes on the highest-priority
+          // system-prepend surface as well so edited identity files are visible
+          // immediately after /new.
+          prependSystemContext = prependSystemContext
+            ? `${prependSystemContext}\n\n${refreshedIdentityContext}`
+            : refreshedIdentityContext;
         }
         // Prepend mandatory file-placement rules on EVERY turn (not just first).
         // appendSystemContext (project docs) is gated once per session — expensive.
