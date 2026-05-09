@@ -1004,6 +1004,42 @@ function clearDeferredNoticesForAgent(
   }
 }
 
+function hasProviderDeferredNoticesForAgent(agentLabel: string): boolean {
+  const instanceId = getInstanceId(agentLabel);
+  const noticePath = resolveAdapterFacadeRuntimePaths(instanceId).delayedRequestsPath;
+  try {
+    if (!fs.existsSync(noticePath)) {
+      return false;
+    }
+    const parsed = JSON.parse(fs.readFileSync(noticePath, "utf8"));
+    const requests = Array.isArray(parsed?.requests) ? parsed.requests : [];
+    return requests.some((item: any) => {
+      if (!item || typeof item !== "object") {
+        return false;
+      }
+      const status = String(item.status || "pending").trim().toLowerCase() || "pending";
+      if (status !== "pending") {
+        return false;
+      }
+      const source = String(item.source || "").trim().toLowerCase();
+      if (source === "provider" || source === "llm_config") {
+        return true;
+      }
+      // Legacy agent_notice rows may have the generated Quaid source only in
+      // the formatted message; treat our structured prefix as provider-owned.
+      const message = String(item.message || "").trim().toLowerCase();
+      return message.includes("[quaid error] [provider]") || message.includes("[quaid error] [llm_config]");
+    });
+  } catch (err: unknown) {
+    writeHookTrace("deferred_notice.provider_probe_check_error", {
+      instance_id: instanceId,
+      agent_label: agentLabel,
+      error: String((err as Error)?.message || err),
+    });
+    return false;
+  }
+}
+
 function queueDeferredNoticeForAgent(
   agentLabel: string,
   message: string,
@@ -5879,9 +5915,9 @@ notify_user(${JSON.stringify(message)})
 
       try {
         const autoInjectEnabled = isAutoInjectEnabled(getMemoryConfig());
-        if (autoInjectEnabled) {
-          // Clear stale provider deferred notices before the relay drain can
-          // inject them into this turn after a config restore.
+        // Clear stale provider deferred notices before the relay drain can
+        // inject them into this turn after a config restore.
+        if (autoInjectEnabled || hasProviderDeferredNoticesForAgent(promptAgentLabel)) {
           await validatePromptModelConfigForTurn();
         }
         const deferredNoticeRelayContext = drainDeferredNoticeRelayContextForAgent(
@@ -6266,6 +6302,12 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
     onChecked("before_agent_reply", async (event: any, ctx: any) => {
       if (isInternalSessionContext(event, ctx)) return;
       const promptAgentLabel = resolveHookAgentLabel(event, ctx);
+      const promptModelConfigSessionKey = String(
+        event?.sessionKey || ctx?.sessionKey || event?.targetSessionKey || ctx?.targetSessionKey || "",
+      ).trim();
+      if (hasProviderDeferredNoticesForAgent(promptAgentLabel)) {
+        await validatePromptModelConfigIfChanged(promptAgentLabel, promptModelConfigSessionKey);
+      }
       const trigger = String(ctx?.trigger || "user").trim().toLowerCase();
       if (trigger === "user") {
         const messages = drainDeferredNoticeMessagesForAgent(promptAgentLabel, "before_agent_reply");

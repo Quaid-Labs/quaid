@@ -1538,6 +1538,156 @@ describe("openclaw deferred notices", () => {
     removeTempDir(home);
   });
 
+  it("clears stale provider deferred notices before prompt relay when auto-inject is disabled", async () => {
+    vi.stubEnv("QUAID_DISABLE_NOTIFICATIONS", "1");
+    const fixture = seedDeferredNoticeFixture(
+      "quaid-oc-provider-recovery-autoinject-off-home-",
+      "openclaw-main",
+      "[Quaid] placeholder",
+    );
+    writeJson(fixture.noticeFile, {
+      version: 1,
+      requests: [
+        {
+          id: "provider-agent-notice",
+          dedupe_key: "provider-agent-notice",
+          created_at: "2026-05-09T08:00:00Z",
+          source: "llm_config",
+          kind: "agent_notice",
+          priority: "high",
+          status: "pending",
+          message: "[Quaid error] [llm_config] stale provider notice from broken config",
+        },
+        {
+          id: "janitor-pending",
+          dedupe_key: "janitor-pending",
+          created_at: "2026-05-09T08:01:00Z",
+          source: "janitor",
+          kind: "janitor_summary",
+          priority: "low",
+          status: "pending",
+          message: "[Quaid] janitor summary remains visible",
+        },
+      ],
+    });
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () => ({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      text: async () => "OK",
+    } as any));
+
+    const plugin = await loadAdapterWithHomes(
+      fixture.hiddenHome,
+      fixture.visibleHome,
+      fixture.openClawConfigPath,
+      "openclaw-main",
+    );
+    const api = makeFakeApi();
+    plugin.register(api as any);
+
+    const beforePromptBuildCall = api.on.mock.calls.find((call: any[]) =>
+      call?.[0] === "before_prompt_build" && call?.[2]?.name === "memory-injection-prompt-build"
+    );
+    expect(beforePromptBuildCall).toBeTruthy();
+
+    const result = await beforePromptBuildCall?.[1](
+      {
+        prependContext: "",
+        prompt: "Clean recovery turn after config restore",
+        sessionId: "session-provider-recovery-autoinject-off",
+        sessionKey: "agent:main:tui-main",
+      },
+      {
+        sessionId: "session-provider-recovery-autoinject-off",
+        sessionKey: "agent:main:tui-main",
+      },
+    );
+
+    expect(fetchMock).toHaveBeenCalled();
+    const systemContext = combinedSystemContext(result);
+    expect(systemContext).not.toContain("stale provider notice from broken config");
+    expect(String(result?.prependContext || "")).not.toContain("stale provider notice from broken config");
+    expect(systemContext).toContain("janitor summary remains visible");
+
+    const payload = JSON.parse(fs.readFileSync(fixture.noticeFile, "utf8"));
+    expect(payload.requests).toHaveLength(1);
+    expect(String(payload.requests[0]?.source || "")).toBe("janitor");
+
+    fetchMock.mockRestore();
+    warn.mockRestore();
+    log.mockRestore();
+    error.mockRestore();
+    removeTempDir(fixture.home);
+  });
+
+  it("clears stale provider deferred notices before visible reply relay", async () => {
+    vi.stubEnv("QUAID_DISABLE_NOTIFICATIONS", "1");
+    const fixture = seedDeferredNoticeFixture(
+      "quaid-oc-provider-recovery-reply-relay-home-",
+      "openclaw-main",
+      "[Quaid] placeholder",
+    );
+    writeJson(fixture.noticeFile, {
+      version: 1,
+      requests: [
+        {
+          id: "provider-agent-notice",
+          dedupe_key: "provider-agent-notice",
+          created_at: "2026-05-09T08:00:00Z",
+          source: "provider",
+          kind: "agent_notice",
+          priority: "high",
+          status: "pending",
+          message: "[Quaid error] [provider] stale provider notice before reply",
+        },
+      ],
+    });
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () => ({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      text: async () => "OK",
+    } as any));
+
+    const plugin = await loadAdapterWithHomes(
+      fixture.hiddenHome,
+      fixture.visibleHome,
+      fixture.openClawConfigPath,
+      "openclaw-main",
+    );
+    const api = makeFakeApi();
+    plugin.register(api as any);
+
+    const beforeReplyCall = api.on.mock.calls.find((call: any[]) =>
+      call?.[0] === "before_agent_reply" && call?.[2]?.name === "deferred-notice-channel-relay"
+    );
+    expect(beforeReplyCall).toBeTruthy();
+
+    const result = await beforeReplyCall?.[1](
+      { sessionId: "session-provider-recovery-reply", sessionKey: "agent:main:tui-main" },
+      { sessionId: "session-provider-recovery-reply", sessionKey: "agent:main:tui-main", trigger: "user" },
+    );
+
+    expect(fetchMock).toHaveBeenCalled();
+    expect(result).toBeUndefined();
+    expect(fs.existsSync(fixture.noticeFile)).toBe(false);
+
+    fetchMock.mockRestore();
+    warn.mockRestore();
+    log.mockRestore();
+    error.mockRestore();
+    removeTempDir(fixture.home);
+  });
+
   it("re-arms project context injection after before_compaction under default strategy", async () => {
     vi.useFakeTimers();
     const fixture = seedDeferredNoticeFixture(

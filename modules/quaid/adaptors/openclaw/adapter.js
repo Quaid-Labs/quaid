@@ -805,6 +805,39 @@ function clearDeferredNoticesForAgent(agentLabel, reason, sources = ["provider",
     return 0;
   }
 }
+function hasProviderDeferredNoticesForAgent(agentLabel) {
+  const instanceId = getInstanceId(agentLabel);
+  const noticePath = resolveAdapterFacadeRuntimePaths(instanceId).delayedRequestsPath;
+  try {
+    if (!fs.existsSync(noticePath)) {
+      return false;
+    }
+    const parsed = JSON.parse(fs.readFileSync(noticePath, "utf8"));
+    const requests = Array.isArray(parsed?.requests) ? parsed.requests : [];
+    return requests.some((item) => {
+      if (!item || typeof item !== "object") {
+        return false;
+      }
+      const status = String(item.status || "pending").trim().toLowerCase() || "pending";
+      if (status !== "pending") {
+        return false;
+      }
+      const source = String(item.source || "").trim().toLowerCase();
+      if (source === "provider" || source === "llm_config") {
+        return true;
+      }
+      const message = String(item.message || "").trim().toLowerCase();
+      return message.includes("[quaid error] [provider]") || message.includes("[quaid error] [llm_config]");
+    });
+  } catch (err) {
+    writeHookTrace("deferred_notice.provider_probe_check_error", {
+      instance_id: instanceId,
+      agent_label: agentLabel,
+      error: String(err?.message || err)
+    });
+    return false;
+  }
+}
 function queueDeferredNoticeForAgent(agentLabel, message, {
   kind = "agent_notice",
   priority = "normal",
@@ -4746,7 +4779,7 @@ ${projectPlacementContext}` : projectPlacementContext;
       };
       try {
         const autoInjectEnabled = isAutoInjectEnabled(getMemoryConfig2());
-        if (autoInjectEnabled) {
+        if (autoInjectEnabled || hasProviderDeferredNoticesForAgent(promptAgentLabel)) {
           await validatePromptModelConfigForTurn();
         }
         const deferredNoticeRelayContext = drainDeferredNoticeRelayContextForAgent(
@@ -5080,6 +5113,12 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
     onChecked("before_agent_reply", async (event, ctx) => {
       if (isInternalSessionContext(event, ctx)) return;
       const promptAgentLabel = resolveHookAgentLabel(event, ctx);
+      const promptModelConfigSessionKey = String(
+        event?.sessionKey || ctx?.sessionKey || event?.targetSessionKey || ctx?.targetSessionKey || ""
+      ).trim();
+      if (hasProviderDeferredNoticesForAgent(promptAgentLabel)) {
+        await validatePromptModelConfigIfChanged(promptAgentLabel, promptModelConfigSessionKey);
+      }
       const trigger = String(ctx?.trigger || "user").trim().toLowerCase();
       if (trigger === "user") {
         const messages = drainDeferredNoticeMessagesForAgent(promptAgentLabel, "before_agent_reply");
