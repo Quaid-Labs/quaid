@@ -112,7 +112,7 @@
     },
     {
       "host": "claude-code",
-      "host_range": "2.1.126",
+      "host_range": "2.1.138",
       "quaid_range": "91c413ee8c776b4a38e26d11b678c946f94b11d0",
       "status": "compatible",
       "notes": "R191 zero-patch green release-readiness clear",
