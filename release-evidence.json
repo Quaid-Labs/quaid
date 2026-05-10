@@ -3,18 +3,18 @@
   "updated_at": "2026-05-10",
   "evidence": {
     "unit": {
-      "sha": "91c413ee8c776b4a38e26d11b678c946f94b11d0",
-      "recorded_at": "2026-05-10T03:34:40.441Z",
-      "notes": "R191 release-prep full local prepush PASS on release stack; release metadata/README delta operator-accepted"
+      "sha": "0b6725539390237936414fc46fc2ac6f83ffff09",
+      "recorded_at": "2026-05-10T03:37:06.817Z",
+      "notes": "R191 release-prep full local prepush PASS on rewritten release stack; release metadata/README delta operator-accepted"
     },
     "ci": {
-      "sha": "91c413ee8c776b4a38e26d11b678c946f94b11d0",
-      "recorded_at": "2026-05-10T03:34:40.504Z",
+      "sha": "0b6725539390237936414fc46fc2ac6f83ffff09",
+      "recorded_at": "2026-05-10T03:37:06.882Z",
       "notes": "Push-main GitHub CI gate required before public main promotion for this release stack"
     },
     "xp": {
-      "sha": "91c413ee8c776b4a38e26d11b678c946f94b11d0",
-      "recorded_at": "2026-05-10T03:34:40.566Z",
+      "sha": "0b6725539390237936414fc46fc2ac6f83ffff09",
+      "recorded_at": "2026-05-10T03:37:06.947Z",
       "notes": "R191 zero-patch green live run accepted for release readiness"
     }
   }
