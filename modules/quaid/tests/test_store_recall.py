@@ -10470,6 +10470,7 @@ class TestRecallFastHookInjectContract:
 
         with patch.object(mg, "get_graph", return_value=graph), \
              patch.object(mg.MemoryGraph, "search_hybrid", fake_search_hybrid), \
+             patch.object(mg, "_ollama_healthy", return_value=True), \
              patch.object(mg, "get_edge_keywords", return_value={}):
             rows, _meta = mg._recall_once(
                 "What is Ari Friday ritual?",
