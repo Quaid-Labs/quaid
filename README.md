@@ -48,11 +48,11 @@ AgentLife tests long-running agent memory across sessions, resets, stale facts, 
 
 ### Clean Harness Headline Rows
 
-| Surface | Quaid | FC Sonnet | Quaid Tokens | FC Tokens |
-| --- | ---: | ---: | ---: | ---: |
-| AgentLife Short | 93.64% | 93.11% | 7.95M | 29.83M |
-| AgentLife Long | 88.52% | 88.69% | 9.64M | 26.50M |
-| AgentLife Long OBD | 88.69% | 88.69% | 8.45M | 26.50M |
+| Surface | Quaid | FC Sonnet | FC Opus 4.7 | Quaid Tokens | FC Sonnet Tokens | FC Opus Tokens |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| AgentLife Short | 93.64% | 93.11% | 92.76% | 7.95M | 29.83M | 40.77M |
+| AgentLife Long | 88.52% | 88.69% | 89.40% | 9.64M | 26.50M | 36.22M |
+| AgentLife Long OBD | 88.69% | 88.69% | 89.40% | 8.45M | 26.50M | 36.22M |
 
 `AgentLife Short` is the clean core lane. `AgentLife Long` adds long/noisy filler sessions. `AgentLife Long OBD` compresses the long lane into one operational day. Quaid rows use Sonnet deep reasoning, Haiku fast reasoning, and Sonnet answer re-evaluation.
 
@@ -68,6 +68,7 @@ The clean harness table is the core Quaid reference surface. The OpenClaw table 
 ### Notes
 
 - Public token rows are non-judge evaluation tokens: answer model + recall/tool + preinject, excluding judge spend.
+- FC Opus rows use `r1454(r1427)` for AgentLife Short and `r1457` for AgentLife Long / Long OBD.
 - Results are single-run per lane/configuration; informal repeat variance on stable configs is typically about `+-1pp`.
 - Full methodology and run IDs live in the AgentLife repo: [latest technical report](https://github.com/quaid-labs/agentlife/blob/main/published/runbooks/AGENTLIFE_TECHNICAL_REPORT_20260430.md) and [runbooks folder](https://github.com/quaid-labs/agentlife/tree/main/published/runbooks).
 
