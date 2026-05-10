@@ -1,6 +1,6 @@
 {
   "name": "quaid",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "Long term memory for AI agents",
   "main": "adaptors/openclaw/index.js",
   "type": "module",

@@ -2,8 +2,8 @@
   "kill_switch": false,
   "kill_message": null,
   "schema_version": 1,
-  "updated_at": "2026-05-03",
-  "latest_quaid": "0.3.2",
+  "updated_at": "2026-05-10",
+  "latest_quaid": "0.3.3",
   "update_message": null,
   "matrix": [
     {
