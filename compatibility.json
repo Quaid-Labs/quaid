@@ -101,35 +101,38 @@
     {
       "host": "openclaw",
       "host_range": "2026.5.2",
-      "quaid_range": "0.3.2",
+      "quaid_range": "91c413ee8c776b4a38e26d11b678c946f94b11d0",
       "status": "compatible",
-      "notes": "Run 179 release-readiness clear",
+      "notes": "R191 zero-patch green release-readiness clear",
       "message": "",
       "fix": "",
-      "validated_sha": "7f2f76d211ff28ece9348b27297943c123e4bca1",
-      "validated_at": "2026-05-03T15:27:01.534Z"
+      "pending_release": true,
+      "install_verified": true,
+      "cleared_at": "2026-05-10T03:34:40.643Z"
     },
     {
       "host": "claude-code",
       "host_range": "2.1.126",
-      "quaid_range": "0.3.2",
+      "quaid_range": "91c413ee8c776b4a38e26d11b678c946f94b11d0",
       "status": "compatible",
-      "notes": "Run 179 release-readiness clear",
+      "notes": "R191 zero-patch green release-readiness clear",
       "message": "",
       "fix": "",
-      "validated_sha": "7f2f76d211ff28ece9348b27297943c123e4bca1",
-      "validated_at": "2026-05-03T15:27:01.623Z"
+      "pending_release": true,
+      "install_verified": true,
+      "cleared_at": "2026-05-10T03:34:40.717Z"
     },
     {
       "host": "codex",
       "host_range": "0.128.0",
-      "quaid_range": "0.3.2",
+      "quaid_range": "91c413ee8c776b4a38e26d11b678c946f94b11d0",
       "status": "compatible",
-      "notes": "Run 179 release-readiness clear",
+      "notes": "R191 zero-patch green release-readiness clear",
       "message": "",
       "fix": "",
-      "validated_sha": "7f2f76d211ff28ece9348b27297943c123e4bca1",
-      "validated_at": "2026-05-03T15:27:01.689Z"
+      "pending_release": true,
+      "install_verified": true,
+      "cleared_at": "2026-05-10T03:34:40.789Z"
     }
   ]
 }

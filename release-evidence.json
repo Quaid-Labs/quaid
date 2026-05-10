@@ -1,21 +1,21 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-05-03",
+  "updated_at": "2026-05-10",
   "evidence": {
     "unit": {
-      "sha": "7f2f76d211ff28ece9348b27297943c123e4bca1",
-      "recorded_at": "2026-05-03T15:27:01.315Z",
-      "notes": "Run 179 release-readiness prepush full gate PASS"
+      "sha": "91c413ee8c776b4a38e26d11b678c946f94b11d0",
+      "recorded_at": "2026-05-10T03:34:40.441Z",
+      "notes": "R191 release-prep full local prepush PASS on release stack; release metadata/README delta operator-accepted"
     },
     "ci": {
-      "sha": "7f2f76d211ff28ece9348b27297943c123e4bca1",
-      "recorded_at": "2026-05-03T15:27:01.379Z",
-      "notes": "GitHub Quaid CI and CodeQL post-promotion PASS"
+      "sha": "91c413ee8c776b4a38e26d11b678c946f94b11d0",
+      "recorded_at": "2026-05-10T03:34:40.504Z",
+      "notes": "Push-main GitHub CI gate required before public main promotion for this release stack"
     },
     "xp": {
-      "sha": "7f2f76d211ff28ece9348b27297943c123e4bca1",
-      "recorded_at": "2026-05-03T15:27:01.445Z",
-      "notes": "Run 179 XP and GLOBAL PASS"
+      "sha": "91c413ee8c776b4a38e26d11b678c946f94b11d0",
+      "recorded_at": "2026-05-10T03:34:40.566Z",
+      "notes": "R191 zero-patch green live run accepted for release readiness"
     }
   }
 }
