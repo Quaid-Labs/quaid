@@ -257,7 +257,7 @@ describe("openclaw auto-provision", () => {
 
     writeJson(path.join(hiddenHome, "instances", "openclaw-main", "config.json"), {
       adapter: { type: "openclaw" },
-      retrieval: { failHard: false, maxLimit: 20 },
+      retrieval: { failHard: false, maxLimit: 20, autoInject: false },
       models: {
         llmProvider: "openai-codex",
         deepReasoningProvider: "openai-codex",
