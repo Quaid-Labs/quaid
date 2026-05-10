@@ -12,7 +12,7 @@ from typing import Any, Dict, Optional
 
 DATASTORE_CLI_REGISTRY: Dict[str, Dict[str, str]] = {
     "docs": {
-        "module": "datastore.docsdb.docs_cli",
+        "module": "core.docs_cli",
         "description": "DocsDB registry, staleness, update, and changelog commands.",
     },
     "session": {

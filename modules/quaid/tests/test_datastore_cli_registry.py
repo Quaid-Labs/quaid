@@ -9,7 +9,7 @@ from core.datastore_cli import main as datastore_cli_main
 
 
 def test_static_datastore_cli_registry_has_docs_and_session_entries() -> None:
-    assert DATASTORE_CLI_REGISTRY["docs"]["module"] == "datastore.docsdb.docs_cli"
+    assert DATASTORE_CLI_REGISTRY["docs"]["module"] == "core.docs_cli"
     assert DATASTORE_CLI_REGISTRY["session"]["module"] == "core.session_cli"
 
 
@@ -17,11 +17,11 @@ def test_static_datastore_cli_registry_returns_copy_for_listing() -> None:
     entries = list_datastore_cli_entries()
     entries["docs"]["module"] = "mutated"
 
-    assert get_datastore_cli_entry("docs")["module"] == "datastore.docsdb.docs_cli"
+    assert get_datastore_cli_entry("docs")["module"] == "core.docs_cli"
 
 
 def test_datastore_cli_dispatch_consumes_static_registry(monkeypatch) -> None:
-    from datastore.docsdb import docs_cli
+    from core import docs_cli
 
     calls = []
 

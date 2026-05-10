@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datastore.docsdb import docs_cli
+from core import docs_cli
 
 
 def test_docs_cli_dispatches_list_to_docs_registry(monkeypatch) -> None:
@@ -73,3 +73,12 @@ def test_docs_cli_unknown_command_prints_usage(capsys) -> None:
 
     captured = capsys.readouterr()
     assert "Usage: quaid docs {list|check|update|changelog}" in captured.err
+
+
+def test_docsdb_docs_cli_is_datastore_only(capsys) -> None:
+    from datastore.docsdb import docs_cli as docsdb_docs_cli
+
+    assert docsdb_docs_cli.main(["update"]) == 1
+
+    captured = capsys.readouterr()
+    assert "Usage: docsdb docs {list|check|changelog}" in captured.err

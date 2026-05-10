@@ -31,6 +31,7 @@ ALLOWLIST = {
     ("core/services/memory_service.py", "datastore"),
     ("core/services/session_memory_bridge.py", "datastore"),
     ("core/docs/updater.py", "datastore"),
+    ("core/docs_cli.py", "datastore"),
     ("core/docs_updater_hook.py", "datastore"),
     ("core/plugins/memorydb_contract.py", "datastore"),
     ("core/plugins/docsdb_contract.py", "datastore"),
