@@ -394,6 +394,21 @@ def get_tracked_files(self) -> List[str]:
 ```
 
 ```python
+def history(file_path: Optional[str] = None, *, limit: int = 20) -> List[Dict[str, str]]:
+    # git log, optionally scoped to one project-relative file
+```
+
+```python
+def show_file(commit_hash: str, file_path: str) -> bytes:
+    # git show <commit>:<file>, with file path guarded to source_root
+```
+
+```python
+def restore_file(commit_hash: str, file_path: str) -> Path:
+    # Writes bytes from a shadow commit back to the source_root file path
+```
+
+```python
 def add_ignore_patterns(self, patterns: List[str]) -> None:
     # Appends LLM-managed patterns to git_dir/info/exclude
     # Defaults in _DEFAULT_EXCLUDES cannot be overwritten
@@ -829,6 +844,26 @@ Always verify with `quaid project show <name>` before deleting.
 quaid project snapshot [<name>]   # All projects or named project
 ```
 
+#### History and recovery (shadow git)
+```bash
+quaid project history <name> [file] --limit 20
+quaid project show-version <name> <rev> <file>
+quaid project restore <name> <rev> <file> --yes
+```
+
+These commands expose the same shadow git repository that snapshots use. They are
+for recovery of tracked source-root files after destructive agent edits. `history`
+does not mutate the shadow repo. `show-version` prints the file bytes from a prior
+shadow commit. `restore` writes that version back into the project source root.
+
+Recovery is only possible for content that was already captured by a prior shadow
+snapshot. Snapshots run on project creation and after successful extraction events;
+use `quaid project snapshot <name>` before risky edits if you need an immediate
+manual checkpoint.
+
+`show-version` and `restore` accept only project-relative paths or absolute paths
+inside the project's `source_root`; paths outside the source root are rejected.
+
 #### Full function table for `core/project_registry_cli.py`
 
 | Subcommand | Function | Notes |
@@ -841,6 +876,9 @@ quaid project snapshot [<name>]   # All projects or named project
 | `unlink <name>` | `unlink_project()` | Removes current instance |
 | `delete <name>` | `delete_project()` | Full cleanup |
 | `snapshot [<name>]` | `snapshot_all_projects()` or single | Shadow git snapshot |
+| `history <name> [file]` | `ShadowGit.history()` | List backup commits |
+| `show-version <name> <rev> <file>` | `ShadowGit.show_file()` | Print file at backup commit |
+| `restore <name> <rev> <file>` | `ShadowGit.restore_file()` | Restore tracked file from backup commit |
 
 ### 7.2 Doc Registry (`quaid registry` / `quaid docs`)
 

@@ -12,6 +12,7 @@ import pytest
 import shutil
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 
@@ -21,6 +22,12 @@ def _git_available():
         return True
     except (FileNotFoundError, subprocess.CalledProcessError):
         return False
+
+
+def _args(**kwargs):
+    defaults = {"json": False}
+    defaults.update(kwargs)
+    return SimpleNamespace(**defaults)
 
 
 @pytest.fixture
@@ -211,6 +218,42 @@ class TestProjectSystemE2E:
         # User's files untouched
         assert (project_env["user_code"] / "main.py").is_file()
         assert (project_env["user_code"] / "config.yaml").is_file()
+
+    def test_shadow_history_can_restore_prior_file_version(self, project_env, capsys):
+        """Shadow git exposes prior tracked file versions for recovery."""
+        from core.project_registry import create_project, snapshot_all_projects
+        from core import project_registry_cli as cli
+
+        create_project(
+            "restore-test",
+            description="Restore test",
+            source_root=str(project_env["user_code"]),
+        )
+
+        original = "def hello():\n    print('hello')\n"
+        updated = "def hello():\n    print('hello world!')\n"
+        target = project_env["user_code"] / "main.py"
+        assert target.read_text() == original
+
+        target.write_text(updated)
+        results = snapshot_all_projects()
+        assert len(results) == 1
+
+        cli.cmd_history(_args(name="restore-test", file="main.py", limit=5, json=True))
+        history_payload = json.loads(capsys.readouterr().out)
+        commits = history_payload["history"]
+        assert len(commits) >= 2
+        prior_rev = commits[-1]["commit"]
+
+        cli.cmd_show_version(_args(name="restore-test", rev=prior_rev, file="main.py"))
+        assert capsys.readouterr().out == original
+
+        # Simulate a destructive agent edit after the last good snapshot.
+        target.write_text("def hello():\n")
+
+        cli.cmd_restore(_args(name="restore-test", rev=prior_rev, file="main.py", yes=True, json=False))
+        assert "Restored main.py" in capsys.readouterr().out
+        assert target.read_text() == original
 
     def test_multiple_projects(self, project_env):
         """Multiple projects can coexist independently."""

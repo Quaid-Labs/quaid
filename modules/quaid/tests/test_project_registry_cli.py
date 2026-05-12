@@ -446,3 +446,54 @@ class TestCmdDiff:
              patch("core.project_docs.format_diff", return_value="ok"):
             cli.cmd_diff(_args(name="proj", full=True))
         m.assert_called_once_with("proj", full=True)
+
+
+class TestCmdShadowGitRecovery:
+    def test_history_json_prints_shadow_commits(self, capsys):
+        sg = MagicMock()
+        sg.history.return_value = [
+            {
+                "commit": "abc123",
+                "short": "abc123",
+                "committed_at": "2026-05-12T00:00:00+00:00",
+                "subject": "snapshot",
+            }
+        ]
+        with patch("core.project_registry_cli._shadow_git_for_visible_project", return_value=sg):
+            cli.cmd_history(_args(name="proj", file="notes.md", limit=3, json=True))
+
+        sg.history.assert_called_once_with("notes.md", limit=3)
+        parsed = json.loads(capsys.readouterr().out)
+        assert parsed["project"] == "proj"
+        assert parsed["file"] == "notes.md"
+        assert parsed["history"][0]["commit"] == "abc123"
+
+    def test_show_version_writes_file_bytes(self, capsys):
+        sg = MagicMock()
+        sg.show_file.return_value = b"previous contents\n"
+        with patch("core.project_registry_cli._shadow_git_for_visible_project", return_value=sg):
+            cli.cmd_show_version(_args(name="proj", rev="abc123", file="notes.md"))
+
+        sg.show_file.assert_called_once_with("abc123", "notes.md")
+        assert capsys.readouterr().out == "previous contents\n"
+
+    def test_restore_requires_yes_when_noninteractive(self, capsys):
+        sg = MagicMock()
+        with patch("core.project_registry_cli._shadow_git_for_visible_project", return_value=sg), \
+             patch("sys.stdin.isatty", return_value=False):
+            with pytest.raises(SystemExit) as exc_info:
+                cli.cmd_restore(_args(name="proj", rev="abc123", file="notes.md", yes=False, json=False))
+
+        assert exc_info.value.code == 1
+        sg.restore_file.assert_not_called()
+        assert "--yes is required" in capsys.readouterr().err
+
+    def test_restore_with_yes_calls_shadow_restore(self, tmp_path, capsys):
+        restored = tmp_path / "notes.md"
+        sg = MagicMock()
+        sg.restore_file.return_value = restored
+        with patch("core.project_registry_cli._shadow_git_for_visible_project", return_value=sg):
+            cli.cmd_restore(_args(name="proj", rev="abc123", file="notes.md", yes=True, json=False))
+
+        sg.restore_file.assert_called_once_with("abc123", "notes.md")
+        assert "Restored notes.md" in capsys.readouterr().out

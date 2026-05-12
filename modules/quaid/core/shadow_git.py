@@ -15,7 +15,7 @@ import subprocess
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -198,6 +198,35 @@ class ShadowGit:
             cmd, capture_output=True, text=True,
             check=check, timeout=timeout,
         )
+
+    def _git_bytes(self, *args, check: bool = True,
+                   timeout: int = 60) -> subprocess.CompletedProcess:
+        """Run a git command and capture raw bytes."""
+        cmd = [
+            "git",
+            f"--git-dir={self.git_dir}",
+            f"--work-tree={self.work_tree}",
+            *args,
+        ]
+        return subprocess.run(
+            cmd, capture_output=True,
+            check=check, timeout=timeout,
+        )
+
+    def _normalize_file_path(self, file_path: str) -> str:
+        """Normalize a user-supplied project file path to a git pathspec."""
+        raw = str(file_path or "").strip()
+        if not raw:
+            raise ValueError("file path is required")
+        path = Path(raw)
+        if path.is_absolute():
+            try:
+                path = path.resolve().relative_to(self.work_tree)
+            except ValueError as exc:
+                raise ValueError(f"file path is outside project source root: {file_path}") from exc
+        if any(part in {"", ".", ".."} for part in path.parts):
+            raise ValueError(f"invalid project file path: {file_path}")
+        return path.as_posix()
 
     @property
     def initialized(self) -> bool:
@@ -472,6 +501,56 @@ class ShadowGit:
         if result.returncode != 0:
             return []
         return [f for f in result.stdout.strip().splitlines() if f.strip()]
+
+    def history(self, file_path: Optional[str] = None, *, limit: int = 20) -> List[Dict[str, str]]:
+        """Return shadow-git commit history, optionally scoped to one file."""
+        if not self.initialized:
+            return []
+        bounded_limit = max(1, min(int(limit or 20), 200))
+        args = ["log", f"-n{bounded_limit}", "--date=iso-strict", "--format=%H%x00%h%x00%aI%x00%s"]
+        if file_path:
+            args.extend(["--", self._normalize_file_path(file_path)])
+        result = self._git(*args, check=False)
+        if result.returncode != 0 or not result.stdout.strip():
+            return []
+        entries: List[Dict[str, str]] = []
+        for line in result.stdout.splitlines():
+            parts = line.split("\0", 3)
+            if len(parts) != 4:
+                continue
+            commit_hash, short_hash, committed_at, subject = parts
+            entries.append({
+                "commit": commit_hash,
+                "short": short_hash,
+                "committed_at": committed_at,
+                "subject": subject,
+            })
+        return entries
+
+    def show_file(self, commit_hash: str, file_path: str) -> bytes:
+        """Return a tracked file's bytes at a shadow commit."""
+        commit = str(commit_hash or "").strip()
+        if not commit:
+            raise ValueError("commit is required")
+        normalized = self._normalize_file_path(file_path)
+        result = self._git_bytes("show", f"{commit}:{normalized}", check=False)
+        if result.returncode != 0:
+            detail = result.stderr.decode("utf-8", errors="replace").strip()
+            raise FileNotFoundError(detail or f"{normalized} not found at {commit}")
+        return bytes(result.stdout)
+
+    def restore_file(self, commit_hash: str, file_path: str) -> Path:
+        """Restore a tracked file from a shadow commit into the work tree."""
+        normalized = self._normalize_file_path(file_path)
+        data = self.show_file(commit_hash, normalized)
+        target = (self.work_tree / normalized).resolve()
+        try:
+            target.relative_to(self.work_tree)
+        except ValueError as exc:
+            raise ValueError(f"restore target is outside project source root: {file_path}") from exc
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
+        return target
 
     def destroy(self) -> None:
         """Remove the shadow git directory entirely."""

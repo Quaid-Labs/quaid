@@ -12,6 +12,9 @@ Usage:
     python3 project_registry_cli.py status <name>
     python3 project_registry_cli.py diff <name> [--stat|--full]
     python3 project_registry_cli.py snapshot [<name>]
+    python3 project_registry_cli.py history <name> [file]
+    python3 project_registry_cli.py show-version <name> <rev> <file>
+    python3 project_registry_cli.py restore <name> <rev> <file> [--yes]
     python3 project_registry_cli.py sync
 """
 
@@ -351,6 +354,83 @@ def cmd_snapshot(args):
                 print(f"  {c['status']}\t{c['path']}")
 
 
+def _shadow_git_for_visible_project(name: str):
+    from core.project_registry import get_project
+    from core.shadow_git import ShadowGit
+    from lib.adapter import get_adapter, quaid_tracking_dir
+    from pathlib import Path
+
+    project = _require_project_visible(name, get_project(name))
+    source_root = project.get("source_root")
+    if not source_root:
+        print(f"No source root for {name}", file=sys.stderr)
+        sys.exit(1)
+
+    adapter = get_adapter()
+    sg = ShadowGit(
+        name,
+        Path(source_root),
+        tracking_base=quaid_tracking_dir(adapter.quaid_home()),
+    )
+    if not sg.initialized:
+        print(f"No shadow git history for {name}", file=sys.stderr)
+        sys.exit(1)
+    return sg
+
+
+def cmd_history(args):
+    try:
+        sg = _shadow_git_for_visible_project(args.name)
+        entries = sg.history(args.file, limit=args.limit)
+    except (ValueError, KeyError) as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+    if args.json:
+        print(json.dumps({"project": args.name, "file": args.file, "history": entries}, indent=2))
+        return
+    if not entries:
+        target = f" for {args.file}" if args.file else ""
+        print(f"No shadow git history for {args.name}{target}.")
+        return
+    for entry in entries:
+        print(f"{entry['short']}  {entry['committed_at']}  {entry['subject']}")
+
+
+def cmd_show_version(args):
+    try:
+        sg = _shadow_git_for_visible_project(args.name)
+        data = sg.show_file(args.rev, args.file)
+    except (ValueError, KeyError, FileNotFoundError) as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+    sys.stdout.buffer.write(data)
+
+
+def cmd_restore(args):
+    try:
+        sg = _shadow_git_for_visible_project(args.name)
+        if not args.yes and not sys.stdin.isatty():
+            print("Error: --yes is required when restore is run non-interactively.", file=sys.stderr)
+            sys.exit(1)
+        if not args.yes:
+            ans = input(f"Restore '{args.file}' in project '{args.name}' from {args.rev}? [y/N] ").strip().lower()
+            if ans not in ("y", "yes"):
+                print("Aborted.")
+                return
+        restored = sg.restore_file(args.rev, args.file)
+    except (ValueError, KeyError, FileNotFoundError) as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+    if args.json:
+        print(json.dumps({
+            "project": args.name,
+            "file": args.file,
+            "rev": args.rev,
+            "restored_path": str(restored),
+        }, indent=2))
+    else:
+        print(f"Restored {args.file} from {args.rev} -> {restored}")
+
 
 def main():
     parser = argparse.ArgumentParser(description="Quaid project system CLI")
@@ -429,6 +509,24 @@ def main():
     snap_p = subparsers.add_parser("snapshot", help="Take shadow git snapshot(s)")
     snap_p.add_argument("name", nargs="?", help="Project name (all if omitted)")
 
+    # shadow git history
+    history_p = subparsers.add_parser("history", help="Show shadow git history for a project or file")
+    history_p.add_argument("name", help="Project name")
+    history_p.add_argument("file", nargs="?", help="Optional project-relative file path")
+    history_p.add_argument("--limit", type=int, default=20, help="Maximum commits to show")
+    add_json_argument(history_p)
+
+    show_version_p = subparsers.add_parser("show-version", help="Print a tracked file from a shadow git revision")
+    show_version_p.add_argument("name", help="Project name")
+    show_version_p.add_argument("rev", help="Shadow git commit/revision")
+    show_version_p.add_argument("file", help="Project-relative file path")
+
+    restore_p = subparsers.add_parser("restore", help="Restore a tracked file from a shadow git revision")
+    restore_p.add_argument("name", help="Project name")
+    restore_p.add_argument("rev", help="Shadow git commit/revision")
+    restore_p.add_argument("file", help="Project-relative file path")
+    restore_p.add_argument("--yes", "-y", action="store_true", help="Skip confirmation prompt")
+    add_json_argument(restore_p)
 
     args = parser.parse_args()
 
@@ -445,6 +543,9 @@ def main():
         "status": cmd_status,
         "diff": cmd_diff,
         "snapshot": cmd_snapshot,
+        "history": cmd_history,
+        "show-version": cmd_show_version,
+        "restore": cmd_restore,
     }
 
     if args.command in commands:
