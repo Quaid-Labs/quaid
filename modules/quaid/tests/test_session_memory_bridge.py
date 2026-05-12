@@ -31,6 +31,7 @@ class FakeMemoryService:
                 "source_conversation_id": kwargs.get("source_conversation_id"),
                 "conversation_id": kwargs.get("conversation_id"),
                 "source_author_id": kwargs.get("source_author_id"),
+                "source_date": kwargs.get("source_date"),
                 "message_pair_id": pair_ids[offset] if offset < len(pair_ids) else kwargs.get("message_pair_id"),
                 "microchunk_id": microchunk_ids[offset] if offset < len(microchunk_ids) else kwargs.get("microchunk_id"),
                 "status": "created",
@@ -168,6 +169,7 @@ def test_bridge_projects_sessiondb_microchunks_to_memorydb(monkeypatch, tmp_path
         session_id="sess-bridge",
         source_id="source-bridge",
         start_index=8,
+        source_date="2023-06-09T19:55:00Z",
         max_microchunk_tokens=16,
         embed=False,
     )
@@ -175,8 +177,10 @@ def test_bridge_projects_sessiondb_microchunks_to_memorydb(monkeypatch, tmp_path
     assert rows
     assert all(row["microchunk_id"] for row in rows)
     assert all(row["message_pair_id"] for row in rows)
+    assert {row["source_date"] for row in rows} == {"2023-06-09"}
     stored_rows = memory.list_session_chunks(owner_id="owner-bridge", session_id="sess-bridge")
     assert {row["microchunk_id"] for row in stored_rows} == {row["microchunk_id"] for row in rows}
+    assert {row["source_date"] for row in stored_rows} == {"2023-06-09"}
     first_micro = session_store.fetch_microchunk(
         microchunk_id=rows[0]["microchunk_id"],
         owner_id="owner-bridge",
@@ -184,7 +188,57 @@ def test_bridge_projects_sessiondb_microchunks_to_memorydb(monkeypatch, tmp_path
     assert first_micro["memory_chunk_id"] == rows[0]["chunk_id"]
     expanded = bridge.expand_microchunk(rows[0]["microchunk_id"], owner_id="owner-bridge", after=1)
     assert expanded["pair"]["pair_id"] == rows[0]["message_pair_id"]
+    assert expanded["source_date"] == "2023-06-09"
     assert expanded["window"]
+
+
+def test_expand_microchunk_returns_compact_local_microchunk_window(monkeypatch, tmp_path):
+    from core.services.datastore_bridge import DatastoreBridge
+    from core.services.session_memory_bridge import DatastoreSessionMemoryBridge
+    from datastore.memorydb.memory_graph import MemoryGraph
+
+    monkeypatch.setenv("MEMORY_DB_PATH", str(tmp_path / "memory.db"))
+    monkeypatch.setenv("SESSION_DB_PATH", str(tmp_path / "session.db"))
+    memory = MemoryGraph(db_path=tmp_path / "memory.db")
+    bridge = DatastoreSessionMemoryBridge(memory_service=memory, datastore_bridge=DatastoreBridge())
+
+    rows = bridge.store_session_source_text(
+        text=(
+            "User: Ari asks where the archive repair kit moved.\n"
+            "Assistant: first shelf empty. blue ledger current. "
+            "brass token cabinet seven. final note closes.\n"
+            "User: Noor asks where the harbor map moved.\n"
+            "Assistant: amber folder west shelf. silver tag north drawer."
+        ),
+        owner_id="owner-local-window",
+        session_id="sess-local-window",
+        source_id="source-local-window",
+        source_date="2023-06-09T19:55:00Z",
+        max_microchunk_tokens=8,
+        embed=False,
+    )
+
+    center = next(row for row in rows if "first shelf" in row["text"])
+    expanded = bridge.expand_microchunk(
+        center["microchunk_id"],
+        owner_id="owner-local-window",
+        after=1,
+    )
+
+    local_texts = [row["text"] for row in expanded["microchunk_window"]]
+    other_pair_ids = {
+        row["message_pair_id"]
+        for row in rows
+        if row["message_pair_id"] != center["message_pair_id"]
+    }
+    assert other_pair_ids
+    assert any("first shelf empty" in text for text in local_texts)
+    assert any("blue ledger current" in text for text in local_texts)
+    assert any("brass token cabinet seven" in text for text in local_texts)
+    assert all(row["pair_id"] == center["message_pair_id"] for row in expanded["microchunk_window"])
+    assert not any(row["pair_id"] in other_pair_ids for row in expanded["microchunk_window"])
+    assert not any("harbor map" in text or "amber folder" in text for text in local_texts)
+    assert {row["source_date"] for row in expanded["microchunk_window"]} == {"2023-06-09"}
 
 
 def test_bridge_projects_indexed_session_transcript_microchunks(monkeypatch, tmp_path):

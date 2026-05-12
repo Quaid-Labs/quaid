@@ -196,6 +196,7 @@ CREATE TABLE IF NOT EXISTS source_chunks (
     sensitivity TEXT DEFAULT 'normal',      -- Open policy vocabulary; mirrors node provenance metadata
     domains TEXT DEFAULT '[]',
     project TEXT,
+    source_date TEXT,
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT DEFAULT (datetime('now'))
 );

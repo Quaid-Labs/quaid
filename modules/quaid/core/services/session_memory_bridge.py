@@ -272,6 +272,7 @@ class DatastoreSessionMemoryBridge(SessionMemoryBridgePort):
             source_conversation_id=_optional(source_conversation_id),
             conversation_id=_optional(conversation_id) or _optional(source_conversation_id),
             source_author_id=_optional(source_author_id),
+            source_date=_optional(kwargs.get("source_date")),
             chunk_index=int(chunk_index or 0),
             chunk_kind=chunk_kind,
             max_microchunk_tokens=int(kwargs.pop("max_microchunk_tokens", 40) or 40),

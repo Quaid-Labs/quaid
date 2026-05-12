@@ -43,6 +43,7 @@ import hashlib
 import inspect
 import json
 import logging
+import math
 import os
 import re
 import sqlite3
@@ -100,6 +101,34 @@ from lib.tokens import (
 from lib.runtime_context import get_workspace_dir, get_adapter_instance, get_logs_dir
 
 logger = logging.getLogger(__name__)
+
+_GRAPH_FACT_CLUSTER_DEFAULT_CAP = 8
+_GRAPH_FACT_CLUSTER_WIDE_POOL_THRESHOLD = 10
+_GRAPH_FACT_CLUSTER_WIDE_CAP = 12
+
+# Interpret only clusters at least as broad as the default rendered cluster;
+# smaller clusters are already compact enough for the answerer to consume raw.
+_GRAPH_FACT_CLUSTER_INTERPRETATION_MIN_CLUSTER_SIZE = 8
+_GRAPH_FACT_CLUSTER_INTERPRETATION_MIN_QUERY_OVERLAP = 2
+_GRAPH_FACT_CLUSTER_INTERPRETATION_MAX_EVIDENCE_CHARS = 5000
+_GRAPH_FACT_CLUSTER_INTERPRETATION_MAX_CHARS = 700
+_GRAPH_FACT_CLUSTER_INTERPRETATION_MAX_TOKENS = 240
+# This runs only in deliberate recall after store retrieval/ranking has already
+# selected a broad graph cluster; keep it bounded below the overall recall SLA.
+_GRAPH_FACT_CLUSTER_INTERPRETATION_TIMEOUT_S = 12.0
+
+# For graph clusters, pull a few first-order provenance windows through the
+# SessionDB bridge: enough for co-reference grounding, bounded by recall budget.
+_GRAPH_CLUSTER_SOURCE_CHUNK_LIMIT = 3
+_GRAPH_CLUSTER_SOURCE_WINDOW_RADIUS = 1
+_GRAPH_CLUSTER_SOURCE_WINDOW_ITEM_LIMIT = 8
+
+# Score session chunks with a tiny same-source neighborhood: transcripts often
+# split the entity mention and the temporal/detail answer across adjacent turns.
+_SESSION_CHUNK_SCORING_WINDOW_RADIUS = 1
+_SESSION_CHUNK_RECALL_CANDIDATE_FLOOR = 2048
+
+_SUBJECT_ATTACHABLE_MEMORY_TYPES = {"fact", "preference", "event"}
 
 
 def _now() -> datetime:
@@ -291,6 +320,7 @@ class SourceChunk:
     sensitivity: str = "normal"
     domains: List[str] = field(default_factory=list)
     project: Optional[str] = None
+    source_date: Optional[str] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 
@@ -1086,6 +1116,7 @@ class MemoryGraph:
                 sensitivity TEXT DEFAULT 'normal',
                 domains TEXT DEFAULT '[]',
                 project TEXT,
+                source_date TEXT,
                 created_at TEXT DEFAULT (datetime('now')),
                 updated_at TEXT DEFAULT (datetime('now'))
             )
@@ -1103,6 +1134,7 @@ class MemoryGraph:
             ("message_pair_id", "TEXT"),
             ("microchunk_id", "TEXT"),
             ("embedding", "BLOB"),
+            ("source_date", "TEXT"),
         ]:
             if col in existing_cols:
                 continue
@@ -1153,6 +1185,7 @@ class MemoryGraph:
             "sensitivity": row["sensitivity"],
             "domains": _normalize_domains(domains),
             "project": row["project"],
+            "source_date": row["source_date"] if "source_date" in row.keys() else None,
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
         }
@@ -1183,6 +1216,7 @@ class MemoryGraph:
         sensitivity: Optional[str] = None,
         domains: Optional[List[str]] = None,
         project: Optional[str] = None,
+        source_date: Optional[str] = None,
         token_count: Optional[int] = None,
         created_at: Optional[str] = None,
         embed: bool = True,
@@ -1251,6 +1285,7 @@ class MemoryGraph:
         sensitivity = str(sensitivity or "normal").strip() or "normal"
         now_iso = _now_iso()
         created = created_at or now_iso
+        normalized_source_date = _date_part(source_date)
         count = int(token_count) if token_count is not None else int(_lib_estimate_tokens(normalized_text))
         count = max(0, count)
         packed_embedding: Optional[bytes] = None
@@ -1288,6 +1323,7 @@ class MemoryGraph:
             sensitivity=sensitivity,
             domains=domains,
             project=project,
+            source_date=normalized_source_date or None,
             created_at=created,
             updated_at=now_iso,
         )
@@ -1300,10 +1336,10 @@ class MemoryGraph:
                 INSERT OR IGNORE INTO source_chunks
                 (chunk_id, source_id, session_id, chunk_index, content_hash, text,
                  chunk_kind, parent_chunk_id, next_chunk_id, message_id, message_pair_id, microchunk_id,
-                 embedding, token_count, owner_id, source_channel, source_conversation_id,
-                 conversation_id, source_author_id, source_type, privacy,
-                 visibility_scope, sensitivity, domains, project, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                embedding, token_count, owner_id, source_channel, source_conversation_id,
+                conversation_id, source_author_id, source_type, privacy,
+                 visibility_scope, sensitivity, domains, project, source_date, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     chunk.chunk_id,
@@ -1331,17 +1367,19 @@ class MemoryGraph:
                     chunk.sensitivity,
                     json.dumps(chunk.domains, sort_keys=True),
                     chunk.project,
+                    chunk.source_date,
                     chunk.created_at or now_iso,
                     chunk.updated_at or now_iso,
                 ),
             )
-            if cursor.rowcount <= 0 and (parent_chunk_id or message_pair_id or microchunk_id):
+            if cursor.rowcount <= 0 and (parent_chunk_id or message_pair_id or microchunk_id or chunk.source_date):
                 active_conn.execute(
                     """
                     UPDATE source_chunks
                     SET parent_chunk_id = COALESCE(NULLIF(parent_chunk_id, ''), ?),
                         message_pair_id = COALESCE(NULLIF(message_pair_id, ''), ?),
                         microchunk_id = COALESCE(NULLIF(microchunk_id, ''), ?),
+                        source_date = COALESCE(NULLIF(source_date, ''), ?),
                         updated_at = ?
                     WHERE chunk_id = ?
                     """,
@@ -1349,6 +1387,7 @@ class MemoryGraph:
                         parent_chunk_id,
                         message_pair_id,
                         microchunk_id,
+                        chunk.source_date,
                         now_iso,
                         chunk.chunk_id,
                     ),
@@ -4287,6 +4326,7 @@ def _graph_mentioned_fact_nodes(
     graph: "MemoryGraph",
     *,
     anchor_text: str,
+    query: Optional[str] = None,
     seen_ids: set,
     limit: int = 12,
 ) -> List["Node"]:
@@ -4312,13 +4352,19 @@ def _graph_mentioned_fact_nodes(
                 ORDER BY confirmation_count DESC, accessed_at DESC, created_at DESC
                 LIMIT ?
                 """,
-                (f"%{anchor}%", max(1, int(limit or 1))),
+                (f"%{anchor}%", max(max(1, int(limit or 1)) * 16, 256)),
             ).fetchall()
     except Exception:
         return []
 
+    query_terms = {
+        term
+        for term in _extract_distinctive_query_terms(query, limit=12)
+        if term and term not in _QUERY_STOPWORDS
+    }
+    ranked: List[Tuple[Tuple[int, int, int], "Node"]] = []
     facts: List["Node"] = []
-    for row in rows:
+    for row_index, row in enumerate(rows):
         try:
             fact = graph._row_to_node(row)
         except Exception:
@@ -4329,6 +4375,27 @@ def _graph_mentioned_fact_nodes(
             continue
         if not _text_mentions_graph_anchor(str(getattr(fact, "name", "") or ""), anchor):
             continue
+        fact_text = str(getattr(fact, "name", "") or "")
+        fact_keywords = str(getattr(fact, "keywords", "") or "")
+        fact_search_text = " ".join([fact_text, fact_keywords]).strip()
+        fact_search_lower = fact_search_text.lower()
+        query_overlap = sum(
+            1
+            for term in query_terms
+            if term and (
+                _text_matches_query_term(fact_search_lower, term)
+            )
+        )
+        ranked.append((
+            (
+                query_overlap,
+                len(query_terms & set(_extract_distinctive_query_terms(fact_text, limit=12))),
+                -row_index,
+            ),
+            fact,
+        ))
+    ranked.sort(key=lambda item: item[0], reverse=True)
+    for _score, fact in ranked[: max(1, int(limit or 1))]:
         facts.append(fact)
     return facts
 
@@ -4344,6 +4411,7 @@ def _graph_attached_fact_rows(
     hop_depth: int,
     seen_ids: set,
     query: Optional[str] = None,
+    query_embedding: Optional[List[float]] = None,
     per_anchor_limit: int = 2,
 ) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
@@ -4365,16 +4433,311 @@ def _graph_attached_fact_rows(
     relation_only_query = bool(normalized_relation_query_terms) and all(
         term in relation_descriptor_terms for term in normalized_relation_query_terms
     )
-    candidates: List[Tuple[Tuple[int, int, int, int, float], Dict[str, Any]]] = []
+    source_chunk_cache: Dict[str, Dict[str, Any]] = {}
+    candidates: List[Tuple[Tuple[Any, ...], Dict[str, Any]]] = []
+
+    def _direct_relation_cluster_rows() -> List[Dict[str, Any]]:
+        relation_rows: List[Dict[str, Any]] = []
+        relation_counts: Dict[str, int] = {}
+        relation_names: Dict[str, List[Tuple[str, str]]] = {}
+        relation_member_limit = 6
+        for edge in edges:
+            relation = str(getattr(edge, "relation", "") or "").strip()
+            if not relation or relation == "has_fact":
+                continue
+            target_id = edge.target_id if edge.source_id == anchor_node.id else edge.source_id
+            if not target_id:
+                continue
+            count = relation_counts.get(relation, 0)
+            if count >= relation_member_limit:
+                continue
+            try:
+                related = graph.get_node(target_id)
+            except Exception as exc:
+                if _is_fail_hard_mode():
+                    raise RuntimeError(
+                        f"Failed to load graph relation target {target_id!r} for relation {relation!r}"
+                    ) from exc
+                continue
+            related_name = str(getattr(related, "name", "") or "").strip()
+            if not related_name:
+                continue
+            direction = "out" if edge.source_id == anchor_node.id else "in"
+            relation_names.setdefault(relation, []).append((related_name, str(getattr(related, "id", "") or target_id)))
+            relation_counts[relation] = count + 1
+            relation_rows.append({
+                "id": str(getattr(related, "id", "") or target_id),
+                "name": related_name,
+                "text": _sanitize_for_context(
+                    _render_bidirectional_graph_text(anchor_text, related_name, relation, direction)
+                ),
+                "relation": relation,
+            })
+        relation_rows.sort(key=lambda row: (str(row.get("relation") or ""), str(row.get("text") or "")))
+        summary_rows: List[Dict[str, Any]] = []
+        for relation, names in sorted(relation_names.items()):
+            deduped: List[Tuple[str, str]] = []
+            seen_names: set[str] = set()
+            for name, node_id in names:
+                key = name.lower()
+                if key in seen_names:
+                    continue
+                seen_names.add(key)
+                deduped.append((name, node_id))
+            if len(deduped) < 2:
+                continue
+            summary_rows.append({
+                "id": f"{anchor_node.id}:{relation}:summary",
+                "name": ", ".join(name for name, _node_id in deduped[:6]),
+                "text": _sanitize_for_context(
+                    f"{anchor_text} → {relation} → {', '.join(name for name, _node_id in deduped[:6])}"
+                ),
+                "relation": relation,
+                "relation_summary": True,
+                "relation_member_ids": [node_id for _name, node_id in deduped[:6] if node_id],
+            })
+        return [*summary_rows, *relation_rows][:10]
+
+    def _source_chunk_for_row(row: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        chunk_id = str((row or {}).get("source_chunk_id") or "").strip()
+        if not chunk_id:
+            return None
+        if chunk_id in source_chunk_cache:
+            return source_chunk_cache[chunk_id]
+        try:
+            chunk = graph.get_source_chunk(chunk_id, fail_hard=_is_fail_hard_mode())
+        except Exception as exc:
+            if _is_fail_hard_mode():
+                raise RuntimeError(
+                    f"Failed to load source chunk {chunk_id!r} for graph event evidence"
+                ) from exc
+            chunk = None
+        if isinstance(chunk, dict):
+            source_chunk_cache[chunk_id] = chunk
+            return chunk
+        source_chunk_cache[chunk_id] = {}
+        return None
+
+    def _row_source_date(row: Dict[str, Any]) -> str:
+        source_date = _date_part((row or {}).get("source_date"))
+        if source_date:
+            return source_date
+        chunk = _source_chunk_for_row(row)
+        if isinstance(chunk, dict):
+            source_date = _date_part(chunk.get("source_date"))
+            if source_date:
+                row["source_date"] = source_date
+                return source_date
+        text = str((row or {}).get("text") or "")
+        explicit_dates = re.findall(r"\b(20\d{2}-\d{2}-\d{2})\b", text)
+        return explicit_dates[-1] if explicit_dates else ""
+
+    def _fact_cluster_row(sorted_candidates: List[Tuple[Any, Dict[str, Any]]]) -> Optional[Dict[str, Any]]:
+        unique_candidates: List[Tuple[Any, Dict[str, Any]]] = []
+        unique_candidate_ids: set[str] = set()
+        for score, row in sorted_candidates:
+            row_id = str(row.get("id") or "").strip()
+            if row_id:
+                if row_id in unique_candidate_ids:
+                    continue
+                unique_candidate_ids.add(row_id)
+            unique_candidates.append((score, row))
+        # Thresholds and caps apply to unique facts, not duplicate graph paths
+        # to the same node. Multiple routes should not inflate rendered context.
+        if len(unique_candidates) < 4 or int(per_anchor_limit or 0) < 4:
+            return None
+        anchor_terms = set(_extract_vocabulary_free_query_terms(anchor_text, limit=6))
+        selected: List[Dict[str, Any]] = []
+        covered_terms: set[str] = set()
+        # Broad entity recall often needs a cluster, not one winning fact.
+        # Keep the normal cap for small pools; only widen when the entity has
+        # enough attached evidence that list/count answers likely need more
+        # first-order context, while still bounding rendered token load.
+        selected_limit = (
+            _GRAPH_FACT_CLUSTER_WIDE_CAP
+            if len(unique_candidates) >= _GRAPH_FACT_CLUSTER_WIDE_POOL_THRESHOLD
+            else _GRAPH_FACT_CLUSTER_DEFAULT_CAP
+        )
+        for _score, row in unique_candidates[:32]:
+            text = str(row.get("text") or "").strip()
+            if not text:
+                continue
+            terms = set(_extract_vocabulary_free_query_terms(text, limit=18)) - anchor_terms
+            novelty = len(terms - covered_terms)
+            if selected and novelty < 2 and len(selected) >= 3:
+                continue
+            selected.append(row)
+            covered_terms.update(terms)
+            if len(selected) >= selected_limit:
+                break
+        if len(selected) < 4:
+            return None
+        relation_rows = _direct_relation_cluster_rows()
+        selected_ids = {str(row.get("id") or "") for row in selected if str(row.get("id") or "")}
+        relation_support_rows: List[Dict[str, Any]] = []
+        relation_support_by_relation_id: Dict[str, List[Dict[str, Any]]] = {}
+        relation_support_ids: set[str] = set()
+        relation_member_names = {
+            str(row.get("id") or "").strip(): str(row.get("name") or "").strip()
+            for row in relation_rows
+            if not row.get("relation_summary")
+            and str(row.get("id") or "").strip()
+            and str(row.get("name") or "").strip()
+        }
+        for relation_row in relation_rows:
+            relation_row_id = str(relation_row.get("id") or "").strip()
+            relation_names = []
+            for member_id in relation_row.get("relation_member_ids") or []:
+                member_name = relation_member_names.get(str(member_id or "").strip())
+                if member_name:
+                    relation_names.append(member_name)
+            relation_name = str(relation_row.get("name") or "").strip()
+            if relation_name:
+                relation_names.append(relation_name)
+            relation_names = list(dict.fromkeys(name for name in relation_names if name))
+            if not relation_names:
+                continue
+            for _score, row in unique_candidates:
+                row_id = str(row.get("id") or "")
+                if not row_id or row_id in relation_support_ids:
+                    continue
+                if any(_text_mentions_graph_anchor(str(row.get("text") or ""), name) for name in relation_names):
+                    relation_support_rows.append(row)
+                    relation_support_ids.add(row_id)
+                    if relation_row_id:
+                        relation_support_by_relation_id.setdefault(relation_row_id, []).append(row)
+                    if len(relation_support_by_relation_id.get(relation_row_id, [])) >= 2:
+                        break
+            if len(relation_support_rows) >= 8:
+                break
+
+        relation_query_terms = set(_extract_vocabulary_free_query_terms(query, limit=16))
+
+        def _relation_row_sort_key(row: Dict[str, Any]) -> Tuple[int, int, int, str]:
+            row_id = str(row.get("id") or "").strip()
+            support_rows = relation_support_by_relation_id.get(row_id, [])
+            search_text = " ".join(
+                [
+                    str(row.get("text") or ""),
+                    str(row.get("relation") or "").replace("_", " "),
+                    *[str(support.get("text") or "") for support in support_rows],
+                ]
+            ).lower()
+            overlap = sum(
+                1 for term in relation_query_terms
+                if term and _text_matches_query_term(search_text, term)
+            )
+            return (
+                overlap,
+                len(support_rows),
+                1 if row.get("relation_summary") else 0,
+                str(row.get("text") or ""),
+            )
+
+        ordered_relation_rows = sorted(relation_rows, key=_relation_row_sort_key, reverse=True)
+        top_relation_overlap = _relation_row_sort_key(ordered_relation_rows[0])[0] if ordered_relation_rows else 0
+        query_hash = hashlib.sha1(str(query or "").encode("utf-8", errors="ignore")).hexdigest()[:12]
+        cluster_id = f"graph_fact_cluster:{anchor_node.id}:{query_hash}"
+
+        def _relation_evidence_bullets(row: Dict[str, Any]) -> List[str]:
+            row_text = str(row.get("text") or "").strip()
+            if not row_text:
+                return []
+            support_rows = [
+                support
+                for support in relation_support_by_relation_id.get(str(row.get("id") or "").strip(), [])
+                if isinstance(support, dict) and str(support.get("text") or "").strip()
+            ]
+            if not support_rows:
+                return [f"- {row_text}"]
+            support_texts = [
+                _sanitize_for_context(str(support.get("text") or "").strip())
+                for support in support_rows[:2]
+            ]
+            # Keep the relation and its strongest direct evidence in one bullet so
+            # answerers can resolve vague transcript mentions like "a colleague".
+            return [f"- {row_text} (support: {'; '.join(support_texts)})"]
+
+        relation_bullet_lines: List[str] = []
+        if ordered_relation_rows:
+            for row in ordered_relation_rows:
+                relation_bullet_lines.extend(_relation_evidence_bullets(row))
+        fact_bullet_lines = [
+            f"- {row.get('text')}"
+            for row in selected
+            if row.get("text") and str(row.get("id") or "") not in relation_support_ids
+        ]
+        if top_relation_overlap >= 2:
+            bullet_lines = [*relation_bullet_lines, *fact_bullet_lines]
+        else:
+            bullet_lines = [*fact_bullet_lines, *relation_bullet_lines]
+        bullet_text = "\n".join(bullet_lines)
+        cluster = {
+            "id": cluster_id,
+            "text": _sanitize_for_context(f"Related facts for {anchor_text}:\n{bullet_text}"),
+            "category": "graph_cluster",
+            "similarity": round(max(0.78, min(float(anchor_score or 0.0), 0.94)), 3),
+            "verified": False,
+            "pinned": False,
+            "via": "graph_fact_cluster",
+            "via_relation": "has_fact",
+            "hop_depth": int(hop_depth or 0) + 1,
+            "source_name": anchor_text,
+            "graph_path": f"{graph_path} --has_fact_cluster--> {len(selected)} facts",
+            "evidence_ids": [str(row.get("id") or "") for row in selected if str(row.get("id") or "")],
+            "source_chunk_ids": list(dict.fromkeys(
+                str(row.get("source_chunk_id") or "").strip()
+                for row in [*selected, *relation_support_rows]
+                if str(row.get("source_chunk_id") or "").strip()
+            )),
+            "cluster_size": len(selected),
+            "relation_support_count": len(relation_support_rows),
+            "relation_support_ids": [
+                str(row.get("id") or "")
+                for row in relation_support_rows
+                if str(row.get("id") or "")
+            ],
+            "relation_evidence_count": len(relation_rows),
+            "relation_evidence_ids": [
+                str(row.get("id") or "")
+                for row in relation_rows
+                if str(row.get("id") or "")
+            ],
+            "owner_id": getattr(anchor_node, "owner_id", None),
+        }
+        if ordered_relation_rows:
+            relation_bullets: List[str] = []
+            for row in ordered_relation_rows:
+                relation_bullets.extend(_relation_evidence_bullets(row))
+            if relation_bullets:
+                compact_relation_summary_text = _sanitize_for_context(
+                    f"Direct graph relations for {anchor_text}:\n" + "\n".join(relation_bullets)
+                )
+                cluster["_compact_relation_summary_text"] = compact_relation_summary_text
+                cluster["compact_relation_query_text"] = compact_relation_summary_text
+        _annotate_graph_traversal_fields(
+            cluster,
+            list(relation_sequence or []) + ["has_fact"],
+            discovery_kind="graph_fact_cluster",
+        )
+        return cluster
 
     def _score_and_add_fact_row(fact: "Node", *, via: str, via_relation: str, path_relation: str) -> None:
         fact_attrs = fact.attributes if isinstance(fact.attributes, dict) else {}
         fact_score = max(0.60, min(0.995, max(float(anchor_score or 0.0), 0.0) + 0.02))
-        linked_fact_priority = 1 if via == "graph_attached_fact" else 0
+        semantic_score = 0.0
+        if query_embedding is not None and getattr(fact, "embedding", None):
+            try:
+                semantic_score = max(0.0, min(1.0, float(graph.cosine_similarity(query_embedding, fact.embedding))))
+            except (TypeError, ValueError):
+                semantic_score = 0.0
+        linked_fact_priority = 1 if via == "graph_attached_fact" or (
+            via == "graph_mentioned_fact" and not relation_only_query
+        ) else 0
         row = {
             "id": fact.id,
             "text": _sanitize_for_context(fact.name),
-            "category": "fact",
+            "category": str(fact.type or "Fact").lower(),
             "similarity": round(fact_score, 3),
             "verified": fact.verified,
             "pinned": fact.pinned,
@@ -4387,26 +4750,36 @@ def _graph_attached_fact_rows(
             "domains": _domains_from_attrs(fact_attrs),
             "project": fact_attrs.get("project"),
             "source_type": fact_attrs.get("source_type"),
+            "source_id": getattr(fact, "source_id", None),
+            "source_chunk_id": getattr(fact, "source_chunk_id", None),
             "structural_anchor_kind": fact_attrs.get("structural_anchor_kind"),
             "keywords": getattr(fact, "keywords", None),
             "extraction_confidence": getattr(fact, "extraction_confidence", None),
             "privacy": getattr(fact, "privacy", None),
             "owner_id": getattr(fact, "owner_id", None),
         }
+        if not _date_part(row.get("source_date")):
+            source_date = _row_source_date(row)
+            if source_date:
+                row["source_date"] = source_date
+        if semantic_score > 0:
+            row["graph_attached_query_similarity"] = round(semantic_score, 3)
         _annotate_graph_traversal_fields(
             row,
             list(relation_sequence or []) + [via_relation],
             discovery_kind=via,
         )
         fact_text = str(fact.name or "").lower()
-        query_overlap = sum(1 for term in query_terms if term in fact_text)
-        explicit_overlap = sum(1 for term in explicit_anchor_terms if term in fact_text)
+        query_overlap = sum(1 for term in query_terms if _text_matches_query_term(fact_text, term))
+        explicit_overlap = sum(1 for term in explicit_anchor_terms if _text_matches_query_term(fact_text, term))
         anchor_text_hit = 1 if lower_anchor_text and lower_anchor_text in fact_text else 0
+        duration_priority = 0
         informative_token_count = len(_extract_distinctive_query_terms(fact_text, limit=12))
+        semantic_rank = int(round(semantic_score * 1000))
         if relation_only_query:
-            score_key = (linked_fact_priority, informative_token_count, explicit_overlap, anchor_text_hit, query_overlap, fact_score)
+            score_key = (linked_fact_priority, semantic_rank, duration_priority, informative_token_count, explicit_overlap, anchor_text_hit, query_overlap, fact_score)
         else:
-            score_key = (linked_fact_priority, query_overlap, explicit_overlap, anchor_text_hit, informative_token_count, fact_score)
+            score_key = (linked_fact_priority, duration_priority, query_overlap, explicit_overlap, anchor_text_hit, semantic_rank, informative_token_count, fact_score)
         candidates.append((score_key, row))
 
     for edge in edges:
@@ -4419,7 +4792,7 @@ def _graph_attached_fact_rows(
             fact = graph.get_node(fact_id)
         except Exception:
             continue
-        if not fact or str(getattr(fact, "type", "") or "").lower() != "fact":
+        if not fact or str(getattr(fact, "type", "") or "").lower() not in _SUBJECT_ATTACHABLE_MEMORY_TYPES:
             continue
         _score_and_add_fact_row(
             fact,
@@ -4442,6 +4815,7 @@ def _graph_attached_fact_rows(
         for fact in _graph_mentioned_fact_nodes(
             graph,
             anchor_text=anchor_text,
+            query=query,
             seen_ids=seen_ids,
             limit=max(4, int(per_anchor_limit or 1) * 4),
         ):
@@ -4453,6 +4827,40 @@ def _graph_attached_fact_rows(
             )
 
     candidates.sort(key=lambda item: item[0], reverse=True)
+    cluster_row = None if terminal_relation_chain_anchor else _fact_cluster_row(candidates)
+    if cluster_row:
+        compact_relation_text = str(cluster_row.pop("_compact_relation_summary_text", "") or "").strip()
+        if compact_relation_text:
+            relation_row = {
+                "id": f"graph_relation_summary:{anchor_node.id}:{hashlib.sha1(str(query or '').encode('utf-8', errors='ignore')).hexdigest()[:12]}",
+                "text": compact_relation_text,
+                "category": "graph_relation_summary",
+                # Structured direct-relation rows are synthesized evidence;
+                # keep them above ordinary graph paths so downstream fusion
+                # does not drop the compact relation summary.
+                "similarity": round(max(float(cluster_row.get("similarity") or 0.0), 0.965), 3),
+                "retrieval_confidence": 0.95,
+                "verified": False,
+                "pinned": False,
+                "via": "graph_relation_summary",
+                "via_relation": "direct_relation",
+                "hop_depth": cluster_row.get("hop_depth"),
+                "source_name": anchor_text,
+                "graph_path": cluster_row.get("graph_path"),
+                "evidence_ids": list(cluster_row.get("relation_evidence_ids") or []),
+                "relation_evidence_count": int(cluster_row.get("relation_evidence_count") or 0),
+                "relation_evidence_ids": list(cluster_row.get("relation_evidence_ids") or []),
+                "relation_support_count": int(cluster_row.get("relation_support_count") or 0),
+                "relation_support_ids": list(cluster_row.get("relation_support_ids") or []),
+                "owner_id": getattr(anchor_node, "owner_id", None),
+            }
+            _annotate_graph_traversal_fields(
+                relation_row,
+                list(relation_sequence or []) + ["direct_relation"],
+                discovery_kind="graph_relation_summary",
+            )
+            rows.append(relation_row)
+        rows.append(cluster_row)
     for _score, row in candidates:
         if len(rows) >= max(1, int(per_anchor_limit or 1)):
             break
@@ -4555,6 +4963,7 @@ def graph_aware_recall(
     # A terse relation chain such as "partner brother occupation" has no
     # named starting entity but still describes the owner's relationship graph.
     query_entities = extract_entities_from_text(query)
+    graph_query_embedding: Optional[List[float]] = None
 
     # 1. Pronoun resolution
     if has_owner_pronoun(query):
@@ -4622,7 +5031,7 @@ def graph_aware_recall(
             date_to=date_to,
             temporal_dimension=temporal_dimension,
         )
-    direct = [r for r in direct_all if str(r.get("category", "")).lower() == "fact"]
+    direct = [r for r in direct_all if str(r.get("category", "")).lower() in _SUBJECT_ATTACHABLE_MEMORY_TYPES]
     results["direct_results"] = direct[:limit]  # Ensure limit is respected
     results["source_breakdown"]["vector_count"] = len(results["direct_results"])
     relation_chain_path_by_node: Dict[str, str] = {}
@@ -4675,7 +5084,7 @@ def graph_aware_recall(
     for fact in direct:
         fact_id = fact.get("id")
         fact_category = fact.get("category", "").lower()
-        if fact_id and fact_category == "fact":
+        if fact_id and fact_category in _SUBJECT_ATTACHABLE_MEMORY_TYPES:
             # Check for inbound has_fact edges
             in_edges = graph.get_edges(fact_id, direction="in")
             for edge in in_edges:
@@ -4731,6 +5140,17 @@ def graph_aware_recall(
         chain_prefix_path = relation_chain_path_by_node.get(node_id)
         chain_prefix_sequence = relation_chain_sequence_by_node.get(node_id, [])
         if source_node:
+            if graph_query_embedding is None:
+                try:
+                    graph_query_embedding = graph.get_embedding(query)
+                    if graph_query_embedding is None and _is_fail_hard_mode():
+                        raise RuntimeError("embedding provider returned no graph ranking vector")
+                except Exception as exc:
+                    if _is_fail_hard_mode():
+                        raise RuntimeError(
+                            "Graph attached-fact semantic ranking failed while retrieval.fail_hard=true"
+                        ) from exc
+                    logger.warning("graph attached-fact semantic ranking unavailable: %s", exc)
             results["graph_results"].extend(_graph_attached_fact_rows(
                 graph,
                 anchor_node=source_node,
@@ -4741,6 +5161,7 @@ def graph_aware_recall(
                 hop_depth=0,
                 seen_ids=seen_ids,
                 query=query,
+                query_embedding=graph_query_embedding,
                 per_anchor_limit=4,
             ))
         related = graph.get_related_bidirectional(node_id, relations=expand_relations, depth=graph_depth)
@@ -4801,6 +5222,7 @@ def graph_aware_recall(
                     hop_depth=depth,
                     seen_ids=seen_ids,
                     query=query,
+                    query_embedding=graph_query_embedding,
                     per_anchor_limit=4,
                 ))
 
@@ -4858,6 +5280,7 @@ def graph_aware_recall(
 
 _graph: Optional[MemoryGraph] = None
 _graph_lock = threading.Lock()
+
 
 def get_graph() -> MemoryGraph:
     """Get singleton graph instance."""
@@ -6109,6 +6532,7 @@ def _source_chunk_recall_payload(chunk: Dict[str, Any], *, max_chunk_tokens: int
         "sensitivity": chunk.get("sensitivity"),
         "domains": chunk.get("domains"),
         "project": chunk.get("project"),
+        "source_date": chunk.get("source_date"),
         "created_at": chunk.get("created_at"),
     }
 
@@ -6268,7 +6692,17 @@ def _prepare_recall_output_rows(
     max_total_chunk_tokens: Optional[int] = None,
 ) -> Tuple[Any, Optional[Dict[str, Any]]]:
     if not include_chunks:
-        return rows, meta
+        if not isinstance(rows, list):
+            return rows, meta
+        output_rows: List[Any] = []
+        for row in rows:
+            if not isinstance(row, dict) or "source_chunk_id" not in row:
+                output_rows.append(row)
+                continue
+            sanitized = dict(row)
+            sanitized.pop("source_chunk_id", None)
+            output_rows.append(sanitized)
+        return output_rows, meta
     output_rows, source_chunk_meta = _attach_source_chunks_to_recall_rows(
         rows,
         max_chunk_tokens=max_chunk_tokens,
@@ -6633,9 +7067,11 @@ def _vector_store_recall(
             inner_planned_stores = [
                 store
                 for store in _planner_store_plan(inner_planner_meta.get("planned_stores") or ["vector"])
-                if store != "graph"
+                if store in {"vector", "docs"}
             ]
             inner_planner_meta["planned_stores"] = inner_planned_stores or ["vector"]
+        if not fast_mode:
+            inner_planner_meta["suppress_session_chunks_auto_include"] = True
     results, meta = recall(
         query=query,
         limit=limit,
@@ -7182,6 +7618,115 @@ def _source_chunk_query_terms(query: str, *, limit: int = 10) -> List[str]:
     return terms
 
 
+_QUOTED_ITEM_RE = re.compile(r"[\"“”]([^\"“”]{2,120})[\"“”]")
+
+
+def _query_requests_temporal_answer(query: str) -> bool:
+    """Return true when a query has enough structure to benefit from dated source headers."""
+    return bool(_source_chunk_query_terms(query, limit=3))
+
+
+def _quoted_item_mentions(text: str, *, limit: int = 8) -> List[str]:
+    mentions: List[str] = []
+    seen: set[str] = set()
+    for match in _QUOTED_ITEM_RE.finditer(str(text or "")):
+        item = " ".join(str(match.group(1) or "").split()).strip()
+        key = item.lower()
+        if not item or key in seen:
+            continue
+        if not re.search(r"[\w]", item, flags=re.UNICODE):
+            continue
+        seen.add(key)
+        mentions.append(item)
+        if len(mentions) >= limit:
+            break
+    return mentions
+
+
+def _quoted_item_keys(text: str, *, limit: int = 8) -> List[str]:
+    return [mention.lower() for mention in _quoted_item_mentions(text, limit=limit)]
+
+
+def _repeated_quoted_item_keys(text: str, *, limit: int = 8) -> List[str]:
+    counts: Dict[str, int] = {}
+    for match in _QUOTED_ITEM_RE.finditer(str(text or "")):
+        item = " ".join(str(match.group(1) or "").split()).strip()
+        key = item.lower()
+        if not item or not re.search(r"[\w]", item, flags=re.UNICODE):
+            continue
+        counts[key] = counts.get(key, 0) + 1
+    keys = [key for key, count in counts.items() if count >= 2]
+    return keys[: max(0, int(limit or 0))]
+
+
+def _shared_quoted_item_score(scoring_text: str, terms: List[str], anchors: List[str]) -> float:
+    """Score first-order transcript windows that repeat a quoted item near anchors."""
+    text = str(scoring_text or "")
+    repeated_keys = _repeated_quoted_item_keys(text)
+    if len(anchors or []) < 2 or not repeated_keys:
+        return 0.0
+    anchor_hits = sum(
+        1 for anchor in anchors
+        if anchor and _text_contains_anchor_term_fuzzy(text, anchor)
+    )
+    if anchor_hits < 2:
+        return 0.0
+    return 0.995
+
+
+def _query_term_variants(term: str) -> List[str]:
+    clean = " ".join(str(term or "").split()).strip().lower()
+    if not clean:
+        return []
+    return [clean]
+
+
+def _text_matches_query_term(text: str, term: str) -> bool:
+    return any(_text_contains_anchor_term_fuzzy(text, variant) for variant in _query_term_variants(term))
+
+
+def _text_matches_query_term_exact(text: str, term: str) -> bool:
+    return any(_text_contains_anchor_term(text, variant) for variant in _query_term_variants(term))
+
+
+def _source_chunk_context_scope_key(chunk: Dict[str, Any]) -> str:
+    for key in ("source_id", "session_id", "source_conversation_id", "conversation_id"):
+        value = str((chunk or {}).get(key) or "").strip()
+        if value:
+            source_date = _date_part((chunk or {}).get("source_date"))
+            if source_date:
+                return f"{key}:{value}|source_date:{source_date}"
+            return f"{key}:{value}"
+    return ""
+
+
+def _source_chunk_adjacent_scoring_text(
+    chunk: Dict[str, Any],
+    chunks_by_scope_index: Dict[Tuple[str, int], Dict[str, Any]],
+    *,
+    radius: int = _SESSION_CHUNK_SCORING_WINDOW_RADIUS,
+    before: Optional[int] = None,
+    after: Optional[int] = None,
+) -> str:
+    text = str((chunk or {}).get("text") or "").strip()
+    scope_key = _source_chunk_context_scope_key(chunk)
+    if not scope_key:
+        return text
+    try:
+        center_index = int((chunk or {}).get("chunk_index"))
+    except (TypeError, ValueError):
+        return text
+    parts: List[str] = []
+    before_count = max(0, int(radius if before is None else before or 0))
+    after_count = max(0, int(radius if after is None else after or 0))
+    for offset in range(-before_count, after_count + 1):
+        neighbor = chunks_by_scope_index.get((scope_key, center_index + offset))
+        neighbor_text = str((neighbor or {}).get("text") or "").strip()
+        if neighbor_text:
+            parts.append(neighbor_text)
+    return "\n".join(parts) if parts else text
+
+
 def _source_chunk_store_recall(
     query: str,
     *,
@@ -7194,6 +7739,7 @@ def _source_chunk_store_recall(
     source_conversation_id: Optional[str] = None,
     max_chunk_tokens: Optional[int] = None,
     max_total_chunk_tokens: Optional[int] = None,
+    timeout_ms: Optional[int] = None,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any], Optional[Dict[str, Any]]]:
     """Opt-in session chunk recall lane for exact transcript context."""
     started = time.monotonic()
@@ -7223,13 +7769,6 @@ def _source_chunk_store_recall(
         return [], meta, None
 
     graph = get_graph()
-    query_embedding: Optional[List[float]] = None
-    try:
-        query_embedding = graph.get_embedding(query)
-    except Exception as exc:
-        if _is_fail_hard_mode():
-            raise RuntimeError("session_chunks recall failed while embedding query") from exc
-        logger.warning("[recall] session_chunks embedding unavailable; using lexical search only: %s", exc)
     clauses = ["owner_id = ?"]
     params: List[Any] = [str(owner_id).strip()]
     normalized_project = _normalize_project_tag(project)
@@ -7267,7 +7806,7 @@ def _source_chunk_store_recall(
                 ORDER BY created_at DESC, chunk_index ASC, chunk_id ASC
                 LIMIT ?
                 """,
-                [*params, max(limit * 64, 512)],
+                [*params, max(limit * 128, _SESSION_CHUNK_RECALL_CANDIDATE_FLOOR)],
             ).fetchall()
     except Exception as exc:
         if _is_fail_hard_mode():
@@ -7277,19 +7816,75 @@ def _source_chunk_store_recall(
         meta["phases_ms"] = {"total_ms": round((time.monotonic() - started) * 1000)}
         return [], meta, None
 
-    candidates: List[Tuple[Tuple[float, str], Dict[str, Any]]] = []
-    lexical_candidate_count = 0
-    semantic_candidate_count = 0
+    scoped_chunks: List[Tuple[Any, Dict[str, Any]]] = []
+    chunks_by_scope_index: Dict[Tuple[str, int], Dict[str, Any]] = {}
     for row in rows:
         chunk = graph._row_to_source_chunk(row)
         chunk_domains = set(_normalize_domains(chunk.get("domains")))
         if not include_all_domains and included_domains and not chunk_domains.intersection(included_domains):
             continue
+        scoped_chunks.append((row, chunk))
+        scope_key = _source_chunk_context_scope_key(chunk)
+        try:
+            chunk_index = int(chunk.get("chunk_index"))
+        except (TypeError, ValueError):
+            continue
+        if scope_key:
+            chunks_by_scope_index.setdefault((scope_key, chunk_index), chunk)
+
+    lexical_probe_count = 0
+    for _row, chunk in scoped_chunks:
+        scoring_text = _source_chunk_adjacent_scoring_text(chunk, chunks_by_scope_index)
+        if any(_text_matches_query_term(scoring_text, term) for term in terms):
+            lexical_probe_count += 1
+            if lexical_probe_count >= max(1, int(limit or 1)):
+                break
+
+    query_embedding: Optional[List[float]] = None
+    embedding_timeout_s: Optional[float] = None
+    if timeout_ms is not None:
+        try:
+            embedding_timeout_s = max(0.5, min(10.0, float(timeout_ms) / 1000.0 * 0.2))
+        except (TypeError, ValueError):
+            embedding_timeout_s = None
+    try:
+        query_embedding = graph.get_embedding(query, timeout_s=embedding_timeout_s)
+    except Exception as exc:
+        if _is_fail_hard_mode():
+            raise RuntimeError("session_chunks recall failed while embedding query") from exc
+        logger.warning("[recall] session_chunks embedding unavailable; using lexical search only: %s", exc)
+
+    candidates: List[Tuple[Tuple[float, str], Dict[str, Any]]] = []
+    lexical_candidate_count = 0
+    semantic_candidate_count = 0
+    adjacent_scoring_contexts = 0
+    temporal_answer_query = _query_requests_temporal_answer(query)
+    shared_source_query = _is_multi_entity_shared_source_query(query)
+    shared_source_anchors = _shared_source_anchor_terms(query, limit=6) if shared_source_query else []
+    for row, chunk in scoped_chunks:
         text = str(chunk.get("text") or "")
-        overlap = sum(1 for term in terms if _text_contains_anchor_term(text, term))
+        if temporal_answer_query:
+            scoring_text = _source_chunk_adjacent_scoring_text(
+                chunk,
+                chunks_by_scope_index,
+                before=2,
+                after=4,
+            )
+        elif shared_source_query:
+            scoring_text = _source_chunk_adjacent_scoring_text(
+                chunk,
+                chunks_by_scope_index,
+                before=2,
+                after=2,
+            )
+        else:
+            scoring_text = _source_chunk_adjacent_scoring_text(chunk, chunks_by_scope_index)
+        if scoring_text != text:
+            adjacent_scoring_contexts += 1
+        overlap = sum(1 for term in terms if _text_matches_query_term(scoring_text, term))
         lexical_score = 0.0
         if overlap > 0:
-            exact_bonus = 0.05 if " ".join(str(query or "").lower().split()) in text.lower() else 0.0
+            exact_bonus = 0.05 if " ".join(str(query or "").lower().split()) in scoring_text.lower() else 0.0
             lexical_score = min(0.99, 0.35 + (0.55 * (overlap / max(1, len(terms)))) + exact_bonus)
             lexical_candidate_count += 1
         semantic_score = 0.0
@@ -7304,24 +7899,55 @@ def _source_chunk_store_recall(
         if semantic_score >= 0.60:
             semantic_candidate_count += 1
         score = max(lexical_score, semantic_score)
+        shared_quoted_item_score = 0.0
+        if shared_source_query:
+            shared_quoted_item_score = _shared_quoted_item_score(
+                scoring_text,
+                terms,
+                shared_source_anchors,
+            )
+            score = max(score, shared_quoted_item_score)
         if lexical_score <= 0 and semantic_score < 0.60:
-            continue
+            if shared_quoted_item_score <= 0:
+                continue
         match_modes = []
         if lexical_score > 0:
             match_modes.append("lexical")
         if semantic_score >= 0.60:
             match_modes.append("semantic")
+        if shared_quoted_item_score > 0:
+            match_modes.append("shared_quoted_item")
         chunk["match_modes"] = match_modes
         chunk["lexical_score"] = round(float(lexical_score), 3)
         chunk["semantic_score"] = round(float(semantic_score), 3)
+        if shared_quoted_item_score > 0:
+            chunk["shared_quoted_item_score"] = round(float(shared_quoted_item_score), 3)
+            chunk["shared_quoted_item_keys"] = _repeated_quoted_item_keys(scoring_text)
+        chunk["session_scoring_context_overlap"] = int(overlap)
+        chunk["session_scoring_context_radius"] = int(_SESSION_CHUNK_SCORING_WINDOW_RADIUS)
+        if scoring_text != text:
+            chunk["session_scoring_context_text"] = scoring_text
+            if temporal_answer_query:
+                chunk["session_temporal_context_text"] = scoring_text
+            if shared_quoted_item_score > 0:
+                chunk["session_shared_item_context_text"] = scoring_text
         candidates.append(((score, str(chunk.get("created_at") or "")), chunk))
     candidates.sort(key=lambda item: item[0], reverse=True)
 
     out: List[Dict[str, Any]] = []
     consumed_tokens = 0
     omitted = 0
+    shared_item_output_counts: Dict[str, int] = {}
     for (score, _created), chunk in candidates:
         if len(out) >= max(1, int(limit or 1)):
+            omitted += 1
+            continue
+        shared_item_keys = [
+            str(key or "").strip().lower()
+            for key in list(chunk.get("shared_quoted_item_keys") or [])
+            if str(key or "").strip()
+        ]
+        if shared_item_keys and all(shared_item_output_counts.get(key, 0) >= 2 for key in shared_item_keys):
             omitted += 1
             continue
         remaining = total_token_limit - consumed_tokens
@@ -7339,9 +7965,18 @@ def _source_chunk_store_recall(
         prefix = f"[session_chunk] {source_label}"
         if payload.get("chunk_index") is not None:
             prefix += f"#{payload.get('chunk_index')}"
+        row_text = payload.get("text")
+        if temporal_answer_query:
+            row_text = chunk.get("session_temporal_context_text") or row_text
+        if chunk.get("shared_quoted_item_score"):
+            row_text = chunk.get("session_shared_item_context_text") or row_text
+        payload_text = str(row_text or "")
+        source_date = _date_part(payload.get("source_date"))
+        if source_date and f"source_date: {source_date}" not in str(payload_text):
+            payload_text = f"source_date: {source_date}\n{payload_text}"
         out.append({
             "id": chunk_id,
-            "text": f"{prefix}: {payload.get('text')}",
+            "text": f"{prefix}: {payload_text}",
             "category": "session_chunk",
             "source_type": "session_chunk",
             "via": "session_chunks",
@@ -7371,10 +8006,20 @@ def _source_chunk_store_recall(
             "output_token_count": output_tokens,
             "truncated": payload.get("truncated"),
             "created_at": payload.get("created_at"),
+            "source_date": payload.get("source_date"),
             "match_modes": list(chunk.get("match_modes") or []),
             "lexical_score": chunk.get("lexical_score"),
             "semantic_score": chunk.get("semantic_score"),
+            "shared_quoted_item_score": chunk.get("shared_quoted_item_score"),
+            "shared_quoted_item_keys": list(chunk.get("shared_quoted_item_keys") or []),
+            "session_scoring_context_overlap": chunk.get("session_scoring_context_overlap"),
+            "session_scoring_context_radius": chunk.get("session_scoring_context_radius"),
+            "session_scoring_context_text": chunk.get("session_scoring_context_text"),
+            "session_temporal_context_attached": bool(temporal_answer_query and chunk.get("session_temporal_context_text")),
+            "session_shared_item_context_attached": bool(chunk.get("session_shared_item_context_text")),
         })
+        for key in shared_item_keys:
+            shared_item_output_counts[key] = shared_item_output_counts.get(key, 0) + 1
     meta["counts"] = {"final_results": len(out)}
     meta["session_chunk_telemetry"] = {
         **dict(meta.get("session_chunk_telemetry") or {}),
@@ -7384,10 +8029,994 @@ def _source_chunk_store_recall(
         "domain_filter_applied": not include_all_domains,
         "semantic_candidate_count": semantic_candidate_count,
         "lexical_candidate_count": lexical_candidate_count,
+        "adjacent_scoring_contexts": adjacent_scoring_contexts,
+        "lexical_probe_count": lexical_probe_count,
+        "embedding_timeout_s": embedding_timeout_s,
+        "semantic_embedding_used": bool(query_embedding),
     }
     meta["source_chunk_telemetry"] = dict(meta["session_chunk_telemetry"])
     meta["phases_ms"] = {"total_ms": round((time.monotonic() - started) * 1000)}
     return _validate_recall_result_rows(out), meta, None
+
+
+def _owner_has_session_chunks(owner_id: Optional[str]) -> bool:
+    owner = str(owner_id or "").strip()
+    if not owner:
+        return False
+    graph = get_graph()
+    try:
+        with graph._get_conn() as conn:
+            graph._ensure_source_chunks_table(conn)
+            row = conn.execute(
+                "SELECT 1 FROM source_chunks WHERE owner_id = ? LIMIT 1",
+                (owner,),
+            ).fetchone()
+            return row is not None
+    except Exception:
+        if _is_fail_hard_mode():
+            raise
+        return False
+
+
+def _session_chunk_expansion_counts(value: Any, default: int) -> int:
+    try:
+        return max(0, min(int(value), 4))
+    except (TypeError, ValueError):
+        return default
+
+
+def _sessiondb_bridge_expand_microchunk(
+    microchunk_id: str,
+    *,
+    owner_id: str,
+    before: int,
+    after: int,
+) -> Optional[Dict[str, Any]]:
+    mid = str(microchunk_id or "").strip()
+    owner = str(owner_id or "").strip()
+    if not mid or not owner:
+        return None
+    from core.services.session_memory_bridge import get_session_memory_bridge
+
+    return get_session_memory_bridge().expand_microchunk(
+        mid,
+        owner_id=owner,
+        before=before,
+        after=after,
+    )
+
+
+def _compact_session_source_header(source_header: str, source_date: str = "") -> str:
+    header = str(source_header or "").strip()
+    if not header:
+        return ""
+    first_line = next((line.strip() for line in header.splitlines() if line.strip()), "")
+    if not first_line:
+        return ""
+    if len(first_line) > 240:
+        first_line = first_line[:237].rstrip() + "..."
+    date_value = _date_part(source_date)
+    if date_value and date_value not in first_line:
+        return f"source_date: {date_value}; {first_line}"
+    return first_line
+
+
+def _ensure_session_window_source_date_header(
+    window: List[Dict[str, Any]],
+    *,
+    source_date: Any,
+    session_id: Optional[str] = None,
+    pair_id: Optional[str] = None,
+    microchunk_id: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    date_value = _date_part(source_date)
+    if not date_value or not window:
+        return window
+    if any(isinstance(item, dict) and item.get("session_source_header") for item in window):
+        return window
+    header_text = f"source_date: {date_value}"
+    return [
+        {
+            "chunk_id": f"{microchunk_id or pair_id or session_id or 'session'}:source_header",
+            "text": header_text,
+            "token_count": int(_lib_estimate_tokens(header_text)),
+            "source_id": session_id,
+            "session_id": session_id,
+            "chunk_index": "context",
+            "chunk_kind": "session_source_header",
+            "message_pair_id": pair_id,
+            "microchunk_id": microchunk_id,
+            "created_at": None,
+            "source_date": date_value,
+            "source_type": "session_chunk",
+            "session_source_header": True,
+        },
+        *window,
+    ]
+
+
+def _sessiondb_bridge_expansion_window(expanded: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    if not isinstance(expanded, dict):
+        return []
+    window: List[Dict[str, Any]] = []
+    source_header = str(expanded.get("source_header") or "").strip()
+    if source_header:
+        micro = expanded.get("microchunk") if isinstance(expanded.get("microchunk"), dict) else {}
+        source_date = _date_part(expanded.get("source_date"))
+        header_text = _compact_session_source_header(source_header, source_date)
+        window.append({
+            "chunk_id": f"{micro.get('microchunk_id') or 'session'}:source_header",
+            "text": header_text,
+            "token_count": int(_lib_estimate_tokens(header_text)),
+            "source_id": micro.get("session_id"),
+            "session_id": micro.get("session_id"),
+            "chunk_index": "context",
+            "chunk_kind": "session_source_header",
+            "message_pair_id": micro.get("pair_id"),
+            "microchunk_id": micro.get("microchunk_id"),
+            "created_at": None,
+            "source_date": source_date or None,
+            "source_type": "session_chunk",
+            "session_source_header": True,
+        })
+    for item in list(expanded.get("microchunk_window") or []):
+        if not isinstance(item, dict):
+            continue
+        text = str(item.get("text") or "").strip()
+        if not text:
+            continue
+        window.append({
+            "chunk_id": item.get("memory_chunk_id") or item.get("microchunk_id"),
+            "text": text,
+            "token_count": int(item.get("token_count") or _lib_estimate_tokens(text)),
+            "source_id": item.get("session_id"),
+            "session_id": item.get("session_id"),
+            "chunk_index": item.get("microchunk_index"),
+            "chunk_kind": "session_microchunk",
+            "parent_chunk_id": item.get("chunk_id"),
+            "message_pair_id": item.get("pair_id"),
+            "microchunk_id": item.get("microchunk_id"),
+            "created_at": item.get("created_at"),
+            "source_date": _date_part(item.get("source_date")) or None,
+            "source_type": "session_chunk",
+        })
+    if window:
+        return window
+    micro = expanded.get("microchunk")
+    if isinstance(micro, dict):
+        text = str(micro.get("text") or "").strip()
+        if text:
+            window.append({
+                "chunk_id": micro.get("memory_chunk_id") or micro.get("microchunk_id"),
+                "text": text,
+                "token_count": int(micro.get("token_count") or _lib_estimate_tokens(text)),
+                "source_id": micro.get("session_id"),
+                "session_id": micro.get("session_id"),
+                "chunk_index": micro.get("microchunk_index"),
+                "chunk_kind": "session_microchunk",
+                "parent_chunk_id": micro.get("chunk_id"),
+                "message_pair_id": micro.get("pair_id"),
+                "microchunk_id": micro.get("microchunk_id"),
+                "created_at": micro.get("created_at"),
+                "source_date": _date_part(micro.get("source_date")) or None,
+                "source_type": "session_chunk",
+            })
+            return window
+    for item in list(expanded.get("window") or []):
+        if not isinstance(item, dict):
+            continue
+        text = str(item.get("text") or "").strip()
+        if not text:
+            continue
+        window.append({
+            "chunk_id": item.get("pair_id") or item.get("microchunk_id"),
+            "text": text,
+            "token_count": int(_lib_estimate_tokens(text)),
+            "source_id": item.get("session_id"),
+            "session_id": item.get("session_id"),
+            "chunk_index": item.get("pair_index"),
+            "chunk_kind": "session_pair",
+            "message_pair_id": item.get("pair_id"),
+            "microchunk_id": item.get("microchunk_id"),
+            "created_at": item.get("created_at"),
+            "source_date": _date_part(item.get("source_date")) or None,
+            "source_type": "session_chunk",
+        })
+    if window:
+        return window
+    return []
+
+
+def _session_window_item_overlap(item: Dict[str, Any], query_terms: List[str]) -> int:
+    if not query_terms:
+        return 0
+    tokens = {
+        token.strip(".,;:!?\"'“”¿¡")
+        for token in re.findall(r"\w+", str(item.get("text") or "").lower(), flags=re.UNICODE)
+    }
+    tokens.discard("")
+    if not tokens:
+        return 0
+    return sum(1 for term in query_terms if term and term in tokens)
+
+
+def _session_window_item_anchor_overlap(item: Dict[str, Any], query_terms: List[str]) -> int:
+    if not query_terms or not isinstance(item, dict):
+        return 0
+    text = str(item.get("text") or "")
+    if not text:
+        return 0
+    tokens = [
+        token.strip(".,;:!?\"'“”¿¡").lower()
+        for token in re.findall(r"[\w][\w._-]*", text.lower(), flags=re.UNICODE)
+    ]
+    return sum(
+        1
+        for term in query_terms
+        if _text_contains_anchor_term_fuzzy(text, term)
+        or (
+            len(str(term or "")) >= 5
+            and any(token.startswith(str(term or "").lower()) for token in tokens)
+        )
+    )
+
+
+def _session_window_item_id(item: Dict[str, Any]) -> str:
+    if not isinstance(item, dict):
+        return ""
+    for key in ("chunk_id", "memory_chunk_id", "microchunk_id", "message_pair_id", "message_id"):
+        value = str(item.get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _session_stream_support_window(
+    *,
+    center_chunk: Optional[Dict[str, Any]],
+    owner_id: str,
+    query_terms: List[str],
+    excluded_ids: Set[str],
+) -> List[Dict[str, Any]]:
+    """Find a compact earlier same-stream support window for selected source evidence."""
+    if not isinstance(center_chunk, dict) or len(query_terms or []) < 2:
+        return []
+    try:
+        center_index = int(center_chunk.get("chunk_index"))
+    except (TypeError, ValueError):
+        return []
+    owner = str(owner_id or "").strip()
+    if not owner:
+        return []
+    scope_clauses = ["owner_id = ?", "chunk_index < ?"]
+    params: List[Any] = [owner, center_index]
+    for key in ("source_id", "source_conversation_id", "conversation_id", "session_id"):
+        value = str(center_chunk.get(key) or "").strip()
+        if value:
+            scope_clauses.append(f"{key} = ?")
+            params.append(value)
+            break
+    else:
+        return []
+    try:
+        graph = get_graph()
+        with graph._get_conn() as conn:
+            graph._ensure_source_chunks_table(conn)
+            rows = conn.execute(
+                f"""
+                SELECT *
+                FROM source_chunks
+                WHERE {" AND ".join(scope_clauses)}
+                ORDER BY chunk_index DESC, created_at DESC
+                LIMIT 2048
+                """,
+                params,
+            ).fetchall()
+    except Exception:
+        if _is_fail_hard_mode():
+            raise
+        logger.warning("session support window lookup failed", exc_info=True)
+        return []
+
+    chunks: List[Dict[str, Any]] = []
+    graph = get_graph()
+    for row in rows:
+        chunk = graph._row_to_source_chunk(row)
+        chunk_id = _session_window_item_id(chunk)
+        if chunk_id and chunk_id in excluded_ids:
+            continue
+        chunks.append(chunk)
+    term_counts: Dict[str, int] = {}
+    normalized_terms = [str(term or "").lower() for term in query_terms if str(term or "").strip()]
+    for term in normalized_terms:
+        count = 0
+        for chunk in chunks:
+            if _session_window_item_anchor_overlap(chunk, [term]) > 0:
+                count += 1
+        if count:
+            term_counts[term] = count
+
+    scored: List[Tuple[float, int, int, Dict[str, Any]]] = []
+    for chunk in chunks:
+        matched_terms = [
+            term
+            for term in normalized_terms
+            if _session_window_item_anchor_overlap(chunk, [term]) > 0
+        ]
+        overlap = len(matched_terms)
+        if overlap < 1:
+            continue
+        rare_score = sum(
+            len(term) / max(1, term_counts.get(term, 1))
+            for term in matched_terms
+        )
+        if overlap < 2 and rare_score < 5.0:
+            continue
+        try:
+            index = int(chunk.get("chunk_index") or 0)
+        except (TypeError, ValueError):
+            index = 0
+        scored.append((rare_score, overlap, index, chunk))
+    if not scored:
+        return []
+    scored.sort(reverse=True, key=lambda item: (item[0], item[1], item[2]))
+    support_center = scored[0][3]
+    support_id = str(support_center.get("chunk_id") or "").strip()
+    if not support_id:
+        return []
+    try:
+        support = get_graph().get_source_chunk(
+            support_id,
+            owner_id=owner,
+            before=1,
+            after=2,
+            fail_hard=_is_fail_hard_mode(),
+        )
+    except Exception:
+        if _is_fail_hard_mode():
+            raise
+        logger.warning("session support window expansion failed for %s", support_id, exc_info=True)
+        return []
+    window = []
+    for item in list((support or {}).get("window") or [support_center]):
+        if not isinstance(item, dict):
+            continue
+        item_id = _session_window_item_id(item)
+        if item_id and item_id in excluded_ids:
+            continue
+        text = str(item.get("text") or "").strip()
+        if not text:
+            continue
+        window.append(item)
+    return window[:3]
+
+
+def _extract_query_temporal_anchor_terms(query: str, *, limit: int = 8) -> List[str]:
+    text = str(query or "").lower()
+    if not text:
+        return []
+    anchors: List[str] = []
+    seen = set()
+    for year_match in re.finditer(r"(?<!\d)(?:19|20)\d{2}(?!\d)", text):
+        before_tokens = re.findall(r"\w+", text[:year_match.start()], flags=re.UNICODE)[-2:]
+        after_tokens = re.findall(r"\w+", text[year_match.end():], flags=re.UNICODE)[:1]
+        for token in [*before_tokens, year_match.group(0), *after_tokens]:
+            token = token.strip(".,;:!?\"'“”¿¡")
+            if len(token) < 3 or token in seen:
+                continue
+            seen.add(token)
+            anchors.append(token)
+            if len(anchors) >= limit:
+                return anchors
+    return anchors
+
+
+def _first_order_session_query_coverage_score(
+    row: Dict[str, Any],
+    query_terms: List[str],
+    temporal_terms: List[str],
+) -> int:
+    if not isinstance(row, dict):
+        return 0
+    source_type = str(row.get("source_type") or row.get("category") or "").strip().lower()
+    if source_type != "session_chunk":
+        return 0
+    text = str(row.get("session_scoring_context_text") or row.get("text") or "").lower()
+    if not text:
+        return 0
+    base = sum(1 for term in query_terms if _text_contains_anchor_term_fuzzy(text, term))
+    temporal = sum(1 for term in temporal_terms if _text_contains_anchor_term_fuzzy(text, term))
+    return base + (2 * temporal)
+
+
+def _prioritize_first_order_session_query_coverage(
+    query: str,
+    rows: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    if not rows:
+        return rows
+    query_terms = _extract_vocabulary_free_query_terms(query, limit=16)
+    temporal_terms = _extract_query_temporal_anchor_terms(query, limit=8)
+    if not query_terms and not temporal_terms:
+        return rows
+    scored = [
+        (
+            idx,
+            row,
+            _first_order_session_query_coverage_score(row, query_terms, temporal_terms),
+        )
+        for idx, row in enumerate(rows)
+    ]
+    if max((score for _idx, _row, score in scored), default=0) < 3:
+        return rows
+    adjusted: List[Tuple[int, Dict[str, Any], int]] = []
+    for idx, row, score in scored:
+        if isinstance(row, dict) and score >= 3:
+            promoted = dict(row)
+            try:
+                current_score = float(promoted.get("similarity") or promoted.get("score") or 0.0)
+            except (TypeError, ValueError):
+                current_score = 0.0
+            coverage_floor = min(0.99, 0.90 + (0.015 * min(score, 6)))
+            if coverage_floor > current_score:
+                promoted["similarity"] = coverage_floor
+                promoted["score"] = coverage_floor
+                promoted["first_order_query_coverage_promoted"] = True
+                promoted["first_order_query_coverage_score"] = score
+            row = promoted
+        adjusted.append((idx, row, score))
+    sorted_rows = sorted(
+        adjusted,
+        key=lambda item: (
+            item[2],
+            float((item[1] or {}).get("similarity") or 0.0) if isinstance(item[1], dict) else 0.0,
+            -item[0],
+        ),
+        reverse=True,
+    )
+    return [row for _idx, row, _score in sorted_rows]
+
+
+def _prioritize_source_dated_session_rows_for_temporal_answers(
+    query: str,
+    rows: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    if not rows or not _query_requests_temporal_answer(query):
+        return rows
+    query_terms = _extract_vocabulary_free_query_terms(query, limit=16)
+    if not query_terms:
+        return rows
+    temporal_terms = _extract_query_temporal_anchor_terms(query, limit=8)
+    scored: List[Tuple[int, float, int, Dict[str, Any]]] = []
+    trailing: List[Tuple[int, Dict[str, Any]]] = []
+    for idx, row in enumerate(rows):
+        if not isinstance(row, dict):
+            trailing.append((idx, row))
+            continue
+        if not _is_first_order_session_source_row(row) or not _date_part(row.get("source_date")):
+            trailing.append((idx, row))
+            continue
+        score = _first_order_session_query_coverage_score(row, query_terms, temporal_terms)
+        if score < 3:
+            trailing.append((idx, row))
+            continue
+        promoted = dict(row)
+        try:
+            current_score = float(promoted.get("similarity") or promoted.get("score") or 0.0)
+        except (TypeError, ValueError):
+            current_score = 0.0
+        floor = min(0.995, 0.94 + (0.01 * min(score, 5)))
+        if floor > current_score:
+            promoted["similarity"] = floor
+            promoted["score"] = floor
+        promoted["temporal_source_dated_session_promoted"] = True
+        promoted["temporal_source_dated_session_score"] = score
+        scored.append((score, float(promoted.get("similarity") or 0.0), -idx, promoted))
+    if not scored:
+        return rows
+    scored.sort(key=lambda item: item[:3], reverse=True)
+    ordered_promoted = [row for _score, _confidence, _negative_idx, row in scored]
+    promoted_ids = {_recall_row_identity(row) for row in ordered_promoted}
+    ordered_trailing = [
+        row for _idx, row in sorted(trailing, key=lambda item: item[0])
+        if not isinstance(row, dict) or _recall_row_identity(row) not in promoted_ids
+    ]
+    return [*ordered_promoted, *ordered_trailing]
+
+
+def _select_session_window_items_for_budget(
+    window: List[Dict[str, Any]],
+    *,
+    available_tokens: int,
+    query_terms: Optional[List[str]] = None,
+) -> List[Dict[str, Any]]:
+    """Keep dense first-order evidence instead of truncating every microchunk."""
+    if not window:
+        return []
+    budget = max(1, int(available_tokens or 0))
+    item_tokens = [
+        max(1, int(_lib_estimate_tokens(str(item.get("text") or ""))))
+        if isinstance(item, dict)
+        else 1
+        for item in window
+    ]
+    if sum(item_tokens) <= budget:
+        return window
+    terms = list(query_terms or [])
+    header_indexes: List[int] = []
+    required_indexes: List[int] = []
+    for idx, item in enumerate(window):
+        if not isinstance(item, dict):
+            continue
+        if item.get("session_source_header"):
+            header_indexes.append(idx)
+        if item.get("session_window_required"):
+            required_indexes.append(idx)
+
+    scored: List[Tuple[int, int, int]] = []
+    for idx, item in enumerate(window):
+        if not isinstance(item, dict):
+            continue
+        overlap = _session_window_item_overlap(item, terms)
+        if overlap <= 0:
+            continue
+        token_count = item_tokens[idx] if idx < len(item_tokens) else 1
+        scored.append((overlap, -token_count, idx))
+    scored.sort(reverse=True)
+
+    selected: set[int] = set()
+    running = 0
+    for idx in required_indexes:
+        token_count = item_tokens[idx] if idx < len(item_tokens) else 1
+        if selected and running + token_count > budget:
+            continue
+        selected.add(idx)
+        running += token_count
+
+    def add_index_if_budget_allows(idx: int) -> None:
+        nonlocal running
+        if idx in selected:
+            return
+        token_count = item_tokens[idx] if idx < len(item_tokens) else 1
+        if selected and running + token_count > budget:
+            return
+        selected.add(idx)
+        running += token_count
+
+    if required_indexes:
+        # Required provenance already anchors the source turn; spend the next
+        # tokens on query-relevant dialogue before lower-signal date headers.
+        for _overlap, _negative_tokens, idx in scored:
+            add_index_if_budget_allows(idx)
+        for idx in header_indexes:
+            add_index_if_budget_allows(idx)
+    else:
+        for idx in header_indexes:
+            add_index_if_budget_allows(idx)
+        for _overlap, _negative_tokens, idx in scored:
+            add_index_if_budget_allows(idx)
+
+    if not selected:
+        # Fallback to the highest-ranked contiguous prefix when no term signal
+        # exists; this preserves previous behavior without fragmenting text.
+        running = 0
+        for idx in range(len(window)):
+            token_count = item_tokens[idx] if idx < len(item_tokens) else 1
+            if selected and running + token_count > budget:
+                break
+            selected.add(idx)
+        running += token_count
+    if not selected:
+        return [window[0]]
+    return [window[idx] for idx in sorted(selected)]
+
+
+def _expand_selected_session_chunk_rows(
+    rows: List[Dict[str, Any]],
+    *,
+    owner_id: Optional[str],
+    max_chunk_tokens: Optional[int],
+    max_total_chunk_tokens: Optional[int] = None,
+    before: Optional[int] = None,
+    after: Optional[int] = None,
+    query: Optional[str] = None,
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    if not rows:
+        return rows, {"expanded": 0, "window_chunk_count": 0}
+    cfg = _get_retrieval_lightweight_config()
+    before_count = _session_chunk_expansion_counts(
+        before if before is not None else getattr(cfg, "session_chunk_window_before", getattr(cfg, "sessionChunkWindowBefore", 2)),
+        2,
+    )
+    after_count = _session_chunk_expansion_counts(
+        after if after is not None else getattr(cfg, "session_chunk_window_after", getattr(cfg, "sessionChunkWindowAfter", 2)),
+        2,
+    )
+    if _query_requests_temporal_answer(str(query or "")):
+        before_count = max(before_count, 2)
+        after_count = max(after_count, 4)
+    if before_count <= 0 and after_count <= 0:
+        return rows, {"expanded": 0, "window_chunk_count": 0}
+    owner_key = str(owner_id or "").strip()
+    if not owner_key:
+        return rows, {"expanded": 0, "window_chunk_count": 0, "skipped_reason": "missing_owner"}
+    per_chunk_limit = min(_normalize_source_chunk_output_token_limit(max_chunk_tokens), 384)
+    total_token_limit = _normalize_source_chunk_total_token_limit(max_total_chunk_tokens)
+    query_terms = _extract_vocabulary_free_query_terms(str(query or ""), limit=12)
+    row_token_counts = [
+        _session_chunk_row_output_tokens(row)
+        if isinstance(row, dict)
+        and (
+            str(row.get("source_type") or row.get("category") or "").strip().lower() in {"session_chunk", "source_chunk"}
+            or str(row.get("source_chunk_id") or row.get("microchunk_id") or "").strip()
+            or bool(row.get("source_chunk_ids"))
+        )
+        else 0
+        for row in rows
+    ]
+    expandable_row_count = sum(1 for count in row_token_counts if count > 0)
+    per_expandable_row_limit = (
+        max(1, total_token_limit // max(1, expandable_row_count))
+        if expandable_row_count > 1
+        else total_token_limit
+    )
+    used_tokens = sum(row_token_counts)
+    expanded_rows: List[Dict[str, Any]] = []
+    expanded_count = 0
+    window_chunk_count = 0
+    omitted_for_budget = 0
+    support_window_count = 0
+    for row_index, row in enumerate(rows):
+        if not isinstance(row, dict):
+            expanded_rows.append(row)
+            continue
+        source_type = str(row.get("source_type") or row.get("category") or "").strip().lower()
+        chunk_id = str(row.get("chunk_id") or row.get("session_chunk_id") or row.get("source_chunk_id") or "").strip()
+        microchunk_id = str(row.get("microchunk_id") or "").strip()
+        source_chunk_ids = [
+            str(value or "").strip()
+            for value in (row.get("source_chunk_ids") or [])
+            if str(value or "").strip()
+        ]
+        can_expand = source_type in {"session_chunk", "source_chunk"} or bool(chunk_id or microchunk_id or source_chunk_ids)
+        if not can_expand:
+            expanded_rows.append(row)
+            continue
+        try:
+            chunk = None
+            row_owner_key = owner_key
+            if chunk_id:
+                chunk = get_graph().get_source_chunk(
+                    chunk_id,
+                    owner_id=owner_key if source_type in {"session_chunk", "source_chunk"} else None,
+                    fail_hard=_is_fail_hard_mode(),
+                )
+                if isinstance(chunk, dict):
+                    row_owner_key = str(chunk.get("owner_id") or "").strip() or owner_key
+                if not microchunk_id and isinstance(chunk, dict):
+                    microchunk_id = str(chunk.get("microchunk_id") or "").strip()
+            window: List[Dict[str, Any]] = []
+            expansion_source = "memorydb_projection"
+            if source_chunk_ids and not chunk_id and not microchunk_id:
+                expansion_source = "graph_cluster_source_chunks"
+                seen_window_ids: set[str] = set()
+                collected_source_windows: List[List[Dict[str, Any]]] = []
+                for source_chunk_id in source_chunk_ids[:_GRAPH_CLUSTER_SOURCE_CHUNK_LIMIT]:
+                    source_chunk = get_graph().get_source_chunk(
+                        source_chunk_id,
+                        # Graph-cluster provenance points at the source chunk
+                        # that produced the selected graph fact. Its stored
+                        # owner is authoritative; benchmark/import owners can
+                        # differ from the recall caller owner.
+                        fail_hard=_is_fail_hard_mode(),
+                    )
+                    if not isinstance(source_chunk, dict):
+                        continue
+                    source_owner_key = str(source_chunk.get("owner_id") or "").strip() or owner_key
+                    source_microchunk_id = str(source_chunk.get("microchunk_id") or "").strip()
+                    source_window: List[Dict[str, Any]] = []
+                    if source_microchunk_id:
+                        expanded = _sessiondb_bridge_expand_microchunk(
+                            source_microchunk_id,
+                            owner_id=source_owner_key,
+                            before=min(before_count, _GRAPH_CLUSTER_SOURCE_WINDOW_RADIUS),
+                            after=min(after_count, _GRAPH_CLUSTER_SOURCE_WINDOW_RADIUS),
+                        )
+                        source_window = _sessiondb_bridge_expansion_window(expanded)
+                        source_window = _ensure_session_window_source_date_header(
+                            source_window,
+                            source_date=source_chunk.get("source_date"),
+                            session_id=str(source_chunk.get("session_id") or "").strip() or None,
+                            pair_id=str(source_chunk.get("message_pair_id") or "").strip() or None,
+                            microchunk_id=source_microchunk_id or None,
+                        )
+                        center_item = next(
+                            (
+                                item for item in source_window
+                                if isinstance(item, dict)
+                                and not item.get("session_source_header")
+                                and str(item.get("microchunk_id") or "").strip() == source_microchunk_id
+                            ),
+                            None,
+                        )
+                        if center_item is not None:
+                            # The selected provenance chunk is the reason this
+                            # graph cluster is expanding; keep it even when the
+                            # surrounding source window is budget-trimmed.
+                            center_item["session_window_required"] = True
+                    if not source_window:
+                        expanded_chunk = get_graph().get_source_chunk(
+                            source_chunk_id,
+                            before=min(before_count, _GRAPH_CLUSTER_SOURCE_WINDOW_RADIUS),
+                            after=min(after_count, _GRAPH_CLUSTER_SOURCE_WINDOW_RADIUS),
+                            fail_hard=_is_fail_hard_mode(),
+                        )
+                        source_window = list((expanded_chunk or {}).get("window") or [source_chunk])
+                        center_item = next(
+                            (
+                                item for item in source_window
+                                if isinstance(item, dict)
+                                and str(item.get("chunk_id") or "").strip() == source_chunk_id
+                            ),
+                            None,
+                        )
+                        if center_item is not None:
+                            # The selected provenance chunk is the reason this
+                            # graph cluster is expanding; keep it even when the
+                            # surrounding source window is budget-trimmed.
+                            center_item["session_window_required"] = True
+                    if source_window:
+                        collected_source_windows.append(source_window)
+
+                def append_source_window_item(item: Dict[str, Any]) -> bool:
+                    if not isinstance(item, dict):
+                        return False
+                    item_id = _session_window_item_id(item)
+                    if item_id and item_id in seen_window_ids:
+                        return False
+                    if item_id:
+                        seen_window_ids.add(item_id)
+                    window.append(item)
+                    return len(window) >= _GRAPH_CLUSTER_SOURCE_WINDOW_ITEM_LIMIT
+
+                for source_window in collected_source_windows:
+                    priority_items = [
+                        item for item in source_window
+                        if isinstance(item, dict) and item.get("session_source_header")
+                    ][:1]
+                    priority_items.extend([
+                        item for item in source_window
+                        if isinstance(item, dict) and item.get("session_window_required")
+                    ][:1])
+                    for item in priority_items:
+                        if append_source_window_item(item):
+                            break
+                    if len(window) >= _GRAPH_CLUSTER_SOURCE_WINDOW_ITEM_LIMIT:
+                        break
+                if len(window) < _GRAPH_CLUSTER_SOURCE_WINDOW_ITEM_LIMIT:
+                    candidate_items: List[Tuple[int, int, int, int, Dict[str, Any]]] = []
+                    for source_index, source_window in enumerate(collected_source_windows):
+                        required_positions = [
+                            idx for idx, item in enumerate(source_window)
+                            if isinstance(item, dict) and item.get("session_window_required")
+                        ]
+                        for item_index, item in enumerate(source_window):
+                            if (
+                                isinstance(item, dict)
+                                and (item.get("session_source_header") or item.get("session_window_required"))
+                            ):
+                                continue
+                            if not isinstance(item, dict):
+                                continue
+                            distance = min(
+                                (abs(item_index - required_index) for required_index in required_positions),
+                                default=item_index,
+                            )
+                            candidate_items.append((
+                                _session_window_item_overlap(item, query_terms),
+                                -distance,
+                                -source_index,
+                                -item_index,
+                                item,
+                            ))
+                    candidate_items.sort(key=lambda item: item[:4], reverse=True)
+                    for _overlap, _negative_distance, _negative_source_index, _negative_item_index, item in candidate_items:
+                        if append_source_window_item(item):
+                            break
+            elif microchunk_id:
+                expanded = _sessiondb_bridge_expand_microchunk(
+                    microchunk_id,
+                    owner_id=row_owner_key,
+                    before=before_count,
+                    after=after_count,
+                )
+                window = _sessiondb_bridge_expansion_window(expanded)
+                if isinstance(chunk, dict):
+                    window = _ensure_session_window_source_date_header(
+                        window,
+                        source_date=chunk.get("source_date"),
+                        session_id=str(chunk.get("session_id") or "").strip() or None,
+                        pair_id=str(chunk.get("message_pair_id") or "").strip() or None,
+                        microchunk_id=microchunk_id or None,
+                    )
+                if window:
+                    expansion_source = "sessiondb_bridge"
+                    center_item = next(
+                        (
+                            item for item in window
+                            if isinstance(item, dict)
+                            and not item.get("session_source_header")
+                            and str(item.get("microchunk_id") or "").strip() == microchunk_id
+                        ),
+                        None,
+                    )
+                    if center_item is not None:
+                        center_item["session_window_required"] = True
+            if not window and chunk_id:
+                chunk = get_graph().get_source_chunk(
+                    chunk_id,
+                    owner_id=owner_key,
+                    before=before_count,
+                    after=after_count,
+                    fail_hard=_is_fail_hard_mode(),
+                )
+                window = list((chunk or {}).get("window") or [])
+        except Exception as exc:
+            if _is_fail_hard_mode():
+                raise
+            logger.warning("session chunk expansion failed for %s: %s", chunk_id, exc, exc_info=True)
+            expanded_rows.append(row)
+            continue
+        if not window or (
+            len(window) <= 1
+            and not microchunk_id
+            and expansion_source != "graph_cluster_source_chunks"
+        ):
+            expanded_rows.append(row)
+            continue
+        excluded_ids = {
+            _session_window_item_id(item)
+            for item in window
+            if isinstance(item, dict) and _session_window_item_id(item)
+        }
+        support_window = _session_stream_support_window(
+            center_chunk=chunk if isinstance(chunk, dict) else None,
+            owner_id=owner_key,
+            query_terms=query_terms,
+            excluded_ids=excluded_ids,
+        )
+        if support_window:
+            window_header_dates = {
+                value
+                for value in (
+                    _date_part(item.get("source_date"))
+                    for item in window
+                    if isinstance(item, dict) and item.get("session_source_header")
+                )
+                if value
+            }
+            if window_header_dates:
+                # Do not attach support from a different dated transcript turn
+                # under the center window's header; that mislabels relative-time
+                # phrases like "last week" with the wrong conversation date.
+                support_window = [
+                    item
+                    for item in support_window
+                    if isinstance(item, dict)
+                    and _date_part(item.get("source_date") or item.get("created_at")) in window_header_dates
+                ]
+            if support_window:
+                window = [*window, *support_window]
+                support_window_count += 1
+        baseline_tokens = row_token_counts[row_index] if row_index < len(row_token_counts) else 0
+        available_tokens = total_token_limit - max(0, used_tokens - baseline_tokens)
+        if available_tokens < len(window):
+            omitted_for_budget += 1
+            expanded_rows.append(row)
+            continue
+        original_text = str(row.get("text") or "").strip()
+        include_original = (
+            source_type not in {"session_chunk", "source_chunk"}
+            or bool(row.get("session_temporal_context_attached"))
+        ) and bool(original_text)
+        original_tokens = int(_lib_estimate_tokens(original_text)) if include_original else 0
+        available_window_tokens = max(0, min(available_tokens, per_expandable_row_limit) - original_tokens)
+        if available_window_tokens < len(window):
+            omitted_for_budget += 1
+            expanded_rows.append(row)
+            continue
+        selected_window = _select_session_window_items_for_budget(
+            window,
+            available_tokens=available_window_tokens,
+            query_terms=query_terms,
+        )
+        header_dates = [
+            _date_part(item.get("source_date"))
+            for item in window
+            if isinstance(item, dict) and item.get("session_source_header")
+        ]
+        window_source_date = next((value for value in header_dates if value), None)
+        selected_window_tokens = sum(
+            int(_lib_estimate_tokens(str(item.get("text") or "")))
+            for item in selected_window
+            if isinstance(item, dict)
+        )
+        window_chunk_limit = max(1, min(per_chunk_limit, available_window_tokens // max(1, len(selected_window))))
+        parts: List[str] = []
+        chunk_ids: List[str] = []
+        output_tokens = original_tokens
+        for item in selected_window:
+            if not isinstance(item, dict):
+                continue
+            item_token_limit = min(
+                per_chunk_limit,
+                max(
+                    window_chunk_limit,
+                    int(_lib_estimate_tokens(str(item.get("text") or "")))
+                    if selected_window_tokens <= available_window_tokens
+                    else window_chunk_limit,
+                ),
+            )
+            payload = _source_chunk_recall_payload(
+                item,
+                max_chunk_tokens=item_token_limit,
+            )
+            label = str(payload.get("session_id") or payload.get("source_id") or "session").strip()
+            index = payload.get("chunk_index")
+            suffix = f"#{index}" if index is not None else ""
+            item_source_date = _date_part(payload.get("source_date") or item.get("source_date")) or window_source_date
+            payload_text = str(payload.get("text") or "")
+            parts.append(f"[session_chunk] {label}{suffix}: {payload_text}")
+            chunk_ids.append(str(payload.get("chunk_id") or "").strip())
+            output_tokens += int(_lib_estimate_tokens(payload_text))
+        if not parts:
+            expanded_rows.append(row)
+            continue
+        expanded = dict(row)
+        if include_original:
+            if expansion_source == "graph_cluster_source_chunks":
+                # For synthetic graph clusters, lead with first-order evidence;
+                # the sanitized cluster remains as backup context below it.
+                expanded["text"] = "\n".join([*parts, f"[memory] {original_text}"])
+            else:
+                expanded["text"] = "\n".join([f"[memory] {original_text}", *parts])
+        else:
+            expanded["text"] = "\n".join(parts)
+        if header_dates:
+            expanded["source_date"] = window_source_date
+            expanded["session_source_header"] = True
+        expanded["session_window_expanded"] = True
+        expanded["session_window_expansion_source"] = expansion_source
+        expanded["session_window_center_chunk_id"] = chunk_id
+        if microchunk_id:
+            expanded["session_window_center_microchunk_id"] = microchunk_id
+        expanded["session_window_chunk_ids"] = [item for item in chunk_ids if item]
+        expanded["session_window_size"] = len(expanded["session_window_chunk_ids"])
+        expanded["output_token_count"] = output_tokens
+        expanded_rows.append(expanded)
+        used_tokens = max(0, used_tokens - baseline_tokens) + output_tokens
+        if row_index < len(row_token_counts):
+            row_token_counts[row_index] = output_tokens
+        expanded_count += 1
+        window_chunk_count += len(expanded["session_window_chunk_ids"])
+    return expanded_rows, {
+        "expanded": expanded_count,
+        "window_chunk_count": window_chunk_count,
+        "before": before_count,
+        "after": after_count,
+        "max_total_chunk_tokens": total_token_limit,
+        "output_token_count": used_tokens,
+        "omitted_for_budget": omitted_for_budget,
+        "support_windows": support_window_count,
+    }
+
+
+def _session_chunk_row_output_tokens(row: Dict[str, Any]) -> int:
+    try:
+        value = int(row.get("output_token_count"))
+    except (TypeError, ValueError):
+        value = int(_lib_estimate_tokens(str(row.get("text") or "")))
+    return max(0, value)
 
 
 def _graph_store_recall(
@@ -7664,13 +9293,11 @@ def _run_recall_store_plan(
             ))
         elif store == "graph":
             graph_candidate_pool = kwargs.get("candidate_pool")
-            if graph_candidate_pool is None and "vector" in normalized_stores and (
-                fast_mode or relation_chain_query_for_plan
-            ):
-                # The vector lane is already running in this store plan. Fast
-                # auto-inject and owner-style relation-chain graph recall should
-                # not pay for a second recursive base recall before graph
-                # traversal can follow the relationship path.
+            if graph_candidate_pool is None and "vector" in normalized_stores:
+                # The vector lane is already running in this store plan. Graph
+                # recall should traverse explicit/entity anchors instead of
+                # recursively paying for another full base recall inside the
+                # same plan.
                 graph_candidate_pool = []
             callables.append(lambda store=store, handler=handler, graph_candidate_pool=graph_candidate_pool: (
                 store,
@@ -7705,6 +9332,7 @@ def _run_recall_store_plan(
                     source_conversation_id=kwargs.get("source_conversation_id"),
                     max_chunk_tokens=kwargs.get("max_chunk_tokens"),
                     max_total_chunk_tokens=kwargs.get("max_total_chunk_tokens"),
+                    timeout_ms=kwargs.get("timeout_ms"),
                 ),
             ))
 
@@ -7752,7 +9380,11 @@ def _run_recall_store_plan(
                 error=str(output),
             )
             if fail_hard or not timeout_like:
-                raise output
+                raise RuntimeError(
+                    f"Recall store '{store_name}' failed while failHard is enabled "
+                    f"(planned_stores={normalized_stores}, timeout_like={timeout_like}, "
+                    f"cause={type(output).__name__}: {output})"
+                ) from output
             logger.warning(
                 "recall store '%s' timed out; continuing with completed stores: %s",
                 store_name,
@@ -7762,6 +9394,8 @@ def _run_recall_store_plan(
         store, payload = output
         rows, meta, bundle = payload
         rows = _validate_recall_result_rows(rows)
+        if store == "session_chunks":
+            rows = _prioritize_first_order_session_query_coverage(query, rows)
         if store == "docs" and rows:
             docs_rows.extend(rows)
         meta = dict(meta or {})
@@ -7816,7 +9450,16 @@ def _run_recall_store_plan(
     candidate_merge_limit = merge_limit
     if relation_chain_query and materialized_row_count > merge_limit:
         candidate_merge_limit = materialized_row_count
-    rrf_shadow_meta = _shadow_rrf_recall_store_plan(rrf_named_batches, limit=merge_limit)
+    rrf_branch_weights = _store_plan_rrf_branch_weights(
+        normalized_stores,
+        planner_meta=planner_meta,
+        common_kwargs=common_kwargs,
+    )
+    rrf_shadow_meta = _shadow_rrf_recall_store_plan(
+        rrf_named_batches,
+        limit=merge_limit,
+        branch_weights=rrf_branch_weights,
+    )
     rrf_fusion_meta: Dict[str, Any] = {"enabled": False}
     rrf_fused_rows: Optional[List[Dict[str, Any]]] = None
     if _should_apply_rrf_store_plan_fusion(normalized_stores):
@@ -7824,6 +9467,7 @@ def _run_recall_store_plan(
             rrf_named_batches,
             normalized_stores=normalized_stores,
             limit=candidate_merge_limit,
+            branch_weights=rrf_branch_weights,
         )
     merged = (
         rrf_fused_rows
@@ -7841,6 +9485,21 @@ def _run_recall_store_plan(
         merged = _prioritize_fast_anchor_direct_rows(query, merged)
     merged = _prioritize_date_relation_callback_rows(query, merged)
     merged = _prioritize_named_entity_activity_anchor_rows(query, merged)
+    merged = _prioritize_first_order_session_query_coverage(query, merged)
+    store_plan_facet_rescue_rows, store_plan_facet_rescue_meta = _recover_explicit_entity_facet_rows(
+        query,
+        merged,
+        owner_id=owner_id,
+        limit=limit,
+        intent=None,
+        domain=kwargs.get("domain"),
+        include_unscoped=(kwargs.get("include_unscoped", True) is not False),
+    )
+    if store_plan_facet_rescue_rows:
+        merged = _merge_recall_batches(
+            [merged, store_plan_facet_rescue_rows],
+            limit=max(candidate_merge_limit, len(merged) + len(store_plan_facet_rescue_rows)),
+        )
     if kwargs.get("date_from") or kwargs.get("date_to"):
         merged = _filter_recall_rows_by_date_bounds(
             merged,
@@ -7851,12 +9510,64 @@ def _run_recall_store_plan(
                 kwargs.get("temporal_dimension"),
             ),
         )
-    final_rows = merged[:limit]
+    final_rows = (
+        _select_final_recall_rows_with_facet_rescue(
+            query,
+            merged,
+            limit=limit,
+            intent=None,
+        )
+        if store_plan_facet_rescue_rows
+        else merged[:limit]
+    )
+    final_rows, store_plan_preserved_meta = _preserve_strong_store_plan_rows(
+        final_rows,
+        rrf_named_batches,
+        limit=limit,
+    )
+    final_rows, preserved_shared_quoted_item_rows = _preserve_shared_quoted_item_rows(
+        query,
+        final_rows,
+        rrf_named_batches,
+        limit=limit,
+    )
+    final_rows, preserved_source_dated_fact_rows = _preserve_source_dated_session_rows_for_selected_facts(
+        query,
+        final_rows,
+        rrf_named_batches,
+        limit=limit,
+    )
     final_rows, preserved_docs_rows = _preserve_requested_docs_rows(
         final_rows,
         docs_rows,
         limit=limit,
         date_to=kwargs.get("date_to"),
+    )
+    final_rows, preserved_graph_relation_summary_rows = _preserve_compact_graph_relation_summary_row(
+        query,
+        final_rows,
+        rrf_named_batches,
+        limit=limit,
+    )
+    final_rows, preserved_graph_cluster_rows = _preserve_graph_fact_cluster_row(
+        final_rows,
+        merged,
+        limit=limit,
+    )
+    final_rows = _prioritize_compact_graph_relation_rows(
+        query,
+        final_rows,
+        limit=limit,
+    )
+    final_rows = _prioritize_graph_fact_cluster_rows(
+        query,
+        final_rows,
+        limit=limit,
+    )
+    final_rows, graph_cluster_interpretation_meta = _interpret_selected_graph_fact_cluster_rows(
+        query,
+        final_rows,
+        fast_mode=fast_mode,
     )
     if kwargs.get("date_from") or kwargs.get("date_to"):
         final_rows = _filter_recall_rows_by_date_bounds(
@@ -7871,6 +9582,27 @@ def _run_recall_store_plan(
     final_rows = _enforce_recall_rows_temporal_axis_validity(
         final_rows,
         temporal_dimension=kwargs.get("temporal_dimension"),
+    )
+    final_rows, session_conflict_meta = _suppress_weaker_synthetic_temporal_conflicts_after_session_source(
+        query,
+        final_rows,
+    )
+    final_rows, session_window_meta = _expand_selected_session_chunk_rows(
+        final_rows,
+        owner_id=owner_id,
+        max_chunk_tokens=kwargs.get("max_chunk_tokens"),
+        max_total_chunk_tokens=kwargs.get("max_total_chunk_tokens"),
+        before=kwargs.get("session_chunk_window_before"),
+        after=kwargs.get("session_chunk_window_after"),
+        query=query,
+    )
+    final_rows = _prioritize_first_order_session_query_coverage(query, final_rows)
+    final_rows = _prioritize_source_dated_session_rows_for_temporal_answers(query, final_rows)
+    final_rows = _prioritize_high_signal_facet_rescue_rows(query, final_rows)
+    final_rows = _prioritize_compact_graph_relation_rows(
+        query,
+        final_rows,
+        limit=limit,
     )
     if rrf_fusion_meta.get("enabled"):
         rrf_shadow_meta = dict(rrf_shadow_meta)
@@ -7899,6 +9631,8 @@ def _run_recall_store_plan(
         meta["rrf_fusion"] = rrf_fusion_meta
     if rrf_shadow_meta.get("enabled") or rrf_shadow_meta.get("failed"):
         meta["rrf_shadow"] = rrf_shadow_meta
+    if store_plan_preserved_meta.get("preserved"):
+        meta["store_plan_preserved_branch_tops"] = store_plan_preserved_meta
     for store_name, store_meta in store_meta_entries:
         if store_name != "session_chunks":
             continue
@@ -7908,6 +9642,22 @@ def _run_recall_store_plan(
             meta["source_chunk_telemetry"] = dict(session_chunk_telemetry)
     if preserved_docs_rows:
         meta["preserved_docs_rows"] = preserved_docs_rows
+    if preserved_shared_quoted_item_rows.get("preserved"):
+        meta["preserved_shared_quoted_item_rows"] = preserved_shared_quoted_item_rows
+    if preserved_source_dated_fact_rows.get("preserved"):
+        meta["preserved_source_dated_fact_rows"] = preserved_source_dated_fact_rows
+    if preserved_graph_relation_summary_rows:
+        meta["preserved_graph_relation_summary_rows"] = preserved_graph_relation_summary_rows
+    if preserved_graph_cluster_rows:
+        meta["preserved_graph_cluster_rows"] = preserved_graph_cluster_rows
+    if session_conflict_meta.get("suppressed"):
+        meta["session_source_conflict_suppression"] = session_conflict_meta
+    if store_plan_facet_rescue_meta.get("applied") or store_plan_facet_rescue_meta.get("error"):
+        meta["facet_rescue"] = store_plan_facet_rescue_meta
+    if graph_cluster_interpretation_meta.get("enabled"):
+        meta["graph_cluster_interpretation"] = graph_cluster_interpretation_meta
+    if session_window_meta.get("expanded") or session_window_meta.get("omitted_for_budget"):
+        meta["session_window_expansion"] = session_window_meta
     # Preserve lexical planner diagnostics from vector recall even when the
     # merged/base metadata row was sourced from another store lane.
     if isinstance(vector_meta, dict):
@@ -8441,7 +10191,7 @@ def _recall_once(
     allow_anchor_miss_penalty = bool(include_lexical_anchor_shaping)
     if include_lexical_anchor_shaping:
         planner_timeout_ms = _LEXICAL_ANCHOR_DEFAULT_TIMEOUT_MS
-        planner_max_retries = 0
+        planner_max_retries = _LEXICAL_ANCHOR_DEFAULT_MAX_RETRIES
         if lexical_anchor_timeout_ms is not None:
             try:
                 planner_timeout_ms = max(200, int(lexical_anchor_timeout_ms))
@@ -8455,10 +10205,7 @@ def _recall_once(
                 )
             except Exception:
                 planner_timeout_ms = _LEXICAL_ANCHOR_DEFAULT_TIMEOUT_MS
-        try:
-            planner_max_retries = int(getattr(config_retrieval, "lexical_anchor_max_retries", 0) or 0)
-        except Exception:
-            planner_max_retries = 0
+        planner_max_retries = _resolve_lexical_anchor_max_retries(config_retrieval)
         planner_anchor_limit = _resolve_lexical_anchor_limit(clean_query, config_retrieval)
         planner_mode = str(lexical_anchor_planner_mode or "llm").strip().lower()
         if planner_mode not in {"llm", "deterministic"}:
@@ -10011,6 +11758,13 @@ def _graph_metadata_richness(row: Dict[str, Any]) -> Tuple[int, int, int, int]:
 
 def _merge_recall_row_variants(preferred: Dict[str, Any], alternate: Dict[str, Any]) -> Dict[str, Any]:
     merged = dict(preferred)
+    if alternate.get("_facet_rescue") and not merged.get("_facet_rescue"):
+        # The same memory can arrive through vector/session branches and facet
+        # rescue. Keep the stronger score/text from the preferred variant, but
+        # preserve rescue provenance so final selection can reserve exact facts.
+        merged["_facet_rescue"] = True
+        if alternate.get("via"):
+            merged["via"] = alternate.get("via")
     if merged.get("_debug") is None and isinstance(alternate.get("_debug"), dict):
         merged["_debug"] = dict(alternate["_debug"])
     if not _has_structured_graph_discovery(merged) and _has_structured_graph_discovery(alternate):
@@ -10088,6 +11842,8 @@ def _reciprocal_rank_fuse_recall_branches(
     *,
     limit: int,
     k: Optional[int] = None,
+    branch_weights: Optional[Dict[str, float]] = None,
+    confidence_aware: bool = False,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """Fuse named ranked recall branches with RRF without mutating inputs."""
     if limit <= 0:
@@ -10108,11 +11864,15 @@ def _reciprocal_rank_fuse_recall_branches(
 
     scores: Dict[str, float] = {}
     source_ranks: Dict[str, Dict[str, int]] = {}
+    source_confidences: Dict[str, Dict[str, float]] = {}
+    source_weights: Dict[str, Dict[str, float]] = {}
     rows_by_key: Dict[str, Dict[str, Any]] = {}
     branch_counts: Dict[str, int] = {}
+    normalized_weights = _normalize_rrf_branch_weights(branch_weights)
 
     for branch_name, branch_rows in branches or []:
         name = str(branch_name or "").strip() or "unnamed"
+        branch_weight = normalized_weights.get(name, 1.0)
         if not isinstance(branch_rows, list):
             if _is_fail_hard_mode():
                 raise RuntimeError(f"RRF branch '{name}' is not a list")
@@ -10131,8 +11891,14 @@ def _reciprocal_rank_fuse_recall_branches(
                 continue
             seen_in_branch.add(key)
             accepted += 1
-            scores[key] = scores.get(key, 0.0) + (1.0 / float(rrf_k + rank))
+            confidence = _rrf_row_confidence(row, name) if confidence_aware else 1.0
+            confidence_factor = _rrf_confidence_factor(confidence) if confidence_aware else 1.0
+            scores[key] = scores.get(key, 0.0) + (
+                branch_weight * confidence_factor / float(rrf_k + rank)
+            )
             source_ranks.setdefault(key, {})[name] = rank
+            source_confidences.setdefault(key, {})[name] = round(float(confidence), 4)
+            source_weights.setdefault(key, {})[name] = round(float(branch_weight), 4)
             existing = rows_by_key.get(key)
             if existing is None:
                 rows_by_key[key] = dict(row)
@@ -10157,11 +11923,19 @@ def _reciprocal_rank_fuse_recall_branches(
         row["rrf_score"] = scores[key]
         row["rrf_rank"] = rank
         row["source_ranks"] = dict(source_ranks.get(key) or {})
+        if confidence_aware:
+            row["source_confidences"] = dict(source_confidences.get(key) or {})
+            row["source_weights"] = dict(source_weights.get(key) or {})
         fused.append(row)
 
     meta = {
         "enabled": True,
         "k": rrf_k,
+        "confidence_aware": bool(confidence_aware),
+        "branch_weights": {
+            name: round(float(normalized_weights.get(name, 1.0)), 4)
+            for name in branch_counts
+        },
         "branch_count": len(branch_counts),
         "branch_counts": branch_counts,
         "candidate_count": len(scores),
@@ -10171,10 +11945,66 @@ def _reciprocal_rank_fuse_recall_branches(
     return fused, meta
 
 
+def _normalize_rrf_branch_weights(value: Optional[Dict[str, float]]) -> Dict[str, float]:
+    out: Dict[str, float] = {}
+    if not isinstance(value, dict):
+        return out
+    for raw_name, raw_weight in value.items():
+        name = str(raw_name or "").strip()
+        if not name:
+            continue
+        try:
+            weight = float(raw_weight)
+        except (TypeError, ValueError):
+            if _is_fail_hard_mode():
+                raise
+            logger.warning("Ignoring invalid RRF branch weight for %s: %r", name, raw_weight)
+            continue
+        out[name] = max(0.0, min(3.0, weight))
+    return out
+
+
+def _rrf_unit_interval(value: Any) -> Optional[float]:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(number):
+        return None
+    return max(0.0, min(1.0, number))
+
+
+def _rrf_row_confidence(row: Dict[str, Any], branch_name: str) -> float:
+    for key in ("retrieval_confidence", "rank_confidence", "confidence"):
+        value = _rrf_unit_interval(row.get(key))
+        if value is not None:
+            return value
+    for key in ("similarity", "semantic_score", "lexical_score"):
+        value = _rrf_unit_interval(row.get(key))
+        if value is not None:
+            return value
+    defaults = {
+        "vector": 0.75,
+        "graph": 0.70,
+        "session_chunks": 0.70,
+        "docs": 0.55,
+        "journal": 0.60,
+        "insights": 0.60,
+    }
+    return defaults.get(str(branch_name or "").strip(), 0.60)
+
+
+def _rrf_confidence_factor(confidence: float) -> float:
+    bounded = max(0.0, min(1.0, float(confidence)))
+    return 0.25 + (0.75 * bounded)
+
+
 def _shadow_rrf_recall_store_plan(
     named_batches: List[Tuple[str, List[Dict[str, Any]]]],
     *,
     limit: int,
+    branch_weights: Optional[Dict[str, float]] = None,
+    confidence_aware: bool = False,
 ) -> Dict[str, Any]:
     if len(named_batches) < 2:
         return {"enabled": False, "reason": "single_branch"}
@@ -10182,6 +12012,8 @@ def _shadow_rrf_recall_store_plan(
         fused, meta = _reciprocal_rank_fuse_recall_branches(
             named_batches,
             limit=max(1, int(limit or 1)),
+            branch_weights=branch_weights,
+            confidence_aware=confidence_aware,
         )
     except Exception:
         if _is_fail_hard_mode():
@@ -10194,6 +12026,8 @@ def _shadow_rrf_recall_store_plan(
             "rank": int(row.get("rrf_rank") or 0),
             "score": float(row.get("rrf_score") or 0.0),
             "source_ranks": dict(row.get("source_ranks") or {}),
+            "source_confidences": dict(row.get("source_confidences") or {}),
+            "source_weights": dict(row.get("source_weights") or {}),
             "category": row.get("category"),
             "source_type": row.get("source_type"),
             "id": row.get("id"),
@@ -10221,9 +12055,9 @@ def _coerce_bool_config(value: Any, default: bool) -> bool:
 
 
 def _should_apply_rrf_store_plan_fusion(normalized_stores: List[str]) -> bool:
-    """Enable active RRF only for the explicit vector+session_chunks lane."""
+    """Enable active RRF for mixed store plans."""
     stores = [str(store or "").strip() for store in normalized_stores or []]
-    if set(stores) != {"vector", "session_chunks"}:
+    if len({store for store in stores if store}) < 2:
         return False
     cfg = _get_retrieval_lightweight_config()
     raw = getattr(cfg, "store_plan_rrf_fusion", None)
@@ -10232,16 +12066,46 @@ def _should_apply_rrf_store_plan_fusion(normalized_stores: List[str]) -> bool:
     return _coerce_bool_config(raw, True)
 
 
+def _store_plan_rrf_branch_weights(
+    normalized_stores: List[str],
+    *,
+    planner_meta: Optional[Dict[str, Any]],
+    common_kwargs: Optional[Dict[str, Any]],
+) -> Dict[str, float]:
+    stores = [str(store or "").strip() for store in normalized_stores or [] if str(store or "").strip()]
+    weights: Dict[str, float] = {store: 1.0 for store in stores}
+    raw: Any = None
+    for container in (common_kwargs, planner_meta):
+        if not isinstance(container, dict):
+            continue
+        raw = (
+            container.get("store_weights")
+            or container.get("storeWeights")
+            or container.get("branch_weights")
+            or container.get("branchWeights")
+        )
+        if raw is not None:
+            break
+    if isinstance(raw, dict):
+        for store, weight in _normalize_rrf_branch_weights(raw).items():
+            if store in weights:
+                weights[store] = weight
+    return weights
+
+
 def _active_rrf_recall_store_plan(
     named_batches: List[Tuple[str, List[Dict[str, Any]]]],
     *,
     normalized_stores: List[str],
     limit: int,
+    branch_weights: Optional[Dict[str, float]] = None,
 ) -> Tuple[Optional[List[Dict[str, Any]]], Dict[str, Any]]:
     try:
         fused, meta = _reciprocal_rank_fuse_recall_branches(
             named_batches,
             limit=max(1, int(limit or 1)),
+            branch_weights=branch_weights,
+            confidence_aware=True,
         )
     except Exception:
         if _is_fail_hard_mode():
@@ -10253,6 +12117,439 @@ def _active_rrf_recall_store_plan(
     out["mode"] = "active"
     out["applied_to_stores"] = list(normalized_stores or [])
     return fused, out
+
+
+def _has_store_plan_branch_result(rows: List[Dict[str, Any]], branch_name: str) -> bool:
+    branch = str(branch_name or "").strip()
+    if not branch:
+        return False
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        source_ranks = row.get("source_ranks")
+        if isinstance(source_ranks, dict) and branch in source_ranks:
+            return True
+        source_type = str(row.get("source_type") or row.get("category") or "").strip().lower()
+        if branch == "session_chunks" and source_type in {"session_chunk", "source_chunk"}:
+            return True
+        if branch == "docs" and source_type in {"doc", "docs", "document", "project_doc"}:
+            return True
+        if branch == "graph" and (
+            str(row.get("via") or "").startswith("graph")
+            or row.get("graph_path")
+            or row.get("graph_relation_sequence")
+        ):
+            return True
+        if branch == "journal" and source_type == "journal":
+            return True
+        if branch == "insights" and source_type in {"insight", "snippet", "journal"}:
+            return True
+    return False
+
+
+def _store_plan_row_best_confidence(row: Dict[str, Any]) -> float:
+    if not isinstance(row, dict):
+        return 0.0
+    source_confidences = row.get("source_confidences")
+    if isinstance(source_confidences, dict) and source_confidences:
+        values = [
+            _rrf_unit_interval(value)
+            for value in source_confidences.values()
+        ]
+        bounded = [value for value in values if value is not None]
+        if bounded:
+            return max(bounded)
+    for key in ("retrieval_confidence", "rank_confidence", "confidence", "similarity"):
+        value = _rrf_unit_interval(row.get(key))
+        if value is not None:
+            return value
+    return 0.0
+
+
+def _preserve_strong_store_plan_rows(
+    rows: List[Dict[str, Any]],
+    named_batches: List[Tuple[str, List[Dict[str, Any]]]],
+    *,
+    limit: int,
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """Keep high-confidence branch-top rows from being erased by cross-store fusion."""
+    if not rows or not named_batches:
+        return rows, {"preserved": 0}
+    top_limit = max(1, int(limit or 1))
+    out = list(rows[:top_limit])
+    existing_keys = {_rrf_recall_row_identity(row) for row in out if isinstance(row, dict)}
+    preserved: List[Dict[str, Any]] = []
+    for branch_name, branch_rows in named_batches:
+        branch = str(branch_name or "").strip()
+        if branch == "docs":
+            # Docs have a dedicated preservation path that also carries docs
+            # bundle metadata; do not preempt it here.
+            continue
+        branch_already_present = _has_store_plan_branch_result(out, branch)
+        if not branch or (branch_already_present and branch != "session_chunks"):
+            continue
+        if not branch_rows:
+            continue
+        candidate_limit = 3 if branch == "session_chunks" else 1
+        branch_candidates = [
+            row for row in branch_rows
+            if isinstance(row, dict)
+        ][:candidate_limit]
+        for candidate in branch_candidates:
+            key = _rrf_recall_row_identity(candidate)
+            if key in existing_keys:
+                continue
+            confidence = _rrf_row_confidence(candidate, branch)
+            min_confidence = 0.65 if branch == "session_chunks" else 0.70
+            if confidence < min_confidence:
+                continue
+            replacement = dict(candidate)
+            replacement["store_plan_preserved_branch_top"] = branch
+            replacement["store_plan_preserved_confidence"] = round(float(confidence), 4)
+            insert_at = len(out)
+            for idx, existing in enumerate(out):
+                if _store_plan_row_best_confidence(existing) < confidence:
+                    insert_at = idx
+                    break
+            if branch == "session_chunks" and confidence >= 0.65:
+                insert_at = sum(
+                    1
+                    for existing in out
+                    if isinstance(existing, dict)
+                    and existing.get("store_plan_preserved_branch_top") == "session_chunks"
+                )
+            if branch == "session_chunks" and confidence >= 0.75 and not branch_already_present:
+                # SessionDB is first-order source evidence. When the planner chose
+                # it and the branch produced a strong hit, lead with the original
+                # transcript evidence rather than a synthesized memory paraphrase.
+                insert_at = 0
+            if insert_at >= top_limit and len(out) >= top_limit:
+                replacement_idx = next(
+                    (
+                        idx
+                        for idx in range(len(out) - 1, -1, -1)
+                        if not out[idx].get("store_plan_preserved_branch_top")
+                    ),
+                    len(out) - 1,
+                )
+                out[replacement_idx] = replacement
+            else:
+                out.insert(insert_at, replacement)
+            if len(out) > top_limit:
+                out = out[:top_limit]
+            existing_keys.add(key)
+            preserved.append({
+                "store": branch,
+                "confidence": round(float(confidence), 4),
+                "key": key,
+            })
+    return out, {"preserved": len(preserved), "rows": preserved}
+
+
+def _preserve_shared_quoted_item_rows(
+    query: str,
+    rows: List[Dict[str, Any]],
+    named_batches: List[Tuple[str, List[Dict[str, Any]]]],
+    *,
+    limit: int,
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """Keep distinct shared quoted-item source rows in the final recall window."""
+    if not rows or not named_batches or limit <= 0 or not _is_multi_entity_shared_source_query(query):
+        return rows, {"preserved": 0}
+    out = list(rows[: max(1, int(limit or 1))])
+    existing_keys = {_rrf_recall_row_identity(row) for row in out if isinstance(row, dict)}
+    present_item_keys: Set[str] = set()
+    for row in out:
+        if not isinstance(row, dict):
+            continue
+        for key in list(row.get("shared_quoted_item_keys") or []):
+            normalized = str(key or "").strip().lower()
+            if normalized:
+                present_item_keys.add(normalized)
+
+    session_branch_rows: List[Dict[str, Any]] = []
+    for branch_name, branch_rows in named_batches:
+        if str(branch_name or "").strip() != "session_chunks":
+            continue
+        session_branch_rows.extend(row for row in branch_rows or [] if isinstance(row, dict))
+    candidates = [
+        row for row in session_branch_rows
+        if float(row.get("shared_quoted_item_score") or 0.0) >= 0.97
+        and any(str(key or "").strip().lower() for key in list(row.get("shared_quoted_item_keys") or []))
+    ]
+    if not candidates:
+        return rows, {"preserved": 0}
+    candidates.sort(
+        key=lambda row: (
+            len({
+                str(key or "").strip().lower()
+                for key in list(row.get("shared_quoted_item_keys") or [])
+                if str(key or "").strip()
+            } - present_item_keys),
+            float(row.get("shared_quoted_item_score") or 0.0),
+            _store_plan_row_best_confidence(row),
+        ),
+        reverse=True,
+    )
+    preserved: List[Dict[str, Any]] = []
+    for candidate in candidates:
+        candidate_item_keys = {
+            str(key or "").strip().lower()
+            for key in list(candidate.get("shared_quoted_item_keys") or [])
+            if str(key or "").strip()
+        }
+        new_item_keys = candidate_item_keys - present_item_keys
+        if not new_item_keys:
+            continue
+        key = _rrf_recall_row_identity(candidate)
+        if key in existing_keys:
+            present_item_keys.update(candidate_item_keys)
+            continue
+        replacement = dict(candidate)
+        replacement["store_plan_preserved_shared_quoted_item"] = True
+        confidence = _store_plan_row_best_confidence(replacement)
+        insert_at = min(len(out), max(0, sum(
+            1 for row in out
+            if isinstance(row, dict)
+            and (
+                row.get("store_plan_preserved_shared_quoted_item")
+                or "shared_quoted_item" in list(row.get("match_modes") or [])
+            )
+        )))
+        if len(out) >= max(1, int(limit or 1)):
+            replacement_idx = next(
+                (
+                    idx
+                    for idx in range(len(out) - 1, -1, -1)
+                    if not (
+                        isinstance(out[idx], dict)
+                        and (
+                            out[idx].get("store_plan_preserved_shared_quoted_item")
+                            or "shared_quoted_item" in list(out[idx].get("match_modes") or [])
+                        )
+                    )
+                ),
+                len(out) - 1,
+            )
+            out[replacement_idx] = replacement
+        else:
+            out.insert(insert_at, replacement)
+        if len(out) > max(1, int(limit or 1)):
+            out = out[: max(1, int(limit or 1))]
+        existing_keys.add(key)
+        present_item_keys.update(candidate_item_keys)
+        preserved.append({
+            "key": key,
+            "item_keys": sorted(new_item_keys),
+            "confidence": round(float(confidence), 4),
+        })
+        if len(preserved) >= max(1, min(3, int(limit or 1) - 1)):
+            break
+    return out, {"preserved": len(preserved), "rows": preserved}
+
+
+def _preserve_source_dated_session_rows_for_selected_facts(
+    query: str,
+    rows: List[Dict[str, Any]],
+    named_batches: List[Tuple[str, List[Dict[str, Any]]]],
+    *,
+    limit: int,
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """Keep dated first-order source rows that ground selected synthetic facts."""
+    if not rows or not named_batches or limit <= 0:
+        return rows, {"preserved": 0}
+    query_terms = _source_chunk_query_terms(query, limit=12)
+    if not query_terms:
+        return rows, {"preserved": 0}
+    selected_fact_rows = [
+        row for row in rows
+        if isinstance(row, dict)
+        and str(row.get("source_type") or row.get("category") or "").strip().lower()
+        in {"fact", "preference", "event", "user"}
+    ]
+    if not selected_fact_rows:
+        return rows, {"preserved": 0}
+
+    def _row_terms(row: Dict[str, Any]) -> Set[str]:
+        return {
+            term for term in _extract_vocabulary_free_query_terms(str(row.get("text") or ""), limit=24)
+            if len(term) >= 4
+        }
+
+    fact_term_sets: List[Set[str]] = []
+    for fact in selected_fact_rows:
+        fact_text = str(fact.get("text") or "")
+        if sum(1 for term in query_terms if _text_matches_query_term(fact_text, term)) <= 0:
+            continue
+        terms = _row_terms(fact)
+        if terms:
+            fact_term_sets.append(terms)
+    if not fact_term_sets:
+        return rows, {"preserved": 0}
+
+    session_branch_rows: List[Dict[str, Any]] = []
+    for branch_name, branch_rows in named_batches:
+        if str(branch_name or "").strip() != "session_chunks":
+            continue
+        session_branch_rows.extend(row for row in branch_rows or [] if isinstance(row, dict))
+    out = list(rows[: max(1, int(limit or 1))])
+    existing_keys = {_rrf_recall_row_identity(row) for row in out if isinstance(row, dict)}
+    scored: List[Tuple[Tuple[int, int, float], Dict[str, Any]]] = []
+    for candidate in session_branch_rows:
+        if not _is_first_order_session_source_row(candidate) or not _date_part(candidate.get("source_date")):
+            continue
+        key = _rrf_recall_row_identity(candidate)
+        if key in existing_keys:
+            continue
+        candidate_text = str(candidate.get("session_scoring_context_text") or candidate.get("text") or "")
+        if not candidate_text:
+            continue
+        candidate_terms = _row_terms({"text": candidate_text})
+        if not candidate_terms:
+            continue
+        fact_bridge_overlap = max((len(candidate_terms & terms) for terms in fact_term_sets), default=0)
+        query_overlap = sum(1 for term in query_terms if _text_matches_query_term(candidate_text, term))
+        if fact_bridge_overlap < 2 or query_overlap < 1:
+            continue
+        scored.append((
+            (
+                fact_bridge_overlap,
+                query_overlap,
+                float(candidate.get("similarity") or candidate.get("score") or 0.0),
+            ),
+            candidate,
+        ))
+    if not scored:
+        return rows, {"preserved": 0}
+    scored.sort(key=lambda item: item[0], reverse=True)
+    out_limit = max(1, int(limit or 1))
+    score_key, candidate = scored[0]
+    replacement = dict(candidate)
+    replacement["store_plan_preserved_source_dated_fact_evidence"] = True
+    replacement["source_dated_fact_bridge_score"] = {
+        "fact_overlap": score_key[0],
+        "query_overlap": score_key[1],
+    }
+    if len(out) >= out_limit:
+        replacement_idx = next(
+            (
+                idx
+                for idx in range(len(out) - 1, -1, -1)
+                if isinstance(out[idx], dict)
+                and not _date_part(out[idx].get("source_date"))
+                and not out[idx].get("store_plan_preserved_branch_top")
+            ),
+            len(out) - 1,
+        )
+        out[replacement_idx] = replacement
+    else:
+        out.append(replacement)
+    if len(out) > out_limit:
+        out = out[:out_limit]
+    return out, {
+        "preserved": 1,
+        "rows": [{
+            "key": _rrf_recall_row_identity(candidate),
+            "fact_overlap": score_key[0],
+            "query_overlap": score_key[1],
+        }],
+    }
+
+
+def _query_term_overlap_count(row: Dict[str, Any], query_terms: List[str]) -> int:
+    if not query_terms:
+        return 0
+    search_text = " ".join([
+        str((row or {}).get("text") or ""),
+        str((row or {}).get("keywords") or ""),
+    ]).lower()
+    return sum(
+        1 for term in query_terms
+        if term and (term in search_text or _text_contains_anchor_term(search_text, term))
+    )
+
+
+def _suppress_weaker_synthetic_temporal_conflicts_after_session_source(
+    query: str,
+    rows: List[Dict[str, Any]],
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """Prefer first-order session evidence over weaker conflicting temporal facts."""
+    if not rows:
+        return rows, {"suppressed": 0}
+    query_terms = [
+        term for term in _extract_vocabulary_free_query_terms(query, limit=12)
+        if len(str(term or "")) >= 5
+    ]
+    if len(query_terms) < 3:
+        return rows, {"suppressed": 0}
+    session_candidates: List[Tuple[int, Dict[str, Any]]] = []
+    for row in rows:
+        if not isinstance(row, dict) or not _is_first_order_session_source_row(row):
+            continue
+        source_date = _date_part(row.get("source_date"))
+        if not source_date:
+            continue
+        overlap = _query_term_overlap_count(row, query_terms)
+        if overlap >= 3:
+            session_candidates.append((overlap, row))
+    if not session_candidates:
+        return rows, {"suppressed": 0}
+    best_overlap, best_source = max(
+        session_candidates,
+        key=lambda item: (
+            item[0],
+            _store_plan_row_best_confidence(item[1]),
+        ),
+    )
+    source_date = _date_part(best_source.get("source_date"))
+    if not source_date:
+        return rows, {"suppressed": 0}
+    kept: List[Dict[str, Any]] = []
+    suppressed: List[Dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            kept.append(row)
+            continue
+        if _is_first_order_session_source_row(row):
+            kept.append(row)
+            continue
+        overlap = _query_term_overlap_count(row, query_terms)
+        row_temporal = _date_part(row.get("occurred_start") or row.get("occurred_end") or row.get("source_date"))
+        temporal_conflicts_with_source = False
+        if row_temporal and row_temporal != source_date:
+            try:
+                temporal_conflicts_with_source = (
+                    datetime.fromisoformat(row_temporal).date()
+                    > datetime.fromisoformat(source_date).date()
+                )
+            except Exception:
+                if _is_fail_hard_mode():
+                    raise
+                temporal_conflicts_with_source = False
+        if temporal_conflicts_with_source and overlap < best_overlap:
+            suppressed.append(row)
+            continue
+        kept.append(row)
+    if not suppressed:
+        return rows, {"suppressed": 0}
+    return kept, {
+        "suppressed": len(suppressed),
+        "source_date": source_date,
+        "source_overlap": best_overlap,
+        "suppressed_rows": [
+            {
+                "id": row.get("id"),
+                "source_type": row.get("source_type") or row.get("category"),
+                "via": row.get("via"),
+                "source_date": row.get("source_date"),
+                "occurred_start": row.get("occurred_start"),
+                "occurred_end": row.get("occurred_end"),
+                "overlap": _query_term_overlap_count(row, query_terms),
+            }
+            for row in suppressed[:5]
+            if isinstance(row, dict)
+        ],
+    }
 
 
 def _annotate_rrf_shadow_comparison(
@@ -10720,6 +13017,11 @@ def _docs_row_latest_iso_date(row: Dict[str, Any]) -> str:
     return max(dates) if dates else ""
 
 
+def _is_first_order_session_source_row(row: Dict[str, Any]) -> bool:
+    source_type = str((row or {}).get("source_type") or (row or {}).get("category") or "").strip().lower()
+    return source_type in {"session_chunk", "source_chunk"} or str((row or {}).get("via") or "") == "session_chunks"
+
+
 def _preserve_requested_docs_rows(
     final_rows: List[Dict[str, Any]],
     docs_rows: List[Dict[str, Any]],
@@ -10792,6 +13094,391 @@ def _preserve_requested_docs_rows(
         out.append(candidate)
         preserved += 1
     return (out[:limit], preserved) if preserved else (final_rows, 0)
+
+
+def _is_graph_fact_cluster_row(row: Dict[str, Any]) -> bool:
+    return str((row or {}).get("via") or "") == "graph_fact_cluster"
+
+
+def _is_compact_graph_relation_row(row: Dict[str, Any]) -> bool:
+    if not isinstance(row, dict):
+        return False
+    if str(row.get("via") or "") not in {"graph_relation_summary", "graph_fact_cluster"}:
+        return False
+    return int(row.get("relation_evidence_count") or 0) > 0
+
+
+def _compact_graph_relation_query_overlap(query: str, row: Dict[str, Any]) -> int:
+    query_tokens = {
+        token.lower()
+        for token in re.findall(r"\w+", str(query or ""), flags=re.UNICODE)
+        if len(token) >= 4
+    }
+    if not query_tokens:
+        return 0
+    row_text = str((row or {}).get("text") or "")
+    compact_relation_text = str((row or {}).get("compact_relation_query_text") or "").strip()
+    if compact_relation_text and str((row or {}).get("via") or "") == "graph_fact_cluster":
+        row_text = compact_relation_text
+    row_tokens = {
+        token.lower()
+        for token in re.findall(r"\w+", row_text, flags=re.UNICODE)
+        if len(token) >= 4
+    }
+    return len(query_tokens & row_tokens)
+
+
+def _prioritize_compact_graph_relation_rows(
+    query: str,
+    rows: List[Dict[str, Any]],
+    *,
+    limit: int,
+) -> List[Dict[str, Any]]:
+    """Keep compact structured graph evidence near first-order transcript hits."""
+    if not rows:
+        return rows
+    candidates: List[Tuple[int, int, Dict[str, Any]]] = []
+    for idx, row in enumerate(rows):
+        if not _is_compact_graph_relation_row(row):
+            continue
+        overlap = _compact_graph_relation_query_overlap(query, row)
+        if overlap < 2:
+            continue
+        candidates.append((overlap, -idx, row))
+    if not candidates:
+        return rows
+    candidates.sort(
+        key=lambda item: (
+            item[0],
+            int((item[2] or {}).get("relation_support_count") or 0),
+            float((item[2] or {}).get("similarity") or 0.0),
+            item[1],
+        ),
+        reverse=True,
+    )
+    selected = candidates[0][2]
+    selected_key = _rrf_recall_row_identity(selected)
+    out = [
+        row for row in rows
+        if _rrf_recall_row_identity(row) != selected_key
+    ]
+    target_idx = 1 if out and _is_first_order_session_source_row(out[0]) else 0
+    out.insert(target_idx, selected)
+    return out[: max(1, int(limit or 1))]
+
+
+def _graph_fact_cluster_query_overlap(query: str, row: Dict[str, Any]) -> int:
+    query_tokens = {
+        token.lower()
+        for token in re.findall(r"\w+", str(query or ""), flags=re.UNICODE)
+        if len(token) >= 4
+    }
+    if not query_tokens:
+        return 0
+    row_tokens = {
+        token.lower()
+        for token in re.findall(r"\w+", str((row or {}).get("text") or ""), flags=re.UNICODE)
+        if len(token) >= 4
+    }
+    return len(query_tokens & row_tokens)
+
+
+def _prioritize_graph_fact_cluster_rows(
+    query: str,
+    rows: List[Dict[str, Any]],
+    *,
+    limit: int,
+) -> List[Dict[str, Any]]:
+    """Keep query-matching graph clusters near first-order transcript hits."""
+    if not rows:
+        return rows
+    candidates: List[Tuple[int, int, Dict[str, Any]]] = []
+    for idx, row in enumerate(rows):
+        if not _is_graph_fact_cluster_row(row):
+            continue
+        overlap = _graph_fact_cluster_query_overlap(query, row)
+        if overlap < 2:
+            continue
+        candidates.append((overlap, -idx, row))
+    if not candidates:
+        return rows
+    candidates.sort(
+        key=lambda item: (
+            item[0],
+            int((item[2] or {}).get("cluster_size") or 0),
+            float((item[2] or {}).get("similarity") or 0.0),
+            item[1],
+        ),
+        reverse=True,
+    )
+    selected = candidates[0][2]
+    selected_key = _rrf_recall_row_identity(selected)
+    out = [
+        row for row in rows
+        if _rrf_recall_row_identity(row) != selected_key
+    ]
+    target_idx = 1 if out and _is_first_order_session_source_row(out[0]) else 0
+    out.insert(target_idx, selected)
+    return out[: max(1, int(limit or 1))]
+
+
+def _interpret_selected_graph_fact_cluster_rows(
+    query: str,
+    rows: List[Dict[str, Any]],
+    *,
+    fast_mode: bool,
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """Add one query-focused LLM interpretation to a large graph fact cluster.
+
+    Graph clusters are first-order evidence packets. In deliberate recall, one
+    compact interpretation can help the answerer use a broad cluster without
+    pushing benchmark-specific lexical semantics into deterministic ranking.
+    """
+    meta: Dict[str, Any] = {
+        "enabled": bool(not fast_mode),
+        "attempted": 0,
+        "annotated": 0,
+    }
+    if fast_mode or not rows:
+        return rows, meta
+
+    selected_idx: Optional[int] = None
+    selected_row: Optional[Dict[str, Any]] = None
+    for idx, row in enumerate(rows):
+        if not isinstance(row, dict) or not _is_graph_fact_cluster_row(row):
+            continue
+        try:
+            cluster_size = int(row.get("cluster_size") or 0)
+        except (TypeError, ValueError):
+            cluster_size = 0
+        if cluster_size < _GRAPH_FACT_CLUSTER_INTERPRETATION_MIN_CLUSTER_SIZE:
+            continue
+        text = str(row.get("text") or "").strip()
+        if not text:
+            continue
+        query_overlap = _graph_fact_cluster_query_overlap(query, row)
+        source_name = str(row.get("source_name") or "").strip()
+        source_name_hit = bool(source_name and _text_mentions_graph_anchor(query, source_name))
+        if (
+            query_overlap < _GRAPH_FACT_CLUSTER_INTERPRETATION_MIN_QUERY_OVERLAP
+            and not source_name_hit
+        ):
+            continue
+        selected_idx = idx
+        selected_row = row
+        break
+    if selected_idx is None or selected_row is None:
+        meta["skipped_reason"] = "no_large_graph_cluster"
+        return rows, meta
+    if not _HAS_LLM_CLIENTS:
+        if _is_fail_hard_mode():
+            raise RuntimeError(
+                "Graph fact cluster interpretation unavailable while failHard is enabled "
+                "(no_llm_clients)"
+            )
+        logger.warning("Graph fact cluster interpretation unavailable; leaving cluster unchanged")
+        meta["skipped_reason"] = "no_llm_clients"
+        return rows, meta
+
+    evidence = str(selected_row.get("text") or "").strip()
+    if len(evidence) > _GRAPH_FACT_CLUSTER_INTERPRETATION_MAX_EVIDENCE_CHARS:
+        evidence = evidence[:_GRAPH_FACT_CLUSTER_INTERPRETATION_MAX_EVIDENCE_CHARS].rsplit("\n", 1)[0].strip()
+    if not evidence:
+        meta["skipped_reason"] = "empty_evidence"
+        return rows, meta
+
+    prompt = (
+        "Write one concise query-focused interpretation from first-order graph evidence.\n"
+        "Rules:\n"
+        "- Use only the evidence below; do not invent facts, entities, dates, counts, or preferences.\n"
+        "- Only summarize affirmative evidence that helps answer or narrow the query.\n"
+        "- Preserve uncertainty when the evidence is incomplete or ambiguous.\n"
+        "- Do not claim that something never happened or that no evidence exists; this cluster is not the full memory.\n"
+        "- If the evidence does not affirmatively help answer or narrow the query, set supported=false and interpretation=\"\".\n"
+        "- Respond in the same language as the Query.\n"
+        "- Return JSON only: {\"supported\": true|false, \"interpretation\": \"...\"}\n\n"
+        f"Query:\n{str(query or '').strip()}\n\n"
+        f"First-order graph evidence:\n{evidence}"
+    )
+    meta["attempted"] = 1
+    try:
+        result, _duration = call_fast_reasoning(
+            prompt=prompt,
+            max_tokens=_GRAPH_FACT_CLUSTER_INTERPRETATION_MAX_TOKENS,
+            timeout=_GRAPH_FACT_CLUSTER_INTERPRETATION_TIMEOUT_S,
+            system_prompt=(
+                "You produce a strict evidence-grounded recall interpretation. "
+                "Match the user's query language. "
+                "Return only the requested JSON object."
+            ),
+            max_retries=0,
+        )
+        if not result:
+            if _is_fail_hard_mode():
+                raise RuntimeError("graph fact cluster interpretation returned no result")
+            meta["skipped_reason"] = "empty_result"
+            return rows, meta
+        parsed = parse_json_response(result)
+        if not isinstance(parsed, dict):
+            if _is_fail_hard_mode():
+                raise RuntimeError("graph fact cluster interpretation returned invalid JSON payload")
+            meta["skipped_reason"] = "invalid_payload"
+            return rows, meta
+        if "supported" not in parsed:
+            if _is_fail_hard_mode():
+                raise RuntimeError("graph fact cluster interpretation missing supported flag")
+            meta["skipped_reason"] = "missing_supported"
+            return rows, meta
+        if parsed.get("supported") is not True:
+            meta["skipped_reason"] = "unsupported_evidence"
+            return rows, meta
+        interpretation = ""
+        interpretation = " ".join(str(parsed.get("interpretation") or "").split()).strip()
+        if not interpretation:
+            if _is_fail_hard_mode():
+                raise RuntimeError("graph fact cluster interpretation returned empty interpretation")
+            meta["skipped_reason"] = "empty_interpretation"
+            return rows, meta
+        interpretation = _sanitize_for_context(interpretation)
+        if len(interpretation) > _GRAPH_FACT_CLUSTER_INTERPRETATION_MAX_CHARS:
+            interpretation = interpretation[:_GRAPH_FACT_CLUSTER_INTERPRETATION_MAX_CHARS].rsplit(" ", 1)[0].strip()
+        if not interpretation:
+            if _is_fail_hard_mode():
+                raise RuntimeError("graph fact cluster interpretation became empty after truncation")
+            meta["skipped_reason"] = "empty_interpretation"
+            return rows, meta
+        out = list(rows)
+        annotated = dict(selected_row)
+        annotated["graph_cluster_interpretation"] = interpretation
+        annotated["graph_cluster_interpretation_model"] = "fast_reasoning"
+        annotated["text"] = _sanitize_for_context(
+            "Query-focused interpretation from first-order graph evidence:\n"
+            f"- {interpretation}\n\n"
+            f"{str(selected_row.get('text') or '').strip()}"
+        )
+        out[selected_idx] = annotated
+        meta["annotated"] = 1
+        meta["cluster_id"] = str(selected_row.get("id") or "")
+        return out, meta
+    except Exception as exc:
+        if _is_fail_hard_mode():
+            raise RuntimeError(
+                "Graph fact cluster interpretation failed while failHard is enabled "
+                f"({type(exc).__name__}: {exc})"
+            ) from exc
+        logger.warning("Graph fact cluster interpretation failed; leaving cluster unchanged: %s", exc)
+        meta["skipped_reason"] = "exception"
+        meta["error_type"] = type(exc).__name__
+        return rows, meta
+
+
+def _preserve_compact_graph_relation_summary_row(
+    query: str,
+    final_rows: List[Dict[str, Any]],
+    named_batches: List[Tuple[str, List[Dict[str, Any]]]],
+    *,
+    limit: int,
+) -> Tuple[List[Dict[str, Any]], int]:
+    """Surface compact graph relation evidence when RRF truncates it out."""
+    if limit <= 0 or not final_rows or not named_batches:
+        return final_rows, 0
+    existing_keys = {_rrf_recall_row_identity(row) for row in final_rows if isinstance(row, dict)}
+    candidates: List[Tuple[int, int, Dict[str, Any]]] = []
+    for branch_name, branch_rows in named_batches:
+        if str(branch_name or "").strip() != "graph":
+            continue
+        for idx, row in enumerate(branch_rows or []):
+            if not isinstance(row, dict):
+                continue
+            if str(row.get("via") or "") != "graph_relation_summary":
+                continue
+            key = _rrf_recall_row_identity(row)
+            if key in existing_keys:
+                continue
+            overlap = _compact_graph_relation_query_overlap(query, row)
+            if overlap < 2:
+                continue
+            candidates.append((overlap, -idx, row))
+    if not candidates:
+        return final_rows, 0
+    candidates.sort(
+        key=lambda item: (
+            item[0],
+            int((item[2] or {}).get("relation_support_count") or 0),
+            float((item[2] or {}).get("similarity") or 0.0),
+            item[1],
+        ),
+        reverse=True,
+    )
+    selected = dict(candidates[0][2])
+    selected["store_plan_preserved_branch_top"] = "graph"
+    selected["store_plan_preserved_reason"] = "compact_graph_relation_summary"
+    out = list(final_rows[: max(1, int(limit or 1))])
+    target_idx = 1 if out and _is_first_order_session_source_row(out[0]) else 0
+    if len(out) < max(1, int(limit or 1)):
+        out.insert(target_idx, selected)
+        return out[: max(1, int(limit or 1))], 1
+    replace_idx = next(
+        (
+            idx
+            for idx in range(len(out) - 1, -1, -1)
+            if not _is_first_order_session_source_row(out[idx])
+        ),
+        len(out) - 1,
+    )
+    out.pop(replace_idx)
+    out.insert(min(target_idx, len(out)), selected)
+    return out[: max(1, int(limit or 1))], 1
+
+
+def _preserve_graph_fact_cluster_row(
+    final_rows: List[Dict[str, Any]],
+    candidate_rows: List[Dict[str, Any]],
+    *,
+    limit: int,
+) -> Tuple[List[Dict[str, Any]], int]:
+    """Keep one compact graph cluster when RRF would otherwise truncate it out."""
+    if limit <= 0 or not candidate_rows:
+        return final_rows, 0
+    if any(_is_graph_fact_cluster_row(row) for row in final_rows):
+        return final_rows, 0
+    seen = {_recall_row_identity(row) for row in final_rows}
+    clusters = [
+        row
+        for row in candidate_rows
+        if isinstance(row, dict)
+        and _is_graph_fact_cluster_row(row)
+        and _recall_row_identity(row) not in seen
+        and int(row.get("cluster_size") or 0) >= 4
+    ]
+    if not clusters:
+        return final_rows, 0
+    clusters.sort(
+        key=lambda row: (
+            float(row.get("rrf_score") or 0.0),
+            float(row.get("similarity") or 0.0),
+            int(row.get("cluster_size") or 0),
+        ),
+        reverse=True,
+    )
+    out = list(final_rows)
+    candidate = clusters[0]
+    if len(out) < limit:
+        out.append(candidate)
+        return out[:limit], 1
+
+    def _replaceable(row: Dict[str, Any]) -> bool:
+        category = str((row or {}).get("category") or "").strip().lower()
+        source_type = str((row or {}).get("source_type") or "").strip().lower()
+        if category in {"session_chunk", "docs"} or source_type in {"session_chunk", "docs"}:
+            return False
+        return not _is_graph_fact_cluster_row(row)
+
+    replace_idx = next((idx for idx in range(len(out) - 1, -1, -1) if _replaceable(out[idx])), None)
+    if replace_idx is None:
+        replace_idx = len(out) - 1
+    out[replace_idx] = candidate
+    return out[:limit], 1
 
 
 def _resolve_reranker_enabled(use_reranker: Optional[bool], config_retrieval=None) -> bool:
@@ -11097,6 +13784,30 @@ def _extract_distinctive_query_terms(query: str, *, limit: int = 8) -> List[str]
     return out
 
 
+def _extract_vocabulary_free_query_terms(query: str, *, limit: int = 8) -> List[str]:
+    """Return overlap terms without language-specific stopword filtering."""
+    tokens = re.findall(r"[\w][\w._-]*", str(query or "").lower(), flags=re.UNICODE)
+    out: List[str] = []
+    seen = set()
+    for idx, token in enumerate(tokens):
+        token = token.strip(".,;:!?\"'“”¿¡")
+        if not token:
+            continue
+        if token in seen:
+            continue
+        # Length is a language-neutral noise floor; do not consult stopword
+        # vocabularies here because deliberate recall already has LLM planning.
+        if len(token) < 4:
+            continue
+        if idx == 0 and len(token) < 5:
+            continue
+        seen.add(token)
+        out.append(token)
+        if len(out) >= limit:
+            break
+    return out
+
+
 def _extract_explicit_query_anchor_terms(query: str, *, limit: int = 4) -> List[str]:
     """Return explicit entity-like anchors from the original query text.
 
@@ -11193,6 +13904,49 @@ _LEXICAL_ANCHOR_MAX_TIMEOUT_S = 8.0
 _LEXICAL_ANCHOR_EXPLICIT_TIMEOUT_CAP_MS = 30000
 _LEXICAL_ANCHOR_FAST_MAX_TIMEOUT_S = 0.75
 _LEXICAL_ANCHOR_FAST_RESERVE_MS = 250
+_LEXICAL_ANCHOR_DEFAULT_MAX_RETRIES = 1
+_LEXICAL_ANCHOR_MAX_RETRIES_CEILING = 2
+_LEXICAL_ANCHOR_RETRY_BASE_DELAY_S = 0.25
+_DRILL_PLANNER_MAX_RETRIES_CEILING = 2
+_DRILL_PLANNER_RETRY_BASE_DELAY_S = 0.25
+
+
+def _resolve_lexical_anchor_max_retries(config_retrieval: Any) -> int:
+    try:
+        raw = getattr(
+            config_retrieval,
+            "lexical_anchor_max_retries",
+            _LEXICAL_ANCHOR_DEFAULT_MAX_RETRIES,
+        )
+    except Exception:
+        if _is_fail_hard_mode():
+            raise
+        raw = _LEXICAL_ANCHOR_DEFAULT_MAX_RETRIES
+    try:
+        return max(0, min(_LEXICAL_ANCHOR_MAX_RETRIES_CEILING, int(raw or 0)))
+    except (TypeError, ValueError):
+        return _LEXICAL_ANCHOR_DEFAULT_MAX_RETRIES
+
+
+def _resolve_drill_planner_max_retries(max_retries: int) -> int:
+    try:
+        return max(0, min(_DRILL_PLANNER_MAX_RETRIES_CEILING, int(max_retries or 0)))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _is_lexical_anchor_retryable_exception(exc: BaseException) -> bool:
+    current: Optional[BaseException] = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, urllib.error.HTTPError):
+            if current.code in {408, 429, 500, 502, 503, 504, 529}:
+                return True
+        elif isinstance(current, (TimeoutError, ConnectionError, OSError, urllib.error.URLError)):
+            return True
+        current = current.__cause__ or current.__context__
+    return False
 
 
 def _lexical_anchor_planner_timeout_s(
@@ -11260,6 +14014,8 @@ def _plan_query_anchor_terms(
         "bailout_reason": None,
         "elapsed_ms": 0,
         "timeout_ms": timeout_ms,
+        "attempts": 0,
+        "max_retries": max_retries,
         "anchor_count": 0,
         "limit": limit,
         "anchors": [],
@@ -11340,16 +14096,34 @@ def _plan_query_anchor_terms(
 
     try:
         meta["used_llm"] = True
-        result, _ = call_fast_reasoning(
-            prompt=prompt,
-            max_tokens=_LEXICAL_ANCHOR_JSON_PLANNER_MAX_TOKENS,
-            timeout=timeout_s,
-            system_prompt=(
-                "You output exactly one compact JSON object for lexical anchor extraction. "
-                "No markdown, prose, explanation, or reasoning."
-            ),
-            max_retries=max_retries,
-        )
+        result = None
+        for attempt in range(max_retries + 1):
+            meta["attempts"] = attempt + 1
+            try:
+                result, _ = call_fast_reasoning(
+                    prompt=prompt,
+                    max_tokens=_LEXICAL_ANCHOR_JSON_PLANNER_MAX_TOKENS,
+                    timeout=timeout_s,
+                    system_prompt=(
+                        "You output exactly one compact JSON object for lexical anchor extraction. "
+                        "No markdown, prose, explanation, or reasoning."
+                    ),
+                    max_retries=0,
+                )
+                break
+            except Exception as call_exc:
+                if attempt >= max_retries or not _is_lexical_anchor_retryable_exception(call_exc):
+                    raise
+                delay_s = min(1.0, _LEXICAL_ANCHOR_RETRY_BASE_DELAY_S * (2 ** attempt))
+                logger.warning(
+                    "Recall lexical anchor planner retryable provider error; "
+                    "attempt %s/%s failed, retrying in %.2fs: %s",
+                    attempt + 1,
+                    max_retries + 1,
+                    delay_s,
+                    call_exc,
+                )
+                _time.sleep(delay_s)
         if result is None:
             if _is_fail_hard_mode():
                 raise RuntimeError("lexical anchor planner returned no result")
@@ -11679,6 +14453,60 @@ def _text_contains_anchor_term(text: str, term: str) -> bool:
     return bool(re.search(rf"(?<!\w){re.escape(clean_term)}(?!\w)", clean_text, flags=re.UNICODE))
 
 
+def _text_contains_anchor_term_fuzzy(text: str, term: str) -> bool:
+    if _text_contains_anchor_term(text, term):
+        return True
+    clean_term = " ".join(str(term or "").split()).strip().lower()
+    if len(clean_term) < 4:
+        return False
+    clean_text = str(text or "").lower()
+    tokens = re.findall(r"[\w][\w._-]*", clean_text, flags=re.UNICODE)
+    # A single character edit catches ordinary typos and light inflection
+    # differences without adding language-specific vocabulary.
+    if any(_single_token_edit_distance_leq_one(clean_term, token) for token in tokens):
+        return True
+    if len(clean_term) >= 6:
+        for token in tokens:
+            if len(token) >= 4 and clean_term.startswith(token):
+                return True
+    return any(
+        token.startswith(clean_term)
+        for token in tokens
+    )
+
+
+def _single_token_edit_distance_leq_one(left: str, right: str) -> bool:
+    left = str(left or "").strip().lower()
+    right = str(right or "").strip().lower()
+    if not left or not right:
+        return False
+    if left == right:
+        return True
+    if abs(len(left) - len(right)) > 1:
+        return False
+    if len(left) == len(right):
+        edits = 0
+        for a, b in zip(left, right):
+            if a != b:
+                edits += 1
+                if edits > 1:
+                    return False
+        return True
+    if len(left) > len(right):
+        left, right = right, left
+    i = j = edits = 0
+    while i < len(left) and j < len(right):
+        if left[i] == right[j]:
+            i += 1
+            j += 1
+            continue
+        edits += 1
+        if edits > 1:
+            return False
+        j += 1
+    return True
+
+
 def _node_searchable_text(node: Node) -> str:
     """Return the text surface FTS can match for a node."""
     parts: List[str] = [str(getattr(node, "name", "") or "")]
@@ -11954,6 +14782,9 @@ def _facet_rescue_attached_fact_rows(
 
 
 _FACET_RESCUE_MEMORY_TYPES = {"fact", "preference", "decision", "relationship"}
+# A rescued row may outrank first-order session evidence only when it matches
+# multiple non-entity query details. One detail is too broad for generic recall.
+_FACET_RESCUE_LEADING_NON_ANCHOR_SIGNAL = 2
 
 
 def _facet_rescue_lexical_memory_rows(
@@ -12285,6 +15116,8 @@ def _select_final_recall_rows_with_facet_rescue(
     filtered = _filter_low_information_rows_for_query(rows, query, intent=intent)
     if not filtered:
         return []
+    filtered = _prioritize_first_order_session_query_coverage(query, filtered)
+    filtered = _prioritize_source_dated_session_rows_for_temporal_answers(query, filtered)
 
     def _key(row: Dict[str, Any]) -> str:
         return str(row.get("id") or row.get("text") or "")
@@ -12296,7 +15129,17 @@ def _select_final_recall_rows_with_facet_rescue(
     if not facet_rows:
         return filtered[:limit]
 
-    query_terms = _extract_distinctive_query_terms(query, limit=12)
+    query_terms = _extract_vocabulary_free_query_terms(query, limit=12)
+    anchor_tokens: Set[str] = set()
+    for anchor in _extract_explicit_query_anchor_terms(query, limit=6):
+        for token in re.findall(r"[\w][\w._'-]*", str(anchor or "").lower(), flags=re.UNICODE):
+            token = token.strip(".,;:!?\"'“”¿¡")
+            if token:
+                anchor_tokens.add(token)
+    non_anchor_query_terms = [
+        term for term in query_terms
+        if term and term not in anchor_tokens
+    ]
 
     def _facet_signal(row: Dict[str, Any]) -> int:
         search_text = " ".join([
@@ -12308,6 +15151,26 @@ def _select_final_recall_rows_with_facet_rescue(
             if term and (term in search_text or _text_contains_anchor_term(search_text, term))
         )
 
+    def _facet_non_anchor_signal(row: Dict[str, Any]) -> int:
+        search_text = " ".join([
+            str((row or {}).get("text") or ""),
+            str((row or {}).get("keywords") or ""),
+        ]).lower()
+        return sum(
+            1 for term in non_anchor_query_terms
+            if term and (term in search_text or _text_contains_anchor_term(search_text, term))
+        )
+
+    source_dated_session_signal = max(
+        (
+            _facet_non_anchor_signal(row)
+            for row in filtered
+            if isinstance(row, dict)
+            and _is_first_order_session_source_row(row)
+            and str(row.get("source_date") or "").strip()
+        ),
+        default=0,
+    )
     facet_rows.sort(
         key=lambda row: (
             _facet_signal(row),
@@ -12319,9 +15182,27 @@ def _select_final_recall_rows_with_facet_rescue(
     reserve_count = min(len(facet_rows), _facet_rescue_reservation_count(query, intent=intent, limit=limit))
     reserved = facet_rows[:reserve_count]
     reserved_keys = {_key(row) for row in reserved}
+    leading_reserved = [
+        row for row in reserved
+        if _facet_non_anchor_signal(row) >= _FACET_RESCUE_LEADING_NON_ANCHOR_SIGNAL
+        and _facet_non_anchor_signal(row) > source_dated_session_signal
+    ]
+    leading_reserved_keys = {_key(row) for row in leading_reserved}
+    trailing_reserved = [
+        row for row in reserved
+        if _key(row) not in leading_reserved_keys
+    ]
 
     selected: List[Dict[str, Any]] = []
     selected_keys: Set[str] = set()
+    for row in leading_reserved:
+        key = _key(row)
+        if not key or key in selected_keys:
+            continue
+        selected.append(row)
+        selected_keys.add(key)
+        if len(selected) >= limit:
+            return selected[:limit]
     primary_slots = max(0, limit - len(reserved))
     for row in filtered:
         key = _key(row)
@@ -12331,7 +15212,7 @@ def _select_final_recall_rows_with_facet_rescue(
         selected_keys.add(key)
         if len(selected) >= primary_slots:
             break
-    for row in reserved:
+    for row in trailing_reserved:
         key = _key(row)
         if not key or key in selected_keys:
             continue
@@ -12349,6 +15230,65 @@ def _select_final_recall_rows_with_facet_rescue(
             if len(selected) >= limit:
                 break
     return selected[:limit]
+
+
+def _prioritize_high_signal_facet_rescue_rows(
+    query: str,
+    rows: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    if not rows:
+        return rows
+    query_terms = _extract_vocabulary_free_query_terms(query, limit=12)
+    if not query_terms:
+        return rows
+    anchor_tokens: Set[str] = set()
+    for anchor in _extract_explicit_query_anchor_terms(query, limit=6):
+        for token in re.findall(r"[\w][\w._'-]*", str(anchor or "").lower(), flags=re.UNICODE):
+            token = token.strip(".,;:!?\"'“”¿¡")
+            if token:
+                anchor_tokens.add(token)
+    non_anchor_query_terms = [
+        term for term in query_terms
+        if term and term not in anchor_tokens
+    ]
+    if not non_anchor_query_terms:
+        return rows
+
+    def _non_anchor_signal(row: Dict[str, Any]) -> int:
+        search_text = " ".join([
+            str((row or {}).get("text") or ""),
+            str((row or {}).get("keywords") or ""),
+        ]).lower()
+        return sum(
+            1 for term in non_anchor_query_terms
+            if term and (term in search_text or _text_contains_anchor_term(search_text, term))
+        )
+
+    source_dated_session_signal = max(
+        (
+            _non_anchor_signal(row)
+            for row in rows
+            if isinstance(row, dict)
+            and _is_first_order_session_source_row(row)
+            and str(row.get("source_date") or "").strip()
+        ),
+        default=0,
+    )
+    leading: List[Tuple[int, int, Dict[str, Any]]] = []
+    trailing: List[Dict[str, Any]] = []
+    for index, row in enumerate(rows):
+        signal = _non_anchor_signal(row) if isinstance(row, dict) and row.get("_facet_rescue") else 0
+        if (
+            signal >= _FACET_RESCUE_LEADING_NON_ANCHOR_SIGNAL
+            and signal > source_dated_session_signal
+        ):
+            leading.append((signal, -index, row))
+        else:
+            trailing.append(row)
+    if not leading:
+        return rows
+    leading.sort(key=lambda item: item[:2], reverse=True)
+    return [row for _signal, _negative_index, row in leading] + trailing
 
 
 def _parse_recall_timestamp(value: Any) -> Optional[datetime]:
@@ -13646,9 +16586,14 @@ def _build_recall_row_from_node(
         "id": node.id,
         "extraction_confidence": float(node.extraction_confidence),
         "created_at": node.created_at,
+        "occurred_start": node.occurred_start,
+        "occurred_end": node.occurred_end,
+        "mentioned_at": node.mentioned_at,
         "valid_from": node.valid_from,
         "valid_until": node.valid_until,
         "source_date": attrs.get("source_date"),
+        "source_id": node.source_id,
+        "source_chunk_id": node.source_chunk_id,
         "session_id": str(attrs.get("source_session_id") or node.session_id or "").strip() or None,
         "privacy": node.privacy,
         "owner_id": node.owner_id,
@@ -14694,13 +17639,14 @@ def _plan_fanout_queries(
                 meta["freshness_preferred"] = bool(parsed.get("freshness_preferred"))
             if "docs" in planned_default_stores and "docs" not in planned_stores:
                 planned_stores = _planner_store_plan([*planned_stores, "docs"])
-            default_relation_chain_graph = (
-                "graph" in planned_default_stores
-                and len(_relation_chain_groups_for_query(clean)) >= 2
-                and _has_relation_chain_structure(clean)
-            )
-            if default_relation_chain_graph and "graph" not in planned_stores:
+            if "graph" in planned_default_stores and "graph" not in planned_stores:
                 planned_stores = _planner_store_plan([*planned_stores, "graph"])
+            if "session_chunks" in planned_default_stores and "session_chunks" not in planned_stores:
+                planned_stores = _planner_store_plan([*planned_stores, "session_chunks"])
+            if _is_multi_entity_shared_source_query(clean) and "graph" not in planned_default_stores:
+                planned_stores = _planner_store_plan([
+                    store for store in planned_stores if store != "graph"
+                ])
         else:
             planned_stores = planned_default_stores
             planned_project = default_project
@@ -14959,10 +17905,77 @@ def _infer_recall_store_defaults(text: str) -> Tuple[List[str], Optional[str]]:
         stores = ["vector", "docs"]
     elif named_person_activity_like:
         stores = ["vector", "graph"]
+    elif _is_multi_entity_shared_source_query(text):
+        stores = ["vector", "session_chunks"]
+    elif _is_named_entity_graph_fact_lookup(text):
+        stores = ["vector", "graph"]
     elif graph_like:
         stores = ["vector", "graph"]
 
     return _planner_store_plan(stores), project_name
+
+
+def _shared_source_anchor_terms(text: str, *, limit: int = 6) -> List[str]:
+    """Return explicit entity anchors for shared-source/intersection questions."""
+    clean = " ".join(str(text or "").split()).strip()
+    if not clean:
+        return []
+    anchors: List[str] = []
+    seen: set[str] = set()
+    try:
+        entities = extract_entities_from_text(clean)
+    except Exception as exc:
+        if _is_fail_hard_mode():
+            raise RuntimeError("Shared-source store classification failed while failHard is enabled") from exc
+        logger.warning("shared-source store classification failed: %s", exc)
+        entities = []
+    for entity in entities or []:
+        entity_id = str(getattr(entity, "id", "") or "").strip().lower()
+        entity_name = str(getattr(entity, "name", "") or "").strip().lower()
+        entity_type = str(getattr(entity, "type", "") or "").strip().lower()
+        anchor = entity_name or entity_id
+        if not anchor or entity_type in {"fact", "event", "preference"} or anchor in seen:
+            continue
+        seen.add(anchor)
+        anchors.append(anchor)
+        if len(anchors) >= limit:
+            return anchors
+    return anchors
+
+
+def _is_multi_entity_shared_source_query(text: str) -> bool:
+    """Return true when multiple explicit entities may need transcript context."""
+    clean = " ".join(str(text or "").split()).strip()
+    if not clean:
+        return False
+    return len(_shared_source_anchor_terms(clean, limit=6)) >= 2
+
+
+def _is_named_entity_graph_fact_lookup(text: str) -> bool:
+    """Return true when a factual lookup names an entity present in the graph.
+
+    Compact graph summaries are first-order memory evidence for named entities,
+    not only for explicit relationship/multi-hop questions. Keep this bounded to
+    query-shaped lookups so plain keyword searches stay vector-first.
+    """
+    clean = " ".join(str(text or "").split()).strip()
+    if not clean:
+        return False
+    if not _extract_explicit_query_anchor_terms(clean, limit=1):
+        return False
+    try:
+        entities = extract_entities_from_text(clean)
+    except Exception as exc:
+        if _is_fail_hard_mode():
+            raise RuntimeError("Named-entity graph store classification failed while failHard is enabled") from exc
+        logger.warning("named-entity graph store classification failed: %s", exc)
+        return False
+    for entity in entities or []:
+        entity_id = str(getattr(entity, "id", "") or "").strip()
+        entity_type = str(getattr(entity, "type", "") or "").strip().lower()
+        if entity_id and entity_type not in {"fact", "event", "preference"}:
+            return True
+    return False
 
 
 def _requires_llm_store_classification_for_exact_query(
@@ -15815,6 +18828,7 @@ def _drill_plan_queries(
     import time as _time
     if not raise_on_error:
         raise_on_error = _is_fail_hard_mode()
+    max_retries = _resolve_drill_planner_max_retries(max_retries)
     started = _time.monotonic()
     meta = {
         "query": query,
@@ -15823,6 +18837,8 @@ def _drill_plan_queries(
         "done": False,
         "bailout_reason": None,
         "queries_count": 0,
+        "attempts": 0,
+        "max_retries": max_retries,
         "elapsed_ms": 0,
     }
 
@@ -15847,6 +18863,8 @@ def _drill_plan_queries(
             detail = (
                 f"{message} "
                 f"(planner_timeout_ms={meta.get('timeout_ms', 0)}, "
+                f"planner_max_retries={meta.get('max_retries', 0)}, "
+                f"planner_attempts={meta.get('attempts', 0)}, "
                 f"planner_elapsed_ms={meta.get('elapsed_ms', 0)})"
             )
             if exc is not None:
@@ -15915,16 +18933,39 @@ def _drill_plan_queries(
     try:
         from lib.llm_clients import call_fast_reasoning
         meta["used_llm"] = True
-        result, _ = call_fast_reasoning(
-            prompt=prompt,
-            max_tokens=_RECALL_JSON_PLANNER_MAX_TOKENS,
-            timeout=timeout_s,
-            system_prompt=(
-                "You output exactly one compact JSON object for retrieval drilling. "
-                "No markdown, no prose, no reasoning."
-            ),
-            max_retries=max(0, int(max_retries or 0)),
-        )
+        result = None
+        for attempt in range(max_retries + 1):
+            meta["attempts"] = attempt + 1
+            try:
+                result, _ = call_fast_reasoning(
+                    prompt=prompt,
+                    max_tokens=_RECALL_JSON_PLANNER_MAX_TOKENS,
+                    timeout=timeout_s,
+                    system_prompt=(
+                        "You output exactly one compact JSON object for retrieval drilling. "
+                        "No markdown, no prose, no reasoning."
+                    ),
+                    max_retries=0,
+                )
+                break
+            except Exception as call_exc:
+                if attempt >= max_retries or not _is_lexical_anchor_retryable_exception(call_exc):
+                    raise
+                delay_s = min(1.0, _DRILL_PLANNER_RETRY_BASE_DELAY_S * (2 ** attempt))
+                logger.warning(
+                    "Recall drill planner retryable provider error; "
+                    "attempt %s/%s failed, retrying in %.2fs: %s",
+                    attempt + 1,
+                    max_retries + 1,
+                    delay_s,
+                    call_exc,
+                )
+                _time.sleep(delay_s)
+        if result is None:
+            return _planner_fallback_or_raise(
+                "planner_returned_none",
+                "drill planner returned no result",
+            )
         parsed = parse_json_response(result)
         if not isinstance(parsed, dict):
             return _finish([], "invalid_response")
@@ -16083,7 +19124,7 @@ def recall(
                     "SELECT COUNT(*) FROM nodes "
                     "WHERE status IS NULL OR status IN ('approved', 'pending', 'active')"
                 ).fetchone()[0]
-            if _node_count == 0:
+            if _node_count == 0 and not _owner_has_session_chunks(owner_id):
                 if use_aliases:
                     try:
                         _g.resolve_alias(query, owner_id=owner_id)
@@ -16328,13 +19369,31 @@ def recall(
         or (isinstance(fanout_meta, dict) and fanout_meta.get("freshness_preferred") is True)
     )
     planned_turn1_stores = _planner_store_plan(fanout_meta.get("planned_stores") or ["vector"])
+    if (
+        owner_id
+        and not include_chunks
+        and planned_turn1_stores == ["vector"]
+        and not fanout_meta.get("suppress_session_chunks_auto_include")
+        and "session_chunks" not in planned_turn1_stores
+        and _owner_has_session_chunks(owner_id)
+    ):
+        # SessionDB is first-order transcript evidence. Include it in
+        # owner-scoped deliberate recall even when the planner stays vector-only;
+        # downstream RRF/coverage gates decide whether any chunk is useful.
+        planned_turn1_stores = _planner_store_plan([*planned_turn1_stores, "session_chunks"])
+        fanout_meta = dict(fanout_meta or {})
+        fanout_meta["planned_stores"] = list(planned_turn1_stores)
+        fanout_meta["session_chunks_auto_included"] = True
     turn1_relation_chain_groups = _relation_chain_groups_for_query(query)
     turn1_relation_chain_query = (
         "graph" in planned_turn1_stores
         and len(turn1_relation_chain_groups) >= 2
         and _has_relation_chain_structure(query)
     )
-    if turn1_relation_chain_query:
+    if (
+        turn1_relation_chain_query
+        or "session_chunks" in planned_turn1_stores
+    ):
         store_plan_graph_depth = max(1, len(turn1_relation_chain_groups))
         try:
             rows, meta, docs_bundle = _run_recall_store_plan(
@@ -16361,15 +19420,20 @@ def recall(
         except TimeoutError as exc:
             if _is_fail_hard_mode():
                 raise
-            # The relation-chain store plan is an optional shortcut; the
-            # established multi-pass recall path below remains authoritative.
+            # Store-plan turn-1 routing is an optional shortcut outside failHard;
+            # the established multi-pass recall path below remains authoritative.
             logger.warning(
-                "relation-chain store-plan recall timed out; falling back to multi-pass recall: %s",
+                "turn-1 store-plan recall timed out; falling back to multi-pass recall: %s",
                 exc,
             )
             fanout_meta = dict(fanout_meta or {})
+            fallback_reason = (
+                "relation_chain_timeout"
+                if turn1_relation_chain_query
+                else "turn1_store_plan_timeout"
+            )
             fanout_meta["store_plan_fallback"] = {
-                "reason": "relation_chain_timeout",
+                "reason": fallback_reason,
                 "error_type": type(exc).__name__,
                 "error": str(exc)[:240],
             }
@@ -16524,6 +19588,7 @@ def recall(
             limit=limit,
             intent=gate_intent,
         )
+        final = _prioritize_high_signal_facet_rescue_rows(query, final)
         final = _enforce_recall_rows_temporal_axis_validity(
             final,
             temporal_dimension=temporal_dimension,
@@ -16843,6 +19908,7 @@ def recall(
         limit=limit,
         intent=gate_intent,
     )
+    final = _prioritize_high_signal_facet_rescue_rows(query, final)
     final = _enforce_recall_rows_temporal_axis_validity(
         final,
         temporal_dimension=temporal_dimension,

@@ -3221,6 +3221,7 @@ class TestSourceChunkStorage:
             "message_id",
             "message_pair_id",
             "embedding",
+            "source_date",
         }.issubset(columns)
 
     def test_store_source_chunk_has_stable_id_for_same_content(self, tmp_path):
@@ -3850,6 +3851,199 @@ class TestSourceChunkStorage:
         assert meta["store_runs"][0]["store"] == "session_chunks"
         assert meta["store_runs"][0]["result_count"] == 1
 
+    def test_source_chunk_store_plan_keeps_source_date_header(self, tmp_path):
+        """Dated transcript rows expose source_date without deterministic language parsing."""
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _db_file = _make_graph(tmp_path)
+        graph.store_source_chunk(
+            "Last Friday, Miko presented at the robotics meetup.",
+            owner_id="miko",
+            session_id="session-relative-day",
+            source_id="transcript-relative-day",
+            chunk_index=0,
+            source_date="2026-05-10",
+        )
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph):
+            rows, _meta, _bundle = mg._run_recall_store_plan(
+                "When did Miko present at the robotics meetup?",
+                stores=["session_chunks"],
+                limit=3,
+                owner_id="miko",
+                min_similarity=0.0,
+                planner_profile="off",
+                planned_queries=["When did Miko present at the robotics meetup?"],
+                planner_meta={"planned_stores": ["session_chunks"]},
+                fast_mode=False,
+                common_kwargs={
+                    "max_chunk_tokens": 80,
+                    "max_total_chunk_tokens": 200,
+                },
+            )
+
+        assert rows
+        assert "Last Friday" in rows[0]["text"]
+        assert "source_date: 2026-05-10" in rows[0]["text"]
+        assert "temporal_relative_day" not in rows[0]["match_modes"]
+        assert rows[0].get("relative_day_annotations") in (None, [])
+
+    def test_source_chunk_store_relative_day_requires_distinctive_query_overlap(self, tmp_path):
+        """Incidental relative dates should not outrank stronger unrelated same-person context."""
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _db_file = _make_graph(tmp_path)
+        graph.store_source_chunk(
+            "Miko planned the robotics convention and met new researchers.",
+            owner_id="miko",
+            session_id="session-relative-weak",
+            source_id="transcript-relative-weak",
+            chunk_index=0,
+            source_date="2026-05-10",
+        )
+        graph.store_source_chunk(
+            "Miko made soup yesterday and people came over tomorrow.",
+            owner_id="miko",
+            session_id="session-relative-weak",
+            source_id="transcript-relative-weak",
+            chunk_index=10,
+            source_date="2026-05-11",
+        )
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph):
+            rows, _meta, _bundle = mg._run_recall_store_plan(
+                "When did Miko go to a robotics convention and meet researchers?",
+                stores=["session_chunks"],
+                limit=3,
+                owner_id="miko",
+                min_similarity=0.0,
+                planner_profile="off",
+                planned_queries=["When did Miko go to a robotics convention and meet researchers?"],
+                planner_meta={"planned_stores": ["session_chunks"]},
+                fast_mode=False,
+                common_kwargs={
+                    "max_chunk_tokens": 100,
+                    "max_total_chunk_tokens": 300,
+                },
+            )
+
+        incidental = next(row for row in rows if "made soup" in row["text"])
+        assert "temporal_relative_day" not in incidental["match_modes"]
+
+    def test_source_chunk_store_relative_day_requires_multiple_distinctive_terms_for_event_dates(self, tmp_path):
+        """A single broad event word plus a relative date is not enough temporal evidence."""
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _db_file = _make_graph(tmp_path)
+        graph.store_source_chunk(
+            "Noor mentioned yesterday while talking about an unrelated stage show.",
+            owner_id="noor",
+            session_id="session-relative-broad",
+            source_id="transcript-relative-broad",
+            chunk_index=1,
+            source_date="2024-05-10",
+        )
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph):
+            rows, _meta, _bundle = mg._source_chunk_store_recall(
+                "When did Noor attend the cooking show?",
+                owner_id="noor",
+                limit=1,
+                domain=None,
+                project=None,
+                max_chunk_tokens=120,
+                max_total_chunk_tokens=200,
+            )
+
+        assert rows
+        assert "temporal_relative_day" not in rows[0]["match_modes"]
+
+    def test_temporal_session_window_keeps_nearby_source_dated_context(self, tmp_path):
+        """Temporal answer windows keep nearby source-dated same-turn context."""
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _db_file = _make_graph(tmp_path)
+        chunks = [
+            "Miko: The tortoises are calm today.",
+            "Joanna: Can I come over sometime and watch them play from a distance?",
+            "Miko: Definitely, I would love to have you over.",
+            "Joanna: That sounds good.",
+            "Joanna: See you tomorrow!",
+        ]
+        for idx, text in enumerate(chunks):
+            graph.store_source_chunk(
+                text,
+                owner_id="miko",
+                session_id="session-temporal-window",
+                source_id="transcript-temporal-window",
+                chunk_index=idx,
+                source_date="2026-05-10",
+            )
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph):
+            rows, meta, _bundle = mg._run_recall_store_plan(
+                "When did Joanna plan to come over and watch the tortoises play?",
+                stores=["session_chunks"],
+                limit=2,
+                owner_id="miko",
+                min_similarity=0.0,
+                planner_profile="off",
+                planned_queries=["When did Joanna plan to come over and watch the tortoises play?"],
+                planner_meta={"planned_stores": ["session_chunks"]},
+                fast_mode=False,
+                common_kwargs={
+                    "max_chunk_tokens": 80,
+                    "max_total_chunk_tokens": 500,
+                },
+            )
+
+        joined = "\n".join(row.get("text", "") for row in rows)
+        assert "Can I come over" in joined
+        assert "See you tomorrow" in joined
+        assert "source_date: 2026-05-10" in joined
+        assert any(row.get("session_temporal_context_attached") for row in rows)
+
+    def test_temporal_selection_prefers_dated_first_order_session_evidence(self):
+        """Temporal answers should not let undated duplicates bury dated transcript evidence."""
+        import datastore.memorydb.memory_graph as mg
+
+        rows = [
+            {
+                "id": "undated-preference",
+                "category": "preference",
+                "text": "Miko enjoys watching the tortoises play.",
+                "similarity": 1.0,
+                "_facet_rescue": True,
+            },
+            {
+                "id": "undated-session",
+                "category": "session_chunk",
+                "source_type": "session_chunk",
+                "text": "Miko: Watching the tortoises play is peaceful.",
+                "similarity": 0.99,
+            },
+            {
+                "id": "dated-session",
+                "category": "session_chunk",
+                "source_type": "session_chunk",
+                "source_date": "2026-05-10",
+                "text": (
+                    "Joanna: Can I come over sometime and watch the tortoises play?\n"
+                    "Joanna: See you tomorrow!"
+                ),
+                "similarity": 0.91,
+            },
+        ]
+
+        selected = mg._select_final_recall_rows_with_facet_rescue(
+            "When did Joanna plan to come over and watch the tortoises play?",
+            rows,
+            limit=2,
+        )
+
+        assert selected[0]["id"] == "dated-session"
+        assert selected[0]["temporal_source_dated_session_promoted"] is True
+
     def test_source_chunk_store_plan_is_explicit_not_default(self, tmp_path):
         """Session chunks are not inserted into the default vector store plan."""
         import datastore.memorydb.memory_graph as mg
@@ -3884,6 +4078,69 @@ class TestSourceChunkStorage:
         assert rows == []
         assert meta["planned_stores"] == ["vector"]
         assert all(row.get("category") != "session_chunk" for row in rows)
+
+    def test_deliberate_recall_auto_includes_session_chunks_when_owner_has_transcripts(self, tmp_path):
+        """Owner-scoped deliberate recall should fan out to first-order transcript evidence."""
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _db_file = _make_graph(tmp_path)
+        graph.store_source_chunk(
+            "User: Ari described the harbor lantern mentor schedule in 2024.",
+            owner_id="ari",
+            session_id="session-auto-include",
+            chunk_index=0,
+        )
+        captured = {}
+
+        def _fake_run(query, *, stores, limit, owner_id, min_similarity, planner_profile, planned_queries, planner_meta, fast_mode, graph_depth, common_kwargs):
+            captured["stores"] = list(stores)
+            captured["planner_meta"] = dict(planner_meta or {})
+            return (
+                [
+                    {
+                        "chunk_id": "session-auto",
+                        "text": "User: Ari described the harbor lantern mentor schedule in 2024.",
+                        "category": "session_chunk",
+                        "source_type": "session_chunk",
+                        "via": "session_chunks",
+                        "similarity": 0.93,
+                    }
+                ],
+                {"planned_stores": list(stores), "store_runs": [{"store": "session_chunks"}]},
+                None,
+            )
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch.object(
+                 mg,
+                 "_plan_fanout_queries",
+                 return_value=(
+                     ["Ari harbor lantern mentor schedule"],
+                     {
+                         "query": "Ari harbor lantern mentor schedule",
+                         "used_llm": False,
+                         "queries_count": 1,
+                         "elapsed_ms": 0,
+                         "planner_profile": "full",
+                         "planned_stores": ["vector"],
+                         "planned_project": None,
+                         "freshness_preferred": False,
+                     },
+                 ),
+             ), patch.object(mg, "_run_recall_store_plan", side_effect=_fake_run), \
+             patch.object(mg, "_recall_once", side_effect=AssertionError("session auto-include should use store plan")):
+            rows, meta = mg.recall(
+                "Ari harbor lantern mentor schedule",
+                owner_id="ari",
+                return_meta=True,
+                use_intent=False,
+                max_turns=1,
+            )
+
+        assert rows and rows[0]["category"] == "session_chunk"
+        assert captured["stores"] == ["vector", "session_chunks"]
+        assert captured["planner_meta"]["session_chunks_auto_included"] is True
+        assert meta["planned_stores"] == ["vector", "session_chunks"]
 
     def test_source_chunk_store_plan_enforces_owner_isolation(self, tmp_path):
         """The session_chunks lane cannot read another owner's transcript evidence."""
@@ -4023,8 +4280,8 @@ class TestSourceChunkStorage:
                 "vector": {
                     "recall": lambda *_a, **_k: (
                         [
-                            {"id": "fact-c", "text": "charlie", "category": "fact", "similarity": 0.95},
-                            {"id": "fact-a", "text": "alpha", "category": "fact", "similarity": 0.90},
+                            {"id": "fact-c", "text": "charlie", "category": "fact", "similarity": 0.95, "retrieval_confidence": 0.95},
+                            {"id": "fact-a", "text": "alpha", "category": "fact", "similarity": 0.90, "retrieval_confidence": 0.30},
                         ],
                         {"selected_path": "vector", "phases_ms": {"total_ms": 1}},
                         None,
@@ -4049,6 +4306,7 @@ class TestSourceChunkStorage:
                                 "category": "session_chunk",
                                 "source_type": "session_chunk",
                                 "similarity": 0.80,
+                                "retrieval_confidence": 1.0,
                             }
                         ],
                         {
@@ -4141,8 +4399,8 @@ class TestSourceChunkStorage:
                 "vector": {
                     "recall": lambda *_a, **_k: (
                         [
-                            {"id": "fact-c", "text": "charlie", "category": "fact", "similarity": 0.95},
-                            {"id": "fact-a", "text": "alpha", "category": "fact", "similarity": 0.90},
+                            {"id": "fact-c", "text": "charlie", "category": "fact", "similarity": 0.95, "retrieval_confidence": 0.95},
+                            {"id": "fact-a", "text": "alpha", "category": "fact", "similarity": 0.90, "retrieval_confidence": 0.30},
                         ],
                         {"selected_path": "vector", "phases_ms": {"total_ms": 1}},
                         None,
@@ -4167,6 +4425,7 @@ class TestSourceChunkStorage:
                                 "category": "session_chunk",
                                 "source_type": "session_chunk",
                                 "similarity": 0.80,
+                                "retrieval_confidence": 1.0,
                             }
                         ],
                         {
@@ -4195,23 +4454,23 @@ class TestSourceChunkStorage:
                 common_kwargs={},
             )
 
-        assert [row.get("id") or row.get("chunk_id") for row in rows] == ["fact-c", "sch-b", "fact-a"]
+        assert [row.get("id") or row.get("chunk_id") for row in rows] == ["sch-b", "fact-c", "fact-a"]
         assert meta["rrf_fusion"]["enabled"] is True
         assert meta["rrf_fusion"]["mode"] == "active"
         assert meta["rrf_fusion"]["applied_to_stores"] == ["vector", "session_chunks"]
         assert meta["rrf_shadow"]["comparison_suppressed_reason"] == "active_rrf_fusion"
         assert "comparison" not in meta["rrf_shadow"]
 
-    def test_rrf_fusion_activation_is_limited_to_source_chunk_mixed_plans(self):
+    def test_rrf_fusion_activation_applies_to_mixed_store_plans(self):
         import datastore.memorydb.memory_graph as mg
 
         with patch.object(mg, "_get_retrieval_lightweight_config", return_value=SimpleNamespace()):
             assert mg._should_apply_rrf_store_plan_fusion([]) is False
             assert mg._should_apply_rrf_store_plan_fusion(["vector"]) is False
             assert mg._should_apply_rrf_store_plan_fusion(["session_chunks"]) is False
-            assert mg._should_apply_rrf_store_plan_fusion(["vector", "graph"]) is False
-            assert mg._should_apply_rrf_store_plan_fusion(["graph", "session_chunks"]) is False
-            assert mg._should_apply_rrf_store_plan_fusion(["vector", "graph", "session_chunks"]) is False
+            assert mg._should_apply_rrf_store_plan_fusion(["vector", "graph"]) is True
+            assert mg._should_apply_rrf_store_plan_fusion(["graph", "session_chunks"]) is True
+            assert mg._should_apply_rrf_store_plan_fusion(["vector", "graph", "session_chunks"]) is True
             assert mg._should_apply_rrf_store_plan_fusion(["vector", "session_chunks"]) is True
         with patch.object(
             mg,
@@ -4219,6 +4478,226 @@ class TestSourceChunkStorage:
             return_value=SimpleNamespace(store_plan_rrf_fusion=False),
         ):
             assert mg._should_apply_rrf_store_plan_fusion(["vector", "session_chunks"]) is False
+
+    def test_store_plan_preserves_strong_unique_session_branch_top(self):
+        import datastore.memorydb.memory_graph as mg
+
+        rows = [
+            {"id": "fact-a", "text": "Fact A", "source_ranks": {"vector": 1, "graph": 1}, "similarity": 0.95},
+            {"id": "fact-b", "text": "Fact B", "source_ranks": {"vector": 2, "graph": 2}, "similarity": 0.58},
+        ]
+        batches = [
+            ("vector", [{"id": "fact-a", "text": "Fact A", "similarity": 0.95}]),
+            ("graph", [{"id": "fact-a", "text": "Fact A", "similarity": 0.80, "via": "graph_attached_fact"}]),
+            (
+                "session_chunks",
+                [
+                    {
+                        "id": "sch-1",
+                        "text": "Raw transcript contains the exact date.",
+                        "source_type": "session_chunk",
+                        "similarity": 0.79,
+                    }
+                ],
+            ),
+        ]
+
+        preserved, meta = mg._preserve_strong_store_plan_rows(rows, batches, limit=2)
+
+        assert [row["id"] for row in preserved] == ["sch-1", "fact-a"]
+        assert preserved[0]["store_plan_preserved_branch_top"] == "session_chunks"
+        assert meta["preserved"] == 1
+        assert meta["rows"][0]["store"] == "session_chunks"
+
+    def test_store_plan_preserves_branch_top_when_all_existing_rows_score_higher(self):
+        import datastore.memorydb.memory_graph as mg
+
+        rows = [
+            {"id": "fact-a", "text": "Fact A", "source_ranks": {"vector": 1}, "retrieval_confidence": 0.99},
+            {"id": "fact-b", "text": "Fact B", "source_ranks": {"vector": 2}, "retrieval_confidence": 0.98},
+        ]
+        batches = [
+            ("vector", list(rows)),
+            (
+                "session_chunks",
+                [
+                    {
+                        "id": "sch-1",
+                        "text": "Raw transcript contains direct evidence.",
+                        "source_type": "session_chunk",
+                        "similarity": 0.79,
+                    }
+                ],
+            ),
+        ]
+
+        preserved, meta = mg._preserve_strong_store_plan_rows(rows, batches, limit=2)
+
+        assert [row["id"] for row in preserved] == ["sch-1", "fact-a"]
+        assert preserved[0]["store_plan_preserved_branch_top"] == "session_chunks"
+        assert meta["preserved"] == 1
+
+    def test_store_plan_preserves_multiple_strong_session_rows(self):
+        import datastore.memorydb.memory_graph as mg
+
+        rows = [
+            {"id": "fact-a", "text": "Fact A", "source_ranks": {"vector": 1}, "retrieval_confidence": 0.99},
+            {"id": "fact-b", "text": "Fact B", "source_ranks": {"vector": 2}, "retrieval_confidence": 0.98},
+            {"id": "fact-c", "text": "Fact C", "source_ranks": {"graph": 1}, "retrieval_confidence": 0.97},
+        ]
+        batches = [
+            ("vector", rows[:2]),
+            ("graph", rows[2:]),
+            (
+                "session_chunks",
+                [
+                    {
+                        "id": "sch-1",
+                        "text": "Raw transcript first relevant source span.",
+                        "source_type": "session_chunk",
+                        "similarity": 0.68,
+                    },
+                    {
+                        "id": "sch-2",
+                        "text": "Raw transcript second relevant source span.",
+                        "source_type": "session_chunk",
+                        "similarity": 0.67,
+                    },
+                    {
+                        "id": "sch-3",
+                        "text": "Raw transcript third relevant source span.",
+                        "source_type": "session_chunk",
+                        "similarity": 0.66,
+                    },
+                    {
+                        "id": "sch-4",
+                        "text": "Raw transcript fourth span should stay out of the bounded preserve set.",
+                        "source_type": "session_chunk",
+                        "similarity": 0.95,
+                    },
+                ],
+            ),
+        ]
+
+        preserved, meta = mg._preserve_strong_store_plan_rows(rows, batches, limit=3)
+
+        assert [row["id"] for row in preserved] == ["sch-1", "sch-2", "sch-3"]
+        assert meta["preserved"] == 3
+        assert {row["key"] for row in meta["rows"]} == {"id:sch-1", "id:sch-2", "id:sch-3"}
+
+    def test_store_plan_does_not_preserve_weak_unique_branch_top(self):
+        import datastore.memorydb.memory_graph as mg
+
+        rows = [{"id": "fact-a", "text": "Fact A", "source_ranks": {"vector": 1}, "similarity": 0.95}]
+        batches = [
+            ("vector", [{"id": "fact-a", "text": "Fact A", "similarity": 0.95}]),
+            ("docs", [{"id": "doc-weak", "text": "Weak docs result", "source_type": "doc", "similarity": 0.42}]),
+        ]
+
+        preserved, meta = mg._preserve_strong_store_plan_rows(rows, batches, limit=1)
+
+        assert preserved == rows
+        assert meta["preserved"] == 0
+
+    def test_session_source_suppresses_weaker_synthetic_temporal_conflict(self):
+        import datastore.memorydb.memory_graph as mg
+
+        rows = [
+            {
+                "id": "session-1",
+                "text": "source_date: 2026-03-10; User: Ari said the family mentor picnic happened last week.",
+                "source_type": "session_chunk",
+                "via": "session_chunks",
+                "source_date": "2026-03-10",
+            },
+            {
+                "id": "synthetic-date",
+                "text": "Ari had a family picnic in April 2026.",
+                "source_type": "user",
+                "via": "graph_attached_fact",
+                "occurred_start": "2026-04-02",
+            },
+            {
+                "id": "synthetic-full",
+                "text": "Ari's family mentor picnic happened and was emotionally important.",
+                "source_type": "user",
+                "via": "graph_attached_fact",
+                "source_date": "2026-04-02",
+            },
+        ]
+
+        filtered, meta = mg._suppress_weaker_synthetic_temporal_conflicts_after_session_source(
+            "When did Ari family mentor picnic happen?",
+            rows,
+        )
+
+        assert [row["id"] for row in filtered] == ["session-1", "synthetic-full"]
+        assert meta["suppressed"] == 1
+        assert meta["suppressed_rows"][0]["id"] == "synthetic-date"
+
+    def test_session_source_keeps_older_synthetic_antecedent(self):
+        import datastore.memorydb.memory_graph as mg
+
+        rows = [
+            {
+                "id": "session-1",
+                "text": "source_date: 2026-03-10; User: Ari said the recommended archive book helped.",
+                "source_type": "session_chunk",
+                "via": "session_chunks",
+                "source_date": "2026-03-10",
+            },
+            {
+                "id": "older-fact",
+                "text": "Ari's recommended archive book was The Design of Everyday Things.",
+                "source_type": "user",
+                "via": "graph_attached_fact",
+                "source_date": "2026-02-01",
+            },
+        ]
+
+        filtered, meta = mg._suppress_weaker_synthetic_temporal_conflicts_after_session_source(
+            "What archive book did Ari recommend?",
+            rows,
+        )
+
+        assert [row["id"] for row in filtered] == ["session-1", "older-fact"]
+        assert meta["suppressed"] == 0
+
+    def test_facet_rescue_selection_does_not_lead_over_equal_dated_session_signal(self):
+        import datastore.memorydb.memory_graph as mg
+
+        rows = [
+            {
+                "id": "facet-partial",
+                "text": "Ari discussed the archive schedule with mentors.",
+                "source_type": "user",
+                "via": "facet_rescue_lexical",
+                "_facet_rescue": True,
+                "similarity": 1.0,
+            },
+            {
+                "id": "session-dated",
+                "text": "source_date: 2026-03-10; User: Ari said the archive schedule with mentors is in the blue folder.",
+                "source_type": "session_chunk",
+                "via": "session_chunks",
+                "source_date": "2026-03-10",
+                "similarity": 0.82,
+            },
+            {
+                "id": "fact-tail",
+                "text": "Ari keeps older archive notes.",
+                "source_type": "user",
+                "similarity": 0.75,
+            },
+        ]
+
+        selected = mg._select_final_recall_rows_with_facet_rescue(
+            "What archive schedule with mentors did Ari mention?",
+            rows,
+            limit=3,
+        )
+
+        assert [row["id"] for row in selected] == ["session-dated", "fact-tail", "facet-partial"]
 
     def test_rrf_shadow_comparison_reports_rrf_only_candidates(self):
         import datastore.memorydb.memory_graph as mg
@@ -4246,6 +4725,668 @@ class TestSourceChunkStorage:
         assert comparison["rrf_only_top_keys"] == ["id:b", "session_chunk:sch-c"]
         assert comparison["current_only_top_keys"] == ["id:d"]
         assert [row["key"] for row in comparison["rrf_only_top_rows"]] == ["id:b", "session_chunk:sch-c"]
+
+    def test_store_plan_promotes_first_order_session_coverage_before_merge_trim(self):
+        """A strong transcript hit must not be lost before final row truncation."""
+        import datastore.memorydb.memory_graph as mg
+
+        vector_rows = [
+            {
+                "id": f"fact-{idx}",
+                "text": f"Ari generic archive note {idx}",
+                "category": "fact",
+                "similarity": 0.98,
+            }
+            for idx in range(6)
+        ]
+        session_row = {
+            "chunk_id": "session-coverage",
+            "source_chunk_id": "session-coverage",
+            "text": "User: Ari discussed the harbor archive lantern mentor schedule in 2024.",
+            "category": "session_chunk",
+            "source_type": "session_chunk",
+            "similarity": 0.20,
+        }
+
+        def _fake_registry():
+            return {
+                "vector": {
+                    "recall": lambda *_a, **_k: (
+                        list(vector_rows),
+                        {"selected_path": "vector", "phases_ms": {"total_ms": 1}},
+                        None,
+                    ),
+                    "recall_fast": lambda *_a, **_k: ([], {}, None),
+                },
+                "docs": {
+                    "recall": lambda *_a, **_k: ([], {}, None),
+                    "recall_fast": lambda *_a, **_k: ([], {}, None),
+                },
+                "graph": {
+                    "recall": lambda *_a, **_k: (
+                        [],
+                        {"selected_path": "graph", "phases_ms": {"total_ms": 1}},
+                        None,
+                    ),
+                    "recall_fast": lambda *_a, **_k: ([], {}, None),
+                },
+                "session_chunks": {
+                    "recall": lambda *_a, **_k: (
+                        [dict(session_row)],
+                        {
+                            "selected_path": "session_chunk_store",
+                            "session_chunk_telemetry": {"candidate_count": 1, "output_token_count": 10},
+                            "phases_ms": {"total_ms": 1},
+                        },
+                        None,
+                    ),
+                    "recall_fast": lambda *_a, **_k: ([], {}, None),
+                },
+            }
+
+        with patch.object(mg, "_get_recall_store_registry", side_effect=_fake_registry), \
+             patch.object(mg, "_should_apply_rrf_store_plan_fusion", return_value=False), \
+             patch.object(
+                 mg,
+                 "_expand_selected_session_chunk_rows",
+                 side_effect=lambda rows, **_kwargs: (rows, {"expanded": 0}),
+             ):
+            rows, _meta, _ = mg._run_recall_store_plan(
+                "Ari harbor archive lantern mentor schedule 2024",
+                stores=["vector", "graph", "session_chunks"],
+                limit=3,
+                owner_id="ari",
+                min_similarity=0.0,
+                planner_profile="off",
+                planned_queries=["Ari harbor archive lantern mentor schedule 2024"],
+                planner_meta={"planned_stores": ["vector", "graph", "session_chunks"]},
+                fast_mode=False,
+                common_kwargs={},
+            )
+
+        assert rows[0]["chunk_id"] == "session-coverage"
+        assert rows[0]["first_order_query_coverage_promoted"] is True
+        assert rows[0]["first_order_query_coverage_score"] >= 3
+
+    def test_store_plan_runs_facet_rescue_for_orphan_entity_fact(self, tmp_path):
+        """Store-plan recall should still recover exact entity facts without graph edges."""
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _ = _make_graph(tmp_path)
+        ari = mg.Node.create("Person", "Ari Vale", owner_id="quaid")
+        noor = mg.Node.create("Person", "Noor Lin", owner_id="quaid")
+        exact = mg.Node.create(
+            "Fact",
+            "Ari Vale and Noor Lin attended the harbor lantern gathering together in 2022.",
+            owner_id="quaid",
+            keywords="Ari Vale Noor Lin harbor lantern gathering 2022",
+        )
+        exact.occurred_start = "2022-06-01T23:59:59"
+        for node in (ari, noor, exact):
+            graph.add_node(node, embed=False)
+
+        vector_rows = [
+            {
+                "id": f"generic-{idx}",
+                "text": f"Ari Vale generic harbor note {idx}",
+                "category": "fact",
+                "similarity": 0.99,
+                "owner_id": "quaid",
+            }
+            for idx in range(5)
+        ]
+        session_row = {
+            "chunk_id": "session-harbor",
+            "source_chunk_id": "session-harbor",
+            "text": "User: Ari Vale mentioned a harbor lantern plan with friends.",
+            "category": "session_chunk",
+            "source_type": "session_chunk",
+            "similarity": 0.96,
+        }
+
+        def _fake_registry():
+            return {
+                "vector": {
+                    "recall": lambda *_a, **_k: (
+                        list(vector_rows),
+                        {"selected_path": "vector", "phases_ms": {"total_ms": 1}},
+                        None,
+                    ),
+                    "recall_fast": lambda *_a, **_k: ([], {}, None),
+                },
+                "docs": {
+                    "recall": lambda *_a, **_k: ([], {}, None),
+                    "recall_fast": lambda *_a, **_k: ([], {}, None),
+                },
+                "graph": {
+                    "recall": lambda *_a, **_k: (
+                        [],
+                        {"selected_path": "graph", "phases_ms": {"total_ms": 1}},
+                        None,
+                    ),
+                    "recall_fast": lambda *_a, **_k: ([], {}, None),
+                },
+                "session_chunks": {
+                    "recall": lambda *_a, **_k: (
+                        [dict(session_row)],
+                        {"selected_path": "session_chunk_store", "phases_ms": {"total_ms": 1}},
+                        None,
+                    ),
+                    "recall_fast": lambda *_a, **_k: ([], {}, None),
+                },
+            }
+
+        with patch.object(mg, "get_graph", return_value=graph), \
+             patch.object(mg, "_get_recall_store_registry", side_effect=_fake_registry), \
+             patch.object(mg, "_should_apply_rrf_store_plan_fusion", return_value=False), \
+             patch.object(
+                 mg,
+                 "_expand_selected_session_chunk_rows",
+                 side_effect=lambda rows, **_kwargs: (rows, {"expanded": 0}),
+             ):
+            rows, meta, _ = mg._run_recall_store_plan(
+                "When did Ari Vale and Noor Lin attend the harbor lantern gathering together?",
+                stores=["vector", "session_chunks"],
+                limit=3,
+                owner_id="quaid",
+                min_similarity=0.0,
+                planner_profile="off",
+                planned_queries=["Ari Vale Noor Lin harbor lantern gathering"],
+                planner_meta={"planned_stores": ["vector", "session_chunks"]},
+                fast_mode=False,
+                common_kwargs={},
+            )
+
+        assert any(row.get("id") == exact.id for row in rows)
+        rescued = next(row for row in rows if row.get("id") == exact.id)
+        assert rows[0]["id"] == exact.id
+        assert rescued["_facet_rescue"] is True
+        assert rescued["via"] == "facet_rescue_lexical"
+        assert rescued["occurred_start"] == "2022-06-01T23:59:59"
+        assert meta["facet_rescue"]["applied"] is True
+
+    def test_source_chunk_store_scores_adjacent_session_context(self, tmp_path):
+        """Adjacent first-order chunks can jointly cover a transcript question."""
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _db_file = _make_graph(tmp_path)
+        graph.store_source_chunk(
+            "Ari's friends, family and mentors encouraged the archive plan.",
+            owner_id="ari",
+            session_id="session-adjacent-context",
+            source_id="source-adjacent-context",
+            chunk_index=75,
+        )
+        graph.store_source_chunk(
+            "Here is a photo from when we met up last week by the harbor.",
+            owner_id="ari",
+            session_id="session-adjacent-context",
+            source_id="source-adjacent-context",
+            chunk_index=76,
+        )
+        graph.store_source_chunk(
+            "Ari's friends, family and mentors kept supporting the archive plan.",
+            owner_id="ari",
+            session_id="session-adjacent-context",
+            source_id="source-adjacent-context",
+            chunk_index=120,
+        )
+
+        with patch.object(mg, "get_graph", return_value=graph), \
+             patch.object(graph, "get_embedding", return_value=None):
+            rows, meta, _bundle = mg._source_chunk_store_recall(
+                "When did Ari meet up with friends, family, and mentors?",
+                owner_id="ari",
+                limit=2,
+                domain=None,
+                project=None,
+                max_chunk_tokens=80,
+                max_total_chunk_tokens=200,
+            )
+
+        assert {row["chunk_index"] for row in rows} == {75, 76}
+        assert min(row["session_scoring_context_overlap"] for row in rows) >= 5
+        assert all(row["similarity"] >= 0.90 for row in rows)
+        assert meta["session_chunk_telemetry"]["adjacent_scoring_contexts"] >= 2
+
+    def test_source_chunk_store_binds_query_embedding_timeout_to_recall_budget(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _db_file = _make_graph(tmp_path)
+        graph.store_source_chunk(
+            "Ari documented the recipe ingredients in the workshop notebook.",
+            owner_id="ari",
+            session_id="session-embedding-budget",
+            source_id="source-embedding-budget",
+            chunk_index=1,
+        )
+
+        seen_timeouts = []
+
+        def _fake_get_embedding(_text, *, timeout_s=None):
+            seen_timeouts.append(timeout_s)
+            return None
+
+        with patch.object(mg, "get_graph", return_value=graph), \
+             patch.object(graph, "get_embedding", side_effect=_fake_get_embedding):
+            rows, meta, _bundle = mg._source_chunk_store_recall(
+                "What recipe ingredients did Ari document?",
+                owner_id="ari",
+                limit=2,
+                domain=None,
+                project=None,
+                max_chunk_tokens=80,
+                max_total_chunk_tokens=200,
+                timeout_ms=60000,
+            )
+
+        assert rows
+        assert seen_timeouts == [10.0]
+        assert meta["session_chunk_telemetry"]["lexical_candidate_count"] >= 1
+
+    def test_source_chunk_store_uses_bounded_query_embedding_with_lexical_candidates(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _db_file = _make_graph(tmp_path)
+        graph.store_source_chunk(
+            "Ari documented recipe ingredients in the workshop notebook.",
+            owner_id="ari",
+            session_id="session-lexical-sufficient",
+            source_id="source-lexical-sufficient",
+            chunk_index=1,
+        )
+        graph.store_source_chunk(
+            "Miko documented recipe ingredients in the studio ledger.",
+            owner_id="ari",
+            session_id="session-lexical-sufficient",
+            source_id="source-lexical-sufficient",
+            chunk_index=2,
+        )
+        seen_timeouts = []
+
+        def _fake_embedding_with_timeout(text, **kwargs):
+            seen_timeouts.append(kwargs.get("timeout_s"))
+            return _fake_get_embedding(text)
+
+        with patch.object(mg, "get_graph", return_value=graph), \
+             patch.object(graph, "get_embedding", side_effect=_fake_embedding_with_timeout):
+            rows, meta, _bundle = mg._source_chunk_store_recall(
+                "What recipe ingredients did Ari and Miko document?",
+                owner_id="ari",
+                limit=2,
+                domain=None,
+                project=None,
+                max_chunk_tokens=80,
+                max_total_chunk_tokens=200,
+                timeout_ms=60000,
+            )
+
+        assert len(rows) == 2
+        assert seen_timeouts == [10.0]
+        telemetry = meta["session_chunk_telemetry"]
+        assert telemetry["lexical_probe_count"] >= 2
+        assert telemetry["semantic_embedding_used"] is True
+
+    def test_source_chunk_store_scores_older_context_before_recency_trim(self, tmp_path):
+        """Long transcript recall must score older chunks before truncating by recency."""
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _db_file = _make_graph(tmp_path)
+        with patch.object(graph, "get_embedding", return_value=None):
+            graph.store_source_chunk(
+                "Ari's friends, family and mentors encouraged the archive plan.",
+                owner_id="ari",
+                session_id="session-long-context",
+                source_id="source-long-context",
+                chunk_index=10,
+                created_at="2023-01-01T00:00:00+00:00",
+            )
+            graph.store_source_chunk(
+                "Here is a photo from when we met up last week by the harbor.",
+                owner_id="ari",
+                session_id="session-long-context",
+                source_id="source-long-context",
+                chunk_index=11,
+                created_at="2023-01-01T00:00:00+00:00",
+            )
+            for idx in range(600):
+                graph.store_source_chunk(
+                    f"Ari generic archive update {idx}.",
+                    owner_id="ari",
+                    session_id="session-long-context",
+                    source_id="source-long-context",
+                    chunk_index=1000 + idx,
+                    created_at="2024-01-01T00:00:00+00:00",
+                )
+
+        with patch.object(mg, "get_graph", return_value=graph), \
+             patch.object(graph, "get_embedding", return_value=None):
+            rows, _meta, _bundle = mg._source_chunk_store_recall(
+                "When did Ari meet up with friends, family, and mentors?",
+                owner_id="ari",
+                limit=2,
+                domain=None,
+                project=None,
+                max_chunk_tokens=80,
+                max_total_chunk_tokens=200,
+            )
+
+        assert {row["chunk_index"] for row in rows} == {10, 11}
+        assert min(row["session_scoring_context_overlap"] for row in rows) >= 5
+
+    def test_source_chunk_store_duration_evidence_requires_distinctive_subject_overlap(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _db_file = _make_graph(tmp_path)
+        graph.store_source_chunk(
+            "Noor: I've had the turtles for 3 years now and they bring me joy.",
+            owner_id="noor",
+            session_id="session-duration-subject",
+            source_id="source-duration-subject",
+            chunk_index=1,
+            source_date="2024-06-01",
+            created_at="2024-06-01T00:00:00+00:00",
+        )
+
+        with patch.object(mg, "get_graph", return_value=graph), \
+             patch.object(graph, "get_embedding", return_value=None):
+            rows, _meta, _bundle = mg._source_chunk_store_recall(
+                "When did Noor get the prism charm?",
+                owner_id="noor",
+                limit=1,
+                domain=None,
+                project=None,
+                max_chunk_tokens=120,
+                max_total_chunk_tokens=200,
+            )
+
+        assert rows
+        assert "temporal_duration" not in rows[0]["match_modes"]
+
+    def test_source_chunk_store_does_not_add_acquisition_match_mode(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _db_file = _make_graph(tmp_path)
+        graph.store_source_chunk(
+            "Ari and Noor logged the prism charm beside the desk.",
+            owner_id="ari",
+            session_id="session-acquisition-grounding",
+            source_id="source-acquisition-grounding",
+            chunk_index=10,
+            source_date="2024-06-01",
+            created_at="2024-06-01T00:00:00+00:00",
+        )
+
+        with patch.object(mg, "get_graph", return_value=graph), \
+             patch.object(graph, "get_embedding", return_value=None):
+            rows, _meta, _bundle = mg._source_chunk_store_recall(
+                "Ari Noor prism charm date",
+                owner_id="ari",
+                limit=1,
+                domain=None,
+                project=None,
+                max_chunk_tokens=120,
+                max_total_chunk_tokens=200,
+            )
+
+        assert rows
+        assert "temporal_acquisition" not in rows[0]["match_modes"]
+
+    def test_shared_source_query_uses_structural_entity_anchors(self):
+        import datastore.memorydb.memory_graph as mg
+
+        ari = SimpleNamespace(id="ari-1", name="Ari", type="Person")
+        noor = SimpleNamespace(id="noor-1", name="Noor", type="Person")
+        with patch.object(mg, "extract_entities_from_text", return_value=[ari, noor]):
+            assert mg._is_multi_entity_shared_source_query(
+                "Which quoted items connect Ari and Noor?"
+            ) is True
+
+    def test_source_chunk_store_promotes_shared_quoted_item_evidence(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _db_file = _make_graph(tmp_path)
+        graph.store_source_chunk(
+            "Ari and Noor keep a shared list of quoted items.",
+            owner_id="ari",
+            session_id="session-shared-quoted-item",
+            source_id="source-shared-quoted-item",
+            chunk_index=5,
+            source_date="2024-03-01",
+            created_at="2024-03-01T00:00:00+00:00",
+        )
+        graph.store_source_chunk(
+            'Ari: "River Atlas" stayed on my shelf after the club meeting.',
+            owner_id="ari",
+            session_id="session-shared-quoted-item",
+            source_id="source-shared-quoted-item",
+            chunk_index=10,
+            source_date="2024-03-02",
+            created_at="2024-03-02T00:00:00+00:00",
+        )
+        graph.store_source_chunk(
+            'Noor: "River Atlas" stayed on my shelf after the club meeting too.',
+            owner_id="ari",
+            session_id="session-shared-quoted-item",
+            source_id="source-shared-quoted-item",
+            chunk_index=11,
+            source_date="2024-03-02",
+            created_at="2024-03-02T00:00:01+00:00",
+        )
+        graph.store_source_chunk(
+            'Ari: "Stone Orchard" is still in the notebook from Noor.',
+            owner_id="ari",
+            session_id="session-shared-quoted-item",
+            source_id="source-shared-quoted-item",
+            chunk_index=12,
+            source_date="2024-03-02",
+            created_at="2024-03-02T00:00:02+00:00",
+        )
+        graph.store_source_chunk(
+            'Noor: "Stone Orchard" is still in my notebook too.',
+            owner_id="ari",
+            session_id="session-shared-quoted-item",
+            source_id="source-shared-quoted-item",
+            chunk_index=13,
+            source_date="2024-03-02",
+            created_at="2024-03-02T00:00:03+00:00",
+        )
+        graph.store_source_chunk(
+            'Ari: "Harbor Moon" is on a separate list.',
+            owner_id="ari",
+            session_id="session-shared-quoted-item",
+            source_id="source-shared-quoted-item",
+            chunk_index=40,
+            source_date="2024-03-03",
+            created_at="2024-03-03T00:00:00+00:00",
+        )
+
+        shared_entities = [
+            SimpleNamespace(id="ari-1", name="Ari", type="Person"),
+            SimpleNamespace(id="noor-1", name="Noor", type="Person"),
+        ]
+        with patch.object(mg, "get_graph", return_value=graph), \
+            patch.object(mg, "extract_entities_from_text", return_value=shared_entities), \
+             patch.object(graph, "get_embedding", return_value=None):
+            rows, _meta, _bundle = mg._source_chunk_store_recall(
+                "Which quoted items connect Ari and Noor?",
+                owner_id="ari",
+                limit=2,
+                domain=None,
+                project=None,
+                max_chunk_tokens=160,
+                max_total_chunk_tokens=300,
+        )
+
+        assert rows
+        assert "shared_quoted_item" in rows[0]["match_modes"]
+        assert max(row.get("shared_quoted_item_score") or 0 for row in rows) >= 0.97
+        combined = "\n".join(row["text"] for row in rows)
+        assert "River Atlas" in combined
+        assert "Stone Orchard" in combined
+        assert "Harbor Moon" not in combined
+
+    def test_source_chunk_store_does_not_promote_unshared_adjacent_quoted_item(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _db_file = _make_graph(tmp_path)
+        graph.store_source_chunk(
+            'Ari: "Cloud Maze" is in a private note.',
+            owner_id="ari",
+            session_id="session-unshared-quoted-item",
+            source_id="source-unshared-quoted-item",
+            chunk_index=10,
+            source_date="2024-03-02",
+            created_at="2024-03-02T00:00:00+00:00",
+        )
+        graph.store_source_chunk(
+            "Ari: Which quoted items are in Noor's notes?",
+            owner_id="ari",
+            session_id="session-unshared-quoted-item",
+            source_id="source-unshared-quoted-item",
+            chunk_index=11,
+            source_date="2024-03-02",
+            created_at="2024-03-02T00:00:01+00:00",
+        )
+        graph.store_source_chunk(
+            "Noor: I kept a note but did not name an item.",
+            owner_id="ari",
+            session_id="session-unshared-quoted-item",
+            source_id="source-unshared-quoted-item",
+            chunk_index=12,
+            source_date="2024-03-02",
+            created_at="2024-03-02T00:00:02+00:00",
+        )
+
+        shared_entities = [
+            SimpleNamespace(id="ari-1", name="Ari", type="Person"),
+            SimpleNamespace(id="noor-1", name="Noor", type="Person"),
+        ]
+        with patch.object(mg, "get_graph", return_value=graph), \
+            patch.object(mg, "extract_entities_from_text", return_value=shared_entities), \
+             patch.object(graph, "get_embedding", return_value=None):
+            rows, _meta, _bundle = mg._source_chunk_store_recall(
+                "Which quoted items connect Ari and Noor?",
+                owner_id="ari",
+                limit=3,
+                domain=None,
+                project=None,
+                max_chunk_tokens=160,
+                max_total_chunk_tokens=300,
+            )
+
+        assert not any("shared_quoted_item" in (row.get("match_modes") or []) for row in rows)
+
+    def test_store_plan_preserves_distinct_shared_quoted_item_rows(self):
+        import datastore.memorydb.memory_graph as mg
+
+        first = {
+            "id": "river",
+            "text": 'Ari noted "River Atlas"; Noor noted "River Atlas".',
+            "category": "session_chunk",
+            "source_type": "session_chunk",
+            "via": "session_chunks",
+            "similarity": 0.995,
+            "match_modes": ["shared_quoted_item"],
+            "shared_quoted_item_score": 0.995,
+            "shared_quoted_item_keys": ["river atlas"],
+        }
+        second = {
+            "id": "stone",
+            "text": 'Ari noted "Stone Orchard"; Noor noted "Stone Orchard".',
+            "category": "session_chunk",
+            "source_type": "session_chunk",
+            "via": "session_chunks",
+            "similarity": 0.995,
+            "match_modes": ["shared_quoted_item"],
+            "shared_quoted_item_score": 0.995,
+            "shared_quoted_item_keys": ["stone orchard"],
+        }
+        rows = [
+            dict(first),
+            {"id": "generic", "text": "Ari and Noor keep shared notes.", "similarity": 0.97},
+            {"id": "pref", "text": "Noor prefers documentaries.", "similarity": 0.92},
+        ]
+
+        shared_entities = [
+            SimpleNamespace(id="ari-1", name="Ari", type="Person"),
+            SimpleNamespace(id="noor-1", name="Noor", type="Person"),
+        ]
+        with patch.object(mg, "extract_entities_from_text", return_value=shared_entities):
+            out, meta = mg._preserve_shared_quoted_item_rows(
+                "Which quoted items connect Ari and Noor?",
+                rows,
+                [("session_chunks", [dict(first), dict(second)])],
+                limit=3,
+            )
+
+        combined = "\n".join(row["text"] for row in out)
+        assert "River Atlas" in combined
+        assert "Stone Orchard" in combined
+        assert meta["preserved"] == 1
+
+    def test_store_plan_preserves_source_dated_session_evidence_for_selected_fact(self):
+        import datastore.memorydb.memory_graph as mg
+
+        selected_fact = {
+            "id": "fact-prism",
+            "text": "Noor keeps the prism charm from Ari near the desk.",
+            "category": "fact",
+            "similarity": 1.0,
+        }
+        dated_source = {
+            "id": "source-prism",
+            "chunk_id": "source-prism",
+            "text": "source_date: 2024-06-01\nAri and Noor documented the prism charm near the desk.",
+            "category": "session_chunk",
+            "source_type": "session_chunk",
+            "via": "session_chunks",
+            "source_date": "2024-06-01",
+            "similarity": 0.89,
+        }
+        rows = [
+            dict(selected_fact),
+            {"id": "generic-a", "text": "Noor keeps a small desk notebook.", "similarity": 0.97},
+            {"id": "generic-b", "text": "Ari and Noor organize office supplies.", "similarity": 0.96},
+        ]
+
+        out, meta = mg._preserve_source_dated_session_rows_for_selected_facts(
+            "Ari Noor prism charm date",
+            rows,
+            [("session_chunks", [dict(dated_source)])],
+            limit=3,
+        )
+
+        assert any(row["id"] == "source-prism" for row in out)
+        assert meta["preserved"] == 1
+
+    def test_store_source_chunk_persists_explicit_source_date(self, tmp_path):
+        """Event/source date must survive independently from DB row creation time."""
+        graph, _db_file = _make_graph(tmp_path)
+        text = "Ari met mentors by the harbor last week."
+
+        initial = graph.store_source_chunk(
+            text,
+            owner_id="ari",
+            session_id="session-source-date",
+            source_id="source-source-date",
+            chunk_index=3,
+            created_at="2023-05-08T13:56:00+00:00",
+        )
+        graph.store_source_chunk(
+            text,
+            owner_id="ari",
+            session_id="session-source-date",
+            source_id="source-source-date",
+            chunk_index=3,
+            source_date="2023-06-09T19:55:00Z",
+            created_at="2023-05-08T13:56:00+00:00",
+        )
+
+        stored = graph.get_source_chunk(initial["chunk_id"], owner_id="ari")
+        assert stored is not None
+        assert stored["source_date"] == "2023-06-09"
+        assert stored["created_at"].startswith("2023-05-08")
 
     def test_source_chunk_store_plan_requires_owner_under_failhard(self, tmp_path):
         """Ownerless source chunk lookup cannot fail open under failHard."""
@@ -4589,6 +5730,69 @@ class TestRecallTelemetry:
         assert queries == ["what does my partner's brother's wife do"]
         assert meta["bailout_reason"] == "preserve_short_exact_query"
         assert meta["planned_stores"] == ["vector", "graph"]
+
+    def test_plan_fanout_queries_keeps_default_graph_when_llm_downgrades_named_lookup(self):
+        import datastore.memorydb.memory_graph as mg
+
+        class _Graph:
+            def get_known_relations(self):
+                return []
+
+        def _fake_call_fast_reasoning(*, prompt, **kwargs):
+            assert "Add 'graph'" in prompt
+            return ('{"stores":["vector"],"queries":["where Ari stored the ledger"]}', {})
+
+        with patch.object(mg, "get_graph", return_value=_Graph()), \
+             patch.object(mg, "get_edge_keywords", return_value={}), \
+             patch.object(mg, "extract_entities_from_text", return_value=[SimpleNamespace(id="ent_ari", type="person")]), \
+             patch.object(
+                 mg,
+                 "parse_json_response",
+                 return_value={"stores": ["vector"], "queries": ["where Ari stored the ledger"]},
+             ), patch("lib.llm_clients.call_fast_reasoning", side_effect=_fake_call_fast_reasoning):
+            queries, meta = mg._plan_fanout_queries(
+                "Where did Ari store the ledger?",
+                timeout_s=60.0,
+                return_meta=True,
+                planner_profile="full",
+            )
+
+        assert queries == ["Where did Ari store the ledger?"]
+        assert meta["bailout_reason"] == "preserve_short_exact_query"
+        assert meta["planned_stores"] == ["vector", "graph"]
+
+    def test_plan_fanout_queries_keeps_default_session_chunks_when_llm_downgrades_shared_lookup(self):
+        import datastore.memorydb.memory_graph as mg
+
+        class _Graph:
+            def get_known_relations(self):
+                return []
+
+        ari = SimpleNamespace(id="ari-1", name="Ari", type="Person")
+        miko = SimpleNamespace(id="miko-1", name="Miko", type="Person")
+
+        def _fake_call_fast_reasoning(*, prompt, **kwargs):
+            assert "session_chunks" in prompt
+            return ('{"stores":["vector","graph"],"queries":["shared documented topic"]}', {})
+
+        with patch.object(mg, "get_graph", return_value=_Graph()), \
+             patch.object(mg, "get_edge_keywords", return_value={}), \
+             patch.object(mg, "extract_entities_from_text", return_value=[ari, miko]), \
+             patch.object(
+                 mg,
+                 "parse_json_response",
+                 return_value={"stores": ["vector", "graph"], "queries": ["shared documented topic"]},
+             ), patch("lib.llm_clients.call_fast_reasoning", side_effect=_fake_call_fast_reasoning):
+            queries, meta = mg._plan_fanout_queries(
+                "What topic did Ari and Miko both document?",
+                timeout_s=60.0,
+                return_meta=True,
+                planner_profile="full",
+            )
+
+        assert queries == ["What topic did Ari and Miko both document?"]
+        assert meta["bailout_reason"] == "preserve_short_exact_query"
+        assert meta["planned_stores"] == ["vector", "session_chunks"]
 
     def test_single_structural_exact_query_recognizes_hyphenated_codeword(self):
         import datastore.memorydb.memory_graph as mg
@@ -7216,6 +8420,64 @@ class TestRecallTelemetry:
         assert "No markdown" in captured["system_prompt"]
         assert "no reasoning" in captured["system_prompt"]
 
+    def test_drill_plan_queries_retries_retryable_transport_error(self):
+        import datastore.memorydb.memory_graph as mg
+
+        calls = []
+
+        def _fake_call_fast_reasoning(**kwargs):
+            calls.append(kwargs)
+            if len(calls) == 1:
+                err = RuntimeError("LLM call failed after retries while failHard is enabled")
+                err.__cause__ = TimeoutError("The read operation timed out")
+                raise err
+            return '{"queries":["Harbor archive permit renewal"],"done":false}', {}
+
+        with patch("lib.llm_clients.call_fast_reasoning", side_effect=_fake_call_fast_reasoning), \
+             patch("time.sleep"):
+            queries, meta = mg._drill_plan_queries(
+                "Which permit did the harbor archive renew?",
+                [{"text": "The harbor archive filed a permit update", "similarity": 0.82}],
+                already_searched=["harbor archive"],
+                return_meta=True,
+                raise_on_error=True,
+                max_retries=1,
+            )
+
+        assert len(calls) == 2
+        assert [call["max_retries"] for call in calls] == [0, 0]
+        assert queries[0] == "Which permit did the harbor archive renew?"
+        assert queries[1] == "Harbor archive permit renewal"
+        assert meta["attempts"] == 2
+        assert meta["max_retries"] == 1
+
+    def test_drill_plan_queries_raises_after_retry_exhaustion_under_failhard(self):
+        import datastore.memorydb.memory_graph as mg
+
+        calls = []
+
+        def _fake_call_fast_reasoning(**kwargs):
+            calls.append(kwargs)
+            err = RuntimeError("LLM call failed after retries while failHard is enabled")
+            err.__cause__ = TimeoutError("The read operation timed out")
+            raise err
+
+        with patch("lib.llm_clients.call_fast_reasoning", side_effect=_fake_call_fast_reasoning), \
+             patch("time.sleep"):
+            with pytest.raises(RuntimeError, match="planner_max_retries=1") as exc:
+                mg._drill_plan_queries(
+                    "Which permit did the harbor archive renew?",
+                    [{"text": "The harbor archive filed a permit update", "similarity": 0.82}],
+                    already_searched=["harbor archive"],
+                    return_meta=True,
+                    raise_on_error=True,
+                    max_retries=1,
+                )
+
+        assert len(calls) == 2
+        assert [call["max_retries"] for call in calls] == [0, 0]
+        assert "planner_attempts=2" in str(exc.value)
+
     def test_recall_fast_always_uses_planner(self):
         import datastore.memorydb.memory_graph as mg
 
@@ -8135,6 +9397,51 @@ class TestRecallFastHookInjectContract:
         assert [row["id"] for row in rows] == ["fact-1", "alice"]
         assert meta["planned_stores"] == ["vector", "graph"]
 
+    def test_run_recall_store_plan_skips_duplicate_graph_seed_recall_in_deliberate_vector_graph_plan(self):
+        import datastore.memorydb.memory_graph as mg
+
+        captured = {}
+
+        def _fake_vector(*args, **kwargs):
+            return (
+                [{"id": "fact-1", "text": "Ari keeps a harbor ledger", "category": "fact", "similarity": 0.8}],
+                {"selected_path": "vector", "phases_ms": {"total_ms": 100}},
+                None,
+            )
+
+        def _fake_graph(*args, **kwargs):
+            captured["candidate_pool"] = kwargs.get("candidate_pool")
+            return (
+                [{"id": "ledger-source", "text": "Ari --has_fact--> Ari keeps a harbor ledger", "category": "fact", "similarity": 0.76}],
+                {"selected_path": "graph_aware", "phases_ms": {"total_ms": 5}},
+                None,
+            )
+
+        registry = {
+            "vector": {"recall": _fake_vector, "recall_fast": _fake_vector},
+            "graph": {"recall": _fake_graph, "recall_fast": _fake_graph},
+            "docs": {"recall": lambda *a, **k: ([], {}, None), "recall_fast": lambda *a, **k: ([], {}, None)},
+        }
+
+        with patch.object(mg, "_get_recall_store_registry", return_value=self._registry_with_source_chunks(registry)):
+            rows, meta, _ = mg._run_recall_store_plan(
+                "What ledger did Ari keep?",
+                stores=["vector", "graph"],
+                limit=5,
+                owner_id="quaid",
+                min_similarity=0.6,
+                planner_profile="full",
+                planned_queries=["What ledger did Ari keep?"],
+                planner_meta={"planned_stores": ["vector", "graph"]},
+                fast_mode=False,
+                graph_depth=1,
+                common_kwargs={},
+            )
+
+        assert captured["candidate_pool"] == []
+        assert [row["id"] for row in rows] == ["fact-1", "ledger-source"]
+        assert meta["planned_stores"] == ["vector", "graph"]
+
     def test_run_recall_store_plan_passes_timeout_budget_to_graph_store(self):
         import datastore.memorydb.memory_graph as mg
 
@@ -8497,6 +9804,46 @@ class TestRecallFastHookInjectContract:
         assert docs_run["error_type"] == "TimeoutError"
         assert "futures unfinished" in docs_run["error"]
 
+    def test_run_recall_store_plan_timeout_names_failed_store_under_failhard(self):
+        import datastore.memorydb.memory_graph as mg
+
+        def _fake_vector(*args, **kwargs):
+            return (
+                [{"id": "fact-1", "text": "Ari keeps ledger notes", "category": "fact", "similarity": 0.82}],
+                {"selected_path": "vector", "counts": {"final_results": 1}, "phases_ms": {"total_ms": 8}},
+                None,
+            )
+
+        def _fake_docs(*args, **kwargs):
+            raise TimeoutError("1 of 2 futures unfinished")
+
+        registry = {
+            "vector": {"recall": _fake_vector, "recall_fast": _fake_vector},
+            "docs": {"recall": _fake_docs, "recall_fast": _fake_docs},
+            "graph": {"recall": lambda *a, **k: ([], {}, None), "recall_fast": lambda *a, **k: ([], {}, None)},
+        }
+
+        with patch.object(mg, "_get_recall_store_registry", return_value=self._registry_with_source_chunks(registry)), \
+             patch.object(mg, "_is_fail_hard_mode", return_value=True):
+            with pytest.raises(RuntimeError) as exc_info:
+                mg._run_recall_store_plan(
+                    "ledger notes",
+                    stores=["vector", "docs"],
+                    limit=5,
+                    owner_id="owner",
+                    min_similarity=0.6,
+                    planner_profile="fast",
+                    planned_queries=["ledger notes"],
+                    planner_meta={"planned_stores": ["vector", "docs"]},
+                    fast_mode=True,
+                    common_kwargs={"timeout_ms": 1000},
+                )
+
+        detail = str(exc_info.value)
+        assert "Recall store 'docs' failed while failHard is enabled" in detail
+        assert "planned_stores=['vector', 'docs']" in detail
+        assert "TimeoutError" in detail
+
     def test_run_recall_store_plan_still_raises_non_timeout_store_error(self):
         import datastore.memorydb.memory_graph as mg
 
@@ -8761,12 +10108,24 @@ class TestRecallFastHookInjectContract:
             "similarity": 0.96,
         }
         calls = []
-
         def _fake_recall_once(query, **kwargs):
             calls.append(query)
             if "stripe" in query.lower():
                 return [exact_row], {"mode": "deliberate", "query": query}
             return [broad_row], {"mode": "deliberate", "query": query}
+
+        def _fake_drill_plan(*args, **kwargs):
+            drill_calls.append(kwargs)
+            return (
+                ["Maya current employer Stripe"],
+                {
+                    "used_llm": True,
+                    "queries_count": 1,
+                    "elapsed_ms": 12,
+                    "bailout_reason": None,
+                    "done": False,
+                },
+            )
 
         with patch.object(mg, "_recall_once", side_effect=_fake_recall_once), \
              patch.object(mg, "_plan_fanout_queries", return_value=["Where does Maya work now?"]), \
@@ -8778,8 +10137,9 @@ class TestRecallFastHookInjectContract:
                      {
                          "used_llm": True,
                          "queries_count": 1,
-                         "elapsed_ms": 12,
-                         "bailout_reason": None,
+                         "timeout_ms": 0,
+                         "elapsed_ms": 0,
+                         "bailout_reason": "preserve_short_exact_query",
                          "done": False,
                      },
                  ),
@@ -9026,6 +10386,62 @@ class TestRecallFastHookInjectContract:
 
         assert captured["timeout"] == 8.0
         assert meta["timeout_ms"] == 8000
+
+    def test_plan_query_anchor_terms_retries_transient_provider_timeout(self):
+        import datastore.memorydb.memory_graph as mg
+
+        calls = []
+
+        def _timeout_error():
+            err = RuntimeError("LLM call failed after retries while failHard is enabled")
+            err.__cause__ = TimeoutError("The read operation timed out")
+            return err
+
+        def _fake_call_fast_reasoning(**kwargs):
+            calls.append(kwargs)
+            if len(calls) == 1:
+                raise _timeout_error()
+            return '{"anchors": ["Maya", "timeline"]}', {}
+
+        with patch.object(mg, "call_fast_reasoning", side_effect=_fake_call_fast_reasoning), \
+             patch("time.sleep") as sleep_mock:
+            anchors, meta = mg._plan_query_anchor_terms(
+                "Maya timeline",
+                timeout_s=0.5,
+                max_retries=1,
+            )
+
+        assert anchors == ["maya", "timeline"]
+        assert len(calls) == 2
+        assert [call["timeout"] for call in calls] == [0.5, 0.5]
+        assert [call["max_retries"] for call in calls] == [0, 0]
+        assert meta["attempts"] == 2
+        assert meta["max_retries"] == 1
+        sleep_mock.assert_called_once()
+
+    def test_plan_query_anchor_terms_raises_after_retry_exhaustion_under_failhard(self):
+        import datastore.memorydb.memory_graph as mg
+
+        calls = []
+
+        def _fake_call_fast_reasoning(**kwargs):
+            calls.append(kwargs)
+            err = RuntimeError("LLM call failed after retries while failHard is enabled")
+            err.__cause__ = TimeoutError("The read operation timed out")
+            raise err
+
+        with patch.object(mg, "call_fast_reasoning", side_effect=_fake_call_fast_reasoning), \
+             patch.object(mg, "_is_fail_hard_mode", return_value=True), \
+             patch("time.sleep"):
+            with pytest.raises(RuntimeError, match="max_retries=1"):
+                mg._plan_query_anchor_terms(
+                    "Maya timeline",
+                    timeout_s=0.5,
+                    max_retries=1,
+                )
+
+        assert len(calls) == 2
+        assert [call["max_retries"] for call in calls] == [0, 0]
 
     def test_plan_query_anchor_terms_uses_safe_json_budget_with_strict_prompt(self):
         import datastore.memorydb.memory_graph as mg
@@ -10294,6 +11710,201 @@ class TestRecallFastHookInjectContract:
         assert any("tide walks" in text for text in texts)
         assert any("repairs kites" in text for text in texts)
 
+    def test_final_selection_keeps_first_order_session_above_facet_rescue(self):
+        import datastore.memorydb.memory_graph as mg
+
+        rows = [
+            {
+                "id": "generic-1",
+                "text": "Nora Vale has a greenhouse.",
+                "category": "fact",
+                "similarity": 0.99,
+            },
+            {
+                "id": "generic-2",
+                "text": "Nora Vale visited the museum.",
+                "category": "fact",
+                "similarity": 0.98,
+            },
+            {
+                "id": "session-ritual",
+                "chunk_id": "session-ritual",
+                "text": "User: Nora Vale described the harbor lantern mentor schedule in 2024.",
+                "category": "session_chunk",
+                "source_type": "session_chunk",
+                "via": "session_chunks",
+                "similarity": 0.20,
+            },
+            {
+                "id": "facet-1",
+                "text": "Nora Vale keeps tide walks as a weekly ritual.",
+                "category": "fact",
+                "similarity": 0.91,
+                "_facet_rescue": True,
+                "via": "facet_rescue_lexical",
+                "keywords": "Nora Vale rituals tide walks weekly",
+            },
+            {
+                "id": "facet-2",
+                "text": "Nora Vale repairs kites as a weekly ritual.",
+                "category": "fact",
+                "similarity": 0.90,
+                "_facet_rescue": True,
+                "via": "facet_rescue_lexical",
+                "keywords": "Nora Vale rituals kites weekly",
+            },
+        ]
+
+        selected = mg._select_final_recall_rows_with_facet_rescue(
+            "Nora Vale harbor lantern mentor schedule 2024",
+            rows,
+            limit=3,
+            intent="GENERAL",
+        )
+
+        assert selected[0]["chunk_id"] == "session-ritual"
+        assert selected[0]["first_order_query_coverage_promoted"] is True
+        assert selected[0]["first_order_query_coverage_score"] >= 3
+
+    def test_high_signal_facet_rescue_can_lead_after_session_expansion(self):
+        import datastore.memorydb.memory_graph as mg
+
+        rows = [
+            {
+                "id": "session-1",
+                "chunk_id": "session-1",
+                "text": "User: Ari Vale described a lantern rehearsal near the harbor.",
+                "category": "session_chunk",
+                "source_type": "session_chunk",
+                "via": "session_chunks",
+                "similarity": 0.96,
+            },
+            {
+                "id": "session-2",
+                "chunk_id": "session-2",
+                "text": "User: Noor Lin talked about another gathering together.",
+                "category": "session_chunk",
+                "source_type": "session_chunk",
+                "via": "session_chunks",
+                "similarity": 0.96,
+            },
+            {
+                "id": "facet-exact",
+                "text": "Ari Vale and Noor Lin attended the lantern gala together in 2022.",
+                "category": "fact",
+                "similarity": 0.92,
+                "_facet_rescue": True,
+                "via": "facet_rescue_lexical",
+                "keywords": "Ari Vale Noor Lin lantern gala together 2022",
+            },
+            {
+                "id": "facet-weak",
+                "text": "Ari Vale likes lanterns.",
+                "category": "preference",
+                "similarity": 0.86,
+                "_facet_rescue": True,
+                "via": "facet_rescue_lexical",
+                "keywords": "Ari Vale lanterns",
+            },
+        ]
+
+        selected = mg._prioritize_high_signal_facet_rescue_rows(
+            "When did Ari Vale and Noor Lin attend the lantern gala together?",
+            rows,
+        )
+
+        assert selected[0]["id"] == "facet-exact"
+        assert selected.index(rows[0]) < selected.index(rows[3])
+
+    def test_merge_preserves_facet_rescue_provenance_for_same_memory(self):
+        import datastore.memorydb.memory_graph as mg
+
+        vector_row = {
+            "id": "fact-1",
+            "text": "Ari Vale and Noor Lin attended the lantern gala together in 2022.",
+            "category": "fact",
+            "similarity": 0.98,
+            "via": "vector",
+        }
+        rescued_row = {
+            "id": "fact-1",
+            "text": "Ari Vale and Noor Lin attended the lantern gala together in 2022.",
+            "category": "fact",
+            "similarity": 0.92,
+            "via": "facet_rescue_lexical",
+            "_facet_rescue": True,
+        }
+
+        merged = mg._merge_recall_batches([[vector_row], [rescued_row]], limit=5)
+
+        assert len(merged) == 1
+        assert merged[0]["similarity"] == 0.98
+        assert merged[0]["_facet_rescue"] is True
+        assert merged[0]["via"] == "facet_rescue_lexical"
+
+    def test_high_signal_facet_rescue_does_not_bury_source_dated_session_evidence(self):
+        import datastore.memorydb.memory_graph as mg
+
+        rows = [
+            {
+                "id": "session-dated",
+                "chunk_id": "session-dated",
+                "text": "source_date: 2023-06-09\nUser: Ari Vale met friends, family, and mentors last week.",
+                "category": "session_chunk",
+                "source_type": "session_chunk",
+                "via": "session_chunks",
+                "source_date": "2023-06-09",
+                "similarity": 0.95,
+            },
+            {
+                "id": "facet-partial",
+                "text": "Ari Vale had a picnic with friends and family last week in late June 2023.",
+                "category": "fact",
+                "similarity": 0.98,
+                "_facet_rescue": True,
+                "via": "facet_rescue_lexical",
+                "keywords": "Ari Vale friends family",
+            },
+        ]
+
+        selected = mg._prioritize_high_signal_facet_rescue_rows(
+            "When did Ari Vale meet friends, family, and mentors?",
+            rows,
+        )
+
+        assert selected[0]["id"] == "session-dated"
+        assert selected[1]["id"] == "facet-partial"
+
+    def test_session_window_item_anchor_overlap_uses_defined_fuzzy_anchor_helper(self):
+        import datastore.memorydb.memory_graph as mg
+
+        row = {"text": "Ari archived lantern schedules near the harbor."}
+
+        assert mg._session_window_item_anchor_overlap(row, ["schedule"]) == 1
+        assert mg._session_window_item_anchor_overlap(row, ["harbor"]) == 1
+
+    def test_fuzzy_anchor_matching_tolerates_single_character_variants(self):
+        import datastore.memorydb.memory_graph as mg
+
+        assert mg._text_contains_anchor_term_fuzzy("Ari met Noor near the archive.", "meet")
+        assert mg._text_contains_anchor_term_fuzzy("The harbor festival happened in June.", "fesetival")
+        assert mg._text_contains_anchor_term_fuzzy("The harbor fest happened in June.", "festival")
+        assert not mg._text_contains_anchor_term_fuzzy("The harbor lantern stayed dark.", "festival")
+
+    def test_first_order_session_coverage_uses_fuzzy_anchor_matching(self):
+        import datastore.memorydb.memory_graph as mg
+
+        row = {
+            "source_type": "session_chunk",
+            "text": "Ari met Noor and their mentor near the archive.",
+        }
+
+        assert mg._first_order_session_query_coverage_score(
+            row,
+            ["meet", "mentor", "archive"],
+            [],
+        ) == 3
+
     def test_fast_term_rescue_promotes_full_fit_above_partial_vector_hit(self):
         import datastore.memorydb.memory_graph as mg
 
@@ -11130,7 +12741,10 @@ class TestRecallFastHookInjectContract:
         with patch.object(mg, "get_graph", return_value=graph), \
              patch.object(mg, "_HAS_CONFIG", True), \
              patch.object(mg, "_get_memory_config", return_value=fake_cfg), \
-             patch.object(mg, "extract_entities_from_text", return_value=[]), \
+             patch.object(mg, "extract_entities_from_text", return_value=[
+                 SimpleNamespace(id="ari-1", name="Ari", type="Person"),
+                 SimpleNamespace(id="noor-1", name="Noor", type="Person"),
+             ]), \
              patch.object(mg, "_get_recall_store_registry", return_value=registry), \
              patch.object(mg, "recall", side_effect=AssertionError("graph lane should not run recursive seed recall")):
             rows, meta, bundle = mg._run_recall_store_plan(
@@ -11188,7 +12802,10 @@ class TestRecallFastHookInjectContract:
         with patch.object(mg, "get_graph", return_value=graph), \
              patch.object(mg, "_HAS_CONFIG", True), \
              patch.object(mg, "_get_memory_config", return_value=fake_cfg), \
-             patch.object(mg, "extract_entities_from_text", return_value=[]), \
+             patch.object(mg, "extract_entities_from_text", return_value=[
+                 SimpleNamespace(id="ari-1", name="Ari", type="Person"),
+                 SimpleNamespace(id="noor-1", name="Noor", type="Person"),
+             ]), \
              patch.object(mg, "get_edge_keywords", return_value={
                  "knows": ["partner"],
                  "sibling_of": ["brother"],
@@ -11525,6 +13142,66 @@ class TestRecallFastHookInjectContract:
              patch.object(mg, "_has_generic_graph_signal", return_value=False), \
              patch.object(mg, "extract_entities_from_text", return_value=[mei]):
             stores, project = mg._infer_recall_store_defaults("what does Mei do")
+
+        assert stores == ["vector", "graph"]
+        assert project is None
+
+    def test_infer_recall_store_defaults_routes_named_entity_lookup_to_graph(self):
+        import datastore.memorydb.memory_graph as mg
+
+        ari = SimpleNamespace(id="ari-1", name="Ari", type="Person")
+        with patch.object(mg, "_registered_project_name_in_query", return_value=None), \
+             patch.object(mg, "_has_generic_graph_signal", return_value=False), \
+             patch.object(mg, "extract_entities_from_text", return_value=[ari]):
+            stores, project = mg._infer_recall_store_defaults("Where did Ari keep the ledger?")
+
+        assert stores == ["vector", "graph"]
+        assert project is None
+
+    def test_infer_recall_store_defaults_routes_shared_entity_lookup_to_session_chunks(self):
+        import datastore.memorydb.memory_graph as mg
+
+        ari = SimpleNamespace(id="ari-1", name="Ari", type="Person")
+        miko = SimpleNamespace(id="miko-1", name="Miko", type="Person")
+        with patch.object(mg, "_registered_project_name_in_query", return_value=None), \
+             patch.object(mg, "_has_generic_graph_signal", return_value=False), \
+             patch.object(mg, "extract_entities_from_text", return_value=[ari, miko]):
+            stores, project = mg._infer_recall_store_defaults("What topic did Ari and Miko both document?")
+
+        assert stores == ["vector", "session_chunks"]
+        assert project is None
+
+    def test_infer_recall_store_defaults_keeps_single_entity_shared_word_vector_graph_only(self):
+        import datastore.memorydb.memory_graph as mg
+
+        ari = SimpleNamespace(id="ari-1", name="Ari", type="Person")
+        with patch.object(mg, "_registered_project_name_in_query", return_value=None), \
+             patch.object(mg, "_has_generic_graph_signal", return_value=False), \
+             patch.object(mg, "extract_entities_from_text", return_value=[ari]):
+            stores, project = mg._infer_recall_store_defaults("What topic did Ari share?")
+
+        assert stores == ["vector", "graph"]
+        assert project is None
+
+    def test_infer_recall_store_defaults_keeps_plain_named_keyword_query_vector_only(self):
+        import datastore.memorydb.memory_graph as mg
+
+        with patch.object(mg, "_registered_project_name_in_query", return_value=None), \
+             patch.object(mg, "_has_generic_graph_signal", return_value=False), \
+             patch.object(mg, "extract_entities_from_text", side_effect=AssertionError("plain keyword query should not classify graph")):
+            stores, project = mg._infer_recall_store_defaults("Ari ledger harbor")
+
+        assert stores == ["vector"]
+        assert project is None
+
+    def test_infer_recall_store_defaults_routes_named_temporal_activity_to_graph(self):
+        import datastore.memorydb.memory_graph as mg
+
+        ari = SimpleNamespace(id="ari-1", name="Ari", type="Person")
+        with patch.object(mg, "_registered_project_name_in_query", return_value=None), \
+             patch.object(mg, "_has_generic_graph_signal", return_value=False), \
+             patch.object(mg, "extract_entities_from_text", return_value=[ari]):
+            stores, project = mg._infer_recall_store_defaults("When did Ari go to the workshop?")
 
         assert stores == ["vector", "graph"]
         assert project is None
@@ -12911,3 +14588,866 @@ class TestRecallLimitEdgeCases:
 
         assert store_names == ["vector", "graph"]
         assert store_opts == {}
+
+class TestGraphFactClusterRecall:
+    def test_preserve_graph_fact_cluster_keeps_session_rows(self):
+        import datastore.memorydb.memory_graph as mg
+
+        final_rows = [
+            {"id": "session-a", "category": "session_chunk", "text": "source transcript", "similarity": 0.96},
+            {"id": "fact-a", "category": "fact", "text": "single fact A", "similarity": 1.0},
+            {"id": "fact-b", "category": "fact", "text": "single fact B", "similarity": 0.99},
+        ]
+        cluster = {
+            "id": "graph_fact_cluster:mei:abc123",
+            "category": "graph_cluster",
+            "via": "graph_fact_cluster",
+            "text": "Related facts for Mei:\n- A\n- B\n- C\n- D",
+            "similarity": 0.93,
+            "cluster_size": 4,
+        }
+
+        rows, preserved = mg._preserve_graph_fact_cluster_row(final_rows, [*final_rows, cluster], limit=3)
+
+        assert preserved == 1
+        assert rows[0]["id"] == "session-a"
+        assert any(row.get("via") == "graph_fact_cluster" for row in rows)
+        assert len(rows) == 3
+
+    def test_graph_fact_cluster_keeps_default_cap_for_small_pools(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _ = _make_graph(tmp_path)
+        anchor = mg.Node.create("Person", "Noor")
+        graph.add_node(anchor, embed=False)
+        facts = []
+        for idx in range(9):
+            fact = mg.Node.create("Fact", f"Noor archive detail marker{idx} topic{idx} planning{idx} note")
+            graph.add_node(fact, embed=False)
+            graph.add_edge(mg.Edge.create(anchor.id, fact.id, "has_fact"))
+            facts.append(fact)
+
+        rows = mg._graph_attached_fact_rows(
+            graph,
+            anchor_node=anchor,
+            anchor_text="Noor",
+            anchor_score=0.93,
+            graph_path="Noor",
+            relation_sequence=[],
+            hop_depth=0,
+            seen_ids=set(),
+            query="What archive details are known about Noor?",
+            per_anchor_limit=12,
+        )
+
+        cluster = next(row for row in rows if row.get("via") == "graph_fact_cluster")
+        assert cluster["cluster_size"] == 8
+        assert "detail marker7" in cluster["text"]
+        assert "detail marker8" not in cluster["text"]
+
+    def test_graph_fact_cluster_cap_uses_unique_fact_pool(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _ = _make_graph(tmp_path)
+        anchor = mg.Node.create("Person", "Lina")
+        graph.add_node(anchor, embed=False)
+        facts = []
+        for idx in range(9):
+            fact = mg.Node.create("Fact", f"Lina archive detail marker{idx} topic{idx} planning{idx} note")
+            graph.add_node(fact, embed=False)
+            graph.add_edge(mg.Edge.create(anchor.id, fact.id, "has_fact"))
+            facts.append(fact)
+        for idx in range(3):
+            alias = mg.Node.create("Concept", f"Lina alias {idx}")
+            graph.add_node(alias, embed=False)
+            graph.add_edge(mg.Edge.create(anchor.id, alias.id, "knows"))
+            graph.add_edge(mg.Edge.create(alias.id, facts[idx].id, "has_fact"))
+
+        rows = mg._graph_attached_fact_rows(
+            graph,
+            anchor_node=anchor,
+            anchor_text="Lina",
+            anchor_score=0.93,
+            graph_path="Lina",
+            relation_sequence=[],
+            hop_depth=0,
+            seen_ids=set(),
+            query="What archive details are known about Lina?",
+            per_anchor_limit=12,
+        )
+
+        cluster = next(row for row in rows if row.get("via") == "graph_fact_cluster")
+        assert cluster["cluster_size"] == 8
+        assert cluster["text"].count("detail marker0") == 1
+        assert "detail marker8" not in cluster["text"]
+
+    def test_graph_fact_cluster_preserves_larger_first_order_context(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _ = _make_graph(tmp_path)
+        anchor = mg.Node.create("Person", "Noor")
+        graph.add_node(anchor, embed=False)
+        for idx in range(12):
+            fact = mg.Node.create("Fact", f"Noor ledger detail marker{idx} topic{idx} planning{idx} note")
+            graph.add_node(fact, embed=False)
+            graph.add_edge(mg.Edge.create(anchor.id, fact.id, "has_fact"))
+
+        rows = mg._graph_attached_fact_rows(
+            graph,
+            anchor_node=anchor,
+            anchor_text="Noor",
+            anchor_score=0.93,
+            graph_path="Noor",
+            relation_sequence=[],
+            hop_depth=0,
+            seen_ids=set(),
+            query="What ledger details are known about Noor?",
+            per_anchor_limit=12,
+        )
+
+        cluster = next(row for row in rows if row.get("via") == "graph_fact_cluster")
+        assert cluster["cluster_size"] == 12
+        assert "detail marker11" in cluster["text"]
+
+    def test_graph_mentioned_fact_nodes_rank_query_keyword_match_before_recent_noise(self):
+        import datastore.memorydb.memory_graph as mg
+
+        class FakeConn:
+            def __init__(self):
+                self.params = None
+
+            def execute(self, _sql, params, **_kwargs):
+                self.params = params
+
+                class Cursor:
+                    def fetchall(self_inner):
+                        rows = [{"id": f"recent-{idx}"} for idx in range(12)]
+                        rows.append({"id": "ingredient"})
+                        return rows
+
+                return Cursor()
+
+        fake_conn = FakeConn()
+
+        class FakeGraph:
+            def _get_conn(self):
+                class Ctx:
+                    def __enter__(self_inner):
+                        return fake_conn
+
+                    def __exit__(self_inner, *_exc):
+                        return False
+
+                return Ctx()
+
+            def _row_to_node(self, row):
+                if row["id"] == "ingredient":
+                    return mg.Node(
+                        id="ingredient",
+                        type="Fact",
+                        name="Ari makes a dessert with milk, extract, sugar, and salt.",
+                        keywords="recipe ingredients cooking dessert",
+                    )
+                return mg.Node(
+                    id=row["id"],
+                    type="Fact",
+                    name=f"Ari shared generic dessert photo {row['id']}",
+                    keywords="dessert photo shared",
+                )
+
+        facts = mg._graph_mentioned_fact_nodes(
+            FakeGraph(),
+            anchor_text="Ari",
+            query="What are the recipe ingredients Ari shared?",
+            seen_ids=set(),
+            limit=2,
+        )
+
+        assert fake_conn.params[1] >= 256
+        assert [fact.id for fact in facts] == ["ingredient", "recent-0"]
+
+    def test_graph_attached_fact_rows_do_not_demote_query_matching_mentioned_facts(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _ = _make_graph(tmp_path)
+        anchor = mg.Node.create("Person", "Ari")
+        graph.add_node(anchor, embed=False)
+        for idx in range(5):
+            fact = mg.Node.create(
+                "Fact",
+                f"Ari shared generic dessert photo {idx}",
+                keywords="dessert photo shared",
+            )
+            graph.add_node(fact, embed=False)
+            graph.add_edge(mg.Edge.create(anchor.id, fact.id, "has_fact"))
+
+        ingredient = mg.Node.create(
+            "Fact",
+            "Ari shared a dessert recipe with milk, extract, sugar, and salt.",
+            keywords="recipe ingredients cooking dessert",
+        )
+        graph.add_node(ingredient, embed=False)
+
+        rows = mg._graph_attached_fact_rows(
+            graph,
+            anchor_node=anchor,
+            anchor_text="Ari",
+            anchor_score=0.93,
+            graph_path="Ari",
+            relation_sequence=[],
+            hop_depth=0,
+            seen_ids=set(),
+            query="What recipe ingredients did Ari share?",
+            per_anchor_limit=4,
+        )
+
+        assert any(row.get("id") == ingredient.id for row in rows)
+
+    def test_graph_fact_cluster_interpretation_asks_for_query_language(self):
+        import datastore.memorydb.memory_graph as mg
+
+        captured = {}
+
+        def fake_call(*, prompt, system_prompt=None, **_kwargs):
+            captured["prompt"] = prompt
+            captured["system_prompt"] = system_prompt
+            return '{"supported": true, "interpretation": "Ari tiene evidencia sobre el archivo y la bicicleta."}', 0.01
+
+        cluster = {
+            "id": "graph_fact_cluster:ari:abc123",
+            "category": "graph_cluster",
+            "via": "graph_fact_cluster",
+            "cluster_size": 8,
+            "text": "Related facts for Ari:\n- Ari reviso el archivo de la bicicleta antigua.\n- Ari guardo notas sobre la bicicleta antigua.",
+        }
+
+        with patch.object(mg, "_HAS_LLM_CLIENTS", True), \
+             patch.object(mg, "call_fast_reasoning", side_effect=fake_call):
+            rows, meta = mg._interpret_selected_graph_fact_cluster_rows(
+                "Que sabe Ari sobre la bicicleta antigua?",
+                [cluster],
+                fast_mode=False,
+            )
+
+        assert meta["annotated"] == 1
+        assert "Respond in the same language as the Query" in captured["prompt"]
+        assert "Match the user's query language" in captured["system_prompt"]
+        assert rows[0]["graph_cluster_interpretation"].startswith("Ari tiene")
+
+    def test_graph_fact_cluster_interpretation_no_provider_respects_failhard(self):
+        import datastore.memorydb.memory_graph as mg
+
+        cluster = {
+            "id": "graph_fact_cluster:ari:abc123",
+            "category": "graph_cluster",
+            "via": "graph_fact_cluster",
+            "cluster_size": 8,
+            "text": "Related facts for Ari:\n- Ari repairs archive lanterns near the harbor.",
+        }
+
+        with patch.object(mg, "_HAS_LLM_CLIENTS", False), \
+             patch.object(mg, "_is_fail_hard_mode", return_value=True):
+            with pytest.raises(RuntimeError, match="no_llm_clients"):
+                mg._interpret_selected_graph_fact_cluster_rows(
+                    "What archive lanterns evidence exists?",
+                    [cluster],
+                    fast_mode=False,
+                )
+
+    @pytest.mark.parametrize(
+        "llm_result,parsed,expected",
+        [
+            (None, None, "returned no result"),
+            ("not-json", None, "invalid JSON payload"),
+            ('{"supported": true, "interpretation": ""}', {"supported": True, "interpretation": ""}, "empty interpretation"),
+        ],
+    )
+    def test_graph_fact_cluster_interpretation_bad_payload_respects_failhard(self, llm_result, parsed, expected):
+        import datastore.memorydb.memory_graph as mg
+
+        cluster = {
+            "id": "graph_fact_cluster:ari:abc123",
+            "category": "graph_cluster",
+            "via": "graph_fact_cluster",
+            "cluster_size": 8,
+            "text": "Related facts for Ari:\n- Ari repairs archive lanterns near the harbor.",
+        }
+
+        with patch.object(mg, "_HAS_LLM_CLIENTS", True), \
+             patch.object(mg, "_is_fail_hard_mode", return_value=True), \
+             patch.object(mg, "call_fast_reasoning", return_value=(llm_result, 0.01)), \
+             patch.object(mg, "parse_json_response", return_value=parsed):
+            with pytest.raises(RuntimeError, match=expected):
+                mg._interpret_selected_graph_fact_cluster_rows(
+                    "What archive lanterns evidence exists?",
+                    [cluster],
+                    fast_mode=False,
+                )
+
+    def test_graph_fact_cluster_interpretation_provider_exception_respects_failhard(self):
+        import datastore.memorydb.memory_graph as mg
+
+        cluster = {
+            "id": "graph_fact_cluster:ari:abc123",
+            "category": "graph_cluster",
+            "via": "graph_fact_cluster",
+            "cluster_size": 8,
+            "text": "Related facts for Ari:\n- Ari repairs archive lanterns near the harbor.",
+        }
+
+        with patch.object(mg, "_HAS_LLM_CLIENTS", True), \
+             patch.object(mg, "_is_fail_hard_mode", return_value=True), \
+             patch.object(mg, "call_fast_reasoning", side_effect=ValueError("provider down")):
+            with pytest.raises(RuntimeError, match="failed while failHard is enabled"):
+                mg._interpret_selected_graph_fact_cluster_rows(
+                    "What archive lanterns evidence exists?",
+                    [cluster],
+                    fast_mode=False,
+                )
+
+    def test_graph_fact_cluster_interpretation_skips_unsupported_evidence(self):
+        import datastore.memorydb.memory_graph as mg
+
+        cluster = {
+            "id": "graph_fact_cluster:ari:abc123",
+            "category": "graph_cluster",
+            "via": "graph_fact_cluster",
+            "cluster_size": 8,
+            "text": "Related facts for Ari:\n- Ari repairs lanterns near the harbor.",
+        }
+
+        with patch.object(mg, "_HAS_LLM_CLIENTS", True), \
+             patch.object(mg, "call_fast_reasoning", return_value=(
+                 '{"supported": false, "interpretation": ""}',
+                 0.01,
+             )):
+            rows, meta = mg._interpret_selected_graph_fact_cluster_rows(
+                "What lanterns harbor evidence exists?",
+                [cluster],
+                fast_mode=False,
+            )
+
+        assert rows == [cluster]
+        assert meta["annotated"] == 0
+        assert meta["skipped_reason"] == "unsupported_evidence"
+
+    def test_graph_cluster_source_chunk_expansion_uses_sessiondb_bridge(self):
+        import datastore.memorydb.memory_graph as mg
+
+        class FakeGraph:
+            def get_source_chunk(self, chunk_id, **_kwargs):
+                assert chunk_id == "source-center"
+                return {
+                    "chunk_id": "source-center",
+                    "microchunk_id": "micro-center",
+                    "source_id": "transcript-1",
+                    "session_id": "session-1",
+                    "chunk_index": 12,
+                    "text": "Ari said the archive repair note was in the blue ledger.",
+                }
+
+        def fake_expand(microchunk_id, *, owner_id, before, after):
+            assert microchunk_id == "micro-center"
+            return {
+                "source_header": "Session on 2026-03-10",
+                "source_date": "2026-03-10",
+                "microchunk": {"microchunk_id": "micro-center", "session_id": "session-1", "pair_id": "pair-center"},
+                "microchunk_window": [
+                    {
+                        "microchunk_id": "micro-center",
+                        "memory_chunk_id": "source-center",
+                        "session_id": "session-1",
+                        "pair_id": "pair-center",
+                        "microchunk_index": 12,
+                        "text": "Ari said the archive repair note was in the blue ledger.",
+                    },
+                    {
+                        "microchunk_id": "micro-after",
+                        "memory_chunk_id": "source-after",
+                        "session_id": "session-1",
+                        "pair_id": "pair-after",
+                        "microchunk_index": 13,
+                        "text": "The blue ledger also listed the harbor repair detail.",
+                    },
+                ],
+            }
+
+        rows = [{
+            "id": "graph_fact_cluster:ari:abc123",
+            "category": "graph_cluster",
+            "via": "graph_fact_cluster",
+            "text": "Related facts for Ari:\n- Ari has an archive repair note.",
+            "source_chunk_ids": ["source-center"],
+            "output_token_count": 8,
+        }]
+
+        with patch.object(mg, "get_graph", return_value=FakeGraph()), \
+             patch.object(mg, "_sessiondb_bridge_expand_microchunk", side_effect=fake_expand):
+            expanded, meta = mg._expand_selected_session_chunk_rows(
+                rows,
+                owner_id="ari",
+                max_chunk_tokens=80,
+                max_total_chunk_tokens=240,
+                before=1,
+                after=1,
+                query="Where was Ari archive repair note?",
+            )
+
+        assert meta["expanded"] == 1
+        assert expanded[0]["session_window_expansion_source"] == "graph_cluster_source_chunks"
+        assert "Ari said the archive repair note was in the blue ledger" in expanded[0]["text"]
+        assert "[memory] Related facts for Ari" in expanded[0]["text"]
+        assert expanded[0]["text"].index("[session_chunk]") < expanded[0]["text"].index("[memory]")
+
+    def test_graph_cluster_source_chunk_expansion_uses_source_chunk_owner(self):
+        import datastore.memorydb.memory_graph as mg
+
+        class FakeGraph:
+            def get_source_chunk(self, chunk_id, **kwargs):
+                assert chunk_id == "source-center"
+                assert "owner_id" not in kwargs
+                return {
+                    "chunk_id": "source-center",
+                    "owner_id": "archive-owner",
+                    "microchunk_id": "micro-center",
+                    "source_id": "transcript-1",
+                    "session_id": "session-1",
+                    "chunk_index": 12,
+                    "text": "Ari said the archive repair note was in the blue ledger.",
+                }
+
+        def fake_expand(microchunk_id, *, owner_id, before, after):
+            assert microchunk_id == "micro-center"
+            assert owner_id == "archive-owner"
+            return {
+                "microchunk": {"microchunk_id": "micro-center", "session_id": "session-1", "pair_id": "pair-center"},
+                "microchunk_window": [
+                    {
+                        "microchunk_id": "micro-center",
+                        "memory_chunk_id": "source-center",
+                        "session_id": "session-1",
+                        "pair_id": "pair-center",
+                        "microchunk_index": 12,
+                        "text": "Ari said the archive repair note was in the blue ledger.",
+                    }
+                ],
+            }
+
+        rows = [{
+            "id": "graph_fact_cluster:ari:abc123",
+            "category": "graph_cluster",
+            "via": "graph_fact_cluster",
+            "text": "Related facts for Ari:\n- Ari has an archive repair note.",
+            "source_chunk_ids": ["source-center"],
+            "output_token_count": 8,
+        }]
+
+        with patch.object(mg, "get_graph", return_value=FakeGraph()), \
+             patch.object(mg, "_sessiondb_bridge_expand_microchunk", side_effect=fake_expand):
+            expanded, meta = mg._expand_selected_session_chunk_rows(
+                rows,
+                owner_id="caller-owner",
+                max_chunk_tokens=80,
+                max_total_chunk_tokens=240,
+                before=1,
+                after=1,
+                query="Where was Ari archive repair note?",
+            )
+
+        assert meta["expanded"] == 1
+        assert expanded[0]["session_window_expansion_source"] == "graph_cluster_source_chunks"
+        assert "blue ledger" in expanded[0]["text"]
+
+    def test_graph_attached_fact_source_expansion_uses_source_chunk_owner(self):
+        import datastore.memorydb.memory_graph as mg
+
+        class FakeGraph:
+            def get_source_chunk(self, chunk_id, **kwargs):
+                assert chunk_id == "source-center"
+                assert kwargs.get("owner_id") is None
+                return {
+                    "chunk_id": "source-center",
+                    "owner_id": "archive-owner",
+                    "microchunk_id": "micro-center",
+                    "source_id": "transcript-1",
+                    "session_id": "session-1",
+                    "chunk_index": 12,
+                    "text": "Ari said the archive repair note was in the blue ledger.",
+                }
+
+        def fake_expand(microchunk_id, *, owner_id, before, after):
+            assert microchunk_id == "micro-center"
+            assert owner_id == "archive-owner"
+            return {
+                "microchunk": {"microchunk_id": "micro-center", "session_id": "session-1", "pair_id": "pair-center"},
+                "microchunk_window": [
+                    {
+                        "microchunk_id": "micro-center",
+                        "memory_chunk_id": "source-center",
+                        "session_id": "session-1",
+                        "pair_id": "pair-center",
+                        "microchunk_index": 12,
+                        "text": "Ari said the archive repair note was in the blue ledger.",
+                    }
+                ],
+            }
+
+        rows = [{
+            "id": "fact-ari",
+            "category": "fact",
+            "source_type": "user",
+            "via": "graph_attached_fact",
+            "text": "Ari has an archive repair note.",
+            "source_chunk_id": "source-center",
+            "output_token_count": 8,
+        }]
+
+        with patch.object(mg, "get_graph", return_value=FakeGraph()), \
+             patch.object(mg, "_sessiondb_bridge_expand_microchunk", side_effect=fake_expand):
+            expanded, meta = mg._expand_selected_session_chunk_rows(
+                rows,
+                owner_id="caller-owner",
+                max_chunk_tokens=80,
+                max_total_chunk_tokens=240,
+                before=1,
+                after=1,
+                query="Where was Ari archive repair note?",
+            )
+
+        assert meta["expanded"] == 1
+        assert expanded[0]["session_window_expansion_source"] == "sessiondb_bridge"
+        assert "blue ledger" in expanded[0]["text"]
+
+    def test_sessiondb_bridge_header_is_metadata_not_transcript_body(self):
+        import datastore.memorydb.memory_graph as mg
+
+        class FakeGraph:
+            def get_source_chunk(self, chunk_id, **_kwargs):
+                assert chunk_id == "source-center"
+                return {
+                    "chunk_id": "source-center",
+                    "microchunk_id": "micro-center",
+                    "source_id": "transcript-1",
+                    "session_id": "session-1",
+                    "chunk_index": 12,
+                    "text": "Ari said the archive repair note was in the blue ledger.",
+                }
+
+        def fake_expand(microchunk_id, *, owner_id, before, after):
+            assert microchunk_id == "micro-center"
+            return {
+                "source_header": (
+                    "Session on 2026-03-10\n\n"
+                    "This transcript body is broad background that should not be "
+                    "rendered as the source header evidence."
+                ),
+                "source_date": "2026-03-10",
+                "microchunk": {"microchunk_id": "micro-center", "session_id": "session-1", "pair_id": "pair-center"},
+                "microchunk_window": [
+                    {
+                        "microchunk_id": "micro-before",
+                        "memory_chunk_id": "source-before",
+                        "session_id": "session-1",
+                        "pair_id": "pair-before",
+                        "microchunk_index": 11,
+                        "text": "Ari mentioned the harbor weather.",
+                    },
+                    {
+                        "microchunk_id": "micro-center",
+                        "memory_chunk_id": "source-center",
+                        "session_id": "session-1",
+                        "pair_id": "pair-center",
+                        "microchunk_index": 12,
+                        "text": "Ari said the archive repair note was in the blue ledger.",
+                    },
+                ],
+            }
+
+        rows = [{
+            "id": "source-center",
+            "category": "session_chunk",
+            "source_type": "session_chunk",
+            "via": "session_chunks",
+            "text": "Ari said the archive repair note was in the blue ledger.",
+            "chunk_id": "source-center",
+            "session_chunk_id": "source-center",
+            "output_token_count": 8,
+        }]
+
+        with patch.object(mg, "get_graph", return_value=FakeGraph()), \
+             patch.object(mg, "_sessiondb_bridge_expand_microchunk", side_effect=fake_expand):
+            expanded, meta = mg._expand_selected_session_chunk_rows(
+                rows,
+                owner_id="ari",
+                max_chunk_tokens=80,
+                max_total_chunk_tokens=240,
+                before=1,
+                after=1,
+                query="Where was Ari archive repair note?",
+            )
+
+        assert meta["expanded"] == 1
+        assert expanded[0]["session_window_expansion_source"] == "sessiondb_bridge"
+        assert "Session on 2026-03-10" in expanded[0]["text"]
+        assert "This transcript body is broad background" not in expanded[0]["text"]
+        assert "Ari said the archive repair note was in the blue ledger" in expanded[0]["text"]
+        assert "source-center" in expanded[0]["session_window_chunk_ids"]
+
+    def test_sessiondb_bridge_prefers_microchunk_over_legacy_pair_window(self):
+        import datastore.memorydb.memory_graph as mg
+
+        expanded = {
+            "microchunk": {
+                "microchunk_id": "micro-center",
+                "memory_chunk_id": "source-center",
+                "chunk_id": "parent-session",
+                "session_id": "session-1",
+                "pair_id": "pair-center",
+                "microchunk_index": 12,
+                "text": "Ari said the archive repair note was in the blue ledger.",
+            },
+            "window": [
+                {
+                    "chunk_id": "parent-session",
+                    "pair_id": "pair-before",
+                    "session_id": "session-1",
+                    "pair_index": 11,
+                    "text": "Large legacy pair transcript body that should not replace the selected microchunk.",
+                }
+            ],
+        }
+
+        window = mg._sessiondb_bridge_expansion_window(expanded)
+
+        assert len(window) == 1
+        assert window[0]["chunk_id"] == "source-center"
+        assert window[0]["microchunk_id"] == "micro-center"
+        assert "archive repair note" in window[0]["text"]
+        assert "Large legacy pair transcript body" not in window[0]["text"]
+
+    def test_sessiondb_bridge_expansion_adds_explicit_source_date_header_for_relative_text(self):
+        import datastore.memorydb.memory_graph as mg
+
+        class FakeGraph:
+            def get_source_chunk(self, chunk_id, **_kwargs):
+                return {
+                    "chunk_id": chunk_id,
+                    "microchunk_id": "micro-center",
+                    "source_id": "transcript-1",
+                    "session_id": "session-1",
+                    "message_pair_id": "pair-center",
+                    "chunk_index": 12,
+                    "created_at": "2026-05-12T14:31:00+00:00",
+                    "source_date": "2023-07-17",
+                    "text": "Ari said the archive festival happened last year.",
+                }
+
+        def fake_expand(microchunk_id, *, owner_id, before, after):
+            return {
+                "microchunk": {
+                    "microchunk_id": microchunk_id,
+                    "memory_chunk_id": "source-center",
+                    "chunk_id": "parent-session",
+                    "session_id": "session-1",
+                    "pair_id": "pair-center",
+                    "microchunk_index": 12,
+                    "text": "Ari said the archive festival happened last year.",
+                }
+            }
+
+        rows = [{
+            "id": "source-center",
+            "category": "session_chunk",
+            "source_type": "session_chunk",
+            "via": "session_chunks",
+            "text": "Ari said the archive festival happened last year.",
+            "chunk_id": "source-center",
+            "session_chunk_id": "source-center",
+            "output_token_count": 8,
+        }]
+
+        with patch.object(mg, "get_graph", return_value=FakeGraph()), \
+             patch.object(mg, "_sessiondb_bridge_expand_microchunk", side_effect=fake_expand):
+            expanded, meta = mg._expand_selected_session_chunk_rows(
+                rows,
+                owner_id="ari",
+                max_chunk_tokens=80,
+                max_total_chunk_tokens=240,
+                before=1,
+                after=1,
+                query="When did Ari archive festival happen?",
+            )
+
+        assert meta["expanded"] == 1
+        assert "source_date: 2023-07-17" in expanded[0]["text"]
+        assert "Ari said the archive festival happened last year" in expanded[0]["text"]
+        assert expanded[0]["source_date"] == "2023-07-17"
+
+    def test_sessiondb_bridge_expansion_does_not_treat_created_at_as_source_date(self):
+        import datastore.memorydb.memory_graph as mg
+
+        class FakeGraph:
+            def get_source_chunk(self, chunk_id, **_kwargs):
+                return {
+                    "chunk_id": chunk_id,
+                    "microchunk_id": "micro-center",
+                    "source_id": "transcript-1",
+                    "session_id": "session-1",
+                    "message_pair_id": "pair-center",
+                    "chunk_index": 12,
+                    "created_at": "2023-07-17T14:31:00+00:00",
+                    "text": "Ari said the archive festival happened last year.",
+                }
+
+        def fake_expand(microchunk_id, *, owner_id, before, after):
+            return {
+                "microchunk": {
+                    "microchunk_id": microchunk_id,
+                    "memory_chunk_id": "source-center",
+                    "chunk_id": "parent-session",
+                    "session_id": "session-1",
+                    "pair_id": "pair-center",
+                    "microchunk_index": 12,
+                    "text": "Ari said the archive festival happened last year.",
+                }
+            }
+
+        rows = [{
+            "id": "source-center",
+            "category": "session_chunk",
+            "source_type": "session_chunk",
+            "via": "session_chunks",
+            "text": "Ari said the archive festival happened last year.",
+            "chunk_id": "source-center",
+            "session_chunk_id": "source-center",
+            "output_token_count": 8,
+        }]
+
+        with patch.object(mg, "get_graph", return_value=FakeGraph()), \
+             patch.object(mg, "_sessiondb_bridge_expand_microchunk", side_effect=fake_expand):
+            expanded, meta = mg._expand_selected_session_chunk_rows(
+                rows,
+                owner_id="ari",
+                max_chunk_tokens=80,
+                max_total_chunk_tokens=240,
+                before=1,
+                after=1,
+                query="When did Ari archive festival happen?",
+            )
+
+        assert meta["expanded"] == 1
+        assert "source_date: 2023-07-17" not in expanded[0]["text"]
+        assert "Ari said the archive festival happened last year" in expanded[0]["text"]
+        assert expanded[0].get("source_date") is None
+
+    def test_graph_cluster_source_chunk_expansion_ignores_empty_source_ids(self):
+        import datastore.memorydb.memory_graph as mg
+
+        rows = [{
+            "id": "graph_fact_cluster:ari:abc123",
+            "category": "graph_cluster",
+            "via": "graph_fact_cluster",
+            "text": "Related facts for Ari:\n- Ari has an archive repair note.",
+            "source_chunk_ids": [],
+        }]
+
+        with patch.object(mg, "get_graph") as get_graph:
+            expanded, meta = mg._expand_selected_session_chunk_rows(
+                rows,
+                owner_id="ari",
+                max_chunk_tokens=80,
+                max_total_chunk_tokens=240,
+                before=1,
+                after=1,
+                query="Where was Ari archive repair note?",
+            )
+
+        assert expanded == rows
+        assert meta["expanded"] == 0
+        assert get_graph.call_count == 0
+
+    def test_graph_cluster_source_chunk_expansion_respects_total_token_budget(self):
+        import datastore.memorydb.memory_graph as mg
+
+        class FakeGraph:
+            def get_source_chunk(self, chunk_id, **_kwargs):
+                return {
+                    "chunk_id": chunk_id,
+                    "microchunk_id": f"micro-{chunk_id}",
+                    "source_id": "transcript-1",
+                    "session_id": "session-1",
+                    "chunk_index": 1,
+                    "text": "Ari archive repair ledger evidence.",
+                }
+
+        def fake_expand(microchunk_id, *, owner_id, before, after):
+            return {
+                "microchunk": {"microchunk_id": microchunk_id, "session_id": "session-1", "pair_id": microchunk_id},
+                "microchunk_window": [
+                    {
+                        "microchunk_id": microchunk_id,
+                        "memory_chunk_id": microchunk_id.replace("micro-", ""),
+                        "session_id": "session-1",
+                        "pair_id": microchunk_id,
+                        "microchunk_index": 1,
+                        "text": "Ari archive repair ledger evidence with enough words.",
+                    }
+                ],
+            }
+
+        rows = [
+            {"id": "cluster-a", "category": "graph_cluster", "via": "graph_fact_cluster", "text": "cluster a"},
+            {"id": "cluster-b", "category": "graph_cluster", "via": "graph_fact_cluster", "text": "cluster b", "source_chunk_ids": ["source-b"]},
+        ]
+
+        with patch.object(mg, "get_graph", return_value=FakeGraph()), \
+             patch.object(mg, "_sessiondb_bridge_expand_microchunk", side_effect=fake_expand):
+            expanded, meta = mg._expand_selected_session_chunk_rows(
+                rows,
+                owner_id="ari",
+                max_chunk_tokens=80,
+                max_total_chunk_tokens=20,
+                before=1,
+                after=1,
+                query="Ari archive repair ledger",
+            )
+
+        assert "session_window_expanded" not in expanded[0]
+        assert expanded[1].get("session_window_expanded") is True
+        assert meta["omitted_for_budget"] == 0
+
+    def test_compact_graph_relation_rows_promote_when_query_overlaps(self):
+        import datastore.memorydb.memory_graph as mg
+
+        rows = [
+            {"id": "session-a", "category": "session_chunk", "text": "raw transcript", "similarity": 0.98},
+            {"id": "fact-a", "category": "fact", "text": "Ari likes archive schedules", "similarity": 0.96},
+        ]
+        relation = {
+            "id": "ari:has_pet:summary",
+            "via": "graph_relation_summary",
+            "text": "Ari -> has_pet -> Noor, Kuma, Sora",
+            "relation_evidence_count": 3,
+            "relation_support_count": 0,
+            "similarity": 0.90,
+        }
+
+        promoted = mg._prioritize_compact_graph_relation_rows("Which has_pet Noor relation does Ari have?", [*rows, relation], limit=3)
+
+        assert promoted[0]["id"] == "session-a"
+        assert promoted[1]["id"] == "ari:has_pet:summary"
+
+    def test_graph_fact_cluster_query_overlap_uses_vocabulary_free_four_char_floor(self):
+        import datastore.memorydb.memory_graph as mg
+
+        graph_cluster = {
+            "id": "graph_fact_cluster:ari:abc123",
+            "category": "graph_cluster",
+            "via": "graph_fact_cluster",
+            "text": "Related facts for Ari:\n- Ari repaired the bicicleta antigua in the workshop",
+        }
+
+        assert mg._graph_fact_cluster_query_overlap(
+            "Que hizo Ari con la bicicleta antigua?",
+            graph_cluster,
+        ) == 2

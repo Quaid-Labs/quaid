@@ -27,6 +27,10 @@ from lib.tokens import estimate_tokens
 
 logger = logging.getLogger(__name__)
 
+# MemoryDB call sites may request a narrow pair radius; split source chunks need
+# a few same-pair microchunks so local continuations survive pair-level truncation.
+_MICROCHUNK_EXPANSION_RADIUS_FLOOR = 3
+
 
 def _utcnow_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -56,6 +60,17 @@ def _hash_id(prefix: str, *parts: Any, length: int = 24) -> str:
 
 def _content_hash(text: str) -> str:
     return hashlib.sha256(str(text or "").strip().encode("utf-8")).hexdigest()
+
+
+def _source_date(value: Any) -> Optional[str]:
+    raw = _clean(value)
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00")).date().isoformat()
+    except ValueError:
+        match = re.search(r"\b(20\d{2}-\d{2}-\d{2})\b", raw)
+        return match.group(1) if match else None
 
 
 def _json_list(value: Any) -> str:
@@ -151,6 +166,7 @@ def ensure_schema(conn) -> None:
             source_conversation_id TEXT,
             conversation_id TEXT,
             source_author_id TEXT,
+            source_date TEXT,
             content_hash TEXT NOT NULL,
             text TEXT NOT NULL,
             created_at TEXT NOT NULL,
@@ -158,6 +174,12 @@ def ensure_schema(conn) -> None:
         )
         """
     )
+    existing_chunk_cols = {
+        row["name"] if hasattr(row, "keys") and "name" in row.keys() else row[1]
+        for row in conn.execute("PRAGMA table_info(session_chunks)").fetchall()
+    }
+    if "source_date" not in existing_chunk_cols:
+        conn.execute("ALTER TABLE session_chunks ADD COLUMN source_date TEXT")
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS session_pairs (
@@ -286,6 +308,7 @@ def store_session_source_text(
     source_conversation_id: Optional[str] = None,
     conversation_id: Optional[str] = None,
     source_author_id: Optional[str] = None,
+    source_date: Optional[str] = None,
     max_microchunk_tokens: int = DEFAULT_MICROCHUNK_TOKENS,
 ) -> Dict[str, Any]:
     sid = _session_id(session_id)
@@ -298,6 +321,7 @@ def store_session_source_text(
     except Exception as exc:
         raise ValueError(f"chunk_index must be an integer, got {chunk_index!r}") from exc
     source_key = _clean(source_id) or sid
+    source_day = _source_date(source_date)
     content = _content_hash(body)
     chunk_id = _hash_id("schunk", owner, sid, source_key, index, content)
     now = _utcnow_iso()
@@ -338,9 +362,10 @@ def store_session_source_text(
                 INSERT INTO session_chunks (
                     chunk_id, owner_id, session_id, source_id, chunk_index, chunk_kind,
                     source_channel, source_conversation_id, conversation_id, source_author_id,
-                    content_hash, text, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    source_date, content_hash, text, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(chunk_id) DO UPDATE SET
+                    source_date = COALESCE(session_chunks.source_date, excluded.source_date),
                     updated_at = excluded.updated_at
                 """,
                 (
@@ -354,6 +379,7 @@ def store_session_source_text(
                     _clean(source_conversation_id) or None,
                     _clean(conversation_id or source_conversation_id) or None,
                     _clean(source_author_id) or None,
+                    source_day,
                     content,
                     body,
                     now,
@@ -640,13 +666,39 @@ def expand_microchunk(
         return None
     pair = fetch_pair(pair_id=str(micro.get("pair_id") or ""), owner_id=owner_id)
     if not pair:
-        return {"microchunk": micro, "pair": None, "window": []}
+        return {"microchunk": micro, "pair": None, "window": [], "microchunk_window": []}
     owner = _owner(owner_id)
     window: List[Dict[str, Any]] = []
     before_count = max(0, min(int(before or 0), 20))
     after_count = max(0, min(int(after or 0), 20))
     with get_connection(get_session_db_path()) as conn:
         ensure_schema(conn)
+        source_chunk = conn.execute(
+            "SELECT * FROM session_chunks WHERE owner_id = ? AND chunk_id = ?",
+            (owner, str(micro.get("chunk_id") or "")),
+        ).fetchone()
+        micro_index = int(micro.get("microchunk_index") or 0)
+        micro_before = max(before_count, _MICROCHUNK_EXPANSION_RADIUS_FLOOR)
+        micro_after = max(after_count, _MICROCHUNK_EXPANSION_RADIUS_FLOOR)
+        micro_rows = conn.execute(
+            """
+            SELECT * FROM session_microchunks
+            WHERE owner_id = ?
+              AND session_id = ?
+              AND chunk_id = ?
+              AND pair_id = ?
+              AND microchunk_index BETWEEN ? AND ?
+            ORDER BY microchunk_index ASC, microchunk_id ASC
+            """,
+            (
+                owner,
+                str(micro.get("session_id") or ""),
+                str(micro.get("chunk_id") or ""),
+                str(micro.get("pair_id") or ""),
+                micro_index - micro_before,
+                micro_index + micro_after,
+            ),
+        ).fetchall()
         current = str(pair.get("pair_id") or "")
         previous: List[Dict[str, Any]] = []
         for _ in range(before_count):
@@ -679,7 +731,26 @@ def expand_microchunk(
             following.append(item)
             next_id = str(item.get("next_pair_id") or "").strip()
     window = [*previous, pair, *following]
-    return {"microchunk": micro, "pair": pair, "window": window}
+    source_chunk_dict = dict(source_chunk) if source_chunk else {}
+    source_day = source_chunk_dict.get("source_date")
+    microchunk_window = [dict(row) for row in micro_rows]
+    if source_day:
+        micro = dict(micro)
+        micro["source_date"] = source_day
+        for item in window:
+            item.setdefault("source_date", source_day)
+        for item in microchunk_window:
+            item.setdefault("source_date", source_day)
+    return {
+        "microchunk": micro,
+        "pair": pair,
+        "window": window,
+        # MemoryDB recall expands split source chunks through this compact
+        # first-order window instead of truncating the broader pair transcript.
+        "microchunk_window": microchunk_window,
+        "source_chunk": source_chunk_dict,
+        "source_date": source_day,
+    }
 
 
 def list_recent_sessions(limit: int = 5, owner_id: Optional[str] = None) -> List[Dict[str, Any]]:
