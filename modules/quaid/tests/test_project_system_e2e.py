@@ -255,6 +255,46 @@ class TestProjectSystemE2E:
         assert "Restored main.py" in capsys.readouterr().out
         assert target.read_text() == original
 
+    def test_shadow_restore_is_atomic_and_rejects_paths_outside_source_root(self, project_env, monkeypatch):
+        """Restore writes via a temp sibling and refuses traversal/outside paths."""
+        from core.project_registry import create_project, snapshot_all_projects
+        from core.shadow_git import ShadowGit
+        from lib.adapter import quaid_tracking_dir
+
+        create_project(
+            "atomic-restore",
+            description="Atomic restore test",
+            source_root=str(project_env["user_code"]),
+        )
+        target = project_env["user_code"] / "main.py"
+        target.write_text("def hello():\n    print('safe backup')\n")
+        snapshot_all_projects()
+
+        sg = ShadowGit(
+            "atomic-restore",
+            project_env["user_code"],
+            tracking_base=quaid_tracking_dir(project_env["quaid_home"]),
+        )
+        backup_rev = sg.history("main.py", limit=1)[0]["commit"]
+
+        target.write_text("current content must survive failed restore\n")
+        original_replace = Path.replace
+
+        def fail_replace(self, target_path):
+            if self.name.endswith(".quaid_tmp"):
+                raise RuntimeError("simulated replace failure")
+            return original_replace(self, target_path)
+
+        monkeypatch.setattr(Path, "replace", fail_replace)
+        with pytest.raises(RuntimeError, match="simulated replace failure"):
+            sg.restore_file(backup_rev, "main.py")
+        assert target.read_text() == "current content must survive failed restore\n"
+
+        with pytest.raises(ValueError, match="outside project source root|invalid project file path"):
+            sg.restore_file(backup_rev, "../outside.md")
+        with pytest.raises(ValueError, match="outside project source root"):
+            sg.restore_file(backup_rev, str(project_env["tmp_path"] / "outside.md"))
+
     def test_multiple_projects(self, project_env):
         """Multiple projects can coexist independently."""
         from core.project_registry import create_project, list_projects, snapshot_all_projects

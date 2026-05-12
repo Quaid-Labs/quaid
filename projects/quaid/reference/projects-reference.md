@@ -859,7 +859,8 @@ shadow commit. `restore` writes that version back into the project source root.
 Recovery is only possible for content that was already captured by a prior shadow
 snapshot. Snapshots run on project creation and after successful extraction events;
 use `quaid project snapshot <name>` before risky edits if you need an immediate
-manual checkpoint.
+manual checkpoint. `restore` prompts for confirmation in an interactive terminal;
+non-interactive callers must pass `--yes`.
 
 `show-version` and `restore` accept only project-relative paths or absolute paths
 inside the project's `source_root`; paths outside the source root are rejected.

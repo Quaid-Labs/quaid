@@ -549,7 +549,9 @@ class ShadowGit:
         except ValueError as exc:
             raise ValueError(f"restore target is outside project source root: {file_path}") from exc
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(data)
+        tmp = target.with_name(f"{target.name}.quaid_tmp")
+        tmp.write_bytes(data)
+        tmp.replace(target)
         return target
 
     def destroy(self) -> None:
