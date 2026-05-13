@@ -123,7 +123,12 @@ This is more reliable than the TUI `/new` which relied on `sessions.json` change
 detection.
 
 After `/new`, send one follow-up message (e.g. `Hello`) so OC processes the
-new-session handshake. Then wait **30–60 seconds** before checking the DB.
+new-session handshake. Wait until that visible reply has completed before
+sending any recall/auto-inject test prompt, then wait **30–60 seconds** before
+checking the DB. Do not queue the M3 Part A auto-inject prompt behind the
+handshake turn: OC may record `message_received` for the queued prompt without
+running `before_prompt_build`, which means Quaid has no pre-model context
+surface for that turn.
 
 **Do NOT use `/reset` for extraction.** `/reset` truncates the transcript
 before the daemon can read it. Use `/new`.

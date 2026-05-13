@@ -35,7 +35,11 @@ General conventions:
 ### `quaid hook-inject`
 
 **Triggered by:** `UserPromptSubmit` (Claude Code) / `before_prompt_build`
-(OpenClaw) — fires on every user message.
+(OpenClaw). Claude Code fires this for each submitted prompt. OpenClaw fires it
+when the gateway builds a prompt turn; queued messages during session-start or
+active-turn settling can produce `message_received`/reply hooks without a
+matching `before_prompt_build`, so auto-inject requires the prompt-build hook
+to be observed for that turn.
 
 **Stdin:**
 ```json
@@ -409,11 +413,11 @@ hooks; the Python layer handles extraction signaling.
 │         └─ inject baseline context (identity files, workspace info)     │
 ├─────────────────────────────────────────────────────────────────────────┤
 │  User sends message                                                     │
-│    └─ before_prompt_build (TS)                                          │
+│    └─ before_prompt_build (TS, when OC builds a prompt turn)            │
 │         ├─ recall memories for current prompt (via facade)              │
 │         └─ inject as [Quaid Memory Context] block into prompt           │
 ├─────────────────────────────────────────────────────────────────────────┤
-│  (repeat before_prompt_build for each user message)                     │
+│  (repeat before_prompt_build for each serialized prompt turn)           │
 ├─────────────────────────────────────────────────────────────────────────┤
 │  User types /compact → gateway triggers before_compaction               │
 │    └─ before_compaction (TS)                                            │
