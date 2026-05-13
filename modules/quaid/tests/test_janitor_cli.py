@@ -79,7 +79,7 @@ def test_write_janitor_stats_records_apply_completion_and_preserves_it(monkeypat
     assert stats["last_janitor_completed_at"] == "2026-05-01T01:02:03"
 
 
-def test_janitor_main_routes_all_apply_through_supervisor_request(monkeypatch, tmp_path):
+def test_janitor_main_routes_all_apply_through_supervisor_request(monkeypatch, tmp_path, capsys):
     monkeypatch.setenv("QUAID_HOME", str(tmp_path))
     monkeypatch.setenv("QUAID_VISIBLE_HOME", str(tmp_path))
     monkeypatch.setenv("QUAID_INSTANCE", "pytest-runner")
@@ -88,6 +88,19 @@ def test_janitor_main_routes_all_apply_through_supervisor_request(monkeypatch, t
     from core.lifecycle import janitor
 
     calls = []
+    instance_stats = tmp_path / "instances" / "pytest-runner" / "logs" / "janitor-stats.json"
+    instance_stats.parent.mkdir(parents=True, exist_ok=True)
+    instance_stats.write_text(
+        json.dumps(
+            {
+                "applied_changes": {
+                    "memories_reviewed": 3,
+                    "graduated_to_active": 2,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
 
     monkeypatch.setattr(project_docs, "ensure_supervisor_alive", lambda: 4321)
     monkeypatch.setattr(
@@ -115,6 +128,11 @@ def test_janitor_main_routes_all_apply_through_supervisor_request(monkeypatch, t
     assert calls[0] == ("request", {"instance": None, "reason": "janitor-cli-apply", "requested_by": "janitor-cli"})
     assert calls[1][0] == "wait"
     assert calls[1][1]["request_id"] == "req-1"
+    captured = capsys.readouterr()
+    assert "[janitor] Instances completed: 1; failed: 0" in captured.out
+    assert "memories_reviewed: 3" in captured.out
+    assert "graduated_to_active: 2" in captured.out
+    assert "Host stats:" in captured.out
     log_path = tmp_path / "logs" / "janitor.log"
     log_text = log_path.read_text(encoding="utf-8")
     assert "janitor_supervisor_request_complete" in log_text

@@ -64,6 +64,26 @@ from lib.fail_policy import is_fail_hard_enabled
 
 _DATASTORE_RUNTIME = None
 
+_SUPERVISOR_JANITOR_SUMMARY_KEYS = (
+    "memories_reviewed",
+    "graduated_to_active",
+    "memories_deleted",
+    "memories_fixed",
+    "duplicates_merged",
+    "dedup_reviewed",
+    "dedup_confirmed",
+    "dedup_reversed",
+    "edges_created",
+    "snippets_folded",
+    "snippets_rewritten",
+    "snippets_discarded",
+    "journal_entries_distilled",
+    "journal_additions",
+    "journal_edits",
+    "project_docs_update_requests",
+    "project_docs_update_request_errors",
+)
+
 
 def _datastore_runtime():
     """Import datastore runtime lazily so no-instance supervisor routing stays lightweight."""
@@ -2146,7 +2166,7 @@ def _run_supervisor_janitor_request(*, instance: Optional[str] = None) -> int:
             if isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0
         },
     )
-    _write_janitor_stats(
+    stats_file = _write_janitor_stats(
         task="all",
         dry_run=False,
         result=audit_result,
@@ -2155,6 +2175,23 @@ def _run_supervisor_janitor_request(*, instance: Optional[str] = None) -> int:
         completed_at=completed_at,
         logs_dir=logs_dir,
     )
+    print(
+        "[janitor] Instances completed: "
+        f"{aggregate_changes.get('instances_completed', 0)}; "
+        f"failed: {aggregate_changes.get('instances_failed', 0)}"
+    )
+    summary_lines = [
+        (key, int(aggregate_changes.get(key) or 0))
+        for key in _SUPERVISOR_JANITOR_SUMMARY_KEYS
+        if int(aggregate_changes.get(key) or 0) > 0
+    ]
+    if summary_lines:
+        print("[janitor] Maintenance effects:")
+        for key, value in summary_lines:
+            print(f"  {key}: {value}")
+    if raw_home:
+        print(f"[janitor] Worker logs: {instances_root}/<instance>/logs/janitor/supervisor-worker.log")
+    print(f"[janitor] Host stats: {stats_file}")
     return 0 if status == "completed" else 1
 
 

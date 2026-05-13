@@ -73,13 +73,19 @@ non-trivial plan.
    approximate count of pending rows it intends to review.
 
 3. **Apply.** This is slow — budget 15–30 min for the first apply. LLM
-   review of each fact batch is the bottleneck.
+   review of each fact batch is the bottleneck. The host-wide command is
+   supervisor-owned: stdout reports the request ID, final status, aggregate
+   maintenance effects, and `~/.quaid/logs/janitor-stats.json`. Per-batch
+   worker progress is written under
+   `~/.quaid/instances/<INSTANCE>/logs/janitor/supervisor-worker.log`.
 
    ```bash
    ssh REMOTE_HOST "\$QCLI janitor --task all --apply --approve"
    ```
 
-   Stream output; watch for per-batch progress.
+   Stream output until the request status is terminal, then inspect the host
+   stats and any relevant per-instance worker log if the aggregate effects do
+   not match the dry-run plan.
 
 4. **Post-state verification.** Diff identity / snippet / journal files
    against the pre-state snapshot. Identity line counts may go DOWN
