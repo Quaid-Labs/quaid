@@ -4844,6 +4844,26 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             _MIN_EXTRACTABLE_CHARS = 50
             transcript_len = len(transcript_text.strip())
             if transcript_len < _MIN_EXTRACTABLE_CHARS:
+                if int(cursor_offset or 0) == 0:
+                    try:
+                        full_transcript_text = adapter.parse_session_jsonl(Path(transcript_path)) if adapter is not None else ""
+                    except Exception as exc:
+                        if _fail_hard_enabled():
+                            raise
+                        logger.warning(
+                            "[%s] session %s: failed to reparse full transcript before too-short skip: %s",
+                            label, session_id, exc,
+                        )
+                        full_transcript_text = ""
+                    full_transcript_len = len(str(full_transcript_text or "").strip())
+                    if full_transcript_len >= _MIN_EXTRACTABLE_CHARS and full_transcript_len > transcript_len:
+                        logger.warning(
+                            "[%s] session %s: recovered full transcript before too-short skip "
+                            "(slice=%d chars, full=%d chars)",
+                            label, session_id, transcript_len, full_transcript_len,
+                        )
+                        transcript_text = str(full_transcript_text or "")
+                        transcript_len = full_transcript_len
                 if staged_state_has_payload(staged_state):
                     logger.info(
                         "[%s] session %s: transcript too short to extract (%d chars < %d min); "
@@ -4851,7 +4871,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                         label, session_id, transcript_len, _MIN_EXTRACTABLE_CHARS,
                     )
                     transcript_text = ""
-                else:
+                elif transcript_len < _MIN_EXTRACTABLE_CHARS:
                     logger.info(
                         "[%s] session %s: transcript too short to extract (%d chars < %d min), skipping",
                         label, session_id, transcript_len, _MIN_EXTRACTABLE_CHARS,

@@ -1990,6 +1990,132 @@ def test_process_signal_reextracts_relocated_transcript_when_content_changed(
     assert cursor["transcript_path"] == str(new_path)
 
 
+def test_process_signal_recovers_full_transcript_before_too_short_skip(
+    monkeypatch,
+    tmp_path,
+):
+    from lib.adapter import set_adapter, reset_adapter
+    from ingest import extract as extract_mod
+    from core import ingest_runtime
+    from core.runtime import notify as notify_mod
+
+    session_id = "1fe54c72-2aa0-49ab-849e-03829272a7fe"
+    sessions_dir = tmp_path / ".quaid" / "instances" / "openclaw-main" / "logs" / "quaid" / "sessions"
+    sessions_dir.mkdir(parents=True)
+    transcript_path = sessions_dir / f"{session_id}.jsonl"
+    transcript_path.write_text(
+        "\n".join([
+            f'{{"type":"session","id":"{session_id}"}}',
+            '{"type":"model_change"}',
+            '{"type":"thinking_level_change"}',
+            '{"type":"custom","customType":"model-snapshot"}',
+            '{"type":"message","message":{"role":"user","content":[{"type":"text","text":"Baxter marker should survive a short stale slice."}]}}',
+            '{"type":"custom_message","customType":"openclaw.runtime-context","content":"context"}',
+            '{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"ACK"}]}}',
+        ]) + "\n",
+        encoding="utf-8",
+    )
+    stale_short_lines = [
+        f'{{"type":"session","id":"{session_id}"}}\n',
+        '{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"ACK"}]}}\n',
+    ]
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "openclaw-main")
+    monkeypatch.setattr(extraction_daemon, "_get_owner_id", lambda: "owner-1")
+    monkeypatch.setattr(extraction_daemon, "_read_usage_totals", lambda: {})
+    monkeypatch.setattr(extraction_daemon, "_session_has_harvestable_subagents", lambda *args, **kwargs: False)
+    monkeypatch.setattr(extraction_daemon, "_buffer_transcript_tail", lambda path, start, state, **kwargs: (dict(state or {}), {
+        "raw_lines_added": 0,
+        "semantic_chars_added": 0,
+        "semantic_tokens_added": 0,
+        "buffered_line_offset": int(start or 0),
+    }))
+    monkeypatch.setattr(extraction_daemon, "read_transcript_slice", lambda path, start: list(stale_short_lines))
+    monkeypatch.setattr(extraction_daemon, "_warm_payload_embeddings", lambda _facts: {
+        "requested": 0,
+        "unique": 0,
+        "cache_hits": 0,
+        "warmed": 0,
+        "failed": 0,
+        "skipped_empty": 0,
+    })
+    monkeypatch.setattr(notify_mod, "notify_memory_extraction", lambda **_kwargs: None)
+    monkeypatch.setattr(ingest_runtime, "run_session_logs_ingest", lambda **_kwargs: {"status": "indexed"})
+
+    captured = {}
+
+    class _Adapter(_OwnedTestAdapterMixin):
+        def instance_root(self):
+            return tmp_path / "instances" / "openclaw-main"
+
+        def parse_session_jsonl(self, path):
+            raw = Path(path).read_text(encoding="utf-8")
+            if "Baxter marker" in raw:
+                return "User: Baxter marker should survive a short stale slice.\nAssistant: ACK"
+            return "Assistant: ACK"
+
+        def is_subagent_session(self, session_id, transcript_path=None):
+            return False
+
+    def fake_extract_from_transcript(transcript, **kwargs):
+        captured["transcript"] = transcript
+        return {
+            "chunks_processed": 1,
+            "chunks_total": 1,
+            "unclassified_empty_payloads": 0,
+            "raw_facts": [
+                {
+                    "text": "Baxter marker should survive a short stale slice.",
+                    "category": "fact",
+                    "domains": ["personal"],
+                    "extraction_confidence": "high",
+                }
+            ],
+            "facts": [],
+            "soul_snippets": {},
+            "journal_entries": {},
+            "project_logs": {},
+            "raw_snippets": {},
+            "raw_journal": {},
+            "raw_project_logs": {},
+            "carry_facts": [],
+        }
+
+    monkeypatch.setattr(extract_mod, "extract_from_transcript", fake_extract_from_transcript)
+    monkeypatch.setattr(
+        extract_mod,
+        "apply_extracted_payloads",
+        lambda *_args, **_kwargs: {
+            "facts_stored": 1,
+            "facts_skipped": 0,
+            "edges_created": 0,
+            "facts": [{"text": "Baxter marker should survive a short stale slice.", "status": "stored", "edges": []}],
+            "snippets": {},
+            "journal": {},
+            "project_log_metrics": {},
+        },
+    )
+
+    set_adapter(_Adapter())
+    try:
+        signal_path = extraction_daemon.write_signal(
+            signal_type="session_end",
+            session_id=session_id,
+            transcript_path=str(transcript_path),
+        )
+        signal_data = json.loads(signal_path.read_text(encoding="utf-8"))
+        signal_data["_signal_path"] = str(signal_path)
+
+        extraction_daemon.process_signal(signal_data)
+    finally:
+        reset_adapter()
+
+    assert "Baxter marker should survive" in captured["transcript"]
+    cursor = extraction_daemon.read_cursor(session_id)
+    assert cursor["line_offset"] == 7
+
+
 @pytest.mark.parametrize(
     ("rebase_retry_count", "expect_followup", "guard_reread_error"),
     [
