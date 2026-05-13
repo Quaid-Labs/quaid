@@ -1406,6 +1406,50 @@ def _cursor_shadowed_by_source_cursor(
     return True
 
 
+def _active_source_cursor_for_stale_signal_transcript(
+    session_id: str,
+    transcript_path: str,
+) -> tuple[str, str]:
+    if not transcript_path or not _is_daemon_preserved_session_transcript_path(str(transcript_path)):
+        return "", ""
+    try:
+        if os.path.isfile(transcript_path) and _transcript_size_bytes(transcript_path) > 0:
+            return "", ""
+        alias_cursor = read_cursor(session_id)
+        candidate_path = str(alias_cursor.get("transcript_path") or "").strip()
+        if (
+            not candidate_path
+            or candidate_path == transcript_path
+            or _is_daemon_preserved_session_transcript_path(candidate_path)
+            or not os.path.isfile(candidate_path)
+        ):
+            return "", ""
+        source_key = _signal_source_cursor_key(
+            session_id,
+            candidate_path,
+            cursor_data=alias_cursor,
+        )
+        source_cursor = _read_cursor_with_source_compat(session_id, source_key)
+        source_path = str(source_cursor.get("transcript_path") or "").strip()
+        if (
+            _canonicalize_transcript_source_path(source_path)
+            != _canonicalize_transcript_source_path(candidate_path)
+        ):
+            return "", ""
+        source_offset = int(source_cursor.get("line_offset", 0) or 0)
+        total_lines = count_transcript_lines(candidate_path)
+        current_size_bytes = _transcript_size_bytes(candidate_path)
+        source_size_bytes = int(source_cursor.get("transcript_size_bytes", 0) or 0)
+        if source_offset < total_lines or (
+            source_size_bytes > 0 and current_size_bytes > source_size_bytes
+        ):
+            return candidate_path, source_key
+    except Exception:
+        if _fail_hard_enabled():
+            raise
+    return "", ""
+
+
 def _pending_signal_source_keys(signals: List[Dict[str, Any]]) -> set[str]:
     keys: set[str] = set()
     for signal in signals:
@@ -3956,7 +4000,22 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
         mark_signal_processed(signal_data)
         return
 
-    lock_owner_key = _signal_meta_cursor_key(session_id, signal_meta) or _signal_source_cursor_key(
+    resolved_source_key = ""
+    resolved_transcript_path, resolved_source_key = _active_source_cursor_for_stale_signal_transcript(
+        session_id,
+        transcript_path,
+    )
+    if resolved_transcript_path:
+        logger.info(
+            "[%s] session %s: signal transcript is an inactive preserved mirror; "
+            "using active source cursor transcript: %s",
+            label,
+            session_id,
+            resolved_transcript_path,
+        )
+        transcript_path = resolved_transcript_path
+
+    lock_owner_key = _signal_meta_cursor_key(session_id, signal_meta) or resolved_source_key or _signal_source_cursor_key(
         session_id,
         transcript_path,
         staged_state=staged_state,

@@ -5135,6 +5135,41 @@ class TestCursorRoundTrip:
             "instance-b must not see instance-a cursor"
         )
 
+    def test_stale_preserved_signal_resolves_to_active_source_cursor(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
+
+        session_id = "sess-stale-preserved"
+        instance_root = tmp_path / "instances" / "test-inst"
+        preserved_path = instance_root / "logs" / "quaid" / "sessions" / f"{session_id}.jsonl"
+        preserved_path.parent.mkdir(parents=True, exist_ok=True)
+        preserved_path.write_text("", encoding="utf-8")
+        live_path = tmp_path / "openclaw" / "sessions" / f"{session_id}.jsonl"
+        live_path.parent.mkdir(parents=True, exist_ok=True)
+        live_path.write_text(
+            "".join(
+                f'{{"role":"user","content":"line {idx}"}}\n'
+                for idx in range(13)
+            ),
+            encoding="utf-8",
+        )
+        source_key = extraction_daemon._signal_source_cursor_key(session_id, str(live_path))
+        extraction_daemon.write_cursor(
+            session_id,
+            7,
+            str(live_path),
+            source_key=source_key,
+        )
+        extraction_daemon.write_cursor(session_id, 0, str(live_path))
+
+        resolved_path, resolved_key = extraction_daemon._active_source_cursor_for_stale_signal_transcript(
+            session_id,
+            str(preserved_path),
+        )
+
+        assert resolved_path == str(live_path)
+        assert resolved_key == source_key
+
 
 # ---------------------------------------------------------------------------
 # check_idle_sessions() — additional coverage
