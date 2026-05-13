@@ -6688,6 +6688,7 @@ def _prepare_recall_output_rows(
     meta: Optional[Dict[str, Any]],
     *,
     include_chunks: bool = False,
+    preserve_source_chunk_ids: bool = False,
     max_chunk_tokens: Optional[int] = None,
     max_total_chunk_tokens: Optional[int] = None,
 ) -> Tuple[Any, Optional[Dict[str, Any]]]:
@@ -6696,7 +6697,7 @@ def _prepare_recall_output_rows(
             return rows, meta
         output_rows: List[Any] = []
         for row in rows:
-            if not isinstance(row, dict) or "source_chunk_id" not in row:
+            if not isinstance(row, dict) or "source_chunk_id" not in row or preserve_source_chunk_ids:
                 output_rows.append(row)
                 continue
             sanitized = dict(row)
@@ -6720,6 +6721,7 @@ def _return_validated_recall(
     return_meta: bool,
     *,
     include_chunks: bool = False,
+    preserve_source_chunk_ids: bool = False,
     max_chunk_tokens: Optional[int] = None,
     max_total_chunk_tokens: Optional[int] = None,
 ) -> Any:
@@ -6727,6 +6729,7 @@ def _return_validated_recall(
         rows,
         meta,
         include_chunks=include_chunks,
+        preserve_source_chunk_ids=preserve_source_chunk_ids,
         max_chunk_tokens=max_chunk_tokens,
         max_total_chunk_tokens=max_total_chunk_tokens,
     )
@@ -7092,6 +7095,7 @@ def _vector_store_recall(
         use_lightweight_config=fast_mode,
         track_access=not fast_mode,
         return_meta=True,
+        preserve_source_chunk_ids=True,
         planned_queries=planned_queries,
         planner_meta=inner_planner_meta,
         **vector_kwargs,
@@ -8670,6 +8674,9 @@ def _expand_selected_session_chunk_rows(
         if not isinstance(row, dict):
             expanded_rows.append(row)
             continue
+        if row.get("session_window_expanded"):
+            expanded_rows.append(row)
+            continue
         source_type = str(row.get("source_type") or row.get("category") or "").strip().lower()
         chunk_id = str(row.get("chunk_id") or row.get("session_chunk_id") or row.get("source_chunk_id") or "").strip()
         microchunk_id = str(row.get("microchunk_id") or "").strip()
@@ -9009,6 +9016,37 @@ def _expand_selected_session_chunk_rows(
         "omitted_for_budget": omitted_for_budget,
         "support_windows": support_window_count,
     }
+
+
+def _expand_final_recall_source_rows(
+    query: str,
+    rows: List[Dict[str, Any]],
+    *,
+    owner_id: Optional[str],
+    max_chunk_tokens: Optional[int],
+    max_total_chunk_tokens: Optional[int],
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """Attach first-order source windows for selected compact memory rows."""
+    if not rows:
+        return rows, {"expanded": 0, "window_chunk_count": 0}
+    has_source_projection = any(
+        isinstance(row, dict)
+        and not row.get("session_window_expanded")
+        and (
+            str(row.get("source_chunk_id") or row.get("microchunk_id") or "").strip()
+            or bool(row.get("source_chunk_ids"))
+        )
+        for row in rows
+    )
+    if not has_source_projection:
+        return rows, {"expanded": 0, "window_chunk_count": 0}
+    return _expand_selected_session_chunk_rows(
+        rows,
+        owner_id=owner_id,
+        max_chunk_tokens=max_chunk_tokens,
+        max_total_chunk_tokens=max_total_chunk_tokens,
+        query=query,
+    )
 
 
 def _session_chunk_row_output_tokens(row: Dict[str, Any]) -> int:
@@ -9949,6 +9987,7 @@ def _recall_once(
     low_signal_retry: bool = True,
     timeout_ms: Optional[int] = None,
     include_chunks: bool = False,
+    preserve_source_chunk_ids: bool = False,
     max_chunk_tokens: Optional[int] = None,
     max_total_chunk_tokens: Optional[int] = None,
     return_meta: bool = False,
@@ -10928,6 +10967,8 @@ def _recall_once(
             "id": node.id,
             "extraction_confidence": node.extraction_confidence,
             **_node_recall_temporal_fields(node),
+            "source_id": node.source_id,
+            "source_chunk_id": node.source_chunk_id,
             "privacy": node.privacy,
             "owner_id": node.owner_id,
             "_multi_pass": node.id in _multi_pass_ids,
@@ -11602,6 +11643,7 @@ def _recall_once(
                             retry_meta,
                             return_meta,
                             include_chunks=include_chunks,
+                            preserve_source_chunk_ids=preserve_source_chunk_ids,
                             max_chunk_tokens=max_chunk_tokens,
                             max_total_chunk_tokens=max_total_chunk_tokens,
                         )
@@ -11613,6 +11655,7 @@ def _recall_once(
         recall_once_meta,
         return_meta,
         include_chunks=include_chunks,
+        preserve_source_chunk_ids=preserve_source_chunk_ids,
         max_chunk_tokens=max_chunk_tokens,
         max_total_chunk_tokens=max_total_chunk_tokens,
     )
@@ -18180,6 +18223,7 @@ def recall_fast(
     planner_profile: str = "fast",
     return_meta: bool = False,
     include_chunks: bool = False,
+    preserve_source_chunk_ids: bool = False,
     max_chunk_tokens: Optional[int] = None,
     max_total_chunk_tokens: Optional[int] = None,
 ) -> Any:
@@ -18800,6 +18844,7 @@ def recall_fast(
         include_chunks=include_chunks,
         max_chunk_tokens=max_chunk_tokens,
         max_total_chunk_tokens=max_total_chunk_tokens,
+        preserve_source_chunk_ids=preserve_source_chunk_ids,
     )
     _attach_recall_meta(rows, meta)
     _trace_m15(
@@ -19051,6 +19096,7 @@ def recall(
     relative_temporal_freshness: bool = False,
     temporal_dimension: Optional[str] = None,
     include_chunks: bool = False,
+    preserve_source_chunk_ids: bool = False,
     max_chunk_tokens: Optional[int] = None,
     max_total_chunk_tokens: Optional[int] = None,
 ) -> Any:
@@ -19459,6 +19505,7 @@ def recall(
             include_mmr=False if turn1_post_merge_refine else include_mmr,
             low_signal_retry=low_signal_retry,
             return_meta=True,
+            preserve_source_chunk_ids=True,
             **branch_common_kwargs,
         ))
 
@@ -19657,6 +19704,7 @@ def recall(
             meta,
             return_meta,
             include_chunks=include_chunks,
+            preserve_source_chunk_ids=preserve_source_chunk_ids,
             max_chunk_tokens=max_chunk_tokens,
             max_total_chunk_tokens=max_total_chunk_tokens,
         )
@@ -19771,6 +19819,7 @@ def recall(
                 include_mmr=False if drill_post_merge_refine else include_mmr,
                 low_signal_retry=False,
                 return_meta=True,
+                preserve_source_chunk_ids=True,
                 **branch_common_kwargs,
             ))
             for q in new_queries
@@ -19913,6 +19962,13 @@ def recall(
         final,
         temporal_dimension=temporal_dimension,
     )
+    final, final_source_window_meta = _expand_final_recall_source_rows(
+        query,
+        final,
+        owner_id=owner_id,
+        max_chunk_tokens=max_chunk_tokens,
+        max_total_chunk_tokens=max_total_chunk_tokens,
+    )
     total_elapsed = (_time.monotonic() - recall_start) * 1000
     if stop_reason == "max_turns" and len(drill_log) < max_turns:
         stop_reason = "completed"
@@ -19987,6 +20043,7 @@ def recall(
             include_relation_keywords=not use_lightweight_config,
         ),
         "facet_rescue": facet_rescue_meta,
+        "final_source_windows": final_source_window_meta,
         "stop_reason": stop_reason,
         "bailout_counts": bailout_counts,
         "fanout_count": len(turn_phase_details[0]["fanout"]["queries"]) if turn_phase_details else 0,
@@ -20021,6 +20078,7 @@ def recall(
         meta,
         return_meta,
         include_chunks=include_chunks,
+        preserve_source_chunk_ids=preserve_source_chunk_ids,
         max_chunk_tokens=max_chunk_tokens,
         max_total_chunk_tokens=max_total_chunk_tokens,
     )

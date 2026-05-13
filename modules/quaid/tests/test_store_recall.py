@@ -15118,6 +15118,90 @@ class TestGraphFactClusterRecall:
         assert expanded[0]["session_window_expansion_source"] == "sessiondb_bridge"
         assert "blue ledger" in expanded[0]["text"]
 
+    def test_final_recall_expands_selected_fact_source_chunk(self):
+        import datastore.memorydb.memory_graph as mg
+
+        class FakeGraph:
+            def get_source_chunk(self, chunk_id, **kwargs):
+                assert chunk_id == "source-center"
+                assert kwargs.get("owner_id") is None
+                return {
+                    "chunk_id": "source-center",
+                    "owner_id": "archive-owner",
+                    "microchunk_id": "micro-center",
+                    "source_id": "transcript-1",
+                    "session_id": "session-1",
+                    "chunk_index": 12,
+                    "text": "Ari said the archive repair note was in the blue ledger.",
+                }
+
+        def fake_expand(microchunk_id, *, owner_id, before, after):
+            assert microchunk_id == "micro-center"
+            assert owner_id == "archive-owner"
+            return {
+                "microchunk": {"microchunk_id": "micro-center", "session_id": "session-1", "pair_id": "pair-center"},
+                "microchunk_window": [
+                    {
+                        "microchunk_id": "micro-center",
+                        "memory_chunk_id": "source-center",
+                        "session_id": "session-1",
+                        "pair_id": "pair-center",
+                        "microchunk_index": 12,
+                        "text": "Ari said the archive repair note was in the blue ledger.",
+                    }
+                ],
+            }
+
+        rows = [{
+            "id": "fact-ari",
+            "category": "fact",
+            "source_type": "user",
+            "text": "Ari has an archive repair note.",
+            "source_chunk_id": "source-center",
+            "similarity": 0.91,
+        }]
+
+        with patch.object(mg, "get_graph", return_value=FakeGraph()), \
+             patch.object(mg, "_sessiondb_bridge_expand_microchunk", side_effect=fake_expand):
+            expanded, meta = mg._expand_final_recall_source_rows(
+                "Where was Ari archive repair note?",
+                rows,
+                owner_id="caller-owner",
+                max_chunk_tokens=80,
+                max_total_chunk_tokens=240,
+            )
+
+        assert meta["expanded"] == 1
+        assert expanded[0]["session_window_expansion_source"] == "sessiondb_bridge"
+        assert "[memory] Ari has an archive repair note." in expanded[0]["text"]
+        assert "Ari said the archive repair note was in the blue ledger" in expanded[0]["text"]
+
+    def test_final_recall_source_expansion_skips_already_expanded_rows(self):
+        import datastore.memorydb.memory_graph as mg
+
+        rows = [{
+            "id": "fact-ari",
+            "category": "fact",
+            "source_type": "user",
+            "text": "[memory] Ari has an archive repair note.\n[session_chunk] transcript-1#12: source text",
+            "source_chunk_id": "source-center",
+            "similarity": 0.91,
+            "session_window_expanded": True,
+        }]
+
+        with patch.object(mg, "get_graph") as get_graph:
+            expanded, meta = mg._expand_final_recall_source_rows(
+                "Where was Ari archive repair note?",
+                rows,
+                owner_id="caller-owner",
+                max_chunk_tokens=80,
+                max_total_chunk_tokens=240,
+            )
+
+        assert expanded == rows
+        assert meta["expanded"] == 0
+        assert get_graph.call_count == 0
+
     def test_sessiondb_bridge_header_is_metadata_not_transcript_body(self):
         import datastore.memorydb.memory_graph as mg
 
