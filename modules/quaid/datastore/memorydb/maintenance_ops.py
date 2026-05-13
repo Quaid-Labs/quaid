@@ -2400,6 +2400,9 @@ def _resolve_entity_node(graph: MemoryGraph, name: str, node_type: str,
 
 
 EDGE_BATCH_SIZE = 25  # Safety cap for edge extraction batch size
+# Compound relationship facts need enough room for the full JSON schema per
+# fact; 300/fact deterministically truncated two-fact CDX edge-backfill batches.
+EDGE_BACKFILL_OUTPUT_TOKENS_PER_FACT = 600
 
 _EDGE_BATCH_RETRYABLE_ERROR_MARKERS = frozenset(
     {
@@ -2542,7 +2545,7 @@ JSON array only:"""
     try:
         response, duration = call_deep_reasoning(
             prompt,
-            max_tokens=300 * len(facts),
+            max_tokens=EDGE_BACKFILL_OUTPUT_TOKENS_PER_FACT * len(facts),
             timeout=DEEP_REASONING_TIMEOUT,
         )
     except Exception as exc:

@@ -141,6 +141,29 @@ def test_batch_extract_edges_prompt_includes_domain_neutral_role_guardrails():
     assert "Do not infer hidden intermediate hops unless the intermediate relationship is explicitly stated" in prompt
 
 
+def test_batch_extract_edges_uses_expanded_output_budget_for_compound_edges():
+    facts = [
+        {"id": "fact-6a", "text": "Maya lives with her partner David.", "owner_id": "default"},
+        {"id": "fact-6b", "text": "David works at North Pier and manages Kai.", "owner_id": "default"},
+    ]
+    metrics = maintenance_ops.JanitorMetrics()
+    captured = {}
+
+    def _fake_call(prompt: str, max_tokens: int, timeout: float):
+        captured["max_tokens"] = max_tokens
+        return ('[{"fact": 1, "edges": []}, {"fact": 2, "edges": []}]', 0.05)
+
+    with patch.object(maintenance_ops, "call_deep_reasoning", side_effect=_fake_call):
+        maintenance_ops.batch_extract_edges(
+            facts=facts,
+            graph=object(),
+            metrics=metrics,
+            relations_list="partner_of, works_at, manages",
+        )
+
+    assert captured["max_tokens"] == 1200
+
+
 def test_batch_extract_edges_retries_smaller_batches_when_parent_batch_returns_empty_response():
     facts = [
         {"id": "fact-7", "text": "Diana has a daughter named Alice", "owner_id": "default"},
