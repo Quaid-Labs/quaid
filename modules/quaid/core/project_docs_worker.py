@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 import signal
 import sys
@@ -58,6 +59,32 @@ def _start_update_heartbeat(project: str, interval_seconds: float) -> tuple[thre
     return stop_event, thread
 
 
+def _refresh_runtime_config_for_update(project: str) -> None:
+    """Reload per-process model caches before long-lived worker LLM calls."""
+    try:
+        from config import reload_config
+        from lib.embeddings import reset_embeddings_provider
+        from lib.llm_clients import reset_model_config_cache
+
+        reload_config()
+        reset_model_config_cache()
+        reset_embeddings_provider()
+    except Exception as exc:
+        logging.getLogger(__name__).warning(
+            "Project docs worker config refresh failed for %s: %s",
+            project,
+            exc,
+        )
+        try:
+            from lib.fail_policy import is_fail_hard_enabled
+
+            fail_hard = is_fail_hard_enabled()
+        except Exception:
+            fail_hard = True
+        if fail_hard:
+            raise
+
+
 def run_worker(project: str, *, once: bool = False, interval_seconds: Optional[float] = None) -> int:
     name = project_docs.validate_project_name(project)
     interval = interval_seconds
@@ -82,6 +109,7 @@ def run_worker(project: str, *, once: bool = False, interval_seconds: Optional[f
                 project_docs.write_worker_heartbeat(name, {"status": "updating"})
                 heartbeat_stop, heartbeat_thread = _start_update_heartbeat(name, interval)
                 try:
+                    _refresh_runtime_config_for_update(name)
                     result = project_docs.execute_update_once(name, request=request)
                 finally:
                     heartbeat_stop.set()

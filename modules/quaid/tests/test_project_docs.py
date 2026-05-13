@@ -307,6 +307,59 @@ def test_project_docs_update_notice_uses_request_runtime_context(monkeypatch):
     assert "QUAID_ADAPTER_TYPE" not in os.environ
 
 
+def test_project_docs_worker_refreshes_runtime_config_before_update(monkeypatch):
+    from core import project_docs_worker
+
+    calls = []
+    monkeypatch.setattr(project_docs_worker.project_docs, "validate_project_name", lambda project: project)
+    monkeypatch.setattr(project_docs_worker, "_supervisor_alive", lambda: True)
+    monkeypatch.setattr(project_docs_worker.project_docs, "read_update_request", lambda _project: {"request_id": "req-1"})
+    monkeypatch.setattr(project_docs_worker.project_docs, "project_status", lambda _project: {"status": "fresh"})
+    monkeypatch.setattr(
+        project_docs_worker.project_docs,
+        "write_worker_heartbeat",
+        lambda project, payload=None: calls.append(("heartbeat", project, (payload or {}).get("status"))),
+    )
+    monkeypatch.setattr(
+        project_docs_worker,
+        "_start_update_heartbeat",
+        lambda _project, _interval: (
+            type("Stop", (), {"set": lambda self: calls.append(("heartbeat_stop",))})(),
+            type("Thread", (), {"join": lambda self, timeout=None: calls.append(("heartbeat_join", timeout))})(),
+        ),
+    )
+    monkeypatch.setattr(
+        project_docs_worker,
+        "_refresh_runtime_config_for_update",
+        lambda project: calls.append(("refresh", project)),
+    )
+
+    def fake_execute(project, *, request=None):
+        calls.append(("execute", project, request))
+        return {"project": project, "status": "fresh"}
+
+    monkeypatch.setattr(project_docs_worker.project_docs, "execute_update_once", fake_execute)
+    monkeypatch.setattr(project_docs_worker.project_docs, "clear_worker_pid_for_current_process", lambda project: calls.append(("clear_pid", project)))
+
+    assert project_docs_worker.run_worker("demo", once=True, interval_seconds=0.5) == 0
+    assert ("refresh", "demo") in calls
+    assert ("execute", "demo", {"request_id": "req-1"}) in calls
+    assert calls.index(("refresh", "demo")) < calls.index(("execute", "demo", {"request_id": "req-1"}))
+
+
+def test_project_docs_worker_refresh_resets_model_caches(monkeypatch):
+    from core import project_docs_worker
+
+    calls = []
+    monkeypatch.setattr("config.reload_config", lambda: calls.append("reload_config"))
+    monkeypatch.setattr("lib.llm_clients.reset_model_config_cache", lambda: calls.append("reset_llm"))
+    monkeypatch.setattr("lib.embeddings.reset_embeddings_provider", lambda: calls.append("reset_embeddings"))
+
+    project_docs_worker._refresh_runtime_config_for_update("demo")
+
+    assert calls == ["reload_config", "reset_llm", "reset_embeddings"]
+
+
 def test_request_janitor_run_writes_hidden_state_and_blocks_parallel_requests(tmp_path, monkeypatch):
     monkeypatch.setenv("QUAID_HOME", str(tmp_path))
     from core import project_docs
