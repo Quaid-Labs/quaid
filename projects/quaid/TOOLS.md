@@ -51,7 +51,17 @@ quaid stats
 
 **Temporal filters:** `date_from`/`date_to` use `temporal_dimension`: `auto`, `occurred`, `mentioned`, or `record`.
 
-**Chunk evidence:** default recall omits chunks. Use `--include-chunks` or `include_chunks:true`; cap with `max_chunk_tokens` and `max_total_chunk_tokens`. `session_chunks` results show chunk ids; expand with the session-chunk fetch surface.
+**Evidence order model:**
+- **1st-order** — original source/session text (`source_chunks`, `session_chunks`, `session_microchunks`)
+- **2nd-order** — extracted compact memories (`nodes` Fact/Preference/Event rows)
+- **3rd-order** — structured graph/cluster evidence (`edges`, relation summaries, graph fact clusters)
+- **4th-order** — ephemeral model interpretation (query plans, reranker decisions, drill queries)
+
+Prefer lower-order evidence when a question depends on exact wording, dates, or
+co-reference. Higher-order evidence is still useful for relationship, list, and
+summary questions, but it should preserve a path back to source evidence.
+
+**Chunk evidence:** default recall omits explicit `source_chunk` payload dicts. Use `--include-chunks` or `include_chunks:true`; cap with `max_chunk_tokens` and `max_total_chunk_tokens`. Deliberate recall may still attach bounded first-order source/session text to a selected compact memory row before output sanitization, so the answerer can see supporting transcript context without exposing raw `source_chunk_id` by default. `session_chunks` results show chunk ids; expand with the session-chunk fetch surface.
 
 **Output flags:** `--json` (machine-readable), `--debug` (scoring breakdown)
 

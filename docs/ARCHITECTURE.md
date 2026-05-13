@@ -63,6 +63,22 @@ Quaid exposes its knowledge layer through four interfaces: a **CLI** (standalone
 
 Project knowledge retrieval remains a first-class path: host adapters expose `projects_search` where appropriate, and the CLI exposes the same capability through `quaid recall "query" '{"stores": ["docs"]}'`.
 
+### Evidence Order Model
+
+Recall code and validation use a four-order evidence model:
+
+| Order | Evidence | Examples | Role |
+|-------|----------|----------|------|
+| **1st-order** | Original source/session text | `source_chunks`, `session_chunks`, `session_microchunks`, source-date headers | Grounding layer for exact wording, dates, source context, and co-reference. |
+| **2nd-order** | Extracted compact memories | Fact, Preference, and Event `nodes` rows with `source_chunk_id` provenance | Normal memory recall target; concise, searchable, and linked back to source. |
+| **3rd-order** | Structured graph/cluster evidence | `edges`, graph paths, relation summaries, graph fact clusters | Multi-hop and list reasoning over extracted memories. |
+| **4th-order** | Ephemeral model interpretation | query plans, reranker grades, drill queries, cluster interpretations | Routing/ranking help only; not stored truth. |
+
+The retrieval contract is that higher-order evidence must not sever the path
+back to lower-order evidence. When deliberate recall selects a compact
+2nd-order row that has source provenance, it can attach a bounded 1st-order
+source/session window before final public output sanitization.
+
 ### TypeScript Layer: Facade and Knowledge Engine
 
 The TypeScript layer sits between adapters and Python backend. Two key modules orchestrate this:
@@ -268,7 +284,11 @@ User message
     |
 [13] Temporal contiguity: surface facts from same session
     |
-[14] Bjork storage_strength update: hard retrievals strengthen more
+[14] Final source evidence expansion: selected compact rows with
+     source_chunk_id/microchunk_id/source_chunk_ids attach bounded
+     first-order source/session windows
+    |
+[15] Bjork storage_strength update: hard retrievals strengthen more
     |
     v
 [MEMORY]-tagged results injected into agent context

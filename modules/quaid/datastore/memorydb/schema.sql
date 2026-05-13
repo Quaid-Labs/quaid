@@ -181,6 +181,7 @@ CREATE TABLE IF NOT EXISTS source_chunks (
     next_chunk_id TEXT,
     message_id TEXT,
     message_pair_id TEXT,
+    microchunk_id TEXT,
     content_hash TEXT NOT NULL,
     text TEXT NOT NULL,
     embedding BLOB,
@@ -218,6 +219,8 @@ CREATE INDEX IF NOT EXISTS idx_source_chunks_message
     ON source_chunks(owner_id, message_id);
 CREATE INDEX IF NOT EXISTS idx_source_chunks_pair
     ON source_chunks(owner_id, message_pair_id);
+CREATE INDEX IF NOT EXISTS idx_source_chunks_microchunk
+    ON source_chunks(owner_id, microchunk_id);
 
 -- Contradictions table - detected conflicting facts
 CREATE TABLE IF NOT EXISTS contradictions (

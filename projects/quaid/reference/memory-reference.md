@@ -4,7 +4,7 @@
 
 This document is the single authoritative reference for the Quaid memory system. It covers system architecture and design decisions (formerly `memory-system-design.md`), full implementation details for all modules, hooks, and shared libraries (formerly `memory-local-implementation.md`), and the complete SQLite schema DDL for all tables (formerly `memory-schema.md`). For day-to-day operations see `memory-operations-guide.md`. For deduplication internals see `memory-deduplication-system.md`.
 
-**Status:** Production Ready (updated 2026-03-25)
+**Status:** Production Ready (updated 2026-05-13)
 **Location:** `modules/quaid/`
 **Codename:** Total Recall (quaid)
 *Design doc created: 2026-01-31 | Updated: 2026-02-08 | Status: Phase 6 complete — search batches 1-4, Ebbinghaus decay, projects system, append-only project logs*
@@ -92,6 +92,11 @@ Multi-hop graph traversal (depth=2, score decay 0.7^depth)
 Privacy filter + session dedup
      │
      ▼
+Final evidence expansion for selected compact rows
+     │  Compact facts/preferences/events with source_chunk_id,
+     │  microchunk_id, or source_chunk_ids attach bounded first-order
+     │  source/session windows before public output sanitization.
+     ▼
 Access tracking (increment access_count on returned results)
      │
      ▼
@@ -104,6 +109,54 @@ Agent receives results with similarity %, extraction_confidence
 ```
 
 > **Note:** Recall is agent-driven via `memory_recall` tool (Feb 2026). Auto-injection is optional (gated by config/env), latency-capped, and intentionally incomplete. The fast OpenClaw auto-inject lane requests both vector and graph recall within the same bounded subprocess budget so linked memories are reachable without language-specific routing heuristics. It can still miss answers that require query rewriting or deeper reasoning, so explicit recall remains the fallback. Core now injects a runtime metadata block with active domains and active graph relation types so the model can decide when an explicit recall is warranted. Auto-capture via per-message classifier is deprecated, but inactivity-timeout extraction still runs when capture is enabled. Memory extraction happens at compaction/reset via the configured deep-reasoning model with combined fact+edge+snippet+journal extraction. Soul snippets are observations written to `.snippets.md` staging files, reviewed by janitor Task 1d-snippets, and folded into core markdown files (default SOUL.md, USER.md, ENVIRONMENT.md; AGENTS.md optional via `docs.journal.targetFiles`). Journal entries are diary-style paragraphs written to `journal/*.journal.md`, distilled by janitor Task 1d-journal into core markdown themes, then archived to `journal/archive/`.
+
+### Evidence Order Model
+
+Quaid recall distinguishes evidence by how directly it represents the original
+user/source statement. This vocabulary is used in code review, benchmark triage,
+and live-test design.
+
+| Order | Name | Stored As | What It Means | Recall Contract |
+|-------|------|-----------|---------------|-----------------|
+| **1st-order** | Source evidence | `source_chunks`, `session_chunks`, `session_microchunks`, source-date headers | Original transcript/source text or a direct bounded window around it. | Highest-grounding evidence. When a selected compact memory has source provenance, deliberate recall may attach a bounded first-order window before public sanitization. |
+| **2nd-order** | Extracted memory | `nodes` rows such as Fact, Preference, Event with `source_chunk_id` and temporal fields | LLM-extracted compact fact/preference/event distilled from first-order text. | Normal vector/FTS recall target. Must keep provenance so answerers can ground back to source text when needed. |
+| **3rd-order** | Structured relation/cluster evidence | `edges`, graph relation summaries, graph fact clusters, facet rescue rows | Structure synthesized from multiple extracted memories: subject attachments, relation paths, compact clusters. | Useful for multi-hop/list questions, but should not crowd out stronger first-order evidence when the question needs exact wording, dates, or source context. |
+| **4th-order** | Model interpretation/planning | LLM query plans, drill queries, reranker/cluster interpretation metadata | Ephemeral reasoning about how to search or how to interpret candidate rows. | May route or rank recall, but must not become stored truth or deterministic benchmark-shaped business logic. |
+
+The order model is a grounding hierarchy, not a rigid ranking rule. A 3rd-order
+graph cluster can be the best answer for "who is connected to X?", while
+1st-order transcript text is preferred for exact events, dates, quotes, and
+co-reference-heavy answers. The key invariant is that lower-order summaries must
+not destroy the path back to first-order source evidence.
+
+### Source Provenance And Final Source Windows
+
+Extraction stores compact memories as 2nd-order rows while preserving their
+source provenance:
+
+- `nodes.source_chunk_id` points to the `source_chunks.chunk_id` that produced the memory.
+- `source_chunks.microchunk_id` links MemoryDB source chunks back to SessionDB microchunks when available.
+- Graph clusters can carry `source_chunk_ids` for the selected supporting facts.
+- `source_date` is carried on source chunks and session chunks so relative or dated text can be interpreted against the original transcript date.
+
+Deliberate recall keeps `source_chunk_id` internally until final selection. If a
+selected compact row has `source_chunk_id`, `microchunk_id`, or
+`source_chunk_ids`, `_expand_final_recall_source_rows()` expands it through the
+existing session/source-window machinery. The answerer may then see text like:
+
+```text
+[memory] Ari has an archive repair note.
+[session_chunk] transcript-1#12: Ari said the archive repair note was in the blue ledger.
+```
+
+Public/default recall output still sanitizes raw provenance fields after the
+expansion step. In other words, source text may be shown as answer context, but
+raw `source_chunk_id` is not exposed by default unless the caller explicitly asks
+for chunk payloads with `include_chunks`.
+
+The final expansion path is structural and language-neutral. It is triggered by
+stored provenance fields, not by English question words, benchmark names, or
+scenario-specific vocabulary.
 
 ### Privacy Tiers
 
@@ -210,6 +263,8 @@ ranking.
 
 ### Recent Capabilities (Feb 2026)
 
+- **First-order source evidence preservation**: Deliberate recall keeps source provenance for selected compact memories and can attach bounded source/session windows before public output sanitization. This lets the answerer ground extracted facts back to original transcript text without exposing raw `source_chunk_id` by default.
+- **Evidence-order model**: Recall behavior is documented as 1st-order source text, 2nd-order extracted memory, 3rd-order graph/cluster structure, and 4th-order model interpretation. This guides code review and live-test expectations.
 - **Search pipeline overhaul** (Batches 1-4): RRF fusion, BM25, composite scoring, MMR diversity, intent classification, temporal validity filtering, Ebbinghaus decay, multi-hop traversal, access tracking, parallel search
 - **Agent-driven recall**: Auto-injection is optional; agent calls `memory_recall` tool with crafted queries
 - **Combined fact+edge extraction**: Single deep-reasoning call extracts both facts and relationships at compaction/reset
@@ -324,8 +379,9 @@ The search system uses a multi-stage pipeline with RRF fusion:
 5. **Temporal validity filtering** — Expired facts penalized, future facts deprioritized
 6. **MMR diversity** — Maximal Marginal Relevance (lambda=0.7) prevents redundant results
 7. **Multi-hop traversal** — `get_related_bidirectional()` with depth=2, hop score decay 0.7^depth
-8. **Access tracking** — `_update_access()` increments access_count and accessed_at for returned results
-9. **Domain filtering** — Recall applies domain-map filters (for example `{all:true}` or `{technical:true}`), preventing unrelated domains from displacing relevant memories in rankings
+8. **Final source-window expansion** — selected compact rows with stored source provenance attach bounded first-order source/session windows before public output sanitization
+9. **Access tracking** — `_update_access()` increments access_count and accessed_at for returned results
+10. **Domain filtering** — Recall applies domain-map filters (for example `{all:true}` or `{technical:true}`), preventing unrelated domains from displacing relevant memories in rankings
 
 **HyDE — Hypothetical Document Embedding (query expansion):**
 - `route_query(query)` transforms a question into a declarative statement before embedding (e.g. "where does Alice live?" → "Alice lives in..."). The embedding of an answer is closer to stored facts in vector space than the raw question.
@@ -382,7 +438,7 @@ Key search functions:
 - `list_relation_types()` — returns the live relation type inventory used by runtime metadata injection and graph-aware query routing
 
 **High-level API:**
-- `recall(query, limit, privacy, owner_id, current_session_id, compaction_time, date_from, date_to)` — returns results with `extraction_confidence`, `created_at`, `valid_from`, `valid_until`, `privacy`, `owner_id`, `domains`, `project`. Runs hybrid search + raw FTS on unrouted query to catch proper nouns. Results pass through `_sanitize_for_context()` which strips injection patterns from recalled text before it enters the agent's context window. Recalled facts are tagged with `[MEMORY]` prefix in output. **Date range filtering:** optional `date_from` and `date_to` parameters (YYYY-MM-DD) filter results by `created_at` date, applied before limit truncation (so limit returns N results within range). Results without dates are included by default. **Domain filtering:** results are filtered by the provided domain map when present.
+- `recall(query, limit, privacy, owner_id, current_session_id, compaction_time, date_from, date_to)` — returns results with `extraction_confidence`, `created_at`, `valid_from`, `valid_until`, `privacy`, `owner_id`, `domains`, `project`. Runs hybrid search + raw FTS on unrouted query to catch proper nouns. Results pass through `_sanitize_for_context()` which strips injection patterns from recalled text before it enters the agent's context window. Recalled facts are tagged with `[MEMORY]` prefix in output. **Date range filtering:** optional `date_from` and `date_to` parameters (YYYY-MM-DD) filter results by `created_at` date, applied before limit truncation (so limit returns N results within range). Results without dates are included by default. **Domain filtering:** results are filtered by the provided domain map when present. **Final source windows:** deliberate recall preserves `source_chunk_id` internally for selected compact rows and may attach bounded first-order source/session context before output is returned. Public/default output still strips raw source-chunk identifiers unless chunk payloads are explicitly requested.
 - `store(text, category, verified, privacy, source, owner_id, session_id, extraction_confidence, speaker, status, keywords, source_type)` — creates nodes with dedup (auto-reject >=0.98, LLM-review gray zone 0.88-0.98, fallback threshold 0.95; FTS bounded to LIMIT 500). Validates owner is present. **Enforces 3-word minimum** for facts to prevent storing meaningless fragments. Optional `keywords` parameter stores derived search terms for FTS vocabulary bridging. Optional `source_type` (user/assistant/tool/import) stored in attributes JSON; assistant-inferred facts get 0.9x confidence multiplier.
 - `store_contradiction(node_a_id, node_b_id, explanation)` — persists janitor-detected contradictions
 - `forget(query, node_id)` — deletes by query or ID
@@ -399,6 +455,16 @@ Each result dict from `recall()` includes:
 - `_multi_pass` — whether result came from multi-pass broadened search
 - Graph results additionally include: `via_relation`, `hop_depth`, `graph_path`, `direction`, `source_name`
 - Co-session results include: `via_relation: "co_session"`, `hop_depth: 0`
+- Rows expanded from compact memories can include `session_window_expanded`,
+  `session_window_expansion_source`, `session_window_center_chunk_id`,
+  `session_window_center_microchunk_id`, `session_window_chunk_ids`, and
+  `session_window_size` internally. These fields describe first-order evidence
+  windows and are bounded by `max_chunk_tokens` / `max_total_chunk_tokens`.
+- `source_chunk_id` is provenance, not public payload. The deliberate recall
+  path may preserve it internally until final source-window expansion, then the
+  normal output sanitizer removes it from default public output. Use
+  `include_chunks:true` only when the caller explicitly needs source chunk
+  payload objects.
 
 **LLM/Embeddings provider architecture:**
 - Core Quaid code is provider-agnostic. Only the adapter/provider layer and config are provider-aware.
@@ -697,7 +763,7 @@ Core orchestrators import ingest via this bridge rather than importing `ingest.*
 
 ## 3. Schema Reference
 
-> Auto-generated from `modules/quaid/datastore/memorydb/schema.sql` — 2026-02-27
+> Auto-generated from `modules/quaid/datastore/memorydb/schema.sql` — 2026-05-13
 > Schema version: 6 | Embedding model: nomic-embed-text (768-dim)
 
 ### 3.1 Nodes — All Memory Entities
@@ -716,6 +782,7 @@ CREATE TABLE IF NOT EXISTS nodes (
     confidence REAL DEFAULT 0.5,            -- 0-1 confidence score
     source TEXT,                            -- Where this came from (file, message, etc.)
     source_id TEXT,                         -- Message ID or file path
+    source_chunk_id TEXT,                   -- Optional source_chunks.chunk_id evidence provenance
 
     -- Multi-user support
     owner_id TEXT,                          -- Who owns this memory (null = shared/legacy)
@@ -742,9 +809,12 @@ CREATE TABLE IF NOT EXISTS nodes (
     extraction_confidence REAL DEFAULT 0.5, -- 0-1: how confident the classifier was
     speaker TEXT,                           -- Who stated this fact (e.g. "Quaid", "Hauser")
 
-    -- Temporal validity
+    -- Temporal validity and provenance
     valid_from TEXT,                        -- ISO8601 datetime
     valid_until TEXT,                       -- ISO8601 datetime (null = still valid)
+    occurred_start TEXT,                    -- ISO8601 datetime/range start for when the fact happened
+    occurred_end TEXT,                      -- ISO8601 datetime/range end for when the fact happened
+    mentioned_at TEXT,                      -- ISO8601 datetime for when Quaid learned/was told the fact
 
     -- Content integrity
     content_hash TEXT,                      -- SHA256 of name text (fast exact-dedup pre-filter)
@@ -779,6 +849,8 @@ CREATE TABLE IF NOT EXISTS nodes (
 - `confirmation_count` — incremented each time extraction re-confirms this fact; used to boost confidence
 - `last_confirmed_at` — timestamp of most recent re-confirmation; useful for staleness checks
 - `keywords` — space-separated derived search terms generated at extraction time; indexed by FTS5 for vocabulary bridging (e.g., "health stomach gastric" for a fact about digestive symptoms)
+- `source_chunk_id` — provenance pointer to first-order source text in `source_chunks`; used internally for final source-window expansion and stripped from default public output after expansion.
+- `occurred_start` / `occurred_end` / `mentioned_at` — temporal provenance axes used by date-aware recall and filters.
 
 **Attributes JSON blob** (`attributes` column) may contain:
 - `source_type` — `"user"` / `"assistant"` / `"tool"` / `"import"` — indicates how the fact was obtained. Assistant-inferred facts get a 0.9x confidence multiplier at store time. Used by janitor review for differential trust policies.
@@ -817,6 +889,60 @@ CREATE TABLE IF NOT EXISTS edges (
 - `ON DELETE CASCADE` on source_id/target_id — deleting a node auto-deletes its edges
 - `ON DELETE SET NULL` on source_fact_id — deleting source fact preserves edge but clears link
 - `UNIQUE(source_id, target_id, relation)` — one edge per direction per relation type; use INSERT OR REPLACE
+
+### 3.3 Source Chunks — First-Order Evidence
+
+`source_chunks` stores bounded first-order source text that compact memory rows
+can point back to through `nodes.source_chunk_id`. It is the MemoryDB projection
+of transcript/source evidence and can be linked back to SessionDB via
+`microchunk_id`.
+
+```sql
+CREATE TABLE IF NOT EXISTS source_chunks (
+    chunk_id TEXT PRIMARY KEY,
+    source_id TEXT,
+    session_id TEXT,
+    chunk_index INTEGER NOT NULL,
+    chunk_kind TEXT DEFAULT 'session',
+    parent_chunk_id TEXT,
+    next_chunk_id TEXT,
+    message_id TEXT,
+    message_pair_id TEXT,
+    microchunk_id TEXT,
+    content_hash TEXT NOT NULL,
+    text TEXT NOT NULL,
+    embedding BLOB,
+    token_count INTEGER DEFAULT 0,
+    owner_id TEXT,
+    source_channel TEXT,
+    source_conversation_id TEXT,
+    conversation_id TEXT,
+    source_author_id TEXT,
+    source_type TEXT,
+    privacy TEXT DEFAULT 'shared' CHECK(privacy IN ('private', 'shared', 'public')),
+    visibility_scope TEXT DEFAULT 'source_shared',
+    sensitivity TEXT DEFAULT 'normal',
+    domains TEXT DEFAULT '[]',
+    project TEXT,
+    source_date TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+);
+```
+
+Key fields:
+
+- `chunk_id` — stable first-order evidence ID referenced by `nodes.source_chunk_id`.
+- `source_date` — calendar date of the source transcript/source item when known; used to interpret relative text and dated evidence.
+- `microchunk_id` — bridge back to SessionDB `session_microchunks` for local transcript-window expansion.
+- `message_pair_id` — pair-level transcript grouping used when SessionDB builds same-pair microchunk windows.
+- `next_chunk_id` / `parent_chunk_id` — source-local adjacency metadata for bounded window fetches.
+
+Recall rules:
+
+- Default public recall does not attach `source_chunk` payload dicts.
+- `include_chunks:true` attaches bounded `source_chunk` payloads and enforces owner checks.
+- Deliberate recall may internally use `source_chunk_id` / `microchunk_id` to expand selected compact rows into first-order source/session windows, then sanitize raw provenance IDs from default public output.
 
 **Edge normalization** (enforced by janitor):
 - Inverse map: `child_of` → `parent_of`, `led_to`/`caused`/`resulted_in`/`triggered` → `caused_by` (FLIP direction)
