@@ -5144,7 +5144,7 @@ class TestCursorRoundTrip:
         preserved_path = instance_root / "logs" / "quaid" / "sessions" / f"{session_id}.jsonl"
         preserved_path.parent.mkdir(parents=True, exist_ok=True)
         preserved_path.write_text("", encoding="utf-8")
-        live_path = tmp_path / "openclaw" / "sessions" / f"{session_id}.jsonl"
+        live_path = tmp_path / "live_sessions" / f"{session_id}.jsonl"
         live_path.parent.mkdir(parents=True, exist_ok=True)
         live_path.write_text(
             "".join(
@@ -5169,6 +5169,58 @@ class TestCursorRoundTrip:
 
         assert resolved_path == str(live_path)
         assert resolved_key == source_key
+
+    def test_nonempty_preserved_signal_transcript_does_not_redirect(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
+
+        session_id = "sess-valid-preserved"
+        instance_root = tmp_path / "instances" / "test-inst"
+        preserved_path = instance_root / "logs" / "quaid" / "sessions" / f"{session_id}.jsonl"
+        preserved_path.parent.mkdir(parents=True, exist_ok=True)
+        preserved_path.write_text('{"role":"user","content":"preserved content"}\n', encoding="utf-8")
+        live_path = tmp_path / "live_sessions" / f"{session_id}.jsonl"
+        live_path.parent.mkdir(parents=True, exist_ok=True)
+        live_path.write_text(
+            "".join(
+                f'{{"role":"user","content":"line {idx}"}}\n'
+                for idx in range(13)
+            ),
+            encoding="utf-8",
+        )
+        source_key = extraction_daemon._signal_source_cursor_key(session_id, str(live_path))
+        extraction_daemon.write_cursor(session_id, 7, str(live_path), source_key=source_key)
+        extraction_daemon.write_cursor(session_id, 0, str(live_path))
+
+        resolved_path, resolved_key = extraction_daemon._active_source_cursor_for_stale_signal_transcript(
+            session_id,
+            str(preserved_path),
+        )
+
+        assert (resolved_path, resolved_key) == ("", "")
+
+    def test_stale_preserved_signal_reraises_in_fail_hard(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
+
+        session_id = "sess-fail-hard-preserved"
+        instance_root = tmp_path / "instances" / "test-inst"
+        preserved_path = instance_root / "logs" / "quaid" / "sessions" / f"{session_id}.jsonl"
+        preserved_path.parent.mkdir(parents=True, exist_ok=True)
+        preserved_path.write_text("", encoding="utf-8")
+
+        monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: True)
+        monkeypatch.setattr(
+            extraction_daemon,
+            "_transcript_size_bytes",
+            lambda _path: (_ for _ in ()).throw(RuntimeError("stat failed")),
+        )
+
+        with pytest.raises(RuntimeError, match="stat failed"):
+            extraction_daemon._active_source_cursor_for_stale_signal_transcript(
+                session_id,
+                str(preserved_path),
+            )
 
 
 # ---------------------------------------------------------------------------
