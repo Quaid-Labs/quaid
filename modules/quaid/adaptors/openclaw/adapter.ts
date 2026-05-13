@@ -2667,6 +2667,18 @@ function preserveSessionTranscript(sessionId: string, preferredPath: string | nu
   const destPath = getPreservedSessionFile(sid);
   try {
     fs.mkdirSync(path.dirname(destPath), { recursive: true });
+    if (shouldKeepRicherPreservedTranscript(destPath, sourcePath, reason)) {
+      sessionTranscriptPaths.set(sid, destPath);
+      writeHookTrace("session_index.transcript_preserve_existing_richer", {
+        session_id: sid,
+        reason,
+        source_path: sourcePath,
+        dest_path: destPath,
+        existing_chars: conversationTranscriptCharCount(parseSessionMessagesJsonl(destPath)),
+        source_chars: conversationTranscriptCharCount(parseSessionMessagesJsonl(sourcePath)),
+      });
+      return destPath;
+    }
     fs.copyFileSync(sourcePath, destPath);
     sessionTranscriptPaths.set(sid, destPath);
     writeHookTrace("session_index.transcript_preserved", {
@@ -2704,6 +2716,29 @@ function conversationTranscriptCharCount(messages: any[]): number {
     (sum, message) => sum + String(message.content || "").trim().length,
     0,
   );
+}
+
+function shouldKeepRicherPreservedTranscript(destPath: string, sourcePath: string, reason: string): boolean {
+  if (!destPath || !sourcePath || destPath === sourcePath || !fs.existsSync(destPath) || !fs.existsSync(sourcePath)) {
+    return false;
+  }
+  if (String(reason || "").toLowerCase().includes("reset")) {
+    return false;
+  }
+  const existingUserText = normalizeConversationTranscriptMessages(parseSessionMessagesJsonl(destPath))
+    .filter((message) => message.role === "user")
+    .map((message) => message.content)
+    .join("\n\n")
+    .trim();
+  const sourceUserText = normalizeConversationTranscriptMessages(parseSessionMessagesJsonl(sourcePath))
+    .filter((message) => message.role === "user")
+    .map((message) => message.content)
+    .join("\n\n")
+    .trim();
+  if (!existingUserText || !sourceUserText || existingUserText.length <= sourceUserText.length) {
+    return false;
+  }
+  return existingUserText.includes(sourceUserText);
 }
 
 function persistHookPayloadTranscript(

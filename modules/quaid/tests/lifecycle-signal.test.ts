@@ -660,6 +660,69 @@ describe("lifecycle signal detection", () => {
     }
   });
 
+  it("does not overwrite richer message_received preserved transcript with shorter native transcript", async () => {
+    const baseDir = fs.mkdtempSync(path.join("/tmp", "quaid-oc-preserve-richer-cache-"));
+    const quaidHome = path.join(baseDir, ".quaid");
+    const visibleHome = path.join(baseDir, "quaid");
+    const openClawConfigPath = path.join(baseDir, ".openclaw", "openclaw.json");
+    const sessionsDir = path.join(baseDir, ".openclaw", "agents", "main", "sessions");
+    fs.mkdirSync(sessionsDir, { recursive: true });
+    fs.mkdirSync(path.dirname(openClawConfigPath), { recursive: true });
+    fs.writeFileSync(
+      openClawConfigPath,
+      JSON.stringify({ agents: { list: [{ id: "main", default: true }] } }),
+      "utf8",
+    );
+
+    try {
+      vi.stubEnv("HOME", baseDir);
+      vi.stubEnv("QUAID_HOME", quaidHome);
+      vi.stubEnv("QUAID_VISIBLE_HOME", visibleHome);
+      vi.stubEnv("OPENCLAW_CONFIG_PATH", openClawConfigPath);
+      vi.stubEnv("QUAID_INSTANCE", "openclaw-main");
+      vi.resetModules();
+      const isolatedAdapter = await import("../adaptors/openclaw/adapter.js");
+      const isolatedTest = isolatedAdapter.__test;
+      const sessionId = "00a8868a-6d3b-4d04-bb11-a84edf894197";
+      const nativePath = path.join(sessionsDir, `${sessionId}.jsonl`);
+
+      const firstChunk = "Before we get going, I use a brass postal scale.";
+      const secondChunk = "A golden retriever named Baxter is a someday-plan, and my orange linen notebook came from Emília Rosa.";
+      isolatedTest.appendPreservedTranscriptMessage(sessionId, "user", firstChunk, "message_received");
+      const preserved = isolatedTest.appendPreservedTranscriptMessage(sessionId, "user", secondChunk, "message_received");
+      expect(preserved).toBeTruthy();
+      fs.writeFileSync(
+        nativePath,
+        [
+          JSON.stringify({
+            type: "message",
+            message: { role: "user", content: firstChunk },
+          }),
+          JSON.stringify({
+            type: "message",
+            message: { role: "assistant", content: "ACK" },
+          }),
+        ].join("\n") + "\n",
+        "utf8",
+      );
+
+      const preservedAgain = isolatedTest.preserveSessionTranscript(
+        sessionId,
+        nativePath,
+        "transcript-update-late-content",
+      );
+
+      expect(preservedAgain).toBe(preserved);
+      const preservedText = fs.readFileSync(String(preservedAgain), "utf8");
+      expect(preservedText).toContain("Baxter");
+      expect(preservedText).toContain("orange linen notebook");
+      expect(preservedText).toContain("Emília Rosa");
+    } finally {
+      vi.unstubAllEnvs();
+      try { fs.rmSync(baseDir, { recursive: true, force: true }); } catch {}
+    }
+  });
+
   it("preserves reset backup for reset reasons even when live transcript exists", async () => {
     const baseDir = fs.mkdtempSync(path.join("/tmp", "quaid-oc-transcript-reset-backup-"));
     const quaidHome = path.join(baseDir, ".quaid");
