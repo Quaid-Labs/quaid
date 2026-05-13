@@ -9315,7 +9315,7 @@ def _run_recall_store_plan(
                     planned_queries=planned_queries,
                     planner_meta=planner_meta,
                     fast_mode=fast_mode,
-                    common_kwargs={**kwargs, "project": planned_project},
+                    common_kwargs={**kwargs, "project": planned_project, "owner_id": owner_id},
                 ),
             ))
         elif store == "docs":

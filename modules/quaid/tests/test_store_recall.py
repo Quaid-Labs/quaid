@@ -4260,6 +4260,42 @@ class TestSourceChunkStorage:
         assert meta["rrf_shadow"]["enabled"] is True
         assert meta["rrf_shadow"]["branch_counts"]["session_chunks"] >= 1
 
+    def test_store_plan_passes_owner_context_to_vector_lane(self):
+        """Nested vector recall must retain owner scope before it can auto-include session chunks."""
+        import datastore.memorydb.memory_graph as mg
+
+        captured = {}
+
+        def _fake_vector(query, **kwargs):
+            captured["common_kwargs"] = dict(kwargs.get("common_kwargs") or {})
+            return [], {"selected_path": "vector"}, None
+
+        def _fake_registry():
+            return {
+                "vector": {"recall": _fake_vector, "recall_fast": _fake_vector},
+                "docs": {"recall": lambda *_a, **_k: ([], {}, None), "recall_fast": lambda *_a, **_k: ([], {}, None)},
+                "graph": {"recall": lambda *_a, **_k: ([], {}, None), "recall_fast": lambda *_a, **_k: ([], {}, None)},
+                "session_chunks": {"recall": lambda *_a, **_k: ([], {}, None), "recall_fast": lambda *_a, **_k: ([], {}, None)},
+            }
+
+        with patch.object(mg, "_get_recall_store_registry", side_effect=_fake_registry):
+            rows, meta, _bundle = mg._run_recall_store_plan(
+                "Lisbon ferry receipt notebook",
+                stores=["vector"],
+                limit=5,
+                owner_id="solomon-steadman",
+                min_similarity=0.0,
+                planner_profile="off",
+                planned_queries=["Lisbon ferry receipt notebook"],
+                planner_meta={"planned_stores": ["vector"]},
+                fast_mode=False,
+                common_kwargs={"project": None},
+            )
+
+        assert rows == []
+        assert meta["planned_stores"] == ["vector"]
+        assert captured["common_kwargs"]["owner_id"] == "solomon-steadman"
+
     def test_rrf_shadow_does_not_change_store_plan_ordering_when_active_fusion_disabled(self):
         """Shadow telemetry remains observational when active RRF fusion is disabled."""
         import datastore.memorydb.memory_graph as mg
