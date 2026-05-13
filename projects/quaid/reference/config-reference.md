@@ -7,7 +7,7 @@ Do not edit manually. Regenerate with:
 python3 modules/quaid/scripts/generate-config-reference.py
 ```
 
-Source hash: `9f367c50038c`
+Source hash: `f79de28f0c69`
 
 Notes:
 - Keys are documented in `snake_case` (loader also accepts camelCase aliases).
@@ -276,6 +276,8 @@ Notes:
 | `retrieval.use_hyde` | `bool` | `true` | Enable HyDE query expansion by default |
 | `retrieval.hyde_timeout_ms` | `int` | `15000` | Fast-tier timeout for HyDE query routing |
 | `retrieval.hyde_max_retries` | `int` | `1` | Extra retries for HyDE route calls (fail-hard still enforced) |
+| `retrieval.lexical_anchor_timeout_ms` | `int` | `8000` | Fast-tier timeout for lexical anchor planning |
+| `retrieval.lexical_anchor_max_retries` | `int` | `1` | Extra retry for transient lexical planner transport failures |
 | `retrieval.injection_timeout_ms` | `int` | `3000` | Overall wall-clock budget for pre-injection recall |
 | `retrieval.injection_fanout_max` | `int` | `5` | Max parallel HyDE queries for injection |
 | `retrieval.injection_fanout_llm_ms` | `int` | `1500` | LLM budget for query fanout within injection |
