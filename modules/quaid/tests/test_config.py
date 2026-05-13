@@ -1253,6 +1253,8 @@ class TestConfigPathResolution:
                 cfg = load_config()
                 assert "ownerUser" in cfg.users.identities
                 assert "owner_user" not in cfg.users.identities
+                assert cfg.users.default_owner == "ownerUser"
+                assert cfg.users.identities["ownerUser"].person_node_name == "Owner"
         finally:
             config._config = old_config
 

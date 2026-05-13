@@ -1462,10 +1462,10 @@ def _load_config_inner() -> MemoryConfig:
         identities[user_id] = UserIdentity(
             channels=identity_data.get('channels', {}),
             speakers=identity_data.get('speakers', []),
-            person_node_name=identity_data.get('person_node_name', '')
+            person_node_name=identity_data.get('person_node_name', identity_data.get('personNodeName', ''))
         )
     users = UsersConfig(
-        default_owner=users_data.get('default_owner', 'default'),
+        default_owner=users_data.get('default_owner', users_data.get('defaultOwner', 'default')),
         identities=identities
     )
 
