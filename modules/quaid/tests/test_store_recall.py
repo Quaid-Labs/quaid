@@ -5838,6 +5838,8 @@ class TestRecallTelemetry:
              patch("datastore.memorydb.memory_graph._get_retrieval_lightweight_config", return_value=fake_cfg.retrieval), \
              patch("datastore.memorydb.memory_graph._ollama_healthy", return_value=True), \
              patch("datastore.memorydb.memory_graph._is_fail_hard_mode", return_value=False), \
+             patch("datastore.memorydb.memory_graph._owner_has_session_chunks", return_value=True), \
+             patch("datastore.memorydb.memory_graph._run_recall_store_plan", side_effect=AssertionError("exact codeword path must stay vector-only")), \
              patch("lib.llm_clients.call_fast_reasoning", side_effect=AssertionError("exact codeword path should not call LLM")), \
              patch.object(mg.MemoryGraph, "search_hybrid", return_value=[(exact_node, 0.93)]), \
              patch.object(mg.MemoryGraph, "search_fts", return_value=[]):

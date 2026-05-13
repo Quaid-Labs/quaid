@@ -19223,6 +19223,7 @@ def recall(
             "planned_stores": ["vector"],
             "planned_project": project,
             "freshness_preferred": False,
+            "suppress_session_chunks_auto_include": True,
         }
         return recall(
             query=query,
