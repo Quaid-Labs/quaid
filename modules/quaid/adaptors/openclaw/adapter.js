@@ -2153,9 +2153,6 @@ function shouldKeepRicherPreservedTranscript(destPath, sourcePath, reason) {
   if (!destPath || !sourcePath || destPath === sourcePath || !fs.existsSync(destPath) || !fs.existsSync(sourcePath)) {
     return false;
   }
-  if (String(reason || "").toLowerCase().includes("reset")) {
-    return false;
-  }
   const existingUserText = normalizeConversationTranscriptMessages(parseSessionMessagesJsonl(destPath)).filter((message) => message.role === "user").map((message) => message.content).join("\n\n").trim();
   const sourceUserText = normalizeConversationTranscriptMessages(parseSessionMessagesJsonl(sourcePath)).filter((message) => message.role === "user").map((message) => message.content).join("\n\n").trim();
   if (!existingUserText || !sourceUserText || existingUserText.length <= sourceUserText.length) {

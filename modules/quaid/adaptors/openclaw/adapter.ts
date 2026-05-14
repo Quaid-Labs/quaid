@@ -2722,9 +2722,6 @@ function shouldKeepRicherPreservedTranscript(destPath: string, sourcePath: strin
   if (!destPath || !sourcePath || destPath === sourcePath || !fs.existsSync(destPath) || !fs.existsSync(sourcePath)) {
     return false;
   }
-  if (String(reason || "").toLowerCase().includes("reset")) {
-    return false;
-  }
   const existingUserText = normalizeConversationTranscriptMessages(parseSessionMessagesJsonl(destPath))
     .filter((message) => message.role === "user")
     .map((message) => message.content)

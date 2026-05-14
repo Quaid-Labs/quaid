@@ -723,6 +723,68 @@ describe("lifecycle signal detection", () => {
     }
   });
 
+  it("does not overwrite richer message_received preserved transcript during reset", async () => {
+    const baseDir = fs.mkdtempSync(path.join("/tmp", "quaid-oc-preserve-richer-reset-"));
+    const quaidHome = path.join(baseDir, ".quaid");
+    const visibleHome = path.join(baseDir, "quaid");
+    const openClawConfigPath = path.join(baseDir, ".openclaw", "openclaw.json");
+    const sessionsDir = path.join(baseDir, ".openclaw", "agents", "main", "sessions");
+    fs.mkdirSync(sessionsDir, { recursive: true });
+    fs.mkdirSync(path.dirname(openClawConfigPath), { recursive: true });
+    fs.writeFileSync(
+      openClawConfigPath,
+      JSON.stringify({ agents: { list: [{ id: "main", default: true }] } }),
+      "utf8",
+    );
+
+    try {
+      vi.stubEnv("HOME", baseDir);
+      vi.stubEnv("QUAID_HOME", quaidHome);
+      vi.stubEnv("QUAID_VISIBLE_HOME", visibleHome);
+      vi.stubEnv("OPENCLAW_CONFIG_PATH", openClawConfigPath);
+      vi.stubEnv("QUAID_INSTANCE", "openclaw-main");
+      vi.resetModules();
+      const isolatedAdapter = await import("../adaptors/openclaw/adapter.js");
+      const isolatedTest = isolatedAdapter.__test;
+      const sessionId = "752e9acc-ea4e-4b4f-ade7-6d4c8adc421e";
+      const nativePath = path.join(sessionsDir, `${sessionId}.jsonl`);
+
+      const firstChunk = "What grinder do I use for my espresso setup?";
+      const secondChunk = "My Friday pumpkin seed ritual is roasting the seeds with smoked paprika and maple salt.";
+      isolatedTest.appendPreservedTranscriptMessage(sessionId, "user", firstChunk, "message_received");
+      const preserved = isolatedTest.appendPreservedTranscriptMessage(sessionId, "user", secondChunk, "message_received");
+      expect(preserved).toBeTruthy();
+      fs.writeFileSync(
+        nativePath,
+        [
+          JSON.stringify({
+            type: "message",
+            message: { role: "user", content: firstChunk },
+          }),
+          JSON.stringify({
+            type: "message",
+            message: { role: "assistant", content: "A Baratza Encore." },
+          }),
+        ].join("\n") + "\n",
+        "utf8",
+      );
+
+      const preservedAgain = isolatedTest.preserveSessionTranscript(
+        sessionId,
+        nativePath,
+        "before_reset",
+      );
+
+      expect(preservedAgain).toBe(preserved);
+      const preservedText = fs.readFileSync(String(preservedAgain), "utf8");
+      expect(preservedText).toContain("pumpkin seed ritual");
+      expect(preservedText).toContain("espresso setup");
+    } finally {
+      vi.unstubAllEnvs();
+      try { fs.rmSync(baseDir, { recursive: true, force: true }); } catch {}
+    }
+  });
+
   it("preserves reset backup for reset reasons even when live transcript exists", async () => {
     const baseDir = fs.mkdtempSync(path.join("/tmp", "quaid-oc-transcript-reset-backup-"));
     const quaidHome = path.join(baseDir, ".quaid");
