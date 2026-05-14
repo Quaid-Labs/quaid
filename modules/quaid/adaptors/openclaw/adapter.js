@@ -4526,45 +4526,17 @@ notify_user(${JSON.stringify(message)})
           hook_session_id: String(ctx?.sessionId || "")
         });
       }
-      let prependContext = String(event?.prependContext || "");
-      let prependSystemContext = String(event?.prependSystemContext || "");
-      let appendSystemContext = String(event?.appendSystemContext || "");
-      if (isSystemEnabled2("projects")) {
-        const startSessionId = String(event?.sessionId || ctx?.sessionId || ctx?.session?.id || "").trim();
-        const startSessionKeyDocs = resolveProjectDocsRefreshKey(event, ctx, startSessionId);
-        const refreshedIdentityContext = peekRefreshedIdentityContext(
-          [startSessionKeyDocs, startSessionId, identityRefreshInstanceKey(startInstanceId)],
-          startInstanceId,
-          "before_agent_start"
-        );
-        if (refreshedIdentityContext) {
-          prependContext = prependContext ? `${refreshedIdentityContext}
-
-${prependContext}` : refreshedIdentityContext;
-          prependSystemContext = prependSystemContext ? `${prependSystemContext}
-
-${refreshedIdentityContext}` : refreshedIdentityContext;
-          appendSystemContext = appendSystemContext ? `${appendSystemContext}
-
-${refreshedIdentityContext}` : refreshedIdentityContext;
-          writeHookTrace("hook.before_agent_start.identity_refresh_context", {
-            session_id: startSessionId,
-            session_key: startSessionKeyDocs,
-            instance_id: startInstanceId,
-            len: refreshedIdentityContext.length
-          });
-        }
-      }
-      const result = {
-        prependContext: prependContext || void 0,
-        ...prependSystemContext ? { prependSystemContext } : {},
-        ...appendSystemContext ? { appendSystemContext } : {}
+      const result = buildRefreshedIdentityHookResult(
+        event,
+        ctx,
+        String(event?.sessionId || ctx?.sessionId || ctx?.session?.id || "").trim(),
+        startInstanceId,
+        "before_agent_start"
+      ) || {
+        prependContext: event?.prependContext ? String(event.prependContext) : void 0,
+        prependSystemContext: event?.prependSystemContext ? String(event.prependSystemContext) : void 0,
+        appendSystemContext: event?.appendSystemContext ? String(event.appendSystemContext) : void 0
       };
-      if (event && typeof event === "object") {
-        if (result.prependContext) event.prependContext = result.prependContext;
-        if (result.prependSystemContext) event.prependSystemContext = result.prependSystemContext;
-        if (result.appendSystemContext) event.appendSystemContext = result.appendSystemContext;
-      }
       const autoInjectEnabled = isAutoInjectEnabled(getMemoryConfig2());
       if (!autoInjectEnabled) {
         return result;
@@ -4656,6 +4628,40 @@ ${refreshedIdentityContext}` : refreshedIdentityContext;
         targets: ["appendSystemContext", "prependContext", "prependSystemContext"]
       });
       return context;
+    };
+    const buildRefreshedIdentityHookResult = (event, ctx, fallbackSessionId, instanceId, targetHook) => {
+      if (!isSystemEnabled2("projects")) return void 0;
+      const sessionId = String(fallbackSessionId || event?.sessionId || ctx?.sessionId || ctx?.session?.id || "").trim();
+      const sessionKeyDocs = resolveProjectDocsRefreshKey(event, ctx, sessionId);
+      const refreshedIdentityContext = peekRefreshedIdentityContext(
+        [sessionKeyDocs, sessionId, identityRefreshInstanceKey(instanceId)],
+        instanceId,
+        targetHook
+      );
+      if (!refreshedIdentityContext) return void 0;
+      const prependContext = event?.prependContext ? `${refreshedIdentityContext}
+
+${String(event.prependContext)}` : refreshedIdentityContext;
+      const prependSystemContext = event?.prependSystemContext ? `${String(event.prependSystemContext)}
+
+${refreshedIdentityContext}` : refreshedIdentityContext;
+      const appendSystemContext = event?.appendSystemContext ? `${String(event.appendSystemContext)}
+
+${refreshedIdentityContext}` : refreshedIdentityContext;
+      const result = { prependContext, prependSystemContext, appendSystemContext };
+      if (event && typeof event === "object") {
+        event.prependContext = prependContext;
+        event.prependSystemContext = prependSystemContext;
+        event.appendSystemContext = appendSystemContext;
+      }
+      writeHookTrace("hook.before_agent_start.identity_refresh_context", {
+        session_id: sessionId,
+        session_key: sessionKeyDocs,
+        instance_id: instanceId,
+        len: refreshedIdentityContext.length,
+        target_hook: targetHook
+      });
+      return result;
     };
     const armProjectContextRefresh = (refreshKey, source, options = {}) => {
       const key = String(refreshKey || "").trim();
@@ -6536,12 +6542,20 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
       if (!isInteractiveKey) return;
       const newAgentLabel = resolveAgentLabelFromSessionKey(newSessionKey) || "main";
       const isAlreadyTracked = Array.from(sessionKeyLastSeen.values()).includes(newSessionId);
+      let transitionIdentityRefreshResult;
       if (!isAlreadyTracked) {
         armLifecycleProjectContextRefresh(
           event,
           ctx,
           newSessionId,
           "before_agent_start:new_interactive_session"
+        );
+        transitionIdentityRefreshResult = buildRefreshedIdentityHookResult(
+          event,
+          ctx,
+          newSessionId,
+          getInstanceId(newAgentLabel),
+          "before_agent_start_session_transition"
         );
       }
       if (!isAlreadyTracked && isSystemEnabled2("memory")) {
@@ -6663,6 +6677,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
         }
         sessionKeyLastSeen.set(`agent:main:hook:${newSessionId}`, newSessionId);
       }
+      if (transitionIdentityRefreshResult) return transitionIdentityRefreshResult;
     };
     onChecked("before_agent_start", beforeAgentStartSessionTransitionHandler, {
       name: "before-agent-start-session-transition",
