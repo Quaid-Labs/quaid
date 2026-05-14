@@ -1600,6 +1600,46 @@ class TestHookInjectRecallResilience:
         assert "silver lantern" in context
         assert "quaid notify --deferred-drain" not in context
 
+    def test_claude_code_relays_deferred_notice_before_recall_work(
+        self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
+    ):
+        from core import extraction_daemon
+
+        trace_events = []
+        monkeypatch.setattr(extraction_daemon, "write_cursor", lambda *a: None)
+        monkeypatch.setattr(
+            "core.interface.hooks._get_deferred_notice_relay_context",
+            lambda: (
+                "MANDATORY: Quaid just drained deferred notices for the human user. "
+                "Start your next response by briefly relaying them, then answer the user's current message.\n\n"
+                "<quaid_system_message>\n• First-turn relay: blue sparrow is ready.\n</quaid_system_message>"
+            ),
+        )
+        monkeypatch.setattr("core.interface.hooks._get_pending_context", lambda: "")
+        monkeypatch.setattr(
+            "core.interface.hooks._write_hook_trace",
+            lambda event, payload=None: trace_events.append((event, payload or {})),
+        )
+
+        with patch("core.interface.api.recall_fast", side_effect=AssertionError("recall should not run before relay")) as recall, \
+             patch("core.interface.api.projects_search_docs", side_effect=AssertionError("docs should not run before relay")) as docs:
+            out, _err = _run_hook_inject(
+                {
+                    "prompt": "Hey, what is up?",
+                    "session_id": "sess-deferred-fastpath",
+                    "cwd": "/Users/x",
+                },
+                monkeypatch=monkeypatch,
+            )
+
+        recall.assert_not_called()
+        docs.assert_not_called()
+        payload = json.loads(out)
+        context = payload["hookSpecificOutput"]["additionalContext"]
+        assert "MANDATORY: Quaid just drained deferred notices" in context
+        assert "blue sparrow" in context
+        assert any(event == "hook.inject.deferred_relay_fastpath" for event, _payload in trace_events)
+
     def test_memory_context_still_injected_without_tool_hint_round_trip(
         self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
     ):

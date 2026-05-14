@@ -1140,6 +1140,61 @@ def test_codex_deferred_notice_relay_context_is_enabled(monkeypatch):
     assert "must" in context.lower() or "relay" in context.lower()
 
 
+def test_codex_hook_inject_relays_deferred_notice_before_recall_work(monkeypatch, tmp_path):
+    from core.interface import hooks
+
+    adapter = _adapter_mock()
+    adapter.get_pending_context.return_value = ""
+    adapter.resolve_prompt_submit_signal.return_value = None
+    adapter.adapter_id.return_value = "codex"
+    adapter.get_session_path.return_value = None
+    adapter.get_sessions_dir.return_value = str(tmp_path / "sessions")
+
+    trace_events = []
+    monkeypatch.setattr("lib.adapter.get_adapter", lambda: adapter)
+    monkeypatch.setattr("lib.adapter._ensure_instance_projects_bootstrapped", lambda _adapter: None)
+    monkeypatch.setattr("core.extraction_daemon.ensure_alive", lambda: None)
+    monkeypatch.setattr("core.extraction_daemon.read_cursor", lambda sid: {"line_offset": 0, "transcript_path": ""})
+    monkeypatch.setattr("core.extraction_daemon.write_cursor", lambda *args: None)
+    monkeypatch.setattr(hooks, "_get_pending_context", lambda: "")
+    monkeypatch.setattr(
+        hooks,
+        "_get_deferred_notice_relay_context",
+        lambda: (
+            "MANDATORY: Quaid just drained deferred notices for the human user. "
+            "Start your next response by briefly relaying them, then answer the user's current message.\n\n"
+            "<quaid_system_message>\n• First-turn relay: brass lantern is ready.\n</quaid_system_message>"
+        ),
+    )
+    monkeypatch.setattr(hooks, "_get_deferred_notice_hint", lambda: "")
+    monkeypatch.setattr(hooks, "_get_owner_id", lambda: "codex-owner")
+    monkeypatch.setattr(
+        hooks,
+        "_write_hook_trace",
+        lambda event, payload=None: trace_events.append((event, payload or {})),
+    )
+
+    with patch("core.interface.api.recall_fast", side_effect=AssertionError("recall should not run before relay")) as recall, \
+         patch("core.interface.api.projects_search_docs", side_effect=AssertionError("docs should not run before relay")) as docs:
+        out, _err = _run_hook_inject(
+            {
+                "prompt": "Hey, what is up?",
+                "session_id": "sess-codex-deferred-fastpath",
+                "cwd": str(tmp_path),
+                "thread_id": "sess-codex-deferred-fastpath",
+            },
+            monkeypatch=monkeypatch,
+        )
+
+    recall.assert_not_called()
+    docs.assert_not_called()
+    payload = json.loads(out)
+    context = payload["hookSpecificOutput"]["additionalContext"]
+    assert "MANDATORY: Quaid just drained deferred notices" in context
+    assert "brass lantern" in context
+    assert any(event == "hook.inject.deferred_relay_fastpath" for event, _payload in trace_events)
+
+
 def test_codex_hook_inject_surfaces_new_pending_notice_on_same_turn(monkeypatch, tmp_path):
     from core.interface import hooks
 

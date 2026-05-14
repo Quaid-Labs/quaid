@@ -1344,6 +1344,39 @@ def hook_inject(args):
             "reason": "compact_identity_context_empty",
         })
 
+    # Human-facing deferred notices must not wait behind recall/docs work, but
+    # lifecycle identity bridges still take precedence on post-compaction turns.
+    deferred_notice_relay_context = _get_deferred_notice_relay_context()
+    if deferred_notice_relay_context:
+        pending_context = _get_pending_context()
+        context_parts = []
+        direct_notice_context = _format_direct_agent_notices(direct_notices)
+        if direct_notice_context:
+            context_parts.append(direct_notice_context)
+        if pending_context:
+            context_parts.append(pending_context)
+        context_parts.append(deferred_notice_relay_context)
+        project_list_hint = _project_list_cli_hint_context(
+            hook_input if isinstance(hook_input, dict) else {}
+        )
+        if project_list_hint:
+            context_parts.append(project_list_hint)
+        context = "\n\n".join(context_parts)
+        _write_hook_trace("hook.inject.deferred_relay_fastpath", {
+            "query": query[:160],
+            "session_id": session_id,
+            "pending_context_len": len(pending_context or ""),
+            "deferred_relay_len": len(deferred_notice_relay_context or ""),
+            "context_len": len(context),
+        })
+        print(json.dumps({
+            "hookSpecificOutput": {
+                "hookEventName": "UserPromptSubmit",
+                "additionalContext": context,
+            }
+        }))
+        return
+
     try:
         from concurrent.futures import ThreadPoolExecutor
         from core.interface.api import projects_search_docs, recall_fast
