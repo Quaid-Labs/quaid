@@ -4299,6 +4299,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
 
     cursor_offset = int(cursor_data["line_offset"] or 0)
     cursor_transcript = cursor_data["transcript_path"]
+    reset_staged_state_for_full_reextract = False
 
     # Write a preliminary cursor entry before extraction begins so that
     # check_idle_sessions() can discover this session even if the daemon is
@@ -4424,6 +4425,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                 label, session_id, cursor_transcript, transcript_path,
             )
             cursor_offset = 0
+            reset_staged_state_for_full_reextract = True
         elif _is_dir_relocation and _relocated_content_changed:
             logger.info(
                 "[%s] session %s: transcript directory relocation content changed "
@@ -4432,6 +4434,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                 _relocated_cursor_size_bytes, _relocated_current_size_bytes,
             )
             cursor_offset = 0
+            reset_staged_state_for_full_reextract = True
         elif _is_dir_relocation and signal_type != "reset":
             # Same-basename path: session file relocated to a different directory.
             # Content is identical; preserve cursor to avoid duplicate extraction.
@@ -4454,6 +4457,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                     label, session_id, cursor_transcript, transcript_path,
                 )
                 cursor_offset = 0
+                reset_staged_state_for_full_reextract = True
             else:
                 logger.info(
                     "[%s] session %s: reset signal on relocated transcript, content already extracted at offset %d (%s -> %s), preserving cursor",
@@ -4473,6 +4477,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                 label, session_id, cursor_transcript, transcript_path,
             )
             cursor_offset = 0
+            reset_staged_state_for_full_reextract = True
         elif _is_cursor_on_backup_to_plain and cursor_offset > 0:
             # Cursor was written against a .reset.* backup; new signal points to
             # the plain session path. OpenClaw can reuse the same session id after
@@ -4495,6 +4500,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                     label, session_id, cursor_transcript, transcript_path, cursor_offset, plain_total_lines,
                 )
                 cursor_offset = 0
+                reset_staged_state_for_full_reextract = True
             elif plain_total_lines > cursor_offset:
                 logger.info(
                     "[%s] session %s: cursor on reset backup, preserved copy has %d new line(s) "
@@ -4519,12 +4525,14 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                 label, session_id, cursor_transcript, transcript_path,
             )
             cursor_offset = 0
+            reset_staged_state_for_full_reextract = True
         else:
             logger.info(
                 "[%s] session %s: transcript path changed (%s -> %s), resetting cursor",
                 label, session_id, cursor_transcript, transcript_path,
             )
             cursor_offset = 0
+            reset_staged_state_for_full_reextract = True
 
     total_lines = count_transcript_lines(transcript_path)
     cursor_clamped_to_eof = False
@@ -4555,6 +4563,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                 current_size_bytes,
             )
             cursor_offset = 0
+            reset_staged_state_for_full_reextract = True
         elif same_transcript_source and signal_type != "reset":
             logger.warning(
                 "[%s] session %s: cursor offset %d > file length %d on unchanged transcript source, "
@@ -4569,6 +4578,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                 label, session_id, cursor_offset, total_lines,
             )
             cursor_offset = 0
+            reset_staged_state_for_full_reextract = True
 
     transcript_read_guard_start = int(cursor_offset or 0)
     transcript_read_guard_count = max(0, int(total_lines or 0) - transcript_read_guard_start)
@@ -4580,6 +4590,18 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
 
     chunk_budget = _get_capture_chunk_tokens()
     chunk_line_budget = _get_capture_chunk_max_lines()
+    if (
+        reset_staged_state_for_full_reextract
+        and not staged_payload_sweep_signal
+        and _rolling_state_has_pending_content(staged_state)
+    ):
+        logger.info(
+            "[%s] session %s: cursor reset for full extraction; clearing stale rolling buffer state",
+            label,
+            session_id,
+        )
+        clear_rolling_state(session_id)
+        staged_state = read_rolling_state(session_id)
     semantic_buffer_metrics = {
         "raw_lines_added": 0,
         "semantic_chars_added": 0,

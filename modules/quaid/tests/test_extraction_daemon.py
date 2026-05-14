@@ -2116,6 +2116,139 @@ def test_process_signal_recovers_full_transcript_before_too_short_skip(
     assert cursor["line_offset"] == 7
 
 
+def test_reset_reextract_clears_stale_rolling_buffer_offset(
+    monkeypatch,
+    tmp_path,
+):
+    from lib.adapter import set_adapter, reset_adapter
+    from ingest import extract as extract_mod
+    from core import ingest_runtime
+    from core.runtime import notify as notify_mod
+
+    session_id = "035f357b-d5a7-4b28-934a-f5f084e8eb12"
+    sessions_dir = tmp_path / ".openclaw" / "agents" / "main" / "sessions"
+    sessions_dir.mkdir(parents=True)
+    original_path = sessions_dir / f"{session_id}.jsonl"
+    backup_path = sessions_dir / f"{session_id}.jsonl.reset.2026-05-14T20-57-02.937Z"
+    backup_path.write_text(
+        "\n".join([
+            f'{{"type":"session","id":"{session_id}"}}',
+            '{"type":"model_change"}',
+            '{"type":"thinking_level_change"}',
+            '{"type":"custom","customType":"model-snapshot"}',
+            '{"type":"message","message":{"role":"user","content":[{"type":"text","text":"Baxter uses an orange linen notebook from Emília Rosa."}]}}',
+            '{"type":"custom_message","customType":"openclaw.runtime-context","content":"context"}',
+            '{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"ACK"}]}}',
+        ]) + "\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "openclaw-main")
+    monkeypatch.setattr(extraction_daemon, "_get_owner_id", lambda: "owner-1")
+    monkeypatch.setattr(extraction_daemon, "_read_usage_totals", lambda: {})
+    monkeypatch.setattr(extraction_daemon, "_session_has_harvestable_subagents", lambda *args, **kwargs: False)
+    monkeypatch.setattr(extraction_daemon, "_warm_payload_embeddings", lambda _facts: {
+        "requested": 0,
+        "unique": 0,
+        "cache_hits": 0,
+        "warmed": 0,
+        "failed": 0,
+        "skipped_empty": 0,
+    })
+    monkeypatch.setattr(notify_mod, "notify_memory_extraction", lambda **_kwargs: None)
+    monkeypatch.setattr(ingest_runtime, "run_session_logs_ingest", lambda **_kwargs: {"status": "indexed"})
+
+    source_key = extraction_daemon._signal_source_cursor_key(session_id, str(original_path))
+    extraction_daemon.write_cursor(session_id, 0, str(original_path), source_key=source_key)
+    extraction_daemon.write_rolling_state(
+        session_id,
+        {
+            "session_id": session_id,
+            "transcript_path": str(original_path),
+            "processed_line_offset": 7,
+            "buffered_line_offset": 7,
+            "semantic_buffer": "User: Hello\n\nAssistant: Hey. What can I help with?",
+            "semantic_buffer_tokens": 12,
+            "carry_facts": [],
+            "raw_facts": [],
+        },
+    )
+
+    captured = {}
+
+    class _Adapter(_OwnedTestAdapterMixin):
+        def instance_root(self):
+            return tmp_path / "instances" / "openclaw-main"
+
+        def parse_session_jsonl(self, path):
+            raw = Path(path).read_text(encoding="utf-8")
+            if "Baxter uses an orange linen notebook" in raw:
+                return "User: Baxter uses an orange linen notebook from Emília Rosa.\nAssistant: ACK"
+            return "User: Hello\n\nAssistant: Hey. What can I help with?"
+
+        def is_subagent_session(self, session_id, transcript_path=None):
+            return False
+
+    def fake_extract_from_transcript(transcript, **kwargs):
+        captured["transcript"] = transcript
+        return {
+            "chunks_processed": 1,
+            "chunks_total": 1,
+            "unclassified_empty_payloads": 0,
+            "raw_facts": [
+                {
+                    "text": "Baxter uses an orange linen notebook from Emília Rosa.",
+                    "category": "fact",
+                    "domains": ["personal"],
+                    "extraction_confidence": "high",
+                }
+            ],
+            "facts": [],
+            "soul_snippets": {},
+            "journal_entries": {},
+            "project_logs": {},
+            "raw_snippets": {},
+            "raw_journal": {},
+            "raw_project_logs": {},
+            "carry_facts": [],
+        }
+
+    monkeypatch.setattr(extract_mod, "extract_from_transcript", fake_extract_from_transcript)
+    monkeypatch.setattr(
+        extract_mod,
+        "apply_extracted_payloads",
+        lambda *_args, **_kwargs: {
+            "facts_stored": 1,
+            "facts_skipped": 0,
+            "edges_created": 0,
+            "facts": [{"text": "Baxter uses an orange linen notebook from Emília Rosa.", "status": "stored", "edges": []}],
+            "snippets": {},
+            "journal": {},
+            "project_log_metrics": {},
+        },
+    )
+
+    set_adapter(_Adapter())
+    try:
+        signal_path = extraction_daemon.write_signal(
+            signal_type="reset",
+            session_id=session_id,
+            transcript_path=str(original_path),
+        )
+        signal_data = json.loads(signal_path.read_text(encoding="utf-8"))
+        signal_data["_signal_path"] = str(signal_path)
+
+        extraction_daemon.process_signal(signal_data)
+    finally:
+        reset_adapter()
+
+    assert "Baxter uses an orange linen notebook" in captured["transcript"]
+    assert "User: Hello" not in captured["transcript"]
+    cursor = extraction_daemon.read_cursor(session_id, source_key=source_key)
+    assert cursor["line_offset"] == 7
+
+
 @pytest.mark.parametrize(
     ("rebase_retry_count", "expect_followup", "guard_reread_error"),
     [
