@@ -384,8 +384,13 @@ describe("install daemon policy", () => {
     );
 
     expect(hotswapText).toContain("printf '$HOME'");
+    expect(hotswapText).toContain('local rest="${value:2}"');
     expect(hotswapText).toContain('printf "\\$HOME/\'%s\'"');
+    expect(hotswapText).not.toContain('${value#~/}');
     expect(hotswapText).not.toContain('printf "~/\'%s\'"');
+    expect(hotswapText).toContain("copy_and_verify");
+    expect(hotswapText).toContain("Remote copy verification failed");
+    expect(hotswapText).toContain("Verified remote copy:");
   });
 
   it("OpenClaw installer re-sanitizes native memory plugins after gateway reloads", () => {

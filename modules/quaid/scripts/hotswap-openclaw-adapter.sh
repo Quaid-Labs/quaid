@@ -31,11 +31,38 @@ remote_quote() {
     return
   fi
   if [[ "$value" == "~/"* ]]; then
-    local rest="${value#~/}"
+    # Do not use pattern-based removal here: bash tilde-expands that
+    # pattern and can produce $HOME/'~/.openclaw/...' paths.
+    local rest="${value:2}"
     printf "\$HOME/'%s'" "$(printf '%s' "$rest" | sed "s/'/'\\\\''/g")"
     return
   fi
   printf "'%s'" "$(printf '%s' "$value" | sed "s/'/'\\\\''/g")"
+}
+
+local_sha1() {
+  shasum "$1" | awk '{print $1}'
+}
+
+remote_sha1() {
+  local remote_file="$1"
+  ssh "$HOST" "shasum $remote_file" | awk '{print $1}'
+}
+
+copy_and_verify() {
+  local local_file="$1"
+  local remote_file="$2"
+  local expected actual
+  ssh "$HOST" "cat > $remote_file" < "$local_file"
+  expected="$(local_sha1 "$local_file")"
+  actual="$(remote_sha1 "$remote_file")"
+  if [[ "$actual" != "$expected" ]]; then
+    echo "Remote copy verification failed: $local_file -> $remote_file" >&2
+    echo "  expected sha1: $expected" >&2
+    echo "  actual sha1:   ${actual:-<missing>}" >&2
+    exit 1
+  fi
+  echo "Verified remote copy: $remote_file ($actual)"
 }
 
 while [[ $# -gt 0 ]]; do
@@ -103,11 +130,11 @@ for plugin_dir in "${PLUGIN_DIRS[@]}"; do
   remote_core_dir="$plugin_dir/core"
   quoted_adapter_dir="$(remote_quote "$remote_adapter_dir")"
   quoted_core_dir="$(remote_quote "$remote_core_dir")"
-  ssh "$HOST" "mkdir -p $quoted_adapter_dir $quoted_core_dir"
-  ssh "$HOST" "cat > $quoted_adapter_dir/adapter.ts" < "$LOCAL_ADAPTER_TS"
-  ssh "$HOST" "cat > $quoted_adapter_dir/adapter.js" < "$LOCAL_ADAPTER_JS"
-  ssh "$HOST" "cat > $quoted_core_dir/session-timeout.ts" < "$LOCAL_TIMEOUT_TS"
-  ssh "$HOST" "cat > $quoted_core_dir/session-timeout.js" < "$LOCAL_TIMEOUT_JS"
+  ssh "$HOST" "mkdir -p $quoted_adapter_dir $quoted_core_dir" </dev/null
+  copy_and_verify "$LOCAL_ADAPTER_TS" "$quoted_adapter_dir/adapter.ts"
+  copy_and_verify "$LOCAL_ADAPTER_JS" "$quoted_adapter_dir/adapter.js"
+  copy_and_verify "$LOCAL_TIMEOUT_TS" "$quoted_core_dir/session-timeout.ts"
+  copy_and_verify "$LOCAL_TIMEOUT_JS" "$quoted_core_dir/session-timeout.js"
 done
 
 GATEWAY_RESTART_HELPER="$MOD_DIR/tests/livetest/scripts/livetest-openclaw-gateway-restart.sh"
