@@ -4485,7 +4485,9 @@ const quaidPlugin = {
       if (isInternalSessionContext(event, ctx)) {
         return;
       }
-      ensureAgentInstanceProvisioned(resolveHookAgentLabel(event, ctx), "before_agent_start");
+      const startAgentLabel = resolveHookAgentLabel(event, ctx);
+      const startInstanceId = getInstanceId(startAgentLabel);
+      ensureAgentInstanceProvisioned(startAgentLabel, "before_agent_start");
       try {
         const messages = facade.collectJanitorNudges({
           statePath: JANITOR_NUDGE_STATE_PATH,
@@ -4524,11 +4526,50 @@ notify_user(${JSON.stringify(message)})
           hook_session_id: String(ctx?.sessionId || "")
         });
       }
+      let prependContext = String(event?.prependContext || "");
+      let prependSystemContext = String(event?.prependSystemContext || "");
+      let appendSystemContext = String(event?.appendSystemContext || "");
+      if (isSystemEnabled2("projects")) {
+        const startSessionId = String(event?.sessionId || ctx?.sessionId || ctx?.session?.id || "").trim();
+        const startSessionKeyDocs = resolveProjectDocsRefreshKey(event, ctx, startSessionId);
+        const refreshedIdentityContext = peekRefreshedIdentityContext(
+          [startSessionKeyDocs, startSessionId, identityRefreshInstanceKey(startInstanceId)],
+          startInstanceId,
+          "before_agent_start"
+        );
+        if (refreshedIdentityContext) {
+          prependContext = prependContext ? `${refreshedIdentityContext}
+
+${prependContext}` : refreshedIdentityContext;
+          prependSystemContext = prependSystemContext ? `${prependSystemContext}
+
+${refreshedIdentityContext}` : refreshedIdentityContext;
+          appendSystemContext = appendSystemContext ? `${appendSystemContext}
+
+${refreshedIdentityContext}` : refreshedIdentityContext;
+          writeHookTrace("hook.before_agent_start.identity_refresh_context", {
+            session_id: startSessionId,
+            session_key: startSessionKeyDocs,
+            instance_id: startInstanceId,
+            len: refreshedIdentityContext.length
+          });
+        }
+      }
+      const result = {
+        prependContext: prependContext || void 0,
+        ...prependSystemContext ? { prependSystemContext } : {},
+        ...appendSystemContext ? { appendSystemContext } : {}
+      };
+      if (event && typeof event === "object") {
+        if (result.prependContext) event.prependContext = result.prependContext;
+        if (result.prependSystemContext) event.prependSystemContext = result.prependSystemContext;
+        if (result.appendSystemContext) event.appendSystemContext = result.appendSystemContext;
+      }
       const autoInjectEnabled = isAutoInjectEnabled(getMemoryConfig2());
       if (!autoInjectEnabled) {
-        return { prependContext: event.prependContext };
+        return result;
       }
-      return { prependContext: event.prependContext };
+      return result;
     };
     const projectDocsInjectedSessions = /* @__PURE__ */ new Set();
     const refreshedIdentityContextTurns = /* @__PURE__ */ new Map();
@@ -4581,6 +4622,37 @@ notify_user(${JSON.stringify(message)})
         instance_id: instanceId,
         remaining_turns: Math.max(0, remaining),
         len: context.length,
+        targets: ["appendSystemContext", "prependContext", "prependSystemContext"]
+      });
+      return context;
+    };
+    const peekRefreshedIdentityContext = (refreshKeys, instanceId, targetHook) => {
+      const keys = Array.from(
+        new Set(
+          refreshKeys.map((key) => String(key || "").trim()).filter(Boolean)
+        )
+      );
+      if (keys.length === 0) return "";
+      const turns = keys.reduce(
+        (maxTurns, key) => Math.max(maxTurns, Math.max(0, Number(refreshedIdentityContextTurns.get(key) || 0) || 0)),
+        0
+      );
+      if (turns <= 0) return "";
+      const context = buildRefreshedIdentityContext(instanceId);
+      if (!context) {
+        writeHookTrace("hook.identity_refresh.peek_empty", {
+          refresh_keys: keys,
+          instance_id: instanceId,
+          target_hook: targetHook
+        });
+        return "";
+      }
+      writeHookTrace("hook.identity_refresh.peeked", {
+        refresh_keys: keys,
+        instance_id: instanceId,
+        turns,
+        len: context.length,
+        target_hook: targetHook,
         targets: ["appendSystemContext", "prependContext", "prependSystemContext"]
       });
       return context;

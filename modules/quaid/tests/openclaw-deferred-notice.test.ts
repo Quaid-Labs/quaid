@@ -1788,6 +1788,98 @@ describe("openclaw deferred notices", () => {
     removeTempDir(fixture.home);
   });
 
+  it("surfaces compact identity refresh on before_agent_start before prompt-build recall", async () => {
+    vi.useFakeTimers();
+    const fixture = seedDeferredNoticeFixture(
+      "quaid-oc-compaction-start-refresh-home-",
+      "openclaw-main",
+      "[Quaid] compaction start refresh fixture",
+    );
+    const identityDir = path.join(fixture.visibleHome, "instances", "openclaw-main");
+    fs.mkdirSync(identityDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(identityDir, "USER.md"),
+      "# USER\nThe office plant is named Bartholomew. It is a fiddle-leaf fig.\n",
+      "utf8",
+    );
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const plugin = await loadAdapterWithHomes(
+      fixture.hiddenHome,
+      fixture.visibleHome,
+      fixture.openClawConfigPath,
+      "openclaw-main",
+    );
+    const api = makeFakeApi();
+    plugin.register(api as any);
+
+    const beforeAgentStartCall = api.on.mock.calls.find((call: any[]) =>
+      call?.[0] === "before_agent_start" && call?.[2]?.name === "memory-injection"
+    );
+    const beforePromptBuildCall = api.on.mock.calls.find((call: any[]) =>
+      call?.[0] === "before_prompt_build" && call?.[2]?.name === "memory-injection-prompt-build"
+    );
+    const beforeCompactionCall = api.on.mock.calls.find((call: any[]) =>
+      call?.[0] === "before_compaction" && call?.[2]?.name === "compaction-memory-extraction"
+    );
+    expect(beforeAgentStartCall).toBeTruthy();
+    expect(beforePromptBuildCall).toBeTruthy();
+    expect(beforeCompactionCall).toBeTruthy();
+
+    const beforeAgentStartHandler = beforeAgentStartCall?.[1];
+    const beforePromptBuildHandler = beforePromptBuildCall?.[1];
+    const beforeCompactionHandler = beforeCompactionCall?.[1];
+    const ctx = {
+      sessionId: "session-compaction-start-refresh",
+      sessionKey: "agent:main:matrix:room-compaction-start-refresh",
+      agentId: "main",
+      trigger: "user",
+    };
+
+    await beforeCompactionHandler(
+      {
+        messages: [],
+        sessionId: ctx.sessionId,
+        sessionKey: ctx.sessionKey,
+      },
+      ctx,
+    );
+
+    const start = await beforeAgentStartHandler(
+      {
+        prependContext: "",
+        sessionId: ctx.sessionId,
+        sessionKey: ctx.sessionKey,
+      },
+      ctx,
+    );
+    expect(combinedSystemContext(start)).toContain("Quaid Refreshed Identity Context");
+    expect(combinedSystemContext(start)).toContain("Bartholomew");
+    expect(String(start?.prependContext || "")).toContain("Quaid Refreshed Identity Context");
+    expect(String(start?.prependContext || "")).toContain("Bartholomew");
+
+    const prompt = await beforePromptBuildHandler(
+      {
+        prependContext: "",
+        prompt: "what is the office plant named?",
+        messages: [{ role: "user", content: "what is the office plant named?" }],
+        sessionId: ctx.sessionId,
+        sessionKey: ctx.sessionKey,
+      },
+      ctx,
+    );
+    expect(combinedSystemContext(prompt)).toContain("Quaid Refreshed Identity Context");
+    expect(combinedSystemContext(prompt)).toContain("Bartholomew");
+
+    warn.mockRestore();
+    log.mockRestore();
+    error.mockRestore();
+    removeTempDir(fixture.home);
+  });
+
   it("re-arms project context injection when before_compaction uses a different session id on the same session key", async () => {
     vi.useFakeTimers();
     const fixture = seedDeferredNoticeFixture(
