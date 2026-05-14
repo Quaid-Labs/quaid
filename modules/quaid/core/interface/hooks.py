@@ -1305,12 +1305,15 @@ def hook_inject(args):
     compaction_marker_consumed = _consume_compaction_refresh_marker(session_id)
     if compaction_marker_consumed:
         identity_context = _build_compaction_identity_context()
+        rules_identity_context = "" if identity_context else _build_compaction_rules_identity_context(hook_input)
         context_parts = []
         direct_notice_context = _format_direct_agent_notices(direct_notices)
         if direct_notice_context:
             context_parts.append(direct_notice_context)
         if identity_context:
             context_parts.append(identity_context)
+        elif rules_identity_context:
+            context_parts.append(rules_identity_context)
         context = "\n\n".join(context_parts)
         _write_hook_trace("hook.inject.compaction_followup_identity_context_ready", {
             "query": query[:160],
@@ -1318,6 +1321,7 @@ def hook_inject(args):
             "strategy": _context_refresh_strategy(),
             "context_len": len(context),
             "identity_context_len": len(identity_context),
+            "rules_identity_context_len": len(rules_identity_context),
             "has_direct_notices": bool(direct_notice_context),
             "reason": "compact_identity_additional_context_bridge",
         })
@@ -1328,7 +1332,7 @@ def hook_inject(args):
                 "recall_count": 0,
                 "docs_count": 0,
                 "context_len": len(context),
-                "context_mode": "compaction_identity",
+                "context_mode": "compaction_identity" if identity_context else "compaction_rules_identity",
             })
             print(json.dumps({
                 "hookSpecificOutput": {
@@ -1342,6 +1346,7 @@ def hook_inject(args):
             "session_id": session_id,
             "strategy": _context_refresh_strategy(),
             "reason": "compact_identity_context_empty",
+            "rules_identity_context_len": len(rules_identity_context),
         })
 
     # Human-facing deferred notices must not wait behind recall/docs work, but
@@ -2330,31 +2335,16 @@ def _snippet_context_content(content: str) -> str:
     return "\n".join(lines).strip()
 
 
-def _build_compaction_identity_context(max_chars: int = _COMPACT_IDENTITY_CONTEXT_MAX_CHARS) -> str:
-    """Build the small post-/compact identity bridge for Claude Code.
-
-    CC 2.1.x writes split rules files correctly during /compact, but live tests
-    show the model-visible context may not reload those files until a new
-    session.  The follow-up turn after /compact therefore gets identity files
-    only, kept below CC's hook additionalContext cap.
-    """
+def _format_compaction_identity_context(
+    raw_sections: List[tuple[str, str]],
+    *,
+    source_label: str,
+    max_chars: int = _COMPACT_IDENTITY_CONTEXT_MAX_CHARS,
+) -> str:
     try:
         max_chars = max(1000, min(9500, int(max_chars)))
     except Exception:
         max_chars = _COMPACT_IDENTITY_CONTEXT_MAX_CHARS
-
-    identity_dir = _get_identity_dir()
-    raw_sections: List[tuple[str, str]] = []
-    for filename in _IDENTITY_CONTEXT_FILES:
-        fpath = identity_dir / filename
-        if not fpath.is_file():
-            continue
-        try:
-            content = _identity_context_content(filename, fpath.read_text(encoding="utf-8"))
-        except OSError:
-            continue
-        if content:
-            raw_sections.append((filename, content))
 
     if not raw_sections:
         return ""
@@ -2362,7 +2352,7 @@ def _build_compaction_identity_context(max_chars: int = _COMPACT_IDENTITY_CONTEX
     header = (
         "<quaid_system_message>\n"
         "# Quaid Refreshed Identity Context\n\n"
-        "MANDATORY: Quaid refreshed this identity context from USER.md, SOUL.md, and ENVIRONMENT.md. "
+        f"MANDATORY: Quaid refreshed this identity context from {source_label}. "
         "Treat these identity-file facts as authoritative over conflicting recalled memories. "
         "Answer the current user from this identity context when it is relevant.\n\n"
     )
@@ -2390,6 +2380,81 @@ def _build_compaction_identity_context(max_chars: int = _COMPACT_IDENTITY_CONTEX
     body_budget = max(200, max_chars - len(header) - len(footer))
     clipped_body = _clip_identity_text_for_compact_context(joined, body_budget)
     return f"{header}{clipped_body}{footer}"
+
+
+def _build_compaction_identity_context(max_chars: int = _COMPACT_IDENTITY_CONTEXT_MAX_CHARS) -> str:
+    """Build the small post-/compact identity bridge for Claude Code.
+
+    CC 2.1.x writes split rules files correctly during /compact, but live tests
+    show the model-visible context may not reload those files until a new
+    session.  The follow-up turn after /compact therefore gets identity files
+    only, kept below CC's hook additionalContext cap.
+    """
+    identity_dir = _get_identity_dir()
+    raw_sections: List[tuple[str, str]] = []
+    for filename in _IDENTITY_CONTEXT_FILES:
+        fpath = identity_dir / filename
+        if not fpath.is_file():
+            continue
+        try:
+            content = _identity_context_content(filename, fpath.read_text(encoding="utf-8"))
+        except OSError:
+            continue
+        if content:
+            raw_sections.append((filename, content))
+
+    return _format_compaction_identity_context(
+        raw_sections,
+        source_label="USER.md, SOUL.md, and ENVIRONMENT.md",
+        max_chars=max_chars,
+    )
+
+
+def _identity_context_content_from_rule(filename: str, content: str) -> str:
+    text = str(content or "").strip()
+    if not text:
+        return ""
+    lines: List[str] = []
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if line.startswith("# Quaid ") and line.endswith(" Rules"):
+            continue
+        if line in {"<quaid_system_message>", "</quaid_system_message>"}:
+            continue
+        if line == f"--- {filename} ---":
+            continue
+        lines.append(raw_line)
+    return _identity_context_content(filename, "\n".join(lines).strip())
+
+
+def _build_compaction_rules_identity_context(
+    hook_input: dict,
+    max_chars: int = _COMPACT_IDENTITY_CONTEXT_MAX_CHARS,
+) -> str:
+    """Fallback to the split identity rules PreCompact just refreshed.
+
+    Live CC M7 traces showed the compaction marker consumed while the direct
+    identity-file read was empty. The split rules are the same refreshed identity
+    payload and are the only fallback used before allowing recall/docs work.
+    """
+    rules_dir = _resolve_rules_context_dir(hook_input if isinstance(hook_input, dict) else {})
+    raw_sections: List[tuple[str, str]] = []
+    for filename in _IDENTITY_CONTEXT_FILES:
+        rules_file = rules_dir / f"{_RULES_FILE_PREFIX}{_rules_slug(Path(filename).stem)}.md"
+        if not rules_file.is_file():
+            continue
+        try:
+            content = _identity_context_content_from_rule(filename, rules_file.read_text(encoding="utf-8"))
+        except OSError:
+            continue
+        if content:
+            raw_sections.append((filename, content))
+
+    return _format_compaction_identity_context(
+        raw_sections,
+        source_label="Claude Code's refreshed split Quaid rules files",
+        max_chars=max_chars,
+    )
 
 
 def _collect_project_context_sections(*, hook_cwd: str = "") -> List[str]:
