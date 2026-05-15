@@ -4283,7 +4283,7 @@ class TestSourceChunkStorage:
                 "Lisbon ferry receipt notebook",
                 stores=["vector"],
                 limit=5,
-                owner_id="solomon-steadman",
+                owner_id="test-owner-alpha",
                 min_similarity=0.0,
                 planner_profile="off",
                 planned_queries=["Lisbon ferry receipt notebook"],
@@ -4294,7 +4294,7 @@ class TestSourceChunkStorage:
 
         assert rows == []
         assert meta["planned_stores"] == ["vector"]
-        assert captured["common_kwargs"]["owner_id"] == "solomon-steadman"
+        assert captured["common_kwargs"]["owner_id"] == "test-owner-alpha"
 
     def test_rrf_shadow_does_not_change_store_plan_ordering_when_active_fusion_disabled(self):
         """Shadow telemetry remains observational when active RRF fusion is disabled."""
