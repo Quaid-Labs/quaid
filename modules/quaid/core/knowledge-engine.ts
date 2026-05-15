@@ -3,6 +3,7 @@ import {
   getRoutableDatastoreKeys,
   normalizeKnowledgeDatastores,
   renderKnowledgeDatastoreGuidanceForAgents,
+  renderRoutableKnowledgeDatastoreRouterGuidance,
 } from "./knowledge-stores.js";
 import type {
   KnowledgeDatastore,
@@ -253,20 +254,11 @@ Rewrite into valid JSON matching the required schema exactly.`;
 
   async function routeKnowledgeDatastores(query: string, expandGraph: boolean): Promise<KnowledgeDatastore[]> {
     const allowed = getRoutableDatastoreKeys();
+    const routerGuidance = renderRoutableKnowledgeDatastoreRouterGuidance();
 
     const systemPrompt = `You route a recall query to knowledge datastores.
 Choose the MINIMAL useful set.
-Stores:
-- vector_basic: personal/user facts (cheapest; prefer this first)
-- vector_technical: technical/code/system facts
-- graph: relationship traversal
-- journal: reflective journal context (more expensive/noisier than memory)
-- project: project docs and architecture notes (expensive; use when question needs file-backed project detail)
-Cost/latency priority:
-1) vector_basic (very cheap, use liberally)
-2) vector_technical/graph
-3) project/journal (use when needed for precision)
-4) broader historical/session retrieval only when prior stores are insufficient
+${routerGuidance}
 Return JSON only: {"datastores":["vector_basic","graph"]}`;
     const userPrompt = `Query: "${query}"\nexpandGraphAllowed: ${expandGraph ? "true" : "false"}`;
     return routeWithRepair(
@@ -373,6 +365,8 @@ Return JSON only: {"datastores":["vector_basic","graph"]}`;
     intent: RecallIntent = "general",
   ): Promise<RoutedRecallPlan> {
     const allowed = getRoutableDatastoreKeys();
+    const routerGuidance = renderRoutableKnowledgeDatastoreRouterGuidance();
+    const allowedStoreList = allowed.join(", ");
     const original = String(query || "").trim();
     const projectCatalog = (deps.getProjectCatalog ? deps.getProjectCatalog() : [])
       .slice(0, 40);
@@ -392,12 +386,8 @@ Return JSON only with:
 Rules:
 - Keep the same user intent; do NOT add new facts.
 - Use minimal datastores needed, but be permissive with vector_basic.
-- Stores allowed: vector_basic, vector_technical, graph, journal, project.
-- Cost/latency priority:
-  1) vector_basic first (cheap)
-  2) vector_technical/graph
-  3) project/journal when needed for precision
-  4) broader historical/session retrieval only if prior stores are insufficient
+- Stores allowed: ${allowedStoreList}.
+${routerGuidance}
 - Set project when query clearly maps to one known project.
 - If project detail is asked but project is uncertain, still include datastore "project" and leave project=null.
 - Prefer domainBoost for known-scope recall instead of strict filtering.

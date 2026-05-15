@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createKnowledgeEngine } from "../orchestrator/default-orchestrator.js";
+import { renderRoutableKnowledgeDatastoreRouterGuidance } from "../core/knowledge-stores.js";
 
 type Result = {
   text: string;
@@ -162,6 +163,24 @@ describe("knowledge orchestrator", () => {
     await expect(engine.routeRecallPlan("x", false, "fast"))
       .rejects.toThrow("router returned no valid datastores");
     expect(callFastRouter).toHaveBeenCalledTimes(2);
+  });
+
+  it("builds router prompts from core datastore registry guidance", async () => {
+    const callFastRouter = vi.fn(async () => '{"datastores":["vector_basic"]}');
+    const engine = createKnowledgeEngine<Result>({
+      workspace: "/tmp",
+      getMemoryConfig: () => ({}),
+      isSystemEnabled: () => false,
+      callFastRouter,
+      recallMemory: vi.fn(async () => []),
+    });
+
+    await engine.routeKnowledgeDatastores("x", false);
+
+    const systemPrompt = callFastRouter.mock.calls[0][0];
+    const registryGuidance = renderRoutableKnowledgeDatastoreRouterGuidance();
+    expect(systemPrompt).toContain(registryGuidance);
+    expect(systemPrompt).not.toContain("session_chunks");
   });
 
   it("preserves first and retry validation errors from router repair flow", async () => {

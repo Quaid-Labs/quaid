@@ -110,6 +110,22 @@ function getKnowledgeDatastoreKeys() {
 function getRoutableDatastoreKeys() {
   return STORE_REGISTRY.map((s) => s.key).filter((k) => k !== "vector" && k !== "session_chunks");
 }
+function renderRoutableKnowledgeDatastoreRouterGuidance() {
+  const routable = new Set(getRoutableDatastoreKeys());
+  const lines = ["Stores:"];
+  for (const store of STORE_REGISTRY) {
+    if (!routable.has(store.key)) continue;
+    lines.push(`- ${store.key}: ${store.description}`);
+  }
+  lines.push(
+    "Cost/latency priority:",
+    "1) vector_basic first (cheap; use liberally)",
+    "2) vector_technical/graph",
+    "3) project/journal when needed for precision",
+    "4) broader historical/session retrieval only when prior stores are insufficient"
+  );
+  return lines.join("\n");
+}
 function normalizeKnowledgeDatastores(datastores, expandGraph) {
   const allowed = new Set(getKnowledgeDatastoreKeys());
   const defaults = STORE_REGISTRY.filter((s) => expandGraph ? s.defaultWhenExpandGraph : s.defaultWhenFlatRecall).map((s) => s.key);
@@ -141,5 +157,6 @@ export {
   getKnowledgeDatastoreRegistry,
   getRoutableDatastoreKeys,
   normalizeKnowledgeDatastores,
-  renderKnowledgeDatastoreGuidanceForAgents
+  renderKnowledgeDatastoreGuidanceForAgents,
+  renderRoutableKnowledgeDatastoreRouterGuidance
 };
