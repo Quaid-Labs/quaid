@@ -10152,19 +10152,6 @@ class TestRecallFastHookInjectContract:
                 return [exact_row], {"mode": "deliberate", "query": query}
             return [broad_row], {"mode": "deliberate", "query": query}
 
-        def _fake_drill_plan(*args, **kwargs):
-            drill_calls.append(kwargs)
-            return (
-                ["Maya current employer Stripe"],
-                {
-                    "used_llm": True,
-                    "queries_count": 1,
-                    "elapsed_ms": 12,
-                    "bailout_reason": None,
-                    "done": False,
-                },
-            )
-
         with patch.object(mg, "_recall_once", side_effect=_fake_recall_once), \
              patch.object(mg, "_plan_fanout_queries", return_value=["Where does Maya work now?"]), \
              patch.object(
