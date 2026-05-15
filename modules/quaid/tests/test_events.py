@@ -6,12 +6,16 @@ import pytest
 
 from core.runtime.events import (
     EVENT_HANDLERS,
+    dispatch_broker_events,
+    emit_broker_event,
     emit_event,
+    EVENT_ENVELOPE_SCHEMA_VERSION,
     get_event_capability,
     get_event_registry,
     list_events,
     process_events,
     register_event_handler,
+    validate_event_envelope,
     validate_declared_event_contract,
 )
 from core.runtime.paths import get_runtime_root
@@ -37,7 +41,11 @@ def test_event_emit_list_and_capabilities(tmp_path):
         owner_id="quaid",
     )
     assert event["name"] == "session.reset"
+    assert event["event_type"] == "session.reset"
+    assert event["event_class"] == "domain"
+    assert event["schema_version"] == EVENT_ENVELOPE_SCHEMA_VERSION
     assert event["status"] == "pending"
+    assert validate_event_envelope(event) == []
 
     items = list_events(status="pending", limit=10)
     assert len(items) >= 1
@@ -49,6 +57,121 @@ def test_event_emit_list_and_capabilities(tmp_path):
     assert any(c.get("name") == "session.ingest_log" for c in caps)
     assert any(c.get("name") == "session.reset" and c.get("delivery_mode") == "active" for c in caps)
     assert any(c.get("name") == "notification.delayed" and c.get("delivery_mode") == "passive" for c in caps)
+
+
+def test_broker_event_request_auto_correlation_and_tracing(tmp_path):
+    adapter = TestAdapter(tmp_path); set_adapter(adapter); iroot = adapter.instance_root()
+
+    event = emit_broker_event(
+        "recall.memory.request.v1",
+        payload={"query": "baratza"},
+        source="pytest",
+        idempotency_key="request-1",
+        provenance={"test": "request-correlation"},
+    )
+
+    assert event["name"] == "recall.memory.request.v1"
+    assert event["event_type"] == "recall.memory.request.v1"
+    assert event["event_class"] == "request"
+    assert event["correlation_id"].startswith("corr-")
+    assert event["idempotency_key"] == "request-1"
+    assert event["provenance"] == {"test": "request-correlation"}
+    assert validate_event_envelope(event) == []
+
+    history_path = get_runtime_root(iroot) / "events" / "history.jsonl"
+    history = [json.loads(line) for line in history_path.read_text(encoding="utf-8").splitlines()]
+    assert any(item.get("op") == "broker.emitted" for item in history)
+
+
+def test_broker_event_rejects_invalid_envelope_under_fail_hard(monkeypatch, tmp_path):
+    adapter = TestAdapter(tmp_path); set_adapter(adapter); iroot = adapter.instance_root()
+
+    import core.runtime.events as events
+
+    monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: True)
+
+    with pytest.raises(RuntimeError, match="Invalid event envelope"):
+        emit_broker_event(
+            "recall.memory.request.v1",
+            payload={"query": "baratza"},
+            source="pytest",
+            schema_version=999,
+        )
+
+
+def test_event_envelope_validation_requires_request_correlation():
+    errors = validate_event_envelope(
+        {
+            "id": "evt-test",
+            "name": "recall.memory.request.v1",
+            "event_type": "recall.memory.request.v1",
+            "event_class": "request",
+            "schema_version": EVENT_ENVELOPE_SCHEMA_VERSION,
+            "source": "pytest",
+            "created_at": "2026-05-15T00:00:00+00:00",
+            "payload": {},
+            "provenance": {},
+            "status": "pending",
+        }
+    )
+
+    assert "request events require correlation_id" in errors
+
+
+def test_broker_event_deduplicates_by_idempotency_key(tmp_path):
+    adapter = TestAdapter(tmp_path); set_adapter(adapter); iroot = adapter.instance_root()
+
+    first = emit_broker_event(
+        "session.reset",
+        payload={"idx": 1},
+        source="pytest",
+        idempotency_key="reset-once",
+    )
+    second = emit_broker_event(
+        "session.reset",
+        payload={"idx": 2},
+        source="pytest",
+        idempotency_key="reset-once",
+    )
+
+    assert second["duplicate"] is True
+    assert second["duplicate_of"] == first["id"]
+    queued = list_events(status="all", limit=10)
+    matching = [
+        event
+        for event in queued
+        if event.get("idempotency_key") == "reset-once"
+        and event.get("event_type") == "session.reset"
+    ]
+    assert len(matching) == 1
+    assert matching[0]["payload"] == {"idx": 1}
+
+
+def test_broker_dispatch_traces_dispatch_ack_and_failure(monkeypatch, tmp_path):
+    adapter = TestAdapter(tmp_path); set_adapter(adapter); iroot = adapter.instance_root()
+
+    import core.runtime.events as events
+
+    emit_broker_event("session.reset", payload={"idx": 1}, source="pytest")
+    dispatch_broker_events(limit=1, names=["session.reset"])
+
+    def _failed(_event):
+        return {"status": "failed", "error": "planned failure"}
+
+    monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: False)
+    original = EVENT_HANDLERS["session.reset"]
+    try:
+        register_event_handler("session.reset", _failed, force=True)
+        emit_broker_event("session.reset", payload={"idx": 2}, source="pytest")
+        dispatch_broker_events(limit=1, names=["session.reset"])
+    finally:
+        register_event_handler("session.reset", original, force=True)
+
+    history_path = get_runtime_root(iroot) / "events" / "history.jsonl"
+    history = [json.loads(line) for line in history_path.read_text(encoding="utf-8").splitlines()]
+    assert any(item.get("op") == "broker.dispatched" for item in history)
+    assert any(item.get("op") == "broker.acked" for item in history)
+    assert any(item.get("op") == "broker.failed" for item in history)
 
 
 def test_event_capability_lookup_has_delivery_mode(tmp_path):

@@ -32,6 +32,8 @@ logger = logging.getLogger(__name__)
 MAX_EVENT_QUEUE = 2000
 MAX_HISTORY_JSONL_BYTES = 5 * 1024 * 1024
 HISTORY_TRIM_TARGET_BYTES = 2 * 1024 * 1024
+EVENT_ENVELOPE_SCHEMA_VERSION = 1
+EVENT_CLASSES = {"domain", "request"}
 
 EVENT_REGISTRY: List[Dict[str, Any]] = [
     {
@@ -324,6 +326,165 @@ def _next_event_id(name: str, ts: str) -> str:
     return "evt-" + base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")[:24]
 
 
+def _next_correlation_id(name: str, ts: str) -> str:
+    raw = f"correlation:{name}:{ts}".encode("utf-8")
+    return "corr-" + base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")[:24]
+
+
+def _event_class_for_name(name: str) -> str:
+    parts = [part.strip().lower() for part in str(name or "").split(".") if part.strip()]
+    return "request" if "request" in parts else "domain"
+
+
+def _trace_event(event: Event) -> Dict[str, Any]:
+    return {
+        key: event.get(key)
+        for key in (
+            "id",
+            "name",
+            "event_type",
+            "event_class",
+            "schema_version",
+            "correlation_id",
+            "idempotency_key",
+            "status",
+        )
+        if event.get(key) is not None
+    }
+
+
+def _make_event_envelope(
+    *,
+    name: str,
+    payload: Optional[Dict[str, Any]],
+    source: str,
+    session_id: Optional[str],
+    owner_id: Optional[str],
+    priority: str,
+    instance_id: Optional[str] = None,
+    project_id: Optional[str] = None,
+    correlation_id: Optional[str] = None,
+    idempotency_key: Optional[str] = None,
+    provenance: Optional[Dict[str, Any]] = None,
+    event_class: Optional[str] = None,
+    schema_version: int = EVENT_ENVELOPE_SCHEMA_VERSION,
+    created_at: Optional[str] = None,
+) -> Event:
+    name = str(name or "").strip()
+    ts = str(created_at or _now())
+    resolved_class = str(event_class or _event_class_for_name(name)).strip().lower()
+    event: Event = {
+        "id": _next_event_id(name, ts),
+        "name": name,
+        "event_type": name,
+        "event_class": resolved_class,
+        "schema_version": schema_version,
+        "payload": payload or {},
+        "source": str(source or "unknown"),
+        "priority": str(priority or "normal"),
+        "created_at": ts,
+        "provenance": provenance if isinstance(provenance, dict) else {},
+        "status": "pending",
+    }
+    if instance_id:
+        event["instance_id"] = str(instance_id)
+    if project_id:
+        event["project_id"] = str(project_id)
+    if session_id:
+        event["session_id"] = str(session_id)
+    if owner_id:
+        event["owner_id"] = str(owner_id)
+    if correlation_id:
+        event["correlation_id"] = str(correlation_id)
+    elif resolved_class == "request":
+        event["correlation_id"] = _next_correlation_id(name, ts)
+    if idempotency_key:
+        event["idempotency_key"] = str(idempotency_key)
+    return event
+
+
+def validate_event_envelope(event: Event) -> List[str]:
+    errors: List[str] = []
+    if not isinstance(event, dict):
+        return ["event envelope must be an object"]
+    name = str(event.get("name") or "").strip()
+    event_type = str(event.get("event_type") or "").strip()
+    if not name:
+        errors.append("name is required")
+    if not event_type:
+        errors.append("event_type is required")
+    if name and event_type and name != event_type:
+        errors.append("name and event_type must match during M1 compatibility")
+    if event.get("schema_version") != EVENT_ENVELOPE_SCHEMA_VERSION:
+        errors.append(f"schema_version must be {EVENT_ENVELOPE_SCHEMA_VERSION}")
+    event_class = str(event.get("event_class") or "").strip().lower()
+    if event_class not in EVENT_CLASSES:
+        errors.append("event_class must be domain or request")
+    if event_class == "request" and not str(event.get("correlation_id") or "").strip():
+        errors.append("request events require correlation_id")
+    if not str(event.get("source") or "").strip():
+        errors.append("source is required")
+    if not str(event.get("created_at") or "").strip():
+        errors.append("created_at is required")
+    if not isinstance(event.get("payload"), dict):
+        errors.append("payload must be an object")
+    if not isinstance(event.get("provenance"), dict):
+        errors.append("provenance must be an object")
+    return errors
+
+
+def _enforce_broker_envelope(event: Event) -> None:
+    errors = validate_event_envelope(event)
+    if not errors:
+        return
+    message = "; ".join(errors)
+    if _is_fail_hard_enabled():
+        raise RuntimeError(
+            f"Invalid event envelope while fail-hard mode is enabled: {message}"
+        )
+    logger.error("Invalid event envelope: %s", message)
+    event["validation_errors"] = errors
+
+
+def _enqueue_event(event: Event) -> Event:
+    paths = _event_paths()
+    ts = str(event.get("created_at") or _now())
+    idempotency_key = str(event.get("idempotency_key") or "").strip()
+    event_type = str(event.get("event_type") or event.get("name") or "").strip()
+    stored_event: Event = event
+    deduped = False
+
+    def _mutate(payload: Any) -> Any:
+        nonlocal stored_event, deduped
+        queue_payload = payload if isinstance(payload, dict) else {"version": 1, "events": []}
+        events = queue_payload.get("events")
+        if not isinstance(events, list):
+            events = []
+        if idempotency_key:
+            for existing in events:
+                if not isinstance(existing, dict):
+                    continue
+                existing_key = str(existing.get("idempotency_key") or "").strip()
+                existing_type = str(existing.get("event_type") or existing.get("name") or "").strip()
+                if existing_key == idempotency_key and existing_type == event_type:
+                    stored_event = dict(existing)
+                    stored_event["duplicate"] = True
+                    stored_event["duplicate_of"] = existing.get("id")
+                    deduped = True
+                    return {"version": 1, "events": events}
+        events.append(event)
+        if len(events) > MAX_EVENT_QUEUE:
+            events = events[-MAX_EVENT_QUEUE:]
+        return {"version": 1, "events": events}
+
+    _read_modify_write_json(paths["queue"], {"version": 1, "events": []}, _mutate)
+    _append_jsonl(
+        paths["history_jsonl"],
+        {"ts": ts, "op": "dedupe" if deduped else "emit", "event": stored_event},
+    )
+    return stored_event
+
+
 def _queue_delayed_llm_request(message: str, kind: str = "janitor", priority: str = "normal", source: str = "quaid_events") -> bool:
     message = str(message or "").strip()
     if not message:
@@ -509,39 +670,116 @@ def emit_event(
     session_id: Optional[str] = None,
     owner_id: Optional[str] = None,
     priority: str = "normal",
+    instance_id: Optional[str] = None,
+    project_id: Optional[str] = None,
+    correlation_id: Optional[str] = None,
+    idempotency_key: Optional[str] = None,
+    provenance: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     name = str(name or "").strip()
     if not name:
         raise ValueError("event name is required")
-    ts = _now()
-    event: Event = {
-        "id": _next_event_id(name, ts),
-        "name": name,
-        "payload": payload or {},
-        "source": str(source or "unknown"),
-        "priority": str(priority or "normal"),
-        "created_at": ts,
-        "status": "pending",
-    }
-    if session_id:
-        event["session_id"] = str(session_id)
-    if owner_id:
-        event["owner_id"] = str(owner_id)
+    event = _make_event_envelope(
+        name=name,
+        payload=payload,
+        source=source,
+        session_id=session_id,
+        owner_id=owner_id,
+        priority=priority,
+        instance_id=instance_id,
+        project_id=project_id,
+        correlation_id=correlation_id,
+        idempotency_key=idempotency_key,
+        provenance=provenance,
+    )
+    return _enqueue_event(event)
 
-    paths = _event_paths()
-    def _mutate(payload: Any) -> Any:
-        queue_payload = payload if isinstance(payload, dict) else {"version": 1, "events": []}
-        events = queue_payload.get("events")
-        if not isinstance(events, list):
-            events = []
-        events.append(event)
-        if len(events) > MAX_EVENT_QUEUE:
-            events = events[-MAX_EVENT_QUEUE:]
-        return {"version": 1, "events": events}
 
-    _read_modify_write_json(paths["queue"], {"version": 1, "events": []}, _mutate)
-    _append_jsonl(paths["history_jsonl"], {"ts": ts, "op": "emit", "event": event})
-    return event
+class EventBroker:
+    """Thin M1 broker facade over the existing queue-backed event system."""
+
+    def emit(
+        self,
+        event_type: str,
+        payload: Optional[Dict[str, Any]] = None,
+        *,
+        source: str = "unknown",
+        session_id: Optional[str] = None,
+        owner_id: Optional[str] = None,
+        priority: str = "normal",
+        instance_id: Optional[str] = None,
+        project_id: Optional[str] = None,
+        correlation_id: Optional[str] = None,
+        idempotency_key: Optional[str] = None,
+        provenance: Optional[Dict[str, Any]] = None,
+        event_class: Optional[str] = None,
+        schema_version: int = EVENT_ENVELOPE_SCHEMA_VERSION,
+    ) -> Event:
+        name = str(event_type or "").strip()
+        if not name:
+            raise ValueError("event_type is required")
+        ts = _now()
+        resolved_class = str(event_class or _event_class_for_name(name)).strip().lower()
+        resolved_correlation = correlation_id
+        if resolved_class == "request" and not resolved_correlation:
+            resolved_correlation = _next_correlation_id(name, ts)
+        event = _make_event_envelope(
+            name=name,
+            payload=payload,
+            source=source,
+            session_id=session_id,
+            owner_id=owner_id,
+            priority=priority,
+            instance_id=instance_id,
+            project_id=project_id,
+            correlation_id=resolved_correlation,
+            idempotency_key=idempotency_key,
+            provenance=provenance,
+            event_class=resolved_class,
+            schema_version=schema_version,
+            created_at=ts,
+        )
+        _enforce_broker_envelope(event)
+        queued = _enqueue_event(event)
+        _append_jsonl(
+            _event_paths()["history_jsonl"],
+            {
+                "ts": _now(),
+                "op": "broker.duplicate" if queued.get("duplicate") else "broker.emitted",
+                "event": _trace_event(queued),
+            },
+        )
+        return queued
+
+    def dispatch(self, limit: int = 20, names: Optional[List[str]] = None) -> Dict[str, Any]:
+        result = process_events(limit=limit, names=names)
+        history_path = _event_paths()["history_jsonl"]
+        for detail in result.get("details") or []:
+            if not isinstance(detail, dict):
+                continue
+            trace = {
+                "id": detail.get("id"),
+                "name": detail.get("name"),
+                "status": detail.get("status"),
+            }
+            _append_jsonl(history_path, {"ts": _now(), "op": "broker.dispatched", "event": trace})
+            if str(detail.get("status") or "") == "failed":
+                _append_jsonl(history_path, {"ts": _now(), "op": "broker.failed", "event": trace})
+            else:
+                _append_jsonl(history_path, {"ts": _now(), "op": "broker.acked", "event": trace})
+        return result
+
+
+def get_event_broker() -> EventBroker:
+    return EventBroker()
+
+
+def emit_broker_event(event_type: str, payload: Optional[Dict[str, Any]] = None, **kwargs: Any) -> Event:
+    return get_event_broker().emit(event_type, payload, **kwargs)
+
+
+def dispatch_broker_events(limit: int = 20, names: Optional[List[str]] = None) -> Dict[str, Any]:
+    return get_event_broker().dispatch(limit=limit, names=names)
 
 
 def list_events(status: str = "pending", limit: int = 50) -> List[Event]:
