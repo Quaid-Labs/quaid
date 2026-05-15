@@ -405,3 +405,31 @@ def test_quaid_session_preserves_internal_plumbing_error(tmp_path: Path) -> None
 
     assert result.returncode == 1
     assert "session log indexing/loading is internal runtime plumbing" in result.stderr
+
+
+def test_quaid_datastore_lists_manifest_registry(tmp_path: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    quaid_bin = repo_root / "quaid"
+
+    home = tmp_path / "home"
+    quaid_home = home / ".quaid"
+    quaid_home.mkdir(parents=True)
+
+    env = {
+        **os.environ,
+        "HOME": str(home),
+        "QUAID_HOME": str(quaid_home),
+        "QUAID_PYTHON_BIN": os.environ.get("QUAID_PYTHON_BIN", "python3"),
+    }
+    result = subprocess.run(
+        [str(quaid_bin), "datastore", "list", "--json"],
+        cwd=tmp_path,
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "ok"
+    assert [item["id"] for item in payload["datastores"]] == ["docsdb", "evolutiondb", "memorydb"]

@@ -480,6 +480,11 @@ print(json.dumps(register_domain(name, desc), indent=2))
     exec "$PYTHON_BIN" "$SCRIPT_DIR/core/datastore_cli.py" docs "$@"
     ;;
 
+  # Datastore manifest registry/debug surface
+  datastore|datastores)
+    exec "$PYTHON_BIN" "$SCRIPT_DIR/core/datastore_registry.py" "$@"
+    ;;
+
   # Registry/projects subsystem (docs registry)
   registry)
     exec "$PYTHON_BIN" "$SCRIPT_DIR/datastore/docsdb/registry.py" "$@"
@@ -734,6 +739,7 @@ PYEOF
     echo "  docs update <project> Queue async project docs update"
     echo "  docs update --apply  Update/reindex registered docs"
     echo "  docs changelog       View update history"
+    echo "  datastore list       List datastore manifest metadata"
     echo ""
     echo "Projects:"
     echo "  project list [--names-only]  List registered projects"

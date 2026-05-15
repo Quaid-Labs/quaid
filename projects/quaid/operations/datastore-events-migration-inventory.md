@@ -1,6 +1,6 @@
 # Datastore Events Migration Inventory
 
-Status: M0 approved; M1 broker facade tracked in `datastore-events-m1-broker-facade.md`
+Status: M0 approved; M1 broker facade tracked in `datastore-events-m1-broker-facade.md`; M2 manifest registry tracked in `datastore-events-m2-manifest-registry.md`
 Owner: W1 runtime/datastore
 Plan source: `~/quaidcode/util/docs/datastore-events-migration-plan.md`
 Branch strategy: local branch `datastore-refactor-m0` from dev HEAD. Alpha/user bugs interrupt this branch; public push/release stays with W8 and requires operator approval.
