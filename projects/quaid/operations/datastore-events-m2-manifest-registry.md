@@ -8,6 +8,8 @@ Plan source: `~/quaidcode/util/docs/datastore-events-migration-plan.md`
 
 M2 adds a core-owned, static datastore manifest registry. It is metadata-only.
 
+Solomon direction on 2026-05-15: the datastore refactor should prefer clean broker/datastore contracts over preserving legacy callpaths. M2 therefore exposes metadata only; it does not add compatibility adapters around existing direct calls.
+
 This milestone does not:
 
 - activate datastore handlers
@@ -71,6 +73,8 @@ Each manifest declares:
 - `contracts`
 
 In M2, `accepted_events` and `request_handlers` describe the manifest contract metadata the broker will use in later milestones. They are not active dispatch registrations yet.
+
+When later milestones activate these handlers, the corresponding old direct callpath should be removed in the same milestone unless an operator-approved alpha compatibility shim is explicitly required.
 
 ## Validation
 

@@ -10,6 +10,8 @@ M1 evolves the existing queue-backed event bus in `core/runtime/events.py`. It d
 
 The current production `emit_event()` and `process_events()` paths remain compatible. Producers are not migrated in this milestone.
 
+Solomon direction on 2026-05-15: compatibility is not a goal for migrated datastore refactor paths. The existing emit/process path remains only because M1 does not migrate producers. When a later milestone migrates a producer to the broker, the old direct producer path should be deleted in that milestone unless an operator-approved alpha-user shim is explicitly needed.
+
 ## Event Envelope
 
 Newly emitted events use a v1 envelope with these fields:
@@ -48,6 +50,8 @@ The M1 facade is intentionally thin:
 
 The facade validates the envelope at the broker boundary, then uses the existing queue and handler dispatch underneath.
 
+New M1/M2/M3 work should call the broker facade rather than adding new callers to the legacy-shaped `emit_event()` surface.
+
 ## Failure Policy
 
 Invalid broker envelopes raise under `failHard=true`.
@@ -84,6 +88,8 @@ Legacy emit/process paths keep their current history operations. Broker facade c
 - `broker.failed`
 
 These traces are for M1 observability and testability. Production producers are not required to call the broker facade yet.
+
+They are not a dual-run compatibility mechanism. Once a producer is migrated, the broker trace becomes the canonical trace for that producer.
 
 ## Non-Goals
 
