@@ -185,6 +185,7 @@ _candidate_is_placeholder() {
         "Ask a question"*|\
         "Explain this codebase"*|\
         "Summarize this codebase"*|\
+        "Summarize recent commits"*|\
         "Describe this codebase"*|\
         "Find and fix a bug"*|\
         "Fix a bug"*|\
@@ -193,7 +194,9 @@ _candidate_is_placeholder() {
         "Add a feature"*|\
         "Improve this code"*|\
         "Review this code"*|\
-        "Explain this file"*)
+        "Explain this file"*|\
+        "new task?"*|\
+        "/clear to save"*)
             return 0
             ;;
     esac
@@ -221,7 +224,7 @@ _pane_has_draft() {
     current_line="$(tmux capture-pane -p -t "$PANE" -S "$cursor_y" -E "$cursor_y" 2>/dev/null || true)"
     current_candidate="$current_line"
     local mark
-    for mark in "❯ " "› " "> " "$ " "% "; do
+    for mark in "❯ " $'❯\xc2\xa0' "› " $'›\xc2\xa0' "> " "$ " "% "; do
         if [[ "$current_candidate" == "$mark"* ]]; then
             current_candidate="${current_candidate#"$mark"}"
             break
@@ -244,7 +247,7 @@ _pane_has_draft() {
         lines+=("$line")
     done <<< "$raw_block"
     for ((i = 0; i < ${#lines[@]}; i++)); do
-        for mark in "❯ " "› " "> " "$ " "% "; do
+        for mark in "❯ " $'❯\xc2\xa0' "› " $'›\xc2\xa0' "> " "$ " "% "; do
             if [[ "${lines[$i]}" == "$mark"* ]]; then
                 prompt_idx="$i"
                 prompt_mark="$mark"
