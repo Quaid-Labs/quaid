@@ -60,10 +60,14 @@ Handler failures still use the existing `process_events()` failHard behavior.
 
 M1 adds queue-resident duplicate filtering for events that provide `idempotency_key`.
 
-If a pending or already processed event with the same `event_type` and `idempotency_key` is still present in the queue file, the new event is not appended and the caller receives the existing event annotated with:
+Dedup scans all retained queue entries, including `pending`, `processed`, and `failed` events. Queue entries persist across process restarts and session boundaries within the same instance runtime root, and eviction happens only through the `MAX_EVENT_QUEUE` ceiling.
+
+If any retained event with the same `event_type` and `idempotency_key` is still present in the queue file, the new event is not appended and the caller receives the existing event annotated with:
 
 - `duplicate: true`
 - `duplicate_of: <existing event id>`
+
+Cross-session suppression is a known behavior of this M1 queue-resident dedupe. Callers that need per-session idempotency must include the session identity in the idempotency key.
 
 This is not a durable replay ledger. Durable idempotency belongs in later datastore listener/base-class milestones.
 

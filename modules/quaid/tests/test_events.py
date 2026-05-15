@@ -99,6 +99,34 @@ def test_broker_event_rejects_invalid_envelope_under_fail_hard(monkeypatch, tmp_
         )
 
 
+def test_broker_event_logs_and_enqueues_invalid_envelope_when_not_fail_hard(
+    caplog,
+    monkeypatch,
+    tmp_path,
+):
+    adapter = TestAdapter(tmp_path); set_adapter(adapter); iroot = adapter.instance_root()
+
+    import core.runtime.events as events
+
+    monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: False)
+
+    with caplog.at_level("ERROR"):
+        event = emit_broker_event(
+            "recall.memory.request.v1",
+            payload={"query": "baratza"},
+            source="pytest",
+            schema_version=999,
+        )
+
+    assert "Invalid event envelope" in caplog.text
+    assert event["validation_errors"] == ["schema_version must be 1"]
+
+    queued = list_events(status="pending", limit=10)
+    assert len(queued) == 1
+    assert queued[0]["id"] == event["id"]
+    assert queued[0]["validation_errors"] == ["schema_version must be 1"]
+
+
 def test_event_envelope_validation_requires_request_correlation():
     errors = validate_event_envelope(
         {
