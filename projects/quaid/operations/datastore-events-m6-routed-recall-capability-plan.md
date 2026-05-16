@@ -371,6 +371,11 @@ M6.2a behavior code:
   project, and date filters preserved.
 - `7412d26fc` pins `source_chunks` alias normalization to the direct
   `session_chunks` memory descriptor with chunk-token options preserved.
+- `2073da2f3` pins fail-open flat default recall execution order:
+  `vector_basic`, `journal`, `project`.
+- `46f60e2a4` pins fail-open expand-graph default recall execution order:
+  `vector_basic`, `graph`, `journal`, `project`, with graph receiving the vector
+  candidate pool.
 
 Future M6.2a code must keep these tests green and add broker-specific coverage
 for `selector: "project"` / `store: "docs"` threading, missing/nacked/malformed
