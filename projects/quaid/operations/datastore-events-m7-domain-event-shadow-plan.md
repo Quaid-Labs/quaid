@@ -238,5 +238,6 @@ M7 is ready to hand off to M8 only when:
 - direct result and shadow intent agree in focused tests
 - W4 smoke confirms the selected monitor path still works
 - W6 confirms no unrelated monitor/write paths were touched
-- there is a concrete M8 plan to remove only this selected direct write path and
-  make the DocsDB listener authoritative
+- `datastore-events-m8-authoritative-docs-listener-plan.md` is reviewed as the
+  concrete plan to remove only this selected direct write path and make the
+  DocsDB listener authoritative

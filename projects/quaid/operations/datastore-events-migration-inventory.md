@@ -1,6 +1,6 @@
 # Datastore Events Migration Inventory
 
-Status: M0 approved; M1-M7 milestone records now live in the adjacent
+Status: M0 approved; M1-M8 milestone records now live in the adjacent
 `datastore-events-m*.md` files. This inventory remains the baseline boundary
 snapshot, not the active implementation checklist.
 Owner: W1 runtime/datastore
