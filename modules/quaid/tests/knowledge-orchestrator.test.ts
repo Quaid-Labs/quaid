@@ -379,6 +379,27 @@ describe("knowledge orchestrator", () => {
     expect(callFastRouter).toHaveBeenCalledTimes(2);
   });
 
+  it("filters invalid router stores while preserving valid routed order", async () => {
+    const callFastRouter = vi.fn(async () => JSON.stringify({
+      query: "filtered query",
+      datastores: ["not_real", "project", "session_chunks", "vector_basic", "still_wrong", "project"],
+    }));
+
+    const engine = createKnowledgeEngine<Result>({
+      workspace: "/tmp",
+      getMemoryConfig: () => ({}),
+      isSystemEnabled: () => false,
+      callFastRouter,
+      recallMemory: vi.fn(async () => []),
+    });
+
+    const plan = await engine.routeRecallPlan("x", false, "fast");
+
+    expect(plan.query).toBe("filtered query");
+    expect(plan.datastores).toEqual(["project", "vector_basic"]);
+    expect(callFastRouter).toHaveBeenCalledTimes(1);
+  });
+
   it("rejects session_chunks when returned by the LLM router", async () => {
     const callFastRouter = vi
       .fn(async () => '{"query":"one","datastores":["session_chunks"]}')
