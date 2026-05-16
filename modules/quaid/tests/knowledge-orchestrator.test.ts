@@ -670,6 +670,53 @@ describe("knowledge orchestrator", () => {
     );
   });
 
+  it("keeps memory selectors from consuming candidate pools while seeding graph", async () => {
+    const basicRows = [
+      { id: "basic-1", text: "Personal anchor", category: "fact", similarity: 0.91, via: "vector_basic" },
+    ];
+    const technicalRows = [
+      { id: "tech-1", text: "Technical anchor", category: "fact", similarity: 0.89, via: "vector_technical" },
+    ];
+    const recallMemory = vi.fn(async (_query: string, _limit: number, opts: any) => {
+      if (opts.stores?.includes("vector_basic")) return basicRows;
+      if (opts.stores?.includes("vector_technical")) return technicalRows;
+      if (opts.stores?.includes("graph")) {
+        return [{ text: "Personal anchor --related--> technical anchor", category: "graph", similarity: 0.72, via: "graph" }];
+      }
+      return [];
+    });
+    const engine = createKnowledgeEngine<Result>({
+      workspace: "/tmp",
+      getMemoryConfig: () => ({}),
+      isSystemEnabled: () => false,
+      callFastRouter: vi.fn(async () => '{"datastores":["vector_basic","vector_technical","graph"]}'),
+      recallMemory,
+    });
+
+    await engine.recall("anchor", 4, {
+      datastores: ["vector_basic", "vector_technical", "graph"],
+      expandGraph: true,
+      graphDepth: 2,
+      domain: { all: true },
+    });
+
+    expect(recallMemory.mock.calls[0][2]).toEqual(expect.objectContaining({
+      stores: ["vector_basic"],
+      domain: { all: true },
+    }));
+    expect(recallMemory.mock.calls[0][2]).not.toHaveProperty("candidatePool");
+    expect(recallMemory.mock.calls[1][2]).toEqual(expect.objectContaining({
+      stores: ["vector_technical"],
+      domain: { all: true },
+    }));
+    expect(recallMemory.mock.calls[1][2]).not.toHaveProperty("candidatePool");
+    expect(recallMemory.mock.calls[2][2]).toEqual(expect.objectContaining({
+      stores: ["graph"],
+      depth: 2,
+      candidatePool: [...basicRows, ...technicalRows],
+    }));
+  });
+
   it("keeps journal on direct journal store descriptor", async () => {
     const recallMemory = vi.fn(async () => {
       throw new Error("journal must not use memory recall");
