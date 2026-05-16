@@ -14566,6 +14566,130 @@ class TestRecallLimitEdgeCases:
                 assert result["status"] == "nacked"
                 assert "selector/store vector" in result["error"]
 
+    def test_cli_vector_broker_nack_response_respects_fail_hard(self, monkeypatch, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+        import core.runtime.events as events
+        from core.contracts.recall import (
+            RECALL_MEMORY_REQUEST,
+            build_recall_request_payload,
+            resolve_recall_request_routes,
+        )
+        from lib.adapter import TestAdapter, reset_adapter, set_adapter
+
+        route = resolve_recall_request_routes(["vector_basic"])[0]
+        payload = build_recall_request_payload(
+            query="what grinder do I use",
+            route=route,
+            limit=1,
+            options={"recall_kwargs": {"limit": 1}},
+        )
+
+        set_adapter(TestAdapter(tmp_path))
+        try:
+            with events._REQUEST_EVENT_HANDLERS_LOCK:
+                events._REQUEST_EVENT_HANDLERS.clear()
+            mg._register_cli_vector_recall_request_handler()
+
+            with patch.object(mg, "recall", side_effect=AssertionError("nacked selector must not recall")):
+                monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: False)
+                response = events.request_broker_event(
+                    RECALL_MEMORY_REQUEST,
+                    payload,
+                    source="test.vector.nack",
+                )
+                assert response["status"] == "failed"
+                assert response["responses"][0]["status"] == "nacked"
+                assert "selector/store vector" in response["responses"][0]["result"]["error"]
+                with pytest.raises(RuntimeError, match="selector/store vector"):
+                    mg._validate_cli_vector_broker_response(response)
+
+                monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: True)
+                with pytest.raises(RuntimeError, match="Request handler failed while fail-hard mode is enabled"):
+                    events.request_broker_event(
+                        RECALL_MEMORY_REQUEST,
+                        payload,
+                        source="test.vector.nack",
+                    )
+        finally:
+            with events._REQUEST_EVENT_HANDLERS_LOCK:
+                events._REQUEST_EVENT_HANDLERS.clear()
+            reset_adapter()
+
+    def test_cli_vector_archive_branch_bypasses_broker(self):
+        import datastore.memorydb.memory_graph as mg
+
+        captured = {}
+
+        def _fake_recall(query, return_meta=False, **kwargs):
+            captured["query"] = query
+            captured["return_meta"] = return_meta
+            captured["kwargs"] = kwargs
+            return (
+                [
+                    {
+                        "text": "Archived vector bypass row",
+                        "category": "fact",
+                        "similarity": 0.81,
+                    }
+                ],
+                {"selected_path": "archive-bypass"},
+            )
+
+        with patch.object(
+            mg,
+            "_request_cli_vector_recall_via_broker",
+            side_effect=AssertionError("archive branch must not use vector broker"),
+        ), patch.object(mg, "recall", side_effect=_fake_recall):
+            payload, text_rows = mg._run_cli_vector_recall_branch(
+                "archived vector query",
+                {"limit": 1, "owner_id": "quaid", "min_similarity": 0.6},
+                use_json=True,
+                stores_explicit=True,
+                store_names=["vector"],
+                archive=True,
+            )
+
+        assert text_rows is None
+        assert captured["query"] == "archived vector query"
+        assert captured["return_meta"] is True
+        assert payload["contract"] == "quaid.recall.v1"
+        assert payload["results"][0]["text"] == "Archived vector bypass row"
+        assert payload["meta"]["selected_path"] == "archive-bypass"
+
+    def test_cli_vector_session_branch_bypasses_broker(self):
+        import datastore.memorydb.memory_graph as mg
+
+        captured = {}
+
+        def _fake_recall(query, **kwargs):
+            captured["query"] = query
+            captured["kwargs"] = kwargs
+            return [
+                {
+                    "text": "Session vector bypass row",
+                    "category": "fact",
+                    "similarity": 0.82,
+                }
+            ]
+
+        with patch.object(
+            mg,
+            "_request_cli_vector_recall_via_broker",
+            side_effect=AssertionError("session branch must not use vector broker"),
+        ), patch.object(mg, "recall", side_effect=_fake_recall):
+            payload, text_rows = mg._run_cli_vector_recall_branch(
+                "session vector query",
+                {"limit": 1, "owner_id": "quaid", "min_similarity": 0.6},
+                use_json=False,
+                stores_explicit=True,
+                store_names=["vector"],
+                session_id="session-123",
+            )
+
+        assert payload is None
+        assert captured["query"] == "session vector query"
+        assert text_rows[0]["text"] == "Session vector bypass row"
+
     def test_cli_vector_broker_missing_handler_respects_fail_hard(self, caplog, monkeypatch, tmp_path):
         import datastore.memorydb.memory_graph as mg
         import core.runtime.events as events
@@ -14645,7 +14769,7 @@ class TestRecallLimitEdgeCases:
 
             monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: False)
             with caplog.at_level("ERROR"):
-                with pytest.raises(RuntimeError, match="vector broker request failed"):
+                with pytest.raises(RuntimeError, match="vector exploded"):
                     mg._request_cli_vector_recall_via_broker(
                         "failing vector handler",
                         recall_kwargs,

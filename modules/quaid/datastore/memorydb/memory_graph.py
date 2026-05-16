@@ -7139,7 +7139,16 @@ def _validate_cli_vector_broker_response(response: Any) -> Dict[str, Any]:
     if not isinstance(response, dict):
         raise _contract_error(f"vector broker response must be an object, got {type(response).__name__}")
     if str(response.get("status") or "") != "ok":
-        raise _contract_error(str(response.get("error") or "vector broker request failed"))
+        response_error = response.get("error")
+        responses_for_error = response.get("responses")
+        if not response_error and isinstance(responses_for_error, list) and len(responses_for_error) == 1:
+            handler_for_error = responses_for_error[0]
+            if isinstance(handler_for_error, dict):
+                result_for_error = handler_for_error.get("result")
+                response_error = handler_for_error.get("error")
+                if not response_error and isinstance(result_for_error, dict):
+                    response_error = result_for_error.get("error")
+        raise _contract_error(str(response_error or "vector broker request failed"))
     responses = response.get("responses")
     if not isinstance(responses, list) or len(responses) != 1:
         raise _contract_error("vector broker response must contain exactly one handler response")
@@ -7149,7 +7158,9 @@ def _validate_cli_vector_broker_response(response: Any) -> Dict[str, Any]:
     if str(handler_response.get("datastore_id") or "") != "memorydb":
         raise _contract_error("vector broker handler must be memorydb")
     if str(handler_response.get("status") or "") not in {"ok", "acked"}:
-        raise _contract_error(str(handler_response.get("error") or "vector broker handler failed"))
+        result_payload = handler_response.get("result")
+        result_error = result_payload.get("error") if isinstance(result_payload, dict) else None
+        raise _contract_error(str(handler_response.get("error") or result_error or "vector broker handler failed"))
     result = handler_response.get("result")
     if not isinstance(result, dict):
         raise _contract_error("vector broker handler result must be an object")
@@ -7193,6 +7204,43 @@ def _request_cli_vector_recall_via_broker(
         },
     )
     return _validate_cli_vector_broker_response(response)
+
+
+def _run_cli_vector_recall_branch(
+    query: str,
+    recall_kwargs: Dict[str, Any],
+    *,
+    use_json: bool,
+    stores_explicit: bool,
+    store_names: List[str],
+    archive: Any = False,
+    session_id: Optional[str] = None,
+) -> Tuple[Optional[Dict[str, Any]], Optional[List[Dict[str, Any]]]]:
+    use_vector_broker = _should_broker_cli_vector_recall(
+        stores_explicit=stores_explicit,
+        store_names=store_names,
+        archive=archive,
+        session_id=session_id,
+    )
+    if use_json:
+        if use_vector_broker:
+            vector_response = _request_cli_vector_recall_via_broker(query, recall_kwargs)
+            results = vector_response["results"]
+            meta = vector_response["meta"]
+        else:
+            # M5: non-vector-only CLI paths keep their existing direct path until
+            # their own broker activation slices.
+            results, meta = recall(query, return_meta=True, **recall_kwargs)
+        return _build_recall_json_payload(results, meta=meta), None
+
+    if use_vector_broker:
+        vector_response = _request_cli_vector_recall_via_broker(query, recall_kwargs)
+        text_memory_results = vector_response["results"]
+    else:
+        # M5: non-vector-only CLI paths keep their existing direct path until
+        # their own broker activation slices.
+        text_memory_results = recall(query, **recall_kwargs)
+    return None, text_memory_results
 
 
 def _build_cli_docs_recall_options(
@@ -23607,26 +23655,15 @@ if __name__ == "__main__":
                         planned_queries=planned_queries,
                         planned_meta=planned_meta,
                     )
-                    use_vector_broker = _should_broker_cli_vector_recall(
+                    json_payload, text_memory_results = _run_cli_vector_recall_branch(
+                        query,
+                        recall_kwargs,
+                        use_json=use_json,
                         stores_explicit=stores_explicit,
                         store_names=store_names,
                         archive=archive,
                         session_id=session_id,
                     )
-                    if use_json:
-                        if use_vector_broker:
-                            vector_response = _request_cli_vector_recall_via_broker(query, recall_kwargs)
-                            results = vector_response["results"]
-                            meta = vector_response["meta"]
-                        else:
-                            results, meta = recall(query, return_meta=True, **recall_kwargs)
-                        json_payload = _build_recall_json_payload(results, meta=meta)
-                    else:
-                        if use_vector_broker:
-                            vector_response = _request_cli_vector_recall_via_broker(query, recall_kwargs)
-                            text_memory_results = vector_response["results"]
-                        else:
-                            text_memory_results = recall(query, **recall_kwargs)
                     if not use_json and text_memory_results is not None:
                         _print_recall_results(text_memory_results)
 
