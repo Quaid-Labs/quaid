@@ -7086,13 +7086,16 @@ def _validate_cli_vector_recall_kwargs(value: Any) -> Dict[str, Any]:
     return dict(value)
 
 
-def _run_cli_vector_recall_request(query: str, options: Dict[str, Any]) -> Dict[str, Any]:
-    """Execute explicit vector recall through the broker request handler."""
+_MEMORY_VECTOR_REQUEST_SELECTORS = frozenset({"vector", "vector_basic", "vector_technical"})
+
+
+def _run_cli_vector_recall_request(query: str, options: Dict[str, Any], *, selector: str = "vector") -> Dict[str, Any]:
+    """Execute vector-backed recall through the broker request handler."""
     recall_kwargs = _validate_cli_vector_recall_kwargs((options or {}).get("recall_kwargs"))
     rows, meta = recall(query, return_meta=True, **recall_kwargs)
     return {
         "status": "ok",
-        "selector": "vector",
+        "selector": selector,
         "store": "vector",
         "results": _validate_recall_result_rows(rows),
         "meta": dict(meta or {}),
@@ -7105,10 +7108,10 @@ def _handle_cli_vector_recall_request(event: Dict[str, Any]) -> Dict[str, Any]:
         raise _contract_error("vector request event payload must be an object")
     selector = str(payload.get("selector") or "").strip().lower().replace("-", "_")
     store = str(payload.get("store") or "").strip().lower().replace("-", "_")
-    if selector != "vector" or store != "vector":
+    if selector not in _MEMORY_VECTOR_REQUEST_SELECTORS or store != "vector":
         return {
             "status": "nacked",
-            "error": "M5 vector recall handler only supports selector/store vector",
+            "error": "M6 memory recall handler only supports selector vector/vector_basic/vector_technical with store vector",
             "selector": selector,
             "store": store,
         }
@@ -7120,7 +7123,7 @@ def _handle_cli_vector_recall_request(event: Dict[str, Any]) -> Dict[str, Any]:
         options = {}
     if not isinstance(options, dict):
         raise _contract_error("vector request payload.options must be an object")
-    return _run_cli_vector_recall_request(query, dict(options))
+    return _run_cli_vector_recall_request(query, dict(options), selector=selector)
 
 
 def _register_cli_vector_recall_request_handler() -> None:
@@ -7170,13 +7173,20 @@ def _validate_cli_vector_broker_response(response: Any) -> Dict[str, Any]:
     meta = result.get("meta")
     if meta is not None and not isinstance(meta, dict):
         raise _contract_error("vector broker handler result.meta must be an object or null")
-    return {"results": rows, "meta": dict(meta or {})}
+    return {
+        "selector": str(result.get("selector") or ""),
+        "store": str(result.get("store") or ""),
+        "results": rows,
+        "meta": dict(meta or {}),
+    }
 
 
 def _request_cli_vector_recall_via_broker(
     query: str,
     recall_kwargs: Dict[str, Any],
     *,
+    selector: str = "vector",
+    store: str = "vector",
     register_handler: bool = True,
 ) -> Dict[str, Any]:
     from core.contracts.recall import (
@@ -7188,22 +7198,52 @@ def _request_cli_vector_recall_via_broker(
 
     if register_handler:
         _register_cli_vector_recall_request_handler()
-    route = resolve_recall_request_routes(["vector"])[0]
+    route = resolve_recall_request_routes([selector])[0]
+    if route.event_type != RECALL_MEMORY_REQUEST:
+        raise _contract_error(f"selector {selector!r} does not route to memory recall")
     payload = build_recall_request_payload(
         query=query,
         route=route,
         limit=int(recall_kwargs.get("limit") or 1),
         options={"recall_kwargs": dict(recall_kwargs or {})},
     )
+    payload["store"] = str(store or "").strip().lower().replace("-", "_")
     response = request_broker_event(
         RECALL_MEMORY_REQUEST,
         payload,
-        source="memory_graph.cli.recall",
+        source="memory_graph.recall_memory_request",
         provenance={
-            "replacement": "datastore.memorydb.memory_graph.recall vector-only direct branch",
+            "replacement": "datastore.memorydb.memory_graph.recall vector-backed direct branch",
         },
     )
     return _validate_cli_vector_broker_response(response)
+
+
+def _build_cli_memory_recall_request_kwargs(options: Dict[str, Any]) -> Dict[str, Any]:
+    """Build recall kwargs for internal vector-backed broker requests."""
+    use_fast = bool(options.get("fast"))
+    return _build_cli_vector_recall_kwargs(
+        limit=int(options.get("limit") or 1),
+        owner=str(options.get("owner_id") or _get_memory_config().users.default_owner),
+        min_similarity=options.get("min_similarity", 0.60),
+        current_session_id=options.get("current_session_id"),
+        compaction_time=options.get("compaction_time"),
+        date_from=options.get("date_from"),
+        date_to=options.get("date_to"),
+        temporal_dimension=options.get("temporal_dimension"),
+        use_debug=bool(options.get("debug")),
+        domain_filter=options.get("domain_filter") if isinstance(options.get("domain_filter"), dict) else {"all": True},
+        domain_boost=options.get("domain_boost", []),
+        project=options.get("project") if isinstance(options.get("project"), str) else None,
+        timeout_ms=options.get("timeout_ms") if isinstance(options.get("timeout_ms"), int) else None,
+        include_chunks=False,
+        max_chunk_tokens=None,
+        max_total_chunk_tokens=None,
+        use_fast=use_fast,
+        planner_profile="fast" if use_fast else "full",
+        planned_queries=None,
+        planned_meta=None,
+    )
 
 
 def _run_cli_vector_recall_branch(
@@ -23104,6 +23144,10 @@ if __name__ == "__main__":
         recall_docs_request_p.add_argument("query", help="Internal docs recall request query")
         recall_docs_request_p.add_argument("options_json", help="Internal docs recall request options JSON")
 
+        recall_memory_request_p = subparsers.add_parser("recall-memory-request", help=argparse.SUPPRESS)
+        recall_memory_request_p.add_argument("query", help="Internal memory recall request query")
+        recall_memory_request_p.add_argument("options_json", help="Internal memory recall request options JSON")
+
         recall_fast_p = subparsers.add_parser("recall-fast", help="Fast pre-injection recall with HyDE fanout")
         recall_fast_p.add_argument("query", nargs="+", help="Search query")
         recall_fast_p.add_argument("--owner", default=None, help="Owner ID")
@@ -23740,6 +23784,26 @@ if __name__ == "__main__":
                 sys.exit(1)
             docs_response = _request_cli_docs_recall_via_broker(args.query, request_options)
             print(json.dumps(docs_response, indent=2))
+
+        elif args.command == "recall-memory-request":
+            try:
+                request_options = json.loads(args.options_json)
+            except json.JSONDecodeError as exc:
+                print(f"recall-memory-request: invalid options JSON: {exc}", file=sys.stderr)
+                sys.exit(1)
+            if not isinstance(request_options, dict):
+                print("recall-memory-request: options JSON must be an object", file=sys.stderr)
+                sys.exit(1)
+            selector = str(request_options.get("selector") or "").strip().lower().replace("-", "_")
+            handler_store = str(request_options.get("store") or "").strip().lower().replace("-", "_")
+            recall_kwargs = _build_cli_memory_recall_request_kwargs(request_options)
+            memory_response = _request_cli_vector_recall_via_broker(
+                args.query,
+                recall_kwargs,
+                selector=selector,
+                store=handler_store,
+            )
+            print(json.dumps(memory_response, indent=2))
 
         elif args.command == "recall-fast":
             query = " ".join(args.query)

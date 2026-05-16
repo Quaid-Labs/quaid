@@ -155,6 +155,9 @@ function createQuaidFacade(deps) {
     recallMemory: async (query, limit, opts) => {
       return recallMemoryFromBridge(query, limit, opts);
     },
+    requestMemoryStoreRecall: async (request) => {
+      return requestMemoryStoreRecall(request);
+    },
     recallJournalStore: async (query, limit) => {
       const journalConfig = deps.getMemoryConfig().docs?.journal || {};
       const visibleInstanceRoot = resolveVisibleInstanceRoot();
@@ -2083,6 +2086,45 @@ Consider running: docs staleness updater (update-stale --apply)`;
       });
     }
     return rows;
+  }
+  function parseMemoryBrokerResults(out, selector) {
+    if (!out || !out.trim()) return [];
+    const parsed = JSON.parse(out);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("memory broker response must be an object");
+    }
+    if (String(parsed.selector || "") !== selector) {
+      throw new Error(`memory broker response selector must be ${selector}`);
+    }
+    if (String(parsed.store || "") !== "vector") {
+      throw new Error("memory broker response store must be vector");
+    }
+    if (!Array.isArray(parsed.results)) {
+      throw new Error("memory broker response results must be a list");
+    }
+    return parseMemoryBridgePayload(JSON.stringify({
+      results: parsed.results,
+      meta: parsed.meta || {}
+    }), false).results;
+  }
+  async function requestMemoryStoreRecall(request) {
+    const options = {
+      selector: request.selector,
+      store: request.store,
+      limit: request.limit,
+      min_similarity: 0.6,
+      domain_filter: request.domain
+    };
+    if (request.domainBoost) options.domain_boost = request.domainBoost;
+    if (request.project) options.project = request.project;
+    if (request.dateFrom) options.date_from = request.dateFrom;
+    if (request.dateTo) options.date_to = request.dateTo;
+    if (request.fast) options.fast = true;
+    const out = await datastoreBridge.recallMemoryRequest([
+      request.query,
+      JSON.stringify(options)
+    ]);
+    return parseMemoryBrokerResults(out, request.selector);
   }
   const _memoryNotes = /* @__PURE__ */ new Map();
   const _memoryNotesTouchedAt = /* @__PURE__ */ new Map();

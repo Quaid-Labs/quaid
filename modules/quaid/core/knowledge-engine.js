@@ -429,6 +429,23 @@ intent: ${intent}`;
       dateTo
     });
   }
+  async function recallFromMemorySelectorStore(selector, ctx) {
+    if (!deps.requestMemoryStoreRecall) {
+      throw new Error("memory recall broker request handler is not configured");
+    }
+    return deps.requestMemoryStoreRecall({
+      query: ctx.query,
+      limit: ctx.limit,
+      selector,
+      store: "vector",
+      domain: ctx.opts.domain || getDefaultDomainForKnowledgeDatastore(selector),
+      domainBoost: ctx.opts.domainBoost,
+      project: ctx.opts.project,
+      dateFrom: ctx.opts.dateFrom,
+      dateTo: ctx.opts.dateTo,
+      fast: ctx.opts.fast
+    });
+  }
   async function _executeStores(query, limit, opts) {
     const datastores = normalizeKnowledgeDatastores(opts.datastores, opts.expandGraph);
     const all = [];
@@ -446,11 +463,11 @@ intent: ${intent}`;
       },
       vector_basic: {
         key: "vector_basic",
-        recall: async (ctx) => deps.recallMemory(ctx.query, ctx.limit, { stores: ["vector_basic"], domain: ctx.opts.domain || getDefaultDomainForKnowledgeDatastore("vector_basic"), domainBoost: ctx.opts.domainBoost, project: ctx.opts.project, dateFrom: ctx.opts.dateFrom, dateTo: ctx.opts.dateTo, fast: ctx.opts.fast })
+        recall: async (ctx) => recallFromMemorySelectorStore("vector_basic", ctx)
       },
       vector_technical: {
         key: "vector_technical",
-        recall: async (ctx) => deps.recallMemory(ctx.query, ctx.limit, { stores: ["vector_technical"], domain: ctx.opts.domain || getDefaultDomainForKnowledgeDatastore("vector_technical"), domainBoost: ctx.opts.domainBoost, project: ctx.opts.project, dateFrom: ctx.opts.dateFrom, dateTo: ctx.opts.dateTo, fast: ctx.opts.fast })
+        recall: async (ctx) => recallFromMemorySelectorStore("vector_technical", ctx)
       },
       graph: {
         key: "graph",

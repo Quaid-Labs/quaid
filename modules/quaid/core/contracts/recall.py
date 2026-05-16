@@ -41,14 +41,14 @@ _RECALL_REQUEST_ROUTES: Tuple[RecallRequestRoute, ...] = (
         selector="vector_basic",
         event_type=RECALL_MEMORY_REQUEST,
         datastore_id="memorydb",
-        handler_store="vector_basic",
+        handler_store="vector",
         aliases=("basic", "personal"),
     ),
     RecallRequestRoute(
         selector="vector_technical",
         event_type=RECALL_MEMORY_REQUEST,
         datastore_id="memorydb",
-        handler_store="vector_technical",
+        handler_store="vector",
         aliases=("technical", "project_memory"),
     ),
     RecallRequestRoute(
@@ -116,7 +116,7 @@ def _route_lookup() -> Dict[str, RecallRequestRoute]:
 def resolve_recall_request_routes(selectors: Iterable[Any]) -> List[RecallRequestRoute]:
     lookup = _route_lookup()
     routes: List[RecallRequestRoute] = []
-    seen: set[Tuple[str, str]] = set()
+    seen: set[Tuple[str, str, str]] = set()
     for raw in selectors:
         token = _normalize_selector(raw)
         if not token:
@@ -124,7 +124,7 @@ def resolve_recall_request_routes(selectors: Iterable[Any]) -> List[RecallReques
         route = lookup.get(token)
         if route is None:
             raise ValueError(f"unknown recall selector: {raw}")
-        key = (route.event_type, route.handler_store)
+        key = (route.event_type, route.selector, route.handler_store)
         if key in seen:
             continue
         seen.add(key)

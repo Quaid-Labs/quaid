@@ -28,7 +28,7 @@ Current request events:
 
 | Selector family | Event type | Datastore | Handler store |
 | --- | --- | --- | --- |
-| `vector`, `vector_basic`, `vector_technical` | `recall.memory.request.v1` | `memorydb` | matching vector store |
+| `vector`, `vector_basic`, `vector_technical` | `recall.memory.request.v1` | `memorydb` | `vector` |
 | `graph` | `recall.graph.request.v1` | `memorydb` | `graph` |
 | `session_chunks` / `source_chunks` | `recall.memory.request.v1` | `memorydb` | `session_chunks` |
 | `docs` | `recall.docs.request.v1` | `docsdb` | `docs` |

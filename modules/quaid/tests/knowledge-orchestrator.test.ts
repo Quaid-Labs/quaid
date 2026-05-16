@@ -22,6 +22,18 @@ type Result = {
   via?: string;
 };
 
+function memoryRequestViaRecallMemory(recallMemory: ReturnType<typeof vi.fn>) {
+  return vi.fn(async (request: any) => recallMemory(request.query, request.limit, {
+    stores: [request.selector],
+    domain: request.domain,
+    domainBoost: request.domainBoost,
+    project: request.project,
+    dateFrom: request.dateFrom,
+    dateTo: request.dateTo,
+    fast: request.fast,
+  }));
+}
+
 describe("knowledge orchestrator", () => {
   it("normalizes store defaults and removes invalid entries", () => {
     const engine = createKnowledgeEngine<Result>({
@@ -128,6 +140,7 @@ describe("knowledge orchestrator", () => {
         throw new Error("offline");
       }),
       recallMemory,
+      requestMemoryStoreRecall: memoryRequestViaRecallMemory(recallMemory),
     });
 
     const out = await engine.recall("Tell me about family relationships", 5, {
@@ -166,6 +179,7 @@ describe("knowledge orchestrator", () => {
         throw new Error("offline");
       }),
       recallMemory,
+      requestMemoryStoreRecall: memoryRequestViaRecallMemory(recallMemory),
       recallJournalStore,
       requestProjectStoreRecall,
     });
@@ -212,6 +226,7 @@ describe("knowledge orchestrator", () => {
         throw new Error("offline");
       }),
       recallMemory,
+      requestMemoryStoreRecall: memoryRequestViaRecallMemory(recallMemory),
       recallJournalStore,
       requestProjectStoreRecall,
     });
@@ -256,6 +271,7 @@ describe("knowledge orchestrator", () => {
         datastores: ["vector_basic", "journal", "project"],
       })),
       recallMemory,
+      requestMemoryStoreRecall: memoryRequestViaRecallMemory(recallMemory),
       recallJournalStore,
       requestProjectStoreRecall,
     });
@@ -302,6 +318,7 @@ describe("knowledge orchestrator", () => {
         datastores: ["vector_basic", "graph", "journal", "project"],
       })),
       recallMemory,
+      requestMemoryStoreRecall: memoryRequestViaRecallMemory(recallMemory),
       recallJournalStore,
       requestProjectStoreRecall,
     });
@@ -337,6 +354,7 @@ describe("knowledge orchestrator", () => {
         throw new Error("offline");
       }),
       recallMemory,
+      requestMemoryStoreRecall: memoryRequestViaRecallMemory(recallMemory),
     });
 
     const first = await engine.recall("Tell me about family relationships", 5, {
@@ -475,6 +493,7 @@ describe("knowledge orchestrator", () => {
       isSystemEnabled: () => false,
       callFastRouter,
       recallMemory,
+      requestMemoryStoreRecall: memoryRequestViaRecallMemory(recallMemory),
     });
 
     const out = await engine.recall("alpha", 3, {
@@ -505,6 +524,7 @@ describe("knowledge orchestrator", () => {
       isSystemEnabled: () => false,
       callFastRouter: vi.fn(async () => '{"datastores":["vector_basic"]}'),
       recallMemory,
+      requestMemoryStoreRecall: memoryRequestViaRecallMemory(recallMemory),
     });
 
     const results = await engine.recall("alpha", 10, {
@@ -535,6 +555,7 @@ describe("knowledge orchestrator", () => {
       isSystemEnabled: () => false,
       callFastRouter: vi.fn(async () => '{"datastores":["vector_basic","graph"]}'),
       recallMemory,
+      requestMemoryStoreRecall: memoryRequestViaRecallMemory(recallMemory),
     });
 
     await engine.recall("alpha", 10, {
@@ -569,6 +590,7 @@ describe("knowledge orchestrator", () => {
       isSystemEnabled: () => false,
       callFastRouter: vi.fn(async () => '{"datastores":["vector_basic","graph"]}'),
       recallMemory,
+      requestMemoryStoreRecall: memoryRequestViaRecallMemory(recallMemory),
     });
 
     const results = await engine.recall("alpha", 5, {
@@ -595,6 +617,7 @@ describe("knowledge orchestrator", () => {
       }),
       callFastRouter: vi.fn(async () => '{"datastores":["vector_basic","project"]}'),
       recallMemory,
+      requestMemoryStoreRecall: memoryRequestViaRecallMemory(recallMemory),
     });
 
     try {
@@ -742,6 +765,7 @@ describe("knowledge orchestrator", () => {
       requestProjectStoreRecall,
       callFastRouter: vi.fn(async () => '{"datastores":["project","vector_basic"]}'),
       recallMemory,
+      requestMemoryStoreRecall: memoryRequestViaRecallMemory(recallMemory),
     });
 
     const results = await engine.recall("As of 2026-03-15, what projects were on the portfolio site?", 2, {
@@ -816,6 +840,7 @@ describe("knowledge orchestrator", () => {
         datastores: ["vector_basic", "project"],
       })),
       recallMemory,
+      requestMemoryStoreRecall: memoryRequestViaRecallMemory(recallMemory),
       requestProjectStoreRecall,
     });
 
@@ -891,6 +916,7 @@ describe("knowledge orchestrator", () => {
       isSystemEnabled: () => false,
       callFastRouter: vi.fn(async () => '{"datastores":["vector"]}'),
       recallMemory,
+      requestMemoryStoreRecall: memoryRequestViaRecallMemory(recallMemory),
     });
 
     await engine.recall("api limits", 3, {
@@ -919,14 +945,18 @@ describe("knowledge orchestrator", () => {
     );
   });
 
-  it("keeps vector_basic and vector_technical on direct memory descriptors with default domains", async () => {
-    const recallMemory = vi.fn(async () => []);
+  it("routes vector_basic and vector_technical through memory broker requests with default domains", async () => {
+    const recallMemory = vi.fn(async () => {
+      throw new Error("memory selectors must not use direct recallMemory");
+    });
+    const requestMemoryStoreRecall = vi.fn(async () => []);
     const engine = createKnowledgeEngine<Result>({
       workspace: "/tmp",
       getMemoryConfig: () => ({}),
       isSystemEnabled: () => false,
       callFastRouter: vi.fn(async () => '{"datastores":["vector_basic"]}'),
       recallMemory,
+      requestMemoryStoreRecall,
     });
 
     await engine.recall("personal preference", 3, {
@@ -940,34 +970,41 @@ describe("knowledge orchestrator", () => {
       graphDepth: 1,
     });
 
-    expect(recallMemory).toHaveBeenNthCalledWith(
+    expect(requestMemoryStoreRecall).toHaveBeenNthCalledWith(
       1,
-      "personal preference",
-      3,
       expect.objectContaining({
-        stores: ["vector_basic"],
+        query: "personal preference",
+        limit: 3,
+        selector: "vector_basic",
+        store: "vector",
         domain: { personal: true },
       }),
     );
-    expect(recallMemory).toHaveBeenNthCalledWith(
+    expect(requestMemoryStoreRecall).toHaveBeenNthCalledWith(
       2,
-      "api limit",
-      3,
       expect.objectContaining({
-        stores: ["vector_technical"],
+        query: "api limit",
+        limit: 3,
+        selector: "vector_technical",
+        store: "vector",
         domain: { technical: true },
       }),
     );
+    expect(recallMemory).not.toHaveBeenCalled();
   });
 
   it("limits memory selector overrides to current top-level descriptor options", async () => {
-    const recallMemory = vi.fn(async () => []);
+    const recallMemory = vi.fn(async () => {
+      throw new Error("memory selectors must not use direct recallMemory");
+    });
+    const requestMemoryStoreRecall = vi.fn(async () => []);
     const engine = createKnowledgeEngine<Result>({
       workspace: "/tmp",
       getMemoryConfig: () => ({}),
       isSystemEnabled: () => false,
       callFastRouter: vi.fn(async () => '{"datastores":["vector_basic"]}'),
       recallMemory,
+      requestMemoryStoreRecall,
     });
 
     await engine.recall("personal scoped", 3, {
@@ -999,12 +1036,13 @@ describe("knowledge orchestrator", () => {
       },
     });
 
-    expect(recallMemory).toHaveBeenNthCalledWith(
+    expect(requestMemoryStoreRecall).toHaveBeenNthCalledWith(
       1,
-      "personal scoped",
-      3,
       expect.objectContaining({
-        stores: ["vector_basic"],
+        query: "personal scoped",
+        limit: 3,
+        selector: "vector_basic",
+        store: "vector",
         domain: { all: true },
         domainBoost: { personal: 1.4 },
         project: "quaid",
@@ -1013,12 +1051,13 @@ describe("knowledge orchestrator", () => {
         fast: true,
       }),
     );
-    expect(recallMemory).toHaveBeenNthCalledWith(
+    expect(requestMemoryStoreRecall).toHaveBeenNthCalledWith(
       2,
-      "technical scoped",
-      3,
       expect.objectContaining({
-        stores: ["vector_technical"],
+        query: "technical scoped",
+        limit: 3,
+        selector: "vector_technical",
+        store: "vector",
         domain: { technical: true },
         domainBoost: { technical: 1.7 },
         project: "quaid-runtime",
@@ -1027,6 +1066,7 @@ describe("knowledge orchestrator", () => {
         fast: true,
       }),
     );
+    expect(recallMemory).not.toHaveBeenCalled();
   });
 
   it("keeps memory selectors from consuming candidate pools while seeding graph", async () => {
@@ -1036,9 +1076,12 @@ describe("knowledge orchestrator", () => {
     const technicalRows = [
       { id: "tech-1", text: "Technical anchor", category: "fact", similarity: 0.89, via: "vector_technical" },
     ];
+    const requestMemoryStoreRecall = vi.fn(async (request: any) => {
+      if (request.selector === "vector_basic") return basicRows;
+      if (request.selector === "vector_technical") return technicalRows;
+      return [];
+    });
     const recallMemory = vi.fn(async (_query: string, _limit: number, opts: any) => {
-      if (opts.stores?.includes("vector_basic")) return basicRows;
-      if (opts.stores?.includes("vector_technical")) return technicalRows;
       if (opts.stores?.includes("graph")) {
         return [{ text: "Personal anchor --related--> technical anchor", category: "graph", similarity: 0.72, via: "graph" }];
       }
@@ -1050,6 +1093,7 @@ describe("knowledge orchestrator", () => {
       isSystemEnabled: () => false,
       callFastRouter: vi.fn(async () => '{"datastores":["vector_basic","vector_technical","graph"]}'),
       recallMemory,
+      requestMemoryStoreRecall,
     });
 
     await engine.recall("anchor", 4, {
@@ -1059,17 +1103,19 @@ describe("knowledge orchestrator", () => {
       domain: { all: true },
     });
 
+    expect(requestMemoryStoreRecall.mock.calls[0][0]).toEqual(expect.objectContaining({
+      selector: "vector_basic",
+      store: "vector",
+      domain: { all: true },
+    }));
+    expect(requestMemoryStoreRecall.mock.calls[0][0]).not.toHaveProperty("candidatePool");
+    expect(requestMemoryStoreRecall.mock.calls[1][0]).toEqual(expect.objectContaining({
+      selector: "vector_technical",
+      store: "vector",
+      domain: { all: true },
+    }));
+    expect(requestMemoryStoreRecall.mock.calls[1][0]).not.toHaveProperty("candidatePool");
     expect(recallMemory.mock.calls[0][2]).toEqual(expect.objectContaining({
-      stores: ["vector_basic"],
-      domain: { all: true },
-    }));
-    expect(recallMemory.mock.calls[0][2]).not.toHaveProperty("candidatePool");
-    expect(recallMemory.mock.calls[1][2]).toEqual(expect.objectContaining({
-      stores: ["vector_technical"],
-      domain: { all: true },
-    }));
-    expect(recallMemory.mock.calls[1][2]).not.toHaveProperty("candidatePool");
-    expect(recallMemory.mock.calls[2][2]).toEqual(expect.objectContaining({
       stores: ["graph"],
       depth: 2,
       candidatePool: [...basicRows, ...technicalRows],
@@ -1089,6 +1135,7 @@ describe("knowledge orchestrator", () => {
       isSystemEnabled: (name) => name === "journal",
       callFastRouter: vi.fn(async () => '{"datastores":["journal"]}'),
       recallMemory,
+      requestMemoryStoreRecall: memoryRequestViaRecallMemory(recallMemory),
       recallJournalStore,
     });
 
@@ -1124,6 +1171,7 @@ describe("knowledge orchestrator", () => {
       isSystemEnabled: () => false,
       callFastRouter: vi.fn(async () => '{"datastores":["vector"]}'),
       recallMemory,
+      requestMemoryStoreRecall: memoryRequestViaRecallMemory(recallMemory),
     });
 
     const out = await engine.recall("exact transcript context", 3, {
@@ -1186,6 +1234,7 @@ describe("knowledge orchestrator", () => {
       isSystemEnabled: () => false,
       callFastRouter: vi.fn(async () => '{"query":"alpha","datastores":["vector_basic","graph"]}'),
       recallMemory,
+      requestMemoryStoreRecall: memoryRequestViaRecallMemory(recallMemory),
     });
 
     const started = Date.now();
@@ -1302,6 +1351,7 @@ describe("knowledge orchestrator", () => {
       isSystemEnabled: () => false,
       callFastRouter: vi.fn(async () => '{"datastores":["vector_basic"]}'),
       recallMemory,
+      requestMemoryStoreRecall: memoryRequestViaRecallMemory(recallMemory),
     });
 
     const results = await engine.recall("what did the assistant suggest", 5, {

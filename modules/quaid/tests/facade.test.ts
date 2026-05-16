@@ -50,6 +50,15 @@ function makeMockDeps(overrides: Partial<QuaidFacadeDeps> = {}): QuaidFacadeDeps
   };
 }
 
+function memoryBrokerResponse(selector: "vector_basic" | "vector_technical", rows: Array<Record<string, unknown>>): string {
+  return JSON.stringify({
+    selector,
+    store: "vector",
+    results: rows,
+    meta: {},
+  });
+}
+
 describe("QuaidFacade", () => {
   // -----------------------------------------------------------------------
   // Pass-through methods
@@ -675,8 +684,8 @@ describe("QuaidFacade", () => {
 
   it("recall routes through knowledgeEngine when routeStores=false", async () => {
     const execPython = vi.fn(async (command: string) => {
-      if (command === "recall") {
-        return JSON.stringify([
+      if (command === "recall-memory-request") {
+        return memoryBrokerResponse("vector_basic", [
           { text: "test fact", category: "fact", similarity: 0.85 },
         ]);
       }
@@ -705,8 +714,8 @@ describe("QuaidFacade", () => {
       truncated: false,
     } satisfies LLMCallResult));
     const execPython = vi.fn(async (command: string) => {
-      if (command === "recall") {
-        return JSON.stringify([
+      if (command === "recall-memory-request") {
+        return memoryBrokerResponse("vector_basic", [
           { text: "routed fact", category: "fact", similarity: 0.9 },
         ]);
       }
@@ -725,8 +734,10 @@ describe("QuaidFacade", () => {
 
   it("recall forwards domain filter in JSON config", async () => {
     const execPython = vi.fn(async (command: string) => {
-      if (command === "recall") {
-        return JSON.stringify([{ text: "domain fact", category: "fact", similarity: 0.8 }]);
+      if (command === "recall-memory-request") {
+        return memoryBrokerResponse("vector_basic", [
+          { text: "domain fact", category: "fact", similarity: 0.8 },
+        ]);
       }
       return "{}";
     });
@@ -739,12 +750,14 @@ describe("QuaidFacade", () => {
       expandGraph: false,
       domain: { personal: true },
     });
-    const recallCall = execPython.mock.calls.find((args) => args[0] === "recall");
+    const recallCall = execPython.mock.calls.find((args) => args[0] === "recall-memory-request");
     expect(recallCall).toBeTruthy();
     const recallArgs: string[] = recallCall?.[1] ?? [];
-    const cfgArg = recallArgs.find((a: string) => a.startsWith("{"));
+    const cfgArg = recallArgs[1];
     expect(cfgArg).toBeTruthy();
     const cfg = JSON.parse(cfgArg!);
+    expect(cfg.selector).toBe("vector_basic");
+    expect(cfg.store).toBe("vector");
     expect(cfg.domain_filter).toMatchObject({ personal: true });
     expect(recallArgs).not.toContain("--domain-filter");
     expect(recallArgs).not.toContain("--domain");
@@ -869,8 +882,10 @@ describe("QuaidFacade", () => {
   it("project broker malformed output preserves vector rows without failHard", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const execPython = vi.fn(async (command: string) => {
-      if (command === "recall") {
-        return JSON.stringify([{ text: "vector survives", category: "fact", similarity: 0.8 }]);
+      if (command === "recall-memory-request") {
+        return memoryBrokerResponse("vector_basic", [
+          { text: "vector survives", category: "fact", similarity: 0.8 },
+        ]);
       }
       if (command === "recall-docs-request") {
         return JSON.stringify({ selector: "docs", store: "docs", docs: { chunks: [] } });
@@ -924,6 +939,83 @@ describe("QuaidFacade", () => {
       datastores: ["project"],
       expandGraph: false,
     })).rejects.toThrow("project broker response selector must be project");
+  });
+
+  it("memory broker malformed output preserves project rows without failHard", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const execPython = vi.fn(async (command: string) => {
+      if (command === "recall-memory-request") {
+        return JSON.stringify({ selector: "vector_basic", store: "vector", meta: {} });
+      }
+      if (command === "recall-docs-request") {
+        return JSON.stringify({
+          selector: "project",
+          store: "docs",
+          docs: {
+            chunks: [
+              {
+                content: "PROJECT.md says the broker migration is active",
+                source: "~/projects/quaid/PROJECT.md",
+                similarity: 0.91,
+                project: "quaid",
+              },
+            ],
+            project: "quaid",
+          },
+          limit: 5,
+          meta: {},
+        });
+      }
+      if (command === "recall") {
+        throw new Error("migrated memory selector must not fall back to direct recall");
+      }
+      return "{}";
+    });
+    const facade = createQuaidFacade(makeMockDeps({
+      execPython,
+      isSystemEnabled: vi.fn((system: string) => system === "projects"),
+      isFailHardEnabled: vi.fn(() => false),
+      getMemoryConfig: vi.fn(() => ({ retrieval: { failHard: false } })),
+    }));
+
+    try {
+      const results = await facade.recall({
+        query: "broker migration",
+        limit: 5,
+        routeStores: false,
+        datastores: ["vector_basic", "project"],
+        expandGraph: false,
+        project: "quaid",
+      });
+
+      expect(results.some((row) => row.via === "project")).toBe(true);
+      expect(execPython.mock.calls.some(([command]) => command === "recall")).toBe(false);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("datastore=vector_basic failed: memory broker response results must be a list"));
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("memory broker malformed output raises under failHard", async () => {
+    const execPython = vi.fn(async (command: string) => {
+      if (command === "recall-memory-request") {
+        return JSON.stringify({ selector: "vector_basic", store: "vector", meta: {} });
+      }
+      return "{}";
+    });
+    const facade = createQuaidFacade(makeMockDeps({
+      execPython,
+      isFailHardEnabled: vi.fn(() => true),
+      getMemoryConfig: vi.fn(() => ({ retrieval: { failHard: true } })),
+    }));
+
+    await expect(facade.recall({
+      query: "bad memory broker",
+      limit: 5,
+      routeStores: false,
+      datastores: ["vector_basic"],
+      expandGraph: false,
+    })).rejects.toThrow("memory broker response results must be a list");
   });
 
   it("recallWithDiagnostics forwards timeout budget in JSON config", async () => {
@@ -1146,8 +1238,8 @@ describe("QuaidFacade", () => {
 
   it("recallWithToolRetry returns primary results when retry heuristics do not trigger", async () => {
     const execPython = vi.fn(async (command: string) => {
-      if (command !== "recall") return "{}";
-      return JSON.stringify([
+      if (command !== "recall-memory-request") return "{}";
+      return memoryBrokerResponse("vector_basic", [
         { text: "Alice project plan is current and active", category: "fact", similarity: 0.91 },
       ]);
     });
@@ -1166,14 +1258,14 @@ describe("QuaidFacade", () => {
 
   it("recallWithToolRetry retries with expanded query and merges results", async () => {
     const execPython = vi.fn(async (command: string) => {
-      if (command !== "recall") return "{}";
-      const callCount = execPython.mock.calls.filter(([cmd]) => cmd === "recall").length;
+      if (command !== "recall-memory-request") return "{}";
+      const callCount = execPython.mock.calls.filter(([cmd]) => cmd === "recall-memory-request").length;
       if (callCount === 1) {
-        return JSON.stringify([
+        return memoryBrokerResponse("vector_basic", [
           { text: "misc unrelated fragment", category: "fact", similarity: 0.2 },
         ]);
       }
-      return JSON.stringify([
+      return memoryBrokerResponse("vector_basic", [
         { text: "Alice leads the project alpha roadmap", category: "fact", similarity: 0.84 },
       ]);
     });
@@ -1192,8 +1284,8 @@ describe("QuaidFacade", () => {
 
   it("recallWithToolRetry skips retry when retry_budget_ms is 0", async () => {
     const execPython = vi.fn(async (command: string) => {
-      if (command !== "recall") return "{}";
-      return JSON.stringify([
+      if (command !== "recall-memory-request") return "{}";
+      return memoryBrokerResponse("vector_basic", [
         { text: "misc unrelated fragment", category: "fact", similarity: 0.2 },
       ]);
     });
@@ -1216,15 +1308,15 @@ describe("QuaidFacade", () => {
 
   it("recallWithToolRetry returns primary when retry exceeds budget", async () => {
     const execPython = vi.fn(async (command: string) => {
-      if (command !== "recall") return "{}";
-      const callCount = execPython.mock.calls.filter(([cmd]) => cmd === "recall").length;
+      if (command !== "recall-memory-request") return "{}";
+      const callCount = execPython.mock.calls.filter(([cmd]) => cmd === "recall-memory-request").length;
       if (callCount === 1) {
-        return JSON.stringify([
+        return memoryBrokerResponse("vector_basic", [
           { text: "misc unrelated fragment", category: "fact", similarity: 0.2 },
         ]);
       }
       await new Promise((resolve) => setTimeout(resolve, 25));
-      return JSON.stringify([
+      return memoryBrokerResponse("vector_basic", [
         { text: "Alice leads the project alpha roadmap", category: "fact", similarity: 0.84 },
       ]);
     });

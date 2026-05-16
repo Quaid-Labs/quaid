@@ -11,7 +11,7 @@ import { COMMAND_REGISTRY } from "./command-registry.js";
 import { createDatastoreBridge } from "./datastore-bridge.js";
 import { createProjectCatalogReader } from "./project-catalog.js";
 import { createKnowledgeEngine } from "./knowledge-engine.js";
-import type { TotalRecallOptions, RecallMemoryOpts } from "../orchestrator/default-orchestrator.js";
+import type { TotalRecallOptions, RecallMemoryOpts, MemoryStoreRecallRequest } from "../orchestrator/default-orchestrator.js";
 import {
   getBridgeEligibleDatastoreKeys,
   getDefaultDomainForKnowledgeDatastore,
@@ -580,6 +580,9 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
     },
     recallMemory: async (query, limit, opts) => {
       return recallMemoryFromBridge(query, limit, opts as RecallMemoryOpts);
+    },
+    requestMemoryStoreRecall: async (request) => {
+      return requestMemoryStoreRecall(request);
     },
     recallJournalStore: async (query, limit) => {
       const journalConfig = deps.getMemoryConfig().docs?.journal || {};
@@ -2850,6 +2853,50 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
       } as MemoryResult);
     }
     return rows;
+  }
+
+  function parseMemoryBrokerResults(
+    out: string,
+    selector: MemoryStoreRecallRequest["selector"],
+  ): MemoryResult[] {
+    if (!out || !out.trim()) return [];
+    const parsed = JSON.parse(out);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("memory broker response must be an object");
+    }
+    if (String(parsed.selector || "") !== selector) {
+      throw new Error(`memory broker response selector must be ${selector}`);
+    }
+    if (String(parsed.store || "") !== "vector") {
+      throw new Error("memory broker response store must be vector");
+    }
+    if (!Array.isArray(parsed.results)) {
+      throw new Error("memory broker response results must be a list");
+    }
+    return parseMemoryBridgePayload(JSON.stringify({
+      results: parsed.results,
+      meta: parsed.meta || {},
+    }), false).results;
+  }
+
+  async function requestMemoryStoreRecall(request: MemoryStoreRecallRequest): Promise<MemoryResult[]> {
+    const options: Record<string, unknown> = {
+      selector: request.selector,
+      store: request.store,
+      limit: request.limit,
+      min_similarity: 0.60,
+      domain_filter: request.domain,
+    };
+    if (request.domainBoost) options.domain_boost = request.domainBoost;
+    if (request.project) options.project = request.project;
+    if (request.dateFrom) options.date_from = request.dateFrom;
+    if (request.dateTo) options.date_to = request.dateTo;
+    if (request.fast) options.fast = true;
+    const out = await datastoreBridge.recallMemoryRequest([
+      request.query,
+      JSON.stringify(options),
+    ]);
+    return parseMemoryBrokerResults(out, request.selector);
   }
 
   // -------------------------------------------------------------------------

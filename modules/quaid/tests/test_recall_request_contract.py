@@ -48,7 +48,7 @@ def test_recall_request_selector_aliases_route_to_datastores() -> None:
     assert [(route.selector, route.event_type, route.datastore_id, route.handler_store) for route in routes] == [
         ("project", RECALL_DOCS_REQUEST, "docsdb", "docs"),
         ("session_chunks", RECALL_MEMORY_REQUEST, "memorydb", "session_chunks"),
-        ("vector_basic", RECALL_MEMORY_REQUEST, "memorydb", "vector_basic"),
+        ("vector_basic", RECALL_MEMORY_REQUEST, "memorydb", "vector"),
         ("journal", RECALL_JOURNAL_REQUEST, "evolutiondb", "journal"),
         ("graph", RECALL_GRAPH_REQUEST, "memorydb", "graph"),
     ]
@@ -68,7 +68,7 @@ def test_recall_request_payload_keeps_contract_shape() -> None:
         "query": "what did I fix?",
         "limit": 7,
         "selector": "vector_technical",
-        "store": "vector_technical",
+        "store": "vector",
         "datastore_id": "memorydb",
         "options": {"domain": {"technical": True}},
     }
@@ -83,6 +83,15 @@ def test_project_selector_round_trips_as_requested_selector() -> None:
     assert route.handler_store == "docs"
     assert payload["selector"] == "project"
     assert payload["store"] == "docs"
+
+
+def test_memory_selectors_share_vector_handler_store_but_remain_distinct() -> None:
+    routes = resolve_recall_request_routes(["vector_basic", "vector_technical"])
+
+    assert [(route.selector, route.handler_store) for route in routes] == [
+        ("vector_basic", "vector"),
+        ("vector_technical", "vector"),
+    ]
 
 
 def test_recall_request_contract_rejects_unknown_or_empty_selectors() -> None:

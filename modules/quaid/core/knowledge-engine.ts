@@ -63,6 +63,19 @@ export type ProjectStoreRecallRequest = {
   dateTo?: string;
 };
 
+export type MemoryStoreRecallRequest = {
+  query: string;
+  limit: number;
+  selector: "vector_basic" | "vector_technical";
+  store: "vector";
+  domain: DomainFilter;
+  domainBoost?: Record<string, number> | string[];
+  project?: string;
+  dateFrom?: string;
+  dateTo?: string;
+  fast?: boolean;
+};
+
 export type RoutedRecallPlan = {
   query: string;
   datastores: KnowledgeDatastore[];
@@ -84,6 +97,7 @@ type KnowledgeEngineDeps<TMemoryResult extends { text: string; similarity: numbe
   ) => Promise<TMemoryResult[]>;
   recallJournalStore?: (query: string, limit: number) => Promise<TMemoryResult[]>;
   requestProjectStoreRecall?: (request: ProjectStoreRecallRequest) => Promise<TMemoryResult[]>;
+  requestMemoryStoreRecall?: (request: MemoryStoreRecallRequest) => Promise<TMemoryResult[]>;
   /** Returns resolved command registry entries for tool hint routing. */
   getCommandRegistry?: () => Array<{ id: string; description: string; hint: string }>;
   /** Optional structured trace emitter for diagnostics (e.g. writeHookTrace). */
@@ -605,6 +619,27 @@ ${projectHints}
     });
   }
 
+  async function recallFromMemorySelectorStore(
+    selector: "vector_basic" | "vector_technical",
+    ctx: StoreRecallContext,
+  ): Promise<TMemoryResult[]> {
+    if (!deps.requestMemoryStoreRecall) {
+      throw new Error("memory recall broker request handler is not configured");
+    }
+    return deps.requestMemoryStoreRecall({
+      query: ctx.query,
+      limit: ctx.limit,
+      selector,
+      store: "vector",
+      domain: ctx.opts.domain || getDefaultDomainForKnowledgeDatastore(selector),
+      domainBoost: ctx.opts.domainBoost,
+      project: ctx.opts.project,
+      dateFrom: ctx.opts.dateFrom,
+      dateTo: ctx.opts.dateTo,
+      fast: ctx.opts.fast,
+    });
+  }
+
   async function _executeStores(query: string, limit: number, opts: TotalRecallOptions): Promise<TMemoryResult[]> {
     const datastores = normalizeKnowledgeDatastores(opts.datastores, opts.expandGraph);
     const all: TMemoryResult[] = [];
@@ -626,11 +661,11 @@ ${projectHints}
       },
       vector_basic: {
         key: "vector_basic",
-        recall: async (ctx) => deps.recallMemory(ctx.query, ctx.limit, { stores: ["vector_basic"], domain: ctx.opts.domain || getDefaultDomainForKnowledgeDatastore("vector_basic"), domainBoost: ctx.opts.domainBoost, project: ctx.opts.project, dateFrom: ctx.opts.dateFrom, dateTo: ctx.opts.dateTo, fast: ctx.opts.fast }),
+        recall: async (ctx) => recallFromMemorySelectorStore("vector_basic", ctx),
       },
       vector_technical: {
         key: "vector_technical",
-        recall: async (ctx) => deps.recallMemory(ctx.query, ctx.limit, { stores: ["vector_technical"], domain: ctx.opts.domain || getDefaultDomainForKnowledgeDatastore("vector_technical"), domainBoost: ctx.opts.domainBoost, project: ctx.opts.project, dateFrom: ctx.opts.dateFrom, dateTo: ctx.opts.dateTo, fast: ctx.opts.fast }),
+        recall: async (ctx) => recallFromMemorySelectorStore("vector_technical", ctx),
       },
       graph: {
         key: "graph",

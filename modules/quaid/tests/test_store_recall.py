@@ -14517,6 +14517,53 @@ class TestRecallLimitEdgeCases:
         assert payload["results"][0]["category"] == "preference"
         assert payload["meta"]["counts"]["final_results"] == 1
 
+    def test_cli_vector_broker_request_round_trips_memory_selector(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+        import core.runtime.events as events
+        from lib.adapter import TestAdapter, reset_adapter, set_adapter
+
+        captured = {}
+
+        def _fake_recall(query, return_meta=False, **kwargs):
+            captured["query"] = query
+            captured["return_meta"] = return_meta
+            captured["kwargs"] = kwargs
+            return (
+                [
+                    {
+                        "text": "Personal selector routes through vector handler",
+                        "category": "fact",
+                        "similarity": 0.92,
+                    }
+                ],
+                {"selected_path": "vector"},
+            )
+
+        set_adapter(TestAdapter(tmp_path))
+        try:
+            with events._REQUEST_EVENT_HANDLERS_LOCK:
+                events._REQUEST_EVENT_HANDLERS.clear()
+            with patch.object(mg, "recall", side_effect=_fake_recall):
+                result = mg._request_cli_vector_recall_via_broker(
+                    "personal preference",
+                    {"limit": 2, "domain": {"personal": True}},
+                    selector="vector_basic",
+                    store="vector",
+                )
+        finally:
+            with events._REQUEST_EVENT_HANDLERS_LOCK:
+                events._REQUEST_EVENT_HANDLERS.clear()
+            reset_adapter()
+
+        assert result["selector"] == "vector_basic"
+        assert result["store"] == "vector"
+        assert result["results"][0]["text"] == "Personal selector routes through vector handler"
+        assert captured == {
+            "query": "personal preference",
+            "return_meta": True,
+            "kwargs": {"limit": 2, "domain": {"personal": True}},
+        }
+
     def test_cli_vector_broker_text_shape_uses_existing_renderer(self, capsys):
         import datastore.memorydb.memory_graph as mg
 
@@ -14565,7 +14612,6 @@ class TestRecallLimitEdgeCases:
                 ("project", "docs"),
                 ("unknown", "vector"),
                 ("vector", "memorydb"),
-                ("vector_basic", "vector"),
             ):
                 result = mg._handle_cli_vector_recall_request(
                     {
@@ -14578,17 +14624,19 @@ class TestRecallLimitEdgeCases:
                     }
                 )
                 assert result["status"] == "nacked"
-                assert "selector/store vector" in result["error"]
+                assert "store vector" in result["error"]
 
-    def test_cli_vector_handler_accepts_exact_vector_selector_only(self):
+    def test_cli_vector_handler_accepts_vector_backed_selectors(self):
         import datastore.memorydb.memory_graph as mg
 
-        captured = {}
+        captured = []
 
         def _fake_recall(query, return_meta=False, **kwargs):
-            captured["query"] = query
-            captured["return_meta"] = return_meta
-            captured["kwargs"] = kwargs
+            captured.append({
+                "query": query,
+                "return_meta": return_meta,
+                "kwargs": kwargs,
+            })
             return (
                 [
                     {
@@ -14601,27 +14649,32 @@ class TestRecallLimitEdgeCases:
             )
 
         with patch.object(mg, "recall", side_effect=_fake_recall):
-            result = mg._handle_cli_vector_recall_request(
-                {
-                    "payload": {
-                        "query": "vector only",
-                        "selector": "vector",
-                        "store": "vector",
-                        "options": {"recall_kwargs": {"limit": 2}},
+            for selector, recall_kwargs in (
+                ("vector", {"limit": 2}),
+                ("vector_basic", {"limit": 3, "domain": {"personal": True}}),
+                ("vector_technical", {"limit": 4, "domain": {"technical": True}}),
+            ):
+                result = mg._handle_cli_vector_recall_request(
+                    {
+                        "payload": {
+                            "query": f"{selector} only",
+                            "selector": selector,
+                            "store": "vector",
+                            "options": {"recall_kwargs": recall_kwargs},
+                        }
                     }
-                }
-            )
+                )
+                assert result["status"] == "ok"
+                assert result["selector"] == selector
+                assert result["store"] == "vector"
+                assert result["results"][0]["text"] == "Exact vector selector works"
+                assert result["meta"] == {"selected_path": "vector"}
 
-        assert result["status"] == "ok"
-        assert result["selector"] == "vector"
-        assert result["store"] == "vector"
-        assert result["results"][0]["text"] == "Exact vector selector works"
-        assert result["meta"] == {"selected_path": "vector"}
-        assert captured == {
-            "query": "vector only",
-            "return_meta": True,
-            "kwargs": {"limit": 2},
-        }
+        assert captured == [
+            {"query": "vector only", "return_meta": True, "kwargs": {"limit": 2}},
+            {"query": "vector_basic only", "return_meta": True, "kwargs": {"limit": 3, "domain": {"personal": True}}},
+            {"query": "vector_technical only", "return_meta": True, "kwargs": {"limit": 4, "domain": {"technical": True}}},
+        ]
 
     def test_cli_vector_broker_nack_response_respects_fail_hard(self, monkeypatch, tmp_path):
         import datastore.memorydb.memory_graph as mg
@@ -14633,7 +14686,7 @@ class TestRecallLimitEdgeCases:
         )
         from lib.adapter import TestAdapter, reset_adapter, set_adapter
 
-        route = resolve_recall_request_routes(["vector_basic"])[0]
+        route = resolve_recall_request_routes(["session_chunks"])[0]
         payload = build_recall_request_payload(
             query="what grinder do I use",
             route=route,
@@ -14656,8 +14709,8 @@ class TestRecallLimitEdgeCases:
                 )
                 assert response["status"] == "failed"
                 assert response["responses"][0]["status"] == "nacked"
-                assert "selector/store vector" in response["responses"][0]["result"]["error"]
-                with pytest.raises(RuntimeError, match="selector/store vector"):
+                assert "store vector" in response["responses"][0]["result"]["error"]
+                with pytest.raises(RuntimeError, match="store vector"):
                     mg._validate_cli_vector_broker_response(response)
 
                 monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: True)
