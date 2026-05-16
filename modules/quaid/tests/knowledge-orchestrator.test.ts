@@ -583,6 +583,47 @@ describe("knowledge orchestrator", () => {
     );
   });
 
+  it("keeps vector_basic and vector_technical on direct memory descriptors with default domains", async () => {
+    const recallMemory = vi.fn(async () => []);
+    const engine = createKnowledgeEngine<Result>({
+      workspace: "/tmp",
+      getMemoryConfig: () => ({}),
+      isSystemEnabled: () => false,
+      callFastRouter: vi.fn(async () => '{"datastores":["vector_basic"]}'),
+      recallMemory,
+    });
+
+    await engine.recall("personal preference", 3, {
+      datastores: ["vector_basic"],
+      expandGraph: false,
+      graphDepth: 1,
+    });
+    await engine.recall("api limit", 3, {
+      datastores: ["vector_technical"],
+      expandGraph: false,
+      graphDepth: 1,
+    });
+
+    expect(recallMemory).toHaveBeenNthCalledWith(
+      1,
+      "personal preference",
+      3,
+      expect.objectContaining({
+        stores: ["vector_basic"],
+        domain: { personal: true },
+      }),
+    );
+    expect(recallMemory).toHaveBeenNthCalledWith(
+      2,
+      "api limit",
+      3,
+      expect.objectContaining({
+        stores: ["vector_technical"],
+        domain: { technical: true },
+      }),
+    );
+  });
+
   it("runs session_chunks only when explicitly requested and preserves chunk metadata", async () => {
     const recallMemory = vi.fn(async () => [
       {
