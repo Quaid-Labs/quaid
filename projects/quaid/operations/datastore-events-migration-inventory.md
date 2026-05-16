@@ -1,6 +1,6 @@
 # Datastore Events Migration Inventory
 
-Status: M0 approved; M1 broker facade tracked in `datastore-events-m1-broker-facade.md`; M2 manifest registry tracked in `datastore-events-m2-manifest-registry.md`; M3 lean-contract direction tracked in `datastore-events-m3-contract-design.md`
+Status: M0 approved; M1 broker facade tracked in `datastore-events-m1-broker-facade.md`; M2 manifest registry tracked in `datastore-events-m2-manifest-registry.md`; M3 lean-contract direction tracked in `datastore-events-m3-contract-design.md`; M4 recall request contract tracked in `datastore-events-m4-recall-request-contract.md`
 Owner: W1 runtime/datastore
 Plan source: `~/quaidcode/util/docs/datastore-events-migration-plan.md`
 Branch strategy: local branch `datastore-refactor-m0` from dev HEAD. Alpha/user bugs interrupt this branch; public push/release stays with W8 and requires operator approval.
@@ -209,7 +209,7 @@ TypeScript:
 - `core/knowledge-stores.ts` is now the central TS knowledge-store registry for recall router guidance, routable keys, defaults, and compatibility alias normalization.
 - `core/facade.ts` still has hardcoded recall bridge store sets and alias handling, including `vector`, `vector_basic`, `vector_technical`, `graph`, `project`, and `session_chunks`.
 - `core/facade.ts` still maps `project` to bridge-side `docs` and normalizes legacy vector aliases into domain filters.
-- Catalog inconsistency to resolve before M6: `core/knowledge-stores.ts` registers `journal` as routable and default for graph-expanded recall, but `core/facade.ts` `bridgeOnlyStores` does not include `journal`. Today this means some explicit bridge-only paths do not treat `journal` as bridge-routable even though the knowledge registry can route to it through the knowledge engine.
+- M4 adds request-contract metadata for `journal` as `recall.journal.request.v1` under `evolutiondb`. Runtime facade routing is still unchanged: `core/facade.ts` `bridgeOnlyStores` does not include `journal`, so some explicit bridge-only paths do not treat `journal` as bridge-routable even though the knowledge registry can route to it through the knowledge engine. Resolve the runtime side before M6 behavior activation.
 
 Python:
 

@@ -250,6 +250,11 @@ class EvolutionDbDatastoreContract(DatastoreContractBase):
     datastore_id = "evolutiondb"
     handler_specs = (
         DatastoreHandlerSpec(
+            "recall.journal.request.v1",
+            REQUEST,
+            ("core.facade recallFromJournal / datastore.notedb.soul_snippets journal files",),
+        ),
+        DatastoreHandlerSpec(
             "datastore.validate.request.v1",
             REQUEST,
             ("datastore.notedb.soul_snippets maintenance validation",),

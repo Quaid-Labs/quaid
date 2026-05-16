@@ -126,6 +126,46 @@ EVENT_REGISTRY: List[Dict[str, Any]] = [
         "listenable": True,
         "delivery_mode": "active",
     },
+    {
+        "name": "recall.memory.request.v1",
+        "description": "Request memory/fact/session recall candidates from a manifested datastore.",
+        "fireable": True,
+        "processable": False,
+        "listenable": True,
+        "delivery_mode": "request",
+    },
+    {
+        "name": "recall.graph.request.v1",
+        "description": "Request graph traversal recall candidates from a manifested datastore.",
+        "fireable": True,
+        "processable": False,
+        "listenable": True,
+        "delivery_mode": "request",
+    },
+    {
+        "name": "recall.docs.request.v1",
+        "description": "Request document recall candidates from a manifested datastore.",
+        "fireable": True,
+        "processable": False,
+        "listenable": True,
+        "delivery_mode": "request",
+    },
+    {
+        "name": "recall.project_context.request.v1",
+        "description": "Request project-scoped context from a manifested datastore.",
+        "fireable": True,
+        "processable": False,
+        "listenable": True,
+        "delivery_mode": "request",
+    },
+    {
+        "name": "recall.journal.request.v1",
+        "description": "Request journal/evolution recall candidates from a manifested datastore.",
+        "fireable": True,
+        "processable": False,
+        "listenable": True,
+        "delivery_mode": "request",
+    },
 ]
 
 _EVENT_NAME_ALIASES: Dict[str, str] = {

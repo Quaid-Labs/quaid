@@ -63,7 +63,7 @@ FIRST_PARTY_DATASTORE_MANIFESTS: List[Dict[str, Any]] = [
         "schema_version": DATASTORE_MANIFEST_SCHEMA_VERSION,
         "capabilities": {
             "stores": ["facts", "edges", "source_chunks", "session_evidence", "archive"],
-            "recall": ["vector", "graph", "temporal", "session_chunks"],
+            "recall": ["vector", "vector_basic", "vector_technical", "graph", "temporal", "session_chunks"],
             "writes": ["facts", "edges", "source_chunks", "session_chunks"],
             "validate": True,
             "explain": True,
@@ -95,7 +95,7 @@ FIRST_PARTY_DATASTORE_MANIFESTS: List[Dict[str, Any]] = [
         "schema_version": DATASTORE_MANIFEST_SCHEMA_VERSION,
         "capabilities": {
             "stores": ["documents", "project_logs", "project_registry"],
-            "recall": ["docs", "project_context"],
+            "recall": ["docs", "project", "project_context"],
             "writes": ["documents", "project_logs", "registry_rows"],
             "validate": True,
             "explain": True,
@@ -137,6 +137,7 @@ FIRST_PARTY_DATASTORE_MANIFESTS: List[Dict[str, Any]] = [
         },
         "accepted_events": [],
         "request_handlers": [
+            "recall.journal.request.v1",
             "datastore.validate.request.v1",
             "datastore.explain.request.v1",
             "maintenance.run.request.v1",
