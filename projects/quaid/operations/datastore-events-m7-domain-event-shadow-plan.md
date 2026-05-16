@@ -1,6 +1,6 @@
 # Datastore Events M7 Domain Event Shadow Plan
 
-Status: implementation submitted; pending W6/W8/W4 validation
+Status: M7 implemented and validated
 Owner: W1 runtime/datastore
 Plan source: `~/quaidcode/util/docs/datastore-events-migration-plan.md`
 
@@ -15,7 +15,9 @@ Do not implement this milestone until:
 3. W6 reviews and approves the implementation patch before runtime code lands.
 4. W8 static validation is available for the affected supervisor/docs tests.
 
-This document is planning only. It does not change runtime behavior.
+M7 runtime behavior is implemented by `a17ceb244`. The selected supervisor
+maintenance path remains direct and authoritative; the added event/listener is
+shadow-only and validated by W3/W4/W6/W8.
 
 ## M7 Goal
 
@@ -161,9 +163,9 @@ Focused tests should prove:
 
 ## Plan Review Record
 
-The M7 domain-event shadow plan is approved as a plan. Runtime implementation is
-now submitted for validation; runtime code still requires the preconditions
-above and fresh review of the implementation patch before landing.
+The M7 domain-event shadow plan is approved and implemented for the selected
+project-docs supervisor maintenance tick. Runtime validation for `a17ceb244`
+cleared W3/W4/W6/W8.
 
 Reviewed plan commit:
 
@@ -210,11 +212,34 @@ Closed guard tests:
 
 Remaining future behavior-slice coverage:
 
-- W6 implementation review of the finalized event name, event payload, and
-  shadow-only listener boundary
-- W8 static validation for the event and supervisor tests
-- W4 smoke proving supervisor docs maintenance still works and shadow traces are
-  present in the installed runtime
+- M8 must remove the selected direct write path only after preserving the M7
+  event payload and shadow parity fields.
+- Any change that affects docs recall/search, docs indexing cadence,
+  project-doc row metadata, or project-doc worker behavior still requires fresh
+  W3 review.
+
+## Implementation Validation Record
+
+Validated implementation commit:
+
+- `a17ceb244` adds `docs.project_maintenance_observed`, emits it from
+  `core/project_docs_supervisor.py` after the direct auto-register/stale-index
+  calls, and routes the event to a DocsDB shadow listener that records
+  `shadow_intent` without performing writes or indexing.
+
+Validation status:
+
+- W3 confirmed no docs recall/search or recall-visible indexing behavior changed.
+- W4 smoke passed on the R201 VM (`192.168.64.230`): docs update/apply still
+  indexed docs, stale docs still indexed through the existing direct path,
+  supervisor-emitted events landed in `.runtime/events/queue.json`, the
+  correct-source shadow handler returned `status=processed`, invalid-source
+  failHard raised loudly, and supervisor-sourced events did not fail.
+- W6 approved the finalized event name, payload, shadow-only listener boundary,
+  direct-call authority, failHard behavior, and scope.
+- W8 static validation passed: `git show --check/stat`, Solomon
+  author/committer, diff-check, py_compile, event/supervisor/project-docs
+  tests, ruff, and docs consistency.
 
 ## W4 Smoke After Code
 
