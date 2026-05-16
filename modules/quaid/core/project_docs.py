@@ -1399,6 +1399,96 @@ def refresh_docs_rag_once(project: Optional[str] = None) -> Dict[str, Any]:
     return {"registered": registered, "indexed_one": bool(indexed)}
 
 
+def _validate_project_docs_update_broker_response(response: Any) -> Dict[str, Any]:
+    if not isinstance(response, dict):
+        raise RuntimeError(f"project-docs update broker response must be an object, got {type(response).__name__}")
+    if str(response.get("status") or "") != "ok":
+        error = str(response.get("error") or "project-docs update broker request failed")
+        responses = response.get("responses")
+        if isinstance(responses, list) and len(responses) == 1 and isinstance(responses[0], dict):
+            result_payload = responses[0].get("result")
+            if isinstance(result_payload, dict) and result_payload.get("error"):
+                error = str(result_payload.get("error"))
+            elif responses[0].get("error"):
+                error = str(responses[0].get("error"))
+        raise RuntimeError(error)
+    responses = response.get("responses")
+    if not isinstance(responses, list) or len(responses) != 1:
+        raise RuntimeError("project-docs update broker response must contain exactly one handler response")
+    handler_response = responses[0]
+    if not isinstance(handler_response, dict):
+        raise RuntimeError("project-docs update broker handler response must be an object")
+    if str(handler_response.get("datastore_id") or "") != "docsdb":
+        raise RuntimeError("project-docs update broker handler must be docsdb")
+    if str(handler_response.get("status") or "") not in {"ok", "acked"}:
+        result_payload = handler_response.get("result")
+        result_error = result_payload.get("error") if isinstance(result_payload, dict) else None
+        raise RuntimeError(str(handler_response.get("error") or result_error or "project-docs update broker handler failed"))
+    result = handler_response.get("result")
+    if not isinstance(result, dict):
+        raise RuntimeError("project-docs update broker handler result must be an object")
+    metrics = result.get("metrics")
+    if not isinstance(metrics, dict):
+        raise RuntimeError("project-docs update broker result.metrics must be an object")
+    registry_sync = result.get("registry_sync")
+    if not isinstance(registry_sync, dict):
+        raise RuntimeError("project-docs update broker result.registry_sync must be an object")
+    try:
+        indexed_docs = int(result.get("indexed_docs") or 0)
+        indexed_project_logs = int(result.get("indexed_project_logs") or 0)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("project-docs update broker indexed counts must be integers") from exc
+    return {
+        "metrics": dict(metrics),
+        "registry_sync": {
+            "registered": int(registry_sync.get("registered") or 0),
+            "unregistered": int(registry_sync.get("unregistered") or 0),
+            "project_md_refreshed": int(registry_sync.get("project_md_refreshed") or 0),
+        },
+        "indexed_docs": indexed_docs,
+        "indexed_project_logs": indexed_project_logs,
+    }
+
+
+def _request_project_docs_update_via_broker(
+    project: str,
+    *,
+    snapshots: List[Dict[str, Any]],
+    project_log_entries: List[str],
+    project_log_offset: int,
+    request: Optional[Dict[str, Any]],
+    dry_run: bool,
+) -> Dict[str, Any]:
+    from core.plugins.docsdb_contract import register_project_docs_update_request_handler
+    from core.runtime.events import DOCS_PROJECT_UPDATE_REQUEST_EVENT, request_broker_event
+
+    register_project_docs_update_request_handler()
+    try:
+        response = request_broker_event(
+            DOCS_PROJECT_UPDATE_REQUEST_EVENT,
+            {
+                "source": WORKER_ROLE,
+                "project": project,
+                "request_id": str((request or {}).get("request_id") or ""),
+                "dry_run": bool(dry_run),
+                "snapshots": list(snapshots or []),
+                "project_log_entries": list(project_log_entries or []),
+                "project_log_offset": int(project_log_offset),
+                "request": dict(request or {}),
+            },
+            source="core.project_docs.execute_update_once",
+            project_id=project,
+            provenance={
+                "replacement": "core.project_docs.execute_update_once direct project-doc apply/index operation",
+            },
+        )
+    except RuntimeError as exc:
+        if exc.__cause__ is not None:
+            raise RuntimeError(str(exc.__cause__)) from exc.__cause__
+        raise
+    return _validate_project_docs_update_broker_response(response)
+
+
 def _notify_project_docs_update(
     project: str,
     result: Dict[str, Any],
@@ -1481,10 +1571,8 @@ def execute_update_once(project: str, *, request: Optional[Dict[str, Any]] = Non
                 registry_sync: Dict[str, int] = {"registered": 0, "unregistered": 0, "project_md_refreshed": 0}
                 index_count = 0
                 project_log_index_count = 0
-                from core.docs_updater_hook import update_project_docs
-                from core.docs import updater as docs_updater
-
-                if snapshots or log_entries or request:
+                should_apply_docs = bool(snapshots or log_entries or request)
+                if should_apply_docs:
                     merge_progress(
                         name,
                         "update_docs",
@@ -1493,34 +1581,23 @@ def execute_update_once(project: str, *, request: Optional[Dict[str, Any]] = Non
                         project_log_entries=len(log_entries),
                         request_id=request_id,
                     )
-                    metrics = update_project_docs(
-                        snapshots,
-                        extraction_result={"project_logs": {name: log_entries}},
-                        dry_run=dry_run,
-                        force_project=name,
-                    )
+                if not dry_run and not should_apply_docs:
+                    merge_progress(name, "index_docs", "indexing registered project docs")
+                broker_result = _request_project_docs_update_via_broker(
+                    name,
+                    snapshots=snapshots,
+                    project_log_entries=log_entries,
+                    project_log_offset=log_offset,
+                    request=request,
+                    dry_run=dry_run,
+                )
+                metrics = broker_result["metrics"]
                 if project_log_queue_metrics.get("errors"):
                     metrics["errors"] = int(metrics.get("errors", 0) or 0) + int(project_log_queue_metrics.get("errors", 0) or 0)
                 metrics["project_log_queue"] = project_log_queue_metrics
-                if not dry_run:
-                    merge_progress(name, "sync_registry", "syncing visible project docs registry")
-                    registry_sync = sync_project_docs_registry(name, entry)
-                    try:
-                        merge_progress(name, "index_docs", "indexing registered project docs")
-                        index_count = int(
-                            docs_updater.update_registered_docs(
-                                project=name,
-                                dry_run=False,
-                                protected_names={PROJECT_LOG},
-                                index_project_logs_after=False,
-                            ) or 0
-                        )
-                        project_log_index_count = int(docs_updater.index_project_logs(project=name) or 0)
-                    except Exception as exc:
-                        if _fail_hard_enabled():
-                            raise
-                        metrics["errors"] = int(metrics.get("errors", 0) or 0) + 1
-                        metrics["index_error"] = str(exc)
+                registry_sync = broker_result["registry_sync"]
+                index_count = int(broker_result["indexed_docs"] or 0)
+                project_log_index_count = int(broker_result["indexed_project_logs"] or 0)
             completed = utc_now()
             next_state = {
                 "status": "fresh" if not metrics.get("errors") else "error",

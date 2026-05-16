@@ -244,6 +244,11 @@ class DocsDbDatastoreContract(DatastoreContractBase):
             ("core.project_docs_supervisor worker reconciliation inputs",),
         ),
         DatastoreHandlerSpec(
+            "docs.project_update.request.v1",
+            REQUEST,
+            ("core.project_docs.execute_update_once apply/index operation",),
+        ),
+        DatastoreHandlerSpec(
             "maintenance.run.request.v1",
             REQUEST,
             ("core.plugins.docsdb_contract.run_project_docs_monitor_maintenance",),

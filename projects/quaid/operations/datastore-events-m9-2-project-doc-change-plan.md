@@ -1,6 +1,6 @@
 # Datastore Events M9.2 Project Doc Change Plan
 
-Status: plan approved; pre-implementation guards in progress
+Status: implementation patch in progress; validation pending
 Owner: W1 runtime/datastore
 Plan source: `projects/quaid/operations/datastore-events-m9-monitor-migration-plan.md`
 
@@ -41,6 +41,18 @@ Pre-implementation guard commits:
   `status=error`, preserves `metrics.index_error`, leaves indexed counts at
   zero, skips project-log indexing after registered-doc failure, and failHard
   re-raises without fallback.
+
+Implementation candidate:
+
+- Adds `docs.project_update.request.v1` as a DocsDB request handler for the
+  selected project-doc worker apply/index operation.
+- `execute_update_once()` keeps worker-owned locks, request retention,
+  project-log queue commits, snapshot/cursor reads, state writes, progress, and
+  notices, then requests DocsDB authority for docs update, visible-doc registry
+  sync, registered-doc indexing, and project-log indexing.
+- The replaced direct worker apply/index calls are removed from the selected
+  path. There is no fallback from broker failure back to those direct calls.
+- Validation remains pending until W3/W4/W6/W8 approve the runtime patch.
 
 ## M9.2 Goal
 

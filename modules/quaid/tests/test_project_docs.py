@@ -499,8 +499,12 @@ def test_execute_update_once_snapshots_applies_indexes_and_advances_cursors(proj
         calls.append("update_docs")
         return {"projects_checked": 1, "docs_updated": 1, "docs_skipped": 0, "trivial_skipped": 0, "errors": 0}
 
-    def _sync_registry(project, entry_arg=None):
+    def _sync_registry(project, canonical_path, *, root_docs, protected_names):
         calls.append("sync_registry")
+        assert project == "demo"
+        assert canonical_path == str(Path(entry["canonical_path"]))
+        assert root_docs == {"PROJECT.md", "TOOLS.md", "AGENTS.md"}
+        assert protected_names == {"PROJECT.log"}
         return {"registered": 3, "unregistered": 1, "project_md_refreshed": 1}
 
     def _update_registered_docs(*args, **kwargs):
@@ -512,7 +516,8 @@ def test_execute_update_once_snapshots_applies_indexes_and_advances_cursors(proj
         return 1
 
     with patch("core.docs_updater_hook.update_project_docs", side_effect=_update_project_docs) as update_docs, \
-         patch("core.project_docs.sync_project_docs_registry", side_effect=_sync_registry) as sync_registry, \
+         patch("core.project_docs.sync_project_docs_registry", side_effect=AssertionError("worker direct registry sync should use DocsDB broker")), \
+         patch("core.docs.updater.sync_project_visible_docs", side_effect=_sync_registry) as sync_registry, \
          patch("core.docs.updater.update_registered_docs", side_effect=_update_registered_docs) as update_registered, \
          patch("core.docs.updater.index_project_logs", side_effect=_index_project_logs) as index_project_logs:
         result = project_docs.execute_update_once("demo", request=request)
@@ -525,7 +530,7 @@ def test_execute_update_once_snapshots_applies_indexes_and_advances_cursors(proj
     update_docs.assert_called_once()
     assert update_docs.call_args.kwargs["force_project"] == "demo"
     assert update_docs.call_args.kwargs["extraction_result"]["project_logs"]["demo"]
-    sync_registry.assert_called_once_with("demo", entry)
+    sync_registry.assert_called_once()
     update_registered.assert_called_once_with(
         project="demo",
         dry_run=False,
@@ -556,10 +561,13 @@ def test_execute_update_once_index_failure_respects_fail_policy(project_env):
         raise RuntimeError("index boom")
 
     with patch("core.docs_updater_hook.update_project_docs", return_value={"projects_checked": 1, "docs_updated": 1, "docs_skipped": 0, "trivial_skipped": 0, "errors": 0}), \
-         patch("core.project_docs.sync_project_docs_registry", return_value={"registered": 1, "unregistered": 0, "project_md_refreshed": 1}), \
+         patch("core.project_docs.sync_project_docs_registry", side_effect=AssertionError("worker direct registry sync should use DocsDB broker")), \
+         patch("core.docs.updater.sync_project_visible_docs", return_value={"registered": 1, "unregistered": 0, "project_md_refreshed": 1}), \
          patch("core.docs.updater.update_registered_docs", side_effect=_fail_index), \
          patch("core.docs.updater.index_project_logs", side_effect=AssertionError("project-log indexing should not run after registered-doc failure")), \
-         patch("core.project_docs._fail_hard_enabled", return_value=False):
+         patch("core.project_docs._fail_hard_enabled", return_value=False), \
+         patch("core.plugins.docsdb_contract._fail_hard_enabled", return_value=False), \
+         patch("core.runtime.events._is_fail_hard_enabled", return_value=False):
         result = project_docs.execute_update_once("demo")
 
     assert result["status"] == "error"
@@ -573,16 +581,65 @@ def test_execute_update_once_index_failure_respects_fail_policy(project_env):
     assert "index boom" in state["last_error"]
 
     with patch("core.docs_updater_hook.update_project_docs", return_value={"projects_checked": 1, "docs_updated": 1, "docs_skipped": 0, "trivial_skipped": 0, "errors": 0}), \
-         patch("core.project_docs.sync_project_docs_registry", return_value={"registered": 1, "unregistered": 0, "project_md_refreshed": 1}), \
+         patch("core.project_docs.sync_project_docs_registry", side_effect=AssertionError("worker direct registry sync should use DocsDB broker")), \
+         patch("core.docs.updater.sync_project_visible_docs", return_value={"registered": 1, "unregistered": 0, "project_md_refreshed": 1}), \
          patch("core.docs.updater.update_registered_docs", side_effect=RuntimeError("failhard index boom")), \
          patch("core.docs.updater.index_project_logs", side_effect=AssertionError("project-log indexing should not run after failHard registered-doc failure")), \
-         patch("core.project_docs._fail_hard_enabled", return_value=True):
+         patch("core.project_docs._fail_hard_enabled", return_value=True), \
+         patch("core.plugins.docsdb_contract._fail_hard_enabled", return_value=True), \
+         patch("core.runtime.events._is_fail_hard_enabled", return_value=True):
         with pytest.raises(RuntimeError, match="failhard index boom"):
             project_docs.execute_update_once("demo")
 
     state = project_docs.read_state("demo")
     assert state["status"] == "error"
     assert state["last_error"] == "failhard index boom"
+
+
+def test_execute_update_once_dry_run_skips_registry_and_index(project_env):
+    _tmp_path, src, _entry = project_env
+    from core import project_docs
+
+    (src / "tool.py").write_text("print('dry run')\n", encoding="utf-8")
+    request = project_docs.request_update("demo", reason="dry-run-test", requested_by="pytest")
+    calls: list[object] = []
+
+    def _update_project_docs(snapshots, *, extraction_result, dry_run, force_project):
+        calls.append(("update_docs", dry_run, force_project, bool(snapshots), bool(extraction_result["project_logs"]["demo"])))
+        return {"projects_checked": 1, "docs_updated": 1, "docs_skipped": 0, "trivial_skipped": 0, "errors": 0}
+
+    with patch("core.docs_updater_hook.update_project_docs", side_effect=_update_project_docs), \
+         patch("core.docs.updater.sync_project_visible_docs", side_effect=AssertionError("dry-run must not sync docs registry")), \
+         patch("core.docs.updater.update_registered_docs", side_effect=AssertionError("dry-run must not index registered docs")), \
+         patch("core.docs.updater.index_project_logs", side_effect=AssertionError("dry-run must not index project logs")):
+        result = project_docs.execute_update_once("demo", request=request, dry_run=True)
+
+    assert result["status"] == "fresh"
+    assert result["registry_sync"] == {"registered": 0, "unregistered": 0, "project_md_refreshed": 0}
+    assert result["indexed_docs"] == 0
+    assert result["indexed_project_logs"] == 0
+    assert calls == [("update_docs", True, "demo", True, False)]
+    assert project_docs.request_path("demo").exists()
+
+
+def test_execute_update_once_broker_failure_has_no_direct_fallback(project_env):
+    _tmp_path, src, _entry = project_env
+    from core import project_docs
+
+    (src / "tool.py").write_text("print('broker failure')\n", encoding="utf-8")
+
+    with patch("core.plugins.docsdb_contract.register_project_docs_update_request_handler"), \
+         patch("core.runtime.events.request_broker_event", return_value={"status": "failed", "error": "synthetic broker failure"}), \
+         patch("core.docs_updater_hook.update_project_docs", side_effect=AssertionError("worker must not fall back to direct docs update")), \
+         patch("core.project_docs.sync_project_docs_registry", side_effect=AssertionError("worker must not fall back to direct registry sync")), \
+         patch("core.docs.updater.update_registered_docs", side_effect=AssertionError("worker must not fall back to direct registered-doc indexing")), \
+         patch("core.docs.updater.index_project_logs", side_effect=AssertionError("worker must not fall back to direct project-log indexing")):
+        with pytest.raises(RuntimeError, match="synthetic broker failure"):
+            project_docs.execute_update_once("demo")
+
+    state = project_docs.read_state("demo")
+    assert state["status"] == "error"
+    assert state["last_error"] == "synthetic broker failure"
 
 
 def test_project_status_reports_pending_project_log_queue(project_env):

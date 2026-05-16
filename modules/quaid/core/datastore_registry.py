@@ -109,6 +109,7 @@ FIRST_PARTY_DATASTORE_MANIFESTS: List[Dict[str, Any]] = [
             "datastore.validate.request.v1",
             "datastore.explain.request.v1",
             "project.worker_specs.request.v1",
+            "docs.project_update.request.v1",
             "maintenance.run.request.v1",
         ],
         "produced_events": [],

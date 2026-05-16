@@ -36,6 +36,7 @@ HISTORY_TRIM_TARGET_BYTES = 2 * 1024 * 1024
 EVENT_ENVELOPE_SCHEMA_VERSION = 1
 EVENT_CLASSES = {"domain", "request"}
 DOCS_PROJECT_MAINTENANCE_OBSERVED_EVENT = "docs.project_maintenance_observed"
+DOCS_PROJECT_UPDATE_REQUEST_EVENT = "docs.project_update.request.v1"
 
 EVENT_REGISTRY: List[Dict[str, Any]] = [
     {
@@ -195,6 +196,14 @@ EVENT_REGISTRY: List[Dict[str, Any]] = [
     {
         "name": "project.worker_specs.request.v1",
         "description": "Request project worker specifications from manifested datastore policy.",
+        "fireable": True,
+        "processable": False,
+        "listenable": True,
+        "delivery_mode": "request",
+    },
+    {
+        "name": DOCS_PROJECT_UPDATE_REQUEST_EVENT,
+        "description": "Request DocsDB-owned project-doc apply/index work for the project-doc worker.",
         "fireable": True,
         "processable": False,
         "listenable": True,

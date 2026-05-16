@@ -236,6 +236,104 @@ def _index_one_stale_registered_doc_via_docsdb(project: Optional[str] = None) ->
     return bool(docs_updater.index_one_stale_registered_doc(project=project))
 
 
+def _empty_project_update_metrics() -> Dict[str, Any]:
+    return {
+        "projects_checked": 0,
+        "docs_updated": 0,
+        "docs_skipped": 0,
+        "trivial_skipped": 0,
+        "errors": 0,
+    }
+
+
+def handle_project_docs_update_request(event: Dict[str, Any]) -> Dict[str, Any]:
+    """Handle project-doc worker apply/index work through DocsDB authority."""
+    payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+    source = str(payload.get("source") or "").strip()
+    if source != "project-docs-worker":
+        return {"status": "failed", "error": "payload.source must be project-docs-worker"}
+    try:
+        project = _validate_project_name(payload.get("project"))
+    except Exception as exc:
+        return {"status": "failed", "error": str(exc)}
+
+    snapshots = payload.get("snapshots")
+    if snapshots is None:
+        snapshots = []
+    if not isinstance(snapshots, list):
+        return {"status": "failed", "error": "payload.snapshots must be a list"}
+    project_log_entries = payload.get("project_log_entries")
+    if project_log_entries is None:
+        project_log_entries = []
+    if not isinstance(project_log_entries, list):
+        return {"status": "failed", "error": "payload.project_log_entries must be a list"}
+    request = payload.get("request")
+    if request is None:
+        request = {}
+    if not isinstance(request, dict):
+        return {"status": "failed", "error": "payload.request must be an object"}
+
+    metrics = _empty_project_update_metrics()
+    registry_sync: Dict[str, int] = {"registered": 0, "unregistered": 0, "project_md_refreshed": 0}
+    indexed_docs = 0
+    indexed_project_logs = 0
+    dry_run = bool(payload.get("dry_run", False))
+
+    from core.docs import updater as docs_updater
+    from core.docs_updater_hook import update_project_docs
+    from core.project_registry import get_project, get_project_raw
+
+    if snapshots or project_log_entries or request:
+        metrics = update_project_docs(
+            list(snapshots),
+            extraction_result={"project_logs": {project: list(project_log_entries)}},
+            dry_run=dry_run,
+            force_project=project,
+        )
+
+    if not dry_run:
+        entry = get_project_raw(project) or get_project(project)
+        if not entry:
+            raise KeyError(f"Project not found: {project}")
+        registry_sync = _sync_visible_project_docs_registry(project, dict(entry))
+        try:
+            from core.project_docs import PROJECT_LOG
+
+            indexed_docs = int(
+                docs_updater.update_registered_docs(
+                    project=project,
+                    dry_run=False,
+                    protected_names={PROJECT_LOG},
+                    index_project_logs_after=False,
+                ) or 0
+            )
+            indexed_project_logs = int(docs_updater.index_project_logs(project=project) or 0)
+        except Exception as exc:
+            if _fail_hard_enabled():
+                raise
+            metrics["errors"] = int(metrics.get("errors", 0) or 0) + 1
+            metrics["index_error"] = str(exc)
+
+    return {
+        "status": "ok",
+        "metrics": metrics,
+        "registry_sync": registry_sync,
+        "indexed_docs": indexed_docs,
+        "indexed_project_logs": indexed_project_logs,
+    }
+
+
+def register_project_docs_update_request_handler() -> None:
+    from core.runtime.events import DOCS_PROJECT_UPDATE_REQUEST_EVENT, register_request_handler
+
+    register_request_handler(
+        DOCS_PROJECT_UPDATE_REQUEST_EVENT,
+        handle_project_docs_update_request,
+        datastore_id="docsdb",
+        force=True,
+    )
+
+
 def handle_project_docs_maintenance_event(event: Dict[str, Any]) -> Dict[str, Any]:
     """Handle supervisor docs-maintenance event through DocsDB authority."""
     payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}

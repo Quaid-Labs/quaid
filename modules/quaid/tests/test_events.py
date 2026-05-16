@@ -7,6 +7,7 @@ import pytest
 from core.runtime.events import (
     EVENT_HANDLERS,
     DOCS_PROJECT_MAINTENANCE_OBSERVED_EVENT,
+    DOCS_PROJECT_UPDATE_REQUEST_EVENT,
     dispatch_broker_events,
     emit_broker_event,
     emit_event,
@@ -727,6 +728,104 @@ def test_event_project_docs_listener_stale_index_failure_respects_fail_hard(monk
         dispatch_broker_events(limit=5, names=[DOCS_PROJECT_MAINTENANCE_OBSERVED_EVENT])
 
     assert calls == ["sync", "index"]
+
+
+def test_request_project_docs_update_runs_authoritative_handler(monkeypatch, tmp_path):
+    set_adapter(TestAdapter(tmp_path))
+    from core.plugins.docsdb_contract import register_project_docs_update_request_handler
+
+    calls: list[object] = []
+    project_root = tmp_path / "demo"
+    project_root.mkdir()
+    monkeypatch.setattr("core.project_registry.get_project_raw", lambda project: {"canonical_path": str(project_root)})
+    monkeypatch.setattr("core.project_registry.get_project", lambda project: (_ for _ in ()).throw(AssertionError("raw project should be enough")))
+    monkeypatch.setattr(
+        "core.docs_updater_hook.update_project_docs",
+        lambda snapshots, *, extraction_result, dry_run, force_project: (
+            calls.append(("update", snapshots, extraction_result, dry_run, force_project))
+            or {"projects_checked": 1, "docs_updated": 2, "docs_skipped": 0, "trivial_skipped": 0, "errors": 0}
+        ),
+    )
+    monkeypatch.setattr(
+        "core.docs.updater.sync_project_visible_docs",
+        lambda project, canonical_path, *, root_docs, protected_names: (
+            calls.append(("sync", project, canonical_path, sorted(root_docs), sorted(protected_names)))
+            or {"registered": 3, "unregistered": 1, "project_md_refreshed": 1}
+        ),
+    )
+    monkeypatch.setattr(
+        "core.docs.updater.update_registered_docs",
+        lambda **kwargs: calls.append(("index_docs", kwargs)) or 4,
+    )
+    monkeypatch.setattr(
+        "core.docs.updater.index_project_logs",
+        lambda *, project: calls.append(("index_logs", project)) or 5,
+    )
+
+    register_project_docs_update_request_handler()
+    response = request_broker_event(
+        DOCS_PROJECT_UPDATE_REQUEST_EVENT,
+        {
+            "source": "project-docs-worker",
+            "project": "Demo",
+            "request_id": "req-1",
+            "dry_run": False,
+            "snapshots": [{"project": "demo", "changes": [{"path": "tool.py"}]}],
+            "project_log_entries": ["- changed"],
+            "project_log_offset": 12,
+            "request": {"request_id": "req-1"},
+        },
+        source="pytest",
+    )
+
+    assert response["status"] == "ok"
+    result = response["responses"][0]["result"]
+    assert calls == [
+        (
+            "update",
+            [{"project": "demo", "changes": [{"path": "tool.py"}]}],
+            {"project_logs": {"demo": ["- changed"]}},
+            False,
+            "demo",
+        ),
+        ("sync", "demo", str(project_root), ["AGENTS.md", "PROJECT.md", "TOOLS.md"], ["PROJECT.log"]),
+        (
+            "index_docs",
+            {
+                "project": "demo",
+                "dry_run": False,
+                "protected_names": {"PROJECT.log"},
+                "index_project_logs_after": False,
+            },
+        ),
+        ("index_logs", "demo"),
+    ]
+    assert result["metrics"]["docs_updated"] == 2
+    assert result["registry_sync"] == {"registered": 3, "unregistered": 1, "project_md_refreshed": 1}
+    assert result["indexed_docs"] == 4
+    assert result["indexed_project_logs"] == 5
+
+
+def test_request_project_docs_update_rejects_wrong_source(monkeypatch, tmp_path):
+    set_adapter(TestAdapter(tmp_path))
+    import core.runtime.events as events
+    from core.plugins.docsdb_contract import register_project_docs_update_request_handler
+
+    monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: False)
+    monkeypatch.setattr(
+        "core.docs_updater_hook.update_project_docs",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("wrong-source request must not update docs")),
+    )
+
+    register_project_docs_update_request_handler()
+    response = request_broker_event(
+        DOCS_PROJECT_UPDATE_REQUEST_EVENT,
+        {"source": "pytest", "project": "demo"},
+        source="pytest",
+    )
+
+    assert response["status"] == "failed"
+    assert response["responses"][0]["result"]["error"] == "payload.source must be project-docs-worker"
 
 
 def test_event_process_docs_project_maintenance_observed_validation_respects_fail_hard(monkeypatch, tmp_path):
