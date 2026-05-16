@@ -1,6 +1,6 @@
 # Datastore Events M2 Manifest Registry
 
-Status: initial M2 slice
+Status: implemented; static first-party manifest registry available
 Owner: W1 runtime/datastore
 Plan source: `~/quaidcode/util/docs/datastore-events-migration-plan.md`
 
@@ -49,7 +49,7 @@ Registered first-party datastore ids:
 
 Reason: the original migration plan covers memory/docs/evolution first. SessionDB is durable and has a CLI namespace, but today it participates through `core.services.session_memory_bridge` as internal transcript/provenance plumbing. Adding it as a first-party manifest would widen M2 before request-event routing and capability ownership are proven.
 
-Revisit before M4/M6 when request-event recall capability routing starts to distinguish datastore implementation ids from user-facing store/capability names such as `session_chunks`.
+Revisit in a dedicated sessiondb/source-window slice. M4/M6 separated request-event recall capability selectors from datastore implementation ids without adding `sessiondb` as a first-party manifest.
 
 ## Manifest Fields
 

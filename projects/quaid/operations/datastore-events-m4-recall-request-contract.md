@@ -1,6 +1,6 @@
 # Datastore Events M4 Recall Request Contract
 
-Status: initial M4 contract slice
+Status: implemented; request contract and synchronous fanin available, behavior activation remains per-slice
 Owner: W1 runtime/datastore, with W3 recall-quality review before behavior activation
 Plan source: `~/quaidcode/util/docs/datastore-events-migration-plan.md`
 

@@ -1,6 +1,6 @@
 # Datastore Events M1 Broker Facade
 
-Status: initial M1 slice
+Status: implemented; broker facade available, producer migration deferred to later milestones
 Owner: W1 runtime/datastore
 Plan source: `~/quaidcode/util/docs/datastore-events-migration-plan.md`
 

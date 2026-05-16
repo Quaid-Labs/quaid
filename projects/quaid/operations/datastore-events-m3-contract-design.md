@@ -1,6 +1,6 @@
 # Datastore Events M3 Contract Design
 
-Status: pre-implementation direction
+Status: implemented; contract surface defined but inactive until per-path activation milestones
 Owner: W1 runtime/datastore
 Plan source: `~/quaidcode/util/docs/datastore-events-migration-plan.md`
 
