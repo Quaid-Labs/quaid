@@ -54,18 +54,15 @@ def _fail_hard_enabled() -> bool:
     return bool(is_fail_hard_enabled())
 
 
-def _emit_project_docs_maintenance_shadow_event(
+def _emit_project_docs_maintenance_event(
     *,
     observed_at: float,
     auto_register_interval: float,
     stale_doc_interval: float,
-    auto_register_ran: bool,
-    stale_index_ran: bool,
-    registered: int | None,
-    indexed_one: bool | None,
-    errors: list[dict[str, str]],
+    auto_register_requested: bool,
+    stale_index_requested: bool,
 ) -> None:
-    if not auto_register_ran and not stale_index_ran:
+    if not auto_register_requested and not stale_index_requested:
         return
     payload = {
         "project": None,
@@ -74,12 +71,9 @@ def _emit_project_docs_maintenance_shadow_event(
         "tick_kind": "auto_register_and_stale_index",
         "auto_register_interval_seconds": float(auto_register_interval),
         "stale_index_interval_seconds": float(stale_doc_interval),
-        "direct_result": {
-            "auto_register_ran": bool(auto_register_ran),
-            "stale_index_ran": bool(stale_index_ran),
-            "registered": registered,
-            "indexed_one": indexed_one,
-            "errors": list(errors),
+        "requested_operations": {
+            "auto_register": bool(auto_register_requested),
+            "stale_index": bool(stale_index_requested),
         },
         "dry_run": False,
     }
@@ -96,15 +90,18 @@ def _emit_project_docs_maintenance_shadow_event(
             source="project-docs-supervisor",
         )
         dispatched = dispatch_broker_events(limit=20, names=[DOCS_PROJECT_MAINTENANCE_OBSERVED_EVENT])
-        if int(dispatched.get("failed") or 0) > 0:
-            logging.getLogger(__name__).warning(
-                "project docs maintenance shadow listener failed: %s",
-                dispatched,
-            )
     except Exception as exc:
-        logging.getLogger(__name__).warning("project docs maintenance shadow event failed: %s", exc)
+        logging.getLogger(__name__).warning("project docs maintenance event failed: %s", exc)
         if _fail_hard_enabled():
             raise
+        return
+    if int(dispatched.get("failed") or 0) > 0:
+        logging.getLogger(__name__).warning(
+            "project docs maintenance listener failed: %s",
+            dispatched,
+        )
+        if _fail_hard_enabled():
+            raise RuntimeError(f"project docs maintenance listener failed: {dispatched}")
 
 
 def _pid_alive(pid: int) -> bool:
@@ -721,44 +718,20 @@ def run_supervisor(*, once: bool = False, interval_seconds: float | None = None)
             except Exception:
                 pass
             known_workers.pop(project, None)
-        auto_register_ran = False
-        stale_index_ran = False
-        registered: int | None = None
-        indexed_one: bool | None = None
-        docs_tick_errors: list[dict[str, str]] = []
+        auto_register_requested = False
+        stale_index_requested = False
         if not _dispatcher_only_mode() and now - last_auto_register_check > auto_register_interval:
-            auto_register_ran = True
-            try:
-                registered = int(project_docs.auto_register_project_docs() or 0)
-            except Exception as exc:
-                import logging
-
-                logging.getLogger(__name__).warning("project docs auto-register tick failed: %s", exc)
-                docs_tick_errors.append({"tick": "auto_register", "error": str(exc)})
-                if _fail_hard_enabled():
-                    raise
+            auto_register_requested = True
             last_auto_register_check = now
         if not _dispatcher_only_mode() and now - last_stale_doc_check > stale_doc_interval:
-            stale_index_ran = True
-            try:
-                indexed_one = bool(project_docs.index_one_stale_registered_doc())
-            except Exception as exc:
-                import logging
-
-                logging.getLogger(__name__).warning("project docs stale-index tick failed: %s", exc)
-                docs_tick_errors.append({"tick": "stale_index", "error": str(exc)})
-                if _fail_hard_enabled():
-                    raise
+            stale_index_requested = True
             last_stale_doc_check = now
-        _emit_project_docs_maintenance_shadow_event(
+        _emit_project_docs_maintenance_event(
             observed_at=now,
             auto_register_interval=auto_register_interval,
             stale_doc_interval=stale_doc_interval,
-            auto_register_ran=auto_register_ran,
-            stale_index_ran=stale_index_ran,
-            registered=registered,
-            indexed_one=indexed_one,
-            errors=docs_tick_errors,
+            auto_register_requested=auto_register_requested,
+            stale_index_requested=stale_index_requested,
         )
         if once:
             return 0

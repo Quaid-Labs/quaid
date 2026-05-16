@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import types
 
 import pytest
 
@@ -20,6 +21,22 @@ def _write_janitor_checkpoint(tmp_path, instance_id: str, status: str = "complet
     checkpoint = tmp_path / "instances" / instance_id / "logs" / "janitor" / "checkpoint-all.json"
     checkpoint.parent.mkdir(parents=True, exist_ok=True)
     checkpoint.write_text(json.dumps({"status": status}), encoding="utf-8")
+
+
+def _install_authoritative_docs_tick_supervisor_proxy(monkeypatch, supervisor) -> None:
+    proxy = types.SimpleNamespace(
+        write_supervisor_pid=lambda _token: None,
+        clear_supervisor_pid_for_current_process=lambda: None,
+        reap_child_processes=lambda: 0,
+        worker_stale_after_seconds=lambda _interval: 30.0,
+        auto_register_project_docs=lambda: (_ for _ in ()).throw(
+            AssertionError("supervisor must not call auto-register directly")
+        ),
+        index_one_stale_registered_doc=lambda: (_ for _ in ()).throw(
+            AssertionError("supervisor must not call stale-index directly")
+        ),
+    )
+    monkeypatch.setattr(supervisor, "project_docs", proxy)
 
 
 def test_supervisor_tick_starts_instance_monitors_and_janitor_workers(monkeypatch):
@@ -127,127 +144,7 @@ def test_supervisor_without_instance_skips_docs_ticks_and_uses_raw_project_listi
     assert calls == ["raw"]
 
 
-def test_supervisor_docs_tick_failure_continues_when_not_failhard(monkeypatch, caplog):
-    from core import project_docs_supervisor as supervisor
-
-    calls: list[str] = []
-
-    def fail_register():
-        calls.append("register")
-        raise RuntimeError("register boom")
-
-    monkeypatch.setenv("QUAID_INSTANCE", "pytest-runner")
-    monkeypatch.delenv("QUAID_SUPERVISOR_BOOT", raising=False)
-    monkeypatch.setattr(supervisor.project_docs, "write_supervisor_pid", lambda _token: None)
-    monkeypatch.setattr(supervisor.project_docs, "clear_supervisor_pid_for_current_process", lambda: None)
-    monkeypatch.setattr(supervisor.project_docs, "reap_child_processes", lambda: 0)
-    monkeypatch.setattr(supervisor.project_docs, "worker_stale_after_seconds", lambda _interval: 30.0)
-    monkeypatch.setattr(supervisor.project_docs, "auto_register_project_docs", fail_register)
-    monkeypatch.setattr(supervisor.project_docs, "index_one_stale_registered_doc", lambda: calls.append("index") or True)
-    monkeypatch.setattr(supervisor, "_fail_hard_enabled", lambda: False)
-    monkeypatch.setattr(supervisor, "_maintain_instance_monitors", lambda _known: None)
-    monkeypatch.setattr(supervisor, "_maintain_on_demand_janitor_request", lambda *args: None)
-    monkeypatch.setattr(supervisor, "_maintain_janitor_workers", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(supervisor, "_supervisor_projects", lambda: {})
-    monkeypatch.setattr(supervisor, "_interval_from_env", lambda _name, _default: 0.5)
-
-    assert supervisor.run_supervisor(once=True, interval_seconds=0.5) == 0
-
-    assert calls == ["register", "index"]
-    assert "project docs auto-register tick failed: register boom" in caplog.text
-
-
-def test_supervisor_docs_tick_failure_raises_when_failhard(monkeypatch):
-    from core import project_docs_supervisor as supervisor
-
-    calls: list[str] = []
-
-    def fail_register():
-        calls.append("register")
-        raise RuntimeError("register boom")
-
-    monkeypatch.setenv("QUAID_INSTANCE", "pytest-runner")
-    monkeypatch.delenv("QUAID_SUPERVISOR_BOOT", raising=False)
-    monkeypatch.setattr(supervisor.project_docs, "write_supervisor_pid", lambda _token: None)
-    monkeypatch.setattr(supervisor.project_docs, "clear_supervisor_pid_for_current_process", lambda: None)
-    monkeypatch.setattr(supervisor.project_docs, "reap_child_processes", lambda: 0)
-    monkeypatch.setattr(supervisor.project_docs, "worker_stale_after_seconds", lambda _interval: 30.0)
-    monkeypatch.setattr(supervisor.project_docs, "auto_register_project_docs", fail_register)
-    monkeypatch.setattr(supervisor.project_docs, "index_one_stale_registered_doc", lambda: calls.append("index") or True)
-    monkeypatch.setattr(supervisor, "_fail_hard_enabled", lambda: True)
-    monkeypatch.setattr(supervisor, "_maintain_instance_monitors", lambda _known: None)
-    monkeypatch.setattr(supervisor, "_maintain_on_demand_janitor_request", lambda *args: None)
-    monkeypatch.setattr(supervisor, "_maintain_janitor_workers", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(supervisor, "_supervisor_projects", lambda: {})
-    monkeypatch.setattr(supervisor, "_interval_from_env", lambda _name, _default: 0.5)
-
-    with pytest.raises(RuntimeError, match="register boom"):
-        supervisor.run_supervisor(once=True, interval_seconds=0.5)
-
-    assert calls == ["register"]
-
-
-def test_supervisor_stale_docs_tick_failure_continues_when_not_failhard(monkeypatch, caplog):
-    from core import project_docs_supervisor as supervisor
-
-    calls: list[str] = []
-
-    def fail_index():
-        calls.append("index")
-        raise RuntimeError("index boom")
-
-    monkeypatch.setenv("QUAID_INSTANCE", "pytest-runner")
-    monkeypatch.delenv("QUAID_SUPERVISOR_BOOT", raising=False)
-    monkeypatch.setattr(supervisor.project_docs, "write_supervisor_pid", lambda _token: None)
-    monkeypatch.setattr(supervisor.project_docs, "clear_supervisor_pid_for_current_process", lambda: None)
-    monkeypatch.setattr(supervisor.project_docs, "reap_child_processes", lambda: 0)
-    monkeypatch.setattr(supervisor.project_docs, "worker_stale_after_seconds", lambda _interval: 30.0)
-    monkeypatch.setattr(supervisor.project_docs, "auto_register_project_docs", lambda: calls.append("register"))
-    monkeypatch.setattr(supervisor.project_docs, "index_one_stale_registered_doc", fail_index)
-    monkeypatch.setattr(supervisor, "_fail_hard_enabled", lambda: False)
-    monkeypatch.setattr(supervisor, "_maintain_instance_monitors", lambda _known: None)
-    monkeypatch.setattr(supervisor, "_maintain_on_demand_janitor_request", lambda *args: None)
-    monkeypatch.setattr(supervisor, "_maintain_janitor_workers", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(supervisor, "_supervisor_projects", lambda: {})
-    monkeypatch.setattr(supervisor, "_interval_from_env", lambda _name, _default: 0.5)
-
-    assert supervisor.run_supervisor(once=True, interval_seconds=0.5) == 0
-
-    assert calls == ["register", "index"]
-    assert "project docs stale-index tick failed: index boom" in caplog.text
-
-
-def test_supervisor_stale_docs_tick_failure_raises_when_failhard(monkeypatch):
-    from core import project_docs_supervisor as supervisor
-
-    calls: list[str] = []
-
-    def fail_index():
-        calls.append("index")
-        raise RuntimeError("index boom")
-
-    monkeypatch.setenv("QUAID_INSTANCE", "pytest-runner")
-    monkeypatch.delenv("QUAID_SUPERVISOR_BOOT", raising=False)
-    monkeypatch.setattr(supervisor.project_docs, "write_supervisor_pid", lambda _token: None)
-    monkeypatch.setattr(supervisor.project_docs, "clear_supervisor_pid_for_current_process", lambda: None)
-    monkeypatch.setattr(supervisor.project_docs, "reap_child_processes", lambda: 0)
-    monkeypatch.setattr(supervisor.project_docs, "worker_stale_after_seconds", lambda _interval: 30.0)
-    monkeypatch.setattr(supervisor.project_docs, "auto_register_project_docs", lambda: calls.append("register"))
-    monkeypatch.setattr(supervisor.project_docs, "index_one_stale_registered_doc", fail_index)
-    monkeypatch.setattr(supervisor, "_fail_hard_enabled", lambda: True)
-    monkeypatch.setattr(supervisor, "_maintain_instance_monitors", lambda _known: None)
-    monkeypatch.setattr(supervisor, "_maintain_on_demand_janitor_request", lambda *args: None)
-    monkeypatch.setattr(supervisor, "_maintain_janitor_workers", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(supervisor, "_supervisor_projects", lambda: {})
-    monkeypatch.setattr(supervisor, "_interval_from_env", lambda _name, _default: 0.5)
-
-    with pytest.raises(RuntimeError, match="index boom"):
-        supervisor.run_supervisor(once=True, interval_seconds=0.5)
-
-    assert calls == ["register", "index"]
-
-
-def test_supervisor_docs_tick_emits_shadow_event_after_direct_calls(monkeypatch, tmp_path):
+def test_supervisor_docs_tick_routes_authoritative_listener_without_direct_calls(monkeypatch, tmp_path):
     from core import project_docs_supervisor as supervisor
     from core.runtime.events import DOCS_PROJECT_MAINTENANCE_OBSERVED_EVENT
     from core.runtime.paths import get_runtime_root
@@ -260,12 +157,9 @@ def test_supervisor_docs_tick_emits_shadow_event_after_direct_calls(monkeypatch,
     adapter = TestAdapter(tmp_path)
     set_adapter(adapter)
     try:
-        monkeypatch.setattr(supervisor.project_docs, "write_supervisor_pid", lambda _token: None)
-        monkeypatch.setattr(supervisor.project_docs, "clear_supervisor_pid_for_current_process", lambda: None)
-        monkeypatch.setattr(supervisor.project_docs, "reap_child_processes", lambda: 0)
-        monkeypatch.setattr(supervisor.project_docs, "worker_stale_after_seconds", lambda _interval: 30.0)
-        monkeypatch.setattr(supervisor.project_docs, "auto_register_project_docs", lambda: calls.append("register") or 2)
-        monkeypatch.setattr(supervisor.project_docs, "index_one_stale_registered_doc", lambda: calls.append("index") or True)
+        monkeypatch.setattr("core.project_docs.auto_register_project_docs", lambda: calls.append("register") or 2)
+        monkeypatch.setattr("core.project_docs.index_one_stale_registered_doc", lambda: calls.append("index") or True)
+        _install_authoritative_docs_tick_supervisor_proxy(monkeypatch, supervisor)
         monkeypatch.setattr(supervisor, "_fail_hard_enabled", lambda: True)
         monkeypatch.setattr(supervisor, "_maintain_instance_monitors", lambda _known: None)
         monkeypatch.setattr(supervisor, "_maintain_on_demand_janitor_request", lambda *args: None)
@@ -280,30 +174,21 @@ def test_supervisor_docs_tick_emits_shadow_event_after_direct_calls(monkeypatch,
         queued = json.loads(queue_path.read_text(encoding="utf-8")).get("events") or []
         event = next(item for item in queued if item.get("name") == DOCS_PROJECT_MAINTENANCE_OBSERVED_EVENT)
         assert event["status"] == "processed"
-        assert event["payload"]["direct_result"]["registered"] == 2
-        assert event["payload"]["direct_result"]["indexed_one"] is True
-        assert event["result"]["shadow_intent"]["would_handle"] == [
-            "auto_register_project_docs",
-            "index_one_stale_registered_doc",
-        ]
+        assert event["payload"]["requested_operations"] == {"auto_register": True, "stale_index": True}
+        assert event["result"]["listener_result"]["mode"] == "authoritative"
+        assert event["result"]["listener_result"]["direct_result"]["registered"] == 2
+        assert event["result"]["listener_result"]["direct_result"]["indexed_one"] is True
     finally:
         reset_adapter()
 
 
-def test_supervisor_docs_shadow_failure_logs_when_not_failhard(monkeypatch, caplog):
+def test_supervisor_docs_listener_failure_logs_when_not_failhard(monkeypatch, caplog):
     from core import project_docs_supervisor as supervisor
     from core.runtime import events
 
-    calls: list[str] = []
-
     monkeypatch.setenv("QUAID_INSTANCE", "pytest-runner")
     monkeypatch.delenv("QUAID_SUPERVISOR_BOOT", raising=False)
-    monkeypatch.setattr(supervisor.project_docs, "write_supervisor_pid", lambda _token: None)
-    monkeypatch.setattr(supervisor.project_docs, "clear_supervisor_pid_for_current_process", lambda: None)
-    monkeypatch.setattr(supervisor.project_docs, "reap_child_processes", lambda: 0)
-    monkeypatch.setattr(supervisor.project_docs, "worker_stale_after_seconds", lambda _interval: 30.0)
-    monkeypatch.setattr(supervisor.project_docs, "auto_register_project_docs", lambda: calls.append("register") or 2)
-    monkeypatch.setattr(supervisor.project_docs, "index_one_stale_registered_doc", lambda: calls.append("index") or True)
+    _install_authoritative_docs_tick_supervisor_proxy(monkeypatch, supervisor)
     monkeypatch.setattr(supervisor, "_fail_hard_enabled", lambda: False)
     monkeypatch.setattr(supervisor, "_maintain_instance_monitors", lambda _known: None)
     monkeypatch.setattr(supervisor, "_maintain_on_demand_janitor_request", lambda *args: None)
@@ -316,27 +201,16 @@ def test_supervisor_docs_shadow_failure_logs_when_not_failhard(monkeypatch, capl
     with caplog.at_level("WARNING"):
         assert supervisor.run_supervisor(once=True, interval_seconds=0.5) == 0
 
-    assert calls == ["register", "index"]
-    assert "project docs maintenance shadow listener failed" in caplog.text
+    assert "project docs maintenance listener failed" in caplog.text
 
 
-def test_supervisor_docs_shadow_failure_raises_when_failhard(monkeypatch):
+def test_supervisor_docs_listener_failure_raises_when_failhard(monkeypatch):
     from core import project_docs_supervisor as supervisor
     from core.runtime import events
 
-    calls: list[str] = []
-
-    def fail_shadow(*_args, **_kwargs):
-        raise RuntimeError("shadow boom")
-
     monkeypatch.setenv("QUAID_INSTANCE", "pytest-runner")
     monkeypatch.delenv("QUAID_SUPERVISOR_BOOT", raising=False)
-    monkeypatch.setattr(supervisor.project_docs, "write_supervisor_pid", lambda _token: None)
-    monkeypatch.setattr(supervisor.project_docs, "clear_supervisor_pid_for_current_process", lambda: None)
-    monkeypatch.setattr(supervisor.project_docs, "reap_child_processes", lambda: 0)
-    monkeypatch.setattr(supervisor.project_docs, "worker_stale_after_seconds", lambda _interval: 30.0)
-    monkeypatch.setattr(supervisor.project_docs, "auto_register_project_docs", lambda: calls.append("register") or 2)
-    monkeypatch.setattr(supervisor.project_docs, "index_one_stale_registered_doc", lambda: calls.append("index") or True)
+    _install_authoritative_docs_tick_supervisor_proxy(monkeypatch, supervisor)
     monkeypatch.setattr(supervisor, "_fail_hard_enabled", lambda: True)
     monkeypatch.setattr(supervisor, "_maintain_instance_monitors", lambda _known: None)
     monkeypatch.setattr(supervisor, "_maintain_on_demand_janitor_request", lambda *args: None)
@@ -344,12 +218,10 @@ def test_supervisor_docs_shadow_failure_raises_when_failhard(monkeypatch):
     monkeypatch.setattr(supervisor, "_supervisor_projects", lambda: {})
     monkeypatch.setattr(supervisor, "_interval_from_env", lambda _name, _default: 0.5)
     monkeypatch.setattr(events, "emit_broker_event", lambda *args, **kwargs: {})
-    monkeypatch.setattr(events, "dispatch_broker_events", fail_shadow)
+    monkeypatch.setattr(events, "dispatch_broker_events", lambda *args, **kwargs: {"failed": 1})
 
-    with pytest.raises(RuntimeError, match="shadow boom"):
+    with pytest.raises(RuntimeError, match="project docs maintenance listener failed"):
         supervisor.run_supervisor(once=True, interval_seconds=0.5)
-
-    assert calls == ["register", "index"]
 
 
 def test_supervisor_stops_removed_instance_monitor(monkeypatch):

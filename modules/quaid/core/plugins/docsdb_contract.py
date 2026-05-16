@@ -144,38 +144,65 @@ def run_project_docs_monitor_maintenance(ctx: Any, result_factory: Any) -> Any:
     return result
 
 
-def handle_project_docs_maintenance_shadow_event(event: Dict[str, Any]) -> Dict[str, Any]:
-    """Record shadow intent for the supervisor docs-maintenance domain event."""
+def handle_project_docs_maintenance_event(event: Dict[str, Any]) -> Dict[str, Any]:
+    """Handle supervisor docs-maintenance event through DocsDB authority."""
     payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
     source = str(payload.get("source") or "").strip()
     tick_kind = str(payload.get("tick_kind") or "").strip()
     observed_at = str(payload.get("observed_at") or "").strip()
-    direct_result = payload.get("direct_result")
+    requested_operations = payload.get("requested_operations")
     if source != "project-docs-supervisor":
         return {"status": "failed", "error": "payload.source must be project-docs-supervisor"}
     if tick_kind != "auto_register_and_stale_index":
         return {"status": "failed", "error": "payload.tick_kind must be auto_register_and_stale_index"}
     if not observed_at:
         return {"status": "failed", "error": "payload.observed_at is required"}
-    if not isinstance(direct_result, dict):
-        return {"status": "failed", "error": "payload.direct_result must be an object"}
+    if not isinstance(requested_operations, dict):
+        return {"status": "failed", "error": "payload.requested_operations must be an object"}
 
-    auto_register_ran = bool(direct_result.get("auto_register_ran", False))
-    stale_index_ran = bool(direct_result.get("stale_index_ran", False))
-    would_handle: list[str] = []
-    if auto_register_ran:
-        would_handle.append("auto_register_project_docs")
-    if stale_index_ran:
-        would_handle.append("index_one_stale_registered_doc")
-    shadow_intent = {
-        "mode": "shadow",
-        "datastore_id": "docsdb",
-        "project": payload.get("project"),
-        "observed_at": observed_at,
-        "would_handle": would_handle,
-        "direct_result": direct_result,
+    auto_register_requested = bool(requested_operations.get("auto_register", False))
+    stale_index_requested = bool(requested_operations.get("stale_index", False))
+    direct_result: Dict[str, Any] = {
+        "auto_register_ran": auto_register_requested,
+        "stale_index_ran": stale_index_requested,
+        "registered": None,
+        "indexed_one": None,
+        "errors": [],
     }
-    return {"status": "processed", "shadow_intent": shadow_intent}
+    from core import project_docs
+
+    def _listener_result() -> Dict[str, Any]:
+        return {
+            "mode": "authoritative",
+            "datastore_id": "docsdb",
+            "project": payload.get("project"),
+            "observed_at": observed_at,
+            "direct_result": direct_result,
+        }
+
+    try:
+        if auto_register_requested:
+            direct_result["registered"] = int(project_docs.auto_register_project_docs() or 0)
+    except Exception as exc:
+        logger.warning("project docs auto-register listener failed: %s", exc)
+        direct_result["errors"].append({"tick": "auto_register", "error": str(exc)})
+        if _fail_hard_enabled():
+            return {"status": "failed", "error": str(exc), "listener_result": _listener_result()}
+
+    try:
+        if stale_index_requested:
+            direct_result["indexed_one"] = bool(project_docs.index_one_stale_registered_doc())
+    except Exception as exc:
+        logger.warning("project docs stale-index listener failed: %s", exc)
+        direct_result["errors"].append({"tick": "stale_index", "error": str(exc)})
+        if _fail_hard_enabled():
+            return {"status": "failed", "error": str(exc), "listener_result": _listener_result()}
+
+    listener_result = _listener_result()
+    if direct_result["errors"]:
+        error = "; ".join(str(item.get("error") or "") for item in direct_result["errors"])
+        return {"status": "failed", "error": error, "listener_result": listener_result}
+    return {"status": "processed", "listener_result": listener_result}
 
 
 def _ensure_project_workspace_dirs(ctx: PluginHookContext) -> None:

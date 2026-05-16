@@ -623,9 +623,9 @@ def _handle_docs_ingest_transcript(event: Event) -> Dict[str, Any]:
 
 
 def _handle_docs_project_maintenance_observed(event: Event) -> Dict[str, Any]:
-    from core.plugins.docsdb_contract import handle_project_docs_maintenance_shadow_event
+    from core.plugins.docsdb_contract import handle_project_docs_maintenance_event
 
-    return handle_project_docs_maintenance_shadow_event(event)
+    return handle_project_docs_maintenance_event(event)
 
 
 def _handle_session_ingest_log(event: Event) -> Dict[str, Any]:

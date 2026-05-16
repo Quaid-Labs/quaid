@@ -410,18 +410,7 @@ def test_event_process_docs_ingest_transcript(monkeypatch, tmp_path):
     assert called["session_id"] == "sess-1"
 
 
-def test_event_process_docs_project_maintenance_observed_records_shadow_intent(monkeypatch, tmp_path):
-    adapter = TestAdapter(tmp_path); set_adapter(adapter); iroot = adapter.instance_root()
-
-    monkeypatch.setattr(
-        "core.project_docs.auto_register_project_docs",
-        lambda: (_ for _ in ()).throw(AssertionError("shadow listener must not auto-register")),
-    )
-    monkeypatch.setattr(
-        "core.project_docs.index_one_stale_registered_doc",
-        lambda: (_ for _ in ()).throw(AssertionError("shadow listener must not index docs")),
-    )
-
+def _emit_docs_project_maintenance_observed_event() -> None:
     emit_broker_event(
         DOCS_PROJECT_MAINTENANCE_OBSERVED_EVENT,
         payload={
@@ -431,17 +420,21 @@ def test_event_process_docs_project_maintenance_observed_records_shadow_intent(m
             "tick_kind": "auto_register_and_stale_index",
             "auto_register_interval_seconds": 300.0,
             "stale_index_interval_seconds": 60.0,
-            "direct_result": {
-                "auto_register_ran": True,
-                "stale_index_ran": True,
-                "registered": 2,
-                "indexed_one": True,
-                "errors": [],
-            },
+            "requested_operations": {"auto_register": True, "stale_index": True},
             "dry_run": False,
         },
         source="pytest",
     )
+
+
+def test_event_process_docs_project_maintenance_observed_runs_authoritative_listener(monkeypatch, tmp_path):
+    adapter = TestAdapter(tmp_path); set_adapter(adapter); iroot = adapter.instance_root()
+
+    calls: list[str] = []
+    monkeypatch.setattr("core.project_docs.auto_register_project_docs", lambda: calls.append("register") or 2)
+    monkeypatch.setattr("core.project_docs.index_one_stale_registered_doc", lambda: calls.append("index") or True)
+
+    _emit_docs_project_maintenance_observed_event()
 
     out = dispatch_broker_events(limit=5, names=[DOCS_PROJECT_MAINTENANCE_OBSERVED_EVENT])
     assert out["processed"] == 1
@@ -450,15 +443,124 @@ def test_event_process_docs_project_maintenance_observed_records_shadow_intent(m
     queue_path = get_runtime_root(iroot) / "events" / "queue.json"
     queued = json.loads(queue_path.read_text(encoding="utf-8")).get("events") or []
     event = next(item for item in queued if item.get("name") == DOCS_PROJECT_MAINTENANCE_OBSERVED_EVENT)
-    intent = event["result"]["shadow_intent"]
-    assert intent["mode"] == "shadow"
-    assert intent["datastore_id"] == "docsdb"
-    assert intent["would_handle"] == [
-        "auto_register_project_docs",
-        "index_one_stale_registered_doc",
-    ]
-    assert intent["direct_result"]["registered"] == 2
-    assert intent["direct_result"]["indexed_one"] is True
+    result = event["result"]["listener_result"]
+    assert calls == ["register", "index"]
+    assert result["mode"] == "authoritative"
+    assert result["datastore_id"] == "docsdb"
+    assert result["direct_result"]["registered"] == 2
+    assert result["direct_result"]["indexed_one"] is True
+
+
+def test_event_project_docs_listener_auto_register_failure_respects_fail_soft(monkeypatch, tmp_path, caplog):
+    adapter = TestAdapter(tmp_path); set_adapter(adapter); iroot = adapter.instance_root()
+
+    import core.runtime.events as events
+
+    calls: list[str] = []
+
+    def fail_register():
+        calls.append("register")
+        raise RuntimeError("register boom")
+
+    monkeypatch.setattr("core.project_docs.auto_register_project_docs", fail_register)
+    monkeypatch.setattr("core.project_docs.index_one_stale_registered_doc", lambda: calls.append("index") or True)
+    monkeypatch.setattr("core.plugins.docsdb_contract._fail_hard_enabled", lambda: False)
+    monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: False)
+
+    _emit_docs_project_maintenance_observed_event()
+    with caplog.at_level("WARNING"):
+        out = dispatch_broker_events(limit=5, names=[DOCS_PROJECT_MAINTENANCE_OBSERVED_EVENT])
+
+    assert out["processed"] == 0
+    assert out["failed"] == 1
+    assert calls == ["register", "index"]
+    assert "project docs auto-register listener failed: register boom" in caplog.text
+
+    queue_path = get_runtime_root(iroot) / "events" / "queue.json"
+    queued = json.loads(queue_path.read_text(encoding="utf-8")).get("events") or []
+    event = next(item for item in queued if item.get("name") == DOCS_PROJECT_MAINTENANCE_OBSERVED_EVENT)
+    direct_result = event["result"]["listener_result"]["direct_result"]
+    assert direct_result["indexed_one"] is True
+    assert direct_result["errors"] == [{"tick": "auto_register", "error": "register boom"}]
+
+
+def test_event_project_docs_listener_auto_register_failure_respects_fail_hard(monkeypatch, tmp_path):
+    set_adapter(TestAdapter(tmp_path))
+
+    import core.runtime.events as events
+
+    calls: list[str] = []
+
+    def fail_register():
+        calls.append("register")
+        raise RuntimeError("register boom")
+
+    monkeypatch.setattr("core.project_docs.auto_register_project_docs", fail_register)
+    monkeypatch.setattr("core.project_docs.index_one_stale_registered_doc", lambda: calls.append("index") or True)
+    monkeypatch.setattr("core.plugins.docsdb_contract._fail_hard_enabled", lambda: True)
+    monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: True)
+
+    _emit_docs_project_maintenance_observed_event()
+    with pytest.raises(RuntimeError, match="register boom"):
+        dispatch_broker_events(limit=5, names=[DOCS_PROJECT_MAINTENANCE_OBSERVED_EVENT])
+
+    assert calls == ["register"]
+
+
+def test_event_project_docs_listener_stale_index_failure_respects_fail_soft(monkeypatch, tmp_path, caplog):
+    adapter = TestAdapter(tmp_path); set_adapter(adapter); iroot = adapter.instance_root()
+
+    import core.runtime.events as events
+
+    calls: list[str] = []
+
+    def fail_index():
+        calls.append("index")
+        raise RuntimeError("index boom")
+
+    monkeypatch.setattr("core.project_docs.auto_register_project_docs", lambda: calls.append("register") or 2)
+    monkeypatch.setattr("core.project_docs.index_one_stale_registered_doc", fail_index)
+    monkeypatch.setattr("core.plugins.docsdb_contract._fail_hard_enabled", lambda: False)
+    monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: False)
+
+    _emit_docs_project_maintenance_observed_event()
+    with caplog.at_level("WARNING"):
+        out = dispatch_broker_events(limit=5, names=[DOCS_PROJECT_MAINTENANCE_OBSERVED_EVENT])
+
+    assert out["processed"] == 0
+    assert out["failed"] == 1
+    assert calls == ["register", "index"]
+    assert "project docs stale-index listener failed: index boom" in caplog.text
+
+    queue_path = get_runtime_root(iroot) / "events" / "queue.json"
+    queued = json.loads(queue_path.read_text(encoding="utf-8")).get("events") or []
+    event = next(item for item in queued if item.get("name") == DOCS_PROJECT_MAINTENANCE_OBSERVED_EVENT)
+    direct_result = event["result"]["listener_result"]["direct_result"]
+    assert direct_result["registered"] == 2
+    assert direct_result["errors"] == [{"tick": "stale_index", "error": "index boom"}]
+
+
+def test_event_project_docs_listener_stale_index_failure_respects_fail_hard(monkeypatch, tmp_path):
+    set_adapter(TestAdapter(tmp_path))
+
+    import core.runtime.events as events
+
+    calls: list[str] = []
+
+    def fail_index():
+        calls.append("index")
+        raise RuntimeError("index boom")
+
+    monkeypatch.setattr("core.project_docs.auto_register_project_docs", lambda: calls.append("register") or 2)
+    monkeypatch.setattr("core.project_docs.index_one_stale_registered_doc", fail_index)
+    monkeypatch.setattr("core.plugins.docsdb_contract._fail_hard_enabled", lambda: True)
+    monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: True)
+
+    _emit_docs_project_maintenance_observed_event()
+    with pytest.raises(RuntimeError, match="index boom"):
+        dispatch_broker_events(limit=5, names=[DOCS_PROJECT_MAINTENANCE_OBSERVED_EVENT])
+
+    assert calls == ["register", "index"]
 
 
 def test_event_process_docs_project_maintenance_observed_validation_respects_fail_hard(monkeypatch, tmp_path):

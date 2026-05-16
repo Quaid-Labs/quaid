@@ -1,6 +1,6 @@
 # Datastore Events M8 Authoritative Docs Listener Plan
 
-Status: draft plan; blocked until M7 shadow parity is implemented and validated
+Status: implementation patch in progress; validation pending
 Owner: W1 runtime/datastore
 Plan source: `~/quaidcode/util/docs/datastore-events-migration-plan.md`
 
@@ -18,7 +18,9 @@ Do not implement this milestone until:
 6. W3 reviews the implementation if any docs recall indexing cadence, recall
    inputs, row metadata, or project/docs result shape can change.
 
-This document is planning only. It does not approve runtime implementation.
+M7 was implemented and validated in `a17ceb244` + `29552057a`. M8 runtime
+implementation still requires W3/W4/W6/W8 validation before this milestone is
+complete.
 
 ## M8 Goal
 
@@ -73,6 +75,11 @@ Implementation review must choose one of these shapes explicitly:
   plus listener result, not direct result
 - introduce a new authoritative event name that preserves the same tick identity
   without carrying `direct_result`
+
+Implementation choice: reuse `docs.project_maintenance_observed` and replace
+the supervisor-provided `direct_result` payload with
+`requested_operations: {auto_register, stale_index}`. The authoritative DocsDB
+listener writes the result metrics under `listener_result.direct_result`.
 
 Either way, the payload must not include document bodies, raw diffs, credentials,
 or local process environment.
