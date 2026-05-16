@@ -87,5 +87,6 @@ modules/quaid/tests/livetest/dashboard.log
 modules/quaid/tests/livetest/current_run.log
 modules/quaid/tests/livetest/scripts/.tmux-targets.json
 modules/quaid/tests/livetest/scripts/.tmux-mailbox/
+modules/quaid/tests/livetest/scripts/.matrix-config
 pytest-home/
 pytest-home/
