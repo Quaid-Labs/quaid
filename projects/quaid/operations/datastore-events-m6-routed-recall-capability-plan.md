@@ -333,6 +333,30 @@ Add focused tests before any live deployment:
   do not silently fall back to the old direct descriptor
 - mixed default results keep existing dedup/sort/source-type boost behavior
 
+### Pre-Activation Guard Record
+
+The following test-only commits pin the current descriptor baseline before any
+M6.2a behavior code:
+
+- `ffb272512` pins project docs/project/date filters, project row
+  `via`/category/source metadata, and project-row preservation in mixed-store
+  merge.
+- `2193dc0d8` pins current project descriptor failure policy: fail-soft logs and
+  preserves vector rows; failHard rethrows.
+- `7034003f1` pins deferred `vector_basic`/`vector_technical` direct
+  `recallMemory` descriptors and selector-specific default domains.
+- `120ea77af` pins non-target `graph` direct memory recall with vector
+  candidate-pool seeding and non-target `journal` direct journal-store recall.
+- `069dea3b6` pins aggregate `vector` direct memory recall with store, domain,
+  project, and date filters preserved.
+- `7412d26fc` pins `source_chunks` alias normalization to the direct
+  `session_chunks` memory descriptor with chunk-token options preserved.
+
+Future M6.2a code must keep these tests green and add broker-specific coverage
+for `selector: "project"` / `store: "docs"` threading, missing/nacked/malformed
+broker responses, and no fallback to the old project descriptor after broker
+failure.
+
 ### W4 Smoke After Code
 
 After W3/W6/W8 approve a code slice, W4 smoke should cover:
