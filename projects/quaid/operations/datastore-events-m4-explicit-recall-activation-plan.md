@@ -1,16 +1,16 @@
 # Datastore Events M4 Explicit Recall Activation Plan
 
-Status: proposed next slice, not implemented
+Status: M4.1 activation slice in progress; explicit `stores:["docs"]` CLI recall routes through the broker
 Owner: W1 runtime/datastore with W3 recall-quality approval before code
 Plan source: `~/quaidcode/util/docs/datastore-events-migration-plan.md`
 
-## Decision Needed
+## Decision
 
 M4 has a request contract and synchronous broker fanin mechanics. The next
 behavior-changing step must pick one explicit recall path and replace that path
 cleanly instead of creating a permanent direct-path plus broker-path split.
 
-Recommended first target:
+First target:
 
 ```bash
 quaid recall "<query>" '{"stores":["docs"],"project":"<project>"}'
@@ -42,13 +42,15 @@ Current Python explicit docs/project recall path:
 Proposed replacement:
 
 - register a `recall.docs.request.v1` request handler for `docsdb`
-- handler receives the M4 payload shape with `selector: "project"` or `selector:
-  "docs"` and `store: "docs"`
+- handler receives the M4 payload shape with `selector: "docs"` and `store:
+  "docs"` for the current public CLI syntax
 - handler calls the DocsDB-owned search implementation and returns rows in the
   existing JSON/text output shape
 - the explicit CLI branch calls `request_broker_event(...)` for docs/project
   explicit requests
 - the old explicit docs/project direct branch is removed in the same patch
+- `selector: "project"` remains a first-class contract route for later callers,
+  but this slice does not add `stores:["project"]` as new public CLI syntax
 
 If the handler cannot be activated without keeping the old branch for product
 safety, stop and route the incompatibility to Hermes/Solomon instead of adding a
@@ -82,12 +84,14 @@ Do not migrate in this slice:
 
 Before implementation:
 
-- W3 approves or redirects this first target.
+- W3 approves or redirects this first target. Status: W3 approved explicit
+  Python CLI docs/project recall with parity invariants.
 
 After implementation:
 
-- focused CLI tests for `stores:["docs"]`
-- focused CLI tests for `stores:["project"]` or project selector equivalent
+- focused CLI/broker tests for `stores:["docs"]` with project, docs, date, fanout,
+  similarity floor, and fallback parity
+- focused output-shape tests for docs-only JSON and text rendering
 - failHard missing-handler and handler-failure tests
 - W6 review for old-path deletion and failHard behavior
 - W8 static validation

@@ -6982,6 +6982,192 @@ def _build_docs_only_recall_json_payload(doc_results: Dict[str, Any], *, limit: 
     )
 
 
+def _build_cli_docs_recall_options(
+    cfg: Dict[str, Any],
+    store_opts: Dict[str, Any],
+    *,
+    limit: int,
+    want_memory: bool,
+    date_from: Optional[str],
+    date_to: Optional[str],
+) -> Dict[str, Any]:
+    """Preserve the existing CLI docs-only recall knobs at the broker boundary."""
+    docs_opts = store_opts.get("docs", {}) if isinstance(store_opts, dict) else {}
+    doc_project = docs_opts.get("project", cfg.get("project"))
+    doc_limit = docs_opts.get("limit", limit if not want_memory else 3)
+    docs_fanout_max = int(cfg.get("docs_fanout_max", 8))
+    if not want_memory:
+        doc_limit = min(int(doc_limit), docs_fanout_max)
+    doc_filters = docs_opts.get("docs", cfg.get("docs"))
+    if isinstance(doc_filters, str):
+        doc_filters = [d.strip() for d in doc_filters.split(",") if d.strip()]
+    doc_min_similarity = docs_opts.get("min_similarity", cfg.get("min_similarity", 0.30))
+    if not want_memory:
+        docs_floor = float(cfg.get("docs_only_min_similarity_floor", 0.35))
+        doc_min_similarity = max(float(doc_min_similarity), docs_floor)
+    bounded_limit = max(1, min(doc_limit, docs_fanout_max))
+    return {
+        "project": doc_project if doc_project else None,
+        "docs": doc_filters,
+        "limit": bounded_limit,
+        "min_similarity": doc_min_similarity,
+        "docs_only": not want_memory,
+        "fallback_min_similarity": float(cfg.get("min_similarity", 0.20)),
+        "date_from": date_from,
+        "date_to": date_to,
+    }
+
+
+def _run_cli_docs_recall_request(query: str, options: Dict[str, Any]) -> Dict[str, Any]:
+    """Execute the docs recall request handler using the old CLI search semantics."""
+    from datastore.docsdb.rag import DocsRAG as _DocsRAG
+
+    bounded_limit = max(1, int(options.get("limit") or 1))
+    project = options.get("project") if options.get("project") else None
+    doc_filters = options.get("docs")
+    doc_min_similarity = options.get("min_similarity", 0.30)
+    date_from = options.get("date_from")
+    date_to = options.get("date_to")
+    rag = _DocsRAG()
+    doc_results = _search_docs_bundle_compat(
+        rag,
+        query=query,
+        limit=bounded_limit,
+        min_similarity=doc_min_similarity,
+        project=project,
+        docs=doc_filters,
+        date_from=date_from,
+        date_to=date_to,
+    )
+    if bool(options.get("docs_only")) and not _validate_docs_bundle(doc_results).get("chunks"):
+        doc_results = _search_docs_bundle_compat(
+            rag,
+            query=query,
+            limit=bounded_limit,
+            min_similarity=float(options.get("fallback_min_similarity", 0.20)),
+            project=project,
+            docs=doc_filters,
+            date_from=date_from,
+            date_to=date_to,
+        )
+    docs = _validate_docs_bundle(doc_results)
+    return {
+        "status": "ok",
+        "selector": "docs",
+        "store": "docs",
+        "docs": docs,
+        "limit": bounded_limit,
+        "meta": {
+            "query": query,
+            "requested_project": project,
+            "resolved_project": docs.get("project"),
+            "chunk_count": len(docs.get("chunks", []) or []),
+            "project_md_attached": bool(docs.get("project_md")),
+        },
+    }
+
+
+def _handle_cli_docs_recall_request(event: Dict[str, Any]) -> Dict[str, Any]:
+    payload = event.get("payload") if isinstance(event, dict) else None
+    if not isinstance(payload, dict):
+        raise _contract_error("docs request event payload must be an object")
+    if str(payload.get("store") or "") != "docs":
+        raise _contract_error("docs request payload.store must be docs")
+    query = str(payload.get("query") or "").strip()
+    if not query:
+        raise _contract_error("docs request payload.query is required")
+    options = payload.get("options")
+    if options is None:
+        options = {}
+    if not isinstance(options, dict):
+        raise _contract_error("docs request payload.options must be an object")
+    request_options = dict(options)
+    request_options["limit"] = int(payload.get("limit") or request_options.get("limit") or 1)
+    return _run_cli_docs_recall_request(query, request_options)
+
+
+def _register_cli_docs_recall_request_handler() -> None:
+    from core.contracts.recall import RECALL_DOCS_REQUEST
+    from core.runtime.events import register_request_handler
+
+    register_request_handler(
+        RECALL_DOCS_REQUEST,
+        _handle_cli_docs_recall_request,
+        datastore_id="docsdb",
+        force=True,
+    )
+
+
+def _validate_cli_docs_broker_response(response: Any) -> Dict[str, Any]:
+    if not isinstance(response, dict):
+        raise _contract_error(f"docs broker response must be an object, got {type(response).__name__}")
+    if str(response.get("status") or "") != "ok":
+        raise _contract_error(str(response.get("error") or "docs broker request failed"))
+    responses = response.get("responses")
+    if not isinstance(responses, list) or len(responses) != 1:
+        raise _contract_error("docs broker response must contain exactly one handler response")
+    handler_response = responses[0]
+    if not isinstance(handler_response, dict):
+        raise _contract_error("docs broker handler response must be an object")
+    if str(handler_response.get("datastore_id") or "") != "docsdb":
+        raise _contract_error("docs broker handler must be docsdb")
+    if str(handler_response.get("status") or "") not in {"ok", "acked"}:
+        raise _contract_error(str(handler_response.get("error") or "docs broker handler failed"))
+    result = handler_response.get("result")
+    if not isinstance(result, dict):
+        raise _contract_error("docs broker handler result must be an object")
+    if not isinstance(result.get("docs"), dict):
+        raise _contract_error("docs broker handler result.docs must be an object")
+    docs = _validate_docs_bundle(result.get("docs"))
+    try:
+        limit = int(result.get("limit"))
+    except (TypeError, ValueError) as exc:
+        raise _contract_error("docs broker handler result.limit must be an integer") from exc
+    if limit <= 0:
+        raise _contract_error("docs broker handler result.limit must be positive")
+    meta = result.get("meta")
+    if meta is not None and not isinstance(meta, dict):
+        raise _contract_error("docs broker handler result.meta must be an object or null")
+    return {
+        "docs": docs,
+        "limit": limit,
+        "meta": dict(meta or {}),
+    }
+
+
+def _request_cli_docs_recall_via_broker(
+    query: str,
+    options: Dict[str, Any],
+    *,
+    register_handler: bool = True,
+) -> Dict[str, Any]:
+    from core.contracts.recall import (
+        RECALL_DOCS_REQUEST,
+        build_recall_request_payload,
+        resolve_recall_request_routes,
+    )
+    from core.runtime.events import request_broker_event
+
+    if register_handler:
+        _register_cli_docs_recall_request_handler()
+    route = resolve_recall_request_routes(["docs"])[0]
+    payload = build_recall_request_payload(
+        query=query,
+        route=route,
+        limit=int(options.get("limit") or 1),
+        options=options,
+    )
+    response = request_broker_event(
+        RECALL_DOCS_REQUEST,
+        payload,
+        source="memory_graph.cli.recall",
+        provenance={
+            "replacement": "datastore.memorydb.memory_graph.recall docs-only direct branch",
+        },
+    )
+    return _validate_cli_docs_broker_response(response)
+
+
 def _merge_docs_bundles(existing: Optional[Dict[str, Any]], incoming: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     if not incoming:
         return existing
@@ -23224,63 +23410,36 @@ if __name__ == "__main__":
             # docs store
             if want_docs:
                 try:
-                    from datastore.docsdb.rag import DocsRAG as _DocsRAG
-                    docs_opts = store_opts.get("docs", {})
-                    doc_project = docs_opts.get("project", cfg.get("project"))
-                    doc_limit = docs_opts.get("limit", limit if not want_memory else 3)
-                    # Cap direct docs-only recall fanout (config: docs_fanout_max, default 8).
-                    docs_fanout_max = int(cfg.get("docs_fanout_max", 8))
-                    if not want_memory:
-                        doc_limit = min(int(doc_limit), docs_fanout_max)
-                    doc_filters = docs_opts.get("docs", cfg.get("docs"))
-                    if isinstance(doc_filters, str):
-                        doc_filters = [d.strip() for d in doc_filters.split(",") if d.strip()]
-                    doc_min_similarity = docs_opts.get("min_similarity", cfg.get("min_similarity", 0.30))
-                    if not want_memory:
-                        # Soft floor for docs-only precision (config: docs_only_min_similarity_floor, default 0.35).
-                        docs_floor = float(cfg.get("docs_only_min_similarity_floor", 0.35))
-                        doc_min_similarity = max(float(doc_min_similarity), docs_floor)
-                    _rag = _DocsRAG()
-                    doc_results = _search_docs_bundle_compat(
-                        _rag,
-                        query=query,
-                        limit=max(1, min(doc_limit, docs_fanout_max)),
-                        min_similarity=doc_min_similarity,
-                        project=doc_project if doc_project else None,
-                        docs=doc_filters,
+                    docs_options = _build_cli_docs_recall_options(
+                        cfg,
+                        store_opts,
+                        limit=limit,
+                        want_memory=want_memory,
                         date_from=date_from,
                         date_to=date_to,
                     )
-                    # Adaptive fallback: if docs-only returns nothing, retry without the floor.
-                    if not want_memory and not _validate_docs_bundle(doc_results).get("chunks"):
-                        doc_results = _search_docs_bundle_compat(
-                            _rag,
-                            query=query,
-                            limit=max(1, min(doc_limit, docs_fanout_max)),
-                            min_similarity=float(cfg.get("min_similarity", 0.20)),
-                            project=doc_project if doc_project else None,
-                            docs=doc_filters,
-                            date_from=date_from,
-                            date_to=date_to,
+                    docs_response = (
+                        _request_cli_docs_recall_via_broker(query, docs_options)
+                        if not want_memory
+                        else _run_cli_docs_recall_request(
+                            query,
+                            docs_options,
+                        )
                     )
+                    doc_results = docs_response["docs"]
+                    doc_limit = int(docs_response["limit"])
                     if use_json:
                         if json_payload is None:
                             json_payload = _build_docs_only_recall_json_payload(
                                 doc_results,
-                                limit=max(1, min(doc_limit, docs_fanout_max)),
+                                limit=doc_limit,
                             )
                         else:
                             json_payload["docs"] = _validate_docs_bundle(doc_results)
                         if _recall_telemetry_enabled():
                             if json_payload.get("meta") is None or not isinstance(json_payload.get("meta"), dict):
                                 json_payload["meta"] = {}
-                            json_payload["meta"]["docs"] = {
-                                "query": query,
-                                "requested_project": doc_project if doc_project else None,
-                                "resolved_project": doc_results.get("project"),
-                                "chunk_count": len(doc_results.get("chunks", []) or []),
-                                "project_md_attached": bool(doc_results.get("project_md")),
-                            }
+                            json_payload["meta"]["docs"] = docs_response.get("meta") or {}
                     else:
                         _print_docs_bundle(doc_results)
                 except Exception as _docs_err:

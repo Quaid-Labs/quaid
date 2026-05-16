@@ -14389,6 +14389,258 @@ class TestRecallLimitEdgeCases:
         assert "plog-amber-valentine-2023" in payload["results"][0]["text"]
         assert payload["docs"]["chunks"][0]["source"].endswith("PROJECT.log")
 
+    def test_cli_docs_broker_request_preserves_filters_and_fallback(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+        import core.runtime.events as events
+        from lib.adapter import TestAdapter, reset_adapter, set_adapter
+
+        calls = []
+
+        class FakeDocsRAG:
+            def search_docs_bundle(
+                self,
+                query,
+                limit=5,
+                min_similarity=0.3,
+                project=None,
+                docs=None,
+                date_from=None,
+                date_to=None,
+            ):
+                calls.append(
+                    {
+                        "query": query,
+                        "limit": limit,
+                        "min_similarity": min_similarity,
+                        "project": project,
+                        "docs": docs,
+                        "date_from": date_from,
+                        "date_to": date_to,
+                    }
+                )
+                if len(calls) == 1:
+                    return {"chunks": [], "project": project, "project_md": None}
+                return {
+                    "chunks": [
+                        {
+                            "content": "Recipe schema uses the dietary labels constant.",
+                            "source": "/tmp/workspace/projects/recipe-app/README.md",
+                            "section_header": "Architecture",
+                            "similarity": 0.91,
+                            "chunk_index": 0,
+                            "project": project,
+                            "source_date": "2026-03-08",
+                        }
+                    ],
+                    "project": project,
+                    "project_md": "# Recipe App",
+                }
+
+        set_adapter(TestAdapter(tmp_path))
+        try:
+            with events._REQUEST_EVENT_HANDLERS_LOCK:
+                events._REQUEST_EVENT_HANDLERS.clear()
+            options = mg._build_cli_docs_recall_options(
+                {
+                    "stores": ["docs"],
+                    "project": "recipe-app",
+                    "docs": "README.md,PROJECT.log",
+                    "min_similarity": 0.2,
+                    "docs_only_min_similarity_floor": 0.35,
+                    "docs_fanout_max": 3,
+                },
+                {},
+                limit=9,
+                want_memory=False,
+                date_from="2026-03-01",
+                date_to="2026-03-31",
+            )
+
+            with patch("datastore.docsdb.rag.DocsRAG", return_value=FakeDocsRAG()):
+                result = mg._request_cli_docs_recall_via_broker("recipe schema", options)
+        finally:
+            with events._REQUEST_EVENT_HANDLERS_LOCK:
+                events._REQUEST_EVENT_HANDLERS.clear()
+            reset_adapter()
+
+        assert result["limit"] == 3
+        assert result["docs"]["chunks"][0]["source"].endswith("README.md")
+        assert result["meta"] == {
+            "query": "recipe schema",
+            "requested_project": "recipe-app",
+            "resolved_project": "recipe-app",
+            "chunk_count": 1,
+            "project_md_attached": False,
+        }
+        assert calls == [
+            {
+                "query": "recipe schema",
+                "limit": 3,
+                "min_similarity": 0.35,
+                "project": "recipe-app",
+                "docs": ["README.md", "PROJECT.log"],
+                "date_from": "2026-03-01",
+                "date_to": "2026-03-31",
+            },
+            {
+                "query": "recipe schema",
+                "limit": 3,
+                "min_similarity": 0.2,
+                "project": "recipe-app",
+                "docs": ["README.md", "PROJECT.log"],
+                "date_from": "2026-03-01",
+                "date_to": "2026-03-31",
+            },
+        ]
+
+    def test_cli_docs_broker_result_preserves_json_and_text_shapes(self, capsys):
+        import datastore.memorydb.memory_graph as mg
+
+        result = mg._validate_cli_docs_broker_response(
+            {
+                "status": "ok",
+                "responses": [
+                    {
+                        "datastore_id": "docsdb",
+                        "status": "ok",
+                        "result": {
+                            "docs": {
+                                "chunks": [
+                                    {
+                                        "content": "The backend uses Express middleware.",
+                                        "source": "/tmp/workspace/projects/recipe-app/README.md",
+                                        "section_header": "Tech Stack",
+                                        "similarity": 0.84,
+                                        "chunk_index": 0,
+                                        "project": "recipe-app",
+                                    }
+                                ],
+                                "project": "recipe-app",
+                                "project_md": "# Recipe App",
+                            },
+                            "limit": 5,
+                            "meta": {"query": "backend", "chunk_count": 1},
+                        },
+                    }
+                ],
+            }
+        )
+
+        payload = mg._build_docs_only_recall_json_payload(result["docs"], limit=result["limit"])
+        assert payload["contract"] == "quaid.recall.v1"
+        assert payload["results"][0]["category"] == "docs"
+        assert payload["docs"]["project"] == "recipe-app"
+
+        mg._print_docs_bundle(result["docs"])
+        rendered = capsys.readouterr().out
+        assert "=== Documentation ===" in rendered
+        assert "README.md > Tech Stack" in rendered
+        assert "The backend uses Express middleware." in rendered
+        assert "=== PROJECT.md ===" in rendered
+
+    def test_cli_docs_broker_missing_handler_respects_fail_hard(self, caplog, monkeypatch, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+        import core.runtime.events as events
+        from lib.adapter import TestAdapter, reset_adapter, set_adapter
+
+        set_adapter(TestAdapter(tmp_path))
+        try:
+            with events._REQUEST_EVENT_HANDLERS_LOCK:
+                events._REQUEST_EVENT_HANDLERS.clear()
+
+            options = {
+                "limit": 1,
+                "min_similarity": 0.35,
+                "docs_only": True,
+                "fallback_min_similarity": 0.2,
+            }
+            monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: False)
+            with caplog.at_level("ERROR"):
+                with pytest.raises(RuntimeError, match="No request handler registered"):
+                    mg._request_cli_docs_recall_via_broker(
+                        "missing docs handler",
+                        options,
+                        register_handler=False,
+                    )
+            assert "No request handler registered for recall.docs.request.v1" in caplog.text
+
+            monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: True)
+            with pytest.raises(RuntimeError, match="Request handler missing while fail-hard mode is enabled"):
+                mg._request_cli_docs_recall_via_broker(
+                    "missing docs handler",
+                    options,
+                    register_handler=False,
+                )
+        finally:
+            with events._REQUEST_EVENT_HANDLERS_LOCK:
+                events._REQUEST_EVENT_HANDLERS.clear()
+            reset_adapter()
+
+    def test_cli_docs_broker_handler_failure_respects_fail_hard(self, caplog, monkeypatch, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+        import core.runtime.events as events
+        from core.contracts.recall import RECALL_DOCS_REQUEST
+        from lib.adapter import TestAdapter, reset_adapter, set_adapter
+
+        def _failing_handler(_event):
+            raise RuntimeError("docs exploded")
+
+        set_adapter(TestAdapter(tmp_path))
+        try:
+            with events._REQUEST_EVENT_HANDLERS_LOCK:
+                events._REQUEST_EVENT_HANDLERS.clear()
+            events.register_request_handler(
+                RECALL_DOCS_REQUEST,
+                _failing_handler,
+                datastore_id="docsdb",
+                force=True,
+            )
+
+            options = {
+                "limit": 1,
+                "min_similarity": 0.35,
+                "docs_only": True,
+                "fallback_min_similarity": 0.2,
+            }
+            monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: False)
+            with caplog.at_level("ERROR"):
+                with pytest.raises(RuntimeError, match="docs broker request failed"):
+                    mg._request_cli_docs_recall_via_broker(
+                        "failing docs handler",
+                        options,
+                        register_handler=False,
+                    )
+            assert "docs exploded" in caplog.text
+
+            monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: True)
+            with pytest.raises(RuntimeError, match="Request handler failed while fail-hard mode is enabled"):
+                mg._request_cli_docs_recall_via_broker(
+                    "failing docs handler",
+                    options,
+                    register_handler=False,
+                )
+        finally:
+            with events._REQUEST_EVENT_HANDLERS_LOCK:
+                events._REQUEST_EVENT_HANDLERS.clear()
+            reset_adapter()
+
+    def test_cli_docs_broker_rejects_malformed_handler_output(self):
+        import datastore.memorydb.memory_graph as mg
+
+        with pytest.raises(RuntimeError, match="result.docs must be an object"):
+            mg._validate_cli_docs_broker_response(
+                {
+                    "status": "ok",
+                    "responses": [
+                        {
+                            "datastore_id": "docsdb",
+                            "status": "ok",
+                            "result": {"limit": 1},
+                        }
+                    ],
+                }
+            )
+
     def test_build_recall_json_payload_raises_on_invalid_result_shape(self):
         from datastore.memorydb.memory_graph import _build_recall_json_payload
 
