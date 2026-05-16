@@ -35,6 +35,7 @@ MAX_HISTORY_JSONL_BYTES = 5 * 1024 * 1024
 HISTORY_TRIM_TARGET_BYTES = 2 * 1024 * 1024
 EVENT_ENVELOPE_SCHEMA_VERSION = 1
 EVENT_CLASSES = {"domain", "request"}
+DOCS_PROJECT_MAINTENANCE_OBSERVED_EVENT = "docs.project_maintenance_observed"
 
 EVENT_REGISTRY: List[Dict[str, Any]] = [
     {
@@ -106,6 +107,14 @@ EVENT_REGISTRY: List[Dict[str, Any]] = [
     {
         "name": "docs.ingest_transcript",
         "description": "Run docs ingestion pipeline from a transcript file path.",
+        "fireable": True,
+        "processable": True,
+        "listenable": True,
+        "delivery_mode": "active",
+    },
+    {
+        "name": DOCS_PROJECT_MAINTENANCE_OBSERVED_EVENT,
+        "description": "Shadow-observe project-docs supervisor docs maintenance tick effects.",
         "fireable": True,
         "processable": True,
         "listenable": True,
@@ -613,6 +622,12 @@ def _handle_docs_ingest_transcript(event: Event) -> Dict[str, Any]:
         return {"status": "failed", "error": str(e)}
 
 
+def _handle_docs_project_maintenance_observed(event: Event) -> Dict[str, Any]:
+    from core.plugins.docsdb_contract import handle_project_docs_maintenance_shadow_event
+
+    return handle_project_docs_maintenance_shadow_event(event)
+
+
 def _handle_session_ingest_log(event: Event) -> Dict[str, Any]:
     payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
     session_id = str(payload.get("session_id") or "").strip()
@@ -700,6 +715,7 @@ EVENT_HANDLERS: Dict[str, EventHandler] = {
     "notification.delayed": _handle_delayed_notification,
     "memory.force_compaction": _handle_force_compaction,
     "docs.ingest_transcript": _handle_docs_ingest_transcript,
+    DOCS_PROJECT_MAINTENANCE_OBSERVED_EVENT: _handle_docs_project_maintenance_observed,
     "session.ingest_log": _handle_session_ingest_log,
     "janitor.run_completed": _handle_janitor_run_completed,
     "session.new": _handle_session_lifecycle,

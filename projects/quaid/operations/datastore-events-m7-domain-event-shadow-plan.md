@@ -1,6 +1,6 @@
 # Datastore Events M7 Domain Event Shadow Plan
 
-Status: plan approved; no runtime implementation
+Status: implementation submitted; pending W6/W8/W4 validation
 Owner: W1 runtime/datastore
 Plan source: `~/quaidcode/util/docs/datastore-events-migration-plan.md`
 
@@ -56,19 +56,18 @@ Why this path:
   shadow git snapshots, PROJECT.log queue commits, doc editing, registry sync,
   indexing, cursor advancement, and user-visible notices.
 
-## Draft Event Boundary
+## Event Boundary
 
 Introduce one domain event for the supervisor tick:
 
 ```text
-project.docs.maintenance_observed.v1
+docs.project_maintenance_observed
 ```
 
-The event name is a draft placeholder. Implementation review must align the
-final name with the active `core/runtime/events.py` naming convention before
-code lands.
+The implementation uses the `docs.*` prefix to match the active
+`core/runtime/events.py` naming convention used by `docs.ingest_transcript`.
 
-Draft payload:
+Submitted payload shape:
 
 ```json
 {
@@ -79,8 +78,11 @@ Draft payload:
   "auto_register_interval_seconds": 300.0,
   "stale_index_interval_seconds": 60.0,
   "direct_result": {
+    "auto_register_ran": true,
+    "stale_index_ran": true,
     "registered": 1,
-    "indexed_one": true
+    "indexed_one": true,
+    "errors": []
   },
   "dry_run": false
 }
@@ -100,7 +102,7 @@ Payload rules:
 ## Shadow Listener Boundary
 
 Register a DocsDB shadow listener for
-`project.docs.maintenance_observed.v1`.
+`docs.project_maintenance_observed`.
 
 The listener must:
 
@@ -144,7 +146,7 @@ of truth throughout M7.
 
 Focused tests should prove:
 
-- supervisor tick emits `project.docs.maintenance_observed.v1` when the
+- supervisor tick emits `docs.project_maintenance_observed` when the
   auto-register/stale-index interval fires
 - event payload includes direct result metrics and omits document bodies and
   environment secrets
@@ -159,9 +161,9 @@ Focused tests should prove:
 
 ## Plan Review Record
 
-The M7 domain-event shadow plan is approved as a plan, but not approved for
-runtime implementation. Runtime code still requires the preconditions above and
-fresh review of the implementation patch.
+The M7 domain-event shadow plan is approved as a plan. Runtime implementation is
+now submitted for validation; runtime code still requires the preconditions
+above and fresh review of the implementation patch before landing.
 
 Reviewed plan commit:
 
@@ -208,17 +210,11 @@ Closed guard tests:
 
 Remaining future behavior-slice coverage:
 
-- supervisor tick emits the finalized M7 event name when the
-  auto-register/stale-index interval fires
-- event payload includes direct result metrics and omits document bodies and
-  environment secrets
-- direct supervisor calls still run and remain authoritative in M7 after the
-  shadow event/listener is added
-- DocsDB shadow listener records would-handle intent without write/index side
-  effects
-- shadow listener failure follows failHard/fail-soft policy without suppressing
-  direct supervisor work in fail-soft mode; the pre-shadow direct-tick
-  fail-policy baseline is pinned by `0d194cadb` and `1622431f8`
+- W6 implementation review of the finalized event name, event payload, and
+  shadow-only listener boundary
+- W8 static validation for the event and supervisor tests
+- W4 smoke proving supervisor docs maintenance still works and shadow traces are
+  present in the installed runtime
 
 ## W4 Smoke After Code
 

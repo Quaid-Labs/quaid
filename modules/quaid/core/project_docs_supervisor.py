@@ -9,6 +9,7 @@ workers apply docs updates, and janitor workers run bounded maintenance ticks.
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import json
 import logging
 import os
@@ -51,6 +52,59 @@ def _fail_hard_enabled() -> bool:
     except Exception:
         return False
     return bool(is_fail_hard_enabled())
+
+
+def _emit_project_docs_maintenance_shadow_event(
+    *,
+    observed_at: float,
+    auto_register_interval: float,
+    stale_doc_interval: float,
+    auto_register_ran: bool,
+    stale_index_ran: bool,
+    registered: int | None,
+    indexed_one: bool | None,
+    errors: list[dict[str, str]],
+) -> None:
+    if not auto_register_ran and not stale_index_ran:
+        return
+    payload = {
+        "project": None,
+        "observed_at": datetime.fromtimestamp(observed_at, tz=timezone.utc).isoformat(),
+        "source": "project-docs-supervisor",
+        "tick_kind": "auto_register_and_stale_index",
+        "auto_register_interval_seconds": float(auto_register_interval),
+        "stale_index_interval_seconds": float(stale_doc_interval),
+        "direct_result": {
+            "auto_register_ran": bool(auto_register_ran),
+            "stale_index_ran": bool(stale_index_ran),
+            "registered": registered,
+            "indexed_one": indexed_one,
+            "errors": list(errors),
+        },
+        "dry_run": False,
+    }
+    try:
+        from core.runtime.events import (
+            DOCS_PROJECT_MAINTENANCE_OBSERVED_EVENT,
+            dispatch_broker_events,
+            emit_broker_event,
+        )
+
+        emit_broker_event(
+            DOCS_PROJECT_MAINTENANCE_OBSERVED_EVENT,
+            payload=payload,
+            source="project-docs-supervisor",
+        )
+        dispatched = dispatch_broker_events(limit=20, names=[DOCS_PROJECT_MAINTENANCE_OBSERVED_EVENT])
+        if int(dispatched.get("failed") or 0) > 0:
+            logging.getLogger(__name__).warning(
+                "project docs maintenance shadow listener failed: %s",
+                dispatched,
+            )
+    except Exception as exc:
+        logging.getLogger(__name__).warning("project docs maintenance shadow event failed: %s", exc)
+        if _fail_hard_enabled():
+            raise
 
 
 def _pid_alive(pid: int) -> bool:
@@ -667,26 +721,45 @@ def run_supervisor(*, once: bool = False, interval_seconds: float | None = None)
             except Exception:
                 pass
             known_workers.pop(project, None)
+        auto_register_ran = False
+        stale_index_ran = False
+        registered: int | None = None
+        indexed_one: bool | None = None
+        docs_tick_errors: list[dict[str, str]] = []
         if not _dispatcher_only_mode() and now - last_auto_register_check > auto_register_interval:
+            auto_register_ran = True
             try:
-                project_docs.auto_register_project_docs()
+                registered = int(project_docs.auto_register_project_docs() or 0)
             except Exception as exc:
                 import logging
 
                 logging.getLogger(__name__).warning("project docs auto-register tick failed: %s", exc)
+                docs_tick_errors.append({"tick": "auto_register", "error": str(exc)})
                 if _fail_hard_enabled():
                     raise
             last_auto_register_check = now
         if not _dispatcher_only_mode() and now - last_stale_doc_check > stale_doc_interval:
+            stale_index_ran = True
             try:
-                project_docs.index_one_stale_registered_doc()
+                indexed_one = bool(project_docs.index_one_stale_registered_doc())
             except Exception as exc:
                 import logging
 
                 logging.getLogger(__name__).warning("project docs stale-index tick failed: %s", exc)
+                docs_tick_errors.append({"tick": "stale_index", "error": str(exc)})
                 if _fail_hard_enabled():
                     raise
             last_stale_doc_check = now
+        _emit_project_docs_maintenance_shadow_event(
+            observed_at=now,
+            auto_register_interval=auto_register_interval,
+            stale_doc_interval=stale_doc_interval,
+            auto_register_ran=auto_register_ran,
+            stale_index_ran=stale_index_ran,
+            registered=registered,
+            indexed_one=indexed_one,
+            errors=docs_tick_errors,
+        )
         if once:
             return 0
         time.sleep(interval)

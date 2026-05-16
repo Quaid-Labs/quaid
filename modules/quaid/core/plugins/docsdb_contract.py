@@ -144,6 +144,40 @@ def run_project_docs_monitor_maintenance(ctx: Any, result_factory: Any) -> Any:
     return result
 
 
+def handle_project_docs_maintenance_shadow_event(event: Dict[str, Any]) -> Dict[str, Any]:
+    """Record shadow intent for the supervisor docs-maintenance domain event."""
+    payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+    source = str(payload.get("source") or "").strip()
+    tick_kind = str(payload.get("tick_kind") or "").strip()
+    observed_at = str(payload.get("observed_at") or "").strip()
+    direct_result = payload.get("direct_result")
+    if source != "project-docs-supervisor":
+        return {"status": "failed", "error": "payload.source must be project-docs-supervisor"}
+    if tick_kind != "auto_register_and_stale_index":
+        return {"status": "failed", "error": "payload.tick_kind must be auto_register_and_stale_index"}
+    if not observed_at:
+        return {"status": "failed", "error": "payload.observed_at is required"}
+    if not isinstance(direct_result, dict):
+        return {"status": "failed", "error": "payload.direct_result must be an object"}
+
+    auto_register_ran = bool(direct_result.get("auto_register_ran", False))
+    stale_index_ran = bool(direct_result.get("stale_index_ran", False))
+    would_handle: list[str] = []
+    if auto_register_ran:
+        would_handle.append("auto_register_project_docs")
+    if stale_index_ran:
+        would_handle.append("index_one_stale_registered_doc")
+    shadow_intent = {
+        "mode": "shadow",
+        "datastore_id": "docsdb",
+        "project": payload.get("project"),
+        "observed_at": observed_at,
+        "would_handle": would_handle,
+        "direct_result": direct_result,
+    }
+    return {"status": "processed", "shadow_intent": shadow_intent}
+
+
 def _ensure_project_workspace_dirs(ctx: PluginHookContext) -> None:
     _ = Path(ctx.workspace_root)
     from lib.instance import visible_projects_dir

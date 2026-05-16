@@ -6,6 +6,7 @@ import pytest
 
 from core.runtime.events import (
     EVENT_HANDLERS,
+    DOCS_PROJECT_MAINTENANCE_OBSERVED_EVENT,
     dispatch_broker_events,
     emit_broker_event,
     emit_event,
@@ -407,6 +408,84 @@ def test_event_process_docs_ingest_transcript(monkeypatch, tmp_path):
     assert called["path"] == str(transcript)
     assert called["label"] == "Compaction"
     assert called["session_id"] == "sess-1"
+
+
+def test_event_process_docs_project_maintenance_observed_records_shadow_intent(monkeypatch, tmp_path):
+    adapter = TestAdapter(tmp_path); set_adapter(adapter); iroot = adapter.instance_root()
+
+    monkeypatch.setattr(
+        "core.project_docs.auto_register_project_docs",
+        lambda: (_ for _ in ()).throw(AssertionError("shadow listener must not auto-register")),
+    )
+    monkeypatch.setattr(
+        "core.project_docs.index_one_stale_registered_doc",
+        lambda: (_ for _ in ()).throw(AssertionError("shadow listener must not index docs")),
+    )
+
+    emit_broker_event(
+        DOCS_PROJECT_MAINTENANCE_OBSERVED_EVENT,
+        payload={
+            "project": None,
+            "observed_at": "2026-05-17T00:00:00+00:00",
+            "source": "project-docs-supervisor",
+            "tick_kind": "auto_register_and_stale_index",
+            "auto_register_interval_seconds": 300.0,
+            "stale_index_interval_seconds": 60.0,
+            "direct_result": {
+                "auto_register_ran": True,
+                "stale_index_ran": True,
+                "registered": 2,
+                "indexed_one": True,
+                "errors": [],
+            },
+            "dry_run": False,
+        },
+        source="pytest",
+    )
+
+    out = dispatch_broker_events(limit=5, names=[DOCS_PROJECT_MAINTENANCE_OBSERVED_EVENT])
+    assert out["processed"] == 1
+    assert out["failed"] == 0
+
+    queue_path = get_runtime_root(iroot) / "events" / "queue.json"
+    queued = json.loads(queue_path.read_text(encoding="utf-8")).get("events") or []
+    event = next(item for item in queued if item.get("name") == DOCS_PROJECT_MAINTENANCE_OBSERVED_EVENT)
+    intent = event["result"]["shadow_intent"]
+    assert intent["mode"] == "shadow"
+    assert intent["datastore_id"] == "docsdb"
+    assert intent["would_handle"] == [
+        "auto_register_project_docs",
+        "index_one_stale_registered_doc",
+    ]
+    assert intent["direct_result"]["registered"] == 2
+    assert intent["direct_result"]["indexed_one"] is True
+
+
+def test_event_process_docs_project_maintenance_observed_validation_respects_fail_hard(monkeypatch, tmp_path):
+    set_adapter(TestAdapter(tmp_path))
+
+    import core.runtime.events as events
+
+    emit_broker_event(
+        DOCS_PROJECT_MAINTENANCE_OBSERVED_EVENT,
+        payload={"source": "wrong"},
+        source="pytest",
+    )
+
+    monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: False)
+    out = dispatch_broker_events(limit=5, names=[DOCS_PROJECT_MAINTENANCE_OBSERVED_EVENT])
+    assert out["processed"] == 0
+    assert out["failed"] == 1
+    assert "payload.source must be project-docs-supervisor" in out["details"][0]["result"]["error"]
+
+    emit_broker_event(
+        DOCS_PROJECT_MAINTENANCE_OBSERVED_EVENT,
+        payload={"source": "wrong"},
+        source="pytest",
+    )
+    monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: True)
+    with pytest.raises(RuntimeError, match="payload.source must be project-docs-supervisor"):
+        dispatch_broker_events(limit=5, names=[DOCS_PROJECT_MAINTENANCE_OBSERVED_EVENT])
 
 
 def test_event_process_session_ingest_log(monkeypatch, tmp_path):
