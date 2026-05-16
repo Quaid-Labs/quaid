@@ -135,4 +135,5 @@ M8 is ready to hand off only when:
 - W6 confirms no unrelated monitor/write paths were touched
 - W3 confirms no recall-visible docs behavior changed, or explicitly approves
   any observed recall-visible change
-- there is a concrete plan for the next producer migration slice
+- `datastore-events-m9-monitor-migration-plan.md` is reviewed as the concrete
+  plan for the next producer migration slices
