@@ -31,6 +31,8 @@ Do not activate these in this slice:
 - `stores:["graph"]`
 - `stores:["session_chunks"]` or `stores:["source_chunks"]`
 - `stores:["vector_basic"]` or `stores:["vector_technical"]`
+- archive recall (`archive:true`)
+- session-filtered recall (`session_id`)
 - routed/default recall where the planner chooses stores
 - TypeScript facade recall
 - adapter auto-inject recall
@@ -43,6 +45,9 @@ Reasons:
   should get their own W3-reviewed slices.
 - `vector_basic` and `vector_technical` are facade/router concepts that require
   domain-default parity review before activation.
+- Archive and session-filtered recall branches currently run before the
+  vector-only branch and have different output/source semantics; they must stay
+  on their existing paths.
 - Routed/default recall changes planner behavior and belongs after explicit
   capability slices prove the broker path.
 
@@ -60,14 +65,20 @@ Proposed replacement:
 
 - register a `recall.memory.request.v1` request handler for `memorydb`
 - handler receives payload with `selector:"vector"` and `store:"vector"`
+- because `recall.memory.request.v1` is also used by excluded selectors
+  (`vector_basic`, `vector_technical`, and `session_chunks`), the handler must
+  validate both fields and nack any payload where `selector!="vector"` or
+  `store!="vector"`; do not silently process other memory selectors through the
+  vector path
 - handler calls the existing vector recall implementation with the same
   explicit CLI options
 - CLI branch calls `request_broker_event(...)` only for explicit
   `stores:["vector"]`
 - old explicit vector-only direct call in the CLI branch is deleted in the same
   patch
-- mixed/vector+docs and routed/default recall remain on the existing path until
-  their own slices
+- archive/session-filtered, mixed/vector+docs, vector_basic/vector_technical,
+  session_chunks, graph, and routed/default recall remain on the existing path
+  until their own slices
 
 ## Required Parity Invariants
 
@@ -117,6 +128,11 @@ The request must be synchronous fanin only. It must not enqueue request events.
 - malformed handler response failHard
 - mixed `stores:["vector","docs"]` does not use the vector broker handler in this
   slice
+- `stores:["vector"]` with `archive:true` or `session_id` does not use the vector
+  broker handler
+- direct handler calls with `selector:"vector_basic"`,
+  `selector:"vector_technical"`, or `selector:"session_chunks"` nack rather than
+  processing as vector recall
 
 ## Validation Gate
 
