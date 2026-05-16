@@ -244,21 +244,32 @@ The remaining TypeScript runtime execution catalog lives in
 - failHard propagation for store execution failures
 
 M6.2 should not rewrite merge/ranking. The first behavior slice should replace
-only the execution call boundary for the already-activated broker-capable
-selector families and leave the `_executeStores()` merge/ranking frame intact.
+only the execution call boundary for the smallest routed/default descriptor
+with reviewed broker-adjacent behavior and leave the `_executeStores()`
+merge/ranking frame intact.
 
-### Proposed First Behavior Slice
+### Proposed First Behavior Slice: M6.2a Project Descriptor Only
 
-Activate broker/request execution only for routed/default store descriptors that
-already have reviewed explicit broker parity:
+Activate broker/request execution only for the routed/default `project`
+descriptor:
 
-- `vector_basic` and `vector_technical` through the memory/vector request path,
-  preserving their default domains and user-facing selector names.
 - `project` through the docs request path, preserving `project`, `docs`,
   `dateFrom`, and `dateTo` filters and project-row preservation after merge.
+- The request payload must preserve `selector: "project"` and `store: "docs"`
+  at the contract boundary. The M4 explicit docs CLI slice used
+  `selector: "docs"` for public `stores:["docs"]`; that hardcoded selector is
+  not acceptable for routed/default project-descriptor activation.
+- This slice does not add `stores:["project"]` as public CLI syntax. It only
+  migrates the internal routed/default project descriptor.
 
-Keep these descriptors on the current path in this slice:
+Keep these descriptors on the current path in M6.2a:
 
+- `vector_basic` and `vector_technical`: these were not reviewed as explicit
+  broker-active selectors. M5 approved aggregate explicit `stores:["vector"]`
+  and required the memory handler to nack `vector_basic` and
+  `vector_technical`. Leave personal/technical vector recall on the current
+  `deps.recallMemory` descriptor path until a separate M6.2b/M6.3 memory-scope
+  plan is approved by W3.
 - `graph`: graph traversal, candidate-pool semantics, and graph metadata
   preservation remain too coupled to ranking and require a separate W3 review.
 - `session_chunks` / `source_chunks`: session evidence windows remain
@@ -268,16 +279,34 @@ Keep these descriptors on the current path in this slice:
 - aggregate `vector`: not router-visible; keep it on its current explicit path
   unless a later explicit-aggregate slice needs it.
 
+### Deferred M6.2b/M6.3 Memory Selector Slice
+
+Before `vector_basic` or `vector_technical` can use broker/request execution,
+W3 must review a separate memory-handler scope change:
+
+- Option A: update the memory request handler to accept exactly `vector`,
+  `vector_basic`, and `vector_technical`, preserving selector-specific default
+  domains.
+- Option B: map routed `vector_basic`/`vector_technical` to selector `vector`
+  with explicit domain defaults, accepting the diagnostic/result-label tradeoff
+  only if W3 approves it.
+
+Either option must continue to nack `graph`, `session_chunks`, `source_chunks`,
+`journal`, and unknown selectors. Do not bundle this with M6.2a.
+
 ### Required Behavior Invariants
 
-M6.2 must preserve:
+M6.2a must preserve:
 
 - router prompt text and router-visible store list
 - flat and expand-graph default store order
 - invalid router-output repair/filter behavior
-- `vector_basic` default domain `{ personal: true }`
-- `vector_technical` default domain `{ technical: true }`
+- `vector_basic` default domain `{ personal: true }` by leaving it on the
+  current path
+- `vector_technical` default domain `{ technical: true }` by leaving it on the
+  current path
 - `project` docs/project/date filter semantics
+- `project` result row shape, including `via`/category/source metadata
 - result dedup keys, source-type boosts, sorting, and final limit behavior
 - project-row preservation when `project` is selected
 - failHard behavior: missing handler, handler failure, malformed response, and
@@ -295,14 +324,11 @@ Add focused tests before any live deployment:
   `project` in the same order
 - expand-graph default still selects `vector_basic`, `graph`, `journal`, and
   `project`
-- routed `vector_basic` broker request preserves selector, handler store,
-  domain, project, date filters, and output shape
-- routed `vector_technical` broker request preserves selector, handler store,
-  domain, project, date filters, and output shape
-- routed `project` broker request preserves selector, docs/project/date
-  filters, output shape, and project-row preservation
-- `graph`, `journal`, `session_chunks`, and aggregate `vector` descriptors do
-  not use the M6.2 broker path
+- routed `project` broker request preserves `selector: "project"`,
+  `store: "docs"`, docs/project/date filters, output shape, `via`, and
+  project-row preservation
+- `vector_basic`, `vector_technical`, `graph`, `journal`, `session_chunks`,
+  and aggregate `vector` descriptors do not use the M6.2a broker path
 - malformed/nacked/missing-handler request responses raise under failHard and
   do not silently fall back to the old direct descriptor
 - mixed default results keep existing dedup/sort/source-type boost behavior
@@ -311,7 +337,9 @@ Add focused tests before any live deployment:
 
 After W3/W6/W8 approve a code slice, W4 smoke should cover:
 
-- default/routed recall with personal fact + project doc results
+- default/routed recall with project doc results
+- default/routed recall with personal facts still present through the unchanged
+  vector_basic path
 - expand-graph recall confirming graph still works and remains on the old path
 - journal result availability when journal data exists
 - explicit `stores:["docs"]` and `stores:["vector"]` still use the M4/M5 paths
