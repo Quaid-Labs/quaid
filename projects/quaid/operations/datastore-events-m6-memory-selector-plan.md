@@ -1,6 +1,6 @@
 # Datastore Events M6.3 Memory Selector Plan
 
-Status: draft for W3 review; no runtime implementation
+Status: deferred plan approved; no runtime implementation
 Owner: W1 runtime/datastore with W3 recall-quality approval before code
 Plan source: `~/quaidcode/util/docs/arch_refactor.md` and
 `datastore-events-m6-routed-recall-capability-plan.md`
@@ -13,7 +13,7 @@ Do not implement this slice until:
    explicitly overrides it.
 2. M6.2a project-descriptor broker activation is either completed and
    validated, or W3 explicitly approves doing memory selectors first.
-3. W3 approves this memory selector mapping before code.
+3. W3 reviews and approves the implementation patch before code.
 4. W6 reviews the replacement boundary before live validation.
 
 This document is planning only. It does not change runtime behavior.
