@@ -114,7 +114,7 @@ EVENT_REGISTRY: List[Dict[str, Any]] = [
     },
     {
         "name": DOCS_PROJECT_MAINTENANCE_OBSERVED_EVENT,
-        "description": "Shadow-observe project-docs supervisor docs maintenance tick effects.",
+        "description": "Handle project-docs supervisor docs maintenance tick through DocsDB authority.",
         "fireable": True,
         "processable": True,
         "listenable": True,

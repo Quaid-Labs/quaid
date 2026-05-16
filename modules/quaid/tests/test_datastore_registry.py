@@ -48,6 +48,14 @@ def test_manifest_request_handlers_are_registered_request_events() -> None:
             assert capability["delivery_mode"] == "request"
 
 
+def test_manifest_accepted_events_are_registered_domain_events() -> None:
+    for manifest in list_datastore_manifests():
+        for event_type in manifest["accepted_events"]:
+            capability = get_event_capability(event_type)
+            assert capability is not None, event_type
+            assert capability["delivery_mode"] != "request"
+
+
 def test_datastore_manifest_validation_rejects_missing_required_field() -> None:
     manifest = get_datastore_manifest("memorydb")
     del manifest["capabilities"]

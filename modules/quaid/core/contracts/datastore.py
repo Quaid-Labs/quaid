@@ -214,6 +214,11 @@ class DocsDbDatastoreContract(DatastoreContractBase):
             ("core.runtime.events._handle_docs_ingest_transcript",),
         ),
         DatastoreHandlerSpec(
+            "docs.project_maintenance_observed",
+            DOMAIN_EVENT,
+            ("core.plugins.docsdb_contract.handle_project_docs_maintenance_event",),
+        ),
+        DatastoreHandlerSpec(
             "recall.docs.request.v1",
             REQUEST,
             ("datastore.docsdb.rag.DocsRAG.search",),

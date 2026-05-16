@@ -102,7 +102,7 @@ FIRST_PARTY_DATASTORE_MANIFESTS: List[Dict[str, Any]] = [
             "export": False,
             "import": False,
         },
-        "accepted_events": ["docs.ingest_transcript"],
+        "accepted_events": ["docs.ingest_transcript", "docs.project_maintenance_observed"],
         "request_handlers": [
             "recall.docs.request.v1",
             "recall.project_context.request.v1",
