@@ -1,6 +1,6 @@
 # Datastore Events M6.3 Memory Selector Plan
 
-Status: implementation submitted; pending W3/W6/W4/W8 validation
+Status: M6.3 implemented and validated
 Owner: W1 runtime/datastore with W3 recall-quality approval before code
 Plan source: `~/quaidcode/util/docs/arch_refactor.md` and
 `datastore-events-m6-routed-recall-capability-plan.md`
@@ -17,8 +17,9 @@ Do not implement this slice until:
    landing.
 4. W6 reviews the replacement boundary before live validation.
 
-Runtime behavior is now proposed in the M6.3 implementation patch. The slice is
-not considered validated until W3/W6/W4/W8 clear it.
+M6.3 runtime behavior is implemented by `041cab42c`. The slice is considered
+validated: W3 approved the recall-quality boundary, W4 smoke passed on R201,
+W6 approved the replacement boundary, and W8 static validation passed.
 
 ## Problem
 
@@ -166,11 +167,11 @@ Before live validation, add focused tests proving:
 - handler exception raises under failHard
 - mixed default results preserve current merge/dedup/source-type boost behavior
 
-## Plan Approval, Guard Record, And Implementation Submission
+## Plan Approval, Guard Record, And Implementation Validation
 
 The M6.3 memory-selector plan was approved as a deferred target. Runtime
-implementation has now been submitted for review after the W4 full-livetest gate
-and M6.2a validation cleared.
+implementation was submitted after the W4 full-livetest gate and M6.2a
+validation cleared, then validated by W3/W4/W6/W8.
 
 Reviewed plan commits:
 
@@ -195,7 +196,13 @@ Closed pre-activation guard tests:
   and do not add `datastoreOptions.vector_basic` or
   `datastoreOptions.vector_technical` semantics.
 
-Submitted implementation coverage:
+Validated implementation commit:
+
+- `041cab42c` routes routed/default `vector_basic` and `vector_technical`
+  descriptors through `recall.memory.request.v1`, preserving the selector while
+  targeting the concrete `vector` store.
+
+Implementation coverage:
 
 - broker request payloads preserve `selector:"vector_basic"` /
   `selector:"vector_technical"` with `store:"vector"` and the correct domain
@@ -212,9 +219,16 @@ Submitted implementation coverage:
 
 Validation status:
 
-- W1 focused static checks passed locally for the submitted patch.
-- W3 implementation review, W6 review, W4 smoke, and W8 static validation are
-  still required before the slice is considered complete.
+- W1 focused static checks passed locally for the implementation patch.
+- W3 approved the implementation review with no recall-quality blockers.
+- W4 smoke passed on the R201 VM (`192.168.64.230`): default `vector_basic`,
+  explicit `stores:["vector"]`, explicit Python CLI `stores:["vector_basic"]`
+  bypass, graph candidate-pool path, journal path, project docs path, and
+  invalid-store negative coverage all passed.
+- W6 approved the replacement boundary with no blockers.
+- W8 static validation passed: runtime build/pairs, TypeScript suites, Python
+  broker/contract suites, py_compile, ruff, docs consistency, diff-check, and
+  author/committer checks.
 
 ## W4 Smoke After Code
 
