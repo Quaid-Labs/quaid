@@ -1,6 +1,9 @@
 import {
+  datastoreUsesCandidatePool,
+  getDefaultDomainForKnowledgeDatastore,
   getKnowledgeDatastoreRegistry,
   getRoutableDatastoreKeys,
+  isVectorKnowledgeDatastore,
   normalizeKnowledgeDatastores,
   renderKnowledgeDatastoreGuidanceForAgents,
   renderRoutableKnowledgeDatastoreRouterGuidance,
@@ -97,7 +100,6 @@ export function createKnowledgeEngine<TMemoryResult extends { text: string; simi
     recall: (ctx: StoreRecallContext) => Promise<TMemoryResult[]>;
   };
 
-  const _vectorStores = new Set<KnowledgeDatastore>(["vector", "vector_basic", "vector_technical"]);
   const _routerWarningLastByTier = new Map<string, number>();
 
   function storeOption(opts: TotalRecallOptions, store: KnowledgeDatastore, key: string): unknown {
@@ -609,11 +611,11 @@ ${projectHints}
       },
       vector_basic: {
         key: "vector_basic",
-        recall: async (ctx) => deps.recallMemory(ctx.query, ctx.limit, { stores: ["vector_basic"], domain: ctx.opts.domain || { personal: true }, domainBoost: ctx.opts.domainBoost, project: ctx.opts.project, dateFrom: ctx.opts.dateFrom, dateTo: ctx.opts.dateTo, fast: ctx.opts.fast }),
+        recall: async (ctx) => deps.recallMemory(ctx.query, ctx.limit, { stores: ["vector_basic"], domain: ctx.opts.domain || getDefaultDomainForKnowledgeDatastore("vector_basic"), domainBoost: ctx.opts.domainBoost, project: ctx.opts.project, dateFrom: ctx.opts.dateFrom, dateTo: ctx.opts.dateTo, fast: ctx.opts.fast }),
       },
       vector_technical: {
         key: "vector_technical",
-        recall: async (ctx) => deps.recallMemory(ctx.query, ctx.limit, { stores: ["vector_technical"], domain: ctx.opts.domain || { technical: true }, domainBoost: ctx.opts.domainBoost, project: ctx.opts.project, dateFrom: ctx.opts.dateFrom, dateTo: ctx.opts.dateTo, fast: ctx.opts.fast }),
+        recall: async (ctx) => deps.recallMemory(ctx.query, ctx.limit, { stores: ["vector_technical"], domain: ctx.opts.domain || getDefaultDomainForKnowledgeDatastore("vector_technical"), domainBoost: ctx.opts.domainBoost, project: ctx.opts.project, dateFrom: ctx.opts.dateFrom, dateTo: ctx.opts.dateTo, fast: ctx.opts.fast }),
       },
       graph: {
         key: "graph",
@@ -680,11 +682,11 @@ ${projectHints}
       const descriptor = descriptors[store];
       if (!descriptor) continue;
       try {
-        const candidatePool = !_vectorStores.has(store) && vectorAccumulated.length > 0
+        const candidatePool = datastoreUsesCandidatePool(store) && vectorAccumulated.length > 0
           ? [...vectorAccumulated] : undefined;
         const storeResults = await descriptor.recall({ query, limit, opts, candidatePool });
         all.push(...storeResults);
-        if (_vectorStores.has(store)) vectorAccumulated.push(...storeResults);
+        if (isVectorKnowledgeDatastore(store)) vectorAccumulated.push(...storeResults);
         if (store === "project" && Array.isArray(storeResults) && storeResults.length > 0) {
           projectRows.push(...storeResults);
         }

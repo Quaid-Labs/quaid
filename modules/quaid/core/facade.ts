@@ -13,6 +13,9 @@ import { createProjectCatalogReader } from "./project-catalog.js";
 import { createKnowledgeEngine } from "./knowledge-engine.js";
 import type { TotalRecallOptions, RecallMemoryOpts } from "../orchestrator/default-orchestrator.js";
 import {
+  getBridgeEligibleDatastoreKeys,
+  getDefaultDomainForKnowledgeDatastore,
+  getHandlerStoreForKnowledgeDatastore,
   normalizeKnowledgeDatastores,
   renderKnowledgeDatastoreGuidanceForAgents,
 } from "./knowledge-stores.js";
@@ -2660,21 +2663,16 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
     const rawStores = opts.stores || ["vector"];
     const expandGraph = rawStores.includes("graph");
 
-    // Normalize legacy vector_basic/vector_technical → vector + domain_filter.
-    // Internal project recall maps to bridge-side docs recall so mixed-store
-    // auto-inject can use the same recall engine as the user-facing CLI/tool path.
-    const normalizedStores = [...new Set(rawStores.map((s) =>
-      (s === "vector_basic" || s === "vector_technical")
-        ? "vector"
-        : (s === "project" ? "docs" : s)
-    ))];
+    // M6.1: bridge handler-store mapping comes from the TS core registry while
+    // preserving the current vector_basic/vector_technical/project behavior.
+    const normalizedStores = [...new Set(rawStores.map((s) => getHandlerStoreForKnowledgeDatastore(s)))];
 
     let domain = opts.domain;
     if (!domain) {
       if (rawStores.includes("vector_technical") && !rawStores.includes("vector_basic")) {
-        domain = { technical: true };
+        domain = getDefaultDomainForKnowledgeDatastore("vector_technical");
       } else if (rawStores.includes("vector_basic") && !rawStores.includes("vector_technical")) {
-        domain = { personal: true };
+        domain = getDefaultDomainForKnowledgeDatastore("vector_basic");
       }
     }
 
@@ -3137,7 +3135,7 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
     const resolvedDateTo = resolveRecallDateTo(opts);
     const selectedStores = normalizeKnowledgeDatastores(datastores, expandGraph);
     const shouldRouteStores = routeStores ?? !Array.isArray(datastores);
-    const bridgeOnlyStores = new Set(["vector", "vector_basic", "vector_technical", "graph", "project", "session_chunks"]);
+    const bridgeOnlyStores = new Set(getBridgeEligibleDatastoreKeys());
     const rawDatastoreOptions = datastoreOptions as Partial<Record<string, Record<string, unknown>>> | undefined;
     const sourceChunkOptions = rawDatastoreOptions?.session_chunks || rawDatastoreOptions?.source_chunks || {};
     const maxChunkTokensFromStore = Number((sourceChunkOptions as Record<string, unknown>).max_chunk_tokens);

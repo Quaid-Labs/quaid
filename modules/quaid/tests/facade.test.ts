@@ -908,6 +908,61 @@ describe("QuaidFacade", () => {
     });
   });
 
+  it("recallWithDiagnostics preserves M6.1 bridge eligibility and handler-store mapping", async () => {
+    const execPython = vi.fn(async (command: string, args: string[]) => {
+      if (command === "recall") {
+        const cfg = JSON.parse(args.find((a: string) => a.startsWith("{")) || "{}");
+        return JSON.stringify({
+          contract: "quaid.recall.v1",
+          results: [
+            {
+              text: `stores=${(cfg.stores || []).join(",")}`,
+              category: "fact",
+              similarity: 0.8,
+            },
+          ],
+          meta: { cfg },
+        });
+      }
+      return "{}";
+    });
+    const facade = createQuaidFacade(makeMockDeps({ execPython }));
+
+    const { diagnostics } = await facade.recallWithDiagnostics({
+      query: "bridge mapping",
+      limit: 5,
+      routeStores: false,
+      datastores: ["vector_basic", "project", "source_chunks" as any],
+      expandGraph: false,
+    });
+
+    const cfg = diagnostics?.meta?.cfg as any;
+    expect(cfg.stores).toEqual(["vector", "docs", "session_chunks"]);
+    expect(cfg.domain_filter).toEqual({ all: true });
+  });
+
+  it("recallWithDiagnostics keeps journal off the bridge path", async () => {
+    const execPython = vi.fn(async () => {
+      throw new Error("journal must not use bridge recall");
+    });
+    const facade = createQuaidFacade(makeMockDeps({
+      execPython,
+      isSystemEnabled: vi.fn((system: string) => system === "journal"),
+    }));
+
+    const { results, diagnostics } = await facade.recallWithDiagnostics({
+      query: "journal scan",
+      limit: 5,
+      routeStores: false,
+      datastores: ["journal"],
+      expandGraph: false,
+    });
+
+    expect(execPython).not.toHaveBeenCalledWith("recall", expect.anything());
+    expect(results).toEqual([]);
+    expect(diagnostics).toBeNull();
+  });
+
   it("recallWithDiagnostics with expandGraph preserves both vector and graph results", async () => {
     const execPython = vi.fn(async (command: string) => {
       if (command === "recall") {

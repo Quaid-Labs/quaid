@@ -3,6 +3,9 @@ import { createDatastoreBridge } from "./datastore-bridge.js";
 import { createProjectCatalogReader } from "./project-catalog.js";
 import { createKnowledgeEngine } from "./knowledge-engine.js";
 import {
+  getBridgeEligibleDatastoreKeys,
+  getDefaultDomainForKnowledgeDatastore,
+  getHandlerStoreForKnowledgeDatastore,
   normalizeKnowledgeDatastores,
   renderKnowledgeDatastoreGuidanceForAgents
 } from "./knowledge-stores.js";
@@ -1895,15 +1898,13 @@ Consider running: docs staleness updater (update-stale --apply)`;
   async function recallMemoryFromBridgeDetailed(query, limit, opts) {
     const rawStores = opts.stores || ["vector"];
     const expandGraph = rawStores.includes("graph");
-    const normalizedStores = [...new Set(rawStores.map(
-      (s) => s === "vector_basic" || s === "vector_technical" ? "vector" : s === "project" ? "docs" : s
-    ))];
+    const normalizedStores = [...new Set(rawStores.map((s) => getHandlerStoreForKnowledgeDatastore(s)))];
     let domain = opts.domain;
     if (!domain) {
       if (rawStores.includes("vector_technical") && !rawStores.includes("vector_basic")) {
-        domain = { technical: true };
+        domain = getDefaultDomainForKnowledgeDatastore("vector_technical");
       } else if (rawStores.includes("vector_basic") && !rawStores.includes("vector_technical")) {
-        domain = { personal: true };
+        domain = getDefaultDomainForKnowledgeDatastore("vector_basic");
       }
     }
     const dateFrom = resolveRecallDateFrom(opts);
@@ -2352,7 +2353,7 @@ ${allNotes.map((n) => `- ${n}`).join("\n")}
     const resolvedDateTo = resolveRecallDateTo(opts);
     const selectedStores = normalizeKnowledgeDatastores(datastores, expandGraph);
     const shouldRouteStores = routeStores ?? !Array.isArray(datastores);
-    const bridgeOnlyStores = /* @__PURE__ */ new Set(["vector", "vector_basic", "vector_technical", "graph", "project", "session_chunks"]);
+    const bridgeOnlyStores = new Set(getBridgeEligibleDatastoreKeys());
     const rawDatastoreOptions = datastoreOptions;
     const sourceChunkOptions = rawDatastoreOptions?.session_chunks || rawDatastoreOptions?.source_chunks || {};
     const maxChunkTokensFromStore = Number(sourceChunkOptions.max_chunk_tokens);

@@ -4,6 +4,11 @@ const STORE_REGISTRY = [
     description: "Combined vector recall across domain-tagged facts.",
     defaultWhenExpandGraph: false,
     defaultWhenFlatRecall: false,
+    routable: false,
+    bridgeEligible: true,
+    handlerStore: "vector",
+    aliases: [],
+    usesCandidatePool: false,
     options: [
       {
         key: "domain",
@@ -22,6 +27,12 @@ const STORE_REGISTRY = [
     description: "Personal facts, preferences, and relationship-adjacent memory facts.",
     defaultWhenExpandGraph: true,
     defaultWhenFlatRecall: true,
+    routable: true,
+    bridgeEligible: true,
+    handlerStore: "vector",
+    aliases: [],
+    defaultDomain: { personal: true },
+    usesCandidatePool: false,
     options: []
   },
   {
@@ -29,6 +40,12 @@ const STORE_REGISTRY = [
     description: "Technical and project-state facts (bugs, tests, versions, architecture changes).",
     defaultWhenExpandGraph: false,
     defaultWhenFlatRecall: false,
+    routable: true,
+    bridgeEligible: true,
+    handlerStore: "vector",
+    aliases: [],
+    defaultDomain: { technical: true },
+    usesCandidatePool: false,
     options: []
   },
   {
@@ -36,6 +53,11 @@ const STORE_REGISTRY = [
     description: "Relationship and entity graph traversal (multi-hop links).",
     defaultWhenExpandGraph: true,
     defaultWhenFlatRecall: false,
+    routable: true,
+    bridgeEligible: true,
+    handlerStore: "graph",
+    aliases: [],
+    usesCandidatePool: true,
     options: [
       {
         key: "depth",
@@ -59,6 +81,11 @@ const STORE_REGISTRY = [
     description: "Distilled reflective context from journal files.",
     defaultWhenExpandGraph: true,
     defaultWhenFlatRecall: true,
+    routable: true,
+    bridgeEligible: false,
+    handlerStore: "journal",
+    aliases: [],
+    usesCandidatePool: false,
     options: []
   },
   {
@@ -66,6 +93,11 @@ const STORE_REGISTRY = [
     description: "Project documentation recall from docs index.",
     defaultWhenExpandGraph: true,
     defaultWhenFlatRecall: true,
+    routable: true,
+    bridgeEligible: true,
+    handlerStore: "docs",
+    aliases: [],
+    usesCandidatePool: false,
     options: [
       {
         key: "project",
@@ -84,6 +116,11 @@ const STORE_REGISTRY = [
     description: "Opt-in session transcript chunk recall for exact wording and evidence.",
     defaultWhenExpandGraph: false,
     defaultWhenFlatRecall: false,
+    routable: false,
+    bridgeEligible: true,
+    handlerStore: "session_chunks",
+    aliases: ["source_chunks"],
+    usesCandidatePool: false,
     options: [
       {
         key: "max_chunk_tokens",
@@ -101,6 +138,8 @@ const STORE_REGISTRY = [
 function getKnowledgeDatastoreRegistry() {
   return STORE_REGISTRY.map((store) => ({
     ...store,
+    aliases: [...store.aliases],
+    defaultDomain: store.defaultDomain ? { ...store.defaultDomain } : void 0,
     options: store.options.map((opt) => ({ ...opt, enumValues: opt.enumValues ? [...opt.enumValues] : void 0 }))
   }));
 }
@@ -108,7 +147,44 @@ function getKnowledgeDatastoreKeys() {
   return STORE_REGISTRY.map((s) => s.key);
 }
 function getRoutableDatastoreKeys() {
-  return STORE_REGISTRY.map((s) => s.key).filter((k) => k !== "vector" && k !== "session_chunks");
+  return STORE_REGISTRY.filter((s) => s.routable).map((s) => s.key);
+}
+function getBridgeEligibleDatastoreKeys() {
+  return STORE_REGISTRY.filter((s) => s.bridgeEligible).map((s) => s.key);
+}
+function getKnowledgeDatastoreSpec(key) {
+  const spec = STORE_REGISTRY.find((s) => s.key === key);
+  if (!spec) return void 0;
+  return {
+    ...spec,
+    aliases: [...spec.aliases],
+    defaultDomain: spec.defaultDomain ? { ...spec.defaultDomain } : void 0,
+    options: spec.options.map((opt) => ({ ...opt, enumValues: opt.enumValues ? [...opt.enumValues] : void 0 }))
+  };
+}
+function normalizeKnowledgeDatastoreKey(value) {
+  const rawValue = String(value || "").trim().toLowerCase();
+  if (!rawValue) return void 0;
+  for (const store of STORE_REGISTRY) {
+    if (store.key === rawValue || store.aliases.includes(rawValue)) return store.key;
+  }
+  return void 0;
+}
+function getHandlerStoreForKnowledgeDatastore(store) {
+  const normalized = normalizeKnowledgeDatastoreKey(store);
+  return STORE_REGISTRY.find((s) => s.key === normalized)?.handlerStore || String(store || "");
+}
+function getDefaultDomainForKnowledgeDatastore(store) {
+  const normalized = normalizeKnowledgeDatastoreKey(store);
+  const domain = STORE_REGISTRY.find((s) => s.key === normalized)?.defaultDomain;
+  return domain ? { ...domain } : void 0;
+}
+function datastoreUsesCandidatePool(store) {
+  const normalized = normalizeKnowledgeDatastoreKey(store);
+  return STORE_REGISTRY.find((s) => s.key === normalized)?.usesCandidatePool === true;
+}
+function isVectorKnowledgeDatastore(store) {
+  return getHandlerStoreForKnowledgeDatastore(store) === "vector";
 }
 function renderRoutableKnowledgeDatastoreRouterGuidance() {
   const routable = new Set(getRoutableDatastoreKeys());
@@ -132,9 +208,8 @@ function normalizeKnowledgeDatastores(datastores, expandGraph) {
   if (!Array.isArray(datastores) || datastores.length === 0) return defaults;
   const normalized = [];
   for (const raw of datastores) {
-    const rawValue = String(raw || "").trim().toLowerCase();
-    const value = rawValue === "source_chunks" ? "session_chunks" : rawValue;
-    if (!allowed.has(value) || normalized.includes(value)) continue;
+    const value = normalizeKnowledgeDatastoreKey(raw);
+    if (!value || !allowed.has(value) || normalized.includes(value)) continue;
     normalized.push(value);
   }
   return normalized.length ? normalized : defaults;
@@ -153,9 +228,16 @@ function renderKnowledgeDatastoreGuidanceForAgents() {
   return lines.join("\n");
 }
 export {
+  datastoreUsesCandidatePool,
+  getBridgeEligibleDatastoreKeys,
+  getDefaultDomainForKnowledgeDatastore,
+  getHandlerStoreForKnowledgeDatastore,
   getKnowledgeDatastoreKeys,
   getKnowledgeDatastoreRegistry,
+  getKnowledgeDatastoreSpec,
   getRoutableDatastoreKeys,
+  isVectorKnowledgeDatastore,
+  normalizeKnowledgeDatastoreKey,
   normalizeKnowledgeDatastores,
   renderKnowledgeDatastoreGuidanceForAgents,
   renderRoutableKnowledgeDatastoreRouterGuidance

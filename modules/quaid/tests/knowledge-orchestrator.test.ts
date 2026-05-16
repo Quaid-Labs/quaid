@@ -1,6 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import { createKnowledgeEngine } from "../orchestrator/default-orchestrator.js";
-import { renderRoutableKnowledgeDatastoreRouterGuidance } from "../core/knowledge-stores.js";
+import {
+  datastoreUsesCandidatePool,
+  getBridgeEligibleDatastoreKeys,
+  getDefaultDomainForKnowledgeDatastore,
+  getHandlerStoreForKnowledgeDatastore,
+  getRoutableDatastoreKeys,
+  renderRoutableKnowledgeDatastoreRouterGuidance,
+} from "../core/knowledge-stores.js";
 
 type Result = {
   text: string;
@@ -42,6 +49,49 @@ describe("knowledge orchestrator", () => {
       "session_chunks",
     ]);
     expect(engine.normalizeKnowledgeDatastores(undefined, false)).not.toContain("session_chunks");
+  });
+
+  it("preserves exact M6.1 routed registry snapshots", () => {
+    expect(getRoutableDatastoreKeys()).toEqual([
+      "vector_basic",
+      "vector_technical",
+      "graph",
+      "journal",
+      "project",
+    ]);
+    expect(getBridgeEligibleDatastoreKeys()).toEqual([
+      "vector",
+      "vector_basic",
+      "vector_technical",
+      "graph",
+      "project",
+      "session_chunks",
+    ]);
+    expect(renderRoutableKnowledgeDatastoreRouterGuidance()).toBe([
+      "Stores:",
+      "- vector_basic: Personal facts, preferences, and relationship-adjacent memory facts.",
+      "- vector_technical: Technical and project-state facts (bugs, tests, versions, architecture changes).",
+      "- graph: Relationship and entity graph traversal (multi-hop links).",
+      "- journal: Distilled reflective context from journal files.",
+      "- project: Project documentation recall from docs index.",
+      "Cost/latency priority:",
+      "1) vector_basic first (cheap; use liberally)",
+      "2) vector_technical/graph",
+      "3) project/journal when needed for precision",
+      "4) broader historical/session retrieval only when prior stores are insufficient",
+    ].join("\n"));
+  });
+
+  it("preserves M6.1 bridge mapping and datastore execution metadata", () => {
+    expect(getHandlerStoreForKnowledgeDatastore("vector_basic")).toBe("vector");
+    expect(getHandlerStoreForKnowledgeDatastore("vector_technical")).toBe("vector");
+    expect(getHandlerStoreForKnowledgeDatastore("project")).toBe("docs");
+    expect(getHandlerStoreForKnowledgeDatastore("session_chunks")).toBe("session_chunks");
+    expect(getHandlerStoreForKnowledgeDatastore("source_chunks")).toBe("session_chunks");
+    expect(getDefaultDomainForKnowledgeDatastore("vector_basic")).toEqual({ personal: true });
+    expect(getDefaultDomainForKnowledgeDatastore("vector_technical")).toEqual({ technical: true });
+    expect(datastoreUsesCandidatePool("graph")).toBe(true);
+    expect(datastoreUsesCandidatePool("project")).toBe(false);
   });
 
   it("throws when router fails and fail-open is not enabled", async () => {

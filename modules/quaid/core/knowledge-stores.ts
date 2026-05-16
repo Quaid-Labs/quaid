@@ -15,6 +15,12 @@ export type KnowledgeDatastoreSpec = {
   description: string;
   defaultWhenExpandGraph: boolean;
   defaultWhenFlatRecall: boolean;
+  routable: boolean;
+  bridgeEligible: boolean;
+  handlerStore: "vector" | "docs" | "graph" | "journal" | "session_chunks";
+  aliases: string[];
+  defaultDomain?: DomainFilter;
+  usesCandidatePool: boolean;
   options: KnowledgeDatastoreOption[];
 };
 
@@ -24,6 +30,11 @@ const STORE_REGISTRY: KnowledgeDatastoreSpec[] = [
     description: "Combined vector recall across domain-tagged facts.",
     defaultWhenExpandGraph: false,
     defaultWhenFlatRecall: false,
+    routable: false,
+    bridgeEligible: true,
+    handlerStore: "vector",
+    aliases: [],
+    usesCandidatePool: false,
     options: [
       {
         key: "domain",
@@ -42,6 +53,12 @@ const STORE_REGISTRY: KnowledgeDatastoreSpec[] = [
     description: "Personal facts, preferences, and relationship-adjacent memory facts.",
     defaultWhenExpandGraph: true,
     defaultWhenFlatRecall: true,
+    routable: true,
+    bridgeEligible: true,
+    handlerStore: "vector",
+    aliases: [],
+    defaultDomain: { personal: true },
+    usesCandidatePool: false,
     options: [],
   },
   {
@@ -49,6 +66,12 @@ const STORE_REGISTRY: KnowledgeDatastoreSpec[] = [
     description: "Technical and project-state facts (bugs, tests, versions, architecture changes).",
     defaultWhenExpandGraph: false,
     defaultWhenFlatRecall: false,
+    routable: true,
+    bridgeEligible: true,
+    handlerStore: "vector",
+    aliases: [],
+    defaultDomain: { technical: true },
+    usesCandidatePool: false,
     options: [],
   },
   {
@@ -56,6 +79,11 @@ const STORE_REGISTRY: KnowledgeDatastoreSpec[] = [
     description: "Relationship and entity graph traversal (multi-hop links).",
     defaultWhenExpandGraph: true,
     defaultWhenFlatRecall: false,
+    routable: true,
+    bridgeEligible: true,
+    handlerStore: "graph",
+    aliases: [],
+    usesCandidatePool: true,
     options: [
       {
         key: "depth",
@@ -79,6 +107,11 @@ const STORE_REGISTRY: KnowledgeDatastoreSpec[] = [
     description: "Distilled reflective context from journal files.",
     defaultWhenExpandGraph: true,
     defaultWhenFlatRecall: true,
+    routable: true,
+    bridgeEligible: false,
+    handlerStore: "journal",
+    aliases: [],
+    usesCandidatePool: false,
     options: [],
   },
   {
@@ -86,6 +119,11 @@ const STORE_REGISTRY: KnowledgeDatastoreSpec[] = [
     description: "Project documentation recall from docs index.",
     defaultWhenExpandGraph: true,
     defaultWhenFlatRecall: true,
+    routable: true,
+    bridgeEligible: true,
+    handlerStore: "docs",
+    aliases: [],
+    usesCandidatePool: false,
     options: [
       {
         key: "project",
@@ -104,6 +142,11 @@ const STORE_REGISTRY: KnowledgeDatastoreSpec[] = [
     description: "Opt-in session transcript chunk recall for exact wording and evidence.",
     defaultWhenExpandGraph: false,
     defaultWhenFlatRecall: false,
+    routable: false,
+    bridgeEligible: true,
+    handlerStore: "session_chunks",
+    aliases: ["source_chunks"],
+    usesCandidatePool: false,
     options: [
       {
         key: "max_chunk_tokens",
@@ -122,6 +165,8 @@ const STORE_REGISTRY: KnowledgeDatastoreSpec[] = [
 export function getKnowledgeDatastoreRegistry(): KnowledgeDatastoreSpec[] {
   return STORE_REGISTRY.map((store) => ({
     ...store,
+    aliases: [...store.aliases],
+    defaultDomain: store.defaultDomain ? { ...store.defaultDomain } : undefined,
     options: store.options.map((opt) => ({ ...opt, enumValues: opt.enumValues ? [...opt.enumValues] : undefined })),
   }));
 }
@@ -131,9 +176,51 @@ export function getKnowledgeDatastoreKeys(): KnowledgeDatastore[] {
 }
 
 export function getRoutableDatastoreKeys(): KnowledgeDatastore[] {
-  // "vector" is an aggregate store. "session_chunks" exposes raw transcript
-  // context, so keep it explicit-only rather than LLM-router selectable.
-  return STORE_REGISTRY.map((s) => s.key).filter((k) => k !== "vector" && k !== "session_chunks");
+  return STORE_REGISTRY.filter((s) => s.routable).map((s) => s.key);
+}
+
+export function getBridgeEligibleDatastoreKeys(): KnowledgeDatastore[] {
+  return STORE_REGISTRY.filter((s) => s.bridgeEligible).map((s) => s.key);
+}
+
+export function getKnowledgeDatastoreSpec(key: KnowledgeDatastore): KnowledgeDatastoreSpec | undefined {
+  const spec = STORE_REGISTRY.find((s) => s.key === key);
+  if (!spec) return undefined;
+  return {
+    ...spec,
+    aliases: [...spec.aliases],
+    defaultDomain: spec.defaultDomain ? { ...spec.defaultDomain } : undefined,
+    options: spec.options.map((opt) => ({ ...opt, enumValues: opt.enumValues ? [...opt.enumValues] : undefined })),
+  };
+}
+
+export function normalizeKnowledgeDatastoreKey(value: unknown): KnowledgeDatastore | undefined {
+  const rawValue = String(value || "").trim().toLowerCase();
+  if (!rawValue) return undefined;
+  for (const store of STORE_REGISTRY) {
+    if (store.key === rawValue || store.aliases.includes(rawValue)) return store.key;
+  }
+  return undefined;
+}
+
+export function getHandlerStoreForKnowledgeDatastore(store: KnowledgeDatastore | string): string {
+  const normalized = normalizeKnowledgeDatastoreKey(store);
+  return STORE_REGISTRY.find((s) => s.key === normalized)?.handlerStore || String(store || "");
+}
+
+export function getDefaultDomainForKnowledgeDatastore(store: KnowledgeDatastore | string): DomainFilter | undefined {
+  const normalized = normalizeKnowledgeDatastoreKey(store);
+  const domain = STORE_REGISTRY.find((s) => s.key === normalized)?.defaultDomain;
+  return domain ? { ...domain } : undefined;
+}
+
+export function datastoreUsesCandidatePool(store: KnowledgeDatastore | string): boolean {
+  const normalized = normalizeKnowledgeDatastoreKey(store);
+  return STORE_REGISTRY.find((s) => s.key === normalized)?.usesCandidatePool === true;
+}
+
+export function isVectorKnowledgeDatastore(store: KnowledgeDatastore | string): boolean {
+  return getHandlerStoreForKnowledgeDatastore(store) === "vector";
 }
 
 export function renderRoutableKnowledgeDatastoreRouterGuidance(): string {
@@ -163,9 +250,8 @@ export function normalizeKnowledgeDatastores(datastores: unknown, expandGraph: b
 
   const normalized: KnowledgeDatastore[] = [];
   for (const raw of datastores) {
-    const rawValue = String(raw || "").trim().toLowerCase();
-    const value = (rawValue === "source_chunks" ? "session_chunks" : rawValue) as KnowledgeDatastore;
-    if (!allowed.has(value) || normalized.includes(value)) continue;
+    const value = normalizeKnowledgeDatastoreKey(raw);
+    if (!value || !allowed.has(value) || normalized.includes(value)) continue;
     normalized.push(value);
   }
 
