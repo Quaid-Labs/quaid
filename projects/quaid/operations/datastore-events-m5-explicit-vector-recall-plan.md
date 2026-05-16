@@ -1,10 +1,10 @@
 # Datastore Events M5 Explicit Vector Recall Plan
 
-Status: proposed next slice, not implemented
+Status: M5 implemented; explicit `stores:["vector"]` CLI recall routes through the broker
 Owner: W1 runtime/datastore with W3 recall-quality approval before code
 Plan source: `~/quaidcode/util/docs/datastore-events-migration-plan.md`
 
-## Decision Needed
+## Decision
 
 M4.1 activated the narrow explicit docs-only CLI path:
 

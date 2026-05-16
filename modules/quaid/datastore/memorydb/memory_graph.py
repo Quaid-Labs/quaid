@@ -6982,6 +6982,219 @@ def _build_docs_only_recall_json_payload(doc_results: Dict[str, Any], *, limit: 
     )
 
 
+_CLI_VECTOR_RECALL_KWARGS = frozenset({
+    "limit",
+    "owner_id",
+    "min_similarity",
+    "current_session_id",
+    "compaction_time",
+    "date_from",
+    "date_to",
+    "temporal_dimension",
+    "debug",
+    "domain",
+    "domain_boost",
+    "project",
+    "timeout_ms",
+    "include_chunks",
+    "max_chunk_tokens",
+    "max_total_chunk_tokens",
+    "use_multi_pass",
+    "use_reranker",
+    "max_turns",
+    "use_routing",
+    "planner_profile",
+    "planned_queries",
+    "planner_meta",
+})
+
+
+def _should_broker_cli_vector_recall(
+    *,
+    stores_explicit: bool,
+    store_names: List[str],
+    archive: Any = False,
+    session_id: Optional[str] = None,
+) -> bool:
+    """Return true only for the M5 explicit vector-only activation slice."""
+    if not stores_explicit or archive or session_id:
+        return False
+    normalized = [str(store or "").strip().lower().replace("-", "_") for store in list(store_names or [])]
+    return normalized == ["vector"]
+
+
+def _build_cli_vector_recall_kwargs(
+    *,
+    limit: int,
+    owner: str,
+    min_similarity: Any,
+    current_session_id: Optional[str],
+    compaction_time: Optional[str],
+    date_from: Optional[str],
+    date_to: Optional[str],
+    temporal_dimension: Optional[str],
+    use_debug: bool,
+    domain_filter: Dict[str, Any],
+    domain_boost: Any,
+    project: Optional[str],
+    timeout_ms: Optional[int],
+    include_chunks: bool,
+    max_chunk_tokens: Optional[int],
+    max_total_chunk_tokens: Optional[int],
+    use_fast: bool,
+    planner_profile: str,
+    planned_queries: Optional[List[str]],
+    planned_meta: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Build the exact recall kwargs used by the existing vector-only CLI path."""
+    recall_kwargs: Dict[str, Any] = dict(
+        limit=limit,
+        owner_id=owner,
+        min_similarity=min_similarity,
+        current_session_id=current_session_id,
+        compaction_time=compaction_time,
+        date_from=date_from,
+        date_to=date_to,
+        temporal_dimension=temporal_dimension,
+        debug=use_debug,
+        domain=domain_filter,
+        domain_boost=domain_boost,
+        project=project,
+        timeout_ms=timeout_ms,
+        include_chunks=include_chunks,
+        max_chunk_tokens=max_chunk_tokens,
+        max_total_chunk_tokens=max_total_chunk_tokens,
+    )
+    if use_fast:
+        recall_kwargs["use_multi_pass"] = False
+        recall_kwargs["use_reranker"] = False
+        recall_kwargs["max_turns"] = 1
+        recall_kwargs["use_routing"] = False
+    recall_kwargs["planner_profile"] = planner_profile
+    if planned_queries is not None and not use_fast:
+        recall_kwargs["planned_queries"] = planned_queries
+        recall_kwargs["planner_meta"] = planned_meta
+    return recall_kwargs
+
+
+def _validate_cli_vector_recall_kwargs(value: Any) -> Dict[str, Any]:
+    if not isinstance(value, dict):
+        raise _contract_error("vector request options.recall_kwargs must be an object")
+    unknown = sorted(set(value) - _CLI_VECTOR_RECALL_KWARGS)
+    if unknown:
+        raise _contract_error(f"vector request options.recall_kwargs has unsupported keys: {unknown}")
+    return dict(value)
+
+
+def _run_cli_vector_recall_request(query: str, options: Dict[str, Any]) -> Dict[str, Any]:
+    """Execute explicit vector recall through the broker request handler."""
+    recall_kwargs = _validate_cli_vector_recall_kwargs((options or {}).get("recall_kwargs"))
+    rows, meta = recall(query, return_meta=True, **recall_kwargs)
+    return {
+        "status": "ok",
+        "selector": "vector",
+        "store": "vector",
+        "results": _validate_recall_result_rows(rows),
+        "meta": dict(meta or {}),
+    }
+
+
+def _handle_cli_vector_recall_request(event: Dict[str, Any]) -> Dict[str, Any]:
+    payload = event.get("payload") if isinstance(event, dict) else None
+    if not isinstance(payload, dict):
+        raise _contract_error("vector request event payload must be an object")
+    selector = str(payload.get("selector") or "").strip().lower().replace("-", "_")
+    store = str(payload.get("store") or "").strip().lower().replace("-", "_")
+    if selector != "vector" or store != "vector":
+        return {
+            "status": "nacked",
+            "error": "M5 vector recall handler only supports selector/store vector",
+            "selector": selector,
+            "store": store,
+        }
+    query = str(payload.get("query") or "").strip()
+    if not query:
+        raise _contract_error("vector request payload.query is required")
+    options = payload.get("options")
+    if options is None:
+        options = {}
+    if not isinstance(options, dict):
+        raise _contract_error("vector request payload.options must be an object")
+    return _run_cli_vector_recall_request(query, dict(options))
+
+
+def _register_cli_vector_recall_request_handler() -> None:
+    from core.contracts.recall import RECALL_MEMORY_REQUEST
+    from core.runtime.events import register_request_handler
+
+    register_request_handler(
+        RECALL_MEMORY_REQUEST,
+        _handle_cli_vector_recall_request,
+        datastore_id="memorydb",
+        force=True,
+    )
+
+
+def _validate_cli_vector_broker_response(response: Any) -> Dict[str, Any]:
+    if not isinstance(response, dict):
+        raise _contract_error(f"vector broker response must be an object, got {type(response).__name__}")
+    if str(response.get("status") or "") != "ok":
+        raise _contract_error(str(response.get("error") or "vector broker request failed"))
+    responses = response.get("responses")
+    if not isinstance(responses, list) or len(responses) != 1:
+        raise _contract_error("vector broker response must contain exactly one handler response")
+    handler_response = responses[0]
+    if not isinstance(handler_response, dict):
+        raise _contract_error("vector broker handler response must be an object")
+    if str(handler_response.get("datastore_id") or "") != "memorydb":
+        raise _contract_error("vector broker handler must be memorydb")
+    if str(handler_response.get("status") or "") not in {"ok", "acked"}:
+        raise _contract_error(str(handler_response.get("error") or "vector broker handler failed"))
+    result = handler_response.get("result")
+    if not isinstance(result, dict):
+        raise _contract_error("vector broker handler result must be an object")
+    if "results" not in result:
+        raise _contract_error("vector broker handler result.results must be a list")
+    rows = _validate_recall_result_rows(result.get("results"))
+    meta = result.get("meta")
+    if meta is not None and not isinstance(meta, dict):
+        raise _contract_error("vector broker handler result.meta must be an object or null")
+    return {"results": rows, "meta": dict(meta or {})}
+
+
+def _request_cli_vector_recall_via_broker(
+    query: str,
+    recall_kwargs: Dict[str, Any],
+    *,
+    register_handler: bool = True,
+) -> Dict[str, Any]:
+    from core.contracts.recall import (
+        RECALL_MEMORY_REQUEST,
+        build_recall_request_payload,
+        resolve_recall_request_routes,
+    )
+    from core.runtime.events import request_broker_event
+
+    if register_handler:
+        _register_cli_vector_recall_request_handler()
+    route = resolve_recall_request_routes(["vector"])[0]
+    payload = build_recall_request_payload(
+        query=query,
+        route=route,
+        limit=int(recall_kwargs.get("limit") or 1),
+        options={"recall_kwargs": dict(recall_kwargs or {})},
+    )
+    response = request_broker_event(
+        RECALL_MEMORY_REQUEST,
+        payload,
+        source="memory_graph.cli.recall",
+        provenance={
+            "replacement": "datastore.memorydb.memory_graph.recall vector-only direct branch",
+        },
+    )
+    return _validate_cli_vector_broker_response(response)
+
+
 def _build_cli_docs_recall_options(
     cfg: Dict[str, Any],
     store_opts: Dict[str, Any],
@@ -23372,38 +23585,48 @@ if __name__ == "__main__":
                     want_docs = False
                 else:
                     # Vector-only recall
-                    recall_kwargs = dict(
+                    recall_kwargs = _build_cli_vector_recall_kwargs(
                         limit=limit,
-                        owner_id=owner,
+                        owner=owner,
                         min_similarity=min_similarity,
                         current_session_id=current_session_id,
                         compaction_time=compaction_time,
                         date_from=date_from,
                         date_to=date_to,
                         temporal_dimension=temporal_dimension,
-                        debug=use_debug,
-                        domain=domain_filter,
+                        use_debug=use_debug,
+                        domain_filter=domain_filter,
                         domain_boost=domain_boost,
                         project=project,
                         timeout_ms=timeout_ms,
                         include_chunks=include_chunks,
                         max_chunk_tokens=max_chunk_tokens,
                         max_total_chunk_tokens=max_total_chunk_tokens,
+                        use_fast=use_fast,
+                        planner_profile=planner_profile,
+                        planned_queries=planned_queries,
+                        planned_meta=planned_meta,
                     )
-                    if use_fast:
-                        recall_kwargs['use_multi_pass'] = False
-                        recall_kwargs['use_reranker'] = False
-                        recall_kwargs['max_turns'] = 1
-                        recall_kwargs['use_routing'] = False  # skip LLM fanout/HyDE expansion
-                    recall_kwargs['planner_profile'] = planner_profile
-                    if planned_queries is not None and not use_fast:
-                        recall_kwargs['planned_queries'] = planned_queries
-                        recall_kwargs['planner_meta'] = planned_meta
+                    use_vector_broker = _should_broker_cli_vector_recall(
+                        stores_explicit=stores_explicit,
+                        store_names=store_names,
+                        archive=archive,
+                        session_id=session_id,
+                    )
                     if use_json:
-                        results, meta = recall(query, return_meta=True, **recall_kwargs)
+                        if use_vector_broker:
+                            vector_response = _request_cli_vector_recall_via_broker(query, recall_kwargs)
+                            results = vector_response["results"]
+                            meta = vector_response["meta"]
+                        else:
+                            results, meta = recall(query, return_meta=True, **recall_kwargs)
                         json_payload = _build_recall_json_payload(results, meta=meta)
                     else:
-                        text_memory_results = recall(query, **recall_kwargs)
+                        if use_vector_broker:
+                            vector_response = _request_cli_vector_recall_via_broker(query, recall_kwargs)
+                            text_memory_results = vector_response["results"]
+                        else:
+                            text_memory_results = recall(query, **recall_kwargs)
                     if not use_json and text_memory_results is not None:
                         _print_recall_results(text_memory_results)
 

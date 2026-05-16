@@ -14389,6 +14389,311 @@ class TestRecallLimitEdgeCases:
         assert "plog-amber-valentine-2023" in payload["results"][0]["text"]
         assert payload["docs"]["chunks"][0]["source"].endswith("PROJECT.log")
 
+    def test_cli_vector_broker_activation_is_exact_vector_only(self):
+        import datastore.memorydb.memory_graph as mg
+
+        assert mg._should_broker_cli_vector_recall(
+            stores_explicit=True,
+            store_names=["vector"],
+        ) is True
+        assert mg._should_broker_cli_vector_recall(
+            stores_explicit=False,
+            store_names=["vector"],
+        ) is False
+        assert mg._should_broker_cli_vector_recall(
+            stores_explicit=True,
+            store_names=["vector", "docs"],
+        ) is False
+        assert mg._should_broker_cli_vector_recall(
+            stores_explicit=True,
+            store_names=["vector"],
+            archive=True,
+        ) is False
+        assert mg._should_broker_cli_vector_recall(
+            stores_explicit=True,
+            store_names=["vector"],
+            session_id="session-123",
+        ) is False
+        assert mg._should_broker_cli_vector_recall(
+            stores_explicit=True,
+            store_names=["vector_basic"],
+        ) is False
+
+    def test_cli_vector_broker_request_preserves_kwargs_and_output_shape(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+        import core.runtime.events as events
+        from lib.adapter import TestAdapter, reset_adapter, set_adapter
+
+        captured = {}
+
+        def _fake_recall(query, return_meta=False, **kwargs):
+            captured["query"] = query
+            captured["return_meta"] = return_meta
+            captured["kwargs"] = kwargs
+            return (
+                [
+                    {
+                        "text": "Solomon uses a Baratza Encore grinder",
+                        "category": "preference",
+                        "similarity": 0.93,
+                        "id": "fact-grinder",
+                    }
+                ],
+                {"selected_path": "vector", "counts": {"final_results": 1}},
+            )
+
+        recall_kwargs = mg._build_cli_vector_recall_kwargs(
+            limit=4,
+            owner="solomon",
+            min_similarity=0.62,
+            current_session_id="session-now",
+            compaction_time="2026-05-16T01:02:03Z",
+            date_from="2026-01-01",
+            date_to="2026-12-31",
+            temporal_dimension="record",
+            use_debug=True,
+            domain_filter={"personal": True},
+            domain_boost=[{"domain": "personal", "boost": 0.2}],
+            project="quaid",
+            timeout_ms=2500,
+            include_chunks=True,
+            max_chunk_tokens=128,
+            max_total_chunk_tokens=512,
+            use_fast=True,
+            planner_profile="fast",
+            planned_queries=["should be ignored in fast mode"],
+            planned_meta={"planned_stores": ["vector"]},
+        )
+
+        set_adapter(TestAdapter(tmp_path))
+        try:
+            with events._REQUEST_EVENT_HANDLERS_LOCK:
+                events._REQUEST_EVENT_HANDLERS.clear()
+            with patch.object(mg, "recall", side_effect=_fake_recall):
+                result = mg._request_cli_vector_recall_via_broker("what grinder do I use", recall_kwargs)
+        finally:
+            with events._REQUEST_EVENT_HANDLERS_LOCK:
+                events._REQUEST_EVENT_HANDLERS.clear()
+            reset_adapter()
+
+        assert captured["query"] == "what grinder do I use"
+        assert captured["return_meta"] is True
+        assert captured["kwargs"] == {
+            "limit": 4,
+            "owner_id": "solomon",
+            "min_similarity": 0.62,
+            "current_session_id": "session-now",
+            "compaction_time": "2026-05-16T01:02:03Z",
+            "date_from": "2026-01-01",
+            "date_to": "2026-12-31",
+            "temporal_dimension": "record",
+            "debug": True,
+            "domain": {"personal": True},
+            "domain_boost": [{"domain": "personal", "boost": 0.2}],
+            "project": "quaid",
+            "timeout_ms": 2500,
+            "include_chunks": True,
+            "max_chunk_tokens": 128,
+            "max_total_chunk_tokens": 512,
+            "use_multi_pass": False,
+            "use_reranker": False,
+            "max_turns": 1,
+            "use_routing": False,
+            "planner_profile": "fast",
+        }
+        assert result["results"][0]["text"] == "Solomon uses a Baratza Encore grinder"
+        assert result["meta"]["selected_path"] == "vector"
+
+        payload = mg._build_recall_json_payload(result["results"], meta=result["meta"])
+        assert payload["contract"] == "quaid.recall.v1"
+        assert payload["results"][0]["category"] == "preference"
+        assert payload["meta"]["counts"]["final_results"] == 1
+
+    def test_cli_vector_broker_text_shape_uses_existing_renderer(self, capsys):
+        import datastore.memorydb.memory_graph as mg
+
+        result = mg._validate_cli_vector_broker_response(
+            {
+                "status": "ok",
+                "responses": [
+                    {
+                        "datastore_id": "memorydb",
+                        "status": "ok",
+                        "result": {
+                            "results": [
+                                {
+                                    "text": "Maya keeps the amber notebook",
+                                    "category": "fact",
+                                    "similarity": 0.87,
+                                    "id": "fact-amber",
+                                    "created_at": "2026-05-16T00:00:00Z",
+                                }
+                            ],
+                            "meta": {"selected_path": "vector"},
+                        },
+                    }
+                ],
+            }
+        )
+
+        mg._print_recall_results(result["results"])
+        rendered = capsys.readouterr().out
+        assert "[0.87] [fact]" in rendered
+        assert "Maya keeps the amber notebook" in rendered
+        assert "|ID:fact-amber|" in rendered
+
+    def test_cli_vector_handler_nacks_excluded_memory_selectors(self):
+        import datastore.memorydb.memory_graph as mg
+
+        with patch.object(mg, "recall", side_effect=AssertionError("excluded selector must not recall")):
+            for selector, store in (
+                ("vector_basic", "vector_basic"),
+                ("vector_technical", "vector_technical"),
+                ("session_chunks", "session_chunks"),
+                ("vector", "memorydb"),
+                ("vector_basic", "vector"),
+            ):
+                result = mg._handle_cli_vector_recall_request(
+                    {
+                        "payload": {
+                            "query": "baratza",
+                            "selector": selector,
+                            "store": store,
+                            "options": {"recall_kwargs": {"limit": 1}},
+                        }
+                    }
+                )
+                assert result["status"] == "nacked"
+                assert "selector/store vector" in result["error"]
+
+    def test_cli_vector_broker_missing_handler_respects_fail_hard(self, caplog, monkeypatch, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+        import core.runtime.events as events
+        from lib.adapter import TestAdapter, reset_adapter, set_adapter
+
+        recall_kwargs = mg._build_cli_vector_recall_kwargs(
+            limit=1,
+            owner="quaid",
+            min_similarity=0.6,
+            current_session_id=None,
+            compaction_time=None,
+            date_from=None,
+            date_to=None,
+            temporal_dimension="auto",
+            use_debug=False,
+            domain_filter={"all": True},
+            domain_boost=[],
+            project=None,
+            timeout_ms=None,
+            include_chunks=False,
+            max_chunk_tokens=None,
+            max_total_chunk_tokens=None,
+            use_fast=False,
+            planner_profile="full",
+            planned_queries=None,
+            planned_meta=None,
+        )
+
+        set_adapter(TestAdapter(tmp_path))
+        try:
+            with events._REQUEST_EVENT_HANDLERS_LOCK:
+                events._REQUEST_EVENT_HANDLERS.clear()
+
+            monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: False)
+            with caplog.at_level("ERROR"):
+                with pytest.raises(RuntimeError, match="No request handler registered"):
+                    mg._request_cli_vector_recall_via_broker(
+                        "missing vector handler",
+                        recall_kwargs,
+                        register_handler=False,
+                    )
+            assert "No request handler registered for recall.memory.request.v1" in caplog.text
+
+            monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: True)
+            with pytest.raises(RuntimeError, match="Request handler missing while fail-hard mode is enabled"):
+                mg._request_cli_vector_recall_via_broker(
+                    "missing vector handler",
+                    recall_kwargs,
+                    register_handler=False,
+                )
+        finally:
+            with events._REQUEST_EVENT_HANDLERS_LOCK:
+                events._REQUEST_EVENT_HANDLERS.clear()
+            reset_adapter()
+
+    def test_cli_vector_broker_handler_failure_respects_fail_hard(self, caplog, monkeypatch, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+        import core.runtime.events as events
+        from core.contracts.recall import RECALL_MEMORY_REQUEST
+        from lib.adapter import TestAdapter, reset_adapter, set_adapter
+
+        recall_kwargs = {"limit": 1, "owner_id": "quaid", "min_similarity": 0.6}
+
+        def _failing_handler(_event):
+            raise RuntimeError("vector exploded")
+
+        set_adapter(TestAdapter(tmp_path))
+        try:
+            with events._REQUEST_EVENT_HANDLERS_LOCK:
+                events._REQUEST_EVENT_HANDLERS.clear()
+            events.register_request_handler(
+                RECALL_MEMORY_REQUEST,
+                _failing_handler,
+                datastore_id="memorydb",
+                force=True,
+            )
+
+            monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: False)
+            with caplog.at_level("ERROR"):
+                with pytest.raises(RuntimeError, match="vector broker request failed"):
+                    mg._request_cli_vector_recall_via_broker(
+                        "failing vector handler",
+                        recall_kwargs,
+                        register_handler=False,
+                    )
+            assert "vector exploded" in caplog.text
+
+            monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: True)
+            with pytest.raises(RuntimeError, match="Request handler failed while fail-hard mode is enabled"):
+                mg._request_cli_vector_recall_via_broker(
+                    "failing vector handler",
+                    recall_kwargs,
+                    register_handler=False,
+                )
+        finally:
+            with events._REQUEST_EVENT_HANDLERS_LOCK:
+                events._REQUEST_EVENT_HANDLERS.clear()
+            reset_adapter()
+
+    def test_cli_vector_broker_malformed_handler_output_raises_end_to_end(self, monkeypatch, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+        import core.runtime.events as events
+        from core.contracts.recall import RECALL_MEMORY_REQUEST
+        from lib.adapter import TestAdapter, reset_adapter, set_adapter
+
+        set_adapter(TestAdapter(tmp_path))
+        try:
+            with events._REQUEST_EVENT_HANDLERS_LOCK:
+                events._REQUEST_EVENT_HANDLERS.clear()
+            events.register_request_handler(
+                RECALL_MEMORY_REQUEST,
+                lambda _event: {"status": "ok", "meta": {}},
+                datastore_id="memorydb",
+                force=True,
+            )
+            monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: True)
+
+            with pytest.raises(RuntimeError, match="results must be a list"):
+                mg._request_cli_vector_recall_via_broker(
+                    "malformed vector handler",
+                    {"limit": 1, "owner_id": "quaid", "min_similarity": 0.6},
+                    register_handler=False,
+                )
+        finally:
+            with events._REQUEST_EVENT_HANDLERS_LOCK:
+                events._REQUEST_EVENT_HANDLERS.clear()
+            reset_adapter()
+
     def test_cli_docs_broker_request_preserves_filters_and_fallback(self, tmp_path):
         import datastore.memorydb.memory_graph as mg
         import core.runtime.events as events
