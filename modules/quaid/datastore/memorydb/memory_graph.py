@@ -23418,14 +23418,12 @@ if __name__ == "__main__":
                         date_from=date_from,
                         date_to=date_to,
                     )
-                    docs_response = (
-                        _request_cli_docs_recall_via_broker(query, docs_options)
-                        if not want_memory
-                        else _run_cli_docs_recall_request(
-                            query,
-                            docs_options,
-                        )
-                    )
+                    if not want_memory:
+                        docs_response = _request_cli_docs_recall_via_broker(query, docs_options)
+                    else:
+                        # M4: mixed docs+vector recall stays on the existing path;
+                        # broker dispatch for mixed store plans is a later slice.
+                        docs_response = _run_cli_docs_recall_request(query, docs_options)
                     doc_results = docs_response["docs"]
                     doc_limit = int(docs_response["limit"])
                     if use_json:

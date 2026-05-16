@@ -14465,6 +14465,8 @@ class TestRecallLimitEdgeCases:
 
         assert result["limit"] == 3
         assert result["docs"]["chunks"][0]["source"].endswith("README.md")
+        # Date-bounded docs recall intentionally suppresses PROJECT.md attachment.
+        assert result["docs"]["project_md"] is None
         assert result["meta"] == {
             "query": "recipe schema",
             "requested_project": "recipe-app",
@@ -14640,6 +14642,35 @@ class TestRecallLimitEdgeCases:
                     ],
                 }
             )
+
+    def test_cli_docs_broker_malformed_handler_output_raises_end_to_end(self, monkeypatch, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+        import core.runtime.events as events
+        from core.contracts.recall import RECALL_DOCS_REQUEST
+        from lib.adapter import TestAdapter, reset_adapter, set_adapter
+
+        set_adapter(TestAdapter(tmp_path))
+        try:
+            with events._REQUEST_EVENT_HANDLERS_LOCK:
+                events._REQUEST_EVENT_HANDLERS.clear()
+            events.register_request_handler(
+                RECALL_DOCS_REQUEST,
+                lambda _event: {"status": "ok", "limit": 1},
+                datastore_id="docsdb",
+                force=True,
+            )
+            monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: True)
+
+            with pytest.raises(RuntimeError, match="result.docs must be an object"):
+                mg._request_cli_docs_recall_via_broker(
+                    "malformed docs handler",
+                    {"limit": 1, "docs_only": True, "min_similarity": 0.35},
+                    register_handler=False,
+                )
+        finally:
+            with events._REQUEST_EVENT_HANDLERS_LOCK:
+                events._REQUEST_EVENT_HANDLERS.clear()
+            reset_adapter()
 
     def test_build_recall_json_payload_raises_on_invalid_result_shape(self):
         from datastore.memorydb.memory_graph import _build_recall_json_payload
