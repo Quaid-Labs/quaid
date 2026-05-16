@@ -7283,6 +7283,9 @@ def _run_cli_docs_recall_request(query: str, options: Dict[str, Any]) -> Dict[st
     """Execute the docs recall request handler using the old CLI search semantics."""
     from datastore.docsdb.rag import DocsRAG as _DocsRAG
 
+    selector = str(options.get("selector") or "docs").strip().lower().replace("-", "_")
+    if selector not in {"docs", "project"}:
+        raise _contract_error("docs request selector must be docs or project")
     bounded_limit = max(1, int(options.get("limit") or 1))
     project = options.get("project") if options.get("project") else None
     doc_filters = options.get("docs")
@@ -7314,7 +7317,7 @@ def _run_cli_docs_recall_request(query: str, options: Dict[str, Any]) -> Dict[st
     docs = _validate_docs_bundle(doc_results)
     return {
         "status": "ok",
-        "selector": "docs",
+        "selector": selector,
         "store": "docs",
         "docs": docs,
         "limit": bounded_limit,
@@ -7334,6 +7337,9 @@ def _handle_cli_docs_recall_request(event: Dict[str, Any]) -> Dict[str, Any]:
         raise _contract_error("docs request event payload must be an object")
     if str(payload.get("store") or "") != "docs":
         raise _contract_error("docs request payload.store must be docs")
+    selector = str(payload.get("selector") or "docs").strip().lower().replace("-", "_")
+    if selector not in {"docs", "project"}:
+        raise _contract_error("docs request payload.selector must be docs or project")
     query = str(payload.get("query") or "").strip()
     if not query:
         raise _contract_error("docs request payload.query is required")
@@ -7344,6 +7350,7 @@ def _handle_cli_docs_recall_request(event: Dict[str, Any]) -> Dict[str, Any]:
         raise _contract_error("docs request payload.options must be an object")
     request_options = dict(options)
     request_options["limit"] = int(payload.get("limit") or request_options.get("limit") or 1)
+    request_options["selector"] = selector
     return _run_cli_docs_recall_request(query, request_options)
 
 
@@ -7377,6 +7384,11 @@ def _validate_cli_docs_broker_response(response: Any) -> Dict[str, Any]:
     result = handler_response.get("result")
     if not isinstance(result, dict):
         raise _contract_error("docs broker handler result must be an object")
+    selector = str(result.get("selector") or "docs").strip().lower().replace("-", "_")
+    if selector not in {"docs", "project"}:
+        raise _contract_error("docs broker handler result.selector must be docs or project")
+    if result.get("store") is not None and str(result.get("store") or "") != "docs":
+        raise _contract_error("docs broker handler result.store must be docs")
     if not isinstance(result.get("docs"), dict):
         raise _contract_error("docs broker handler result.docs must be an object")
     docs = _validate_docs_bundle(result.get("docs"))
@@ -7390,6 +7402,8 @@ def _validate_cli_docs_broker_response(response: Any) -> Dict[str, Any]:
     if meta is not None and not isinstance(meta, dict):
         raise _contract_error("docs broker handler result.meta must be an object or null")
     return {
+        "selector": selector,
+        "store": "docs",
         "docs": docs,
         "limit": limit,
         "meta": dict(meta or {}),
@@ -7411,7 +7425,10 @@ def _request_cli_docs_recall_via_broker(
 
     if register_handler:
         _register_cli_docs_recall_request_handler()
-    route = resolve_recall_request_routes(["docs"])[0]
+    selector = str(options.get("selector") or "docs").strip().lower().replace("-", "_")
+    route = resolve_recall_request_routes([selector])[0]
+    if route.event_type != RECALL_DOCS_REQUEST or route.handler_store != "docs":
+        raise _contract_error("docs broker selector must route to docs")
     payload = build_recall_request_payload(
         query=query,
         route=route,
@@ -23083,6 +23100,10 @@ if __name__ == "__main__":
         recall_p.add_argument("--max-chunk-tokens", "--max_chunk_tokens", type=int, default=None, help="Max tokens per included session chunk")
         recall_p.add_argument("--max-total-chunk-tokens", "--max_total_chunk_tokens", type=int, default=None, help="Aggregate token cap for all included session chunks")
 
+        recall_docs_request_p = subparsers.add_parser("recall-docs-request", help=argparse.SUPPRESS)
+        recall_docs_request_p.add_argument("query", help="Internal docs recall request query")
+        recall_docs_request_p.add_argument("options_json", help="Internal docs recall request options JSON")
+
         recall_fast_p = subparsers.add_parser("recall-fast", help="Fast pre-injection recall with HyDE fanout")
         recall_fast_p.add_argument("query", nargs="+", help="Search query")
         recall_fast_p.add_argument("--owner", default=None, help="Owner ID")
@@ -23707,6 +23728,18 @@ if __name__ == "__main__":
 
             if use_json and json_payload is not None:
                 print(json.dumps(json_payload, indent=2))
+
+        elif args.command == "recall-docs-request":
+            try:
+                request_options = json.loads(args.options_json)
+            except json.JSONDecodeError as exc:
+                print(f"recall-docs-request: invalid options JSON: {exc}", file=sys.stderr)
+                sys.exit(1)
+            if not isinstance(request_options, dict):
+                print("recall-docs-request: options JSON must be an object", file=sys.stderr)
+                sys.exit(1)
+            docs_response = _request_cli_docs_recall_via_broker(args.query, request_options)
+            print(json.dumps(docs_response, indent=2))
 
         elif args.command == "recall-fast":
             query = " ".join(args.query)

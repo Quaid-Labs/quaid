@@ -772,15 +772,32 @@ describe("QuaidFacade", () => {
     expect(JSON.parse(cfgArg!).date_to).toBe("2026-04-15");
   });
 
-  it("project recall forwards date bounds to docs search", async () => {
-    const execDocsRag = vi.fn(async () => [
-      "Found 1 results for 'milestone':",
-      "",
-      "1. ~/projects/quaid/PROJECT.log (similarity: 0.95)",
-      "   - [2026-04-20T10:00:00] Milestone shipped",
-    ].join("\n"));
+  it("project recall forwards date bounds to docs broker request", async () => {
+    const execPython = vi.fn(async (command: string) => {
+      if (command === "recall-docs-request") {
+        return JSON.stringify({
+          selector: "project",
+          store: "docs",
+          docs: {
+            chunks: [
+              {
+                content: "[2026-04-20T10:00:00] Milestone shipped",
+                source: "~/projects/quaid/PROJECT.log",
+                similarity: 0.95,
+                project: "quaid",
+                source_date: "2026-04-20",
+              },
+            ],
+            project: "quaid",
+          },
+          limit: 5,
+          meta: {},
+        });
+      }
+      return "{}";
+    });
     const facade = createQuaidFacade(makeMockDeps({
-      execDocsRag,
+      execPython,
       isSystemEnabled: vi.fn((system: string) => system === "projects"),
     }));
     await facade.recall({
@@ -792,27 +809,44 @@ describe("QuaidFacade", () => {
       project: "quaid",
       dateTo: "2026-04-20",
     });
-    expect(execDocsRag).toHaveBeenCalledWith("search", [
-      "milestone",
-      "--limit",
-      "5",
-      "--project",
-      "quaid",
-      "--date-to",
-      "2026-04-20",
-    ]);
+    const requestCall = execPython.mock.calls.find(([command]) => command === "recall-docs-request");
+    expect(requestCall?.[1]?.[0]).toBe("milestone");
+    expect(JSON.parse(requestCall?.[1]?.[1] || "{}")).toMatchObject({
+      selector: "project",
+      store: "docs",
+      limit: 5,
+      project: "quaid",
+      date_to: "2026-04-20",
+    });
   });
 
   it("project recall preserves PROJECT.log content in parsed results", async () => {
-    const execDocsRag = vi.fn(async () => [
-      "Found 1 results for 'portfolio projects':",
-      "",
-      "1. ~/projects/portfolio-site/PROJECT.log > 2026-03-15 (similarity: 0.95)",
-      "   - [2026-03-15T09:00:00] Projects on the site: Recipe App; TechFlow Platform Redesign",
-      "",
-    ].join("\n"));
+    const execPython = vi.fn(async (command: string) => {
+      if (command === "recall-docs-request") {
+        return JSON.stringify({
+          selector: "project",
+          store: "docs",
+          docs: {
+            chunks: [
+              {
+                content: "[2026-03-15T09:00:00] Projects on the site: Recipe App; TechFlow Platform Redesign",
+                source: "~/projects/portfolio-site/PROJECT.log",
+                section_header: "2026-03-15",
+                similarity: 0.95,
+                project: "portfolio-site",
+                source_date: "2026-03-15",
+              },
+            ],
+            project: "portfolio-site",
+          },
+          limit: 5,
+          meta: {},
+        });
+      }
+      return "{}";
+    });
     const facade = createQuaidFacade(makeMockDeps({
-      execDocsRag,
+      execPython,
       isSystemEnabled: vi.fn((system: string) => system === "projects"),
     }));
 
@@ -830,6 +864,66 @@ describe("QuaidFacade", () => {
     expect(results[0].sourceType).toBe("docs");
     expect(results[0].text).toContain("Projects on the site: Recipe App; TechFlow Platform Redesign");
     expect(results[0].createdAt).toBe("2026-03-15");
+  });
+
+  it("project broker malformed output preserves vector rows without failHard", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const execPython = vi.fn(async (command: string) => {
+      if (command === "recall") {
+        return JSON.stringify([{ text: "vector survives", category: "fact", similarity: 0.8 }]);
+      }
+      if (command === "recall-docs-request") {
+        return JSON.stringify({ selector: "docs", store: "docs", docs: { chunks: [] } });
+      }
+      return "{}";
+    });
+    const execDocsRag = vi.fn(async () => "should not be called");
+    const facade = createQuaidFacade(makeMockDeps({
+      execPython,
+      execDocsRag,
+      isSystemEnabled: vi.fn((system: string) => system === "memory" || system === "projects"),
+      isFailHardEnabled: vi.fn(() => false),
+      getMemoryConfig: vi.fn(() => ({ retrieval: { failHard: false } })),
+    }));
+
+    try {
+      const results = await facade.recall({
+        query: "mixed broker malformed",
+        limit: 5,
+        routeStores: false,
+        datastores: ["vector_basic", "project"],
+        expandGraph: false,
+      });
+
+      expect(results.map((row) => row.text)).toContain("vector survives");
+      expect(execDocsRag).not.toHaveBeenCalled();
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("datastore=project failed: project broker response selector must be project"));
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("project broker malformed output raises under failHard", async () => {
+    const execPython = vi.fn(async (command: string) => {
+      if (command === "recall-docs-request") {
+        return JSON.stringify({ selector: "docs", store: "docs", docs: { chunks: [] } });
+      }
+      return "{}";
+    });
+    const facade = createQuaidFacade(makeMockDeps({
+      execPython,
+      isSystemEnabled: vi.fn((system: string) => system === "projects"),
+      isFailHardEnabled: vi.fn(() => true),
+      getMemoryConfig: vi.fn(() => ({ retrieval: { failHard: true } })),
+    }));
+
+    await expect(facade.recall({
+      query: "bad broker",
+      limit: 5,
+      routeStores: false,
+      datastores: ["project"],
+      expandGraph: false,
+    })).rejects.toThrow("project broker response selector must be project");
   });
 
   it("recallWithDiagnostics forwards timeout budget in JSON config", async () => {

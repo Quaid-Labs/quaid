@@ -415,8 +415,19 @@ intent: ${intent}`;
   }
   async function recallFromProjectStore(query, limit, project, docs, dateFrom, dateTo) {
     if (!deps.isSystemEnabled("projects")) return [];
-    if (!deps.recallProjectStore) return [];
-    return deps.recallProjectStore(query, limit, project, docs, dateFrom, dateTo);
+    if (!deps.requestProjectStoreRecall) {
+      throw new Error("project recall broker request handler is not configured");
+    }
+    return deps.requestProjectStoreRecall({
+      query,
+      limit,
+      selector: "project",
+      store: "docs",
+      project,
+      docs,
+      dateFrom,
+      dateTo
+    });
   }
   async function _executeStores(query, limit, opts) {
     const datastores = normalizeKnowledgeDatastores(opts.datastores, opts.expandGraph);

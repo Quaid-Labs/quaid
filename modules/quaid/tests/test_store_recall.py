@@ -14981,6 +14981,65 @@ class TestRecallLimitEdgeCases:
             },
         ]
 
+    def test_cli_docs_broker_project_selector_round_trips(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+        import core.runtime.events as events
+        from lib.adapter import TestAdapter, reset_adapter, set_adapter
+
+        class FakeDocsRAG:
+            def search_docs_bundle(
+                self,
+                query,
+                limit=5,
+                min_similarity=0.3,
+                project=None,
+                docs=None,
+                date_from=None,
+                date_to=None,
+            ):
+                return {
+                    "chunks": [
+                        {
+                            "content": "Project runtime notes mention the broker boundary.",
+                            "source": "/tmp/workspace/projects/quaid/PROJECT.md",
+                            "section_header": "Runtime",
+                            "similarity": 0.93,
+                            "chunk_index": 0,
+                            "project": project,
+                            "source_date": "2026-05-17",
+                        }
+                    ],
+                    "project": project,
+                    "project_md": "# Quaid",
+                }
+
+        set_adapter(TestAdapter(tmp_path))
+        try:
+            with events._REQUEST_EVENT_HANDLERS_LOCK:
+                events._REQUEST_EVENT_HANDLERS.clear()
+            options = {
+                "selector": "project",
+                "limit": 2,
+                "project": "quaid",
+                "docs": ["PROJECT.md"],
+                "min_similarity": 0.3,
+                "date_from": "2026-05-01",
+                "date_to": "2026-05-31",
+            }
+
+            with patch("datastore.docsdb.rag.DocsRAG", return_value=FakeDocsRAG()):
+                result = mg._request_cli_docs_recall_via_broker("broker boundary", options)
+        finally:
+            with events._REQUEST_EVENT_HANDLERS_LOCK:
+                events._REQUEST_EVENT_HANDLERS.clear()
+            reset_adapter()
+
+        assert result["selector"] == "project"
+        assert result["store"] == "docs"
+        assert result["limit"] == 2
+        assert result["docs"]["chunks"][0]["project"] == "quaid"
+        assert result["meta"]["requested_project"] == "quaid"
+
     def test_cli_docs_broker_result_preserves_json_and_text_shapes(self, capsys):
         import datastore.memorydb.memory_graph as mg
 

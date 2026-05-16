@@ -154,7 +154,7 @@ describe("knowledge orchestrator", () => {
       calls.push("journal");
       return [{ text: "journal default", category: "journal", similarity: 0.74, via: "journal" }];
     });
-    const recallProjectStore = vi.fn(async () => {
+    const requestProjectStoreRecall = vi.fn(async () => {
       calls.push("project");
       return [{ text: "project default", category: "project", similarity: 0.72, via: "project" }];
     });
@@ -167,7 +167,7 @@ describe("knowledge orchestrator", () => {
       }),
       recallMemory,
       recallJournalStore,
-      recallProjectStore,
+      requestProjectStoreRecall,
     });
 
     await engine.recall("default flat order", 5, {
@@ -200,7 +200,7 @@ describe("knowledge orchestrator", () => {
       calls.push("journal");
       return [{ text: "journal default", category: "journal", similarity: 0.74, via: "journal" }];
     });
-    const recallProjectStore = vi.fn(async () => {
+    const requestProjectStoreRecall = vi.fn(async () => {
       calls.push("project");
       return [{ text: "project default", category: "project", similarity: 0.72, via: "project" }];
     });
@@ -213,7 +213,7 @@ describe("knowledge orchestrator", () => {
       }),
       recallMemory,
       recallJournalStore,
-      recallProjectStore,
+      requestProjectStoreRecall,
     });
 
     await engine.recall("default graph order", 5, {
@@ -243,7 +243,7 @@ describe("knowledge orchestrator", () => {
       calls.push("journal");
       return [{ text: "journal routed", category: "journal", similarity: 0.74, via: "journal" }];
     });
-    const recallProjectStore = vi.fn(async () => {
+    const requestProjectStoreRecall = vi.fn(async () => {
       calls.push("project");
       return [{ text: "project routed", category: "project", similarity: 0.72, via: "project" }];
     });
@@ -257,7 +257,7 @@ describe("knowledge orchestrator", () => {
       })),
       recallMemory,
       recallJournalStore,
-      recallProjectStore,
+      requestProjectStoreRecall,
     });
 
     await engine.recall("routed flat order", 5, {
@@ -289,7 +289,7 @@ describe("knowledge orchestrator", () => {
       calls.push("journal");
       return [{ text: "journal routed", category: "journal", similarity: 0.74, via: "journal" }];
     });
-    const recallProjectStore = vi.fn(async () => {
+    const requestProjectStoreRecall = vi.fn(async () => {
       calls.push("project");
       return [{ text: "project routed", category: "project", similarity: 0.72, via: "project" }];
     });
@@ -303,7 +303,7 @@ describe("knowledge orchestrator", () => {
       })),
       recallMemory,
       recallJournalStore,
-      recallProjectStore,
+      requestProjectStoreRecall,
     });
 
     await engine.recall("routed graph order", 5, {
@@ -590,7 +590,7 @@ describe("knowledge orchestrator", () => {
       workspace: "/tmp",
       getMemoryConfig: () => ({ retrieval: { failHard: false }, docs: { journal: { journalDir: "journal" } } }),
       isSystemEnabled: (name) => name === "projects",
-      recallProjectStore: vi.fn(async () => {
+      requestProjectStoreRecall: vi.fn(async () => {
         throw new Error("project backend unavailable");
       }),
       callFastRouter: vi.fn(async () => '{"datastores":["vector_basic","project"]}'),
@@ -617,7 +617,7 @@ describe("knowledge orchestrator", () => {
       workspace: "/tmp",
       getMemoryConfig: () => ({ retrieval: { failHard: true }, docs: { journal: { journalDir: "journal" } } }),
       isSystemEnabled: (name) => name === "projects",
-      recallProjectStore: vi.fn(async () => {
+      requestProjectStoreRecall: vi.fn(async () => {
         throw new Error("project backend unavailable");
       }),
       callFastRouter: vi.fn(async () => '{"datastores":["project"]}'),
@@ -633,14 +633,14 @@ describe("knowledge orchestrator", () => {
   });
 
   it("passes project/docs filters through project store recall", async () => {
-    const recallProjectStore = vi.fn(async () => [
+    const requestProjectStoreRecall = vi.fn(async () => [
       { text: "PROJECT.md > Overview", category: "project", similarity: 0.88, via: "project" },
     ]);
     const engine = createKnowledgeEngine<Result>({
       workspace: "/tmp",
       getMemoryConfig: () => ({ docs: { journal: { journalDir: "journal" } } }),
       isSystemEnabled: (name) => name === "projects",
-      recallProjectStore,
+      requestProjectStoreRecall,
       callFastRouter: vi.fn(async () => '{"datastores":["project"]}'),
       recallMemory: vi.fn(async () => []),
     });
@@ -654,20 +654,22 @@ describe("knowledge orchestrator", () => {
       docs: ["PROJECT.md", "reference/memory-local-implementation.md"],
     });
 
-    expect(recallProjectStore).toHaveBeenCalledWith(
-      "architecture",
-      5,
-      "quaid",
-      ["PROJECT.md", "reference/memory-local-implementation.md"],
-      undefined,
-      undefined,
-    );
+    expect(requestProjectStoreRecall).toHaveBeenCalledWith({
+      query: "architecture",
+      limit: 5,
+      selector: "project",
+      store: "docs",
+      project: "quaid",
+      docs: ["PROJECT.md", "reference/memory-local-implementation.md"],
+      dateFrom: undefined,
+      dateTo: undefined,
+    });
     expect(results.length).toBe(1);
     expect(results[0].category).toBe("project");
   });
 
   it("passes project date bounds and preserves project row metadata", async () => {
-    const recallProjectStore = vi.fn(async () => [
+    const requestProjectStoreRecall = vi.fn(async () => [
       {
         text: "PROJECT.log > 2026-03-15: Recipe App shipped",
         category: "project",
@@ -680,7 +682,7 @@ describe("knowledge orchestrator", () => {
       workspace: "/tmp",
       getMemoryConfig: () => ({ docs: { journal: { journalDir: "journal" } } }),
       isSystemEnabled: (name) => name === "projects",
-      recallProjectStore,
+      requestProjectStoreRecall,
       callFastRouter: vi.fn(async () => '{"datastores":["project"]}'),
       recallMemory: vi.fn(async () => []),
     });
@@ -696,14 +698,16 @@ describe("knowledge orchestrator", () => {
       dateTo: "2026-03-31",
     });
 
-    expect(recallProjectStore).toHaveBeenCalledWith(
-      "recipe app shipped",
-      5,
-      "recipe-app",
-      ["PROJECT.log"],
-      "2026-03-01",
-      "2026-03-31",
-    );
+    expect(requestProjectStoreRecall).toHaveBeenCalledWith({
+      query: "recipe app shipped",
+      limit: 5,
+      selector: "project",
+      store: "docs",
+      project: "recipe-app",
+      docs: ["PROJECT.log"],
+      dateFrom: "2026-03-01",
+      dateTo: "2026-03-31",
+    });
     expect(results[0]).toMatchObject({
       text: "PROJECT.log > 2026-03-15: Recipe App shipped",
       category: "project",
@@ -713,7 +717,7 @@ describe("knowledge orchestrator", () => {
   });
 
   it("preserves explicit project rows in mixed-store recall", async () => {
-    const recallProjectStore = vi.fn(async () => [
+    const requestProjectStoreRecall = vi.fn(async () => [
       {
         text: "~/projects/portfolio-site/PROJECT.log: Projects on the site: Recipe App; TechFlow Platform Redesign",
         category: "project",
@@ -735,7 +739,7 @@ describe("knowledge orchestrator", () => {
       workspace: "/tmp",
       getMemoryConfig: () => ({ docs: { journal: { journalDir: "journal" } } }),
       isSystemEnabled: (name) => name === "projects",
-      recallProjectStore,
+      requestProjectStoreRecall,
       callFastRouter: vi.fn(async () => '{"datastores":["project","vector_basic"]}'),
       recallMemory,
     });
@@ -793,7 +797,7 @@ describe("knowledge orchestrator", () => {
       }
       return [];
     });
-    const recallProjectStore = vi.fn(async () => [
+    const requestProjectStoreRecall = vi.fn(async () => [
       {
         id: "project-low",
         text: "PROJECT.md > Launch notes",
@@ -812,7 +816,7 @@ describe("knowledge orchestrator", () => {
         datastores: ["vector_basic", "project"],
       })),
       recallMemory,
-      recallProjectStore,
+      requestProjectStoreRecall,
     });
 
     const results = await engine.recall("mixed result baseline", 3, {
@@ -840,14 +844,14 @@ describe("knowledge orchestrator", () => {
   });
 
   it("applies datastoreOptions override for project store scope", async () => {
-    const recallProjectStore = vi.fn(async () => [
+    const requestProjectStoreRecall = vi.fn(async () => [
       { text: "PROJECT.md > Overview", category: "project", similarity: 0.88, via: "project" },
     ]);
     const engine = createKnowledgeEngine<Result>({
       workspace: "/tmp",
       getMemoryConfig: () => ({ docs: { journal: { journalDir: "journal" } } }),
       isSystemEnabled: (name) => name === "projects",
-      recallProjectStore,
+      requestProjectStoreRecall,
       callFastRouter: vi.fn(async () => '{"datastores":["project"]}'),
       recallMemory: vi.fn(async () => []),
     });
@@ -867,14 +871,16 @@ describe("knowledge orchestrator", () => {
       },
     });
 
-    expect(recallProjectStore).toHaveBeenCalledWith(
-      "architecture",
-      5,
-      "quaid",
-      ["PROJECT.md"],
-      undefined,
-      undefined,
-    );
+    expect(requestProjectStoreRecall).toHaveBeenCalledWith({
+      query: "architecture",
+      limit: 5,
+      selector: "project",
+      store: "docs",
+      project: "quaid",
+      docs: ["PROJECT.md"],
+      dateFrom: undefined,
+      dateTo: undefined,
+    });
   });
 
   it("keeps aggregate vector on direct memory descriptor with datastoreOptions override", async () => {
@@ -1203,7 +1209,7 @@ describe("knowledge orchestrator", () => {
       datastores: ["project"],
       project: "quaid",
     }));
-    const recallProjectStore = vi.fn(async () => [
+    const requestProjectStoreRecall = vi.fn(async () => [
       { text: "PROJECT.md > Overview", category: "project", similarity: 0.9, via: "project" },
     ]);
 
@@ -1211,7 +1217,7 @@ describe("knowledge orchestrator", () => {
       workspace: "/tmp",
       getMemoryConfig: () => ({ docs: { journal: { journalDir: "journal" } } }),
       isSystemEnabled: (name) => name === "projects",
-      recallProjectStore,
+      requestProjectStoreRecall,
       callFastRouter,
       callDeepRouter,
       getProjectCatalog: () => [{ name: "quaid", description: "Knowledge layer project docs." }],
@@ -1229,14 +1235,16 @@ describe("knowledge orchestrator", () => {
     expect(callDeepRouter).toHaveBeenCalledTimes(1);
     // Single prepass policy: no extra fast-router fallback call.
     expect(callFastRouter).toHaveBeenCalledTimes(0);
-    expect(recallProjectStore).toHaveBeenCalledWith(
-      "quaid architecture docs",
-      5,
-      "quaid",
-      undefined,
-      undefined,
-      undefined,
-    );
+    expect(requestProjectStoreRecall).toHaveBeenCalledWith({
+      query: "quaid architecture docs",
+      limit: 5,
+      selector: "project",
+      store: "docs",
+      project: "quaid",
+      docs: undefined,
+      dateFrom: undefined,
+      dateTo: undefined,
+    });
     expect(results.length).toBe(1);
   });
 

@@ -3,6 +3,7 @@ export type PythonBridgeExec = (command: string, args?: string[]) => Promise<str
 export function createDatastoreBridge(exec: PythonBridgeExec) {
   return {
     recall: (args: string[]) => exec("recall", args),
+    recallDocsRequest: (args: string[]) => exec("recall-docs-request", args),
     store: (args: string[]) => exec("store", args),
     createEdge: (args: string[]) => exec("create-edge", args),
     addEdge: (args: string[]) => exec("create-edge", args),

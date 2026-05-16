@@ -52,6 +52,17 @@ export type RecallMemoryOpts = {
   maxTotalChunkTokens?: number;
 };
 
+export type ProjectStoreRecallRequest = {
+  query: string;
+  limit: number;
+  selector: "project";
+  store: "docs";
+  project?: string;
+  docs?: string[];
+  dateFrom?: string;
+  dateTo?: string;
+};
+
 export type RoutedRecallPlan = {
   query: string;
   datastores: KnowledgeDatastore[];
@@ -72,14 +83,7 @@ type KnowledgeEngineDeps<TMemoryResult extends { text: string; similarity: numbe
     opts: RecallMemoryOpts
   ) => Promise<TMemoryResult[]>;
   recallJournalStore?: (query: string, limit: number) => Promise<TMemoryResult[]>;
-  recallProjectStore?: (
-    query: string,
-    limit: number,
-    project?: string,
-    docs?: string[],
-    dateFrom?: string,
-    dateTo?: string
-  ) => Promise<TMemoryResult[]>;
+  requestProjectStoreRecall?: (request: ProjectStoreRecallRequest) => Promise<TMemoryResult[]>;
   /** Returns resolved command registry entries for tool hint routing. */
   getCommandRegistry?: () => Array<{ id: string; description: string; hint: string }>;
   /** Optional structured trace emitter for diagnostics (e.g. writeHookTrace). */
@@ -586,8 +590,19 @@ ${projectHints}
     dateTo?: string
   ): Promise<TMemoryResult[]> {
     if (!deps.isSystemEnabled("projects")) return [];
-    if (!deps.recallProjectStore) return [];
-    return deps.recallProjectStore(query, limit, project, docs, dateFrom, dateTo);
+    if (!deps.requestProjectStoreRecall) {
+      throw new Error("project recall broker request handler is not configured");
+    }
+    return deps.requestProjectStoreRecall({
+      query,
+      limit,
+      selector: "project",
+      store: "docs",
+      project,
+      docs,
+      dateFrom,
+      dateTo,
+    });
   }
 
   async function _executeStores(query: string, limit: number, opts: TotalRecallOptions): Promise<TMemoryResult[]> {

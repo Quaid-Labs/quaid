@@ -1,6 +1,6 @@
 # Datastore Events M6 Routed Recall Capability Plan
 
-Status: M6.1 implemented/validated; behavior activation blocked on W4 full-livetest gate
+Status: M6.1 implemented/validated; M6.2a project descriptor implementation under review
 Owner: W1 runtime/datastore with W3 recall-quality approval before code
 Plan source: `~/quaidcode/util/docs/datastore-events-migration-plan.md`
 
@@ -225,11 +225,12 @@ the next M6 behavior slice still requires a fresh W3 plan review before code.
 
 ## Candidate M6.2 Slice: Routed Store Execution Request Boundary
 
-Status: M6.2a project-only plan approved; runtime code still blocked. Do not
-implement until:
+Status: M6.2a project-only plan approved; W4 full-livetest gate cleared by
+R201 on `a1efdc362`. Runtime implementation may proceed only inside the
+project-only boundary below.
 
 1. W4 records the full-livetest gate above as green, or Solomon/Hermes
-   explicitly overrides it.
+   explicitly overrides it. Closed by R201.
 2. W3 reviews and approves the implementation patch before behavior code lands.
 3. W6 reviews the replacement boundary before live validation.
 
@@ -393,6 +394,33 @@ Future M6.2a code must keep these tests green and add broker-specific coverage
 for `selector: "project"` / `store: "docs"` threading, missing/nacked/malformed
 broker responses, and no fallback to the old project descriptor after broker
 failure.
+
+### M6.2a Implementation Submission
+
+Implementation scope:
+
+- The TypeScript `project` descriptor now calls an explicit project recall
+  request dependency with `selector: "project"` and `store: "docs"`.
+- The facade backs that dependency with an internal `recall-docs-request`
+  Python bridge command, not the old direct `execDocsRag("search", ...)`
+  descriptor call.
+- The Python docs request handler continues to accept the existing
+  `selector: "docs"` M4 path and now also accepts `selector: "project"` when
+  the handler store is `docs`.
+- `vector_basic`, `vector_technical`, `graph`, `journal`, `session_chunks`,
+  `source_chunks`, and aggregate `vector` descriptor execution remain on their
+  current non-M6.2a paths.
+
+Validation added:
+
+- TS project descriptor tests assert `selector: "project"` / `store: "docs"`
+  request threading, project/docs/date filter forwarding, failHard/fail-soft
+  malformed-response behavior, and no direct DocsRAG fallback.
+- Python docs broker tests assert project selector round-trip through
+  `recall.docs.request.v1` while preserving the existing docs selector path.
+
+Review status: pending W3 implementation-patch review, W6 boundary review, W8
+static validation, and W4 smoke.
 
 ### W4 Smoke After Code
 

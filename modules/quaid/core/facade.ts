@@ -590,14 +590,24 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
       const journalDir = path.join(visibleInstanceRoot, journalConfig.journalDir || "journal");
       return recallFromJournal(query, limit, journalDir);
     },
-    recallProjectStore: async (query, limit, project, docs, dateFrom, dateTo) => {
-      const args = [query, "--limit", String(limit)];
-      if (project) args.push("--project", project);
-      if (Array.isArray(docs) && docs.length > 0) args.push("--docs", docs.join(","));
-      if (dateFrom) args.push("--date-from", dateFrom);
-      if (dateTo) args.push("--date-to", dateTo);
-      const out = await deps.execDocsRag("search", args);
-      return parseProjectStoreResults(out, query, limit, project);
+    requestProjectStoreRecall: async (request) => {
+      const ragMinSimilarity = Number(deps.getMemoryConfig()?.rag?.min_similarity ?? 0.3);
+      const minSimilarity = Number.isFinite(ragMinSimilarity) ? ragMinSimilarity : 0.3;
+      const options: Record<string, unknown> = {
+        selector: request.selector,
+        store: request.store,
+        limit: request.limit,
+        min_similarity: minSimilarity,
+      };
+      if (request.project) options.project = request.project;
+      if (Array.isArray(request.docs) && request.docs.length > 0) options.docs = request.docs;
+      if (request.dateFrom) options.date_from = request.dateFrom;
+      if (request.dateTo) options.date_to = request.dateTo;
+      const out = await datastoreBridge.recallDocsRequest([
+        request.query,
+        JSON.stringify(options),
+      ]);
+      return parseProjectBrokerResults(out, request.project);
     },
   });
 
@@ -2793,76 +2803,53 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
   }
 
   // -------------------------------------------------------------------------
-  // Project store result parser
+  // Project broker result parser
   // -------------------------------------------------------------------------
 
-  function parseProjectStoreResults(
+  function parseProjectBrokerResults(
     out: string,
-    _query: string,
-    _limit: number,
     project?: string,
   ): MemoryResult[] {
     if (!out || !out.trim()) return [];
-    const results: MemoryResult[] = [];
-    const lines = out.split("\n");
-    let current: {
-      sourcePath: string;
-      section?: string;
-      similarity: number;
-      content: string[];
-    } | null = null;
-
-    const flushCurrent = () => {
-      if (!current) return;
-      const sourceBits = [current.sourcePath, current.section].filter(Boolean).join(" > ");
-      const body = current.content
-        .map((line) => line.trim())
-        .filter(Boolean)
-        .join(" ")
-        .replace(/\s+/g, " ")
-        .trim();
-      const text = body ? `${sourceBits}: ${body}` : sourceBits;
-      const createdAtMatch = body.match(/\[(20\d{2}-\d{2}-\d{2})(?:T[^\]]*)?\]/);
-      results.push({
-        text,
+    const parsed = JSON.parse(out);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("project broker response must be an object");
+    }
+    if (String(parsed.selector || "") !== "project") {
+      throw new Error("project broker response selector must be project");
+    }
+    if (String(parsed.store || "") !== "docs") {
+      throw new Error("project broker response store must be docs");
+    }
+    const docs = parsed.docs;
+    if (!docs || typeof docs !== "object" || Array.isArray(docs)) {
+      throw new Error("project broker response docs must be an object");
+    }
+    const chunks = Array.isArray(docs.chunks) ? docs.chunks : [];
+    const rows: MemoryResult[] = [];
+    const fallbackProject = String(docs.project || project || "").trim() || undefined;
+    for (const chunk of chunks) {
+      if (!chunk || typeof chunk !== "object") continue;
+      const content = String(chunk.content || "").trim().replace(/\s+/g, " ");
+      if (!content) continue;
+      const source = String(chunk.source || "").trim();
+      const section = String(chunk.section_header || "").trim();
+      const sourceBits = [source, section].filter(Boolean).join(" > ");
+      const sourceDate = String(chunk.source_date || "").trim();
+      const createdAtMatch = (sourceDate || content).match(/(20\d{2}-\d{2}-\d{2})(?:T[^\]]*)?/);
+      const chunkProject = String(chunk.project || fallbackProject || "").trim() || undefined;
+      rows.push({
+        text: sourceBits ? `${sourceBits}: ${content}` : content,
         category: "project",
-        similarity: current.similarity || 0.6,
+        similarity: Number(chunk.similarity) || 0.6,
         via: "project",
         sourceType: "docs",
-        sourceName: current.sourcePath,
+        sourceName: source || undefined,
         createdAt: createdAtMatch?.[1],
-        ...(project ? { project } : {}),
+        ...(chunkProject ? { project: chunkProject } : {}),
       } as MemoryResult);
-      current = null;
-    };
-
-    for (const line of lines) {
-      const headerMatch = line.match(/^\d+\.\s+(.+?)\s+\(similarity:\s+([\d.]+)\)\s*$/);
-      if (headerMatch) {
-        flushCurrent();
-        const sourceLabel = String(headerMatch[1] || "").trim();
-        const headerParts = sourceLabel.split(/\s+>\s+/);
-        const sourcePath = String(headerParts.shift() || "").trim();
-        const section = headerParts.join(" > ").trim() || undefined;
-        current = {
-          sourcePath,
-          section,
-          similarity: Number.parseFloat(headerMatch[2]) || 0.6,
-          content: [],
-        };
-        continue;
-      }
-      if (!current) continue;
-      if (!line.trim()) {
-        flushCurrent();
-        continue;
-      }
-      if (/^\s{2,}\S/.test(line)) {
-        current.content.push(line.trim());
-      }
     }
-    flushCurrent();
-    return results;
+    return rows;
   }
 
   // -------------------------------------------------------------------------

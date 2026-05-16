@@ -1,6 +1,7 @@
 function createDatastoreBridge(exec) {
   return {
     recall: (args) => exec("recall", args),
+    recallDocsRequest: (args) => exec("recall-docs-request", args),
     store: (args) => exec("store", args),
     createEdge: (args) => exec("create-edge", args),
     addEdge: (args) => exec("create-edge", args),
