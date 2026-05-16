@@ -379,6 +379,52 @@ describe("knowledge orchestrator", () => {
     expect(results[0].category).toBe("project");
   });
 
+  it("passes project date bounds and preserves project row metadata", async () => {
+    const recallProjectStore = vi.fn(async () => [
+      {
+        text: "PROJECT.log > 2026-03-15: Recipe App shipped",
+        category: "project",
+        similarity: 0.92,
+        via: "project",
+        sourceType: "docs",
+      },
+    ]);
+    const engine = createKnowledgeEngine<Result>({
+      workspace: "/tmp",
+      getMemoryConfig: () => ({ docs: { journal: { journalDir: "journal" } } }),
+      isSystemEnabled: (name) => name === "projects",
+      recallProjectStore,
+      callFastRouter: vi.fn(async () => '{"datastores":["project"]}'),
+      recallMemory: vi.fn(async () => []),
+    });
+
+    const results = await engine.recall("recipe app shipped", 5, {
+      datastores: ["project"],
+      expandGraph: false,
+      graphDepth: 1,
+      domain: { all: true },
+      project: "recipe-app",
+      docs: ["PROJECT.log"],
+      dateFrom: "2026-03-01",
+      dateTo: "2026-03-31",
+    });
+
+    expect(recallProjectStore).toHaveBeenCalledWith(
+      "recipe app shipped",
+      5,
+      "recipe-app",
+      ["PROJECT.log"],
+      "2026-03-01",
+      "2026-03-31",
+    );
+    expect(results[0]).toMatchObject({
+      text: "PROJECT.log > 2026-03-15: Recipe App shipped",
+      category: "project",
+      via: "project",
+      sourceType: "docs",
+    });
+  });
+
   it("preserves explicit project rows in mixed-store recall", async () => {
     const recallProjectStore = vi.fn(async () => [
       {
@@ -416,8 +462,9 @@ describe("knowledge orchestrator", () => {
     });
 
     expect(results).toHaveLength(2);
-    expect(results.some((item) => item.via === "project")).toBe(true);
-    expect(results.some((item) => item.text.includes("Projects on the site: Recipe App"))).toBe(true);
+    const projectResult = results.find((item) => item.via === "project");
+    expect(projectResult).toMatchObject({ category: "project", sourceType: "docs" });
+    expect(projectResult?.text).toContain("Projects on the site: Recipe App");
   });
 
   it("applies datastoreOptions override for project store scope", async () => {
