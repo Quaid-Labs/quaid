@@ -48,7 +48,9 @@ Rationale:
 - `store:"vector"` reflects the concrete datastore handler and avoids keeping
   legacy aliases as primary datastore truth.
 - `selector:"vector_basic"` / `selector:"vector_technical"` preserves current
-  router diagnostics, result labels, and W3 review visibility.
+  router diagnostics, request metadata, and W3 review visibility. It must not
+  imply a result-row `via` or label change unless the current path already emits
+  that value.
 - Domain policy stays explicit in request options instead of hidden inside the
   datastore handler.
 
@@ -78,6 +80,8 @@ Proposed replacement:
   - `selector:"vector", store:"vector"`
   - `selector:"vector_basic", store:"vector"`
   - `selector:"vector_technical", store:"vector"`
+- Existing M5 `selector:"vector", store:"vector"` behavior must remain
+  accepted unchanged.
 - The handler must nack `graph`, `session_chunks`, `source_chunks`, `journal`,
   `docs`, `project`, and unknown selectors.
 - The TypeScript descriptors call the request broker only for
@@ -118,7 +122,14 @@ The brokered `vector_basic` and `vector_technical` descriptors must preserve:
 - `project`
 - `dateFrom` / `dateTo`
 - `fast`
-- candidate-pool behavior: neither selector consumes a candidate pool
+- domain override parity is limited to the current descriptor-supported
+  surfaces: top-level `domain`, `domainBoost`, `project`, `dateFrom`, `dateTo`,
+  and `fast`. Do not add new `datastoreOptions.vector_basic` or
+  `datastoreOptions.vector_technical` semantics in this slice.
+- candidate-pool behavior in both directions:
+  - `vector_basic` and `vector_technical` must not consume a `candidatePool`
+  - their result rows must still accumulate as vector rows and seed later
+    `graph` candidate pools exactly as the current `_executeStores()` frame does
 - result row shape, including `via`/category/source metadata
 - downstream result merge, dedup, source-type boost, and final limit behavior
 - failHard behavior for missing handler, handler exception, malformed response,
@@ -137,8 +148,15 @@ Before live validation, add focused tests proving:
   domain policy
 - explicit domain overrides still win where the current descriptor path allows
   overrides
+- current M5 `selector:"vector", store:"vector"` request behavior still works
+  unchanged after widening the memory handler
 - `graph`, `journal`, `session_chunks`, `source_chunks`, `project`, and
-  aggregate `vector` do not use this broker path
+  unknown selectors nack if sent to the widened memory handler
+- explicit Python CLI `stores:["vector_basic"]` or
+  `stores:["vector_technical"]`, aggregate `vector`, and other non-target paths
+  do not use this broker path
+- `vector_basic` / `vector_technical` rows still seed later graph
+  `candidatePool` while not consuming one themselves
 - missing handler raises under failHard and logs/fails loudly under fail-soft
 - nacked handler raises under failHard and does not fall back to
   `deps.recallMemory`
