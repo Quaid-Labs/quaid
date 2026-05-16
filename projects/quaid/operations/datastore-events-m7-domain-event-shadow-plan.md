@@ -12,7 +12,7 @@ Do not implement this milestone until:
    Solomon/Hermes.
 2. W4 records the required full-livetest gate as green for the active M6 stack,
    or Solomon/Hermes explicitly overrides it.
-3. W6 approves this M7 replacement boundary before code.
+3. W6 reviews and approves the implementation patch before runtime code lands.
 4. W8 static validation is available for the affected supervisor/docs tests.
 
 This document is planning only. It does not change runtime behavior.
