@@ -144,6 +144,44 @@ describe("knowledge orchestrator", () => {
     expect(out[0].text).toContain("[RECALL ROUTER WARNING]");
   });
 
+  it("executes fail-open flat default stores in registry order", async () => {
+    const calls: string[] = [];
+    const recallMemory = vi.fn(async (_query: string, _limit: number, opts: any) => {
+      calls.push(String(opts.stores?.[0] || ""));
+      return [{ text: "vector default", category: "fact", similarity: 0.83, via: "vector_basic" }];
+    });
+    const recallJournalStore = vi.fn(async () => {
+      calls.push("journal");
+      return [{ text: "journal default", category: "journal", similarity: 0.74, via: "journal" }];
+    });
+    const recallProjectStore = vi.fn(async () => {
+      calls.push("project");
+      return [{ text: "project default", category: "project", similarity: 0.72, via: "project" }];
+    });
+    const engine = createKnowledgeEngine<Result>({
+      workspace: "/tmp",
+      getMemoryConfig: () => ({ retrieval: { failHard: false } }),
+      isSystemEnabled: (name) => name === "journal" || name === "projects",
+      callFastRouter: vi.fn(async () => {
+        throw new Error("offline");
+      }),
+      recallMemory,
+      recallJournalStore,
+      recallProjectStore,
+    });
+
+    await engine.recall("default flat order", 5, {
+      datastores: [],
+      expandGraph: false,
+      graphDepth: 1,
+      domain: { all: true },
+      reasoning: "fast",
+      failOpen: true,
+    });
+
+    expect(calls).toEqual(["vector_basic", "journal", "project"]);
+  });
+
   it("throttles repeated router fallback warning notices per reasoning tier", async () => {
     const recallMemory = vi.fn(async (_query: string, _limit: number, opts: any) => {
       if (opts.stores?.includes("graph")) {
