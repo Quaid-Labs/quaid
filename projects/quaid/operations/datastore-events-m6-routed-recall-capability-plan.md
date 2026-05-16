@@ -1,6 +1,6 @@
 # Datastore Events M6 Routed Recall Capability Plan
 
-Status: M6.1 implemented/validated; M6.2a project descriptor implementation under review
+Status: M6.1 implemented/validated; M6.2a project descriptor implemented/validated
 Owner: W1 runtime/datastore with W3 recall-quality approval before code
 Plan source: `~/quaidcode/util/docs/datastore-events-migration-plan.md`
 
@@ -337,9 +337,9 @@ Add focused tests before any live deployment:
 
 ### M6.2a Plan Approval Record
 
-The M6.2a project-only plan is approved as a plan, but not yet approved for
-runtime implementation. The W4 full-livetest gate remains the blocker before
-behavior code unless Solomon or Hermes explicitly overrides it.
+The M6.2a project-only plan was approved as a plan before runtime
+implementation. The W4 full-livetest gate was the blocker before behavior code
+unless Solomon or Hermes explicitly overrode it; that gate was closed by R201.
 
 Reviewed plan commits:
 
@@ -419,8 +419,19 @@ Validation added:
 - Python docs broker tests assert project selector round-trip through
   `recall.docs.request.v1` while preserving the existing docs selector path.
 
-Review status: pending W3 implementation-patch review, W6 boundary review, W8
-static validation, and W4 smoke.
+Validation status:
+
+- W3 approved the implementation patch for W4 smoke.
+- W4 smoke passed on R201 VM `192.168.64.230`: project descriptor docs broker
+  returned docs alongside vector results; explicit `stores:["docs"]` and
+  `stores:["vector"]`, default vector recall, graph, and journal paths stayed
+  unchanged.
+- W6 approved with no blockers, confirming the lean contract, failHard behavior,
+  non-target descriptor preservation, TS/JS pair updates, and Python selector
+  widening.
+- W8 static passed with runtime pairs, focused TS tests, docs broker tests,
+  broker contract/events/registry/contract tests, docs consistency, diff check,
+  py_compile, and ruff.
 
 ### W4 Smoke After Code
 
