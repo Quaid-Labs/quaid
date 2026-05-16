@@ -717,6 +717,9 @@ def register_request_handler(
         raise ValueError("request event_type is required")
     if not target_id:
         raise ValueError("request datastore_id is required")
+    capability = get_event_capability(request_type)
+    if capability is None or str(capability.get("delivery_mode") or "").strip().lower() != "request":
+        raise ValueError(f"request event_type is not registered as request: {request_type}")
     if not callable(handler):
         raise TypeError(f"Request handler {request_type}/{target_id} is not callable")
 

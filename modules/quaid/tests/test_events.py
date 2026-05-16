@@ -219,6 +219,16 @@ def test_broker_request_fan_in_dispatches_registered_handlers(tmp_path):
     assert sum(1 for item in history if item.get("op") == "broker.request_acked") == 2
 
 
+def test_register_request_handler_requires_request_event_type(tmp_path):
+    set_adapter(TestAdapter(tmp_path))
+
+    with pytest.raises(ValueError, match="not registered as request"):
+        register_request_handler("session.reset", lambda _event: {"status": "ok"}, datastore_id="memorydb")
+
+    with pytest.raises(ValueError, match="not registered as request"):
+        register_request_handler("missing.request.v1", lambda _event: {"status": "ok"}, datastore_id="memorydb")
+
+
 def test_broker_request_missing_handler_fails_closed_when_not_fail_hard(caplog, monkeypatch, tmp_path):
     set_adapter(TestAdapter(tmp_path))
 
