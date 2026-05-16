@@ -93,6 +93,8 @@ Required validation:
 
 ## M9.3 Lifecycle And Session Observed Events
 
+Tracking doc: `datastore-events-m9-3-lifecycle-session-plan.md`.
+
 Scope:
 
 - lifecycle/session observed writes
