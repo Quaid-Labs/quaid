@@ -545,6 +545,46 @@ def test_execute_update_once_snapshots_applies_indexes_and_advances_cursors(proj
     assert state["last_metrics"]["docs_updated"] == 1
 
 
+def test_execute_update_once_index_failure_respects_fail_policy(project_env):
+    _tmp_path, _src, _entry = project_env
+    from core import project_docs
+
+    calls: list[str] = []
+
+    def _fail_index(*_args, **_kwargs):
+        calls.append("update_registered_docs")
+        raise RuntimeError("index boom")
+
+    with patch("core.docs_updater_hook.update_project_docs", return_value={"projects_checked": 1, "docs_updated": 1, "docs_skipped": 0, "trivial_skipped": 0, "errors": 0}), \
+         patch("core.project_docs.sync_project_docs_registry", return_value={"registered": 1, "unregistered": 0, "project_md_refreshed": 1}), \
+         patch("core.docs.updater.update_registered_docs", side_effect=_fail_index), \
+         patch("core.docs.updater.index_project_logs", side_effect=AssertionError("project-log indexing should not run after registered-doc failure")), \
+         patch("core.project_docs._fail_hard_enabled", return_value=False):
+        result = project_docs.execute_update_once("demo")
+
+    assert result["status"] == "error"
+    assert result["metrics"]["errors"] == 1
+    assert result["metrics"]["index_error"] == "index boom"
+    assert result["indexed_docs"] == 0
+    assert result["indexed_project_logs"] == 0
+    assert calls == ["update_registered_docs"]
+    state = project_docs.read_state("demo")
+    assert state["status"] == "error"
+    assert "index boom" in state["last_error"]
+
+    with patch("core.docs_updater_hook.update_project_docs", return_value={"projects_checked": 1, "docs_updated": 1, "docs_skipped": 0, "trivial_skipped": 0, "errors": 0}), \
+         patch("core.project_docs.sync_project_docs_registry", return_value={"registered": 1, "unregistered": 0, "project_md_refreshed": 1}), \
+         patch("core.docs.updater.update_registered_docs", side_effect=RuntimeError("failhard index boom")), \
+         patch("core.docs.updater.index_project_logs", side_effect=AssertionError("project-log indexing should not run after failHard registered-doc failure")), \
+         patch("core.project_docs._fail_hard_enabled", return_value=True):
+        with pytest.raises(RuntimeError, match="failhard index boom"):
+            project_docs.execute_update_once("demo")
+
+    state = project_docs.read_state("demo")
+    assert state["status"] == "error"
+    assert state["last_error"] == "failhard index boom"
+
+
 def test_project_status_reports_pending_project_log_queue(project_env):
     _tmp_path, _src, _entry = project_env
     from core import project_docs
