@@ -195,6 +195,12 @@ Closed guard tests:
   `auto_register_project_docs` or `index_one_stale_registered_doc`. This keeps
   the future M7 shadow event scoped to the supervisor tick instead of the
   worker apply path.
+- `0d194cadb` pins the supervisor auto-register tick failure policy before
+  shadowing: fail-soft logs loudly and continues to the stale-index tick;
+  failHard re-raises the original error and does not run stale indexing.
+- `1622431f8` pins the sibling stale-index tick failure policy before
+  shadowing: fail-soft logs loudly after auto-register completes; failHard
+  re-raises the original stale-index error.
 
 Remaining future behavior-slice coverage:
 
@@ -206,7 +212,8 @@ Remaining future behavior-slice coverage:
 - DocsDB shadow listener records would-handle intent without write/index side
   effects
 - shadow listener failure follows failHard/fail-soft policy without suppressing
-  direct supervisor work in fail-soft mode
+  direct supervisor work in fail-soft mode; the pre-shadow direct-tick
+  fail-policy baseline is pinned by `0d194cadb` and `1622431f8`
 
 ## W4 Smoke After Code
 
