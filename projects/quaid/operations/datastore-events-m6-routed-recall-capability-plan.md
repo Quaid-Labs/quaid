@@ -150,4 +150,3 @@ For M6.1 code:
 - Should invalid router-selected stores fail immediately under failHard, or
   continue the current repair/validation behavior where invalid store names are
   ignored until no valid stores remain?
-
