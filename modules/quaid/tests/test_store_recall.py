@@ -14418,6 +14418,14 @@ class TestRecallLimitEdgeCases:
             stores_explicit=True,
             store_names=["vector_basic"],
         ) is False
+        assert mg._should_broker_cli_vector_recall(
+            stores_explicit=True,
+            store_names=["vector_technical"],
+        ) is False
+        assert mg._should_broker_cli_vector_recall(
+            stores_explicit=True,
+            store_names=["vector_basic", "vector_technical"],
+        ) is False
 
     def test_cli_vector_broker_request_preserves_kwargs_and_output_shape(self, tmp_path):
         import datastore.memorydb.memory_graph as mg
