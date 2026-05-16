@@ -1,6 +1,6 @@
 # Datastore Events M7 Domain Event Shadow Plan
 
-Status: draft for W3/W6 review; no runtime implementation
+Status: plan approved; no runtime implementation
 Owner: W1 runtime/datastore
 Plan source: `~/quaidcode/util/docs/datastore-events-migration-plan.md`
 
@@ -63,6 +63,10 @@ Introduce one domain event for the supervisor tick:
 ```text
 project.docs.maintenance_observed.v1
 ```
+
+The event name is a draft placeholder. Implementation review must align the
+final name with the active `core/runtime/events.py` naming convention before
+code lands.
 
 Draft payload:
 
@@ -152,6 +156,35 @@ Focused tests should prove:
 - shadow listener failure logs loudly and leaves direct supervisor work intact
   under `failHard=false`
 - no project-doc worker `execute_update_once` path emits this event in M7
+
+## Plan Review Record
+
+The M7 domain-event shadow plan is approved as a plan, but not approved for
+runtime implementation. Runtime code still requires the preconditions above and
+fresh review of the implementation patch.
+
+Reviewed plan commit:
+
+- `fce24801b` drafted the M7 shadow plan for the project-docs supervisor
+  auto-register/stale-index tick.
+
+Review status:
+
+- W3 confirmed from recall-quality scope because direct project-docs supervisor
+  behavior remains authoritative and docs RAG search/recall plus project-doc
+  worker update paths are explicitly out of scope.
+- W6 approved the shadow-first boundary and recorded an implementation-phase
+  note to align the final event name with the existing event registry naming
+  pattern.
+- W8 passed docs-static validation for the plan.
+
+Implementation guardrails carried forward:
+
+- shadow traces must not change project/docs recall inputs, row metadata,
+  indexing cadence, or failHard behavior without fresh W3 review
+- shadow listener failure must not suppress the authoritative direct path in
+  fail-soft mode
+- no project-doc worker `execute_update_once` path should emit this event in M7
 
 ## W4 Smoke After Code
 
