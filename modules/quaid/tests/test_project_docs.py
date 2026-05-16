@@ -530,7 +530,12 @@ def test_execute_update_once_snapshots_applies_indexes_and_advances_cursors(proj
     update_docs.assert_called_once()
     assert update_docs.call_args.kwargs["force_project"] == "demo"
     assert update_docs.call_args.kwargs["extraction_result"]["project_logs"]["demo"]
-    sync_registry.assert_called_once()
+    sync_registry.assert_called_once_with(
+        "demo",
+        str(Path(entry["canonical_path"])),
+        root_docs={"PROJECT.md", "TOOLS.md", "AGENTS.md"},
+        protected_names={"PROJECT.log"},
+    )
     update_registered.assert_called_once_with(
         project="demo",
         dry_run=False,
@@ -550,7 +555,7 @@ def test_execute_update_once_snapshots_applies_indexes_and_advances_cursors(proj
     assert state["last_metrics"]["docs_updated"] == 1
 
 
-def test_execute_update_once_index_failure_respects_fail_policy(project_env):
+def test_execute_update_once_index_failure_respects_fail_policy(project_env, caplog):
     _tmp_path, _src, _entry = project_env
     from core import project_docs
 
@@ -560,6 +565,7 @@ def test_execute_update_once_index_failure_respects_fail_policy(project_env):
         calls.append("update_registered_docs")
         raise RuntimeError("index boom")
 
+    caplog.set_level(logging.WARNING)
     with patch("core.docs_updater_hook.update_project_docs", return_value={"projects_checked": 1, "docs_updated": 1, "docs_skipped": 0, "trivial_skipped": 0, "errors": 0}), \
          patch("core.project_docs.sync_project_docs_registry", side_effect=AssertionError("worker direct registry sync should use DocsDB broker")), \
          patch("core.docs.updater.sync_project_visible_docs", return_value={"registered": 1, "unregistered": 0, "project_md_refreshed": 1}), \
@@ -576,6 +582,7 @@ def test_execute_update_once_index_failure_respects_fail_policy(project_env):
     assert result["indexed_docs"] == 0
     assert result["indexed_project_logs"] == 0
     assert calls == ["update_registered_docs"]
+    assert "project-docs update index failed for demo (fail-soft): index boom" in caplog.text
     state = project_docs.read_state("demo")
     assert state["status"] == "error"
     assert "index boom" in state["last_error"]
@@ -705,6 +712,7 @@ def test_execute_update_once_does_not_run_supervisor_docs_maintenance_tick(proje
     with patch("core.project_docs.auto_register_project_docs", side_effect=AssertionError("supervisor auto-register tick only")), \
          patch("core.project_docs.index_one_stale_registered_doc", side_effect=AssertionError("supervisor stale-index tick only")), \
          patch("core.docs_updater_hook.update_project_docs", return_value={"projects_checked": 1, "docs_updated": 1, "docs_skipped": 0, "trivial_skipped": 0, "errors": 0}), \
+         patch("core.docs.updater.sync_project_visible_docs", return_value={"registered": 1, "unregistered": 0, "project_md_refreshed": 1}), \
          patch("core.docs.updater.update_registered_docs", return_value=1), \
          patch("core.docs.updater.index_project_logs", return_value=0):
         result = project_docs.execute_update_once("demo")
