@@ -489,23 +489,43 @@ def test_execute_update_once_snapshots_applies_indexes_and_advances_cursors(proj
     tmp_path, src, entry = project_env
     from core import project_docs
 
+    calls = []
     (src / "tool.py").write_text("print('v2')\n", encoding="utf-8")
     project_log = Path(entry["canonical_path"]) / "PROJECT.log"
     project_log.write_text("- [2026-04-19T00:00:00] Tool behavior changed\n", encoding="utf-8")
     request = project_docs.request_update("demo", reason="manual-test", requested_by="pytest")
 
-    with patch("core.docs_updater_hook.update_project_docs", return_value={"projects_checked": 1, "docs_updated": 1, "docs_skipped": 0, "trivial_skipped": 0, "errors": 0}) as update_docs, \
-         patch("core.docs.updater.update_registered_docs", return_value=2) as update_registered, \
-         patch("core.docs.updater.index_project_logs", return_value=1) as index_project_logs:
+    def _update_project_docs(*args, **kwargs):
+        calls.append("update_docs")
+        return {"projects_checked": 1, "docs_updated": 1, "docs_skipped": 0, "trivial_skipped": 0, "errors": 0}
+
+    def _sync_registry(project, entry_arg=None):
+        calls.append("sync_registry")
+        return {"registered": 3, "unregistered": 1, "project_md_refreshed": 1}
+
+    def _update_registered_docs(*args, **kwargs):
+        calls.append("update_registered_docs")
+        return 2
+
+    def _index_project_logs(*args, **kwargs):
+        calls.append("index_project_logs")
+        return 1
+
+    with patch("core.docs_updater_hook.update_project_docs", side_effect=_update_project_docs) as update_docs, \
+         patch("core.project_docs.sync_project_docs_registry", side_effect=_sync_registry) as sync_registry, \
+         patch("core.docs.updater.update_registered_docs", side_effect=_update_registered_docs) as update_registered, \
+         patch("core.docs.updater.index_project_logs", side_effect=_index_project_logs) as index_project_logs:
         result = project_docs.execute_update_once("demo", request=request)
 
     assert result["status"] == "fresh"
     assert result["indexed_docs"] == 2
     assert result["indexed_project_logs"] == 1
     assert result["snapshot"]["commit_hash"]
+    assert calls == ["update_docs", "sync_registry", "update_registered_docs", "index_project_logs"]
     update_docs.assert_called_once()
     assert update_docs.call_args.kwargs["force_project"] == "demo"
     assert update_docs.call_args.kwargs["extraction_result"]["project_logs"]["demo"]
+    sync_registry.assert_called_once_with("demo", entry)
     update_registered.assert_called_once_with(
         project="demo",
         dry_run=False,
@@ -521,7 +541,8 @@ def test_execute_update_once_snapshots_applies_indexes_and_advances_cursors(proj
     assert state["project_log_offset"] == project_log.stat().st_size
     assert state["last_indexed_docs"] == 2
     assert state["last_indexed_project_logs"] == 1
-    assert state["last_registry_sync"]["project_md_refreshed"] in (0, 1)
+    assert state["last_registry_sync"] == {"registered": 3, "unregistered": 1, "project_md_refreshed": 1}
+    assert state["last_metrics"]["docs_updated"] == 1
 
 
 def test_project_status_reports_pending_project_log_queue(project_env):
