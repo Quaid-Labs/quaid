@@ -225,7 +225,8 @@ the next M6 behavior slice still requires a fresh W3 plan review before code.
 
 ## Candidate M6.2 Slice: Routed Store Execution Request Boundary
 
-Status: draft only. Do not implement until:
+Status: M6.2a project-only plan approved; runtime code still blocked. Do not
+implement until:
 
 1. W4 records the full-livetest gate above as green, or Solomon explicitly
    overrides it.
@@ -332,6 +333,25 @@ Add focused tests before any live deployment:
 - malformed/nacked/missing-handler request responses raise under failHard and
   do not silently fall back to the old direct descriptor
 - mixed default results keep existing dedup/sort/source-type boost behavior
+
+### M6.2a Plan Approval Record
+
+The M6.2a project-only plan is approved as a plan, but not yet approved for
+runtime implementation. The W4 full-livetest gate remains the blocker before
+behavior code unless Solomon or Hermes explicitly overrides it.
+
+Reviewed plan commits:
+
+- `3473df54e` drafted the broader routed recall execution boundary.
+- `582252ea4` narrowed the first behavior slice to the routed/default
+  `project` descriptor and deferred memory selector expansion.
+
+Review status:
+
+- W3 approved the narrowed project-only plan with the existing W4 gate.
+- W6 approved the draft-plus-narrowing stack and confirmed the handler-scope
+  note was addressed.
+- W8 passed docs-static validation for the plan stack.
 
 ### Pre-Activation Guard Record
 
