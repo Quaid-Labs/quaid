@@ -593,7 +593,7 @@ describe("knowledge orchestrator", () => {
     );
   });
 
-  it("applies datastoreOptions override for vector technical scope", async () => {
+  it("keeps aggregate vector on direct memory descriptor with datastoreOptions override", async () => {
     const recallMemory = vi.fn(async () => []);
     const engine = createKnowledgeEngine<Result>({
       workspace: "/tmp",
@@ -608,6 +608,9 @@ describe("knowledge orchestrator", () => {
       expandGraph: false,
       graphDepth: 1,
       domain: { personal: true },
+      project: "quaid",
+      dateFrom: "2026-01-01",
+      dateTo: "2026-01-31",
       datastoreOptions: {
         vector: { domain: { technical: true } },
       },
@@ -616,7 +619,13 @@ describe("knowledge orchestrator", () => {
     expect(recallMemory).toHaveBeenCalledWith(
       "api limits",
       3,
-      expect.objectContaining({ domain: { technical: true } }),
+      expect.objectContaining({
+        stores: ["vector"],
+        domain: { technical: true },
+        project: "quaid",
+        dateFrom: "2026-01-01",
+        dateTo: "2026-01-31",
+      }),
     );
   });
 
