@@ -1,6 +1,6 @@
 # Datastore Events M6 Routed Recall Capability Plan
 
-Status: proposed, not implemented
+Status: M6.1 implemented/validated; behavior activation blocked on W4 full-livetest gate
 Owner: W1 runtime/datastore with W3 recall-quality approval before code
 Plan source: `~/quaidcode/util/docs/datastore-events-migration-plan.md`
 
@@ -166,3 +166,59 @@ W3 approved M6.1 metadata-only code with conservative answers:
   current code would fail. Do not tighten failHard semantics in M6.1.
 - Add exact snapshot/parity tests for rendered router guidance and default store
   order, not only set equality.
+
+## M6.1 Implementation Record
+
+M6.1 landed as a metadata-only TypeScript runtime cleanup:
+
+- `e5164fcd8` `refactor(core): route recall metadata through store registry`
+- `bad9138da` `test(core): pin flat recall store defaults`
+
+Implemented behavior-preserving changes:
+
+- `core/knowledge-stores.ts` owns `routable`, `bridgeEligible`,
+  `handlerStore`, `aliases`, `defaultDomain`, and `usesCandidatePool`
+  metadata for the current TypeScript recall runtime.
+- `core/knowledge-engine.ts` consumes registry metadata for vector-store
+  detection, default domains, and graph candidate-pool seeding.
+- `core/facade.ts` consumes registry metadata for explicit bridge eligibility
+  and handler-store normalization.
+- `journal` remains routable through the current TypeScript journal scanner but
+  is not bridge-eligible.
+- `source_chunks` remains an alias for `session_chunks`.
+- No broker activation was added for routed/default, mixed, graph,
+  `session_chunks`, or journal recall.
+
+Validation:
+
+- W3 approved recall-routing parity.
+- W6 approved behavior preservation and boundary scope.
+- W8 static passed runtime pairs, affected TypeScript tests, docs consistency,
+  and diff checks.
+- Local affected suite: `tests/knowledge-orchestrator.test.ts` and
+  `tests/facade.test.ts` passed with 148 tests.
+
+## W4 Full-Livetest Gate Before M6.2
+
+Do not start routed/default recall behavior activation beyond M6.1 until W4
+records a full livetest pass across CC, CDX, and OC on a stack that includes
+M4/M5 explicit recall activation and M6.1 metadata cleanup.
+
+Gate expectations:
+
+- Normal M2/M3 extraction and auto-inject behavior remains unchanged.
+- Explicit `stores:["docs"]` recall still uses the M4 broker path and preserves
+  docs-only JSON/text output.
+- Explicit `stores:["vector"]` recall still uses the M5 broker path and
+  preserves vector JSON/text output, fast mode, chunk attachment, and temporal
+  filters.
+- Mixed `vector+docs`, default/routed recall, graph recall, session/source
+  chunk recall, and journal recall remain on their existing non-M6 broker paths.
+- Router-visible stores and router guidance remain unchanged.
+- `journal` remains non-bridge and still uses the TypeScript journal scanner.
+- No failHard violations or provider/deferred-notice regressions appear during
+  the full run.
+
+If W4 finds a recall-quality or runtime regression, stop M6 behavior planning
+and route the issue to W1 or W3 according to normal ownership. If W4 passes,
+the next M6 behavior slice still requires a fresh W3 plan review before code.
