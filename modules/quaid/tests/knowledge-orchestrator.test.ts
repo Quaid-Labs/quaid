@@ -320,6 +320,43 @@ describe("knowledge orchestrator", () => {
     expect(results.some((r) => r.category === "graph")).toBe(true);
   });
 
+  it("keeps graph on direct memory descriptor with vector candidate pool", async () => {
+    const vectorRows = [
+      { id: "v1", text: "Alpha vector anchor", category: "fact", similarity: 0.91, via: "vector" },
+    ];
+    const recallMemory = vi.fn(async (_query: string, _limit: number, opts: any) => {
+      if (opts.stores?.includes("graph")) {
+        return [{ text: "Alpha --related--> Beta", category: "graph", similarity: 0.75, via: "graph" }];
+      }
+      return vectorRows;
+    });
+    const engine = createKnowledgeEngine<Result>({
+      workspace: "/tmp",
+      getMemoryConfig: () => ({ docs: { journal: { journalDir: "journal" } } }),
+      isSystemEnabled: () => false,
+      callFastRouter: vi.fn(async () => '{"datastores":["vector_basic","graph"]}'),
+      recallMemory,
+    });
+
+    await engine.recall("alpha", 10, {
+      datastores: ["vector_basic", "graph"],
+      expandGraph: true,
+      graphDepth: 2,
+      domain: { personal: true },
+    });
+
+    expect(recallMemory).toHaveBeenNthCalledWith(
+      2,
+      "alpha",
+      10,
+      expect.objectContaining({
+        stores: ["graph"],
+        depth: 2,
+        candidatePool: vectorRows,
+      }),
+    );
+  });
+
   it("preserves partial recall results when one datastore fails and failHard is disabled", async () => {
     const recallMemory = vi.fn(async (_query: string, _limit: number, opts: any) => {
       if (opts.stores?.includes("graph")) {
@@ -622,6 +659,34 @@ describe("knowledge orchestrator", () => {
         domain: { technical: true },
       }),
     );
+  });
+
+  it("keeps journal on direct journal store descriptor", async () => {
+    const recallMemory = vi.fn(async () => {
+      throw new Error("journal must not use memory recall");
+    });
+    const recallJournalStore = vi.fn(async () => [
+      { text: "journal reflection", category: "journal", similarity: 0.7, via: "journal" },
+    ]);
+    const engine = createKnowledgeEngine<Result>({
+      workspace: "/tmp",
+      getMemoryConfig: () => ({ docs: { journal: { journalDir: "journal" } } }),
+      isSystemEnabled: (name) => name === "journal",
+      callFastRouter: vi.fn(async () => '{"datastores":["journal"]}'),
+      recallMemory,
+      recallJournalStore,
+    });
+
+    const out = await engine.recall("reflection", 3, {
+      datastores: ["journal"],
+      expandGraph: false,
+      graphDepth: 1,
+      domain: { all: true },
+    });
+
+    expect(recallJournalStore).toHaveBeenCalledWith("reflection", 3);
+    expect(recallMemory).not.toHaveBeenCalled();
+    expect(out[0]).toMatchObject({ category: "journal", via: "journal" });
   });
 
   it("runs session_chunks only when explicitly requested and preserves chunk metadata", async () => {
