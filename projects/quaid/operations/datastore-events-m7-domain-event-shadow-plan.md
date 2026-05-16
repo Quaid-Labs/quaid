@@ -186,6 +186,28 @@ Implementation guardrails carried forward:
   fail-soft mode
 - no project-doc worker `execute_update_once` path should emit this event in M7
 
+## Pre-Implementation Guard Record
+
+Closed guard tests:
+
+- `e11c4942c` pins that project-doc worker `execute_update_once` does not call
+  the supervisor-only docs maintenance tick primitives
+  `auto_register_project_docs` or `index_one_stale_registered_doc`. This keeps
+  the future M7 shadow event scoped to the supervisor tick instead of the
+  worker apply path.
+
+Remaining future behavior-slice coverage:
+
+- supervisor tick emits the finalized M7 event name when the
+  auto-register/stale-index interval fires
+- event payload includes direct result metrics and omits document bodies and
+  environment secrets
+- direct supervisor calls still run and remain authoritative in M7
+- DocsDB shadow listener records would-handle intent without write/index side
+  effects
+- shadow listener failure follows failHard/fail-soft policy without suppressing
+  direct supervisor work in fail-soft mode
+
 ## W4 Smoke After Code
 
 After W6/W8 approve an implementation patch, W4 smoke should cover:
