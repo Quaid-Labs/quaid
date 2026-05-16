@@ -70,7 +70,14 @@ _RECALL_REQUEST_ROUTES: Tuple[RecallRequestRoute, ...] = (
         event_type=RECALL_DOCS_REQUEST,
         datastore_id="docsdb",
         handler_store="docs",
-        aliases=("project", "projects", "project_docs", "documents"),
+        aliases=("documents",),
+    ),
+    RecallRequestRoute(
+        selector="project",
+        event_type=RECALL_DOCS_REQUEST,
+        datastore_id="docsdb",
+        handler_store="docs",
+        aliases=("projects", "project_docs"),
     ),
     RecallRequestRoute(
         selector="project_context",

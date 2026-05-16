@@ -12,7 +12,15 @@ from core.contracts.recall import (
     resolve_recall_request_routes,
     validate_recall_request_routes_against_manifests,
 )
-from core.runtime.events import get_event_capability
+from core.runtime.events import emit_broker_event, get_event_capability, list_events, process_events
+from lib.adapter import TestAdapter, reset_adapter, set_adapter
+
+
+@pytest.fixture(autouse=True)
+def _adapter_state():
+    reset_adapter()
+    yield
+    reset_adapter()
 
 
 def test_recall_request_routes_are_manifested_and_registered_events() -> None:
@@ -38,7 +46,7 @@ def test_recall_request_selector_aliases_route_to_datastores() -> None:
     )
 
     assert [(route.selector, route.event_type, route.datastore_id, route.handler_store) for route in routes] == [
-        ("docs", RECALL_DOCS_REQUEST, "docsdb", "docs"),
+        ("project", RECALL_DOCS_REQUEST, "docsdb", "docs"),
         ("session_chunks", RECALL_MEMORY_REQUEST, "memorydb", "session_chunks"),
         ("vector_basic", RECALL_MEMORY_REQUEST, "memorydb", "vector_basic"),
         ("journal", RECALL_JOURNAL_REQUEST, "evolutiondb", "journal"),
@@ -66,6 +74,17 @@ def test_recall_request_payload_keeps_contract_shape() -> None:
     }
 
 
+def test_project_selector_round_trips_as_requested_selector() -> None:
+    route = resolve_recall_request_routes(["project"])[0]
+
+    payload = build_recall_request_payload(query="project docs", route=route, limit=3)
+
+    assert route.selector == "project"
+    assert route.handler_store == "docs"
+    assert payload["selector"] == "project"
+    assert payload["store"] == "docs"
+
+
 def test_recall_request_contract_rejects_unknown_or_empty_selectors() -> None:
     with pytest.raises(ValueError, match="unknown recall selector"):
         resolve_recall_request_routes(["vector_basic", "missing-store"])
@@ -82,3 +101,30 @@ def test_recall_request_payload_requires_query_and_positive_limit() -> None:
 
     with pytest.raises(ValueError, match="limit must be positive"):
         build_recall_request_payload(query="docs", route=route, limit=0)
+
+
+def test_unactivated_recall_request_fails_closed_when_dispatched(monkeypatch, tmp_path) -> None:
+    import core.runtime.events as events
+
+    monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: False)
+    set_adapter(TestAdapter(tmp_path))
+
+    emit_broker_event(RECALL_MEMORY_REQUEST, {"query": "baratza"}, source="pytest")
+    result = process_events(limit=1, names=[RECALL_MEMORY_REQUEST])
+
+    assert result["processed"] == 0
+    assert result["failed"] == 1
+    failed = list_events(status="failed", limit=10)
+    assert len(failed) == 1
+    assert failed[0]["result"]["error"] == "recall.memory.request.v1 request handler not activated in M4"
+
+
+def test_unactivated_recall_request_raises_under_fail_hard(monkeypatch, tmp_path) -> None:
+    import core.runtime.events as events
+
+    set_adapter(TestAdapter(tmp_path))
+    emit_broker_event(RECALL_DOCS_REQUEST, {"query": "docs"}, source="pytest")
+    monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: True)
+
+    with pytest.raises(RuntimeError, match="Event handler failed while fail-hard mode is enabled"):
+        process_events(limit=1, names=[RECALL_DOCS_REQUEST])

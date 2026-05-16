@@ -656,6 +656,13 @@ def _handle_janitor_run_completed(event: Event) -> Dict[str, Any]:
         return {"status": "failed", "error": str(e)}
 
 
+def _handle_unactivated_recall_request(event: Event) -> Dict[str, Any]:
+    return {
+        "status": "failed",
+        "error": f"{event.get('name')} request handler not activated in M4",
+    }
+
+
 EVENT_HANDLERS: Dict[str, EventHandler] = {
     "notification.delayed": _handle_delayed_notification,
     "memory.force_compaction": _handle_force_compaction,
@@ -668,6 +675,11 @@ EVENT_HANDLERS: Dict[str, EventHandler] = {
     "session.timeout": _handle_session_lifecycle,
     "session.agent_start": _handle_session_lifecycle,
     "session.agent_end": _handle_session_lifecycle,
+    "recall.memory.request.v1": _handle_unactivated_recall_request,
+    "recall.graph.request.v1": _handle_unactivated_recall_request,
+    "recall.docs.request.v1": _handle_unactivated_recall_request,
+    "recall.project_context.request.v1": _handle_unactivated_recall_request,
+    "recall.journal.request.v1": _handle_unactivated_recall_request,
 }
 _EVENT_HANDLERS_LOCK = Lock()
 

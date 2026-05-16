@@ -31,7 +31,8 @@ Current request events:
 | `vector`, `vector_basic`, `vector_technical` | `recall.memory.request.v1` | `memorydb` | matching vector store |
 | `graph` | `recall.graph.request.v1` | `memorydb` | `graph` |
 | `session_chunks` / `source_chunks` | `recall.memory.request.v1` | `memorydb` | `session_chunks` |
-| `docs` / `project` | `recall.docs.request.v1` | `docsdb` | `docs` |
+| `docs` | `recall.docs.request.v1` | `docsdb` | `docs` |
+| `project` | `recall.docs.request.v1` | `docsdb` | `docs` |
 | `project_context` | `recall.project_context.request.v1` | `docsdb` | `project_context` |
 | `journal` | `recall.journal.request.v1` | `evolutiondb` | `journal` |
 
@@ -41,15 +42,22 @@ The request payload shape for each selected route is:
 {
   "query": "user query",
   "limit": 5,
-  "selector": "vector_basic",
-  "store": "vector_basic",
-  "datastore_id": "memorydb",
+  "selector": "project",
+  "store": "docs",
+  "datastore_id": "docsdb",
   "options": {}
 }
 ```
 
-`selector` is the normalized user-facing selector. `store` is the handler-local
-store key the datastore handler will receive when that request path is activated.
+`selector` preserves the normalized user-facing selector for diagnostics and
+result labeling. `store` is the handler-local store key the datastore handler
+will receive when that request path is activated. For example, `project` remains
+`project` at the contract boundary while the docs datastore handler receives
+`store: "docs"`.
+
+If a recall request event is manually dispatched before M4 handler activation,
+the event fails closed with `request handler not activated in M4`. It must not be
+silently marked processed by the generic no-handler path.
 
 ## Registry Alignment
 
