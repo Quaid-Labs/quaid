@@ -48,7 +48,11 @@ describe("knowledge orchestrator", () => {
     expect(engine.normalizeKnowledgeDatastores(["source_chunks"], false)).toEqual([
       "session_chunks",
     ]);
-    expect(engine.normalizeKnowledgeDatastores(undefined, false)).not.toContain("session_chunks");
+    expect(engine.normalizeKnowledgeDatastores(undefined, false)).toEqual([
+      "vector_basic",
+      "journal",
+      "project",
+    ]);
   });
 
   it("preserves exact M6.1 routed registry snapshots", () => {
