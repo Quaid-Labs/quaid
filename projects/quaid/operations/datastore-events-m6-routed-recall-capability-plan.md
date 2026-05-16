@@ -150,3 +150,19 @@ For M6.1 code:
 - Should invalid router-selected stores fail immediately under failHard, or
   continue the current repair/validation behavior where invalid store names are
   ignored until no valid stores remain?
+
+## W3 Resolution For M6.1
+
+W3 approved M6.1 metadata-only code with conservative answers:
+
+- Do not generate the TypeScript registry from Python contracts in this slice.
+  Keep `core/knowledge-stores.ts` as the adapter-facing source for current
+  TypeScript recall runtime metadata.
+- Do not make `journal` bridge-eligible. Keep journal recall on the current
+  TypeScript journal scanner path until a separate `evolutiondb`/journal slice
+  is reviewed.
+- Preserve current invalid-router-store behavior. Invalid router-selected store
+  names continue to be filtered/repair-handled as today and fail only when the
+  current code would fail. Do not tighten failHard semantics in M6.1.
+- Add exact snapshot/parity tests for rendered router guidance and default store
+  order, not only set equality.
