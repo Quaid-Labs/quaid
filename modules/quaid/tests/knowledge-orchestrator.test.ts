@@ -182,6 +182,57 @@ describe("knowledge orchestrator", () => {
     expect(calls).toEqual(["vector_basic", "journal", "project"]);
   });
 
+  it("executes fail-open expand-graph default stores in registry order", async () => {
+    const calls: string[] = [];
+    const vectorRows = [
+      { text: "vector default", category: "fact", similarity: 0.83, via: "vector_basic" },
+    ];
+    let graphOptions: any;
+    const recallMemory = vi.fn(async (_query: string, _limit: number, opts: any) => {
+      calls.push(String(opts.stores?.[0] || ""));
+      if (opts.stores?.includes("graph")) {
+        graphOptions = opts;
+        return [{ text: "graph default", category: "graph", similarity: 0.76, via: "graph" }];
+      }
+      return vectorRows;
+    });
+    const recallJournalStore = vi.fn(async () => {
+      calls.push("journal");
+      return [{ text: "journal default", category: "journal", similarity: 0.74, via: "journal" }];
+    });
+    const recallProjectStore = vi.fn(async () => {
+      calls.push("project");
+      return [{ text: "project default", category: "project", similarity: 0.72, via: "project" }];
+    });
+    const engine = createKnowledgeEngine<Result>({
+      workspace: "/tmp",
+      getMemoryConfig: () => ({ retrieval: { failHard: false } }),
+      isSystemEnabled: (name) => name === "journal" || name === "projects",
+      callFastRouter: vi.fn(async () => {
+        throw new Error("offline");
+      }),
+      recallMemory,
+      recallJournalStore,
+      recallProjectStore,
+    });
+
+    await engine.recall("default graph order", 5, {
+      datastores: [],
+      expandGraph: true,
+      graphDepth: 2,
+      domain: { all: true },
+      reasoning: "fast",
+      failOpen: true,
+    });
+
+    expect(calls).toEqual(["vector_basic", "graph", "journal", "project"]);
+    expect(graphOptions).toEqual(expect.objectContaining({
+      stores: ["graph"],
+      depth: 2,
+      candidatePool: vectorRows,
+    }));
+  });
+
   it("throttles repeated router fallback warning notices per reasoning tier", async () => {
     const recallMemory = vi.fn(async (_query: string, _limit: number, opts: any) => {
       if (opts.stores?.includes("graph")) {
