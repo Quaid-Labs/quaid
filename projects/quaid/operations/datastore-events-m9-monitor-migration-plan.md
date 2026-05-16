@@ -72,6 +72,8 @@ Required review:
 
 ## M9.2 Project File And Document Changed Events
 
+Tracking doc: `datastore-events-m9-2-project-doc-change-plan.md`.
+
 Scope:
 
 - project file/document change monitor writes
