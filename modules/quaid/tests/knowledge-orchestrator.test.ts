@@ -670,6 +670,75 @@ describe("knowledge orchestrator", () => {
     );
   });
 
+  it("limits memory selector overrides to current top-level descriptor options", async () => {
+    const recallMemory = vi.fn(async () => []);
+    const engine = createKnowledgeEngine<Result>({
+      workspace: "/tmp",
+      getMemoryConfig: () => ({}),
+      isSystemEnabled: () => false,
+      callFastRouter: vi.fn(async () => '{"datastores":["vector_basic"]}'),
+      recallMemory,
+    });
+
+    await engine.recall("personal scoped", 3, {
+      datastores: ["vector_basic"],
+      expandGraph: false,
+      graphDepth: 1,
+      domain: { all: true },
+      domainBoost: { personal: 1.4 },
+      project: "quaid",
+      dateFrom: "2026-02-01",
+      dateTo: "2026-02-28",
+      fast: true,
+      datastoreOptions: {
+        vector_basic: { domain: { technical: true }, project: "wrong-project" },
+      },
+    });
+    await engine.recall("technical scoped", 3, {
+      datastores: ["vector_technical"],
+      expandGraph: false,
+      graphDepth: 1,
+      domain: { technical: true },
+      domainBoost: { technical: 1.7 },
+      project: "quaid-runtime",
+      dateFrom: "2026-03-01",
+      dateTo: "2026-03-31",
+      fast: true,
+      datastoreOptions: {
+        vector_technical: { domain: { personal: true }, project: "wrong-project" },
+      },
+    });
+
+    expect(recallMemory).toHaveBeenNthCalledWith(
+      1,
+      "personal scoped",
+      3,
+      expect.objectContaining({
+        stores: ["vector_basic"],
+        domain: { all: true },
+        domainBoost: { personal: 1.4 },
+        project: "quaid",
+        dateFrom: "2026-02-01",
+        dateTo: "2026-02-28",
+        fast: true,
+      }),
+    );
+    expect(recallMemory).toHaveBeenNthCalledWith(
+      2,
+      "technical scoped",
+      3,
+      expect.objectContaining({
+        stores: ["vector_technical"],
+        domain: { technical: true },
+        domainBoost: { technical: 1.7 },
+        project: "quaid-runtime",
+        dateFrom: "2026-03-01",
+        dateTo: "2026-03-31",
+        fast: true,
+      }),
+    );
+  });
+
   it("keeps memory selectors from consuming candidate pools while seeding graph", async () => {
     const basicRows = [
       { id: "basic-1", text: "Personal anchor", category: "fact", similarity: 0.91, via: "vector_basic" },
