@@ -14,6 +14,8 @@ from core.runtime.events import (
     get_event_registry,
     list_events,
     process_events,
+    register_request_handler,
+    request_broker_event,
     register_event_handler,
     validate_event_envelope,
     validate_declared_event_contract,
@@ -24,10 +26,18 @@ from lib.adapter import TestAdapter, reset_adapter, set_adapter
 
 def setup_function():
     reset_adapter()
+    import core.runtime.events as events
+
+    with events._REQUEST_EVENT_HANDLERS_LOCK:
+        events._REQUEST_EVENT_HANDLERS.clear()
 
 
 def teardown_function():
     reset_adapter()
+    import core.runtime.events as events
+
+    with events._REQUEST_EVENT_HANDLERS_LOCK:
+        events._REQUEST_EVENT_HANDLERS.clear()
 
 
 def test_event_emit_list_and_capabilities(tmp_path):
@@ -84,7 +94,7 @@ def test_broker_event_request_auto_correlation_and_tracing(tmp_path):
 
 
 def test_broker_event_rejects_invalid_envelope_under_fail_hard(monkeypatch, tmp_path):
-    adapter = TestAdapter(tmp_path); set_adapter(adapter); iroot = adapter.instance_root()
+    set_adapter(TestAdapter(tmp_path))
 
     import core.runtime.events as events
 
@@ -104,7 +114,7 @@ def test_broker_event_logs_and_enqueues_invalid_envelope_when_not_fail_hard(
     monkeypatch,
     tmp_path,
 ):
-    adapter = TestAdapter(tmp_path); set_adapter(adapter); iroot = adapter.instance_root()
+    set_adapter(TestAdapter(tmp_path))
 
     import core.runtime.events as events
 
@@ -173,6 +183,116 @@ def test_broker_event_deduplicates_by_idempotency_key(tmp_path):
     ]
     assert len(matching) == 1
     assert matching[0]["payload"] == {"idx": 1}
+
+
+def test_broker_request_fan_in_dispatches_registered_handlers(tmp_path):
+    adapter = TestAdapter(tmp_path); set_adapter(adapter); iroot = adapter.instance_root()
+
+    def memory_handler(event):
+        return {"status": "ok", "query": event["payload"]["query"], "rows": ["memory-row"]}
+
+    def graph_handler(event):
+        return {"status": "acked", "query": event["payload"]["query"], "rows": ["graph-row"]}
+
+    register_request_handler("recall.memory.request.v1", memory_handler, datastore_id="memorydb")
+    register_request_handler("recall.memory.request.v1", graph_handler, datastore_id="graph-shadow")
+
+    result = request_broker_event(
+        "recall.memory.request.v1",
+        {"query": "baratza"},
+        source="pytest",
+        instance_id="inst-1",
+    )
+
+    assert result["status"] == "ok"
+    assert result["handler_count"] == 2
+    assert result["failed"] == 0
+    assert [row["datastore_id"] for row in result["responses"]] == ["memorydb", "graph-shadow"]
+    assert result["responses"][0]["result"]["rows"] == ["memory-row"]
+    assert result["event"]["event_class"] == "request"
+    assert result["event"]["correlation_id"].startswith("corr-")
+    assert list_events(status="all", limit=10) == []
+
+    history_path = get_runtime_root(iroot) / "events" / "history.jsonl"
+    history = [json.loads(line) for line in history_path.read_text(encoding="utf-8").splitlines()]
+    assert any(item.get("op") == "broker.requested" for item in history)
+    assert sum(1 for item in history if item.get("op") == "broker.request_acked") == 2
+
+
+def test_broker_request_missing_handler_fails_closed_when_not_fail_hard(caplog, monkeypatch, tmp_path):
+    set_adapter(TestAdapter(tmp_path))
+
+    import core.runtime.events as events
+
+    monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: False)
+
+    with caplog.at_level("ERROR"):
+        result = request_broker_event("recall.docs.request.v1", {"query": "docs"}, source="pytest")
+
+    assert result["status"] == "failed"
+    assert result["handler_count"] == 0
+    assert result["failed"] == 1
+    assert result["responses"] == []
+    assert result["error"] == "No request handler registered for recall.docs.request.v1"
+    assert "No request handler registered for recall.docs.request.v1" in caplog.text
+
+
+def test_broker_request_missing_handler_raises_under_fail_hard(monkeypatch, tmp_path):
+    set_adapter(TestAdapter(tmp_path))
+
+    import core.runtime.events as events
+
+    monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: True)
+
+    with pytest.raises(RuntimeError, match="Request handler missing while fail-hard mode is enabled"):
+        request_broker_event("recall.docs.request.v1", {"query": "docs"}, source="pytest")
+
+
+def test_broker_request_handler_nack_respects_fail_hard(monkeypatch, tmp_path):
+    set_adapter(TestAdapter(tmp_path))
+
+    import core.runtime.events as events
+
+    register_request_handler(
+        "recall.memory.request.v1",
+        lambda _event: {"status": "nacked", "error": "handler not activated"},
+        datastore_id="memorydb",
+    )
+
+    monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: False)
+    result = request_broker_event("recall.memory.request.v1", {"query": "baratza"}, source="pytest")
+
+    assert result["status"] == "failed"
+    assert result["failed"] == 1
+    assert result["responses"][0]["status"] == "nacked"
+
+    monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: True)
+    with pytest.raises(RuntimeError, match="handler not activated"):
+        request_broker_event("recall.memory.request.v1", {"query": "baratza"}, source="pytest")
+
+
+def test_broker_request_handler_malformed_response_fails_closed(monkeypatch, tmp_path):
+    set_adapter(TestAdapter(tmp_path))
+
+    import core.runtime.events as events
+
+    register_request_handler(
+        "recall.memory.request.v1",
+        lambda _event: "bad-response",
+        datastore_id="memorydb",
+    )
+
+    monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: False)
+    result = request_broker_event("recall.memory.request.v1", {"query": "baratza"}, source="pytest")
+
+    assert result["status"] == "failed"
+    assert result["responses"][0]["result"]["error"] == (
+        "recall.memory.request.v1/memorydb returned non-object response"
+    )
+
+    monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: True)
+    with pytest.raises(RuntimeError, match="non-object response"):
+        request_broker_event("recall.memory.request.v1", {"query": "baratza"}, source="pytest")
 
 
 def test_broker_dispatch_traces_dispatch_ack_and_failure(monkeypatch, tmp_path):
@@ -270,7 +390,7 @@ def test_event_process_docs_ingest_transcript(monkeypatch, tmp_path):
 
 
 def test_event_process_session_ingest_log(monkeypatch, tmp_path):
-    adapter = TestAdapter(tmp_path); set_adapter(adapter); iroot = adapter.instance_root()
+    set_adapter(TestAdapter(tmp_path))
 
     import core.runtime.events as events
     called = {}
@@ -421,7 +541,7 @@ def test_emit_event_trims_history_file_before_append(monkeypatch, tmp_path):
 
 
 def test_process_events_handler_error_raises_in_fail_hard(monkeypatch, tmp_path):
-    adapter = TestAdapter(tmp_path); set_adapter(adapter); iroot = adapter.instance_root()
+    set_adapter(TestAdapter(tmp_path))
 
     import core.runtime.events as events
 
@@ -445,7 +565,7 @@ def test_process_events_handler_error_raises_in_fail_hard(monkeypatch, tmp_path)
 
 
 def test_process_events_handler_error_marks_failed_when_not_fail_hard(monkeypatch, tmp_path):
-    adapter = TestAdapter(tmp_path); set_adapter(adapter); iroot = adapter.instance_root()
+    set_adapter(TestAdapter(tmp_path))
 
     import core.runtime.events as events
 
@@ -502,7 +622,7 @@ def test_emit_event_recovers_on_malformed_queue_when_not_fail_hard(monkeypatch, 
 
 
 def test_emit_event_raises_on_chmod_failure_when_fail_hard(monkeypatch, tmp_path):
-    adapter = TestAdapter(tmp_path); set_adapter(adapter); iroot = adapter.instance_root()
+    set_adapter(TestAdapter(tmp_path))
 
     import core.runtime.events as events
 

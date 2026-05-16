@@ -71,6 +71,26 @@ M4 adds the missing `recall.journal.request.v1` metadata to `evolutiondb` becaus
 `journal` is already a routed recall selector in the TypeScript knowledge-store
 registry. This is metadata-only; it does not activate a journal handler.
 
+## Broker Request Mechanics
+
+M4 also adds synchronous broker request/fanin mechanics:
+
+- `register_request_handler(event_type, handler, datastore_id=...)`
+- `request_broker_event(event_type, payload, ...)`
+
+This is separate from the existing queue-backed `emit` / `dispatch` path. Recall
+requests need immediate responses and correlation ids; they must not be queued
+and later marked processed with no response body.
+
+The request broker fans out to all registered in-process handlers for the event
+type and returns aggregate response metadata. Missing handlers or nacked/failed
+handler responses fail loudly under `failHard=true`. With `failHard=false`, they
+return a failed/partial response and log at error level.
+
+No first-party recall datastore handler is registered by this M4 slice. That
+keeps production recall behavior unchanged while giving the activation milestone
+a real request contract to switch to.
+
 ## Activation Gate
 
 M4 contract metadata is safe for W1 to implement. Activating recall behavior is

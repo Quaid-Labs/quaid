@@ -28,6 +28,7 @@ from lib.runtime_context import get_workspace_dir
 
 Event = Dict[str, Any]
 EventHandler = Callable[[Event], Dict[str, Any]]
+RequestEventHandler = Callable[[Event], Dict[str, Any]]
 logger = logging.getLogger(__name__)
 MAX_EVENT_QUEUE = 2000
 MAX_HISTORY_JSONL_BYTES = 5 * 1024 * 1024
@@ -682,6 +683,8 @@ EVENT_HANDLERS: Dict[str, EventHandler] = {
     "recall.journal.request.v1": _handle_unactivated_recall_request,
 }
 _EVENT_HANDLERS_LOCK = Lock()
+_REQUEST_EVENT_HANDLERS: Dict[str, List[Dict[str, Any]]] = {}
+_REQUEST_EVENT_HANDLERS_LOCK = Lock()
 
 
 def register_event_handler(name: str, handler: EventHandler, *, force: bool = False) -> None:
@@ -699,6 +702,47 @@ def register_event_handler(name: str, handler: EventHandler, *, force: bool = Fa
         if existing is not None and existing is not handler and force:
             logger.warning("register_event_handler overwriting existing handler for '%s'", event_name)
         EVENT_HANDLERS[event_name] = handler
+
+
+def register_request_handler(
+    event_type: str,
+    handler: RequestEventHandler,
+    *,
+    datastore_id: str,
+    force: bool = False,
+) -> None:
+    request_type = str(event_type or "").strip()
+    target_id = str(datastore_id or "").strip()
+    if not request_type:
+        raise ValueError("request event_type is required")
+    if not target_id:
+        raise ValueError("request datastore_id is required")
+    if not callable(handler):
+        raise TypeError(f"Request handler {request_type}/{target_id} is not callable")
+
+    with _REQUEST_EVENT_HANDLERS_LOCK:
+        handlers = list(_REQUEST_EVENT_HANDLERS.get(request_type) or [])
+        existing_index = next(
+            (
+                index
+                for index, registration in enumerate(handlers)
+                if str(registration.get("datastore_id") or "") == target_id
+            ),
+            None,
+        )
+        registration = {"datastore_id": target_id, "handler": handler}
+        if existing_index is not None and not force:
+            logger.warning(
+                "register_request_handler skipped overwrite for '%s' datastore '%s' (pass force=True to replace)",
+                request_type,
+                target_id,
+            )
+            return
+        if existing_index is not None:
+            handlers[existing_index] = registration
+        else:
+            handlers.append(registration)
+        _REQUEST_EVENT_HANDLERS[request_type] = handlers
 
 
 def get_event_registry() -> List[Dict[str, Any]]:
@@ -821,6 +865,140 @@ class EventBroker:
                 _append_jsonl(history_path, {"ts": _now(), "op": "broker.acked", "event": trace})
         return result
 
+    def request(
+        self,
+        event_type: str,
+        payload: Optional[Dict[str, Any]] = None,
+        *,
+        source: str = "unknown",
+        session_id: Optional[str] = None,
+        owner_id: Optional[str] = None,
+        priority: str = "normal",
+        instance_id: Optional[str] = None,
+        project_id: Optional[str] = None,
+        correlation_id: Optional[str] = None,
+        idempotency_key: Optional[str] = None,
+        provenance: Optional[Dict[str, Any]] = None,
+        schema_version: int = EVENT_ENVELOPE_SCHEMA_VERSION,
+    ) -> Dict[str, Any]:
+        name = str(event_type or "").strip()
+        if not name:
+            raise ValueError("event_type is required")
+        ts = _now()
+        event = _make_event_envelope(
+            name=name,
+            payload=payload,
+            source=source,
+            session_id=session_id,
+            owner_id=owner_id,
+            priority=priority,
+            instance_id=instance_id,
+            project_id=project_id,
+            correlation_id=correlation_id or _next_correlation_id(name, ts),
+            idempotency_key=idempotency_key,
+            provenance=provenance,
+            event_class="request",
+            schema_version=schema_version,
+            created_at=ts,
+        )
+        _enforce_broker_envelope(event)
+        history_path = _event_paths()["history_jsonl"]
+        _append_jsonl(history_path, {"ts": _now(), "op": "broker.requested", "event": _trace_event(event)})
+
+        with _REQUEST_EVENT_HANDLERS_LOCK:
+            registrations = list(_REQUEST_EVENT_HANDLERS.get(name) or [])
+
+        if not registrations:
+            message = f"No request handler registered for {name}"
+            if _is_fail_hard_enabled():
+                raise RuntimeError(
+                    f"Request handler missing while fail-hard mode is enabled: {message}"
+                )
+            logger.error(message)
+            _append_jsonl(history_path, {"ts": _now(), "op": "broker.request_failed", "event": _trace_event(event), "error": message})
+            return {
+                "status": "failed",
+                "error": message,
+                "event": _trace_event(event),
+                "handler_count": 0,
+                "failed": 1,
+                "responses": [],
+            }
+
+        responses: List[Dict[str, Any]] = []
+        failed = 0
+        for registration in registrations:
+            datastore_id = str(registration.get("datastore_id") or "").strip()
+            handler = registration.get("handler")
+            try:
+                result = handler(event)  # type: ignore[misc]
+            except Exception as exc:
+                failed += 1
+                message = str(exc)
+                _append_jsonl(
+                    history_path,
+                    {"ts": _now(), "op": "broker.request_failed", "event": _trace_event(event), "handler": datastore_id, "error": message},
+                )
+                if _is_fail_hard_enabled():
+                    raise RuntimeError(
+                        "Request handler failed while fail-hard mode is enabled"
+                    ) from exc
+                logger.error("Request handler %s/%s failed: %s", name, datastore_id, message)
+                responses.append({
+                    "datastore_id": datastore_id,
+                    "status": "failed",
+                    "error": message,
+                    "result": {},
+                })
+                continue
+
+            if result is None:
+                result_payload: Dict[str, Any] = {}
+            elif isinstance(result, dict):
+                result_payload = dict(result)
+            else:
+                result_payload = {
+                    "status": "failed",
+                    "error": f"{name}/{datastore_id} returned non-object response",
+                }
+            status = str(result_payload.get("status") or "ok").strip().lower() or "ok"
+            response = {
+                "datastore_id": datastore_id,
+                "status": status,
+                "result": result_payload,
+            }
+            responses.append(response)
+            if status in {"failed", "error", "nacked"}:
+                failed += 1
+                message = str(result_payload.get("error") or f"{name}/{datastore_id} returned {status}")
+                _append_jsonl(
+                    history_path,
+                    {"ts": _now(), "op": "broker.request_failed", "event": _trace_event(event), "handler": datastore_id, "error": message},
+                )
+                if _is_fail_hard_enabled():
+                    raise RuntimeError(
+                        f"Request handler failed while fail-hard mode is enabled: {message}"
+                    )
+            else:
+                _append_jsonl(
+                    history_path,
+                    {"ts": _now(), "op": "broker.request_acked", "event": _trace_event(event), "handler": datastore_id},
+                )
+
+        if failed == 0:
+            status = "ok"
+        elif failed < len(registrations):
+            status = "partial"
+        else:
+            status = "failed"
+        return {
+            "status": status,
+            "event": _trace_event(event),
+            "handler_count": len(registrations),
+            "failed": failed,
+            "responses": responses,
+        }
+
 
 def get_event_broker() -> EventBroker:
     return EventBroker()
@@ -832,6 +1010,10 @@ def emit_broker_event(event_type: str, payload: Optional[Dict[str, Any]] = None,
 
 def dispatch_broker_events(limit: int = 20, names: Optional[List[str]] = None) -> Dict[str, Any]:
     return get_event_broker().dispatch(limit=limit, names=names)
+
+
+def request_broker_event(event_type: str, payload: Optional[Dict[str, Any]] = None, **kwargs: Any) -> Dict[str, Any]:
+    return get_event_broker().request(event_type, payload, **kwargs)
 
 
 def list_events(status: str = "pending", limit: int = 50) -> List[Event]:
