@@ -222,3 +222,98 @@ Gate expectations:
 If W4 finds a recall-quality or runtime regression, stop M6 behavior planning
 and route the issue to W1 or W3 according to normal ownership. If W4 passes,
 the next M6 behavior slice still requires a fresh W3 plan review before code.
+
+## Candidate M6.2 Slice: Routed Store Execution Request Boundary
+
+Status: draft only. Do not implement until:
+
+1. W4 records the full-livetest gate above as green, or Solomon explicitly
+   overrides it.
+2. W3 reviews and approves this M6.2 mapping before code.
+3. W6 reviews the replacement boundary before live validation.
+
+### Replacement Target
+
+The remaining TypeScript runtime execution catalog lives in
+`core/knowledge-engine.ts` `_executeStores()`:
+
+- descriptor functions for `vector`, `vector_basic`, `vector_technical`,
+  `graph`, `journal`, `project`, and `session_chunks`
+- result accumulation, dedup, source-type boosts, sorting, and project-row
+  preservation
+- failHard propagation for store execution failures
+
+M6.2 should not rewrite merge/ranking. The first behavior slice should replace
+only the execution call boundary for the already-activated broker-capable
+selector families and leave the `_executeStores()` merge/ranking frame intact.
+
+### Proposed First Behavior Slice
+
+Activate broker/request execution only for routed/default store descriptors that
+already have reviewed explicit broker parity:
+
+- `vector_basic` and `vector_technical` through the memory/vector request path,
+  preserving their default domains and user-facing selector names.
+- `project` through the docs request path, preserving `project`, `docs`,
+  `dateFrom`, and `dateTo` filters and project-row preservation after merge.
+
+Keep these descriptors on the current path in this slice:
+
+- `graph`: graph traversal, candidate-pool semantics, and graph metadata
+  preservation remain too coupled to ranking and require a separate W3 review.
+- `session_chunks` / `source_chunks`: session evidence windows remain
+  explicit-only and require a separate sessiondb/source-window slice.
+- `journal`: stays on the TypeScript journal scanner until an
+  `evolutiondb`/journal broker slice is reviewed.
+- aggregate `vector`: not router-visible; keep it on its current explicit path
+  unless a later explicit-aggregate slice needs it.
+
+### Required Behavior Invariants
+
+M6.2 must preserve:
+
+- router prompt text and router-visible store list
+- flat and expand-graph default store order
+- invalid router-output repair/filter behavior
+- `vector_basic` default domain `{ personal: true }`
+- `vector_technical` default domain `{ technical: true }`
+- `project` docs/project/date filter semantics
+- result dedup keys, source-type boosts, sorting, and final limit behavior
+- project-row preservation when `project` is selected
+- failHard behavior: missing handler, handler failure, malformed response, and
+  nacked response must raise when `retrieval.fail_hard=true`
+- fail-soft behavior: degraded request execution must log loudly and return the
+  same user-visible failure shape as the current path where applicable
+- no fallback to the old direct descriptor after a broker request failure in the
+  migrated descriptor
+
+### Tests Before W4 Smoke
+
+Add focused tests before any live deployment:
+
+- routed/default flat recall still selects `vector_basic`, `journal`, and
+  `project` in the same order
+- expand-graph default still selects `vector_basic`, `graph`, `journal`, and
+  `project`
+- routed `vector_basic` broker request preserves selector, handler store,
+  domain, project, date filters, and output shape
+- routed `vector_technical` broker request preserves selector, handler store,
+  domain, project, date filters, and output shape
+- routed `project` broker request preserves selector, docs/project/date
+  filters, output shape, and project-row preservation
+- `graph`, `journal`, `session_chunks`, and aggregate `vector` descriptors do
+  not use the M6.2 broker path
+- malformed/nacked/missing-handler request responses raise under failHard and
+  do not silently fall back to the old direct descriptor
+- mixed default results keep existing dedup/sort/source-type boost behavior
+
+### W4 Smoke After Code
+
+After W3/W6/W8 approve a code slice, W4 smoke should cover:
+
+- default/routed recall with personal fact + project doc results
+- expand-graph recall confirming graph still works and remains on the old path
+- journal result availability when journal data exists
+- explicit `stores:["docs"]` and `stores:["vector"]` still use the M4/M5 paths
+- negative case proving missing/nacked broker request surfaces loudly under
+  failHard
