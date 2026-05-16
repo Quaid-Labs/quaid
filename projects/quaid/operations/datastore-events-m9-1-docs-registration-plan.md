@@ -1,6 +1,6 @@
 # Datastore Events M9.1 Docs Registration And Index Request Plan
 
-Status: implementation patch in progress; validation pending
+Status: implemented and validated
 Owner: W1 runtime/datastore
 Plan source: `projects/quaid/operations/datastore-events-m9-monitor-migration-plan.md`
 
@@ -17,8 +17,41 @@ Do not implement runtime code for M9.1 until:
    recallability, indexing cadence, row metadata, or result shape.
 
 M8 completed W3/W4/W6/W8 validation on stack
-`b405e5813+90de45f09+f4a9e21dc`. M9.1 runtime implementation still requires
-fresh W3/W4/W6/W8 validation before this milestone is complete.
+`b405e5813+90de45f09+f4a9e21dc`. M9.1 runtime implementation completed on
+`9ac2a07b3` and passed W3/W4/W6/W8 validation.
+
+## Implementation Record
+
+Implemented by `9ac2a07b3`:
+
+- DocsDB listener no longer calls
+  `core.project_docs.auto_register_project_docs()` or
+  `core.project_docs.index_one_stale_registered_doc()` for the selected
+  `docs.project_maintenance_observed` event path.
+- Listener-owned helper now materializes queued PROJECT.log projects, syncs
+  visible docs registry rows through `core.docs.updater.sync_project_visible_docs()`,
+  and indexes one stale registered doc through
+  `core.docs.updater.index_one_stale_registered_doc()`.
+- `listener_result.direct_result` metrics shape is preserved.
+- Project-doc worker `execute_update_once` remains on its existing path.
+- Docs RAG recall/search and recall request handlers are unchanged.
+
+Validation:
+
+- W3 approved from docs/recall-quality scope: no recall/search regression, no
+  project-doc worker path change, all-project and project-scoped behavior
+  covered, failHard/fail-soft behavior preserved.
+- W4 R201 smoke passed: supervisor emit/dispatch through DocsDB primitives,
+  authoritative listener metrics, newly indexed docs recallable, worker
+  `execute_update_once` unchanged, project-scoped listener pass, failHard
+  validation failure surfaced.
+- W6 approved: lean contract pass, no fallback to removed helpers, failHard
+  checks on new exception paths, M8 golden tests preserved. W6 LOW on reserved
+  project skip was verified as preserved pre-M9.1 behavior from
+  `materialize_queued_projects()`.
+- W8 static passed: py_compile touched Python, project-doc/event suite,
+  datastore registry/contracts/events suite, ruff, docs consistency, and
+  boundary check.
 
 ## M9.1 Goal
 

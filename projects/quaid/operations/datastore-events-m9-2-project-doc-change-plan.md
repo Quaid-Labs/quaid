@@ -1,6 +1,6 @@
 # Datastore Events M9.2 Project Doc Change Plan
 
-Status: draft plan; runtime implementation blocked until M9.1 validation completes
+Status: plan approved; pre-implementation guards in progress
 Owner: W1 runtime/datastore
 Plan source: `projects/quaid/operations/datastore-events-m9-monitor-migration-plan.md`
 
@@ -17,7 +17,30 @@ Do not implement runtime code for M9.2 until:
    can affect docs recallability, indexing cadence, row metadata, and result
    shape.
 
-This document is planning only. It does not approve runtime implementation.
+M9.1 completed validation on `9ac2a07b3`. This document is planning only and
+does not approve runtime implementation. Any behavior patch still needs fresh
+W3/W4/W6/W8 validation.
+
+## Review Record
+
+Plan `a689199bc`:
+
+- W3 approved as plan-only. W3 clarified that the selected behavior slice is
+  only the apply/index operation inside `execute_update_once`, not the broader
+  project-doc worker transaction.
+- W6 approved the plan scope and no-fallback/failHard framing.
+- W8 docs-static passed.
+
+Pre-implementation guard commits:
+
+- `e863aaee5` pins the current worker apply/index sequence:
+  `update_project_docs` -> `sync_project_docs_registry` ->
+  `update_registered_docs` -> `index_project_logs`. It also pins registry sync
+  metrics, indexed-doc counts, `last_metrics`, and stored worker state.
+- `e9a46bd02` pins registered-doc indexing failure behavior: fail-soft returns
+  `status=error`, preserves `metrics.index_error`, leaves indexed counts at
+  zero, skips project-log indexing after registered-doc failure, and failHard
+  re-raises without fallback.
 
 ## M9.2 Goal
 
