@@ -11,7 +11,7 @@ changes. The migration plan requires W4 full livetest across CC/CDX/OC before
 migrating routed recall.
 
 Until that gate is recorded, M6 work should stay at planning, metadata, and
-test-design level unless Solomon explicitly overrides the gate.
+test-design level unless Solomon/Hermes explicitly overrides the gate.
 
 ## Decision Needed
 
@@ -228,9 +228,9 @@ the next M6 behavior slice still requires a fresh W3 plan review before code.
 Status: M6.2a project-only plan approved; runtime code still blocked. Do not
 implement until:
 
-1. W4 records the full-livetest gate above as green, or Solomon explicitly
-   overrides it.
-2. W3 reviews and approves this M6.2 mapping before code.
+1. W4 records the full-livetest gate above as green, or Solomon/Hermes
+   explicitly overrides it.
+2. W3 reviews and approves the implementation patch before behavior code lands.
 3. W6 reviews the replacement boundary before live validation.
 
 ### Replacement Target
