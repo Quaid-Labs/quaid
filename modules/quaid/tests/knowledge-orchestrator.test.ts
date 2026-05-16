@@ -345,6 +345,57 @@ describe("knowledge orchestrator", () => {
     expect(results.some((r) => r.text === "vector survives")).toBe(true);
   });
 
+  it("logs and preserves vector rows when project descriptor fails without failHard", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const recallMemory = vi.fn(async () => [
+      { text: "vector survives", category: "fact", similarity: 0.8, via: "vector" },
+    ]);
+    const engine = createKnowledgeEngine<Result>({
+      workspace: "/tmp",
+      getMemoryConfig: () => ({ retrieval: { failHard: false }, docs: { journal: { journalDir: "journal" } } }),
+      isSystemEnabled: (name) => name === "projects",
+      recallProjectStore: vi.fn(async () => {
+        throw new Error("project backend unavailable");
+      }),
+      callFastRouter: vi.fn(async () => '{"datastores":["vector_basic","project"]}'),
+      recallMemory,
+    });
+
+    try {
+      const results = await engine.recall("alpha", 5, {
+        datastores: ["vector_basic", "project"],
+        expandGraph: false,
+        graphDepth: 1,
+        domain: { all: true },
+      });
+
+      expect(results.map((r) => r.text)).toContain("vector survives");
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("datastore=project failed: project backend unavailable"));
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("raises project descriptor failures when failHard is enabled", async () => {
+    const engine = createKnowledgeEngine<Result>({
+      workspace: "/tmp",
+      getMemoryConfig: () => ({ retrieval: { failHard: true }, docs: { journal: { journalDir: "journal" } } }),
+      isSystemEnabled: (name) => name === "projects",
+      recallProjectStore: vi.fn(async () => {
+        throw new Error("project backend unavailable");
+      }),
+      callFastRouter: vi.fn(async () => '{"datastores":["project"]}'),
+      recallMemory: vi.fn(async () => []),
+    });
+
+    await expect(engine.recall("alpha", 5, {
+      datastores: ["project"],
+      expandGraph: false,
+      graphDepth: 1,
+      domain: { all: true },
+    })).rejects.toThrow("project backend unavailable");
+  });
+
   it("passes project/docs filters through project store recall", async () => {
     const recallProjectStore = vi.fn(async () => [
       { text: "PROJECT.md > Overview", category: "project", similarity: 0.88, via: "project" },
