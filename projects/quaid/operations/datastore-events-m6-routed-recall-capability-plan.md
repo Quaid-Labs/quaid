@@ -379,6 +379,15 @@ M6.2a behavior code:
 - `dd76bacf1` pins successful routed default recall execution order for both
   flat and expand-graph plans, including graph depth and vector candidate-pool
   forwarding.
+- `bee2a576f` pins invalid router-output repair/filter behavior: invalid stores
+  and router-selected `session_chunks` are filtered, valid routed stores keep
+  order and dedupe, and the router is not retried when at least one valid
+  routable store remains.
+- `074e3a2f5` pins routed/default mixed-result merge behavior for
+  `vector_basic` + `project`: dedup chooses the highest raw duplicate before
+  source-type boosts, `agent_actions` source boosts can reorder rows, low-sim
+  project docs rows are preserved in limited mixed output, and project row
+  metadata remains intact.
 
 Future M6.2a code must keep these tests green and add broker-specific coverage
 for `selector: "project"` / `store: "docs"` threading, missing/nacked/malformed
