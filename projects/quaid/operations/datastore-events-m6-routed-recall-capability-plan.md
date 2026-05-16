@@ -376,6 +376,9 @@ M6.2a behavior code:
 - `46f60e2a4` pins fail-open expand-graph default recall execution order:
   `vector_basic`, `graph`, `journal`, `project`, with graph receiving the vector
   candidate pool.
+- `dd76bacf1` pins successful routed default recall execution order for both
+  flat and expand-graph plans, including graph depth and vector candidate-pool
+  forwarding.
 
 Future M6.2a code must keep these tests green and add broker-specific coverage
 for `selector: "project"` / `store: "docs"` threading, missing/nacked/malformed
