@@ -754,6 +754,91 @@ describe("knowledge orchestrator", () => {
     expect(projectResult?.text).toContain("Projects on the site: Recipe App");
   });
 
+  it("preserves mixed routed merge dedup source boosts and project rows", async () => {
+    const recallMemory = vi.fn(async (_query: string, _limit: number, opts: any) => {
+      if (opts.stores?.includes("vector_basic")) {
+        return [
+          {
+            id: "dup",
+            text: "User duplicate raw winner",
+            category: "fact",
+            similarity: 0.9,
+            sourceType: "user",
+            via: "vector_basic",
+          },
+          {
+            id: "dup",
+            text: "Assistant duplicate post-boost challenger",
+            category: "fact",
+            similarity: 0.75,
+            sourceType: "assistant",
+            via: "vector_basic",
+          },
+          {
+            id: "assistant",
+            text: "Agent suggested the launch plan",
+            category: "fact",
+            similarity: 0.78,
+            sourceType: "assistant",
+            via: "vector_basic",
+          },
+          {
+            id: "extra-memory",
+            text: "Extra memory that project preservation should replace",
+            category: "fact",
+            similarity: 0.81,
+            via: "vector_basic",
+          },
+        ];
+      }
+      return [];
+    });
+    const recallProjectStore = vi.fn(async () => [
+      {
+        id: "project-low",
+        text: "PROJECT.md > Launch notes",
+        category: "project",
+        similarity: 0.2,
+        via: "project",
+        sourceType: "docs",
+      },
+    ]);
+    const engine = createKnowledgeEngine<Result>({
+      workspace: "/tmp",
+      getMemoryConfig: () => ({ docs: { journal: { journalDir: "journal" } } }),
+      isSystemEnabled: (name) => name === "projects",
+      callFastRouter: vi.fn(async () => JSON.stringify({
+        query: "mixed result baseline",
+        datastores: ["vector_basic", "project"],
+      })),
+      recallMemory,
+      recallProjectStore,
+    });
+
+    const results = await engine.recall("mixed result baseline", 3, {
+      datastores: [],
+      expandGraph: false,
+      graphDepth: 1,
+      domain: { all: true },
+      intent: "agent_actions",
+      reasoning: "fast",
+    });
+
+    expect(results.map((row) => row.text)).toEqual([
+      "Agent suggested the launch plan",
+      "User duplicate raw winner",
+      "PROJECT.md > Launch notes",
+    ]);
+    expect(results[0].similarity).toBeCloseTo(0.975);
+    expect(results[1].similarity).toBeCloseTo(0.828);
+    expect(results[2]).toMatchObject({
+      id: "project-low",
+      category: "project",
+      via: "project",
+      sourceType: "docs",
+    });
+  });
+
   it("applies datastoreOptions override for project store scope", async () => {
     const recallProjectStore = vi.fn(async () => [
       { text: "PROJECT.md > Overview", category: "project", similarity: 0.88, via: "project" },
