@@ -698,7 +698,7 @@ describe("knowledge orchestrator", () => {
     expect(out[0]).toMatchObject({ category: "journal", via: "journal" });
   });
 
-  it("runs session_chunks only when explicitly requested and preserves chunk metadata", async () => {
+  it("runs session_chunks/source_chunks only when explicitly requested and preserves chunk metadata", async () => {
     const recallMemory = vi.fn(async () => [
       {
         text: "[session_chunk] session-1#0: User: exact transcript context",
@@ -746,6 +746,25 @@ describe("knowledge orchestrator", () => {
       outputTokenCount: 4,
       truncated: false,
     });
+
+    await engine.recall("exact transcript alias", 2, {
+      datastores: ["source_chunks" as any],
+      expandGraph: false,
+      graphDepth: 1,
+      domain: { all: true },
+      maxChunkTokens: 8,
+      maxTotalChunkTokens: 13,
+    });
+
+    expect(recallMemory).toHaveBeenLastCalledWith(
+      "exact transcript alias",
+      2,
+      expect.objectContaining({
+        stores: ["session_chunks"],
+        maxChunkTokens: 8,
+        maxTotalChunkTokens: 13,
+      }),
+    );
   });
 
   it("handles recall planning within latency budget for mocked dependencies", async () => {
