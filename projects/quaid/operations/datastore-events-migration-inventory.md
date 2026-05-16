@@ -1,6 +1,8 @@
 # Datastore Events Migration Inventory
 
-Status: M0 approved; M1 broker facade tracked in `datastore-events-m1-broker-facade.md`; M2 manifest registry tracked in `datastore-events-m2-manifest-registry.md`; M3 lean-contract direction tracked in `datastore-events-m3-contract-design.md`; M4 recall request contract tracked in `datastore-events-m4-recall-request-contract.md`
+Status: M0 approved; M1-M7 milestone records now live in the adjacent
+`datastore-events-m*.md` files. This inventory remains the baseline boundary
+snapshot, not the active implementation checklist.
 Owner: W1 runtime/datastore
 Plan source: `~/quaidcode/util/docs/datastore-events-migration-plan.md`
 Branch strategy: local branch `datastore-refactor-m0` from dev HEAD. Alpha/user bugs interrupt this branch; public push/release stays with W8 and requires operator approval.
@@ -231,21 +233,33 @@ Direct-write monitor paths to migrate in later milestones:
 - DocsDB project/file freshness and registration paths still write inside DocsDB modules rather than via domain event listeners.
 - Evolution/snippet/journal writes from extraction still call NoteDB functions directly.
 
-## M0 Open Questions Before M2
+## M0 Follow-Up Decisions
 
-1. Should `sessiondb` be added to first-party datastore manifests in M2?
-   - Current evidence: it has durable storage, CLI commands, and bridge callbacks.
-   - Risk: adding it expands the original memory/docs/evolution scope.
+1. `sessiondb` was not added to first-party datastore manifests in M2.
+   - Current disposition: keep it as internal transcript/provenance plumbing
+     through `core.services.session_memory_bridge` until a dedicated sessiondb
+     manifest or source-window slice is reviewed.
+   - Tracking doc: `datastore-events-m2-manifest-registry.md`.
 
-2. Should canonical store ids exposed to recall users include `docs`, `graph`, and `session_chunks`, or should these be modeled as capabilities under `memorydb`, `docsdb`, and `sessiondb`?
-   - Current evidence: user/API store names are not identical to datastore implementation ids.
-   - Milestone 6 should distinguish user-facing recall capabilities from datastore ids.
+2. User-facing recall store names are treated as capability/selectors rather
+   than datastore implementation ids.
+   - Current disposition: M4/M5 activate explicit docs/vector request slices;
+     M6.1 keeps TypeScript routing metadata behavior-preserving; M6.2a and M6.3
+     remain plan-approved but runtime-blocked.
+   - Tracking docs: `datastore-events-m4-recall-request-contract.md`,
+     `datastore-events-m5-explicit-vector-recall-plan.md`,
+     `datastore-events-m6-routed-recall-capability-plan.md`, and
+     `datastore-events-m6-memory-selector-plan.md`.
 
-3. How long should the `notedb` runtime path remain after `evolutiondb` id adoption?
-   - Current rule: M0 docs may say `evolutiondb`; runtime import rename waits for Milestone 10.
+3. `evolutiondb` is the canonical datastore id while the runtime module remains
+   `datastore.notedb`.
+   - Current disposition: M2 records `runtime_aliases: ["notedb"]`; runtime
+     package rename remains deferred to the dedicated rename milestone.
 
-## Next M0 Work
+## Current Use
 
-- W6 review this inventory for missing producers/write paths and boundary interpretation.
-- If approved, use it to drive M1/M2 implementation tasks.
-- Do not start M1 event envelope or M2 manifest code until the branch strategy and M0 inventory have passed review.
+- Use this file as the frozen baseline for producer/write-path inventory.
+- Use the milestone-specific documents for current implementation state,
+  validation gates, and behavior-slice boundaries.
+- Runtime behavior changes remain governed by the active milestone preconditions,
+  especially W4 full-livetest or explicit Solomon/Hermes override gates for M6/M7.
