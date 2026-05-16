@@ -1,6 +1,6 @@
 # Datastore Events M4 Explicit Recall Activation Plan
 
-Status: M4.1 activation slice in progress; explicit `stores:["docs"]` CLI recall routes through the broker
+Status: M4.1 complete; explicit `stores:["docs"]` CLI recall routes through the broker
 Owner: W1 runtime/datastore with W3 recall-quality approval before code
 Plan source: `~/quaidcode/util/docs/datastore-events-migration-plan.md`
 
@@ -84,16 +84,17 @@ Do not migrate in this slice:
 
 Before implementation:
 
-- W3 approves or redirects this first target. Status: W3 approved explicit
-  Python CLI docs/project recall with parity invariants.
+- W3 approved explicit Python CLI docs/project recall with parity invariants.
 
 After implementation:
 
-- focused CLI/broker tests for `stores:["docs"]` with project, docs, date, fanout,
-  similarity floor, and fallback parity
-- focused output-shape tests for docs-only JSON and text rendering
-- failHard missing-handler and handler-failure tests
-- W6 review for old-path deletion and failHard behavior
-- W8 static validation
-- W4 smoke/livetest only after W3 and W6/W8 are clear, because this changes
-  user-visible recall behavior
+- focused CLI/broker tests for `stores:["docs"]` with project, docs, date,
+  fanout, similarity floor, and fallback parity: complete
+- focused output-shape tests for docs-only JSON and text rendering: complete
+- failHard missing-handler, handler-failure, and malformed-output tests:
+  complete
+- W3 recall-quality review: approved
+- W6 review for old-path deletion and failHard behavior: approved
+- W8 static validation: passed
+- W4 smoke on R200 VM/CC with docs-only JSON/text/date and mixed-store
+  non-broker checks: passed

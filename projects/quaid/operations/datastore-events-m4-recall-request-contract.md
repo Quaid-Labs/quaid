@@ -87,9 +87,10 @@ type and returns aggregate response metadata. Missing handlers or nacked/failed
 handler responses fail loudly under `failHard=true`. With `failHard=false`, they
 return a failed/partial response and log at error level.
 
-No first-party recall datastore handler is registered by this M4 slice. That
-keeps production recall behavior unchanged while giving the activation milestone
-a real request contract to switch to.
+The initial M4 contract slice registered no first-party recall datastore
+handler. M4.1 then activated only the explicit Python CLI `stores:["docs"]`
+path through `recall.docs.request.v1`; other recall request handlers remain
+unactivated until their own reviewed migration slices.
 
 ## Activation Gate
 
@@ -101,6 +102,7 @@ not W1-only:
 - W6 must review the boundary for direct-path leakage and failHard handling.
 - W4/live validation is required before switching explicit or routed recall.
 
-The next implementation slice should choose one explicit recall path, likely
-docs or memory vector recall, and replace that direct path end-to-end instead of
-leaving a permanent dual-run path.
+The next proposed implementation slice is explicit Python CLI
+`stores:["vector"]` recall, tracked in
+`datastore-events-m5-explicit-vector-recall-plan.md`. It should replace that
+direct path end-to-end instead of leaving a permanent dual-run path.
