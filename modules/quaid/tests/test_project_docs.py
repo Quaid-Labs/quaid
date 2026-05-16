@@ -578,6 +578,22 @@ def test_execute_update_once_drains_project_log_queue_under_worker_lock(project_
     index_project_logs.assert_called_once_with(project="demo")
 
 
+def test_execute_update_once_does_not_run_supervisor_docs_maintenance_tick(project_env):
+    _tmp_path, src, _entry = project_env
+    from core import project_docs
+
+    (src / "tool.py").write_text("print('worker path')\n", encoding="utf-8")
+
+    with patch("core.project_docs.auto_register_project_docs", side_effect=AssertionError("supervisor auto-register tick only")), \
+         patch("core.project_docs.index_one_stale_registered_doc", side_effect=AssertionError("supervisor stale-index tick only")), \
+         patch("core.docs_updater_hook.update_project_docs", return_value={"projects_checked": 1, "docs_updated": 1, "docs_skipped": 0, "trivial_skipped": 0, "errors": 0}), \
+         patch("core.docs.updater.update_registered_docs", return_value=1), \
+         patch("core.docs.updater.index_project_logs", return_value=0):
+        result = project_docs.execute_update_once("demo")
+
+    assert result["status"] == "fresh"
+
+
 def test_execute_update_once_preserves_structured_project_log_entry_dates(project_env):
     _tmp_path, _src, entry = project_env
     from core import project_docs
