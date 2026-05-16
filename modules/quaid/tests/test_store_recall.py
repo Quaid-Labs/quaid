@@ -14550,6 +14550,12 @@ class TestRecallLimitEdgeCases:
                 ("vector_basic", "vector_basic"),
                 ("vector_technical", "vector_technical"),
                 ("session_chunks", "session_chunks"),
+                ("source_chunks", "session_chunks"),
+                ("graph", "vector"),
+                ("journal", "vector"),
+                ("docs", "docs"),
+                ("project", "docs"),
+                ("unknown", "vector"),
                 ("vector", "memorydb"),
                 ("vector_basic", "vector"),
             ):
@@ -14565,6 +14571,49 @@ class TestRecallLimitEdgeCases:
                 )
                 assert result["status"] == "nacked"
                 assert "selector/store vector" in result["error"]
+
+    def test_cli_vector_handler_accepts_exact_vector_selector_only(self):
+        import datastore.memorydb.memory_graph as mg
+
+        captured = {}
+
+        def _fake_recall(query, return_meta=False, **kwargs):
+            captured["query"] = query
+            captured["return_meta"] = return_meta
+            captured["kwargs"] = kwargs
+            return (
+                [
+                    {
+                        "text": "Exact vector selector works",
+                        "category": "fact",
+                        "similarity": 0.91,
+                    }
+                ],
+                {"selected_path": "vector"},
+            )
+
+        with patch.object(mg, "recall", side_effect=_fake_recall):
+            result = mg._handle_cli_vector_recall_request(
+                {
+                    "payload": {
+                        "query": "vector only",
+                        "selector": "vector",
+                        "store": "vector",
+                        "options": {"recall_kwargs": {"limit": 2}},
+                    }
+                }
+            )
+
+        assert result["status"] == "ok"
+        assert result["selector"] == "vector"
+        assert result["store"] == "vector"
+        assert result["results"][0]["text"] == "Exact vector selector works"
+        assert result["meta"] == {"selected_path": "vector"}
+        assert captured == {
+            "query": "vector only",
+            "return_meta": True,
+            "kwargs": {"limit": 2},
+        }
 
     def test_cli_vector_broker_nack_response_respects_fail_hard(self, monkeypatch, tmp_path):
         import datastore.memorydb.memory_graph as mg
