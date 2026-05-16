@@ -190,6 +190,10 @@ Implementation guardrails carried forward:
 
 Closed guard tests:
 
+- Pre-existing `test_supervisor_runs_docs_rag_refresh_ticks` pins that the
+  supervisor docs-maintenance tick directly calls
+  `auto_register_project_docs` and `index_one_stale_registered_doc` in order
+  before any M7 shadow event is added.
 - `e11c4942c` pins that project-doc worker `execute_update_once` does not call
   the supervisor-only docs maintenance tick primitives
   `auto_register_project_docs` or `index_one_stale_registered_doc`. This keeps
@@ -208,7 +212,8 @@ Remaining future behavior-slice coverage:
   auto-register/stale-index interval fires
 - event payload includes direct result metrics and omits document bodies and
   environment secrets
-- direct supervisor calls still run and remain authoritative in M7
+- direct supervisor calls still run and remain authoritative in M7 after the
+  shadow event/listener is added
 - DocsDB shadow listener records would-handle intent without write/index side
   effects
 - shadow listener failure follows failHard/fail-soft policy without suppressing
