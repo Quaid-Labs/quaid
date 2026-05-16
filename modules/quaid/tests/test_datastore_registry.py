@@ -13,6 +13,7 @@ from core.datastore_registry import (
     list_datastore_manifests,
     validate_datastore_manifest,
 )
+from core.runtime.events import get_event_capability
 
 
 def test_first_party_datastore_registry_lists_canonical_manifests() -> None:
@@ -37,6 +38,14 @@ def test_datastore_capabilities_surface_manifest_metadata() -> None:
     assert "graph" in capabilities["memorydb"]["recall"]
     assert "project_context" in capabilities["docsdb"]["recall"]
     assert capabilities["evolutiondb"]["stores"] == ["snippets", "journal"]
+
+
+def test_manifest_request_handlers_are_registered_request_events() -> None:
+    for manifest in list_datastore_manifests():
+        for event_type in manifest["request_handlers"]:
+            capability = get_event_capability(event_type)
+            assert capability is not None, event_type
+            assert capability["delivery_mode"] == "request"
 
 
 def test_datastore_manifest_validation_rejects_missing_required_field() -> None:

@@ -167,6 +167,38 @@ EVENT_REGISTRY: List[Dict[str, Any]] = [
         "listenable": True,
         "delivery_mode": "request",
     },
+    {
+        "name": "datastore.validate.request.v1",
+        "description": "Request datastore schema, index, and artifact validation from manifested datastores.",
+        "fireable": True,
+        "processable": False,
+        "listenable": True,
+        "delivery_mode": "request",
+    },
+    {
+        "name": "datastore.explain.request.v1",
+        "description": "Request datastore result/provenance explanation from manifested datastores.",
+        "fireable": True,
+        "processable": False,
+        "listenable": True,
+        "delivery_mode": "request",
+    },
+    {
+        "name": "project.worker_specs.request.v1",
+        "description": "Request project worker specifications from manifested datastore policy.",
+        "fireable": True,
+        "processable": False,
+        "listenable": True,
+        "delivery_mode": "request",
+    },
+    {
+        "name": "maintenance.run.request.v1",
+        "description": "Request datastore-owned maintenance routines from manifested datastores.",
+        "fireable": True,
+        "processable": False,
+        "listenable": True,
+        "delivery_mode": "request",
+    },
 ]
 
 _EVENT_NAME_ALIASES: Dict[str, str] = {
@@ -720,6 +752,22 @@ def register_request_handler(
     capability = get_event_capability(request_type)
     if capability is None or str(capability.get("delivery_mode") or "").strip().lower() != "request":
         raise ValueError(f"request event_type is not registered as request: {request_type}")
+    try:
+        from core.datastore_registry import get_datastore_manifest
+
+        manifest = get_datastore_manifest(target_id)
+    except Exception as exc:
+        if _is_fail_hard_enabled():
+            raise RuntimeError(
+                "Failed to validate request handler datastore manifest while fail-hard mode is enabled"
+            ) from exc
+        logger.error("Failed to validate request handler datastore manifest: %s", exc)
+        manifest = None
+    if manifest is None:
+        raise ValueError(f"request datastore is not registered: {target_id}")
+    manifest_handlers = set(manifest.get("request_handlers") or [])
+    if request_type not in manifest_handlers:
+        raise ValueError(f"datastore {target_id} does not declare request handler {request_type}")
     if not callable(handler):
         raise TypeError(f"Request handler {request_type}/{target_id} is not callable")
 

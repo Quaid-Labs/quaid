@@ -189,17 +189,17 @@ def test_broker_request_fan_in_dispatches_registered_handlers(tmp_path):
     adapter = TestAdapter(tmp_path); set_adapter(adapter); iroot = adapter.instance_root()
 
     def memory_handler(event):
-        return {"status": "ok", "query": event["payload"]["query"], "rows": ["memory-row"]}
+        return {"status": "ok", "datastore": "memorydb", "target": event["payload"]["target"]}
 
-    def graph_handler(event):
-        return {"status": "acked", "query": event["payload"]["query"], "rows": ["graph-row"]}
+    def docs_handler(event):
+        return {"status": "acked", "datastore": "docsdb", "target": event["payload"]["target"]}
 
-    register_request_handler("recall.memory.request.v1", memory_handler, datastore_id="memorydb")
-    register_request_handler("recall.memory.request.v1", graph_handler, datastore_id="graph-shadow")
+    register_request_handler("datastore.validate.request.v1", memory_handler, datastore_id="memorydb")
+    register_request_handler("datastore.validate.request.v1", docs_handler, datastore_id="docsdb")
 
     result = request_broker_event(
-        "recall.memory.request.v1",
-        {"query": "baratza"},
+        "datastore.validate.request.v1",
+        {"target": "all"},
         source="pytest",
         instance_id="inst-1",
     )
@@ -207,8 +207,8 @@ def test_broker_request_fan_in_dispatches_registered_handlers(tmp_path):
     assert result["status"] == "ok"
     assert result["handler_count"] == 2
     assert result["failed"] == 0
-    assert [row["datastore_id"] for row in result["responses"]] == ["memorydb", "graph-shadow"]
-    assert result["responses"][0]["result"]["rows"] == ["memory-row"]
+    assert [row["datastore_id"] for row in result["responses"]] == ["memorydb", "docsdb"]
+    assert result["responses"][0]["result"]["datastore"] == "memorydb"
     assert result["event"]["event_class"] == "request"
     assert result["event"]["correlation_id"].startswith("corr-")
     assert list_events(status="all", limit=10) == []
@@ -227,6 +227,16 @@ def test_register_request_handler_requires_request_event_type(tmp_path):
 
     with pytest.raises(ValueError, match="not registered as request"):
         register_request_handler("missing.request.v1", lambda _event: {"status": "ok"}, datastore_id="memorydb")
+
+
+def test_register_request_handler_requires_manifest_declaration(tmp_path):
+    set_adapter(TestAdapter(tmp_path))
+
+    with pytest.raises(ValueError, match="request datastore is not registered"):
+        register_request_handler("recall.memory.request.v1", lambda _event: {"status": "ok"}, datastore_id="missingdb")
+
+    with pytest.raises(ValueError, match="does not declare request handler"):
+        register_request_handler("recall.docs.request.v1", lambda _event: {"status": "ok"}, datastore_id="memorydb")
 
 
 def test_broker_request_missing_handler_fails_closed_when_not_fail_hard(caplog, monkeypatch, tmp_path):
