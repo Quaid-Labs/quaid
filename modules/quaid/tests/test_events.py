@@ -410,11 +410,11 @@ def test_event_process_docs_ingest_transcript(monkeypatch, tmp_path):
     assert called["session_id"] == "sess-1"
 
 
-def _emit_docs_project_maintenance_observed_event() -> None:
+def _emit_docs_project_maintenance_observed_event(project: str | None = None) -> None:
     emit_broker_event(
         DOCS_PROJECT_MAINTENANCE_OBSERVED_EVENT,
         payload={
-            "project": None,
+            "project": project,
             "observed_at": "2026-05-17T00:00:00+00:00",
             "source": "project-docs-supervisor",
             "tick_kind": "auto_register_and_stale_index",
@@ -430,9 +430,29 @@ def _emit_docs_project_maintenance_observed_event() -> None:
 def test_event_process_docs_project_maintenance_observed_runs_authoritative_listener(monkeypatch, tmp_path):
     adapter = TestAdapter(tmp_path); set_adapter(adapter); iroot = adapter.instance_root()
 
-    calls: list[str] = []
-    monkeypatch.setattr("core.project_docs.auto_register_project_docs", lambda: calls.append("register") or 2)
-    monkeypatch.setattr("core.project_docs.index_one_stale_registered_doc", lambda: calls.append("index") or True)
+    calls: list[object] = []
+    project_root = tmp_path / "demo"
+    monkeypatch.setattr(
+        "core.project_docs.auto_register_project_docs",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("old auto-register helper called")),
+    )
+    monkeypatch.setattr(
+        "core.project_docs.index_one_stale_registered_doc",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("old stale-index helper called")),
+    )
+    monkeypatch.setattr("core.docs.updater.queued_project_log_projects", lambda project=None: [])
+    monkeypatch.setattr("core.project_registry.list_projects", lambda: {"demo": {"canonical_path": str(project_root)}})
+    monkeypatch.setattr(
+        "core.docs.updater.sync_project_visible_docs",
+        lambda project, canonical_path, *, root_docs, protected_names: (
+            calls.append(("sync", project, canonical_path, sorted(root_docs), sorted(protected_names)))
+            or {"registered": 2}
+        ),
+    )
+    monkeypatch.setattr(
+        "core.docs.updater.index_one_stale_registered_doc",
+        lambda *, project=None: calls.append(("index", project)) or True,
+    )
 
     _emit_docs_project_maintenance_observed_event()
 
@@ -444,11 +464,117 @@ def test_event_process_docs_project_maintenance_observed_runs_authoritative_list
     queued = json.loads(queue_path.read_text(encoding="utf-8")).get("events") or []
     event = next(item for item in queued if item.get("name") == DOCS_PROJECT_MAINTENANCE_OBSERVED_EVENT)
     result = event["result"]["listener_result"]
-    assert calls == ["register", "index"]
+    assert calls == [
+        ("sync", "demo", str(project_root), ["AGENTS.md", "PROJECT.md", "TOOLS.md"], ["PROJECT.log"]),
+        ("index", None),
+    ]
     assert result["mode"] == "authoritative"
     assert result["datastore_id"] == "docsdb"
     assert result["direct_result"]["registered"] == 2
     assert result["direct_result"]["indexed_one"] is True
+
+
+def test_event_project_docs_listener_preserves_project_scope(monkeypatch, tmp_path):
+    adapter = TestAdapter(tmp_path); set_adapter(adapter); iroot = adapter.instance_root()
+
+    calls: list[object] = []
+    project_root = tmp_path / "demo"
+    monkeypatch.setattr(
+        "core.project_docs.auto_register_project_docs",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("old auto-register helper called")),
+    )
+    monkeypatch.setattr(
+        "core.project_docs.index_one_stale_registered_doc",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("old stale-index helper called")),
+    )
+    monkeypatch.setattr(
+        "core.docs.updater.queued_project_log_projects",
+        lambda project=None: calls.append(("queued", project)) or [],
+    )
+    monkeypatch.setattr("core.project_registry.list_projects", lambda: (_ for _ in ()).throw(AssertionError("unscoped list called")))
+    monkeypatch.setattr("core.project_registry.get_project", lambda project: {"canonical_path": str(project_root)})
+    monkeypatch.setattr(
+        "core.docs.updater.sync_project_visible_docs",
+        lambda project, canonical_path, *, root_docs, protected_names: (
+            calls.append(("sync", project, canonical_path))
+            or {"registered": 1}
+        ),
+    )
+    monkeypatch.setattr(
+        "core.docs.updater.index_one_stale_registered_doc",
+        lambda *, project=None: calls.append(("index", project)) or True,
+    )
+
+    _emit_docs_project_maintenance_observed_event(project="Demo")
+
+    out = dispatch_broker_events(limit=5, names=[DOCS_PROJECT_MAINTENANCE_OBSERVED_EVENT])
+    assert out["processed"] == 1
+    assert out["failed"] == 0
+
+    queue_path = get_runtime_root(iroot) / "events" / "queue.json"
+    queued = json.loads(queue_path.read_text(encoding="utf-8")).get("events") or []
+    event = next(item for item in queued if item.get("name") == DOCS_PROJECT_MAINTENANCE_OBSERVED_EVENT)
+    result = event["result"]["listener_result"]
+    assert calls == [
+        ("queued", "demo"),
+        ("sync", "demo", str(project_root)),
+        ("index", "demo"),
+    ]
+    assert result["project"] == "demo"
+    assert result["direct_result"]["registered"] == 1
+    assert result["direct_result"]["indexed_one"] is True
+
+
+def test_event_project_docs_listener_materializes_queued_projects_before_sync(monkeypatch, tmp_path):
+    adapter = TestAdapter(tmp_path); set_adapter(adapter); iroot = adapter.instance_root()
+
+    calls: list[object] = []
+    projects: dict[str, dict[str, str]] = {}
+    queued_root = tmp_path / "queued-demo"
+    monkeypatch.setattr(
+        "core.project_docs.auto_register_project_docs",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("old auto-register helper called")),
+    )
+    monkeypatch.setattr(
+        "core.project_docs.index_one_stale_registered_doc",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("old stale-index helper called")),
+    )
+    monkeypatch.setattr("core.docs.updater.queued_project_log_projects", lambda project=None: calls.append(("queued", project)) or ["queued-demo"])
+    monkeypatch.setattr("core.project_registry.project_exists_raw", lambda name: name in projects)
+    monkeypatch.setattr("core.project_registry.project_deleted_raw", lambda name: False)
+
+    def create_project(name, *, description):
+        calls.append(("create", name, description))
+        projects[name] = {"canonical_path": str(queued_root)}
+
+    monkeypatch.setattr("core.project_registry.create_project", create_project)
+    monkeypatch.setattr("core.project_registry.list_projects", lambda: calls.append("list") or dict(projects))
+    monkeypatch.setattr(
+        "core.docs.updater.sync_project_visible_docs",
+        lambda project, canonical_path, *, root_docs, protected_names: (
+            calls.append(("sync", project, canonical_path))
+            or {"registered": 1}
+        ),
+    )
+    monkeypatch.setattr("core.docs.updater.index_one_stale_registered_doc", lambda *, project=None: calls.append(("index", project)) or False)
+
+    _emit_docs_project_maintenance_observed_event()
+
+    out = dispatch_broker_events(limit=5, names=[DOCS_PROJECT_MAINTENANCE_OBSERVED_EVENT])
+    assert out["processed"] == 1
+    assert out["failed"] == 0
+
+    queue_path = get_runtime_root(iroot) / "events" / "queue.json"
+    queued = json.loads(queue_path.read_text(encoding="utf-8")).get("events") or []
+    event = next(item for item in queued if item.get("name") == DOCS_PROJECT_MAINTENANCE_OBSERVED_EVENT)
+    assert event["result"]["listener_result"]["direct_result"]["registered"] == 1
+    assert calls == [
+        ("queued", None),
+        ("create", "queued-demo", "Project inferred from conversation continuity."),
+        "list",
+        ("sync", "queued-demo", str(queued_root)),
+        ("index", None),
+    ]
 
 
 def test_event_project_docs_listener_auto_register_failure_respects_fail_soft(monkeypatch, tmp_path, caplog):
@@ -458,12 +584,22 @@ def test_event_project_docs_listener_auto_register_failure_respects_fail_soft(mo
 
     calls: list[str] = []
 
-    def fail_register():
-        calls.append("register")
+    def fail_register(*_args, **_kwargs):
+        calls.append("sync")
         raise RuntimeError("register boom")
 
-    monkeypatch.setattr("core.project_docs.auto_register_project_docs", fail_register)
-    monkeypatch.setattr("core.project_docs.index_one_stale_registered_doc", lambda: calls.append("index") or True)
+    monkeypatch.setattr(
+        "core.project_docs.auto_register_project_docs",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("old auto-register helper called")),
+    )
+    monkeypatch.setattr(
+        "core.project_docs.index_one_stale_registered_doc",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("old stale-index helper called")),
+    )
+    monkeypatch.setattr("core.docs.updater.queued_project_log_projects", lambda project=None: [])
+    monkeypatch.setattr("core.project_registry.list_projects", lambda: {"demo": {"canonical_path": str(tmp_path / "demo")}})
+    monkeypatch.setattr("core.docs.updater.sync_project_visible_docs", fail_register)
+    monkeypatch.setattr("core.docs.updater.index_one_stale_registered_doc", lambda *, project=None: calls.append("index") or True)
     monkeypatch.setattr("core.plugins.docsdb_contract._fail_hard_enabled", lambda: False)
     monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: False)
 
@@ -473,15 +609,15 @@ def test_event_project_docs_listener_auto_register_failure_respects_fail_soft(mo
 
     assert out["processed"] == 0
     assert out["failed"] == 1
-    assert calls == ["register", "index"]
-    assert "project docs auto-register listener failed: register boom" in caplog.text
+    assert calls == ["sync", "index"]
+    assert "Project docs auto-register failed for demo: register boom" in caplog.text
 
     queue_path = get_runtime_root(iroot) / "events" / "queue.json"
     queued = json.loads(queue_path.read_text(encoding="utf-8")).get("events") or []
     event = next(item for item in queued if item.get("name") == DOCS_PROJECT_MAINTENANCE_OBSERVED_EVENT)
     direct_result = event["result"]["listener_result"]["direct_result"]
     assert direct_result["indexed_one"] is True
-    assert direct_result["errors"] == [{"tick": "auto_register", "error": "register boom"}]
+    assert direct_result["errors"] == [{"tick": "auto_register", "error": "demo: register boom"}]
 
 
 def test_event_project_docs_listener_auto_register_failure_respects_fail_hard(monkeypatch, tmp_path):
@@ -491,12 +627,22 @@ def test_event_project_docs_listener_auto_register_failure_respects_fail_hard(mo
 
     calls: list[str] = []
 
-    def fail_register():
-        calls.append("register")
+    def fail_register(*_args, **_kwargs):
+        calls.append("sync")
         raise RuntimeError("register boom")
 
-    monkeypatch.setattr("core.project_docs.auto_register_project_docs", fail_register)
-    monkeypatch.setattr("core.project_docs.index_one_stale_registered_doc", lambda: calls.append("index") or True)
+    monkeypatch.setattr(
+        "core.project_docs.auto_register_project_docs",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("old auto-register helper called")),
+    )
+    monkeypatch.setattr(
+        "core.project_docs.index_one_stale_registered_doc",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("old stale-index helper called")),
+    )
+    monkeypatch.setattr("core.docs.updater.queued_project_log_projects", lambda project=None: [])
+    monkeypatch.setattr("core.project_registry.list_projects", lambda: {"demo": {"canonical_path": str(tmp_path / "demo")}})
+    monkeypatch.setattr("core.docs.updater.sync_project_visible_docs", fail_register)
+    monkeypatch.setattr("core.docs.updater.index_one_stale_registered_doc", lambda *, project=None: calls.append("index") or True)
     monkeypatch.setattr("core.plugins.docsdb_contract._fail_hard_enabled", lambda: True)
     monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: True)
 
@@ -504,7 +650,7 @@ def test_event_project_docs_listener_auto_register_failure_respects_fail_hard(mo
     with pytest.raises(RuntimeError, match="register boom"):
         dispatch_broker_events(limit=5, names=[DOCS_PROJECT_MAINTENANCE_OBSERVED_EVENT])
 
-    assert calls == ["register"]
+    assert calls == ["sync"]
 
 
 def test_event_project_docs_listener_stale_index_failure_respects_fail_soft(monkeypatch, tmp_path, caplog):
@@ -514,12 +660,22 @@ def test_event_project_docs_listener_stale_index_failure_respects_fail_soft(monk
 
     calls: list[str] = []
 
-    def fail_index():
+    def fail_index(*_args, **_kwargs):
         calls.append("index")
         raise RuntimeError("index boom")
 
-    monkeypatch.setattr("core.project_docs.auto_register_project_docs", lambda: calls.append("register") or 2)
-    monkeypatch.setattr("core.project_docs.index_one_stale_registered_doc", fail_index)
+    monkeypatch.setattr(
+        "core.project_docs.auto_register_project_docs",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("old auto-register helper called")),
+    )
+    monkeypatch.setattr(
+        "core.project_docs.index_one_stale_registered_doc",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("old stale-index helper called")),
+    )
+    monkeypatch.setattr("core.docs.updater.queued_project_log_projects", lambda project=None: [])
+    monkeypatch.setattr("core.project_registry.list_projects", lambda: {"demo": {"canonical_path": str(tmp_path / "demo")}})
+    monkeypatch.setattr("core.docs.updater.sync_project_visible_docs", lambda *args, **kwargs: calls.append("sync") or {"registered": 2})
+    monkeypatch.setattr("core.docs.updater.index_one_stale_registered_doc", fail_index)
     monkeypatch.setattr("core.plugins.docsdb_contract._fail_hard_enabled", lambda: False)
     monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: False)
 
@@ -529,7 +685,7 @@ def test_event_project_docs_listener_stale_index_failure_respects_fail_soft(monk
 
     assert out["processed"] == 0
     assert out["failed"] == 1
-    assert calls == ["register", "index"]
+    assert calls == ["sync", "index"]
     assert "project docs stale-index listener failed: index boom" in caplog.text
 
     queue_path = get_runtime_root(iroot) / "events" / "queue.json"
@@ -547,12 +703,22 @@ def test_event_project_docs_listener_stale_index_failure_respects_fail_hard(monk
 
     calls: list[str] = []
 
-    def fail_index():
+    def fail_index(*_args, **_kwargs):
         calls.append("index")
         raise RuntimeError("index boom")
 
-    monkeypatch.setattr("core.project_docs.auto_register_project_docs", lambda: calls.append("register") or 2)
-    monkeypatch.setattr("core.project_docs.index_one_stale_registered_doc", fail_index)
+    monkeypatch.setattr(
+        "core.project_docs.auto_register_project_docs",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("old auto-register helper called")),
+    )
+    monkeypatch.setattr(
+        "core.project_docs.index_one_stale_registered_doc",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("old stale-index helper called")),
+    )
+    monkeypatch.setattr("core.docs.updater.queued_project_log_projects", lambda project=None: [])
+    monkeypatch.setattr("core.project_registry.list_projects", lambda: {"demo": {"canonical_path": str(tmp_path / "demo")}})
+    monkeypatch.setattr("core.docs.updater.sync_project_visible_docs", lambda *args, **kwargs: calls.append("sync") or {"registered": 2})
+    monkeypatch.setattr("core.docs.updater.index_one_stale_registered_doc", fail_index)
     monkeypatch.setattr("core.plugins.docsdb_contract._fail_hard_enabled", lambda: True)
     monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: True)
 
@@ -560,7 +726,7 @@ def test_event_project_docs_listener_stale_index_failure_respects_fail_hard(monk
     with pytest.raises(RuntimeError, match="index boom"):
         dispatch_broker_events(limit=5, names=[DOCS_PROJECT_MAINTENANCE_OBSERVED_EVENT])
 
-    assert calls == ["register", "index"]
+    assert calls == ["sync", "index"]
 
 
 def test_event_process_docs_project_maintenance_observed_validation_respects_fail_hard(monkeypatch, tmp_path):

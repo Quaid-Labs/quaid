@@ -1,6 +1,6 @@
 # Datastore Events M9.1 Docs Registration And Index Request Plan
 
-Status: draft plan; blocked until M8 validation completes
+Status: implementation patch in progress; validation pending
 Owner: W1 runtime/datastore
 Plan source: `projects/quaid/operations/datastore-events-m9-monitor-migration-plan.md`
 
@@ -16,7 +16,9 @@ Do not implement runtime code for M9.1 until:
 5. This M9.1 plan has W3/W6 review if the implementation can affect docs
    recallability, indexing cadence, row metadata, or result shape.
 
-This document is planning only. It does not approve runtime implementation.
+M8 completed W3/W4/W6/W8 validation on stack
+`b405e5813+90de45f09+f4a9e21dc`. M9.1 runtime implementation still requires
+fresh W3/W4/W6/W8 validation before this milestone is complete.
 
 ## M9.1 Goal
 

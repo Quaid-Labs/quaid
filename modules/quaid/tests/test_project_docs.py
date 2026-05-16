@@ -1537,20 +1537,31 @@ def test_supervisor_runs_docs_rag_refresh_ticks(project_env, monkeypatch):
     from core import project_docs
     from core import project_docs_supervisor
 
-    calls: list[str] = []
+    calls: list[object] = []
     monkeypatch.setattr(project_docs, "write_supervisor_pid", lambda _token: None)
     monkeypatch.setattr(project_docs, "reap_child_processes", lambda: 0)
     monkeypatch.setattr(project_docs, "worker_stale_after_seconds", lambda _interval: 30.0)
     monkeypatch.setattr(project_docs, "reap_stale_worker", lambda _project, *, stale_after_seconds: False)
     monkeypatch.setattr(project_docs, "start_worker", lambda _project: 123)
-    monkeypatch.setattr(project_docs, "auto_register_project_docs", lambda: calls.append("register") or 1)
-    monkeypatch.setattr(project_docs, "index_one_stale_registered_doc", lambda: calls.append("index") or True)
+    monkeypatch.setattr(
+        project_docs,
+        "auto_register_project_docs",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("old auto-register helper called")),
+    )
+    monkeypatch.setattr(
+        project_docs,
+        "index_one_stale_registered_doc",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("old stale-index helper called")),
+    )
+    monkeypatch.setattr("core.docs.updater.queued_project_log_projects", lambda project=None: [])
+    monkeypatch.setattr("core.docs.updater.sync_project_visible_docs", lambda *args, **kwargs: calls.append("sync") or {"registered": 1})
+    monkeypatch.setattr("core.docs.updater.index_one_stale_registered_doc", lambda *, project=None: calls.append(("index", project)) or True)
     monkeypatch.setattr(project_docs_supervisor, "_maintain_instance_monitors", lambda _known: None)
     monkeypatch.setattr(project_docs_supervisor, "_maintain_janitor_workers", lambda *_args, **_kwargs: None)
 
     project_docs_supervisor.run_supervisor(once=True, interval_seconds=0.5)
 
-    assert calls == ["register", "index"]
+    assert calls == ["sync", ("index", None)]
 
 
 def test_supervisor_skips_project_deleted_after_project_snapshot(project_env):

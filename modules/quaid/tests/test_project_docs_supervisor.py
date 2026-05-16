@@ -71,7 +71,7 @@ def test_supervisor_tick_starts_instance_monitors_and_janitor_workers(monkeypatc
 def test_supervisor_boot_mode_skips_docs_ticks_and_uses_raw_project_listing(monkeypatch):
     from core import project_docs_supervisor as supervisor
 
-    calls: list[str] = []
+    calls: list[object] = []
 
     monkeypatch.setenv("QUAID_SUPERVISOR_BOOT", "1")
     monkeypatch.delenv("QUAID_INSTANCE", raising=False)
@@ -157,8 +157,18 @@ def test_supervisor_docs_tick_routes_authoritative_listener_without_direct_calls
     adapter = TestAdapter(tmp_path)
     set_adapter(adapter)
     try:
-        monkeypatch.setattr("core.project_docs.auto_register_project_docs", lambda: calls.append("register") or 2)
-        monkeypatch.setattr("core.project_docs.index_one_stale_registered_doc", lambda: calls.append("index") or True)
+        monkeypatch.setattr(
+            "core.project_docs.auto_register_project_docs",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("old auto-register helper called")),
+        )
+        monkeypatch.setattr(
+            "core.project_docs.index_one_stale_registered_doc",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("old stale-index helper called")),
+        )
+        monkeypatch.setattr("core.docs.updater.queued_project_log_projects", lambda project=None: [])
+        monkeypatch.setattr("core.project_registry.list_projects", lambda: {"demo": {"canonical_path": str(tmp_path / "demo")}})
+        monkeypatch.setattr("core.docs.updater.sync_project_visible_docs", lambda *args, **kwargs: calls.append("sync") or {"registered": 2})
+        monkeypatch.setattr("core.docs.updater.index_one_stale_registered_doc", lambda *, project=None: calls.append(("index", project)) or True)
         _install_authoritative_docs_tick_supervisor_proxy(monkeypatch, supervisor)
         monkeypatch.setattr(supervisor, "_fail_hard_enabled", lambda: True)
         monkeypatch.setattr(supervisor, "_maintain_instance_monitors", lambda _known: None)
@@ -169,7 +179,7 @@ def test_supervisor_docs_tick_routes_authoritative_listener_without_direct_calls
 
         assert supervisor.run_supervisor(once=True, interval_seconds=0.5) == 0
 
-        assert calls == ["register", "index"]
+        assert calls == ["sync", ("index", None)]
         queue_path = get_runtime_root(adapter.instance_root()) / "events" / "queue.json"
         queued = json.loads(queue_path.read_text(encoding="utf-8")).get("events") or []
         event = next(item for item in queued if item.get("name") == DOCS_PROJECT_MAINTENANCE_OBSERVED_EVENT)

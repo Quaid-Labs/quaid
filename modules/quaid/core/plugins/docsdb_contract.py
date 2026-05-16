@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import os
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional, Tuple
 
 from core.contracts.plugin_contract import PluginContractBase
 from core.runtime.plugins import PluginHookContext
@@ -144,6 +144,98 @@ def run_project_docs_monitor_maintenance(ctx: Any, result_factory: Any) -> Any:
     return result
 
 
+def _validate_project_name(project: Any) -> str:
+    from core.project_docs import validate_project_name
+
+    return validate_project_name(str(project or ""))
+
+
+def _materialize_queued_project_docs_projects(project: Optional[str] = None) -> int:
+    """Create durable projects for transcript-driven PROJECT.log queues."""
+    from core.docs import updater as docs_updater
+    from core.project_registry import create_project, project_deleted_raw, project_exists_raw
+
+    queued = (
+        docs_updater.queued_project_log_projects(_validate_project_name(project))
+        if project
+        else docs_updater.queued_project_log_projects()
+    )
+    created = 0
+    for raw_name in queued:
+        name = _validate_project_name(raw_name)
+        if name == "quaid" or name.startswith("misc--"):
+            logger.info("Skipping queued PROJECT.log auto-create for reserved project %s", name)
+            continue
+        if project_exists_raw(name):
+            continue
+        if project_deleted_raw(name):
+            logger.info("Skipping queued PROJECT.log auto-create for deleted project %s", name)
+            continue
+        try:
+            create_project(
+                name,
+                description="Project inferred from conversation continuity.",
+            )
+            created += 1
+        except ValueError as exc:
+            logger.info("Skipping queued PROJECT.log auto-create for %s: %s", name, exc)
+        except Exception as exc:
+            logger.warning("Failed auto-creating queued PROJECT.log project %s: %s", name, exc)
+            if _fail_hard_enabled():
+                raise
+    return created
+
+
+def _docsdb_project_entries(project: Optional[str] = None) -> Dict[str, Dict[str, Any]]:
+    from core.project_registry import get_project as get_project_entry
+    from core.project_registry import list_projects
+
+    if project:
+        name = _validate_project_name(project)
+        return {name: get_project_entry(name)}
+    return dict(list_projects())
+
+
+def _sync_visible_project_docs_registry(project: str, entry: Dict[str, Any]) -> Dict[str, int]:
+    from core.docs import updater as docs_updater
+    from core.project_docs import PROJECT_LOG, UPDATABLE_ROOT_DOCS
+
+    name = _validate_project_name(project)
+    canonical_raw = str(entry.get("canonical_path") or "").strip()
+    return docs_updater.sync_project_visible_docs(
+        name,
+        canonical_raw,
+        root_docs=UPDATABLE_ROOT_DOCS,
+        protected_names={PROJECT_LOG},
+    )
+
+
+def _auto_register_project_docs_via_docsdb(project: Optional[str] = None) -> Tuple[int, list[Dict[str, str]]]:
+    """Register visible project docs through DocsDB-owned registry primitives."""
+    _materialize_queued_project_docs_projects(project)
+    registered = 0
+    errors: list[Dict[str, str]] = []
+    for name, entry in sorted(_docsdb_project_entries(project).items()):
+        if not entry:
+            continue
+        try:
+            result = _sync_visible_project_docs_registry(name, dict(entry))
+            registered += int(result.get("registered") or 0)
+        except Exception as exc:
+            logger.warning("Project docs auto-register failed for %s: %s", name, exc)
+            if _fail_hard_enabled():
+                raise
+            errors.append({"tick": "auto_register", "error": f"{name}: {exc}"})
+    return registered, errors
+
+
+def _index_one_stale_registered_doc_via_docsdb(project: Optional[str] = None) -> bool:
+    """Index one stale registered doc through DocsDB-owned updater primitives."""
+    from core.docs import updater as docs_updater
+
+    return bool(docs_updater.index_one_stale_registered_doc(project=project))
+
+
 def handle_project_docs_maintenance_event(event: Dict[str, Any]) -> Dict[str, Any]:
     """Handle supervisor docs-maintenance event through DocsDB authority."""
     payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
@@ -162,6 +254,7 @@ def handle_project_docs_maintenance_event(event: Dict[str, Any]) -> Dict[str, An
 
     auto_register_requested = bool(requested_operations.get("auto_register", False))
     stale_index_requested = bool(requested_operations.get("stale_index", False))
+    project = _validate_project_name(payload.get("project")) if payload.get("project") else None
     direct_result: Dict[str, Any] = {
         "auto_register_ran": auto_register_requested,
         "stale_index_ran": stale_index_requested,
@@ -169,20 +262,21 @@ def handle_project_docs_maintenance_event(event: Dict[str, Any]) -> Dict[str, An
         "indexed_one": None,
         "errors": [],
     }
-    from core import project_docs
 
     def _listener_result() -> Dict[str, Any]:
         return {
             "mode": "authoritative",
             "datastore_id": "docsdb",
-            "project": payload.get("project"),
+            "project": project,
             "observed_at": observed_at,
             "direct_result": direct_result,
         }
 
     try:
         if auto_register_requested:
-            direct_result["registered"] = int(project_docs.auto_register_project_docs() or 0)
+            registered, errors = _auto_register_project_docs_via_docsdb(project)
+            direct_result["registered"] = registered
+            direct_result["errors"].extend(errors)
     except Exception as exc:
         logger.warning("project docs auto-register listener failed: %s", exc)
         direct_result["errors"].append({"tick": "auto_register", "error": str(exc)})
@@ -191,7 +285,7 @@ def handle_project_docs_maintenance_event(event: Dict[str, Any]) -> Dict[str, An
 
     try:
         if stale_index_requested:
-            direct_result["indexed_one"] = bool(project_docs.index_one_stale_registered_doc())
+            direct_result["indexed_one"] = _index_one_stale_registered_doc_via_docsdb(project)
     except Exception as exc:
         logger.warning("project docs stale-index listener failed: %s", exc)
         direct_result["errors"].append({"tick": "stale_index", "error": str(exc)})
