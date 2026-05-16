@@ -164,6 +164,50 @@ Before live validation, add focused tests proving:
 - handler exception raises under failHard
 - mixed default results preserve current merge/dedup/source-type boost behavior
 
+## Plan Approval And Guard Record
+
+The M6.3 memory-selector plan is approved as a deferred target, but not yet
+approved for runtime implementation. Runtime code still requires the
+preconditions above plus fresh W3 review of the implementation.
+
+Reviewed plan commits:
+
+- `854cb2e81` drafted the memory selector broker plan.
+- `56389148b` clarified W3's parity conditions: candidate-pool behavior in both
+  directions, selector-preservation scope, current override surfaces only,
+  explicit Python CLI exclusions, and M5 vector handler preservation.
+
+Review status:
+
+- W3 approved the clarified plan as the deferred M6.3 target.
+- W6 approved the clarified plan stack.
+- W8 passed docs-static validation for the plan stack.
+
+Closed pre-activation guard tests:
+
+- `2f99b9c01` pins candidate-pool parity: `vector_basic` and
+  `vector_technical` do not consume `candidatePool`, while their rows still
+  seed later `graph` candidate pools.
+- `64b97d637` pins option-scope parity: `vector_basic` and
+  `vector_technical` preserve the current top-level descriptor option surface
+  and do not add `datastoreOptions.vector_basic` or
+  `datastoreOptions.vector_technical` semantics.
+
+Remaining future behavior-slice coverage:
+
+- broker request payloads preserve `selector:"vector_basic"` /
+  `selector:"vector_technical"` with `store:"vector"` and the correct domain
+  policy
+- widened memory handler preserves existing M5 `selector:"vector",
+  store:"vector"` behavior
+- non-target selectors nack when sent to the widened memory handler
+- explicit Python CLI `stores:["vector_basic"]` /
+  `stores:["vector_technical"]` stays out of scope
+- missing/nacked/malformed/exception handler responses fail according to the
+  failHard contract
+- migrated descriptors do not fall back to the old `deps.recallMemory` calls
+  after broker failure
+
 ## W4 Smoke After Code
 
 After W3/W6/W8 approve an implementation slice, W4 smoke should cover:
