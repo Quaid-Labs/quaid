@@ -201,7 +201,11 @@ narrow session-ingest smoke:
 
 ## Deferred Decisions
 
-- default lifecycle-triggered transcript ingestion
+- default terminal `session.agent_end` lifecycle-to-daemon signal bridge is
+  tracked as M24 in
+  `projects/quaid/operations/datastore-events-m24-default-agent-end-signal-plan.md`;
+  broader reset/compaction/timeout lifecycle-triggered transcript ingestion
+  remains deferred
 - daemon start/wake/restart automation from lifecycle events
 - whether SessionDB should expose dedicated request handlers beyond
   `session.ingest_log.request.v1` and generic metadata/maintenance surfaces

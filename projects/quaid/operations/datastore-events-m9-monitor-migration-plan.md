@@ -142,7 +142,12 @@ the obsolete `core.plugins.memorydb_contract` wrappers for SessionDB-owned
 `session.ingest_log` helper/handler/registrar were removed, while MemoryDB
 `session_chunks` recall/write ownership, SessionDB request ownership, active
 ingest behavior, source-window policy, lifecycle/daemon behavior, and non-session
-MemoryDB contract surfaces remain unchanged.
+MemoryDB contract surfaces remain unchanged. M24 now tracks a default terminal
+`session.agent_end` lifecycle-to-daemon `session_end` signal bridge in
+`projects/quaid/operations/datastore-events-m24-default-agent-end-signal-plan.md`;
+broader reset/compaction/timeout default lifecycle-triggered transcript ingest,
+daemon process automation, and recall/source-window policy changes remain
+deferred.
 
 ## Shared Rules For Every M9 Slice
 
