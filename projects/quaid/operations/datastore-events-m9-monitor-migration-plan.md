@@ -52,8 +52,8 @@ The selected M9 monitor-write migrations are complete:
 
 Deferred items are not M9 blockers unless separately selected by Solomon with a
 new reviewed plan: direct `extract_from_transcript()` / CLI request routing,
-lifecycle persistence, source-window metadata enrichment, SessionDB ownership of
-`session.ingest_log`,
+lifecycle-triggered transcript ingest and daemon automation, source-window
+selector ownership, SessionDB ownership of `session.ingest_log`,
 `datastore.notedb` / `core.plugins.notedb_contract` compatibility-alias
 retirement, `notedb.core` plugin-id rename, and `.ego` integration. The
 `datastore.evolutiondb` runtime package and `core.plugins.evolutiondb_contract`
@@ -119,10 +119,11 @@ it under the existing source-window output policy. MemoryDB `session_chunks`
 selector ownership remains unchanged, and SessionDB/source-window selector
 ownership remains deferred.
 
-M20 now tracks SessionDB lifecycle observation metadata for ack-only lifecycle
-events in `projects/quaid/operations/datastore-events-m20-sessiondb-lifecycle-metadata-plan.md`;
-lifecycle-triggered transcript ingest, daemon work, and lifecycle automation
-remain deferred.
+M20 SessionDB lifecycle observation metadata closed at `bc58b8a06` +
+`195fc7678`: ack-only lifecycle events with concrete `session_id` now persist
+SessionDB metadata observations, while lifecycle events without `session_id`
+remain acknowledged without persistence. Lifecycle-triggered transcript ingest,
+daemon work, and lifecycle automation remain deferred.
 
 ## Shared Rules For Every M9 Slice
 

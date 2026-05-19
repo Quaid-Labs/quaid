@@ -1,12 +1,12 @@
 # Datastore Events M20 SessionDB Lifecycle Metadata Plan
 
-Status: draft plan; no runtime implementation yet
+Status: runtime metadata slice complete; lifecycle automation deferred
 Owner: W1 runtime/datastore, W6 boundary review
 Plan source: `projects/quaid/operations/datastore-events-m19-sessiondb-source-window-metadata-plan.md`
 
 ## Precondition
 
-Do not implement runtime code for M20 until:
+Runtime code for M20 was gated on:
 
 1. M19 SessionDB source-window metadata is closed through W4/W3/W6/W8.
 2. W6 reviews the lifecycle ownership boundary because this slice changes
@@ -18,12 +18,12 @@ Do not implement runtime code for M20 until:
 4. W4 is ready to live-check that lifecycle events still acknowledge normally
    and do not interfere with daemon/session ingest flows.
 
-This document selects a narrow lifecycle metadata ownership slice only. It does
-not approve lifecycle-triggered transcript ingestion, daemon signal-shape
-changes, event-name changes, SessionDB recall selectors, source-window selector
-ownership, MemoryDB compatibility-wrapper removal, request/default routing
-changes, CLI behavior changes, `.ego` integration, public push, or release
-actions.
+This document records the completed narrow lifecycle metadata ownership slice
+only. It does not approve lifecycle-triggered transcript ingestion, daemon
+signal-shape changes, event-name changes, SessionDB recall selectors,
+source-window selector ownership, MemoryDB compatibility-wrapper removal,
+request/default routing changes, CLI behavior changes, `.ego` integration,
+public push, or release actions.
 
 ## Goal
 
@@ -35,7 +35,7 @@ boundary is still ack-only: core runtime receives `session.new`,
 and `session.agent_end`, then `_handle_session_lifecycle()` returns an
 acknowledgement without recording SessionDB-owned lifecycle provenance.
 
-M20 selects the first persistence slice for those ack-only lifecycle events:
+M20 selected the first persistence slice for those ack-only lifecycle events:
 when a lifecycle event has a concrete `session_id`, SessionDB records a compact
 lifecycle observation row, while core runtime keeps the same processed/failed
 acknowledgement behavior and all ingest/recall/source-window flows remain
@@ -47,7 +47,7 @@ recall ranking, or daemon work.
 
 ## Current Boundary
 
-Current post-M19 path:
+Pre-M20 path:
 
 1. `core.runtime.events.EVENT_REGISTRY` declares lifecycle events as active
    processable events.
@@ -63,7 +63,7 @@ Current post-M19 path:
 
 ## Selected First Slice: SessionDB Lifecycle Observation Metadata Only
 
-Implement one runtime metadata slice only:
+Implemented one runtime metadata slice only:
 
 1. Add a SessionDB-owned lifecycle observation helper exposed from
    `core.plugins.sessiondb_contract.record_session_lifecycle_observation()`,
@@ -191,3 +191,83 @@ narrow lifecycle smoke:
 - whether hidden CLI request-mode flags should ever become public
 - compatibility-alias retirement and `notedb.core` plugin-id rename
 - `.ego` import/export integration
+
+## Implementation Record
+
+Runtime closed in `bc58b8a06` (`refactor(datastore): persist SessionDB
+lifecycle metadata`) with test/cleanup follow-up `195fc7678`
+(`test(datastore): tighten M20 lifecycle guards`).
+
+Implemented behavior:
+
+- `datastore.sessiondb.session_store.ensure_schema()` now creates an additive
+  `session_lifecycle_observations` table with `event_id` as the primary key and
+  an owner/session/observed-at index. Existing transcript tables are unchanged.
+- `datastore.sessiondb.session_store.record_lifecycle_observation()` records
+  compact lifecycle observation metadata with `INSERT OR IGNORE` semantics, so
+  reprocessing the same runtime event id is idempotent and reports
+  `inserted=False` when the row already exists.
+- `core.plugins.sessiondb_contract.record_session_lifecycle_observation()` is
+  the core-facing SessionDB helper. `core.runtime.events` calls through this
+  plugin contract and does not import `datastore.sessiondb.session_store`
+  directly. The boundary checker now allowlists
+  `core/plugins/sessiondb_contract.py` as a datastore composition point,
+  matching the existing MemoryDB/DocsDB contract pattern.
+- `_handle_session_lifecycle()` persists only lifecycle events with a concrete
+  `session_id` in the event envelope or payload. Successful persistence returns
+  the existing acknowledgement status/event fields plus `persisted=True`,
+  `datastore_id="sessiondb"`, and `inserted`.
+- Lifecycle events without `session_id` remain acknowledged and unpersisted:
+  `{"status": "acknowledged", "event": <name>, "persisted": False}` with no
+  `datastore_id`.
+- Under `failHard=true`, selected persistence failures raise through the
+  existing `process_events()` active-event failHard machinery with the original
+  exception chained. Under `failHard=false`, persistence failures log loudly and
+  return the acknowledgement envelope with `persisted=False`.
+- The SessionDB manifest now declares `lifecycle_observations` in stores and
+  writes, and records datastore-level `capabilities.metadata_version=2`.
+  `DATASTORE_MANIFEST_SCHEMA_VERSION` remains the global manifest-format
+  version; per-datastore additive schema metadata uses
+  `capabilities.metadata_version`.
+- Active/request session ingest behavior, M16 request ownership, M17 active
+  helper routing, M18 active failHard behavior, M19 source-window metadata,
+  MemoryDB compatibility wrappers, MemoryDB `session_chunks` recall/write
+  ownership, and SessionDB `capabilities.recall=[]` are unchanged.
+
+Test coverage:
+
+- Lifecycle persistence tests assert a session-scoped event records one
+  SessionDB row with owner id, session id, event name, event id/idempotency key,
+  source, reason, and metadata payload.
+- Idempotency tests call the lifecycle handler twice with the same event and
+  assert the second call reports `inserted=False` without duplicating rows.
+- Missing-session tests use a hard-raise helper sentinel to prove the SessionDB
+  persistence helper is not called, and assert the exact acknowledged
+  `persisted=False` envelope without `datastore_id`.
+- Failure-path tests cover fail-soft warning plus `persisted=False`, and
+  failHard propagation through `process_events()` with original exception
+  chaining.
+- Follow-up coverage exercises all six lifecycle event names by name:
+  `session.new`, `session.reset`, `session.compaction`, `session.timeout`,
+  `session.agent_start`, and `session.agent_end`.
+- Registry tests assert SessionDB `lifecycle_observations` store/write metadata
+  and `capabilities.metadata_version=2`.
+
+Validation record:
+
+- W4 R201 live/source-proof PASS on `bc58b8a06` with daemon restart clean at pid
+  70610. The `195fc7678` follow-up was test/cleanup only and required no fresh
+  live smoke.
+- W3 runtime/recall APPROVED with no findings for `bc58b8a06`, and W3
+  follow-up APPROVED with no findings for `195fc7678`: lifecycle observations
+  are metadata-only, MemoryDB `session_chunks` and source-window ownership are
+  unchanged, SessionDB recall remains `[]`, and no ranking/planner/token-budget
+  or output-ordering drift was found.
+- W6 APPROVED for `bc58b8a06` with low concerns, then APPROVED `195fc7678` with
+  no concerns after the dead constant was removed, all six lifecycle event names
+  were covered by tests, and the `capabilities.metadata_version` convention was
+  recorded as intentional.
+- W8 static PASS/runtime HOLD closed for the `bc58b8a06` + `195fc7678` pair:
+  focused lifecycle tests, affected event/session lanes, registry/contracts and
+  session bridge lanes, py_compile, ruff, diff/docs checks, boundary checks, and
+  the unit wrapper all passed.

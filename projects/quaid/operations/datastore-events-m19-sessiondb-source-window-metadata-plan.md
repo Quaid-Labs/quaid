@@ -185,8 +185,9 @@ narrow session source-window smoke:
 - request/active compatibility-wrapper removal from `core.plugins.memorydb_contract`
 - whether SessionDB should expose dedicated request handlers beyond
   `session.ingest_log.request.v1` and generic metadata/maintenance surfaces
-- lifecycle persistence for ack-only lifecycle events is tracked as M20 in
-  `projects/quaid/operations/datastore-events-m20-sessiondb-lifecycle-metadata-plan.md`
+- lifecycle observation metadata for ack-only lifecycle events closed in M20 at
+  `bc58b8a06` + `195fc7678`; lifecycle-triggered transcript ingest and daemon
+  automation remain deferred
 - source-window selector ownership or SessionDB recall capability
 - source-window ranking/planner policy changes
 - whether direct request mode should ever become the extraction default
