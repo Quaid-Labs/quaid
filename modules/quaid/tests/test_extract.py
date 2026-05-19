@@ -3096,7 +3096,11 @@ class TestExtractFromTranscript:
             "journal": ["SOUL.journal.md"],
         }
 
-    def test_apply_extracted_payloads_snippet_journal_request_mode_does_not_fallback_after_broker_failure(self, monkeypatch):
+    def test_apply_extracted_payloads_snippet_journal_request_mode_does_not_fallback_after_broker_failure(
+        self,
+        caplog,
+        monkeypatch,
+    ):
         import ingest.extract as extract_mod
 
         direct_called = False
@@ -3138,6 +3142,8 @@ class TestExtractFromTranscript:
             "dry_run": False,
         }
 
+        caplog.set_level("WARNING", logger="ingest.extract")
+
         with pytest.raises(RuntimeError, match="snippet/journal write request returned no evolutiondb response"):
             extract_mod.apply_extracted_payloads(
                 payload,
@@ -3150,6 +3156,72 @@ class TestExtractFromTranscript:
 
         assert direct_called is False
         assert "snippet_journal_metrics" not in payload
+        assert any(
+            "snippet/journal write request returned no evolutiondb response: simulated snippet broker failure"
+            in record.getMessage()
+            for record in caplog.records
+        )
+
+    def test_apply_extracted_payloads_snippet_journal_request_mode_logs_broker_exception_before_raise(
+        self,
+        caplog,
+        monkeypatch,
+    ):
+        import ingest.extract as extract_mod
+
+        direct_called = False
+
+        def fake_publish(result, **_kwargs):
+            result["facts_stored"] = 0
+            return []
+
+        def fake_direct_snippet_journal(*_args, **_kwargs):
+            nonlocal direct_called
+            direct_called = True
+            raise AssertionError("request-mode exception must not route around direct snippet/journal helper")
+
+        def fake_request(*_args, **_kwargs):
+            raise OSError("simulated broker transport failure")
+
+        monkeypatch.setattr("core.plugins.memorydb_contract.run_extraction_publish_payload", fake_publish)
+        monkeypatch.setattr("core.plugins.notedb_contract.run_snippet_journal_write_payload", fake_direct_snippet_journal)
+        monkeypatch.setattr("core.plugins.notedb_contract.register_snippet_journal_write_request_handler", lambda: None)
+        monkeypatch.setattr("core.runtime.events.request_broker_event", fake_request)
+
+        payload = {
+            "raw_facts": [],
+            "raw_snippets": {"SOUL.md": ["Keep launch checklist references precise"]},
+            "raw_journal": {},
+            "raw_project_logs": {},
+            "facts": [],
+            "snippets": {},
+            "journal": {},
+            "project_logs": {},
+            "project_log_metrics": {},
+            "facts_stored": 0,
+            "facts_skipped": 0,
+            "edges_created": 0,
+            "dry_run": False,
+        }
+
+        caplog.set_level("WARNING", logger="ingest.extract")
+
+        with pytest.raises(OSError, match="simulated broker transport failure"):
+            extract_mod.apply_extracted_payloads(
+                payload,
+                owner_id="test",
+                label="rolling-flush",
+                session_id="sess-note-request-exc",
+                dry_run=False,
+                snippet_journal_write_mode="request",
+            )
+
+        assert direct_called is False
+        assert "snippet_journal_metrics" not in payload
+        assert any(
+            "snippet/journal write request failed: simulated broker transport failure" in record.getMessage()
+            for record in caplog.records
+        )
 
     def test_apply_extracted_payloads_rejects_unknown_snippet_journal_write_mode(self, monkeypatch):
         import ingest.extract as extract_mod
