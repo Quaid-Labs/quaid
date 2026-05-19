@@ -232,7 +232,12 @@ Focused tests for the CLI exposure slice should prove:
   `extract_from_transcript()` without changing MemoryDB mode.
 - Passing both request flags forwards `request` / `request`.
 - Invalid mode values fail through argparse before extraction starts.
-- No environment variable or hidden config can flip CLI routing modes.
+- No environment variable or hidden config can flip CLI routing modes. Prove
+  this primarily by inspecting the argparse action configuration for the two
+  hidden flags and confirming their defaults are literal `direct` values with
+  no env/config sourcing. A representative runtime guard may also set a
+  plausible variable such as `QUAID_MEMORY_PUBLISH_MODE=request` and assert the
+  CLI default still forwards `direct` / `direct`.
 
 ## W4 Smoke
 
