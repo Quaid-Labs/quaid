@@ -1080,7 +1080,9 @@ def _record_daemon_lifecycle_observation(
         return record_session_lifecycle_observation(event)
     except Exception as exc:
         if _fail_hard_enabled():
-            raise
+            raise RuntimeError(
+                "SessionDB daemon lifecycle observation failed while failHard is enabled"
+            ) from exc
         logger.warning(
             "SessionDB daemon lifecycle observation persistence failed: %s",
             exc,

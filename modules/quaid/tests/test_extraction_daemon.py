@@ -324,13 +324,18 @@ def test_daemon_lifecycle_observation_failure_respects_failhard(monkeypatch, cap
     assert "SessionDB daemon lifecycle observation persistence failed" in caplog.text
 
     monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: True)
-    with pytest.raises(RuntimeError, match="sessiondb observation down"):
+    with pytest.raises(
+        RuntimeError,
+        match="SessionDB daemon lifecycle observation failed while failHard is enabled",
+    ) as excinfo:
         extraction_daemon._record_daemon_lifecycle_observation(
             signal_data,
             session_id="sess-fail",
             signal_type="timeout",
             transcript_path="/tmp/session.jsonl",
         )
+    assert isinstance(excinfo.value.__cause__, RuntimeError)
+    assert str(excinfo.value.__cause__) == "sessiondb observation down"
 
 
 def test_finalize_no_payload_signal_records_lifecycle_before_signal_finalization(monkeypatch):
@@ -363,6 +368,35 @@ def test_finalize_no_payload_signal_records_lifecycle_before_signal_finalization
     )
 
     assert order == ["record", "timeout_marker", "cursor", "mark", "release"]
+
+
+def test_finalize_no_payload_signal_failhard_observation_error_prevents_finalization(
+    monkeypatch,
+):
+    order = []
+    monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: True)
+    monkeypatch.setattr(
+        extraction_daemon,
+        "write_context_refresh_timeout_marker",
+        lambda _session_id: order.append("timeout_marker"),
+    )
+    monkeypatch.setattr(extraction_daemon, "mark_signal_processed", lambda _signal: order.append("mark"))
+
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("observation write failed")
+
+    monkeypatch.setattr(extraction_daemon, "_record_daemon_lifecycle_observation", _boom)
+
+    with pytest.raises(RuntimeError, match="observation write failed"):
+        extraction_daemon._finalize_no_payload_signal(
+            session_id="sess-finalize",
+            transcript_path="/tmp/session.jsonl",
+            signal_data={"type": "timeout", "session_id": "sess-finalize"},
+            lock_owner_key="sess-finalize",
+            lock_fd=123,
+        )
+
+    assert order == []
 
 
 def test_daemon_lifecycle_observation_keeps_sessiondb_import_behind_plugin_contract():
