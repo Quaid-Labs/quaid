@@ -229,11 +229,9 @@ narrow explicit bridge smoke:
 
 ## Deferred Decisions
 
-- default terminal `session.agent_end` lifecycle-to-daemon signal bridge is
-  tracked as M24 in
-  `projects/quaid/operations/datastore-events-m24-default-agent-end-signal-plan.md`;
-  broader reset/compaction/timeout lifecycle-triggered transcript ingestion
-  remains deferred
+- default terminal `session.agent_end` lifecycle-to-daemon signal bridge closed
+  in M24 at `058737670`; broader reset/compaction/timeout
+  lifecycle-triggered transcript ingestion remains deferred
 - daemon start/wake/restart automation from lifecycle events
 - SessionDB ingest wrapper retirement closed in M23 at `bfe5836b` +
   `4a3824d88`

@@ -1,12 +1,12 @@
 # Datastore Events M24 Default Agent-End Signal Plan
 
-Status: draft plan; no runtime implementation yet
+Status: runtime default terminal bridge slice complete; broader automation deferred
 Owner: W1 runtime/daemon, W6 boundary review, W3 recall guard review
 Plan source: `projects/quaid/operations/datastore-events-m22-lifecycle-daemon-signal-bridge-plan.md`
 
 ## Precondition
 
-Do not implement runtime code for M24 until:
+Runtime code for M24 was gated on:
 
 1. M23 SessionDB ingest wrapper retirement is closed through W4/W3/W6/W8.
 2. W3 reviews the selected slice because a default lifecycle-triggered daemon
@@ -21,12 +21,12 @@ Do not implement runtime code for M24 until:
    exactly one existing daemon signal and that duplicate adapter-hook signals are
    still deduped.
 
-This document is a plan only. It does not approve runtime implementation until
-those gates are recorded. It does not approve reset/compaction/timeout default
-automation, daemon start/wake/restart behavior, new signal types, new lifecycle
-event names, request/default routing changes, SessionDB recall selectors,
-source-window selector ownership, broad compatibility-alias retirement, CLI
-behavior changes, `.ego` integration, public push, or release actions.
+This document records the completed narrow default terminal bridge slice only.
+It did not approve reset/compaction/timeout default automation, daemon
+start/wake/restart behavior, new signal types, new lifecycle event names,
+request/default routing changes, SessionDB recall selectors, source-window
+selector ownership, broad compatibility-alias retirement, CLI behavior changes,
+`.ego` integration, public push, or release actions.
 
 ## Goal
 
@@ -35,14 +35,14 @@ queue daemon work when `payload.daemon_signal.enabled=true` is present. That
 protected alpha stability while proving the event-bus-to-daemon boundary,
 `write_signal()` dedupe, failHard behavior, and M21 daemon observation path.
 
-The next lowest-risk default behavior is narrower than the full deferred
-lifecycle automation item: only `session.agent_end` may infer an existing
+The next lowest-risk default behavior was narrower than the full deferred
+lifecycle automation item: only `session.agent_end` now infers an existing
 `session_end` daemon signal when the event already carries a concrete
 `session_id` and a real transcript path. Terminal agent-end events are the
 natural point to flush transcript evidence, while reset, compaction, timeout,
 rolling, and daemon process lifecycle automation remain future-plan-gated.
 
-M24 selects this one default bridge only. It keeps M22's explicit opt-in bridge
+M24 selected this one default bridge only. It keeps M22's explicit opt-in bridge
 for all four mapped lifecycle events and adds a default path for terminal
 `session.agent_end` only.
 
@@ -53,7 +53,7 @@ signal-processing path do the work.
 
 ## Current Boundary
 
-Post-M23 path:
+Pre-M24 path:
 
 1. `_handle_session_lifecycle()` records SessionDB lifecycle observations for
    event-bus lifecycle events with `session_id`, preserving M20 acknowledgement
@@ -79,24 +79,24 @@ Post-M23 path:
 
 ## Selected First Slice: Default Terminal Agent-End Signal Only
 
-Implement one runtime slice only:
+Implemented one runtime slice only:
 
-1. Add a private helper in `core.runtime.events`, near
+1. Added a private helper in `core.runtime.events`, near
    `_maybe_queue_lifecycle_daemon_signal()`, that determines whether a plain
    lifecycle event is eligible for default daemon signal queueing. A suggested
    name is `_maybe_queue_default_agent_end_signal(event, *, session_id)`. The
    helper must not live in `datastore.*` and must not import datastore modules.
 2. The default bridge is selected only for `event.name == "session.agent_end"`.
-   It maps to the existing daemon signal type `session_end` only. Do not add
+   It maps to the existing daemon signal type `session_end` only. Did not add
    default queueing for `session.reset`, `session.compaction`,
    `session.timeout`, `session.new`, `session.agent_start`, or rolling.
-3. Preserve the M22 explicit opt-in bridge exactly. If
+3. Preserved the M22 explicit opt-in bridge exactly. If
    `payload.daemon_signal.enabled is True`, the M22 helper remains the selected
    path and keeps its existing four-event mapping, validation, passive envelope
    fields, and failHard behavior. The M24 default helper must not run a second
    queueing attempt after the explicit M22 bridge runs.
 4. The default path requires a concrete non-empty `session_id` and an existing
-   transcript path from `payload.transcript_path`. Do not read
+   transcript path from `payload.transcript_path`. Did not read
    `payload.daemon_signal.transcript_path` for the default path; that field
    belongs to the explicit M22 bridge.
 5. Missing, empty, or nonexistent `payload.transcript_path` for a plain
@@ -108,15 +108,15 @@ Implement one runtime slice only:
    terminal lifecycle behavior: omit `payload.transcript_path` unless the event
    should queue the default daemon `session_end` signal.
 6. Uses `core.extraction_daemon.write_signal()` through an in-function import
-   inside the default helper. Do not write signal files by hand. Do not import or
+   inside the default helper. Did not write signal files by hand. Did not import or
    call daemon process lifecycle helpers such as start, wake, stop, or restart.
-7. Preserve idempotency by relying on existing `write_signal()` dedupe rules for
+7. Preserved idempotency by relying on existing `write_signal()` dedupe rules for
    compatible same-session/same-type signals. If an adapter hook already wrote a
    `session_end` signal for the same session, the default bridge must collapse
    to the same pending signal file instead of creating a duplicate.
-8. Record compact signal metadata only: bridge provenance, lifecycle event id,
+8. Records compact signal metadata only: bridge provenance, lifecycle event id,
    lifecycle event name, and optional adapter/source fields already present in
-   the lifecycle payload. Do not put transcript text, extracted facts, recall
+   the lifecycle payload. Did not put transcript text, extracted facts, recall
    rows, or source-window rows in signal metadata.
 9. Successful default queueing may add passive fields to the acknowledgement
    result: `daemon_signal_queued: true`, `daemon_signal_type: "session_end"`,
@@ -130,7 +130,7 @@ Implement one runtime slice only:
 11. Under failHard, a selected default queueing failure from `write_signal()` must
     raise through `process_events()` with the original exception chained. Do not
     catch it and return acknowledgement success.
-12. Preserve M21 daemon observation behavior. When the daemon later processes the
+12. Preserved M21 daemon observation behavior. When the daemon later processes the
     default-written signal, it should follow the same observation path as
     adapter-written and explicit-M22 bridge signals.
 13. M24 is infrastructure for event-bus lifecycle emitters that already know the
@@ -259,3 +259,99 @@ narrow default terminal bridge smoke:
 - whether hidden CLI request-mode flags should ever become public
 - broad compatibility-alias retirement and `notedb.core` plugin-id rename
 - `.ego` import/export integration
+
+## Implementation Record
+
+Runtime default terminal bridge slice closed at `058737670`
+(`refactor(datastore): default agent-end lifecycle signal`). The approved plan
+and guard addendum are `024f28726` and `fcac4fb8e`.
+
+Implemented behavior:
+
+- Added `core.runtime.events._default_agent_end_transcript_path()` as a
+  side-effect-free eligibility helper for the default terminal path. It selects
+  only plain `session.agent_end` events with a non-empty `session_id` and an
+  existing `payload.transcript_path`; it returns `None` for M22 explicit opt-in
+  payloads, non-agent-end lifecycle events, missing session ids, missing paths,
+  empty paths, and nonexistent paths.
+- Added `core.runtime.events._maybe_queue_default_agent_end_signal()` as the
+  writer helper. It imports `core.extraction_daemon.write_signal()` in-function,
+  writes the existing daemon `session_end` signal type only, and does not import
+  datastore modules, manually write signal files, or call daemon start/wake/stop/
+  restart helpers.
+- Preserved explicit M22 bridge precedence: when `payload.daemon_signal.enabled`
+  is `True`, `_handle_session_lifecycle()` routes to the existing M22 helper and
+  does not run the M24 default helper.
+- Preserved the M24 opt-out/compatibility contract: plain `session.agent_end`
+  events without a real `payload.transcript_path` keep the M20 acknowledgement
+  plus lifecycle-observation behavior and do not gain daemon signal fields.
+- Added only passive default-bridge envelope fields on successful default
+  queueing: `daemon_signal_queued=True`, `daemon_signal_type="session_end"`,
+  `signal_name=<write_signal result basename>`, and
+  `daemon_signal_default=True`. The handler does not change `status` or `event`.
+- Under fail-soft, selected default `write_signal()` failures log loudly and add
+  `daemon_signal_queued=False`, `daemon_signal_default=True`, and
+  `daemon_signal_error=<operator-readable string>`. Under failHard, selected
+  default `write_signal()` failures raise through `process_events()` with the
+  original exception chained.
+- Preserved fail-soft independence between M20 lifecycle observation persistence
+  and daemon signal writing: a SessionDB observation failure does not block an
+  otherwise-selected default agent-end signal.
+- Preserved existing daemon semantics by delegating idempotency and cross-path
+  dedupe to `write_signal()`. Adapter-written and default-agent-end same-session
+  `session_end` signals collapse to one pending signal file under the existing
+  same-session/same-type compatible dedupe rules.
+- Preserved M21 daemon observation behavior by writing a standard `session_end`
+  signal; daemon processing and observation recording remain on the pre-existing
+  path. No daemon polling, priority, locking, cursor, rolling, timeout
+  classifier, reset backup, or transcript ownership behavior changed.
+- Preserved MemoryDB `session_chunks` recall/write ownership, SessionDB
+  `capabilities.recall=[]`, M19 source-window metadata/output policy, M16
+  request ownership, M17/M18 active ingest behavior, M20 lifecycle observation
+  semantics, M22 explicit opt-in bridge behavior, CLI/default routing, broad
+  compatibility aliases, and adapter hook direct `write_signal()` paths.
+
+Test coverage added or preserved:
+
+- Default success path writes exactly one `session_end` signal for plain
+  `session.agent_end` with concrete `session_id` and existing
+  `payload.transcript_path`, and asserts the passive envelope fields plus compact
+  signal metadata.
+- Negative default-selection coverage proves plain `session.reset`,
+  `session.compaction`, `session.timeout`, `session.new`, and
+  `session.agent_start` do not default-queue daemon signals even with
+  `payload.transcript_path`.
+- No-op compatibility coverage proves missing session id, missing transcript
+  path, empty transcript path, and nonexistent transcript path preserve the
+  acknowledgement/observation shape and add no daemon signal fields.
+- Explicit M22 precedence coverage proves `payload.daemon_signal.enabled=True`
+  uses the M22 explicit bridge, uses `payload.daemon_signal.transcript_path`, and
+  does not set `daemon_signal_default`.
+- Cross-path dedupe coverage proves an adapter-written `session_end` signal and
+  the M24 default bridge for the same session result in one pending signal file.
+- Monkeypatched `write_signal()` failure coverage proves fail-soft logging and
+  passive failure metadata plus failHard exception chaining.
+- Source-boundary assertions cover both M22 and M24 helpers: in-function
+  `write_signal()` imports are present, while `datastore.*`, manual signal-file
+  helpers, and daemon process lifecycle calls are absent.
+- Existing event, extraction-daemon signal, source-window, session-memory bridge,
+  docs consistency, boundary, and unit-wrapper lanes remained green.
+
+Validation chain:
+
+- W4 R201 PASS on `058737670`: default plain `session.agent_end` queued one
+  `session_end` signal; no-path and nonexistent-path plain events no-op;
+  explicit M22 opt-in wins; non-agent-end lifecycle events remain excluded; no
+  daemon wake/start/restart or recall/source-window policy change observed.
+- W3 runtime/recall APPROVED with no findings: default selection, M22
+  precedence, no-path compatibility no-op, non-agent-end exclusions,
+  `write_signal()`-only signal creation, and recall/source-window boundaries were
+  verified.
+- W6 runtime APPROVED with one LOW informational note: a dedicated M24
+  write-then-daemon-process round-trip test could make the explicit Step 12
+  coverage direct, but existing daemon `session_end` tests and M22 parity make
+  the invariant functionally covered.
+- W8 STATIC PASS/runtime HOLD for `058737670`: focused M24 selector, full
+  `test_events.py`, extraction-daemon selector, source-window selector,
+  `test_session_memory_bridge.py`, py_compile, ruff, diff/docs, boundary, and
+  unit wrapper 140/140 all passed.
