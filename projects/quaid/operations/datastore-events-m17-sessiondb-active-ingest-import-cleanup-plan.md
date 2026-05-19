@@ -63,6 +63,11 @@ Implement one runtime cleanup slice only:
 1. Update `core.runtime.events._handle_session_ingest_log()` to import
    `run_session_ingest_payload()` from `core.plugins.sessiondb_contract`
    directly.
+   Import location: update the existing module-level import in
+   `core/runtime/events.py` from
+   `from core.plugins.memorydb_contract import run_session_ingest_payload` to
+   `from core.plugins.sessiondb_contract import run_session_ingest_payload`.
+   Keep the import at module level; do not move it inside the function.
 2. Keep the active `session.ingest_log` event name, delivery mode, payload
    schema, processed/failed result envelope, and `process_events()` behavior
    unchanged.
@@ -123,6 +128,10 @@ Add or preserve focused tests proving:
 - Active `session.ingest_log` imports/calls
   `core.plugins.sessiondb_contract.run_session_ingest_payload()` directly and
   does not call `core.plugins.memorydb_contract.run_session_ingest_payload()`.
+  Verify the no-MemoryDB-call invariant with a trip-wire: monkeypatch
+  `core.plugins.memorydb_contract.run_session_ingest_payload()` to raise
+  `AssertionError` if invoked, then process active `session.ingest_log`. Assert
+  the SessionDB helper was called and the MemoryDB trip-wire did not fire.
 - Missing `payload.session_id` still returns the same active failed envelope and
   does not call either helper.
 - Helper failure/result-status handling preserves the existing active
@@ -156,6 +165,8 @@ narrow session-ingest smoke:
 ## Deferred Decisions
 
 - request/active compatibility-wrapper removal from `core.plugins.memorydb_contract`
+- active handler exception/failed-envelope cleanup for the pre-existing bare
+  `except Exception` path, to be selected by a separate failHard cleanup plan
 - whether SessionDB should expose dedicated request handlers beyond
   `session.ingest_log.request.v1` and generic metadata/maintenance surfaces
 - lifecycle persistence for ack-only lifecycle events
