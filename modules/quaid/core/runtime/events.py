@@ -37,6 +37,7 @@ EVENT_ENVELOPE_SCHEMA_VERSION = 1
 EVENT_CLASSES = {"domain", "request"}
 DOCS_PROJECT_MAINTENANCE_OBSERVED_EVENT = "docs.project_maintenance_observed"
 DOCS_PROJECT_UPDATE_REQUEST_EVENT = "docs.project_update.request.v1"
+SESSION_INGEST_LOG_REQUEST_EVENT = "session.ingest_log.request.v1"
 
 EVENT_REGISTRY: List[Dict[str, Any]] = [
     {
@@ -128,6 +129,14 @@ EVENT_REGISTRY: List[Dict[str, Any]] = [
         "processable": True,
         "listenable": True,
         "delivery_mode": "active",
+    },
+    {
+        "name": SESSION_INGEST_LOG_REQUEST_EVENT,
+        "description": "Request MemoryDB-owned session transcript ingest and session_chunks projection.",
+        "fireable": True,
+        "processable": False,
+        "listenable": True,
+        "delivery_mode": "request",
     },
     {
         "name": "janitor.run_completed",

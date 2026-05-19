@@ -8,6 +8,7 @@ from core.runtime.events import (
     EVENT_HANDLERS,
     DOCS_PROJECT_MAINTENANCE_OBSERVED_EVENT,
     DOCS_PROJECT_UPDATE_REQUEST_EVENT,
+    SESSION_INGEST_LOG_REQUEST_EVENT,
     dispatch_broker_events,
     emit_broker_event,
     emit_event,
@@ -67,6 +68,7 @@ def test_event_emit_list_and_capabilities(tmp_path):
     assert any(c.get("name") == "session.reset" for c in caps)
     assert any(c.get("name") == "notification.delayed" for c in caps)
     assert any(c.get("name") == "session.ingest_log" for c in caps)
+    assert any(c.get("name") == SESSION_INGEST_LOG_REQUEST_EVENT and c.get("delivery_mode") == "request" for c in caps)
     assert any(c.get("name") == "session.reset" and c.get("delivery_mode") == "active" for c in caps)
     assert any(c.get("name") == "notification.delayed" and c.get("delivery_mode") == "passive" for c in caps)
 
@@ -893,6 +895,198 @@ def test_event_process_session_ingest_log(monkeypatch, tmp_path):
     assert called["source_channel"] == "telegram"
     assert called["conversation_id"] == "group-1"
     assert called["message_count"] == 12
+
+
+def test_request_session_ingest_log_runs_memorydb_handler(monkeypatch, tmp_path):
+    set_adapter(TestAdapter(tmp_path))
+    from core.plugins.memorydb_contract import register_session_ingest_log_request_handler
+
+    called = {}
+
+    def _fake_run(**kwargs):
+        called.update(kwargs)
+        return {
+            "status": "indexed",
+            "session_id": kwargs["session_id"],
+            "source_kind": "transcript_path",
+            "microchunks_stored": 2,
+        }
+
+    monkeypatch.setattr("core.ingest_runtime.run_session_logs_ingest", _fake_run)
+
+    register_session_ingest_log_request_handler()
+    response = request_broker_event(
+        SESSION_INGEST_LOG_REQUEST_EVENT,
+        {
+            "session_id": "sess-req",
+            "owner_id": " owner-req ",
+            "label": "SessionEnd",
+            "session_file": str(tmp_path / "session.jsonl"),
+            "transcript_path": str(tmp_path / "transcript.jsonl"),
+            "source_channel": "codex",
+            "conversation_id": "conv-req",
+            "participant_ids": [" user:owner ", "", "agent:quaid"],
+            "participant_aliases": {" Operator ": " user:owner "},
+            "message_count": 4,
+            "topic_hint": "broker request",
+        },
+        source="pytest",
+    )
+
+    assert response["status"] == "ok"
+    result = response["responses"][0]["result"]
+    assert response["responses"][0]["datastore_id"] == "memorydb"
+    assert result["status"] == "indexed"
+    assert result["microchunks_stored"] == 2
+    assert called["session_id"] == "sess-req"
+    assert called["owner_id"] == "owner-req"
+    assert called["source_channel"] == "codex"
+    assert called["conversation_id"] == "conv-req"
+    assert called["participant_ids"] == ["user:owner", "agent:quaid"]
+    assert called["participant_aliases"] == {" Operator ": " user:owner "}
+    assert called["message_count"] == 4
+    assert called["topic_hint"] == "broker request"
+
+
+def test_request_session_ingest_log_rejects_missing_session_id(monkeypatch, tmp_path):
+    set_adapter(TestAdapter(tmp_path))
+    import core.runtime.events as events
+    from core.plugins.memorydb_contract import register_session_ingest_log_request_handler
+
+    monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: False)
+    monkeypatch.setattr(
+        "core.ingest_runtime.run_session_logs_ingest",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("missing session_id must not ingest")),
+    )
+
+    register_session_ingest_log_request_handler()
+    response = request_broker_event(
+        SESSION_INGEST_LOG_REQUEST_EVENT,
+        {"owner_id": "owner-req"},
+        source="pytest",
+    )
+
+    assert response["status"] == "failed"
+    assert response["responses"][0]["result"]["error"] == "payload.session_id is required"
+
+
+def test_request_session_ingest_log_matches_direct_session_projection(monkeypatch, tmp_path):
+    set_adapter(TestAdapter(tmp_path))
+    monkeypatch.setenv("MEMORY_DB_PATH", str(tmp_path / "memory.db"))
+    monkeypatch.setenv("SESSION_DB_PATH", str(tmp_path / "session.db"))
+
+    from core.plugins.memorydb_contract import register_session_ingest_log_request_handler
+    from core.services.datastore_bridge import DatastoreBridge
+    from core.services.session_memory_bridge import DatastoreSessionMemoryBridge
+    import datastore.memorydb.memory_graph as mg
+    from datastore.memorydb.memory_graph import MemoryGraph
+    from datastore.sessiondb import session_store
+    from ingest import session_logs_ingest
+
+    memory = MemoryGraph(db_path=tmp_path / "memory.db")
+    monkeypatch.setattr(memory, "get_embedding", lambda *_args, **_kwargs: None)
+    bridge = DatastoreSessionMemoryBridge(memory_service=memory, datastore_bridge=DatastoreBridge())
+    monkeypatch.setattr("ingest.session_logs_ingest.get_session_memory_bridge", lambda: bridge)
+
+    provider_payload = {
+        "stop_reason": "end_turn",
+        "usage": {"input_tokens": 900, "output_tokens": 12},
+    }
+    session_lines = [
+        json.dumps({"type": "session_meta", "payload": {"cwd": str(tmp_path)}}),
+        json.dumps({"role": "user", "content": "Mira left the kiln key inside the green ledger."}),
+        json.dumps({"role": "assistant", "content": json.dumps(provider_payload)}),
+        json.dumps({"role": "assistant", "content": "Logged for session recall."}),
+        json.dumps({"role": "user", "content": "Noor hid the harbor map inside the amber folder."}),
+        json.dumps({"role": "assistant", "content": "That belongs to a separate pair."}),
+    ]
+    raw_direct = tmp_path / "direct-session.jsonl"
+    raw_broker = tmp_path / "broker-session.jsonl"
+    for raw_session in (raw_direct, raw_broker):
+        raw_session.write_text("\n".join(session_lines) + "\n", encoding="utf-8")
+    base_payload = {
+        "owner_id": "owner-parity",
+        "label": "SessionEnd",
+        "source_channel": "codex",
+        "conversation_id": "conv-parity",
+        "participant_ids": ["user:owner", "agent:quaid"],
+        "participant_aliases": {"Operator": "user:owner"},
+        "message_count": 6,
+        "topic_hint": "kiln key",
+    }
+
+    direct = session_logs_ingest.run(session_id="sess-direct", transcript_path=str(raw_direct), **base_payload)
+    register_session_ingest_log_request_handler()
+    broker = request_broker_event(
+        SESSION_INGEST_LOG_REQUEST_EVENT,
+        {"session_id": "sess-broker", "transcript_path": str(raw_broker), **base_payload},
+        source="pytest",
+    )
+    broker_result = broker["responses"][0]["result"]
+
+    assert broker["status"] == "ok"
+    assert direct["status"] == "indexed"
+    assert broker_result["status"] == "indexed"
+    for key in ("message_count", "pairs_stored", "microchunks_stored", "source_kind"):
+        assert broker_result[key] == direct[key]
+
+    direct_session = session_store.load_session("sess-direct", owner_id="owner-parity")
+    broker_session = session_store.load_session("sess-broker", owner_id="owner-parity")
+    assert direct_session and broker_session
+    for row in (direct_session, broker_session):
+        assert "Mira left the kiln key" in row["transcript_text"]
+        assert "session_meta" not in row["transcript_text"]
+        assert "stop_reason" not in row["transcript_text"]
+        assert row["source_channel"] == "codex"
+        assert row["conversation_id"] == "conv-parity"
+        assert row["participant_ids"] == ["user:owner", "agent:quaid"]
+        assert row["participant_aliases"] == {"Operator": "user:owner"}
+
+    direct_rows = memory.list_session_chunks(owner_id="owner-parity", session_id="sess-direct")
+    broker_rows = memory.list_session_chunks(owner_id="owner-parity", session_id="sess-broker")
+    assert direct_rows and broker_rows
+    assert len(broker_rows) == len(direct_rows)
+    assert len({row["message_pair_id"] for row in broker_rows}) >= 2
+    for row in broker_rows:
+        assert row["source_id"] == str(raw_broker)
+        assert row["source_channel"] == "codex"
+        assert row["source_conversation_id"] == "conv-parity"
+        assert row["conversation_id"] == "conv-parity"
+        assert row["chunk_kind"] == "micro"
+        assert row["parent_chunk_id"]
+        assert row["message_pair_id"]
+        assert row["microchunk_id"]
+
+    monkeypatch.setattr(mg, "get_graph", lambda: memory)
+    recall_rows, recall_meta, _bundle = mg._run_recall_store_plan(
+        "kiln key green ledger",
+        stores=["session_chunks"],
+        limit=3,
+        owner_id="owner-parity",
+        min_similarity=0.0,
+        planner_profile="off",
+        planned_queries=["kiln key green ledger"],
+        planner_meta={"planned_stores": ["session_chunks"]},
+        fast_mode=False,
+        common_kwargs={"source_channel": "codex", "max_chunk_tokens": 80, "max_total_chunk_tokens": 200},
+    )
+    assert any(row["session_id"] == "sess-broker" and "green ledger" in row["text"] for row in recall_rows)
+    assert recall_meta["store_runs"][0]["store"] == "session_chunks"
+
+    center = next(row for row in broker_rows if "kiln key" in row["text"])
+    other_pair_ids = {
+        row["message_pair_id"]
+        for row in broker_rows
+        if row["message_pair_id"] != center["message_pair_id"]
+    }
+    expanded = bridge.expand_microchunk(center["microchunk_id"], owner_id="owner-parity", after=10)
+    assert expanded
+    assert expanded["pair"]["session_id"] == "sess-broker"
+    assert all(row["session_id"] == "sess-broker" for row in expanded["window"])
+    assert all(row["session_id"] == "sess-broker" for row in expanded["microchunk_window"])
+    assert all(row["pair_id"] == center["message_pair_id"] for row in expanded["microchunk_window"])
+    assert not any(row["pair_id"] in other_pair_ids for row in expanded["microchunk_window"])
+    assert not any("harbor map" in row["text"] for row in expanded["microchunk_window"])
 
 
 def test_event_process_janitor_run_completed_queues_notifications(monkeypatch, tmp_path):

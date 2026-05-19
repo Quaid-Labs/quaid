@@ -1,6 +1,6 @@
 # Datastore Events M9.3 Lifecycle And Session Plan
 
-Status: draft coordination plan; no runtime implementation
+Status: first-slice runtime patch ready for validation; W4 live gate pending
 Owner: W1 runtime/datastore
 Plan source: `projects/quaid/operations/datastore-events-m9-monitor-migration-plan.md`
 
@@ -17,7 +17,9 @@ Do not implement runtime code for M9.3 until:
    `session_chunks` recall evidence and can affect recall-visible source-window
    behavior.
 
-This document is planning only. It does not approve runtime implementation.
+W3 approved the first runtime slice under the ownership constraints below.
+Milestone closure still requires W4 live validation plus W6/W8 review/static
+closure.
 
 ## M9.3 Goal
 
@@ -72,6 +74,18 @@ ownership model:
 
 Do not silently add `sessiondb` to manifests in the same patch as a behavior
 migration unless W3/W6 have reviewed that ownership decision.
+
+## First-Slice Decision
+
+W3 approved keeping this slice owned by the existing MemoryDB/session-memory
+bridge boundary. The implementation uses a synchronous
+`session.ingest_log.request.v1` request handler registered under MemoryDB. The
+handler unwraps to the original `run_session_logs_ingest()` result shape, while
+the daemon validates the broker envelope before logging status.
+
+SessionDB remains unregistered as a first-party datastore in this slice. A
+dedicated source-window/ownership slice must review and approve any future
+SessionDB manifest registration.
 
 ## Proposed First Slice
 

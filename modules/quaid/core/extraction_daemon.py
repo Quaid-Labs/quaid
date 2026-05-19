@@ -423,6 +423,88 @@ def _validate_session_id(session_id: str) -> str:
     return safe
 
 
+def _session_logs_ingest_error_message(response: Dict[str, Any], row: Optional[Dict[str, Any]] = None) -> str:
+    if row:
+        result = row.get("result") if isinstance(row.get("result"), dict) else {}
+        for value in (row.get("error"), result.get("error"), result.get("reason")):
+            text = str(value or "").strip()
+            if text:
+                return text
+    for value in (response.get("error"), response.get("status")):
+        text = str(value or "").strip()
+        if text:
+            return text
+    return "unknown session_logs ingest request failure"
+
+
+def _validate_session_logs_ingest_broker_response(response: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(response, dict):
+        raise RuntimeError("session_logs ingest request returned a non-object response")
+    responses = response.get("responses")
+    if not isinstance(responses, list) or len(responses) != 1:
+        message = _session_logs_ingest_error_message(response)
+        raise RuntimeError(f"session_logs ingest request returned no memorydb response: {message}")
+    row = responses[0]
+    if not isinstance(row, dict):
+        raise RuntimeError("session_logs ingest request returned malformed memorydb response")
+    if str(row.get("datastore_id") or "").strip() != "memorydb":
+        raise RuntimeError("session_logs ingest request returned a non-memorydb response")
+    result = row.get("result")
+    if not isinstance(result, dict):
+        raise RuntimeError("session_logs ingest request memorydb result is not an object")
+
+    response_status = str(response.get("status") or "").strip().lower()
+    row_status = str(row.get("status") or result.get("status") or "").strip().lower()
+    result_status = str(result.get("status") or "").strip().lower()
+    if response_status != "ok" or row_status in {"failed", "error", "nacked"} or result_status in {"failed", "error"}:
+        message = _session_logs_ingest_error_message(response, row)
+        raise RuntimeError(f"session_logs ingest request failed: {message}")
+    return result
+
+
+def _request_session_logs_ingest(
+    *,
+    session_id: str,
+    owner_id: str,
+    label: str,
+    session_file: Optional[str] = None,
+    transcript_path: Optional[str] = None,
+    source_channel: Optional[str] = None,
+    conversation_id: Optional[str] = None,
+    participant_ids: Optional[List[str]] = None,
+    participant_aliases: Optional[Dict[str, str]] = None,
+    message_count: int = 0,
+    topic_hint: str = "",
+) -> Dict[str, Any]:
+    from core.plugins.memorydb_contract import register_session_ingest_log_request_handler
+    from core.runtime.events import SESSION_INGEST_LOG_REQUEST_EVENT, request_broker_event
+
+    register_session_ingest_log_request_handler()
+    response = request_broker_event(
+        SESSION_INGEST_LOG_REQUEST_EVENT,
+        {
+            "session_id": session_id,
+            "owner_id": owner_id,
+            "label": label,
+            "session_file": session_file,
+            "transcript_path": transcript_path,
+            "source_channel": source_channel,
+            "conversation_id": conversation_id,
+            "participant_ids": list(participant_ids or []),
+            "participant_aliases": dict(participant_aliases or {}),
+            "message_count": int(message_count or 0),
+            "topic_hint": topic_hint,
+        },
+        source="core.extraction_daemon.process_signal",
+        session_id=session_id,
+        owner_id=owner_id,
+        provenance={
+            "replacement": "core.extraction_daemon direct run_session_logs_ingest call",
+        },
+    )
+    return _validate_session_logs_ingest_broker_response(response)
+
+
 def _is_discovery_artifact_transcript(transcript_path: Path) -> bool:
     """Return True when a transcript file is a sidecar artifact, not a live session."""
     try:
@@ -4718,8 +4800,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
         else:
             if signal_type == "session_end":
                 try:
-                    from core.ingest_runtime import run_session_logs_ingest
-                    sl_result = run_session_logs_ingest(
+                    sl_result = _request_session_logs_ingest(
                         session_id=session_id,
                         owner_id=_get_owner_id(),
                         label=label,
@@ -5361,8 +5442,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                 logger.warning("[%s] session %s: failed queuing post-timeout compaction: %s", label, session_id, e)
 
         try:
-            from core.ingest_runtime import run_session_logs_ingest
-            sl_result = run_session_logs_ingest(
+            sl_result = _request_session_logs_ingest(
                 session_id=session_id,
                 owner_id=owner,
                 label=label,
@@ -5376,9 +5456,9 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                         label, session_id, sl_status,
                         f" ({sl_reason})" if sl_reason else "")
         except Exception as e:
+            logger.warning("[%s] session %s: session_logs ingest failed: %s", label, session_id, e)
             if _fail_hard_enabled():
                 raise RuntimeError("session_logs ingest failed") from e
-            logger.warning("[%s] session %s: session_logs ingest failed: %s", label, session_id, e)
 
         _write_extraction_buffer_log(
             session_id,

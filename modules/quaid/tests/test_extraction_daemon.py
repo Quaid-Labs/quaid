@@ -35,6 +35,92 @@ def _stub_successful_session_logs_ingest(monkeypatch):
     monkeypatch.setattr(ingest_runtime, "run_session_logs_ingest", lambda **_kwargs: {"status": "indexed"})
 
 
+def test_session_logs_ingest_request_returns_memorydb_result(monkeypatch, tmp_path):
+    from lib.adapter import TestAdapter, reset_adapter, set_adapter
+
+    set_adapter(TestAdapter(tmp_path))
+    called = {}
+
+    def _fake_run(**kwargs):
+        called.update(kwargs)
+        return {
+            "status": "indexed",
+            "session_id": kwargs["session_id"],
+            "source_kind": "transcript_path",
+            "microchunks_stored": 2,
+        }
+
+    monkeypatch.setattr("core.ingest_runtime.run_session_logs_ingest", _fake_run)
+
+    try:
+        result = extraction_daemon._request_session_logs_ingest(
+            session_id="sess-broker",
+            owner_id="owner-broker",
+            label="SessionEnd",
+            transcript_path=str(tmp_path / "session.jsonl"),
+            source_channel="codex",
+            conversation_id="conv-broker",
+            participant_ids=["user:owner"],
+            participant_aliases={"Operator": "user:owner"},
+            message_count=3,
+            topic_hint="broker parity",
+        )
+    finally:
+        reset_adapter()
+
+    assert result == {
+        "status": "indexed",
+        "session_id": "sess-broker",
+        "source_kind": "transcript_path",
+        "microchunks_stored": 2,
+    }
+    assert called["session_id"] == "sess-broker"
+    assert called["owner_id"] == "owner-broker"
+    assert called["label"] == "SessionEnd"
+    assert called["source_channel"] == "codex"
+    assert called["conversation_id"] == "conv-broker"
+    assert called["participant_ids"] == ["user:owner"]
+    assert called["participant_aliases"] == {"Operator": "user:owner"}
+    assert called["message_count"] == 3
+    assert called["topic_hint"] == "broker parity"
+
+
+def test_session_logs_ingest_request_has_no_direct_fallback(monkeypatch, tmp_path):
+    from lib.adapter import TestAdapter, reset_adapter, set_adapter
+
+    set_adapter(TestAdapter(tmp_path))
+    registered = []
+    monkeypatch.setattr(
+        "core.plugins.memorydb_contract.register_session_ingest_log_request_handler",
+        lambda: registered.append("registered"),
+    )
+    monkeypatch.setattr(
+        "core.runtime.events.request_broker_event",
+        lambda *_args, **_kwargs: {
+            "status": "failed",
+            "error": "synthetic broker failure",
+            "responses": [],
+        },
+    )
+    monkeypatch.setattr(
+        "core.ingest_runtime.run_session_logs_ingest",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("must not fall back to direct ingest")),
+    )
+
+    try:
+        with pytest.raises(RuntimeError, match="synthetic broker failure"):
+            extraction_daemon._request_session_logs_ingest(
+                session_id="sess-broker-fail",
+                owner_id="owner-broker",
+                label="SessionEnd",
+                transcript_path=str(tmp_path / "session.jsonl"),
+            )
+    finally:
+        reset_adapter()
+
+    assert registered == ["registered"]
+
+
 def test_daemon_loop_preserves_signal_when_processing_raises(monkeypatch):
     signal_payload = {"session_id": "sess-1", "type": "reset"}
     marked = []
@@ -5981,6 +6067,48 @@ class TestRollingExtraction:
         lock_dir = tmp_path / "instances" / "rolling-inst" / "data" / "session-processing"
         assert list(lock_dir.glob("*.lock")) == []
 
+    def test_session_end_no_new_content_routes_session_ingest_through_broker(self, monkeypatch, tmp_path):
+        import core.ingest_runtime as ingest_runtime
+
+        transcript_path = tmp_path / "session.jsonl"
+        transcript_path.write_text(
+            '{"role":"user","content":"hello"}\n',
+            encoding="utf-8",
+        )
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "rolling-inst")
+        extraction_daemon.write_cursor("sess-no-new-broker", 1, str(transcript_path))
+        monkeypatch.setattr(extraction_daemon, "_get_owner_id", lambda: "Owner")
+        monkeypatch.setattr(extraction_daemon, "_session_has_harvestable_subagents", lambda *args, **kwargs: False)
+        monkeypatch.setattr(
+            ingest_runtime,
+            "run_session_logs_ingest",
+            lambda **_kwargs: (_ for _ in ()).throw(AssertionError("must route through broker request")),
+        )
+
+        ingest_calls = []
+        monkeypatch.setattr(
+            extraction_daemon,
+            "_request_session_logs_ingest",
+            lambda **kwargs: ingest_calls.append(kwargs) or {"status": "indexed"},
+        )
+
+        extraction_daemon.write_signal(
+            signal_type="session_end",
+            session_id="sess-no-new-broker",
+            transcript_path=str(transcript_path),
+        )
+        extraction_daemon.process_signal(extraction_daemon.read_pending_signals()[0])
+
+        assert extraction_daemon.read_pending_signals() == []
+        assert len(ingest_calls) == 1
+        assert ingest_calls[0]["session_id"] == "sess-no-new-broker"
+        assert ingest_calls[0]["owner_id"] == "Owner"
+        assert ingest_calls[0]["transcript_path"] == str(transcript_path)
+        assert ingest_calls[0]["message_count"] == 0
+        assert ingest_calls[0]["topic_hint"] == ""
+
     @pytest.mark.parametrize("signal_type", ["compaction", "timeout"])
     def test_process_signal_noop_does_not_recreate_empty_rolling_state(
         self, monkeypatch, tmp_path, signal_type
@@ -8381,7 +8509,13 @@ class TestRollingExtraction:
         monkeypatch.setattr(
             ingest_runtime_mod,
             "run_session_logs_ingest",
-            lambda **kwargs: {"status": "indexed"},
+            lambda **_kwargs: (_ for _ in ()).throw(AssertionError("must route through broker request")),
+        )
+        session_ingest_calls = []
+        monkeypatch.setattr(
+            extraction_daemon,
+            "_request_session_logs_ingest",
+            lambda **kwargs: session_ingest_calls.append(kwargs) or {"status": "indexed"},
         )
         monkeypatch.setattr(project_registry_mod, "snapshot_all_projects", lambda: [])
         monkeypatch.setattr(
@@ -8416,6 +8550,10 @@ class TestRollingExtraction:
             assert seen_transcripts == ["User: My sister is Diana\n\nAssistant: Her daughter is Alice"]
             assert extraction_daemon.read_cursor("sess-roll")["line_offset"] == 2
             assert not extraction_daemon._rolling_state_path("sess-roll").exists()
+            assert len(session_ingest_calls) == 1
+            assert session_ingest_calls[0]["session_id"] == "sess-roll"
+            assert session_ingest_calls[0]["owner_id"] == "Owner"
+            assert session_ingest_calls[0]["transcript_path"] == str(transcript_path)
             buffer_log = (instance_root / "logs" / "daemon" / "extraction-buffer.log").read_text(
                 encoding="utf-8"
             )

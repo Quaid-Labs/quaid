@@ -188,6 +188,11 @@ class MemoryDbDatastoreContract(DatastoreContractBase):
             ("datastore.memorydb.memory_graph.graph_aware_recall",),
         ),
         DatastoreHandlerSpec(
+            "session.ingest_log.request.v1",
+            REQUEST,
+            ("core.plugins.memorydb_contract.handle_session_ingest_log_request",),
+        ),
+        DatastoreHandlerSpec(
             "datastore.validate.request.v1",
             REQUEST,
             ("datastore.memorydb.memory_graph.health",),
