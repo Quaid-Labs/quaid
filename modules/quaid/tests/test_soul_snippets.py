@@ -179,6 +179,113 @@ class TestEvolutionDbContractSnippetJournalWrite:
         assert second["journal_files_written"] == 0
         assert second["journal_files_skipped"] == 1
 
+    def test_helper_isolates_snippet_only_metrics(self):
+        from core.plugins.evolutiondb_contract import run_snippet_journal_write_payload
+
+        result = run_snippet_journal_write_payload({
+            "source": "extraction-apply-payloads",
+            "snippets": {"USER.md": ["Maya keeps a green tea note."]},
+            "journal": {},
+            "dry_run": True,
+        })
+
+        assert result["status"] == "ok"
+        assert result["snippet_files_seen"] == 1
+        assert result["snippet_items_seen"] == 1
+        assert result["snippet_files_written"] == 0
+        assert result["snippet_items_written"] == 0
+        assert result["snippet_files_skipped"] == 1
+        assert result["journal_files_seen"] == 0
+        assert result["journal_files_written"] == 0
+        assert result["journal_files_skipped"] == 0
+        assert result["target_files"] == {
+            "snippets": ["USER.snippets.md"],
+            "journal": [],
+        }
+        assert result["errors"] == []
+
+    def test_helper_isolates_journal_only_metrics(self):
+        from core.plugins.evolutiondb_contract import run_snippet_journal_write_payload
+
+        result = run_snippet_journal_write_payload({
+            "source": "extraction-apply-payloads",
+            "snippets": {},
+            "journal": {"SOUL.md": "A short journal note."},
+            "dry_run": True,
+        })
+
+        assert result["status"] == "ok"
+        assert result["snippet_files_seen"] == 0
+        assert result["snippet_items_seen"] == 0
+        assert result["snippet_files_written"] == 0
+        assert result["snippet_items_written"] == 0
+        assert result["snippet_files_skipped"] == 0
+        assert result["journal_files_seen"] == 1
+        assert result["journal_files_written"] == 0
+        assert result["journal_files_skipped"] == 1
+        assert result["target_files"] == {
+            "snippets": [],
+            "journal": ["SOUL.journal.md"],
+        }
+        assert result["errors"] == []
+
+    def test_helper_write_flags_preserve_family_skip_counters_and_targets(self):
+        from core.plugins.evolutiondb_contract import run_snippet_journal_write_payload
+
+        result = run_snippet_journal_write_payload({
+            "source": "extraction-apply-payloads",
+            "snippets": {"USER.md": ["Maya keeps a green tea note."]},
+            "journal": {"SOUL.md": "A short journal note."},
+            "write_snippets": False,
+            "write_journal": False,
+        })
+
+        assert result["status"] == "ok"
+        assert result["snippet_files_seen"] == 1
+        assert result["snippet_items_seen"] == 1
+        assert result["snippet_files_written"] == 0
+        assert result["snippet_items_written"] == 0
+        assert result["snippet_files_skipped"] == 1
+        assert result["journal_files_seen"] == 1
+        assert result["journal_files_written"] == 0
+        assert result["journal_files_skipped"] == 1
+        assert result["target_files"] == {
+            "snippets": ["USER.snippets.md"],
+            "journal": ["SOUL.journal.md"],
+        }
+        assert result["errors"] == []
+
+    def test_helper_calls_split_helpers_in_snippet_then_journal_order(self, monkeypatch):
+        import core.plugins.evolutiondb_contract as contract
+
+        calls = []
+
+        def fake_snippet_helper(payload, result, soul_snippets):
+            calls.append(("snippets", payload["trigger"], soul_snippets is not None))
+            result["snippet_files_seen"] += 1
+
+        def fake_journal_helper(payload, result, soul_snippets):
+            calls.append(("journal", payload["trigger"], soul_snippets is not None))
+            assert result["snippet_files_seen"] == 1
+            result["journal_files_seen"] += 1
+
+        monkeypatch.setattr(contract, "_run_snippet_write_payload", fake_snippet_helper)
+        monkeypatch.setattr(contract, "_run_journal_write_payload", fake_journal_helper)
+
+        result = contract.run_snippet_journal_write_payload({
+            "source": "extraction-apply-payloads",
+            "trigger": "Reset",
+            "snippets": {"USER.md": ["Maya keeps a green tea note."]},
+            "journal": {"SOUL.md": "A short journal note."},
+        })
+
+        assert calls == [
+            ("snippets", "Reset", True),
+            ("journal", "Reset", True),
+        ]
+        assert result["snippet_files_seen"] == 1
+        assert result["journal_files_seen"] == 1
+
     def test_helper_logs_and_records_soft_snippet_write_failure(self, caplog):
         from core.plugins.evolutiondb_contract import run_snippet_journal_write_payload
 

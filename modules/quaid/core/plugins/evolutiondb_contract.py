@@ -25,6 +25,89 @@ def _logical_journal_target(filename: str) -> str:
     return f"{str(filename).removesuffix('.md')}.journal.md"
 
 
+def _run_snippet_write_payload(payload: Dict[str, Any], result: Dict[str, Any], soul_snippets: Any) -> None:
+    snippets = payload["snippets"]
+    trigger = payload["trigger"]
+    date_str = payload["date_str"]
+    time_str = payload["time_str"]
+    write_snippets = payload["write_snippets"]
+    dry_run = payload["dry_run"]
+    snippet_targets: List[str] = result["target_files"]["snippets"]
+
+    for filename, items in snippets.items():
+        if not isinstance(items, list):
+            continue
+        valid = [str(item).strip() for item in items if isinstance(item, str) and str(item).strip()]
+        if not valid:
+            continue
+        result["snippet_files_seen"] += 1
+        result["snippet_items_seen"] += len(valid)
+        snippet_targets.append(_logical_snippet_target(str(filename)))
+        if not write_snippets or dry_run:
+            result["snippet_files_skipped"] += 1
+            continue
+        try:
+            written = soul_snippets.write_snippet_entry(
+                str(filename),
+                valid,
+                trigger=trigger,
+                date_str=date_str,
+                time_str=time_str,
+            )
+        except Exception as exc:
+            message = f"snippet write failed for {filename}: {exc}"
+            logger.warning("[notedb] %s", message)
+            if _fail_hard_enabled():
+                raise
+            result["status"] = "failed"
+            result["errors"].append(message)
+            result["snippet_files_skipped"] += 1
+            continue
+        if written:
+            result["snippet_files_written"] += 1
+            result["snippet_items_written"] += len(valid)
+        else:
+            result["snippet_files_skipped"] += 1
+
+
+def _run_journal_write_payload(payload: Dict[str, Any], result: Dict[str, Any], soul_snippets: Any) -> None:
+    journal = payload["journal"]
+    trigger = payload["trigger"]
+    date_str = payload["date_str"]
+    write_journal = payload["write_journal"]
+    dry_run = payload["dry_run"]
+    journal_targets: List[str] = result["target_files"]["journal"]
+
+    for filename, text in journal.items():
+        if not isinstance(text, str) or not text.strip():
+            continue
+        result["journal_files_seen"] += 1
+        journal_targets.append(_logical_journal_target(str(filename)))
+        if not write_journal or dry_run:
+            result["journal_files_skipped"] += 1
+            continue
+        try:
+            written = soul_snippets.write_journal_entry(
+                str(filename),
+                text.strip(),
+                trigger=trigger,
+                date_str=date_str,
+            )
+        except Exception as exc:
+            message = f"journal write failed for {filename}: {exc}"
+            logger.warning("[notedb] %s", message)
+            if _fail_hard_enabled():
+                raise
+            result["status"] = "failed"
+            result["errors"].append(message)
+            result["journal_files_skipped"] += 1
+            continue
+        if written:
+            result["journal_files_written"] += 1
+        else:
+            result["journal_files_skipped"] += 1
+
+
 def run_snippet_journal_write_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Persist extraction snippet/journal payloads through the EvolutionDB seam."""
     if not isinstance(payload, dict):
@@ -65,72 +148,18 @@ def run_snippet_journal_write_payload(payload: Dict[str, Any]) -> Dict[str, Any]
 
     from core.lifecycle import soul_snippets
 
-    snippet_targets: List[str] = result["target_files"]["snippets"]
-    journal_targets: List[str] = result["target_files"]["journal"]
-
-    for filename, items in snippets.items():
-        if not isinstance(items, list):
-            continue
-        valid = [str(item).strip() for item in items if isinstance(item, str) and str(item).strip()]
-        if not valid:
-            continue
-        result["snippet_files_seen"] += 1
-        result["snippet_items_seen"] += len(valid)
-        snippet_targets.append(_logical_snippet_target(str(filename)))
-        if not write_snippets or dry_run:
-            result["snippet_files_skipped"] += 1
-            continue
-        try:
-            written = soul_snippets.write_snippet_entry(
-                str(filename),
-                valid,
-                trigger=trigger,
-                date_str=date_str,
-                time_str=time_str,
-            )
-        except Exception as exc:
-            message = f"snippet write failed for {filename}: {exc}"
-            logger.warning("[notedb] %s", message)
-            if _fail_hard_enabled():
-                raise
-            result["status"] = "failed"
-            result["errors"].append(message)
-            result["snippet_files_skipped"] += 1
-            continue
-        if written:
-            result["snippet_files_written"] += 1
-            result["snippet_items_written"] += len(valid)
-        else:
-            result["snippet_files_skipped"] += 1
-
-    for filename, text in journal.items():
-        if not isinstance(text, str) or not text.strip():
-            continue
-        result["journal_files_seen"] += 1
-        journal_targets.append(_logical_journal_target(str(filename)))
-        if not write_journal or dry_run:
-            result["journal_files_skipped"] += 1
-            continue
-        try:
-            written = soul_snippets.write_journal_entry(
-                str(filename),
-                text.strip(),
-                trigger=trigger,
-                date_str=date_str,
-            )
-        except Exception as exc:
-            message = f"journal write failed for {filename}: {exc}"
-            logger.warning("[notedb] %s", message)
-            if _fail_hard_enabled():
-                raise
-            result["status"] = "failed"
-            result["errors"].append(message)
-            result["journal_files_skipped"] += 1
-            continue
-        if written:
-            result["journal_files_written"] += 1
-        else:
-            result["journal_files_skipped"] += 1
+    helper_payload = {
+        "snippets": snippets,
+        "journal": journal,
+        "trigger": trigger,
+        "date_str": date_str,
+        "time_str": time_str,
+        "write_snippets": write_snippets,
+        "write_journal": write_journal,
+        "dry_run": dry_run,
+    }
+    _run_snippet_write_payload(helper_payload, result, soul_snippets)
+    _run_journal_write_payload(helper_payload, result, soul_snippets)
 
     return result
 
