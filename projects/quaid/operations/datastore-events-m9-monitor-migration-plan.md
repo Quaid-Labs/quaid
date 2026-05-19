@@ -238,3 +238,5 @@ M9 is ready to hand off to M10 only when:
 - W6 confirms the series did not accumulate a B032-style symptom chain
 - `evolutiondb` remains only a canonical datastore id/planning name until the
   dedicated M10 runtime rename starts
+- M10 runtime rename planning starts in
+  `projects/quaid/operations/datastore-events-m10-evolutiondb-rename-plan.md`
