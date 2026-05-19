@@ -672,6 +672,54 @@ describe("QuaidFacade", () => {
     await rm(workspace, { recursive: true, force: true });
   });
 
+  it("processLifecycleEvent emits timeout through existing events path", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "quaid-facade-timeout-lifecycle-"));
+    const transcriptPath = path.join(workspace, "timeout-session.jsonl");
+    await writeFile(transcriptPath, '{"role":"user","content":"timeout transcript"}\n', "utf8");
+    const execEvents = vi.fn(async () => '{"status":"acknowledged","event":"session.timeout"}');
+    const facade = createQuaidFacade(makeMockDeps({ execEvents }));
+
+    const result = await facade.processLifecycleEvent(
+      {
+        label: "TimeoutSignal",
+        source: "system_notice",
+        signature: "system:timeout",
+        messageIndex: 5,
+      },
+      {
+        sessionId: "sess-timeout",
+        transcriptPath,
+        timeoutSource: "idle_timer",
+        reason: "idle_timeout",
+        adapter: "openclaw",
+        source: "facade-test",
+      },
+    );
+
+    expect(result).toEqual({ status: "acknowledged", event: "session.timeout" });
+    expect(execEvents).toHaveBeenCalledTimes(1);
+    const args = execEvents.mock.calls[0][1];
+    expect(execEvents).toHaveBeenCalledWith(
+      "emit",
+      expect.arrayContaining(["--name", "session.timeout", "--dispatch", "immediate"]),
+    );
+    const payload = JSON.parse(String(args[args.indexOf("--payload") + 1]));
+    expect(payload).toEqual({
+      session_id: "sess-timeout",
+      transcript_path: transcriptPath,
+      lifecycle_signal_label: "TimeoutSignal",
+      lifecycle_signal_source: "system_notice",
+      lifecycle_signal_signature: "system:timeout",
+      lifecycle_message_index: 5,
+      reason: "idle_timeout",
+      adapter: "openclaw",
+      source: "facade-test",
+      timeout_source: "idle_timer",
+    });
+    expect(JSON.stringify(payload)).not.toContain("timeout transcript");
+    await rm(workspace, { recursive: true, force: true });
+  });
+
   it("processLifecycleEvent rejects live transcript reset inputs without emitting", async () => {
     const workspace = await mkdtemp(path.join(tmpdir(), "quaid-facade-reset-live-only-"));
     const liveTranscriptPath = path.join(workspace, "live-session.jsonl");
@@ -708,14 +756,50 @@ describe("QuaidFacade", () => {
     await rm(workspace, { recursive: true, force: true });
   });
 
+  it("processLifecycleEvent rejects reset transcript timeout inputs without emitting", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "quaid-facade-timeout-reset-only-"));
+    const resetTranscriptPath = path.join(workspace, "reset-snapshot.jsonl");
+    await writeFile(resetTranscriptPath, '{"role":"user","content":"reset snapshot"}\n', "utf8");
+    const execEvents = vi.fn(async () => '{"status":"unexpected"}');
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const facade = createQuaidFacade(makeMockDeps({ execEvents }));
+
+    await expect(
+      facade.processLifecycleEvent(
+        { label: "TimeoutSignal", source: "hook", signature: "hook:timeout" },
+        { sessionId: "sess-timeout", resetTranscriptPath },
+      ),
+    ).resolves.toEqual({
+      status: "ignored",
+      event_emitted: false,
+      reason: "missing_transcript_path",
+    });
+
+    const failHardFacade = createQuaidFacade(makeMockDeps({
+      execEvents,
+      isFailHardEnabled: vi.fn(() => true),
+    }));
+    await expect(
+      failHardFacade.processLifecycleEvent(
+        { label: "TimeoutSignal", source: "hook", signature: "hook:timeout" },
+        { sessionId: "sess-timeout", resetTranscriptPath },
+      ),
+    ).rejects.toThrow("requires context.transcriptPath");
+
+    expect(execEvents).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("requires context.transcriptPath"));
+    warn.mockRestore();
+    await rm(workspace, { recursive: true, force: true });
+  });
+
   it("processLifecycleEvent no-ops invalid inputs without emitting under fail-soft", async () => {
     const execEvents = vi.fn(async () => '{"status":"unexpected"}');
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const facade = createQuaidFacade(makeMockDeps({ execEvents }));
 
     await expect(
-      facade.processLifecycleEvent({ label: "TimeoutSignal", source: "hook", signature: "hook:timeout" }, {
-        sessionId: "sess-timeout",
+      facade.processLifecycleEvent({ label: "AgentEndSignal", source: "hook", signature: "hook:agent-end" }, {
+        sessionId: "sess-agent-end",
         transcriptPath: "/tmp/session.jsonl",
       }),
     ).resolves.toEqual({
@@ -735,7 +819,7 @@ describe("QuaidFacade", () => {
     });
 
     expect(execEvents).not.toHaveBeenCalled();
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("does not support signal label TimeoutSignal"));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("does not support signal label AgentEndSignal"));
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("transcript path does not exist"));
     warn.mockRestore();
   });
@@ -785,6 +869,7 @@ describe("QuaidFacade", () => {
     const functionSource = source.slice(functionStart, functionEnd);
     expect(functionSource).toContain('emitRuntimeEvent("session.compaction", payload, "immediate")');
     expect(functionSource).toContain('emitRuntimeEvent("session.reset", payload, "immediate")');
+    expect(functionSource).toContain('emitRuntimeEvent("session.timeout", payload, "immediate")');
     expect(functionSource).not.toMatch(/write_signal|ensure_alive|start_daemon|stop_daemon|restart|subprocess|pidfile/);
 
     const resetStart = functionSource.indexOf('if (label === "ResetSignal")');
@@ -793,6 +878,13 @@ describe("QuaidFacade", () => {
     expect(resetSource).toContain("ctx.resetTranscriptPath || ctx.reset_transcript_path");
     expect(resetSource).toContain("reset_transcript_path");
     expect(resetSource).not.toMatch(/ctx\.transcriptPath|ctx\.transcript_path|ctx\.sessionFile|ctx\.session_file/);
+
+    const timeoutStart = functionSource.indexOf('if (label === "TimeoutSignal")');
+    const timeoutEnd = functionSource.indexOf('return emitRuntimeEvent("session.timeout", payload, "immediate")', timeoutStart);
+    const timeoutSource = functionSource.slice(timeoutStart, timeoutEnd);
+    expect(timeoutSource).toContain("ctx.transcriptPath || ctx.transcript_path || ctx.sessionFile || ctx.session_file");
+    expect(timeoutSource).toContain("transcript_path");
+    expect(timeoutSource).not.toMatch(/ctx\.resetTranscriptPath|ctx\.reset_transcript_path|reset_transcript_path/);
   });
 
   // -----------------------------------------------------------------------
