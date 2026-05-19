@@ -2683,6 +2683,81 @@ class TestExtractFromTranscript:
         assert second_call["extraction_confidence"] == pytest.approx(0.6)
         assert second_call["provenance_confidence"] == pytest.approx(0.6)
 
+    def test_apply_extracted_payloads_delegates_memory_publish_through_memorydb_contract(self, monkeypatch):
+        import ingest.extract as extract_mod
+
+        seen = {}
+
+        def fake_publish(result, **kwargs):
+            seen["kwargs"] = kwargs
+            result["facts_stored"] = 1
+            result["facts_skipped"] = 0
+            result["edges_created"] = 0
+            result.setdefault("facts", []).append({
+                "text": "Maya moved the launch checklist into the red binder",
+                "status": "stored",
+                "edges": [],
+            })
+            return [{
+                "text": "Maya moved the launch checklist into the red binder",
+                "domains": ["project"],
+                "project": "launch-app",
+            }]
+
+        fake_enqueue = MagicMock(return_value={
+            "entries_seen": 1,
+            "entries_queued": 1,
+            "projects_queued": 1,
+            "queue_failures": 0,
+        })
+        monkeypatch.setattr(
+            "core.plugins.memorydb_contract.run_extraction_publish_payload",
+            fake_publish,
+        )
+        monkeypatch.setattr(extract_mod, "enqueue_project_logs", fake_enqueue)
+
+        payload = {
+            "raw_facts": [{
+                "text": "Maya moved the launch checklist into the red binder",
+                "category": "fact",
+                "speaker": "user",
+                "domains": ["project"],
+                "project": "launch-app",
+            }],
+            "raw_snippets": {"SOUL.md": ["Keep launch checklist references precise"]},
+            "raw_journal": {},
+            "raw_project_logs": {"launch-app": ["Moved launch checklist into red binder"]},
+            "facts": [],
+            "snippets": {},
+            "journal": {},
+            "project_logs": {},
+            "project_log_metrics": {},
+            "facts_stored": 0,
+            "facts_skipped": 0,
+            "edges_created": 0,
+            "dry_run": False,
+        }
+
+        applied = extract_mod.apply_extracted_payloads(
+            payload,
+            owner_id="test",
+            label="flush",
+            session_id="sess-contract",
+            write_snippets=False,
+            write_journal=False,
+            dry_run=False,
+        )
+
+        assert applied["facts_stored"] == 1
+        assert applied["snippets"]["SOUL.md"] == ["Keep launch checklist references precise"]
+        assert applied["project_logs"]["launch-app"] == ["Moved launch checklist into red binder"]
+        fake_enqueue.assert_called_once()
+        kwargs = seen["kwargs"]
+        assert kwargs["memory_service"] is extract_mod._memory
+        assert kwargs["session_bridge"] is extract_mod._session_bridge
+        assert kwargs["snippet_files"] == 1
+        assert kwargs["project_log_projects"] == 1
+
     @patch("ingest.extract._memory.store")
     def test_apply_extracted_payloads_collapses_exact_duplicate_fact_rows(self, mock_store):
         from ingest.extract import apply_extracted_payloads
@@ -2743,6 +2818,102 @@ class TestExtractFromTranscript:
         assert "created_at" not in call
         assert call["mentioned_at"] == "2026-03-12T23:59:59"
         assert sorted(call["domains"]) == ["health", "personal"]
+
+    @patch("ingest.extract._memory.store")
+    def test_apply_extracted_payloads_resolves_domain_policy_inside_memorydb_boundary(
+        self,
+        mock_store,
+        monkeypatch,
+    ):
+        from ingest.extract import apply_extracted_payloads
+
+        mock_store.return_value = {"id": "n-domain", "status": "created", "dedup_telemetry": {}}
+        monkeypatch.setattr(
+            "datastore.memorydb.extraction_publish.get_config",
+            lambda: SimpleNamespace(retrieval=SimpleNamespace(domains={"personal": "Personal facts"})),
+        )
+
+        payload = {
+            "raw_facts": [{
+                "text": "Maya prefers jasmine tea in the morning",
+                "category": "fact",
+                "speaker": "user",
+                "domains": ["personal"],
+                "extraction_confidence": "high",
+            }],
+            "raw_snippets": {},
+            "raw_journal": {},
+            "raw_project_logs": {},
+            "facts": [],
+            "snippets": {},
+            "journal": {},
+            "project_logs": {},
+            "project_log_metrics": {},
+            "facts_stored": 0,
+            "facts_skipped": 0,
+            "edges_created": 0,
+            "dry_run": False,
+        }
+
+        applied = apply_extracted_payloads(
+            payload,
+            owner_id="test",
+            label="flush",
+            session_id="sess-domain",
+            dry_run=False,
+            allowed_domains={"project"},
+        )
+
+        assert applied["facts_stored"] == 1
+        assert applied["facts_skipped"] == 0
+        assert mock_store.call_args.kwargs["domains"] == ["personal"]
+
+    @patch("ingest.extract.is_fail_hard_enabled", return_value=True)
+    @patch("ingest.extract._memory.store")
+    def test_apply_extracted_payloads_raises_on_domain_policy_failure_under_failhard(
+        self,
+        mock_store,
+        _mock_failhard,
+        monkeypatch,
+    ):
+        from ingest.extract import apply_extracted_payloads
+
+        monkeypatch.setattr(
+            "datastore.memorydb.extraction_publish.get_config",
+            lambda: (_ for _ in ()).throw(RuntimeError("config unavailable")),
+        )
+
+        payload = {
+            "raw_facts": [{
+                "text": "Maya prefers jasmine tea in the morning",
+                "category": "fact",
+                "speaker": "user",
+                "domains": ["personal"],
+                "extraction_confidence": "high",
+            }],
+            "raw_snippets": {},
+            "raw_journal": {},
+            "raw_project_logs": {},
+            "facts": [],
+            "snippets": {},
+            "journal": {},
+            "project_logs": {},
+            "project_log_metrics": {},
+            "facts_stored": 0,
+            "facts_skipped": 0,
+            "edges_created": 0,
+            "dry_run": False,
+        }
+
+        with pytest.raises(RuntimeError, match="Failed to resolve MemoryDB extraction publish domains"):
+            apply_extracted_payloads(
+                payload,
+                owner_id="test",
+                label="flush",
+                session_id="sess-domain-failhard",
+                dry_run=False,
+            )
+        mock_store.assert_not_called()
 
     @patch("ingest.extract._memory.store")
     def test_apply_extracted_payloads_passes_temporal_provenance_to_store(self, mock_store):

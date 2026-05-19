@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 from core.contracts.plugin_contract import PluginContractBase
 from core.runtime.plugins import PluginHookContext
@@ -66,6 +66,13 @@ def handle_session_ingest_log_request(event: Dict[str, Any]) -> Dict[str, Any]:
     """Handle synchronous session transcript ingest through MemoryDB ownership."""
     payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
     return run_session_ingest_payload(payload)
+
+
+def run_extraction_publish_payload(result: Dict[str, Any], **kwargs: Any) -> List[Dict[str, Any]]:
+    """Publish extracted fact/source evidence through MemoryDB ownership."""
+    from datastore.memorydb.extraction_publish import run_extraction_publish_payload as _run
+
+    return _run(result, **kwargs)
 
 
 def register_session_ingest_log_request_handler() -> None:
