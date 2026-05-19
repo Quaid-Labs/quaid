@@ -1,6 +1,6 @@
 # Datastore Events M10 EvolutionDB Runtime Rename Plan
 
-Status: draft plan; no runtime implementation
+Status: Slice 1 closed; Slice 2 contract-module rename planned, no Slice 2 runtime implementation yet
 Owner: W1 runtime/datastore, W3 recall and identity-context review
 Plan source: `projects/quaid/operations/datastore-events-m9-monitor-migration-plan.md`
 
@@ -17,7 +17,8 @@ Do not implement runtime code for M10 until:
    registry tests, journal/snippet tests, janitor lifecycle tests, and
    extraction orchestration tests.
 
-This document is planning only. It does not approve runtime code.
+This document records completed M10 Slice 1 work and plans later slices. It does
+not approve Slice 2 runtime code until the Slice 2 plan has W3/W6/W8 review.
 
 ## Goal
 
@@ -35,6 +36,34 @@ Current state after M9:
 The rename should reduce naming drift without changing visible snippet/journal
 behavior, journal recall behavior, maintenance scheduling, file paths, or event
 contracts.
+
+## M10 Closure Status
+
+Slice 1: compatibility package and import seam is closed at:
+
+- `6727d8457` `refactor(datastore): make EvolutionDB runtime package canonical`
+- `211d16b40` `fix(datastore): route lifecycle writes through EvolutionDB facade`
+
+Slice 1 validation:
+
+- W4 live/source-proof PASS on R201
+- W3 recall/identity-context APPROVED/no findings
+- W6 APPROVED after the facade-boundary follow-up
+- W8 static PASS and runtime HOLD closed
+
+Current state after Slice 1:
+
+- `datastore.evolutiondb.soul_snippets` is the canonical implementation module.
+- `datastore.notedb.soul_snippets` remains a pure `sys.modules` alias shim to
+  the canonical module for installed alpha compatibility.
+- `core.lifecycle.soul_snippets`, `core.lifecycle.datastore_runtime`, janitor
+  lifecycle registration, datastore manifest metadata, and contract descriptor
+  strings point at `datastore.evolutiondb`.
+- `core.plugins.notedb_contract` and `notedb.core` are intentionally unchanged
+  until Slice 2.
+
+Slice 2 is not implemented. It requires its own W3/W6/W8-reviewed plan before
+runtime code lands.
 
 ## Current Boundary
 
@@ -93,23 +122,20 @@ Shim owner and removal condition:
 After the runtime package exists, decide whether to rename
 `core.plugins.notedb_contract` to `core.plugins.evolutiondb_contract`.
 
-Do not combine this decision with Slice 1 unless W6 confirms the import surface
-is small enough to review safely.
+Selected Slice 2 direction:
 
-If renamed:
-
-- keep a compatibility wrapper for `core.plugins.notedb_contract` until all
-  internal imports and tests are migrated
-- update contract handler specs to the canonical module path
-- preserve request handler registration behavior and result envelopes
-- keep event names unchanged
-
-If not renamed in M10:
-
-- document why the contract module intentionally stays aligned with the legacy
-  runtime package name for another milestone
-- add tests pinning that the canonical datastore id remains `evolutiondb`
-  despite the contract module name
+- rename the canonical contract implementation to
+  `core.plugins.evolutiondb_contract`
+- keep `core.plugins.notedb_contract` as a pure compatibility alias module for
+  installed alpha imports and existing tests during the compatibility window
+- update internal producers, handler specs, and plugin manifest module metadata
+  to `core.plugins.evolutiondb_contract`
+- keep plugin id `notedb.core` unchanged in this slice unless a separately
+  reviewed plugin-id compatibility plan approves changing it
+- preserve request handler registration behavior, result envelopes, and event
+  names
+- add tests proving legacy `core.plugins.notedb_contract` imports alias the
+  canonical contract module by identity, not only equivalent behavior
 
 ### Slice 3: Alias Retirement Planning Only
 
@@ -209,8 +235,9 @@ W4 should smoke runtime code only after W3/W6/W8 review:
 
 ## Deferred Decisions
 
-- exact timing for renaming `core.plugins.notedb_contract`
+- exact timing for renaming plugin id `notedb.core`
 - removal date for the `datastore.notedb` compatibility shim
+- removal date for the `core.plugins.notedb_contract` compatibility shim
 - whether release notes are needed for alpha users
 - whether `.ego` import/export should reference `evolutiondb` names in a later
   product milestone
