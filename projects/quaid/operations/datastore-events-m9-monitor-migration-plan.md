@@ -119,6 +119,11 @@ it under the existing source-window output policy. MemoryDB `session_chunks`
 selector ownership remains unchanged, and SessionDB/source-window selector
 ownership remains deferred.
 
+M20 now tracks SessionDB lifecycle observation metadata for ack-only lifecycle
+events in `projects/quaid/operations/datastore-events-m20-sessiondb-lifecycle-metadata-plan.md`;
+lifecycle-triggered transcript ingest, daemon work, and lifecycle automation
+remain deferred.
+
 ## Shared Rules For Every M9 Slice
 
 - One write path family per sub-milestone.

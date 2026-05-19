@@ -217,7 +217,8 @@ code lands after this plan:
   closed in M17 at `93b3561f5`
 - whether SessionDB should expose dedicated request handlers beyond generic
   metadata/maintenance surfaces
-- lifecycle persistence for ack-only lifecycle events
+- lifecycle persistence for ack-only lifecycle events is tracked as M20 in
+  `projects/quaid/operations/datastore-events-m20-sessiondb-lifecycle-metadata-plan.md`
 - source-window metadata enrichment and selector ownership
 - whether direct request mode should ever become the extraction default
 - whether hidden CLI request-mode flags should ever become public
