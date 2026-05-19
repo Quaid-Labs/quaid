@@ -178,14 +178,38 @@ def rotate_project_logs(projects_dir: Path, **kwargs) -> int:
     if not projects_dir.is_dir():
         return 0
 
+    from core.project_docs import project_update_lock
+    from lib.fail_policy import is_fail_hard_enabled
+
     total = 0
     for project_dir in sorted(projects_dir.iterdir()):
         if not project_dir.is_dir() or project_dir.name.startswith("."):
             continue
         log_file = project_dir / "PROJECT.log"
-        if log_file.is_file():
+        if not log_file.is_file():
+            continue
+
+        lock_cm = project_update_lock(project_dir.name, blocking=False)
+        try:
+            acquired = bool(lock_cm.__enter__())
+        except Exception as exc:
+            logger.warning("[log-rotation] failed acquiring project-docs lock for %s: %s", project_dir.name, exc)
+            if is_fail_hard_enabled():
+                raise
+            continue
+
+        exc_info = (None, None, None)
+        try:
+            if not acquired:
+                logger.info("[log-rotation] skipped locked project log: %s", log_file)
+                continue
             archived, _ = rotate_log_file(log_file, **kwargs)
             total += archived
+        except BaseException as exc:
+            exc_info = (type(exc), exc, exc.__traceback__)
+            raise
+        finally:
+            lock_cm.__exit__(*exc_info)
     return total
 
 

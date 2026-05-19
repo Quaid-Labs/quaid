@@ -1,7 +1,9 @@
 """Tests for core/log_rotation.py — token-budget-based log rotation."""
 
+import logging
 import os
 import sys
+from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
@@ -193,6 +195,110 @@ class TestRotateProjectLogs:
 
         total = rotate_project_logs(tmp_path, token_budget=50)
         assert total > 0
+
+    def test_uses_project_docs_lock_before_rotating(self, tmp_path, monkeypatch):
+        project = tmp_path / "proj-a"
+        project.mkdir()
+        log = project / "PROJECT.log"
+        log.write_text("- [2026-01-01T10:00:00] entry\n", encoding="utf-8")
+        lock_calls = []
+        rotated = []
+
+        @contextmanager
+        def fake_lock(name, *, blocking=True):
+            lock_calls.append((name, blocking))
+            yield True
+
+        def fake_rotate(path, **kwargs):
+            rotated.append((path, kwargs))
+            return 3, 1
+
+        monkeypatch.setattr("core.project_docs.project_update_lock", fake_lock)
+        monkeypatch.setattr("core.log_rotation.rotate_log_file", fake_rotate)
+
+        total = rotate_project_logs(tmp_path, token_budget=50)
+
+        assert total == 3
+        assert lock_calls == [("proj-a", False)]
+        assert rotated == [(log, {"token_budget": 50})]
+
+    def test_skips_locked_project_without_rewriting_log(self, tmp_path, monkeypatch, caplog):
+        from core import project_docs
+
+        caplog.set_level(logging.INFO, logger="core.log_rotation")
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        project = tmp_path / "projects" / "proj-a"
+        project.mkdir(parents=True)
+        log = project / "PROJECT.log"
+        original = "\n".join(
+            f"- [2026-01-{i+1:02d}T10:00:00] entry {i} with enough padding to rotate"
+            for i in range(20)
+        ) + "\n"
+        log.write_text(original, encoding="utf-8")
+
+        with project_docs.project_update_lock("proj-a", blocking=True) as acquired:
+            assert acquired is True
+            total = rotate_project_logs(tmp_path / "projects", token_budget=10)
+
+        assert total == 0
+        assert log.read_text(encoding="utf-8") == original
+        assert not (project / "log").exists()
+        assert "skipped locked project log" in caplog.text
+
+    def test_lock_acquire_failure_raises_under_fail_hard(self, tmp_path, monkeypatch):
+        project = tmp_path / "proj-a"
+        project.mkdir()
+        (project / "PROJECT.log").write_text("- [2026-01-01T10:00:00] entry\n", encoding="utf-8")
+
+        @contextmanager
+        def failing_lock(_name, *, blocking=True):
+            raise OSError("synthetic lock failure")
+            yield
+
+        monkeypatch.setattr("core.project_docs.project_update_lock", failing_lock)
+        monkeypatch.setattr("lib.fail_policy.is_fail_hard_enabled", lambda: True)
+        monkeypatch.setattr(
+            "core.log_rotation.rotate_log_file",
+            lambda *_args, **_kwargs: pytest.fail("rotate_log_file must not run after lock failure"),
+        )
+
+        with pytest.raises(OSError, match="synthetic lock failure"):
+            rotate_project_logs(tmp_path, token_budget=50)
+
+    def test_lock_acquire_failure_skips_under_fail_soft(self, tmp_path, monkeypatch, caplog):
+        project = tmp_path / "proj-a"
+        project.mkdir()
+        log = project / "PROJECT.log"
+        log.write_text("- [2026-01-01T10:00:00] entry\n", encoding="utf-8")
+
+        @contextmanager
+        def failing_lock(_name, *, blocking=True):
+            raise OSError("synthetic lock failure")
+            yield
+
+        monkeypatch.setattr("core.project_docs.project_update_lock", failing_lock)
+        monkeypatch.setattr("lib.fail_policy.is_fail_hard_enabled", lambda: False)
+        monkeypatch.setattr(
+            "core.log_rotation.rotate_log_file",
+            lambda *_args, **_kwargs: pytest.fail("rotate_log_file must not run after lock failure"),
+        )
+
+        assert rotate_project_logs(tmp_path, token_budget=50) == 0
+        assert log.read_text(encoding="utf-8") == "- [2026-01-01T10:00:00] entry\n"
+        assert "failed acquiring project-docs lock" in caplog.text
+
+    def test_rotation_failure_inside_lock_propagates(self, tmp_path, monkeypatch):
+        project = tmp_path / "proj-a"
+        project.mkdir()
+        (project / "PROJECT.log").write_text("- [2026-01-01T10:00:00] entry\n", encoding="utf-8")
+
+        def fail_rotate(*_args, **_kwargs):
+            raise RuntimeError("synthetic rotation failure")
+
+        monkeypatch.setattr("core.log_rotation.rotate_log_file", fail_rotate)
+
+        with pytest.raises(RuntimeError, match="synthetic rotation failure"):
+            rotate_project_logs(tmp_path, token_budget=50)
 
     def test_skips_hidden_dirs(self, tmp_path):
         hidden = tmp_path / ".hidden"
