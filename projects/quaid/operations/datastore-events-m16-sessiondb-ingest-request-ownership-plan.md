@@ -84,6 +84,10 @@ Implement one runtime ownership slice only:
    `transcript_chunks`, `message_pairs`, and `microchunks`. Do not add
    `message_pair_attachments`, recall selectors, or MemoryDB projection writes
    in this slice.
+   Runtime source proof before this addendum found no current
+   `message_pair_attachments` table or write path in
+   `datastore.sessiondb.session_store`; it is declarative future metadata, not a
+   store written by `run_session_logs_ingest()` today.
 7. Keep MemoryDB manifest `capabilities.recall` including `session_chunks` and
    keep MemoryDB manifest `capabilities.writes` including `session_chunks`.
 8. Update `core.extraction_daemon._request_session_logs_ingest()` to import the
@@ -96,6 +100,14 @@ Implement one runtime ownership slice only:
     compatibility wrappers only. They must delegate to the SessionDB handler and
     registrar; they must not register `session.ingest_log.request.v1` under
     datastore id `memorydb` after this slice.
+    Wrapper shape: each MemoryDB compatibility wrapper is a distinct
+    function-level wrapper that imports and calls the corresponding
+    `core.plugins.sessiondb_contract` handler or registrar. Do not re-export the
+    SessionDB symbols by identity. Monkeypatches on either module affect only
+    that module's symbol.
+    Wrapper logging policy: MemoryDB compatibility wrappers are silent. They do
+    not emit deprecation, info, or warning logs on call; their purpose is
+    module-import-path compatibility only.
 11. Preserve active `session.ingest_log` behavior exactly. Do not change
     `core.runtime.events._handle_session_ingest_log()` in this slice; it may keep
     importing through the MemoryDB helper wrapper.
