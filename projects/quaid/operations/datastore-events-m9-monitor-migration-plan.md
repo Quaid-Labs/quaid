@@ -123,6 +123,14 @@ Required validation:
 
 ## M9.4 Extraction Completed And Fact Batch Events
 
+Tracking doc: `datastore-events-m9-4-extraction-fact-plan.md`.
+
+Status:
+
+- Draft plan opened for W3/W6/W8 review.
+- Runtime implementation is not approved until the selected MemoryDB publish
+  slice is reviewed.
+
 Scope:
 
 - extraction completed/fact batch writes behind datastore listeners
