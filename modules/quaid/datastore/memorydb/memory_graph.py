@@ -8609,6 +8609,93 @@ def _compact_session_source_header(source_header: str, source_date: str = "") ->
     return first_line
 
 
+_SESSION_SOURCE_WINDOW_HEADER_REQUIRED_KEYS = (
+    "session_id",
+    "source_date",
+    "pair_id",
+    "microchunk_id",
+    "header_id",
+)
+
+
+def _session_source_window_header_id(session_id: Optional[str], source_date: Any) -> str:
+    sid = str(session_id or "").strip()
+    date_value = _date_part(source_date)
+    return f"{sid}:{date_value}" if sid and date_value else ""
+
+
+def _validate_session_source_window_header(raw: Any) -> Dict[str, str]:
+    if not isinstance(raw, dict):
+        raise ValueError("source_window_header must be a dict")
+    out: Dict[str, str] = {}
+    for key in _SESSION_SOURCE_WINDOW_HEADER_REQUIRED_KEYS:
+        value = raw.get(key)
+        if not isinstance(value, str):
+            raise ValueError(f"source_window_header.{key} must be a non-empty string")
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError(f"source_window_header.{key} must be a non-empty string")
+        out[key] = cleaned
+    source_date = _date_part(out["source_date"])
+    if not source_date:
+        raise ValueError("source_window_header.source_date must be an ISO date string")
+    out["source_date"] = source_date
+    expected_header_id = _session_source_window_header_id(out["session_id"], source_date)
+    if out["header_id"] != expected_header_id:
+        raise ValueError("source_window_header.header_id must be session_id:source_date")
+    return out
+
+
+def _session_window_source_date_header_row(
+    *,
+    source_date: Any,
+    session_id: Optional[str] = None,
+    pair_id: Optional[str] = None,
+    microchunk_id: Optional[str] = None,
+    header_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    date_value = _date_part(source_date)
+    if not date_value:
+        return None
+    header_text = f"source_date: {date_value}"
+    stable_header_id = str(header_id or "").strip() or _session_source_window_header_id(session_id, date_value)
+    return {
+        "chunk_id": f"{microchunk_id or pair_id or session_id or 'session'}:source_header",
+        "header_id": stable_header_id or None,
+        "text": header_text,
+        "token_count": int(_lib_estimate_tokens(header_text)),
+        "source_id": session_id,
+        "session_id": session_id,
+        "chunk_index": "context",
+        "chunk_kind": "session_source_header",
+        "message_pair_id": pair_id,
+        "microchunk_id": microchunk_id,
+        "created_at": None,
+        "source_date": date_value,
+        "source_type": "session_chunk",
+        "session_source_header": True,
+    }
+
+
+def _session_window_source_date_header_from_metadata(expanded: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    if "source_window_header" not in expanded:
+        return None
+    try:
+        header = _validate_session_source_window_header(expanded.get("source_window_header"))
+    except Exception as exc:
+        if _is_fail_hard_mode():
+            raise
+        logger.warning("Ignoring malformed SessionDB source_window_header metadata: %s", exc, exc_info=True)
+        return None
+    return _session_window_source_date_header_row(
+        source_date=header["source_date"],
+        session_id=header["session_id"],
+        pair_id=header["pair_id"],
+        microchunk_id=header["microchunk_id"],
+        header_id=header["header_id"],
+    )
+
+
 def _ensure_session_window_source_date_header(
     window: List[Dict[str, Any]],
     *,
@@ -8622,38 +8709,30 @@ def _ensure_session_window_source_date_header(
         return window
     if any(isinstance(item, dict) and item.get("session_source_header") for item in window):
         return window
-    header_text = f"source_date: {date_value}"
-    return [
-        {
-            "chunk_id": f"{microchunk_id or pair_id or session_id or 'session'}:source_header",
-            "text": header_text,
-            "token_count": int(_lib_estimate_tokens(header_text)),
-            "source_id": session_id,
-            "session_id": session_id,
-            "chunk_index": "context",
-            "chunk_kind": "session_source_header",
-            "message_pair_id": pair_id,
-            "microchunk_id": microchunk_id,
-            "created_at": None,
-            "source_date": date_value,
-            "source_type": "session_chunk",
-            "session_source_header": True,
-        },
-        *window,
-    ]
+    header_row = _session_window_source_date_header_row(
+        source_date=date_value,
+        session_id=session_id,
+        pair_id=pair_id,
+        microchunk_id=microchunk_id,
+    )
+    return [header_row, *window] if header_row else window
 
 
 def _sessiondb_bridge_expansion_window(expanded: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
     if not isinstance(expanded, dict):
         return []
     window: List[Dict[str, Any]] = []
+    source_window_header = _session_window_source_date_header_from_metadata(expanded)
+    if source_window_header is not None:
+        window.append(source_window_header)
     source_header = str(expanded.get("source_header") or "").strip()
-    if source_header:
+    if source_header and source_window_header is None:
         micro = expanded.get("microchunk") if isinstance(expanded.get("microchunk"), dict) else {}
         source_date = _date_part(expanded.get("source_date"))
         header_text = _compact_session_source_header(source_header, source_date)
         window.append({
             "chunk_id": f"{micro.get('microchunk_id') or 'session'}:source_header",
+            "header_id": _session_source_window_header_id(micro.get("session_id"), source_date) or None,
             "text": header_text,
             "token_count": int(_lib_estimate_tokens(header_text)),
             "source_id": micro.get("session_id"),
@@ -8772,6 +8851,10 @@ def _session_window_item_anchor_overlap(item: Dict[str, Any], query_terms: List[
 def _session_window_item_id(item: Dict[str, Any]) -> str:
     if not isinstance(item, dict):
         return ""
+    if item.get("session_source_header"):
+        header_id = str(item.get("header_id") or "").strip()
+        if header_id:
+            return header_id
     for key in ("chunk_id", "memory_chunk_id", "microchunk_id", "message_pair_id", "message_id"):
         value = str(item.get(key) or "").strip()
         if value:

@@ -741,7 +741,17 @@ def expand_microchunk(
             item.setdefault("source_date", source_day)
         for item in microchunk_window:
             item.setdefault("source_date", source_day)
-    return {
+    source_window_header = None
+    if source_day:
+        session_id = str(micro.get("session_id") or "")
+        source_window_header = {
+            "header_id": f"{session_id}:{source_day}",
+            "source_date": str(source_day),
+            "session_id": session_id,
+            "pair_id": str(micro.get("pair_id") or ""),
+            "microchunk_id": str(micro.get("microchunk_id") or ""),
+        }
+    result = {
         "microchunk": micro,
         "pair": pair,
         "window": window,
@@ -751,6 +761,9 @@ def expand_microchunk(
         "source_chunk": source_chunk_dict,
         "source_date": source_day,
     }
+    if source_window_header is not None:
+        result["source_window_header"] = source_window_header
+    return result
 
 
 def list_recent_sessions(limit: int = 5, owner_id: Optional[str] = None) -> List[Dict[str, Any]]:

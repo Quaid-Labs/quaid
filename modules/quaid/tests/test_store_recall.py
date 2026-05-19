@@ -16273,6 +16273,172 @@ class TestGraphFactClusterRecall:
         assert "Ari said the archive festival happened last year" in expanded[0]["text"]
         assert expanded[0]["source_date"] == "2023-07-17"
 
+    def test_sessiondb_bridge_source_window_header_metadata_matches_absent_fallback(self):
+        import datastore.memorydb.memory_graph as mg
+
+        class FakeGraph:
+            def get_source_chunk(self, chunk_id, **_kwargs):
+                return {
+                    "chunk_id": chunk_id,
+                    "microchunk_id": "micro-center",
+                    "source_id": "transcript-1",
+                    "session_id": "session-1",
+                    "message_pair_id": "pair-center",
+                    "chunk_index": 12,
+                    "created_at": "2026-05-12T14:31:00+00:00",
+                    "source_date": "2023-07-17",
+                    "text": "Ari said the archive festival happened last year.",
+                }
+
+        def run_expansion(*, include_header):
+            def fake_expand(microchunk_id, *, owner_id, before, after):
+                expanded = {
+                    "microchunk": {
+                        "microchunk_id": microchunk_id,
+                        "memory_chunk_id": "source-center",
+                        "chunk_id": "parent-session",
+                        "session_id": "session-1",
+                        "pair_id": "pair-center",
+                        "microchunk_index": 12,
+                        "text": "Ari said the archive festival happened last year.",
+                    },
+                    "microchunk_window": [
+                        {
+                            "microchunk_id": microchunk_id,
+                            "memory_chunk_id": "source-center",
+                            "chunk_id": "parent-session",
+                            "session_id": "session-1",
+                            "pair_id": "pair-center",
+                            "microchunk_index": 12,
+                            "text": "Ari said the archive festival happened last year.",
+                        }
+                    ],
+                    "source_date": "2023-07-17",
+                }
+                if include_header:
+                    expanded["source_window_header"] = {
+                        "header_id": "session-1:2023-07-17",
+                        "source_date": "2023-07-17",
+                        "session_id": "session-1",
+                        "pair_id": "pair-center",
+                        "microchunk_id": microchunk_id,
+                    }
+                return expanded
+
+            rows = [{
+                "id": "source-center",
+                "category": "session_chunk",
+                "source_type": "session_chunk",
+                "via": "session_chunks",
+                "text": "Ari said the archive festival happened last year.",
+                "chunk_id": "source-center",
+                "session_chunk_id": "source-center",
+                "output_token_count": 8,
+            }]
+
+            with patch.object(mg, "get_graph", return_value=FakeGraph()), \
+                 patch.object(mg, "_sessiondb_bridge_expand_microchunk", side_effect=fake_expand):
+                expanded, meta = mg._expand_selected_session_chunk_rows(
+                    rows,
+                    owner_id="ari",
+                    max_chunk_tokens=80,
+                    max_total_chunk_tokens=240,
+                    before=1,
+                    after=1,
+                    query="When did Ari archive festival happen?",
+                )
+            assert meta["expanded"] == 1
+            return expanded[0]
+
+        enriched = run_expansion(include_header=True)
+        fallback = run_expansion(include_header=False)
+
+        assert enriched["text"] == fallback["text"]
+        assert enriched["source_date"] == fallback["source_date"] == "2023-07-17"
+        assert enriched["session_source_header"] is True
+        assert fallback["session_source_header"] is True
+        assert enriched["session_window_chunk_ids"] == fallback["session_window_chunk_ids"]
+        assert enriched["session_window_size"] == fallback["session_window_size"]
+        assert "source_date: 2023-07-17" in enriched["text"]
+
+    def test_sessiondb_bridge_malformed_source_window_header_respects_failhard(self, caplog):
+        import datastore.memorydb.memory_graph as mg
+
+        class FakeGraph:
+            def get_source_chunk(self, chunk_id, **_kwargs):
+                return {
+                    "chunk_id": chunk_id,
+                    "microchunk_id": "micro-center",
+                    "source_id": "transcript-1",
+                    "session_id": "session-1",
+                    "message_pair_id": "pair-center",
+                    "chunk_index": 12,
+                    "source_date": "2023-07-17",
+                    "text": "Ari said the archive festival happened last year.",
+                }
+
+        def fake_expand(microchunk_id, *, owner_id, before, after):
+            return {
+                "microchunk": {
+                    "microchunk_id": microchunk_id,
+                    "memory_chunk_id": "source-center",
+                    "chunk_id": "parent-session",
+                    "session_id": "session-1",
+                    "pair_id": "pair-center",
+                    "microchunk_index": 12,
+                    "text": "Ari said the archive festival happened last year.",
+                },
+                "source_window_header": {
+                    "header_id": "session-1:2023-07-17",
+                    "session_id": "session-1",
+                    "pair_id": "pair-center",
+                    "microchunk_id": microchunk_id,
+                },
+            }
+
+        rows = [{
+            "id": "source-center",
+            "category": "session_chunk",
+            "source_type": "session_chunk",
+            "via": "session_chunks",
+            "text": "Ari said the archive festival happened last year.",
+            "chunk_id": "source-center",
+            "session_chunk_id": "source-center",
+            "output_token_count": 8,
+        }]
+
+        with patch.object(mg, "get_graph", return_value=FakeGraph()), \
+             patch.object(mg, "_sessiondb_bridge_expand_microchunk", side_effect=fake_expand), \
+             patch.object(mg, "_is_fail_hard_mode", return_value=True):
+            with pytest.raises(ValueError, match="source_window_header.source_date"):
+                mg._expand_selected_session_chunk_rows(
+                    rows,
+                    owner_id="ari",
+                    max_chunk_tokens=80,
+                    max_total_chunk_tokens=240,
+                    before=1,
+                    after=1,
+                    query="When did Ari archive festival happen?",
+                )
+
+        with patch.object(mg, "get_graph", return_value=FakeGraph()), \
+             patch.object(mg, "_sessiondb_bridge_expand_microchunk", side_effect=fake_expand), \
+             patch.object(mg, "_is_fail_hard_mode", return_value=False), \
+             caplog.at_level("WARNING"):
+            expanded, meta = mg._expand_selected_session_chunk_rows(
+                rows,
+                owner_id="ari",
+                max_chunk_tokens=80,
+                max_total_chunk_tokens=240,
+                before=1,
+                after=1,
+                query="When did Ari archive festival happen?",
+            )
+
+        assert meta["expanded"] == 1
+        assert "source_date: 2023-07-17" in expanded[0]["text"]
+        assert any("Ignoring malformed SessionDB source_window_header metadata" in rec.message for rec in caplog.records)
+
     def test_sessiondb_bridge_expansion_does_not_treat_created_at_as_source_date(self):
         import datastore.memorydb.memory_graph as mg
 

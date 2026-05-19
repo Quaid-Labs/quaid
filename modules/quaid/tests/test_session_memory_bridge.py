@@ -189,7 +189,16 @@ def test_bridge_projects_sessiondb_microchunks_to_memorydb(monkeypatch, tmp_path
     expanded = bridge.expand_microchunk(rows[0]["microchunk_id"], owner_id="owner-bridge", after=1)
     assert expanded["pair"]["pair_id"] == rows[0]["message_pair_id"]
     assert expanded["source_date"] == "2023-06-09"
+    assert expanded["source_window_header"] == {
+        "header_id": "sess-bridge:2023-06-09",
+        "source_date": "2023-06-09",
+        "session_id": "sess-bridge",
+        "pair_id": rows[0]["message_pair_id"],
+        "microchunk_id": rows[0]["microchunk_id"],
+    }
     assert expanded["window"]
+    assert all(not row.get("session_source_header") for row in expanded["window"])
+    assert all(not row.get("session_source_header") for row in expanded["microchunk_window"])
 
 
 def test_expand_microchunk_returns_compact_local_microchunk_window(monkeypatch, tmp_path):
