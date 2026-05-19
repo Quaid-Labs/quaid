@@ -171,8 +171,11 @@ closed at `a4a4d4238`: facade `processLifecycleEvent()` may emit only
 `session.compaction` for explicit `CompactionSignal` inputs with concrete session
 id and existing transcript path through the existing `emitEvent`/`execEvents`
 immediate path, while M26 remains the daemon compaction signal writer and M28
-remains the daemon wake owner. Reset, timeout, agent-end emitter wiring,
-OpenClaw hook migration, daemon restart/stop automation, and
+remains the daemon wake owner. M30 now tracks the reset facade lifecycle emitter
+in `projects/quaid/operations/datastore-events-m30-reset-facade-lifecycle-emitter-plan.md`:
+the selected plan requires an explicit reset-preserved transcript path and does
+not approve live transcript path reset queueing. Timeout, agent-end emitter
+wiring, OpenClaw hook migration, daemon restart/stop automation, and
 recall/source-window policy changes remain deferred.
 
 ## Shared Rules For Every M9 Slice

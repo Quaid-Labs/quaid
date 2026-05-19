@@ -243,7 +243,10 @@ narrow facade compaction emitter smoke:
 
 ## Deferred Decisions
 
-- reset lifecycle facade emitter with explicit `payload.reset_transcript_path`
+- reset facade lifecycle emitter is tracked as M30 in
+  `projects/quaid/operations/datastore-events-m30-reset-facade-lifecycle-emitter-plan.md`;
+  it must require explicit reset-preserved transcript path discipline and must
+  not infer reset evidence from live transcript paths
 - timeout lifecycle facade emitter
 - agent-end lifecycle facade emitter
 - OpenClaw hook migration to facade lifecycle emitters
