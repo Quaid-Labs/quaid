@@ -1,6 +1,6 @@
 # Datastore Events M16 SessionDB Ingest Request Ownership Plan
 
-Status: draft plan; no runtime implementation yet
+Status: runtime ownership slice complete; lifecycle/source-window decisions deferred
 Owner: W1 runtime/datastore, W3 recall and source-window review
 Plan source: `projects/quaid/operations/datastore-events-m15-sessiondb-ingest-helper-plan.md`
 
@@ -17,24 +17,24 @@ Do not implement runtime code for M16 until:
    manifests/contracts, extraction-daemon request validation, session memory
    bridge, source-window expansion, and boundary checks.
 
-This document selects a request-ownership move only. It does not approve changing
-active `session.ingest_log` delivery, adding new event names, changing request
-payload or result envelopes, adding recall selectors to SessionDB, changing
-MemoryDB `session_chunks` projection ownership, changing source-window behavior,
-lifecycle persistence, data migration, CLI behavior, default request routing,
-public push, or release actions.
+This document records the completed request-ownership move only. It does not
+approve changing active `session.ingest_log` delivery, adding new event names,
+changing request payload or result envelopes, adding recall selectors to
+SessionDB, changing MemoryDB `session_chunks` projection ownership, changing
+source-window behavior, lifecycle persistence, data migration, CLI behavior,
+default request routing, public push, or release actions.
 
 ## Goal
 
-M16 addresses the post-M15 boundary mismatch where SessionDB owns the ingest
+M16 addressed the post-M15 boundary mismatch where SessionDB owns the ingest
 helper body, but `session.ingest_log.request.v1` is still declared and registered
-under MemoryDB. The selected slice moves only the existing request event's
+under MemoryDB. The selected slice moved only the existing request event's
 first-party ownership metadata and request-handler registration to SessionDB.
 
 This is not a new route, event, or envelope. Producers still emit the same
 `session.ingest_log.request.v1` event with the same payload. The handler still
 runs the M15 SessionDB helper and returns the same ingest result shape. The
-observable request broker response changes only in datastore ownership:
+observable request broker response changed only in datastore ownership:
 `datastore_id` becomes `sessiondb` instead of `memorydb`.
 
 MemoryDB continues to own the user-facing `session_chunks` recall selector and
@@ -63,7 +63,7 @@ Current post-M15 path:
 
 ## Selected First Slice: Request Ownership Move Only
 
-Implement one runtime ownership slice only:
+Implemented one runtime ownership slice only:
 
 1. Add `handle_session_ingest_log_request(event)` and
    `register_session_ingest_log_request_handler()` to
@@ -193,6 +193,80 @@ narrow session-ingest smoke:
   `session_chunks` evidence.
 - Active `session.ingest_log` behavior remains unchanged.
 - Source-window expansion for session evidence is unchanged.
+
+## Implementation Record
+
+Runtime ownership slice closed at `40ff6c8ed` (`refactor(datastore): move
+session ingest request to SessionDB`) with metadata/test follow-up `23c0e7228`
+(`test(datastore): align SessionDB ingest event metadata`).
+
+Implemented behavior:
+
+- Added `core.plugins.sessiondb_contract.handle_session_ingest_log_request()`
+  and `register_session_ingest_log_request_handler()`; the registrar registers
+  `session.ingest_log.request.v1` under datastore id `sessiondb`.
+- Moved `session.ingest_log.request.v1` from MemoryDB manifest/contract metadata
+  to SessionDB manifest/contract metadata.
+- Updated SessionDB `capabilities.writes` to the current transcript-store write
+  set: `sessions`, `transcript_chunks`, `message_pairs`, and `microchunks`.
+  `message_pair_attachments` remains declarative store metadata and is not in
+  writes.
+- Preserved MemoryDB `session_chunks` recall and write capability.
+- Updated `core.extraction_daemon._request_session_logs_ingest()` to import the
+  SessionDB registrar and validate exactly one `sessiondb` broker response.
+- Preserved `core.plugins.memorydb_contract` helper, handler, and registrar as
+  silent distinct compatibility wrappers that delegate to SessionDB; they do not
+  register a MemoryDB handler.
+- Left active `session.ingest_log` behavior unchanged; the active handler still
+  imports through the MemoryDB helper wrapper.
+- Updated the `session.ingest_log.request.v1` event registry description to
+  record SessionDB-owned transcript ingest with MemoryDB `session_chunks`
+  projection.
+- Did not change event name, payload schema, request/active result shape,
+  source-window behavior, recall ranking/planning, lifecycle persistence, daemon
+  signal shape, CLI behavior, default routing, or public release state.
+
+Tests added or preserved:
+
+- Manifest and contract ownership move: SessionDB declares the request event;
+  MemoryDB no longer declares it.
+- Capability split: SessionDB writes only current transcript stores and recall
+  remains `[]`; MemoryDB retains `session_chunks` recall/write capability.
+- SessionDB registrar ownership and MemoryDB compatibility wrapper delegation
+  without dual registration.
+- Request broker integration returns exactly one `sessiondb` response row with
+  unchanged result shape.
+- Extraction-daemon request validation rejects missing, malformed, failed, and
+  non-SessionDB responses without falling back to direct ingest.
+- Event capability metadata pins both SessionDB request ownership and MemoryDB
+  `session_chunks` projection.
+- Direct/request/active parity still writes SessionDB rows and MemoryDB
+  `session_chunks`; session-memory bridge, store-recall, and session-log lanes
+  continue to pass.
+
+Validation:
+
+- W4 R201 live/source-proof PASS on `40ff6c8ed`: SessionDB owns the request
+  handler; exactly one broker registration row exists; MemoryDB manifest and
+  contract no longer declare the request event; SessionDB manifest and contract
+  do; extraction daemon expects `sessiondb`; active `session.ingest_log` remains
+  unchanged; MemoryDB keeps `session_chunks`; prior M9.x/M10/M11/M12/M13/M14/M15
+  routes remain intact. W4 source-proofed the `23c0e7228` metadata follow-up
+  without requiring a fresh live smoke.
+- W3 runtime/recall APPROVED after `23c0e7228` closed the stale event-capability
+  description finding: MemoryDB retains `session_chunks` recall/write
+  projection, SessionDB recall remains `[]`, source-window/recall/ranking/planner
+  behavior is unchanged, and lifecycle/new-event/CLI/default-routing behavior is
+  unchanged.
+- W6 APPROVED with no concerns for both `40ff6c8ed` and `23c0e7228`: no dual
+  registration, no fallback to MemoryDB request registration, silent distinct
+  wrappers, capability split clean, no broad shared try/except, and no B-code
+  concerns introduced.
+- W8 static PASS/runtime HOLD closed for the corrected pair: focused session
+  ingest/event capability selectors, extraction-daemon request validation,
+  registry/contract lanes, affected runtime lane, adjacent session-memory/store
+  recall/session-log lane, py_compile, ruff, diff/docs checks, boundary check,
+  and unit wrapper all passed.
 
 ## Deferred Decisions
 
