@@ -131,6 +131,9 @@ Add or preserve focused tests proving:
 - Active `session.ingest_log` still calls
   `core.plugins.sessiondb_contract.run_session_ingest_payload()` directly and
   does not call `core.plugins.memorydb_contract.run_session_ingest_payload()`.
+  Preserve the M17 trip-wire pattern: monkeypatch
+  `core.plugins.memorydb_contract.run_session_ingest_payload()` to raise
+  `AssertionError` if invoked. The trip-wire must continue not to fire.
 - Missing `payload.session_id` still returns the same active failed envelope and
   does not call the helper.
 - Helper-returned `{"status": "failed"}` still produces the same handler-reported
@@ -141,9 +144,17 @@ Add or preserve focused tests proving:
   the exception text is recorded, and the event is not reported as processed.
 - Unexpected helper exceptions in failHard mode raise from `process_events()`
   with the original helper exception chained as `__cause__`.
+  Test the chain explicitly with `pytest.raises(...) as excinfo`, then assert
+  `excinfo.value.__cause__` is the original helper exception, or at minimum that
+  it is the same exception type and message raised by the helper.
 - Source assertions prove `_handle_session_ingest_log()` no longer contains a
   handler-local `except Exception` path and still does not import
   `run_session_logs_ingest()` directly.
+  Scope this source assertion to `_handle_session_ingest_log()` only, for
+  example with `inspect.getsource(events._handle_session_ingest_log)` or an
+  equivalent function-body slice. Do not assert `except Exception` is absent from
+  the whole `events.py` file because `process_events()` legitimately uses its
+  own event-level exception handler.
 - `session.ingest_log.request.v1` still registers under SessionDB and still
   returns exactly one SessionDB broker response row.
 - Active and request session ingest still write SessionDB rows and MemoryDB
