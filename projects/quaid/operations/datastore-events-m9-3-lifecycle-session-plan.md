@@ -280,6 +280,60 @@ tests assert:
 - `source_kind`
 - chunk/index counts supplied by the session-memory bridge result
 
+## Next Decision Point: Ack-Only Lifecycle Events
+
+The remaining M9.3 lifecycle events are currently ack-only active events:
+
+- `session.new`
+- `session.reset`
+- `session.compaction`
+- `session.timeout`
+- `session.agent_start`
+- `session.agent_end`
+
+Current implementation:
+
+- `core/runtime/events.py::_handle_session_lifecycle()` returns
+  `{"status": "acknowledged", "event": event.get("name")}`.
+- Adapter/native aliases such as `before_agent_start`, `agent_end`,
+  `session_end`, `before_compaction`, `before_reset`, and `command:new/reset`
+  canonicalize to the runtime event names before validation.
+- No current handler writes SessionDB, MemoryDB, or any other datastore state.
+
+Proposed disposition:
+
+- Do not add datastore persistence in the ack-only lifecycle slice unless W3/W6
+  first approve a concrete lifecycle persistence contract.
+- Treat the current ack-only handlers as core runtime dispatch acknowledgements,
+  not datastore write paths.
+- If product requirements later need durable lifecycle audit/session state,
+  plan that as a separate datastore-owned contract with explicit storage schema,
+  replay semantics, and W4 lifecycle milestone validation.
+
+Allowed next patch shape:
+
+- docs-only decision record that M9.3 session write migration is complete and
+  ack-only lifecycle events remain core-owned for now; or
+- test-only/runtime-no-op guard coverage pinning that lifecycle aliases,
+  delivery mode, and acknowledgement envelope remain unchanged.
+
+Non-targets:
+
+- no lifecycle datastore table or SessionDB manifest
+- no change to active delivery mode
+- no adapter delivery-surface changes
+- no change to reset/compaction/timeout side effects
+- no new persistence of transcript bodies, environment, credentials, or hook
+  payloads
+
+Required review before any runtime behavior change:
+
+- W3 if lifecycle persistence can affect recall/session evidence or
+  source-window behavior.
+- W6 for ownership and envelope semantics.
+- W4 for CC/CDX/OC lifecycle milestone smoke if runtime behavior changes.
+- W8 for full event/static lanes.
+
 ## Non-Targets
 
 - docs registration/index paths from M9.1 and M9.2

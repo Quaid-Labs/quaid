@@ -98,7 +98,9 @@ Tracking doc: `datastore-events-m9-3-lifecycle-session-plan.md`.
 Status:
 
 - First session-log ingest slice complete at `ce02408f2` + `e23dfc17f`.
-- W4 live PASS, W6 review, and W8 static closure recorded.
+- Active `session.ingest_log` follow-up complete at `7c2522ab5`.
+- W4 live PASS, W6 review, and W8 static/runtime closure recorded for both
+  session-log ingest slices.
 - Remaining lifecycle/session sub-slices require their own focused plan before
   runtime implementation.
 
