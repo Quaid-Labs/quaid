@@ -183,6 +183,25 @@ If removal is ever selected, it needs a separate plan covering:
 - release notes and operator impact
 - W4 installed-instance smoke from an older alpha state
 
+Readiness snapshot on 2026-05-19, after Slice 1 and Slice 2 closure:
+
+- Production imports have moved to canonical paths. Static grep shows
+  `core.plugins.notedb_contract` production references are limited to the
+  compatibility shim itself; `ingest.extract`, handler specs, and plugin
+  manifest module metadata point at `core.plugins.evolutiondb_contract`.
+- Runtime package compatibility remains intentionally active:
+  `datastore.notedb.soul_snippets` aliases
+  `datastore.evolutiondb.soul_snippets`, `datastore.notedb/plugin.json` still
+  carries plugin id `notedb.core`, and datastore manifest metadata retains
+  `runtime_aliases: ["notedb"]`.
+- Tests still intentionally exercise legacy import and monkeypatch paths to
+  prove installed-alpha compatibility. Those tests are evidence the shims are
+  still contractual, not dead code.
+- Alias retirement is not selected by this snapshot. Removal still requires the
+  operator-approved compatibility review described above, including installed
+  alpha homes, external scripts, planned `.ego` import/export surfaces,
+  release-note coverage, and W4 installed-upgrade smoke.
+
 ## Non-Targets
 
 - no snippet or journal markdown file path changes
