@@ -294,8 +294,9 @@ request-mode flags passed explicitly.
   user-facing flags
 - whether to consolidate the two extraction routing mode kwargs into a future
   routing options object
-- lifecycle persistence and SessionDB first-party manifest registration
-- source-window metadata enrichment
+- SessionDB first-party manifest metadata, tracked as M14 in
+  `projects/quaid/operations/datastore-events-m14-sessiondb-manifest-plan.md`
+- lifecycle persistence and source-window metadata enrichment
 - extraction producer routing through separate snippet/journal request events
   closed in M13 at `516732b88` + `9437788d`; default request routing remains
   deferred

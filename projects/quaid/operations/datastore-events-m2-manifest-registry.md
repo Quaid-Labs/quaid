@@ -51,6 +51,11 @@ Reason: the original migration plan covers memory/docs/evolution first. SessionD
 
 Revisit in a dedicated sessiondb/source-window slice. M4/M6 separated request-event recall capability selectors from datastore implementation ids without adding `sessiondb` as a first-party manifest.
 
+Post-M13 update: M14 now tracks a metadata-only SessionDB first-party manifest
+slice in `projects/quaid/operations/datastore-events-m14-sessiondb-manifest-plan.md`.
+That plan does not approve lifecycle persistence, `session.ingest_log` ownership
+changes, or source-window behavior changes.
+
 ## Manifest Fields
 
 Each manifest declares:

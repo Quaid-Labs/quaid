@@ -92,6 +92,11 @@ SessionDB remains unregistered as a first-party datastore in this slice. A
 dedicated source-window/ownership slice must review and approve any future
 SessionDB manifest registration.
 
+Post-M13 update: M14 now tracks a metadata-only SessionDB first-party manifest
+slice in `projects/quaid/operations/datastore-events-m14-sessiondb-manifest-plan.md`.
+The M14 plan keeps `session.ingest_log` ownership, lifecycle persistence, and
+source-window behavior out of scope unless a later reviewed slice selects them.
+
 ## First-Slice Validation
 
 Completed runtime:

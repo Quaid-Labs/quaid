@@ -83,6 +83,12 @@ snippet and journal request events and aggregates back into the existing
 `snippet_journal_metrics` shape. Default direct behavior and combined event
 compatibility remain unchanged.
 
+SessionDB first-party manifest metadata is now tracked as M14 in
+`projects/quaid/operations/datastore-events-m14-sessiondb-manifest-plan.md`.
+The selected M14 first slice is metadata-only; lifecycle persistence,
+source-window enrichment, and SessionDB ownership of `session.ingest_log`
+remain future-plan-gated.
+
 ## Shared Rules For Every M9 Slice
 
 - One write path family per sub-milestone.

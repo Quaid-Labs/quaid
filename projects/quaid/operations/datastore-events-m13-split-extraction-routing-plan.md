@@ -259,7 +259,8 @@ W4 should smoke runtime code only after W3/W6/W8 review:
 
 - whether direct request mode should ever become the default
 - whether hidden CLI request-mode flags should ever become public
-- lifecycle persistence and SessionDB first-party manifest registration
-- source-window metadata enrichment
+- SessionDB first-party manifest metadata, tracked as M14 in
+  `projects/quaid/operations/datastore-events-m14-sessiondb-manifest-plan.md`
+- lifecycle persistence and source-window metadata enrichment
 - compatibility-alias retirement and `notedb.core` plugin-id rename
 - `.ego` import/export integration

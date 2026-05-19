@@ -324,7 +324,8 @@ For the second event-surface slice, W4 should additionally smoke:
   requests closed in M13 at `516732b88` + `9437788d`
 - whether direct request mode should ever become the default
 - whether hidden CLI request-mode flags should ever become public
-- lifecycle persistence and SessionDB first-party manifest registration
-- source-window metadata enrichment
+- SessionDB first-party manifest metadata, tracked as M14 in
+  `projects/quaid/operations/datastore-events-m14-sessiondb-manifest-plan.md`
+- lifecycle persistence and source-window metadata enrichment
 - compatibility-alias retirement and `notedb.core` plugin-id rename
 - `.ego` import/export integration
