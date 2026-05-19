@@ -52,16 +52,15 @@ The selected M9 monitor-write migrations are complete:
 
 Deferred items are not M9 blockers unless separately selected by Solomon with a
 new reviewed plan: direct `extract_from_transcript()` / CLI request routing,
-project-log rotation/single-writer hardening, lifecycle persistence, SessionDB
-first-party manifest registration, source-window metadata enrichment,
-snippet/journal request splitting, `datastore.notedb` /
-`core.plugins.notedb_contract` compatibility-alias retirement, `notedb.core`
-plugin-id rename, and `.ego` integration. The `datastore.evolutiondb` runtime
-package and `core.plugins.evolutiondb_contract` module renames were completed in
-M10 Slice 1 and Slice 2. The extraction-side project-log queue ownership path is
-already implemented and tracked in
-`projects/quaid/operations/project-log-single-writer-plan.md`; the remaining
-project-log single-writer gap is `PROJECT.log` rotation.
+lifecycle persistence, SessionDB first-party manifest registration,
+source-window metadata enrichment, snippet/journal request splitting,
+`datastore.notedb` / `core.plugins.notedb_contract` compatibility-alias
+retirement, `notedb.core` plugin-id rename, and `.ego` integration. The
+`datastore.evolutiondb` runtime package and `core.plugins.evolutiondb_contract`
+module renames were completed in M10 Slice 1 and Slice 2. The extraction-side
+project-log queue ownership path and the `PROJECT.log` rotation lock hardening
+are implemented and tracked in
+`projects/quaid/operations/project-log-single-writer-plan.md`.
 
 Direct extraction request-mode routing is now tracked as M11 in
 `projects/quaid/operations/datastore-events-m11-direct-extraction-request-plan.md`.

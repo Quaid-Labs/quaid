@@ -211,7 +211,6 @@ W4 should smoke runtime code only after W3/W6/W8 review:
   operator/debug flags in a later reviewed slice
 - whether to consolidate the two extraction routing mode kwargs into a future
   routing options object
-- project-log rotation/single-writer hardening
 - lifecycle persistence and SessionDB first-party manifest registration
 - source-window metadata enrichment
 - snippet/journal request splitting

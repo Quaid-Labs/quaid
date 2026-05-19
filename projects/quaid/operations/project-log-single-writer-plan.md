@@ -1,6 +1,6 @@
 # PROJECT.log Single-Writer Plan
 
-Status: extraction queue path implemented; rotation follow-up pending
+Status: extraction queue and rotation lock paths implemented
 Owner: W1 runtime/project-system
 Last updated: 2026-05-19
 
@@ -37,11 +37,26 @@ Current source proof:
 - `datastore.docsdb.project_log_queue` owns durable file-per-item queue
   persistence and failHard queue-write behavior.
 
-Remaining explicit gap: `core.log_rotation.rotate_project_logs()` can still
-rewrite `PROJECT.log` outside the project-docs worker lock. That rotation path
-must be routed through the project-docs worker or guarded by the same
-`project_update_lock(project)` before this plan can be marked fully closed.
-This docs update does not approve or implement the rotation follow-up.
+Rotation follow-up:
+
+- `894fe7c56` selected the narrow runtime shape for the remaining
+  `PROJECT.log` rotation gap.
+- `19abcb42a` pinned lock semantics: basename-derived project name,
+  `project_update_lock(project, blocking=False)`, falsey acquired means
+  busy/skip, lock exceptions follow failHard policy, and the lock-acquire
+  try/except must not wrap `rotate_log_file()`.
+- `8bd4f9be7` implemented the runtime hardening: `rotate_project_logs()` now
+  acquires the project-docs lock before rewriting each visible `PROJECT.log`,
+  skips locked projects, preserves failHard behavior for unexpected lock
+  acquisition failures, and leaves generic `rotate_log_file()` plus
+  `rotate_journal_logs()` unchanged.
+- Validation recorded for the runtime follow-up: W4 live/source-proof PASS
+  with cross-process lock contention, W3 runtime/recall APPROVED, W6
+  APPROVED, and W8 static PASS.
+
+Remaining optional validation: a broader multi-adapter shared-project canary can
+still exercise CC/CDX/OC producers close together, but the selected runtime
+single-writer hardening is implemented and validated.
 
 ## Problem
 
@@ -323,7 +338,7 @@ Live validation:
 4. [x] Move extraction publish to queue project logs instead of direct append.
 5. [x] Make `append_project_logs()` monitor-owned by convention and tests for
    runtime producers.
-6. [ ] Route or lock log rotation.
+6. [x] Route or lock log rotation.
 7. [x] Add focused unit/integration tests for the queue and worker path.
-8. [ ] Run live multi-instance shared-project canary when the rotation
-   follow-up is selected.
+8. [ ] Run broader live multi-instance shared-project canary if selected as a
+   future validation exercise.
