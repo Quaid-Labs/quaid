@@ -1,6 +1,6 @@
 # Datastore Events M12 EvolutionDB Snippet Journal Split Plan
 
-Status: first helper-split runtime slice complete; separate request events deferred
+Status: first helper-split runtime slice complete; separate request-event surface planned
 Owner: W1 runtime/datastore, W3 recall and identity-context review
 Plan source: `projects/quaid/operations/datastore-events-m9-5-evolution-snippet-journal-plan.md`
 
@@ -22,10 +22,10 @@ Do not implement runtime code for M12 until:
 6. W8 confirms static coverage includes EvolutionDB helper tests, extraction
    request-mode tests, event/contract/manifest checks, and boundary checks.
 
-This document records the first helper-split runtime slice. It does not approve
-new request event names, daemon routing changes, default behavior changes,
-public CLI changes, alias retirement, plugin-id rename, or public push/release
-actions.
+This document records the first helper-split runtime slice and selects a second
+event-surface-only slice for review. It does not approve extraction producer
+routing changes, daemon routing changes, default behavior changes, public CLI
+changes, alias retirement, plugin-id rename, or public push/release actions.
 
 ## Goal
 
@@ -38,7 +38,8 @@ sub-helpers while preserving the public combined helper and combined request
 handler exactly.
 
 Later slices may consider separate request events only after the helper split is
-validated and reviewed.
+validated and reviewed. The next selected slice adds those event surfaces but
+does not route extraction producers through them yet.
 
 ## Current Boundary
 
@@ -124,13 +125,47 @@ files, errors, request envelopes, or event names.
 
 ## Future Request-Event Split
 
-Separate request events are not selected in the first slice.
+Separate request events were not selected in the first slice.
 
-If a later slice selects separate events, it needs a separate reviewed plan that
-covers:
+Selected second slice: add separate request event surfaces, but do not route
+extraction through them yet.
 
-- proposed event names and ownership, likely one snippet write request event and
-  one journal write request event under EvolutionDB ownership
+Implementation shape:
+
+- Add two new request event constants and registry entries:
+  - `evolution.snippet_write.request.v1`
+  - `evolution.journal_write.request.v1`
+- Register both events under EvolutionDB ownership with `delivery_mode:
+  request`, `fireable: true`, `processable: false`, and `listenable: true`.
+- Add both event names to the EvolutionDB manifest `request_handlers` list and
+  `EvolutionDbDatastoreContract.handler_specs`.
+- Add thin handlers in `core.plugins.evolutiondb_contract`, for example
+  `handle_snippet_write_request()` and `handle_journal_write_request()`, plus
+  explicit registration helpers.
+- Keep the existing combined handler and combined
+  `evolution.snippet_journal_write.request.v1` event unchanged.
+- The snippet handler accepts `source="extraction-apply-payloads"`, a `snippets`
+  object, shared trigger/date/time/write/dry-run metadata, and no non-empty
+  `journal` payload. It delegates through the public combined helper with
+  `journal` forced to `{}`.
+- The journal handler accepts `source="extraction-apply-payloads"`, a `journal`
+  object, shared trigger/date/write/dry-run metadata, and no non-empty
+  `snippets` payload. It delegates through the public combined helper with
+  `snippets` forced to `{}`.
+- Both new handlers return the same envelope shape as the combined handler:
+  `{status: "ok", snippet_journal_metrics: ...}`. The metrics object remains the
+  combined helper's existing shape, with the other write family counters at
+  zero.
+- Do not change `ingest.extract.apply_extracted_payloads()` in this slice.
+- Do not change `snippet_journal_write_mode`; request mode still sends one
+  combined `evolution.snippet_journal_write.request.v1` broker request.
+
+This slice creates explicit EvolutionDB request surfaces and tests their
+contracts, but it does not introduce partial-write producer behavior.
+
+If a later slice routes extraction through separate events, it needs a separate
+reviewed plan that covers:
+
 - whether extraction request mode sends one combined request or two ordered
   broker requests
 - how response validation preserves the existing additive
@@ -190,6 +225,25 @@ Focused tests should prove:
   one combined broker request and still refuses direct-helper fallback after
   broker or validator failure.
 
+For the second event-surface slice, focused tests should prove:
+
+- `evolution.snippet_write.request.v1` and
+  `evolution.journal_write.request.v1` are present in the runtime event
+  registry as request events.
+- EvolutionDB manifest and datastore contract metadata list both new request
+  handlers while retaining the combined request handler.
+- Each new handler registers under datastore id `evolutiondb`.
+- The snippet handler rejects a missing/wrong source, non-object `snippets`, and
+  any non-empty `journal` payload.
+- The journal handler rejects a missing/wrong source, non-object `journal`, and
+  any non-empty `snippets` payload.
+- The snippet handler returns `{status, snippet_journal_metrics}` with snippet
+  target files/counters populated and journal counters at zero.
+- The journal handler returns `{status, snippet_journal_metrics}` with journal
+  target files/counters populated and snippet counters at zero.
+- Existing `apply_extracted_payloads(snippet_journal_write_mode="request")`
+  tests still prove extraction sends only the combined event in this slice.
+
 ## W4 Smoke
 
 W4 should smoke runtime code only after W3/W6/W8 review:
@@ -205,9 +259,17 @@ W4 should smoke runtime code only after W3/W6/W8 review:
   EvolutionDB request, M10 compatibility aliases, and M11 CLI hidden flags remain
   healthy
 
+For the second event-surface slice, W4 should additionally smoke:
+
+- both separate request events are registered under EvolutionDB in the installed
+  environment
+- direct broker calls to the snippet-only and journal-only events return the
+  existing `snippet_journal_metrics` envelope
+- daemon/extraction request mode still uses the combined event, not the separate
+  events
+
 ## Deferred Decisions
 
-- whether to add separate snippet and journal request events
 - whether extraction should ever issue two ordered broker requests for snippet
   and journal writes
 - whether direct request mode should ever become the default
