@@ -1,6 +1,6 @@
 # Datastore Events Migration Inventory
 
-Status: M0 approved; M1-M9 milestone records now live in the adjacent
+Status: M0 approved; M1-M10 milestone records now live in the adjacent
 `datastore-events-m*.md` files. This inventory remains the baseline boundary
 snapshot, not the active implementation checklist.
 Owner: W1 runtime/datastore
@@ -251,10 +251,14 @@ Direct-write monitor paths to migrate in later milestones:
      `datastore-events-m6-routed-recall-capability-plan.md`, and
      `datastore-events-m6-memory-selector-plan.md`.
 
-3. `evolutiondb` is the canonical datastore id while the runtime module remains
+3. `evolutiondb` is the canonical datastore id while the M0 runtime module was
    `datastore.notedb`.
-   - Current disposition: M2 records `runtime_aliases: ["notedb"]`; runtime
-     package rename remains deferred to the dedicated rename milestone.
+   - Current disposition: M10 Slice 1 made `datastore.evolutiondb` canonical
+     with `datastore.notedb` as an installed-alpha compatibility alias. M10
+     Slice 2 made `core.plugins.evolutiondb_contract` canonical with
+     `core.plugins.notedb_contract` as the matching compatibility alias.
+     `notedb.core` plugin-id rename and alias removal remain separately
+     reviewed, operator-gated future work.
 
 ## Current Use
 
