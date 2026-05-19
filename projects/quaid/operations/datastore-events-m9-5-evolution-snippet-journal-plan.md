@@ -1,6 +1,6 @@
 # Datastore Events M9.5 Evolution Snippet Journal Plan
 
-Status: draft plan; no runtime implementation
+Status: first synchronous helper seam complete
 Owner: W1 runtime/datastore, W3 recall and identity-context review
 Plan source: `projects/quaid/operations/datastore-events-m9-monitor-migration-plan.md`
 
@@ -285,6 +285,40 @@ W4 should smoke the runtime patch only after W3/W6/W8 review:
 - identity/context lifecycle still reads the written content as before.
 - M9.2 DocsDB, M9.3 session ingest, and M9.4 MemoryDB extraction publish routes
   remain healthy.
+
+## First Runtime Slice Closure
+
+The synchronous EvolutionDB/NoteDB helper seam closed at:
+
+- `99a947426` `refactor(datastore): route snippet journal writes through EvolutionDB`
+- `7fd0771dc` `fix(datastore): keep EvolutionDB helper behind core seam`
+
+Implemented shape:
+
+- `core.plugins.notedb_contract.run_snippet_journal_write_payload()` is the
+  selected helper seam for extraction snippet/journal writes.
+- `ingest.extract.apply_extracted_payloads()` still owns orchestration and now
+  sends normalized `result["snippets"]` and `result["journal"]` through that
+  helper.
+- The helper calls `core.lifecycle.soul_snippets`, which preserves the
+  allowlisted core lifecycle seam to the existing `datastore.notedb`
+  implementation.
+- `core.lifecycle.soul_snippets` remains available for lifecycle/janitor callers.
+- No request event was added in this slice.
+- MemoryDB fact publish, DocsDB project-log queueing, lifecycle maintenance,
+  and journal recall behavior are unchanged.
+- `snippet_journal_metrics` is additive; existing extraction result keys and
+  side-effect ordering remain unchanged.
+
+Closure evidence:
+
+- W4 live PASS for `99a947426`; W4 source-proof PASS for `7fd0771dc`.
+- W3 recall/identity-context review PASS/no findings for the corrected pair.
+- W6 APPROVED-WITH-CONCERNS; governance clarifications were recorded in
+  `8e28a8d68`.
+- W8 static PASS and runtime hold close recorded for the pair after
+  `7fd0771dc` fixed the initial boundary-check hold.
+- W8 docs-gate PASS for `8e28a8d68`.
 
 ## Deferred Decisions
 

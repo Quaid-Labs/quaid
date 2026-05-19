@@ -163,8 +163,12 @@ Tracking doc: `datastore-events-m9-5-evolution-snippet-journal-plan.md`.
 Status:
 
 - Draft plan opened for EvolutionDB-owned snippet/journal write migration.
-- Runtime implementation is blocked pending W3/W6/W8 review of the focused
-  M9.5 plan.
+- First synchronous helper seam complete at `99a947426` + `7fd0771dc`, with
+  governance clarification recorded at `8e28a8d68`.
+- W4 live/source-proof PASS, W3 recall/identity-context PASS, W6
+  approved-with-concerns documented, and W8 static/runtime closure recorded.
+- Request-event routing for snippet/journal writes remains deferred to a
+  separate reviewed slice.
 
 Scope:
 
