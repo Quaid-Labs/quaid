@@ -1,18 +1,55 @@
 # PROJECT.log Single-Writer Plan
 
-Status: launch-blocking design plan
+Status: extraction queue path implemented; rotation follow-up pending
 Owner: W1 runtime/project-system
-Last updated: 2026-04-23
+Last updated: 2026-05-19
 
 Related plan: `projects/quaid/operations/project-docs-supervisor-plan.md`.
 
+## Implementation Record
+
+The extraction/project-docs-worker single-writer path is implemented on this
+branch:
+
+- `ed59ffc9b` added `datastore.docsdb.project_log_queue`, moved extraction
+  project-log side effects to durable queue writes, added queue-aware project
+  status, and drained queued items from the project-docs worker path.
+- `71be469ae` kept queue drain append-only by passing
+  `update_project_md=False` and `index_history=False` to the visible commit
+  primitive; the worker then reads `PROJECT.log` from the cursor and lets the
+  project-docs update path own `PROJECT.md` and indexing.
+- `986c299fd` routed extraction and worker access through the
+  `core.docs.updater` wrapper so ingest/core callers do not import the
+  datastore queue module directly.
+- `f845f1b98` materialized valid queued transcript-driven projects through the
+  project-docs monitor path and skipped deleted/reserved queued projects.
+- `90d0f03d1` kept project-log indexing behind the core project-docs boundary.
+
+Current source proof:
+
+- `ingest.extract.apply_extracted_payloads()` calls `enqueue_project_logs()`
+  after MemoryDB publish and snippet/journal writes, records queue metrics, and
+  does not claim visible `PROJECT.log` writes.
+- `core.project_docs.execute_update_once()` enters `project_update_lock()`,
+  calls `_commit_queued_project_logs()`, then reads `PROJECT.log` from the
+  stored cursor and routes the resulting project-log entries through the
+  DocsDB project-doc update request path.
+- `datastore.docsdb.project_log_queue` owns durable file-per-item queue
+  persistence and failHard queue-write behavior.
+
+Remaining explicit gap: `core.log_rotation.rotate_project_logs()` can still
+rewrite `PROJECT.log` outside the project-docs worker lock. That rotation path
+must be routed through the project-docs worker or guarded by the same
+`project_update_lock(project)` before this plan can be marked fully closed.
+This docs update does not approve or implement the rotation follow-up.
+
 ## Problem
 
-`PROJECT.log` and the `PROJECT.md` recent-log block can currently be written by
-multiple instance extraction daemons. Extraction publish routes through
-`ingest.extract.apply_extracted_payloads()`, which calls
-`core.docs.updater.append_project_logs()`, which immediately appends
-`PROJECT.log`, rewrites `PROJECT.md`, and indexes the log.
+At plan-open time, `PROJECT.log` and the `PROJECT.md` recent-log block could be
+written by multiple instance extraction daemons. Extraction publish routed
+through `ingest.extract.apply_extracted_payloads()`, which called
+`core.docs.updater.append_project_logs()`, immediately appended `PROJECT.log`,
+rewrote `PROJECT.md`, and indexed the log.
 
 That makes the write path unsafe for shared projects:
 
@@ -20,7 +57,7 @@ That makes the write path unsafe for shared projects:
 - `PROJECT.md` is a read-modify-write surface and can lose concurrent updates;
 - immediate indexing can race with another append or with the project-docs cursor;
 - the project-docs worker already has the correct per-project lock, but extraction
-  currently bypasses it.
+  bypassed it.
 
 The launch invariant is simple: visible project artifacts must have one writer
 per project.
@@ -45,13 +82,13 @@ extraction engine and digest the returned results.
 
 ## Queue Ownership
 
-Add a datastore-owned module:
+Implemented datastore-owned module:
 
 ```text
 modules/quaid/datastore/docsdb/project_log_queue.py
 ```
 
-Near-term APIs:
+Implemented APIs:
 
 ```python
 enqueue_project_logs(
@@ -132,7 +169,7 @@ Under `retrieval.fail_hard=true`, queue write failure raises. Under
 ## Project-Docs Worker Drain Flow
 
 The existing project-docs worker is already the right single-writer boundary.
-Update its flow so queue drain happens inside `project_update_lock(project)`.
+Its flow now drains the queue inside `project_update_lock(project)`.
 
 Worker update sequence:
 
@@ -176,8 +213,8 @@ The queue layer should not silently invent projects. It should either:
 
 ## Rotation And Other Writers
 
-`core/log_rotation.py` also mutates `PROJECT.log`. It must not remain a second
-visible writer.
+`core/log_rotation.py` still mutates `PROJECT.log`. It must not remain a second
+visible writer before this plan is fully closed.
 
 Launch-safe options:
 
@@ -230,11 +267,13 @@ Live validation:
 
 ## Implementation Checklist
 
-1. Add `datastore.docsdb.project_log_queue`.
-2. Add queue-aware project status.
-3. Add queue drain inside `project_docs.execute_update_once()`.
-4. Move extraction publish to queue project logs instead of direct append.
-5. Make `append_project_logs()` monitor-owned by convention and tests.
-6. Route or lock log rotation.
-7. Add focused unit/integration tests.
-8. Run live multi-instance shared-project canary.
+1. [x] Add `datastore.docsdb.project_log_queue`.
+2. [x] Add queue-aware project status.
+3. [x] Add queue drain inside `project_docs.execute_update_once()`.
+4. [x] Move extraction publish to queue project logs instead of direct append.
+5. [x] Make `append_project_logs()` monitor-owned by convention and tests for
+   runtime producers.
+6. [ ] Route or lock log rotation.
+7. [x] Add focused unit/integration tests for the queue and worker path.
+8. [ ] Run live multi-instance shared-project canary when the rotation
+   follow-up is selected.
