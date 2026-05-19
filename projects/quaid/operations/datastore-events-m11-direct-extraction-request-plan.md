@@ -65,13 +65,13 @@ Implementation shape:
 - Add explicit keyword arguments to `extract_from_transcript()`:
   - `memory_publish_mode: str = "direct"`
   - `snippet_journal_write_mode: str = "direct"`
+- Add those as explicit function parameters, not `**kwargs`, so static checks
+  and callers can see the contract and typos fail loudly.
 - Pass those values through to `apply_extracted_payloads()` unchanged.
 - Preserve the current default direct behavior for all existing Python callers.
-- Add CLI flags only if the runtime patch explicitly selects CLI coverage:
-  - `--memory-publish-mode {direct,request}`
-  - `--snippet-journal-write-mode {direct,request}`
-- If CLI flags are added, defaults must remain `direct` and help text must make
-  clear that request mode is an operator/debug routing option, not a new default.
+- Do not add CLI flags in the first runtime slice. CLI exposure is a separate
+  operator-facing surface and requires a follow-up reviewed plan/addendum before
+  runtime implementation.
 - Do not route direct extraction through request mode by environment sniffing,
   daemon detection, label matching, owner identity, or hidden global config.
 - Do not bypass `apply_extracted_payloads()`; it remains the orchestration
@@ -124,6 +124,10 @@ In every combination:
 - Request broker, handler, validator, MemoryDB write, and EvolutionDB write
   failures must not fall back to the synchronous helper after request mode is
   selected.
+- The request-mode primary path and synchronous helper path must not share a
+  `try`/`except` scope that could catch broker, handler, or validator failures
+  and fall through to direct-helper invocation. Each mode raises out of its own
+  branch.
 - Existing warn-before-raise validator discipline from M9.4/M9.5 must be
   preserved. New raise paths introduced by this slice must use the centralized
   warn-then-raise helper pattern when they surface runtime request failures.
@@ -151,9 +155,8 @@ Focused tests should prove:
   invoking the corresponding synchronous helper fallback.
 - Request/direct mode matrix preserves project-log queueing and
   `publish_complete` ordering.
-- CLI defaults remain direct if CLI flags are added.
-- CLI request flags route through the same explicit kwargs if CLI flags are
-  added.
+- CLI behavior remains unchanged because first-slice runtime must not add CLI
+  request-mode flags.
 - Existing daemon request-mode tests continue to pass unchanged.
 
 ## W4 Smoke
@@ -175,8 +178,8 @@ W4 should smoke runtime code only after W3/W6/W8 review:
 ## Deferred Decisions
 
 - whether direct request mode should ever become the default
-- whether CLI request-mode flags should be public user-facing flags, hidden
-  operator/debug flags, or omitted from the first runtime slice
+- whether CLI request-mode flags should be public user-facing flags or hidden
+  operator/debug flags in a later reviewed slice
 - whether to consolidate the two extraction routing mode kwargs into a future
   routing options object
 - project-log queue ownership
