@@ -30,7 +30,6 @@ logger = logging.getLogger(__name__)
 # MemoryDB call sites may request a narrow pair radius; split source chunks need
 # a few same-pair microchunks so local continuations survive pair-level truncation.
 _MICROCHUNK_EXPANSION_RADIUS_FLOOR = 3
-SESSIONDB_METADATA_VERSION = 2
 
 
 def _utcnow_iso() -> str:

@@ -433,6 +433,40 @@ def test_session_lifecycle_observation_is_idempotent(monkeypatch, tmp_path):
     assert rows[0]["event_id"] == event["id"]
 
 
+@pytest.mark.parametrize("event_name", ["session.new", "session.agent_end"])
+def test_session_lifecycle_remaining_event_names_persist_sessiondb_observation(
+    monkeypatch,
+    tmp_path,
+    event_name,
+):
+    monkeypatch.setenv("SESSION_DB_PATH", str(tmp_path / "session.db"))
+    set_adapter(TestAdapter(tmp_path))
+
+    session_id = event_name.replace(".", "-")
+    event = emit_event(
+        name=event_name,
+        payload={"reason": "lifecycle smoke"},
+        source="pytest",
+        session_id=session_id,
+        owner_id="owner-life",
+    )
+    out = process_events(limit=5, names=[event_name])
+
+    assert out["processed"] == 1
+    result = out["details"][0]["result"]
+    assert result["status"] == "acknowledged"
+    assert result["event"] == event_name
+    assert result["persisted"] is True
+    assert result["datastore_id"] == "sessiondb"
+
+    from datastore.sessiondb.session_store import list_lifecycle_observations
+
+    rows = list_lifecycle_observations(owner_id="owner-life", session_id=session_id)
+    assert len(rows) == 1
+    assert rows[0]["event_id"] == event["id"]
+    assert rows[0]["event_name"] == event_name
+
+
 def test_session_lifecycle_without_session_id_acknowledges_without_persistence(monkeypatch, tmp_path):
     monkeypatch.setenv("SESSION_DB_PATH", str(tmp_path / "session.db"))
     adapter = TestAdapter(tmp_path); set_adapter(adapter)
