@@ -565,6 +565,55 @@ def test_session_lifecycle_default_timeout_signal_writes_existing_signal(monkeyp
     assert signals[0]["meta"]["lifecycle_event_name"] == "session.timeout"
 
 
+def test_session_lifecycle_default_compaction_signal_writes_existing_signal(monkeypatch, tmp_path):
+    monkeypatch.setenv("SESSION_DB_PATH", str(tmp_path / "session.db"))
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
+    set_adapter(TestAdapter(tmp_path))
+
+    transcript = tmp_path / "compaction-session.jsonl"
+    transcript.write_text('{"role":"user","content":"compact"}\n', encoding="utf-8")
+    emit_event(
+        name="session.compaction",
+        payload={
+            "reason": "before_compaction",
+            "transcript_path": str(transcript),
+            "adapter": "openclaw",
+            "source": "before-compaction",
+            "supports_compaction_control": True,
+        },
+        source="pytest",
+        session_id="sess-compaction-default",
+        owner_id="owner-life",
+    )
+
+    out = process_events(limit=5, names=["session.compaction"])
+
+    assert out["processed"] == 1
+    result = out["details"][0]["result"]
+    assert result["status"] == "acknowledged"
+    assert result["event"] == "session.compaction"
+    assert result["persisted"] is True
+    assert result["daemon_signal_queued"] is True
+    assert result["daemon_signal_type"] == "compaction"
+    assert result["daemon_signal_default"] is True
+    assert result["signal_name"].endswith("_compaction.json")
+
+    from core import extraction_daemon
+
+    signals = extraction_daemon.read_pending_signals()
+    assert len(signals) == 1
+    assert signals[0]["type"] == "compaction"
+    assert signals[0]["session_id"] == "sess-compaction-default"
+    assert signals[0]["transcript_path"] == str(transcript)
+    assert signals[0]["adapter"] == "pytest"
+    assert signals[0]["supports_compaction_control"] is True
+    assert signals[0]["meta"]["bridge"] == "event_lifecycle_default_compaction_bridge"
+    assert signals[0]["meta"]["adapter"] == "openclaw"
+    assert signals[0]["meta"]["source"] == "before-compaction"
+    assert signals[0]["meta"]["lifecycle_event_name"] == "session.compaction"
+
+
 def test_session_lifecycle_without_daemon_signal_does_not_call_write_signal(monkeypatch, tmp_path):
     monkeypatch.setenv("SESSION_DB_PATH", str(tmp_path / "session.db"))
     monkeypatch.setenv("QUAID_HOME", str(tmp_path))
@@ -594,7 +643,7 @@ def test_session_lifecycle_without_daemon_signal_does_not_call_write_signal(monk
 
 @pytest.mark.parametrize(
     "event_name",
-    ["session.reset", "session.compaction", "session.new", "session.agent_start"],
+    ["session.reset", "session.new", "session.agent_start"],
 )
 def test_session_lifecycle_default_signal_excludes_unselected_events(monkeypatch, tmp_path, event_name):
     monkeypatch.setenv("SESSION_DB_PATH", str(tmp_path / "session.db"))
@@ -740,6 +789,61 @@ def test_session_lifecycle_default_timeout_signal_noop_without_valid_inputs(
     assert extraction_daemon.read_pending_signals() == []
 
 
+@pytest.mark.parametrize(
+    ("payload", "session_id", "expected_persisted"),
+    [
+        ({}, "sess-compaction-no-path", True),
+        ({"transcript_path": ""}, "sess-compaction-empty-path", True),
+        ({"transcript_path": "missing.jsonl"}, "sess-compaction-missing-path", True),
+        ({"transcript_path": "session.jsonl"}, "", False),
+    ],
+)
+def test_session_lifecycle_default_compaction_signal_noop_without_valid_inputs(
+    monkeypatch,
+    tmp_path,
+    payload,
+    session_id,
+    expected_persisted,
+):
+    monkeypatch.setenv("SESSION_DB_PATH", str(tmp_path / "session.db"))
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
+    set_adapter(TestAdapter(tmp_path))
+
+    from core import extraction_daemon
+
+    monkeypatch.setattr(
+        extraction_daemon,
+        "write_signal",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("invalid default inputs must not signal daemon")),
+    )
+    if payload.get("transcript_path") == "session.jsonl":
+        transcript = tmp_path / "session.jsonl"
+        transcript.write_text('{"role":"user","content":"hello"}\n', encoding="utf-8")
+        payload = {**payload, "transcript_path": str(transcript)}
+    elif payload.get("transcript_path") == "missing.jsonl":
+        payload = {**payload, "transcript_path": str(tmp_path / "missing.jsonl")}
+
+    emit_event(
+        name="session.compaction",
+        payload=payload,
+        source="pytest",
+        session_id=session_id or None,
+        owner_id="owner-life",
+    )
+    out = process_events(limit=5, names=["session.compaction"])
+
+    result = out["details"][0]["result"]
+    assert result["status"] == "acknowledged"
+    assert result["event"] == "session.compaction"
+    assert result["persisted"] is expected_persisted
+    assert "daemon_signal_queued" not in result
+    assert "daemon_signal_default" not in result
+    assert "daemon_signal_error" not in result
+    assert "signal_name" not in result
+    assert extraction_daemon.read_pending_signals() == []
+
+
 @pytest.mark.parametrize("event_name", ["session.new", "session.agent_start"])
 def test_session_lifecycle_excluded_events_do_not_queue_daemon_signal(monkeypatch, tmp_path, event_name):
     monkeypatch.setenv("SESSION_DB_PATH", str(tmp_path / "session.db"))
@@ -846,6 +950,98 @@ def test_session_lifecycle_explicit_daemon_signal_wins_over_default_timeout(monk
     assert signals[0]["transcript_path"] == str(explicit_transcript)
     assert signals[0]["meta"]["bridge"] == "event_lifecycle_bridge"
     assert signals[0]["meta"]["reason"] == "explicit-timeout"
+
+
+def test_session_lifecycle_explicit_daemon_signal_wins_over_default_compaction(monkeypatch, tmp_path):
+    monkeypatch.setenv("SESSION_DB_PATH", str(tmp_path / "session.db"))
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
+    set_adapter(TestAdapter(tmp_path))
+
+    default_transcript = tmp_path / "default-compaction.jsonl"
+    explicit_transcript = tmp_path / "explicit-compaction.jsonl"
+    default_transcript.write_text('{"role":"user","content":"default"}\n', encoding="utf-8")
+    explicit_transcript.write_text('{"role":"user","content":"explicit"}\n', encoding="utf-8")
+
+    emit_event(
+        name="session.compaction",
+        payload={
+            "transcript_path": str(default_transcript),
+            "supports_compaction_control": True,
+            "daemon_signal": {
+                "enabled": True,
+                "transcript_path": str(explicit_transcript),
+                "reason": "explicit-compaction",
+            },
+        },
+        source="pytest",
+        session_id="sess-compaction-explicit-wins",
+        owner_id="owner-life",
+    )
+    out = process_events(limit=5, names=["session.compaction"])
+
+    from core import extraction_daemon
+
+    result = out["details"][0]["result"]
+    assert result["daemon_signal_queued"] is True
+    assert result["daemon_signal_type"] == "compaction"
+    assert "daemon_signal_default" not in result
+    signals = extraction_daemon.read_pending_signals()
+    assert len(signals) == 1
+    assert signals[0]["transcript_path"] == str(explicit_transcript)
+    assert signals[0]["supports_compaction_control"] is False
+    assert signals[0]["meta"]["bridge"] == "event_lifecycle_bridge"
+    assert signals[0]["meta"]["reason"] == "explicit-compaction"
+
+
+@pytest.mark.parametrize(
+    ("payload_value", "expected_supports_compaction_control"),
+    [
+        (True, True),
+        (False, False),
+        ("true", False),
+        (None, False),
+    ],
+)
+def test_session_lifecycle_default_compaction_supports_control_is_explicit_boolean(
+    monkeypatch,
+    tmp_path,
+    payload_value,
+    expected_supports_compaction_control,
+):
+    monkeypatch.setenv("SESSION_DB_PATH", str(tmp_path / "session.db"))
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
+    set_adapter(TestAdapter(tmp_path))
+
+    from core import extraction_daemon
+
+    captured = {}
+
+    def _fake_write_signal(**kwargs):
+        captured.update(kwargs)
+        return tmp_path / "fake_compaction.json"
+
+    monkeypatch.setattr(extraction_daemon, "write_signal", _fake_write_signal)
+    transcript = tmp_path / "compaction-support.jsonl"
+    transcript.write_text('{"role":"user","content":"compact"}\n', encoding="utf-8")
+    payload = {"transcript_path": str(transcript)}
+    if payload_value is not None:
+        payload["supports_compaction_control"] = payload_value
+
+    emit_event(
+        name="session.compaction",
+        payload=payload,
+        source="pytest",
+        session_id="sess-compaction-support",
+        owner_id="owner-life",
+    )
+    out = process_events(limit=5, names=["session.compaction"])
+
+    result = out["details"][0]["result"]
+    assert result["daemon_signal_queued"] is True
+    assert captured["signal_type"] == "compaction"
+    assert captured["supports_compaction_control"] is expected_supports_compaction_control
 
 
 def test_session_lifecycle_daemon_signal_failures_respect_failhard(monkeypatch, tmp_path, caplog):
@@ -1073,6 +1269,55 @@ def test_session_lifecycle_default_timeout_write_failure_respects_failhard(monke
     assert str(excinfo.value.__cause__) == "default timeout write_signal down"
 
 
+def test_session_lifecycle_default_compaction_write_failure_respects_failhard(monkeypatch, tmp_path, caplog):
+    monkeypatch.setenv("SESSION_DB_PATH", str(tmp_path / "session.db"))
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
+    set_adapter(TestAdapter(tmp_path))
+
+    from core import extraction_daemon
+    import core.runtime.events as events
+
+    transcript = tmp_path / "session.jsonl"
+    transcript.write_text('{"role":"user","content":"hello"}\n', encoding="utf-8")
+
+    def _boom(**_kwargs):
+        raise RuntimeError("default compaction write_signal down")
+
+    monkeypatch.setattr(extraction_daemon, "write_signal", _boom)
+    monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: False)
+    with caplog.at_level("WARNING"):
+        emit_event(
+            name="session.compaction",
+            payload={"transcript_path": str(transcript)},
+            source="pytest",
+            session_id="sess-compaction-soft-write",
+            owner_id="owner-life",
+        )
+        soft = process_events(limit=5, names=["session.compaction"])
+
+    soft_result = soft["details"][0]["result"]
+    assert soft_result["status"] == "acknowledged"
+    assert soft_result["persisted"] is True
+    assert soft_result["daemon_signal_queued"] is False
+    assert soft_result["daemon_signal_default"] is True
+    assert soft_result["daemon_signal_error"] == "default compaction write_signal down"
+    assert any("Lifecycle daemon signal bridge failed" in rec.message for rec in caplog.records)
+
+    monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: True)
+    emit_event(
+        name="session.compaction",
+        payload={"transcript_path": str(transcript)},
+        source="pytest",
+        session_id="sess-compaction-hard-write",
+        owner_id="owner-life",
+    )
+    with pytest.raises(RuntimeError, match="Event handler failed while fail-hard mode is enabled") as excinfo:
+        process_events(limit=5, names=["session.compaction"])
+    assert isinstance(excinfo.value.__cause__, RuntimeError)
+    assert str(excinfo.value.__cause__) == "default compaction write_signal down"
+
+
 def test_session_lifecycle_daemon_signal_dedupes_with_adapter_signal(monkeypatch, tmp_path):
     monkeypatch.setenv("SESSION_DB_PATH", str(tmp_path / "session.db"))
     monkeypatch.setenv("QUAID_HOME", str(tmp_path))
@@ -1204,6 +1449,50 @@ def test_session_lifecycle_default_timeout_signal_dedupes_with_adapter_signal(mo
     assert signals[0]["meta"]["bridge"] == "event_lifecycle_default_timeout_bridge"
 
 
+def test_session_lifecycle_default_compaction_signal_dedupes_with_adapter_signal(monkeypatch, tmp_path):
+    monkeypatch.setenv("SESSION_DB_PATH", str(tmp_path / "session.db"))
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
+    set_adapter(TestAdapter(tmp_path))
+
+    from core import extraction_daemon
+
+    adapter_transcript = tmp_path / "adapter-compaction.jsonl"
+    default_transcript = tmp_path / "default-compaction.jsonl"
+    adapter_transcript.write_text('{"role":"user","content":"adapter"}\n', encoding="utf-8")
+    default_transcript.write_text('{"role":"user","content":"default"}\n', encoding="utf-8")
+    adapter_signal = extraction_daemon.write_signal(
+        signal_type="compaction",
+        session_id="sess-compaction-dedupe",
+        transcript_path=str(adapter_transcript),
+        adapter="adapter-hook",
+        supports_compaction_control=True,
+        meta={"reason": "adapter_compaction"},
+    )
+
+    emit_event(
+        name="session.compaction",
+        payload={"transcript_path": str(default_transcript)},
+        source="pytest",
+        session_id="sess-compaction-dedupe",
+        owner_id="owner-life",
+    )
+    out = process_events(limit=5, names=["session.compaction"])
+
+    result = out["details"][0]["result"]
+    assert result["daemon_signal_queued"] is True
+    assert result["daemon_signal_type"] == "compaction"
+    assert result["daemon_signal_default"] is True
+    assert result["signal_name"] == adapter_signal.name
+    signals = extraction_daemon.read_pending_signals()
+    assert len(signals) == 1
+    assert signals[0]["type"] == "compaction"
+    assert signals[0]["session_id"] == "sess-compaction-dedupe"
+    assert signals[0]["transcript_path"] == str(default_transcript)
+    assert signals[0]["supports_compaction_control"] is False
+    assert signals[0]["meta"]["bridge"] == "event_lifecycle_default_compaction_bridge"
+
+
 def test_session_lifecycle_daemon_signal_helper_preserves_boundaries():
     import core.runtime.events as events
 
@@ -1212,9 +1501,10 @@ def test_session_lifecycle_daemon_signal_helper_preserves_boundaries():
             inspect.getsource(events._maybe_queue_lifecycle_daemon_signal),
             inspect.getsource(events._maybe_queue_default_agent_end_signal),
             inspect.getsource(events._maybe_queue_default_timeout_signal),
+            inspect.getsource(events._maybe_queue_default_compaction_signal),
         ]
     )
-    assert helper_sources.count("from core.extraction_daemon import write_signal") == 3
+    assert helper_sources.count("from core.extraction_daemon import write_signal") == 4
     assert "datastore." not in helper_sources
     assert "_atomic_write" not in helper_sources
     assert "start_daemon" not in helper_sources
@@ -1460,6 +1750,48 @@ def test_session_lifecycle_persistence_failure_does_not_block_failsoft_default_t
     assert result["persisted"] is False
     assert result["daemon_signal_queued"] is True
     assert result["daemon_signal_type"] == "timeout"
+    assert result["daemon_signal_default"] is True
+    assert len(extraction_daemon.read_pending_signals()) == 1
+    assert any("SessionDB lifecycle observation persistence failed" in rec.message for rec in caplog.records)
+
+
+def test_session_lifecycle_persistence_failure_does_not_block_failsoft_default_compaction_signal(
+    monkeypatch,
+    tmp_path,
+    caplog,
+):
+    monkeypatch.setenv("SESSION_DB_PATH", str(tmp_path / "session.db"))
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
+    set_adapter(TestAdapter(tmp_path))
+
+    import core.plugins.sessiondb_contract as sessiondb_contract
+    import core.runtime.events as events
+
+    def _boom(_event):
+        raise RuntimeError("sessiondb lifecycle down")
+
+    transcript = tmp_path / "session.jsonl"
+    transcript.write_text('{"role":"user","content":"hello"}\n', encoding="utf-8")
+    monkeypatch.setattr(sessiondb_contract, "record_session_lifecycle_observation", _boom)
+    monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: False)
+    with caplog.at_level("WARNING"):
+        emit_event(
+            name="session.compaction",
+            payload={"transcript_path": str(transcript)},
+            source="pytest",
+            session_id="sess-compaction-observation-fail",
+            owner_id="owner-life",
+        )
+        out = process_events(limit=5, names=["session.compaction"])
+
+    from core import extraction_daemon
+
+    result = out["details"][0]["result"]
+    assert result["status"] == "acknowledged"
+    assert result["persisted"] is False
+    assert result["daemon_signal_queued"] is True
+    assert result["daemon_signal_type"] == "compaction"
     assert result["daemon_signal_default"] is True
     assert len(extraction_daemon.read_pending_signals()) == 1
     assert any("SessionDB lifecycle observation persistence failed" in rec.message for rec in caplog.records)
