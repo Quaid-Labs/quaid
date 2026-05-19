@@ -1,0 +1,265 @@
+# Datastore Events M9.5 Evolution Snippet Journal Plan
+
+Status: draft plan; no runtime implementation
+Owner: W1 runtime/datastore, W3 recall and identity-context review
+Plan source: `projects/quaid/operations/datastore-events-m9-monitor-migration-plan.md`
+
+## Precondition
+
+Do not implement runtime code for M9.5 until:
+
+1. M9.4 extraction publish request routing is closed through W4/W3/W6/W8.
+2. W3 reviews the selected slice because journal content and identity-context
+   markdown can be recall-visible and user-visible.
+3. W6 reviews the ownership boundary so extraction remains the producer and
+   EvolutionDB/NoteDB owns snippet and journal persistence.
+4. W8 confirms focused static lanes cover extraction orchestration,
+   EvolutionDB/NoteDB writes, event contracts, and boundary checks.
+
+This document records the proposed migration sequence only. It does not approve
+runtime code.
+
+## Goal
+
+M9.5 should move the selected snippet and journal write family behind
+EvolutionDB ownership while preserving normal product behavior.
+
+The selected write family is:
+
+- pending identity snippets written to `*.snippets.md`
+- journal entries written to `journal/*.journal.md`
+- write counters, duplicate-skip behavior, target filenames, and failure
+  diagnostics for those files
+
+Extraction remains the producer of structured snippet and journal payloads.
+EvolutionDB owns how those payloads are persisted into the current NoteDB
+markdown implementation.
+
+## Current Boundary
+
+Current extraction publish path:
+
+1. `ingest.extract.extract_from_transcript()` builds `raw_snippets` and
+   `raw_journal` while extracting facts.
+2. `ingest.extract.apply_extracted_payloads()` routes MemoryDB facts through the
+   M9.4 MemoryDB helper/request path.
+3. The same function normalizes snippet and journal payloads and directly calls
+   `core.lifecycle.soul_snippets.write_snippet_entry()` and
+   `core.lifecycle.soul_snippets.write_journal_entry()`.
+4. `core.lifecycle.soul_snippets` is a thin wrapper over
+   `datastore.notedb.soul_snippets`.
+5. `datastore.notedb.soul_snippets` owns the actual markdown file writes,
+   duplicate detection, journal archiving, snippet review, journal
+   distillation, and janitor routine registration.
+
+Current EvolutionDB registry state:
+
+- `evolutiondb` is the canonical datastore id.
+- The runtime module remains `datastore.notedb.soul_snippets`.
+- `notedb` remains a runtime alias.
+- The first-party contract currently declares journal recall, datastore
+  validate/explain, and maintenance request handlers, but no snippet/journal
+  write request.
+
+## Design Constraints
+
+- Do not rename `datastore.notedb` modules in M9. Runtime package renaming waits
+  for the dedicated M10 rename milestone.
+- Do not wrap all of `apply_extracted_payloads()` as an EvolutionDB operation.
+  MemoryDB fact publish and DocsDB project-log queueing are separate owners.
+- Do not move snippet or journal persistence into MemoryDB.
+- Do not move project-log queueing into EvolutionDB.
+- Do not change `.ego` import/export behavior.
+- Do not change journal recall ranking, scoring, source-window policy, or
+  planner behavior.
+- Do not change snippet review or journal distillation behavior unless the
+  selected runtime slice explicitly targets that maintenance path.
+- Preserve current file formats, target paths, duplicate-skip semantics, trigger
+  labels, date handling, and identity-file projection behavior.
+
+## Selected First Slice
+
+The preferred first runtime slice is a synchronous EvolutionDB-owned helper
+seam, not a request event.
+
+Implementation shape:
+
+- Add an EvolutionDB contract helper in `core.plugins.notedb_contract`.
+- Delegate from that helper to `datastore.notedb.soul_snippets`.
+- Route `apply_extracted_payloads()` snippet and journal writes through the
+  contract helper instead of directly loading `core.lifecycle.soul_snippets`.
+- Keep `apply_extracted_payloads()` as the orchestration entrypoint.
+- Keep MemoryDB publish and DocsDB project-log side effects in their current
+  owners and order.
+- Keep `core.lifecycle.soul_snippets` available for lifecycle callers while the
+  selected extraction write path moves to the EvolutionDB contract seam.
+
+This mirrors the successful M9.4 pattern: establish a datastore-owned helper and
+prove parity before introducing a broker/request event.
+
+## Candidate Helper Contract
+
+Candidate helper:
+
+- `core.plugins.notedb_contract.run_snippet_journal_write_payload(payload)`
+
+Candidate payload:
+
+- `source`: expected producer, initially `extraction-apply-payloads`
+- `owner_id`
+- `session_id`
+- `label`
+- `trigger`
+- `date_str`
+- `time_str`
+- `snippets`: mapping of filename to list of snippet strings
+- `journal`: mapping of filename to journal text
+- `write_snippets`
+- `write_journal`
+- `dry_run`
+
+Candidate response:
+
+- `status`: `ok` or `failed`
+- `snippet_files_seen`
+- `snippet_items_seen`
+- `snippet_files_written`
+- `snippet_items_written`
+- `snippet_files_skipped`
+- `journal_files_seen`
+- `journal_files_written`
+- `journal_files_skipped`
+- `target_files`
+- `errors`
+
+The response should expose only the counters and target metadata the extraction
+orchestrator or operator diagnostics consume. Internal markdown parsing,
+archive, and janitor mechanics stay covered by EvolutionDB/NoteDB tests rather
+than becoming response-envelope validation.
+
+## Future Request Event Slice
+
+A later slice may introduce a request event after helper parity is proven.
+
+Candidate event:
+
+- `evolution.snippet_journal_write.request.v1`
+
+Candidate owner:
+
+- EvolutionDB, via `core.plugins.notedb_contract` and the existing
+  `datastore.notedb.soul_snippets` implementation.
+
+Candidate producer:
+
+- `ingest.extract.apply_extracted_payloads()` only, for the selected extraction
+  snippet/journal write path.
+
+Request-slice rules:
+
+- The request handler must delegate to the same helper selected above.
+- `apply_extracted_payloads()` should keep an explicit mode flag if broker
+  routing is added. Do not use environment sniffing or daemon direct broker
+  bypass.
+- Broker, handler, validator, or markdown write failure must not fall back to
+  direct NoteDB writes.
+- Direct `extract_from_transcript()` / CLI behavior should remain direct unless
+  a separate reviewed slice explicitly selects request routing for it.
+
+## Non-Targets
+
+- no `datastore.notedb` package rename
+- no `.ego` export/import behavior
+- no MemoryDB fact, edge, source-chunk, dedup, ranking, recall, or source-window
+  changes
+- no DocsDB project-log queueing changes
+- no session ingest changes
+- no lifecycle ack persistence
+- no snippet review model prompt changes
+- no journal distillation model prompt changes
+- no janitor scheduling changes unless a later selected slice targets
+  maintenance routing
+- no new durable schema for snippets or journal entries
+- no public/user CLI output change unless explicitly reviewed
+
+## FailHard Policy
+
+- `failHard=true`: helper, request dispatch, handler validation, markdown file
+  read/write, archive, duplicate-check, or projection failure must raise through
+  the caller. Do not route around the selected EvolutionDB write path.
+- `failHard=false`: degraded behavior may remain only where current behavior
+  already degrades, and it must log loudly without claiming snippets or journal
+  entries were written.
+- Warnings must be emitted before failHard raises so live operators can see the
+  failing filename, trigger, and exception reason.
+- Exceptions should preserve identity with bare `raise` where current code
+  relies on it, or use contextual `RuntimeError(... ) from exc` where the helper
+  boundary needs a stable message.
+
+## Parity Invariants
+
+Implementation must preserve:
+
+- target path resolution for `SOUL.md`, `USER.md`, `ENVIRONMENT.md`, and
+  `*.snippets.md`
+- journal path resolution under `journal/*.journal.md`
+- snippet duplicate detection and skip behavior
+- journal duplicate detection and sequence-number behavior
+- journal max-entry archive behavior
+- trigger derivation from extraction labels
+- date and time defaults used by current snippet and journal writers
+- generated USER snippet projection cleanup/reconciliation behavior
+- return booleans from the underlying NoteDB writers where callers rely on them
+- extraction result shape for `result["snippets"]` and `result["journal"]`
+- `publish_complete` trace ordering from M9.4 after snippet, journal, and
+  project-log side effects
+- snippet/journal write ordering relative to MemoryDB publish and project-log
+  queueing
+- lifecycle wrapper behavior for existing callers
+- maintenance registration for snippet review and journal distillation
+
+## Required Tests Before W4
+
+Add or preserve tests proving:
+
+- helper/direct parity for snippet and journal file contents.
+- helper/direct parity for duplicate snippet and duplicate journal inputs.
+- `apply_extracted_payloads()` routes snippet and journal writes through the
+  EvolutionDB contract seam without moving MemoryDB or DocsDB writes.
+- failHard snippet write failure raises after logging and does not fall back to
+  direct NoteDB writes.
+- fail-soft snippet write failure logs and does not claim written counters.
+- failHard journal write failure raises after logging and does not fall back to
+  direct NoteDB writes.
+- fail-soft journal write failure logs and does not claim written counters.
+- `publish_complete` still fires after snippet, journal, and project-log side
+  effects.
+- M9.2 DocsDB, M9.3 session ingest, and M9.4 MemoryDB extraction publish routes
+  remain registered.
+- W3-selected journal recall or identity-context checks still see the same
+  persisted content.
+
+## W4 Smoke
+
+W4 should smoke the runtime patch only after W3/W6/W8 review:
+
+- normal extraction writes at least one snippet and one journal entry through
+  the selected EvolutionDB seam.
+- the expected `*.snippets.md` and `journal/*.journal.md` files are visible in
+  the installed runtime home.
+- duplicate snippet/journal payloads do not create duplicate visible entries.
+- failHard write failure stops the selected path without fallback.
+- identity/context lifecycle still reads the written content as before.
+- M9.2 DocsDB, M9.3 session ingest, and M9.4 MemoryDB extraction publish routes
+  remain healthy.
+
+## Deferred Decisions
+
+- Whether to add `evolution.snippet_journal_write.request.v1` after the helper
+  seam closes.
+- Whether to split snippet and journal writes into separate request events.
+- Whether direct `extract_from_transcript()` / CLI should ever use request mode.
+- Whether snippet review and journal distillation maintenance should get their
+  own request handlers beyond the existing maintenance contract.
+- Runtime `datastore.evolutiondb` package rename, deferred to M10.
+- `.ego` import/export integration, deferred to a separate product milestone.

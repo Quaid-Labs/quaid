@@ -158,6 +158,14 @@ Required validation:
 
 ## M9.5 Evolution, Snippet, And Journal Events
 
+Tracking doc: `datastore-events-m9-5-evolution-snippet-journal-plan.md`.
+
+Status:
+
+- Draft plan opened for EvolutionDB-owned snippet/journal write migration.
+- Runtime implementation is blocked pending W3/W6/W8 review of the focused
+  M9.5 plan.
+
 Scope:
 
 - evolution/snippet/journal writes behind `evolutiondb` listeners
