@@ -326,6 +326,10 @@ narrow facade agent-end emitter smoke:
 - broad compatibility-alias retirement and `notedb.core` plugin-id rename
 - `.ego` import/export integration
 
+Post-M32 decision boundaries are recorded in
+`projects/quaid/operations/datastore-events-m33-post-facade-decision-boundary-plan.md`.
+That record does not approve runtime work.
+
 ## Implementation Record
 
 Runtime closed at `b015b5dbab4d07bc2ca6db15920d240fbc4acd15`

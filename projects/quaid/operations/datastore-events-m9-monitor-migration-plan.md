@@ -190,7 +190,8 @@ session id and existing live transcript path through the existing
 `session_end` signal writer and M28 remains the daemon wake owner;
 reset-preserved transcript paths remain no-op for agent-end. OpenClaw hook
 migration, daemon restart/stop automation, and recall/source-window policy
-changes remain deferred.
+changes remain deferred. Post-M32 decision boundaries are recorded in
+`projects/quaid/operations/datastore-events-m33-post-facade-decision-boundary-plan.md`.
 
 ## Shared Rules For Every M9 Slice
 
