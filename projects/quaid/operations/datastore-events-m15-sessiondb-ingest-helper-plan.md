@@ -1,6 +1,6 @@
 # Datastore Events M15 SessionDB Ingest Helper Plan
 
-Status: draft plan; no runtime implementation yet
+Status: helper runtime slice complete; request ownership move deferred
 Owner: W1 runtime/datastore, W3 recall and source-window review
 Plan source: `projects/quaid/operations/datastore-events-m14-sessiondb-manifest-plan.md`
 
@@ -17,12 +17,12 @@ Do not implement runtime code for M15 until:
    registry/contract, session memory bridge, source-window expansion, and
    boundary checks.
 
-This document selects an internal helper-ownership prerequisite slice. It does
-not approve moving `session.ingest_log.request.v1` out of MemoryDB ownership,
-changing active `session.ingest_log`, adding SessionDB-specific request events,
-adding activated SessionDB handlers, changing recall selectors, changing
-source-window behavior, lifecycle persistence, data migration, CLI behavior,
-default request routing, public push, or release actions.
+This document records the completed internal helper-ownership prerequisite slice.
+It does not approve moving `session.ingest_log.request.v1` out of MemoryDB
+ownership, changing active `session.ingest_log`, adding SessionDB-specific
+request events, adding activated SessionDB handlers, changing recall selectors,
+changing source-window behavior, lifecycle persistence, data migration, CLI
+behavior, default request routing, public push, or release actions.
 
 ## Goal
 
@@ -31,15 +31,15 @@ manifest now exists, but the session ingest payload normalization helper still
 lives in `core.plugins.memorydb_contract` because M9.3 intentionally kept the
 request event under MemoryDB ownership.
 
-The selected first slice is narrow: introduce a SessionDB-owned helper module for
-the existing session-ingest payload normalization and transcript ingest call, then
-keep the existing MemoryDB request handler and active-event path delegating
+The selected first slice was narrow: introduce a SessionDB-owned helper module
+for the existing session-ingest payload normalization and transcript ingest call,
+then keep the existing MemoryDB request handler and active-event path delegating
 through that helper. Observable event ownership and response envelopes stay
 unchanged.
 
 A future ownership-move plan, for example routing
 `session.ingest_log.request.v1` through SessionDB ownership, will consume this
-SessionDB-owned helper directly. This M15 slice creates the helper-ownership
+SessionDB-owned helper directly. This M15 slice created the helper-ownership
 prerequisite without making that ownership move.
 
 This is not a route switch. MemoryDB still owns the existing request event and
@@ -68,7 +68,7 @@ Current post-M14 path:
 
 ## Selected First Slice: SessionDB Helper Extraction Only
 
-Implement one runtime helper-extraction slice only:
+Implemented one runtime helper-extraction slice only:
 
 1. Add `core.plugins.sessiondb_contract` with a `run_session_ingest_payload(payload)`
    helper that owns the existing payload normalization and call into
@@ -168,9 +168,61 @@ narrow session-ingest smoke:
   present and recallable.
 - Source-window expansion for session evidence is unchanged.
 
+## Implementation Record
+
+Runtime slice closed at `379be9a47` (`refactor(datastore): move session ingest
+helper to SessionDB`).
+
+Implemented behavior:
+
+- Added `core.plugins.sessiondb_contract.run_session_ingest_payload()` as the
+  SessionDB-owned helper for the existing session-ingest payload normalization
+  and `core.ingest_runtime.run_session_logs_ingest()` delegation body.
+- Preserved `core.plugins.memorydb_contract.run_session_ingest_payload()` as a
+  distinct function-level compatibility wrapper that late-imports and calls the
+  SessionDB helper. It is not an identity re-export.
+- Left `handle_session_ingest_log_request()` and
+  `register_session_ingest_log_request_handler()` under MemoryDB ownership with
+  datastore id `memorydb`.
+- Left `core.runtime.events._handle_session_ingest_log()` importing through the
+  MemoryDB wrapper for active `session.ingest_log` processing.
+- Did not change datastore manifests, datastore contracts, event names, daemon
+  routes, CLI behavior, lifecycle persistence, recall selectors, source-window
+  expansion, or request/active response envelopes.
+
+Tests added or preserved:
+
+- SessionDB helper normalization and `run_session_logs_ingest()` call-argument
+  parity.
+- MemoryDB wrapper delegation to a distinct SessionDB helper symbol.
+- Helper-failure propagation through the wrapper with no fallback and no effect
+  on MemoryDB request-handler registration.
+- Existing active/request session ingest, manifest/contract ownership,
+  session-memory bridge, store recall, and source-window guard coverage.
+
+Validation:
+
+- W4 R201 live/source-proof PASS: SessionDB helper module loads; MemoryDB wrapper
+  delegates to it; `session.ingest_log.request.v1` still registers under
+  MemoryDB; active handler still imports through MemoryDB; MemoryDB manifest
+  still declares the request event; SessionDB manifest still does not; prior
+  M9.x/M10/M11/M12/M13/M14 routes remain intact.
+- W3 runtime/recall APPROVED with no findings: MemoryDB retains
+  `session.ingest_log.request.v1` and `session_chunks`; SessionDB manifest and
+  contract still do not activate the ingest request; no source-window, recall,
+  ranking, planner, lifecycle, event-name, daemon, or handler-activation change.
+- W6 APPROVED with no concerns: helper body moved near-purely with only the
+  docstring changed, wrapper shape matches the addendum, helper failures
+  propagate unchanged, and no shared try/except or fallback path was introduced.
+- W8 static PASS: focused helper/session ingest selector, affected
+  events/session_logs/registry/contracts lane, W1 supporting adjacent
+  session-memory/store-recall/session-log lane, py_compile, ruff, diff/docs,
+  boundary check, and unit wrapper all passed.
+
 ## Deferred Decisions
 
-- whether SessionDB should ever own `session.ingest_log.request.v1`
+- whether SessionDB should ever own `session.ingest_log.request.v1`; M15 closed
+  only the helper-ownership prerequisite at `379be9a47`
 - whether SessionDB should expose dedicated request handlers beyond generic
   metadata/maintenance surfaces
 - lifecycle persistence for ack-only lifecycle events

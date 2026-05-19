@@ -90,11 +90,12 @@ transcript/provenance ownership, while MemoryDB continues to own
 Lifecycle persistence, source-window enrichment, and SessionDB ownership of
 `session.ingest_log` remain future-plan-gated.
 
-The next prerequisite is tracked as M15 in
-`projects/quaid/operations/datastore-events-m15-sessiondb-ingest-helper-plan.md`:
-move the session-ingest payload helper internals toward SessionDB ownership
-while preserving MemoryDB ownership of `session.ingest_log.request.v1` and the
-`session_chunks` recall selector.
+M15 SessionDB ingest helper ownership closed at `379be9a47`: the session-ingest
+payload helper internals now live in `core.plugins.sessiondb_contract`, while
+`core.plugins.memorydb_contract` remains the MemoryDB-owned compatibility wrapper
+for active/request session ingest. MemoryDB ownership of
+`session.ingest_log.request.v1` and the `session_chunks` recall selector remains
+unchanged.
 
 ## Shared Rules For Every M9 Slice
 
