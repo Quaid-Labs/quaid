@@ -137,6 +137,13 @@ remain acknowledgement plus observation only. Default lifecycle-triggered
 transcript ingest, new daemon automation, and recall/source-window policy
 changes remain deferred.
 
+M23 now tracks SessionDB ingest wrapper retirement in
+`projects/quaid/operations/datastore-events-m23-sessiondb-ingest-wrapper-retirement-plan.md`:
+the obsolete `core.plugins.memorydb_contract` wrappers for SessionDB-owned
+`session.ingest_log` helper/handler/registrar may be removed, while MemoryDB
+`session_chunks` recall/write ownership, SessionDB request ownership, active
+ingest behavior, and source-window policy remain unchanged.
+
 ## Shared Rules For Every M9 Slice
 
 - One write path family per sub-milestone.

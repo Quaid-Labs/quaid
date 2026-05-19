@@ -232,6 +232,8 @@ narrow explicit bridge smoke:
 - default lifecycle-triggered transcript ingestion
 - daemon start/wake/restart automation from lifecycle events
 - request/active compatibility-wrapper removal from `core.plugins.memorydb_contract`
+  is tracked as M23 in
+  `projects/quaid/operations/datastore-events-m23-sessiondb-ingest-wrapper-retirement-plan.md`
 - whether SessionDB should expose dedicated request handlers beyond
   `session.ingest_log.request.v1` and generic metadata/maintenance surfaces
 - source-window selector ownership or SessionDB recall capability
