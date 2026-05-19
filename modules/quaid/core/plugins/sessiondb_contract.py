@@ -1,8 +1,7 @@
 """SessionDB plugin contract helpers.
 
 This module owns SessionDB transcript/provenance helper logic and the
-`session.ingest_log.request.v1` request handler. Active event compatibility may
-still flow through MemoryDB wrappers.
+`session.ingest_log.request.v1` request handler.
 """
 
 from __future__ import annotations

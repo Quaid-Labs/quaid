@@ -1387,16 +1387,14 @@ def test_event_process_session_ingest_log(monkeypatch, tmp_path):
     import core.plugins.memorydb_contract as memorydb_contract
     import core.plugins.sessiondb_contract as sessiondb_contract
 
+    assert not hasattr(memorydb_contract, "run_session_ingest_payload")
+
     called = {}
 
     def _fake_helper(payload):
         called.update(payload)
         return {"status": "indexed", "session_id": payload["session_id"], "chunks": 2}
 
-    def _memorydb_tripwire(_payload):
-        raise AssertionError("active session ingest must not call MemoryDB wrapper")
-
-    monkeypatch.setattr(memorydb_contract, "run_session_ingest_payload", _memorydb_tripwire)
     monkeypatch.setattr(sessiondb_contract, "run_session_ingest_payload", _fake_helper)
 
     emit_event(
@@ -1498,17 +1496,12 @@ def test_event_process_session_ingest_log_helper_exception_uses_event_exception_
 ):
     set_adapter(TestAdapter(tmp_path))
 
-    import core.plugins.memorydb_contract as memorydb_contract
     import core.plugins.sessiondb_contract as sessiondb_contract
     import core.runtime.events as events
-
-    def _memorydb_tripwire(_payload):
-        raise AssertionError("active session ingest must not call MemoryDB wrapper")
 
     def _fail(_payload):
         raise RuntimeError("simulated helper boom")
 
-    monkeypatch.setattr(memorydb_contract, "run_session_ingest_payload", _memorydb_tripwire)
     monkeypatch.setattr(sessiondb_contract, "run_session_ingest_payload", _fail)
     monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: False)
 
@@ -1651,51 +1644,44 @@ def test_sessiondb_session_ingest_helper_normalizes_payload(monkeypatch, tmp_pat
     }
 
 
-def test_memorydb_session_ingest_wrapper_delegates_to_distinct_sessiondb_helper(monkeypatch):
+def test_memorydb_session_ingest_wrappers_are_retired_from_memorydb_contract():
     import core.plugins.memorydb_contract as memorydb_contract
     import core.plugins.sessiondb_contract as sessiondb_contract
 
-    assert memorydb_contract.run_session_ingest_payload is not sessiondb_contract.run_session_ingest_payload
+    retired_names = {
+        "run_session_ingest_payload",
+        "handle_session_ingest_log_request",
+        "register_session_ingest_log_request_handler",
+    }
+    for name in retired_names:
+        assert not hasattr(memorydb_contract, name)
+        assert hasattr(sessiondb_contract, name)
 
-    called = {}
-
-    def _fake_sessiondb_helper(payload):
-        called.update(payload)
-        return {"status": "indexed", "session_id": payload["session_id"]}
-
-    monkeypatch.setattr(sessiondb_contract, "run_session_ingest_payload", _fake_sessiondb_helper)
-
-    result = memorydb_contract.run_session_ingest_payload({"session_id": "sess-wrapper"})
-
-    assert result == {"status": "indexed", "session_id": "sess-wrapper"}
-    assert called == {"session_id": "sess-wrapper"}
-    assert memorydb_contract.run_session_ingest_payload is not sessiondb_contract.run_session_ingest_payload
+    memorydb_source = Path(memorydb_contract.__file__).read_text(encoding="utf-8")
+    for name in retired_names:
+        assert f"def {name}" not in memorydb_source
 
 
-def test_memorydb_session_ingest_wrapper_propagates_helper_failure_without_registration(
-    monkeypatch,
-    tmp_path,
-):
-    set_adapter(TestAdapter(tmp_path))
-    import core.plugins.memorydb_contract as memorydb_contract
-    import core.plugins.sessiondb_contract as sessiondb_contract
-    import core.runtime.events as events
-
-    def _fail(_payload):
-        raise RuntimeError("sessiondb helper boom")
-
-    monkeypatch.setattr(sessiondb_contract, "run_session_ingest_payload", _fail)
-
-    with pytest.raises(RuntimeError, match="sessiondb helper boom"):
-        memorydb_contract.run_session_ingest_payload({"session_id": "sess-fail"})
-
-    memorydb_contract.register_session_ingest_log_request_handler()
-    with events._REQUEST_EVENT_HANDLERS_LOCK:
-        handlers = list(events._REQUEST_EVENT_HANDLERS.get(SESSION_INGEST_LOG_REQUEST_EVENT) or [])
-
-    assert [(item["datastore_id"], item["handler"]) for item in handlers] == [
-        ("sessiondb", sessiondb_contract.handle_session_ingest_log_request)
+def test_memorydb_session_ingest_wrappers_have_no_production_references():
+    production_root = Path(__file__).resolve().parents[1]
+    forbidden_patterns = [
+        "memorydb_contract.run_session_ingest_payload",
+        "memorydb_contract.handle_session_ingest_log_request",
+        "memorydb_contract.register_session_ingest_log_request_handler",
+        "from core.plugins.memorydb_contract import run_session_ingest_payload",
+        "from core.plugins.memorydb_contract import handle_session_ingest_log_request",
+        "from core.plugins.memorydb_contract import register_session_ingest_log_request_handler",
     ]
+    offenders = []
+    for path in production_root.rglob("*.py"):
+        if "tests" in path.parts:
+            continue
+        text = path.read_text(encoding="utf-8")
+        for pattern in forbidden_patterns:
+            if pattern in text:
+                offenders.append(f"{path.relative_to(production_root)}: {pattern}")
+
+    assert offenders == []
 
 
 def test_sessiondb_request_registrar_owns_session_ingest_request(tmp_path):
@@ -1708,45 +1694,6 @@ def test_sessiondb_request_registrar_owns_session_ingest_request(tmp_path):
     with events._REQUEST_EVENT_HANDLERS_LOCK:
         handlers = list(events._REQUEST_EVENT_HANDLERS.get(SESSION_INGEST_LOG_REQUEST_EVENT) or [])
 
-    assert [(item["datastore_id"], item["handler"]) for item in handlers] == [
-        ("sessiondb", sessiondb_contract.handle_session_ingest_log_request)
-    ]
-
-
-def test_memorydb_session_ingest_handler_and_registrar_are_silent_distinct_wrappers(
-    monkeypatch,
-    caplog,
-    tmp_path,
-):
-    set_adapter(TestAdapter(tmp_path))
-    import core.plugins.memorydb_contract as memorydb_contract
-    import core.plugins.sessiondb_contract as sessiondb_contract
-    import core.runtime.events as events
-
-    assert memorydb_contract.handle_session_ingest_log_request is not sessiondb_contract.handle_session_ingest_log_request
-    assert (
-        memorydb_contract.register_session_ingest_log_request_handler
-        is not sessiondb_contract.register_session_ingest_log_request_handler
-    )
-
-    called = {}
-
-    def _fake_handler(event):
-        called["event"] = event
-        return {"status": "indexed", "session_id": event["payload"]["session_id"]}
-
-    monkeypatch.setattr(sessiondb_contract, "handle_session_ingest_log_request", _fake_handler)
-    event = {"payload": {"session_id": "sess-wrapper-handler"}}
-
-    with caplog.at_level("INFO"):
-        result = memorydb_contract.handle_session_ingest_log_request(event)
-        memorydb_contract.register_session_ingest_log_request_handler()
-
-    assert result == {"status": "indexed", "session_id": "sess-wrapper-handler"}
-    assert called["event"] is event
-    assert caplog.records == []
-    with events._REQUEST_EVENT_HANDLERS_LOCK:
-        handlers = list(events._REQUEST_EVENT_HANDLERS.get(SESSION_INGEST_LOG_REQUEST_EVENT) or [])
     assert [(item["datastore_id"], item["handler"]) for item in handlers] == [
         ("sessiondb", sessiondb_contract.handle_session_ingest_log_request)
     ]

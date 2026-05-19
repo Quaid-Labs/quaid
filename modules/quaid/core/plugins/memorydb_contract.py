@@ -29,20 +29,6 @@ from lib.tools_domain_sync import sync_tools_domain_block
 logger = logging.getLogger(__name__)
 
 
-def run_session_ingest_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """Compatibility wrapper for the SessionDB-owned ingest helper."""
-    from core.plugins.sessiondb_contract import run_session_ingest_payload as _run
-
-    return _run(payload)
-
-
-def handle_session_ingest_log_request(event: Dict[str, Any]) -> Dict[str, Any]:
-    """Compatibility wrapper for the SessionDB-owned session ingest handler."""
-    from core.plugins.sessiondb_contract import handle_session_ingest_log_request as _handle
-
-    return _handle(event)
-
-
 def _optional_payload_str(payload: Dict[str, Any], key: str) -> str | None:
     text = str(payload.get(key) or "").strip()
     return text or None
@@ -136,12 +122,6 @@ def extraction_publish_microchunk_tokens() -> int:
     from datastore.memorydb.extraction_publish import DEFAULT_SESSION_MICROCHUNK_TOKENS
 
     return int(DEFAULT_SESSION_MICROCHUNK_TOKENS)
-
-
-def register_session_ingest_log_request_handler() -> None:
-    from core.plugins.sessiondb_contract import register_session_ingest_log_request_handler as _register
-
-    _register()
 
 
 def register_extraction_publish_request_handler() -> None:
