@@ -1,6 +1,6 @@
 # Datastore Events M25 Default Timeout Signal Plan
 
-Status: runtime default timeout bridge slice complete; broader reset/compaction automation deferred
+Status: runtime default timeout bridge slice complete; broader reset automation deferred
 Owner: W1 runtime/daemon, W6 boundary review, W3 recall guard review
 Plan source: `projects/quaid/operations/datastore-events-m24-default-agent-end-signal-plan.md`
 
@@ -269,8 +269,9 @@ narrow default timeout bridge smoke:
 ## Deferred Decisions
 
 - default compaction lifecycle-to-daemon signal bridge closed in M26 at
-  `2f35f279`; broader reset lifecycle-triggered transcript ingestion remains
-  deferred
+  `2f35f279`; default reset lifecycle-to-daemon signal bridge is tracked as
+  M27 in
+  `projects/quaid/operations/datastore-events-m27-default-reset-signal-plan.md`
 - daemon start/wake/restart automation from lifecycle events
 - whether SessionDB should expose dedicated request handlers beyond
   `session.ingest_log.request.v1` and generic metadata/maintenance surfaces

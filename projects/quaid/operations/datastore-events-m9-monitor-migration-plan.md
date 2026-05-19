@@ -156,9 +156,12 @@ lifecycle-to-daemon `compaction` signal bridge closed at `2f35f279`: plain
 compaction lifecycle events with concrete `session_id` and real
 `payload.transcript_path` now write the existing daemon `compaction` signal
 through `core.extraction_daemon.write_signal()`, while M22 explicit opt-in,
-M24 agent-end, and M25 timeout precedence remain canonical. Reset default
-lifecycle-triggered transcript ingest, daemon process automation, and
-recall/source-window policy changes remain deferred.
+M24 agent-end, and M25 timeout precedence remain canonical. M27 now tracks a
+default `session.reset` lifecycle-to-daemon `reset` signal bridge in
+`projects/quaid/operations/datastore-events-m27-default-reset-signal-plan.md`;
+the selected plan requires an explicit `payload.reset_transcript_path` and does
+not approve live `payload.transcript_path` reset queueing. Daemon process
+automation and recall/source-window policy changes remain deferred.
 
 ## Shared Rules For Every M9 Slice
 

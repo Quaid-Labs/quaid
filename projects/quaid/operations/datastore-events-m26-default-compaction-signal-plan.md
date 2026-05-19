@@ -1,6 +1,6 @@
 # Datastore Events M26 Default Compaction Signal Plan
 
-Status: runtime default compaction bridge slice complete; reset automation deferred
+Status: runtime default compaction bridge slice complete; reset bridge tracked as M27
 Owner: W1 runtime/daemon, W6 boundary review, W3 recall guard review
 Plan source: `projects/quaid/operations/datastore-events-m25-default-timeout-signal-plan.md`
 
@@ -280,7 +280,10 @@ narrow default compaction bridge smoke:
 
 ## Deferred Decisions
 
-- default lifecycle-triggered reset transcript ingestion
+- default reset lifecycle-to-daemon signal bridge is tracked as M27 in
+  `projects/quaid/operations/datastore-events-m27-default-reset-signal-plan.md`;
+  M27 requires `payload.reset_transcript_path` and does not approve live
+  `payload.transcript_path` reset queueing
 - daemon start/wake/restart automation from lifecycle events
 - whether SessionDB should expose dedicated request handlers beyond
   `session.ingest_log.request.v1` and generic metadata/maintenance surfaces
