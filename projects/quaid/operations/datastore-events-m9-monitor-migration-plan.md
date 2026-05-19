@@ -134,6 +134,8 @@ Status:
   MemoryDB-owned helper split before any broader request routing.
 - Request event routing plan is drafted in the M9.4 tracking doc, but runtime
   implementation is not approved until W3/W6/W8 review that next slice.
+- A pre-slice cleanup should move publish-only defaults into a shared
+  MemoryDB/core-owned seam before request-event wiring.
 
 Scope:
 

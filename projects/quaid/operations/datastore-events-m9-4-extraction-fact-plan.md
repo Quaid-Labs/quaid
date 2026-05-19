@@ -306,28 +306,51 @@ Explicitly not selected:
 - session ingest, lifecycle ack, docs update, recall planner, ranking, scoring,
   or source-window behavior
 
-Implementation shape under review:
+Implementation shape:
 
 1. Keep `apply_extracted_payloads()` as the public direct/orchestration
    entrypoint for non-daemon callers.
-2. Add a daemon-only orchestration path or mode that still performs one
-   `apply_extracted_payloads`-style operation from the daemon's point of view.
-   The daemon must not manually split MemoryDB publish from snippet, journal, or
-   project-log side effects.
-3. Add `memory.extraction_publish.request.v1` to `core.runtime.events`,
+2. Add an explicit daemon-only mode to `apply_extracted_payloads()` rather than
+   having the daemon call the broker directly. The daemon still makes one
+   `apply_extracted_payloads()` call; the function selects the brokered
+   MemoryDB publish path for the daemon and then continues its existing
+   snippet, journal, and project-log side effects after the MemoryDB request
+   returns.
+3. Keep the default `apply_extracted_payloads()` mode as the existing
+   synchronous helper path for direct `extract_from_transcript()` and CLI
+   callers. No implicit context sniffing or environment-based switch is allowed;
+   the daemon must pass an explicit mode/flag.
+4. Add `memory.extraction_publish.request.v1` to `core.runtime.events`,
    MemoryDB's datastore contract, and MemoryDB's registry manifest.
-4. Add a MemoryDB request handler in `core.plugins.memorydb_contract` that
+5. Add a MemoryDB request handler in `core.plugins.memorydb_contract` that
    unwraps the request envelope, calls the existing MemoryDB publish helper, and
    returns the same result counters/rows the daemon already consumes.
-5. Do not have the MemoryDB request handler import `ingest.extract` for helper
-   callbacks. Before or during the request slice, move publish-only defaults
-   needed by the handler into the MemoryDB-owned publish boundary or another
-   core/datastore-owned seam. This includes temporal/provenance normalization,
-   duplicate collapse, publish trace writing, batch-size lookup, and default
-   microchunk token configuration if they are needed by the request handler.
-6. Direct `apply_extracted_payloads()` may continue to call the synchronous
-   helper directly. Only the daemon final rolling flush should use the brokered
-   request path in this slice.
+6. Do not have the MemoryDB request handler import `ingest.extract` for helper
+   callbacks. Before the request-event runtime patch, land a small pre-slice
+   cleanup that moves publish-only defaults into a MemoryDB/core-owned seam used
+   by both the direct helper path and the request handler.
+
+Publish-default seam ownership decisions:
+
+- temporal normalization: MemoryDB-owned publish data-shape helper
+- provenance normalization: MemoryDB-owned publish data-shape helper
+- duplicate collapse: MemoryDB-owned publish helper, because the collapsed
+  duplicate counter is a MemoryDB publish counter and must match request/direct
+  behavior
+- publish trace writing: MemoryDB-owned publish telemetry helper
+- publish batch-size lookup: MemoryDB-owned publish/transaction config helper
+- default microchunk token config: MemoryDB-owned source evidence config helper,
+  because request and direct paths must materialize source chunks identically
+
+Pre-slice cleanup requirement:
+
+- Land the publish-default seam move as a small reviewed cleanup before the
+  request-event runtime patch when practical. That cleanup must not add the
+  request event and must prove direct `apply_extracted_payloads()` parity.
+- The request-event patch then wires broker registration/routing to the already
+  shared seam. If implementation discovers the cleanup cannot be safely
+  separated, stop and send a fresh plan update instead of combining a broad seam
+  move with request routing by default.
 
 FailHard/no-fallback contract:
 
@@ -372,8 +395,6 @@ Required runtime tests for this request slice:
 
 ## Deferred Decisions
 
-- Whether this request-event slice is approved with the publish-defaults seam
-  above, or whether W3/W6 prefer another lower-coupling request-handler shape.
 - Whether a later slice should migrate direct `extract_from_transcript()` request
   routing.
 - Whether future producer payloads need additional source metadata fields after
