@@ -296,6 +296,7 @@ request-mode flags passed explicitly.
   routing options object
 - lifecycle persistence and SessionDB first-party manifest registration
 - source-window metadata enrichment
-- snippet/journal request splitting
+- snippet/journal request splitting, tracked as M12 in
+  `datastore-events-m12-evolution-snippet-journal-split-plan.md`
 - compatibility-alias retirement and `notedb.core` plugin-id rename
 - `.ego` import/export integration

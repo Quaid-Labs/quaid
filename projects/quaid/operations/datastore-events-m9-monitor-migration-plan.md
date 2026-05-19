@@ -53,7 +53,8 @@ The selected M9 monitor-write migrations are complete:
 Deferred items are not M9 blockers unless separately selected by Solomon with a
 new reviewed plan: direct `extract_from_transcript()` / CLI request routing,
 lifecycle persistence, SessionDB first-party manifest registration,
-source-window metadata enrichment, snippet/journal request splitting,
+source-window metadata enrichment, snippet/journal request splitting
+(tracked as M12 in `datastore-events-m12-evolution-snippet-journal-split-plan.md`),
 `datastore.notedb` / `core.plugins.notedb_contract` compatibility-alias
 retirement, `notedb.core` plugin-id rename, and `.ego` integration. The
 `datastore.evolutiondb` runtime package and `core.plugins.evolutiondb_contract`
