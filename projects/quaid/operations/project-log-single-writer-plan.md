@@ -229,9 +229,11 @@ operation.
 The first runtime follow-up should use the smallest lock-safe shape:
 
 1. Keep `core.log_rotation.rotate_log_file()` generic and unchanged.
-2. Update `core.log_rotation.rotate_project_logs()` so each visible
-   `PROJECT.log` rotation acquires `core.project_docs.project_update_lock()`
-   for that project before calling `rotate_log_file()`.
+2. Update `core.log_rotation.rotate_project_logs()` so each project directory
+   with a visible `PROJECT.log` acquires
+   `core.project_docs.project_update_lock(project, blocking=False)` before
+   calling `rotate_log_file()`. Project names come from the directory basename,
+   matching the current `rotate_project_logs(projects_dir)` iteration shape.
 3. Use `blocking=False` for the project lock. If a project-docs worker is
    already updating the project, skip rotation for that project and log an
    informational message; do not wait inside janitor and do not rewrite the log
@@ -239,7 +241,15 @@ The first runtime follow-up should use the smallest lock-safe shape:
 4. If resolving or acquiring the lock raises unexpectedly, preserve failHard
    behavior: raise under `retrieval.fail_hard=true`; log and skip that project
    under fail-soft mode.
-5. Leave `rotate_journal_logs()` unchanged. Journal rotation is EvolutionDB
+5. Treat lock-busy and lock-error as distinct outcomes. The existing
+   `core.project_docs.project_update_lock()` context manager yields a boolean:
+   a falsey `acquired` value means "busy, skip"; an exception escaping the
+   context manager means "unexpected lock failure" and follows the failHard
+   rule above.
+6. Do not share the try/except scope for lock acquisition with the
+   `rotate_log_file()` call. Rotation failures inside the acquired lock must
+   remain rotation failures and must not be downgraded into lock-skip behavior.
+7. Leave `rotate_journal_logs()` unchanged. Journal rotation is EvolutionDB
    lifecycle work and is not part of the project-log single-writer gap.
 
 Non-targets for this slice:
