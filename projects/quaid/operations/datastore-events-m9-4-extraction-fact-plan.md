@@ -1,6 +1,6 @@
 # Datastore Events M9.4 Extraction Fact Publish Plan
 
-Status: first synchronous helper slice complete; request-event routing plan drafted
+Status: synchronous helper and daemon request-event slices complete
 Owner: W1 runtime/datastore, W3 recall quality
 Plan source: `projects/quaid/operations/datastore-events-m9-monitor-migration-plan.md`
 
@@ -274,124 +274,57 @@ Closure evidence:
   those findings with W6 APPROVED/no findings.
 - W8 static PASS and runtime hold close recorded for the pair.
 
-The request event remains intentionally unimplemented in this closed slice.
-Any `memory.extraction_publish.request.v1` work needs a fresh focused update
-that delegates to the same helper and proves request/failHard/no-fallback
-semantics.
+## Request Event Runtime Slice Closure
 
-## Next Request-Event Slice Plan
+The daemon final rolling flush request-event slice closed at:
 
-The next candidate runtime slice is request delivery for the daemon final
-rolling flush MemoryDB publish family. This section is planning only until W3,
-W6, and W8 review it.
+- `9acb2da60` `refactor(datastore): route extraction publish through request event`
+- `41f4aacf8` `fix(datastore): log extraction publish request failures`
 
-Selected request event:
+Implemented shape:
 
-- `memory.extraction_publish.request.v1`
+- `memory.extraction_publish.request.v1` is registered in `core.runtime.events`
+  with `delivery_mode=request`, `fireable=True`, and `processable=False`.
+- MemoryDB declares the request in both the first-party datastore manifest and
+  `MemoryDbDatastoreContract` handler specs.
+- `core.plugins.memorydb_contract.handle_extraction_publish_request()` unwraps
+  the request payload, validates `source`, `result`, `owner_id`, and `label`,
+  then delegates to the same `run_extraction_publish_payload()` helper used by
+  the synchronous direct path.
+- `apply_extracted_payloads()` gained an explicit `memory_publish_mode` kwarg.
+  The default remains `"direct"` for direct `extract_from_transcript()` and CLI
+  callers; the daemon final rolling flush passes `"request"`.
+- The daemon still calls `apply_extracted_payloads()` once. It does not bypass
+  the ingest orchestrator or call the broker directly.
+- Snippet, journal, and project-log side effects remain in `ingest.extract` and
+  run after MemoryDB publish returns in both direct and request modes.
+- Request-mode broker, handler, validation, or MemoryDB write failures do not
+  fall back to the synchronous helper.
 
-Selected datastore owner:
+Follow-up hardening:
 
-- MemoryDB, declared in the MemoryDB datastore contract and manifest
+- `41f4aacf8` routes every extraction publish broker-response validation failure
+  through a single warning-before-raise helper, restoring the failHard diagnostic
+  discipline for all malformed or failed response shapes.
+- The MemoryDB request handler now rejects missing or empty `owner_id` and
+  `label` rather than silently coercing them to `default`/`unknown`.
 
-Selected producer:
+Closure evidence:
 
-- daemon final rolling flush only
+- W4 live PASS for `9acb2da60`, including R201 deploy, clean daemon restart,
+  request event registration, manifest/contract binding, daemon request mode,
+  no-fallback behavior, invalid-mode guard, side-effect ordering, and M9.2/M9.3
+  route stability.
+- W3 recall/provenance review PASS/no findings for `9acb2da60`; W3 was notified
+  that `41f4aacf8` was diagnostics/payload-guard hardening only with no recall
+  or source/provenance behavior change.
+- W6 approved `9acb2da60` with two follow-up findings; `41f4aacf8` closed both
+  with W6 APPROVED/no findings.
+- W8 static PASS and runtime hold close recorded for the pair.
 
-Explicitly not selected:
-
-- direct `extract_from_transcript()` / CLI request routing
-- snippet writes
-- journal writes
-- project-log queueing
-- session ingest, lifecycle ack, docs update, recall planner, ranking, scoring,
-  or source-window behavior
-
-Implementation shape:
-
-1. Keep `apply_extracted_payloads()` as the public direct/orchestration
-   entrypoint for non-daemon callers.
-2. Add an explicit daemon-only mode to `apply_extracted_payloads()` rather than
-   having the daemon call the broker directly. The daemon still makes one
-   `apply_extracted_payloads()` call; the function selects the brokered
-   MemoryDB publish path for the daemon and then continues its existing
-   snippet, journal, and project-log side effects after the MemoryDB request
-   returns.
-3. Keep the default `apply_extracted_payloads()` mode as the existing
-   synchronous helper path for direct `extract_from_transcript()` and CLI
-   callers. No implicit context sniffing or environment-based switch is allowed;
-   the daemon must pass an explicit mode/flag.
-4. Add `memory.extraction_publish.request.v1` to `core.runtime.events`,
-   MemoryDB's datastore contract, and MemoryDB's registry manifest.
-5. Add a MemoryDB request handler in `core.plugins.memorydb_contract` that
-   unwraps the request envelope, calls the existing MemoryDB publish helper, and
-   returns the same result counters/rows the daemon already consumes.
-6. Do not have the MemoryDB request handler import `ingest.extract` for helper
-   callbacks. Before the request-event runtime patch, land a small pre-slice
-   cleanup that moves publish-only defaults into a MemoryDB/core-owned seam used
-   by both the direct helper path and the request handler.
-
-Publish-default seam ownership decisions:
-
-- temporal normalization: MemoryDB-owned publish data-shape helper
-- provenance normalization: MemoryDB-owned publish data-shape helper
-- duplicate collapse: MemoryDB-owned publish helper, because the collapsed
-  duplicate counter is a MemoryDB publish counter and must match request/direct
-  behavior
-- publish trace writing: MemoryDB-owned publish telemetry helper
-- publish batch-size lookup: MemoryDB-owned publish/transaction config helper
-- default microchunk token config: MemoryDB-owned source evidence config helper,
-  because request and direct paths must materialize source chunks identically
-
-Pre-slice cleanup requirement:
-
-- Land the publish-default seam move as a small reviewed cleanup before the
-  request-event runtime patch when practical. That cleanup must not add the
-  request event and must prove direct `apply_extracted_payloads()` parity.
-- The request-event patch then wires broker registration/routing to the already
-  shared seam. If implementation discovers the cleanup cannot be safely
-  separated, stop and send a fresh plan update instead of combining a broad seam
-  move with request routing by default.
-
-FailHard/no-fallback contract:
-
-- The daemon request path must not fall back to the synchronous helper or old
-  direct publish path after broker, registration, handler, validation, or
-  MemoryDB write failure.
-- Under `failHard=true`, any request failure must raise through the daemon with
-  the original exception identity or a contextual `RuntimeError(... ) from exc`
-  where the request boundary requires wrapping.
-- Under `failHard=false`, failures may degrade only where the current final
-  flush path already degrades; logs and counters must not claim facts were
-  stored when the request failed.
-
-Response validation should stay narrow:
-
-- Validate the request envelope status and MemoryDB response row shape.
-- Validate only daemon-consumed fields such as `facts_stored`,
-  `facts_skipped`, `edges_created`, source chunk counters, `publish_batches`,
-  dedup counters, and `facts` rows.
-- Do not validate internal SQL/transaction details in the request envelope.
-  Transaction and rowid-window behavior belongs in MemoryDB helper tests.
-
-Required runtime tests for this request slice:
-
-- event registry capability exists with `delivery_mode=request` and
-  `fireable=True`
-- MemoryDB manifest and contract declare `memory.extraction_publish.request.v1`
-- request handler delegates to the same MemoryDB helper used by the closed
-  synchronous slice
-- daemon final rolling flush uses the request path and has no synchronous helper
-  fallback on request failure
-- direct `extract_from_transcript()` still uses the non-request path
-- request/direct parity for fact rows, edge rows, source chunk rows,
-  `source_chunk_id` attachment, counters, dedup telemetry, publish batching, and
-  provenance fields
-- snippet, journal, and project-log side effects remain outside the MemoryDB
-  request handler and keep their existing ordering after MemoryDB publish
-- failHard broker/handler/write failure raises through the daemon
-- fail-soft request failure logs loudly and does not increment stored counters
-- M9.3 session ingest and M9.2 docs request routes remain registered and
-  unaffected
+M9.4 request routing is now implemented for the selected daemon final rolling
+flush producer. Direct `extract_from_transcript()` / CLI request routing remains
+explicitly deferred.
 
 ## Deferred Decisions
 

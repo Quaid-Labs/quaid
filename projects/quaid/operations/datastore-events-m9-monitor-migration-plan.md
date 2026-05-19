@@ -128,14 +128,15 @@ Tracking doc: `datastore-events-m9-4-extraction-fact-plan.md`.
 Status:
 
 - First synchronous helper slice complete at `65dbab41d` + `045883370`.
-- W4 live/source-proof PASS, W3 recall PASS/no re-review needed, W6 concerns
-  closed, and W8 static/runtime closure recorded for that pair.
-- The completed slice selected an internal `apply_extracted_payloads()` ->
-  MemoryDB-owned helper split before any broader request routing.
-- Request event routing plan is drafted in the M9.4 tracking doc, but runtime
-  implementation is not approved until W3/W6/W8 review that next slice.
-- A pre-slice cleanup should move publish-only defaults into a shared
-  MemoryDB/core-owned seam before request-event wiring.
+- Pre-slice publish-default seam cleanup complete at `cd7cb61f7` + `98e7b21f5`.
+- Daemon final rolling flush request-event slice complete at `9acb2da60` +
+  `41f4aacf8`.
+- W4 live/source-proof PASS, W3 recall PASS/no findings where required, W6
+  concerns closed, and W8 static/runtime closure recorded for all completed
+  M9.4 runtime pairs.
+- `memory.extraction_publish.request.v1` is implemented for the selected daemon
+  final rolling flush producer. Direct `extract_from_transcript()` / CLI request
+  routing remains deferred.
 
 Scope:
 
