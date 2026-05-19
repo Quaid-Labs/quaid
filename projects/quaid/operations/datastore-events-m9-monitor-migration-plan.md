@@ -74,6 +74,17 @@ Required review:
 
 Tracking doc: `datastore-events-m9-2-project-doc-change-plan.md`.
 
+Status:
+
+- Project-doc worker selected apply/index request slice complete at
+  `b5a4dbabe` + `959899295`.
+- Known failHard warning-order diagnostic gap closed at `2ff5aa51`.
+- W4 final live PASS, W6 review closure, and W8 static/runtime closure are
+  recorded for the consolidated M9.2 head.
+- `docs.project_update.request.v1` is implemented for the selected
+  project-doc worker apply/index operation. Project-log queue commit ownership
+  and broader worker lifecycle/state ownership remain deferred/non-target.
+
 Scope:
 
 - project file/document change monitor writes

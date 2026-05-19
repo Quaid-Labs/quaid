@@ -1,6 +1,6 @@
 # Datastore Events M9.2 Project Doc Change Plan
 
-Status: implementation patch in progress; validation pending
+Status: implemented and validated; diagnostic follow-up closed
 Owner: W1 runtime/datastore
 Plan source: `projects/quaid/operations/datastore-events-m9-monitor-migration-plan.md`
 
@@ -17,9 +17,9 @@ Do not implement runtime code for M9.2 until:
    can affect docs recallability, indexing cadence, row metadata, and result
    shape.
 
-M9.1 completed validation on `9ac2a07b3`. This document is planning only and
-does not approve runtime implementation. Any behavior patch still needs fresh
-W3/W4/W6/W8 validation.
+M9.1 completed validation on `9ac2a07b3`. M9.2 runtime implementation completed
+at `b5a4dbabe` + `959899295`; the known warning-order diagnostic gap was closed
+at `2ff5aa51`.
 
 ## Review Record
 
@@ -42,17 +42,34 @@ Pre-implementation guard commits:
   zero, skips project-log indexing after registered-doc failure, and failHard
   re-raises without fallback.
 
-Implementation candidate:
+Implementation:
 
-- Adds `docs.project_update.request.v1` as a DocsDB request handler for the
+- `b5a4dbabe` adds `docs.project_update.request.v1` as a DocsDB request handler for the
   selected project-doc worker apply/index operation.
-- `execute_update_once()` keeps worker-owned locks, request retention,
+- `959899295` routes `execute_update_once()` through the DocsDB-owned request
+  path while keeping worker-owned locks, request retention,
   project-log queue commits, snapshot/cursor reads, state writes, progress, and
   notices, then requests DocsDB authority for docs update, visible-doc registry
   sync, registered-doc indexing, and project-log indexing.
 - The replaced direct worker apply/index calls are removed from the selected
   path. There is no fallback from broker failure back to those direct calls.
-- Validation remains pending until W3/W4/W6/W8 approve the runtime patch.
+- `2ff5aa51` closes the W6 warning-order finding by logging the project update
+  index failure before the failHard re-raise.
+
+Validation:
+
+- W4 final live gate PASS on R201: DocsDB-only handler registration, request
+  validation policy, dry-run contract shape, fail-soft index-failure metrics,
+  failHard raise without direct fallback, worker status stability, and clean
+  M9.2 route coexistence were confirmed.
+- W6 retroactive review APPROVED-WITH-CONCERNS for `b5a4dbabe` + `959899295`;
+  the medium warning-order concern was closed by `2ff5aa51`.
+- W8 static PASS for the runtime head and consolidated diagnostic follow-up:
+  focused project-docs, docsdb contract, events, docs registry, py_compile,
+  ruff, docs consistency, boundary check, and unit-wrapper lanes passed.
+- W3 was not required beyond the plan/runtime constraints already recorded
+  because the selected runtime slice preserved docs recall/search behavior and
+  the final live gate did not exercise a new recall-ranking change.
 
 ## M9.2 Goal
 
