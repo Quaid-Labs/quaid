@@ -34,6 +34,7 @@ ALLOWLIST = {
     ("core/docs_cli.py", "datastore"),
     ("core/docs_updater_hook.py", "datastore"),
     ("core/plugins/memorydb_contract.py", "datastore"),
+    ("core/plugins/sessiondb_contract.py", "datastore"),
     ("core/plugins/docsdb_contract.py", "datastore"),
     ("core/project_registry.py", "datastore"),
     ("core/extraction_daemon.py", "datastore"),

@@ -49,8 +49,11 @@ def test_datastore_capabilities_surface_manifest_metadata() -> None:
         "transcript_chunks",
         "message_pairs",
         "microchunks",
+        "lifecycle_observations",
     ]
     assert "microchunks" in capabilities["sessiondb"]["stores"]
+    assert "lifecycle_observations" in capabilities["sessiondb"]["stores"]
+    assert capabilities["sessiondb"]["metadata_version"] == 2
     assert "message_pair_attachments" in capabilities["sessiondb"]["stores"]
     assert "message_pair_attachments" not in capabilities["sessiondb"]["writes"]
 
@@ -73,7 +76,9 @@ def test_sessiondb_manifest_owns_ingest_request_and_memorydb_keeps_recall_projec
         "transcript_chunks",
         "message_pairs",
         "microchunks",
+        "lifecycle_observations",
     ]
+    assert sessiondb["capabilities"]["metadata_version"] == 2
     assert "session_chunks" in memorydb["capabilities"]["recall"]
     assert "session_chunks" in memorydb["capabilities"]["writes"]
 

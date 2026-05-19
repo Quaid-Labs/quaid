@@ -18,6 +18,7 @@ from typing import Any, Dict, Iterable, List, Optional
 logger = logging.getLogger(__name__)
 
 DATASTORE_MANIFEST_SCHEMA_VERSION = 1
+SESSIONDB_METADATA_VERSION = 2
 _DATASTORE_ID_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 _MODULE_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+$")
 _REQUIRED_FIELDS = (
@@ -169,14 +170,16 @@ FIRST_PARTY_DATASTORE_MANIFESTS: List[Dict[str, Any]] = [
                 "transcript_chunks",
                 "message_pairs",
                 "microchunks",
+                "lifecycle_observations",
                 "message_pair_attachments",
             ],
             "recall": [],
-            "writes": ["sessions", "transcript_chunks", "message_pairs", "microchunks"],
+            "writes": ["sessions", "transcript_chunks", "message_pairs", "microchunks", "lifecycle_observations"],
             "validate": True,
             "explain": True,
             "export": False,
             "import": False,
+            "metadata_version": SESSIONDB_METADATA_VERSION,
         },
         "accepted_events": [],
         "request_handlers": [

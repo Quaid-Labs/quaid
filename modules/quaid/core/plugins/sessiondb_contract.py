@@ -10,6 +10,19 @@ from __future__ import annotations
 from typing import Any, Dict
 
 
+def record_session_lifecycle_observation(event: Dict[str, Any]) -> Dict[str, Any]:
+    """Record SessionDB-owned lifecycle metadata for concrete sessions."""
+    payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+    session_id = str(event.get("session_id") or payload.get("session_id") or "").strip()
+    if not session_id:
+        return {"status": "skipped", "persisted": False, "reason": "missing_session_id"}
+    owner_id = str(event.get("owner_id") or payload.get("owner_id") or "default").strip() or "default"
+
+    from datastore.sessiondb.session_store import record_lifecycle_observation
+
+    return record_lifecycle_observation(event, owner_id=owner_id, session_id=session_id)
+
+
 def run_session_ingest_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Run session transcript ingest from the SessionDB-owned payload helper."""
     session_id = str(payload.get("session_id") or "").strip()

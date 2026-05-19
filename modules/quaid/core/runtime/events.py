@@ -634,7 +634,29 @@ def _queue_delayed_llm_request(message: str, kind: str = "janitor", priority: st
 
 
 def _handle_session_lifecycle(event: Event) -> Dict[str, Any]:
-    return {"status": "acknowledged", "event": event.get("name")}
+    payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+    session_id = str(event.get("session_id") or payload.get("session_id") or "").strip()
+    result = {"status": "acknowledged", "event": event.get("name")}
+    if not session_id:
+        result["persisted"] = False
+        return result
+    try:
+        from core.plugins.sessiondb_contract import record_session_lifecycle_observation
+
+        persisted = record_session_lifecycle_observation(event)
+    except Exception as exc:
+        if _is_fail_hard_enabled():
+            raise
+        logger.warning("SessionDB lifecycle observation persistence failed: %s", exc, exc_info=True)
+        result["persisted"] = False
+        return result
+    if isinstance(persisted, dict) and persisted.get("persisted"):
+        result["persisted"] = True
+        result["datastore_id"] = "sessiondb"
+        result["inserted"] = bool(persisted.get("inserted"))
+        return result
+    result["persisted"] = False
+    return result
 
 
 def _handle_delayed_notification(event: Event) -> Dict[str, Any]:

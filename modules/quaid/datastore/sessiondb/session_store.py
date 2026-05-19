@@ -30,6 +30,7 @@ logger = logging.getLogger(__name__)
 # MemoryDB call sites may request a narrow pair radius; split source chunks need
 # a few same-pair microchunks so local continuations survive pair-level truncation.
 _MICROCHUNK_EXPANSION_RADIUS_FLOOR = 3
+SESSIONDB_METADATA_VERSION = 2
 
 
 def _utcnow_iso() -> str:
@@ -216,6 +217,22 @@ def ensure_schema(conn) -> None:
         )
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS session_lifecycle_observations (
+            event_id TEXT PRIMARY KEY,
+            owner_id TEXT NOT NULL,
+            session_id TEXT NOT NULL,
+            event_name TEXT NOT NULL,
+            idempotency_key TEXT,
+            source TEXT,
+            reason TEXT,
+            observed_at TEXT NOT NULL,
+            metadata_json TEXT DEFAULT '{}',
+            created_at TEXT NOT NULL
+        )
+        """
+    )
     for stmt in (
         "CREATE INDEX IF NOT EXISTS idx_session_chunks_session ON session_chunks(owner_id, session_id, chunk_index)",
         "CREATE INDEX IF NOT EXISTS idx_session_pairs_session ON session_pairs(owner_id, session_id, pair_index)",
@@ -224,6 +241,7 @@ def ensure_schema(conn) -> None:
         "CREATE INDEX IF NOT EXISTS idx_session_microchunks_pair ON session_microchunks(owner_id, pair_id, microchunk_index)",
         "CREATE INDEX IF NOT EXISTS idx_session_microchunks_session ON session_microchunks(owner_id, session_id, chunk_id, microchunk_index)",
         "CREATE INDEX IF NOT EXISTS idx_session_microchunks_memory ON session_microchunks(owner_id, memory_chunk_id)",
+        "CREATE INDEX IF NOT EXISTS idx_session_lifecycle_session ON session_lifecycle_observations(owner_id, session_id, observed_at)",
     ):
         conn.execute(stmt)
 
@@ -245,6 +263,101 @@ def _session_summary(row: Any) -> Dict[str, Any]:
             logger.warning("sessiondb row has invalid JSON in %s; using %r: %s", key, fallback, exc)
             data[key] = fallback
     return data
+
+
+def record_lifecycle_observation(
+    event: Dict[str, Any],
+    *,
+    owner_id: str = "default",
+    session_id: str,
+) -> Dict[str, Any]:
+    sid = _session_id(session_id)
+    owner = _owner(owner_id)
+    event_id = _clean(event.get("id") or event.get("event_id") or event.get("idempotency_key"))
+    if not event_id:
+        raise ValueError("lifecycle observation event_id is required")
+    event_name = _clean(event.get("name") or event.get("event_type"))
+    if not event_name:
+        raise ValueError("lifecycle observation event name is required")
+    payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+    reason = _clean(payload.get("reason") or event.get("reason")) or None
+    observed_at = _clean(event.get("created_at")) or _utcnow_iso()
+    metadata = {
+        "payload": payload,
+        "provenance": event.get("provenance") if isinstance(event.get("provenance"), dict) else {},
+        "instance_id": _clean(event.get("instance_id")) or None,
+        "project_id": _clean(event.get("project_id")) or None,
+    }
+    now = _utcnow_iso()
+    with get_connection(get_session_db_path()) as conn:
+        ensure_schema(conn)
+        cursor = conn.execute(
+            """
+            INSERT OR IGNORE INTO session_lifecycle_observations (
+                event_id, owner_id, session_id, event_name, idempotency_key,
+                source, reason, observed_at, metadata_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                event_id,
+                owner,
+                sid,
+                event_name,
+                _clean(event.get("idempotency_key")) or None,
+                _clean(event.get("source")) or None,
+                reason,
+                observed_at,
+                json.dumps(metadata, ensure_ascii=True, sort_keys=True),
+                now,
+            ),
+        )
+    return {
+        "status": "recorded",
+        "datastore_id": "sessiondb",
+        "persisted": True,
+        "inserted": cursor.rowcount > 0,
+        "event_id": event_id,
+        "session_id": sid,
+        "owner_id": owner,
+    }
+
+
+def list_lifecycle_observations(
+    *,
+    owner_id: str = "default",
+    session_id: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    owner = _owner(owner_id)
+    sid = _clean(session_id)
+    with get_connection(get_session_db_path()) as conn:
+        ensure_schema(conn)
+        if sid:
+            rows = conn.execute(
+                """
+                SELECT * FROM session_lifecycle_observations
+                WHERE owner_id = ? AND session_id = ?
+                ORDER BY observed_at ASC, event_id ASC
+                """,
+                (owner, sid),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT * FROM session_lifecycle_observations
+                WHERE owner_id = ?
+                ORDER BY observed_at ASC, event_id ASC
+                """,
+                (owner,),
+            ).fetchall()
+    out: List[Dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        try:
+            item["metadata"] = json.loads(item.pop("metadata_json") or "{}")
+        except (TypeError, ValueError, json.JSONDecodeError):
+            item["metadata"] = {}
+        out.append(item)
+    return out
 
 
 def _pair_text(pair: Dict[str, str]) -> str:

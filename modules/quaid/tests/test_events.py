@@ -373,6 +373,123 @@ def test_broker_dispatch_traces_dispatch_ack_and_failure(monkeypatch, tmp_path):
     assert any(item.get("op") == "broker.failed" for item in history)
 
 
+def test_session_lifecycle_records_sessiondb_observation(monkeypatch, tmp_path):
+    monkeypatch.setenv("SESSION_DB_PATH", str(tmp_path / "session.db"))
+    adapter = TestAdapter(tmp_path); set_adapter(adapter)
+
+    event = emit_event(
+        name="session.reset",
+        payload={"reason": "operator reset"},
+        source="pytest",
+        session_id="sess-life",
+        owner_id="owner-life",
+        idempotency_key="life-reset-1",
+    )
+    out = process_events(limit=5, names=["session.reset"])
+
+    assert out["processed"] == 1
+    result = out["details"][0]["result"]
+    assert result["status"] == "acknowledged"
+    assert result["event"] == "session.reset"
+    assert result["persisted"] is True
+    assert result["datastore_id"] == "sessiondb"
+    assert result["inserted"] is True
+
+    from datastore.sessiondb.session_store import list_lifecycle_observations
+
+    rows = list_lifecycle_observations(owner_id="owner-life", session_id="sess-life")
+    assert len(rows) == 1
+    assert rows[0]["event_id"] == event["id"]
+    assert rows[0]["idempotency_key"] == "life-reset-1"
+    assert rows[0]["event_name"] == "session.reset"
+    assert rows[0]["source"] == "pytest"
+    assert rows[0]["reason"] == "operator reset"
+    assert rows[0]["metadata"]["payload"] == {"reason": "operator reset"}
+
+
+def test_session_lifecycle_observation_is_idempotent(monkeypatch, tmp_path):
+    monkeypatch.setenv("SESSION_DB_PATH", str(tmp_path / "session.db"))
+    adapter = TestAdapter(tmp_path); set_adapter(adapter)
+
+    event = emit_event(
+        name="session.agent_start",
+        payload={"reason": "agent boot"},
+        source="pytest",
+        session_id="sess-life",
+        owner_id="owner-life",
+    )
+    first = EVENT_HANDLERS["session.agent_start"](event)
+    second = EVENT_HANDLERS["session.agent_start"](event)
+
+    assert first["persisted"] is True
+    assert first["inserted"] is True
+    assert second["persisted"] is True
+    assert second["inserted"] is False
+
+    from datastore.sessiondb.session_store import list_lifecycle_observations
+
+    rows = list_lifecycle_observations(owner_id="owner-life", session_id="sess-life")
+    assert len(rows) == 1
+    assert rows[0]["event_id"] == event["id"]
+
+
+def test_session_lifecycle_without_session_id_acknowledges_without_persistence(monkeypatch, tmp_path):
+    monkeypatch.setenv("SESSION_DB_PATH", str(tmp_path / "session.db"))
+    adapter = TestAdapter(tmp_path); set_adapter(adapter)
+
+    import core.plugins.sessiondb_contract as sessiondb_contract
+
+    monkeypatch.setattr(
+        sessiondb_contract,
+        "record_session_lifecycle_observation",
+        lambda _event: (_ for _ in ()).throw(AssertionError("missing session_id must not persist")),
+    )
+
+    emit_event(name="session.timeout", payload={"reason": "idle"}, source="pytest")
+    out = process_events(limit=5, names=["session.timeout"])
+
+    assert out["processed"] == 1
+    result = out["details"][0]["result"]
+    assert result == {"status": "acknowledged", "event": "session.timeout", "persisted": False}
+
+    from datastore.sessiondb.session_store import list_lifecycle_observations
+
+    assert list_lifecycle_observations(owner_id="default") == []
+
+
+def test_session_lifecycle_persistence_failure_respects_failhard(monkeypatch, tmp_path, caplog):
+    monkeypatch.setenv("SESSION_DB_PATH", str(tmp_path / "session.db"))
+    set_adapter(TestAdapter(tmp_path))
+
+    import core.plugins.sessiondb_contract as sessiondb_contract
+    import core.runtime.events as events
+
+    def _boom(_event):
+        raise RuntimeError("sessiondb lifecycle down")
+
+    monkeypatch.setattr(sessiondb_contract, "record_session_lifecycle_observation", _boom)
+    monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: False)
+    with caplog.at_level("WARNING"):
+        emit_event(name="session.compaction", payload={}, source="pytest", session_id="sess-soft")
+        soft = process_events(limit=5, names=["session.compaction"])
+
+    assert soft["processed"] == 1
+    assert soft["failed"] == 0
+    assert soft["details"][0]["result"] == {
+        "status": "acknowledged",
+        "event": "session.compaction",
+        "persisted": False,
+    }
+    assert any("SessionDB lifecycle observation persistence failed" in rec.message for rec in caplog.records)
+
+    monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: True)
+    emit_event(name="session.compaction", payload={}, source="pytest", session_id="sess-hard")
+    with pytest.raises(RuntimeError, match="Event handler failed while fail-hard mode is enabled") as excinfo:
+        process_events(limit=5, names=["session.compaction"])
+    assert isinstance(excinfo.value.__cause__, RuntimeError)
+    assert str(excinfo.value.__cause__) == "sessiondb lifecycle down"
+
+
 def test_event_capability_lookup_has_delivery_mode(tmp_path):
     adapter = TestAdapter(tmp_path); set_adapter(adapter); iroot = adapter.instance_root()
     cap_active = get_event_capability("session.reset")
