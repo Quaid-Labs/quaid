@@ -238,16 +238,24 @@ Direct-write monitor paths to migrate in later milestones:
 ## M0 Follow-Up Decisions
 
 1. `sessiondb` was not added to first-party datastore manifests in M2.
-   - Current disposition: keep it as internal transcript/provenance plumbing
-     through `core.services.session_memory_bridge` until a dedicated sessiondb
-     manifest or source-window slice is reviewed.
-   - Tracking doc: `datastore-events-m2-manifest-registry.md`.
+   - Current disposition: M14 added SessionDB first-party manifest/contract
+     metadata for durable transcript/provenance ownership, and M16 moved
+     `session.ingest_log.request.v1` metadata and request registration to
+     SessionDB. MemoryDB still owns the `session_chunks` recall/write
+     projection, SessionDB recall remains `[]`, and source-window selector
+     ownership remains deferred.
+   - Tracking docs: `datastore-events-m2-manifest-registry.md`,
+     `datastore-events-m14-sessiondb-manifest-plan.md`, and
+     `datastore-events-m16-sessiondb-ingest-request-ownership-plan.md`.
 
 2. User-facing recall store names are treated as capability/selectors rather
    than datastore implementation ids.
-   - Current disposition: M4/M5 activate explicit docs/vector request slices;
-     M6.1 keeps TypeScript routing metadata behavior-preserving; M6.2a and M6.3
-     remain plan-approved but runtime-blocked.
+   - Current disposition: M4/M5 activated explicit docs/vector request slices;
+     M6.1 kept TypeScript routing metadata behavior-preserving; M6.2a routed
+     the default/routed `project` descriptor through the docs broker path; and
+     M6.3 routed default/routed `vector_basic` and `vector_technical` selectors
+     through the MemoryDB broker path while preserving selector-specific domain
+     policy.
    - Tracking docs: `datastore-events-m4-recall-request-contract.md`,
      `datastore-events-m5-explicit-vector-recall-plan.md`,
      `datastore-events-m6-routed-recall-capability-plan.md`, and
