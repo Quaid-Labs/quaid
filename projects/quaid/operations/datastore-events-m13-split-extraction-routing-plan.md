@@ -81,6 +81,12 @@ Implementation shape:
 - Preserve empty-family behavior. Do not invent writes for empty snippet or
   journal payloads; aggregate zero counters and empty target files for families
   that have no payload to send.
+- Skipped or empty-family aggregation shape is inline synthesis, not a no-op
+  broker request: when a write flag is false or a family payload is empty,
+  synthesize a zero-counter metrics entry for that family using the same
+  key/value shape the split handler returns for a fully empty successful payload
+  (`status="ok"`, counters at `0`, target files as `[]`, `errors=[]`). Do not
+  send a no-op broker request.
 - Preserve the existing additive `snippet_journal_metrics` shape by merging the
   per-family metrics returned by the split handlers into one combined metrics
   object with the same keys, target-file structure, status, and errors list.
