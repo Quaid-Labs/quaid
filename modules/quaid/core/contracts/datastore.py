@@ -272,7 +272,7 @@ class EvolutionDbDatastoreContract(DatastoreContractBase):
         DatastoreHandlerSpec(
             "recall.journal.request.v1",
             REQUEST,
-            ("core.facade recallFromJournal / datastore.notedb.soul_snippets journal files",),
+            ("core.facade recallFromJournal / datastore.evolutiondb.soul_snippets journal files",),
         ),
         DatastoreHandlerSpec(
             "evolution.snippet_journal_write.request.v1",
@@ -282,17 +282,17 @@ class EvolutionDbDatastoreContract(DatastoreContractBase):
         DatastoreHandlerSpec(
             "datastore.validate.request.v1",
             REQUEST,
-            ("datastore.notedb.soul_snippets maintenance validation",),
+            ("datastore.evolutiondb.soul_snippets maintenance validation",),
         ),
         DatastoreHandlerSpec(
             "datastore.explain.request.v1",
             REQUEST,
-            ("datastore.notedb.soul_snippets journal/snippet provenance helpers",),
+            ("datastore.evolutiondb.soul_snippets journal/snippet provenance helpers",),
         ),
         DatastoreHandlerSpec(
             "maintenance.run.request.v1",
             REQUEST,
-            ("datastore.notedb.soul_snippets.register_lifecycle_routines",),
+            ("datastore.evolutiondb.soul_snippets.register_lifecycle_routines",),
         ),
     )
 

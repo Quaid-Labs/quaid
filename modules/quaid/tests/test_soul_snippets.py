@@ -1,5 +1,6 @@
 """Tests for soul_snippets.py — Journal System (evolved from soul snippets v1)."""
 
+import importlib
 import json
 import logging
 import os
@@ -36,6 +37,42 @@ def workspace_dir(tmp_path, monkeypatch):
     yield iroot
 
     reset_adapter()
+
+
+def test_evolutiondb_is_canonical_soul_snippets_module():
+    canonical = importlib.import_module("datastore.evolutiondb.soul_snippets")
+    legacy = importlib.import_module("datastore.notedb.soul_snippets")
+    from datastore.notedb import soul_snippets as legacy_package_module
+    from core.lifecycle import soul_snippets as lifecycle_soul_snippets
+
+    assert legacy is canonical
+    assert legacy_package_module is canonical
+    assert lifecycle_soul_snippets.run_soul_snippets_review is canonical.run_soul_snippets_review
+    assert lifecycle_soul_snippets.run_journal_distillation is canonical.run_journal_distillation
+
+
+def test_notedb_compat_shim_monkeypatches_canonical_module(monkeypatch):
+    canonical = importlib.import_module("datastore.evolutiondb.soul_snippets")
+    legacy = importlib.import_module("datastore.notedb.soul_snippets")
+    from core.lifecycle import soul_snippets as lifecycle_soul_snippets
+
+    calls = []
+
+    def _fake_write(filename, snippets, **kwargs):
+        calls.append((filename, snippets, kwargs))
+        return True
+
+    monkeypatch.setattr(legacy, "write_snippet_entry", _fake_write)
+
+    assert canonical.write_snippet_entry is _fake_write
+    assert lifecycle_soul_snippets.write_snippet_entry("USER.md", ["compat works"])
+    assert calls == [
+        (
+            "USER.md",
+            ["compat works"],
+            {"trigger": "Compaction", "date_str": None, "time_str": None},
+        )
+    ]
 
 
 @pytest.fixture

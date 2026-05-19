@@ -22,6 +22,7 @@ def test_first_party_datastore_registry_lists_canonical_manifests() -> None:
 
     assert ids == ["docsdb", "evolutiondb", "memorydb"]
     assert get_datastore_manifest("evolutiondb")["runtime_aliases"] == ["notedb"]
+    assert get_datastore_manifest("evolutiondb")["module"] == "datastore.evolutiondb.soul_snippets"
     assert get_datastore_manifest("sessiondb") is None
 
 

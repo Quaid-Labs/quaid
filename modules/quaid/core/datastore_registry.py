@@ -125,8 +125,8 @@ FIRST_PARTY_DATASTORE_MANIFESTS: List[Dict[str, Any]] = [
     {
         "id": "evolutiondb",
         "display_name": "EvolutionDB",
-        "description": "Canonical datastore id for the current NoteDB snippets and journal implementation.",
-        "module": "datastore.notedb.soul_snippets",
+        "description": "Canonical datastore id for the EvolutionDB snippets and journal implementation.",
+        "module": "datastore.evolutiondb.soul_snippets",
         "plugin_id": "notedb.core",
         "schema_version": DATASTORE_MANIFEST_SCHEMA_VERSION,
         "capabilities": {
