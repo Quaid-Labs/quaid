@@ -2601,6 +2601,7 @@ def test_process_signal_does_not_reextract_tail_after_nonrolling_semantic_stage(
 
     extract_calls = []
     published_payloads = []
+    publish_kwargs = []
 
     def fake_extract_from_transcript(transcript, **_kwargs):
         extract_calls.append(transcript)
@@ -2622,8 +2623,9 @@ def test_process_signal_does_not_reextract_tail_after_nonrolling_semantic_stage(
             "carry_facts": [],
         }
 
-    def fake_apply_extracted_payloads(payload, **_kwargs):
+    def fake_apply_extracted_payloads(payload, **kwargs):
         published_payloads.append(payload)
+        publish_kwargs.append(kwargs)
         return {
             "facts_stored": len(payload.get("raw_facts", [])),
             "facts_skipped": 0,
@@ -2651,6 +2653,7 @@ def test_process_signal_does_not_reextract_tail_after_nonrolling_semantic_stage(
     assert extract_calls == ["User: My Lisbon notebook codeword is tangerine-emilia."]
     assert len(published_payloads) == 1
     assert len(published_payloads[0]["raw_facts"]) == 1
+    assert publish_kwargs[0]["memory_publish_mode"] == "request"
 
 
 def test_summarize_fact_result_buckets_groups_duplicate_and_skip_reasons():

@@ -193,6 +193,11 @@ class MemoryDbDatastoreContract(DatastoreContractBase):
             ("core.plugins.memorydb_contract.handle_session_ingest_log_request",),
         ),
         DatastoreHandlerSpec(
+            "memory.extraction_publish.request.v1",
+            REQUEST,
+            ("core.plugins.memorydb_contract.handle_extraction_publish_request",),
+        ),
+        DatastoreHandlerSpec(
             "datastore.validate.request.v1",
             REQUEST,
             ("datastore.memorydb.memory_graph.health",),

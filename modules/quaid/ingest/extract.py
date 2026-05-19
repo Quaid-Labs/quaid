@@ -2707,6 +2707,109 @@ def _extract_chunk_payloads(
     return []
 
 
+def _extraction_publish_request_error_message(
+    response: Dict[str, Any],
+    row: Optional[Dict[str, Any]] = None,
+) -> str:
+    if row:
+        result = row.get("result") if isinstance(row.get("result"), dict) else {}
+        for value in (row.get("error"), result.get("error"), result.get("reason")):
+            text = str(value or "").strip()
+            if text:
+                return text
+    for value in (response.get("error"), response.get("status")):
+        text = str(value or "").strip()
+        if text:
+            return text
+    return "unknown extraction publish request failure"
+
+
+def _validate_extraction_publish_broker_response(response: Dict[str, Any]) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
+    if not isinstance(response, dict):
+        raise RuntimeError("extraction publish request returned a non-object response")
+    responses = response.get("responses")
+    if not isinstance(responses, list) or len(responses) != 1:
+        message = _extraction_publish_request_error_message(response)
+        raise RuntimeError(f"extraction publish request returned no memorydb response: {message}")
+    row = responses[0]
+    if not isinstance(row, dict):
+        raise RuntimeError("extraction publish request returned malformed memorydb response")
+    if str(row.get("datastore_id") or "").strip() != "memorydb":
+        raise RuntimeError("extraction publish request returned a non-memorydb response")
+    handler_result = row.get("result")
+    if not isinstance(handler_result, dict):
+        raise RuntimeError("extraction publish request memorydb result is not an object")
+
+    response_status = str(response.get("status") or "").strip().lower()
+    row_status = str(row.get("status") or handler_result.get("status") or "").strip().lower()
+    handler_status = str(handler_result.get("status") or "").strip().lower()
+    if response_status != "ok" or row_status in {"failed", "error", "nacked"} or handler_status in {"failed", "error"}:
+        message = _extraction_publish_request_error_message(response, row)
+        raise RuntimeError(f"extraction publish request failed: {message}")
+
+    publish_result = handler_result.get("publish_result")
+    if not isinstance(publish_result, dict):
+        raise RuntimeError("extraction publish request memorydb publish_result is not an object")
+    facts = handler_result.get("facts_for_orchestration")
+    if not isinstance(facts, list):
+        raise RuntimeError("extraction publish request memorydb facts_for_orchestration is not a list")
+    return publish_result, list(facts)
+
+
+def _request_extraction_publish_payload(
+    result: Dict[str, Any],
+    *,
+    owner_id: str,
+    label: str,
+    session_id: Optional[str],
+    actor_id: Optional[str],
+    speaker_entity_id: Optional[str],
+    subject_entity_id: Optional[str],
+    source_channel: Optional[str],
+    target_datastore: Optional[str],
+    source_conversation_id: Optional[str],
+    participant_entity_ids: Optional[List[str]],
+    source_author_id: Optional[str],
+    dry_run: bool,
+    snippet_files: int,
+    journal_files: int,
+    project_log_projects: int,
+) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
+    from core.plugins.memorydb_contract import register_extraction_publish_request_handler
+    from core.runtime.events import MEMORY_EXTRACTION_PUBLISH_REQUEST_EVENT, request_broker_event
+
+    register_extraction_publish_request_handler()
+    response = request_broker_event(
+        MEMORY_EXTRACTION_PUBLISH_REQUEST_EVENT,
+        {
+            "source": "daemon-final-rolling-flush",
+            "result": dict(result),
+            "owner_id": owner_id,
+            "label": label,
+            "session_id": session_id,
+            "actor_id": actor_id,
+            "speaker_entity_id": speaker_entity_id,
+            "subject_entity_id": subject_entity_id,
+            "source_channel": source_channel,
+            "target_datastore": target_datastore,
+            "source_conversation_id": source_conversation_id,
+            "participant_entity_ids": list(participant_entity_ids or []),
+            "source_author_id": source_author_id,
+            "dry_run": bool(dry_run),
+            "snippet_files": int(snippet_files),
+            "journal_files": int(journal_files),
+            "project_log_projects": int(project_log_projects),
+        },
+        source="ingest.extract.apply_extracted_payloads",
+        session_id=session_id,
+        owner_id=owner_id,
+        provenance={
+            "replacement": "ingest.extract direct MemoryDB extraction publish helper call",
+        },
+    )
+    return _validate_extraction_publish_broker_response(response)
+
+
 def apply_extracted_payloads(
     result: Dict[str, Any],
     *,
@@ -2725,6 +2828,7 @@ def apply_extracted_payloads(
     write_journal: bool = True,
     dry_run: bool = False,
     allowed_domains: Optional[set[str]] = None,
+    memory_publish_mode: str = "direct",
 ) -> Dict[str, Any]:
     """Store/publish a previously extracted raw payload bundle."""
     # Kept for call compatibility; MemoryDB resolves publish domain policy.
@@ -2742,28 +2846,52 @@ def apply_extracted_payloads(
 
     from core.plugins.memorydb_contract import run_extraction_publish_payload, write_extraction_publish_trace
 
-    facts = run_extraction_publish_payload(
-        result,
-        owner_id=owner_id,
-        label=label,
-        session_id=session_id,
-        actor_id=actor_id,
-        speaker_entity_id=speaker_entity_id,
-        subject_entity_id=subject_entity_id,
-        source_channel=source_channel,
-        target_datastore=target_datastore,
-        source_conversation_id=source_conversation_id,
-        participant_entity_ids=participant_entity_ids,
-        source_author_id=source_author_id,
-        dry_run=dry_run,
-        snippet_files=len(all_snippets),
-        journal_files=len(all_journal),
-        project_log_projects=len(all_project_logs),
-        memory_service=_memory,
-        session_bridge=_session_bridge,
-        fail_hard_enabled=is_fail_hard_enabled,
-        log=logger,
-    )
+    publish_mode = str(memory_publish_mode or "direct").strip().lower()
+    if publish_mode == "request":
+        publish_result, facts = _request_extraction_publish_payload(
+            result,
+            owner_id=owner_id,
+            label=label,
+            session_id=session_id,
+            actor_id=actor_id,
+            speaker_entity_id=speaker_entity_id,
+            subject_entity_id=subject_entity_id,
+            source_channel=source_channel,
+            target_datastore=target_datastore,
+            source_conversation_id=source_conversation_id,
+            participant_entity_ids=participant_entity_ids,
+            source_author_id=source_author_id,
+            dry_run=dry_run,
+            snippet_files=len(all_snippets),
+            journal_files=len(all_journal),
+            project_log_projects=len(all_project_logs),
+        )
+        result.update(publish_result)
+    elif publish_mode == "direct":
+        facts = run_extraction_publish_payload(
+            result,
+            owner_id=owner_id,
+            label=label,
+            session_id=session_id,
+            actor_id=actor_id,
+            speaker_entity_id=speaker_entity_id,
+            subject_entity_id=subject_entity_id,
+            source_channel=source_channel,
+            target_datastore=target_datastore,
+            source_conversation_id=source_conversation_id,
+            participant_entity_ids=participant_entity_ids,
+            source_author_id=source_author_id,
+            dry_run=dry_run,
+            snippet_files=len(all_snippets),
+            journal_files=len(all_journal),
+            project_log_projects=len(all_project_logs),
+            memory_service=_memory,
+            session_bridge=_session_bridge,
+            fail_hard_enabled=is_fail_hard_enabled,
+            log=logger,
+        )
+    else:
+        raise ValueError(f"Unsupported memory_publish_mode: {memory_publish_mode!r}")
 
     if isinstance(all_snippets, dict):
         for filename, items in all_snippets.items():

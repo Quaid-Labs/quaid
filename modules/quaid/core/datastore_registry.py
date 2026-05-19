@@ -75,6 +75,7 @@ FIRST_PARTY_DATASTORE_MANIFESTS: List[Dict[str, Any]] = [
             "recall.memory.request.v1",
             "recall.graph.request.v1",
             "session.ingest_log.request.v1",
+            "memory.extraction_publish.request.v1",
             "datastore.validate.request.v1",
             "datastore.explain.request.v1",
             "maintenance.run.request.v1",

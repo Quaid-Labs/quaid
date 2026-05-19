@@ -7,6 +7,7 @@ are implemented here and invoked by core plugin contract execution.
 from __future__ import annotations
 
 import sqlite3
+import logging
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -24,6 +25,8 @@ from datastore.memorydb.domain_registry import (
 from lib.config import get_db_path
 from lib.domain_runtime import publish_domains_to_runtime_config
 from lib.tools_domain_sync import sync_tools_domain_block
+
+logger = logging.getLogger(__name__)
 
 
 def run_session_ingest_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -68,6 +71,70 @@ def handle_session_ingest_log_request(event: Dict[str, Any]) -> Dict[str, Any]:
     return run_session_ingest_payload(payload)
 
 
+def _optional_payload_str(payload: Dict[str, Any], key: str) -> str | None:
+    text = str(payload.get(key) or "").strip()
+    return text or None
+
+
+def _payload_int(payload: Dict[str, Any], key: str) -> int:
+    try:
+        return int(payload.get(key) or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _payload_str_list(payload: Dict[str, Any], key: str) -> List[str] | None:
+    raw = payload.get(key)
+    if not isinstance(raw, list):
+        return None
+    values = [str(item).strip() for item in raw if str(item).strip()]
+    return values
+
+
+def handle_extraction_publish_request(event: Dict[str, Any]) -> Dict[str, Any]:
+    """Handle daemon final-flush fact/source publish through MemoryDB ownership."""
+    payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+    source = str(payload.get("source") or "").strip()
+    if source != "daemon-final-rolling-flush":
+        return {"status": "failed", "error": "payload.source must be daemon-final-rolling-flush"}
+    result_payload = payload.get("result")
+    if not isinstance(result_payload, dict):
+        return {"status": "failed", "error": "payload.result must be an object"}
+
+    from core.services.memory_service import get_memory_service
+    from core.services.session_memory_bridge import get_session_memory_bridge
+    from lib.fail_policy import is_fail_hard_enabled
+
+    result = dict(result_payload)
+    facts = run_extraction_publish_payload(
+        result,
+        owner_id=str(payload.get("owner_id") or "default").strip() or "default",
+        label=str(payload.get("label") or "unknown").strip() or "unknown",
+        session_id=_optional_payload_str(payload, "session_id"),
+        actor_id=_optional_payload_str(payload, "actor_id"),
+        speaker_entity_id=_optional_payload_str(payload, "speaker_entity_id"),
+        subject_entity_id=_optional_payload_str(payload, "subject_entity_id"),
+        source_channel=_optional_payload_str(payload, "source_channel"),
+        target_datastore=_optional_payload_str(payload, "target_datastore"),
+        source_conversation_id=_optional_payload_str(payload, "source_conversation_id"),
+        participant_entity_ids=_payload_str_list(payload, "participant_entity_ids"),
+        source_author_id=_optional_payload_str(payload, "source_author_id"),
+        dry_run=bool(payload.get("dry_run", False)),
+        snippet_files=_payload_int(payload, "snippet_files"),
+        journal_files=_payload_int(payload, "journal_files"),
+        project_log_projects=_payload_int(payload, "project_log_projects"),
+        memory_service=get_memory_service(),
+        session_bridge=get_session_memory_bridge(),
+        fail_hard_enabled=is_fail_hard_enabled,
+        log=logger,
+    )
+    return {
+        "status": "ok",
+        "publish_result": result,
+        "facts_for_orchestration": facts,
+    }
+
+
 def run_extraction_publish_payload(result: Dict[str, Any], **kwargs: Any) -> List[Dict[str, Any]]:
     """Publish extracted fact/source evidence through MemoryDB ownership.
 
@@ -99,6 +166,17 @@ def register_session_ingest_log_request_handler() -> None:
     register_request_handler(
         SESSION_INGEST_LOG_REQUEST_EVENT,
         handle_session_ingest_log_request,
+        datastore_id="memorydb",
+        force=True,
+    )
+
+
+def register_extraction_publish_request_handler() -> None:
+    from core.runtime.events import MEMORY_EXTRACTION_PUBLISH_REQUEST_EVENT, register_request_handler
+
+    register_request_handler(
+        MEMORY_EXTRACTION_PUBLISH_REQUEST_EVENT,
+        handle_extraction_publish_request,
         datastore_id="memorydb",
         force=True,
     )

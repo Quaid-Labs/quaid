@@ -8,6 +8,7 @@ from core.runtime.events import (
     EVENT_HANDLERS,
     DOCS_PROJECT_MAINTENANCE_OBSERVED_EVENT,
     DOCS_PROJECT_UPDATE_REQUEST_EVENT,
+    MEMORY_EXTRACTION_PUBLISH_REQUEST_EVENT,
     SESSION_INGEST_LOG_REQUEST_EVENT,
     dispatch_broker_events,
     emit_broker_event,
@@ -69,6 +70,10 @@ def test_event_emit_list_and_capabilities(tmp_path):
     assert any(c.get("name") == "notification.delayed" for c in caps)
     assert any(c.get("name") == "session.ingest_log" for c in caps)
     assert any(c.get("name") == SESSION_INGEST_LOG_REQUEST_EVENT and c.get("delivery_mode") == "request" for c in caps)
+    assert any(
+        c.get("name") == MEMORY_EXTRACTION_PUBLISH_REQUEST_EVENT and c.get("delivery_mode") == "request"
+        for c in caps
+    )
     assert any(c.get("name") == "session.reset" and c.get("delivery_mode") == "active" for c in caps)
     assert any(c.get("name") == "notification.delayed" and c.get("delivery_mode") == "passive" for c in caps)
 
@@ -1028,6 +1033,87 @@ def test_request_session_ingest_log_rejects_missing_session_id(monkeypatch, tmp_
 
     assert response["status"] == "failed"
     assert response["responses"][0]["result"]["error"] == "payload.session_id is required"
+
+
+def test_request_extraction_publish_runs_memorydb_handler(monkeypatch, tmp_path):
+    set_adapter(TestAdapter(tmp_path))
+    import core.plugins.memorydb_contract as memorydb_contract
+    from core.plugins.memorydb_contract import register_extraction_publish_request_handler
+
+    called = {}
+
+    def _fake_publish(result, **kwargs):
+        called["result"] = result
+        called["kwargs"] = kwargs
+        result["facts_stored"] = 1
+        result["facts_skipped"] = 0
+        result["edges_created"] = 1
+        result["facts"] = [{"status": "stored", "text": "Maya keeps the launch checklist in the red binder"}]
+        return [{"text": "Maya keeps the launch checklist in the red binder", "project": "launch-app"}]
+
+    monkeypatch.setattr(memorydb_contract, "run_extraction_publish_payload", _fake_publish)
+
+    register_extraction_publish_request_handler()
+    response = request_broker_event(
+        MEMORY_EXTRACTION_PUBLISH_REQUEST_EVENT,
+        {
+            "source": "daemon-final-rolling-flush",
+            "result": {
+                "raw_facts": [{"text": "Maya keeps the launch checklist in the red binder"}],
+                "facts": [],
+            },
+            "owner_id": " owner-req ",
+            "label": "RollingFlush",
+            "session_id": "sess-publish",
+            "source_channel": "codex",
+            "target_datastore": "memorydb",
+            "source_conversation_id": "conv-publish",
+            "participant_entity_ids": [" entity:user ", "", "entity:agent"],
+            "dry_run": False,
+            "snippet_files": 2,
+            "journal_files": 1,
+            "project_log_projects": 1,
+        },
+        source="pytest",
+    )
+
+    assert response["status"] == "ok"
+    row = response["responses"][0]
+    assert row["datastore_id"] == "memorydb"
+    result = row["result"]
+    assert result["status"] == "ok"
+    assert result["publish_result"]["facts_stored"] == 1
+    assert result["publish_result"]["edges_created"] == 1
+    assert result["facts_for_orchestration"][0]["project"] == "launch-app"
+    kwargs = called["kwargs"]
+    assert kwargs["owner_id"] == "owner-req"
+    assert kwargs["label"] == "RollingFlush"
+    assert kwargs["session_id"] == "sess-publish"
+    assert kwargs["source_channel"] == "codex"
+    assert kwargs["target_datastore"] == "memorydb"
+    assert kwargs["source_conversation_id"] == "conv-publish"
+    assert kwargs["participant_entity_ids"] == ["entity:user", "entity:agent"]
+    assert kwargs["snippet_files"] == 2
+    assert kwargs["journal_files"] == 1
+    assert kwargs["project_log_projects"] == 1
+
+
+def test_request_extraction_publish_rejects_wrong_source(monkeypatch, tmp_path):
+    set_adapter(TestAdapter(tmp_path))
+    import core.runtime.events as events
+    from core.plugins.memorydb_contract import register_extraction_publish_request_handler
+
+    monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: False)
+
+    register_extraction_publish_request_handler()
+    response = request_broker_event(
+        MEMORY_EXTRACTION_PUBLISH_REQUEST_EVENT,
+        {"source": "cli", "result": {"raw_facts": []}},
+        source="pytest",
+    )
+
+    assert response["status"] == "failed"
+    assert response["responses"][0]["result"]["error"] == "payload.source must be daemon-final-rolling-flush"
 
 
 def test_request_session_ingest_log_matches_direct_session_projection(monkeypatch, tmp_path):

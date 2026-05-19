@@ -2764,6 +2764,174 @@ class TestExtractFromTranscript:
         assert "publish_batch_size" not in kwargs
         assert "default_session_microchunk_tokens" not in kwargs
 
+    def test_apply_extracted_payloads_request_mode_routes_through_memorydb_request(self, monkeypatch):
+        import ingest.extract as extract_mod
+
+        called = {}
+
+        def fake_register():
+            called["registered"] = True
+
+        def fake_direct_publish(*_args, **_kwargs):
+            raise AssertionError("request mode must not fall back to direct publish helper")
+
+        def fake_request(event_type, payload, **kwargs):
+            called["event_type"] = event_type
+            called["payload"] = payload
+            called["kwargs"] = kwargs
+            publish_result = dict(payload["result"])
+            publish_result["facts_stored"] = 1
+            publish_result["facts_skipped"] = 0
+            publish_result["edges_created"] = 0
+            publish_result["facts"] = [{
+                "text": "Maya moved the launch checklist into the red binder",
+                "status": "stored",
+                "edges": [],
+            }]
+            return {
+                "status": "ok",
+                "responses": [{
+                    "datastore_id": "memorydb",
+                    "status": "ok",
+                    "result": {
+                        "status": "ok",
+                        "publish_result": publish_result,
+                        "facts_for_orchestration": [{
+                            "text": "Maya moved the launch checklist into the red binder",
+                            "domains": ["project"],
+                            "project": "launch-app",
+                        }],
+                    },
+                }],
+            }
+
+        fake_enqueue = MagicMock(return_value={
+            "entries_seen": 1,
+            "entries_queued": 1,
+            "projects_queued": 1,
+            "queue_failures": 0,
+        })
+        monkeypatch.setattr(
+            "core.plugins.memorydb_contract.register_extraction_publish_request_handler",
+            fake_register,
+        )
+        monkeypatch.setattr(
+            "core.plugins.memorydb_contract.run_extraction_publish_payload",
+            fake_direct_publish,
+        )
+        monkeypatch.setattr("core.runtime.events.request_broker_event", fake_request)
+        monkeypatch.setattr(extract_mod, "enqueue_project_logs", fake_enqueue)
+
+        payload = {
+            "raw_facts": [{
+                "text": "Maya moved the launch checklist into the red binder",
+                "category": "fact",
+                "speaker": "user",
+                "domains": ["project"],
+                "project": "launch-app",
+            }],
+            "raw_snippets": {"SOUL.md": ["Keep launch checklist references precise"]},
+            "raw_journal": {},
+            "raw_project_logs": {"launch-app": ["Moved launch checklist into red binder"]},
+            "facts": [],
+            "snippets": {},
+            "journal": {},
+            "project_logs": {},
+            "project_log_metrics": {},
+            "facts_stored": 0,
+            "facts_skipped": 0,
+            "edges_created": 0,
+            "dry_run": False,
+        }
+
+        applied = extract_mod.apply_extracted_payloads(
+            payload,
+            owner_id="test",
+            label="rolling-flush",
+            session_id="sess-request",
+            source_channel="codex",
+            target_datastore="memorydb",
+            source_conversation_id="conv-request",
+            participant_entity_ids=["entity:user"],
+            write_snippets=False,
+            write_journal=False,
+            dry_run=False,
+            memory_publish_mode="request",
+        )
+
+        assert called["registered"] is True
+        assert called["event_type"] == "memory.extraction_publish.request.v1"
+        assert called["payload"]["source"] == "daemon-final-rolling-flush"
+        assert called["payload"]["owner_id"] == "test"
+        assert called["payload"]["session_id"] == "sess-request"
+        assert called["payload"]["source_channel"] == "codex"
+        assert called["payload"]["target_datastore"] == "memorydb"
+        assert called["payload"]["source_conversation_id"] == "conv-request"
+        assert called["payload"]["participant_entity_ids"] == ["entity:user"]
+        assert called["payload"]["snippet_files"] == 1
+        assert called["payload"]["project_log_projects"] == 1
+        assert called["kwargs"]["source"] == "ingest.extract.apply_extracted_payloads"
+        assert applied["facts_stored"] == 1
+        assert applied["snippets"]["SOUL.md"] == ["Keep launch checklist references precise"]
+        assert applied["project_logs"]["launch-app"] == ["Moved launch checklist into red binder"]
+        fake_enqueue.assert_called_once()
+
+    def test_apply_extracted_payloads_request_mode_does_not_fallback_after_broker_failure(self, monkeypatch):
+        import ingest.extract as extract_mod
+
+        direct_called = False
+
+        def fake_direct_publish(*_args, **_kwargs):
+            nonlocal direct_called
+            direct_called = True
+            raise AssertionError("request-mode failure must not route around broker")
+
+        monkeypatch.setattr(
+            "core.plugins.memorydb_contract.register_extraction_publish_request_handler",
+            lambda: None,
+        )
+        monkeypatch.setattr(
+            "core.plugins.memorydb_contract.run_extraction_publish_payload",
+            fake_direct_publish,
+        )
+        monkeypatch.setattr(
+            "core.runtime.events.request_broker_event",
+            lambda *_args, **_kwargs: {
+                "status": "failed",
+                "error": "simulated broker failure",
+                "responses": [],
+            },
+        )
+
+        payload = {
+            "raw_facts": [{"text": "Maya keeps the launch checklist in the red binder"}],
+            "raw_snippets": {},
+            "raw_journal": {},
+            "raw_project_logs": {},
+            "facts": [],
+            "snippets": {},
+            "journal": {},
+            "project_logs": {},
+            "project_log_metrics": {},
+            "facts_stored": 0,
+            "facts_skipped": 0,
+            "edges_created": 0,
+            "dry_run": False,
+        }
+
+        with pytest.raises(RuntimeError, match="extraction publish request returned no memorydb response"):
+            extract_mod.apply_extracted_payloads(
+                payload,
+                owner_id="test",
+                label="rolling-flush",
+                session_id="sess-request-fail",
+                dry_run=False,
+                memory_publish_mode="request",
+            )
+
+        assert direct_called is False
+        assert payload["facts_stored"] == 0
+
     @patch("ingest.extract._memory.store")
     def test_apply_extracted_payloads_collapses_exact_duplicate_fact_rows(self, mock_store):
         from ingest.extract import apply_extracted_payloads
