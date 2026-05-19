@@ -1,6 +1,6 @@
 # Datastore Events M9 Monitor Migration Plan
 
-Status: draft coordination plan; no runtime implementation
+Status: M9 selected monitor-write migrations complete; M10 handoff criteria recorded
 Owner: W1 runtime/datastore
 Plan source: `~/quaidcode/util/docs/datastore-events-migration-plan.md`
 
@@ -14,8 +14,9 @@ Do not implement any M9 sub-milestone until:
 4. The specific M9 sub-milestone has a focused implementation plan reviewed by
    the relevant domain owner before code lands.
 
-This document is planning only. It records the ordered M9 sequence and stop
-rules; it does not approve any runtime implementation.
+This document started as a planning record and now also records closure for the
+selected M9 monitor-write migrations. It does not approve new runtime work
+beyond the completed slices listed below.
 
 ## M9 Goal
 
@@ -31,6 +32,30 @@ The order is intentional risk gradient:
 5. evolution, snippet, and journal events
 
 Do not reorder without recording why and getting the relevant domain review.
+
+## M9 Closure Status
+
+The selected M9 monitor-write migrations are complete:
+
+- M9.1 DocsDB registration/stale-index listener authority closed at
+  `9ac2a07b3`.
+- M9.2 project-doc worker apply/index request routing closed at
+  `b5a4dbabe` + `959899295`, with diagnostic follow-up `2ff5aa51`.
+- M9.3 session-log ingest request routing and active `session.ingest_log`
+  helper convergence closed at `ce02408f2` + `e23dfc17f` and `7c2522ab5`;
+  ack-only lifecycle events remain core-owned acknowledgements.
+- M9.4 MemoryDB extraction fact/source publish helper and request routing closed
+  through `65dbab41d` + `045883370`, `cd7cb61f7` + `98e7b21f5`, and
+  `9acb2da60` + `41f4aacf8`.
+- M9.5 EvolutionDB/NoteDB snippet/journal helper and request routing closed
+  through `99a947426` + `7fd0771dc`, `c9aac7ab6`, and `126659a91`.
+
+Deferred items are not M9 blockers unless separately selected by Solomon with a
+new reviewed plan: direct `extract_from_transcript()` / CLI request routing,
+project-log queue ownership, lifecycle persistence, SessionDB first-party
+manifest registration, source-window metadata enrichment, snippet/journal
+request splitting, `datastore.evolutiondb` package rename, and `.ego`
+integration.
 
 ## Shared Rules For Every M9 Slice
 
