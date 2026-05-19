@@ -1,12 +1,12 @@
 # Datastore Events M22 Lifecycle Daemon Signal Bridge Plan
 
-Status: draft plan; no runtime implementation yet
+Status: runtime opt-in bridge slice complete; default automation deferred
 Owner: W1 runtime/daemon, W6 boundary review, W3 recall guard review
 Plan source: `projects/quaid/operations/datastore-events-m21-daemon-lifecycle-observation-plan.md`
 
 ## Precondition
 
-Do not implement runtime code for M22 until:
+Runtime code for M22 was gated on:
 
 1. M21 daemon lifecycle observation bridge is closed through W4/W3/W6/W8.
 2. W6 reviews the runtime-event-to-daemon boundary because this slice would let
@@ -20,7 +20,7 @@ Do not implement runtime code for M22 until:
    preserves normal daemon extraction/projection behavior and does not duplicate
    adapter hook signals.
 
-This document selects a narrow explicit bridge only. It does not approve default
+This document records the completed narrow explicit bridge only. It does not approve default
 lifecycle-triggered extraction, new daemon signal types, new lifecycle event
 names, changes to adapter hook signal paths, request/default routing changes,
 SessionDB recall selectors, source-window selector ownership, MemoryDB
@@ -36,19 +36,19 @@ still intentionally closed: a normal `session.reset`, `session.compaction`,
 `session.timeout`, or `session.agent_end` event does not itself enqueue daemon
 extraction work.
 
-M22 selects a first explicitly requested bridge between those two surfaces. If a
+M22 selected a first explicitly requested bridge between those two surfaces. If a
 lifecycle event payload opts in and supplies a concrete transcript path, the
-runtime may write the corresponding existing daemon signal type through the same
+runtime now writes the corresponding existing daemon signal type through the same
 signal-file path used by adapter hooks. Normal lifecycle events without the
 explicit opt-in remain acknowledgement-plus-observation only.
 
-This is not default automation. M22 must not infer extraction work from lifecycle
-event names alone, must not wake or start the daemon in the first slice, and must
+This is not default automation. M22 does not infer extraction work from lifecycle
+event names alone, does not wake or start the daemon in the first slice, and does
 not change which transcripts adapter hooks already signal.
 
 ## Current Boundary
 
-Current post-M21 path:
+Pre-M22 path:
 
 1. `_handle_session_lifecycle()` records SessionDB lifecycle observations for
    event-bus lifecycle events with `session_id`, preserving acknowledgement
@@ -61,13 +61,13 @@ Current post-M21 path:
 4. M21 records metadata-only SessionDB lifecycle observations for daemon
    `reset`/`compaction`/`timeout`/`session_end` signals; `rolling` remains
    excluded.
-5. No event-bus lifecycle handler currently enqueues daemon signal files.
+5. No event-bus lifecycle handler enqueued daemon signal files.
 
 ## Selected First Slice: Explicit Opt-In Signal File Bridge
 
-Implement one runtime slice only after review:
+Implemented one runtime slice only:
 
-1. Add a small helper for lifecycle-event daemon signal requests, for example
+1. Added a small helper for lifecycle-event daemon signal requests, for example
    `_maybe_queue_lifecycle_daemon_signal(event, *, session_id)`, as a private
    module-level function in `core.runtime.events` near
    `_handle_session_lifecycle()`. Do not create a new dedicated helper module
@@ -86,7 +86,7 @@ Implement one runtime slice only after review:
    be supplied as `payload.daemon_signal.transcript_path` or, if absent there,
    as `payload.transcript_path`. Missing, empty, or nonexistent transcript paths
    are selected request failures, not silent no-ops.
-4. Map only existing lifecycle events to existing daemon signal types:
+4. Mapped only existing lifecycle events to existing daemon signal types:
    `session.reset -> reset`, `session.compaction -> compaction`,
    `session.timeout -> timeout`, and `session.agent_end -> session_end`.
    `session.new` and `session.agent_start` do not queue daemon signals in this
@@ -97,19 +97,19 @@ Implement one runtime slice only after review:
    "session.agent_end": "session_end"}` so tests can assert the mapping
    directly. `session.new`, `session.agent_start`, and `rolling` must be absent
    from the constant.
-5. Use `core.extraction_daemon.write_signal()` through an in-function import
+5. Uses `core.extraction_daemon.write_signal()` through an in-function import
    inside the private helper. Do not write signal files by hand. Do not add a
    direct dependency from lifecycle handling to datastore implementations. Do
    not import or call daemon process lifecycle helpers such as start, wake, stop,
    or restart functions.
-6. Preserve daemon signal idempotency by relying on the existing `write_signal()`
+6. Preserves daemon signal idempotency by relying on the existing `write_signal()`
    dedupe rules for compatible same-session/same-type signals. Do not generate a
    new daemon signal UUID outside `write_signal()`.
-7. Record compact signal metadata only: reason/source fields from
+7. Records compact signal metadata only: reason/source fields from
    `payload.daemon_signal`, the lifecycle event id/name, and the adapter label if
    provided. Do not put transcript text, extracted facts, recall rows, or
    source-window rows in the signal metadata.
-8. Preserve `_handle_session_lifecycle()` acknowledgement shape. Successful
+8. Preserves `_handle_session_lifecycle()` acknowledgement shape. Successful
    explicit queueing may add passive fields such as `daemon_signal_queued: true`,
    `daemon_signal_type`, and `signal_name`, but must not change `status` or
    `event`. Non-opt-in events must not gain those fields.
@@ -121,10 +121,10 @@ Implement one runtime slice only after review:
      `daemon_signal_error: <operator-readable string>`.
    - Plain lifecycle events without opt-in must not gain any
      `daemon_signal_*` fields or `signal_name`.
-9. Do not wake, start, stop, or restart the daemon in this first slice. The
+9. Does not wake, start, stop, or restart the daemon in this first slice. The
    selected bridge writes the existing signal file only; daemon process lifecycle
    automation remains future-plan-gated.
-10. Preserve M21 daemon observation behavior. When the daemon later processes the
+10. Preserves M21 daemon observation behavior. When the daemon later processes the
     queued signal, M21 observation recording should work exactly as it does for
     adapter-written signals.
 
@@ -240,3 +240,39 @@ narrow explicit bridge smoke:
 - whether hidden CLI request-mode flags should ever become public
 - compatibility-alias retirement and `notedb.core` plugin-id rename
 - `.ego` import/export integration
+
+## Implementation Record
+
+Runtime closed in `4fbecd088` (`refactor(datastore): bridge opt-in lifecycle signals to daemon`) with test-only follow-up `90a0fb2de` (`test(datastore): cover M22 daemon signal write failures`).
+
+Implemented behavior:
+
+- `core.runtime.events.LIFECYCLE_EVENT_TO_DAEMON_SIGNAL` maps only `session.reset -> reset`, `session.compaction -> compaction`, `session.timeout -> timeout`, and `session.agent_end -> session_end`. `session.new`, `session.agent_start`, and `rolling` remain excluded.
+- `_maybe_queue_lifecycle_daemon_signal()` is a private helper next to `_handle_session_lifecycle()`. It imports `core.extraction_daemon.write_signal()` in-function, does not import `datastore.*`, does not manually write signal files, and does not call daemon start/wake/stop/restart helpers.
+- The bridge is selected only by `payload.daemon_signal.enabled is True`. Plain lifecycle events keep the M20 acknowledgement plus SessionDB observation envelope and do not gain `daemon_signal_*` fields or `signal_name`.
+- Opt-in payloads require a concrete `session_id` and an existing transcript path from `payload.daemon_signal.transcript_path` or `payload.transcript_path`. Missing session id, missing transcript path, nonexistent transcript path, and `write_signal()` failures are selected request failures.
+- Success adds only passive bridge metadata to the existing acknowledgement result: `daemon_signal_queued=True`, `daemon_signal_type=<mapped signal type>`, and `signal_name=<write_signal result basename>`. Fail-soft selected failures log loudly and return `daemon_signal_queued=False` plus `daemon_signal_error`.
+- Signal metadata is compact: bridge provenance, lifecycle event id/name, and optional `reason`/`source` from `payload.daemon_signal`. Unknown `daemon_signal` fields are ignored and not propagated. Transcript text, extracted facts, recall rows, and source-window rows are not added to signal metadata.
+- Cross-path dedupe is delegated to existing `write_signal()` behavior. Adapter-written and lifecycle-bridge-written compatible same-session/same-type pending signals collapse to one pending signal file.
+- Under `failHard=true`, selected bridge failures raise through `process_events()` with the original exception chained. Under `failHard=false`, selected bridge failures log loudly and preserve lifecycle acknowledgement semantics without claiming a queued signal.
+- M20 lifecycle observation recording remains independent: fail-soft SessionDB observation failures do not block an explicitly requested daemon signal, and daemon signal failures do not claim lifecycle observation failure.
+- M21 daemon observation behavior is unchanged; when the daemon later processes a bridge-written signal, it follows the same observation path as adapter-written signals.
+- MemoryDB `session_chunks` recall/write ownership, SessionDB `capabilities.recall=[]`, M19 source-window metadata/output policy, M16 request ownership, M17/M18 active ingest behavior, MemoryDB compatibility wrappers, daemon polling/priority/locking/cursor/rolling behavior, CLI/default routing, and daemon process lifecycle all remain unchanged.
+
+Test coverage added or preserved:
+
+- exact mapping constant and excluded event assertions;
+- explicit opt-in success path writes one existing daemon signal through `write_signal()` and records the expected passive envelope fields;
+- non-opt-in lifecycle events do not call `write_signal()` and have no bridge fields;
+- `session.new` and `session.agent_start` remain excluded even with opt-in payloads;
+- missing transcript path, nonexistent transcript path, missing session id, and monkeypatched `write_signal()` exceptions cover fail-soft logging/envelope behavior and failHard exception chaining;
+- cross-path adapter-hook plus lifecycle-bridge dedupe produces exactly one pending signal;
+- source assertions prove no datastore import, no manual signal write helper, and no daemon start/wake/restart helper call;
+- existing event, daemon signal, source-window, SessionDB bridge, registry, docs consistency, boundary, and unit-wrapper lanes remain green.
+
+Validation chain:
+
+- W4 R201 PASS on `4fbecd088`: opt-in bridge source proof and live smoke passed;  `90a0fb2de` was test-only and required no fresh live deploy.
+- W3 APPROVED `4fbecd088` with no runtime/recall findings; W3 APPROVED `90a0fb2de` as test-only with no behavior delta.
+- W6 APPROVED-WITH-CONCERNS on `4fbecd088`, then APPROVED `90a0fb2de` after the explicit `write_signal()` exception coverage gap was closed; the discarded-return note remains informational.
+- W8 STATIC PASS/runtime HOLD for `4fbecd088` + `90a0fb2de`; runtime hold was only awaiting final closure recording.

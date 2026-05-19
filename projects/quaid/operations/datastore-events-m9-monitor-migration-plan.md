@@ -128,11 +128,14 @@ daemon work, and lifecycle automation remain deferred.
 M21 daemon lifecycle observation bridge closed at `f6b661ea0` + `b591b7d3` +
 `f90602cb`: existing daemon reset/compaction/timeout/session_end signals now
 record metadata-only SessionDB lifecycle observations through the M20 contract
-seam, while rolling signals remain excluded. M22 now tracks an explicit opt-in
-lifecycle-to-daemon signal file bridge in
-`projects/quaid/operations/datastore-events-m22-lifecycle-daemon-signal-bridge-plan.md`;
-default lifecycle-triggered transcript ingest, new daemon automation, and
-recall/source-window policy changes remain deferred.
+seam, while rolling signals remain excluded. M22 explicit opt-in
+lifecycle-to-daemon signal file bridge closed at `4fbecd088` + `90a0fb2de`:
+lifecycle events with `payload.daemon_signal.enabled=true`, concrete
+`session_id`, and a real transcript path can write existing daemon signals
+through `core.extraction_daemon.write_signal()`, while plain lifecycle events
+remain acknowledgement plus observation only. Default lifecycle-triggered
+transcript ingest, new daemon automation, and recall/source-window policy
+changes remain deferred.
 
 ## Shared Rules For Every M9 Slice
 

@@ -183,10 +183,8 @@ narrow lifecycle smoke:
 
 - daemon lifecycle signal observation bridge closed in M21 at `f6b661ea0` +
   `b591b7d3` + `f90602cb`; explicit opt-in lifecycle-to-daemon signal file
-  bridge is tracked as M22 in
-  `projects/quaid/operations/datastore-events-m22-lifecycle-daemon-signal-bridge-plan.md`;
-  default lifecycle-triggered transcript ingest and daemon automation remain
-  deferred
+  bridge closed in M22 at `4fbecd088` + `90a0fb2de`; default
+  lifecycle-triggered transcript ingest and daemon automation remain deferred
 - request/active compatibility-wrapper removal from `core.plugins.memorydb_contract`
 - whether SessionDB should expose dedicated request handlers beyond
   `session.ingest_log.request.v1` and generic metadata/maintenance surfaces
