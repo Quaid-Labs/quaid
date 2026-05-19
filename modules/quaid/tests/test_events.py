@@ -605,6 +605,54 @@ def test_session_lifecycle_daemon_signal_missing_session_id_is_selected_failure(
     assert str(excinfo.value.__cause__) == "payload.session_id is required for daemon_signal bridge"
 
 
+def test_session_lifecycle_daemon_signal_write_failure_respects_failhard(monkeypatch, tmp_path, caplog):
+    monkeypatch.setenv("SESSION_DB_PATH", str(tmp_path / "session.db"))
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
+    set_adapter(TestAdapter(tmp_path))
+
+    from core import extraction_daemon
+    import core.runtime.events as events
+
+    transcript = tmp_path / "session.jsonl"
+    transcript.write_text('{"role":"user","content":"hello"}\n', encoding="utf-8")
+
+    def _boom(**_kwargs):
+        raise RuntimeError("write_signal down")
+
+    monkeypatch.setattr(extraction_daemon, "write_signal", _boom)
+    monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: False)
+    with caplog.at_level("WARNING"):
+        emit_event(
+            name="session.reset",
+            payload={"daemon_signal": {"enabled": True, "transcript_path": str(transcript)}},
+            source="pytest",
+            session_id="sess-soft-write",
+            owner_id="owner-life",
+        )
+        soft = process_events(limit=5, names=["session.reset"])
+
+    soft_result = soft["details"][0]["result"]
+    assert soft_result["status"] == "acknowledged"
+    assert soft_result["persisted"] is True
+    assert soft_result["daemon_signal_queued"] is False
+    assert soft_result["daemon_signal_error"] == "write_signal down"
+    assert any("Lifecycle daemon signal bridge failed" in rec.message for rec in caplog.records)
+
+    monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: True)
+    emit_event(
+        name="session.reset",
+        payload={"daemon_signal": {"enabled": True, "transcript_path": str(transcript)}},
+        source="pytest",
+        session_id="sess-hard-write",
+        owner_id="owner-life",
+    )
+    with pytest.raises(RuntimeError, match="Event handler failed while fail-hard mode is enabled") as excinfo:
+        process_events(limit=5, names=["session.reset"])
+    assert isinstance(excinfo.value.__cause__, RuntimeError)
+    assert str(excinfo.value.__cause__) == "write_signal down"
+
+
 def test_session_lifecycle_daemon_signal_dedupes_with_adapter_signal(monkeypatch, tmp_path):
     monkeypatch.setenv("SESSION_DB_PATH", str(tmp_path / "session.db"))
     monkeypatch.setenv("QUAID_HOME", str(tmp_path))
