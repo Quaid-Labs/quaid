@@ -112,10 +112,12 @@ active handler no longer catches unexpected SessionDB helper/import exceptions
 locally; they now reach `process_events()` failHard machinery, while structured
 failed envelopes and normal success behavior remain unchanged.
 
-M19 now tracks SessionDB source-window metadata enrichment in
-`projects/quaid/operations/datastore-events-m19-sessiondb-source-window-metadata-plan.md`;
-MemoryDB `session_chunks` selector ownership remains unchanged, while
-SessionDB/source-window selector ownership remains deferred.
+M19 SessionDB source-window metadata enrichment closed at `cf9eddd26` +
+`e4c4ec0d5`: SessionDB `expand_microchunk()` now supplies provenance-only
+`source_window_header` metadata for dated microchunks, while MemoryDB consumes
+it under the existing source-window output policy. MemoryDB `session_chunks`
+selector ownership remains unchanged, and SessionDB/source-window selector
+ownership remains deferred.
 
 ## Shared Rules For Every M9 Slice
 

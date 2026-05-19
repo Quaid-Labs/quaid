@@ -1,6 +1,6 @@
 # Datastore Events M19 SessionDB Source-Window Metadata Plan
 
-Status: draft plan; no runtime implementation yet
+Status: runtime metadata slice complete; selector/policy decisions deferred
 Owner: W1 runtime/datastore, W3 recall and source-window review
 Plan source: `projects/quaid/operations/datastore-events-m18-sessiondb-active-ingest-failhard-plan.md`
 
@@ -19,13 +19,13 @@ Do not implement runtime code for M19 until:
    session-memory bridge, store recall, active/request session ingest,
    datastore manifests/contracts, and boundary checks.
 
-This document selects a narrow source-window metadata ownership slice only. It
-does not approve changing the `session_chunks` recall selector owner, changing
-ranking/planner behavior, changing source-window item selection or token budget,
-adding SessionDB recall selectors, removing MemoryDB compatibility wrappers,
-changing active/request session ingest payloads or envelopes, lifecycle
-persistence, data migration, CLI behavior, default request routing, public push,
-or release actions.
+This document records the completed narrow source-window metadata ownership
+slice only. It does not approve changing the `session_chunks` recall selector
+owner, changing ranking/planner behavior, changing source-window item selection
+or token budget, adding SessionDB recall selectors, removing MemoryDB
+compatibility wrappers, changing active/request session ingest payloads or
+envelopes, lifecycle persistence, data migration, CLI behavior, default request
+routing, public push, or release actions.
 
 ## Goal
 
@@ -36,8 +36,8 @@ exception propagation. MemoryDB still correctly owns the user-facing
 
 The remaining source-window ownership boundary is mixed: SessionDB stores the
 transcript rows and can expand a microchunk to nearby SessionDB rows, but
-MemoryDB recall code reconstructs source-date header metadata for the expanded
-window. M19 selects a first metadata-only runtime slice: let SessionDB include
+MemoryDB recall code reconstructed source-date header metadata for the expanded
+window. M19 selected a first metadata-only runtime slice: let SessionDB include
 explicit source-window header metadata in `expand_microchunk()` results, then let
 MemoryDB consume that metadata while producing the same recall output as before.
 
@@ -47,7 +47,7 @@ policy.
 
 ## Current Boundary
 
-Current post-M18 path:
+Pre-M19 path:
 
 1. `datastore.sessiondb.session_store.expand_microchunk()` returns the selected
    microchunk, pair, pair-window rows, compact microchunk-window rows, source
@@ -66,7 +66,7 @@ Current post-M18 path:
 
 ## Selected First Slice: Source-Window Header Metadata Only
 
-Implement one runtime metadata slice only:
+Implemented one runtime metadata slice only:
 
 1. Add a SessionDB-owned `source_window_header` metadata object to
    `datastore.sessiondb.session_store.expand_microchunk()` results when the
@@ -192,3 +192,68 @@ narrow session source-window smoke:
 - whether hidden CLI request-mode flags should ever become public
 - compatibility-alias retirement and `notedb.core` plugin-id rename
 - `.ego` import/export integration
+
+## Implementation Record
+
+Runtime closed in `cf9eddd26` (`refactor(datastore): add SessionDB
+source-window metadata`) with test follow-up `e4c4ec0d5` (`test(datastore):
+tighten M19 source-window guards`).
+
+Implemented behavior:
+
+- `datastore.sessiondb.session_store.expand_microchunk()` now emits a top-level
+  `source_window_header` metadata object when the expanded microchunk has a
+  source date. The object contains only `session_id`, `source_date`, `pair_id`,
+  `microchunk_id`, and deterministic `header_id=f"{session_id}:{source_date}"`.
+- SessionDB `window` and `microchunk_window` arrays remain unchanged; the
+  source header is metadata only, not an inserted SessionDB row.
+- MemoryDB source-window expansion validates and consumes
+  `source_window_header` when present, then constructs the same source-date
+  header row shape used before M19.
+- Absent `source_window_header` metadata remains a backward-compatible installed
+  alpha path: MemoryDB uses the pre-M19 header construction path and produces
+  identical output for the same input.
+- Malformed `source_window_header` metadata raises through the existing
+  source-window failHard path under `failHard=true`; under `failHard=false`,
+  MemoryDB logs loudly and preserves the previous output shape without claiming
+  enriched provenance.
+- The legacy fallback header row also carries the deterministic header id, and
+  source-header dedup uses that id. This is intentional M19 scope so enriched
+  and absent-metadata paths produce matching row identifiers and dedupe headers
+  consistently.
+- MemoryDB `session_chunks` recall/write ownership, final source-window
+  selection, ranking, planner behavior, token budgets, output ordering,
+  active/request session ingest envelopes, M16 request ownership, M17 active
+  import routing, M18 failHard behavior, MemoryDB compatibility wrappers, and
+  SessionDB `capabilities.recall=[]` are unchanged.
+
+Test coverage:
+
+- SessionDB bridge integration asserts exact `source_window_header` metadata and
+  proves `window`/`microchunk_window` rows are not mutated with header rows.
+- MemoryDB recall tests assert enriched and absent-metadata paths produce the
+  same rendered text, source date, session-window metadata, row identifiers, and
+  header-row fields.
+- Malformed-header tests cover non-dict metadata, missing/wrong/empty required
+  keys, invalid dates, and `header_id` mismatch.
+- FailHard/fail-soft tests prove malformed metadata raises under failHard and
+  logs/falls back under fail-soft.
+- Existing sessiondb bridge, source-window, and session-memory bridge lanes
+  continue to pass.
+
+Validation record:
+
+- W4 R201 live/source-proof PASS on `cf9eddd26`; `e4c4ec0d5` was test-only and
+  required no fresh live smoke.
+- W3 runtime/recall APPROVED with no findings: provenance metadata source only,
+  MemoryDB remains `session_chunks` recall/write selector and final expansion
+  policy owner, SessionDB recall remains `[]`, and no source-window selection,
+  ranking, planner, token-budget, output-ordering, active/request envelope, or
+  lifecycle behavior drift was found.
+- W6 APPROVED after `e4c4ec0d5` closed the malformed-shape coverage gap,
+  tightened absent-metadata parity assertions, and confirmed header-id fallback
+  and dedup-key additions as intentional M19 concomitant scope.
+- W8 static PASS/runtime HOLD closed for the `cf9eddd26` + `e4c4ec0d5` pair:
+  focused source-window tests, sessiondb bridge/source-window selector, session
+  memory bridge, py_compile, ruff, diff/docs checks, boundary check, and unit
+  wrapper all passed.
