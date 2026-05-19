@@ -1365,6 +1365,12 @@ def test_split_snippet_journal_request_handlers_return_family_zero_metrics(tmp_p
         (
             EVOLUTION_SNIPPET_WRITE_REQUEST_EVENT,
             "register_snippet_write_request_handler",
+            {"snippets": {}},
+            "payload.source must be extraction-apply-payloads",
+        ),
+        (
+            EVOLUTION_SNIPPET_WRITE_REQUEST_EVENT,
+            "register_snippet_write_request_handler",
             {"source": "extraction-apply-payloads", "snippets": []},
             "payload.snippets must be an object",
         ),
@@ -1378,6 +1384,12 @@ def test_split_snippet_journal_request_handlers_return_family_zero_metrics(tmp_p
             EVOLUTION_JOURNAL_WRITE_REQUEST_EVENT,
             "register_journal_write_request_handler",
             {"source": "wrong", "journal": {}},
+            "payload.source must be extraction-apply-payloads",
+        ),
+        (
+            EVOLUTION_JOURNAL_WRITE_REQUEST_EVENT,
+            "register_journal_write_request_handler",
+            {"journal": {}},
             "payload.source must be extraction-apply-payloads",
         ),
         (
@@ -1422,6 +1434,103 @@ def test_split_snippet_journal_request_handlers_reject_invalid_payloads_fail_sof
     assert metrics["journal_files_seen"] == 0
     assert metrics["target_files"] == {"snippets": [], "journal": []}
     assert metrics["errors"] == [error]
+
+
+def test_apply_extracted_payloads_request_mode_still_uses_combined_snippet_journal_event(monkeypatch, tmp_path):
+    set_adapter(TestAdapter(tmp_path))
+    import ingest.extract as extract_mod
+
+    called_events = []
+    direct_called = False
+
+    def fake_publish(result, **_kwargs):
+        result["facts_stored"] = 0
+        return []
+
+    def fake_direct_snippet_journal(*_args, **_kwargs):
+        nonlocal direct_called
+        direct_called = True
+        raise AssertionError("request mode must not fall back to the direct snippet/journal helper")
+
+    def fake_request(event_type, payload, **kwargs):
+        called_events.append((event_type, payload, kwargs))
+        return {
+            "status": "ok",
+            "responses": [
+                {
+                    "datastore_id": "evolutiondb",
+                    "status": "ok",
+                    "result": {
+                        "status": "ok",
+                        "snippet_journal_metrics": {
+                            "status": "ok",
+                            "snippet_files_seen": 1,
+                            "snippet_items_seen": 1,
+                            "snippet_files_written": 1,
+                            "snippet_items_written": 1,
+                            "snippet_files_skipped": 0,
+                            "journal_files_seen": 1,
+                            "journal_files_written": 1,
+                            "journal_files_skipped": 0,
+                            "target_files": {
+                                "snippets": ["SOUL.snippets.md"],
+                                "journal": ["SOUL.journal.md"],
+                            },
+                            "errors": [],
+                        },
+                    },
+                }
+            ],
+        }
+
+    monkeypatch.setattr("core.plugins.memorydb_contract.run_extraction_publish_payload", fake_publish)
+    monkeypatch.setattr("core.plugins.evolutiondb_contract.run_snippet_journal_write_payload", fake_direct_snippet_journal)
+    monkeypatch.setattr("core.plugins.evolutiondb_contract.register_snippet_journal_write_request_handler", lambda: None)
+    monkeypatch.setattr("core.runtime.events.request_broker_event", fake_request)
+
+    payload = {
+        "raw_facts": [],
+        "raw_snippets": {"SOUL.md": ["Keep split event routing explicit."]},
+        "raw_journal": {"SOUL.md": "A combined request-mode journal note."},
+        "raw_project_logs": {},
+        "facts": [],
+        "snippets": {},
+        "journal": {},
+        "project_logs": {},
+        "project_log_metrics": {},
+        "facts_stored": 0,
+        "facts_skipped": 0,
+        "edges_created": 0,
+        "dry_run": False,
+    }
+
+    applied = extract_mod.apply_extracted_payloads(
+        payload,
+        owner_id="test",
+        label="rolling-flush",
+        session_id="sess-combined-routing",
+        write_snippets=True,
+        write_journal=True,
+        dry_run=False,
+        snippet_journal_write_mode="request",
+    )
+
+    assert direct_called is False
+    assert [event_type for event_type, _payload, _kwargs in called_events] == [
+        EVOLUTION_SNIPPET_JOURNAL_WRITE_REQUEST_EVENT
+    ]
+    assert EVOLUTION_SNIPPET_WRITE_REQUEST_EVENT not in [event_type for event_type, _payload, _kwargs in called_events]
+    assert EVOLUTION_JOURNAL_WRITE_REQUEST_EVENT not in [event_type for event_type, _payload, _kwargs in called_events]
+    event_type, request_payload, request_kwargs = called_events[0]
+    assert event_type == EVOLUTION_SNIPPET_JOURNAL_WRITE_REQUEST_EVENT
+    assert request_payload["source"] == "extraction-apply-payloads"
+    assert request_payload["snippets"] == {"SOUL.md": ["Keep split event routing explicit."]}
+    assert request_payload["journal"] == {"SOUL.md": "A combined request-mode journal note."}
+    assert request_kwargs["source"] == "ingest.extract.apply_extracted_payloads"
+    assert applied["snippet_journal_metrics"]["target_files"] == {
+        "snippets": ["SOUL.snippets.md"],
+        "journal": ["SOUL.journal.md"],
+    }
 
 
 @pytest.mark.parametrize(
