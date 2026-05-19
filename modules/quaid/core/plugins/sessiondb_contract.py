@@ -1,7 +1,8 @@
 """SessionDB plugin contract helpers.
 
-This module owns SessionDB transcript/provenance helper logic while active
-request registration remains MemoryDB-owned until a later ownership move.
+This module owns SessionDB transcript/provenance helper logic and the
+`session.ingest_log.request.v1` request handler. Active event compatibility may
+still flow through MemoryDB wrappers.
 """
 
 from __future__ import annotations
@@ -42,4 +43,21 @@ def run_session_ingest_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         participant_aliases={str(k): str(v) for k, v in participant_aliases.items() if str(k).strip()},
         message_count=message_count,
         topic_hint=topic_hint,
+    )
+
+
+def handle_session_ingest_log_request(event: Dict[str, Any]) -> Dict[str, Any]:
+    """Handle synchronous session transcript ingest through SessionDB ownership."""
+    payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+    return run_session_ingest_payload(payload)
+
+
+def register_session_ingest_log_request_handler() -> None:
+    from core.runtime.events import SESSION_INGEST_LOG_REQUEST_EVENT, register_request_handler
+
+    register_request_handler(
+        SESSION_INGEST_LOG_REQUEST_EVENT,
+        handle_session_ingest_log_request,
+        datastore_id="sessiondb",
+        force=True,
     )

@@ -443,15 +443,15 @@ def _validate_session_logs_ingest_broker_response(response: Dict[str, Any]) -> D
     responses = response.get("responses")
     if not isinstance(responses, list) or len(responses) != 1:
         message = _session_logs_ingest_error_message(response)
-        raise RuntimeError(f"session_logs ingest request returned no memorydb response: {message}")
+        raise RuntimeError(f"session_logs ingest request returned no sessiondb response: {message}")
     row = responses[0]
     if not isinstance(row, dict):
-        raise RuntimeError("session_logs ingest request returned malformed memorydb response")
-    if str(row.get("datastore_id") or "").strip() != "memorydb":
-        raise RuntimeError("session_logs ingest request returned a non-memorydb response")
+        raise RuntimeError("session_logs ingest request returned malformed sessiondb response")
+    if str(row.get("datastore_id") or "").strip() != "sessiondb":
+        raise RuntimeError("session_logs ingest request returned a non-sessiondb response")
     result = row.get("result")
     if not isinstance(result, dict):
-        raise RuntimeError("session_logs ingest request memorydb result is not an object")
+        raise RuntimeError("session_logs ingest request sessiondb result is not an object")
 
     response_status = str(response.get("status") or "").strip().lower()
     row_status = str(row.get("status") or result.get("status") or "").strip().lower()
@@ -476,7 +476,7 @@ def _request_session_logs_ingest(
     message_count: int = 0,
     topic_hint: str = "",
 ) -> Dict[str, Any]:
-    from core.plugins.memorydb_contract import register_session_ingest_log_request_handler
+    from core.plugins.sessiondb_contract import register_session_ingest_log_request_handler
     from core.runtime.events import SESSION_INGEST_LOG_REQUEST_EVENT, request_broker_event
 
     register_session_ingest_log_request_handler()

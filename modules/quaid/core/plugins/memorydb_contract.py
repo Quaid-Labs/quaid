@@ -37,9 +37,10 @@ def run_session_ingest_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def handle_session_ingest_log_request(event: Dict[str, Any]) -> Dict[str, Any]:
-    """Handle synchronous session transcript ingest through MemoryDB ownership."""
-    payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
-    return run_session_ingest_payload(payload)
+    """Compatibility wrapper for the SessionDB-owned session ingest handler."""
+    from core.plugins.sessiondb_contract import handle_session_ingest_log_request as _handle
+
+    return _handle(event)
 
 
 def _optional_payload_str(payload: Dict[str, Any], key: str) -> str | None:
@@ -138,14 +139,9 @@ def extraction_publish_microchunk_tokens() -> int:
 
 
 def register_session_ingest_log_request_handler() -> None:
-    from core.runtime.events import SESSION_INGEST_LOG_REQUEST_EVENT, register_request_handler
+    from core.plugins.sessiondb_contract import register_session_ingest_log_request_handler as _register
 
-    register_request_handler(
-        SESSION_INGEST_LOG_REQUEST_EVENT,
-        handle_session_ingest_log_request,
-        datastore_id="memorydb",
-        force=True,
-    )
+    _register()
 
 
 def register_extraction_publish_request_handler() -> None:

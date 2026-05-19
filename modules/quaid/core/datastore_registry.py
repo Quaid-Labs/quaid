@@ -74,7 +74,6 @@ FIRST_PARTY_DATASTORE_MANIFESTS: List[Dict[str, Any]] = [
         "request_handlers": [
             "recall.memory.request.v1",
             "recall.graph.request.v1",
-            "session.ingest_log.request.v1",
             "memory.extraction_publish.request.v1",
             "datastore.validate.request.v1",
             "datastore.explain.request.v1",
@@ -173,7 +172,7 @@ FIRST_PARTY_DATASTORE_MANIFESTS: List[Dict[str, Any]] = [
                 "message_pair_attachments",
             ],
             "recall": [],
-            "writes": [],
+            "writes": ["sessions", "transcript_chunks", "message_pairs", "microchunks"],
             "validate": True,
             "explain": True,
             "export": False,
@@ -181,6 +180,7 @@ FIRST_PARTY_DATASTORE_MANIFESTS: List[Dict[str, Any]] = [
         },
         "accepted_events": [],
         "request_handlers": [
+            "session.ingest_log.request.v1",
             "datastore.validate.request.v1",
             "datastore.explain.request.v1",
             "maintenance.run.request.v1",

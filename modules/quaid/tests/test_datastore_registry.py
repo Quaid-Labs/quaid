@@ -44,24 +44,38 @@ def test_datastore_capabilities_surface_manifest_metadata() -> None:
     assert "project_context" in capabilities["docsdb"]["recall"]
     assert capabilities["evolutiondb"]["stores"] == ["snippets", "journal"]
     assert capabilities["sessiondb"]["recall"] == []
-    assert capabilities["sessiondb"]["writes"] == []
+    assert capabilities["sessiondb"]["writes"] == [
+        "sessions",
+        "transcript_chunks",
+        "message_pairs",
+        "microchunks",
+    ]
     assert "microchunks" in capabilities["sessiondb"]["stores"]
+    assert "message_pair_attachments" in capabilities["sessiondb"]["stores"]
+    assert "message_pair_attachments" not in capabilities["sessiondb"]["writes"]
 
 
-def test_sessiondb_manifest_is_metadata_only_and_memorydb_keeps_ingest_ownership() -> None:
+def test_sessiondb_manifest_owns_ingest_request_and_memorydb_keeps_recall_projection() -> None:
     sessiondb = get_datastore_manifest("sessiondb")
     memorydb = get_datastore_manifest("memorydb")
 
     assert validate_datastore_manifest(sessiondb) == []
     assert sessiondb["request_handlers"] == [
+        "session.ingest_log.request.v1",
         "datastore.validate.request.v1",
         "datastore.explain.request.v1",
         "maintenance.run.request.v1",
     ]
-    assert "session.ingest_log.request.v1" not in sessiondb["request_handlers"]
-    assert "session.ingest_log.request.v1" in memorydb["request_handlers"]
+    assert "session.ingest_log.request.v1" not in memorydb["request_handlers"]
     assert sessiondb["capabilities"]["recall"] == []
+    assert sessiondb["capabilities"]["writes"] == [
+        "sessions",
+        "transcript_chunks",
+        "message_pairs",
+        "microchunks",
+    ]
     assert "session_chunks" in memorydb["capabilities"]["recall"]
+    assert "session_chunks" in memorydb["capabilities"]["writes"]
 
 
 def test_manifest_request_handlers_are_registered_request_events() -> None:

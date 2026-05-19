@@ -188,11 +188,6 @@ class MemoryDbDatastoreContract(DatastoreContractBase):
             ("datastore.memorydb.memory_graph.graph_aware_recall",),
         ),
         DatastoreHandlerSpec(
-            "session.ingest_log.request.v1",
-            REQUEST,
-            ("core.plugins.memorydb_contract.handle_session_ingest_log_request",),
-        ),
-        DatastoreHandlerSpec(
             "memory.extraction_publish.request.v1",
             REQUEST,
             ("core.plugins.memorydb_contract.handle_extraction_publish_request",),
@@ -310,6 +305,11 @@ class EvolutionDbDatastoreContract(DatastoreContractBase):
 class SessionDbDatastoreContract(DatastoreContractBase):
     datastore_id = "sessiondb"
     handler_specs = (
+        DatastoreHandlerSpec(
+            "session.ingest_log.request.v1",
+            REQUEST,
+            ("core.plugins.sessiondb_contract.handle_session_ingest_log_request",),
+        ),
         DatastoreHandlerSpec(
             "datastore.validate.request.v1",
             REQUEST,

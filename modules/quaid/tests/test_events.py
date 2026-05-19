@@ -977,9 +977,9 @@ def test_event_process_session_ingest_log_rejects_missing_session_id(monkeypatch
     assert out["details"][0]["result"]["error"] == "payload.session_id is required"
 
 
-def test_request_session_ingest_log_runs_memorydb_handler(monkeypatch, tmp_path):
+def test_request_session_ingest_log_runs_sessiondb_handler(monkeypatch, tmp_path):
     set_adapter(TestAdapter(tmp_path))
-    from core.plugins.memorydb_contract import register_session_ingest_log_request_handler
+    from core.plugins.sessiondb_contract import register_session_ingest_log_request_handler
 
     called = {}
 
@@ -1015,7 +1015,7 @@ def test_request_session_ingest_log_runs_memorydb_handler(monkeypatch, tmp_path)
 
     assert response["status"] == "ok"
     result = response["responses"][0]["result"]
-    assert response["responses"][0]["datastore_id"] == "memorydb"
+    assert response["responses"][0]["datastore_id"] == "sessiondb"
     assert result["status"] == "indexed"
     assert result["microchunks_stored"] == 2
     assert called["session_id"] == "sess-req"
@@ -1031,7 +1031,7 @@ def test_request_session_ingest_log_runs_memorydb_handler(monkeypatch, tmp_path)
 def test_request_session_ingest_log_rejects_missing_session_id(monkeypatch, tmp_path):
     set_adapter(TestAdapter(tmp_path))
     import core.runtime.events as events
-    from core.plugins.memorydb_contract import register_session_ingest_log_request_handler
+    from core.plugins.sessiondb_contract import register_session_ingest_log_request_handler
 
     monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: False)
     monkeypatch.setattr(
@@ -1137,7 +1137,61 @@ def test_memorydb_session_ingest_wrapper_propagates_helper_failure_without_regis
         handlers = list(events._REQUEST_EVENT_HANDLERS.get(SESSION_INGEST_LOG_REQUEST_EVENT) or [])
 
     assert [(item["datastore_id"], item["handler"]) for item in handlers] == [
-        ("memorydb", memorydb_contract.handle_session_ingest_log_request)
+        ("sessiondb", sessiondb_contract.handle_session_ingest_log_request)
+    ]
+
+
+def test_sessiondb_request_registrar_owns_session_ingest_request(tmp_path):
+    set_adapter(TestAdapter(tmp_path))
+    import core.plugins.sessiondb_contract as sessiondb_contract
+    import core.runtime.events as events
+
+    sessiondb_contract.register_session_ingest_log_request_handler()
+
+    with events._REQUEST_EVENT_HANDLERS_LOCK:
+        handlers = list(events._REQUEST_EVENT_HANDLERS.get(SESSION_INGEST_LOG_REQUEST_EVENT) or [])
+
+    assert [(item["datastore_id"], item["handler"]) for item in handlers] == [
+        ("sessiondb", sessiondb_contract.handle_session_ingest_log_request)
+    ]
+
+
+def test_memorydb_session_ingest_handler_and_registrar_are_silent_distinct_wrappers(
+    monkeypatch,
+    caplog,
+    tmp_path,
+):
+    set_adapter(TestAdapter(tmp_path))
+    import core.plugins.memorydb_contract as memorydb_contract
+    import core.plugins.sessiondb_contract as sessiondb_contract
+    import core.runtime.events as events
+
+    assert memorydb_contract.handle_session_ingest_log_request is not sessiondb_contract.handle_session_ingest_log_request
+    assert (
+        memorydb_contract.register_session_ingest_log_request_handler
+        is not sessiondb_contract.register_session_ingest_log_request_handler
+    )
+
+    called = {}
+
+    def _fake_handler(event):
+        called["event"] = event
+        return {"status": "indexed", "session_id": event["payload"]["session_id"]}
+
+    monkeypatch.setattr(sessiondb_contract, "handle_session_ingest_log_request", _fake_handler)
+    event = {"payload": {"session_id": "sess-wrapper-handler"}}
+
+    with caplog.at_level("INFO"):
+        result = memorydb_contract.handle_session_ingest_log_request(event)
+        memorydb_contract.register_session_ingest_log_request_handler()
+
+    assert result == {"status": "indexed", "session_id": "sess-wrapper-handler"}
+    assert called["event"] is event
+    assert caplog.records == []
+    with events._REQUEST_EVENT_HANDLERS_LOCK:
+        handlers = list(events._REQUEST_EVENT_HANDLERS.get(SESSION_INGEST_LOG_REQUEST_EVENT) or [])
+    assert [(item["datastore_id"], item["handler"]) for item in handlers] == [
+        ("sessiondb", sessiondb_contract.handle_session_ingest_log_request)
     ]
 
 
@@ -1693,7 +1747,7 @@ def test_request_session_ingest_log_matches_direct_session_projection(monkeypatc
     monkeypatch.setenv("MEMORY_DB_PATH", str(tmp_path / "memory.db"))
     monkeypatch.setenv("SESSION_DB_PATH", str(tmp_path / "session.db"))
 
-    from core.plugins.memorydb_contract import register_session_ingest_log_request_handler
+    from core.plugins.sessiondb_contract import register_session_ingest_log_request_handler
     from core.services.datastore_bridge import DatastoreBridge
     from core.services.session_memory_bridge import DatastoreSessionMemoryBridge
     import datastore.memorydb.memory_graph as mg
@@ -1744,6 +1798,7 @@ def test_request_session_ingest_log_matches_direct_session_projection(monkeypatc
     broker_result = broker["responses"][0]["result"]
 
     assert broker["status"] == "ok"
+    assert broker["responses"][0]["datastore_id"] == "sessiondb"
     assert direct["status"] == "indexed"
     assert broker_result["status"] == "indexed"
     for key in ("message_count", "pairs_stored", "microchunks_stored", "source_kind"):

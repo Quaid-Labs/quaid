@@ -35,7 +35,7 @@ def _stub_successful_session_logs_ingest(monkeypatch):
     monkeypatch.setattr(ingest_runtime, "run_session_logs_ingest", lambda **_kwargs: {"status": "indexed"})
 
 
-def test_session_logs_ingest_request_returns_memorydb_result(monkeypatch, tmp_path):
+def test_session_logs_ingest_request_returns_sessiondb_result(monkeypatch, tmp_path):
     from lib.adapter import TestAdapter, reset_adapter, set_adapter
 
     set_adapter(TestAdapter(tmp_path))
@@ -91,7 +91,7 @@ def test_session_logs_ingest_request_has_no_direct_fallback(monkeypatch, tmp_pat
     set_adapter(TestAdapter(tmp_path))
     registered = []
     monkeypatch.setattr(
-        "core.plugins.memorydb_contract.register_session_ingest_log_request_handler",
+        "core.plugins.sessiondb_contract.register_session_ingest_log_request_handler",
         lambda: registered.append("registered"),
     )
     monkeypatch.setattr(
@@ -111,6 +111,61 @@ def test_session_logs_ingest_request_has_no_direct_fallback(monkeypatch, tmp_pat
         with pytest.raises(RuntimeError, match="synthetic broker failure"):
             extraction_daemon._request_session_logs_ingest(
                 session_id="sess-broker-fail",
+                owner_id="owner-broker",
+                label="SessionEnd",
+                transcript_path=str(tmp_path / "session.jsonl"),
+            )
+    finally:
+        reset_adapter()
+
+    assert registered == ["registered"]
+
+
+@pytest.mark.parametrize(
+    ("response", "error"),
+    [
+        (
+            {"status": "failed", "error": "simulated broker failure", "responses": []},
+            "session_logs ingest request returned no sessiondb response: simulated broker failure",
+        ),
+        (
+            {"status": "ok", "responses": ["not-a-row"]},
+            "session_logs ingest request returned malformed sessiondb response",
+        ),
+        (
+            {"status": "ok", "responses": [{"datastore_id": "memorydb", "result": {"status": "indexed"}}]},
+            "session_logs ingest request returned a non-sessiondb response",
+        ),
+        (
+            {"status": "ok", "responses": [{"datastore_id": "sessiondb", "result": "not-an-object"}]},
+            "session_logs ingest request sessiondb result is not an object",
+        ),
+    ],
+)
+def test_session_logs_ingest_request_validates_sessiondb_response_without_fallback(
+    monkeypatch,
+    tmp_path,
+    response,
+    error,
+):
+    from lib.adapter import TestAdapter, reset_adapter, set_adapter
+
+    set_adapter(TestAdapter(tmp_path))
+    registered = []
+    monkeypatch.setattr(
+        "core.plugins.sessiondb_contract.register_session_ingest_log_request_handler",
+        lambda: registered.append("registered"),
+    )
+    monkeypatch.setattr("core.runtime.events.request_broker_event", lambda *_args, **_kwargs: response)
+    monkeypatch.setattr(
+        "core.ingest_runtime.run_session_logs_ingest",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("must not fall back to direct ingest")),
+    )
+
+    try:
+        with pytest.raises(RuntimeError, match=error):
+            extraction_daemon._request_session_logs_ingest(
+                session_id="sess-broker-invalid",
                 owner_id="owner-broker",
                 label="SessionEnd",
                 transcript_path=str(tmp_path / "session.jsonl"),
