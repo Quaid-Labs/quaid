@@ -176,9 +176,13 @@ remains the daemon wake owner. M30 reset facade lifecycle emitter closed at
 explicit `ResetSignal` inputs with concrete session id and existing
 reset-preserved transcript path through the existing `emitEvent`/`execEvents`
 immediate path, while M27 remains the daemon reset signal writer and M28 remains
-the daemon wake owner; live transcript paths remain no-op for reset. Timeout,
-agent-end emitter wiring, OpenClaw hook migration, daemon restart/stop
-automation, and recall/source-window policy changes remain deferred.
+the daemon wake owner; live transcript paths remain no-op for reset. M31 now
+tracks the timeout facade lifecycle emitter in
+`projects/quaid/operations/datastore-events-m31-timeout-facade-lifecycle-emitter-plan.md`:
+the selected plan requires an explicit live transcript path and does not approve
+reset-preserved transcript paths as timeout evidence. Agent-end emitter wiring,
+OpenClaw hook migration, daemon restart/stop automation, and recall/source-window
+policy changes remain deferred.
 
 ## Shared Rules For Every M9 Slice
 

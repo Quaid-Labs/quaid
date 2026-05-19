@@ -238,7 +238,9 @@ narrow explicit bridge smoke:
   `5152a928`; daemon restart/stop automation remains deferred
 - facade compaction lifecycle emitter closed in M29 at `a4a4d4238`;
   reset facade lifecycle emitter closed in M30 at `9f43c696`;
-  timeout, agent-end emitter wiring and OpenClaw hook migration remain deferred
+  timeout facade lifecycle emitter is tracked as M31 in
+  `projects/quaid/operations/datastore-events-m31-timeout-facade-lifecycle-emitter-plan.md`;
+  agent-end emitter wiring and OpenClaw hook migration remain deferred
 - SessionDB ingest wrapper retirement closed in M23 at `bfe5836b` +
   `4a3824d88`
 - whether SessionDB should expose dedicated request handlers beyond
