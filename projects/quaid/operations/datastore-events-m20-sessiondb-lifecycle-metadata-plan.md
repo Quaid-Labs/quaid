@@ -181,7 +181,9 @@ narrow lifecycle smoke:
 
 ## Deferred Decisions
 
-- lifecycle-triggered transcript ingestion or daemon work
+- daemon lifecycle signal observation bridge is tracked as M21 in
+  `projects/quaid/operations/datastore-events-m21-daemon-lifecycle-observation-plan.md`;
+  lifecycle-triggered transcript ingest and daemon automation remain deferred
 - request/active compatibility-wrapper removal from `core.plugins.memorydb_contract`
 - whether SessionDB should expose dedicated request handlers beyond
   `session.ingest_log.request.v1` and generic metadata/maintenance surfaces
