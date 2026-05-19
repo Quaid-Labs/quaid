@@ -690,7 +690,7 @@ def _handle_session_ingest_log(event: Event) -> Dict[str, Any]:
         return {"status": "failed", "error": "payload.session_id is required"}
 
     try:
-        from core.plugins.memorydb_contract import run_session_ingest_payload
+        from core.plugins.sessiondb_contract import run_session_ingest_payload
 
         result = run_session_ingest_payload(payload)
         if isinstance(result, dict) and str(result.get("status") or "").lower() in {"failed", "error"}:

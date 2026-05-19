@@ -885,6 +885,8 @@ def test_event_process_docs_project_maintenance_observed_validation_respects_fai
 
 def test_event_process_session_ingest_log(monkeypatch, tmp_path):
     set_adapter(TestAdapter(tmp_path))
+    import core.plugins.memorydb_contract as memorydb_contract
+    import core.plugins.sessiondb_contract as sessiondb_contract
 
     called = {}
 
@@ -892,7 +894,11 @@ def test_event_process_session_ingest_log(monkeypatch, tmp_path):
         called.update(payload)
         return {"status": "indexed", "session_id": payload["session_id"], "chunks": 2}
 
-    monkeypatch.setattr("core.plugins.memorydb_contract.run_session_ingest_payload", _fake_helper)
+    def _memorydb_tripwire(_payload):
+        raise AssertionError("active session ingest must not call MemoryDB wrapper")
+
+    monkeypatch.setattr(memorydb_contract, "run_session_ingest_payload", _memorydb_tripwire)
+    monkeypatch.setattr(sessiondb_contract, "run_session_ingest_payload", _fake_helper)
 
     emit_event(
         name="session.ingest_log",
@@ -928,6 +934,8 @@ def test_event_process_session_ingest_log_has_no_runtime_direct_ingest_call():
     source = Path(events.__file__).read_text(encoding="utf-8")
 
     assert "run_session_logs_ingest" not in source
+    assert "from core.plugins.memorydb_contract import run_session_ingest_payload" not in source
+    assert "from core.plugins.sessiondb_contract import run_session_ingest_payload" in source
 
 
 def test_event_process_session_ingest_log_failed_result_marks_failed(monkeypatch, tmp_path):
@@ -936,7 +944,7 @@ def test_event_process_session_ingest_log_failed_result_marks_failed(monkeypatch
     import core.runtime.events as events
 
     monkeypatch.setattr(
-        "core.plugins.memorydb_contract.run_session_ingest_payload",
+        "core.plugins.sessiondb_contract.run_session_ingest_payload",
         lambda _payload: {"status": "failed", "error": "simulated ingest failure"},
     )
     monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: False)
@@ -968,7 +976,7 @@ def test_event_process_session_ingest_log_rejects_missing_session_id(monkeypatch
 
     monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: False)
     monkeypatch.setattr(
-        "core.plugins.memorydb_contract.run_session_ingest_payload",
+        "core.plugins.sessiondb_contract.run_session_ingest_payload",
         lambda _payload: (_ for _ in ()).throw(AssertionError("missing session_id must not ingest")),
     )
 
