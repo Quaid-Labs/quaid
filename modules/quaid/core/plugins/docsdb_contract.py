@@ -310,6 +310,7 @@ def handle_project_docs_update_request(event: Dict[str, Any]) -> Dict[str, Any]:
             indexed_project_logs = int(docs_updater.index_project_logs(project=project) or 0)
         except Exception as exc:
             if _fail_hard_enabled():
+                logger.warning("project-docs update index failed for %s: %s", project, exc)
                 raise
             logger.warning("project-docs update index failed for %s (fail-soft): %s", project, exc)
             metrics["errors"] = int(metrics.get("errors", 0) or 0) + 1

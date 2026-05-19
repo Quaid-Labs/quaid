@@ -587,6 +587,7 @@ def test_execute_update_once_index_failure_respects_fail_policy(project_env, cap
     assert state["status"] == "error"
     assert "index boom" in state["last_error"]
 
+    caplog.clear()
     with patch("core.docs_updater_hook.update_project_docs", return_value={"projects_checked": 1, "docs_updated": 1, "docs_skipped": 0, "trivial_skipped": 0, "errors": 0}), \
          patch("core.project_docs.sync_project_docs_registry", side_effect=AssertionError("worker direct registry sync should use DocsDB broker")), \
          patch("core.docs.updater.sync_project_visible_docs", return_value={"registered": 1, "unregistered": 0, "project_md_refreshed": 1}), \
@@ -601,6 +602,8 @@ def test_execute_update_once_index_failure_respects_fail_policy(project_env, cap
     state = project_docs.read_state("demo")
     assert state["status"] == "error"
     assert state["last_error"] == "failhard index boom"
+    assert "project-docs update index failed for demo: failhard index boom" in caplog.text
+    assert "project-docs update index failed for demo (fail-soft)" not in caplog.text
 
 
 def test_execute_update_once_dry_run_skips_registry_and_index(project_env):
