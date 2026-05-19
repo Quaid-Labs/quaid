@@ -3,8 +3,13 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
+import os
+import re
 import time
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from config import get_config
@@ -13,10 +18,337 @@ from lib.domain_text import normalize_domain_id
 logger = logging.getLogger(__name__)
 
 
-NormalizeFactTemporal = Callable[..., Dict[str, Any]]
-CollapsePayloadFacts = Callable[[List[Dict[str, Any]]], Tuple[List[Dict[str, Any]], int]]
-WritePublishTrace = Callable[..., None]
 FailHardEnabled = Callable[[], bool]
+
+_SESSION_DATE_RE = re.compile(r"(?<!\d)(\d{4}-\d{2}-\d{2})(?!\d)")
+DEFAULT_EXTRACT_PUBLISH_BATCH_SIZE = 100
+DEFAULT_SESSION_MICROCHUNK_TOKENS = 40
+
+
+def _publish_date_for_session(session_id: str) -> Optional[str]:
+    """Resolve a source date hint for MemoryDB publish metadata."""
+    quaid_now = os.environ.get("QUAID_NOW", "").strip()
+    if quaid_now:
+        return quaid_now
+    match = _SESSION_DATE_RE.search(str(session_id or ""))
+    if match:
+        return match.group(1)
+    return None
+
+
+def _normalize_extracted_timestamp(value: Any) -> Optional[str]:
+    """Normalize extractor timestamps to stable ISO strings when possible."""
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw):
+        return f"{raw}T23:59:59"
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed.isoformat(timespec="seconds")
+
+def _timestamp_sort_key(value: Any) -> Tuple[int, str]:
+    """Return a comparison key that prefers earlier valid timestamps."""
+    normalized = _normalize_extracted_timestamp(value)
+    if not normalized:
+        return (1, "")
+    try:
+        parsed = datetime.fromisoformat(normalized.replace("Z", "+00:00"))
+    except ValueError:
+        return (1, normalized)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return (0, parsed.astimezone(timezone.utc).isoformat(timespec="seconds"))
+
+def _prefer_earlier_timestamp(first: Any, second: Any) -> Optional[str]:
+    """Pick the earliest valid timestamp, preferring any valid value over missing."""
+    a = _normalize_extracted_timestamp(first)
+    b = _normalize_extracted_timestamp(second)
+    if a and b:
+        return a if _timestamp_sort_key(a) <= _timestamp_sort_key(b) else b
+    return a or b
+
+def _prefer_later_timestamp(first: Any, second: Any) -> Optional[str]:
+    """Pick the latest valid timestamp, preferring any valid value over missing."""
+    a = _normalize_extracted_timestamp(first)
+    b = _normalize_extracted_timestamp(second)
+    if a and b:
+        return a if _timestamp_sort_key(a) >= _timestamp_sort_key(b) else b
+    return a or b
+
+def _current_utc_timestamp() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+def _normalize_fact_temporal_hint(
+    fact: Dict[str, Any],
+    *,
+    default_created_at: Optional[str] = None,
+    default_mentioned_at: Optional[str] = None,
+    prefer_default_mentioned_at: bool = False,
+) -> Dict[str, Any]:
+    """Normalize fact temporal metadata and backfill source mention time."""
+    normalized = dict(fact or {})
+    raw_created_at = str(normalized.get("created_at") or "").strip()
+    source_created_at = _normalize_extracted_timestamp(raw_created_at)
+    fallback_source_at = _normalize_extracted_timestamp(default_created_at)
+    fallback_mentioned_at = _normalize_extracted_timestamp(default_mentioned_at) or fallback_source_at
+    if (
+        source_created_at
+        and fallback_source_at
+        and re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw_created_at)
+        and raw_created_at == fallback_source_at[:10]
+    ):
+        source_created_at = fallback_source_at
+    source_timestamp = source_created_at or fallback_source_at
+    # MemoryDB owns created_at as record/write time. Extracted source timestamps
+    # are source mention time and must not override the datastore record axis.
+    normalized.pop("created_at", None)
+    if source_timestamp:
+        normalized["_source_timestamp"] = source_timestamp
+    else:
+        normalized.pop("_source_timestamp", None)
+    occurred_start = _normalize_extracted_timestamp(
+        normalized.get("occurred_start") or normalized.get("occurred_at")
+    )
+    occurred_end = _normalize_extracted_timestamp(normalized.get("occurred_end"))
+    if occurred_start:
+        normalized["occurred_start"] = occurred_start
+    else:
+        normalized.pop("occurred_start", None)
+    if occurred_end:
+        normalized["occurred_end"] = occurred_end
+    else:
+        normalized.pop("occurred_end", None)
+    extracted_mentioned_at = _normalize_extracted_timestamp(normalized.get("mentioned_at"))
+    if prefer_default_mentioned_at:
+        mentioned_at = fallback_mentioned_at or extracted_mentioned_at or source_timestamp
+    else:
+        mentioned_at = extracted_mentioned_at or source_timestamp or fallback_mentioned_at
+    if mentioned_at:
+        normalized["mentioned_at"] = mentioned_at
+    else:
+        normalized.pop("mentioned_at", None)
+    normalized.pop("occurred_at", None)
+    return normalized
+
+def _fact_text_key(text: str) -> str:
+    """Cheap normalization key for exact repeat suppression during carry."""
+    return " ".join(str(text or "").strip().lower().split())
+
+def _confidence_rank(value: Any) -> int:
+    conf = str(value or "medium").strip().lower()
+    return {"high": 3, "medium": 2, "low": 1}.get(conf, 2)
+
+def _merge_fact_edges(existing: Any, incoming: Any) -> List[Dict[str, Any]]:
+    merged: List[Dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for source in (existing, incoming):
+        if not isinstance(source, list):
+            continue
+        for edge in source:
+            if not isinstance(edge, dict):
+                continue
+            subj = str(edge.get("subject", "") or "").strip()
+            rel = str(edge.get("relation", "") or "").strip()
+            obj = str(edge.get("object", "") or "").strip()
+            key = (subj, rel, obj)
+            if not all(key) or key in seen:
+                continue
+            seen.add(key)
+            merged.append({"subject": subj, "relation": rel, "object": obj})
+    return merged
+
+def _merge_fact_keywords(existing: Any, incoming: Any) -> Optional[str]:
+    tokens: List[str] = []
+    seen: set[str] = set()
+    for raw in (existing, incoming):
+        if not isinstance(raw, str):
+            continue
+        for token in raw.split():
+            tok = token.strip()
+            if not tok or tok in seen:
+                continue
+            seen.add(tok)
+            tokens.append(tok)
+    return " ".join(tokens) if tokens else None
+
+def _fact_provenance_specificity(fact: Dict[str, Any]) -> int:
+    score = 0
+    raw_source = str((fact or {}).get("source", "") or "").strip().lower()
+    if raw_source == "subagent":
+        score += 100
+    elif raw_source in {"assistant", "agent", "tool", "both", "user"}:
+        score += 10
+    if str((fact or {}).get("_source_label", "") or "").strip():
+        score += 5
+    if str((fact or {}).get("_source_id", "") or "").strip():
+        score += 5
+    if str((fact or {}).get("_source_chunk_id") or (fact or {}).get("source_chunk_id") or "").strip():
+        score += 3
+    return score
+
+def _merge_duplicate_fact_entries(primary: Dict[str, Any], duplicate: Dict[str, Any]) -> Dict[str, Any]:
+    merged = dict(primary)
+    primary_provenance = _fact_provenance_specificity(primary)
+    duplicate_provenance = _fact_provenance_specificity(duplicate)
+    if duplicate_provenance > primary_provenance:
+        merged = dict(duplicate)
+    elif duplicate_provenance == primary_provenance:
+        primary_rank = _confidence_rank(primary.get("extraction_confidence"))
+        duplicate_rank = _confidence_rank(duplicate.get("extraction_confidence"))
+        if duplicate_rank > primary_rank:
+            merged = dict(duplicate)
+        elif duplicate_rank == primary_rank:
+            primary_text = str(primary.get("text", "") or "")
+            duplicate_text = str(duplicate.get("text", "") or "")
+            if len(duplicate_text) > len(primary_text):
+                merged = dict(duplicate)
+
+    other = duplicate if merged is primary else primary
+
+    merged["edges"] = _merge_fact_edges(merged.get("edges"), other.get("edges"))
+
+    domains: List[str] = []
+    seen_domains: set[str] = set()
+    for source in (merged.get("domains"), other.get("domains")):
+        if isinstance(source, str):
+            source = [source]
+        if not isinstance(source, list):
+            continue
+        for raw in source:
+            dom = str(raw or "").strip()
+            if not dom or dom in seen_domains:
+                continue
+            seen_domains.add(dom)
+            domains.append(dom)
+    if domains:
+        merged["domains"] = domains
+
+    keywords = _merge_fact_keywords(merged.get("keywords"), other.get("keywords"))
+    if keywords:
+        merged["keywords"] = keywords
+
+    for key in ("category", "speaker", "project", "privacy"):
+        if not merged.get(key) and other.get(key):
+            merged[key] = other.get(key)
+
+    if _fact_provenance_specificity(other) > _fact_provenance_specificity(merged):
+        for key in ("source", "_source_label", "_source_id", "_source_chunk_id", "source_chunk_id", "_source_chunk_index"):
+            if other.get(key):
+                merged[key] = other.get(key)
+    else:
+        for key in ("source", "_source_label", "_source_id", "_source_chunk_id", "source_chunk_id", "_source_chunk_index"):
+            if not merged.get(key) and other.get(key):
+                merged[key] = other.get(key)
+
+    if _confidence_rank(other.get("extraction_confidence")) > _confidence_rank(merged.get("extraction_confidence")):
+        merged["extraction_confidence"] = other.get("extraction_confidence")
+
+    merged.pop("created_at", None)
+    merged_source_timestamp = _prefer_earlier_timestamp(
+        merged.get("_source_timestamp"),
+        other.get("_source_timestamp"),
+    )
+    if merged_source_timestamp:
+        merged["_source_timestamp"] = merged_source_timestamp
+    else:
+        merged.pop("_source_timestamp", None)
+    merged_occurred_start = _prefer_earlier_timestamp(merged.get("occurred_start"), other.get("occurred_start"))
+    if merged_occurred_start:
+        merged["occurred_start"] = merged_occurred_start
+    else:
+        merged.pop("occurred_start", None)
+    merged_occurred_end = _prefer_later_timestamp(merged.get("occurred_end"), other.get("occurred_end"))
+    if merged_occurred_end:
+        merged["occurred_end"] = merged_occurred_end
+    else:
+        merged.pop("occurred_end", None)
+    merged_mentioned_at = _prefer_earlier_timestamp(merged.get("mentioned_at"), other.get("mentioned_at"))
+    if merged_mentioned_at:
+        merged["mentioned_at"] = merged_mentioned_at
+    else:
+        merged.pop("mentioned_at", None)
+
+    return merged
+
+def _collapse_duplicate_payload_facts(facts: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], int]:
+    """Collapse exact duplicate fact texts within one extracted payload before publish.
+
+    This is intentionally narrow: only exact normalized-text duplicates are merged.
+    Semantic dedup remains the datastore's responsibility.
+    """
+    collapsed: List[Dict[str, Any]] = []
+    seen: Dict[str, int] = {}
+    dropped = 0
+
+    for fact in facts or []:
+        if not isinstance(fact, dict):
+            collapsed.append(fact)
+            continue
+        text = fact.get("text", "")
+        if not isinstance(text, str):
+            collapsed.append(fact)
+            continue
+        key = _fact_text_key(text)
+        if not key:
+            collapsed.append(fact)
+            continue
+        prior_idx = seen.get(key)
+        if prior_idx is None:
+            seen[key] = len(collapsed)
+            collapsed.append(dict(fact))
+            continue
+        collapsed[prior_idx] = _merge_duplicate_fact_entries(collapsed[prior_idx], fact)
+        dropped += 1
+
+    return collapsed, dropped
+
+def _get_extract_publish_batch_size() -> int:
+    raw = str(os.environ.get("QUAID_EXTRACT_PUBLISH_BATCH_SIZE", "") or "").strip()
+    if not raw:
+        return DEFAULT_EXTRACT_PUBLISH_BATCH_SIZE
+    try:
+        size = int(raw)
+    except Exception:
+        logger.warning(
+            "[extract] invalid QUAID_EXTRACT_PUBLISH_BATCH_SIZE=%r; defaulting to %d",
+            raw,
+            DEFAULT_EXTRACT_PUBLISH_BATCH_SIZE,
+        )
+        return DEFAULT_EXTRACT_PUBLISH_BATCH_SIZE
+    return max(1, size)
+
+def _publish_trace_enabled() -> bool:
+    raw = str(os.environ.get("QUAID_PUBLISH_TRACE", "") or "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+def _publish_trace_path() -> Optional[Path]:
+    if not _publish_trace_enabled():
+        return None
+    instance = str(os.environ.get("QUAID_INSTANCE", "benchrunner") or "benchrunner").strip() or "benchrunner"
+    from lib.adapter import get_adapter
+
+    path = get_adapter().quaid_home() / "instances" / instance / "logs" / "daemon" / "publish-trace.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
+
+def _write_publish_trace(event: str, **data: Any) -> None:
+    path = _publish_trace_path()
+    if path is None:
+        return
+    payload = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "pid": os.getpid(),
+        "event": event,
+    }
+    payload.update(data)
+    try:
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(payload, ensure_ascii=True) + "\n")
+    except OSError as exc:
+        logger.warning("[extract] publish trace write failed: %s", exc)
 
 
 def _content_hash(text: str) -> str:
@@ -351,6 +683,45 @@ def _resolve_allowed_domains(*, fail_hard_enabled: FailHardEnabled, log: logging
     return allowed
 
 
+def _normalize_fact_provenance(
+    fact: Dict[str, Any],
+    *,
+    label: str,
+    fact_index: int,
+    fail_hard_enabled: FailHardEnabled,
+    log: logging.Logger,
+) -> Tuple[str, str]:
+    """Normalize speaker/source into canonical labels and enforce provenance presence."""
+    raw_speaker = str(fact.get("speaker", "") or "").strip().lower()
+    raw_source = str(fact.get("source", "") or "").strip().lower()
+    if not raw_speaker and not raw_source:
+        msg = (
+            f"[extract] missing provenance (speaker/source) for fact index={fact_index} "
+            f"in {label} extraction"
+        )
+        if fail_hard_enabled():
+            raise RuntimeError(msg)
+        log.warning("%s - defaulting to user", msg)
+        raw_speaker = "user"
+        raw_source = "user"
+    if raw_speaker not in {"agent", "assistant", "user"}:
+        raw_speaker = "agent" if raw_source in {"agent", "assistant"} else "user"
+    if not raw_source:
+        raw_source = raw_speaker
+    speaker_label = "agent" if raw_speaker in {"agent", "assistant"} else "user"
+    if raw_source in {"agent", "assistant"}:
+        source_type = "assistant"
+    elif raw_source == "subagent":
+        source_type = "subagent"
+    elif raw_source == "both":
+        source_type = "both"
+    elif raw_source == "tool":
+        source_type = "tool"
+    else:
+        source_type = "user"
+    return speaker_label, source_type
+
+
 def run_extraction_publish_payload(
     result: Dict[str, Any],
     *,
@@ -366,22 +737,13 @@ def run_extraction_publish_payload(
     participant_entity_ids: Optional[List[str]],
     source_author_id: Optional[str],
     dry_run: bool,
-    default_created_at: Optional[str],
-    default_mentioned_at: Optional[str],
-    prefer_default_mentioned_at: bool,
     snippet_files: int,
     journal_files: int,
     project_log_projects: int,
     memory_service: Any,
     session_bridge: Any,
     fail_hard_enabled: FailHardEnabled,
-    normalize_fact_temporal_hint: NormalizeFactTemporal,
-    collapse_duplicate_payload_facts: CollapsePayloadFacts,
-    normalize_fact_provenance: Callable[..., Tuple[str, str]],
-    write_publish_trace: WritePublishTrace,
-    publish_batch_size: int,
     log: logging.Logger = logger,
-    default_session_microchunk_tokens: int = 40,
 ) -> List[Dict[str, Any]]:
     """Publish extracted fact/edge/source evidence through MemoryDB ownership.
 
@@ -398,6 +760,9 @@ def run_extraction_publish_payload(
     result.setdefault("facts_planned", 0)
     result.setdefault("edges_created", 0)
     raw_facts = list(result.get("raw_facts", []) or [])
+    default_created_at = _publish_date_for_session(session_id or "")
+    default_mentioned_at = default_created_at or _current_utc_timestamp()
+    prefer_default_mentioned_at = bool(default_created_at)
     if not dry_run:
         ref_to_chunk_id = _store_payload_source_chunks(
             result,
@@ -410,12 +775,12 @@ def run_extraction_publish_payload(
             session_bridge=session_bridge,
             fail_hard_enabled=fail_hard_enabled,
             log=log,
-            max_microchunk_tokens=default_session_microchunk_tokens,
+            max_microchunk_tokens=DEFAULT_SESSION_MICROCHUNK_TOKENS,
         )
         raw_facts = _attach_materialized_source_chunk_ids(raw_facts, ref_to_chunk_id)
         result["raw_facts"] = raw_facts
     facts = [
-        normalize_fact_temporal_hint(
+        _normalize_fact_temporal_hint(
             fact,
             default_created_at=default_created_at,
             default_mentioned_at=default_mentioned_at,
@@ -425,7 +790,7 @@ def run_extraction_publish_payload(
         else fact
         for fact in raw_facts
     ]
-    facts, collapsed_duplicates = collapse_duplicate_payload_facts(facts)
+    facts, collapsed_duplicates = _collapse_duplicate_payload_facts(facts)
     allowed = _resolve_allowed_domains(fail_hard_enabled=fail_hard_enabled, log=log)
 
     chunks_total = int(result.get("chunks_total", 0) or 0)
@@ -462,7 +827,7 @@ def run_extraction_publish_payload(
     result.setdefault("edge_embedding_cache_hits", 0)
     result.setdefault("edge_embedding_cache_warmed", 0)
     result.setdefault("edge_embedding_cache_failed", 0)
-    write_publish_trace(
+    _write_publish_trace(
         "publish_start",
         session_id=session_id,
         label=label,
@@ -493,7 +858,7 @@ def run_extraction_publish_payload(
         result["edge_embedding_cache_hits"] = int(edge_warm_stats.get("cache_hits", 0) or 0)
         result["edge_embedding_cache_warmed"] = int(edge_warm_stats.get("warmed", 0) or 0)
         result["edge_embedding_cache_failed"] = int(edge_warm_stats.get("failed", 0) or 0)
-        write_publish_trace(
+        _write_publish_trace(
             "publish_prewarm_done",
             session_id=session_id,
             label=label,
@@ -517,14 +882,14 @@ def run_extraction_publish_payload(
                 dedup_rowid_max = int(row[0] or 0) if row else 0
         except Exception:
             dedup_rowid_max = None
-        write_publish_trace(
+        _write_publish_trace(
             "publish_snapshot_rowid",
             session_id=session_id,
             label=label,
             dedup_rowid_max=dedup_rowid_max,
         )
 
-    publish_batch_size = max(1, int(publish_batch_size or 1))
+    publish_batch_size = max(1, int(_get_extract_publish_batch_size() or 1))
     result["publish_batches"] = 0
 
     def _accumulate_dedup_meta(store_result: Optional[Dict[str, Any]]) -> None:
@@ -631,7 +996,7 @@ def run_extraction_publish_payload(
         if not callable(execute):
             return
         execute("BEGIN IMMEDIATE")
-        write_publish_trace(
+        _write_publish_trace(
             "publish_batch_lock_acquired",
             session_id=session_id,
             label=label,
@@ -654,7 +1019,7 @@ def run_extraction_publish_payload(
         delta_rowid_max = external_rowid_seen
         if current_max > int(external_rowid_seen or 0):
             delta_rowid_max = current_max
-        write_publish_trace(
+        _write_publish_trace(
             "publish_batch_rowid_window",
             session_id=session_id,
             label=label,
@@ -679,7 +1044,7 @@ def run_extraction_publish_payload(
                 text_hash_preview = _content_hash(text)[:12]
             except Exception:
                 text_hash_preview = None
-        write_publish_trace(
+        _write_publish_trace(
             "publish_fact_start",
             session_id=session_id,
             label=label,
@@ -696,7 +1061,7 @@ def run_extraction_publish_payload(
                 "status": "skipped",
                 "reason": "too short (need 3+ words)",
             })
-            write_publish_trace(
+            _write_publish_trace(
                 "publish_fact_done",
                 session_id=session_id,
                 label=label,
@@ -757,17 +1122,19 @@ def run_extraction_publish_payload(
         source_label = str(fact.get("_source_label") or f"{label}-extraction")
         source_id_value = str(fact.get("_source_id") or session_id or "")
         source_chunk_id = str(fact.get("_source_chunk_id") or fact.get("source_chunk_id") or "").strip() or None
-        speaker_label, source_type = normalize_fact_provenance(
+        speaker_label, source_type = _normalize_fact_provenance(
             fact,
             label=label,
             fact_index=fact_index,
+            fail_hard_enabled=fail_hard_enabled,
+            log=log,
         )
 
         fact_entry = {"text": text, "status": "pending", "edges": []}
 
         if not dry_run:
             store_started_at = time.time()
-            write_publish_trace(
+            _write_publish_trace(
                 "publish_store_call_start",
                 session_id=session_id,
                 label=label,
@@ -812,7 +1179,7 @@ def run_extraction_publish_payload(
                 _conn=write_conn,
                 _dedup_rowid_max=dedup_rowid_max,
             )
-            write_publish_trace(
+            _write_publish_trace(
                 "publish_store_call_done",
                 session_id=session_id,
                 label=label,
@@ -828,7 +1195,7 @@ def run_extraction_publish_payload(
                 fact_entry=fact_entry,
                 write_conn=write_conn,
             ):
-                write_publish_trace(
+                _write_publish_trace(
                     "publish_fact_done",
                     session_id=session_id,
                     label=label,
@@ -844,7 +1211,7 @@ def run_extraction_publish_payload(
             result["facts_planned"] += 1
 
         result["facts"].append(fact_entry)
-        write_publish_trace(
+        _write_publish_trace(
             "publish_fact_done",
             session_id=session_id,
             label=label,
@@ -866,7 +1233,7 @@ def run_extraction_publish_payload(
             batch = facts[offset:offset + publish_batch_size]
             batch_index = (offset // publish_batch_size) + 1
             delta_rowid_max = external_rowid_seen
-            write_publish_trace(
+            _write_publish_trace(
                 "publish_batch_begin",
                 session_id=session_id,
                 label=label,
@@ -885,7 +1252,7 @@ def run_extraction_publish_payload(
                         )
                     except Exception:
                         delta_rowid_max = external_rowid_seen
-                write_publish_trace(
+                _write_publish_trace(
                     "publish_batch_conn_opened",
                     session_id=session_id,
                     label=label,
@@ -924,10 +1291,12 @@ def run_extraction_publish_payload(
                         source_label = str(fact.get("_source_label") or f"{label}-extraction")
                         source_id_value = str(fact.get("_source_id") or session_id or "")
                         source_chunk_id = str(fact.get("_source_chunk_id") or fact.get("source_chunk_id") or "").strip() or None
-                        speaker_label, source_type = normalize_fact_provenance(
+                        speaker_label, source_type = _normalize_fact_provenance(
                             fact,
                             label=label,
                             fact_index=global_fact_index,
+                            fail_hard_enabled=fail_hard_enabled,
+                            log=log,
                         )
                         delta_entry = {"text": text, "status": "pending", "edges": []}
                         delta_result = memory_service.store(
@@ -969,7 +1338,7 @@ def run_extraction_publish_payload(
                             _dedup_rowid_max=delta_rowid_max,
                             _dedup_only=True,
                         )
-                        write_publish_trace(
+                        _write_publish_trace(
                             "publish_delta_recheck_done",
                             session_id=session_id,
                             label=label,
@@ -998,7 +1367,7 @@ def run_extraction_publish_payload(
                     ):
                         should_abort = True
                         break
-                write_publish_trace(
+                _write_publish_trace(
                     "publish_batch_done",
                     session_id=session_id,
                     label=label,
@@ -1016,4 +1385,13 @@ def run_extraction_publish_payload(
             ):
                 external_rowid_seen = int(delta_rowid_max or 0)
 
+    _write_publish_trace(
+        "publish_complete",
+        session_id=session_id,
+        label=label,
+        facts_stored=int(result.get("facts_stored", 0) or 0),
+        facts_skipped=int(result.get("facts_skipped", 0) or 0),
+        edges_created=int(result.get("edges_created", 0) or 0),
+        publish_batches=int(result.get("publish_batches", 0) or 0),
+    )
     return facts

@@ -386,7 +386,6 @@ DEFAULT_EXTRACT_OUTPUT_TOKENS = 16384
 EXTRACT_RETRY_TARGET_TOKENS = 8000
 MIN_EXTRACT_RETRY_TOKENS = 4000
 MAX_EXTRACT_SPLIT_DEPTH = 4
-DEFAULT_EXTRACT_PUBLISH_BATCH_SIZE = 100
 MIN_REPAIR_OUTPUT_TOKENS = 4096
 # SessionDB microchunks are intentionally much smaller than legacy source
 # chunks. They are recall probes that carry pair_id/microchunk_id for expansion.
@@ -464,22 +463,6 @@ def _get_extract_parallel_root_workers() -> int:
     return max(1, workers)
 
 
-def _get_extract_publish_batch_size() -> int:
-    raw = str(os.environ.get("QUAID_EXTRACT_PUBLISH_BATCH_SIZE", "") or "").strip()
-    if not raw:
-        return DEFAULT_EXTRACT_PUBLISH_BATCH_SIZE
-    try:
-        size = int(raw)
-    except Exception:
-        logger.warning(
-            "[extract] invalid QUAID_EXTRACT_PUBLISH_BATCH_SIZE=%r; defaulting to %d",
-            raw,
-            DEFAULT_EXTRACT_PUBLISH_BATCH_SIZE,
-        )
-        return DEFAULT_EXTRACT_PUBLISH_BATCH_SIZE
-    return max(1, size)
-
-
 def _model_max_output_tokens(tier: str, default: int) -> int:
     """Read the configured model output cap without hiding failHard errors."""
     try:
@@ -506,39 +489,6 @@ def _repair_max_output_tokens(response_text: str) -> int:
         _model_max_output_tokens("deep", DEFAULT_EXTRACT_OUTPUT_TOKENS),
         max(MIN_REPAIR_OUTPUT_TOKENS, needed),
     )
-
-
-def _publish_trace_enabled() -> bool:
-    raw = str(os.environ.get("QUAID_PUBLISH_TRACE", "") or "").strip().lower()
-    return raw in {"1", "true", "yes", "on"}
-
-
-def _publish_trace_path() -> Optional[Path]:
-    if not _publish_trace_enabled():
-        return None
-    instance = str(os.environ.get("QUAID_INSTANCE", "benchrunner") or "benchrunner").strip() or "benchrunner"
-    from lib.adapter import get_adapter
-
-    path = get_adapter().quaid_home() / "instances" / instance / "logs" / "daemon" / "publish-trace.jsonl"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    return path
-
-
-def _write_publish_trace(event: str, **data: Any) -> None:
-    path = _publish_trace_path()
-    if path is None:
-        return
-    payload = {
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "pid": os.getpid(),
-        "event": event,
-    }
-    payload.update(data)
-    try:
-        with path.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(payload, ensure_ascii=True) + "\n")
-    except OSError as exc:
-        logger.warning("[extract] publish trace write failed: %s", exc)
 
 
 def _load_extraction_prompt(
@@ -605,38 +555,6 @@ def _get_owner_id(override: Optional[str] = None) -> str:
         if is_fail_hard_enabled():
             raise RuntimeError(f"extract owner resolution failed: {exc}") from exc
         return "default"
-
-
-def _normalize_fact_provenance(fact: Dict[str, Any], *, label: str, fact_index: int) -> Tuple[str, str]:
-    """Normalize speaker/source into canonical labels and enforce provenance presence."""
-    raw_speaker = str(fact.get("speaker", "") or "").strip().lower()
-    raw_source = str(fact.get("source", "") or "").strip().lower()
-    if not raw_speaker and not raw_source:
-        msg = (
-            f"[extract] missing provenance (speaker/source) for fact index={fact_index} "
-            f"in {label} extraction"
-        )
-        if is_fail_hard_enabled():
-            raise RuntimeError(msg)
-        logger.warning(msg + " - defaulting to user")
-        raw_speaker = "user"
-        raw_source = "user"
-    if raw_speaker not in {"agent", "assistant", "user"}:
-        raw_speaker = "agent" if raw_source in {"agent", "assistant"} else "user"
-    if not raw_source:
-        raw_source = raw_speaker
-    speaker_label = "agent" if raw_speaker in {"agent", "assistant"} else "user"
-    if raw_source in {"agent", "assistant"}:
-        source_type = "assistant"
-    elif raw_source == "subagent":
-        source_type = "subagent"
-    elif raw_source == "both":
-        source_type = "both"
-    elif raw_source == "tool":
-        source_type = "tool"
-    else:
-        source_type = "user"
-    return speaker_label, source_type
 
 
 def parse_session_jsonl(path: str) -> str:
@@ -2809,7 +2727,6 @@ def apply_extracted_payloads(
     # Kept for call compatibility; MemoryDB resolves publish domain policy.
     _ = allowed_domains
     session_date_hint = _project_log_date_for_payload(session_id or "")
-    publish_mentioned_at = session_date_hint or _current_utc_timestamp()
     all_snippets = dict(result.get("raw_snippets", {}) or {})
     all_journal = dict(result.get("raw_journal", {}) or {})
     all_project_logs = {
@@ -2836,22 +2753,13 @@ def apply_extracted_payloads(
         participant_entity_ids=participant_entity_ids,
         source_author_id=source_author_id,
         dry_run=dry_run,
-        default_created_at=session_date_hint,
-        default_mentioned_at=publish_mentioned_at,
-        prefer_default_mentioned_at=bool(session_date_hint),
         snippet_files=len(all_snippets),
         journal_files=len(all_journal),
         project_log_projects=len(all_project_logs),
         memory_service=_memory,
         session_bridge=_session_bridge,
         fail_hard_enabled=is_fail_hard_enabled,
-        normalize_fact_temporal_hint=_normalize_fact_temporal_hint,
-        collapse_duplicate_payload_facts=_collapse_duplicate_payload_facts,
-        normalize_fact_provenance=_normalize_fact_provenance,
-        write_publish_trace=_write_publish_trace,
-        publish_batch_size=_get_extract_publish_batch_size(),
         log=logger,
-        default_session_microchunk_tokens=DEFAULT_SESSION_MICROCHUNK_TOKENS,
     )
 
     if isinstance(all_snippets, dict):
@@ -2952,15 +2860,6 @@ def apply_extracted_payloads(
             f"[extract] {label}: {result['facts_stored']} stored, "
             f"{result['facts_skipped']} skipped, {result['edges_created']} edges"
         )
-    _write_publish_trace(
-        "publish_complete",
-        session_id=session_id,
-        label=label,
-        facts_stored=int(result.get("facts_stored", 0) or 0),
-        facts_skipped=int(result.get("facts_skipped", 0) or 0),
-        edges_created=int(result.get("edges_created", 0) or 0),
-        publish_batches=int(result.get("publish_batches", 0) or 0),
-    )
     return result
 
 

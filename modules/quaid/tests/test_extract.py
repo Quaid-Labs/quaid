@@ -2757,6 +2757,12 @@ class TestExtractFromTranscript:
         assert kwargs["session_bridge"] is extract_mod._session_bridge
         assert kwargs["snippet_files"] == 1
         assert kwargs["project_log_projects"] == 1
+        assert "normalize_fact_temporal_hint" not in kwargs
+        assert "collapse_duplicate_payload_facts" not in kwargs
+        assert "normalize_fact_provenance" not in kwargs
+        assert "write_publish_trace" not in kwargs
+        assert "publish_batch_size" not in kwargs
+        assert "default_session_microchunk_tokens" not in kwargs
 
     @patch("ingest.extract._memory.store")
     def test_apply_extracted_payloads_collapses_exact_duplicate_fact_rows(self, mock_store):
@@ -2945,23 +2951,16 @@ class TestExtractFromTranscript:
             participant_entity_ids=None,
             source_author_id=None,
             dry_run=True,
-            default_created_at=None,
-            default_mentioned_at=None,
-            prefer_default_mentioned_at=False,
             snippet_files=0,
             journal_files=0,
             project_log_projects=0,
             memory_service=object(),
             session_bridge=object(),
             fail_hard_enabled=lambda: False,
-            normalize_fact_temporal_hint=lambda fact, **_kwargs: fact,
-            collapse_duplicate_payload_facts=lambda facts: (facts, 0),
-            normalize_fact_provenance=lambda fact, **_kwargs: ("user", "conversation"),
-            write_publish_trace=lambda *_args, **_kwargs: None,
-            publish_batch_size=1,
         )
 
-        assert returned == result["raw_facts"]
+        assert returned[0]["text"] == result["raw_facts"][0]["text"]
+        assert "mentioned_at" in returned[0]
         assert result["facts_planned"] == 1
         assert result["facts"][0]["status"] == "would_store"
 
@@ -4218,7 +4217,7 @@ class TestExtractFromTranscript:
         }
 
         with patch("ingest.extract._memory.batch_write", side_effect=fake_batch_write), \
-             patch("ingest.extract._get_extract_publish_batch_size", return_value=1):
+             patch("datastore.memorydb.extraction_publish._get_extract_publish_batch_size", return_value=1):
             applied = apply_extracted_payloads(
                 payload,
                 owner_id="test",
@@ -5447,25 +5446,43 @@ class TestGetOwnerId:
 
 class TestNormalizeFactProvenance:
     def test_raises_when_missing_speaker_and_source_under_fail_hard(self):
-        from ingest.extract import _normalize_fact_provenance
-        with patch("ingest.extract.is_fail_hard_enabled", return_value=True):
-            with pytest.raises(RuntimeError, match="missing provenance"):
-                _normalize_fact_provenance({}, label="unit", fact_index=1)
+        from datastore.memorydb.extraction_publish import _normalize_fact_provenance
+
+        with pytest.raises(RuntimeError, match="missing provenance"):
+            _normalize_fact_provenance(
+                {},
+                label="unit",
+                fact_index=1,
+                fail_hard_enabled=lambda: True,
+                log=SimpleNamespace(warning=lambda *_args, **_kwargs: None),
+            )
 
     def test_defaults_to_user_when_missing_speaker_and_source_non_fail_hard(self):
-        from ingest.extract import _normalize_fact_provenance
-        with patch("ingest.extract.is_fail_hard_enabled", return_value=False):
-            speaker, source_type = _normalize_fact_provenance({}, label="unit", fact_index=2)
+        from datastore.memorydb.extraction_publish import _normalize_fact_provenance
+
+        speaker, source_type = _normalize_fact_provenance(
+            {},
+            label="unit",
+            fact_index=2,
+            fail_hard_enabled=lambda: False,
+            log=SimpleNamespace(warning=lambda *_args, **_kwargs: None),
+        )
         assert speaker == "user"
         assert source_type == "user"
 
     def test_normalizes_agent_and_tool_source_variants(self):
-        from ingest.extract import _normalize_fact_provenance
+        from datastore.memorydb.extraction_publish import _normalize_fact_provenance
+
+        kwargs = {
+            "fail_hard_enabled": lambda: False,
+            "log": SimpleNamespace(warning=lambda *_args, **_kwargs: None),
+        }
 
         speaker, source_type = _normalize_fact_provenance(
             {"speaker": "agent"},
             label="unit",
             fact_index=3,
+            **kwargs,
         )
         assert speaker == "agent"
         assert source_type == "assistant"
@@ -5474,6 +5491,7 @@ class TestNormalizeFactProvenance:
             {"source": "agent"},
             label="unit",
             fact_index=4,
+            **kwargs,
         )
         assert speaker == "agent"
         assert source_type == "assistant"
@@ -5482,6 +5500,7 @@ class TestNormalizeFactProvenance:
             {"source": "both"},
             label="unit",
             fact_index=5,
+            **kwargs,
         )
         assert speaker == "user"
         assert source_type == "both"
@@ -5490,6 +5509,7 @@ class TestNormalizeFactProvenance:
             {"source": "tool"},
             label="unit",
             fact_index=6,
+            **kwargs,
         )
         assert speaker == "user"
         assert source_type == "tool"
@@ -5498,6 +5518,7 @@ class TestNormalizeFactProvenance:
             {"speaker": "user", "source": "subagent"},
             label="unit",
             fact_index=7,
+            **kwargs,
         )
         assert speaker == "user"
         assert source_type == "subagent"
@@ -5506,6 +5527,7 @@ class TestNormalizeFactProvenance:
             {"speaker": "agent", "source": "subagent"},
             label="unit",
             fact_index=8,
+            **kwargs,
         )
         assert speaker == "agent"
         assert source_type == "subagent"
