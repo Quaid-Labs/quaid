@@ -229,6 +229,29 @@ Request-slice rules:
   it must remain additive and must not replace existing `result["snippets"]` or
   `result["journal"]` shapes.
 
+Request-slice mode pins:
+
+- Keep `memory_publish_mode` and the new snippet/journal mode as separate
+  keyword arguments for this slice. Each migrated subsystem keeps an explicit
+  mode at its own ownership boundary until a later cleanup is specifically
+  approved to consolidate routing controls.
+- The two modes are independently switchable. The four supported combinations
+  are:
+  - MemoryDB direct + snippet/journal direct: direct/CLI default behavior.
+  - MemoryDB request + snippet/journal direct: current daemon behavior after
+    M9.4, before this request slice is enabled.
+  - MemoryDB direct + snippet/journal request: allowed for focused parity tests
+    and future selected producers, but not the daemon default unless reviewed.
+  - MemoryDB request + snippet/journal request: intended daemon final rolling
+    flush shape after this slice.
+- In every mode combination, `apply_extracted_payloads()` remains the
+  orchestrator. Project-log queueing stays after both MemoryDB publish and
+  snippet/journal writes, and `publish_complete` remains the final completion
+  trace after snippet, journal, and project-log side effects.
+- Request-mode response validation should use a centralized warn-then-raise
+  helper, following the M9.4 `_raise_extraction_publish_request_error()` pattern,
+  so future validator failure paths inherit warning-before-raise discipline.
+
 Request-slice non-targets:
 
 - no `datastore.notedb` package rename
