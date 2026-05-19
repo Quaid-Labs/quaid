@@ -71,7 +71,10 @@ Implement one runtime metadata slice only:
    `_record_daemon_lifecycle_observation(signal_data, *, session_id,
    signal_type, transcript_path, label)`, that builds an event-like dict and
    calls `core.plugins.sessiondb_contract.record_session_lifecycle_observation()`.
-   The daemon must call through the core plugin contract. Do not import
+   Helper placement: keep `_record_daemon_lifecycle_observation()` as a private
+   module-level function in `core.extraction_daemon` near the existing signal
+   processing code. Do not create a new dedicated helper module for this single
+   function. The daemon must call through the core plugin contract. Do not import
    `datastore.sessiondb.session_store` directly from `core.extraction_daemon`.
 2. Record observations only for lifecycle signal types that already represent
    terminal or lifecycle boundaries: `reset`, `compaction`, `timeout`, and
@@ -81,12 +84,23 @@ Implement one runtime metadata slice only:
 3. Map daemon signal types to existing lifecycle event names only:
    `reset -> session.reset`, `compaction -> session.compaction`,
    `timeout -> session.timeout`, and `session_end -> session.agent_end`.
-   Do not introduce a `session.session_end` or daemon-specific event name.
+   Mapping definition: implement this as a module-level constant such as
+   `DAEMON_SIGNAL_TO_LIFECYCLE_EVENT = {"reset": "session.reset",
+   "compaction": "session.compaction", "timeout": "session.timeout",
+   "session_end": "session.agent_end"}` so tests can assert the mapping
+   directly. `rolling` must be absent from the constant; absence is the test
+   invariant for excluded signal types. Do not introduce a `session.session_end`
+   or daemon-specific event name.
 4. Preserve idempotency with a stable event id derived from existing daemon
    signal identity, preferably the signal file basename from `_signal_path` plus
-   the signal type and session id. Reprocessing the same signal file must not
-   create duplicate lifecycle observation rows. Do not generate a new observation
-   UUID at record time; use the already-existing signal identity.
+   the signal type and session id. Event id composition: use a
+   prefix-disambiguated daemon id such as
+   `daemon-signal:{signal_file_basename}:{signal_type}:{session_id}`. The
+   `daemon-signal:` prefix distinguishes daemon-origin observations from
+   event-bus-origin observations, which use the event-bus event id directly, and
+   prevents accidental primary-key collisions. Reprocessing the same signal file
+   must not create duplicate lifecycle observation rows. Do not generate a new
+   observation UUID at record time; use the already-existing signal identity.
 5. Record compact metadata only: daemon signal type, transcript path, adapter,
    source, reason/meta fields already present on the signal, and enough
    provenance to identify that the observation came from daemon signal
@@ -146,6 +160,10 @@ Implement one runtime metadata slice only:
   under failHard.
 - Do not fall back to writing lifecycle observations directly through
   `datastore.sessiondb.session_store` if the plugin contract helper fails.
+- Boundary check: M21 runtime must not add `core/extraction_daemon.py` to the
+  `scripts/check-boundaries.py` datastore composition allowlist. The daemon
+  routes through `core/plugins/sessiondb_contract.py`, which is already
+  allowlisted from M20. A boundary-check pass is the required guard.
 
 ## Required Tests Before W4
 
@@ -160,6 +178,8 @@ Add or preserve focused tests proving:
   duplicate lifecycle observation rows.
 - The daemon does not import `datastore.sessiondb.session_store` directly; source
   assertions or boundary checks prove it calls through `core.plugins.sessiondb_contract`.
+  The runtime diff does not add `core/extraction_daemon.py` to the boundary
+  allowlist.
 - Missing-session or malformed lifecycle signals remain handled by the existing
   daemon signal validation paths and do not call the SessionDB observation
   helper.
