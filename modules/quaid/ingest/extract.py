@@ -3567,7 +3567,7 @@ def _format_human_summary(result: Dict[str, Any]) -> str:
 # CLI
 # =============================================================================
 
-def main():
+def _build_cli_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Extract memories from a conversation transcript.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -3589,7 +3589,23 @@ def main():
     parser.add_argument("--no-journal", action="store_true", help="Skip writing journal entries")
     parser.add_argument("--json", action="store_true", help="Output JSON instead of human summary")
     parser.add_argument("--verbose", "-v", action="store_true", help="Enable debug logging")
+    parser.add_argument(
+        "--memory-publish-mode",
+        choices=("direct", "request"),
+        default="direct",
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--snippet-journal-write-mode",
+        choices=("direct", "request"),
+        default="direct",
+        help=argparse.SUPPRESS,
+    )
+    return parser
 
+
+def main():
+    parser = _build_cli_parser()
     args = parser.parse_args()
 
     # Logging
@@ -3645,6 +3661,8 @@ def main():
         write_snippets=not args.no_snippets,
         write_journal=not args.no_journal,
         dry_run=args.dry_run,
+        memory_publish_mode=args.memory_publish_mode,
+        snippet_journal_write_mode=args.snippet_journal_write_mode,
     )
 
     if args.json:

@@ -1,5 +1,6 @@
 """Tests for extract.py — Memory extraction from conversation transcripts."""
 
+import argparse
 import importlib
 import json
 import os
@@ -6492,6 +6493,119 @@ class TestCLI:
         # argparse --help exits 0
         assert result.returncode == 0
         assert "extract" in result.stdout.lower()
+        assert "--memory-publish-mode" not in result.stdout
+        assert "--snippet-journal-write-mode" not in result.stdout
+
+    def test_request_mode_flags_are_hidden_literal_argparse_defaults(self):
+        from ingest import extract as extract_mod
+
+        parser = extract_mod._build_cli_parser()
+        actions = {action.dest: action for action in parser._actions}
+
+        memory_action = actions["memory_publish_mode"]
+        snippet_action = actions["snippet_journal_write_mode"]
+
+        assert memory_action.default == "direct"
+        assert snippet_action.default == "direct"
+        assert memory_action.help is argparse.SUPPRESS
+        assert snippet_action.help is argparse.SUPPRESS
+        assert memory_action.choices == ("direct", "request")
+        assert snippet_action.choices == ("direct", "request")
+
+    @pytest.mark.parametrize(
+        ("extra_args", "expected_memory_mode", "expected_snippet_mode"),
+        [
+            ([], "direct", "direct"),
+            (["--memory-publish-mode", "request"], "request", "direct"),
+            (["--snippet-journal-write-mode", "request"], "direct", "request"),
+            (
+                ["--memory-publish-mode", "request", "--snippet-journal-write-mode", "request"],
+                "request",
+                "request",
+            ),
+        ],
+    )
+    def test_request_mode_flags_forward_to_extract_from_transcript(
+        self,
+        tmp_path,
+        monkeypatch,
+        capsys,
+        extra_args,
+        expected_memory_mode,
+        expected_snippet_mode,
+    ):
+        from ingest import extract as extract_mod
+
+        transcript = tmp_path / "transcript.txt"
+        transcript.write_text("User: Maya prefers green tea.\n", encoding="utf-8")
+        calls = []
+
+        def fake_extract_from_transcript(**kwargs):
+            calls.append(kwargs)
+            return {"status": "ok"}
+
+        monkeypatch.setattr(extract_mod, "_get_owner_id", lambda _owner: "owner-1")
+        monkeypatch.setattr(extract_mod, "extract_from_transcript", fake_extract_from_transcript)
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "extract.py",
+                str(transcript),
+                "--json",
+                *extra_args,
+            ],
+        )
+
+        extract_mod.main()
+        out = capsys.readouterr().out
+
+        assert json.loads(out) == {"status": "ok"}
+        assert len(calls) == 1
+        assert calls[0]["memory_publish_mode"] == expected_memory_mode
+        assert calls[0]["snippet_journal_write_mode"] == expected_snippet_mode
+
+    def test_request_mode_cli_defaults_ignore_env_var(self, tmp_path, monkeypatch):
+        from ingest import extract as extract_mod
+
+        transcript = tmp_path / "transcript.txt"
+        transcript.write_text("User: Maya prefers green tea.\n", encoding="utf-8")
+        calls = []
+
+        def fake_extract_from_transcript(**kwargs):
+            calls.append(kwargs)
+            return {"status": "ok"}
+
+        monkeypatch.setenv("QUAID_MEMORY_PUBLISH_MODE", "request")
+        monkeypatch.setattr(extract_mod, "_get_owner_id", lambda _owner: "owner-1")
+        monkeypatch.setattr(extract_mod, "extract_from_transcript", fake_extract_from_transcript)
+        monkeypatch.setattr(sys, "argv", ["extract.py", str(transcript), "--json"])
+
+        extract_mod.main()
+
+        assert len(calls) == 1
+        assert calls[0]["memory_publish_mode"] == "direct"
+        assert calls[0]["snippet_journal_write_mode"] == "direct"
+
+    @pytest.mark.parametrize(
+        ("flag", "bad_value"),
+        [
+            ("--memory-publish-mode", "bogus"),
+            ("--snippet-journal-write-mode", "bogus"),
+        ],
+    )
+    def test_invalid_request_mode_flag_exits_before_extraction(self, monkeypatch, flag, bad_value):
+        from ingest import extract as extract_mod
+
+        monkeypatch.setattr(
+            extract_mod,
+            "extract_from_transcript",
+            lambda **_kwargs: pytest.fail("invalid argparse choice must not start extraction"),
+        )
+        monkeypatch.setattr(sys, "argv", ["extract.py", "transcript.txt", flag, bad_value])
+
+        with pytest.raises(SystemExit):
+            extract_mod.main()
 
     def test_missing_file(self):
         import subprocess
