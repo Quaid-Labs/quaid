@@ -107,9 +107,10 @@ handler now imports the SessionDB helper directly, while MemoryDB compatibility
 wrappers and the MemoryDB `session_chunks` recall/write projection remain
 unchanged.
 
-M18 now tracks active `session.ingest_log` failHard cleanup for the pre-existing
-handler-local bare exception path in
-`projects/quaid/operations/datastore-events-m18-sessiondb-active-ingest-failhard-plan.md`.
+M18 active `session.ingest_log` failHard cleanup closed at `fd7cc4b38`: the
+active handler no longer catches unexpected SessionDB helper/import exceptions
+locally; they now reach `process_events()` failHard machinery, while structured
+failed envelopes and normal success behavior remain unchanged.
 
 ## Shared Rules For Every M9 Slice
 

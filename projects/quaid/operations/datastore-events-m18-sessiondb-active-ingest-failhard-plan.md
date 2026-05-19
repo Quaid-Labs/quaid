@@ -1,6 +1,6 @@
 # Datastore Events M18 SessionDB Active Ingest FailHard Plan
 
-Status: draft plan; no runtime implementation yet
+Status: runtime failHard cleanup slice complete; broader cleanup deferred
 Owner: W1 runtime/datastore, W3 recall and source-window review
 Plan source: `projects/quaid/operations/datastore-events-m17-sessiondb-active-ingest-import-cleanup-plan.md`
 
@@ -18,7 +18,7 @@ Do not implement runtime code for M18 until:
    request session ingest, datastore manifests/contracts, session memory bridge,
    store recall, source-window guards, and boundary checks.
 
-This document selects one narrow failHard cleanup slice only. It does not approve
+This document records one narrow failHard cleanup slice only. It does not approve
 changing active event delivery mode, adding new event names, changing active or
 request payload schemas, changing normal processed/failed envelopes for
 validation or helper-returned failed statuses, removing MemoryDB compatibility
@@ -33,7 +33,7 @@ M17 made active `session.ingest_log` import the SessionDB helper directly but
 intentionally preserved the pre-existing handler-local bare
 `except Exception: return {"status": "failed", "error": str(e)}` shape.
 
-M18 selects the next failHard cleanup: remove the handler-local catch around the
+M18 selected the next failHard cleanup: remove the handler-local catch around the
 SessionDB helper call so unexpected helper/import exceptions propagate to
 `process_events()`' existing event-level failure machinery. This keeps normal
 validation and helper-returned failed-status behavior unchanged while preventing
@@ -45,7 +45,7 @@ slice.
 
 ## Current Boundary
 
-Current post-M17 path:
+Pre-M18 path:
 
 1. `core.runtime.events._handle_session_ingest_log()` validates
    `payload.session_id` before helper invocation and returns
@@ -65,7 +65,7 @@ Current post-M17 path:
 
 ## Selected First Slice: Active Handler Exception Cleanup Only
 
-Implement one runtime cleanup slice only:
+Implemented one runtime cleanup slice only:
 
 1. Remove the handler-local `try/except Exception` wrapper around the SessionDB
    helper import/call in `core.runtime.events._handle_session_ingest_log()`.
@@ -88,6 +88,68 @@ Implement one runtime cleanup slice only:
 9. Preserve SessionDB transcript row shape, MemoryDB `session_chunks`
    projection, microchunk linkage, source kind, source-window expansion inputs,
    recall selector ownership, ranking, and planner behavior.
+
+## Implementation Record
+
+Runtime failHard cleanup slice closed at `fd7cc4b38`
+(`refactor(datastore): let active session ingest exceptions fail hard`).
+
+Implemented behavior:
+
+- Removed the handler-local `try/except Exception` wrapper around the
+  SessionDB helper import/call inside
+  `core.runtime.events._handle_session_ingest_log()`.
+- Preserved missing-`payload.session_id` validation and failed envelope before
+  helper invocation.
+- Preserved helper-returned failed/error status handling:
+  `{"status": "failed", "result": result}` still returns from the handler and
+  is handled by `process_events()` as a handler-reported failed status.
+- Preserved the successful active envelope:
+  `{"status": "processed", "result": result}`.
+- Left `process_events()` exception machinery unchanged; unexpected helper/import
+  exceptions now reach that existing event-level fail-soft/failHard path.
+- Preserved M17 direct SessionDB helper import, M16 request ownership, MemoryDB
+  compatibility wrappers, MemoryDB `session_chunks` recall/write projection,
+  SessionDB `capabilities.recall=[]`, source-window inputs, recall
+  ranking/planning, lifecycle behavior, CLI behavior, default routing, and
+  public release state.
+
+Tests added or preserved:
+
+- Active `session.ingest_log` no-MemoryDB-call trip-wire remains: the test
+  monkeypatches `memorydb_contract.run_session_ingest_payload()` to raise if
+  invoked.
+- Function-scoped source assertion uses `inspect.getsource()` on
+  `_handle_session_ingest_log()` and verifies the handler no longer contains
+  `except Exception`; whole-file source assertions still verify no direct
+  `run_session_logs_ingest()` import and no MemoryDB helper import.
+- Fail-soft helper exception coverage verifies `process_events()` marks the
+  event failed, records the helper exception text, and does not report the event
+  as processed.
+- failHard helper exception coverage verifies `process_events()` raises and
+  chains the original helper `RuntimeError` as `__cause__`.
+- Existing missing-`session_id`, helper-returned failed/error, request-path,
+  manifest/contract, MemoryDB compatibility wrapper, session-memory bridge,
+  store recall, and source-window guard lanes remain covered.
+
+Validation:
+
+- W4 R201 live/source-proof PASS on `fd7cc4b38`: handler-local `try/except` was
+  removed; missing-`session_id`, helper-returned failed/error, and happy-path
+  envelopes are unchanged; unexpected helper exceptions now propagate to
+  `process_events()`; request ownership, MemoryDB wrappers, `session_chunks`
+  projection, and prior routes remain intact.
+- W3 runtime/recall APPROVED with no findings: active/request success behavior,
+  M16 request ownership, MemoryDB compatibility wrappers, MemoryDB
+  `session_chunks` projection, SessionDB recall `[]`, source-window, recall,
+  ranking, planner, lifecycle, CLI, and default routing behavior are unchanged.
+- W6 APPROVED with no concerns: bare-except removed cleanly, function-scoped
+  source assertion implemented, MemoryDB trip-wire preserved, failHard
+  `__cause__` assertion implemented, and no B-code concerns introduced.
+- W8 static PASS/runtime HOLD pending final closure: focused session ingest
+  selector, affected event/extraction/session-ingest/registry/contract lane,
+  py_compile, ruff, diff/docs checks, boundary check, and unit wrapper all
+  passed.
 
 ## Non-Targets
 

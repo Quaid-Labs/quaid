@@ -223,8 +223,7 @@ narrow session-ingest smoke:
 
 - request/active compatibility-wrapper removal from `core.plugins.memorydb_contract`
 - active handler exception/failed-envelope cleanup for the pre-existing bare
-  `except Exception` path is tracked as M18 in
-  `projects/quaid/operations/datastore-events-m18-sessiondb-active-ingest-failhard-plan.md`
+  `except Exception` path closed in M18 at `fd7cc4b38`
 - whether SessionDB should expose dedicated request handlers beyond
   `session.ingest_log.request.v1` and generic metadata/maintenance surfaces
 - lifecycle persistence for ack-only lifecycle events
