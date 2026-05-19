@@ -211,6 +211,12 @@ keyed on `datastore.notedb.soul_snippets` should migrate those filters to the
 canonical logger name; the legacy package aliases the canonical module object
 and does not produce a separate legacy logger stream.
 
+After Slice 2, the canonical logger name for the contract module is
+`core.plugins.evolutiondb_contract`. Operators with logger-name filters keyed on
+`core.plugins.notedb_contract` should migrate those filters to the canonical
+name. The warning message prefix remains `[notedb]` for operator-visible log
+continuity during the compatibility window.
+
 ## Required Tests Before W4
 
 Add or preserve tests proving:
