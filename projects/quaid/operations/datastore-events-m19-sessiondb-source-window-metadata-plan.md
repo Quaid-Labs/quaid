@@ -182,7 +182,8 @@ narrow session source-window smoke:
 
 ## Deferred Decisions
 
-- request/active compatibility-wrapper removal from `core.plugins.memorydb_contract`
+- SessionDB ingest wrapper retirement closed in M23 at `bfe5836b` +
+  `4a3824d88`
 - whether SessionDB should expose dedicated request handlers beyond
   `session.ingest_log.request.v1` and generic metadata/maintenance surfaces
 - lifecycle observation metadata for ack-only lifecycle events closed in M20 at

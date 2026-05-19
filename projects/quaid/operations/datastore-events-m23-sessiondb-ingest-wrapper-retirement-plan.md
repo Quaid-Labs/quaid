@@ -1,12 +1,12 @@
 # Datastore Events M23 SessionDB Ingest Wrapper Retirement Plan
 
-Status: draft plan; no runtime implementation yet
+Status: runtime wrapper-retirement slice complete; broader alias retirement deferred
 Owner: W1 runtime/datastore, W3 recall and source-window review
 Plan source: `projects/quaid/operations/datastore-events-m22-lifecycle-daemon-signal-bridge-plan.md`
 
 ## Precondition
 
-Do not implement runtime code for M23 until:
+Runtime code for M23 was gated on:
 
 1. M22 explicit opt-in lifecycle-to-daemon signal bridge is closed through
    W4/W3/W6/W8.
@@ -23,12 +23,11 @@ Do not implement runtime code for M23 until:
    real transcript and project MemoryDB `session_chunks` evidence after wrapper
    retirement.
 
-This document is a plan only. It does not approve runtime changes until the
-preconditions above are satisfied and the plan is reviewed. It does not approve
-removing MemoryDB `session_chunks` APIs, changing recall/source-window behavior,
-changing lifecycle signal behavior, broad compatibility-alias retirement,
-`notedb.core` plugin-id rename, `.ego` integration, public push, or release
-actions.
+This document records the completed narrow wrapper-retirement slice only. It did
+not approve removing MemoryDB `session_chunks` APIs, changing
+recall/source-window behavior, changing lifecycle signal behavior, broad
+compatibility-alias retirement, `notedb.core` plugin-id rename, `.ego`
+integration, public push, or release actions.
 
 ## Goal
 
@@ -40,11 +39,11 @@ SessionDB helper directly. M18 restored failHard propagation for unexpected
 active helper exceptions.
 
 After those closures, the remaining `core.plugins.memorydb_contract`
-session-ingest wrappers are no longer used by in-repo production paths. They now widen
-the ownership boundary by leaving a MemoryDB module surface that appears to own
-SessionDB transcript ingest.
+session-ingest wrappers were no longer used by in-repo production paths. They
+widened the ownership boundary by leaving a MemoryDB module surface that appears
+to own SessionDB transcript ingest.
 
-M23 selects one cleanup slice: retire only the obsolete MemoryDB
+M23 selected one cleanup slice: retire only the obsolete MemoryDB
 `session.ingest_log` compatibility wrappers, while preserving SessionDB-owned
 active/request ingest behavior and MemoryDB-owned `session_chunks` recall/write
 projection.
@@ -54,7 +53,7 @@ move. It is not a source-window selector change.
 
 ## Current Boundary
 
-Current post-M22 path:
+Pre-M23 path:
 
 1. `core.plugins.sessiondb_contract.run_session_ingest_payload()` owns
    session-ingest payload normalization and delegates to
@@ -68,7 +67,7 @@ Current post-M22 path:
 5. `core.runtime.events._handle_session_ingest_log()` imports the SessionDB
    helper directly and lets unexpected helper/import exceptions reach
    `process_events()` failHard machinery.
-6. `core.plugins.memorydb_contract` still exposes three silent compatibility
+6. `core.plugins.memorydb_contract` still exposed three silent compatibility
    wrappers for the same SessionDB-owned surfaces:
    `run_session_ingest_payload()`, `handle_session_ingest_log_request()`, and
    `register_session_ingest_log_request_handler()`.
@@ -77,38 +76,37 @@ Current post-M22 path:
 
 ## Selected First Slice: Session-Ingest Wrapper Retirement Only
 
-Implement one runtime cleanup slice only:
+Implemented one runtime cleanup slice only:
 
-1. Remove these obsolete SessionDB ingest compatibility wrappers from
+1. Removed these obsolete SessionDB ingest compatibility wrappers from
    `core.plugins.memorydb_contract`:
    - `run_session_ingest_payload(payload)`
    - `handle_session_ingest_log_request(event)`
    - `register_session_ingest_log_request_handler()`
-2. Do not add replacement shims, deprecation wrappers, warning wrappers, or
-   fallback wrappers under MemoryDB. If W4 or W6 finds a real installed-alpha
-   caller that still depends on these import paths, stop the runtime change and
-   write a separate compatibility-shim plan with an owner and removal condition.
-3. Preserve `core.plugins.sessiondb_contract` helper, handler, and registrar
+2. Did not add replacement shims, deprecation wrappers, warning wrappers, or
+   fallback wrappers under MemoryDB. No real installed-alpha caller was found
+   during review or W4 validation.
+3. Preserved `core.plugins.sessiondb_contract` helper, handler, and registrar
    names and behavior exactly.
-4. Preserve active `session.ingest_log` behavior exactly: event name, payload
+4. Preserved active `session.ingest_log` behavior exactly: event name, payload
    schema, missing-`session_id` failed envelope, helper-returned failed/error
    envelope, successful processed envelope, and failHard exception propagation
    stay unchanged.
-5. Preserve `session.ingest_log.request.v1` behavior exactly: request event name,
+5. Preserved `session.ingest_log.request.v1` behavior exactly: request event name,
    payload schema, SessionDB datastore id, broker response shape, and
    extraction-daemon broker validation stay unchanged.
-6. Preserve SessionDB transcript row shape, MemoryDB `session_chunks`
+6. Preserved SessionDB transcript row shape, MemoryDB `session_chunks`
    projection, microchunk linkage, source kind, source-window expansion inputs,
    recall selector ownership, ranking, planner behavior, and token budget.
-7. Preserve MemoryDB-owned non-session-ingest contract functions, including
+7. Preserved MemoryDB-owned non-session-ingest contract functions, including
    extraction publish, domain sync, maintenance, and `session_chunks` public
    MemoryDB APIs. Do not remove `store_session_chunks()`,
    `list_session_chunks()`, `get_session_chunk()`, or any MemoryDB recall
    selector surface.
-8. Do not change datastore manifests or capabilities in this slice except for
-   tests/source assertions that continue to prove SessionDB owns
+8. Did not change datastore manifests or capabilities in this slice; tests and
+   source assertions continue to prove SessionDB owns
    `session.ingest_log.request.v1` and MemoryDB owns `session_chunks`.
-9. Do not change lifecycle observation, daemon signal bridge, daemon polling,
+9. Did not change lifecycle observation, daemon signal bridge, daemon polling,
    signal finalization, rolling behavior, CLI behavior, default routing,
    compatibility aliases outside these three wrappers, or `.ego` behavior.
 
@@ -213,3 +211,83 @@ narrow session-ingest smoke:
 - whether hidden CLI request-mode flags should ever become public
 - broad compatibility-alias retirement and `notedb.core` plugin-id rename
 - `.ego` import/export integration
+
+## Implementation Record
+
+Runtime wrapper-retirement slice closed at `bfe5836b`
+(`refactor(datastore): retire MemoryDB session ingest wrappers`) with test-only
+follow-up `4a3824d88` (`test(datastore): cover M23 error-status envelope`).
+
+Implemented behavior:
+
+- Removed only the obsolete SessionDB ingest compatibility wrappers from
+  `core.plugins.memorydb_contract`: `run_session_ingest_payload()`,
+  `handle_session_ingest_log_request()`, and
+  `register_session_ingest_log_request_handler()`.
+- Added no replacement MemoryDB shim, deprecation wrapper, warning wrapper,
+  fallback wrapper, `ImportError`/`AttributeError` catch, or direct
+  `core.ingest_runtime.run_session_logs_ingest()` fallback.
+- Preserved `core.plugins.sessiondb_contract.run_session_ingest_payload()`,
+  `handle_session_ingest_log_request()`, and
+  `register_session_ingest_log_request_handler()` as the canonical SessionDB
+  helper, request handler, and registrar.
+- Preserved active `session.ingest_log` behavior from M17/M18: the handler
+  imports the SessionDB helper directly, missing `payload.session_id` returns the
+  same failed envelope, helper-returned `failed`/`error` statuses return the
+  same failed envelope, successful results return the same processed envelope,
+  and unexpected helper exceptions still reach `process_events()` failHard
+  machinery.
+- Preserved `session.ingest_log.request.v1` SessionDB ownership and broker
+  response datastore id `sessiondb`; `core.extraction_daemon` still registers
+  and validates the request through `core.plugins.sessiondb_contract`.
+- Preserved MemoryDB-owned non-session-ingest contract surfaces, including
+  extraction publish, domain sync, maintenance, and `session_chunks` public
+  MemoryDB APIs.
+- Preserved MemoryDB `session_chunks` recall/write ownership, SessionDB
+  `capabilities.recall=[]`, M19 source-window metadata/output policy, M20-M22
+  lifecycle/daemon behavior, daemon polling/priority/locking/cursor/rolling,
+  CLI/default routing, datastore manifests, and broader compatibility aliases.
+
+Test coverage added or preserved:
+
+- Absence assertions prove `core.plugins.memorydb_contract` no longer defines the
+  three retired wrapper names and its source no longer contains those `def`
+  blocks.
+- Production-source scan coverage proves no production code imports or references
+  the retired MemoryDB wrapper names; tests may reference them only to assert
+  absence.
+- SessionDB ownership assertions prove the canonical helper, handler, and
+  registrar remain on `core.plugins.sessiondb_contract`.
+- Active/session request coverage preserves M18 behavior for missing
+  `session_id`, helper-returned `failed` and `error` statuses, successful active
+  results, fail-soft unexpected helper exceptions, and failHard unexpected helper
+  exceptions with original cause chaining.
+- Request broker and extraction-daemon coverage preserves exactly one SessionDB
+  broker response and rejects missing, malformed, failed, or non-SessionDB
+  responses without fallback.
+- Direct/request/active parity coverage still writes SessionDB rows and MemoryDB
+  `session_chunks` with the same counts, metadata, source kind, and microchunk
+  linkage.
+- Existing source-window, session-memory bridge, lifecycle, daemon, registry,
+  docs consistency, boundary, and unit-wrapper lanes remain green.
+
+Validation:
+
+- W4 R201 live/source-proof PASS on `bfe5836b`: MemoryDB session-ingest wrappers
+  are absent; SessionDB helper/handler/registrar remain present; request handler
+  ownership is still `sessiondb`; active handler and extraction-daemon broker
+  path import through `sessiondb_contract`; MemoryDB extraction publish wrappers
+  and `session_chunks` recall/write capability remain intact; M22 lifecycle
+  bridge and prior milestone routes remain intact. `4a3824d88` was test-only and
+  required no fresh live deploy.
+- W3 runtime/recall APPROVED with no findings on `bfe5836b` and follow-up
+  APPROVED on `4a3824d88`: no runtime, recall, source-window, SessionDB ingest
+  ownership, or MemoryDB `session_chunks` behavior delta beyond the selected
+  wrapper retirement.
+- W6 APPROVED on `bfe5836b` with one LOW optional test-coverage note for explicit
+  helper-returned `status="error"` coverage; `4a3824d88` closed that note and
+  was APPROVED with no concerns.
+- W8 static PASS/runtime HOLD on the M23 pair: focused session-ingest/event,
+  extraction-daemon, source-window, session-memory bridge, py_compile, ruff,
+  diff/docs, boundary, exact follow-up test, and unit wrapper `140/140` all
+  passed.
