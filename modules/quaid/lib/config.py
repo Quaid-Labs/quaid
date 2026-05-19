@@ -33,6 +33,10 @@ def _workspace_root() -> Path:
     instance_root = getattr(adapter, "instance_root", None)
     if not callable(instance_root):
         if env_home and env_instance:
+            logger.warning(
+                "Adapter %s lacks instance_root(); falling back to QUAID_HOME/instances/QUAID_INSTANCE",
+                type(adapter).__name__,
+            )
             return Path(env_home).expanduser().resolve() / "instances" / env_instance
         raise TypeError(
             f"Adapter instance_root() must be callable, got {type(adapter).__name__}"

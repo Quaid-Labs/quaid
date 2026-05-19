@@ -95,8 +95,14 @@ def _json_dict(value: Any) -> str:
     return json.dumps(out, ensure_ascii=True, sort_keys=True)
 
 
+def _session_db_path() -> Path:
+    path = get_session_db_path()
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    return path
+
+
 def _lock_path(session_id: str) -> str:
-    return f"{get_session_db_path()}.session-{session_id}.lock"
+    return f"{_session_db_path()}.session-{session_id}.lock"
 
 
 def _stale_lock(path: str) -> bool:
@@ -288,9 +294,7 @@ def record_lifecycle_observation(
         "project_id": _clean(event.get("project_id")) or None,
     }
     now = _utcnow_iso()
-    db_path = get_session_db_path()
-    Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-    with get_connection(db_path) as conn:
+    with get_connection(_session_db_path()) as conn:
         ensure_schema(conn)
         cursor = conn.execute(
             """
@@ -330,7 +334,7 @@ def list_lifecycle_observations(
 ) -> List[Dict[str, Any]]:
     owner = _owner(owner_id)
     sid = _clean(session_id)
-    with get_connection(get_session_db_path()) as conn:
+    with get_connection(_session_db_path()) as conn:
         ensure_schema(conn)
         if sid:
             rows = conn.execute(
@@ -443,7 +447,7 @@ def store_session_source_text(
 
     lock_fd, lock_file = _with_session_lock(sid)
     try:
-        with get_connection(get_session_db_path()) as conn:
+        with get_connection(_session_db_path()) as conn:
             ensure_schema(conn)
             conn.execute(
                 """
@@ -649,7 +653,7 @@ def index_session_log(
     msg_count = int(message_count or 0) or max(1, len(pairs))
     hint = _clean(topic_hint) or (pairs[0]["user_text"][:140] if pairs else "")
 
-    with get_connection(get_session_db_path()) as conn:
+    with get_connection(_session_db_path()) as conn:
         ensure_schema(conn)
         prev = conn.execute(
             "SELECT content_hash FROM sessions WHERE owner_id = ? AND session_id = ?",
@@ -725,7 +729,7 @@ def attach_memory_chunk(*, microchunk_id: str, memory_chunk_id: str, owner_id: s
         raise ValueError("memory_chunk_id is required")
     owner = _owner(owner_id)
     now = _utcnow_iso()
-    with get_connection(get_session_db_path()) as conn:
+    with get_connection(_session_db_path()) as conn:
         ensure_schema(conn)
         cursor = conn.execute(
             """
@@ -745,7 +749,7 @@ def fetch_microchunk(*, microchunk_id: str, owner_id: str = "default") -> Option
     if not micro_id:
         raise ValueError("microchunk_id is required")
     owner = _owner(owner_id)
-    with get_connection(get_session_db_path()) as conn:
+    with get_connection(_session_db_path()) as conn:
         ensure_schema(conn)
         row = conn.execute(
             "SELECT * FROM session_microchunks WHERE owner_id = ? AND microchunk_id = ?",
@@ -759,7 +763,7 @@ def fetch_pair(*, pair_id: str, owner_id: str = "default") -> Optional[Dict[str,
     if not pid:
         raise ValueError("pair_id is required")
     owner = _owner(owner_id)
-    with get_connection(get_session_db_path()) as conn:
+    with get_connection(_session_db_path()) as conn:
         ensure_schema(conn)
         row = conn.execute(
             "SELECT * FROM session_pairs WHERE owner_id = ? AND pair_id = ?",
@@ -785,7 +789,7 @@ def expand_microchunk(
     window: List[Dict[str, Any]] = []
     before_count = max(0, min(int(before or 0), 20))
     after_count = max(0, min(int(after or 0), 20))
-    with get_connection(get_session_db_path()) as conn:
+    with get_connection(_session_db_path()) as conn:
         ensure_schema(conn)
         source_chunk = conn.execute(
             "SELECT * FROM session_chunks WHERE owner_id = ? AND chunk_id = ?",
@@ -883,7 +887,7 @@ def expand_microchunk(
 def list_recent_sessions(limit: int = 5, owner_id: Optional[str] = None) -> List[Dict[str, Any]]:
     lim = max(1, min(int(limit or 5), 50))
     owner = _clean(owner_id)
-    with get_connection(get_session_db_path()) as conn:
+    with get_connection(_session_db_path()) as conn:
         ensure_schema(conn)
         if owner:
             rows = conn.execute(
@@ -902,7 +906,7 @@ def list_recent_sessions(limit: int = 5, owner_id: Optional[str] = None) -> List
 def load_session(session_id: str, owner_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
     sid = _session_id(session_id)
     owner = _clean(owner_id)
-    with get_connection(get_session_db_path()) as conn:
+    with get_connection(_session_db_path()) as conn:
         ensure_schema(conn)
         if owner:
             row = conn.execute(

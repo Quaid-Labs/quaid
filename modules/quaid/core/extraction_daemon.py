@@ -1007,6 +1007,11 @@ def _daemon_lifecycle_event_id(
     signal_type: str,
     session_id: str,
 ) -> str:
+    signal_file = _daemon_lifecycle_signal_file(signal_data)
+    return f"daemon-signal:{signal_file}:{signal_type}:{session_id}"
+
+
+def _daemon_lifecycle_signal_file(signal_data: Dict[str, Any]) -> str:
     signal_path = str(signal_data.get("_signal_path") or "").strip()
     signal_file = Path(signal_path).name if signal_path else ""
     if not signal_file:
@@ -1016,7 +1021,7 @@ def _daemon_lifecycle_event_id(
             or signal_data.get("timestamp")
             or "inline"
         ).strip() or "inline"
-    return f"daemon-signal:{signal_file}:{signal_type}:{session_id}"
+    return signal_file
 
 
 def _record_daemon_lifecycle_observation(
@@ -1032,14 +1037,7 @@ def _record_daemon_lifecycle_observation(
         return {"status": "skipped", "persisted": False}
 
     signal_path = str(signal_data.get("_signal_path") or "").strip()
-    signal_file = Path(signal_path).name if signal_path else ""
-    if not signal_file:
-        signal_file = str(
-            signal_data.get("id")
-            or signal_data.get("idempotency_key")
-            or signal_data.get("timestamp")
-            or "inline"
-        ).strip() or "inline"
+    signal_file = _daemon_lifecycle_signal_file(signal_data)
     meta = signal_data.get("meta") if isinstance(signal_data.get("meta"), dict) else {}
     event_id = _daemon_lifecycle_event_id(
         signal_data,

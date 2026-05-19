@@ -273,6 +273,7 @@ def test_daemon_lifecycle_observation_is_idempotent(monkeypatch, tmp_path):
 def test_daemon_lifecycle_observation_uses_env_instance_root_without_adapter_instance_root(
     monkeypatch,
     tmp_path,
+    caplog,
 ):
     import lib.adapter as adapter_mod
     from datastore.sessiondb.session_store import list_lifecycle_observations
@@ -281,19 +282,21 @@ def test_daemon_lifecycle_observation_uses_env_instance_root_without_adapter_ins
     monkeypatch.setenv("QUAID_INSTANCE", "daemon-inst")
     monkeypatch.setattr(adapter_mod, "get_adapter", lambda: object())
 
-    result = extraction_daemon._record_daemon_lifecycle_observation(
-        {
-            "type": "compaction",
-            "session_id": "sess-env-root",
-            "_signal_path": str(tmp_path / "signals" / "compaction.json"),
-        },
-        session_id="sess-env-root",
-        signal_type="compaction",
-        transcript_path=str(tmp_path / "session.jsonl"),
-    )
+    with caplog.at_level("WARNING", logger="lib.config"):
+        result = extraction_daemon._record_daemon_lifecycle_observation(
+            {
+                "type": "compaction",
+                "session_id": "sess-env-root",
+                "_signal_path": str(tmp_path / "signals" / "compaction.json"),
+            },
+            session_id="sess-env-root",
+            signal_type="compaction",
+            transcript_path=str(tmp_path / "session.jsonl"),
+        )
 
     assert result["persisted"] is True
     assert (tmp_path / "instances" / "daemon-inst" / "data" / "session.db").is_file()
+    assert "lacks instance_root(); falling back to QUAID_HOME/instances/QUAID_INSTANCE" in caplog.text
     rows = list_lifecycle_observations(session_id="sess-env-root")
     assert len(rows) == 1
     assert rows[0]["event_name"] == "session.compaction"
@@ -397,6 +400,92 @@ def test_finalize_no_payload_signal_failhard_observation_error_prevents_finaliza
         )
 
     assert order == []
+
+
+def test_process_signal_full_flush_records_daemon_lifecycle_observation(monkeypatch, tmp_path):
+    from ingest import extract as extract_mod
+    from lib.adapter import reset_adapter, set_adapter
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "daemon-inst")
+    monkeypatch.setattr(extraction_daemon, "_get_owner_id", lambda: "owner-1")
+    monkeypatch.setattr(extraction_daemon, "_read_usage_totals", lambda: {})
+    monkeypatch.setattr(extraction_daemon, "_session_has_harvestable_subagents", lambda *args, **kwargs: False)
+    monkeypatch.setattr(extraction_daemon, "_request_session_logs_ingest", lambda **_kwargs: {"status": "indexed"})
+
+    transcript_path = tmp_path / "session.jsonl"
+    transcript_path.write_text(
+        '{"role":"user","content":"The daemon lifecycle full flush codeword is cedar-lantern."}\n',
+        encoding="utf-8",
+    )
+    extraction_daemon.write_cursor("sess-full-observe", 0, str(transcript_path))
+
+    class _Adapter(_OwnedTestAdapterMixin):
+        def parse_session_jsonl(self, path):
+            _ = path
+            return "User: The daemon lifecycle full flush codeword is cedar-lantern."
+
+    observed = []
+    monkeypatch.setattr(
+        extraction_daemon,
+        "_record_daemon_lifecycle_observation",
+        lambda signal_data, **kwargs: observed.append({"signal_data": signal_data, **kwargs})
+        or {"status": "recorded", "persisted": True},
+    )
+    monkeypatch.setattr(
+        extract_mod,
+        "extract_from_transcript",
+        lambda *_args, **_kwargs: {
+            "chunks_processed": 1,
+            "chunks_total": 1,
+            "unclassified_empty_payloads": 0,
+            "raw_facts": [],
+            "facts": [],
+            "raw_snippets": {},
+            "raw_journal": {},
+            "raw_project_logs": {},
+            "carry_facts": [],
+        },
+    )
+    monkeypatch.setattr(
+        extract_mod,
+        "apply_extracted_payloads",
+        lambda *_args, **_kwargs: {
+            "facts_stored": 0,
+            "facts_skipped": 0,
+            "edges_created": 0,
+            "facts": [],
+            "snippets": {},
+            "journal": {},
+            "project_log_metrics": {},
+        },
+    )
+
+    set_adapter(_Adapter())
+    try:
+        extraction_daemon.write_signal(
+            signal_type="compaction",
+            session_id="sess-full-observe",
+            transcript_path=str(transcript_path),
+        )
+        extraction_daemon.process_signal(extraction_daemon.read_pending_signals()[0])
+    finally:
+        reset_adapter()
+
+    assert len(observed) == 1
+    assert observed[0]["session_id"] == "sess-full-observe"
+    assert observed[0]["signal_type"] == "compaction"
+    assert observed[0]["transcript_path"] == str(transcript_path)
+    assert extraction_daemon.read_pending_signals() == []
+
+
+def test_session_store_connection_entrypoints_use_parent_guard():
+    import inspect
+    from datastore.sessiondb import session_store
+
+    source = inspect.getsource(session_store)
+    assert "get_connection(get_session_db_path())" not in source
+    assert "with get_connection(_session_db_path())" in source
 
 
 def test_daemon_lifecycle_observation_keeps_sessiondb_import_behind_plugin_contract():
