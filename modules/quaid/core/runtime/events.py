@@ -689,15 +689,12 @@ def _handle_session_ingest_log(event: Event) -> Dict[str, Any]:
     if not session_id:
         return {"status": "failed", "error": "payload.session_id is required"}
 
-    try:
-        from core.plugins.sessiondb_contract import run_session_ingest_payload
+    from core.plugins.sessiondb_contract import run_session_ingest_payload
 
-        result = run_session_ingest_payload(payload)
-        if isinstance(result, dict) and str(result.get("status") or "").lower() in {"failed", "error"}:
-            return {"status": "failed", "result": result}
-        return {"status": "processed", "result": result}
-    except Exception as e:  # pragma: no cover
-        return {"status": "failed", "error": str(e)}
+    result = run_session_ingest_payload(payload)
+    if isinstance(result, dict) and str(result.get("status") or "").lower() in {"failed", "error"}:
+        return {"status": "failed", "result": result}
+    return {"status": "processed", "result": result}
 
 
 def _handle_janitor_run_completed(event: Event) -> Dict[str, Any]:

@@ -1,4 +1,5 @@
 import json
+import inspect
 import types
 from pathlib import Path
 
@@ -928,14 +929,16 @@ def test_event_process_session_ingest_log(monkeypatch, tmp_path):
     assert called["message_count"] == 12
 
 
-def test_event_process_session_ingest_log_has_no_runtime_direct_ingest_call():
+def test_event_process_session_ingest_log_has_no_handler_local_exception_or_direct_ingest_call():
     import core.runtime.events as events
 
     source = Path(events.__file__).read_text(encoding="utf-8")
+    handler_source = inspect.getsource(events._handle_session_ingest_log)
 
     assert "run_session_logs_ingest" not in source
     assert "from core.plugins.memorydb_contract import run_session_ingest_payload" not in source
     assert "from core.plugins.sessiondb_contract import run_session_ingest_payload" in source
+    assert "except Exception" not in handler_source
 
 
 def test_event_process_session_ingest_log_failed_result_marks_failed(monkeypatch, tmp_path):
@@ -989,6 +992,48 @@ def test_event_process_session_ingest_log_rejects_missing_session_id(monkeypatch
     assert out["processed"] == 0
     assert out["failed"] == 1
     assert out["details"][0]["result"]["error"] == "payload.session_id is required"
+
+
+def test_event_process_session_ingest_log_helper_exception_uses_event_exception_path(
+    monkeypatch,
+    tmp_path,
+):
+    set_adapter(TestAdapter(tmp_path))
+
+    import core.plugins.memorydb_contract as memorydb_contract
+    import core.plugins.sessiondb_contract as sessiondb_contract
+    import core.runtime.events as events
+
+    def _memorydb_tripwire(_payload):
+        raise AssertionError("active session ingest must not call MemoryDB wrapper")
+
+    def _fail(_payload):
+        raise RuntimeError("simulated helper boom")
+
+    monkeypatch.setattr(memorydb_contract, "run_session_ingest_payload", _memorydb_tripwire)
+    monkeypatch.setattr(sessiondb_contract, "run_session_ingest_payload", _fail)
+    monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: False)
+
+    emit_event(
+        name="session.ingest_log",
+        payload={"session_id": "sess-helper-boom"},
+        source="pytest",
+    )
+    out = process_events(limit=5, names=["session.ingest_log"])
+    assert out["processed"] == 0
+    assert out["failed"] == 1
+    assert out["details"][0]["error"] == "simulated helper boom"
+
+    emit_event(
+        name="session.ingest_log",
+        payload={"session_id": "sess-helper-boom-hard"},
+        source="pytest",
+    )
+    monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: True)
+    with pytest.raises(RuntimeError, match="Event handler failed while fail-hard mode is enabled") as excinfo:
+        process_events(limit=5, names=["session.ingest_log"])
+    assert isinstance(excinfo.value.__cause__, RuntimeError)
+    assert str(excinfo.value.__cause__) == "simulated helper boom"
 
 
 def test_request_session_ingest_log_runs_sessiondb_handler(monkeypatch, tmp_path):
