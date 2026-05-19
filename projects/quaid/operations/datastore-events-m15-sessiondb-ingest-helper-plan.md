@@ -37,6 +37,11 @@ keep the existing MemoryDB request handler and active-event path delegating
 through that helper. Observable event ownership and response envelopes stay
 unchanged.
 
+A future ownership-move plan, for example routing
+`session.ingest_log.request.v1` through SessionDB ownership, will consume this
+SessionDB-owned helper directly. This M15 slice creates the helper-ownership
+prerequisite without making that ownership move.
+
 This is not a route switch. MemoryDB still owns the existing request event and
 the user-facing `session_chunks` recall projection.
 
@@ -74,21 +79,26 @@ Implement one runtime helper-extraction slice only:
    a thin compatibility/delegation wrapper to the new SessionDB helper for this
    slice, so existing active-event imports and monkeypatch tests can be migrated
    deliberately.
-4. Keep `core.plugins.memorydb_contract.handle_session_ingest_log_request(event)`
+4. Wrapper shape: `memorydb_contract.run_session_ingest_payload(payload)` is a
+   distinct function-level wrapper that imports and calls
+   `core.plugins.sessiondb_contract.run_session_ingest_payload(payload)`. Do not
+   re-export the SessionDB helper symbol by identity. Monkeypatches on either
+   module affect only that module's symbol.
+5. Keep `core.plugins.memorydb_contract.handle_session_ingest_log_request(event)`
    and `register_session_ingest_log_request_handler()` as the production request
    handler and registration surface. The registered datastore id remains
    `memorydb`.
-5. Do not add `session.ingest_log.request.v1` to the SessionDB manifest or
+6. Do not add `session.ingest_log.request.v1` to the SessionDB manifest or
    `SessionDbDatastoreContract` in this slice.
-6. Do not add a new SessionDB-specific request event or register any activated
+7. Do not add a new SessionDB-specific request event or register any activated
    SessionDB request handler.
-7. Preserve active `session.ingest_log` envelope behavior exactly: successful
+8. Preserve active `session.ingest_log` envelope behavior exactly: successful
    ingest returns `{"status": "processed", "result": result}` through
    `process_events()`, failed/error helper results mark the event failed, and
    failHard behavior remains owned by `process_events()`.
-8. Preserve request broker response behavior exactly: broker responses still use
+9. Preserve request broker response behavior exactly: broker responses still use
    datastore id `memorydb` and the existing request envelope/result shape.
-9. Preserve transcript source resolution, adapter JSONL parsing, participant
+10. Preserve transcript source resolution, adapter JSONL parsing, participant
    metadata forwarding, SessionDB transcript row shape, MemoryDB projection,
    microchunk linkage, and `session_chunks` recall/source-window behavior.
 
@@ -141,6 +151,9 @@ Add or preserve focused tests proving:
   policy.
 - failHard request/active failures raise through the same paths and do not fall
   back to a direct or old helper implementation.
+- Helper failure in `sessiondb_contract.run_session_ingest_payload()` propagates
+  through the `memorydb_contract.run_session_ingest_payload()` wrapper unchanged;
+  MemoryDB request handler registration is not affected by helper failures.
 
 ## W4 Smoke
 
