@@ -1,6 +1,6 @@
 # Datastore Events M9.3 Lifecycle And Session Plan
 
-Status: first-slice runtime patch ready for validation; W4 live gate pending
+Status: first-slice complete; further M9.3 sub-slices require separate review
 Owner: W1 runtime/datastore
 Plan source: `projects/quaid/operations/datastore-events-m9-monitor-migration-plan.md`
 
@@ -17,9 +17,9 @@ Do not implement runtime code for M9.3 until:
    `session_chunks` recall evidence and can affect recall-visible source-window
    behavior.
 
-W3 approved the first runtime slice under the ownership constraints below.
-Milestone closure still requires W4 live validation plus W6/W8 review/static
-closure.
+W3 approved the first runtime slice under the ownership constraints below. That
+slice is complete at runtime commit `ce02408f2` plus test-fixture commit
+`e23dfc17f` after W4 live validation, W6 review, and W8 static closure.
 
 ## M9.3 Goal
 
@@ -87,6 +87,36 @@ SessionDB remains unregistered as a first-party datastore in this slice. A
 dedicated source-window/ownership slice must review and approve any future
 SessionDB manifest registration.
 
+## First-Slice Validation
+
+Completed runtime:
+
+- `ce02408f2` routes the daemon's selected session-log ingest callsites through
+  `session.ingest_log.request.v1`.
+- `e23dfc17f` aligns extraction-daemon test fixtures with the broker runtime
+  path; it does not change production runtime code.
+
+Validation recorded:
+
+- W4 live PASS on R201: broker route, no direct fallback, fail-soft/failHard
+  contracts, parse-before-store ordering, M9.2 stability, clean daemon restart
+  after `.pyc` pruning.
+- W6 APPROVED-WITH-CONCERNS: no blocking findings; optional participant/source
+  metadata population remains intentionally deferred because the replaced daemon
+  callsites did not previously supply those fields.
+- W8 static PASS: full extraction daemon, adjacent session-log lanes,
+  datastore/event/session bridge suites, py_compile, ruff, docs consistency, and
+  unit wrapper.
+
+Implementation note:
+
+- The request handler accepts `source_channel`, `conversation_id`,
+  `participant_ids`, and `participant_aliases` to preserve the full
+  `run_session_logs_ingest()` contract for trusted producers.
+- The migrated daemon callsites intentionally pass only the fields that the
+  previous direct call supplied. Deriving richer source metadata from signals or
+  adapter state is a separate source-window/metadata slice and needs W3 review.
+
 ## Proposed First Slice
 
 First slice target: replace the direct daemon-to-ingest session-log write calls
@@ -124,6 +154,10 @@ Defer these until separate review:
   formatting
 - changing `session_chunks` routed/default recall behavior
 - changing adapter lifecycle delivery surfaces
+
+Next M9.3 runtime work must begin with a focused plan for one deferred
+sub-slice. Do not extend the first-slice patch into ack-only lifecycle handlers
+or source metadata enrichment by follow-on code without that review.
 
 ## Event Contract Requirements
 
