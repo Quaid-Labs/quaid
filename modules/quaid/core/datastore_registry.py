@@ -186,7 +186,7 @@ FIRST_PARTY_DATASTORE_MANIFESTS: List[Dict[str, Any]] = [
             "maintenance.run.request.v1",
         ],
         "produced_events": [],
-        "maintenance_tasks": ["sessiondb.maintenance"],
+        "maintenance_tasks": [],
         "migrations": [],
         "worker_specs": [],
         "resource_budgets": {"llm": "none", "io": "sqlite"},
