@@ -3151,6 +3151,8 @@ def extract_from_transcript(
     dry_run: bool = False,
     carry_facts: Optional[List[Dict[str, Any]]] = None,
     wall_timeout_seconds: Optional[float] = None,
+    memory_publish_mode: str = "direct",
+    snippet_journal_write_mode: str = "direct",
 ) -> Dict[str, Any]:
     """Extract memories from a conversation transcript using Deep Reasoning.
 
@@ -3162,6 +3164,9 @@ def extract_from_transcript(
         write_snippets: Whether to write soul snippets.
         write_journal: Whether to write journal entries.
         dry_run: If True, parse and plan but don't store anything.
+        memory_publish_mode: MemoryDB publish routing mode ("direct" or "request").
+        snippet_journal_write_mode: EvolutionDB snippet/journal routing mode
+            ("direct" or "request").
         wall_timeout_seconds: Deprecated no-op. Extraction processes every chunk;
             per-provider request timeouts are enforced by the LLM client.
 
@@ -3508,6 +3513,8 @@ def extract_from_transcript(
         write_journal=write_journal,
         dry_run=dry_run,
         allowed_domains=allowed_domains,
+        memory_publish_mode=memory_publish_mode,
+        snippet_journal_write_mode=snippet_journal_write_mode,
     )
 
 

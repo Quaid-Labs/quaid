@@ -423,6 +423,78 @@ class TestExtractFromTranscript:
         mock_llm.assert_not_called()
 
     @patch("ingest.extract.call_deep_reasoning")
+    def test_extract_from_transcript_defaults_to_direct_publish_modes(
+        self,
+        mock_llm,
+        monkeypatch,
+        mock_opus_response,
+    ):
+        import ingest.extract as extract_mod
+
+        captured = {}
+        mock_llm.return_value = (mock_opus_response, 1.0)
+
+        def fake_apply(result, **kwargs):
+            captured["kwargs"] = kwargs
+            result["facts_stored"] = 2
+            return result
+
+        monkeypatch.setattr(extract_mod, "apply_extracted_payloads", fake_apply)
+
+        result = extract_mod.extract_from_transcript(
+            transcript="User: I like coffee\n\nAssistant: noted",
+            owner_id="test",
+            label="cli",
+            session_id="sess-direct-default",
+        )
+
+        assert result["facts_stored"] == 2
+        assert captured["kwargs"]["memory_publish_mode"] == "direct"
+        assert captured["kwargs"]["snippet_journal_write_mode"] == "direct"
+
+    @pytest.mark.parametrize(
+        ("memory_mode", "snippet_mode"),
+        [
+            ("request", "direct"),
+            ("direct", "request"),
+            ("request", "request"),
+        ],
+    )
+    @patch("ingest.extract.call_deep_reasoning")
+    def test_extract_from_transcript_forwards_explicit_publish_modes(
+        self,
+        mock_llm,
+        monkeypatch,
+        mock_opus_response,
+        memory_mode,
+        snippet_mode,
+    ):
+        import ingest.extract as extract_mod
+
+        captured = {}
+        mock_llm.return_value = (mock_opus_response, 1.0)
+
+        def fake_apply(result, **kwargs):
+            captured["kwargs"] = kwargs
+            result["facts_stored"] = 2
+            return result
+
+        monkeypatch.setattr(extract_mod, "apply_extracted_payloads", fake_apply)
+
+        result = extract_mod.extract_from_transcript(
+            transcript="User: I like coffee\n\nAssistant: noted",
+            owner_id="test",
+            label="cli",
+            session_id="sess-explicit-mode",
+            memory_publish_mode=memory_mode,
+            snippet_journal_write_mode=snippet_mode,
+        )
+
+        assert result["facts_stored"] == 2
+        assert captured["kwargs"]["memory_publish_mode"] == memory_mode
+        assert captured["kwargs"]["snippet_journal_write_mode"] == snippet_mode
+
+    @patch("ingest.extract.call_deep_reasoning")
     @patch("ingest.extract._memory.store")
     @patch("ingest.extract._memory.create_edge")
     def test_basic_extraction(self, mock_edge, mock_store, mock_llm, mock_opus_response, workspace_dir):
