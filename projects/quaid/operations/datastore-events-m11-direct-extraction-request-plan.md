@@ -1,6 +1,6 @@
 # Datastore Events M11 Direct Extraction Request Routing Plan
 
-Status: first Python-API-only runtime slice complete; CLI exposure deferred
+Status: first Python-API-only runtime slice complete; CLI exposure slice planned
 Owner: W1 runtime/datastore, W3 recall and identity-context review
 Plan source: `projects/quaid/operations/datastore-events-m9-monitor-migration-plan.md`
 
@@ -22,9 +22,10 @@ Do not implement runtime code for M11 until:
    datastore contract/manifest checks, snippet/journal tests, and boundary
    checks.
 
-This document records the first Python-API-only M11 runtime slice and remaining
-deferred decisions. It does not approve CLI flags, default behavior changes, or
-public push/release actions.
+This document records the first Python-API-only M11 runtime slice, selects a
+follow-up CLI exposure slice for review, and records remaining deferred
+decisions. It does not approve default behavior changes or public push/release
+actions.
 
 ## Goal
 
@@ -110,6 +111,35 @@ The two mode kwargs remain intentionally separate, matching the M9.5 mode-matrix
 decision. A consolidated routing-mode abstraction is deferred unless a later
 cleanup plan selects it.
 
+## Selected CLI Exposure Slice
+
+Selected scope: hidden operator/debug CLI flags for the existing direct
+extraction script only.
+
+Implementation shape:
+
+- Add explicit argparse options to `ingest.extract.main()`:
+  - `--memory-publish-mode {direct,request}`
+  - `--snippet-journal-write-mode {direct,request}`
+- Keep both defaults as `direct`.
+- Use `help=argparse.SUPPRESS` so the flags do not appear in normal `--help`.
+  These are operator/debug routing controls, not a public user-facing feature.
+- Pass parsed values through to `extract_from_transcript()` using the existing
+  explicit keyword parameters from `6eebe1a59`.
+- Let argparse reject invalid mode values before extraction starts.
+- Do not add aliases, environment-variable routing, hidden config routing,
+  owner/label sniffing, or default request behavior.
+- Do not change the top-level `quaid` shell wrapper or hook/daemon routing.
+
+Rationale:
+
+- Hidden flags give W4/operator tooling a direct way to exercise the existing
+  broker paths from the CLI without changing the normal installed user surface.
+- Keeping the flags hidden avoids presenting request routing as an end-user
+  feature toggle before default behavior and UX are separately reviewed.
+- The runtime change should be pass-through only; all request-mode behavior and
+  no-fallback validation remains owned by `apply_extracted_payloads()`.
+
 ## Mode Matrix
 
 The mode matrix remains independently switchable:
@@ -136,6 +166,7 @@ In every combination:
 
 - no new event names
 - no request routing by default for direct Python or CLI callers
+- no public/user-facing CLI help entry for request routing
 - no daemon routing change; the daemon already selects request mode explicitly
 - no broad rewrite of extraction, chunking, LLM prompting, repair, or carry-fact
   behavior
@@ -188,6 +219,21 @@ Focused tests should prove:
   request-mode flags.
 - Existing daemon request-mode tests continue to pass unchanged.
 
+## Required CLI Tests Before W4
+
+Focused tests for the CLI exposure slice should prove:
+
+- `python3 ingest/extract.py --help` still exits 0 and does not show
+  `--memory-publish-mode` or `--snippet-journal-write-mode`.
+- Omitting both flags keeps CLI behavior at `direct` / `direct`.
+- Passing `--memory-publish-mode request` forwards request mode to
+  `extract_from_transcript()` without changing snippet/journal mode.
+- Passing `--snippet-journal-write-mode request` forwards request mode to
+  `extract_from_transcript()` without changing MemoryDB mode.
+- Passing both request flags forwards `request` / `request`.
+- Invalid mode values fail through argparse before extraction starts.
+- No environment variable or hidden config can flip CLI routing modes.
+
 ## W4 Smoke
 
 W4 should smoke runtime code only after W3/W6/W8 review:
@@ -204,11 +250,15 @@ W4 should smoke runtime code only after W3/W6/W8 review:
 - M9.2 DocsDB, M9.3 session ingest, M9.4 MemoryDB daemon request, M9.5
   EvolutionDB daemon request, and M10 compatibility aliases remain healthy
 
+For the CLI exposure slice, W4 should additionally smoke the installed
+`ingest/extract.py` CLI with default direct behavior and with both hidden
+request-mode flags passed explicitly.
+
 ## Deferred Decisions
 
 - whether direct request mode should ever become the default
-- whether CLI request-mode flags should be public user-facing flags or hidden
-  operator/debug flags in a later reviewed slice
+- whether the hidden CLI request-mode flags should ever become public
+  user-facing flags
 - whether to consolidate the two extraction routing mode kwargs into a future
   routing options object
 - lifecycle persistence and SessionDB first-party manifest registration
