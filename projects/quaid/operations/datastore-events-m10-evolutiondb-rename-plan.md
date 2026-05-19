@@ -128,6 +128,9 @@ Selected Slice 2 direction:
   `core.plugins.evolutiondb_contract`
 - keep `core.plugins.notedb_contract` as a pure compatibility alias module for
   installed alpha imports and existing tests during the compatibility window
+- implement the compatibility alias with the same `sys.modules[__name__] =
+  _canonical` shape used by the Slice 1 `datastore.notedb.soul_snippets` shim;
+  do not keep duplicate implementation logic under `notedb_contract`
 - update internal producers, handler specs, and plugin manifest module metadata
   to `core.plugins.evolutiondb_contract`
 - keep plugin id `notedb.core` unchanged in this slice unless a separately
@@ -136,6 +139,15 @@ Selected Slice 2 direction:
   names
 - add tests proving legacy `core.plugins.notedb_contract` imports alias the
   canonical contract module by identity, not only equivalent behavior
+
+Slice 2 shim owner and removal condition:
+
+- owner: W1 runtime/datastore
+- removal condition: do not remove in M10; after a future operator-approved
+  compatibility review confirms installed alpha homes, external scripts, and
+  planned `.ego` import/export surfaces no longer reference
+  `core.plugins.notedb_contract`, remove the shim in a separate reviewed slice
+  with release-note coverage and W4 installed-upgrade smoke
 
 ### Slice 3: Alias Retirement Planning Only
 
@@ -212,6 +224,9 @@ Add or preserve tests proving:
 - manifest module path and runtime alias metadata are correct
 - `core.plugins` contract handler specs point to the chosen canonical contract
   module path or intentionally documented compatibility module path
+- static import-grep confirms no production code outside the compatibility shim
+  still imports `core.plugins.notedb_contract` directly; tests may keep targeted
+  legacy imports only to exercise the alias path
 - snippet/journal helper direct path and request event still write identical
   visible files
 - journal recall still reads the same persisted journal content
