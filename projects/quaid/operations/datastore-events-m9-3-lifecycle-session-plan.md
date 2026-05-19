@@ -1,6 +1,6 @@
 # Datastore Events M9.3 Lifecycle And Session Plan
 
-Status: first-slice complete; further M9.3 sub-slices require separate review
+Status: first slice and active session-ingest follow-up complete; further M9.3 sub-slices require separate review
 Owner: W1 runtime/datastore
 Plan source: `projects/quaid/operations/datastore-events-m9-monitor-migration-plan.md`
 
@@ -20,6 +20,8 @@ Do not implement runtime code for M9.3 until:
 W3 approved the first runtime slice under the ownership constraints below. That
 slice is complete at runtime commit `ce02408f2` plus test-fixture commit
 `e23dfc17f` after W4 live validation, W6 review, and W8 static closure.
+The active `session.ingest_log` follow-up is complete at `7c2522ab5` after W3
+plan approval, W4 live validation, W6 review, and W8 static/runtime closure.
 
 ## M9.3 Goal
 
@@ -213,6 +215,41 @@ Review gates:
 - W4 live smoke is only needed if runtime code changes land after this plan; it
   should verify active `session.ingest_log` processing plus the already-closed
   daemon broker path.
+
+### Active Session-Ingest Follow-Up Closure
+
+Completed runtime:
+
+- `fb5e9b0f1` recorded the reviewed active `session.ingest_log` slice plan.
+- `7c2522ab5` routes active `session.ingest_log` storage through the
+  MemoryDB-owned shared helper `run_session_ingest_payload()`.
+- `core/runtime/events.py` no longer imports or calls
+  `run_session_logs_ingest()` directly.
+
+Validation recorded:
+
+- W3 approved the plan with recall-sensitive constraints: active delivery must
+  remain active, no `sessiondb` manifest, no daemon callsite changes, no source
+  metadata enrichment, and no lifecycle/fact/recall planner changes.
+- W4 live PASS on R201: active and request paths converge on the shared
+  MemoryDB helper; active processed/failed envelope semantics are preserved;
+  failHard remains owned by `process_events()`; daemon request route remains
+  unaffected.
+- W6 APPROVED with no findings: shared-helper design resolved the plan decision
+  and avoided active-handler-to-request-handler coupling.
+- W8 static PASS and runtime hold closed: focused active/session-ingest tests,
+  full event suite, session ingest/session memory bridge lanes, unit wrapper,
+  py_compile, ruff, diff check, docs consistency, and route scan all passed.
+
+Implementation note:
+
+- The active handler keeps only active-envelope validation and wrapping in
+  `core/runtime/events.py`. Payload normalization plus
+  `run_session_logs_ingest()` delegation are centralized in
+  `core/plugins/memorydb_contract.py`.
+- Trusted active-event producer metadata (`source_channel`, `conversation_id`,
+  `participant_ids`, `participant_aliases`, `message_count`, and `topic_hint`)
+  remains forwarded through SessionDB rows and MemoryDB `session_chunks`.
 
 ## Event Contract Requirements
 
