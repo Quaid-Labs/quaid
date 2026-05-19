@@ -212,8 +212,9 @@ Implementation shape:
 This slice created explicit EvolutionDB request surfaces and tested their
 contracts, but it did not introduce partial-write producer behavior.
 
-If a later slice routes extraction through separate events, it needs a separate
-reviewed plan that covers:
+M13 now tracks the later extraction producer-routing decision in
+`projects/quaid/operations/datastore-events-m13-split-extraction-routing-plan.md`.
+That separate reviewed plan covers:
 
 - whether extraction request mode sends one combined request or two ordered
   broker requests
@@ -319,8 +320,9 @@ For the second event-surface slice, W4 should additionally smoke:
 
 ## Deferred Decisions
 
-- whether extraction should ever issue two ordered broker requests for snippet
-  and journal writes
+- extraction producer routing through ordered snippet and journal broker
+  requests, tracked as M13 in
+  `projects/quaid/operations/datastore-events-m13-split-extraction-routing-plan.md`
 - whether direct request mode should ever become the default
 - whether hidden CLI request-mode flags should ever become public
 - lifecycle persistence and SessionDB first-party manifest registration

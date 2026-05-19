@@ -465,7 +465,8 @@ Closure evidence:
 - Whether extraction producers should route through separate snippet and
   journal request events; M12 completed the helper-split prerequisite at
   `e81244e32` and the split-event surface prerequisite at `3f245ba9e` +
-  `1a92dd7c`.
+  `1a92dd7c`; the routing decision is now tracked as M13 in
+  `projects/quaid/operations/datastore-events-m13-split-extraction-routing-plan.md`.
 - Whether direct `extract_from_transcript()` / CLI should ever use request mode.
 - Whether snippet review and journal distillation maintenance should get their
   own request handlers beyond the existing maintenance contract.

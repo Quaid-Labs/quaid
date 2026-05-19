@@ -54,7 +54,8 @@ Deferred items are not M9 blockers unless separately selected by Solomon with a
 new reviewed plan: direct `extract_from_transcript()` / CLI request routing,
 lifecycle persistence, SessionDB first-party manifest registration,
 source-window metadata enrichment, extraction producer routing through separate
-snippet/journal request events,
+snippet/journal request events (tracked as M13 in
+`projects/quaid/operations/datastore-events-m13-split-extraction-routing-plan.md`),
 `datastore.notedb` / `core.plugins.notedb_contract` compatibility-alias
 retirement, `notedb.core` plugin-id rename, and `.ego` integration. The
 `datastore.evolutiondb` runtime package and `core.plugins.evolutiondb_contract`
@@ -77,7 +78,8 @@ M12 runtime slices closed at `e81244e32` and `3f245ba9e` + `1a92dd7c`:
 EvolutionDB snippet and journal writes now have separate private helper
 internals and additive snippet-only / journal-only request event surfaces behind
 the existing combined extraction route. Extraction producer routing through
-separate snippet/journal request events remains future-plan-gated.
+separate snippet/journal request events is now tracked as M13 in
+`projects/quaid/operations/datastore-events-m13-split-extraction-routing-plan.md`.
 
 ## Shared Rules For Every M9 Slice
 
