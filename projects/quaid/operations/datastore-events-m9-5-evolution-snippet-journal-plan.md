@@ -97,6 +97,28 @@ Implementation shape:
 This mirrors the successful M9.4 pattern: establish a datastore-owned helper and
 prove parity before introducing a broker/request event.
 
+## First-Slice Design Pins
+
+The first runtime slice uses the existing `core.plugins.notedb_contract` module
+name intentionally. `evolutiondb` is the canonical datastore id, but the runtime
+package remains `datastore.notedb` until M10. Keeping the contract module aligned
+with the runtime package avoids a misleading half-rename in M9. A future M10
+rename may introduce `evolutiondb_contract` or move the module when the runtime
+package rename happens.
+
+`core.lifecycle.soul_snippets` remains available for lifecycle callers in the
+first slice. That is a partial migration by design:
+
+- selected extraction snippet/journal writes route through the EvolutionDB
+  contract seam
+- existing lifecycle/janitor callers keep using the lifecycle wrapper
+- snippet review and journal distillation maintenance registration remains in
+  `datastore.notedb.soul_snippets`
+
+Moving lifecycle callers to the same contract seam is deferred unless a later
+reviewed M9.5 slice selects that maintenance path. The helper-first extraction
+slice must not alter janitor routine registration.
+
 ## Candidate Helper Contract
 
 Candidate helper:
@@ -129,7 +151,9 @@ Candidate response:
 - `journal_files_seen`
 - `journal_files_written`
 - `journal_files_skipped`
-- `target_files`
+- `target_files`: object with `snippets` and `journal` arrays of logical
+  target filenames, for example
+  `{"snippets": ["SOUL.snippets.md"], "journal": ["SOUL.journal.md"]}`
 - `errors`
 
 The response should expose only the counters and target metadata the extraction
@@ -209,7 +233,9 @@ Implementation must preserve:
 - trigger derivation from extraction labels
 - date and time defaults used by current snippet and journal writers
 - generated USER snippet projection cleanup/reconciliation behavior
-- return booleans from the underlying NoteDB writers where callers rely on them
+- return booleans from the underlying NoteDB writers for existing direct callers
+  of `core.lifecycle.soul_snippets` and `datastore.notedb.soul_snippets`; the
+  extraction orchestrator may consume the richer helper counters instead
 - extraction result shape for `result["snippets"]` and `result["journal"]`
 - `publish_complete` trace ordering from M9.4 after snippet, journal, and
   project-log side effects
