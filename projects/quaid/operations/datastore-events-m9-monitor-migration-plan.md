@@ -52,8 +52,8 @@ The selected M9 monitor-write migrations are complete:
 
 Deferred items are not M9 blockers unless separately selected by Solomon with a
 new reviewed plan: direct `extract_from_transcript()` / CLI request routing,
-lifecycle-triggered transcript ingest and daemon automation, source-window
-selector ownership, SessionDB ownership of `session.ingest_log`,
+default lifecycle-triggered transcript ingest and daemon automation,
+source-window selector ownership, SessionDB ownership of `session.ingest_log`,
 `datastore.notedb` / `core.plugins.notedb_contract` compatibility-alias
 retirement, `notedb.core` plugin-id rename, and `.ego` integration. The
 `datastore.evolutiondb` runtime package and `core.plugins.evolutiondb_contract`
@@ -128,9 +128,11 @@ daemon work, and lifecycle automation remain deferred.
 M21 daemon lifecycle observation bridge closed at `f6b661ea0` + `b591b7d3` +
 `f90602cb`: existing daemon reset/compaction/timeout/session_end signals now
 record metadata-only SessionDB lifecycle observations through the M20 contract
-seam, while rolling signals remain excluded. Lifecycle-triggered transcript
-ingest, new daemon automation, and recall/source-window policy changes remain
-deferred.
+seam, while rolling signals remain excluded. M22 now tracks an explicit opt-in
+lifecycle-to-daemon signal file bridge in
+`projects/quaid/operations/datastore-events-m22-lifecycle-daemon-signal-bridge-plan.md`;
+default lifecycle-triggered transcript ingest, new daemon automation, and
+recall/source-window policy changes remain deferred.
 
 ## Shared Rules For Every M9 Slice
 
