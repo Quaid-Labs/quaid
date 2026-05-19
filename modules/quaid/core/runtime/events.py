@@ -884,6 +884,28 @@ def _maybe_queue_default_compaction_signal(event: Event, *, session_id: str) -> 
     }
 
 
+def _wake_daemon_after_lifecycle_signal(signal_result: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if not signal_result or signal_result.get("daemon_signal_queued") is not True:
+        return None
+    if not str(signal_result.get("signal_name") or "").strip():
+        return None
+
+    from core.extraction_daemon import ensure_alive
+
+    pid = ensure_alive()
+    try:
+        daemon_pid = int(pid)
+    except (TypeError, ValueError):
+        daemon_pid = -1
+    if daemon_pid <= 0:
+        raise RuntimeError(f"daemon ensure_alive returned invalid pid: {pid}")
+    return {
+        "daemon_wake_attempted": True,
+        "daemon_wake_succeeded": True,
+        "daemon_wake_pid": daemon_pid,
+    }
+
+
 def _handle_session_lifecycle(event: Event) -> Dict[str, Any]:
     payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
     session_id = str(event.get("session_id") or payload.get("session_id") or "").strip()
@@ -947,6 +969,18 @@ def _handle_session_lifecycle(event: Event) -> Dict[str, Any]:
         return result
     if daemon_signal_result:
         result.update(daemon_signal_result)
+        try:
+            wake_result = _wake_daemon_after_lifecycle_signal(daemon_signal_result)
+        except Exception as exc:
+            if _is_fail_hard_enabled():
+                raise
+            logger.warning("Lifecycle daemon wake failed: %s", exc, exc_info=True)
+            result["daemon_wake_attempted"] = True
+            result["daemon_wake_succeeded"] = False
+            result["daemon_wake_error"] = str(exc)
+            return result
+        if wake_result:
+            result.update(wake_result)
     return result
 
 

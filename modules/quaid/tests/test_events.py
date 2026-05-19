@@ -49,6 +49,29 @@ def teardown_function():
         events._REQUEST_EVENT_HANDLERS.clear()
 
 
+def _record_daemon_wake(monkeypatch, *, pid: int = 4242):
+    from core import extraction_daemon
+
+    calls = []
+
+    def _ensure_alive():
+        calls.append(True)
+        return pid
+
+    monkeypatch.setattr(extraction_daemon, "ensure_alive", _ensure_alive)
+    return calls
+
+
+def _fail_on_daemon_wake(monkeypatch):
+    from core import extraction_daemon
+
+    monkeypatch.setattr(
+        extraction_daemon,
+        "ensure_alive",
+        lambda: (_ for _ in ()).throw(AssertionError("daemon wake must not be attempted")),
+    )
+
+
 def test_event_emit_list_and_capabilities(tmp_path):
     adapter = TestAdapter(tmp_path); set_adapter(adapter); iroot = adapter.instance_root()
 
@@ -425,6 +448,7 @@ def test_session_lifecycle_explicit_daemon_signal_writes_existing_signal(monkeyp
     monkeypatch.setenv("QUAID_HOME", str(tmp_path))
     monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
     set_adapter(TestAdapter(tmp_path))
+    wake_calls = _record_daemon_wake(monkeypatch, pid=4301)
 
     transcript = tmp_path / "session.jsonl"
     transcript.write_text('{"role":"user","content":"hello"}\n', encoding="utf-8")
@@ -455,6 +479,10 @@ def test_session_lifecycle_explicit_daemon_signal_writes_existing_signal(monkeyp
     assert result["daemon_signal_queued"] is True
     assert result["daemon_signal_type"] == "session_end"
     assert result["signal_name"].endswith("_session_end.json")
+    assert result["daemon_wake_attempted"] is True
+    assert result["daemon_wake_succeeded"] is True
+    assert result["daemon_wake_pid"] == 4301
+    assert wake_calls == [True]
 
     from core import extraction_daemon
 
@@ -476,6 +504,7 @@ def test_session_lifecycle_default_reset_signal_writes_existing_signal(monkeypat
     monkeypatch.setenv("QUAID_HOME", str(tmp_path))
     monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
     set_adapter(TestAdapter(tmp_path))
+    wake_calls = _record_daemon_wake(monkeypatch, pid=4302)
 
     transcript = tmp_path / "reset-preserved.jsonl"
     transcript.write_text('{"role":"user","content":"pre reset"}\n', encoding="utf-8")
@@ -504,6 +533,10 @@ def test_session_lifecycle_default_reset_signal_writes_existing_signal(monkeypat
     assert result["daemon_signal_type"] == "reset"
     assert result["daemon_signal_default"] is True
     assert result["signal_name"].endswith("_reset.json")
+    assert result["daemon_wake_attempted"] is True
+    assert result["daemon_wake_succeeded"] is True
+    assert result["daemon_wake_pid"] == 4302
+    assert wake_calls == [True]
 
     from core import extraction_daemon
 
@@ -526,6 +559,7 @@ def test_session_lifecycle_default_agent_end_signal_writes_existing_signal(monke
     monkeypatch.setenv("QUAID_HOME", str(tmp_path))
     monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
     set_adapter(TestAdapter(tmp_path))
+    wake_calls = _record_daemon_wake(monkeypatch, pid=4303)
 
     transcript = tmp_path / "default-session.jsonl"
     transcript.write_text('{"role":"user","content":"default"}\n', encoding="utf-8")
@@ -553,6 +587,10 @@ def test_session_lifecycle_default_agent_end_signal_writes_existing_signal(monke
     assert result["daemon_signal_type"] == "session_end"
     assert result["daemon_signal_default"] is True
     assert result["signal_name"].endswith("_session_end.json")
+    assert result["daemon_wake_attempted"] is True
+    assert result["daemon_wake_succeeded"] is True
+    assert result["daemon_wake_pid"] == 4303
+    assert wake_calls == [True]
 
     from core import extraction_daemon
 
@@ -573,6 +611,7 @@ def test_session_lifecycle_default_timeout_signal_writes_existing_signal(monkeyp
     monkeypatch.setenv("QUAID_HOME", str(tmp_path))
     monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
     set_adapter(TestAdapter(tmp_path))
+    wake_calls = _record_daemon_wake(monkeypatch, pid=4304)
 
     transcript = tmp_path / "timeout-session.jsonl"
     transcript.write_text('{"role":"user","content":"timeout"}\n', encoding="utf-8")
@@ -600,6 +639,10 @@ def test_session_lifecycle_default_timeout_signal_writes_existing_signal(monkeyp
     assert result["daemon_signal_type"] == "timeout"
     assert result["daemon_signal_default"] is True
     assert result["signal_name"].endswith("_timeout.json")
+    assert result["daemon_wake_attempted"] is True
+    assert result["daemon_wake_succeeded"] is True
+    assert result["daemon_wake_pid"] == 4304
+    assert wake_calls == [True]
 
     from core import extraction_daemon
 
@@ -620,6 +663,7 @@ def test_session_lifecycle_default_compaction_signal_writes_existing_signal(monk
     monkeypatch.setenv("QUAID_HOME", str(tmp_path))
     monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
     set_adapter(TestAdapter(tmp_path))
+    wake_calls = _record_daemon_wake(monkeypatch, pid=4305)
 
     transcript = tmp_path / "compaction-session.jsonl"
     transcript.write_text('{"role":"user","content":"compact"}\n', encoding="utf-8")
@@ -648,6 +692,10 @@ def test_session_lifecycle_default_compaction_signal_writes_existing_signal(monk
     assert result["daemon_signal_type"] == "compaction"
     assert result["daemon_signal_default"] is True
     assert result["signal_name"].endswith("_compaction.json")
+    assert result["daemon_wake_attempted"] is True
+    assert result["daemon_wake_succeeded"] is True
+    assert result["daemon_wake_pid"] == 4305
+    assert wake_calls == [True]
 
     from core import extraction_daemon
 
@@ -677,6 +725,7 @@ def test_session_lifecycle_without_daemon_signal_does_not_call_write_signal(monk
         "write_signal",
         lambda **_kwargs: (_ for _ in ()).throw(AssertionError("plain lifecycle must not signal daemon")),
     )
+    _fail_on_daemon_wake(monkeypatch)
 
     emit_event(name="session.reset", payload={"reason": "plain"}, source="pytest", session_id="sess-plain")
     out = process_events(limit=5, names=["session.reset"])
@@ -708,6 +757,7 @@ def test_session_lifecycle_default_signal_excludes_unselected_events(monkeypatch
         "write_signal",
         lambda **_kwargs: (_ for _ in ()).throw(AssertionError("unselected event must not signal daemon")),
     )
+    _fail_on_daemon_wake(monkeypatch)
     transcript = tmp_path / f"{event_name}.jsonl"
     transcript.write_text('{"role":"user","content":"hello"}\n', encoding="utf-8")
 
@@ -742,6 +792,7 @@ def test_session_lifecycle_default_reset_signal_ignores_live_transcript_path(mon
         "write_signal",
         lambda **_kwargs: (_ for _ in ()).throw(AssertionError("live reset transcript_path must not signal daemon")),
     )
+    _fail_on_daemon_wake(monkeypatch)
     transcript = tmp_path / "live-reset-session.jsonl"
     transcript.write_text('{"role":"user","content":"post reset"}\n', encoding="utf-8")
 
@@ -791,6 +842,7 @@ def test_session_lifecycle_default_reset_signal_noop_without_valid_inputs(
         "write_signal",
         lambda **_kwargs: (_ for _ in ()).throw(AssertionError("invalid default reset inputs must not signal daemon")),
     )
+    _fail_on_daemon_wake(monkeypatch)
     if payload.get("reset_transcript_path") == "session.jsonl":
         transcript = tmp_path / "session.jsonl"
         transcript.write_text('{"role":"user","content":"hello"}\n', encoding="utf-8")
@@ -846,6 +898,7 @@ def test_session_lifecycle_default_agent_end_signal_noop_without_valid_inputs(
         "write_signal",
         lambda **_kwargs: (_ for _ in ()).throw(AssertionError("invalid default inputs must not signal daemon")),
     )
+    _fail_on_daemon_wake(monkeypatch)
     if payload.get("transcript_path") == "session.jsonl":
         transcript = tmp_path / "session.jsonl"
         transcript.write_text('{"role":"user","content":"hello"}\n', encoding="utf-8")
@@ -901,6 +954,7 @@ def test_session_lifecycle_default_timeout_signal_noop_without_valid_inputs(
         "write_signal",
         lambda **_kwargs: (_ for _ in ()).throw(AssertionError("invalid default inputs must not signal daemon")),
     )
+    _fail_on_daemon_wake(monkeypatch)
     if payload.get("transcript_path") == "session.jsonl":
         transcript = tmp_path / "session.jsonl"
         transcript.write_text('{"role":"user","content":"hello"}\n', encoding="utf-8")
@@ -956,6 +1010,7 @@ def test_session_lifecycle_default_compaction_signal_noop_without_valid_inputs(
         "write_signal",
         lambda **_kwargs: (_ for _ in ()).throw(AssertionError("invalid default inputs must not signal daemon")),
     )
+    _fail_on_daemon_wake(monkeypatch)
     if payload.get("transcript_path") == "session.jsonl":
         transcript = tmp_path / "session.jsonl"
         transcript.write_text('{"role":"user","content":"hello"}\n', encoding="utf-8")
@@ -989,6 +1044,7 @@ def test_session_lifecycle_excluded_events_do_not_queue_daemon_signal(monkeypatc
     monkeypatch.setenv("QUAID_HOME", str(tmp_path))
     monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
     set_adapter(TestAdapter(tmp_path))
+    _fail_on_daemon_wake(monkeypatch)
 
     transcript = tmp_path / f"{event_name}.jsonl"
     transcript.write_text('{"role":"user","content":"hello"}\n', encoding="utf-8")
@@ -1016,6 +1072,7 @@ def test_session_lifecycle_explicit_daemon_signal_wins_over_default_reset(monkey
     monkeypatch.setenv("QUAID_HOME", str(tmp_path))
     monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
     set_adapter(TestAdapter(tmp_path))
+    wake_calls = _record_daemon_wake(monkeypatch)
 
     default_transcript = tmp_path / "default-reset.jsonl"
     explicit_transcript = tmp_path / "explicit-reset.jsonl"
@@ -1044,6 +1101,9 @@ def test_session_lifecycle_explicit_daemon_signal_wins_over_default_reset(monkey
     assert result["daemon_signal_queued"] is True
     assert result["daemon_signal_type"] == "reset"
     assert "daemon_signal_default" not in result
+    assert result["daemon_wake_attempted"] is True
+    assert result["daemon_wake_succeeded"] is True
+    assert wake_calls == [True]
     signals = extraction_daemon.read_pending_signals()
     assert len(signals) == 1
     assert signals[0]["transcript_path"] == str(explicit_transcript)
@@ -1056,6 +1116,7 @@ def test_session_lifecycle_explicit_daemon_signal_wins_over_default_agent_end(mo
     monkeypatch.setenv("QUAID_HOME", str(tmp_path))
     monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
     set_adapter(TestAdapter(tmp_path))
+    wake_calls = _record_daemon_wake(monkeypatch)
 
     default_transcript = tmp_path / "default.jsonl"
     explicit_transcript = tmp_path / "explicit.jsonl"
@@ -1084,6 +1145,9 @@ def test_session_lifecycle_explicit_daemon_signal_wins_over_default_agent_end(mo
     assert result["daemon_signal_queued"] is True
     assert result["daemon_signal_type"] == "session_end"
     assert "daemon_signal_default" not in result
+    assert result["daemon_wake_attempted"] is True
+    assert result["daemon_wake_succeeded"] is True
+    assert wake_calls == [True]
     signals = extraction_daemon.read_pending_signals()
     assert len(signals) == 1
     assert signals[0]["transcript_path"] == str(explicit_transcript)
@@ -1096,6 +1160,7 @@ def test_session_lifecycle_explicit_daemon_signal_wins_over_default_timeout(monk
     monkeypatch.setenv("QUAID_HOME", str(tmp_path))
     monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
     set_adapter(TestAdapter(tmp_path))
+    wake_calls = _record_daemon_wake(monkeypatch)
 
     default_transcript = tmp_path / "default-timeout.jsonl"
     explicit_transcript = tmp_path / "explicit-timeout.jsonl"
@@ -1124,6 +1189,9 @@ def test_session_lifecycle_explicit_daemon_signal_wins_over_default_timeout(monk
     assert result["daemon_signal_queued"] is True
     assert result["daemon_signal_type"] == "timeout"
     assert "daemon_signal_default" not in result
+    assert result["daemon_wake_attempted"] is True
+    assert result["daemon_wake_succeeded"] is True
+    assert wake_calls == [True]
     signals = extraction_daemon.read_pending_signals()
     assert len(signals) == 1
     assert signals[0]["transcript_path"] == str(explicit_transcript)
@@ -1136,6 +1204,7 @@ def test_session_lifecycle_explicit_daemon_signal_wins_over_default_compaction(m
     monkeypatch.setenv("QUAID_HOME", str(tmp_path))
     monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
     set_adapter(TestAdapter(tmp_path))
+    wake_calls = _record_daemon_wake(monkeypatch)
 
     default_transcript = tmp_path / "default-compaction.jsonl"
     explicit_transcript = tmp_path / "explicit-compaction.jsonl"
@@ -1165,6 +1234,9 @@ def test_session_lifecycle_explicit_daemon_signal_wins_over_default_compaction(m
     assert result["daemon_signal_queued"] is True
     assert result["daemon_signal_type"] == "compaction"
     assert "daemon_signal_default" not in result
+    assert result["daemon_wake_attempted"] is True
+    assert result["daemon_wake_succeeded"] is True
+    assert wake_calls == [True]
     signals = extraction_daemon.read_pending_signals()
     assert len(signals) == 1
     assert signals[0]["transcript_path"] == str(explicit_transcript)
@@ -1192,6 +1264,7 @@ def test_session_lifecycle_default_compaction_supports_control_is_explicit_boole
     monkeypatch.setenv("QUAID_HOME", str(tmp_path))
     monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
     set_adapter(TestAdapter(tmp_path))
+    wake_calls = _record_daemon_wake(monkeypatch)
 
     from core import extraction_daemon
 
@@ -1219,6 +1292,8 @@ def test_session_lifecycle_default_compaction_supports_control_is_explicit_boole
 
     result = out["details"][0]["result"]
     assert result["daemon_signal_queued"] is True
+    assert result["daemon_wake_succeeded"] is True
+    assert wake_calls == [True]
     assert captured["signal_type"] == "compaction"
     assert captured["supports_compaction_control"] is expected_supports_compaction_control
 
@@ -1318,6 +1393,7 @@ def test_session_lifecycle_daemon_signal_write_failure_respects_failhard(monkeyp
         raise RuntimeError("write_signal down")
 
     monkeypatch.setattr(extraction_daemon, "write_signal", _boom)
+    _fail_on_daemon_wake(monkeypatch)
     monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: False)
     with caplog.at_level("WARNING"):
         emit_event(
@@ -1366,6 +1442,7 @@ def test_session_lifecycle_default_reset_write_failure_respects_failhard(monkeyp
         raise RuntimeError("default reset write_signal down")
 
     monkeypatch.setattr(extraction_daemon, "write_signal", _boom)
+    _fail_on_daemon_wake(monkeypatch)
     monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: False)
     with caplog.at_level("WARNING"):
         emit_event(
@@ -1415,6 +1492,7 @@ def test_session_lifecycle_default_agent_end_write_failure_respects_failhard(mon
         raise RuntimeError("default write_signal down")
 
     monkeypatch.setattr(extraction_daemon, "write_signal", _boom)
+    _fail_on_daemon_wake(monkeypatch)
     monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: False)
     with caplog.at_level("WARNING"):
         emit_event(
@@ -1464,6 +1542,7 @@ def test_session_lifecycle_default_timeout_write_failure_respects_failhard(monke
         raise RuntimeError("default timeout write_signal down")
 
     monkeypatch.setattr(extraction_daemon, "write_signal", _boom)
+    _fail_on_daemon_wake(monkeypatch)
     monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: False)
     with caplog.at_level("WARNING"):
         emit_event(
@@ -1513,6 +1592,7 @@ def test_session_lifecycle_default_compaction_write_failure_respects_failhard(mo
         raise RuntimeError("default compaction write_signal down")
 
     monkeypatch.setattr(extraction_daemon, "write_signal", _boom)
+    _fail_on_daemon_wake(monkeypatch)
     monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: False)
     with caplog.at_level("WARNING"):
         emit_event(
@@ -1546,11 +1626,65 @@ def test_session_lifecycle_default_compaction_write_failure_respects_failhard(mo
     assert str(excinfo.value.__cause__) == "default compaction write_signal down"
 
 
+def test_session_lifecycle_daemon_wake_failure_respects_failhard(monkeypatch, tmp_path, caplog):
+    monkeypatch.setenv("SESSION_DB_PATH", str(tmp_path / "session.db"))
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
+    set_adapter(TestAdapter(tmp_path))
+
+    from core import extraction_daemon
+    import core.runtime.events as events
+
+    transcript = tmp_path / "session.jsonl"
+    transcript.write_text('{"role":"user","content":"hello"}\n', encoding="utf-8")
+
+    def _wake_down():
+        raise RuntimeError("daemon wake down")
+
+    monkeypatch.setattr(extraction_daemon, "ensure_alive", _wake_down)
+    monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: False)
+    with caplog.at_level("WARNING"):
+        emit_event(
+            name="session.agent_end",
+            payload={"transcript_path": str(transcript)},
+            source="pytest",
+            session_id="sess-wake-soft",
+            owner_id="owner-life",
+        )
+        soft = process_events(limit=5, names=["session.agent_end"])
+
+    soft_result = soft["details"][0]["result"]
+    assert soft_result["status"] == "acknowledged"
+    assert soft_result["persisted"] is True
+    assert soft_result["daemon_signal_queued"] is True
+    assert soft_result["daemon_signal_type"] == "session_end"
+    assert soft_result["daemon_signal_default"] is True
+    assert soft_result["daemon_wake_attempted"] is True
+    assert soft_result["daemon_wake_succeeded"] is False
+    assert soft_result["daemon_wake_error"] == "daemon wake down"
+    assert len(extraction_daemon.read_pending_signals()) == 1
+    assert any("Lifecycle daemon wake failed" in rec.message for rec in caplog.records)
+
+    monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: True)
+    emit_event(
+        name="session.agent_end",
+        payload={"transcript_path": str(transcript)},
+        source="pytest",
+        session_id="sess-wake-hard",
+        owner_id="owner-life",
+    )
+    with pytest.raises(RuntimeError, match="Event handler failed while fail-hard mode is enabled") as excinfo:
+        process_events(limit=5, names=["session.agent_end"])
+    assert isinstance(excinfo.value.__cause__, RuntimeError)
+    assert str(excinfo.value.__cause__) == "daemon wake down"
+
+
 def test_session_lifecycle_daemon_signal_dedupes_with_adapter_signal(monkeypatch, tmp_path):
     monkeypatch.setenv("SESSION_DB_PATH", str(tmp_path / "session.db"))
     monkeypatch.setenv("QUAID_HOME", str(tmp_path))
     monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
     set_adapter(TestAdapter(tmp_path))
+    wake_calls = _record_daemon_wake(monkeypatch)
 
     from core import extraction_daemon
 
@@ -1585,6 +1719,8 @@ def test_session_lifecycle_daemon_signal_dedupes_with_adapter_signal(monkeypatch
     assert result["daemon_signal_queued"] is True
     assert result["daemon_signal_type"] == "reset"
     assert result["signal_name"] == adapter_signal.name
+    assert result["daemon_wake_succeeded"] is True
+    assert wake_calls == [True]
     signals = extraction_daemon.read_pending_signals()
     assert len(signals) == 1
     assert signals[0]["type"] == "reset"
@@ -1598,6 +1734,7 @@ def test_session_lifecycle_default_reset_signal_dedupes_with_adapter_signal(monk
     monkeypatch.setenv("QUAID_HOME", str(tmp_path))
     monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
     set_adapter(TestAdapter(tmp_path))
+    wake_calls = _record_daemon_wake(monkeypatch)
 
     from core import extraction_daemon
 
@@ -1627,6 +1764,8 @@ def test_session_lifecycle_default_reset_signal_dedupes_with_adapter_signal(monk
     assert result["daemon_signal_type"] == "reset"
     assert result["daemon_signal_default"] is True
     assert result["signal_name"] == adapter_signal.name
+    assert result["daemon_wake_succeeded"] is True
+    assert wake_calls == [True]
     signals = extraction_daemon.read_pending_signals()
     assert len(signals) == 1
     assert signals[0]["type"] == "reset"
@@ -1642,6 +1781,7 @@ def test_session_lifecycle_default_agent_end_signal_dedupes_with_adapter_signal(
     monkeypatch.setenv("QUAID_HOME", str(tmp_path))
     monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
     set_adapter(TestAdapter(tmp_path))
+    wake_calls = _record_daemon_wake(monkeypatch)
 
     from core import extraction_daemon
 
@@ -1671,6 +1811,8 @@ def test_session_lifecycle_default_agent_end_signal_dedupes_with_adapter_signal(
     assert result["daemon_signal_type"] == "session_end"
     assert result["daemon_signal_default"] is True
     assert result["signal_name"] == adapter_signal.name
+    assert result["daemon_wake_succeeded"] is True
+    assert wake_calls == [True]
     signals = extraction_daemon.read_pending_signals()
     assert len(signals) == 1
     assert signals[0]["type"] == "session_end"
@@ -1684,6 +1826,7 @@ def test_session_lifecycle_default_timeout_signal_dedupes_with_adapter_signal(mo
     monkeypatch.setenv("QUAID_HOME", str(tmp_path))
     monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
     set_adapter(TestAdapter(tmp_path))
+    wake_calls = _record_daemon_wake(monkeypatch)
 
     from core import extraction_daemon
 
@@ -1713,6 +1856,8 @@ def test_session_lifecycle_default_timeout_signal_dedupes_with_adapter_signal(mo
     assert result["daemon_signal_type"] == "timeout"
     assert result["daemon_signal_default"] is True
     assert result["signal_name"] == adapter_signal.name
+    assert result["daemon_wake_succeeded"] is True
+    assert wake_calls == [True]
     signals = extraction_daemon.read_pending_signals()
     assert len(signals) == 1
     assert signals[0]["type"] == "timeout"
@@ -1726,6 +1871,7 @@ def test_session_lifecycle_default_compaction_signal_dedupes_with_adapter_signal
     monkeypatch.setenv("QUAID_HOME", str(tmp_path))
     monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
     set_adapter(TestAdapter(tmp_path))
+    wake_calls = _record_daemon_wake(monkeypatch)
 
     from core import extraction_daemon
 
@@ -1756,6 +1902,8 @@ def test_session_lifecycle_default_compaction_signal_dedupes_with_adapter_signal
     assert result["daemon_signal_type"] == "compaction"
     assert result["daemon_signal_default"] is True
     assert result["signal_name"] == adapter_signal.name
+    assert result["daemon_wake_succeeded"] is True
+    assert wake_calls == [True]
     signals = extraction_daemon.read_pending_signals()
     assert len(signals) == 1
     assert signals[0]["type"] == "compaction"
@@ -1768,7 +1916,7 @@ def test_session_lifecycle_default_compaction_signal_dedupes_with_adapter_signal
 def test_session_lifecycle_daemon_signal_helper_preserves_boundaries():
     import core.runtime.events as events
 
-    helper_sources = "\n".join(
+    signal_helper_sources = "\n".join(
         [
             inspect.getsource(events._maybe_queue_lifecycle_daemon_signal),
             inspect.getsource(events._maybe_queue_default_reset_signal),
@@ -1777,14 +1925,17 @@ def test_session_lifecycle_daemon_signal_helper_preserves_boundaries():
             inspect.getsource(events._maybe_queue_default_compaction_signal),
         ]
     )
-    assert helper_sources.count("from core.extraction_daemon import write_signal") == 5
+    wake_helper_source = inspect.getsource(events._wake_daemon_after_lifecycle_signal)
+    helper_sources = "\n".join([signal_helper_sources, wake_helper_source])
+    assert signal_helper_sources.count("from core.extraction_daemon import write_signal") == 5
+    assert wake_helper_source.count("from core.extraction_daemon import ensure_alive") == 1
     assert "datastore." not in helper_sources
     assert "_atomic_write" not in helper_sources
     assert "recent_reset" not in helper_sources
     assert "start_daemon" not in helper_sources
     assert "stop_daemon" not in helper_sources
     assert "restart" not in helper_sources
-    assert "wake" not in helper_sources
+    assert "subprocess" not in helper_sources
 
 
 def test_session_lifecycle_observation_is_idempotent(monkeypatch, tmp_path):
@@ -1913,6 +2064,7 @@ def test_session_lifecycle_persistence_failure_does_not_block_failsoft_daemon_si
     monkeypatch.setenv("QUAID_HOME", str(tmp_path))
     monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
     set_adapter(TestAdapter(tmp_path))
+    wake_calls = _record_daemon_wake(monkeypatch)
 
     import core.plugins.sessiondb_contract as sessiondb_contract
     import core.runtime.events as events
@@ -1941,6 +2093,8 @@ def test_session_lifecycle_persistence_failure_does_not_block_failsoft_daemon_si
     assert result["persisted"] is False
     assert result["daemon_signal_queued"] is True
     assert result["daemon_signal_type"] == "reset"
+    assert result["daemon_wake_succeeded"] is True
+    assert wake_calls == [True]
     assert len(extraction_daemon.read_pending_signals()) == 1
     assert any("SessionDB lifecycle observation persistence failed" in rec.message for rec in caplog.records)
 
@@ -1954,6 +2108,7 @@ def test_session_lifecycle_persistence_failure_does_not_block_failsoft_default_r
     monkeypatch.setenv("QUAID_HOME", str(tmp_path))
     monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
     set_adapter(TestAdapter(tmp_path))
+    wake_calls = _record_daemon_wake(monkeypatch)
 
     import core.plugins.sessiondb_contract as sessiondb_contract
     import core.runtime.events as events
@@ -1983,6 +2138,8 @@ def test_session_lifecycle_persistence_failure_does_not_block_failsoft_default_r
     assert result["daemon_signal_queued"] is True
     assert result["daemon_signal_type"] == "reset"
     assert result["daemon_signal_default"] is True
+    assert result["daemon_wake_succeeded"] is True
+    assert wake_calls == [True]
     assert len(extraction_daemon.read_pending_signals()) == 1
     assert any("SessionDB lifecycle observation persistence failed" in rec.message for rec in caplog.records)
 
@@ -1996,6 +2153,7 @@ def test_session_lifecycle_persistence_failure_does_not_block_failsoft_default_a
     monkeypatch.setenv("QUAID_HOME", str(tmp_path))
     monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
     set_adapter(TestAdapter(tmp_path))
+    wake_calls = _record_daemon_wake(monkeypatch)
 
     import core.plugins.sessiondb_contract as sessiondb_contract
     import core.runtime.events as events
@@ -2025,6 +2183,8 @@ def test_session_lifecycle_persistence_failure_does_not_block_failsoft_default_a
     assert result["daemon_signal_queued"] is True
     assert result["daemon_signal_type"] == "session_end"
     assert result["daemon_signal_default"] is True
+    assert result["daemon_wake_succeeded"] is True
+    assert wake_calls == [True]
     assert len(extraction_daemon.read_pending_signals()) == 1
     assert any("SessionDB lifecycle observation persistence failed" in rec.message for rec in caplog.records)
 
@@ -2038,6 +2198,7 @@ def test_session_lifecycle_persistence_failure_does_not_block_failsoft_default_t
     monkeypatch.setenv("QUAID_HOME", str(tmp_path))
     monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
     set_adapter(TestAdapter(tmp_path))
+    wake_calls = _record_daemon_wake(monkeypatch)
 
     import core.plugins.sessiondb_contract as sessiondb_contract
     import core.runtime.events as events
@@ -2067,6 +2228,8 @@ def test_session_lifecycle_persistence_failure_does_not_block_failsoft_default_t
     assert result["daemon_signal_queued"] is True
     assert result["daemon_signal_type"] == "timeout"
     assert result["daemon_signal_default"] is True
+    assert result["daemon_wake_succeeded"] is True
+    assert wake_calls == [True]
     assert len(extraction_daemon.read_pending_signals()) == 1
     assert any("SessionDB lifecycle observation persistence failed" in rec.message for rec in caplog.records)
 
@@ -2080,6 +2243,7 @@ def test_session_lifecycle_persistence_failure_does_not_block_failsoft_default_c
     monkeypatch.setenv("QUAID_HOME", str(tmp_path))
     monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
     set_adapter(TestAdapter(tmp_path))
+    wake_calls = _record_daemon_wake(monkeypatch)
 
     import core.plugins.sessiondb_contract as sessiondb_contract
     import core.runtime.events as events
@@ -2109,6 +2273,8 @@ def test_session_lifecycle_persistence_failure_does_not_block_failsoft_default_c
     assert result["daemon_signal_queued"] is True
     assert result["daemon_signal_type"] == "compaction"
     assert result["daemon_signal_default"] is True
+    assert result["daemon_wake_succeeded"] is True
+    assert wake_calls == [True]
     assert len(extraction_daemon.read_pending_signals()) == 1
     assert any("SessionDB lifecycle observation persistence failed" in rec.message for rec in caplog.records)
 
