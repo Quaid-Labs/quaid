@@ -280,6 +280,16 @@ class EvolutionDbDatastoreContract(DatastoreContractBase):
             ("core.plugins.evolutiondb_contract.handle_snippet_journal_write_request",),
         ),
         DatastoreHandlerSpec(
+            "evolution.snippet_write.request.v1",
+            REQUEST,
+            ("core.plugins.evolutiondb_contract.handle_snippet_write_request",),
+        ),
+        DatastoreHandlerSpec(
+            "evolution.journal_write.request.v1",
+            REQUEST,
+            ("core.plugins.evolutiondb_contract.handle_journal_write_request",),
+        ),
+        DatastoreHandlerSpec(
             "datastore.validate.request.v1",
             REQUEST,
             ("datastore.evolutiondb.soul_snippets maintenance validation",),

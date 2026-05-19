@@ -142,6 +142,8 @@ FIRST_PARTY_DATASTORE_MANIFESTS: List[Dict[str, Any]] = [
         "request_handlers": [
             "recall.journal.request.v1",
             "evolution.snippet_journal_write.request.v1",
+            "evolution.snippet_write.request.v1",
+            "evolution.journal_write.request.v1",
             "datastore.validate.request.v1",
             "datastore.explain.request.v1",
             "maintenance.run.request.v1",

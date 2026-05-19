@@ -40,6 +40,8 @@ DOCS_PROJECT_UPDATE_REQUEST_EVENT = "docs.project_update.request.v1"
 SESSION_INGEST_LOG_REQUEST_EVENT = "session.ingest_log.request.v1"
 MEMORY_EXTRACTION_PUBLISH_REQUEST_EVENT = "memory.extraction_publish.request.v1"
 EVOLUTION_SNIPPET_JOURNAL_WRITE_REQUEST_EVENT = "evolution.snippet_journal_write.request.v1"
+EVOLUTION_SNIPPET_WRITE_REQUEST_EVENT = "evolution.snippet_write.request.v1"
+EVOLUTION_JOURNAL_WRITE_REQUEST_EVENT = "evolution.journal_write.request.v1"
 
 EVENT_REGISTRY: List[Dict[str, Any]] = [
     {
@@ -151,6 +153,22 @@ EVENT_REGISTRY: List[Dict[str, Any]] = [
     {
         "name": EVOLUTION_SNIPPET_JOURNAL_WRITE_REQUEST_EVENT,
         "description": "Request EvolutionDB-owned snippet/journal markdown writes.",
+        "fireable": True,
+        "processable": False,
+        "listenable": True,
+        "delivery_mode": "request",
+    },
+    {
+        "name": EVOLUTION_SNIPPET_WRITE_REQUEST_EVENT,
+        "description": "Request EvolutionDB-owned snippet-only markdown writes.",
+        "fireable": True,
+        "processable": False,
+        "listenable": True,
+        "delivery_mode": "request",
+    },
+    {
+        "name": EVOLUTION_JOURNAL_WRITE_REQUEST_EVENT,
+        "description": "Request EvolutionDB-owned journal-only markdown writes.",
         "fireable": True,
         "processable": False,
         "listenable": True,

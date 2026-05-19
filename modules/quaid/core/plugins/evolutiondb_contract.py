@@ -25,6 +25,35 @@ def _logical_journal_target(filename: str) -> str:
     return f"{str(filename).removesuffix('.md')}.journal.md"
 
 
+def _zero_snippet_journal_metrics() -> Dict[str, Any]:
+    return {
+        "status": "failed",
+        "snippet_files_seen": 0,
+        "snippet_items_seen": 0,
+        "snippet_files_written": 0,
+        "snippet_items_written": 0,
+        "snippet_files_skipped": 0,
+        "journal_files_seen": 0,
+        "journal_files_written": 0,
+        "journal_files_skipped": 0,
+        "target_files": {"snippets": [], "journal": []},
+        "errors": [],
+    }
+
+
+def _reject_split_write_request(message: str) -> Dict[str, Any]:
+    logger.warning("[notedb] %s", message)
+    if _fail_hard_enabled():
+        raise ValueError(message)
+    metrics = _zero_snippet_journal_metrics()
+    metrics["errors"].append(message)
+    return {
+        "status": "failed",
+        "error": message,
+        "snippet_journal_metrics": metrics,
+    }
+
+
 def _run_snippet_write_payload(payload: Dict[str, Any], result: Dict[str, Any], soul_snippets: Any) -> None:
     snippets = payload["snippets"]
     trigger = payload["trigger"]
@@ -186,12 +215,88 @@ def handle_snippet_journal_write_request(event: Dict[str, Any]) -> Dict[str, Any
     }
 
 
+def handle_snippet_write_request(event: Dict[str, Any]) -> Dict[str, Any]:
+    """Handle extraction snippet-only writes through EvolutionDB ownership."""
+    payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+    source = str(payload.get("source") or "").strip()
+    if source != "extraction-apply-payloads":
+        return _reject_split_write_request("payload.source must be extraction-apply-payloads")
+    raw_snippets = payload.get("snippets")
+    snippets = raw_snippets if raw_snippets is not None else {}
+    if not isinstance(snippets, dict):
+        return _reject_split_write_request("payload.snippets must be an object")
+    raw_journal = payload.get("journal")
+    journal = raw_journal if raw_journal is not None else {}
+    if not isinstance(journal, dict):
+        return _reject_split_write_request("payload.journal must be an object")
+    if journal:
+        return _reject_split_write_request("payload.journal must be empty for snippet-only writes")
+
+    split_payload = dict(payload)
+    split_payload["snippets"] = snippets
+    split_payload["journal"] = {}
+    metrics = run_snippet_journal_write_payload(split_payload)
+    return {
+        "status": "ok",
+        "snippet_journal_metrics": metrics,
+    }
+
+
+def handle_journal_write_request(event: Dict[str, Any]) -> Dict[str, Any]:
+    """Handle extraction journal-only writes through EvolutionDB ownership."""
+    payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+    source = str(payload.get("source") or "").strip()
+    if source != "extraction-apply-payloads":
+        return _reject_split_write_request("payload.source must be extraction-apply-payloads")
+    raw_journal = payload.get("journal")
+    journal = raw_journal if raw_journal is not None else {}
+    if not isinstance(journal, dict):
+        return _reject_split_write_request("payload.journal must be an object")
+    raw_snippets = payload.get("snippets")
+    snippets = raw_snippets if raw_snippets is not None else {}
+    if not isinstance(snippets, dict):
+        return _reject_split_write_request("payload.snippets must be an object")
+    if snippets:
+        return _reject_split_write_request("payload.snippets must be empty for journal-only writes")
+
+    split_payload = dict(payload)
+    split_payload["snippets"] = {}
+    split_payload["journal"] = journal
+    metrics = run_snippet_journal_write_payload(split_payload)
+    return {
+        "status": "ok",
+        "snippet_journal_metrics": metrics,
+    }
+
+
 def register_snippet_journal_write_request_handler() -> None:
     from core.runtime.events import EVOLUTION_SNIPPET_JOURNAL_WRITE_REQUEST_EVENT, register_request_handler
 
     register_request_handler(
         EVOLUTION_SNIPPET_JOURNAL_WRITE_REQUEST_EVENT,
         handle_snippet_journal_write_request,
+        datastore_id="evolutiondb",
+        force=True,
+    )
+
+
+def register_snippet_write_request_handler() -> None:
+    from core.runtime.events import EVOLUTION_SNIPPET_WRITE_REQUEST_EVENT, register_request_handler
+
+    register_request_handler(
+        EVOLUTION_SNIPPET_WRITE_REQUEST_EVENT,
+        handle_snippet_write_request,
+        datastore_id="evolutiondb",
+        force=True,
+    )
+
+
+def register_journal_write_request_handler() -> None:
+    from core.runtime.events import EVOLUTION_JOURNAL_WRITE_REQUEST_EVENT, register_request_handler
+
+    register_request_handler(
+        EVOLUTION_JOURNAL_WRITE_REQUEST_EVENT,
+        handle_journal_write_request,
         datastore_id="evolutiondb",
         force=True,
     )

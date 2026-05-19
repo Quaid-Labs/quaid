@@ -8,7 +8,9 @@ from core.runtime.events import (
     EVENT_HANDLERS,
     DOCS_PROJECT_MAINTENANCE_OBSERVED_EVENT,
     DOCS_PROJECT_UPDATE_REQUEST_EVENT,
+    EVOLUTION_JOURNAL_WRITE_REQUEST_EVENT,
     EVOLUTION_SNIPPET_JOURNAL_WRITE_REQUEST_EVENT,
+    EVOLUTION_SNIPPET_WRITE_REQUEST_EVENT,
     MEMORY_EXTRACTION_PUBLISH_REQUEST_EVENT,
     SESSION_INGEST_LOG_REQUEST_EVENT,
     dispatch_broker_events,
@@ -77,6 +79,14 @@ def test_event_emit_list_and_capabilities(tmp_path):
     )
     assert any(
         c.get("name") == EVOLUTION_SNIPPET_JOURNAL_WRITE_REQUEST_EVENT and c.get("delivery_mode") == "request"
+        for c in caps
+    )
+    assert any(
+        c.get("name") == EVOLUTION_SNIPPET_WRITE_REQUEST_EVENT and c.get("delivery_mode") == "request"
+        for c in caps
+    )
+    assert any(
+        c.get("name") == EVOLUTION_JOURNAL_WRITE_REQUEST_EVENT and c.get("delivery_mode") == "request"
         for c in caps
     )
     assert any(c.get("name") == "session.reset" and c.get("delivery_mode") == "active" for c in caps)
@@ -1250,6 +1260,213 @@ def test_request_snippet_journal_write_rejects_required_payload_fields(monkeypat
     assert response["status"] == "failed"
     assert response["responses"][0]["datastore_id"] == "evolutiondb"
     assert response["responses"][0]["result"]["error"] == error
+
+
+def test_split_snippet_journal_request_metadata_declared():
+    from core.contracts.datastore import build_first_party_datastore_contracts
+    from core.datastore_registry import get_datastore_manifest
+
+    manifest = get_datastore_manifest("evolutiondb")
+    assert EVOLUTION_SNIPPET_WRITE_REQUEST_EVENT in manifest["request_handlers"]
+    assert EVOLUTION_JOURNAL_WRITE_REQUEST_EVENT in manifest["request_handlers"]
+
+    contract = build_first_party_datastore_contracts()["evolutiondb"]
+    handlers = {spec.event_type: spec for spec in contract.list_request_handlers()}
+    assert EVOLUTION_SNIPPET_WRITE_REQUEST_EVENT in handlers
+    assert EVOLUTION_JOURNAL_WRITE_REQUEST_EVENT in handlers
+    assert "core.plugins.evolutiondb_contract.handle_snippet_write_request" in handlers[
+        EVOLUTION_SNIPPET_WRITE_REQUEST_EVENT
+    ].replacement_targets
+    assert "core.plugins.evolutiondb_contract.handle_journal_write_request" in handlers[
+        EVOLUTION_JOURNAL_WRITE_REQUEST_EVENT
+    ].replacement_targets
+
+
+def test_split_snippet_journal_request_handlers_register_under_evolutiondb(tmp_path):
+    set_adapter(TestAdapter(tmp_path))
+    import core.runtime.events as events
+    from core.plugins.evolutiondb_contract import (
+        register_journal_write_request_handler,
+        register_snippet_write_request_handler,
+    )
+
+    register_snippet_write_request_handler()
+    register_journal_write_request_handler()
+
+    with events._REQUEST_EVENT_HANDLERS_LOCK:
+        snippet_handlers = list(events._REQUEST_EVENT_HANDLERS.get(EVOLUTION_SNIPPET_WRITE_REQUEST_EVENT) or [])
+        journal_handlers = list(events._REQUEST_EVENT_HANDLERS.get(EVOLUTION_JOURNAL_WRITE_REQUEST_EVENT) or [])
+
+    assert [handler["datastore_id"] for handler in snippet_handlers] == ["evolutiondb"]
+    assert [handler["datastore_id"] for handler in journal_handlers] == ["evolutiondb"]
+
+
+def test_split_snippet_journal_request_handlers_return_family_zero_metrics(tmp_path):
+    set_adapter(TestAdapter(tmp_path))
+    from core.plugins.evolutiondb_contract import (
+        register_journal_write_request_handler,
+        register_snippet_write_request_handler,
+    )
+
+    register_snippet_write_request_handler()
+    register_journal_write_request_handler()
+
+    snippet_response = request_broker_event(
+        EVOLUTION_SNIPPET_WRITE_REQUEST_EVENT,
+        {
+            "source": "extraction-apply-payloads",
+            "trigger": "CLI",
+            "snippets": {"USER.md": ["Maya keeps a green tea note."]},
+            "dry_run": True,
+        },
+        source="pytest",
+    )
+    journal_response = request_broker_event(
+        EVOLUTION_JOURNAL_WRITE_REQUEST_EVENT,
+        {
+            "source": "extraction-apply-payloads",
+            "trigger": "CLI",
+            "journal": {"SOUL.md": "A short journal note."},
+            "dry_run": True,
+        },
+        source="pytest",
+    )
+
+    snippet_metrics = snippet_response["responses"][0]["result"]["snippet_journal_metrics"]
+    assert snippet_response["status"] == "ok"
+    assert snippet_metrics["snippet_files_seen"] == 1
+    assert snippet_metrics["snippet_files_skipped"] == 1
+    assert snippet_metrics["journal_files_seen"] == 0
+    assert snippet_metrics["target_files"] == {
+        "snippets": ["USER.snippets.md"],
+        "journal": [],
+    }
+
+    journal_metrics = journal_response["responses"][0]["result"]["snippet_journal_metrics"]
+    assert journal_response["status"] == "ok"
+    assert journal_metrics["snippet_files_seen"] == 0
+    assert journal_metrics["journal_files_seen"] == 1
+    assert journal_metrics["journal_files_skipped"] == 1
+    assert journal_metrics["target_files"] == {
+        "snippets": [],
+        "journal": ["SOUL.journal.md"],
+    }
+
+
+@pytest.mark.parametrize(
+    ("event_type", "register_name", "payload", "error"),
+    [
+        (
+            EVOLUTION_SNIPPET_WRITE_REQUEST_EVENT,
+            "register_snippet_write_request_handler",
+            {"source": "wrong", "snippets": {}},
+            "payload.source must be extraction-apply-payloads",
+        ),
+        (
+            EVOLUTION_SNIPPET_WRITE_REQUEST_EVENT,
+            "register_snippet_write_request_handler",
+            {"source": "extraction-apply-payloads", "snippets": []},
+            "payload.snippets must be an object",
+        ),
+        (
+            EVOLUTION_SNIPPET_WRITE_REQUEST_EVENT,
+            "register_snippet_write_request_handler",
+            {"source": "extraction-apply-payloads", "snippets": {}, "journal": {"SOUL.md": "not allowed"}},
+            "payload.journal must be empty for snippet-only writes",
+        ),
+        (
+            EVOLUTION_JOURNAL_WRITE_REQUEST_EVENT,
+            "register_journal_write_request_handler",
+            {"source": "wrong", "journal": {}},
+            "payload.source must be extraction-apply-payloads",
+        ),
+        (
+            EVOLUTION_JOURNAL_WRITE_REQUEST_EVENT,
+            "register_journal_write_request_handler",
+            {"source": "extraction-apply-payloads", "journal": []},
+            "payload.journal must be an object",
+        ),
+        (
+            EVOLUTION_JOURNAL_WRITE_REQUEST_EVENT,
+            "register_journal_write_request_handler",
+            {"source": "extraction-apply-payloads", "journal": {}, "snippets": {"USER.md": ["not allowed"]}},
+            "payload.snippets must be empty for journal-only writes",
+        ),
+    ],
+)
+def test_split_snippet_journal_request_handlers_reject_invalid_payloads_fail_soft(
+    monkeypatch,
+    tmp_path,
+    event_type,
+    register_name,
+    payload,
+    error,
+):
+    set_adapter(TestAdapter(tmp_path))
+    import core.runtime.events as events
+    import core.plugins.evolutiondb_contract as evolutiondb_contract
+
+    monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: False)
+    monkeypatch.setattr("lib.fail_policy.is_fail_hard_enabled", lambda: False)
+    getattr(evolutiondb_contract, register_name)()
+
+    response = request_broker_event(event_type, payload, source="pytest")
+
+    assert response["status"] == "failed"
+    result = response["responses"][0]["result"]
+    assert result["status"] == "failed"
+    assert result["error"] == error
+    metrics = result["snippet_journal_metrics"]
+    assert metrics["status"] == "failed"
+    assert metrics["snippet_files_seen"] == 0
+    assert metrics["journal_files_seen"] == 0
+    assert metrics["target_files"] == {"snippets": [], "journal": []}
+    assert metrics["errors"] == [error]
+
+
+@pytest.mark.parametrize(
+    ("handler_name", "payload", "error"),
+    [
+        (
+            "handle_snippet_write_request",
+            {
+                "payload": {
+                    "source": "extraction-apply-payloads",
+                    "snippets": {},
+                    "journal": {"SOUL.md": "not allowed"},
+                },
+            },
+            "payload.journal must be empty for snippet-only writes",
+        ),
+        (
+            "handle_journal_write_request",
+            {
+                "payload": {
+                    "source": "extraction-apply-payloads",
+                    "journal": {},
+                    "snippets": {"USER.md": ["not allowed"]},
+                },
+            },
+            "payload.snippets must be empty for journal-only writes",
+        ),
+    ],
+)
+def test_split_snippet_journal_request_handlers_warn_before_fail_hard_raise(
+    caplog,
+    monkeypatch,
+    handler_name,
+    payload,
+    error,
+):
+    import core.plugins.evolutiondb_contract as evolutiondb_contract
+
+    monkeypatch.setattr("lib.fail_policy.is_fail_hard_enabled", lambda: True)
+
+    with caplog.at_level("WARNING", logger="core.plugins.evolutiondb_contract"):
+        with pytest.raises(ValueError, match=error):
+            getattr(evolutiondb_contract, handler_name)(payload)
+
+    assert error in caplog.text
 
 
 def test_request_session_ingest_log_matches_direct_session_projection(monkeypatch, tmp_path):
