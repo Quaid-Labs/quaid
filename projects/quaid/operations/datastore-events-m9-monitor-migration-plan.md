@@ -53,7 +53,8 @@ The selected M9 monitor-write migrations are complete:
 Deferred items are not M9 blockers unless separately selected by Solomon with a
 new reviewed plan: direct `extract_from_transcript()` / CLI request routing,
 lifecycle persistence, SessionDB first-party manifest registration,
-source-window metadata enrichment, separate snippet/journal request events,
+source-window metadata enrichment, extraction producer routing through separate
+snippet/journal request events,
 `datastore.notedb` / `core.plugins.notedb_contract` compatibility-alias
 retirement, `notedb.core` plugin-id rename, and `.ego` integration. The
 `datastore.evolutiondb` runtime package and `core.plugins.evolutiondb_contract`
@@ -72,10 +73,11 @@ request-mode controls explicitly, while normal help output and defaults remain
 unchanged. Default request routing and broader deferred items remain
 future-plan-gated.
 
-The first M12 helper-split runtime slice closed at `e81244e32`: EvolutionDB
-snippet and journal writes now have separate private helper internals behind the
-existing combined helper and combined request event. Separate snippet/journal
-request events remain future-plan-gated.
+M12 runtime slices closed at `e81244e32` and `3f245ba9e` + `1a92dd7c`:
+EvolutionDB snippet and journal writes now have separate private helper
+internals and additive snippet-only / journal-only request event surfaces behind
+the existing combined extraction route. Extraction producer routing through
+separate snippet/journal request events remains future-plan-gated.
 
 ## Shared Rules For Every M9 Slice
 

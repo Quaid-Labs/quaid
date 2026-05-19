@@ -296,7 +296,8 @@ request-mode flags passed explicitly.
   routing options object
 - lifecycle persistence and SessionDB first-party manifest registration
 - source-window metadata enrichment
-- separate snippet/journal request events; the M12 helper-split prerequisite
-  closed at `e81244e32`
+- extraction producer routing through separate snippet/journal request events;
+  M12 helper-split and split-event surface prerequisites closed at `e81244e32`
+  and `3f245ba9e` + `1a92dd7c`
 - compatibility-alias retirement and `notedb.core` plugin-id rename
 - `.ego` import/export integration

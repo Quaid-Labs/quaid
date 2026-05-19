@@ -1,6 +1,6 @@
 # Datastore Events M12 EvolutionDB Snippet Journal Split Plan
 
-Status: first helper-split runtime slice complete; separate request-event surface planned
+Status: helper-split and split request-event surface slices complete; extraction producer routing deferred
 Owner: W1 runtime/datastore, W3 recall and identity-context review
 Plan source: `projects/quaid/operations/datastore-events-m9-5-evolution-snippet-journal-plan.md`
 
@@ -22,10 +22,10 @@ Do not implement runtime code for M12 until:
 6. W8 confirms static coverage includes EvolutionDB helper tests, extraction
    request-mode tests, event/contract/manifest checks, and boundary checks.
 
-This document records the first helper-split runtime slice and selects a second
-event-surface-only slice for review. It does not approve extraction producer
-routing changes, daemon routing changes, default behavior changes, public CLI
-changes, alias retirement, plugin-id rename, or public push/release actions.
+This document records the first helper-split runtime slice and the second
+event-surface-only slice. It does not approve extraction producer routing
+changes, daemon routing changes, default behavior changes, public CLI changes,
+alias retirement, plugin-id rename, or public push/release actions.
 
 ## Goal
 
@@ -37,9 +37,9 @@ combined EvolutionDB helper internals into snippet-owned and journal-owned
 sub-helpers while preserving the public combined helper and combined request
 handler exactly.
 
-Later slices may consider separate request events only after the helper split is
-validated and reviewed. The next selected slice adds those event surfaces but
-does not route extraction producers through them yet.
+The second slice added separate request event surfaces after the helper split
+was validated and reviewed. Extraction producers still do not route through
+those separate events.
 
 ## Current Boundary
 
@@ -91,6 +91,49 @@ Validation:
 - W6 APPROVED/no concerns.
 - W8 static PASS and runtime HOLD closed for the commit.
 
+Second runtime slice implemented by:
+
+- `3f245ba9e` `refactor(datastore): add split snippet journal request surfaces`
+- `1a92dd7c` `test(datastore): cover split event routing guards`
+
+Implemented behavior:
+
+- `evolution.snippet_write.request.v1` and
+  `evolution.journal_write.request.v1` are additive EvolutionDB-owned request
+  event surfaces with runtime registry entries, EvolutionDB manifest request
+  handlers, and `EvolutionDbDatastoreContract` handler specs.
+- `core.plugins.evolutiondb_contract` exposes thin
+  `handle_snippet_write_request()` and `handle_journal_write_request()`
+  handlers plus explicit registration helpers under datastore id
+  `evolutiondb`.
+- Both split handlers accept exactly `source="extraction-apply-payloads"`,
+  reject cross-family payloads before delegation, and use the reviewed
+  warn-then-raise guard shape: failHard raises after warning, fail-soft returns
+  a failed envelope with zeroed `snippet_journal_metrics`.
+- Successful split handlers delegate through the existing public combined
+  `run_snippet_journal_write_payload()` helper with the opposite family forced
+  to `{}` and return the same `{status, snippet_journal_metrics}` envelope
+  shape with opposite-family counters and target files at zero.
+- The existing combined `evolution.snippet_journal_write.request.v1` event,
+  `handle_snippet_journal_write_request()`, `snippet_journal_metrics` shape,
+  `snippet_journal_write_mode` behavior, `ingest.extract` producer routing,
+  daemon/default/CLI routing, visible markdown files, and recall behavior are
+  unchanged.
+- Tests pin event/manifest/contract metadata, handler registration under
+  EvolutionDB, family-zero metrics, wrong-source and absent-source rejection,
+  cross-family rejection in fail-soft and failHard modes, and the invariant
+  that `apply_extracted_payloads(snippet_journal_write_mode="request")` still
+  emits only the combined event and refuses direct-helper fallback.
+
+Validation:
+
+- W4 live/source-proof PASS on R201 for `3f245ba9e`; test-only follow-up
+  `1a92dd7c` required no fresh live smoke.
+- W3 runtime/recall APPROVED/no findings.
+- W6 APPROVED after the test-only follow-up closed the absent-source and
+  combined-event routing coverage gaps.
+- W8 static PASS and runtime HOLD closed for the pair.
+
 ## Selected First Slice
 
 Selected scope: split the internal helper implementation only.
@@ -123,12 +166,10 @@ This slice should be reviewable as a mechanical helper extraction plus tests. It
 must not change visible markdown paths, duplicate behavior, counters, target
 files, errors, request envelopes, or event names.
 
-## Future Request-Event Split
+## Second Slice: Request-Event Surfaces
 
-Separate request events were not selected in the first slice.
-
-Selected second slice: add separate request event surfaces, but do not route
-extraction through them yet.
+Selected scope: add separate request event surfaces, but do not route extraction
+through them yet.
 
 Implementation shape:
 
@@ -168,8 +209,8 @@ Implementation shape:
 - Do not change `snippet_journal_write_mode`; request mode still sends one
   combined `evolution.snippet_journal_write.request.v1` broker request.
 
-This slice creates explicit EvolutionDB request surfaces and tests their
-contracts, but it does not introduce partial-write producer behavior.
+This slice created explicit EvolutionDB request surfaces and tested their
+contracts, but it did not introduce partial-write producer behavior.
 
 If a later slice routes extraction through separate events, it needs a separate
 reviewed plan that covers:
