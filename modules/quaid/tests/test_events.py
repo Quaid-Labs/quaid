@@ -1437,14 +1437,15 @@ def test_event_process_session_ingest_log_has_no_handler_local_exception_or_dire
     assert "except Exception" not in handler_source
 
 
-def test_event_process_session_ingest_log_failed_result_marks_failed(monkeypatch, tmp_path):
+@pytest.mark.parametrize("helper_status", ["failed", "error"])
+def test_event_process_session_ingest_log_failed_result_marks_failed(monkeypatch, tmp_path, helper_status):
     set_adapter(TestAdapter(tmp_path))
 
     import core.runtime.events as events
 
     monkeypatch.setattr(
         "core.plugins.sessiondb_contract.run_session_ingest_payload",
-        lambda _payload: {"status": "failed", "error": "simulated ingest failure"},
+        lambda _payload: {"status": helper_status, "error": "simulated ingest failure"},
     )
     monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: False)
 
