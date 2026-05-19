@@ -167,10 +167,13 @@ Status:
   governance clarification recorded at `8e28a8d68`.
 - W4 live/source-proof PASS, W3 recall/identity-context PASS, W6
   approved-with-concerns documented, and W8 static/runtime closure recorded.
-- Request-event routing for snippet/journal writes is planned as a separate
-  reviewed slice using `evolution.snippet_journal_write.request.v1`; runtime
-  implementation remains blocked pending W3/W6/W8 plan review and W4 smoke for
-  any landed code.
+- Request-event routing for snippet/journal writes is complete at `c9aac7ab6`
+  with test-only diagnostic coverage at `126659a91`.
+- W4 live PASS, W3 recall/identity-context PASS, W6 review closure, and W8
+  static/runtime closure are recorded for the request-event pair.
+- `evolution.snippet_journal_write.request.v1` is implemented for the selected
+  daemon final rolling flush producer. Direct `extract_from_transcript()` / CLI
+  request routing remains deferred.
 
 Scope:
 

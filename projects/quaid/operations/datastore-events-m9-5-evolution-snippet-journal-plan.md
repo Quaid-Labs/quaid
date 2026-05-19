@@ -1,6 +1,6 @@
 # Datastore Events M9.5 Evolution Snippet Journal Plan
 
-Status: first synchronous helper seam complete; request-event slice planned
+Status: first synchronous helper seam complete; request-event slice complete
 Owner: W1 runtime/datastore, W3 recall and identity-context review
 Plan source: `projects/quaid/operations/datastore-events-m9-monitor-migration-plan.md`
 
@@ -419,6 +419,45 @@ Closure evidence:
 - W8 static PASS and runtime hold close recorded for the pair after
   `7fd0771dc` fixed the initial boundary-check hold.
 - W8 docs-gate PASS for `8e28a8d68`.
+
+## Request Event Slice Closure
+
+The selected request-event runtime slice closed at:
+
+- `c9aac7ab6` `refactor(datastore): route snippet journal writes through request event`
+- `126659a91` `test(datastore): assert snippet journal request failure logs`
+
+Implemented shape:
+
+- `evolution.snippet_journal_write.request.v1` is registered as a request event
+  owned by EvolutionDB/NoteDB.
+- `core.plugins.notedb_contract.handle_snippet_journal_write_request()` is a
+  thin request handler that validates the request envelope and delegates to
+  `run_snippet_journal_write_payload()`.
+- The helper remains behind `core.lifecycle.soul_snippets`; the new handler does
+  not import `datastore.notedb` directly.
+- `ingest.extract.apply_extracted_payloads()` now accepts
+  `snippet_journal_write_mode`, defaulting to `direct`.
+- Direct `extract_from_transcript()` / CLI callers continue using the direct
+  helper path by default.
+- Daemon final rolling flush selects the combined request-mode shape with
+  `memory_publish_mode="request"` and `snippet_journal_write_mode="request"`.
+- Project-log queueing and `publish_complete` remain after MemoryDB publish and
+  snippet/journal writes in every mode combination.
+- Request-mode broker, handler, validator, or writer failure does not fall back
+  to direct NoteDB writes.
+- `snippet_journal_metrics` remains additive; existing `result["snippets"]` and
+  `result["journal"]` shapes remain unchanged.
+
+Closure evidence:
+
+- W4 live PASS for `c9aac7ab6` on R201 with the new event registered under
+  EvolutionDB, daemon request mode verified, and M9.2/M9.3/M9.4 routes intact.
+- W3 runtime/recall review PASS/no findings for `c9aac7ab6`; `126659a91` was
+  inspected as test-only diagnostic coverage with no runtime delta.
+- W6 APPROVED-WITH-CONCERNS for `c9aac7ab6`; `126659a91` closed the minor
+  request-failure logging coverage gap.
+- W8 static PASS and runtime hold close recorded for the pair.
 
 ## Deferred Decisions
 
