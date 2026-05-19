@@ -77,6 +77,11 @@ Implement one runtime slice only after review:
    contains an explicit `daemon_signal` object with `enabled: true`. A plain
    lifecycle event without that object or with `enabled` false keeps the exact
    M20/M21 acknowledgement and observation behavior.
+   - Payload schema: `payload.daemon_signal = {"enabled": bool, "transcript_path": str,
+     "reason": str, "source": str}`. Only `enabled=true` selects the bridge.
+     `transcript_path`, `reason`, and `source` are optional strings; unknown
+     fields under `daemon_signal` are ignored, not rejected, and are not
+     propagated to the signal metadata.
 3. Require a concrete `session_id` and transcript path. The transcript path may
    be supplied as `payload.daemon_signal.transcript_path` or, if absent there,
    as `payload.transcript_path`. Missing, empty, or nonexistent transcript paths
@@ -108,6 +113,14 @@ Implement one runtime slice only after review:
    explicit queueing may add passive fields such as `daemon_signal_queued: true`,
    `daemon_signal_type`, and `signal_name`, but must not change `status` or
    `event`. Non-opt-in events must not gain those fields.
+   - Success envelope: add `daemon_signal_queued: true`,
+     `daemon_signal_type: <mapped daemon signal type string>`, and
+     `signal_name: <signal file basename or daemon-side identifier returned by
+     write_signal()>`.
+   - Fail-soft envelope: add `daemon_signal_queued: false` and
+     `daemon_signal_error: <operator-readable string>`.
+   - Plain lifecycle events without opt-in must not gain any
+     `daemon_signal_*` fields or `signal_name`.
 9. Do not wake, start, stop, or restart the daemon in this first slice. The
    selected bridge writes the existing signal file only; daemon process lifecycle
    automation remains future-plan-gated.
@@ -172,6 +185,10 @@ Add or preserve focused tests proving:
   excluded lifecycle events are absent from it.
 - Re-emitting the same explicit lifecycle signal request uses `write_signal()`
   dedupe behavior and does not create duplicate pending signal files.
+- Cross-path dedupe is explicit: if an adapter hook writes a compatible signal
+  directly through `write_signal()` and a lifecycle bridge targets the same
+  `session_id` plus mapped signal type, `read_pending_signals()` must show
+  exactly one pending signal file.
 - Missing/nonexistent transcript path under failHard raises with the original
   exception chained; fail-soft logs loudly and returns `daemon_signal_queued=false`
   without claiming a queued signal.
