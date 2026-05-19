@@ -297,7 +297,8 @@ narrow facade timeout emitter smoke:
 
 ## Deferred Decisions
 
-- agent-end lifecycle facade emitter
+- agent-end lifecycle facade emitter is tracked as M32 in
+  `projects/quaid/operations/datastore-events-m32-agent-end-facade-lifecycle-emitter-plan.md`
 - OpenClaw hook migration to facade lifecycle emitters
 - adapter direct-signal retirement, if ever approved
 - daemon restart/stop automation from lifecycle events
