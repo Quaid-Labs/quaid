@@ -1,6 +1,6 @@
 # Datastore Events M9.5 Evolution Snippet Journal Plan
 
-Status: first synchronous helper seam complete
+Status: first synchronous helper seam complete; request-event slice planned
 Owner: W1 runtime/datastore, W3 recall and identity-context review
 Plan source: `projects/quaid/operations/datastore-events-m9-monitor-migration-plan.md`
 
@@ -170,7 +170,9 @@ than becoming response-envelope validation.
 
 ## Future Request Event Slice
 
-A later slice may introduce a request event after helper parity is proven.
+The next proposed runtime slice is a request event for the selected extraction
+snippet/journal write path. This section is a plan only; it does not approve
+runtime code until W3/W6/W8 review closes.
 
 Candidate event:
 
@@ -184,7 +186,26 @@ Candidate owner:
 Candidate producer:
 
 - `ingest.extract.apply_extracted_payloads()` only, for the selected extraction
-  snippet/journal write path.
+  snippet/journal write path when an explicit request mode is selected.
+
+Implementation shape:
+
+- Add the request event to the core runtime event registry with
+  `delivery_mode="request"` and `fireable=True`.
+- Add the handler spec to the EvolutionDB/NoteDB contract and datastore
+  manifest under the existing `evolutiondb` owner.
+- Register the request handler from `core.plugins.notedb_contract`.
+- Keep the handler thin: validate the request envelope, then delegate to the
+  existing `run_snippet_journal_write_payload()` helper.
+- Keep the helper behind the current `core.lifecycle.soul_snippets` seam. The
+  request handler must not import `datastore.notedb` directly.
+- Add an explicit `snippet_journal_write_mode` (or equivalently named) argument
+  to `apply_extracted_payloads()`, defaulting to `direct`.
+- In direct mode, preserve the current synchronous helper path for
+  `extract_from_transcript()` / CLI callers.
+- In request mode, `apply_extracted_payloads()` should send exactly one broker
+  request and validate the response before continuing to project-log queueing
+  and `publish_complete`.
 
 Request-slice rules:
 
@@ -196,6 +217,62 @@ Request-slice rules:
   direct NoteDB writes.
 - Direct `extract_from_transcript()` / CLI behavior should remain direct unless
   a separate reviewed slice explicitly selects request routing for it.
+- The response validator should check only the fields the extraction
+  orchestrator consumes: `status`, snippet/journal counters, `target_files`,
+  and `errors`. Do not validate internal markdown archive mechanics, duplicate
+  parser state, or filesystem implementation details in the broker envelope.
+- `target_files` remain logical target filenames, not physical filesystem paths.
+- FailHard warning discipline applies to validator failures as well as writer
+  failures: warn before raising so operators see the broker/handler failure
+  reason in live logs.
+- The request path may return `snippet_journal_metrics` to the orchestrator, but
+  it must remain additive and must not replace existing `result["snippets"]` or
+  `result["journal"]` shapes.
+
+Request-slice non-targets:
+
+- no `datastore.notedb` package rename
+- no split into separate snippet-only and journal-only events in this slice
+- no direct daemon broker bypass around `apply_extracted_payloads()`
+- no request routing for direct `extract_from_transcript()` / CLI callers
+- no change to lifecycle/janitor callers of `core.lifecycle.soul_snippets`
+- no snippet review or journal distillation maintenance routing changes
+- no MemoryDB fact publish, DocsDB project-log, session ingest, lifecycle ack,
+  recall planner, ranking, scoring, or source-window changes
+
+Required tests before W4:
+
+- event registry, datastore manifest, and contract handler spec expose
+  `evolution.snippet_journal_write.request.v1` under EvolutionDB/NoteDB.
+- direct mode still calls the synchronous helper path and keeps CLI/direct
+  behavior unchanged.
+- request mode calls the broker once and does not fall back to direct helper
+  writes after broker, handler, validator, or writer failure.
+- request/direct parity for snippet and journal file contents, including
+  duplicate inputs.
+- request/direct parity for `snippet_journal_metrics`, logical `target_files`,
+  and existing `result["snippets"]` / `result["journal"]` shapes.
+- failHard broker/handler/validator failure warns before raising and preserves
+  exception identity or contextual cause as appropriate.
+- fail-soft write failure logs, reports `status="failed"` or populated
+  `errors`, and does not claim written counters.
+- snippet writes still happen before journal writes inside the helper.
+- `publish_complete` still fires after snippet, journal, and project-log side
+  effects.
+- W3-selected journal recall or identity-context checks still see the same
+  persisted content after request-mode writes.
+
+W4 smoke requirements:
+
+- installed extraction writes at least one snippet and one journal entry through
+  `evolution.snippet_journal_write.request.v1`.
+- the expected `*.snippets.md` and `journal/*.journal.md` files are visible in
+  the installed runtime home with the same content as the direct helper path.
+- duplicate snippet/journal payloads do not create duplicate visible entries.
+- failHard request-mode write failure stops without direct fallback.
+- identity/context lifecycle still reads the written content as before.
+- M9.2 DocsDB, M9.3 session ingest, and M9.4 MemoryDB extraction publish routes
+  remain healthy.
 
 ## Non-Targets
 
@@ -322,8 +399,6 @@ Closure evidence:
 
 ## Deferred Decisions
 
-- Whether to add `evolution.snippet_journal_write.request.v1` after the helper
-  seam closes.
 - Whether to split snippet and journal writes into separate request events.
 - Whether direct `extract_from_transcript()` / CLI should ever use request mode.
 - Whether snippet review and journal distillation maintenance should get their

@@ -167,8 +167,10 @@ Status:
   governance clarification recorded at `8e28a8d68`.
 - W4 live/source-proof PASS, W3 recall/identity-context PASS, W6
   approved-with-concerns documented, and W8 static/runtime closure recorded.
-- Request-event routing for snippet/journal writes remains deferred to a
-  separate reviewed slice.
+- Request-event routing for snippet/journal writes is planned as a separate
+  reviewed slice using `evolution.snippet_journal_write.request.v1`; runtime
+  implementation remains blocked pending W3/W6/W8 plan review and W4 smoke for
+  any landed code.
 
 Scope:
 
