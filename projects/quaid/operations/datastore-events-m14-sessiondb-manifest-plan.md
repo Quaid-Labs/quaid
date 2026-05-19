@@ -80,11 +80,21 @@ Implement one runtime metadata slice only:
    explicitly approves a selector ownership change. Store metadata may describe
    SessionDB-owned transcript/provenance tables, but it must not claim the
    user-facing `session_chunks` recall selector.
-6. Keep all SessionDB contract methods metadata-only/inactive, matching the
+6. Manifest capabilities shape: `capabilities.recall` is `[]`.
+   `capabilities.stores` may include declarative-only metadata for
+   SessionDB-owned tables such as `sessions`, `transcript_chunks`,
+   `message_pairs`, `microchunks`, and message-pair attachments. Do not declare
+   active SessionDB read, write, or recall surfaces in this slice.
+7. Manifest identity shape: `plugin_id` is `sessiondb.core`, matching the
+   first-party `<datastore>.core` pattern. Do not alias the plugin id to any
+   other datastore.
+8. Manifest alias shape: `runtime_aliases` is an empty list `[]`; SessionDB has
+   no prior runtime datastore name to alias.
+9. Keep all SessionDB contract methods metadata-only/inactive, matching the
    existing M3 contract style. Contract construction, validation, and inactive
    `nack` behavior may be tested, but no production SessionDB operation should
    be routed through the contract.
-7. Preserve failHard behavior in registry/contract validation. Invalid SessionDB
+10. Preserve failHard behavior in registry/contract validation. Invalid SessionDB
    manifest metadata must raise under `failHard=true` and log/skip under
    `failHard=false`, matching existing manifest validation policy.
 
