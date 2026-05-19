@@ -159,6 +159,61 @@ Next M9.3 runtime work must begin with a focused plan for one deferred
 sub-slice. Do not extend the first-slice patch into ack-only lifecycle handlers
 or source metadata enrichment by follow-on code without that review.
 
+## Next Slice Plan: Active `session.ingest_log`
+
+The next narrow runtime slice should remove the remaining active-event direct
+call from `core/runtime/events.py` without changing active event semantics.
+
+Current remaining direct path:
+
+- `core/runtime/events.py::_handle_session_ingest_log()` unwraps the active
+  `session.ingest_log` payload and calls
+  `core.ingest_runtime.run_session_logs_ingest()` directly.
+
+Proposed ownership change:
+
+- keep `session.ingest_log` as an active event in this slice
+- delegate the storage work to the MemoryDB-owned session ingest contract path,
+  reusing `core.plugins.memorydb_contract.handle_session_ingest_log_request()`
+  or a small shared helper owned by that module
+- preserve the existing active handler result envelope:
+  - ingest result with `status` in `failed` or `error` returns
+    `{"status": "failed", "result": result}`
+  - successful ingest returns `{"status": "processed", "result": result}`
+  - unexpected exceptions return `{"status": "failed", "error": str(exc)}`
+
+Non-targets for this slice:
+
+- do not change `session.ingest_log` to request delivery mode
+- do not introduce a `sessiondb` manifest
+- do not change daemon session-ingest callsites completed in the first slice
+- do not enrich production daemon payloads with `source_channel`,
+  `conversation_id`, `participant_ids`, or `participant_aliases`
+- do not change lifecycle ack handlers or fact extraction writes
+
+Required implementation tests:
+
+- active `session.ingest_log` still produces the same processed/failed result
+  shape that existing event processing expects
+- active handler delegates through the MemoryDB-owned contract/helper rather
+  than calling `run_session_logs_ingest()` from `core/runtime/events.py`
+- handler-returned failed/error results still mark the event failed through
+  `process_events()`
+- failHard behavior remains owned by `process_events()` raising on failed
+  handler results; the active handler must not add a fallback route
+- request handler parity tests from the first slice remain passing
+
+Review gates:
+
+- W3 should confirm this does not alter recall-visible projection fields or
+  source-window behavior.
+- W6 should review the ownership boundary and result-envelope preservation.
+- W8 should run `tests/test_events.py` plus the first-slice session ingest,
+  session memory bridge, and extraction daemon lanes.
+- W4 live smoke is only needed if runtime code changes land after this plan; it
+  should verify active `session.ingest_log` processing plus the already-closed
+  daemon broker path.
+
 ## Event Contract Requirements
 
 The first slice must preserve the current session ingest inputs:
