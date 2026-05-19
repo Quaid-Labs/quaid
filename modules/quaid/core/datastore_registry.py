@@ -157,6 +157,43 @@ FIRST_PARTY_DATASTORE_MANIFESTS: List[Dict[str, Any]] = [
         "contracts": {"validate": 1, "explain": 1, "export": 0, "import": 0},
         "runtime_aliases": ["notedb"],
     },
+    {
+        "id": "sessiondb",
+        "display_name": "SessionDB",
+        "description": "Durable transcript provenance, message-pair chains, and microchunk expansion metadata.",
+        "module": "datastore.sessiondb.session_store",
+        "plugin_id": "sessiondb.core",
+        "schema_version": DATASTORE_MANIFEST_SCHEMA_VERSION,
+        "capabilities": {
+            "stores": [
+                "sessions",
+                "transcript_chunks",
+                "message_pairs",
+                "microchunks",
+                "message_pair_attachments",
+            ],
+            "recall": [],
+            "writes": [],
+            "validate": True,
+            "explain": True,
+            "export": False,
+            "import": False,
+        },
+        "accepted_events": [],
+        "request_handlers": [
+            "datastore.validate.request.v1",
+            "datastore.explain.request.v1",
+            "maintenance.run.request.v1",
+        ],
+        "produced_events": [],
+        "maintenance_tasks": ["sessiondb.maintenance"],
+        "migrations": [],
+        "worker_specs": [],
+        "resource_budgets": {"llm": "none", "io": "sqlite"},
+        "fail_hard_policy": "inherit_global",
+        "contracts": {"validate": 1, "explain": 1, "export": 0, "import": 0},
+        "runtime_aliases": [],
+    },
 ]
 
 

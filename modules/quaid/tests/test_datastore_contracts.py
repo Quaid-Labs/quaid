@@ -18,7 +18,7 @@ from core.contracts.datastore import (
 def test_first_party_contracts_match_manifest_handlers_and_ids() -> None:
     contracts = build_first_party_datastore_contracts()
 
-    assert sorted(contracts) == ["docsdb", "evolutiondb", "memorydb"]
+    assert sorted(contracts) == ["docsdb", "evolutiondb", "memorydb", "sessiondb"]
     for datastore_id, contract in contracts.items():
         manifest = contract.manifest
         assert manifest["id"] == datastore_id
@@ -56,6 +56,27 @@ def test_contract_health_and_validation_are_metadata_only() -> None:
 
     assert contract.health() == {"datastore_id": "memorydb", "healthy": True, "active": False}
     assert contract.validate() == {"datastore_id": "memorydb", "valid": True, "errors": []}
+
+
+def test_sessiondb_contract_is_metadata_only_and_memorydb_keeps_session_request() -> None:
+    contracts = build_first_party_datastore_contracts()
+    sessiondb = contracts["sessiondb"]
+    memorydb = contracts["memorydb"]
+
+    assert sessiondb.health() == {"datastore_id": "sessiondb", "healthy": True, "active": False}
+    assert sessiondb.validate() == {"datastore_id": "sessiondb", "valid": True, "errors": []}
+    assert [spec.event_type for spec in sessiondb.list_domain_event_listeners()] == []
+    assert [spec.event_type for spec in sessiondb.list_request_handlers()] == [
+        "datastore.validate.request.v1",
+        "datastore.explain.request.v1",
+        "maintenance.run.request.v1",
+    ]
+    assert "session.ingest_log.request.v1" not in {
+        spec.event_type for spec in sessiondb.list_request_handlers()
+    }
+    assert "session.ingest_log.request.v1" in {
+        spec.event_type for spec in memorydb.list_request_handlers()
+    }
 
 
 def test_contract_inactive_handlers_nack_without_calling_legacy_paths() -> None:

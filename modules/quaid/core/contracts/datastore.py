@@ -307,10 +307,32 @@ class EvolutionDbDatastoreContract(DatastoreContractBase):
     )
 
 
+class SessionDbDatastoreContract(DatastoreContractBase):
+    datastore_id = "sessiondb"
+    handler_specs = (
+        DatastoreHandlerSpec(
+            "datastore.validate.request.v1",
+            REQUEST,
+            ("datastore.sessiondb.session_store schema/provenance validation metadata",),
+        ),
+        DatastoreHandlerSpec(
+            "datastore.explain.request.v1",
+            REQUEST,
+            ("datastore.sessiondb.session_store transcript provenance/debug metadata",),
+        ),
+        DatastoreHandlerSpec(
+            "maintenance.run.request.v1",
+            REQUEST,
+            ("datastore.sessiondb.session_store inactive metadata-only maintenance contract",),
+        ),
+    )
+
+
 _FIRST_PARTY_CONTRACT_CLASSES = {
     "memorydb": MemoryDbDatastoreContract,
     "docsdb": DocsDbDatastoreContract,
     "evolutiondb": EvolutionDbDatastoreContract,
+    "sessiondb": SessionDbDatastoreContract,
 }
 
 
