@@ -147,11 +147,10 @@ MemoryDB contract surfaces remain unchanged. M24 default terminal
 `058737670`: plain terminal agent-end lifecycle events with concrete `session_id`
 and real `payload.transcript_path` now write the existing daemon `session_end`
 signal through `core.extraction_daemon.write_signal()`, while M22 explicit
-opt-in remains canonical. M25 now tracks a default `session.timeout`
-lifecycle-to-daemon `timeout` signal bridge in
-`projects/quaid/operations/datastore-events-m25-default-timeout-signal-plan.md`:
-plain timeout lifecycle events with concrete `session_id` and real
-`payload.transcript_path` may write the existing daemon `timeout` signal through
+opt-in remains canonical. M25 default `session.timeout`
+lifecycle-to-daemon `timeout` signal bridge closed at `32ba63569`: plain timeout
+lifecycle events with concrete `session_id` and real `payload.transcript_path`
+now write the existing daemon `timeout` signal through
 `core.extraction_daemon.write_signal()`, while reset/compaction default
 lifecycle-triggered transcript ingest, daemon process automation, and
 recall/source-window policy changes remain deferred.
