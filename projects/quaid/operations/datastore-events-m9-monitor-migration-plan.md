@@ -66,8 +66,11 @@ Direct extraction request-mode routing is now tracked as M11 in
 `projects/quaid/operations/datastore-events-m11-direct-extraction-request-plan.md`.
 The M11 first Python-API-only runtime slice closed at `6eebe1a59` +
 `539061237`: direct Python callers can opt into the existing MemoryDB and
-EvolutionDB request modes, while defaults remain direct. CLI exposure, default
-request routing, and broader deferred items remain future-plan-gated.
+EvolutionDB request modes, while defaults remain direct. Hidden CLI
+operator/debug exposure closed at `6e413c648`: operators can pass the existing
+request-mode controls explicitly, while normal help output and defaults remain
+unchanged. Default request routing and broader deferred items remain
+future-plan-gated.
 
 ## Shared Rules For Every M9 Slice
 

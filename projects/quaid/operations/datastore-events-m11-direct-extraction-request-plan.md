@@ -1,6 +1,6 @@
 # Datastore Events M11 Direct Extraction Request Routing Plan
 
-Status: first Python-API-only runtime slice complete; CLI exposure slice planned
+Status: Python-API-only and hidden CLI request-mode slices complete
 Owner: W1 runtime/datastore, W3 recall and identity-context review
 Plan source: `projects/quaid/operations/datastore-events-m9-monitor-migration-plan.md`
 
@@ -22,10 +22,9 @@ Do not implement runtime code for M11 until:
    datastore contract/manifest checks, snippet/journal tests, and boundary
    checks.
 
-This document records the first Python-API-only M11 runtime slice, selects a
-follow-up CLI exposure slice for review, and records remaining deferred
-decisions. It does not approve default behavior changes or public push/release
-actions.
+This document records the first Python-API-only M11 runtime slice, the hidden
+CLI exposure slice, and remaining deferred decisions. It does not approve
+default behavior changes, public CLI promotion, or public push/release actions.
 
 ## Goal
 
@@ -85,6 +84,35 @@ Validation:
 - W6 APPROVED after the test-only follow-up closed the invalid-mode and
   call-once coverage gaps.
 - W8 static PASS and runtime HOLD closed for the pair.
+
+CLI exposure slice implemented by:
+
+- `6e413c648` `refactor(datastore): expose hidden CLI request modes`
+
+Implemented behavior:
+
+- `ingest.extract.main()` now builds its argparse parser through
+  `_build_cli_parser()` and accepts hidden operator/debug flags:
+  `--memory-publish-mode {direct,request}` and
+  `--snippet-journal-write-mode {direct,request}`.
+- Both flags default to `direct`, use `argparse.SUPPRESS`, and remain absent
+  from normal `--help` output.
+- Parsed values pass through to the existing `extract_from_transcript()`
+  keyword parameters from `6eebe1a59`.
+- Invalid values fail through argparse before extraction starts.
+- No default request routing, public help entry, daemon route, wrapper, hook,
+  event, environment/config routing, or recall behavior changed.
+- Tests pin hidden help, literal argparse defaults and choices, independent and
+  combined forwarding, representative environment-variable non-routing, and
+  invalid-choice stop-before-extraction behavior for both flags.
+
+Validation:
+
+- W4 live/source-proof PASS on R201 for `6e413c648`.
+- W3 runtime/recall APPROVED/no findings.
+- W6 APPROVED-WITH-CONCERNS with W1 disposition confirming the
+  `_build_cli_parser()` extraction is intentional and testability-only.
+- W8 static PASS and runtime HOLD closed for the commit.
 
 ## Selected First Slice
 
