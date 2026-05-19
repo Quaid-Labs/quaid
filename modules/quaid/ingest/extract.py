@@ -2986,8 +2986,6 @@ def _merge_split_snippet_journal_metrics(
         if isinstance(metric_errors, list):
             errors.extend(metric_errors)
     merged["errors"] = errors
-    if errors:
-        merged["status"] = "failed"
     return merged
 
 

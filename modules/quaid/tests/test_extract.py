@@ -3466,6 +3466,78 @@ class TestExtractFromTranscript:
             for record in caplog.records
         )
 
+    def test_apply_extracted_payloads_split_request_mode_snippet_failure_skips_journal(
+        self,
+        caplog,
+        monkeypatch,
+    ):
+        import ingest.extract as extract_mod
+
+        called_events = []
+        direct_called = False
+
+        def fake_publish(result, **_kwargs):
+            result["facts_stored"] = 0
+            return []
+
+        def fake_direct_snippet_journal(*_args, **_kwargs):
+            nonlocal direct_called
+            direct_called = True
+            raise AssertionError("snippet failure must not route around direct helper")
+
+        def fake_request(event_type, _payload, **_kwargs):
+            called_events.append(event_type)
+            if event_type == "evolution.journal_write.request.v1":
+                raise AssertionError("journal request must not run after snippet failure")
+            return {
+                "status": "failed",
+                "error": "simulated snippet broker failure",
+                "responses": [],
+            }
+
+        monkeypatch.setattr("core.plugins.memorydb_contract.run_extraction_publish_payload", fake_publish)
+        monkeypatch.setattr("core.plugins.evolutiondb_contract.run_snippet_journal_write_payload", fake_direct_snippet_journal)
+        monkeypatch.setattr("core.plugins.evolutiondb_contract.register_snippet_write_request_handler", lambda: None)
+        monkeypatch.setattr("core.plugins.evolutiondb_contract.register_journal_write_request_handler", lambda: None)
+        monkeypatch.setattr("core.runtime.events.request_broker_event", fake_request)
+
+        payload = {
+            "raw_facts": [],
+            "raw_snippets": {"SOUL.md": ["Snippet fails first."]},
+            "raw_journal": {"SOUL.md": "Journal must not run."},
+            "raw_project_logs": {},
+            "facts": [],
+            "snippets": {},
+            "journal": {},
+            "project_logs": {},
+            "project_log_metrics": {},
+            "facts_stored": 0,
+            "facts_skipped": 0,
+            "edges_created": 0,
+            "dry_run": False,
+        }
+
+        caplog.set_level("WARNING", logger="ingest.extract")
+
+        with pytest.raises(RuntimeError, match="snippet/journal write request returned no evolutiondb response"):
+            extract_mod.apply_extracted_payloads(
+                payload,
+                owner_id="test",
+                label="rolling-flush",
+                session_id="sess-note-snippet-fail",
+                dry_run=False,
+                snippet_journal_write_mode="request",
+            )
+
+        assert called_events == ["evolution.snippet_write.request.v1"]
+        assert direct_called is False
+        assert "snippet_journal_metrics" not in payload
+        assert any(
+            "snippet/journal write request returned no evolutiondb response: simulated snippet broker failure"
+            in record.getMessage()
+            for record in caplog.records
+        )
+
     def test_apply_extracted_payloads_snippet_journal_request_mode_logs_broker_exception_before_raise(
         self,
         caplog,
