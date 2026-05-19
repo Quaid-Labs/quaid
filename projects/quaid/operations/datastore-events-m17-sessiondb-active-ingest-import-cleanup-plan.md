@@ -1,6 +1,6 @@
 # Datastore Events M17 SessionDB Active Ingest Import Cleanup Plan
 
-Status: draft plan; no runtime implementation yet
+Status: runtime import-cleanup slice complete; wrapper removal deferred
 Owner: W1 runtime/datastore, W3 recall and source-window review
 Plan source: `projects/quaid/operations/datastore-events-m16-sessiondb-ingest-request-ownership-plan.md`
 
@@ -18,7 +18,7 @@ Do not implement runtime code for M17 until:
    ingest, datastore manifests/contracts, session memory bridge, store recall,
    source-window guards, and boundary checks.
 
-This document selects one narrow import cleanup slice only. It does not approve
+This document records one narrow import cleanup slice only. It does not approve
 changing active event delivery mode, adding new event names, changing active or
 request payload/result envelopes, removing MemoryDB compatibility wrappers,
 changing `session.ingest_log.request.v1` ownership, adding recall selectors to
@@ -32,7 +32,7 @@ M16 moved `session.ingest_log.request.v1` metadata and request registration to
 SessionDB while intentionally leaving the active `session.ingest_log` handler
 importing through `core.plugins.memorydb_contract.run_session_ingest_payload()`.
 
-M17 selects the next cleanup prerequisite: make the active handler import the
+M17 selected the next cleanup prerequisite: make the active handler import the
 SessionDB-owned helper directly. This aligns active-event helper ownership with
 the M15/M16 SessionDB ownership boundary while preserving the active event name,
 payload, processed/failed envelope, request ownership, and MemoryDB
@@ -43,14 +43,14 @@ wrappers remain for installed alpha import paths and older internal callers.
 
 ## Current Boundary
 
-Current post-M16 path:
+Pre-M17 path:
 
 1. `core.plugins.sessiondb_contract.run_session_ingest_payload()` owns the
    session-ingest payload normalization and `core.ingest_runtime` delegation.
 2. `session.ingest_log.request.v1` is declared and registered under SessionDB.
 3. `core.plugins.memorydb_contract.run_session_ingest_payload()` remains a
    silent distinct compatibility wrapper to the SessionDB helper.
-4. `core.runtime.events._handle_session_ingest_log()` still imports
+4. `core.runtime.events._handle_session_ingest_log()` still imported
    `run_session_ingest_payload()` from `core.plugins.memorydb_contract` for
    active `session.ingest_log` processing.
 5. MemoryDB manifest/contract still own `session_chunks` recall/write
@@ -58,7 +58,7 @@ Current post-M16 path:
 
 ## Selected First Slice: Active Import Cleanup Only
 
-Implement one runtime cleanup slice only:
+Implemented one runtime cleanup slice only:
 
 1. Update `core.runtime.events._handle_session_ingest_log()` to import
    `run_session_ingest_payload()` from `core.plugins.sessiondb_contract`
@@ -90,6 +90,62 @@ Implement one runtime cleanup slice only:
 8. Preserve SessionDB transcript row shape, MemoryDB `session_chunks`
    projection, microchunk linkage, source kind, source-window expansion inputs,
    recall selector ownership, ranking, and planner behavior.
+
+## Implementation Record
+
+Runtime import-cleanup slice closed at `93b3561f5`
+(`refactor(datastore): route active session ingest through SessionDB helper`).
+
+Implemented behavior:
+
+- Updated the existing in-function import inside
+  `core.runtime.events._handle_session_ingest_log()` from
+  `core.plugins.memorydb_contract.run_session_ingest_payload` to
+  `core.plugins.sessiondb_contract.run_session_ingest_payload`.
+- Preserved active `session.ingest_log` event name, delivery mode, payload
+  schema, processed/failed envelope, missing-`session_id` validation, helper
+  failed/error result handling, and the pre-existing exception/failed-envelope
+  behavior.
+- Preserved M16 `session.ingest_log.request.v1` SessionDB ownership, broker
+  validation, manifest/contract metadata, and request handler behavior.
+- Preserved all `core.plugins.memorydb_contract` compatibility wrappers.
+- Preserved MemoryDB `session_chunks` recall/write projection, SessionDB
+  `capabilities.recall=[]`, source-window inputs, recall ranking/planning,
+  lifecycle behavior, CLI behavior, default routing, and public release state.
+
+Tests added or preserved:
+
+- Active `session.ingest_log` trip-wire coverage: the test monkeypatches
+  `memorydb_contract.run_session_ingest_payload()` to raise if called and
+  verifies the active path calls the SessionDB helper instead.
+- Source assertion coverage: `core.runtime.events` does not import
+  `core.plugins.memorydb_contract.run_session_ingest_payload` and does not
+  directly import `run_session_logs_ingest`; it does import the SessionDB helper.
+- Missing-`session_id` and helper failed-result active envelope tests still pin
+  the existing processed/failed behavior.
+- Existing request-path, manifest/contract, MemoryDB compatibility wrapper,
+  session-memory bridge, store recall, and source-window guard lanes remain
+  covered.
+
+Validation:
+
+- W4 R201 live/source-proof PASS on `93b3561f5`: active handler imports the
+  SessionDB helper directly; active envelope shape is unchanged; M16 request
+  ownership remains SessionDB; MemoryDB compatibility wrappers remain callable;
+  MemoryDB `session_chunks` recall/write projection is unchanged; prior milestone
+  routes remain intact.
+- W3 runtime/recall APPROVED with no findings: active event behavior and
+  request ownership are unchanged except for the helper import source;
+  `session_chunks` projection, SessionDB recall `[]`, source-window, recall,
+  ranking, planner, lifecycle, CLI, and default routing behavior are unchanged.
+- W6 APPROVED with no concerns: one-line in-function import swap, no
+  MemoryDB-call trip-wire implemented, in-function import location preserved,
+  pre-existing bare-except behavior explicitly deferred, and no B-code concerns
+  introduced.
+- W8 static PASS/runtime HOLD pending final closure: focused session ingest
+  selector, affected event/extraction/session-ingest/registry/contract lane,
+  py_compile, ruff, diff/docs checks, boundary check, and unit wrapper all
+  passed.
 
 ## Non-Targets
 

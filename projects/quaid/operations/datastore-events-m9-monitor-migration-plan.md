@@ -102,9 +102,10 @@ M16 SessionDB request ownership closed at `40ff6c8ed` + `23c0e7228`:
 SessionDB, while MemoryDB `session_chunks` recall ownership and source-window
 behavior remain unchanged.
 
-M17 now tracks active `session.ingest_log` import cleanup away from the MemoryDB
-compatibility wrapper in
-`projects/quaid/operations/datastore-events-m17-sessiondb-active-ingest-import-cleanup-plan.md`.
+M17 active `session.ingest_log` import cleanup closed at `93b3561f5`: the active
+handler now imports the SessionDB helper directly, while MemoryDB compatibility
+wrappers and the MemoryDB `session_chunks` recall/write projection remain
+unchanged.
 
 ## Shared Rules For Every M9 Slice
 

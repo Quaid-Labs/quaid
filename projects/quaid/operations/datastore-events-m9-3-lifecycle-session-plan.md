@@ -105,9 +105,8 @@ The request ownership move closed in M16 at `40ff6c8ed` + `23c0e7228` and is
 recorded in
 `projects/quaid/operations/datastore-events-m16-sessiondb-ingest-request-ownership-plan.md`.
 M16 does not select lifecycle persistence or source-window enrichment. Active
-`session.ingest_log` import cleanup away from the MemoryDB wrapper is tracked as
-M17 in
-`projects/quaid/operations/datastore-events-m17-sessiondb-active-ingest-import-cleanup-plan.md`.
+`session.ingest_log` import cleanup away from the MemoryDB wrapper closed in M17
+at `93b3561f5`.
 
 ## First-Slice Validation
 
@@ -371,8 +370,7 @@ Closure status:
 
 - The selected M9.3 datastore write family is complete: daemon session-log
   ingest callsites route through `session.ingest_log.request.v1`, and the active
-  `session.ingest_log` handler routes through the MemoryDB compatibility
-  wrapper.
+  `session.ingest_log` handler routes through the SessionDB helper after M17.
 - No additional M9.3 runtime migration is selected for the ack-only lifecycle
   events in this milestone.
 - `session.new`, `session.reset`, `session.compaction`, `session.timeout`,

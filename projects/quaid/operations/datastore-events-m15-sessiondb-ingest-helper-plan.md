@@ -224,9 +224,8 @@ Validation:
 - SessionDB ownership of `session.ingest_log.request.v1` closed in M16 at
   `40ff6c8ed` + `23c0e7228`; M15 closed only the helper-ownership prerequisite
   at `379be9a47`
-- active `session.ingest_log` import cleanup away from the MemoryDB wrapper is
-  tracked as M17 in
-  `projects/quaid/operations/datastore-events-m17-sessiondb-active-ingest-import-cleanup-plan.md`
+- active `session.ingest_log` import cleanup away from the MemoryDB wrapper
+  closed in M17 at `93b3561f5`
 - whether SessionDB should expose dedicated request handlers beyond generic
   metadata/maintenance surfaces
 - lifecycle persistence for ack-only lifecycle events
