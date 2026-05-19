@@ -30,6 +30,8 @@ def write_snippet_entry(
     )
 
 
+# These maintenance callables are intentionally bound at import time. Tests or
+# callers that monkeypatch them should patch the canonical EvolutionDB module.
 run_soul_snippets_review = _soul_snippets.run_soul_snippets_review
 run_journal_distillation = _soul_snippets.run_journal_distillation
 

@@ -167,6 +167,12 @@ Runtime implementation must preserve:
 - importability of legacy `datastore.notedb.soul_snippets` during the
   compatibility window
 
+Operational note: after Slice 1, the canonical logger name for the moved module
+is `datastore.evolutiondb.soul_snippets`. Operators with log filters or alerts
+keyed on `datastore.notedb.soul_snippets` should migrate those filters to the
+canonical logger name; the legacy package aliases the canonical module object
+and does not produce a separate legacy logger stream.
+
 ## Required Tests Before W4
 
 Add or preserve tests proving:
