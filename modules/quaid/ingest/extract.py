@@ -2892,19 +2892,52 @@ def _validate_snippet_journal_write_broker_response(response: Dict[str, Any]) ->
     return dict(metrics)
 
 
-def _request_snippet_journal_write_payload(
+def _empty_snippet_journal_metrics() -> Dict[str, Any]:
+    return {
+        "status": "ok",
+        "snippet_files_seen": 0,
+        "snippet_items_seen": 0,
+        "snippet_files_written": 0,
+        "snippet_items_written": 0,
+        "snippet_files_skipped": 0,
+        "journal_files_seen": 0,
+        "journal_files_written": 0,
+        "journal_files_skipped": 0,
+        "target_files": {"snippets": [], "journal": []},
+        "errors": [],
+    }
+
+
+def _validate_split_snippet_journal_metrics(family: str, metrics: Dict[str, Any]) -> None:
+    status = str(metrics.get("status") or "ok").strip().lower() or "ok"
+    errors = metrics.get("errors")
+    if isinstance(errors, list) and errors:
+        detail = str(errors[0] or "").strip()
+    else:
+        detail = ""
+    if status == "ok" and not detail:
+        return
+    message = f"{family} write request metrics returned {status}"
+    if detail:
+        message = f"{message}: {detail}"
+    _raise_snippet_journal_write_request_error(message)
+
+
+def _request_split_snippet_journal_family(
+    event_type: str,
     payload: Dict[str, Any],
     *,
+    family: str,
+    register_handler: Any,
     owner_id: str,
     session_id: Optional[str],
 ) -> Dict[str, Any]:
-    from core.plugins.evolutiondb_contract import register_snippet_journal_write_request_handler
-    from core.runtime.events import EVOLUTION_SNIPPET_JOURNAL_WRITE_REQUEST_EVENT, request_broker_event
+    from core.runtime.events import request_broker_event
 
-    register_snippet_journal_write_request_handler()
+    register_handler()
     try:
         response = request_broker_event(
-            EVOLUTION_SNIPPET_JOURNAL_WRITE_REQUEST_EVENT,
+            event_type,
             dict(payload),
             source="ingest.extract.apply_extracted_payloads",
             session_id=session_id,
@@ -2914,9 +2947,96 @@ def _request_snippet_journal_write_payload(
             },
         )
     except Exception as exc:
-        logger.warning("[extract] snippet/journal write request failed: %s", exc)
+        logger.warning("[extract] %s write request failed: %s", family, exc)
         raise
-    return _validate_snippet_journal_write_broker_response(response)
+    metrics = _validate_snippet_journal_write_broker_response(response)
+    _validate_split_snippet_journal_metrics(family, metrics)
+    return metrics
+
+
+def _merge_split_snippet_journal_metrics(
+    snippet_metrics: Dict[str, Any],
+    journal_metrics: Dict[str, Any],
+) -> Dict[str, Any]:
+    merged = _empty_snippet_journal_metrics()
+    for key in (
+        "snippet_files_seen",
+        "snippet_items_seen",
+        "snippet_files_written",
+        "snippet_items_written",
+        "snippet_files_skipped",
+    ):
+        merged[key] = int(snippet_metrics.get(key, 0) or 0)
+    for key in (
+        "journal_files_seen",
+        "journal_files_written",
+        "journal_files_skipped",
+    ):
+        merged[key] = int(journal_metrics.get(key, 0) or 0)
+
+    snippet_targets = snippet_metrics.get("target_files") if isinstance(snippet_metrics.get("target_files"), dict) else {}
+    journal_targets = journal_metrics.get("target_files") if isinstance(journal_metrics.get("target_files"), dict) else {}
+    merged["target_files"] = {
+        "snippets": list(snippet_targets.get("snippets") or []),
+        "journal": list(journal_targets.get("journal") or []),
+    }
+    errors: List[Any] = []
+    for metrics in (snippet_metrics, journal_metrics):
+        metric_errors = metrics.get("errors")
+        if isinstance(metric_errors, list):
+            errors.extend(metric_errors)
+    merged["errors"] = errors
+    if errors:
+        merged["status"] = "failed"
+    return merged
+
+
+def _request_snippet_journal_write_payload(
+    payload: Dict[str, Any],
+    *,
+    owner_id: str,
+    session_id: Optional[str],
+) -> Dict[str, Any]:
+    from core.plugins.evolutiondb_contract import (
+        register_journal_write_request_handler,
+        register_snippet_write_request_handler,
+    )
+    from core.runtime.events import EVOLUTION_JOURNAL_WRITE_REQUEST_EVENT, EVOLUTION_SNIPPET_WRITE_REQUEST_EVENT
+
+    snippets = payload.get("snippets") if isinstance(payload.get("snippets"), dict) else {}
+    journal = payload.get("journal") if isinstance(payload.get("journal"), dict) else {}
+    write_snippets = bool(payload.get("write_snippets", True))
+    write_journal = bool(payload.get("write_journal", True))
+
+    snippet_metrics = _empty_snippet_journal_metrics()
+    if write_snippets and snippets:
+        snippet_payload = dict(payload)
+        snippet_payload["snippets"] = snippets
+        snippet_payload["journal"] = {}
+        snippet_metrics = _request_split_snippet_journal_family(
+            EVOLUTION_SNIPPET_WRITE_REQUEST_EVENT,
+            snippet_payload,
+            family="snippet",
+            register_handler=register_snippet_write_request_handler,
+            owner_id=owner_id,
+            session_id=session_id,
+        )
+
+    journal_metrics = _empty_snippet_journal_metrics()
+    if write_journal and journal:
+        journal_payload = dict(payload)
+        journal_payload["snippets"] = {}
+        journal_payload["journal"] = journal
+        journal_metrics = _request_split_snippet_journal_family(
+            EVOLUTION_JOURNAL_WRITE_REQUEST_EVENT,
+            journal_payload,
+            family="journal",
+            register_handler=register_journal_write_request_handler,
+            owner_id=owner_id,
+            session_id=session_id,
+        )
+
+    return _merge_split_snippet_journal_metrics(snippet_metrics, journal_metrics)
 
 
 def _snippet_journal_trigger_for_label(label: str) -> str:

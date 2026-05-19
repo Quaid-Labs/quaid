@@ -1436,7 +1436,7 @@ def test_split_snippet_journal_request_handlers_reject_invalid_payloads_fail_sof
     assert metrics["errors"] == [error]
 
 
-def test_apply_extracted_payloads_request_mode_still_uses_combined_snippet_journal_event(monkeypatch, tmp_path):
+def test_apply_extracted_payloads_request_mode_uses_split_snippet_journal_events(monkeypatch, tmp_path):
     set_adapter(TestAdapter(tmp_path))
     import ingest.extract as extract_mod
 
@@ -1454,6 +1454,36 @@ def test_apply_extracted_payloads_request_mode_still_uses_combined_snippet_journ
 
     def fake_request(event_type, payload, **kwargs):
         called_events.append((event_type, payload, kwargs))
+        if event_type == EVOLUTION_SNIPPET_WRITE_REQUEST_EVENT:
+            metrics = {
+                "status": "ok",
+                "snippet_files_seen": 1,
+                "snippet_items_seen": 1,
+                "snippet_files_written": 1,
+                "snippet_items_written": 1,
+                "snippet_files_skipped": 0,
+                "journal_files_seen": 0,
+                "journal_files_written": 0,
+                "journal_files_skipped": 0,
+                "target_files": {"snippets": ["SOUL.snippets.md"], "journal": []},
+                "errors": [],
+            }
+        elif event_type == EVOLUTION_JOURNAL_WRITE_REQUEST_EVENT:
+            metrics = {
+                "status": "ok",
+                "snippet_files_seen": 0,
+                "snippet_items_seen": 0,
+                "snippet_files_written": 0,
+                "snippet_items_written": 0,
+                "snippet_files_skipped": 0,
+                "journal_files_seen": 1,
+                "journal_files_written": 1,
+                "journal_files_skipped": 0,
+                "target_files": {"snippets": [], "journal": ["SOUL.journal.md"]},
+                "errors": [],
+            }
+        else:
+            raise AssertionError(f"unexpected request event: {event_type}")
         return {
             "status": "ok",
             "responses": [
@@ -1462,22 +1492,7 @@ def test_apply_extracted_payloads_request_mode_still_uses_combined_snippet_journ
                     "status": "ok",
                     "result": {
                         "status": "ok",
-                        "snippet_journal_metrics": {
-                            "status": "ok",
-                            "snippet_files_seen": 1,
-                            "snippet_items_seen": 1,
-                            "snippet_files_written": 1,
-                            "snippet_items_written": 1,
-                            "snippet_files_skipped": 0,
-                            "journal_files_seen": 1,
-                            "journal_files_written": 1,
-                            "journal_files_skipped": 0,
-                            "target_files": {
-                                "snippets": ["SOUL.snippets.md"],
-                                "journal": ["SOUL.journal.md"],
-                            },
-                            "errors": [],
-                        },
+                        "snippet_journal_metrics": metrics,
                     },
                 }
             ],
@@ -1485,7 +1500,8 @@ def test_apply_extracted_payloads_request_mode_still_uses_combined_snippet_journ
 
     monkeypatch.setattr("core.plugins.memorydb_contract.run_extraction_publish_payload", fake_publish)
     monkeypatch.setattr("core.plugins.evolutiondb_contract.run_snippet_journal_write_payload", fake_direct_snippet_journal)
-    monkeypatch.setattr("core.plugins.evolutiondb_contract.register_snippet_journal_write_request_handler", lambda: None)
+    monkeypatch.setattr("core.plugins.evolutiondb_contract.register_snippet_write_request_handler", lambda: None)
+    monkeypatch.setattr("core.plugins.evolutiondb_contract.register_journal_write_request_handler", lambda: None)
     monkeypatch.setattr("core.runtime.events.request_broker_event", fake_request)
 
     payload = {
@@ -1517,16 +1533,19 @@ def test_apply_extracted_payloads_request_mode_still_uses_combined_snippet_journ
 
     assert direct_called is False
     assert [event_type for event_type, _payload, _kwargs in called_events] == [
-        EVOLUTION_SNIPPET_JOURNAL_WRITE_REQUEST_EVENT
+        EVOLUTION_SNIPPET_WRITE_REQUEST_EVENT,
+        EVOLUTION_JOURNAL_WRITE_REQUEST_EVENT,
     ]
-    assert EVOLUTION_SNIPPET_WRITE_REQUEST_EVENT not in [event_type for event_type, _payload, _kwargs in called_events]
-    assert EVOLUTION_JOURNAL_WRITE_REQUEST_EVENT not in [event_type for event_type, _payload, _kwargs in called_events]
-    event_type, request_payload, request_kwargs = called_events[0]
-    assert event_type == EVOLUTION_SNIPPET_JOURNAL_WRITE_REQUEST_EVENT
-    assert request_payload["source"] == "extraction-apply-payloads"
-    assert request_payload["snippets"] == {"SOUL.md": ["Keep split event routing explicit."]}
-    assert request_payload["journal"] == {"SOUL.md": "A combined request-mode journal note."}
-    assert request_kwargs["source"] == "ingest.extract.apply_extracted_payloads"
+    assert EVOLUTION_SNIPPET_JOURNAL_WRITE_REQUEST_EVENT not in [
+        event_type for event_type, _payload, _kwargs in called_events
+    ]
+    snippet_event, journal_event = called_events
+    assert snippet_event[1]["source"] == "extraction-apply-payloads"
+    assert snippet_event[1]["snippets"] == {"SOUL.md": ["Keep split event routing explicit."]}
+    assert snippet_event[1]["journal"] == {}
+    assert snippet_event[2]["source"] == "ingest.extract.apply_extracted_payloads"
+    assert journal_event[1]["snippets"] == {}
+    assert journal_event[1]["journal"] == {"SOUL.md": "A combined request-mode journal note."}
     assert applied["snippet_journal_metrics"]["target_files"] == {
         "snippets": ["SOUL.snippets.md"],
         "journal": ["SOUL.journal.md"],
