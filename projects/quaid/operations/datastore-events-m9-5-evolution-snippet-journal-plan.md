@@ -468,10 +468,9 @@ Closure evidence:
   `1a92dd7c`; M13 completed the extraction producer routing at `516732b88` +
   `9437788d`.
 - Whether direct `extract_from_transcript()` / CLI should ever use request mode.
-- SessionDB first-party manifest metadata is tracked as M14 in
-  `projects/quaid/operations/datastore-events-m14-sessiondb-manifest-plan.md`;
-  lifecycle persistence and source-window enrichment remain separate deferred
-  decisions.
+- SessionDB first-party manifest metadata closed in M14 at `f0574902b` +
+  `522f16e28`; lifecycle persistence, `session.ingest_log` ownership, and
+  source-window enrichment remain separate deferred decisions.
 - Whether snippet review and journal distillation maintenance should get their
   own request handlers beyond the existing maintenance contract.
 - Runtime `datastore.evolutiondb` package rename, completed in M10 Slice 1;

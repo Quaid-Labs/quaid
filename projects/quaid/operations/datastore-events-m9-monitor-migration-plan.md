@@ -52,8 +52,8 @@ The selected M9 monitor-write migrations are complete:
 
 Deferred items are not M9 blockers unless separately selected by Solomon with a
 new reviewed plan: direct `extract_from_transcript()` / CLI request routing,
-lifecycle persistence, SessionDB first-party manifest registration,
-source-window metadata enrichment,
+lifecycle persistence, source-window metadata enrichment, SessionDB ownership of
+`session.ingest_log`,
 `datastore.notedb` / `core.plugins.notedb_contract` compatibility-alias
 retirement, `notedb.core` plugin-id rename, and `.ego` integration. The
 `datastore.evolutiondb` runtime package and `core.plugins.evolutiondb_contract`
@@ -83,11 +83,12 @@ snippet and journal request events and aggregates back into the existing
 `snippet_journal_metrics` shape. Default direct behavior and combined event
 compatibility remain unchanged.
 
-SessionDB first-party manifest metadata is now tracked as M14 in
-`projects/quaid/operations/datastore-events-m14-sessiondb-manifest-plan.md`.
-The selected M14 first slice is metadata-only; lifecycle persistence,
-source-window enrichment, and SessionDB ownership of `session.ingest_log`
-remain future-plan-gated.
+M14 SessionDB manifest metadata closed at `f0574902b` + `522f16e28`:
+SessionDB is now listed as first-party manifest/contract metadata for durable
+transcript/provenance ownership, while MemoryDB continues to own
+`session.ingest_log.request.v1` and the `session_chunks` recall selector.
+Lifecycle persistence, source-window enrichment, and SessionDB ownership of
+`session.ingest_log` remain future-plan-gated.
 
 ## Shared Rules For Every M9 Slice
 

@@ -1,6 +1,6 @@
 # Datastore Events M14 SessionDB Manifest Plan
 
-Status: draft plan; no runtime implementation yet
+Status: metadata runtime slice complete; lifecycle/source-window ownership deferred
 Owner: W1 runtime/datastore, W3 recall and source-window review
 Plan source: `projects/quaid/operations/datastore-events-m9-3-lifecycle-session-plan.md`
 
@@ -20,7 +20,7 @@ Do not implement runtime code for M14 until:
 5. W8 confirms static coverage includes datastore registry, datastore contract,
    session ingest, session memory bridge, and recall source-window guard lanes.
 
-This document selects a metadata-only first slice for review. It does not
+This document records the completed metadata-only first slice. It does not
 approve lifecycle persistence, SessionDB write-route rewiring, source-window
 metadata enrichment, new event names, activated SessionDB handlers,
 SessionDB-specific request handlers, recall selector changes, data migration,
@@ -60,9 +60,51 @@ Current post-M13 boundary:
    `session_chunks`; SessionDB supplies transcript provenance and expansion
    data behind that selector.
 
+## Implementation Record
+
+Runtime slice implemented by:
+
+- `f0574902b` `refactor(datastore): register SessionDB manifest metadata`
+- `522f16e28` `test(datastore): align SessionDB manifest metadata checks`
+
+Implemented behavior:
+
+- `core.datastore_registry` now includes first-party `sessiondb` manifest
+  metadata with `plugin_id="sessiondb.core"`, `module="datastore.sessiondb.session_store"`,
+  `runtime_aliases=[]`, `capabilities.recall=[]`, and `capabilities.writes=[]`.
+- SessionDB `capabilities.stores` declares transcript/provenance table metadata
+  only: `sessions`, `transcript_chunks`, `message_pairs`, `microchunks`, and
+  `message_pair_attachments`.
+- SessionDB request metadata is limited to existing generic datastore request
+  events: `datastore.validate.request.v1`, `datastore.explain.request.v1`, and
+  `maintenance.run.request.v1`.
+- `SessionDbDatastoreContract` is present but inactive/metadata-only, matching
+  the M3 contract style.
+- The follow-up removed the unbacked `sessiondb.maintenance` maintenance-task
+  placeholder, so `maintenance_tasks=[]` until a future reviewed maintenance
+  slice registers an actual routine.
+- MemoryDB continues to own `session.ingest_log.request.v1`, the active
+  `session.ingest_log` path, and the user-facing `session_chunks` recall
+  selector/projection.
+- No new events, activated handlers, SessionDB-specific request handlers,
+  lifecycle persistence, source-window enrichment, routing changes, daemon
+  changes, CLI syntax changes, recall selector changes, or source-window
+  behavior changes were introduced.
+
+Validation recorded:
+
+- W4 live/source-proof PASS on R201 for `f0574902b`; `522f16e28` was a
+  metadata cleanup/source-proof follow-up and required no fresh live gate.
+- W3 runtime/recall APPROVED with no findings; W3 treated `522f16e28` as a
+  no-recall/source-window/routing-delta follow-up.
+- W6 APPROVED after `522f16e28` removed the unbacked maintenance-task metadata
+  and made the corresponding test gap moot.
+- W8 static PASS after the repaired CLI wrapper/unit lane included `sessiondb`
+  in manifest-list output.
+
 ## Selected First Slice: Metadata-Only Manifest Registration
 
-Implement one runtime metadata slice only:
+Implemented one runtime metadata slice only:
 
 1. Add a first-party `sessiondb` manifest to
    `core.datastore_registry.FIRST_PARTY_DATASTORE_MANIFESTS`.
