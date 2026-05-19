@@ -132,8 +132,8 @@ Status:
   closed, and W8 static/runtime closure recorded for that pair.
 - The completed slice selected an internal `apply_extracted_payloads()` ->
   MemoryDB-owned helper split before any broader request routing.
-- Request event routing is still deferred and is not approved without a fresh
-  plan update.
+- Request event routing plan is drafted in the M9.4 tracking doc, but runtime
+  implementation is not approved until W3/W6/W8 review that next slice.
 
 Scope:
 
