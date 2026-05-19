@@ -268,9 +268,9 @@ narrow default timeout bridge smoke:
 
 ## Deferred Decisions
 
-- default compaction lifecycle-to-daemon signal bridge is tracked as M26 in
-  `projects/quaid/operations/datastore-events-m26-default-compaction-signal-plan.md`;
-  broader reset lifecycle-triggered transcript ingestion remains deferred
+- default compaction lifecycle-to-daemon signal bridge closed in M26 at
+  `2f35f279`; broader reset lifecycle-triggered transcript ingestion remains
+  deferred
 - daemon start/wake/restart automation from lifecycle events
 - whether SessionDB should expose dedicated request handlers beyond
   `session.ingest_log.request.v1` and generic metadata/maintenance surfaces

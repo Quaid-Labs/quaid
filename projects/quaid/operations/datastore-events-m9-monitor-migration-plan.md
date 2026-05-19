@@ -151,12 +151,12 @@ opt-in remains canonical. M25 default `session.timeout`
 lifecycle-to-daemon `timeout` signal bridge closed at `32ba63569`: plain timeout
 lifecycle events with concrete `session_id` and real `payload.transcript_path`
 now write the existing daemon `timeout` signal through
-`core.extraction_daemon.write_signal()`. M26 now tracks a default
-`session.compaction` lifecycle-to-daemon `compaction` signal bridge in
-`projects/quaid/operations/datastore-events-m26-default-compaction-signal-plan.md`:
-plain compaction lifecycle events with concrete `session_id` and real
-`payload.transcript_path` may write the existing daemon `compaction` signal
-through `core.extraction_daemon.write_signal()`, while reset default
+`core.extraction_daemon.write_signal()`. M26 default `session.compaction`
+lifecycle-to-daemon `compaction` signal bridge closed at `2f35f279`: plain
+compaction lifecycle events with concrete `session_id` and real
+`payload.transcript_path` now write the existing daemon `compaction` signal
+through `core.extraction_daemon.write_signal()`, while M22 explicit opt-in,
+M24 agent-end, and M25 timeout precedence remain canonical. Reset default
 lifecycle-triggered transcript ingest, daemon process automation, and
 recall/source-window policy changes remain deferred.
 
