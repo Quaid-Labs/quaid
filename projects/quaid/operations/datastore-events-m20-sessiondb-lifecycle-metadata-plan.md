@@ -65,15 +65,26 @@ Current post-M19 path:
 
 Implement one runtime metadata slice only:
 
-1. Add a SessionDB-owned lifecycle observation helper, for example in
-   `datastore.sessiondb.session_store`, that records compact lifecycle metadata
-   for events with a concrete session id.
+1. Add a SessionDB-owned lifecycle observation helper exposed from
+   `core.plugins.sessiondb_contract.record_session_lifecycle_observation()`,
+   delegating to the SessionDB implementation in
+   `datastore.sessiondb.session_store`. `_handle_session_lifecycle()` must call
+   through `core.plugins.sessiondb_contract`, matching the M15/M16/M17/M18
+   layering pattern; do not add a direct `core.runtime.events` import from
+   `datastore.sessiondb.session_store`.
 2. Store lifecycle observations in a dedicated SessionDB table rather than
    mutating transcript rows or MemoryDB projections. Suggested table shape:
    owner id, session id, event name, event id or idempotency key, source,
    observed timestamp, optional reason, and a compact JSON metadata payload.
+   Schema migration: create the lifecycle observation table through an
+   idempotent `CREATE TABLE IF NOT EXISTS` in the SessionDB schema setup path.
+   Bump SessionDB manifest schema/version metadata to reflect the additive table.
+   Existing transcript tables remain unchanged and no existing rows are migrated.
 3. Keep lifecycle observation idempotent for the same runtime event. Reprocessing
    the same event id or idempotency key must not create duplicate rows.
+   Idempotency mechanism: use a unique `event_id` column or equivalent runtime
+   event identifier, with `INSERT OR IGNORE` / `ON CONFLICT DO NOTHING`
+   semantics. Composite-key idempotency is not required for this first slice.
 4. Update `_handle_session_lifecycle()` to call the SessionDB helper only when a
    session id is present in the event envelope or payload. Preserve the existing
    acknowledgement status and event field. It may add passive metadata such as
@@ -81,7 +92,12 @@ Implement one runtime metadata slice only:
    processed/failed semantics.
 5. Preserve compatibility for lifecycle events without a session id. They remain
    acknowledged and are not persisted; this is an intentional compatibility path
-   for existing queue/broker tests and host lifecycle plumbing.
+   for existing queue/broker tests and host lifecycle plumbing. Missing-session
+   shape: return `{"status": "acknowledged", "event": <name>, "persisted":
+   false}`. Do not include `datastore_id` when `persisted=false` because no
+   datastore-side observation was attempted. A future debug field such as
+   `skip_reason="missing_session_id"` may be added if needed, but it must not be
+   present in the success-path persisted envelope.
 6. Preserve active/request session ingest behavior and M16/M17/M18/M19 ownership
    boundaries. M20 must not alter `session.ingest_log`,
    `session.ingest_log.request.v1`, SessionDB source-window metadata, MemoryDB
@@ -118,7 +134,7 @@ Implement one runtime metadata slice only:
   persistence failed. Do not claim `persisted=true` when the write failed.
 - Missing `session_id` is not a persistence failure in this slice. It is an
   explicit compatibility path and should return an acknowledgement with
-  `persisted=false` or equivalent passive metadata.
+  `persisted=false` and no `datastore_id`.
 - Do not wrap SessionDB persistence and unrelated lifecycle acknowledgement logic
   in a shared broad `try`/`except` that could convert selected persistence
   failures into silent success under failHard.
