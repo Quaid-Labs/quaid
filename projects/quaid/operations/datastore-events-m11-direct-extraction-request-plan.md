@@ -1,0 +1,187 @@
+# Datastore Events M11 Direct Extraction Request Routing Plan
+
+Status: draft plan; no runtime implementation yet
+Owner: W1 runtime/datastore, W3 recall and identity-context review
+Plan source: `projects/quaid/operations/datastore-events-m9-monitor-migration-plan.md`
+
+## Precondition
+
+Do not implement runtime code for M11 until:
+
+1. M9.4 MemoryDB extraction publish request routing is closed through
+   W4/W3/W6/W8.
+2. M9.5 EvolutionDB snippet/journal request routing is closed through
+   W4/W3/W6/W8.
+3. M10 Slice 1 and Slice 2 rename work is closed, with compatibility aliases
+   retained for installed alpha state.
+4. W3 reviews the selected slice because direct extraction can write recallable
+   facts, source evidence, snippets, and journal content.
+5. W6 reviews the ownership boundary because this slice crosses ingest
+   orchestration, MemoryDB, EvolutionDB, and CLI surfaces.
+6. W8 confirms static coverage includes extraction, event/request routing,
+   datastore contract/manifest checks, snippet/journal tests, and boundary
+   checks.
+
+This document is a planning record only. It does not approve runtime code,
+CLI flags, default behavior changes, or public push/release actions.
+
+## Goal
+
+M11 selects the previously deferred direct `extract_from_transcript()` / CLI
+request-routing question from M9.4 and M9.5.
+
+The goal is narrow: allow direct extraction callers to opt into the existing
+MemoryDB and EvolutionDB request-event paths explicitly, while preserving the
+current default direct helper behavior.
+
+Selected request events already exist:
+
+- `memory.extraction_publish.request.v1`
+- `evolution.snippet_journal_write.request.v1`
+
+M11 should not create new datastore events.
+
+## Current Boundary
+
+Current post-M10 path:
+
+1. `ingest.extract.extract_from_transcript()` extracts raw facts, source chunks,
+   snippets, journal entries, and project logs.
+2. It calls `apply_extracted_payloads()` once.
+3. `apply_extracted_payloads()` already accepts `memory_publish_mode` and
+   `snippet_journal_write_mode`, both defaulting to `direct`.
+4. The daemon final rolling flush passes both modes as `request`.
+5. Direct `extract_from_transcript()` and CLI callers do not pass either mode,
+   so they continue using synchronous direct helper calls.
+6. Project-log queueing remains in the extraction orchestrator after MemoryDB
+   publish and snippet/journal writes.
+
+## Selected First Slice
+
+First slice target: explicit opt-in request routing for direct extraction.
+
+Implementation shape:
+
+- Add explicit keyword arguments to `extract_from_transcript()`:
+  - `memory_publish_mode: str = "direct"`
+  - `snippet_journal_write_mode: str = "direct"`
+- Pass those values through to `apply_extracted_payloads()` unchanged.
+- Preserve the current default direct behavior for all existing Python callers.
+- Add CLI flags only if the runtime patch explicitly selects CLI coverage:
+  - `--memory-publish-mode {direct,request}`
+  - `--snippet-journal-write-mode {direct,request}`
+- If CLI flags are added, defaults must remain `direct` and help text must make
+  clear that request mode is an operator/debug routing option, not a new default.
+- Do not route direct extraction through request mode by environment sniffing,
+  daemon detection, label matching, owner identity, or hidden global config.
+- Do not bypass `apply_extracted_payloads()`; it remains the orchestration
+  entrypoint for all direct and daemon paths.
+
+The two mode kwargs remain intentionally separate, matching the M9.5 mode-matrix
+decision. A consolidated routing-mode abstraction is deferred unless a later
+cleanup plan selects it.
+
+## Mode Matrix
+
+The mode matrix remains independently switchable:
+
+- `direct` / `direct`: current default direct extraction behavior.
+- `request` / `direct`: MemoryDB publish routes through the broker;
+  snippet/journal writes use the synchronous EvolutionDB helper.
+- `direct` / `request`: MemoryDB publish uses the synchronous helper;
+  snippet/journal writes route through the broker.
+- `request` / `request`: both selected datastore write families route through
+  their existing request events.
+
+In every combination:
+
+- `extract_from_transcript()` calls `apply_extracted_payloads()` once.
+- MemoryDB publish happens before snippet/journal writes.
+- snippet/journal writes happen before project-log queueing.
+- `publish_complete` remains after MemoryDB publish, snippet/journal writes,
+  and project-log queueing.
+- project-log queueing remains in its existing owner and is not moved into
+  MemoryDB or EvolutionDB.
+
+## Non-Targets
+
+- no new event names
+- no request routing by default for direct Python or CLI callers
+- no daemon routing change; the daemon already selects request mode explicitly
+- no broad rewrite of extraction, chunking, LLM prompting, repair, or carry-fact
+  behavior
+- no change to MemoryDB fact/source/edge storage semantics
+- no change to EvolutionDB snippet/journal file paths, file formats, duplicate
+  handling, trigger labels, or journal archiving
+- no project-log queue ownership change
+- no recall ranking, scoring, planner, source-window, or source metadata policy
+  change
+- no `.ego` import/export behavior change
+- no alias retirement or `notedb.core` plugin-id rename
+
+## FailHard Policy
+
+- Request broker, handler, validator, MemoryDB write, and EvolutionDB write
+  failures must not fall back to the synchronous helper after request mode is
+  selected.
+- Existing warn-before-raise validator discipline from M9.4/M9.5 must be
+  preserved. New raise paths introduced by this slice must use the centralized
+  warn-then-raise helper pattern when they surface runtime request failures.
+- `failHard=true` must raise through the direct extraction caller.
+- `failHard=false` may report degraded/failure metrics only where the existing
+  helper/request path already does so; it must not claim facts, snippets, or
+  journal entries were stored when the selected request path failed.
+
+## Required Tests Before W4
+
+Focused tests should prove:
+
+- `extract_from_transcript()` defaults to `direct` / `direct` and preserves
+  existing output shape.
+- `extract_from_transcript(memory_publish_mode="request")` forwards request mode
+  to `apply_extracted_payloads()` without changing snippet/journal mode.
+- `extract_from_transcript(snippet_journal_write_mode="request")` forwards
+  request mode without changing MemoryDB mode.
+- `request` / `request` direct extraction routes through both existing broker
+  events and produces the same visible fact/source/snippet/journal results as
+  direct mode under controlled fake services.
+- Invalid mode values raise loudly and do not partially write through a fallback
+  route.
+- Broker/handler/validator failure in either request path raises without
+  invoking the corresponding synchronous helper fallback.
+- Request/direct mode matrix preserves project-log queueing and
+  `publish_complete` ordering.
+- CLI defaults remain direct if CLI flags are added.
+- CLI request flags route through the same explicit kwargs if CLI flags are
+  added.
+- Existing daemon request-mode tests continue to pass unchanged.
+
+## W4 Smoke
+
+W4 should smoke runtime code only after W3/W6/W8 review:
+
+- installed direct extraction with default CLI/Python behavior still writes via
+  the existing direct path and produces the same visible outputs
+- installed direct extraction with explicit request modes writes recallable facts
+  plus visible snippet and journal content through the broker paths
+- request-mode failure under failHard stops loudly with no direct-helper fallback
+- identity/context or journal recall sees the same persisted content after
+  request-mode writes
+- project-log queueing still occurs after MemoryDB publish and snippet/journal
+  writes
+- M9.2 DocsDB, M9.3 session ingest, M9.4 MemoryDB daemon request, M9.5
+  EvolutionDB daemon request, and M10 compatibility aliases remain healthy
+
+## Deferred Decisions
+
+- whether direct request mode should ever become the default
+- whether CLI request-mode flags should be public user-facing flags, hidden
+  operator/debug flags, or omitted from the first runtime slice
+- whether to consolidate the two extraction routing mode kwargs into a future
+  routing options object
+- project-log queue ownership
+- lifecycle persistence and SessionDB first-party manifest registration
+- source-window metadata enrichment
+- snippet/journal request splitting
+- compatibility-alias retirement and `notedb.core` plugin-id rename
+- `.ego` import/export integration

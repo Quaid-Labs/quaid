@@ -60,6 +60,11 @@ integration. The `datastore.evolutiondb` runtime package and
 `core.plugins.evolutiondb_contract` module renames were completed in M10 Slice 1
 and Slice 2.
 
+Direct extraction request-mode routing is now tracked as M11 in
+`projects/quaid/operations/datastore-events-m11-direct-extraction-request-plan.md`.
+The M11 plan does not change runtime behavior until it has W3/W6/W8 review and a
+runtime patch passes W4.
+
 ## Shared Rules For Every M9 Slice
 
 - One write path family per sub-milestone.
