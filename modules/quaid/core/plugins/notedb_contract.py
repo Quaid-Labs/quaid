@@ -61,7 +61,7 @@ def run_snippet_journal_write_payload(payload: Dict[str, Any]) -> Dict[str, Any]
         "errors": [],
     }
 
-    from datastore.notedb import soul_snippets
+    from core.lifecycle import soul_snippets
 
     snippet_targets: List[str] = result["target_files"]["snippets"]
     journal_targets: List[str] = result["target_files"]["journal"]
