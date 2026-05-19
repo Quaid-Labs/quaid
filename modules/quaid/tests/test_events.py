@@ -518,6 +518,53 @@ def test_session_lifecycle_default_agent_end_signal_writes_existing_signal(monke
     assert signals[0]["meta"]["lifecycle_event_name"] == "session.agent_end"
 
 
+def test_session_lifecycle_default_timeout_signal_writes_existing_signal(monkeypatch, tmp_path):
+    monkeypatch.setenv("SESSION_DB_PATH", str(tmp_path / "session.db"))
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
+    set_adapter(TestAdapter(tmp_path))
+
+    transcript = tmp_path / "timeout-session.jsonl"
+    transcript.write_text('{"role":"user","content":"timeout"}\n', encoding="utf-8")
+    emit_event(
+        name="session.timeout",
+        payload={
+            "reason": "idle",
+            "transcript_path": str(transcript),
+            "adapter": "openclaw",
+            "source": "idle-timer",
+        },
+        source="pytest",
+        session_id="sess-timeout-default",
+        owner_id="owner-life",
+    )
+
+    out = process_events(limit=5, names=["session.timeout"])
+
+    assert out["processed"] == 1
+    result = out["details"][0]["result"]
+    assert result["status"] == "acknowledged"
+    assert result["event"] == "session.timeout"
+    assert result["persisted"] is True
+    assert result["daemon_signal_queued"] is True
+    assert result["daemon_signal_type"] == "timeout"
+    assert result["daemon_signal_default"] is True
+    assert result["signal_name"].endswith("_timeout.json")
+
+    from core import extraction_daemon
+
+    signals = extraction_daemon.read_pending_signals()
+    assert len(signals) == 1
+    assert signals[0]["type"] == "timeout"
+    assert signals[0]["session_id"] == "sess-timeout-default"
+    assert signals[0]["transcript_path"] == str(transcript)
+    assert signals[0]["adapter"] == "pytest"
+    assert signals[0]["meta"]["bridge"] == "event_lifecycle_default_timeout_bridge"
+    assert signals[0]["meta"]["adapter"] == "openclaw"
+    assert signals[0]["meta"]["source"] == "idle-timer"
+    assert signals[0]["meta"]["lifecycle_event_name"] == "session.timeout"
+
+
 def test_session_lifecycle_without_daemon_signal_does_not_call_write_signal(monkeypatch, tmp_path):
     monkeypatch.setenv("SESSION_DB_PATH", str(tmp_path / "session.db"))
     monkeypatch.setenv("QUAID_HOME", str(tmp_path))
@@ -547,9 +594,9 @@ def test_session_lifecycle_without_daemon_signal_does_not_call_write_signal(monk
 
 @pytest.mark.parametrize(
     "event_name",
-    ["session.reset", "session.compaction", "session.timeout", "session.new", "session.agent_start"],
+    ["session.reset", "session.compaction", "session.new", "session.agent_start"],
 )
-def test_session_lifecycle_default_signal_excludes_non_agent_end_events(monkeypatch, tmp_path, event_name):
+def test_session_lifecycle_default_signal_excludes_unselected_events(monkeypatch, tmp_path, event_name):
     monkeypatch.setenv("SESSION_DB_PATH", str(tmp_path / "session.db"))
     monkeypatch.setenv("QUAID_HOME", str(tmp_path))
     monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
@@ -560,7 +607,7 @@ def test_session_lifecycle_default_signal_excludes_non_agent_end_events(monkeypa
     monkeypatch.setattr(
         extraction_daemon,
         "write_signal",
-        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("non-agent_end must not signal daemon")),
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("unselected event must not signal daemon")),
     )
     transcript = tmp_path / f"{event_name}.jsonl"
     transcript.write_text('{"role":"user","content":"hello"}\n', encoding="utf-8")
@@ -638,6 +685,61 @@ def test_session_lifecycle_default_agent_end_signal_noop_without_valid_inputs(
     assert extraction_daemon.read_pending_signals() == []
 
 
+@pytest.mark.parametrize(
+    ("payload", "session_id", "expected_persisted"),
+    [
+        ({}, "sess-timeout-no-path", True),
+        ({"transcript_path": ""}, "sess-timeout-empty-path", True),
+        ({"transcript_path": "missing.jsonl"}, "sess-timeout-missing-path", True),
+        ({"transcript_path": "session.jsonl"}, "", False),
+    ],
+)
+def test_session_lifecycle_default_timeout_signal_noop_without_valid_inputs(
+    monkeypatch,
+    tmp_path,
+    payload,
+    session_id,
+    expected_persisted,
+):
+    monkeypatch.setenv("SESSION_DB_PATH", str(tmp_path / "session.db"))
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
+    set_adapter(TestAdapter(tmp_path))
+
+    from core import extraction_daemon
+
+    monkeypatch.setattr(
+        extraction_daemon,
+        "write_signal",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("invalid default inputs must not signal daemon")),
+    )
+    if payload.get("transcript_path") == "session.jsonl":
+        transcript = tmp_path / "session.jsonl"
+        transcript.write_text('{"role":"user","content":"hello"}\n', encoding="utf-8")
+        payload = {**payload, "transcript_path": str(transcript)}
+    elif payload.get("transcript_path") == "missing.jsonl":
+        payload = {**payload, "transcript_path": str(tmp_path / "missing.jsonl")}
+
+    emit_event(
+        name="session.timeout",
+        payload=payload,
+        source="pytest",
+        session_id=session_id or None,
+        owner_id="owner-life",
+    )
+    out = process_events(limit=5, names=["session.timeout"])
+
+    result = out["details"][0]["result"]
+    assert result["status"] == "acknowledged"
+    assert result["event"] == "session.timeout"
+    assert result["persisted"] is expected_persisted
+    assert "daemon_signal_queued" not in result
+    assert "daemon_signal_default" not in result
+    assert "daemon_signal_error" not in result
+    assert "signal_name" not in result
+    assert extraction_daemon.read_pending_signals() == []
+
+
 @pytest.mark.parametrize("event_name", ["session.new", "session.agent_start"])
 def test_session_lifecycle_excluded_events_do_not_queue_daemon_signal(monkeypatch, tmp_path, event_name):
     monkeypatch.setenv("SESSION_DB_PATH", str(tmp_path / "session.db"))
@@ -704,6 +806,46 @@ def test_session_lifecycle_explicit_daemon_signal_wins_over_default_agent_end(mo
     assert signals[0]["transcript_path"] == str(explicit_transcript)
     assert signals[0]["meta"]["bridge"] == "event_lifecycle_bridge"
     assert signals[0]["meta"]["reason"] == "explicit"
+
+
+def test_session_lifecycle_explicit_daemon_signal_wins_over_default_timeout(monkeypatch, tmp_path):
+    monkeypatch.setenv("SESSION_DB_PATH", str(tmp_path / "session.db"))
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
+    set_adapter(TestAdapter(tmp_path))
+
+    default_transcript = tmp_path / "default-timeout.jsonl"
+    explicit_transcript = tmp_path / "explicit-timeout.jsonl"
+    default_transcript.write_text('{"role":"user","content":"default"}\n', encoding="utf-8")
+    explicit_transcript.write_text('{"role":"user","content":"explicit"}\n', encoding="utf-8")
+
+    emit_event(
+        name="session.timeout",
+        payload={
+            "transcript_path": str(default_transcript),
+            "daemon_signal": {
+                "enabled": True,
+                "transcript_path": str(explicit_transcript),
+                "reason": "explicit-timeout",
+            },
+        },
+        source="pytest",
+        session_id="sess-timeout-explicit-wins",
+        owner_id="owner-life",
+    )
+    out = process_events(limit=5, names=["session.timeout"])
+
+    from core import extraction_daemon
+
+    result = out["details"][0]["result"]
+    assert result["daemon_signal_queued"] is True
+    assert result["daemon_signal_type"] == "timeout"
+    assert "daemon_signal_default" not in result
+    signals = extraction_daemon.read_pending_signals()
+    assert len(signals) == 1
+    assert signals[0]["transcript_path"] == str(explicit_transcript)
+    assert signals[0]["meta"]["bridge"] == "event_lifecycle_bridge"
+    assert signals[0]["meta"]["reason"] == "explicit-timeout"
 
 
 def test_session_lifecycle_daemon_signal_failures_respect_failhard(monkeypatch, tmp_path, caplog):
@@ -882,6 +1024,55 @@ def test_session_lifecycle_default_agent_end_write_failure_respects_failhard(mon
     assert str(excinfo.value.__cause__) == "default write_signal down"
 
 
+def test_session_lifecycle_default_timeout_write_failure_respects_failhard(monkeypatch, tmp_path, caplog):
+    monkeypatch.setenv("SESSION_DB_PATH", str(tmp_path / "session.db"))
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
+    set_adapter(TestAdapter(tmp_path))
+
+    from core import extraction_daemon
+    import core.runtime.events as events
+
+    transcript = tmp_path / "session.jsonl"
+    transcript.write_text('{"role":"user","content":"hello"}\n', encoding="utf-8")
+
+    def _boom(**_kwargs):
+        raise RuntimeError("default timeout write_signal down")
+
+    monkeypatch.setattr(extraction_daemon, "write_signal", _boom)
+    monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: False)
+    with caplog.at_level("WARNING"):
+        emit_event(
+            name="session.timeout",
+            payload={"transcript_path": str(transcript)},
+            source="pytest",
+            session_id="sess-timeout-soft-write",
+            owner_id="owner-life",
+        )
+        soft = process_events(limit=5, names=["session.timeout"])
+
+    soft_result = soft["details"][0]["result"]
+    assert soft_result["status"] == "acknowledged"
+    assert soft_result["persisted"] is True
+    assert soft_result["daemon_signal_queued"] is False
+    assert soft_result["daemon_signal_default"] is True
+    assert soft_result["daemon_signal_error"] == "default timeout write_signal down"
+    assert any("Lifecycle daemon signal bridge failed" in rec.message for rec in caplog.records)
+
+    monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: True)
+    emit_event(
+        name="session.timeout",
+        payload={"transcript_path": str(transcript)},
+        source="pytest",
+        session_id="sess-timeout-hard-write",
+        owner_id="owner-life",
+    )
+    with pytest.raises(RuntimeError, match="Event handler failed while fail-hard mode is enabled") as excinfo:
+        process_events(limit=5, names=["session.timeout"])
+    assert isinstance(excinfo.value.__cause__, RuntimeError)
+    assert str(excinfo.value.__cause__) == "default timeout write_signal down"
+
+
 def test_session_lifecycle_daemon_signal_dedupes_with_adapter_signal(monkeypatch, tmp_path):
     monkeypatch.setenv("SESSION_DB_PATH", str(tmp_path / "session.db"))
     monkeypatch.setenv("QUAID_HOME", str(tmp_path))
@@ -971,6 +1162,48 @@ def test_session_lifecycle_default_agent_end_signal_dedupes_with_adapter_signal(
     assert signals[0]["meta"]["bridge"] == "event_lifecycle_default_bridge"
 
 
+def test_session_lifecycle_default_timeout_signal_dedupes_with_adapter_signal(monkeypatch, tmp_path):
+    monkeypatch.setenv("SESSION_DB_PATH", str(tmp_path / "session.db"))
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
+    set_adapter(TestAdapter(tmp_path))
+
+    from core import extraction_daemon
+
+    adapter_transcript = tmp_path / "adapter-timeout.jsonl"
+    default_transcript = tmp_path / "default-timeout.jsonl"
+    adapter_transcript.write_text('{"role":"user","content":"adapter"}\n', encoding="utf-8")
+    default_transcript.write_text('{"role":"user","content":"default"}\n', encoding="utf-8")
+    adapter_signal = extraction_daemon.write_signal(
+        signal_type="timeout",
+        session_id="sess-timeout-dedupe",
+        transcript_path=str(adapter_transcript),
+        adapter="adapter-hook",
+        meta={"reason": "adapter_timeout"},
+    )
+
+    emit_event(
+        name="session.timeout",
+        payload={"transcript_path": str(default_transcript)},
+        source="pytest",
+        session_id="sess-timeout-dedupe",
+        owner_id="owner-life",
+    )
+    out = process_events(limit=5, names=["session.timeout"])
+
+    result = out["details"][0]["result"]
+    assert result["daemon_signal_queued"] is True
+    assert result["daemon_signal_type"] == "timeout"
+    assert result["daemon_signal_default"] is True
+    assert result["signal_name"] == adapter_signal.name
+    signals = extraction_daemon.read_pending_signals()
+    assert len(signals) == 1
+    assert signals[0]["type"] == "timeout"
+    assert signals[0]["session_id"] == "sess-timeout-dedupe"
+    assert signals[0]["transcript_path"] == str(default_transcript)
+    assert signals[0]["meta"]["bridge"] == "event_lifecycle_default_timeout_bridge"
+
+
 def test_session_lifecycle_daemon_signal_helper_preserves_boundaries():
     import core.runtime.events as events
 
@@ -978,9 +1211,10 @@ def test_session_lifecycle_daemon_signal_helper_preserves_boundaries():
         [
             inspect.getsource(events._maybe_queue_lifecycle_daemon_signal),
             inspect.getsource(events._maybe_queue_default_agent_end_signal),
+            inspect.getsource(events._maybe_queue_default_timeout_signal),
         ]
     )
-    assert helper_sources.count("from core.extraction_daemon import write_signal") == 2
+    assert helper_sources.count("from core.extraction_daemon import write_signal") == 3
     assert "datastore." not in helper_sources
     assert "_atomic_write" not in helper_sources
     assert "start_daemon" not in helper_sources
@@ -1184,6 +1418,48 @@ def test_session_lifecycle_persistence_failure_does_not_block_failsoft_default_a
     assert result["persisted"] is False
     assert result["daemon_signal_queued"] is True
     assert result["daemon_signal_type"] == "session_end"
+    assert result["daemon_signal_default"] is True
+    assert len(extraction_daemon.read_pending_signals()) == 1
+    assert any("SessionDB lifecycle observation persistence failed" in rec.message for rec in caplog.records)
+
+
+def test_session_lifecycle_persistence_failure_does_not_block_failsoft_default_timeout_signal(
+    monkeypatch,
+    tmp_path,
+    caplog,
+):
+    monkeypatch.setenv("SESSION_DB_PATH", str(tmp_path / "session.db"))
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
+    set_adapter(TestAdapter(tmp_path))
+
+    import core.plugins.sessiondb_contract as sessiondb_contract
+    import core.runtime.events as events
+
+    def _boom(_event):
+        raise RuntimeError("sessiondb lifecycle down")
+
+    transcript = tmp_path / "session.jsonl"
+    transcript.write_text('{"role":"user","content":"hello"}\n', encoding="utf-8")
+    monkeypatch.setattr(sessiondb_contract, "record_session_lifecycle_observation", _boom)
+    monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: False)
+    with caplog.at_level("WARNING"):
+        emit_event(
+            name="session.timeout",
+            payload={"transcript_path": str(transcript)},
+            source="pytest",
+            session_id="sess-timeout-observation-fail",
+            owner_id="owner-life",
+        )
+        out = process_events(limit=5, names=["session.timeout"])
+
+    from core import extraction_daemon
+
+    result = out["details"][0]["result"]
+    assert result["status"] == "acknowledged"
+    assert result["persisted"] is False
+    assert result["daemon_signal_queued"] is True
+    assert result["daemon_signal_type"] == "timeout"
     assert result["daemon_signal_default"] is True
     assert len(extraction_daemon.read_pending_signals()) == 1
     assert any("SessionDB lifecycle observation persistence failed" in rec.message for rec in caplog.records)

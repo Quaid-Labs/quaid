@@ -739,6 +739,54 @@ def _maybe_queue_default_agent_end_signal(event: Event, *, session_id: str) -> O
     }
 
 
+def _default_timeout_transcript_path(event: Event, *, session_id: str) -> Optional[str]:
+    payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+    if str(event.get("name") or "") != "session.timeout":
+        return None
+    if _daemon_signal_requested(payload):
+        return None
+    if not str(session_id or "").strip():
+        return None
+
+    transcript_path = str(payload.get("transcript_path") or "").strip()
+    if not transcript_path or not Path(transcript_path).is_file():
+        return None
+    return transcript_path
+
+
+def _maybe_queue_default_timeout_signal(event: Event, *, session_id: str) -> Optional[Dict[str, Any]]:
+    payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+    transcript_path = _default_timeout_transcript_path(event, session_id=session_id)
+    if not transcript_path:
+        return None
+
+    meta: Dict[str, Any] = {
+        "bridge": "event_lifecycle_default_timeout_bridge",
+        "lifecycle_event_id": event.get("id"),
+        "lifecycle_event_name": event.get("name"),
+    }
+    for key in ("adapter", "source"):
+        value = str(payload.get(key) or "").strip()
+        if value:
+            meta[key] = value
+
+    from core.extraction_daemon import write_signal
+
+    signal_path = write_signal(
+        signal_type="timeout",
+        session_id=session_id,
+        transcript_path=transcript_path,
+        adapter=str(event.get("source") or ""),
+        meta=meta,
+    )
+    return {
+        "daemon_signal_queued": True,
+        "daemon_signal_type": "timeout",
+        "signal_name": signal_path.name,
+        "daemon_signal_default": True,
+    }
+
+
 def _handle_session_lifecycle(event: Event) -> Dict[str, Any]:
     payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
     session_id = str(event.get("session_id") or payload.get("session_id") or "").strip()
@@ -765,7 +813,11 @@ def _handle_session_lifecycle(event: Event) -> Dict[str, Any]:
             raise
         logger.warning("SessionDB lifecycle observation persistence failed: %s", exc, exc_info=True)
         result["persisted"] = False
-        if not _daemon_signal_requested(payload) and not _default_agent_end_transcript_path(event, session_id=session_id):
+        if (
+            not _daemon_signal_requested(payload)
+            and not _default_agent_end_transcript_path(event, session_id=session_id)
+            and not _default_timeout_transcript_path(event, session_id=session_id)
+        ):
             return result
     if isinstance(persisted, dict) and persisted.get("persisted"):
         result["persisted"] = True
@@ -777,6 +829,8 @@ def _handle_session_lifecycle(event: Event) -> Dict[str, Any]:
     try:
         if _daemon_signal_requested(payload):
             daemon_signal_result = _maybe_queue_lifecycle_daemon_signal(event, session_id=session_id)
+        elif str(event.get("name") or "") == "session.timeout":
+            daemon_signal_result = _maybe_queue_default_timeout_signal(event, session_id=session_id)
         else:
             daemon_signal_result = _maybe_queue_default_agent_end_signal(event, session_id=session_id)
     except Exception as exc:
