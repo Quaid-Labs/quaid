@@ -720,6 +720,54 @@ describe("QuaidFacade", () => {
     await rm(workspace, { recursive: true, force: true });
   });
 
+  it("processLifecycleEvent emits agent-end through existing events path", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "quaid-facade-agent-end-lifecycle-"));
+    const transcriptPath = path.join(workspace, "agent-end-session.jsonl");
+    await writeFile(transcriptPath, '{"role":"user","content":"agent end transcript"}\n', "utf8");
+    const execEvents = vi.fn(async () => '{"status":"acknowledged","event":"session.agent_end"}');
+    const facade = createQuaidFacade(makeMockDeps({ execEvents }));
+
+    const result = await facade.processLifecycleEvent(
+      {
+        label: "AgentEndSignal",
+        source: "system_notice",
+        signature: "system:agent-end",
+        messageIndex: 6,
+      },
+      {
+        sessionId: "sess-agent-end",
+        transcriptPath,
+        agentEndSource: "terminal_lifecycle",
+        reason: "agent_end",
+        adapter: "openclaw",
+        source: "facade-test",
+      },
+    );
+
+    expect(result).toEqual({ status: "acknowledged", event: "session.agent_end" });
+    expect(execEvents).toHaveBeenCalledTimes(1);
+    const args = execEvents.mock.calls[0][1];
+    expect(execEvents).toHaveBeenCalledWith(
+      "emit",
+      expect.arrayContaining(["--name", "session.agent_end", "--dispatch", "immediate"]),
+    );
+    const payload = JSON.parse(String(args[args.indexOf("--payload") + 1]));
+    expect(payload).toEqual({
+      session_id: "sess-agent-end",
+      transcript_path: transcriptPath,
+      lifecycle_signal_label: "AgentEndSignal",
+      lifecycle_signal_source: "system_notice",
+      lifecycle_signal_signature: "system:agent-end",
+      lifecycle_message_index: 6,
+      reason: "agent_end",
+      adapter: "openclaw",
+      source: "facade-test",
+      agent_end_source: "terminal_lifecycle",
+    });
+    expect(JSON.stringify(payload)).not.toContain("agent end transcript");
+    await rm(workspace, { recursive: true, force: true });
+  });
+
   it("processLifecycleEvent rejects live transcript reset inputs without emitting", async () => {
     const workspace = await mkdtemp(path.join(tmpdir(), "quaid-facade-reset-live-only-"));
     const liveTranscriptPath = path.join(workspace, "live-session.jsonl");
@@ -792,14 +840,50 @@ describe("QuaidFacade", () => {
     await rm(workspace, { recursive: true, force: true });
   });
 
+  it("processLifecycleEvent rejects reset transcript agent-end inputs without emitting", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "quaid-facade-agent-end-reset-only-"));
+    const resetTranscriptPath = path.join(workspace, "reset-snapshot.jsonl");
+    await writeFile(resetTranscriptPath, '{"role":"user","content":"reset snapshot"}\n', "utf8");
+    const execEvents = vi.fn(async () => '{"status":"unexpected"}');
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const facade = createQuaidFacade(makeMockDeps({ execEvents }));
+
+    await expect(
+      facade.processLifecycleEvent(
+        { label: "AgentEndSignal", source: "hook", signature: "hook:agent-end" },
+        { sessionId: "sess-agent-end", resetTranscriptPath },
+      ),
+    ).resolves.toEqual({
+      status: "ignored",
+      event_emitted: false,
+      reason: "missing_transcript_path",
+    });
+
+    const failHardFacade = createQuaidFacade(makeMockDeps({
+      execEvents,
+      isFailHardEnabled: vi.fn(() => true),
+    }));
+    await expect(
+      failHardFacade.processLifecycleEvent(
+        { label: "AgentEndSignal", source: "hook", signature: "hook:agent-end" },
+        { sessionId: "sess-agent-end", resetTranscriptPath },
+      ),
+    ).rejects.toThrow("requires context.transcriptPath");
+
+    expect(execEvents).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("requires context.transcriptPath"));
+    warn.mockRestore();
+    await rm(workspace, { recursive: true, force: true });
+  });
+
   it("processLifecycleEvent no-ops invalid inputs without emitting under fail-soft", async () => {
     const execEvents = vi.fn(async () => '{"status":"unexpected"}');
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const facade = createQuaidFacade(makeMockDeps({ execEvents }));
 
     await expect(
-      facade.processLifecycleEvent({ label: "AgentEndSignal", source: "hook", signature: "hook:agent-end" }, {
-        sessionId: "sess-agent-end",
+      facade.processLifecycleEvent({ label: "SessionStartSignal", source: "hook", signature: "hook:session-start" }, {
+        sessionId: "sess-session-start",
         transcriptPath: "/tmp/session.jsonl",
       }),
     ).resolves.toEqual({
@@ -819,7 +903,7 @@ describe("QuaidFacade", () => {
     });
 
     expect(execEvents).not.toHaveBeenCalled();
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("does not support signal label AgentEndSignal"));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("does not support signal label SessionStartSignal"));
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("transcript path does not exist"));
     warn.mockRestore();
   });
@@ -870,6 +954,10 @@ describe("QuaidFacade", () => {
     expect(functionSource).toContain('emitRuntimeEvent("session.compaction", payload, "immediate")');
     expect(functionSource).toContain('emitRuntimeEvent("session.reset", payload, "immediate")');
     expect(functionSource).toContain('emitRuntimeEvent("session.timeout", payload, "immediate")');
+    expect(functionSource).toContain('emitRuntimeEvent("session.agent_end", payload, "immediate")');
+    expect(functionSource).not.toContain('emitRuntimeEvent("session_end"');
+    expect(functionSource).not.toContain('emitRuntimeEvent("session.end"');
+    expect(functionSource).not.toContain('emitRuntimeEvent("agent.end"');
     expect(functionSource).not.toMatch(/write_signal|ensure_alive|start_daemon|stop_daemon|restart|subprocess|pidfile/);
 
     const resetStart = functionSource.indexOf('if (label === "ResetSignal")');
@@ -885,6 +973,13 @@ describe("QuaidFacade", () => {
     expect(timeoutSource).toContain("ctx.transcriptPath || ctx.transcript_path || ctx.sessionFile || ctx.session_file");
     expect(timeoutSource).toContain("transcript_path");
     expect(timeoutSource).not.toMatch(/ctx\.resetTranscriptPath|ctx\.reset_transcript_path|reset_transcript_path/);
+
+    const agentEndStart = functionSource.indexOf('if (label === "AgentEndSignal")');
+    const agentEndEnd = functionSource.indexOf('return emitRuntimeEvent("session.agent_end", payload, "immediate")', agentEndStart);
+    const agentEndSource = functionSource.slice(agentEndStart, agentEndEnd);
+    expect(agentEndSource).toContain("ctx.transcriptPath || ctx.transcript_path || ctx.sessionFile || ctx.session_file");
+    expect(agentEndSource).toContain("transcript_path");
+    expect(agentEndSource).not.toMatch(/ctx\.resetTranscriptPath|ctx\.reset_transcript_path|reset_transcript_path/);
   });
 
   // -----------------------------------------------------------------------

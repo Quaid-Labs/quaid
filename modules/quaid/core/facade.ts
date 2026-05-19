@@ -2286,6 +2286,42 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
       return emitRuntimeEvent("session.timeout", payload, "immediate");
     }
 
+    if (label === "AgentEndSignal") {
+      const sessionId = String(ctx.sessionId || ctx.session_id || "").trim();
+      if (!sessionId) {
+        return lifecycleNoop("missing_session_id", "requires context.sessionId");
+      }
+      const transcriptPath = String(ctx.transcriptPath || ctx.transcript_path || ctx.sessionFile || ctx.session_file || "").trim();
+      if (!transcriptPath) {
+        return lifecycleNoop("missing_transcript_path", "requires context.transcriptPath");
+      }
+      if (!fs.existsSync(transcriptPath)) {
+        return lifecycleNoop("missing_transcript_path", `transcript path does not exist: ${transcriptPath}`);
+      }
+
+      const payload: Record<string, unknown> = {
+        session_id: sessionId,
+        transcript_path: transcriptPath,
+        lifecycle_signal_label: label,
+      };
+      const signalSource = String(sig.source || "").trim();
+      if (signalSource) payload.lifecycle_signal_source = signalSource;
+      const signature = String(sig.signature || "").trim();
+      if (signature) payload.lifecycle_signal_signature = signature;
+      const messageIndex = Number(sig.messageIndex);
+      if (Number.isInteger(messageIndex) && messageIndex >= 0) {
+        payload.lifecycle_message_index = messageIndex;
+      }
+      for (const key of ["reason", "adapter", "source"] as const) {
+        const value = String(ctx[key] || "").trim();
+        if (value) payload[key] = value;
+      }
+      const agentEndSource = String(ctx.agentEndSource || ctx.agent_end_source || "").trim();
+      if (agentEndSource) payload.agent_end_source = agentEndSource;
+
+      return emitRuntimeEvent("session.agent_end", payload, "immediate");
+    }
+
     return lifecycleNoop("unsupported_signal", `does not support signal label ${label || "<missing>"}`);
   }
 
