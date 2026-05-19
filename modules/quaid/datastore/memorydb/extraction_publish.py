@@ -383,13 +383,19 @@ def run_extraction_publish_payload(
     log: logging.Logger = logger,
     default_session_microchunk_tokens: int = 40,
 ) -> List[Dict[str, Any]]:
-    """Publish extracted fact/edge/source evidence through MemoryDB ownership."""
+    """Publish extracted fact/edge/source evidence through MemoryDB ownership.
+
+    Returns the normalized raw fact list for orchestration-layer synthesis while
+    mutating result["facts"] with status/edge entries. Snippet, journal, and
+    project-log counts are trace-only; those writes stay outside MemoryDB.
+    """
     result.setdefault("source_chunks_stored", 0)
     result.setdefault("source_chunks_existing", 0)
     result.setdefault("source_chunks_failed", 0)
     result.setdefault("facts", [])
     result.setdefault("facts_stored", 0)
     result.setdefault("facts_skipped", 0)
+    result.setdefault("facts_planned", 0)
     result.setdefault("edges_created", 0)
     raw_facts = list(result.get("raw_facts", []) or [])
     if not dry_run:

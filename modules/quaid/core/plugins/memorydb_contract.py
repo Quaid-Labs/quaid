@@ -69,7 +69,11 @@ def handle_session_ingest_log_request(event: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def run_extraction_publish_payload(result: Dict[str, Any], **kwargs: Any) -> List[Dict[str, Any]]:
-    """Publish extracted fact/source evidence through MemoryDB ownership."""
+    """Publish extracted fact/source evidence through MemoryDB ownership.
+
+    The helper returns normalized raw facts for the ingest orchestrator while
+    mutating result["facts"] with publish statuses and edges.
+    """
     from datastore.memorydb.extraction_publish import run_extraction_publish_payload as _run
 
     return _run(result, **kwargs)

@@ -2915,6 +2915,56 @@ class TestExtractFromTranscript:
             )
         mock_store.assert_not_called()
 
+    def test_memorydb_extraction_publish_initializes_facts_planned_for_dry_run(self, monkeypatch):
+        from datastore.memorydb.extraction_publish import run_extraction_publish_payload
+
+        monkeypatch.setattr(
+            "datastore.memorydb.extraction_publish.get_config",
+            lambda: SimpleNamespace(retrieval=SimpleNamespace(domains={"personal": "Personal facts"})),
+        )
+        result = {
+            "raw_facts": [{
+                "text": "Maya keeps the launch checklist in the red binder",
+                "category": "fact",
+                "speaker": "user",
+                "domains": ["personal"],
+            }],
+        }
+
+        returned = run_extraction_publish_payload(
+            result,
+            owner_id="test",
+            label="unit",
+            session_id="sess-dry-run",
+            actor_id=None,
+            speaker_entity_id=None,
+            subject_entity_id=None,
+            source_channel=None,
+            target_datastore=None,
+            source_conversation_id=None,
+            participant_entity_ids=None,
+            source_author_id=None,
+            dry_run=True,
+            default_created_at=None,
+            default_mentioned_at=None,
+            prefer_default_mentioned_at=False,
+            snippet_files=0,
+            journal_files=0,
+            project_log_projects=0,
+            memory_service=object(),
+            session_bridge=object(),
+            fail_hard_enabled=lambda: False,
+            normalize_fact_temporal_hint=lambda fact, **_kwargs: fact,
+            collapse_duplicate_payload_facts=lambda facts: (facts, 0),
+            normalize_fact_provenance=lambda fact, **_kwargs: ("user", "conversation"),
+            write_publish_trace=lambda *_args, **_kwargs: None,
+            publish_batch_size=1,
+        )
+
+        assert returned == result["raw_facts"]
+        assert result["facts_planned"] == 1
+        assert result["facts"][0]["status"] == "would_store"
+
     @patch("ingest.extract._memory.store")
     def test_apply_extracted_payloads_passes_temporal_provenance_to_store(self, mock_store):
         from ingest.extract import apply_extracted_payloads
