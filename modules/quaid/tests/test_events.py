@@ -1050,6 +1050,97 @@ def test_request_session_ingest_log_rejects_missing_session_id(monkeypatch, tmp_
     assert response["responses"][0]["result"]["error"] == "payload.session_id is required"
 
 
+def test_sessiondb_session_ingest_helper_normalizes_payload(monkeypatch, tmp_path):
+    set_adapter(TestAdapter(tmp_path))
+    import core.plugins.sessiondb_contract as sessiondb_contract
+
+    called = {}
+
+    def _fake_run(**kwargs):
+        called.update(kwargs)
+        return {"status": "indexed", "session_id": kwargs["session_id"]}
+
+    monkeypatch.setattr("core.ingest_runtime.run_session_logs_ingest", _fake_run)
+
+    result = sessiondb_contract.run_session_ingest_payload(
+        {
+            "session_id": " sess-sessiondb ",
+            "owner_id": " owner-sessiondb ",
+            "label": " SessionEnd ",
+            "session_file": tmp_path / "session.jsonl",
+            "transcript_path": tmp_path / "transcript.jsonl",
+            "source_channel": " codex ",
+            "conversation_id": " conv-sessiondb ",
+            "participant_ids": [" user:owner ", "", "agent:quaid"],
+            "participant_aliases": {" Operator ": " user:owner "},
+            "message_count": "5",
+            "topic_hint": " helper ownership ",
+        }
+    )
+
+    assert result == {"status": "indexed", "session_id": "sess-sessiondb"}
+    assert called == {
+        "session_id": "sess-sessiondb",
+        "owner_id": "owner-sessiondb",
+        "label": "SessionEnd",
+        "session_file": str(tmp_path / "session.jsonl"),
+        "transcript_path": str(tmp_path / "transcript.jsonl"),
+        "source_channel": "codex",
+        "conversation_id": "conv-sessiondb",
+        "participant_ids": ["user:owner", "agent:quaid"],
+        "participant_aliases": {" Operator ": " user:owner "},
+        "message_count": 5,
+        "topic_hint": "helper ownership",
+    }
+
+
+def test_memorydb_session_ingest_wrapper_delegates_to_distinct_sessiondb_helper(monkeypatch):
+    import core.plugins.memorydb_contract as memorydb_contract
+    import core.plugins.sessiondb_contract as sessiondb_contract
+
+    assert memorydb_contract.run_session_ingest_payload is not sessiondb_contract.run_session_ingest_payload
+
+    called = {}
+
+    def _fake_sessiondb_helper(payload):
+        called.update(payload)
+        return {"status": "indexed", "session_id": payload["session_id"]}
+
+    monkeypatch.setattr(sessiondb_contract, "run_session_ingest_payload", _fake_sessiondb_helper)
+
+    result = memorydb_contract.run_session_ingest_payload({"session_id": "sess-wrapper"})
+
+    assert result == {"status": "indexed", "session_id": "sess-wrapper"}
+    assert called == {"session_id": "sess-wrapper"}
+    assert memorydb_contract.run_session_ingest_payload is not sessiondb_contract.run_session_ingest_payload
+
+
+def test_memorydb_session_ingest_wrapper_propagates_helper_failure_without_registration(
+    monkeypatch,
+    tmp_path,
+):
+    set_adapter(TestAdapter(tmp_path))
+    import core.plugins.memorydb_contract as memorydb_contract
+    import core.plugins.sessiondb_contract as sessiondb_contract
+    import core.runtime.events as events
+
+    def _fail(_payload):
+        raise RuntimeError("sessiondb helper boom")
+
+    monkeypatch.setattr(sessiondb_contract, "run_session_ingest_payload", _fail)
+
+    with pytest.raises(RuntimeError, match="sessiondb helper boom"):
+        memorydb_contract.run_session_ingest_payload({"session_id": "sess-fail"})
+
+    memorydb_contract.register_session_ingest_log_request_handler()
+    with events._REQUEST_EVENT_HANDLERS_LOCK:
+        handlers = list(events._REQUEST_EVENT_HANDLERS.get(SESSION_INGEST_LOG_REQUEST_EVENT) or [])
+
+    assert [(item["datastore_id"], item["handler"]) for item in handlers] == [
+        ("memorydb", memorydb_contract.handle_session_ingest_log_request)
+    ]
+
+
 def test_request_extraction_publish_runs_memorydb_handler(monkeypatch, tmp_path):
     set_adapter(TestAdapter(tmp_path))
     import core.plugins.memorydb_contract as memorydb_contract
