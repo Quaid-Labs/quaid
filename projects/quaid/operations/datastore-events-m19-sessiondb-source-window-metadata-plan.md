@@ -73,6 +73,10 @@ Implement one runtime metadata slice only:
    expanded microchunk has a source date. The object should contain only
    provenance fields needed to construct the existing header row: `source_date`,
    `session_id`, `pair_id`, `microchunk_id`, and a stable header identifier.
+   Stable header identifier shape: composite of `session_id` and `source_date`
+   (for example, `f"{session_id}:{source_date}"`) so multiple microchunks from
+   the same session on the same date dedupe to the same header. Do not use a
+   non-deterministic UUID-style identifier.
 2. Do not insert the header object into SessionDB's `window` or
    `microchunk_window` arrays. Those arrays must keep their current row shapes
    and counts.
@@ -117,6 +121,11 @@ Implement one runtime metadata slice only:
   expansion failures must raise through the existing source-window expansion
   failHard paths. Do not silently fall back to incomplete or misdated headers in
   failHard mode.
+  Malformed metadata means at least one of: not a dict, missing required key
+  (`session_id`, `source_date`, `pair_id`, `microchunk_id`, or stable header
+  identifier), or wrong type for a required key, such as non-string
+  `source_date`. Empty strings or null values for required keys count as
+  malformed because they cannot produce a valid header row.
 - `failHard=false`: existing fail-soft recall behavior may continue, but any
   ignored malformed metadata must log loudly and preserve the previous output
   shape rather than reporting enriched provenance that was not actually used.
@@ -125,6 +134,9 @@ Implement one runtime metadata slice only:
   Backward-compatible handling for absent metadata is allowed because installed
   alpha/runtime responses may not include the new field until all call paths are
   updated.
+- Do not wrap SessionDB metadata extraction and MemoryDB header construction in
+  a shared `try`/`except` scope that could mask malformed-metadata failures as
+  successful fallback. Each path raises out of its own block.
 
 ## Required Tests Before W4
 
@@ -138,6 +150,11 @@ Add or preserve focused tests proving:
 - MemoryDB source-window expansion consumes the SessionDB-provided metadata and
   renders the same `source_date: <date>` header text and same session window
   metadata fields as before.
+- When `source_window_header` metadata is absent from the SessionDB response
+  (simulated by monkeypatching `session_store.expand_microchunk()` to omit the
+  new field), MemoryDB's backward-compatible fallback construction produces
+  output identical to the metadata-enriched path for the same input: same
+  `source_date` header text, same metadata fields, and same row identifiers.
 - Existing source-window tests for direct `sessiondb_bridge` expansion,
   graph-cluster source chunk expansion, source-date header insertion, no-created
   `created_at` fallback, support-window filtering, and budget behavior still
