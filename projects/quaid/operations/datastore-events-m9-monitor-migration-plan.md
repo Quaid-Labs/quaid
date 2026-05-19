@@ -90,6 +90,12 @@ transcript/provenance ownership, while MemoryDB continues to own
 Lifecycle persistence, source-window enrichment, and SessionDB ownership of
 `session.ingest_log` remain future-plan-gated.
 
+The next prerequisite is tracked as M15 in
+`projects/quaid/operations/datastore-events-m15-sessiondb-ingest-helper-plan.md`:
+move the session-ingest payload helper internals toward SessionDB ownership
+while preserving MemoryDB ownership of `session.ingest_log.request.v1` and the
+`session_chunks` recall selector.
+
 ## Shared Rules For Every M9 Slice
 
 - One write path family per sub-milestone.
