@@ -288,7 +288,9 @@ def record_lifecycle_observation(
         "project_id": _clean(event.get("project_id")) or None,
     }
     now = _utcnow_iso()
-    with get_connection(get_session_db_path()) as conn:
+    db_path = get_session_db_path()
+    Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+    with get_connection(db_path) as conn:
         ensure_schema(conn)
         cursor = conn.execute(
             """

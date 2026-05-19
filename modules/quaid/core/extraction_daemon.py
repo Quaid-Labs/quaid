@@ -53,6 +53,12 @@ logger = logging.getLogger("quaid.daemon")
 
 # Valid signal types (B062)
 VALID_SIGNAL_TYPES = ("compaction", "reset", "session_end", "timeout", "rolling")
+DAEMON_SIGNAL_TO_LIFECYCLE_EVENT = {
+    "reset": "session.reset",
+    "compaction": "session.compaction",
+    "timeout": "session.timeout",
+    "session_end": "session.agent_end",
+}
 _SIGNAL_PRIORITY = {
     "rolling": 0,
     "timeout": 1,
@@ -971,6 +977,12 @@ def _finalize_no_payload_signal(
     signal_type = str(
         signal_data.get("type") or signal_data.get("signal_type") or ""
     ).strip().lower()
+    _record_daemon_lifecycle_observation(
+        signal_data,
+        session_id=session_id,
+        signal_type=signal_type,
+        transcript_path=transcript_path,
+    )
     if signal_type == "timeout":
         write_context_refresh_timeout_marker(session_id)
     if next_cursor_offset is not None:
@@ -987,6 +999,94 @@ def _finalize_no_payload_signal(
         emit_noop_metric()
     mark_signal_processed(signal_data)
     _release_session_processing_lock(lock_owner_key, lock_fd)
+
+
+def _daemon_lifecycle_event_id(
+    signal_data: Dict[str, Any],
+    *,
+    signal_type: str,
+    session_id: str,
+) -> str:
+    signal_path = str(signal_data.get("_signal_path") or "").strip()
+    signal_file = Path(signal_path).name if signal_path else ""
+    if not signal_file:
+        signal_file = str(
+            signal_data.get("id")
+            or signal_data.get("idempotency_key")
+            or signal_data.get("timestamp")
+            or "inline"
+        ).strip() or "inline"
+    return f"daemon-signal:{signal_file}:{signal_type}:{session_id}"
+
+
+def _record_daemon_lifecycle_observation(
+    signal_data: Dict[str, Any],
+    *,
+    session_id: str,
+    signal_type: str,
+    transcript_path: str,
+) -> Dict[str, Any]:
+    event_name = DAEMON_SIGNAL_TO_LIFECYCLE_EVENT.get(signal_type)
+    sid = str(session_id or "").strip()
+    if not event_name or not sid:
+        return {"status": "skipped", "persisted": False}
+
+    signal_path = str(signal_data.get("_signal_path") or "").strip()
+    signal_file = Path(signal_path).name if signal_path else ""
+    if not signal_file:
+        signal_file = str(
+            signal_data.get("id")
+            or signal_data.get("idempotency_key")
+            or signal_data.get("timestamp")
+            or "inline"
+        ).strip() or "inline"
+    meta = signal_data.get("meta") if isinstance(signal_data.get("meta"), dict) else {}
+    event_id = _daemon_lifecycle_event_id(
+        signal_data,
+        signal_type=signal_type,
+        session_id=sid,
+    )
+    source = f"daemon.{signal_type}"
+    payload = {
+        "session_id": sid,
+        "reason": str(meta.get("reason") or meta.get("source") or signal_type),
+        "daemon_signal_type": signal_type,
+        "transcript_path": str(transcript_path or signal_data.get("transcript_path") or ""),
+        "signal_file": signal_file,
+        "signal_path": signal_path,
+        "adapter": str(signal_data.get("adapter") or ""),
+        "meta": meta,
+    }
+    event = {
+        "id": event_id,
+        "event_id": event_id,
+        "idempotency_key": event_id,
+        "name": event_name,
+        "event_type": event_name,
+        "source": source,
+        "session_id": sid,
+        "created_at": str(signal_data.get("timestamp") or "").strip(),
+        "payload": payload,
+        "provenance": {
+            "origin": "daemon_signal",
+            "signal_type": signal_type,
+            "signal_file": signal_file,
+            "signal_path": signal_path,
+        },
+    }
+    try:
+        from core.plugins.sessiondb_contract import record_session_lifecycle_observation
+
+        return record_session_lifecycle_observation(event)
+    except Exception as exc:
+        if _fail_hard_enabled():
+            raise
+        logger.warning(
+            "SessionDB daemon lifecycle observation persistence failed: %s",
+            exc,
+            exc_info=True,
+        )
+        return {"status": "failed", "persisted": False, "error": str(exc)}
 
 
 # ---------------------------------------------------------------------------
@@ -5530,6 +5630,12 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                     )
                 else:
                     transcript_rebased_followup = True
+        _record_daemon_lifecycle_observation(
+            signal_data,
+            session_id=session_id,
+            signal_type=signal_type,
+            transcript_path=transcript_path,
+        )
         write_cursor(
             session_id,
             final_cursor_offset,

@@ -29,7 +29,15 @@ def _workspace_root() -> Path:
     if env_home and not env_instance:
         return Path(env_home).expanduser().resolve()
     from lib.adapter import get_adapter
-    root = get_adapter().instance_root()
+    adapter = get_adapter()
+    instance_root = getattr(adapter, "instance_root", None)
+    if not callable(instance_root):
+        if env_home and env_instance:
+            return Path(env_home).expanduser().resolve() / "instances" / env_instance
+        raise TypeError(
+            f"Adapter instance_root() must be callable, got {type(adapter).__name__}"
+        )
+    root = instance_root()
     if isinstance(root, Path):
         return root
     if isinstance(root, os.PathLike):

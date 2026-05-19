@@ -121,6 +121,258 @@ def test_session_logs_ingest_request_has_no_direct_fallback(monkeypatch, tmp_pat
     assert registered == ["registered"]
 
 
+def test_daemon_lifecycle_signal_mapping_excludes_rolling():
+    assert extraction_daemon.DAEMON_SIGNAL_TO_LIFECYCLE_EVENT == {
+        "reset": "session.reset",
+        "compaction": "session.compaction",
+        "timeout": "session.timeout",
+        "session_end": "session.agent_end",
+    }
+    assert "rolling" not in extraction_daemon.DAEMON_SIGNAL_TO_LIFECYCLE_EVENT
+
+
+@pytest.mark.parametrize(
+    ("signal_type", "event_name"),
+    [
+        ("reset", "session.reset"),
+        ("compaction", "session.compaction"),
+        ("timeout", "session.timeout"),
+        ("session_end", "session.agent_end"),
+    ],
+)
+def test_daemon_lifecycle_observation_maps_selected_signal_types(
+    monkeypatch,
+    tmp_path,
+    signal_type,
+    event_name,
+):
+    from core.plugins import sessiondb_contract
+
+    captured = []
+    monkeypatch.setattr(
+        sessiondb_contract,
+        "record_session_lifecycle_observation",
+        lambda event: captured.append(event) or {"status": "recorded", "persisted": True},
+    )
+
+    extraction_daemon._record_daemon_lifecycle_observation(
+        {
+            "type": signal_type,
+            "session_id": "sess-map",
+            "_signal_path": str(tmp_path / f"{signal_type}.json"),
+        },
+        session_id="sess-map",
+        signal_type=signal_type,
+        transcript_path=str(tmp_path / "session.jsonl"),
+    )
+
+    assert captured[0]["name"] == event_name
+    assert captured[0]["id"] == f"daemon-signal:{signal_type}.json:{signal_type}:sess-map"
+
+
+def test_daemon_lifecycle_observation_uses_prefixed_event_id_and_plugin_contract(
+    monkeypatch,
+    tmp_path,
+):
+    from core.plugins import sessiondb_contract
+
+    captured = []
+
+    def _record(event):
+        captured.append(event)
+        return {"status": "recorded", "persisted": True, "datastore_id": "sessiondb", "inserted": True}
+
+    monkeypatch.setattr(sessiondb_contract, "record_session_lifecycle_observation", _record)
+
+    signal_path = tmp_path / "signals" / "reset-signal.json"
+    result = extraction_daemon._record_daemon_lifecycle_observation(
+        {
+            "type": "reset",
+            "session_id": "sess-daemon",
+            "transcript_path": str(tmp_path / "session.jsonl"),
+            "timestamp": "2026-05-19T00:00:00Z",
+            "adapter": "codex",
+            "meta": {"reason": "operator_reset"},
+            "_signal_path": str(signal_path),
+        },
+        session_id="sess-daemon",
+        signal_type="reset",
+        transcript_path=str(tmp_path / "session.jsonl"),
+    )
+
+    assert result["persisted"] is True
+    assert len(captured) == 1
+    event = captured[0]
+    assert event["id"] == "daemon-signal:reset-signal.json:reset:sess-daemon"
+    assert event["idempotency_key"] == "daemon-signal:reset-signal.json:reset:sess-daemon"
+    assert event["name"] == "session.reset"
+    assert event["source"] == "daemon.reset"
+    assert event["session_id"] == "sess-daemon"
+    assert event["payload"]["reason"] == "operator_reset"
+    assert event["payload"]["daemon_signal_type"] == "reset"
+    assert event["payload"]["signal_file"] == "reset-signal.json"
+    assert event["provenance"]["origin"] == "daemon_signal"
+
+
+def test_daemon_lifecycle_observation_skips_rolling_and_missing_session(monkeypatch):
+    from core.plugins import sessiondb_contract
+
+    monkeypatch.setattr(
+        sessiondb_contract,
+        "record_session_lifecycle_observation",
+        lambda _event: (_ for _ in ()).throw(AssertionError("must not record")),
+    )
+
+    assert extraction_daemon._record_daemon_lifecycle_observation(
+        {"type": "rolling", "session_id": "sess-roll"},
+        session_id="sess-roll",
+        signal_type="rolling",
+        transcript_path="/tmp/session.jsonl",
+    ) == {"status": "skipped", "persisted": False}
+    assert extraction_daemon._record_daemon_lifecycle_observation(
+        {"type": "reset"},
+        session_id="",
+        signal_type="reset",
+        transcript_path="/tmp/session.jsonl",
+    ) == {"status": "skipped", "persisted": False}
+
+
+def test_daemon_lifecycle_observation_is_idempotent(monkeypatch, tmp_path):
+    from datastore.sessiondb.session_store import list_lifecycle_observations
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    signal_data = {
+        "type": "session_end",
+        "session_id": "sess-daemon-idem",
+        "transcript_path": str(tmp_path / "session.jsonl"),
+        "timestamp": "2026-05-19T00:00:00Z",
+        "_signal_path": str(tmp_path / "signals" / "session-end.json"),
+    }
+
+    first = extraction_daemon._record_daemon_lifecycle_observation(
+        signal_data,
+        session_id="sess-daemon-idem",
+        signal_type="session_end",
+        transcript_path=str(tmp_path / "session.jsonl"),
+    )
+    second = extraction_daemon._record_daemon_lifecycle_observation(
+        signal_data,
+        session_id="sess-daemon-idem",
+        signal_type="session_end",
+        transcript_path=str(tmp_path / "session.jsonl"),
+    )
+
+    assert first["inserted"] is True
+    assert second["inserted"] is False
+    rows = list_lifecycle_observations(session_id="sess-daemon-idem")
+    assert len(rows) == 1
+    assert rows[0]["event_id"] == "daemon-signal:session-end.json:session_end:sess-daemon-idem"
+    assert rows[0]["event_name"] == "session.agent_end"
+
+
+def test_daemon_lifecycle_observation_uses_env_instance_root_without_adapter_instance_root(
+    monkeypatch,
+    tmp_path,
+):
+    import lib.adapter as adapter_mod
+    from datastore.sessiondb.session_store import list_lifecycle_observations
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "daemon-inst")
+    monkeypatch.setattr(adapter_mod, "get_adapter", lambda: object())
+
+    result = extraction_daemon._record_daemon_lifecycle_observation(
+        {
+            "type": "compaction",
+            "session_id": "sess-env-root",
+            "_signal_path": str(tmp_path / "signals" / "compaction.json"),
+        },
+        session_id="sess-env-root",
+        signal_type="compaction",
+        transcript_path=str(tmp_path / "session.jsonl"),
+    )
+
+    assert result["persisted"] is True
+    assert (tmp_path / "instances" / "daemon-inst" / "data" / "session.db").is_file()
+    rows = list_lifecycle_observations(session_id="sess-env-root")
+    assert len(rows) == 1
+    assert rows[0]["event_name"] == "session.compaction"
+
+
+def test_daemon_lifecycle_observation_failure_respects_failhard(monkeypatch, caplog):
+    from core.plugins import sessiondb_contract
+
+    def _boom(_event):
+        raise RuntimeError("sessiondb observation down")
+
+    monkeypatch.setattr(sessiondb_contract, "record_session_lifecycle_observation", _boom)
+    signal_data = {
+        "type": "timeout",
+        "session_id": "sess-fail",
+        "_signal_path": "/tmp/timeout.json",
+    }
+
+    monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: False)
+    with caplog.at_level("WARNING", logger="quaid.daemon"):
+        result = extraction_daemon._record_daemon_lifecycle_observation(
+            signal_data,
+            session_id="sess-fail",
+            signal_type="timeout",
+            transcript_path="/tmp/session.jsonl",
+        )
+    assert result["persisted"] is False
+    assert "SessionDB daemon lifecycle observation persistence failed" in caplog.text
+
+    monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: True)
+    with pytest.raises(RuntimeError, match="sessiondb observation down"):
+        extraction_daemon._record_daemon_lifecycle_observation(
+            signal_data,
+            session_id="sess-fail",
+            signal_type="timeout",
+            transcript_path="/tmp/session.jsonl",
+        )
+
+
+def test_finalize_no_payload_signal_records_lifecycle_before_signal_finalization(monkeypatch):
+    order = []
+    monkeypatch.setattr(
+        extraction_daemon,
+        "_record_daemon_lifecycle_observation",
+        lambda *_args, **_kwargs: order.append("record") or {"persisted": True},
+    )
+    monkeypatch.setattr(
+        extraction_daemon,
+        "write_context_refresh_timeout_marker",
+        lambda _session_id: order.append("timeout_marker"),
+    )
+    monkeypatch.setattr(extraction_daemon, "write_cursor", lambda *_args, **_kwargs: order.append("cursor"))
+    monkeypatch.setattr(extraction_daemon, "mark_signal_processed", lambda _signal: order.append("mark"))
+    monkeypatch.setattr(
+        extraction_daemon,
+        "_release_session_processing_lock",
+        lambda *_args, **_kwargs: order.append("release"),
+    )
+
+    extraction_daemon._finalize_no_payload_signal(
+        session_id="sess-finalize",
+        transcript_path="/tmp/session.jsonl",
+        signal_data={"type": "timeout", "session_id": "sess-finalize"},
+        lock_owner_key="sess-finalize",
+        lock_fd=123,
+        next_cursor_offset=4,
+    )
+
+    assert order == ["record", "timeout_marker", "cursor", "mark", "release"]
+
+
+def test_daemon_lifecycle_observation_keeps_sessiondb_import_behind_plugin_contract():
+    import inspect
+
+    source = inspect.getsource(extraction_daemon)
+    assert "from core.plugins.sessiondb_contract import record_session_lifecycle_observation" in source
+    assert "datastore.sessiondb.session_store" not in source
+
+
 @pytest.mark.parametrize(
     ("response", "error"),
     [
