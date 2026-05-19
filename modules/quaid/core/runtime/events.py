@@ -42,6 +42,12 @@ MEMORY_EXTRACTION_PUBLISH_REQUEST_EVENT = "memory.extraction_publish.request.v1"
 EVOLUTION_SNIPPET_JOURNAL_WRITE_REQUEST_EVENT = "evolution.snippet_journal_write.request.v1"
 EVOLUTION_SNIPPET_WRITE_REQUEST_EVENT = "evolution.snippet_write.request.v1"
 EVOLUTION_JOURNAL_WRITE_REQUEST_EVENT = "evolution.journal_write.request.v1"
+LIFECYCLE_EVENT_TO_DAEMON_SIGNAL = {
+    "session.reset": "reset",
+    "session.compaction": "compaction",
+    "session.timeout": "timeout",
+    "session.agent_end": "session_end",
+}
 
 EVENT_REGISTRY: List[Dict[str, Any]] = [
     {
@@ -633,13 +639,75 @@ def _queue_delayed_llm_request(message: str, kind: str = "janitor", priority: st
     )
 
 
+def _daemon_signal_requested(payload: Dict[str, Any]) -> bool:
+    daemon_signal = payload.get("daemon_signal") if isinstance(payload, dict) else None
+    return isinstance(daemon_signal, dict) and daemon_signal.get("enabled") is True
+
+
+def _maybe_queue_lifecycle_daemon_signal(event: Event, *, session_id: str) -> Optional[Dict[str, Any]]:
+    payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+    daemon_signal = payload.get("daemon_signal") if isinstance(payload.get("daemon_signal"), dict) else {}
+    if daemon_signal.get("enabled") is not True:
+        return None
+
+    signal_type = LIFECYCLE_EVENT_TO_DAEMON_SIGNAL.get(str(event.get("name") or ""))
+    if not signal_type:
+        return None
+
+    if not str(session_id or "").strip():
+        raise ValueError("payload.session_id is required for daemon_signal bridge")
+
+    transcript_path = str(daemon_signal.get("transcript_path") or payload.get("transcript_path") or "").strip()
+    if not transcript_path:
+        raise ValueError("payload.daemon_signal.transcript_path is required")
+    if not Path(transcript_path).is_file():
+        raise FileNotFoundError(transcript_path)
+
+    meta: Dict[str, Any] = {
+        "bridge": "event_lifecycle_bridge",
+        "lifecycle_event_id": event.get("id"),
+        "lifecycle_event_name": event.get("name"),
+    }
+    reason = str(daemon_signal.get("reason") or "").strip()
+    if reason:
+        meta["reason"] = reason
+    source = str(daemon_signal.get("source") or "").strip()
+    if source:
+        meta["source"] = source
+
+    from core.extraction_daemon import write_signal
+
+    signal_path = write_signal(
+        signal_type=signal_type,
+        session_id=session_id,
+        transcript_path=transcript_path,
+        adapter=str(event.get("source") or ""),
+        meta=meta,
+    )
+    return {
+        "daemon_signal_queued": True,
+        "daemon_signal_type": signal_type,
+        "signal_name": signal_path.name,
+    }
+
+
 def _handle_session_lifecycle(event: Event) -> Dict[str, Any]:
     payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
     session_id = str(event.get("session_id") or payload.get("session_id") or "").strip()
     result = {"status": "acknowledged", "event": event.get("name")}
     if not session_id:
+        if _daemon_signal_requested(payload):
+            try:
+                _maybe_queue_lifecycle_daemon_signal(event, session_id=session_id)
+            except Exception as exc:
+                if _is_fail_hard_enabled():
+                    raise
+                logger.warning("Lifecycle daemon signal bridge failed: %s", exc, exc_info=True)
+                result["daemon_signal_queued"] = False
+                result["daemon_signal_error"] = str(exc)
         result["persisted"] = False
         return result
+    persisted = None
     try:
         from core.plugins.sessiondb_contract import record_session_lifecycle_observation
 
@@ -649,13 +717,26 @@ def _handle_session_lifecycle(event: Event) -> Dict[str, Any]:
             raise
         logger.warning("SessionDB lifecycle observation persistence failed: %s", exc, exc_info=True)
         result["persisted"] = False
-        return result
+        if not _daemon_signal_requested(payload):
+            return result
     if isinstance(persisted, dict) and persisted.get("persisted"):
         result["persisted"] = True
         result["datastore_id"] = "sessiondb"
         result["inserted"] = bool(persisted.get("inserted"))
+    else:
+        result["persisted"] = False
+
+    try:
+        daemon_signal_result = _maybe_queue_lifecycle_daemon_signal(event, session_id=session_id)
+    except Exception as exc:
+        if _is_fail_hard_enabled():
+            raise
+        logger.warning("Lifecycle daemon signal bridge failed: %s", exc, exc_info=True)
+        result["daemon_signal_queued"] = False
+        result["daemon_signal_error"] = str(exc)
         return result
-    result["persisted"] = False
+    if daemon_signal_result:
+        result.update(daemon_signal_result)
     return result
 
 

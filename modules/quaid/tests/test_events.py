@@ -12,6 +12,7 @@ from core.runtime.events import (
     EVOLUTION_JOURNAL_WRITE_REQUEST_EVENT,
     EVOLUTION_SNIPPET_JOURNAL_WRITE_REQUEST_EVENT,
     EVOLUTION_SNIPPET_WRITE_REQUEST_EVENT,
+    LIFECYCLE_EVENT_TO_DAEMON_SIGNAL,
     MEMORY_EXTRACTION_PUBLISH_REQUEST_EVENT,
     SESSION_INGEST_LOG_REQUEST_EVENT,
     dispatch_broker_events,
@@ -407,6 +408,263 @@ def test_session_lifecycle_records_sessiondb_observation(monkeypatch, tmp_path):
     assert rows[0]["metadata"]["payload"] == {"reason": "operator reset"}
 
 
+def test_lifecycle_daemon_signal_mapping_excludes_non_bridge_events():
+    assert LIFECYCLE_EVENT_TO_DAEMON_SIGNAL == {
+        "session.reset": "reset",
+        "session.compaction": "compaction",
+        "session.timeout": "timeout",
+        "session.agent_end": "session_end",
+    }
+    assert "session.new" not in LIFECYCLE_EVENT_TO_DAEMON_SIGNAL
+    assert "session.agent_start" not in LIFECYCLE_EVENT_TO_DAEMON_SIGNAL
+    assert "rolling" not in LIFECYCLE_EVENT_TO_DAEMON_SIGNAL
+
+
+def test_session_lifecycle_explicit_daemon_signal_writes_existing_signal(monkeypatch, tmp_path):
+    monkeypatch.setenv("SESSION_DB_PATH", str(tmp_path / "session.db"))
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
+    set_adapter(TestAdapter(tmp_path))
+
+    transcript = tmp_path / "session.jsonl"
+    transcript.write_text('{"role":"user","content":"hello"}\n', encoding="utf-8")
+    emit_event(
+        name="session.agent_end",
+        payload={
+            "reason": "closed",
+            "daemon_signal": {
+                "enabled": True,
+                "transcript_path": str(transcript),
+                "reason": "session_closed",
+                "source": "pytest-bridge",
+                "ignored": "not-propagated",
+            },
+        },
+        source="pytest",
+        session_id="sess-bridge",
+        owner_id="owner-life",
+    )
+
+    out = process_events(limit=5, names=["session.agent_end"])
+
+    assert out["processed"] == 1
+    result = out["details"][0]["result"]
+    assert result["status"] == "acknowledged"
+    assert result["event"] == "session.agent_end"
+    assert result["persisted"] is True
+    assert result["daemon_signal_queued"] is True
+    assert result["daemon_signal_type"] == "session_end"
+    assert result["signal_name"].endswith("_session_end.json")
+
+    from core import extraction_daemon
+
+    signals = extraction_daemon.read_pending_signals()
+    assert len(signals) == 1
+    assert signals[0]["type"] == "session_end"
+    assert signals[0]["session_id"] == "sess-bridge"
+    assert signals[0]["transcript_path"] == str(transcript)
+    assert signals[0]["adapter"] == "pytest"
+    assert signals[0]["meta"]["bridge"] == "event_lifecycle_bridge"
+    assert signals[0]["meta"]["reason"] == "session_closed"
+    assert signals[0]["meta"]["source"] == "pytest-bridge"
+    assert signals[0]["meta"]["lifecycle_event_name"] == "session.agent_end"
+    assert "ignored" not in signals[0]["meta"]
+
+
+def test_session_lifecycle_without_daemon_signal_does_not_call_write_signal(monkeypatch, tmp_path):
+    monkeypatch.setenv("SESSION_DB_PATH", str(tmp_path / "session.db"))
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
+    set_adapter(TestAdapter(tmp_path))
+
+    from core import extraction_daemon
+
+    monkeypatch.setattr(
+        extraction_daemon,
+        "write_signal",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("plain lifecycle must not signal daemon")),
+    )
+
+    emit_event(name="session.reset", payload={"reason": "plain"}, source="pytest", session_id="sess-plain")
+    out = process_events(limit=5, names=["session.reset"])
+
+    result = out["details"][0]["result"]
+    assert result["status"] == "acknowledged"
+    assert result["persisted"] is True
+    assert "daemon_signal_queued" not in result
+    assert "daemon_signal_type" not in result
+    assert "daemon_signal_error" not in result
+    assert "signal_name" not in result
+    assert extraction_daemon.read_pending_signals() == []
+
+
+@pytest.mark.parametrize("event_name", ["session.new", "session.agent_start"])
+def test_session_lifecycle_excluded_events_do_not_queue_daemon_signal(monkeypatch, tmp_path, event_name):
+    monkeypatch.setenv("SESSION_DB_PATH", str(tmp_path / "session.db"))
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
+    set_adapter(TestAdapter(tmp_path))
+
+    transcript = tmp_path / f"{event_name}.jsonl"
+    transcript.write_text('{"role":"user","content":"hello"}\n', encoding="utf-8")
+    emit_event(
+        name=event_name,
+        payload={"daemon_signal": {"enabled": True, "transcript_path": str(transcript)}},
+        source="pytest",
+        session_id=event_name.replace(".", "-"),
+        owner_id="owner-life",
+    )
+    out = process_events(limit=5, names=[event_name])
+
+    from core import extraction_daemon
+
+    result = out["details"][0]["result"]
+    assert result["status"] == "acknowledged"
+    assert result["persisted"] is True
+    assert "daemon_signal_queued" not in result
+    assert "signal_name" not in result
+    assert extraction_daemon.read_pending_signals() == []
+
+
+def test_session_lifecycle_daemon_signal_failures_respect_failhard(monkeypatch, tmp_path, caplog):
+    monkeypatch.setenv("SESSION_DB_PATH", str(tmp_path / "session.db"))
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
+    set_adapter(TestAdapter(tmp_path))
+
+    import core.runtime.events as events
+
+    missing = tmp_path / "missing.jsonl"
+    monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: False)
+    with caplog.at_level("WARNING"):
+        emit_event(
+            name="session.compaction",
+            payload={"daemon_signal": {"enabled": True, "transcript_path": str(missing)}},
+            source="pytest",
+            session_id="sess-soft-signal",
+            owner_id="owner-life",
+        )
+        soft = process_events(limit=5, names=["session.compaction"])
+
+    assert soft["processed"] == 1
+    soft_result = soft["details"][0]["result"]
+    assert soft_result["status"] == "acknowledged"
+    assert soft_result["persisted"] is True
+    assert soft_result["daemon_signal_queued"] is False
+    assert str(missing) in soft_result["daemon_signal_error"]
+    assert any("Lifecycle daemon signal bridge failed" in rec.message for rec in caplog.records)
+
+    monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: True)
+    emit_event(
+        name="session.compaction",
+        payload={"daemon_signal": {"enabled": True, "transcript_path": str(missing)}},
+        source="pytest",
+        session_id="sess-hard-signal",
+        owner_id="owner-life",
+    )
+    with pytest.raises(RuntimeError, match="Event handler failed while fail-hard mode is enabled") as excinfo:
+        process_events(limit=5, names=["session.compaction"])
+    assert isinstance(excinfo.value.__cause__, FileNotFoundError)
+    assert str(excinfo.value.__cause__) == str(missing)
+
+
+def test_session_lifecycle_daemon_signal_missing_session_id_is_selected_failure(monkeypatch, tmp_path, caplog):
+    monkeypatch.setenv("SESSION_DB_PATH", str(tmp_path / "session.db"))
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
+    set_adapter(TestAdapter(tmp_path))
+
+    import core.runtime.events as events
+
+    transcript = tmp_path / "session.jsonl"
+    transcript.write_text('{"role":"user","content":"hello"}\n', encoding="utf-8")
+    monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: False)
+    with caplog.at_level("WARNING"):
+        emit_event(
+            name="session.timeout",
+            payload={"daemon_signal": {"enabled": True, "transcript_path": str(transcript)}},
+            source="pytest",
+        )
+        soft = process_events(limit=5, names=["session.timeout"])
+
+    soft_result = soft["details"][0]["result"]
+    assert soft_result["persisted"] is False
+    assert soft_result["daemon_signal_queued"] is False
+    assert "session_id is required" in soft_result["daemon_signal_error"]
+    assert any("Lifecycle daemon signal bridge failed" in rec.message for rec in caplog.records)
+
+    monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: True)
+    emit_event(
+        name="session.timeout",
+        payload={"daemon_signal": {"enabled": True, "transcript_path": str(transcript)}},
+        source="pytest",
+    )
+    with pytest.raises(RuntimeError, match="Event handler failed while fail-hard mode is enabled") as excinfo:
+        process_events(limit=5, names=["session.timeout"])
+    assert isinstance(excinfo.value.__cause__, ValueError)
+    assert str(excinfo.value.__cause__) == "payload.session_id is required for daemon_signal bridge"
+
+
+def test_session_lifecycle_daemon_signal_dedupes_with_adapter_signal(monkeypatch, tmp_path):
+    monkeypatch.setenv("SESSION_DB_PATH", str(tmp_path / "session.db"))
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
+    set_adapter(TestAdapter(tmp_path))
+
+    from core import extraction_daemon
+
+    adapter_transcript = tmp_path / "adapter.jsonl"
+    bridge_transcript = tmp_path / "bridge.jsonl"
+    adapter_transcript.write_text('{"role":"user","content":"adapter"}\n', encoding="utf-8")
+    bridge_transcript.write_text('{"role":"user","content":"bridge"}\n', encoding="utf-8")
+    adapter_signal = extraction_daemon.write_signal(
+        signal_type="reset",
+        session_id="sess-dedupe",
+        transcript_path=str(adapter_transcript),
+        adapter="adapter-hook",
+        meta={"reason": "adapter_reset"},
+    )
+
+    emit_event(
+        name="session.reset",
+        payload={
+            "daemon_signal": {
+                "enabled": True,
+                "transcript_path": str(bridge_transcript),
+                "reason": "event_reset",
+            },
+        },
+        source="pytest",
+        session_id="sess-dedupe",
+        owner_id="owner-life",
+    )
+    out = process_events(limit=5, names=["session.reset"])
+
+    result = out["details"][0]["result"]
+    assert result["daemon_signal_queued"] is True
+    assert result["daemon_signal_type"] == "reset"
+    assert result["signal_name"] == adapter_signal.name
+    signals = extraction_daemon.read_pending_signals()
+    assert len(signals) == 1
+    assert signals[0]["type"] == "reset"
+    assert signals[0]["session_id"] == "sess-dedupe"
+    assert signals[0]["transcript_path"] == str(bridge_transcript)
+    assert signals[0]["meta"]["reason"] == "event_reset"
+
+
+def test_session_lifecycle_daemon_signal_helper_preserves_boundaries():
+    import core.runtime.events as events
+
+    helper_source = inspect.getsource(events._maybe_queue_lifecycle_daemon_signal)
+    assert "from core.extraction_daemon import write_signal" in helper_source
+    assert "datastore." not in helper_source
+    assert "_atomic_write" not in helper_source
+    assert "start_daemon" not in helper_source
+    assert "stop_daemon" not in helper_source
+    assert "restart" not in helper_source
+    assert "wake" not in helper_source
+
+
 def test_session_lifecycle_observation_is_idempotent(monkeypatch, tmp_path):
     monkeypatch.setenv("SESSION_DB_PATH", str(tmp_path / "session.db"))
     adapter = TestAdapter(tmp_path); set_adapter(adapter)
@@ -522,6 +780,47 @@ def test_session_lifecycle_persistence_failure_respects_failhard(monkeypatch, tm
         process_events(limit=5, names=["session.compaction"])
     assert isinstance(excinfo.value.__cause__, RuntimeError)
     assert str(excinfo.value.__cause__) == "sessiondb lifecycle down"
+
+
+def test_session_lifecycle_persistence_failure_does_not_block_failsoft_daemon_signal(
+    monkeypatch,
+    tmp_path,
+    caplog,
+):
+    monkeypatch.setenv("SESSION_DB_PATH", str(tmp_path / "session.db"))
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
+    set_adapter(TestAdapter(tmp_path))
+
+    import core.plugins.sessiondb_contract as sessiondb_contract
+    import core.runtime.events as events
+
+    def _boom(_event):
+        raise RuntimeError("sessiondb lifecycle down")
+
+    transcript = tmp_path / "session.jsonl"
+    transcript.write_text('{"role":"user","content":"hello"}\n', encoding="utf-8")
+    monkeypatch.setattr(sessiondb_contract, "record_session_lifecycle_observation", _boom)
+    monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: False)
+    with caplog.at_level("WARNING"):
+        emit_event(
+            name="session.reset",
+            payload={"daemon_signal": {"enabled": True, "transcript_path": str(transcript)}},
+            source="pytest",
+            session_id="sess-observation-fail",
+            owner_id="owner-life",
+        )
+        out = process_events(limit=5, names=["session.reset"])
+
+    from core import extraction_daemon
+
+    result = out["details"][0]["result"]
+    assert result["status"] == "acknowledged"
+    assert result["persisted"] is False
+    assert result["daemon_signal_queued"] is True
+    assert result["daemon_signal_type"] == "reset"
+    assert len(extraction_daemon.read_pending_signals()) == 1
+    assert any("SessionDB lifecycle observation persistence failed" in rec.message for rec in caplog.records)
 
 
 def test_event_capability_lookup_has_delivery_mode(tmp_path):
