@@ -291,8 +291,7 @@ narrow facade reset emitter smoke:
 - timeout facade lifecycle emitter closed in M31 at `815b938`; it requires
   explicit live transcript path discipline and does not use reset-preserved
   transcript paths as timeout evidence
-- agent-end lifecycle facade emitter is tracked as M32 in
-  `projects/quaid/operations/datastore-events-m32-agent-end-facade-lifecycle-emitter-plan.md`
+- agent-end lifecycle facade emitter closed in M32 at `b015b5dba`
 - OpenClaw hook migration to facade lifecycle emitters
 - adapter direct-signal retirement, if ever approved
 - daemon restart/stop automation from lifecycle events

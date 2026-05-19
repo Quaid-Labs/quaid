@@ -239,8 +239,7 @@ narrow explicit bridge smoke:
 - facade compaction lifecycle emitter closed in M29 at `a4a4d4238`;
   reset facade lifecycle emitter closed in M30 at `9f43c696`;
   timeout facade lifecycle emitter closed in M31 at `815b938`;
-  agent-end facade lifecycle emitter is tracked as M32 in
-  `projects/quaid/operations/datastore-events-m32-agent-end-facade-lifecycle-emitter-plan.md`;
+  agent-end facade lifecycle emitter closed in M32 at `b015b5dba`;
   OpenClaw hook migration remains deferred
 - SessionDB ingest wrapper retirement closed in M23 at `bfe5836b` +
   `4a3824d88`

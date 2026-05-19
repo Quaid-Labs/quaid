@@ -182,13 +182,15 @@ facade lifecycle emitter closed at `815b938`: facade
 `TimeoutSignal` inputs with concrete session id and existing live transcript path
 through the existing `emitEvent`/`execEvents` immediate path, while M25 remains
 the daemon timeout signal writer and M28 remains the daemon wake owner;
-reset-preserved transcript paths remain no-op for timeout. M32 now tracks the
-agent-end facade lifecycle emitter in
-`projects/quaid/operations/datastore-events-m32-agent-end-facade-lifecycle-emitter-plan.md`:
-the selected plan requires an explicit live transcript path and does not approve
-reset-preserved transcript paths as agent-end evidence. OpenClaw hook migration,
-daemon restart/stop automation, and recall/source-window policy changes remain
-deferred.
+reset-preserved transcript paths remain no-op for timeout. M32 agent-end facade
+lifecycle emitter closed at `b015b5dba`: facade `processLifecycleEvent()` may
+emit only `session.agent_end` for explicit `AgentEndSignal` inputs with concrete
+session id and existing live transcript path through the existing
+`emitEvent`/`execEvents` immediate path, while M24 remains the daemon
+`session_end` signal writer and M28 remains the daemon wake owner;
+reset-preserved transcript paths remain no-op for agent-end. OpenClaw hook
+migration, daemon restart/stop automation, and recall/source-window policy
+changes remain deferred.
 
 ## Shared Rules For Every M9 Slice
 
