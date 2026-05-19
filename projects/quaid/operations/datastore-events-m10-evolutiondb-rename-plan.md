@@ -1,6 +1,6 @@
 # Datastore Events M10 EvolutionDB Runtime Rename Plan
 
-Status: Slice 1 closed; Slice 2 contract-module rename planned, no Slice 2 runtime implementation yet
+Status: Slice 1 and Slice 2 closed; Slice 3 alias retirement remains planning-only
 Owner: W1 runtime/datastore, W3 recall and identity-context review
 Plan source: `projects/quaid/operations/datastore-events-m9-monitor-migration-plan.md`
 
@@ -17,8 +17,9 @@ Do not implement runtime code for M10 until:
    registry tests, journal/snippet tests, janitor lifecycle tests, and
    extraction orchestration tests.
 
-This document records completed M10 Slice 1 work and plans later slices. It does
-not approve Slice 2 runtime code until the Slice 2 plan has W3/W6/W8 review.
+This document records completed M10 Slice 1 and Slice 2 work and plans later
+slices. It does not approve alias retirement, plugin-id rename, or shim removal
+without a separate reviewed plan and operator approval.
 
 ## Goal
 
@@ -62,17 +63,38 @@ Current state after Slice 1:
 - `core.plugins.notedb_contract` and `notedb.core` are intentionally unchanged
   until Slice 2.
 
-Slice 2 is not implemented. It requires its own W3/W6/W8-reviewed plan before
-runtime code lands.
+Slice 2: contract module rename is closed at:
+
+- `787d93ee8` `refactor(datastore): make EvolutionDB contract module canonical`
+- `03e533338` `docs(datastore): note M10 contract logger rename`
+
+Slice 2 validation:
+
+- W4 live/source-proof PASS on R201
+- W3 runtime/recall APPROVED/no findings
+- W6 APPROVED after the logger-name operational note follow-up
+- W8 static PASS, docs gate PASS, and runtime HOLD closed
+
+Current state after Slice 2:
+
+- `core.plugins.evolutiondb_contract` is the canonical contract module.
+- `core.plugins.notedb_contract` remains a pure `sys.modules` alias shim to the
+  canonical module for installed alpha compatibility.
+- Internal producers, EvolutionDB handler specs, and the plugin manifest module
+  metadata point at `core.plugins.evolutiondb_contract`.
+- plugin id `notedb.core` is intentionally unchanged until a separately
+  reviewed compatibility plan approves changing it.
 
 ## Current Boundary
 
 Current runtime surfaces that mention NoteDB include:
 
-- `datastore.notedb.soul_snippets`
-- `core.lifecycle.soul_snippets`, a wrapper around `datastore.notedb`
-- `core.plugins.notedb_contract`
-- tests and maintenance paths that patch or import `datastore.notedb`
+- `datastore.notedb.soul_snippets`, a compatibility alias to
+  `datastore.evolutiondb.soul_snippets`
+- `core.plugins.notedb_contract`, a compatibility alias to
+  `core.plugins.evolutiondb_contract`
+- targeted tests that patch or import the legacy aliases to prove installed
+  alpha compatibility
 - manifest metadata with canonical id `evolutiondb` and `runtime_aliases:
   ["notedb"]`
 
