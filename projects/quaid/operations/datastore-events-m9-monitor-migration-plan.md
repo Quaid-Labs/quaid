@@ -54,8 +54,11 @@ Deferred items are not M9 blockers unless separately selected by Solomon with a
 new reviewed plan: direct `extract_from_transcript()` / CLI request routing,
 project-log queue ownership, lifecycle persistence, SessionDB first-party
 manifest registration, source-window metadata enrichment, snippet/journal
-request splitting, `datastore.evolutiondb` package rename, and `.ego`
-integration.
+request splitting, `datastore.notedb` / `core.plugins.notedb_contract`
+compatibility-alias retirement, `notedb.core` plugin-id rename, and `.ego`
+integration. The `datastore.evolutiondb` runtime package and
+`core.plugins.evolutiondb_contract` module renames were completed in M10 Slice 1
+and Slice 2.
 
 ## Shared Rules For Every M9 Slice
 
@@ -236,7 +239,10 @@ M9 is ready to hand off to M10 only when:
 - each M9 sub-milestone has passed W4 validation before the next one starts
 - no migrated monitor path retains its old direct production write path
 - W6 confirms the series did not accumulate a B032-style symptom chain
-- `evolutiondb` remains only a canonical datastore id/planning name until the
-  dedicated M10 runtime rename starts
 - M10 runtime rename planning starts in
   `projects/quaid/operations/datastore-events-m10-evolutiondb-rename-plan.md`
+
+Post-M10 disposition: M10 Slice 1 and Slice 2 completed the runtime package and
+contract-module rename while retaining installed-alpha compatibility aliases.
+Alias retirement and the `notedb.core` plugin-id rename remain future,
+operator-gated work.

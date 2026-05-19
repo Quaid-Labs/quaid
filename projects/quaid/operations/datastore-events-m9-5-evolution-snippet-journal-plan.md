@@ -465,5 +465,8 @@ Closure evidence:
 - Whether direct `extract_from_transcript()` / CLI should ever use request mode.
 - Whether snippet review and journal distillation maintenance should get their
   own request handlers beyond the existing maintenance contract.
-- Runtime `datastore.evolutiondb` package rename, deferred to M10.
+- Runtime `datastore.evolutiondb` package rename, completed in M10 Slice 1;
+  `core.plugins.evolutiondb_contract` canonicalization completed in M10 Slice 2.
+  Compatibility alias retirement and `notedb.core` plugin-id rename remain
+  future/operator-gated work.
 - `.ego` import/export integration, deferred to a separate product milestone.
