@@ -164,10 +164,16 @@ through `core.extraction_daemon.write_signal()`, while live
 `payload.transcript_path` remains ack+observation only and OpenClaw reset hooks
 plus daemon reset backup/cursor ownership remain unchanged. M28 event-bus
 lifecycle signal wake/start parity closed at `5152a928`: after an existing M22
-explicit or M24-M27 default lifecycle bridge writes a compatible daemon signal, the event-bus path now wakes/starts the daemon only through
-`core.extraction_daemon.ensure_alive()`. Daemon restart/stop automation,
-event-bus emitter wiring from OpenClaw hooks, and recall/source-window policy
-changes remain deferred.
+explicit or M24-M27 default lifecycle bridge writes a compatible daemon signal,
+the event-bus path now wakes/starts the daemon only through
+`core.extraction_daemon.ensure_alive()`. M29 now tracks the first facade
+lifecycle emitter slice in
+`projects/quaid/operations/datastore-events-m29-compaction-facade-lifecycle-emitter-plan.md`:
+facade `processLifecycleEvent()` may emit only `session.compaction` for explicit
+`CompactionSignal` inputs with concrete session id and existing transcript path.
+Reset, timeout, agent-end emitter wiring, OpenClaw hook migration, daemon
+restart/stop automation, and recall/source-window policy changes remain
+deferred.
 
 ## Shared Rules For Every M9 Slice
 

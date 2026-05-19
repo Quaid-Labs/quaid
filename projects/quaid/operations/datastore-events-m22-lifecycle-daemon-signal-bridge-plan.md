@@ -236,6 +236,9 @@ narrow explicit bridge smoke:
   bridge closed in M27 at `acd05eaab`
 - event-bus lifecycle signal wake/start parity closed in M28 at
   `5152a928`; daemon restart/stop automation remains deferred
+- facade compaction lifecycle emitter is tracked as M29 in
+  `projects/quaid/operations/datastore-events-m29-compaction-facade-lifecycle-emitter-plan.md`;
+  reset, timeout, agent-end emitter wiring and OpenClaw hook migration remain deferred
 - SessionDB ingest wrapper retirement closed in M23 at `bfe5836b` +
   `4a3824d88`
 - whether SessionDB should expose dedicated request handlers beyond

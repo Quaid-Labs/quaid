@@ -273,6 +273,9 @@ narrow default timeout bridge smoke:
   `acd05eaab`
 - event-bus lifecycle signal wake/start parity closed in M28 at
   `5152a928`; daemon restart/stop automation remains deferred
+- facade compaction lifecycle emitter is tracked as M29 in
+  `projects/quaid/operations/datastore-events-m29-compaction-facade-lifecycle-emitter-plan.md`;
+  reset, timeout, agent-end emitter wiring and OpenClaw hook migration remain deferred
 - whether SessionDB should expose dedicated request handlers beyond
   `session.ingest_log.request.v1` and generic metadata/maintenance surfaces
 - source-window selector ownership or SessionDB recall capability

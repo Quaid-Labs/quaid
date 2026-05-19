@@ -281,8 +281,11 @@ narrow lifecycle wake smoke:
 ## Deferred Decisions
 
 - daemon restart/stop automation from lifecycle events
-- whether event-bus lifecycle emitters should later be wired from OpenClaw hooks
-  or another facade/gateway layer
+- facade compaction lifecycle emitter is tracked as M29 in
+  `projects/quaid/operations/datastore-events-m29-compaction-facade-lifecycle-emitter-plan.md`
+- reset, timeout, and agent-end lifecycle emitters
+- whether OpenClaw hooks should later be wired to facade lifecycle emitters or
+  another facade/gateway layer
 - whether SessionDB should expose dedicated request handlers beyond
   `session.ingest_log.request.v1` and generic metadata/maintenance surfaces
 - source-window selector ownership or SessionDB recall capability
