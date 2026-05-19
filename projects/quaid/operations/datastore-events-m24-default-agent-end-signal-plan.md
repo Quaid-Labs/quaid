@@ -70,6 +70,9 @@ Post-M23 path:
    files directly through `core.extraction_daemon.write_signal()`.
 6. M21 records metadata-only SessionDB lifecycle observations when the daemon
    later processes `reset`, `compaction`, `timeout`, and `session_end` signals.
+   Those observations persist directly to SessionDB through
+   `core.plugins.sessiondb_contract.record_session_lifecycle_observation()` and
+   do not republish through `process_events()`.
 7. MemoryDB remains the owner of `session_chunks` recall/write projection and
    final source-window output policy. SessionDB `capabilities.recall` remains
    `[]`.
@@ -101,6 +104,9 @@ Implement one runtime slice only:
    M20 acknowledgement plus observation behavior and does not add daemon signal
    fields. This compatibility rule prevents older alpha lifecycle emitters that
    do not know about transcript paths from turning terminal events into failures.
+   It is also the explicit opt-out contract for emitters that need ack-only
+   terminal lifecycle behavior: omit `payload.transcript_path` unless the event
+   should queue the default daemon `session_end` signal.
 6. Uses `core.extraction_daemon.write_signal()` through an in-function import
    inside the default helper. Do not write signal files by hand. Do not import or
    call daemon process lifecycle helpers such as start, wake, stop, or restart.
@@ -127,6 +133,11 @@ Implement one runtime slice only:
 12. Preserve M21 daemon observation behavior. When the daemon later processes the
     default-written signal, it should follow the same observation path as
     adapter-written and explicit-M22 bridge signals.
+13. M24 is infrastructure for event-bus lifecycle emitters that already know the
+    active transcript path or will be migrated to provide it. Current adapter
+    hook paths may continue to write `session_end` signals directly through
+    `write_signal()`; this slice does not require migrating those hooks to
+    event-bus lifecycle emission.
 
 ## Non-Targets
 
