@@ -136,7 +136,7 @@ EVENT_REGISTRY: List[Dict[str, Any]] = [
     },
     {
         "name": SESSION_INGEST_LOG_REQUEST_EVENT,
-        "description": "Request MemoryDB-owned session transcript ingest and session_chunks projection.",
+        "description": "Request SessionDB-owned session transcript ingest with MemoryDB session_chunks projection.",
         "fireable": True,
         "processable": False,
         "listenable": True,

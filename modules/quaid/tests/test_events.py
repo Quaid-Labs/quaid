@@ -72,7 +72,13 @@ def test_event_emit_list_and_capabilities(tmp_path):
     assert any(c.get("name") == "session.reset" for c in caps)
     assert any(c.get("name") == "notification.delayed" for c in caps)
     assert any(c.get("name") == "session.ingest_log" for c in caps)
-    assert any(c.get("name") == SESSION_INGEST_LOG_REQUEST_EVENT and c.get("delivery_mode") == "request" for c in caps)
+    assert any(
+        c.get("name") == SESSION_INGEST_LOG_REQUEST_EVENT
+        and c.get("delivery_mode") == "request"
+        and "SessionDB-owned session transcript ingest" in str(c.get("description") or "")
+        and "MemoryDB session_chunks projection" in str(c.get("description") or "")
+        for c in caps
+    )
     assert any(
         c.get("name") == MEMORY_EXTRACTION_PUBLISH_REQUEST_EVENT and c.get("delivery_mode") == "request"
         for c in caps
