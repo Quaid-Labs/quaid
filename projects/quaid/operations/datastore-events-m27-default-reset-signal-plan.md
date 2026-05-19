@@ -327,7 +327,9 @@ narrow default reset bridge smoke:
 
 ## Deferred Decisions
 
-- daemon start/wake/restart automation from lifecycle events
+- event-bus lifecycle signal wake/start parity is tracked as M28 in
+  `projects/quaid/operations/datastore-events-m28-lifecycle-signal-daemon-wake-plan.md`;
+  daemon restart/stop automation remains deferred
 - whether event-bus reset emitters should later be wired from OpenClaw hooks or
   another facade/gateway layer
 - whether SessionDB should expose dedicated request handlers beyond

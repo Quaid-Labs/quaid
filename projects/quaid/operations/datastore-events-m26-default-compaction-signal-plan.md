@@ -283,7 +283,9 @@ narrow default compaction bridge smoke:
 - default reset lifecycle-to-daemon signal bridge closed in M27 at
   `acd05eaab`; M27 requires `payload.reset_transcript_path` and does not
   approve live `payload.transcript_path` reset queueing
-- daemon start/wake/restart automation from lifecycle events
+- event-bus lifecycle signal wake/start parity is tracked as M28 in
+  `projects/quaid/operations/datastore-events-m28-lifecycle-signal-daemon-wake-plan.md`;
+  daemon restart/stop automation remains deferred
 - whether SessionDB should expose dedicated request handlers beyond
   `session.ingest_log.request.v1` and generic metadata/maintenance surfaces
 - source-window selector ownership or SessionDB recall capability

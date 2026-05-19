@@ -162,8 +162,14 @@ M24 agent-end, and M25 timeout precedence remain canonical. M27 default
 `payload.reset_transcript_path` now write the existing daemon `reset` signal
 through `core.extraction_daemon.write_signal()`, while live
 `payload.transcript_path` remains ack+observation only and OpenClaw reset hooks
-plus daemon reset backup/cursor ownership remain unchanged. Daemon process
-automation and recall/source-window policy changes remain deferred.
+plus daemon reset backup/cursor ownership remain unchanged. M28 now tracks event-bus
+lifecycle signal wake/start parity in
+`projects/quaid/operations/datastore-events-m28-lifecycle-signal-daemon-wake-plan.md`:
+after an existing M22 explicit or M24-M27 default lifecycle bridge writes a
+compatible daemon signal, the selected plan would wake/start the daemon only
+through `core.extraction_daemon.ensure_alive()`. Daemon restart/stop
+automation, event-bus emitter wiring from OpenClaw hooks, and
+recall/source-window policy changes remain deferred.
 
 ## Shared Rules For Every M9 Slice
 
