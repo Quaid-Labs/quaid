@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createQuaidFacade } from "../core/facade.js";
 import type { QuaidFacadeDeps, LLMCallResult } from "../core/facade.js";
-import { mkdir, mkdtemp, readFile, readdir, rm, unlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { mkdirSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
@@ -576,6 +576,129 @@ describe("QuaidFacade", () => {
       "--dispatch",
       "queued",
     ]);
+  });
+
+  it("processLifecycleEvent emits compaction through existing events path", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "quaid-facade-lifecycle-"));
+    const transcriptPath = path.join(workspace, "session.jsonl");
+    await writeFile(transcriptPath, '{"role":"user","content":"compact this"}\n', "utf8");
+    const execEvents = vi.fn(async () => '{"status":"acknowledged","event":"session.compaction"}');
+    const facade = createQuaidFacade(makeMockDeps({ execEvents }));
+
+    const result = await facade.processLifecycleEvent(
+      {
+        label: "CompactionSignal",
+        source: "system_notice",
+        signature: "system:compacted",
+        messageIndex: 3,
+      },
+      {
+        sessionId: "sess-compact",
+        transcriptPath,
+        reason: "before_compaction",
+        adapter: "openclaw",
+        source: "facade-test",
+      },
+    );
+
+    expect(result).toEqual({ status: "acknowledged", event: "session.compaction" });
+    expect(execEvents).toHaveBeenCalledTimes(1);
+    const args = execEvents.mock.calls[0][1];
+    expect(execEvents).toHaveBeenCalledWith(
+      "emit",
+      expect.arrayContaining(["--name", "session.compaction", "--dispatch", "immediate"]),
+    );
+    const payload = JSON.parse(String(args[args.indexOf("--payload") + 1]));
+    expect(payload).toEqual({
+      session_id: "sess-compact",
+      transcript_path: transcriptPath,
+      lifecycle_signal_label: "CompactionSignal",
+      lifecycle_signal_source: "system_notice",
+      lifecycle_signal_signature: "system:compacted",
+      lifecycle_message_index: 3,
+      reason: "before_compaction",
+      adapter: "openclaw",
+      source: "facade-test",
+    });
+    expect(JSON.stringify(payload)).not.toContain("compact this");
+    await rm(workspace, { recursive: true, force: true });
+  });
+
+  it("processLifecycleEvent no-ops invalid inputs without emitting under fail-soft", async () => {
+    const execEvents = vi.fn(async () => '{"status":"unexpected"}');
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const facade = createQuaidFacade(makeMockDeps({ execEvents }));
+
+    await expect(
+      facade.processLifecycleEvent({ label: "ResetSignal", source: "hook", signature: "hook:reset" }, {
+        sessionId: "sess-reset",
+        transcriptPath: "/tmp/live-transcript.jsonl",
+      }),
+    ).resolves.toEqual({
+      status: "ignored",
+      event_emitted: false,
+      reason: "unsupported_signal",
+    });
+    await expect(
+      facade.processLifecycleEvent({ label: "CompactionSignal", source: "hook", signature: "hook:compact" }, {
+        sessionId: "sess-compact",
+        transcriptPath: "/tmp/missing-transcript.jsonl",
+      }),
+    ).resolves.toEqual({
+      status: "ignored",
+      event_emitted: false,
+      reason: "missing_transcript_path",
+    });
+
+    expect(execEvents).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("does not support signal label ResetSignal"));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("transcript path does not exist"));
+    warn.mockRestore();
+  });
+
+  it("processLifecycleEvent raises selected invalid inputs under failHard", async () => {
+    const execEvents = vi.fn(async () => '{"status":"unexpected"}');
+    const facade = createQuaidFacade(makeMockDeps({
+      execEvents,
+      isFailHardEnabled: vi.fn(() => true),
+    }));
+
+    await expect(
+      facade.processLifecycleEvent({ label: "CompactionSignal", source: "hook", signature: "hook:compact" }, {
+        transcriptPath: "/tmp/session.jsonl",
+      }),
+    ).rejects.toThrow("requires context.sessionId");
+    await expect(
+      facade.processLifecycleEvent({ label: "ResetSignal", source: "hook", signature: "hook:reset" }, {
+        sessionId: "sess-reset",
+        transcriptPath: "/tmp/session.jsonl",
+      }),
+    ).rejects.toThrow("does not support signal label ResetSignal");
+    expect(execEvents).not.toHaveBeenCalled();
+  });
+
+  it("processLifecycleEvent preserves emitEvent failure behavior", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "quaid-facade-lifecycle-bad-json-"));
+    const transcriptPath = path.join(workspace, "session.jsonl");
+    await writeFile(transcriptPath, '{"role":"user","content":"compact this"}\n', "utf8");
+    const execEvents = vi.fn(async () => "not-json");
+    const facade = createQuaidFacade(makeMockDeps({ execEvents }));
+
+    await expect(
+      facade.processLifecycleEvent(
+        { label: "CompactionSignal", source: "hook", signature: "hook:compact" },
+        { sessionId: "sess-compact", transcriptPath },
+      ),
+    ).rejects.toThrow("events emit returned invalid JSON");
+    expect(execEvents).toHaveBeenCalledTimes(1);
+    await rm(workspace, { recursive: true, force: true });
+  });
+
+  it("processLifecycleEvent source does not bypass runtime event boundaries", async () => {
+    const source = await readFile(path.join(process.cwd(), "core", "facade.ts"), "utf8");
+    const match = source.match(/async function processLifecycleEvent[\s\S]*?return emitRuntimeEvent\("session\.compaction", payload, "immediate"\);\n  \}/);
+    expect(match?.[0] || "").toContain('emitRuntimeEvent("session.compaction", payload, "immediate")');
+    expect(match?.[0] || "").not.toMatch(/write_signal|ensure_alive|start_daemon|stop_daemon|restart|subprocess|pidfile|reset_transcript_path/);
   });
 
   // -----------------------------------------------------------------------
@@ -2374,11 +2497,6 @@ describe("QuaidFacade", () => {
         stale,
       ),
     ).toBe(true);
-  });
-
-  it("processLifecycleEvent throws not implemented", () => {
-    const facade = createQuaidFacade(makeMockDeps());
-    expect(() => facade.processLifecycleEvent({}, {})).toThrow("not yet implemented");
   });
 
   it("maybeRunMaintenance throws not implemented", () => {

@@ -488,7 +488,7 @@ export type QuaidFacade = {
   ) => boolean;
   markLifecycleSignalFromHook: (sessionId: string, label: "ResetSignal" | "CompactionSignal") => void;
   clearLifecycleSignalHistory: () => void;
-  processLifecycleEvent: (signal: unknown, context: unknown) => never;
+  processLifecycleEvent: (signal: unknown, context: unknown) => Promise<Record<string, unknown>>;
   maybeRunMaintenance: (sessionId: string) => never;
   getJanitorHealthIssue: () => string | null;
   queueExtraction: (task: () => Promise<void>, source: string) => Promise<void>;
@@ -2126,6 +2126,93 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
       signature: `hook:${label}`,
       seenAt: Date.now(),
     });
+  }
+
+  async function emitRuntimeEvent(
+    name: string,
+    payload: Record<string, unknown>,
+    dispatch: "auto" | "immediate" | "queued" = "auto",
+  ): Promise<Record<string, unknown>> {
+    const args = [
+      "--name",
+      name,
+      "--payload",
+      JSON.stringify(payload || {}),
+      "--source",
+      String(deps.eventSource || "adapter"),
+      "--dispatch",
+      dispatch,
+    ];
+    const out = await deps.execEvents("emit", args);
+    let parsed: unknown = null;
+    try {
+      parsed = JSON.parse(out || "{}");
+    } catch (err: unknown) {
+      const msg = String((err as Error)?.message || err);
+      throw new Error(`[quaid][facade] events emit returned invalid JSON: ${msg}`);
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("[quaid][facade] events emit returned non-object payload");
+    }
+    return parsed as Record<string, unknown>;
+  }
+
+  function lifecycleNoop(reason: string, message: string): Record<string, unknown> {
+    const detail = `[quaid][facade] processLifecycleEvent ${message}`;
+    if (deps.isFailHardEnabled()) {
+      throw new Error(detail);
+    }
+    console.warn(detail);
+    return {
+      status: "ignored",
+      event_emitted: false,
+      reason,
+    };
+  }
+
+  async function processLifecycleEvent(signal: unknown, context: unknown): Promise<Record<string, unknown>> {
+    if (!signal || typeof signal !== "object" || Array.isArray(signal)) {
+      return lifecycleNoop("invalid_signal", "requires a signal object");
+    }
+    const sig = signal as Record<string, unknown>;
+    const label = String(sig.label || "").trim();
+    if (label !== "CompactionSignal") {
+      return lifecycleNoop("unsupported_signal", `does not support signal label ${label || "<missing>"}`);
+    }
+    const ctx = context && typeof context === "object" && !Array.isArray(context)
+      ? context as Record<string, unknown>
+      : {};
+    const sessionId = String(ctx.sessionId || ctx.session_id || "").trim();
+    if (!sessionId) {
+      return lifecycleNoop("missing_session_id", "requires context.sessionId");
+    }
+    const transcriptPath = String(ctx.transcriptPath || ctx.transcript_path || ctx.sessionFile || ctx.session_file || "").trim();
+    if (!transcriptPath) {
+      return lifecycleNoop("missing_transcript_path", "requires context.transcriptPath");
+    }
+    if (!fs.existsSync(transcriptPath)) {
+      return lifecycleNoop("missing_transcript_path", `transcript path does not exist: ${transcriptPath}`);
+    }
+
+    const payload: Record<string, unknown> = {
+      session_id: sessionId,
+      transcript_path: transcriptPath,
+      lifecycle_signal_label: label,
+    };
+    const signalSource = String(sig.source || "").trim();
+    if (signalSource) payload.lifecycle_signal_source = signalSource;
+    const signature = String(sig.signature || "").trim();
+    if (signature) payload.lifecycle_signal_signature = signature;
+    const messageIndex = Number(sig.messageIndex);
+    if (Number.isInteger(messageIndex) && messageIndex >= 0) {
+      payload.lifecycle_message_index = messageIndex;
+    }
+    for (const key of ["reason", "adapter", "source"] as const) {
+      const value = String(ctx[key] || "").trim();
+      if (value) payload[key] = value;
+    }
+
+    return emitRuntimeEvent("session.compaction", payload, "immediate");
   }
 
   function isInternalMaintenancePrompt(text: string): boolean {
@@ -4179,30 +4266,7 @@ ${lines.join("\n")}
     ]),
 
     // Events
-    emitEvent: async (name, payload, dispatch = "auto") => {
-      const args = [
-        "--name",
-        name,
-        "--payload",
-        JSON.stringify(payload || {}),
-        "--source",
-        String(deps.eventSource || "adapter"),
-        "--dispatch",
-        dispatch,
-      ];
-      const out = await deps.execEvents("emit", args);
-      let parsed: unknown = null;
-      try {
-        parsed = JSON.parse(out || "{}");
-      } catch (err: unknown) {
-        const msg = String((err as Error)?.message || err);
-        throw new Error(`[quaid][facade] events emit returned invalid JSON: ${msg}`);
-      }
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-        throw new Error("[quaid][facade] events emit returned non-object payload");
-      }
-      return parsed as Record<string, unknown>;
-    },
+    emitEvent: emitRuntimeEvent,
 
     // Recall
     recall,
@@ -4274,7 +4338,7 @@ ${lines.join("\n")}
     shouldProcessLifecycleSignal,
     markLifecycleSignalFromHook,
     clearLifecycleSignalHistory: () => lifecycleSignalHistory.clear(),
-    processLifecycleEvent: () => notImplemented("processLifecycleEvent"),
+    processLifecycleEvent,
     maybeRunMaintenance: () => notImplemented("maybeRunMaintenance"),
     getJanitorHealthIssue,
     queueExtraction,

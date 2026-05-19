@@ -1471,6 +1471,82 @@ function createQuaidFacade(deps) {
       seenAt: Date.now()
     });
   }
+  async function emitRuntimeEvent(name, payload, dispatch = "auto") {
+    const args = [
+      "--name",
+      name,
+      "--payload",
+      JSON.stringify(payload || {}),
+      "--source",
+      String(deps.eventSource || "adapter"),
+      "--dispatch",
+      dispatch
+    ];
+    const out = await deps.execEvents("emit", args);
+    let parsed = null;
+    try {
+      parsed = JSON.parse(out || "{}");
+    } catch (err) {
+      const msg = String(err?.message || err);
+      throw new Error(`[quaid][facade] events emit returned invalid JSON: ${msg}`);
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("[quaid][facade] events emit returned non-object payload");
+    }
+    return parsed;
+  }
+  function lifecycleNoop(reason, message) {
+    const detail = `[quaid][facade] processLifecycleEvent ${message}`;
+    if (deps.isFailHardEnabled()) {
+      throw new Error(detail);
+    }
+    console.warn(detail);
+    return {
+      status: "ignored",
+      event_emitted: false,
+      reason
+    };
+  }
+  async function processLifecycleEvent(signal, context) {
+    if (!signal || typeof signal !== "object" || Array.isArray(signal)) {
+      return lifecycleNoop("invalid_signal", "requires a signal object");
+    }
+    const sig = signal;
+    const label = String(sig.label || "").trim();
+    if (label !== "CompactionSignal") {
+      return lifecycleNoop("unsupported_signal", `does not support signal label ${label || "<missing>"}`);
+    }
+    const ctx = context && typeof context === "object" && !Array.isArray(context) ? context : {};
+    const sessionId = String(ctx.sessionId || ctx.session_id || "").trim();
+    if (!sessionId) {
+      return lifecycleNoop("missing_session_id", "requires context.sessionId");
+    }
+    const transcriptPath = String(ctx.transcriptPath || ctx.transcript_path || ctx.sessionFile || ctx.session_file || "").trim();
+    if (!transcriptPath) {
+      return lifecycleNoop("missing_transcript_path", "requires context.transcriptPath");
+    }
+    if (!fs.existsSync(transcriptPath)) {
+      return lifecycleNoop("missing_transcript_path", `transcript path does not exist: ${transcriptPath}`);
+    }
+    const payload = {
+      session_id: sessionId,
+      transcript_path: transcriptPath,
+      lifecycle_signal_label: label
+    };
+    const signalSource = String(sig.source || "").trim();
+    if (signalSource) payload.lifecycle_signal_source = signalSource;
+    const signature = String(sig.signature || "").trim();
+    if (signature) payload.lifecycle_signal_signature = signature;
+    const messageIndex = Number(sig.messageIndex);
+    if (Number.isInteger(messageIndex) && messageIndex >= 0) {
+      payload.lifecycle_message_index = messageIndex;
+    }
+    for (const key of ["reason", "adapter", "source"]) {
+      const value = String(ctx[key] || "").trim();
+      if (value) payload[key] = value;
+    }
+    return emitRuntimeEvent("session.compaction", payload, "immediate");
+  }
   function isInternalMaintenancePrompt(text) {
     const normalized = String(text || "").trim().toLowerCase();
     if (!normalized) return false;
@@ -3215,30 +3291,7 @@ ${combined}` : combined;
       String(limit)
     ]),
     // Events
-    emitEvent: async (name, payload, dispatch = "auto") => {
-      const args = [
-        "--name",
-        name,
-        "--payload",
-        JSON.stringify(payload || {}),
-        "--source",
-        String(deps.eventSource || "adapter"),
-        "--dispatch",
-        dispatch
-      ];
-      const out = await deps.execEvents("emit", args);
-      let parsed = null;
-      try {
-        parsed = JSON.parse(out || "{}");
-      } catch (err) {
-        const msg = String(err?.message || err);
-        throw new Error(`[quaid][facade] events emit returned invalid JSON: ${msg}`);
-      }
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-        throw new Error("[quaid][facade] events emit returned non-object payload");
-      }
-      return parsed;
-    },
+    emitEvent: emitRuntimeEvent,
     // Recall
     recall,
     recallWithDiagnostics,
@@ -3303,7 +3356,7 @@ ${combined}` : combined;
     shouldProcessLifecycleSignal,
     markLifecycleSignalFromHook,
     clearLifecycleSignalHistory: () => lifecycleSignalHistory.clear(),
-    processLifecycleEvent: () => notImplemented("processLifecycleEvent"),
+    processLifecycleEvent,
     maybeRunMaintenance: () => notImplemented("maybeRunMaintenance"),
     getJanitorHealthIssue,
     queueExtraction,
