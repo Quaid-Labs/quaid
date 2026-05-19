@@ -75,6 +75,29 @@ def test_notedb_compat_shim_monkeypatches_canonical_module(monkeypatch):
     ]
 
 
+def test_notedb_contract_compat_shim_aliases_evolutiondb_contract(monkeypatch):
+    canonical = importlib.import_module("core.plugins.evolutiondb_contract")
+    legacy = importlib.import_module("core.plugins.notedb_contract")
+
+    calls = []
+
+    def _fake_write(payload):
+        calls.append(payload)
+        return {
+            "status": "ok",
+            "target_files": {"snippets": [], "journal": []},
+            "errors": [],
+        }
+
+    monkeypatch.setattr(legacy, "run_snippet_journal_write_payload", _fake_write)
+
+    assert legacy is canonical
+    assert canonical.run_snippet_journal_write_payload is _fake_write
+    result = canonical.run_snippet_journal_write_payload({"source": "extraction-apply-payloads"})
+    assert result["status"] == "ok"
+    assert calls == [{"source": "extraction-apply-payloads"}]
+
+
 @pytest.fixture
 def mock_config():
     """Mock config with journal enabled."""
@@ -101,9 +124,9 @@ def mock_config():
     return mock_cfg
 
 
-class TestNoteDbContractSnippetJournalWrite:
+class TestEvolutionDbContractSnippetJournalWrite:
     def test_helper_writes_snippet_and_journal_with_target_metrics(self, workspace_dir, mock_config):
-        from core.plugins.notedb_contract import run_snippet_journal_write_payload
+        from core.plugins.evolutiondb_contract import run_snippet_journal_write_payload
 
         with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
             result = run_snippet_journal_write_payload({
@@ -135,7 +158,7 @@ class TestNoteDbContractSnippetJournalWrite:
         ).read_text(encoding="utf-8")
 
     def test_helper_preserves_duplicate_skip_counters(self, workspace_dir, mock_config):
-        from core.plugins.notedb_contract import run_snippet_journal_write_payload
+        from core.plugins.evolutiondb_contract import run_snippet_journal_write_payload
 
         payload = {
             "source": "extraction-apply-payloads",
@@ -157,11 +180,11 @@ class TestNoteDbContractSnippetJournalWrite:
         assert second["journal_files_skipped"] == 1
 
     def test_helper_logs_and_records_soft_snippet_write_failure(self, caplog):
-        from core.plugins.notedb_contract import run_snippet_journal_write_payload
+        from core.plugins.evolutiondb_contract import run_snippet_journal_write_payload
 
         with patch("datastore.notedb.soul_snippets.write_snippet_entry", side_effect=OSError("disk full")), \
              patch("lib.fail_policy.is_fail_hard_enabled", return_value=False), \
-             caplog.at_level(logging.WARNING, logger="core.plugins.notedb_contract"):
+             caplog.at_level(logging.WARNING, logger="core.plugins.evolutiondb_contract"):
             result = run_snippet_journal_write_payload({
                 "source": "extraction-apply-payloads",
                 "snippets": {"SOUL.md": ["Remember the disk warning."]},
@@ -175,11 +198,11 @@ class TestNoteDbContractSnippetJournalWrite:
         assert "snippet write failed for SOUL.md: disk full" in caplog.text
 
     def test_helper_logs_before_fail_hard_snippet_write_raise(self, caplog):
-        from core.plugins.notedb_contract import run_snippet_journal_write_payload
+        from core.plugins.evolutiondb_contract import run_snippet_journal_write_payload
 
         with patch("datastore.notedb.soul_snippets.write_snippet_entry", side_effect=OSError("disk full")), \
              patch("lib.fail_policy.is_fail_hard_enabled", return_value=True), \
-             caplog.at_level(logging.WARNING, logger="core.plugins.notedb_contract"):
+             caplog.at_level(logging.WARNING, logger="core.plugins.evolutiondb_contract"):
             with pytest.raises(OSError, match="disk full"):
                 run_snippet_journal_write_payload({
                     "source": "extraction-apply-payloads",
@@ -190,11 +213,11 @@ class TestNoteDbContractSnippetJournalWrite:
         assert "snippet write failed for SOUL.md: disk full" in caplog.text
 
     def test_helper_logs_and_records_soft_journal_write_failure(self, caplog):
-        from core.plugins.notedb_contract import run_snippet_journal_write_payload
+        from core.plugins.evolutiondb_contract import run_snippet_journal_write_payload
 
         with patch("datastore.notedb.soul_snippets.write_journal_entry", side_effect=OSError("disk full")), \
              patch("lib.fail_policy.is_fail_hard_enabled", return_value=False), \
-             caplog.at_level(logging.WARNING, logger="core.plugins.notedb_contract"):
+             caplog.at_level(logging.WARNING, logger="core.plugins.evolutiondb_contract"):
             result = run_snippet_journal_write_payload({
                 "source": "extraction-apply-payloads",
                 "snippets": {},
@@ -208,11 +231,11 @@ class TestNoteDbContractSnippetJournalWrite:
         assert "journal write failed for SOUL.md: disk full" in caplog.text
 
     def test_helper_logs_before_fail_hard_journal_write_raise(self, caplog):
-        from core.plugins.notedb_contract import run_snippet_journal_write_payload
+        from core.plugins.evolutiondb_contract import run_snippet_journal_write_payload
 
         with patch("datastore.notedb.soul_snippets.write_journal_entry", side_effect=OSError("disk full")), \
              patch("lib.fail_policy.is_fail_hard_enabled", return_value=True), \
-             caplog.at_level(logging.WARNING, logger="core.plugins.notedb_contract"):
+             caplog.at_level(logging.WARNING, logger="core.plugins.evolutiondb_contract"):
             with pytest.raises(OSError, match="disk full"):
                 run_snippet_journal_write_payload({
                     "source": "extraction-apply-payloads",

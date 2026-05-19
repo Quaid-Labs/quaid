@@ -2898,7 +2898,7 @@ def _request_snippet_journal_write_payload(
     owner_id: str,
     session_id: Optional[str],
 ) -> Dict[str, Any]:
-    from core.plugins.notedb_contract import register_snippet_journal_write_request_handler
+    from core.plugins.evolutiondb_contract import register_snippet_journal_write_request_handler
     from core.runtime.events import EVOLUTION_SNIPPET_JOURNAL_WRITE_REQUEST_EVENT, request_broker_event
 
     register_snippet_journal_write_request_handler()
@@ -2964,7 +2964,7 @@ def apply_extracted_payloads(
     }
 
     from core.plugins.memorydb_contract import run_extraction_publish_payload, write_extraction_publish_trace
-    from core.plugins.notedb_contract import run_snippet_journal_write_payload
+    from core.plugins.evolutiondb_contract import run_snippet_journal_write_payload
 
     publish_mode = str(memory_publish_mode or "direct").strip().lower()
     if publish_mode == "request":

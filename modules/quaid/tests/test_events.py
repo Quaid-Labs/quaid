@@ -1158,8 +1158,8 @@ def test_request_extraction_publish_rejects_required_payload_fields(monkeypatch,
 
 def test_request_snippet_journal_write_runs_evolutiondb_handler(monkeypatch, tmp_path):
     set_adapter(TestAdapter(tmp_path))
-    import core.plugins.notedb_contract as notedb_contract
-    from core.plugins.notedb_contract import register_snippet_journal_write_request_handler
+    import core.plugins.evolutiondb_contract as evolutiondb_contract
+    from core.plugins.evolutiondb_contract import register_snippet_journal_write_request_handler
 
     called = {}
 
@@ -1182,7 +1182,7 @@ def test_request_snippet_journal_write_runs_evolutiondb_handler(monkeypatch, tmp
             "errors": [],
         }
 
-    monkeypatch.setattr(notedb_contract, "run_snippet_journal_write_payload", _fake_write)
+    monkeypatch.setattr(evolutiondb_contract, "run_snippet_journal_write_payload", _fake_write)
 
     register_snippet_journal_write_request_handler()
     response = request_broker_event(
@@ -1236,7 +1236,7 @@ def test_request_snippet_journal_write_runs_evolutiondb_handler(monkeypatch, tmp
 def test_request_snippet_journal_write_rejects_required_payload_fields(monkeypatch, tmp_path, payload, error):
     set_adapter(TestAdapter(tmp_path))
     import core.runtime.events as events
-    from core.plugins.notedb_contract import register_snippet_journal_write_request_handler
+    from core.plugins.evolutiondb_contract import register_snippet_journal_write_request_handler
 
     monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: False)
 

@@ -277,7 +277,7 @@ class EvolutionDbDatastoreContract(DatastoreContractBase):
         DatastoreHandlerSpec(
             "evolution.snippet_journal_write.request.v1",
             REQUEST,
-            ("core.plugins.notedb_contract.handle_snippet_journal_write_request",),
+            ("core.plugins.evolutiondb_contract.handle_snippet_journal_write_request",),
         ),
         DatastoreHandlerSpec(
             "datastore.validate.request.v1",

@@ -2905,7 +2905,7 @@ class TestExtractFromTranscript:
             }
 
         monkeypatch.setattr("core.plugins.memorydb_contract.run_extraction_publish_payload", fake_publish)
-        monkeypatch.setattr("core.plugins.notedb_contract.run_snippet_journal_write_payload", fake_snippet_journal)
+        monkeypatch.setattr("core.plugins.evolutiondb_contract.run_snippet_journal_write_payload", fake_snippet_journal)
 
         payload = {
             "raw_facts": [],
@@ -3051,8 +3051,8 @@ class TestExtractFromTranscript:
             }
 
         monkeypatch.setattr("core.plugins.memorydb_contract.run_extraction_publish_payload", fake_publish)
-        monkeypatch.setattr("core.plugins.notedb_contract.run_snippet_journal_write_payload", fake_direct_snippet_journal)
-        monkeypatch.setattr("core.plugins.notedb_contract.register_snippet_journal_write_request_handler", lambda: None)
+        monkeypatch.setattr("core.plugins.evolutiondb_contract.run_snippet_journal_write_payload", fake_direct_snippet_journal)
+        monkeypatch.setattr("core.plugins.evolutiondb_contract.register_snippet_journal_write_request_handler", lambda: None)
         monkeypatch.setattr("core.runtime.events.request_broker_event", fake_request)
 
         payload = {
@@ -3115,8 +3115,8 @@ class TestExtractFromTranscript:
             raise AssertionError("request-mode failure must not route around direct snippet/journal helper")
 
         monkeypatch.setattr("core.plugins.memorydb_contract.run_extraction_publish_payload", fake_publish)
-        monkeypatch.setattr("core.plugins.notedb_contract.run_snippet_journal_write_payload", fake_direct_snippet_journal)
-        monkeypatch.setattr("core.plugins.notedb_contract.register_snippet_journal_write_request_handler", lambda: None)
+        monkeypatch.setattr("core.plugins.evolutiondb_contract.run_snippet_journal_write_payload", fake_direct_snippet_journal)
+        monkeypatch.setattr("core.plugins.evolutiondb_contract.register_snippet_journal_write_request_handler", lambda: None)
         monkeypatch.setattr(
             "core.runtime.events.request_broker_event",
             lambda *_args, **_kwargs: {
@@ -3184,8 +3184,8 @@ class TestExtractFromTranscript:
             raise OSError("simulated broker transport failure")
 
         monkeypatch.setattr("core.plugins.memorydb_contract.run_extraction_publish_payload", fake_publish)
-        monkeypatch.setattr("core.plugins.notedb_contract.run_snippet_journal_write_payload", fake_direct_snippet_journal)
-        monkeypatch.setattr("core.plugins.notedb_contract.register_snippet_journal_write_request_handler", lambda: None)
+        monkeypatch.setattr("core.plugins.evolutiondb_contract.run_snippet_journal_write_payload", fake_direct_snippet_journal)
+        monkeypatch.setattr("core.plugins.evolutiondb_contract.register_snippet_journal_write_request_handler", lambda: None)
         monkeypatch.setattr("core.runtime.events.request_broker_event", fake_request)
 
         payload = {
