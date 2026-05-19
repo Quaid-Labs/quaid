@@ -1,6 +1,6 @@
 # Datastore Events M13 Split Extraction Routing Plan
 
-Status: draft plan; no runtime implementation yet
+Status: runtime slice complete; default request routing still deferred
 Owner: W1 runtime/datastore, W3 recall and identity-context review
 Plan source: `projects/quaid/operations/datastore-events-m12-evolution-snippet-journal-split-plan.md`
 
@@ -20,9 +20,10 @@ Do not implement runtime code for M13 until:
 6. W8 confirms static coverage includes extraction request-mode tests,
    EvolutionDB event/request tests, docs consistency, and boundary checks.
 
-This document selects a runtime slice for review. It does not approve default
-request routing, public CLI promotion, daemon scheduling changes, new event
-names, request-envelope changes, alias retirement, plugin-id rename, or public
+This document records the runtime slice that routes explicit extraction request
+mode through split EvolutionDB events. It does not approve default request
+routing, public CLI promotion, daemon scheduling changes, new event names,
+request-envelope changes, alias retirement, plugin-id rename, or public
 push/release actions.
 
 ## Goal
@@ -56,6 +57,54 @@ Current post-M12 path:
    the opposite family forced to `{}` and return the existing
    `{status, snippet_journal_metrics}` envelope shape.
 6. Extraction producers still do not use the split surfaces.
+
+## Implementation Record
+
+Runtime slice implemented by:
+
+- `516732b88` `refactor(datastore): route extraction request mode through split events`
+- `9437788d` `test(datastore): cover split request failure ordering`
+
+Implemented behavior:
+
+- `apply_extracted_payloads(snippet_journal_write_mode="request")` now sends
+  ordered split broker requests: `evolution.snippet_write.request.v1` first,
+  then `evolution.journal_write.request.v1` when both families have payloads and
+  enabled write flags.
+- Direct mode remains unchanged and still calls
+  `run_snippet_journal_write_payload()` synchronously.
+- The combined `evolution.snippet_journal_write.request.v1` event and handler
+  remain registered and callable for compatibility, but extraction request mode
+  no longer emits the combined event.
+- Split response validation preserves the existing `snippet_journal_metrics`
+  object shape and rejects failed split responses as request-mode failures.
+- Skipped or empty families use inline zero-metrics synthesis; no no-op broker
+  requests are sent.
+- Family metrics are merged with snippet counters and
+  `target_files["snippets"]` coming only from the snippet response, journal
+  counters and `target_files["journal"]` coming only from the journal response,
+  and errors concatenated in snippet-then-journal order.
+- Failure behavior is explicit: snippet failure stops before journal dispatch;
+  journal failure after snippet success raises and does not report partial
+  success; neither path falls back to the direct helper.
+- Hidden CLI flags, daemon signal shape, event names, request envelopes, visible
+  markdown paths, project-log queueing, `publish_complete` ordering, and
+  recall/source-window/ranking behavior are unchanged.
+- Tests pin ordered split dispatch, combined-event non-emission by extraction
+  request mode, snippet-only and journal-only routing, write-flag and
+  empty-family suppression, inline zero metrics, aggregation shape,
+  fail-soft-envelope rejection, no direct fallback, snippet-fail-skips-journal,
+  and journal-fail-after-snippet behavior.
+
+Validation:
+
+- W4 live/source-proof PASS on R201 for `516732b88`; `9437788d` was a
+  cleanup/test follow-up with no fresh live gate needed.
+- W3 runtime/recall APPROVED/no findings for `516732b88`; `9437788d` had no
+  recall/visible/default behavior delta.
+- W6 APPROVED after the follow-up removed the unreachable merge-status branch
+  and added the snippet-fail-skips-journal trip-wire test.
+- W8 static PASS and runtime HOLD closed for the pair.
 
 ## Selected First Slice
 

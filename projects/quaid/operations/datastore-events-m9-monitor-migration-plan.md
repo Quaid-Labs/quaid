@@ -53,9 +53,7 @@ The selected M9 monitor-write migrations are complete:
 Deferred items are not M9 blockers unless separately selected by Solomon with a
 new reviewed plan: direct `extract_from_transcript()` / CLI request routing,
 lifecycle persistence, SessionDB first-party manifest registration,
-source-window metadata enrichment, extraction producer routing through separate
-snippet/journal request events (tracked as M13 in
-`projects/quaid/operations/datastore-events-m13-split-extraction-routing-plan.md`),
+source-window metadata enrichment,
 `datastore.notedb` / `core.plugins.notedb_contract` compatibility-alias
 retirement, `notedb.core` plugin-id rename, and `.ego` integration. The
 `datastore.evolutiondb` runtime package and `core.plugins.evolutiondb_contract`
@@ -77,9 +75,13 @@ future-plan-gated.
 M12 runtime slices closed at `e81244e32` and `3f245ba9e` + `1a92dd7c`:
 EvolutionDB snippet and journal writes now have separate private helper
 internals and additive snippet-only / journal-only request event surfaces behind
-the existing combined extraction route. Extraction producer routing through
-separate snippet/journal request events is now tracked as M13 in
-`projects/quaid/operations/datastore-events-m13-split-extraction-routing-plan.md`.
+the existing combined extraction route.
+
+M13 split extraction routing closed at `516732b88` + `9437788d`: explicit
+`snippet_journal_write_mode="request"` extraction now routes through ordered
+snippet and journal request events and aggregates back into the existing
+`snippet_journal_metrics` shape. Default direct behavior and combined event
+compatibility remain unchanged.
 
 ## Shared Rules For Every M9 Slice
 

@@ -296,10 +296,8 @@ request-mode flags passed explicitly.
   routing options object
 - lifecycle persistence and SessionDB first-party manifest registration
 - source-window metadata enrichment
-- extraction producer routing through separate snippet/journal request events,
-  now tracked as M13 in
-  `projects/quaid/operations/datastore-events-m13-split-extraction-routing-plan.md`;
-  M12 helper-split and split-event surface prerequisites closed at `e81244e32`
-  and `3f245ba9e` + `1a92dd7c`
+- extraction producer routing through separate snippet/journal request events
+  closed in M13 at `516732b88` + `9437788d`; default request routing remains
+  deferred
 - compatibility-alias retirement and `notedb.core` plugin-id rename
 - `.ego` import/export integration
