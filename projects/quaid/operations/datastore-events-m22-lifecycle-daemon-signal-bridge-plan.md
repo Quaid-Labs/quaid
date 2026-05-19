@@ -232,9 +232,8 @@ narrow explicit bridge smoke:
 - default terminal `session.agent_end` lifecycle-to-daemon signal bridge closed
   in M24 at `058737670`; default timeout lifecycle-to-daemon signal bridge
   closed in M25 at `32ba63569`; default compaction lifecycle-to-daemon signal
-  bridge closed in M26 at `2f35f279`; default reset lifecycle-to-daemon
-  signal bridge is tracked as M27 in
-  `projects/quaid/operations/datastore-events-m27-default-reset-signal-plan.md`
+  bridge closed in M26 at `2f35f279`; default reset lifecycle-to-daemon signal
+  bridge closed in M27 at `acd05eaab`
 - daemon start/wake/restart automation from lifecycle events
 - SessionDB ingest wrapper retirement closed in M23 at `bfe5836b` +
   `4a3824d88`

@@ -204,9 +204,8 @@ narrow session-ingest smoke:
 - default terminal `session.agent_end` lifecycle-to-daemon signal bridge closed
   in M24 at `058737670`; default timeout lifecycle-to-daemon signal bridge
   closed in M25 at `32ba63569`; default compaction lifecycle-to-daemon signal
-  bridge closed in M26 at `2f35f279`; default reset lifecycle-to-daemon
-  signal bridge is tracked as M27 in
-  `projects/quaid/operations/datastore-events-m27-default-reset-signal-plan.md`
+  bridge closed in M26 at `2f35f279`; default reset lifecycle-to-daemon signal
+  bridge closed in M27 at `acd05eaab`
 - daemon start/wake/restart automation from lifecycle events
 - whether SessionDB should expose dedicated request handlers beyond
   `session.ingest_log.request.v1` and generic metadata/maintenance surfaces
