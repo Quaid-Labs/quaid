@@ -68,6 +68,10 @@ Implementation shape:
   example:
   - `_run_snippet_write_payload(payload, result, soul_snippets)`
   - `_run_journal_write_payload(payload, result, soul_snippets)`
+- Helper signature shape is mutation-style: helpers receive the shared combined
+  `result` dict and mutate only their write family's metrics in place. The
+  public combined helper owns result dict construction, common metadata parsing,
+  orchestration, ordering, and final return.
 - The public combined helper owns payload validation, common metadata parsing,
   result object creation, helper ordering, and final result shape.
 - The snippet helper owns only snippet iteration, target-file projection,
