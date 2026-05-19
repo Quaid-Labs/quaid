@@ -2724,35 +2724,46 @@ def _extraction_publish_request_error_message(
     return "unknown extraction publish request failure"
 
 
+def _raise_extraction_publish_request_error(message: str) -> None:
+    logger.warning("[extract] extraction publish request failed: %s", message)
+    raise RuntimeError(message)
+
+
 def _validate_extraction_publish_broker_response(response: Dict[str, Any]) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
     if not isinstance(response, dict):
-        raise RuntimeError("extraction publish request returned a non-object response")
+        _raise_extraction_publish_request_error("extraction publish request returned a non-object response")
     responses = response.get("responses")
     if not isinstance(responses, list) or len(responses) != 1:
         message = _extraction_publish_request_error_message(response)
-        raise RuntimeError(f"extraction publish request returned no memorydb response: {message}")
+        _raise_extraction_publish_request_error(
+            f"extraction publish request returned no memorydb response: {message}"
+        )
     row = responses[0]
     if not isinstance(row, dict):
-        raise RuntimeError("extraction publish request returned malformed memorydb response")
+        _raise_extraction_publish_request_error("extraction publish request returned malformed memorydb response")
     if str(row.get("datastore_id") or "").strip() != "memorydb":
-        raise RuntimeError("extraction publish request returned a non-memorydb response")
+        _raise_extraction_publish_request_error("extraction publish request returned a non-memorydb response")
     handler_result = row.get("result")
     if not isinstance(handler_result, dict):
-        raise RuntimeError("extraction publish request memorydb result is not an object")
+        _raise_extraction_publish_request_error("extraction publish request memorydb result is not an object")
 
     response_status = str(response.get("status") or "").strip().lower()
     row_status = str(row.get("status") or handler_result.get("status") or "").strip().lower()
     handler_status = str(handler_result.get("status") or "").strip().lower()
     if response_status != "ok" or row_status in {"failed", "error", "nacked"} or handler_status in {"failed", "error"}:
         message = _extraction_publish_request_error_message(response, row)
-        raise RuntimeError(f"extraction publish request failed: {message}")
+        _raise_extraction_publish_request_error(f"extraction publish request failed: {message}")
 
     publish_result = handler_result.get("publish_result")
     if not isinstance(publish_result, dict):
-        raise RuntimeError("extraction publish request memorydb publish_result is not an object")
+        _raise_extraction_publish_request_error(
+            "extraction publish request memorydb publish_result is not an object"
+        )
     facts = handler_result.get("facts_for_orchestration")
     if not isinstance(facts, list):
-        raise RuntimeError("extraction publish request memorydb facts_for_orchestration is not a list")
+        _raise_extraction_publish_request_error(
+            "extraction publish request memorydb facts_for_orchestration is not a list"
+        )
     return publish_result, list(facts)
 
 

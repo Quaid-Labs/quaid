@@ -1116,6 +1116,41 @@ def test_request_extraction_publish_rejects_wrong_source(monkeypatch, tmp_path):
     assert response["responses"][0]["result"]["error"] == "payload.source must be daemon-final-rolling-flush"
 
 
+@pytest.mark.parametrize(
+    ("payload", "error"),
+    [
+        (
+            {"source": "daemon-final-rolling-flush", "result": []},
+            "payload.result must be an object",
+        ),
+        (
+            {"source": "daemon-final-rolling-flush", "result": {}, "label": "RollingFlush"},
+            "payload.owner_id is required",
+        ),
+        (
+            {"source": "daemon-final-rolling-flush", "result": {}, "owner_id": "owner-req"},
+            "payload.label is required",
+        ),
+    ],
+)
+def test_request_extraction_publish_rejects_required_payload_fields(monkeypatch, tmp_path, payload, error):
+    set_adapter(TestAdapter(tmp_path))
+    import core.runtime.events as events
+    from core.plugins.memorydb_contract import register_extraction_publish_request_handler
+
+    monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: False)
+
+    register_extraction_publish_request_handler()
+    response = request_broker_event(
+        MEMORY_EXTRACTION_PUBLISH_REQUEST_EVENT,
+        payload,
+        source="pytest",
+    )
+
+    assert response["status"] == "failed"
+    assert response["responses"][0]["result"]["error"] == error
+
+
 def test_request_session_ingest_log_matches_direct_session_projection(monkeypatch, tmp_path):
     set_adapter(TestAdapter(tmp_path))
     monkeypatch.setenv("MEMORY_DB_PATH", str(tmp_path / "memory.db"))

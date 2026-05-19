@@ -2932,6 +2932,71 @@ class TestExtractFromTranscript:
         assert direct_called is False
         assert payload["facts_stored"] == 0
 
+    @pytest.mark.parametrize(
+        ("response", "message"),
+        [
+            ([], "extraction publish request returned a non-object response"),
+            (
+                {"status": "failed", "error": "simulated broker failure", "responses": []},
+                "extraction publish request returned no memorydb response: simulated broker failure",
+            ),
+            (
+                {"status": "ok", "responses": ["bad-row"]},
+                "extraction publish request returned malformed memorydb response",
+            ),
+            (
+                {"status": "ok", "responses": [{"datastore_id": "docsdb", "status": "ok", "result": {}}]},
+                "extraction publish request returned a non-memorydb response",
+            ),
+            (
+                {"status": "ok", "responses": [{"datastore_id": "memorydb", "status": "ok", "result": []}]},
+                "extraction publish request memorydb result is not an object",
+            ),
+            (
+                {
+                    "status": "failed",
+                    "responses": [{
+                        "datastore_id": "memorydb",
+                        "status": "failed",
+                        "result": {"status": "failed", "error": "handler rejected publish"},
+                    }],
+                },
+                "extraction publish request failed: handler rejected publish",
+            ),
+            (
+                {
+                    "status": "ok",
+                    "responses": [{
+                        "datastore_id": "memorydb",
+                        "status": "ok",
+                        "result": {"status": "ok", "facts_for_orchestration": []},
+                    }],
+                },
+                "extraction publish request memorydb publish_result is not an object",
+            ),
+            (
+                {
+                    "status": "ok",
+                    "responses": [{
+                        "datastore_id": "memorydb",
+                        "status": "ok",
+                        "result": {"status": "ok", "publish_result": {}, "facts_for_orchestration": {}},
+                    }],
+                },
+                "extraction publish request memorydb facts_for_orchestration is not a list",
+            ),
+        ],
+    )
+    def test_validate_extraction_publish_broker_response_warns_before_raise(self, caplog, response, message):
+        import ingest.extract as extract_mod
+
+        caplog.set_level("WARNING", logger="ingest.extract")
+
+        with pytest.raises(RuntimeError, match=message):
+            extract_mod._validate_extraction_publish_broker_response(response)
+
+        assert any(message in record.getMessage() for record in caplog.records)
+
     @patch("ingest.extract._memory.store")
     def test_apply_extracted_payloads_collapses_exact_duplicate_fact_rows(self, mock_store):
         from ingest.extract import apply_extracted_payloads

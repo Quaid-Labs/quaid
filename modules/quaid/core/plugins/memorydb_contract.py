@@ -100,6 +100,12 @@ def handle_extraction_publish_request(event: Dict[str, Any]) -> Dict[str, Any]:
     result_payload = payload.get("result")
     if not isinstance(result_payload, dict):
         return {"status": "failed", "error": "payload.result must be an object"}
+    owner_id = str(payload.get("owner_id") or "").strip()
+    if not owner_id:
+        return {"status": "failed", "error": "payload.owner_id is required"}
+    label = str(payload.get("label") or "").strip()
+    if not label:
+        return {"status": "failed", "error": "payload.label is required"}
 
     from core.services.memory_service import get_memory_service
     from core.services.session_memory_bridge import get_session_memory_bridge
@@ -108,8 +114,8 @@ def handle_extraction_publish_request(event: Dict[str, Any]) -> Dict[str, Any]:
     result = dict(result_payload)
     facts = run_extraction_publish_payload(
         result,
-        owner_id=str(payload.get("owner_id") or "default").strip() or "default",
-        label=str(payload.get("label") or "unknown").strip() or "unknown",
+        owner_id=owner_id,
+        label=label,
         session_id=_optional_payload_str(payload, "session_id"),
         actor_id=_optional_payload_str(payload, "actor_id"),
         speaker_entity_id=_optional_payload_str(payload, "speaker_entity_id"),
