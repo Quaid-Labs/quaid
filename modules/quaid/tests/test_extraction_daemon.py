@@ -1770,6 +1770,12 @@ def test_process_signal_uses_cursor_transcript_when_signal_path_missing(monkeypa
     captured = {}
 
     class _Adapter(_OwnedTestAdapterMixin):
+        def instance_root(self):
+            return tmp_path / "instances" / "pytest-runner"
+
+        def data_dir(self):
+            return self.instance_root() / "data"
+
         def owns_session_path(self, path, session_id=""):
             return True
 
@@ -5078,6 +5084,12 @@ class TestSignalRoundTrip:
         )
 
         class _Adapter(_OwnedTestAdapterMixin):
+            def instance_root(self):
+                return tmp_path / "instances" / "test-inst"
+
+            def data_dir(self):
+                return self.instance_root() / "data"
+
             def parse_session_jsonl(self, _path):
                 return (
                     "User: I keep an emergency brass key under the west porch planter.\n"
@@ -5126,6 +5138,9 @@ class TestSignalRoundTrip:
 
         fake_registry = types.ModuleType("core.subagent_registry")
         fake_registry.is_registered_subagent = lambda _sid: False
+        fake_registry.get_harvestable = lambda _sid: []
+        fake_registry.mark_harvested = lambda _sid, _cid: None
+        fake_registry._registry_dir = lambda: tmp_path / "subagents"
 
         real_registry = sys.modules.get("core.subagent_registry")
         sys.modules["core.subagent_registry"] = fake_registry
