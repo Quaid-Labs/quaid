@@ -21,7 +21,7 @@ from pathlib import Path
 from threading import Lock
 from typing import Any, Callable, Dict, List, Optional
 
-from core.ingest_runtime import run_docs_ingest, run_session_logs_ingest
+from core.ingest_runtime import run_docs_ingest
 from core.runtime.paths import get_runtime_root
 from lib.runtime_context import queue_deferred_notice
 from lib.runtime_context import get_workspace_dir
@@ -649,36 +649,14 @@ def _handle_docs_project_maintenance_observed(event: Event) -> Dict[str, Any]:
 def _handle_session_ingest_log(event: Event) -> Dict[str, Any]:
     payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
     session_id = str(payload.get("session_id") or "").strip()
-    owner_id = str(payload.get("owner_id") or "default").strip() or "default"
-    label = str(payload.get("label") or "unknown").strip() or "unknown"
-    session_file = payload.get("session_file")
-    transcript_path = payload.get("transcript_path")
-    source_channel = str(payload.get("source_channel") or "").strip() or None
-    conversation_id = str(payload.get("conversation_id") or "").strip() or None
-    participant_ids_raw = payload.get("participant_ids")
-    participant_aliases_raw = payload.get("participant_aliases")
-    participant_ids = participant_ids_raw if isinstance(participant_ids_raw, list) else []
-    participant_aliases = participant_aliases_raw if isinstance(participant_aliases_raw, dict) else {}
-    message_count = int(payload.get("message_count") or 0)
-    topic_hint = str(payload.get("topic_hint") or "").strip()
 
     if not session_id:
         return {"status": "failed", "error": "payload.session_id is required"}
 
     try:
-        result = run_session_logs_ingest(
-            session_id=session_id,
-            owner_id=owner_id,
-            label=label,
-            session_file=str(session_file) if session_file else None,
-            transcript_path=str(transcript_path) if transcript_path else None,
-            source_channel=source_channel,
-            conversation_id=conversation_id,
-            participant_ids=[str(p).strip() for p in participant_ids if str(p).strip()],
-            participant_aliases={str(k): str(v) for k, v in participant_aliases.items() if str(k).strip()},
-            message_count=message_count,
-            topic_hint=topic_hint,
-        )
+        from core.plugins.memorydb_contract import run_session_ingest_payload
+
+        result = run_session_ingest_payload(payload)
         if isinstance(result, dict) and str(result.get("status") or "").lower() in {"failed", "error"}:
             return {"status": "failed", "result": result}
         return {"status": "processed", "result": result}

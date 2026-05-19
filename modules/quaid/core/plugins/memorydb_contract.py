@@ -26,9 +26,8 @@ from lib.domain_runtime import publish_domains_to_runtime_config
 from lib.tools_domain_sync import sync_tools_domain_block
 
 
-def handle_session_ingest_log_request(event: Dict[str, Any]) -> Dict[str, Any]:
-    """Handle synchronous session transcript ingest through MemoryDB ownership."""
-    payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+def run_session_ingest_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Run session transcript ingest from a MemoryDB-owned payload contract."""
     session_id = str(payload.get("session_id") or "").strip()
     owner_id = str(payload.get("owner_id") or "default").strip() or "default"
     label = str(payload.get("label") or "unknown").strip() or "unknown"
@@ -61,6 +60,12 @@ def handle_session_ingest_log_request(event: Dict[str, Any]) -> Dict[str, Any]:
         message_count=message_count,
         topic_hint=topic_hint,
     )
+
+
+def handle_session_ingest_log_request(event: Dict[str, Any]) -> Dict[str, Any]:
+    """Handle synchronous session transcript ingest through MemoryDB ownership."""
+    payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+    return run_session_ingest_payload(payload)
 
 
 def register_session_ingest_log_request_handler() -> None:

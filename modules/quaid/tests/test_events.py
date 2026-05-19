@@ -860,14 +860,13 @@ def test_event_process_docs_project_maintenance_observed_validation_respects_fai
 def test_event_process_session_ingest_log(monkeypatch, tmp_path):
     set_adapter(TestAdapter(tmp_path))
 
-    import core.runtime.events as events
     called = {}
 
-    def _fake_run(**kwargs):
-        called.update(kwargs)
-        return {"status": "indexed", "session_id": kwargs["session_id"], "chunks": 2}
+    def _fake_helper(payload):
+        called.update(payload)
+        return {"status": "indexed", "session_id": payload["session_id"], "chunks": 2}
 
-    monkeypatch.setattr("core.runtime.events.run_session_logs_ingest", _fake_run)
+    monkeypatch.setattr("core.plugins.memorydb_contract.run_session_ingest_payload", _fake_helper)
 
     emit_event(
         name="session.ingest_log",
@@ -895,6 +894,67 @@ def test_event_process_session_ingest_log(monkeypatch, tmp_path):
     assert called["source_channel"] == "telegram"
     assert called["conversation_id"] == "group-1"
     assert called["message_count"] == 12
+
+
+def test_event_process_session_ingest_log_has_no_runtime_direct_ingest_call():
+    import core.runtime.events as events
+
+    source = Path(events.__file__).read_text(encoding="utf-8")
+
+    assert "run_session_logs_ingest" not in source
+
+
+def test_event_process_session_ingest_log_failed_result_marks_failed(monkeypatch, tmp_path):
+    set_adapter(TestAdapter(tmp_path))
+
+    import core.runtime.events as events
+
+    monkeypatch.setattr(
+        "core.plugins.memorydb_contract.run_session_ingest_payload",
+        lambda _payload: {"status": "failed", "error": "simulated ingest failure"},
+    )
+    monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: False)
+
+    emit_event(
+        name="session.ingest_log",
+        payload={"session_id": "sess-failed"},
+        source="pytest",
+    )
+    out = process_events(limit=5, names=["session.ingest_log"])
+    assert out["processed"] == 0
+    assert out["failed"] == 1
+    assert out["details"][0]["result"]["result"]["error"] == "simulated ingest failure"
+
+    emit_event(
+        name="session.ingest_log",
+        payload={"session_id": "sess-failed-hard"},
+        source="pytest",
+    )
+    monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: True)
+    with pytest.raises(RuntimeError, match="Event handler failed while fail-hard mode is enabled"):
+        process_events(limit=5, names=["session.ingest_log"])
+
+
+def test_event_process_session_ingest_log_rejects_missing_session_id(monkeypatch, tmp_path):
+    set_adapter(TestAdapter(tmp_path))
+
+    import core.runtime.events as events
+
+    monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: False)
+    monkeypatch.setattr(
+        "core.plugins.memorydb_contract.run_session_ingest_payload",
+        lambda _payload: (_ for _ in ()).throw(AssertionError("missing session_id must not ingest")),
+    )
+
+    emit_event(
+        name="session.ingest_log",
+        payload={"owner_id": "owner-missing"},
+        source="pytest",
+    )
+    out = process_events(limit=5, names=["session.ingest_log"])
+    assert out["processed"] == 0
+    assert out["failed"] == 1
+    assert out["details"][0]["result"]["error"] == "payload.session_id is required"
 
 
 def test_request_session_ingest_log_runs_memorydb_handler(monkeypatch, tmp_path):
@@ -1002,7 +1062,8 @@ def test_request_session_ingest_log_matches_direct_session_projection(monkeypatc
     ]
     raw_direct = tmp_path / "direct-session.jsonl"
     raw_broker = tmp_path / "broker-session.jsonl"
-    for raw_session in (raw_direct, raw_broker):
+    raw_active = tmp_path / "active-session.jsonl"
+    for raw_session in (raw_direct, raw_broker, raw_active):
         raw_session.write_text("\n".join(session_lines) + "\n", encoding="utf-8")
     base_payload = {
         "owner_id": "owner-parity",
@@ -1030,10 +1091,24 @@ def test_request_session_ingest_log_matches_direct_session_projection(monkeypatc
     for key in ("message_count", "pairs_stored", "microchunks_stored", "source_kind"):
         assert broker_result[key] == direct[key]
 
+    emit_event(
+        name="session.ingest_log",
+        payload={"session_id": "sess-active", "transcript_path": str(raw_active), **base_payload},
+        source="pytest",
+    )
+    active = process_events(limit=5, names=["session.ingest_log"])
+    assert active["processed"] == 1
+    assert active["failed"] == 0
+    active_result = active["details"][0]["result"]["result"]
+    assert active_result["status"] == "indexed"
+    for key in ("message_count", "pairs_stored", "microchunks_stored", "source_kind"):
+        assert active_result[key] == direct[key]
+
     direct_session = session_store.load_session("sess-direct", owner_id="owner-parity")
     broker_session = session_store.load_session("sess-broker", owner_id="owner-parity")
-    assert direct_session and broker_session
-    for row in (direct_session, broker_session):
+    active_session = session_store.load_session("sess-active", owner_id="owner-parity")
+    assert direct_session and broker_session and active_session
+    for row in (direct_session, broker_session, active_session):
         assert "Mira left the kiln key" in row["transcript_text"]
         assert "session_meta" not in row["transcript_text"]
         assert "stop_reason" not in row["transcript_text"]
@@ -1044,18 +1119,22 @@ def test_request_session_ingest_log_matches_direct_session_projection(monkeypatc
 
     direct_rows = memory.list_session_chunks(owner_id="owner-parity", session_id="sess-direct")
     broker_rows = memory.list_session_chunks(owner_id="owner-parity", session_id="sess-broker")
-    assert direct_rows and broker_rows
+    active_rows = memory.list_session_chunks(owner_id="owner-parity", session_id="sess-active")
+    assert direct_rows and broker_rows and active_rows
     assert len(broker_rows) == len(direct_rows)
+    assert len(active_rows) == len(direct_rows)
     assert len({row["message_pair_id"] for row in broker_rows}) >= 2
-    for row in broker_rows:
-        assert row["source_id"] == str(raw_broker)
-        assert row["source_channel"] == "codex"
-        assert row["source_conversation_id"] == "conv-parity"
-        assert row["conversation_id"] == "conv-parity"
-        assert row["chunk_kind"] == "micro"
-        assert row["parent_chunk_id"]
-        assert row["message_pair_id"]
-        assert row["microchunk_id"]
+    assert len({row["message_pair_id"] for row in active_rows}) >= 2
+    for rows, raw_session in ((broker_rows, raw_broker), (active_rows, raw_active)):
+        for row in rows:
+            assert row["source_id"] == str(raw_session)
+            assert row["source_channel"] == "codex"
+            assert row["source_conversation_id"] == "conv-parity"
+            assert row["conversation_id"] == "conv-parity"
+            assert row["chunk_kind"] == "micro"
+            assert row["parent_chunk_id"]
+            assert row["message_pair_id"]
+            assert row["microchunk_id"]
 
     monkeypatch.setattr(mg, "get_graph", lambda: memory)
     recall_rows, recall_meta, _bundle = mg._run_recall_store_plan(
