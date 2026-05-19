@@ -4414,7 +4414,72 @@ class TestExtractFromTranscript:
         assert "publish_batch_conn_opened" in events
         assert "publish_store_call_start" in events
         assert "publish_store_call_done" in events
+        assert "publish_facts_complete" in events
         assert "publish_complete" in events
+        assert events.index("publish_facts_complete") < events.index("publish_complete")
+
+    def test_publish_complete_trace_waits_for_orchestration_side_effects(self, workspace_dir, monkeypatch):
+        from ingest.extract import apply_extracted_payloads
+
+        monkeypatch.setattr(
+            "datastore.memorydb.extraction_publish.get_config",
+            lambda: SimpleNamespace(retrieval=SimpleNamespace(domains={"personal": "Personal facts"})),
+        )
+        monkeypatch.setenv("QUAID_PUBLISH_TRACE", "1")
+        monkeypatch.setenv("QUAID_INSTANCE", "benchrunner")
+        trace_path = workspace_dir.parent / "benchrunner" / "logs" / "daemon" / "publish-trace.jsonl"
+
+        def fake_enqueue_project_logs(*_args, **_kwargs):
+            rows = [
+                json.loads(line)
+                for line in trace_path.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+            events_during_side_effect = [row["event"] for row in rows]
+            assert "publish_facts_complete" in events_during_side_effect
+            assert "publish_complete" not in events_during_side_effect
+            return {
+                "entries_seen": 1,
+                "entries_queued": 1,
+                "projects_queued": 1,
+                "queue_failures": 0,
+            }
+
+        monkeypatch.setattr("ingest.extract.enqueue_project_logs", fake_enqueue_project_logs)
+
+        payload = {
+            "raw_facts": [{
+                "text": "Maya keeps the launch checklist in the red binder",
+                "category": "fact",
+                "speaker": "user",
+                "domains": ["personal"],
+            }],
+            "raw_snippets": {},
+            "raw_journal": {},
+            "raw_project_logs": {"launch-app": ["Moved launch checklist into red binder"]},
+            "facts": [],
+            "snippets": {},
+            "journal": {},
+            "project_logs": {},
+            "project_log_metrics": {},
+            "facts_stored": 0,
+            "facts_skipped": 0,
+            "edges_created": 0,
+            "dry_run": True,
+        }
+
+        applied = apply_extracted_payloads(
+            payload,
+            owner_id="test",
+            label="rolling-flush",
+            session_id="sess-trace-order",
+            dry_run=True,
+        )
+
+        assert applied["project_log_metrics"]["entries_queued"] == 1
+        rows = [json.loads(line) for line in trace_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+        events = [row["event"] for row in rows]
+        assert events.index("publish_facts_complete") < events.index("publish_complete")
 
     @patch("ingest.extract.call_deep_reasoning")
     @patch("ingest.extract._memory.store")

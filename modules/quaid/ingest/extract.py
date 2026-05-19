@@ -389,7 +389,6 @@ MAX_EXTRACT_SPLIT_DEPTH = 4
 MIN_REPAIR_OUTPUT_TOKENS = 4096
 # SessionDB microchunks are intentionally much smaller than legacy source
 # chunks. They are recall probes that carry pair_id/microchunk_id for expansion.
-DEFAULT_SESSION_MICROCHUNK_TOKENS = 40
 _SOUL_SNIPPETS_MODULE = None
 
 
@@ -428,11 +427,15 @@ def _build_extraction_source_chunk_descriptor(
 def _split_session_source_microchunks(
     text: str,
     *,
-    max_tokens: int = DEFAULT_SESSION_MICROCHUNK_TOKENS,
+    max_tokens: Optional[int] = None,
 ) -> List[str]:
     """Split persisted session evidence into embedding-safe microchunks."""
     from lib.session_text import split_microchunks
 
+    if max_tokens is None:
+        from core.plugins.memorydb_contract import extraction_publish_microchunk_tokens
+
+        max_tokens = extraction_publish_microchunk_tokens()
     return split_microchunks(text, max_tokens=max_tokens)
 
 
@@ -2737,7 +2740,7 @@ def apply_extracted_payloads(
         for project_name, items in dict(result.get("raw_project_logs", {}) or {}).items()
     }
 
-    from core.plugins.memorydb_contract import run_extraction_publish_payload
+    from core.plugins.memorydb_contract import run_extraction_publish_payload, write_extraction_publish_trace
 
     facts = run_extraction_publish_payload(
         result,
@@ -2860,6 +2863,15 @@ def apply_extracted_payloads(
             f"[extract] {label}: {result['facts_stored']} stored, "
             f"{result['facts_skipped']} skipped, {result['edges_created']} edges"
         )
+    write_extraction_publish_trace(
+        "publish_complete",
+        session_id=session_id,
+        label=label,
+        facts_stored=int(result.get("facts_stored", 0) or 0),
+        facts_skipped=int(result.get("facts_skipped", 0) or 0),
+        edges_created=int(result.get("edges_created", 0) or 0),
+        publish_batches=int(result.get("publish_batches", 0) or 0),
+    )
     return result
 
 

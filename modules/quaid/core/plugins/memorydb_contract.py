@@ -79,6 +79,20 @@ def run_extraction_publish_payload(result: Dict[str, Any], **kwargs: Any) -> Lis
     return _run(result, **kwargs)
 
 
+def write_extraction_publish_trace(event: str, **data: Any) -> None:
+    """Write a publish trace event through the MemoryDB-owned trace helper."""
+    from datastore.memorydb.extraction_publish import _write_publish_trace
+
+    _write_publish_trace(event, **data)
+
+
+def extraction_publish_microchunk_tokens() -> int:
+    """Return the MemoryDB-owned default source evidence microchunk size."""
+    from datastore.memorydb.extraction_publish import DEFAULT_SESSION_MICROCHUNK_TOKENS
+
+    return int(DEFAULT_SESSION_MICROCHUNK_TOKENS)
+
+
 def register_session_ingest_log_request_handler() -> None:
     from core.runtime.events import SESSION_INGEST_LOG_REQUEST_EVENT, register_request_handler
 

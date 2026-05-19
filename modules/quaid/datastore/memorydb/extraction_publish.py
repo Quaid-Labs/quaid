@@ -313,7 +313,7 @@ def _get_extract_publish_batch_size() -> int:
         size = int(raw)
     except Exception:
         logger.warning(
-            "[extract] invalid QUAID_EXTRACT_PUBLISH_BATCH_SIZE=%r; defaulting to %d",
+            "[datastore-memorydb] invalid QUAID_EXTRACT_PUBLISH_BATCH_SIZE=%r; defaulting to %d",
             raw,
             DEFAULT_EXTRACT_PUBLISH_BATCH_SIZE,
         )
@@ -348,7 +348,7 @@ def _write_publish_trace(event: str, **data: Any) -> None:
         with path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(payload, ensure_ascii=True) + "\n")
     except OSError as exc:
-        logger.warning("[extract] publish trace write failed: %s", exc)
+        logger.warning("[datastore-memorydb] extraction publish trace write failed: %s", exc)
 
 
 def _content_hash(text: str) -> str:
@@ -1386,7 +1386,7 @@ def run_extraction_publish_payload(
                 external_rowid_seen = int(delta_rowid_max or 0)
 
     _write_publish_trace(
-        "publish_complete",
+        "publish_facts_complete",
         session_id=session_id,
         label=label,
         facts_stored=int(result.get("facts_stored", 0) or 0),
