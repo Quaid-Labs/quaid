@@ -463,8 +463,8 @@ Closure evidence:
 ## Deferred Decisions
 
 - Whether to split snippet and journal writes into separate request events;
-  M12 now tracks a helper-split prerequisite plan before any separate event names
-  are selected.
+  M12 completed the helper-split prerequisite at `e81244e32`, while separate
+  event names remain future-plan-gated.
 - Whether direct `extract_from_transcript()` / CLI should ever use request mode.
 - Whether snippet review and journal distillation maintenance should get their
   own request handlers beyond the existing maintenance contract.

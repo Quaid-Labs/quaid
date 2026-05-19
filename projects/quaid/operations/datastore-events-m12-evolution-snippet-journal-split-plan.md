@@ -1,6 +1,6 @@
 # Datastore Events M12 EvolutionDB Snippet Journal Split Plan
 
-Status: draft plan; no runtime implementation yet
+Status: first helper-split runtime slice complete; separate request events deferred
 Owner: W1 runtime/datastore, W3 recall and identity-context review
 Plan source: `projects/quaid/operations/datastore-events-m9-5-evolution-snippet-journal-plan.md`
 
@@ -22,9 +22,10 @@ Do not implement runtime code for M12 until:
 6. W8 confirms static coverage includes EvolutionDB helper tests, extraction
    request-mode tests, event/contract/manifest checks, and boundary checks.
 
-This document selects only the first helper-split slice. It does not approve new
-request event names, daemon routing changes, default behavior changes, public
-CLI changes, alias retirement, plugin-id rename, or public push/release actions.
+This document records the first helper-split runtime slice. It does not approve
+new request event names, daemon routing changes, default behavior changes,
+public CLI changes, alias retirement, plugin-id rename, or public push/release
+actions.
 
 ## Goal
 
@@ -54,6 +55,40 @@ Current post-M11 path:
    combined `snippet_journal_metrics` object.
 6. Project-log queueing and `publish_complete` happen after the combined
    snippet/journal write block.
+
+## Implementation Record
+
+First runtime slice implemented by:
+
+- `e81244e32` `refactor(datastore): split snippet journal helper internals`
+
+Implemented behavior:
+
+- `core.plugins.evolutiondb_contract` now has private mutation-style helpers:
+  `_run_snippet_write_payload()` and `_run_journal_write_payload()`.
+- Public `run_snippet_journal_write_payload()` still owns payload validation,
+  result construction, common metadata parsing, helper ordering, orchestration,
+  and final return.
+- The snippet helper mutates only snippet-family metrics and
+  `target_files["snippets"]`; the journal helper mutates only journal-family
+  metrics and `target_files["journal"]`. Shared `status` and `errors` behavior
+  remains the same as before the split.
+- The combined helper still calls snippet before journal.
+- `handle_snippet_journal_write_request()`,
+  `evolution.snippet_journal_write.request.v1`, request envelopes,
+  `snippet_journal_metrics`, extraction routing kwargs, visible markdown files,
+  failHard/no-fallback behavior, project-log queueing, and `publish_complete`
+  ordering are unchanged.
+- Tests pin family-isolated counters and target files, write-flag skip behavior,
+  snippet-before-journal helper ordering, failHard warn-before-raise, combined
+  request handler envelope preservation, and request-mode no-fallback behavior.
+
+Validation:
+
+- W4 live/source-proof PASS on R201 for `e81244e32`.
+- W3 runtime/recall APPROVED/no findings.
+- W6 APPROVED/no concerns.
+- W8 static PASS and runtime HOLD closed for the commit.
 
 ## Selected First Slice
 
