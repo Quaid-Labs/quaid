@@ -125,11 +125,12 @@ SessionDB metadata observations, while lifecycle events without `session_id`
 remain acknowledged without persistence. Lifecycle-triggered transcript ingest,
 daemon work, and lifecycle automation remain deferred.
 
-M21 now tracks a daemon lifecycle observation bridge in
-`projects/quaid/operations/datastore-events-m21-daemon-lifecycle-observation-plan.md`:
-existing daemon lifecycle signals may record SessionDB lifecycle observations
-through the M20 contract seam, while lifecycle-triggered transcript ingest, new
-daemon automation, and recall/source-window policy changes remain deferred.
+M21 daemon lifecycle observation bridge closed at `f6b661ea0` + `b591b7d3` +
+`f90602cb`: existing daemon reset/compaction/timeout/session_end signals now
+record metadata-only SessionDB lifecycle observations through the M20 contract
+seam, while rolling signals remain excluded. Lifecycle-triggered transcript
+ingest, new daemon automation, and recall/source-window policy changes remain
+deferred.
 
 ## Shared Rules For Every M9 Slice
 

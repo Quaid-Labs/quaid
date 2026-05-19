@@ -1,12 +1,12 @@
 # Datastore Events M21 Daemon Lifecycle Observation Plan
 
-Status: draft plan; no runtime implementation yet
+Status: runtime observation slice complete; lifecycle automation deferred
 Owner: W1 daemon/datastore, W6 boundary review, W3 recall guard review
 Plan source: `projects/quaid/operations/datastore-events-m20-sessiondb-lifecycle-metadata-plan.md`
 
 ## Precondition
 
-Do not implement runtime code for M21 until:
+Runtime code for M21 was gated on:
 
 1. M20 SessionDB lifecycle observation metadata is closed through W4/W3/W6/W8.
 2. W6 reviews the daemon-to-SessionDB boundary because this slice lets the
@@ -19,7 +19,7 @@ Do not implement runtime code for M21 until:
 5. W4 is ready to live-check that daemon lifecycle signal processing still
    extracts and projects session evidence exactly as before.
 
-This document selects a narrow daemon lifecycle observation bridge only. It does
+This document records the completed narrow daemon lifecycle observation bridge only. It does
 not approve new daemon signals, lifecycle-triggered transcript ingest beyond the
 existing daemon signal paths, new event names, request/default routing changes,
 SessionDB recall selectors, source-window selector ownership, MemoryDB
@@ -35,20 +35,20 @@ signals such as `reset`, `compaction`, `timeout`, and `session_end`; the daemon
 processes those signals directly to extract transcript content and project
 MemoryDB `session_chunks` evidence.
 
-M21 selects the first bridge between those existing daemon lifecycle signals and
+M21 selected the first bridge between those existing daemon lifecycle signals and
 M20's SessionDB lifecycle observation table. When the daemon is already handling
 a concrete lifecycle signal for a concrete `session_id`, it records a metadata
 observation through `core.plugins.sessiondb_contract.record_session_lifecycle_observation()`.
 The daemon's extraction behavior, cursor behavior, signal lifecycle, session
 logs ingest, recall output, and source-window behavior remain unchanged.
 
-This is not lifecycle automation. M21 must not create new daemon work from
-lifecycle observations, must not enqueue extra extraction signals, and must not
+This is not lifecycle automation. M21 did not create new daemon work from
+lifecycle observations, did not enqueue extra extraction signals, and did not
 change which transcripts are extracted.
 
 ## Current Boundary
 
-Current post-M20 path:
+Pre-M21 path:
 
 1. `core.runtime.events._handle_session_lifecycle()` records M20 lifecycle
    observations for event-bus lifecycle events with `session_id`.
@@ -58,14 +58,14 @@ Current post-M20 path:
 3. `core.extraction_daemon.process_signal()` processes those files directly,
    manages cursors/rolling buffers, extracts transcript deltas, publishes through
    request-mode datastore paths, and requests SessionDB session-log ingest.
-4. Daemon lifecycle signals are not currently recorded as M20 lifecycle
+4. Daemon lifecycle signals were not recorded as M20 lifecycle
    observations unless another caller also emits a matching runtime event.
 5. MemoryDB remains the owner of `session_chunks` recall/write projection and
    final source-window output policy. SessionDB `capabilities.recall=[]`.
 
 ## Selected First Slice: Daemon Signal Observation Metadata Only
 
-Implement one runtime metadata slice only:
+Implemented one runtime metadata slice only:
 
 1. Add a small daemon-local helper, for example
    `_record_daemon_lifecycle_observation(signal_data, *, session_id,
@@ -225,3 +225,94 @@ narrow daemon lifecycle smoke:
 - whether hidden CLI request-mode flags should ever become public
 - compatibility-alias retirement and `notedb.core` plugin-id rename
 - `.ego` import/export integration
+
+## Implementation Record
+
+Runtime closed in `f6b661ea0` (`refactor(datastore): observe daemon
+lifecycle signals in SessionDB`) with failHard/test follow-up `b591b7d3`
+(`test(datastore): tighten M21 daemon failHard guards`) and hardening follow-up
+`f90602cb` (`fix(datastore): harden M21 daemon observation guards`).
+
+Implemented behavior:
+
+- `core.extraction_daemon.DAEMON_SIGNAL_TO_LIFECYCLE_EVENT` maps existing daemon
+  lifecycle signal types to existing M20 lifecycle event names:
+  `reset -> session.reset`, `compaction -> session.compaction`,
+  `timeout -> session.timeout`, and `session_end -> session.agent_end`.
+  `rolling` remains absent and is not recorded as a lifecycle observation.
+- `core.extraction_daemon._record_daemon_lifecycle_observation()` builds compact
+  event-like metadata and calls
+  `core.plugins.sessiondb_contract.record_session_lifecycle_observation()`.
+  The daemon does not import `datastore.sessiondb.session_store` directly for
+  M21 observation writes and did not add `core/extraction_daemon.py` to the
+  boundary allowlist.
+- Daemon-origin observation ids are deterministic and prefix-disambiguated:
+  `daemon-signal:{signal_file}:{signal_type}:{session_id}`. Reprocessing the
+  same signal id/path is idempotent through the M20 `event_id` primary key and
+  `INSERT OR IGNORE` behavior.
+- Observation recording is placed before selected signal finalization side
+  effects. `_finalize_no_payload_signal()` records before timeout markers,
+  cursor writes, rolling-state clears, noop metrics, `mark_signal_processed()`,
+  and lock release. The full-flush `process_signal()` path also records before
+  final cursor/signal finalization.
+- Under `failHard=true`, selected daemon observation persistence failures raise
+  `RuntimeError("SessionDB daemon lifecycle observation failed while failHard is enabled")`
+  with the original exception chained as `__cause__`; finalization side effects
+  do not run after the failHard observation error. Under `failHard=false`, the
+  daemon logs loudly and returns `persisted=False` for the observation attempt
+  while preserving pre-M21 signal/extraction behavior.
+- `datastore.sessiondb.session_store._session_db_path()` centralizes SessionDB
+  parent-directory creation and all SessionDB connection entry points now use
+  it, including lifecycle observation recording, lifecycle listing, transcript
+  ingest/indexing, microchunk fetch/attach, source-window expansion, recent
+  session listing, session loading, and lifecycle lock-path creation.
+- `lib.config._workspace_root()` now logs a warning before falling back to
+  `QUAID_HOME/instances/QUAID_INSTANCE` when an adapter lacks
+  `instance_root()`, so the daemon/test compatibility path is observable.
+- M20 event-bus lifecycle handling, M16 request ownership, M17/M18 active
+  session ingest routing/failHard behavior, M19 source-window metadata,
+  MemoryDB compatibility wrappers, MemoryDB `session_chunks` recall/write
+  ownership, and SessionDB `capabilities.recall=[]` are unchanged.
+
+Test coverage:
+
+- Mapping tests assert the exact `DAEMON_SIGNAL_TO_LIFECYCLE_EVENT` constant and
+  rolling absence.
+- Helper tests assert prefix-disambiguated event ids, mapped lifecycle event
+  names, plugin-contract routing, compact payload/provenance fields, missing
+  session and rolling skip behavior, idempotent duplicate signal handling, and
+  fail-soft/failHard persistence behavior.
+- Ordering tests assert no-payload finalization records before timeout marker,
+  cursor write, signal processed marker, and lock release, and assert
+  failHard observation errors prevent those finalization side effects.
+- Integration coverage drives `process_signal()` through a full compaction flush
+  and asserts exactly one daemon lifecycle observation is attempted with the
+  expected session id, signal type, and transcript path.
+- Store/config hardening tests assert SessionDB connection entry points route
+  through the parent-directory guard and the adapter-without-`instance_root()`
+  fallback logs loudly.
+- Existing extraction daemon, session lifecycle, SessionDB registry, M19
+  source-window/session bridge, active/request ingest, boundary, ruff,
+  py_compile, and unit-wrapper lanes continue to pass.
+
+Validation record:
+
+- W4 R201 live/source-proof PASS on `f6b661ea0`, `b591b7d3`, and `f90602cb`:
+  daemon observations route through the SessionDB contract, event ids keep the
+  `daemon-signal:` format, rolling remains excluded, observation ordering is
+  before signal finalization, failHard wraps and chains original exceptions,
+  fail-soft logs and continues, SessionDB parent-dir creation is centralized,
+  and daemon stability remained clean.
+- W3 runtime/recall APPROVED with no findings for the latest stack: daemon
+  lifecycle observations are metadata-only, MemoryDB `session_chunks` ownership
+  and final source-window policy are unchanged, SessionDB recall remains `[]`,
+  M19 `source_window_header` behavior is untouched, and no selector, ranking,
+  planner, token-budget, or output-ordering drift was found.
+- W6 APPROVED after `f90602cb` closed the parent-directory guard scope concern,
+  loud fallback warning, process-signal integration coverage gap, and duplicate
+  signal-file derivation. The remaining B017/textual and pre-existing boundary
+  allowlist notes were accepted as informational.
+- W8 static PASS for the latest stack: focused daemon lifecycle/sessiondb
+  observation selectors, full `tests/test_extraction_daemon.py`, adjacent
+  lifecycle/source-window lanes, py_compile, ruff, diff/docs checks, boundary
+  checks, and the unit wrapper all passed.
