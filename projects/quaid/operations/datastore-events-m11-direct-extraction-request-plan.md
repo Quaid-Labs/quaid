@@ -1,6 +1,6 @@
 # Datastore Events M11 Direct Extraction Request Routing Plan
 
-Status: draft plan; no runtime implementation yet
+Status: first Python-API-only runtime slice complete; CLI exposure deferred
 Owner: W1 runtime/datastore, W3 recall and identity-context review
 Plan source: `projects/quaid/operations/datastore-events-m9-monitor-migration-plan.md`
 
@@ -22,8 +22,9 @@ Do not implement runtime code for M11 until:
    datastore contract/manifest checks, snippet/journal tests, and boundary
    checks.
 
-This document is a planning record only. It does not approve runtime code,
-CLI flags, default behavior changes, or public push/release actions.
+This document records the first Python-API-only M11 runtime slice and remaining
+deferred decisions. It does not approve CLI flags, default behavior changes, or
+public push/release actions.
 
 ## Goal
 
@@ -55,6 +56,34 @@ Current post-M10 path:
    so they continue using synchronous direct helper calls.
 6. Project-log queueing remains in the extraction orchestrator after MemoryDB
    publish and snippet/journal writes.
+
+## Implementation Record
+
+First runtime slice implemented by:
+
+- `6eebe1a59` `refactor(datastore): expose direct extraction request modes`
+- `539061237` `test(datastore): cover direct extraction mode guards`
+
+Implemented behavior:
+
+- `extract_from_transcript()` now accepts explicit `memory_publish_mode` and
+  `snippet_journal_write_mode` keyword parameters, both defaulting to `direct`.
+- The new parameters pass through unchanged to `apply_extracted_payloads()`.
+- Existing Python and CLI callers keep the default `direct` / `direct` behavior.
+- No CLI flags, new events, daemon route changes, environment sniffing, or hidden
+  config routing were added.
+- Tests pin default forwarding, independent mode forwarding, call-once behavior,
+  invalid-mode raise-through, and no direct-helper fallback for invalid modes.
+
+Validation:
+
+- W4 source-proof PASS on R201 for `6eebe1a59`; `539061237` was test-only and
+  needed no fresh live smoke.
+- W3 runtime/recall APPROVED/no findings for `6eebe1a59`; `539061237` had no
+  runtime/recall delta.
+- W6 APPROVED after the test-only follow-up closed the invalid-mode and
+  call-once coverage gaps.
+- W8 static PASS and runtime HOLD closed for the pair.
 
 ## Selected First Slice
 
