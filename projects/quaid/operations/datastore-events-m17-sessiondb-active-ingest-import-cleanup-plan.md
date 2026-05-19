@@ -63,11 +63,12 @@ Implement one runtime cleanup slice only:
 1. Update `core.runtime.events._handle_session_ingest_log()` to import
    `run_session_ingest_payload()` from `core.plugins.sessiondb_contract`
    directly.
-   Import location: update the existing module-level import in
-   `core/runtime/events.py` from
+   Import location: runtime source proof before implementation found the
+   existing import is inside `_handle_session_ingest_log()`, not module-level.
+   Update that existing in-function import in `core/runtime/events.py` from
    `from core.plugins.memorydb_contract import run_session_ingest_payload` to
    `from core.plugins.sessiondb_contract import run_session_ingest_payload`.
-   Keep the import at module level; do not move it inside the function.
+   Keep the import in the function; do not move it to module scope.
 2. Keep the active `session.ingest_log` event name, delivery mode, payload
    schema, processed/failed result envelope, and `process_events()` behavior
    unchanged.
