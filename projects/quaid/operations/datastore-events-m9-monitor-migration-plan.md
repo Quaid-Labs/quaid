@@ -101,8 +101,10 @@ Status:
 - Active `session.ingest_log` follow-up complete at `7c2522ab5`.
 - W4 live PASS, W6 review, and W8 static/runtime closure recorded for both
   session-log ingest slices.
-- Remaining lifecycle/session sub-slices require their own focused plan before
-  runtime implementation.
+- Ack-only lifecycle disposition recorded at `1e84e60ed` + `e329d13b1`: the
+  remaining lifecycle events stay core-owned active acknowledgements unless a
+  future W3/W6-reviewed persistence contract selects new runtime behavior.
+- No additional M9.3 runtime migration is selected in this milestone.
 
 Scope:
 

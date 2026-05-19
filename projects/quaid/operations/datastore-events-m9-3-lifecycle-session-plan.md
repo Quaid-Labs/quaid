@@ -1,6 +1,6 @@
 # Datastore Events M9.3 Lifecycle And Session Plan
 
-Status: first slice and active session-ingest follow-up complete; further M9.3 sub-slices require separate review
+Status: session write migration complete; lifecycle ack-only disposition recorded
 Owner: W1 runtime/datastore
 Plan source: `projects/quaid/operations/datastore-events-m9-monitor-migration-plan.md`
 
@@ -22,6 +22,9 @@ slice is complete at runtime commit `ce02408f2` plus test-fixture commit
 `e23dfc17f` after W4 live validation, W6 review, and W8 static closure.
 The active `session.ingest_log` follow-up is complete at `7c2522ab5` after W3
 plan approval, W4 live validation, W6 review, and W8 static/runtime closure.
+Ack-only lifecycle events were dispositioned in `1e84e60ed` with guardrail
+clarification in `e329d13b1`: they remain core runtime acknowledgements unless
+W3/W6 approve a concrete lifecycle persistence contract in a future slice.
 
 ## M9.3 Goal
 
@@ -346,6 +349,20 @@ Required review before any runtime behavior change:
 - W6 for ownership and envelope semantics.
 - W4 for CC/CDX/OC lifecycle milestone smoke if runtime behavior changes.
 - W8 for full event/static lanes.
+
+Closure status:
+
+- The selected M9.3 datastore write family is complete: daemon session-log
+  ingest callsites route through `session.ingest_log.request.v1`, and the active
+  `session.ingest_log` handler routes through the MemoryDB-owned helper.
+- No additional M9.3 runtime migration is selected for the ack-only lifecycle
+  events in this milestone.
+- `session.new`, `session.reset`, `session.compaction`, `session.timeout`,
+  `session.agent_start`, and `session.agent_end` remain core-owned active
+  acknowledgements.
+- Future lifecycle persistence, SessionDB manifest registration, source-window
+  metadata enrichment, or new lifecycle events such as `session.fork` require a
+  separate reviewed plan and W4 lifecycle smoke.
 
 ## Non-Targets
 
