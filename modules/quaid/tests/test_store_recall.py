@@ -16290,40 +16290,44 @@ class TestGraphFactClusterRecall:
                     "text": "Ari said the archive festival happened last year.",
                 }
 
-        def run_expansion(*, include_header):
-            def fake_expand(microchunk_id, *, owner_id, before, after):
-                expanded = {
-                    "microchunk": {
-                        "microchunk_id": microchunk_id,
+        def build_expanded_payload(*, include_header):
+            expanded = {
+                "microchunk": {
+                    "microchunk_id": "micro-center",
+                    "memory_chunk_id": "source-center",
+                    "chunk_id": "parent-session",
+                    "session_id": "session-1",
+                    "pair_id": "pair-center",
+                    "microchunk_index": 12,
+                    "text": "Ari said the archive festival happened last year.",
+                },
+                "microchunk_window": [
+                    {
+                        "microchunk_id": "micro-center",
                         "memory_chunk_id": "source-center",
                         "chunk_id": "parent-session",
                         "session_id": "session-1",
                         "pair_id": "pair-center",
                         "microchunk_index": 12,
                         "text": "Ari said the archive festival happened last year.",
-                    },
-                    "microchunk_window": [
-                        {
-                            "microchunk_id": microchunk_id,
-                            "memory_chunk_id": "source-center",
-                            "chunk_id": "parent-session",
-                            "session_id": "session-1",
-                            "pair_id": "pair-center",
-                            "microchunk_index": 12,
-                            "text": "Ari said the archive festival happened last year.",
-                        }
-                    ],
-                    "source_date": "2023-07-17",
-                }
-                if include_header:
-                    expanded["source_window_header"] = {
-                        "header_id": "session-1:2023-07-17",
-                        "source_date": "2023-07-17",
-                        "session_id": "session-1",
-                        "pair_id": "pair-center",
-                        "microchunk_id": microchunk_id,
                     }
-                return expanded
+                ],
+                "source_date": "2023-07-17",
+            }
+            if include_header:
+                expanded["source_window_header"] = {
+                    "header_id": "session-1:2023-07-17",
+                    "source_date": "2023-07-17",
+                    "session_id": "session-1",
+                    "pair_id": "pair-center",
+                    "microchunk_id": "micro-center",
+                }
+            return expanded
+
+        def run_expansion(*, include_header):
+            def fake_expand(microchunk_id, *, owner_id, before, after):
+                assert microchunk_id == "micro-center"
+                return build_expanded_payload(include_header=include_header)
 
             rows = [{
                 "id": "source-center",
@@ -16360,6 +16364,73 @@ class TestGraphFactClusterRecall:
         assert enriched["session_window_chunk_ids"] == fallback["session_window_chunk_ids"]
         assert enriched["session_window_size"] == fallback["session_window_size"]
         assert "source_date: 2023-07-17" in enriched["text"]
+
+        enriched_window = mg._sessiondb_bridge_expansion_window(build_expanded_payload(include_header=True))
+        fallback_window = mg._ensure_session_window_source_date_header(
+            mg._sessiondb_bridge_expansion_window(build_expanded_payload(include_header=False)),
+            source_date="2023-07-17",
+            session_id="session-1",
+            pair_id="pair-center",
+            microchunk_id="micro-center",
+        )
+        enriched_header = next(item for item in enriched_window if item.get("session_source_header"))
+        fallback_header = next(item for item in fallback_window if item.get("session_source_header"))
+        for key in ("header_id", "text", "source_date", "source_type", "chunk_kind", "message_pair_id", "microchunk_id"):
+            assert enriched_header[key] == fallback_header[key]
+        assert mg._session_window_item_id(enriched_header) == "session-1:2023-07-17"
+        assert mg._session_window_item_id(fallback_header) == "session-1:2023-07-17"
+
+    @pytest.mark.parametrize(
+        "raw,match",
+        [
+            ("not-a-dict", "must be a dict"),
+            (
+                {
+                    "header_id": "session-1:2023-07-17",
+                    "source_date": "2023-07-17",
+                    "session_id": ["session-1"],
+                    "pair_id": "pair-center",
+                    "microchunk_id": "micro-center",
+                },
+                "source_window_header.session_id",
+            ),
+            (
+                {
+                    "header_id": "session-1:2023-07-17",
+                    "source_date": "2023-07-17",
+                    "session_id": "session-1",
+                    "pair_id": "",
+                    "microchunk_id": "micro-center",
+                },
+                "source_window_header.pair_id",
+            ),
+            (
+                {
+                    "header_id": "session-1:2023-07-17",
+                    "source_date": "not-a-date",
+                    "session_id": "session-1",
+                    "pair_id": "pair-center",
+                    "microchunk_id": "micro-center",
+                },
+                "source_window_header.source_date must be an ISO date string",
+            ),
+            (
+                {
+                    "header_id": "wrong-header",
+                    "source_date": "2023-07-17",
+                    "session_id": "session-1",
+                    "pair_id": "pair-center",
+                    "microchunk_id": "micro-center",
+                },
+                "source_window_header.header_id must be session_id:source_date",
+            ),
+        ],
+    )
+    def test_sessiondb_source_window_header_validator_rejects_malformed_shapes(self, raw, match):
+        import datastore.memorydb.memory_graph as mg
+
+        with pytest.raises(ValueError, match=match):
+            mg._validate_session_source_window_header(raw)
 
     def test_sessiondb_bridge_malformed_source_window_header_respects_failhard(self, caplog):
         import datastore.memorydb.memory_graph as mg
