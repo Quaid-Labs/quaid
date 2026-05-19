@@ -221,8 +221,9 @@ Validation:
 
 ## Deferred Decisions
 
-- whether SessionDB should ever own `session.ingest_log.request.v1`; M15 closed
-  only the helper-ownership prerequisite at `379be9a47`
+- SessionDB ownership of `session.ingest_log.request.v1`, tracked as M16 in
+  `projects/quaid/operations/datastore-events-m16-sessiondb-ingest-request-ownership-plan.md`;
+  M15 closed only the helper-ownership prerequisite at `379be9a47`
 - whether SessionDB should expose dedicated request handlers beyond generic
   metadata/maintenance surfaces
 - lifecycle persistence for ack-only lifecycle events

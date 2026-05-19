@@ -211,8 +211,8 @@ code lands after this plan:
 ## Deferred Decisions
 
 - SessionDB session-ingest helper ownership closed in M15 at `379be9a47`;
-  `session.ingest_log.request.v1` ownership remains deferred
-- whether SessionDB should ever own `session.ingest_log.request.v1`
+  `session.ingest_log.request.v1` ownership is tracked as M16 in
+  `projects/quaid/operations/datastore-events-m16-sessiondb-ingest-request-ownership-plan.md`
 - whether SessionDB should expose dedicated request handlers beyond generic
   metadata/maintenance surfaces
 - lifecycle persistence for ack-only lifecycle events

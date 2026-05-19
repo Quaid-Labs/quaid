@@ -98,6 +98,13 @@ at `f0574902b` + `522f16e28` and is recorded in
 The M14 closure keeps `session.ingest_log` ownership, lifecycle persistence, and
 source-window behavior out of scope unless a later reviewed slice selects them.
 
+Post-M15 update: the SessionDB ingest helper ownership prerequisite closed at
+`379be9a47` and is recorded in
+`projects/quaid/operations/datastore-events-m15-sessiondb-ingest-helper-plan.md`.
+The request ownership move is tracked as M16 in
+`projects/quaid/operations/datastore-events-m16-sessiondb-ingest-request-ownership-plan.md`.
+M16 does not select lifecycle persistence or source-window enrichment.
+
 ## First-Slice Validation
 
 Completed runtime:

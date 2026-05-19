@@ -97,6 +97,12 @@ for active/request session ingest. MemoryDB ownership of
 `session.ingest_log.request.v1` and the `session_chunks` recall selector remains
 unchanged.
 
+The request ownership move is tracked as M16 in
+`projects/quaid/operations/datastore-events-m16-sessiondb-ingest-request-ownership-plan.md`:
+move `session.ingest_log.request.v1` metadata and request registration to
+SessionDB while preserving MemoryDB `session_chunks` recall ownership and
+source-window behavior.
+
 ## Shared Rules For Every M9 Slice
 
 - One write path family per sub-milestone.
