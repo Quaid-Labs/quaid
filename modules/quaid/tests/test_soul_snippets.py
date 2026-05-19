@@ -64,6 +64,128 @@ def mock_config():
     return mock_cfg
 
 
+class TestNoteDbContractSnippetJournalWrite:
+    def test_helper_writes_snippet_and_journal_with_target_metrics(self, workspace_dir, mock_config):
+        from core.plugins.notedb_contract import run_snippet_journal_write_payload
+
+        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
+            result = run_snippet_journal_write_payload({
+                "source": "extraction-apply-payloads",
+                "label": "rolling-reset",
+                "trigger": "Reset",
+                "date_str": "2026-03-10",
+                "time_str": "01:23:45",
+                "snippets": {"USER.md": ["Alden Rook is Owner's test godbrother."]},
+                "journal": {"SOUL.md": "A quiet journal note."},
+            })
+
+        assert result["status"] == "ok"
+        assert result["snippet_files_seen"] == 1
+        assert result["snippet_items_seen"] == 1
+        assert result["snippet_files_written"] == 1
+        assert result["snippet_items_written"] == 1
+        assert result["journal_files_seen"] == 1
+        assert result["journal_files_written"] == 1
+        assert result["target_files"] == {
+            "snippets": ["USER.snippets.md"],
+            "journal": ["SOUL.journal.md"],
+        }
+        assert "Alden Rook is Owner's test godbrother." in (
+            workspace_dir / "USER.snippets.md"
+        ).read_text(encoding="utf-8")
+        assert "A quiet journal note." in (
+            workspace_dir / "journal" / "SOUL.journal.md"
+        ).read_text(encoding="utf-8")
+
+    def test_helper_preserves_duplicate_skip_counters(self, workspace_dir, mock_config):
+        from core.plugins.notedb_contract import run_snippet_journal_write_payload
+
+        payload = {
+            "source": "extraction-apply-payloads",
+            "trigger": "Reset",
+            "date_str": "2026-03-10",
+            "time_str": "01:23:45",
+            "snippets": {"USER.md": ["Alden Rook is Owner's test godbrother."]},
+            "journal": {"SOUL.md": "A quiet journal note."},
+        }
+        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
+            first = run_snippet_journal_write_payload(payload)
+            second = run_snippet_journal_write_payload(payload)
+
+        assert first["snippet_files_written"] == 1
+        assert first["journal_files_written"] == 1
+        assert second["snippet_files_written"] == 0
+        assert second["snippet_files_skipped"] == 1
+        assert second["journal_files_written"] == 0
+        assert second["journal_files_skipped"] == 1
+
+    def test_helper_logs_and_records_soft_snippet_write_failure(self, caplog):
+        from core.plugins.notedb_contract import run_snippet_journal_write_payload
+
+        with patch("datastore.notedb.soul_snippets.write_snippet_entry", side_effect=OSError("disk full")), \
+             patch("lib.fail_policy.is_fail_hard_enabled", return_value=False), \
+             caplog.at_level(logging.WARNING, logger="core.plugins.notedb_contract"):
+            result = run_snippet_journal_write_payload({
+                "source": "extraction-apply-payloads",
+                "snippets": {"SOUL.md": ["Remember the disk warning."]},
+                "journal": {},
+            })
+
+        assert result["status"] == "failed"
+        assert result["snippet_files_written"] == 0
+        assert result["snippet_files_skipped"] == 1
+        assert "snippet write failed for SOUL.md: disk full" in result["errors"]
+        assert "snippet write failed for SOUL.md: disk full" in caplog.text
+
+    def test_helper_logs_before_fail_hard_snippet_write_raise(self, caplog):
+        from core.plugins.notedb_contract import run_snippet_journal_write_payload
+
+        with patch("datastore.notedb.soul_snippets.write_snippet_entry", side_effect=OSError("disk full")), \
+             patch("lib.fail_policy.is_fail_hard_enabled", return_value=True), \
+             caplog.at_level(logging.WARNING, logger="core.plugins.notedb_contract"):
+            with pytest.raises(OSError, match="disk full"):
+                run_snippet_journal_write_payload({
+                    "source": "extraction-apply-payloads",
+                    "snippets": {"SOUL.md": ["Remember the disk warning."]},
+                    "journal": {},
+                })
+
+        assert "snippet write failed for SOUL.md: disk full" in caplog.text
+
+    def test_helper_logs_and_records_soft_journal_write_failure(self, caplog):
+        from core.plugins.notedb_contract import run_snippet_journal_write_payload
+
+        with patch("datastore.notedb.soul_snippets.write_journal_entry", side_effect=OSError("disk full")), \
+             patch("lib.fail_policy.is_fail_hard_enabled", return_value=False), \
+             caplog.at_level(logging.WARNING, logger="core.plugins.notedb_contract"):
+            result = run_snippet_journal_write_payload({
+                "source": "extraction-apply-payloads",
+                "snippets": {},
+                "journal": {"SOUL.md": "Remember the disk warning."},
+            })
+
+        assert result["status"] == "failed"
+        assert result["journal_files_written"] == 0
+        assert result["journal_files_skipped"] == 1
+        assert "journal write failed for SOUL.md: disk full" in result["errors"]
+        assert "journal write failed for SOUL.md: disk full" in caplog.text
+
+    def test_helper_logs_before_fail_hard_journal_write_raise(self, caplog):
+        from core.plugins.notedb_contract import run_snippet_journal_write_payload
+
+        with patch("datastore.notedb.soul_snippets.write_journal_entry", side_effect=OSError("disk full")), \
+             patch("lib.fail_policy.is_fail_hard_enabled", return_value=True), \
+             caplog.at_level(logging.WARNING, logger="core.plugins.notedb_contract"):
+            with pytest.raises(OSError, match="disk full"):
+                run_snippet_journal_write_payload({
+                    "source": "extraction-apply-payloads",
+                    "snippets": {},
+                    "journal": {"SOUL.md": "Remember the disk warning."},
+                })
+
+        assert "journal write failed for SOUL.md: disk full" in caplog.text
+
+
 # =============================================================================
 # Journal entry writing tests
 # =============================================================================

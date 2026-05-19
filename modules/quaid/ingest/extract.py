@@ -36,7 +36,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from lib.llm_clients import call_deep_reasoning, parse_json_response
 from config import get_config
 from core.docs.updater import enqueue_project_logs
-from core.lifecycle import soul_snippets as soul_snippets_runtime
 from lib.runtime_context import (
     parse_session_jsonl as runtime_parse_session_jsonl,
     build_transcript as runtime_build_transcript,
@@ -389,7 +388,6 @@ MAX_EXTRACT_SPLIT_DEPTH = 4
 MIN_REPAIR_OUTPUT_TOKENS = 4096
 # SessionDB microchunks are intentionally much smaller than legacy source
 # chunks. They are recall probes that carry pair_id/microchunk_id for expansion.
-_SOUL_SNIPPETS_MODULE = None
 
 
 def _build_extraction_source_chunk_descriptor(
@@ -437,14 +435,6 @@ def _split_session_source_microchunks(
 
         max_tokens = extraction_publish_microchunk_tokens()
     return split_microchunks(text, max_tokens=max_tokens)
-
-
-def _load_soul_snippets_module():
-    global _SOUL_SNIPPETS_MODULE
-    if _SOUL_SNIPPETS_MODULE is not None:
-        return _SOUL_SNIPPETS_MODULE
-    _SOUL_SNIPPETS_MODULE = soul_snippets_runtime
-    return _SOUL_SNIPPETS_MODULE
 
 
 def _extract_carry_context_enabled() -> bool:
@@ -2821,6 +2811,15 @@ def _request_extraction_publish_payload(
     return _validate_extraction_publish_broker_response(response)
 
 
+def _snippet_journal_trigger_for_label(label: str) -> str:
+    lowered = str(label or "").lower()
+    if "compaction" in lowered:
+        return "Compaction"
+    if "reset" in lowered:
+        return "Reset"
+    return "CLI"
+
+
 def apply_extracted_payloads(
     result: Dict[str, Any],
     *,
@@ -2856,6 +2855,7 @@ def apply_extracted_payloads(
     }
 
     from core.plugins.memorydb_contract import run_extraction_publish_payload, write_extraction_publish_trace
+    from core.plugins.notedb_contract import run_snippet_journal_write_payload
 
     publish_mode = str(memory_publish_mode or "direct").strip().lower()
     if publish_mode == "request":
@@ -2917,24 +2917,23 @@ def apply_extracted_payloads(
         if fallback_user_snippets:
             result["snippets"]["USER.md"] = fallback_user_snippets
 
-    if write_snippets and result["snippets"] and not dry_run:
-        trigger = "Compaction" if "compaction" in label.lower() else (
-            "Reset" if "reset" in label.lower() else "CLI"
-        )
-        for filename, items in result["snippets"].items():
-            _load_soul_snippets_module().write_snippet_entry(filename, items, trigger=trigger)
-
     if isinstance(all_journal, dict):
         for filename, text in all_journal.items():
             if isinstance(text, str) and text.strip():
                 result["journal"][filename] = text.strip()
 
-    if write_journal and result["journal"] and not dry_run:
-        trigger = "Compaction" if "compaction" in label.lower() else (
-            "Reset" if "reset" in label.lower() else "CLI"
-        )
-        for filename, text in result["journal"].items():
-            _load_soul_snippets_module().write_journal_entry(filename, text, trigger=trigger)
+    result["snippet_journal_metrics"] = run_snippet_journal_write_payload({
+        "source": "extraction-apply-payloads",
+        "owner_id": owner_id,
+        "session_id": session_id,
+        "label": label,
+        "trigger": _snippet_journal_trigger_for_label(label),
+        "snippets": result["snippets"],
+        "journal": result["journal"],
+        "write_snippets": write_snippets,
+        "write_journal": write_journal,
+        "dry_run": dry_run,
+    })
 
     normalized_project_logs = all_project_logs if isinstance(all_project_logs, dict) else {}
 

@@ -2876,6 +2876,78 @@ class TestExtractFromTranscript:
         assert applied["project_logs"]["launch-app"] == ["Moved launch checklist into red binder"]
         fake_enqueue.assert_called_once()
 
+    def test_apply_extracted_payloads_routes_snippet_journal_through_evolutiondb_contract(self, monkeypatch):
+        import ingest.extract as extract_mod
+
+        seen = {}
+
+        def fake_publish(result, **_kwargs):
+            result["facts_stored"] = 0
+            return []
+
+        def fake_snippet_journal(payload):
+            seen["payload"] = payload
+            return {
+                "status": "ok",
+                "snippet_files_seen": 1,
+                "snippet_items_seen": 1,
+                "snippet_files_written": 1,
+                "snippet_items_written": 1,
+                "snippet_files_skipped": 0,
+                "journal_files_seen": 1,
+                "journal_files_written": 1,
+                "journal_files_skipped": 0,
+                "target_files": {
+                    "snippets": ["SOUL.snippets.md"],
+                    "journal": ["SOUL.journal.md"],
+                },
+                "errors": [],
+            }
+
+        monkeypatch.setattr("core.plugins.memorydb_contract.run_extraction_publish_payload", fake_publish)
+        monkeypatch.setattr("core.plugins.notedb_contract.run_snippet_journal_write_payload", fake_snippet_journal)
+
+        payload = {
+            "raw_facts": [],
+            "raw_snippets": {"SOUL.md": ["Keep launch checklist references precise"]},
+            "raw_journal": {"SOUL.md": "A quiet launch note."},
+            "raw_project_logs": {},
+            "facts": [],
+            "snippets": {},
+            "journal": {},
+            "project_logs": {},
+            "project_log_metrics": {},
+            "facts_stored": 0,
+            "facts_skipped": 0,
+            "edges_created": 0,
+            "dry_run": False,
+        }
+
+        applied = extract_mod.apply_extracted_payloads(
+            payload,
+            owner_id="test",
+            label="rolling-compaction",
+            session_id="sess-evolution-seam",
+            write_snippets=True,
+            write_journal=True,
+            dry_run=False,
+        )
+
+        helper_payload = seen["payload"]
+        assert helper_payload["source"] == "extraction-apply-payloads"
+        assert helper_payload["owner_id"] == "test"
+        assert helper_payload["session_id"] == "sess-evolution-seam"
+        assert helper_payload["trigger"] == "Compaction"
+        assert helper_payload["snippets"] == {"SOUL.md": ["Keep launch checklist references precise"]}
+        assert helper_payload["journal"] == {"SOUL.md": "A quiet launch note."}
+        assert helper_payload["write_snippets"] is True
+        assert helper_payload["write_journal"] is True
+        assert helper_payload["dry_run"] is False
+        assert applied["snippet_journal_metrics"]["target_files"] == {
+            "snippets": ["SOUL.snippets.md"],
+            "journal": ["SOUL.journal.md"],
+        }
+
     def test_apply_extracted_payloads_request_mode_does_not_fallback_after_broker_failure(self, monkeypatch):
         import ingest.extract as extract_mod
 
