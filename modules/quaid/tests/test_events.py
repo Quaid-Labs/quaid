@@ -8,6 +8,7 @@ from core.runtime.events import (
     EVENT_HANDLERS,
     DOCS_PROJECT_MAINTENANCE_OBSERVED_EVENT,
     DOCS_PROJECT_UPDATE_REQUEST_EVENT,
+    EVOLUTION_SNIPPET_JOURNAL_WRITE_REQUEST_EVENT,
     MEMORY_EXTRACTION_PUBLISH_REQUEST_EVENT,
     SESSION_INGEST_LOG_REQUEST_EVENT,
     dispatch_broker_events,
@@ -72,6 +73,10 @@ def test_event_emit_list_and_capabilities(tmp_path):
     assert any(c.get("name") == SESSION_INGEST_LOG_REQUEST_EVENT and c.get("delivery_mode") == "request" for c in caps)
     assert any(
         c.get("name") == MEMORY_EXTRACTION_PUBLISH_REQUEST_EVENT and c.get("delivery_mode") == "request"
+        for c in caps
+    )
+    assert any(
+        c.get("name") == EVOLUTION_SNIPPET_JOURNAL_WRITE_REQUEST_EVENT and c.get("delivery_mode") == "request"
         for c in caps
     )
     assert any(c.get("name") == "session.reset" and c.get("delivery_mode") == "active" for c in caps)
@@ -1148,6 +1153,102 @@ def test_request_extraction_publish_rejects_required_payload_fields(monkeypatch,
     )
 
     assert response["status"] == "failed"
+    assert response["responses"][0]["result"]["error"] == error
+
+
+def test_request_snippet_journal_write_runs_evolutiondb_handler(monkeypatch, tmp_path):
+    set_adapter(TestAdapter(tmp_path))
+    import core.plugins.notedb_contract as notedb_contract
+    from core.plugins.notedb_contract import register_snippet_journal_write_request_handler
+
+    called = {}
+
+    def _fake_write(payload):
+        called["payload"] = payload
+        return {
+            "status": "ok",
+            "snippet_files_seen": 1,
+            "snippet_items_seen": 1,
+            "snippet_files_written": 1,
+            "snippet_items_written": 1,
+            "snippet_files_skipped": 0,
+            "journal_files_seen": 1,
+            "journal_files_written": 1,
+            "journal_files_skipped": 0,
+            "target_files": {
+                "snippets": ["USER.snippets.md"],
+                "journal": ["SOUL.journal.md"],
+            },
+            "errors": [],
+        }
+
+    monkeypatch.setattr(notedb_contract, "run_snippet_journal_write_payload", _fake_write)
+
+    register_snippet_journal_write_request_handler()
+    response = request_broker_event(
+        EVOLUTION_SNIPPET_JOURNAL_WRITE_REQUEST_EVENT,
+        {
+            "source": "extraction-apply-payloads",
+            "owner_id": "owner-req",
+            "session_id": "sess-note",
+            "label": "RollingFlush",
+            "trigger": "CLI",
+            "snippets": {"USER.md": ["Alden Rook is Owner's test godbrother."]},
+            "journal": {"SOUL.md": "A quiet journal note."},
+            "write_snippets": True,
+            "write_journal": True,
+            "dry_run": False,
+        },
+        source="pytest",
+    )
+
+    assert response["status"] == "ok"
+    row = response["responses"][0]
+    assert row["datastore_id"] == "evolutiondb"
+    result = row["result"]
+    assert result["status"] == "ok"
+    metrics = result["snippet_journal_metrics"]
+    assert metrics["snippet_files_written"] == 1
+    assert metrics["journal_files_written"] == 1
+    assert metrics["target_files"]["snippets"] == ["USER.snippets.md"]
+    assert called["payload"]["source"] == "extraction-apply-payloads"
+    assert called["payload"]["snippets"] == {"USER.md": ["Alden Rook is Owner's test godbrother."]}
+    assert called["payload"]["journal"] == {"SOUL.md": "A quiet journal note."}
+
+
+@pytest.mark.parametrize(
+    ("payload", "error"),
+    [
+        (
+            {"source": "wrong", "snippets": {}, "journal": {}},
+            "payload.source must be extraction-apply-payloads",
+        ),
+        (
+            {"source": "extraction-apply-payloads", "snippets": [], "journal": {}},
+            "payload.snippets must be an object",
+        ),
+        (
+            {"source": "extraction-apply-payloads", "snippets": {}, "journal": []},
+            "payload.journal must be an object",
+        ),
+    ],
+)
+def test_request_snippet_journal_write_rejects_required_payload_fields(monkeypatch, tmp_path, payload, error):
+    set_adapter(TestAdapter(tmp_path))
+    import core.runtime.events as events
+    from core.plugins.notedb_contract import register_snippet_journal_write_request_handler
+
+    monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: False)
+
+    register_snippet_journal_write_request_handler()
+    response = request_broker_event(
+        EVOLUTION_SNIPPET_JOURNAL_WRITE_REQUEST_EVENT,
+        payload,
+        source="pytest",
+    )
+
+    assert response["status"] == "failed"
+    assert response["responses"][0]["datastore_id"] == "evolutiondb"
     assert response["responses"][0]["result"]["error"] == error
 
 

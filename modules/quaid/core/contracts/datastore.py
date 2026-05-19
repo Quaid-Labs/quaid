@@ -275,6 +275,11 @@ class EvolutionDbDatastoreContract(DatastoreContractBase):
             ("core.facade recallFromJournal / datastore.notedb.soul_snippets journal files",),
         ),
         DatastoreHandlerSpec(
+            "evolution.snippet_journal_write.request.v1",
+            REQUEST,
+            ("core.plugins.notedb_contract.handle_snippet_journal_write_request",),
+        ),
+        DatastoreHandlerSpec(
             "datastore.validate.request.v1",
             REQUEST,
             ("datastore.notedb.soul_snippets maintenance validation",),

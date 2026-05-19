@@ -5372,6 +5372,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             session_id=session_id,
             dry_run=False,
             memory_publish_mode="request",
+            snippet_journal_write_mode="request",
         )
         publish_wall = time.time() - publish_started_at
         usage_after_publish = _read_usage_totals()

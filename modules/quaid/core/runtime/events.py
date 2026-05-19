@@ -39,6 +39,7 @@ DOCS_PROJECT_MAINTENANCE_OBSERVED_EVENT = "docs.project_maintenance_observed"
 DOCS_PROJECT_UPDATE_REQUEST_EVENT = "docs.project_update.request.v1"
 SESSION_INGEST_LOG_REQUEST_EVENT = "session.ingest_log.request.v1"
 MEMORY_EXTRACTION_PUBLISH_REQUEST_EVENT = "memory.extraction_publish.request.v1"
+EVOLUTION_SNIPPET_JOURNAL_WRITE_REQUEST_EVENT = "evolution.snippet_journal_write.request.v1"
 
 EVENT_REGISTRY: List[Dict[str, Any]] = [
     {
@@ -142,6 +143,14 @@ EVENT_REGISTRY: List[Dict[str, Any]] = [
     {
         "name": MEMORY_EXTRACTION_PUBLISH_REQUEST_EVENT,
         "description": "Request MemoryDB-owned extraction fact/source publish work.",
+        "fireable": True,
+        "processable": False,
+        "listenable": True,
+        "delivery_mode": "request",
+    },
+    {
+        "name": EVOLUTION_SNIPPET_JOURNAL_WRITE_REQUEST_EVENT,
+        "description": "Request EvolutionDB-owned snippet/journal markdown writes.",
         "fireable": True,
         "processable": False,
         "listenable": True,

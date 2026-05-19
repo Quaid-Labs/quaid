@@ -3004,6 +3004,188 @@ class TestExtractFromTranscript:
         assert direct_called is False
         assert payload["facts_stored"] == 0
 
+    def test_apply_extracted_payloads_routes_snippet_journal_request_mode_through_broker(self, monkeypatch):
+        import ingest.extract as extract_mod
+
+        called = {}
+        direct_called = False
+
+        def fake_publish(result, **_kwargs):
+            result["facts_stored"] = 0
+            return []
+
+        def fake_direct_snippet_journal(*_args, **_kwargs):
+            nonlocal direct_called
+            direct_called = True
+            raise AssertionError("snippet/journal request mode must not call direct helper")
+
+        def fake_request(event_type, payload, **kwargs):
+            called["event_type"] = event_type
+            called["payload"] = payload
+            called["kwargs"] = kwargs
+            return {
+                "status": "ok",
+                "responses": [{
+                    "datastore_id": "evolutiondb",
+                    "status": "ok",
+                    "result": {
+                        "status": "ok",
+                        "snippet_journal_metrics": {
+                            "status": "ok",
+                            "snippet_files_seen": 1,
+                            "snippet_items_seen": 1,
+                            "snippet_files_written": 1,
+                            "snippet_items_written": 1,
+                            "snippet_files_skipped": 0,
+                            "journal_files_seen": 1,
+                            "journal_files_written": 1,
+                            "journal_files_skipped": 0,
+                            "target_files": {
+                                "snippets": ["SOUL.snippets.md"],
+                                "journal": ["SOUL.journal.md"],
+                            },
+                            "errors": [],
+                        },
+                    },
+                }],
+            }
+
+        monkeypatch.setattr("core.plugins.memorydb_contract.run_extraction_publish_payload", fake_publish)
+        monkeypatch.setattr("core.plugins.notedb_contract.run_snippet_journal_write_payload", fake_direct_snippet_journal)
+        monkeypatch.setattr("core.plugins.notedb_contract.register_snippet_journal_write_request_handler", lambda: None)
+        monkeypatch.setattr("core.runtime.events.request_broker_event", fake_request)
+
+        payload = {
+            "raw_facts": [],
+            "raw_snippets": {"SOUL.md": ["Keep launch checklist references precise"]},
+            "raw_journal": {"SOUL.md": "A quiet launch note."},
+            "raw_project_logs": {},
+            "facts": [],
+            "snippets": {},
+            "journal": {},
+            "project_logs": {},
+            "project_log_metrics": {},
+            "facts_stored": 0,
+            "facts_skipped": 0,
+            "edges_created": 0,
+            "dry_run": False,
+        }
+
+        applied = extract_mod.apply_extracted_payloads(
+            payload,
+            owner_id="test",
+            label="rolling-flush",
+            session_id="sess-note-request",
+            write_snippets=True,
+            write_journal=True,
+            dry_run=False,
+            snippet_journal_write_mode="request",
+        )
+
+        assert direct_called is False
+        assert called["event_type"] == "evolution.snippet_journal_write.request.v1"
+        assert called["payload"]["source"] == "extraction-apply-payloads"
+        assert called["payload"]["owner_id"] == "test"
+        assert called["payload"]["session_id"] == "sess-note-request"
+        assert called["payload"]["trigger"] == "CLI"
+        assert called["payload"]["snippets"] == {"SOUL.md": ["Keep launch checklist references precise"]}
+        assert called["payload"]["journal"] == {"SOUL.md": "A quiet launch note."}
+        assert called["kwargs"]["source"] == "ingest.extract.apply_extracted_payloads"
+        assert applied["snippet_journal_metrics"]["target_files"] == {
+            "snippets": ["SOUL.snippets.md"],
+            "journal": ["SOUL.journal.md"],
+        }
+
+    def test_apply_extracted_payloads_snippet_journal_request_mode_does_not_fallback_after_broker_failure(self, monkeypatch):
+        import ingest.extract as extract_mod
+
+        direct_called = False
+
+        def fake_publish(result, **_kwargs):
+            result["facts_stored"] = 0
+            return []
+
+        def fake_direct_snippet_journal(*_args, **_kwargs):
+            nonlocal direct_called
+            direct_called = True
+            raise AssertionError("request-mode failure must not route around direct snippet/journal helper")
+
+        monkeypatch.setattr("core.plugins.memorydb_contract.run_extraction_publish_payload", fake_publish)
+        monkeypatch.setattr("core.plugins.notedb_contract.run_snippet_journal_write_payload", fake_direct_snippet_journal)
+        monkeypatch.setattr("core.plugins.notedb_contract.register_snippet_journal_write_request_handler", lambda: None)
+        monkeypatch.setattr(
+            "core.runtime.events.request_broker_event",
+            lambda *_args, **_kwargs: {
+                "status": "failed",
+                "error": "simulated snippet broker failure",
+                "responses": [],
+            },
+        )
+
+        payload = {
+            "raw_facts": [],
+            "raw_snippets": {"SOUL.md": ["Keep launch checklist references precise"]},
+            "raw_journal": {},
+            "raw_project_logs": {},
+            "facts": [],
+            "snippets": {},
+            "journal": {},
+            "project_logs": {},
+            "project_log_metrics": {},
+            "facts_stored": 0,
+            "facts_skipped": 0,
+            "edges_created": 0,
+            "dry_run": False,
+        }
+
+        with pytest.raises(RuntimeError, match="snippet/journal write request returned no evolutiondb response"):
+            extract_mod.apply_extracted_payloads(
+                payload,
+                owner_id="test",
+                label="rolling-flush",
+                session_id="sess-note-request-fail",
+                dry_run=False,
+                snippet_journal_write_mode="request",
+            )
+
+        assert direct_called is False
+        assert "snippet_journal_metrics" not in payload
+
+    def test_apply_extracted_payloads_rejects_unknown_snippet_journal_write_mode(self, monkeypatch):
+        import ingest.extract as extract_mod
+
+        def fake_publish(result, **_kwargs):
+            result["facts_stored"] = 0
+            return []
+
+        monkeypatch.setattr("core.plugins.memorydb_contract.run_extraction_publish_payload", fake_publish)
+
+        payload = {
+            "raw_facts": [],
+            "raw_snippets": {},
+            "raw_journal": {},
+            "raw_project_logs": {},
+            "facts": [],
+            "snippets": {},
+            "journal": {},
+            "project_logs": {},
+            "project_log_metrics": {},
+            "facts_stored": 0,
+            "facts_skipped": 0,
+            "edges_created": 0,
+            "dry_run": False,
+        }
+
+        with pytest.raises(ValueError, match="Unsupported snippet_journal_write_mode"):
+            extract_mod.apply_extracted_payloads(
+                payload,
+                owner_id="test",
+                label="rolling-flush",
+                session_id="sess-note-bad-mode",
+                dry_run=False,
+                snippet_journal_write_mode="bogus",
+            )
+
     @pytest.mark.parametrize(
         ("response", "message"),
         [
@@ -3066,6 +3248,91 @@ class TestExtractFromTranscript:
 
         with pytest.raises(RuntimeError, match=message):
             extract_mod._validate_extraction_publish_broker_response(response)
+
+        assert any(message in record.getMessage() for record in caplog.records)
+
+    @pytest.mark.parametrize(
+        ("response", "message"),
+        [
+            ([], "snippet/journal write request returned a non-object response"),
+            (
+                {"status": "failed", "error": "simulated broker failure", "responses": []},
+                "snippet/journal write request returned no evolutiondb response: simulated broker failure",
+            ),
+            (
+                {"status": "ok", "responses": ["bad-row"]},
+                "snippet/journal write request returned malformed evolutiondb response",
+            ),
+            (
+                {"status": "ok", "responses": [{"datastore_id": "memorydb", "status": "ok", "result": {}}]},
+                "snippet/journal write request returned a non-evolutiondb response",
+            ),
+            (
+                {"status": "ok", "responses": [{"datastore_id": "evolutiondb", "status": "ok", "result": []}]},
+                "snippet/journal write request evolutiondb result is not an object",
+            ),
+            (
+                {
+                    "status": "failed",
+                    "responses": [{
+                        "datastore_id": "evolutiondb",
+                        "status": "failed",
+                        "result": {"status": "failed", "error": "handler rejected snippet write"},
+                    }],
+                },
+                "snippet/journal write request failed: handler rejected snippet write",
+            ),
+            (
+                {
+                    "status": "ok",
+                    "responses": [{
+                        "datastore_id": "evolutiondb",
+                        "status": "ok",
+                        "result": {"status": "ok"},
+                    }],
+                },
+                "snippet/journal write request evolutiondb snippet_journal_metrics is not an object",
+            ),
+            (
+                {
+                    "status": "ok",
+                    "responses": [{
+                        "datastore_id": "evolutiondb",
+                        "status": "ok",
+                        "result": {
+                            "status": "ok",
+                            "snippet_journal_metrics": {"status": "ok", "errors": []},
+                        },
+                    }],
+                },
+                "snippet/journal write request evolutiondb target_files is not an object",
+            ),
+            (
+                {
+                    "status": "ok",
+                    "responses": [{
+                        "datastore_id": "evolutiondb",
+                        "status": "ok",
+                        "result": {
+                            "status": "ok",
+                            "snippet_journal_metrics": {
+                                "status": "ok",
+                                "target_files": {"snippets": [], "journal": []},
+                            },
+                        },
+                    }],
+                },
+                "snippet/journal write request evolutiondb errors is not a list",
+            ),
+        ],
+    )
+    def test_validate_snippet_journal_write_broker_response_warns_before_raise(self, caplog, response, message):
+        import ingest.extract as extract_mod
+
+        caplog.set_level("WARNING", logger="ingest.extract")
+
+        with pytest.raises(RuntimeError, match=message):
+            extract_mod._validate_snippet_journal_write_broker_response(response)
 
         assert any(message in record.getMessage() for record in caplog.records)
 

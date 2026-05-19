@@ -33,8 +33,10 @@ def run_snippet_journal_write_payload(payload: Dict[str, Any]) -> Dict[str, Any]
     if source and source != "extraction-apply-payloads":
         raise ValueError("payload.source must be extraction-apply-payloads")
 
-    snippets = payload.get("snippets") or {}
-    journal = payload.get("journal") or {}
+    raw_snippets = payload.get("snippets")
+    raw_journal = payload.get("journal")
+    snippets = raw_snippets if raw_snippets is not None else {}
+    journal = raw_journal if raw_journal is not None else {}
     if not isinstance(snippets, dict):
         raise TypeError("payload.snippets must be an object")
     if not isinstance(journal, dict):
@@ -131,6 +133,39 @@ def run_snippet_journal_write_payload(payload: Dict[str, Any]) -> Dict[str, Any]
             result["journal_files_skipped"] += 1
 
     return result
+
+
+def handle_snippet_journal_write_request(event: Dict[str, Any]) -> Dict[str, Any]:
+    """Handle extraction snippet/journal writes through EvolutionDB ownership."""
+    payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+    source = str(payload.get("source") or "").strip()
+    if source != "extraction-apply-payloads":
+        return {"status": "failed", "error": "payload.source must be extraction-apply-payloads"}
+    raw_snippets = payload.get("snippets")
+    raw_journal = payload.get("journal")
+    snippets = raw_snippets if raw_snippets is not None else {}
+    journal = raw_journal if raw_journal is not None else {}
+    if not isinstance(snippets, dict):
+        return {"status": "failed", "error": "payload.snippets must be an object"}
+    if not isinstance(journal, dict):
+        return {"status": "failed", "error": "payload.journal must be an object"}
+
+    metrics = run_snippet_journal_write_payload(dict(payload))
+    return {
+        "status": "ok",
+        "snippet_journal_metrics": metrics,
+    }
+
+
+def register_snippet_journal_write_request_handler() -> None:
+    from core.runtime.events import EVOLUTION_SNIPPET_JOURNAL_WRITE_REQUEST_EVENT, register_request_handler
+
+    register_request_handler(
+        EVOLUTION_SNIPPET_JOURNAL_WRITE_REQUEST_EVENT,
+        handle_snippet_journal_write_request,
+        datastore_id="evolutiondb",
+        force=True,
+    )
 
 
 class NoteDbPluginContract(PluginContractBase):

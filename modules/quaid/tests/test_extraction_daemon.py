@@ -2654,6 +2654,7 @@ def test_process_signal_does_not_reextract_tail_after_nonrolling_semantic_stage(
     assert len(published_payloads) == 1
     assert len(published_payloads[0]["raw_facts"]) == 1
     assert publish_kwargs[0]["memory_publish_mode"] == "request"
+    assert publish_kwargs[0]["snippet_journal_write_mode"] == "request"
 
 
 def test_summarize_fact_result_buckets_groups_duplicate_and_skip_reasons():

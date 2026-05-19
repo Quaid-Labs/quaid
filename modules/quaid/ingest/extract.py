@@ -2811,6 +2811,114 @@ def _request_extraction_publish_payload(
     return _validate_extraction_publish_broker_response(response)
 
 
+def _snippet_journal_write_request_error_message(
+    response: Dict[str, Any],
+    row: Optional[Dict[str, Any]] = None,
+) -> str:
+    if row:
+        result = row.get("result") if isinstance(row.get("result"), dict) else {}
+        metrics = result.get("snippet_journal_metrics") if isinstance(result.get("snippet_journal_metrics"), dict) else {}
+        for value in (
+            row.get("error"),
+            result.get("error"),
+            result.get("reason"),
+            metrics.get("error"),
+        ):
+            text = str(value or "").strip()
+            if text:
+                return text
+        errors = metrics.get("errors")
+        if isinstance(errors, list) and errors:
+            text = str(errors[0] or "").strip()
+            if text:
+                return text
+    for value in (response.get("error"), response.get("status")):
+        text = str(value or "").strip()
+        if text:
+            return text
+    return "unknown snippet/journal write request failure"
+
+
+def _raise_snippet_journal_write_request_error(message: str) -> None:
+    logger.warning("[extract] snippet/journal write request failed: %s", message)
+    raise RuntimeError(message)
+
+
+def _validate_snippet_journal_write_broker_response(response: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(response, dict):
+        _raise_snippet_journal_write_request_error("snippet/journal write request returned a non-object response")
+    responses = response.get("responses")
+    if not isinstance(responses, list) or len(responses) != 1:
+        message = _snippet_journal_write_request_error_message(response)
+        _raise_snippet_journal_write_request_error(
+            f"snippet/journal write request returned no evolutiondb response: {message}"
+        )
+    row = responses[0]
+    if not isinstance(row, dict):
+        _raise_snippet_journal_write_request_error("snippet/journal write request returned malformed evolutiondb response")
+    if str(row.get("datastore_id") or "").strip() != "evolutiondb":
+        _raise_snippet_journal_write_request_error("snippet/journal write request returned a non-evolutiondb response")
+    handler_result = row.get("result")
+    if not isinstance(handler_result, dict):
+        _raise_snippet_journal_write_request_error("snippet/journal write request evolutiondb result is not an object")
+
+    response_status = str(response.get("status") or "").strip().lower()
+    row_status = str(row.get("status") or handler_result.get("status") or "").strip().lower()
+    handler_status = str(handler_result.get("status") or "").strip().lower()
+    if response_status != "ok" or row_status in {"failed", "error", "nacked"} or handler_status in {"failed", "error"}:
+        message = _snippet_journal_write_request_error_message(response, row)
+        _raise_snippet_journal_write_request_error(f"snippet/journal write request failed: {message}")
+
+    metrics = handler_result.get("snippet_journal_metrics")
+    if not isinstance(metrics, dict):
+        _raise_snippet_journal_write_request_error(
+            "snippet/journal write request evolutiondb snippet_journal_metrics is not an object"
+        )
+    target_files = metrics.get("target_files")
+    if not isinstance(target_files, dict):
+        _raise_snippet_journal_write_request_error(
+            "snippet/journal write request evolutiondb target_files is not an object"
+        )
+    for field in ("snippets", "journal"):
+        if not isinstance(target_files.get(field), list):
+            _raise_snippet_journal_write_request_error(
+                f"snippet/journal write request evolutiondb target_files.{field} is not a list"
+            )
+    errors = metrics.get("errors")
+    if not isinstance(errors, list):
+        _raise_snippet_journal_write_request_error(
+            "snippet/journal write request evolutiondb errors is not a list"
+        )
+    return dict(metrics)
+
+
+def _request_snippet_journal_write_payload(
+    payload: Dict[str, Any],
+    *,
+    owner_id: str,
+    session_id: Optional[str],
+) -> Dict[str, Any]:
+    from core.plugins.notedb_contract import register_snippet_journal_write_request_handler
+    from core.runtime.events import EVOLUTION_SNIPPET_JOURNAL_WRITE_REQUEST_EVENT, request_broker_event
+
+    register_snippet_journal_write_request_handler()
+    try:
+        response = request_broker_event(
+            EVOLUTION_SNIPPET_JOURNAL_WRITE_REQUEST_EVENT,
+            dict(payload),
+            source="ingest.extract.apply_extracted_payloads",
+            session_id=session_id,
+            owner_id=owner_id,
+            provenance={
+                "replacement": "ingest.extract direct EvolutionDB snippet/journal helper call",
+            },
+        )
+    except Exception as exc:
+        logger.warning("[extract] snippet/journal write request failed: %s", exc)
+        raise
+    return _validate_snippet_journal_write_broker_response(response)
+
+
 def _snippet_journal_trigger_for_label(label: str) -> str:
     lowered = str(label or "").lower()
     if "compaction" in lowered:
@@ -2839,6 +2947,7 @@ def apply_extracted_payloads(
     dry_run: bool = False,
     allowed_domains: Optional[set[str]] = None,
     memory_publish_mode: str = "direct",
+    snippet_journal_write_mode: str = "direct",
 ) -> Dict[str, Any]:
     """Store/publish a previously extracted raw payload bundle."""
     # Kept for call compatibility; MemoryDB resolves publish domain policy.
@@ -2922,7 +3031,7 @@ def apply_extracted_payloads(
             if isinstance(text, str) and text.strip():
                 result["journal"][filename] = text.strip()
 
-    result["snippet_journal_metrics"] = run_snippet_journal_write_payload({
+    snippet_journal_payload = {
         "source": "extraction-apply-payloads",
         "owner_id": owner_id,
         "session_id": session_id,
@@ -2933,7 +3042,18 @@ def apply_extracted_payloads(
         "write_snippets": write_snippets,
         "write_journal": write_journal,
         "dry_run": dry_run,
-    })
+    }
+    snippet_mode = str(snippet_journal_write_mode or "direct").strip().lower()
+    if snippet_mode == "request":
+        result["snippet_journal_metrics"] = _request_snippet_journal_write_payload(
+            snippet_journal_payload,
+            owner_id=owner_id,
+            session_id=session_id,
+        )
+    elif snippet_mode == "direct":
+        result["snippet_journal_metrics"] = run_snippet_journal_write_payload(snippet_journal_payload)
+    else:
+        raise ValueError(f"Unsupported snippet_journal_write_mode: {snippet_journal_write_mode!r}")
 
     normalized_project_logs = all_project_logs if isinstance(all_project_logs, dict) else {}
 
