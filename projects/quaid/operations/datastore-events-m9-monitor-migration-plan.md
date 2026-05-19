@@ -112,6 +112,10 @@ active handler no longer catches unexpected SessionDB helper/import exceptions
 locally; they now reach `process_events()` failHard machinery, while structured
 failed envelopes and normal success behavior remain unchanged.
 
+M19 now tracks SessionDB source-window metadata enrichment in
+`projects/quaid/operations/datastore-events-m19-sessiondb-source-window-metadata-plan.md`;
+MemoryDB `session_chunks` selector ownership remains deferred.
+
 ## Shared Rules For Every M9 Slice
 
 - One write path family per sub-milestone.
