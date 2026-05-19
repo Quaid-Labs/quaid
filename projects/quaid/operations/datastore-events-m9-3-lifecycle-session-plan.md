@@ -295,9 +295,20 @@ Current implementation:
 
 - `core/runtime/events.py::_handle_session_lifecycle()` returns
   `{"status": "acknowledged", "event": event.get("name")}`.
-- Adapter/native aliases such as `before_agent_start`, `agent_end`,
-  `session_end`, `before_compaction`, `before_reset`, and `command:new/reset`
-  canonicalize to the runtime event names before validation.
+- Each lifecycle capability remains `delivery_mode="active"`; this disposition
+  does not convert lifecycle acknowledgements to request or passive events.
+- Adapter/native aliases currently canonicalize to runtime event names before
+  validation:
+  - `before_agent_start` -> `session.agent_start`
+  - `agent_end` -> `session.agent_end`
+  - `session_end` -> `session.reset`
+  - `before_compaction` -> `session.compaction`
+  - `before_reset` -> `session.reset`
+  - `command:new` -> `session.new`
+  - `command:reset` -> `session.reset`
+  - `command:restart` -> `session.reset`
+  - `command:compact` -> `session.compaction`
+  - `command:compaction` -> `session.compaction`
 - No current handler writes SessionDB, MemoryDB, or any other datastore state.
 
 Proposed disposition:
@@ -325,6 +336,8 @@ Non-targets:
 - no change to reset/compaction/timeout side effects
 - no new persistence of transcript bodies, environment, credentials, or hook
   payloads
+- no new lifecycle event names such as `session.fork` without their own
+  reviewed product contract, alias mapping, and W4 lifecycle smoke plan
 
 Required review before any runtime behavior change:
 
