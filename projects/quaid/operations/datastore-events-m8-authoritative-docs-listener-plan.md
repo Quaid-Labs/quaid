@@ -1,6 +1,6 @@
 # Datastore Events M8 Authoritative Docs Listener Plan
 
-Status: implementation patch in progress; validation pending
+Status: implemented and validated
 Owner: W1 runtime/datastore
 Plan source: `~/quaidcode/util/docs/datastore-events-migration-plan.md`
 
@@ -18,9 +18,8 @@ Do not implement this milestone until:
 6. W3 reviews the implementation if any docs recall indexing cadence, recall
    inputs, row metadata, or project/docs result shape can change.
 
-M7 was implemented and validated in `a17ceb244` + `29552057a`. M8 runtime
-implementation still requires W3/W4/W6/W8 validation before this milestone is
-complete.
+M7 was implemented and validated in `a17ceb244` + `29552057a`. M8 completed
+W3/W4/W6/W8 validation on stack `b405e5813+90de45f09+f4a9e21dc`.
 
 ## M8 Goal
 
@@ -33,6 +32,38 @@ The selected path is only the project-docs supervisor docs maintenance tick:
 - index one stale registered project doc
 
 M8 should not broaden the migration to other monitor or write paths.
+
+## Implementation Record
+
+Implemented by `b405e5813`:
+
+- `core/project_docs_supervisor.py` emits the selected maintenance tick with
+  `requested_operations` and no longer performs the replaced direct
+  auto-register or stale-index writes for that tick.
+- `core/plugins/docsdb_contract.py` handles
+  `docs.project_maintenance_observed` authoritatively through DocsDB-owned
+  listener execution.
+- Listener output keeps the M7 operator metrics shape under
+  `listener_result.direct_result`.
+- Tests pin the direct-call tripwires, failHard/fail-soft listener behavior,
+  project scope preservation, and project-doc worker non-target boundary.
+
+Follow-up `90de45f09` records the selected event in the DocsDB datastore
+manifest/contract metadata and adds the registry guard for accepted non-request
+domain events.
+
+Validation:
+
+- W4 smoke confirmed the listener-owned supervisor maintenance path was
+  authoritative and stable.
+- W3 confirmed no docs recall/search behavior changed.
+- W6 confirmed no unrelated monitor/write paths were touched.
+- W8 static validation passed for the affected event, DocsDB, registry, and
+  supervisor coverage.
+
+`f4a9e21dc` drafted the M9.1 follow-on plan after M8 validation closed. M9.1
+later moved the listener internals from `core.project_docs` wrappers to the
+DocsDB-owned helper path; that later slice does not reopen M8.
 
 ## Replacement Boundary
 
