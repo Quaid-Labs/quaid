@@ -119,6 +119,13 @@ Moving lifecycle callers to the same contract seam is deferred unless a later
 reviewed M9.5 slice selects that maintenance path. The helper-first extraction
 slice must not alter janitor routine registration.
 
+The selected extraction slice may dispatch snippets and journal entries through
+one combined helper call. That call must preserve the existing sequence inside
+the helper: snippet writes first, journal writes second. The extraction
+orchestrator may also attach an additive `snippet_journal_metrics` key to its
+result for operator/debug counters, provided all existing result keys and
+side-effect ordering remain unchanged.
+
 ## Candidate Helper Contract
 
 Candidate helper:
