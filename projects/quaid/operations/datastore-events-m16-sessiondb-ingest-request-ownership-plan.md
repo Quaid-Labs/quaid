@@ -270,7 +270,9 @@ Validation:
 
 ## Deferred Decisions
 
-- active `session.ingest_log` import cleanup away from the MemoryDB wrapper
+- active `session.ingest_log` import cleanup away from the MemoryDB wrapper is
+  tracked as M17 in
+  `projects/quaid/operations/datastore-events-m17-sessiondb-active-ingest-import-cleanup-plan.md`
 - whether SessionDB should expose dedicated request handlers beyond
   `session.ingest_log.request.v1` and generic metadata/maintenance surfaces
 - lifecycle persistence for ack-only lifecycle events
