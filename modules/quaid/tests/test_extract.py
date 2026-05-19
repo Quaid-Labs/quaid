@@ -432,9 +432,11 @@ class TestExtractFromTranscript:
         import ingest.extract as extract_mod
 
         captured = {}
+        apply_calls = []
         mock_llm.return_value = (mock_opus_response, 1.0)
 
         def fake_apply(result, **kwargs):
+            apply_calls.append(kwargs)
             captured["kwargs"] = kwargs
             result["facts_stored"] = 2
             return result
@@ -449,6 +451,7 @@ class TestExtractFromTranscript:
         )
 
         assert result["facts_stored"] == 2
+        assert len(apply_calls) == 1
         assert captured["kwargs"]["memory_publish_mode"] == "direct"
         assert captured["kwargs"]["snippet_journal_write_mode"] == "direct"
 
@@ -472,9 +475,11 @@ class TestExtractFromTranscript:
         import ingest.extract as extract_mod
 
         captured = {}
+        apply_calls = []
         mock_llm.return_value = (mock_opus_response, 1.0)
 
         def fake_apply(result, **kwargs):
+            apply_calls.append(kwargs)
             captured["kwargs"] = kwargs
             result["facts_stored"] = 2
             return result
@@ -491,8 +496,80 @@ class TestExtractFromTranscript:
         )
 
         assert result["facts_stored"] == 2
+        assert len(apply_calls) == 1
         assert captured["kwargs"]["memory_publish_mode"] == memory_mode
         assert captured["kwargs"]["snippet_journal_write_mode"] == snippet_mode
+
+    @patch("ingest.extract.call_deep_reasoning")
+    def test_extract_from_transcript_rejects_invalid_memory_publish_mode_without_fallback(
+        self,
+        mock_llm,
+        monkeypatch,
+        mock_opus_response,
+    ):
+        import ingest.extract as extract_mod
+
+        direct_called = False
+        mock_llm.return_value = (mock_opus_response, 1.0)
+
+        def fake_direct_publish(*_args, **_kwargs):
+            nonlocal direct_called
+            direct_called = True
+            raise AssertionError("invalid memory mode must not fall back to direct helper")
+
+        monkeypatch.setattr(
+            "core.plugins.memorydb_contract.run_extraction_publish_payload",
+            fake_direct_publish,
+        )
+
+        with pytest.raises(ValueError, match="Unsupported memory_publish_mode"):
+            extract_mod.extract_from_transcript(
+                transcript="User: I like coffee\n\nAssistant: noted",
+                owner_id="test",
+                label="cli",
+                session_id="sess-invalid-memory-mode",
+                memory_publish_mode="bogus",
+            )
+
+        assert direct_called is False
+
+    @patch("ingest.extract.call_deep_reasoning")
+    def test_extract_from_transcript_rejects_invalid_snippet_journal_mode_without_fallback(
+        self,
+        mock_llm,
+        monkeypatch,
+        mock_opus_response,
+    ):
+        import ingest.extract as extract_mod
+
+        snippet_direct_called = False
+        mock_llm.return_value = (mock_opus_response, 1.0)
+
+        def fake_publish(result, **_kwargs):
+            result["facts_stored"] = 0
+            return []
+
+        def fake_direct_snippet_journal(*_args, **_kwargs):
+            nonlocal snippet_direct_called
+            snippet_direct_called = True
+            raise AssertionError("invalid snippet/journal mode must not fall back to direct helper")
+
+        monkeypatch.setattr("core.plugins.memorydb_contract.run_extraction_publish_payload", fake_publish)
+        monkeypatch.setattr(
+            "core.plugins.evolutiondb_contract.run_snippet_journal_write_payload",
+            fake_direct_snippet_journal,
+        )
+
+        with pytest.raises(ValueError, match="Unsupported snippet_journal_write_mode"):
+            extract_mod.extract_from_transcript(
+                transcript="User: I like coffee\n\nAssistant: noted",
+                owner_id="test",
+                label="cli",
+                session_id="sess-invalid-snippet-mode",
+                snippet_journal_write_mode="bogus",
+            )
+
+        assert snippet_direct_called is False
 
     @patch("ingest.extract.call_deep_reasoning")
     @patch("ingest.extract._memory.store")
