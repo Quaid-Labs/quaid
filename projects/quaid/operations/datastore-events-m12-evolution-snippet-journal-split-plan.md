@@ -152,6 +152,14 @@ Implementation shape:
   object, shared trigger/date/write/dry-run metadata, and no non-empty
   `snippets` payload. It delegates through the public combined helper with
   `snippets` forced to `{}`.
+- Source check shape: both new handlers accept exactly
+  `source="extraction-apply-payloads"` as the only allowed source. Additional
+  sources such as janitor, operator CLI, or `.ego` import require a reviewed
+  plan addendum before they can be wired.
+- Cross-family payload rejection must use the established warn-then-raise
+  helper pattern. Under `failHard=true`, rejection warns first and raises. Under
+  `failHard=false`, rejection logs and returns a failed envelope with zeroed
+  `snippet_journal_metrics` for both write families.
 - Both new handlers return the same envelope shape as the combined handler:
   `{status: "ok", snippet_journal_metrics: ...}`. The metrics object remains the
   combined helper's existing shape, with the other write family counters at
