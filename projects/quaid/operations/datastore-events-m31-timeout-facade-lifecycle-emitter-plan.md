@@ -1,32 +1,32 @@
 # Datastore Events M31 Timeout Facade Lifecycle Emitter Plan
 
-Status: draft plan; no runtime implementation yet
+Status: runtime timeout facade emitter slice complete; agent-end emitter deferred
 Owner: W1 facade/runtime, W6 boundary review, W3 recall guard review
 Plan source: `projects/quaid/operations/datastore-events-m30-reset-facade-lifecycle-emitter-plan.md`
 
 ## Precondition
 
-Do not implement runtime code for M31 until:
+Runtime code for M31 was gated on:
 
-1. M30 reset facade lifecycle emitter is closed through W4/W3/W6/W8.
-2. W3 reviews the selected timeout emitter slice because facade-originated
+1. M30 reset facade lifecycle emitter was closed through W4/W3/W6/W8.
+2. W3 reviewed the selected timeout emitter slice because facade-originated
    timeout lifecycle events can write daemon `timeout` signals, wake the daemon
    through the existing M25/M28 path, write context-refresh timeout markers, and
    change when MemoryDB `session_chunks` evidence becomes recall-visible.
-3. W6 reviews the facade-to-runtime timeout boundary because timeout has
+3. W6 reviewed the facade-to-runtime timeout boundary because timeout has
    daemon-side marker and cursor behavior that must remain owned by the existing
    daemon processor, not by the facade.
-4. W8 confirms static coverage includes facade tests, runtime-pair checks,
+4. W8 confirmed static coverage includes facade tests, runtime-pair checks,
    runtime lifecycle timeout tests, extraction-daemon timeout/marker tests,
    source-window/session bridge checks, and boundary checks.
-5. W4 is ready to live-check that a facade-originated timeout lifecycle event
+5. W4 was ready to live-check that a facade-originated timeout lifecycle event
    emits one existing `session.timeout` event only when given an explicit live
    transcript path, writes one compatible daemon `timeout` signal through the
    existing M25 path, and wakes through the M28 `ensure_alive()` path without
    moving timeout marker, cursor, or daemon ownership into the facade.
 
-This document is a plan only. Do not implement from it until W3/W6/W8 approve
-and W4 is ready to validate the runtime slice. It does not approve agent-end
+This document records the completed narrow timeout facade emitter slice only. It
+does not approve agent-end
 emitter wiring, OpenClaw hook migration, adapter timeout-signal removal, daemon
 restart/stop behavior, timeout marker writes in the facade, cursor ownership in
 facade code, new lifecycle event names, new daemon signal types, request/default
@@ -44,7 +44,7 @@ field contract, not the reset-specific contract: M25 default timeout queueing is
 selected only for plain `session.timeout` events that carry a concrete
 `session_id` and an existing `payload.transcript_path`.
 
-M31 selects the next narrow facade-emitter slice: implement facade
+M31 selected the next narrow facade-emitter slice: implemented facade
 `processLifecycleEvent()` for `TimeoutSignal` only when the caller explicitly
 supplies a concrete `sessionId` and an existing live transcript path, exposed at
 the facade boundary as `context.transcriptPath`, `context.transcript_path`,
@@ -55,28 +55,28 @@ runtime handler remains the only owner of writing the daemon `timeout` signal,
 and the existing M28 wake helper remains the only owner of waking the daemon
 after that signal is queued.
 
-M31 is not timeout manager migration. It does not move idle-timeout detection,
+M31 was not timeout manager migration. It did not move idle-timeout detection,
 context-refresh timeout marker writing, timeout cursor logic, transcript
 classification, adapter direct signal-writing, or daemon timeout finalization
-into the facade. It only adds the facade timeout emitter contract for future
+into the facade. It only added the facade timeout emitter contract for future
 callers that already hold the correct active transcript path.
 
 ## Current Boundary
 
-Post-M30 path:
+Pre-M31 path:
 
 1. `createQuaidFacade().emitEvent()` delegates to the runtime events CLI through
    `deps.execEvents("emit", ...)`, normalizes payload/source/dispatch arguments,
    parses JSON output, and raises on malformed output.
-2. `createQuaidFacade().processLifecycleEvent()` supports `CompactionSignal` and
+2. `createQuaidFacade().processLifecycleEvent()` supported `CompactionSignal` and
    `ResetSignal` only. `CompactionSignal` requires a concrete `sessionId` and
    existing live `transcriptPath`, emits `session.compaction` with dispatch
    `immediate`, and returns fail-soft no-op metadata or raises under failHard for
    invalid inputs. `ResetSignal` requires explicit `resetTranscriptPath` /
    `reset_transcript_path`, emits `session.reset`, and intentionally rejects live
    transcript fields as reset evidence.
-3. `TimeoutSignal` inputs are currently unsupported by `processLifecycleEvent()`.
-   Under M30 they return passive no-op metadata under fail-soft or raise under
+3. `TimeoutSignal` inputs were unsupported by `processLifecycleEvent()`.
+   Under M30 they returned passive no-op metadata under fail-soft or raised under
    failHard, and they do not emit runtime events.
 4. `_handle_session_lifecycle()` in `core.runtime.events` already handles
    `session.timeout` events. M25 selects only plain `session.timeout` with
@@ -86,10 +86,10 @@ Post-M30 path:
    the selected event-bus lifecycle signal write succeeds.
 6. Daemon timeout processing owns timeout classification, cursor handling,
    duplicate avoidance, extraction/finalization, and context-refresh timeout
-   marker writing. M31 must not move that ownership into the facade.
+   marker writing. M31 did not move that ownership into the facade.
 7. Adapter hook or timeout-manager paths may continue to write compatible daemon
    `timeout` signals directly through `write_signal()` when they own that host
-   integration. M31 must not migrate or remove those paths.
+   integration. M31 did not migrate or remove those paths.
 8. M30 reset remains stricter than timeout and compaction. Facade reset emission
    requires a real reset-preserved transcript path; live transcript paths must
    remain no-op for reset.
@@ -99,9 +99,9 @@ Post-M30 path:
 
 ## Selected First Slice: Facade Timeout Lifecycle Event Emitter
 
-Implement one runtime slice only:
+Implemented one runtime slice only:
 
-1. Extend the existing `processLifecycleEvent()` facade method to support
+1. Extended the existing `processLifecycleEvent()` facade method to support
    `signal.label === "TimeoutSignal"` in addition to the already-closed M29
    `CompactionSignal` and M30 `ResetSignal` paths. Keep the implementation as
    explicit parallel branches; do not generalize compaction, reset, and timeout
@@ -131,39 +131,39 @@ Implement one runtime slice only:
    explicit scalar context field. Do not include transcript text, facts, recall
    rows, timeout marker contents, cursor state, source-window rows, or
    context-refresh contents.
-8. Dispatch through the existing `emitRuntimeEvent("session.timeout", payload,
+8. Dispatches through the existing `emitRuntimeEvent("session.timeout", payload,
    "immediate")` helper so runtime event handling, M25 signal writing, M28 wake
    behavior, and daemon timeout finalization remain owned by the existing runtime
    path.
-9. Preserve M29 compaction emitter behavior exactly. The existing
+9. Preserved M29 compaction emitter behavior exactly. The existing
    `CompactionSignal` path keeps its live `transcriptPath` requirement,
    `session.compaction` event name, payload fields, fail-soft/failHard behavior,
    and `emitRuntimeEvent(..., "immediate")` dispatch.
-10. Preserve M30 reset emitter behavior exactly. The existing `ResetSignal` path
+10. Preserved M30 reset emitter behavior exactly. The existing `ResetSignal` path
     keeps its `resetTranscriptPath` / `reset_transcript_path` requirement,
     `session.reset` event name, live-transcript rejection guard, payload fields,
     fail-soft/failHard behavior, and `emitRuntimeEvent(..., "immediate")`
     dispatch.
-11. Preserve `emitEvent()` behavior exactly. Do not add a second events CLI path,
+11. Preserved `emitEvent()` behavior exactly. Do not add a second events CLI path,
     direct Python process invocation, direct `write_signal()` call, direct
     timeout marker write, or direct `ensure_alive()` call in the facade helper.
-12. Preserve M22/M24/M25/M26/M27/M28 runtime behavior exactly. M31 must not
+12. Preserved M22/M24/M25/M26/M27/M28 runtime behavior exactly. M31 must not
     change runtime event eligibility, signal shapes, dedupe rules, wake metadata,
     timeout marker behavior, cursor handling, reset backup/cursor handling,
     compaction context refresh, or failHard behavior in `core.runtime.events` or
     `core.extraction_daemon`.
-13. Do not wire OpenClaw hooks, timeout manager paths, idle scanners,
+13. Did not wire OpenClaw hooks, timeout manager paths, idle scanners,
     session-index reset paths, compaction hook paths, reset hook paths, or
     agent-end behavior to `processLifecycleEvent()` in this slice. Current
     adapter direct signal writers may continue unchanged.
-14. Preserve lifecycle duplicate-suppression helpers. The existing
+14. Preserved lifecycle duplicate-suppression helpers. The existing
     `detectLifecycleSignal()` / `shouldProcessLifecycleSignal()` /
     `markLifecycleSignalFromHook()` contract currently models reset/compaction
     hook signals; M31 does not require expanding those helper types to timeout
     unless a concrete timeout hook caller is added in a future approved slice.
-15. Preserve generated runtime-pair discipline. Edit `core/facade.ts`, then run
-    `npm run build:runtime` so the paired generated runtime file is derived, and
-    validate with `npm run check:runtime-pairs`.
+15. Preserved generated runtime-pair discipline. Edited `core/facade.ts`, ran
+    `npm run build:runtime` so the paired generated runtime file was derived, and
+    validated with `npm run check:runtime-pairs`.
 
 ## Non-Targets
 
@@ -309,3 +309,133 @@ narrow facade timeout emitter smoke:
 - whether hidden CLI request-mode flags should ever become public
 - broad compatibility-alias retirement and `notedb.core` plugin-id rename
 - `.ego` import/export integration
+
+
+## Implementation Record
+
+Runtime closed at `815b93895c46a19166b6526c002acba155dcf084`
+(`refactor(datastore): emit timeout lifecycle from facade`) after the approved
+plan commit `cbd2d874a76245dca9a3d4ce9a1e66ea8b415b6f`.
+
+Implemented behavior:
+
+- Extended `createQuaidFacade().processLifecycleEvent()` with an explicit
+  `TimeoutSignal` branch alongside the M29 `CompactionSignal` and M30
+  `ResetSignal` branches. The implementation remains three explicit label
+  branches followed by the existing unsupported-label no-op/failHard path; it is
+  not a generalized lifecycle event passthrough.
+- Requires an explicit concrete session id from caller context
+  (`sessionId`/`session_id`) and an explicit existing live transcript path from
+  caller context (`transcriptPath`/`transcript_path`/`sessionFile`/
+  `session_file`). Missing, empty, or nonexistent live paths do not emit runtime
+  events under fail-soft and raise under failHard.
+- Preserves the cross-emitter field discipline at the facade layer. The
+  `TimeoutSignal` branch reads only live transcript fields; it does not read
+  `ctx.resetTranscriptPath` or `ctx.reset_transcript_path`. A reset-path-only
+  timeout input remains passive no-op under fail-soft and raises under failHard.
+- Emits exactly the existing runtime event name `session.timeout` through the
+  existing `emitRuntimeEvent()` / `execEvents()` path with dispatch `immediate`
+  and payload field `transcript_path`.
+- Builds a compact timeout payload only: `session_id`, `transcript_path`,
+  `lifecycle_signal_label`, optional `lifecycle_signal_source`, optional
+  `lifecycle_signal_signature`, optional nonnegative `lifecycle_message_index`,
+  optional caller context `reason`, `adapter`, and `source`, and optional
+  `timeout_source`. It does not include transcript text, facts, recall rows,
+  timeout marker contents, cursor state, source-window rows, or context-refresh
+  contents.
+- Preserves M29 `CompactionSignal` behavior verbatim. The existing branch keeps
+  its live transcript path inputs, compact payload fields, fail-soft/failHard
+  behavior, and `emitRuntimeEvent("session.compaction", ..., "immediate")`
+  dispatch unchanged.
+- Preserves M30 `ResetSignal` behavior verbatim, including the load-bearing
+  live-transcript rejection guard. The existing branch keeps its
+  `resetTranscriptPath` / `reset_transcript_path` requirement,
+  `session.reset` event name, payload fields, fail-soft/failHard behavior, and
+  `emitRuntimeEvent("session.reset", ..., "immediate")` dispatch unchanged.
+- Leaves M25 as the only owner of writing daemon `timeout` signals and M28 as
+  the only owner of daemon wake after event-bus signal queueing.
+  `core/facade.ts` does not call `write_signal`, `ensure_alive`, `start_daemon`,
+  `stop_daemon`, restart helpers, `subprocess`, pidfile helpers, datastore
+  imports, manual signal-file helpers, timeout marker writers, timeout cursor
+  helpers, timeout classifier/finalization helpers, or direct daemon wake
+  helpers.
+- Preserves M22/M24/M25/M26/M27/M28 runtime behavior by scope: no
+  `core.runtime.events` or daemon files changed, so lifecycle event eligibility,
+  signal shape, dedupe, wake metadata, timeout marker behavior, cursor handling,
+  daemon polling, and failHard behavior remain owned by the existing runtime
+  path.
+- Preserves adapter hook and timeout-manager ownership. No adapter files changed;
+  current OpenClaw hook paths, timeout manager paths, direct timeout signal
+  writing, and adapter-side daemon wake behavior remain unchanged.
+- Preserves lifecycle duplicate-suppression helper ownership. Existing
+  `detectLifecycleSignal()`, `shouldProcessLifecycleSignal()`,
+  `markLifecycleSignalFromHook()`, and related history helpers remain unchanged;
+  they continue to model reset/compaction hook signals only.
+- Preserves generated runtime-pair discipline. `core/facade.ts` was edited, and
+  the paired generated `core/facade.js` was derived with
+  `npm run build:runtime`; `npm run check:runtime-pairs` passed.
+- Preserves MemoryDB `session_chunks` recall/write ownership, SessionDB
+  `capabilities.recall=[]`, M19 source-window metadata/output policy, active and
+  request ingest parity, daemon polling/processing ownership, CLI/default
+  routing, broad compatibility aliases, and `.ego` deferral.
+
+Test coverage added or preserved:
+
+- `processLifecycleEvent emits timeout through existing events path` proves a
+  valid `TimeoutSignal` with concrete session id and existing live transcript
+  path calls `execEvents("emit", args)` exactly once with `--name
+  session.timeout`, `--dispatch immediate`, and compact lifecycle provenance
+  payload fields including `transcript_path` and optional `timeout_source`.
+- The timeout happy-path facade test asserts the emitted payload does not contain
+  transcript text.
+- `processLifecycleEvent rejects reset transcript timeout inputs without
+  emitting` proves a `TimeoutSignal` with only `resetTranscriptPath`, even when
+  that file exists, returns `status="ignored"` / `event_emitted=false` under
+  fail-soft, raises under failHard, logs the live-transcript requirement, and
+  does not call `execEvents()`.
+- The invalid-input tests preserve unsupported-label no-op behavior by moving
+  the unsupported example to `AgentEndSignal`, while reflecting that
+  `TimeoutSignal` is now a selected label.
+- `processLifecycleEvent emits compaction through existing events path` and
+  `processLifecycleEvent emits reset through existing events path` preserve M29
+  and M30 happy-path behavior. The M30 live-transcript reset rejection test
+  remains unchanged.
+- `processLifecycleEvent preserves emitEvent failure behavior` proves malformed
+  events CLI output still raises through the shared `emitRuntimeEvent()` path and
+  is not relabeled as facade success.
+- The source-boundary test proves `processLifecycleEvent` emits only the
+  selected `session.compaction`, `session.reset`, and `session.timeout` events
+  with `immediate` dispatch, does not reference forbidden daemon/process APIs,
+  specifically asserts the `ResetSignal` source slice does not read live
+  transcript fields, and specifically asserts the `TimeoutSignal` source slice
+  does not read reset-specific transcript fields.
+- Existing facade lifecycle detection/dedupe tests, M25/M28 runtime lifecycle
+  tests, extraction-daemon timeout/lifecycle/write-signal tests,
+  source-window/session bridge tests, session-timeout-manager tests,
+  runtime-pair checks, docs consistency, boundary checks, eslint with existing
+  facade warnings only, and unit-wrapper lanes remain green.
+
+Validation chain:
+
+- W4 R201 live/source-proof PASS on `815b93895`: installed `facade.ts` and
+  generated `facade.js` were deployed; W4 verified the new `TimeoutSignal`
+  branch, live transcript path discipline, reset-path-only no-op behavior, happy
+  `session.timeout` immediate emission with `transcript_path`, M29/M30
+  preservation, absence of forbidden facade daemon/datastore APIs, and M25/M28
+  backend composition.
+- W3 runtime/recall APPROVED with no findings on `815b93895`: explicit timeout
+  facade emission can only change timing through the existing M25/M28 path,
+  while MemoryDB `session_chunks`, SessionDB `recall=[]`, M19 source-window
+  policy, and active/request ingest ownership stay unchanged.
+- W6 runtime APPROVED on `815b93895` with one LOW informational note for
+  optional TimeoutSignal validation-branch test specificity. W6 verified all 15
+  plan steps, TS/JS pair derivation, M29 and M30 branch preservation, the
+  load-bearing cross-emitter rejection guard, daemon timeout ownership
+  isolation, lifecycle dedupe helper non-widening, and B-code cleanliness.
+- W8 STATIC PASS/runtime HOLD CLOSED on `815b93895`: exact changed paths were
+  `core/facade.ts`, generated `core/facade.js`, and `tests/facade.test.ts`;
+  Solomon attribution, runtime-pair build/check, facade tests, full
+  `tests/test_events.py`, extraction-daemon timeout/lifecycle/write-signal
+  selector, source-window/session bridge selector, session-timeout-manager, docs
+  consistency, boundary, eslint with existing facade warnings only, and unit
+  wrapper 140/140 passed.

@@ -288,10 +288,9 @@ narrow facade reset emitter smoke:
 
 ## Deferred Decisions
 
-- timeout facade lifecycle emitter is tracked as M31 in
-  `projects/quaid/operations/datastore-events-m31-timeout-facade-lifecycle-emitter-plan.md`;
-  it must require explicit live transcript path discipline and must not use
-  reset-preserved transcript paths as timeout evidence
+- timeout facade lifecycle emitter closed in M31 at `815b938`; it requires
+  explicit live transcript path discipline and does not use reset-preserved
+  transcript paths as timeout evidence
 - agent-end lifecycle facade emitter
 - OpenClaw hook migration to facade lifecycle emitters
 - adapter direct-signal retirement, if ever approved
