@@ -281,8 +281,7 @@ narrow lifecycle wake smoke:
 ## Deferred Decisions
 
 - daemon restart/stop automation from lifecycle events
-- facade compaction lifecycle emitter is tracked as M29 in
-  `projects/quaid/operations/datastore-events-m29-compaction-facade-lifecycle-emitter-plan.md`
+- facade compaction lifecycle emitter closed in M29 at `a4a4d4238`
 - reset, timeout, and agent-end lifecycle emitters
 - whether OpenClaw hooks should later be wired to facade lifecycle emitters or
   another facade/gateway layer
