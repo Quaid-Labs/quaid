@@ -62,13 +62,13 @@ Create `datastore.evolutiondb` as the runtime package while keeping
 `datastore.notedb` as a loud, compatibility-only alias for installed alpha
 state and existing imports.
 
-Preferred shape:
+Required shape:
 
-- add `datastore/evolutiondb/soul_snippets.py` as the canonical implementation
-  module, or move the implementation there with a compatibility wrapper left in
-  `datastore/notedb/soul_snippets.py`
-- keep `datastore.notedb.soul_snippets` importable as a small shim that reexports
-  from `datastore.evolutiondb.soul_snippets`
+- move the implementation to `datastore/evolutiondb/soul_snippets.py` as the
+  canonical implementation module
+- keep `datastore.notedb.soul_snippets` importable as a pure reexport shim that
+  imports from `datastore.evolutiondb.soul_snippets`
+- do not keep duplicate implementation logic under `datastore.notedb`
 - keep markdown file paths and filenames unchanged
 - keep `core.lifecycle.soul_snippets` as the core-owned facade used by higher
   layers
@@ -78,6 +78,15 @@ Preferred shape:
 
 The compatibility shim must be small, loud in comments, and tied to alpha-user
 upgrade compatibility. It should not grow new behavior.
+
+Shim owner and removal condition:
+
+- owner: W1 runtime/datastore
+- removal condition: do not remove in M10; after a future operator-approved
+  compatibility review confirms installed alpha homes, external scripts, and
+  planned `.ego` import/export surfaces no longer reference `datastore.notedb`,
+  remove the shim in a separate reviewed slice with release-note coverage and W4
+  installed-upgrade smoke
 
 ### Slice 2: Contract Module Naming Decision
 
@@ -136,6 +145,9 @@ If removal is ever selected, it needs a separate plan covering:
   writes when the underlying write failed.
 - Do not catch `ImportError` and silently switch to the legacy package in product
   code. The legacy package should be the shim, not a runtime fallback decision.
+- Any new failHard raise sites introduced by the rename must use a centralized
+  warn-then-raise helper pattern, matching the M9.4/M9.5 request validators, so
+  future raise paths inherit warning-order discipline automatically.
 
 ## Parity Invariants
 
@@ -162,7 +174,8 @@ Add or preserve tests proving:
 - canonical `datastore.evolutiondb.soul_snippets` imports and exposes the same
   writer, reader, review, distillation, and maintenance entrypoints
 - legacy `datastore.notedb.soul_snippets` imports as a compatibility shim and
-  returns the same functions/results
+  reexports the canonical module objects by identity, not just equivalent
+  behavior
 - `core.lifecycle.soul_snippets` still delegates to the canonical implementation
 - manifest module path and runtime alias metadata are correct
 - `core.plugins` contract handler specs point to the chosen canonical contract
