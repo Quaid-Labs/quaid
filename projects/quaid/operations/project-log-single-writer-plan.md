@@ -224,6 +224,46 @@ Launch-safe options:
 The long-term preference is that rotation becomes another project-docs worker
 operation.
 
+### Selected Rotation Follow-Up Slice
+
+The first runtime follow-up should use the smallest lock-safe shape:
+
+1. Keep `core.log_rotation.rotate_log_file()` generic and unchanged.
+2. Update `core.log_rotation.rotate_project_logs()` so each visible
+   `PROJECT.log` rotation acquires `core.project_docs.project_update_lock()`
+   for that project before calling `rotate_log_file()`.
+3. Use `blocking=False` for the project lock. If a project-docs worker is
+   already updating the project, skip rotation for that project and log an
+   informational message; do not wait inside janitor and do not rewrite the log
+   concurrently.
+4. If resolving or acquiring the lock raises unexpectedly, preserve failHard
+   behavior: raise under `retrieval.fail_hard=true`; log and skip that project
+   under fail-soft mode.
+5. Leave `rotate_journal_logs()` unchanged. Journal rotation is EvolutionDB
+   lifecycle work and is not part of the project-log single-writer gap.
+
+Non-targets for this slice:
+
+- no queue format changes
+- no project-docs request-event or worker-loop changes
+- no `PROJECT.md`, docs index, source-window, ranking, or recall policy changes
+- no default janitor scheduling change
+- no move of rotation into a new DocsDB request event
+
+Required tests before W4:
+
+- `rotate_project_logs()` acquires the same per-project lock used by
+  `project_docs.execute_update_once()` before rotating a managed `PROJECT.log`.
+- When that lock is already held, `rotate_project_logs()` skips the project and
+  leaves the live `PROJECT.log` unchanged.
+- Existing log-rotation behavior for unlocked projects, hidden directories,
+  missing project dirs, projects without `PROJECT.log`, and journal logs remains
+  unchanged.
+
+W4 smoke for the runtime follow-up should prove an installed janitor/log
+rotation run does not disturb queued project-log worker behavior and that a
+locked project is skipped rather than rewritten concurrently.
+
 ## Migration Notes
 
 `datastore.docsdb.project_updater.append_project_logs()` should become a
