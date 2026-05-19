@@ -127,12 +127,13 @@ Tracking doc: `datastore-events-m9-4-extraction-fact-plan.md`.
 
 Status:
 
-- Draft plan opened for W3/W6/W8 review.
-- W3/W6 review selected daemon final flush as the first behavior slice and
-  selected an internal `apply_extracted_payloads()` -> MemoryDB-owned helper
-  split before any broader request routing.
-- Runtime implementation is not approved beyond that reviewed split without a
-  fresh plan update.
+- First synchronous helper slice complete at `65dbab41d` + `045883370`.
+- W4 live/source-proof PASS, W3 recall PASS/no re-review needed, W6 concerns
+  closed, and W8 static/runtime closure recorded for that pair.
+- The completed slice selected an internal `apply_extracted_payloads()` ->
+  MemoryDB-owned helper split before any broader request routing.
+- Request event routing is still deferred and is not approved without a fresh
+  plan update.
 
 Scope:
 

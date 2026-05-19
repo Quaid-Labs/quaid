@@ -1,6 +1,6 @@
 # Datastore Events M9.4 Extraction Fact Publish Plan
 
-Status: draft plan; first-slice split decision recorded; no runtime implementation
+Status: first synchronous helper slice complete; request-event routing deferred
 Owner: W1 runtime/datastore, W3 recall quality
 Plan source: `projects/quaid/operations/datastore-events-m9-monitor-migration-plan.md`
 
@@ -242,10 +242,47 @@ W4 should smoke the runtime patch only after W3/W6/W8 review:
   allowed only if it delegates to that same helper and preserves request,
   failHard, and no-fallback semantics.
 
+## First Runtime Slice Closure
+
+The synchronous helper slice closed at:
+
+- `65dbab41d` `refactor(datastore): route extraction publish through MemoryDB`
+- `045883370` `fix(datastore): initialize extraction publish dry-run counter`
+
+Implemented shape:
+
+- `apply_extracted_payloads()` remains the orchestration entrypoint.
+- MemoryDB-owned fact, edge, source-chunk materialization, domain policy,
+  dedup telemetry, batching, and provenance publish logic moved behind
+  `core.plugins.memorydb_contract.run_extraction_publish_payload()`, which
+  delegates to `datastore.memorydb.extraction_publish`.
+- Snippet, journal, and project-log side effects remain in `ingest.extract`
+  after the MemoryDB helper returns.
+- The helper resolves domain policy inside the MemoryDB boundary and ignores
+  producer-supplied `allowed_domains` as an authoritative policy source.
+- The follow-up initializes `facts_planned` for direct dry-run helper callers
+  and documents the helper return-value versus `result["facts"]` mutation
+  contract. It also documents that snippet, journal, and project-log counts are
+  trace-only telemetry and not MemoryDB-owned writes.
+
+Closure evidence:
+
+- W4 live PASS for `65dbab41d`; W4 source-proof PASS for `045883370`.
+- W3 recall review PASS/no findings for `65dbab41d`; no W3 re-review needed
+  for the dry-run counter/docstring follow-up.
+- W6 approved `65dbab41d` with low follow-up findings; `045883370` closed
+  those findings with W6 APPROVED/no findings.
+- W8 static PASS and runtime hold close recorded for the pair.
+
+The request event remains intentionally unimplemented in this closed slice.
+Any `memory.extraction_publish.request.v1` work needs a fresh focused update
+that delegates to the same helper and proves request/failHard/no-fallback
+semantics.
+
 ## Deferred Decisions
 
-- Whether to add `memory.extraction_publish.request.v1` in the first runtime
-  patch or after the synchronous helper has landed and passed parity gates.
+- Whether to add `memory.extraction_publish.request.v1` after the synchronous
+  helper has landed and passed parity gates.
 - Whether a later slice should migrate direct `extract_from_transcript()` request
   routing.
 - Whether future producer payloads need additional source metadata fields after
