@@ -55,7 +55,8 @@ Current extraction publish path:
 Current EvolutionDB registry state:
 
 - `evolutiondb` is the canonical datastore id.
-- The runtime module remains `datastore.notedb.soul_snippets`.
+- At M9.5 plan time, the runtime module remained
+  `datastore.notedb.soul_snippets`.
 - `notedb` remains a runtime alias.
 - The first-party contract currently declares journal recall, datastore
   validate/explain, and maintenance request handlers, but no snippet/journal
@@ -63,8 +64,8 @@ Current EvolutionDB registry state:
 
 ## Design Constraints
 
-- Do not rename `datastore.notedb` modules in M9. Runtime package renaming waits
-  for the dedicated M10 rename milestone.
+- Do not rename `datastore.notedb` modules in M9. Runtime package renaming was
+  reserved for the dedicated M10 rename milestone.
 - Do not wrap all of `apply_extracted_payloads()` as an EvolutionDB operation.
   MemoryDB fact publish and DocsDB project-log queueing are separate owners.
 - Do not move snippet or journal persistence into MemoryDB.
@@ -101,10 +102,10 @@ prove parity before introducing a broker/request event.
 
 The first runtime slice uses the existing `core.plugins.notedb_contract` module
 name intentionally. `evolutiondb` is the canonical datastore id, but the runtime
-package remains `datastore.notedb` until M10. Keeping the contract module aligned
-with the runtime package avoids a misleading half-rename in M9. A future M10
-rename may introduce `evolutiondb_contract` or move the module when the runtime
-package rename happens.
+package remained `datastore.notedb` during M9. Keeping the contract module
+aligned with the runtime package avoided a misleading half-rename in M9. M10
+later introduced `datastore.evolutiondb` and `core.plugins.evolutiondb_contract`
+as the canonical runtime/contract modules.
 
 `core.lifecycle.soul_snippets` remains available for lifecycle callers in the
 first slice. That is a partial migration by design:

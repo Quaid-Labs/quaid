@@ -223,7 +223,8 @@ Scope:
 
 Out of scope:
 
-- runtime `datastore.notedb` module rename; that waits for M10
+- runtime `datastore.notedb` module rename; that was out of M9 scope and later
+  completed in M10 Slice 1
 - `.ego` export/import behavior
 - memory/docs write migrations from earlier M9 slices
 

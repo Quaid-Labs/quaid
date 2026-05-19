@@ -33,7 +33,9 @@ Current open inventory decision before M2:
 
 Runtime rename rule:
 
-- Do not rename `datastore.notedb` imports or paths in M0. Planning/docs may use `evolutiondb`; runtime module rename waits for the dedicated rename milestone.
+- Do not rename `datastore.notedb` imports or paths in M0. Planning/docs may
+  use `evolutiondb`; runtime module rename was out of M0 scope and later tracked
+  by the dedicated rename milestone.
 
 ## Current Producers And Monitors
 
