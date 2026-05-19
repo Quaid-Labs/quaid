@@ -260,7 +260,8 @@ W4 should smoke runtime code only after W3/W6/W8 review:
 - whether direct request mode should ever become the default
 - whether hidden CLI request-mode flags should ever become public
 - SessionDB first-party manifest metadata closed in M14 at `f0574902b` +
-  `522f16e28`; lifecycle persistence, `session.ingest_log` ownership, and
-  source-window metadata enrichment remain deferred
+  `522f16e28`; lifecycle persistence and `session.ingest_log` ownership remain
+  deferred; source-window metadata enrichment closed in M19 at `cf9eddd26` +
+  `e4c4ec0d5`; selector ownership remains deferred
 - compatibility-alias retirement and `notedb.core` plugin-id rename
 - `.ego` import/export integration

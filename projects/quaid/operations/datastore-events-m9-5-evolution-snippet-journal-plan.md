@@ -469,8 +469,10 @@ Closure evidence:
   `9437788d`.
 - Whether direct `extract_from_transcript()` / CLI should ever use request mode.
 - SessionDB first-party manifest metadata closed in M14 at `f0574902b` +
-  `522f16e28`; lifecycle persistence, `session.ingest_log` ownership, and
-  source-window enrichment remain separate deferred decisions.
+  `522f16e28`; lifecycle persistence and broader `session.ingest_log` ownership
+  remain separate deferred decisions; source-window metadata enrichment closed in
+  M19 at `cf9eddd26` + `e4c4ec0d5`; selector ownership remains
+  deferred.
 - Whether snippet review and journal distillation maintenance should get their
   own request handlers beyond the existing maintenance contract.
 - Runtime `datastore.evolutiondb` package rename, completed in M10 Slice 1;

@@ -295,8 +295,9 @@ request-mode flags passed explicitly.
 - whether to consolidate the two extraction routing mode kwargs into a future
   routing options object
 - SessionDB first-party manifest metadata closed in M14 at `f0574902b` +
-  `522f16e28`; lifecycle persistence, `session.ingest_log` ownership, and
-  source-window metadata enrichment remain deferred
+  `522f16e28`; lifecycle persistence and `session.ingest_log` ownership remain
+  deferred; source-window metadata enrichment closed in M19 at `cf9eddd26` +
+  `e4c4ec0d5`; selector ownership remains deferred
 - extraction producer routing through separate snippet/journal request events
   closed in M13 at `516732b88` + `9437788d`; default request routing remains
   deferred

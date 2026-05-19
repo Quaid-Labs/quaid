@@ -220,7 +220,8 @@ code lands after this plan:
 - lifecycle observation metadata for ack-only lifecycle events closed in M20 at
   `bc58b8a06` + `195fc7678`; lifecycle-triggered transcript ingest and daemon
   automation remain deferred
-- source-window metadata enrichment and selector ownership
+- source-window metadata enrichment closed in M19 at `cf9eddd26` +
+  `e4c4ec0d5`; source-window selector ownership remains deferred
 - whether direct request mode should ever become the extraction default
 - whether hidden CLI request-mode flags should ever become public
 - compatibility-alias retirement and `notedb.core` plugin-id rename

@@ -228,7 +228,8 @@ narrow session-ingest smoke:
 - whether SessionDB should expose dedicated request handlers beyond
   `session.ingest_log.request.v1` and generic metadata/maintenance surfaces
 - lifecycle persistence for ack-only lifecycle events
-- source-window metadata enrichment and selector ownership
+- source-window metadata enrichment closed in M19 at `cf9eddd26` +
+  `e4c4ec0d5`; source-window selector ownership remains deferred
 - whether direct request mode should ever become the extraction default
 - whether hidden CLI request-mode flags should ever become public
 - compatibility-alias retirement and `notedb.core` plugin-id rename
