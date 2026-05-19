@@ -2176,43 +2176,81 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
     }
     const sig = signal as Record<string, unknown>;
     const label = String(sig.label || "").trim();
-    if (label !== "CompactionSignal") {
-      return lifecycleNoop("unsupported_signal", `does not support signal label ${label || "<missing>"}`);
-    }
     const ctx = context && typeof context === "object" && !Array.isArray(context)
       ? context as Record<string, unknown>
       : {};
-    const sessionId = String(ctx.sessionId || ctx.session_id || "").trim();
-    if (!sessionId) {
-      return lifecycleNoop("missing_session_id", "requires context.sessionId");
-    }
-    const transcriptPath = String(ctx.transcriptPath || ctx.transcript_path || ctx.sessionFile || ctx.session_file || "").trim();
-    if (!transcriptPath) {
-      return lifecycleNoop("missing_transcript_path", "requires context.transcriptPath");
-    }
-    if (!fs.existsSync(transcriptPath)) {
-      return lifecycleNoop("missing_transcript_path", `transcript path does not exist: ${transcriptPath}`);
+
+    if (label === "CompactionSignal") {
+      const sessionId = String(ctx.sessionId || ctx.session_id || "").trim();
+      if (!sessionId) {
+        return lifecycleNoop("missing_session_id", "requires context.sessionId");
+      }
+      const transcriptPath = String(ctx.transcriptPath || ctx.transcript_path || ctx.sessionFile || ctx.session_file || "").trim();
+      if (!transcriptPath) {
+        return lifecycleNoop("missing_transcript_path", "requires context.transcriptPath");
+      }
+      if (!fs.existsSync(transcriptPath)) {
+        return lifecycleNoop("missing_transcript_path", `transcript path does not exist: ${transcriptPath}`);
+      }
+
+      const payload: Record<string, unknown> = {
+        session_id: sessionId,
+        transcript_path: transcriptPath,
+        lifecycle_signal_label: label,
+      };
+      const signalSource = String(sig.source || "").trim();
+      if (signalSource) payload.lifecycle_signal_source = signalSource;
+      const signature = String(sig.signature || "").trim();
+      if (signature) payload.lifecycle_signal_signature = signature;
+      const messageIndex = Number(sig.messageIndex);
+      if (Number.isInteger(messageIndex) && messageIndex >= 0) {
+        payload.lifecycle_message_index = messageIndex;
+      }
+      for (const key of ["reason", "adapter", "source"] as const) {
+        const value = String(ctx[key] || "").trim();
+        if (value) payload[key] = value;
+      }
+
+      return emitRuntimeEvent("session.compaction", payload, "immediate");
     }
 
-    const payload: Record<string, unknown> = {
-      session_id: sessionId,
-      transcript_path: transcriptPath,
-      lifecycle_signal_label: label,
-    };
-    const signalSource = String(sig.source || "").trim();
-    if (signalSource) payload.lifecycle_signal_source = signalSource;
-    const signature = String(sig.signature || "").trim();
-    if (signature) payload.lifecycle_signal_signature = signature;
-    const messageIndex = Number(sig.messageIndex);
-    if (Number.isInteger(messageIndex) && messageIndex >= 0) {
-      payload.lifecycle_message_index = messageIndex;
-    }
-    for (const key of ["reason", "adapter", "source"] as const) {
-      const value = String(ctx[key] || "").trim();
-      if (value) payload[key] = value;
+    if (label === "ResetSignal") {
+      const sessionId = String(ctx.sessionId || ctx.session_id || "").trim();
+      if (!sessionId) {
+        return lifecycleNoop("missing_session_id", "requires context.sessionId");
+      }
+      const resetTranscriptPath = String(ctx.resetTranscriptPath || ctx.reset_transcript_path || "").trim();
+      if (!resetTranscriptPath) {
+        return lifecycleNoop("missing_reset_transcript_path", "requires context.resetTranscriptPath");
+      }
+      if (!fs.existsSync(resetTranscriptPath)) {
+        return lifecycleNoop("missing_reset_transcript_path", `reset transcript path does not exist: ${resetTranscriptPath}`);
+      }
+
+      const payload: Record<string, unknown> = {
+        session_id: sessionId,
+        reset_transcript_path: resetTranscriptPath,
+        lifecycle_signal_label: label,
+      };
+      const signalSource = String(sig.source || "").trim();
+      if (signalSource) payload.lifecycle_signal_source = signalSource;
+      const signature = String(sig.signature || "").trim();
+      if (signature) payload.lifecycle_signal_signature = signature;
+      const messageIndex = Number(sig.messageIndex);
+      if (Number.isInteger(messageIndex) && messageIndex >= 0) {
+        payload.lifecycle_message_index = messageIndex;
+      }
+      for (const key of ["reason", "adapter", "source"] as const) {
+        const value = String(ctx[key] || "").trim();
+        if (value) payload[key] = value;
+      }
+      const resetTranscriptSource = String(ctx.resetTranscriptSource || ctx.reset_transcript_source || "").trim();
+      if (resetTranscriptSource) payload.reset_transcript_source = resetTranscriptSource;
+
+      return emitRuntimeEvent("session.reset", payload, "immediate");
     }
 
-    return emitRuntimeEvent("session.compaction", payload, "immediate");
+    return lifecycleNoop("unsupported_signal", `does not support signal label ${label || "<missing>"}`);
   }
 
   function isInternalMaintenancePrompt(text: string): boolean {

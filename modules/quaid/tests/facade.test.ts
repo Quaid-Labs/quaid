@@ -624,15 +624,99 @@ describe("QuaidFacade", () => {
     await rm(workspace, { recursive: true, force: true });
   });
 
+  it("processLifecycleEvent emits reset through existing events path", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "quaid-facade-reset-lifecycle-"));
+    const resetTranscriptPath = path.join(workspace, "reset-snapshot.jsonl");
+    await writeFile(resetTranscriptPath, '{"role":"user","content":"reset snapshot"}\n', "utf8");
+    const execEvents = vi.fn(async () => '{"status":"acknowledged","event":"session.reset"}');
+    const facade = createQuaidFacade(makeMockDeps({ execEvents }));
+
+    const result = await facade.processLifecycleEvent(
+      {
+        label: "ResetSignal",
+        source: "system_notice",
+        signature: "system:reset",
+        messageIndex: 4,
+      },
+      {
+        sessionId: "sess-reset",
+        resetTranscriptPath,
+        resetTranscriptSource: "before_reset_snapshot",
+        reason: "before_reset",
+        adapter: "openclaw",
+        source: "facade-test",
+      },
+    );
+
+    expect(result).toEqual({ status: "acknowledged", event: "session.reset" });
+    expect(execEvents).toHaveBeenCalledTimes(1);
+    const args = execEvents.mock.calls[0][1];
+    expect(execEvents).toHaveBeenCalledWith(
+      "emit",
+      expect.arrayContaining(["--name", "session.reset", "--dispatch", "immediate"]),
+    );
+    const payload = JSON.parse(String(args[args.indexOf("--payload") + 1]));
+    expect(payload).toEqual({
+      session_id: "sess-reset",
+      reset_transcript_path: resetTranscriptPath,
+      lifecycle_signal_label: "ResetSignal",
+      lifecycle_signal_source: "system_notice",
+      lifecycle_signal_signature: "system:reset",
+      lifecycle_message_index: 4,
+      reason: "before_reset",
+      adapter: "openclaw",
+      source: "facade-test",
+      reset_transcript_source: "before_reset_snapshot",
+    });
+    expect(JSON.stringify(payload)).not.toContain("reset snapshot");
+    await rm(workspace, { recursive: true, force: true });
+  });
+
+  it("processLifecycleEvent rejects live transcript reset inputs without emitting", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "quaid-facade-reset-live-only-"));
+    const liveTranscriptPath = path.join(workspace, "live-session.jsonl");
+    await writeFile(liveTranscriptPath, '{"role":"user","content":"post-reset live transcript"}\n', "utf8");
+    const execEvents = vi.fn(async () => '{"status":"unexpected"}');
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const facade = createQuaidFacade(makeMockDeps({ execEvents }));
+
+    await expect(
+      facade.processLifecycleEvent(
+        { label: "ResetSignal", source: "hook", signature: "hook:reset" },
+        { sessionId: "sess-reset", transcriptPath: liveTranscriptPath, sessionFile: liveTranscriptPath },
+      ),
+    ).resolves.toEqual({
+      status: "ignored",
+      event_emitted: false,
+      reason: "missing_reset_transcript_path",
+    });
+
+    const failHardFacade = createQuaidFacade(makeMockDeps({
+      execEvents,
+      isFailHardEnabled: vi.fn(() => true),
+    }));
+    await expect(
+      failHardFacade.processLifecycleEvent(
+        { label: "ResetSignal", source: "hook", signature: "hook:reset" },
+        { sessionId: "sess-reset", transcriptPath: liveTranscriptPath, sessionFile: liveTranscriptPath },
+      ),
+    ).rejects.toThrow("requires context.resetTranscriptPath");
+
+    expect(execEvents).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("requires context.resetTranscriptPath"));
+    warn.mockRestore();
+    await rm(workspace, { recursive: true, force: true });
+  });
+
   it("processLifecycleEvent no-ops invalid inputs without emitting under fail-soft", async () => {
     const execEvents = vi.fn(async () => '{"status":"unexpected"}');
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const facade = createQuaidFacade(makeMockDeps({ execEvents }));
 
     await expect(
-      facade.processLifecycleEvent({ label: "ResetSignal", source: "hook", signature: "hook:reset" }, {
-        sessionId: "sess-reset",
-        transcriptPath: "/tmp/live-transcript.jsonl",
+      facade.processLifecycleEvent({ label: "TimeoutSignal", source: "hook", signature: "hook:timeout" }, {
+        sessionId: "sess-timeout",
+        transcriptPath: "/tmp/session.jsonl",
       }),
     ).resolves.toEqual({
       status: "ignored",
@@ -651,7 +735,7 @@ describe("QuaidFacade", () => {
     });
 
     expect(execEvents).not.toHaveBeenCalled();
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("does not support signal label ResetSignal"));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("does not support signal label TimeoutSignal"));
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("transcript path does not exist"));
     warn.mockRestore();
   });
@@ -673,7 +757,7 @@ describe("QuaidFacade", () => {
         sessionId: "sess-reset",
         transcriptPath: "/tmp/session.jsonl",
       }),
-    ).rejects.toThrow("does not support signal label ResetSignal");
+    ).rejects.toThrow("requires context.resetTranscriptPath");
     expect(execEvents).not.toHaveBeenCalled();
   });
 
@@ -696,9 +780,19 @@ describe("QuaidFacade", () => {
 
   it("processLifecycleEvent source does not bypass runtime event boundaries", async () => {
     const source = await readFile(path.join(process.cwd(), "core", "facade.ts"), "utf8");
-    const match = source.match(/async function processLifecycleEvent[\s\S]*?return emitRuntimeEvent\("session\.compaction", payload, "immediate"\);\n  \}/);
-    expect(match?.[0] || "").toContain('emitRuntimeEvent("session.compaction", payload, "immediate")');
-    expect(match?.[0] || "").not.toMatch(/write_signal|ensure_alive|start_daemon|stop_daemon|restart|subprocess|pidfile|reset_transcript_path/);
+    const functionStart = source.indexOf("async function processLifecycleEvent");
+    const functionEnd = source.indexOf("  function isInternalMaintenancePrompt", functionStart);
+    const functionSource = source.slice(functionStart, functionEnd);
+    expect(functionSource).toContain('emitRuntimeEvent("session.compaction", payload, "immediate")');
+    expect(functionSource).toContain('emitRuntimeEvent("session.reset", payload, "immediate")');
+    expect(functionSource).not.toMatch(/write_signal|ensure_alive|start_daemon|stop_daemon|restart|subprocess|pidfile/);
+
+    const resetStart = functionSource.indexOf('if (label === "ResetSignal")');
+    const resetEnd = functionSource.indexOf('return emitRuntimeEvent("session.reset", payload, "immediate")', resetStart);
+    const resetSource = functionSource.slice(resetStart, resetEnd);
+    expect(resetSource).toContain("ctx.resetTranscriptPath || ctx.reset_transcript_path");
+    expect(resetSource).toContain("reset_transcript_path");
+    expect(resetSource).not.toMatch(/ctx\.transcriptPath|ctx\.transcript_path|ctx\.sessionFile|ctx\.session_file/);
   });
 
   // -----------------------------------------------------------------------
