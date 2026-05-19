@@ -1,6 +1,6 @@
 # Datastore Events M9.4 Extraction Fact Publish Plan
 
-Status: draft plan; no runtime implementation
+Status: draft plan; first-slice split decision recorded; no runtime implementation
 Owner: W1 runtime/datastore, W3 recall quality
 Plan source: `projects/quaid/operations/datastore-events-m9-monitor-migration-plan.md`
 
@@ -64,12 +64,25 @@ That would incorrectly make MemoryDB own unrelated snippet, journal, and
 project-log side effects just because they are currently co-located in one
 function.
 
-The first M9.4 runtime patch must either:
+W3/W6 review selected the first behavior shape:
 
-- factor the MemoryDB-owned publish portion into a helper/contract while
-  leaving NoteDB/DocsDB side effects in their current owners, or
-- explicitly select a narrower no-runtime/test-only guard slice if factoring is
-  too risky for the next step.
+- Keep `apply_extracted_payloads()` as the orchestration entrypoint for the
+  current daemon/direct extraction publish flow.
+- Factor only the MemoryDB-owned publish portion into a MemoryDB-owned helper
+  or contract helper.
+- Call that helper from inside `apply_extracted_payloads()` for the selected
+  facts/edges/source-chunks publish family.
+- Leave snippet, journal, and project-log side effects in their current owners
+  and call order; do not move those writes into the MemoryDB helper.
+- Do not split the daemon into separate `memorydb_publish()` and
+  `apply_extracted_payloads_non_memorydb_side_effects()` calls in the first
+  behavior patch. That would duplicate orchestration and increase the risk of
+  changing current side-effect ordering or result shape.
+
+The first runtime patch may use only a synchronous MemoryDB-owned helper if that
+is the safest step. If a request event is introduced in the same patch, the
+request handler must delegate to the same helper and preserve failHard/no-fallback
+semantics.
 
 ## Candidate First Runtime Slice
 
@@ -86,6 +99,12 @@ Candidate producer:
 
 - daemon final rolling flush publish path in `core/extraction_daemon.py`
 
+The direct `extract_from_transcript()` publish path is not selected for request
+routing in the first behavior slice. A transparent internal helper extraction
+inside `apply_extracted_payloads()` is allowed only if parity tests prove direct
+extraction output is unchanged. Any direct-path request/broker migration is a
+future slice.
+
 Candidate payload:
 
 - raw facts selected for publish
@@ -101,10 +120,13 @@ Candidate payload:
   - `source_channel`
   - `source_conversation_id`
   - `source_author_id`
-  - `target_datastore`
+  - `target_datastore` only as the existing MemoryDB store pass-through value;
+    do not introduce new accepted values or future-proofed routing semantics in
+    this slice
 - publish controls:
   - `dry_run`
-  - `allowed_domains` or a clearly defined owner-side domain snapshot
+  - owner-side domain policy snapshot resolved inside the MemoryDB boundary;
+    producers must not be trusted as the authoritative allow-list source
   - publish batch size behavior, if configurable
 
 Candidate response:
@@ -122,6 +144,11 @@ Candidate response:
 
 The response must preserve enough result shape for daemon metrics, notifications,
 publish traces, and extraction buffer logs to remain unchanged.
+
+The daemon-side response validator should validate only the status and counters
+the daemon actually consumes. Internal implementation details such as transaction
+mode, rowid-window rechecks, or dedup SQL mechanics belong in MemoryDB helper
+tests, not as speculative response-envelope validation.
 
 ## Non-Targets
 
@@ -183,7 +210,9 @@ Add or preserve tests proving:
   MemoryDB request handler.
 - publish batching still uses bounded batches and shared write connections for
   fact and edge writes.
-- source chunk ids are attached to facts before storage.
+- source chunk ids are attached to facts before storage, with source chunk
+  materialization and fact `source_chunk_id` attachment kept in the same
+  MemoryDB-owned helper/request path.
 - recall can retrieve newly stored facts and linked source evidence with the
   same provenance fields as before.
 
@@ -197,15 +226,27 @@ W4 should smoke the runtime patch only after W3/W6/W8 review:
 - failHard handler failure stops the daemon path without direct fallback
 - M9.3 session ingest routes still work
 
-## Open Decisions
+## Resolved First-Slice Decisions
 
-- Whether the first M9.4 patch should migrate only daemon final flush or also
-  direct `extract_from_transcript()` publish calls.
-- Whether domain allow-list resolution belongs in the producer payload or the
-  MemoryDB handler.
-- Whether source chunk persistence should remain via the session-memory bridge
-  port for this slice or move behind the same MemoryDB request handler.
-- Whether a request event is required for the first patch or a MemoryDB-owned
-  shared helper is a safer intermediate step before broker routing.
+- First behavior slice: daemon final rolling flush only.
+- Direct `extract_from_transcript()` request routing remains unchanged unless a
+  later slice explicitly selects and parity-tests it.
+- Split shape: `apply_extracted_payloads()` internally delegates the selected
+  MemoryDB fact/edge/source-chunk publish work to a MemoryDB-owned helper while
+  preserving the current non-MemoryDB side effects in their existing owners.
+- Domain allow-list resolution and validation belong inside the MemoryDB-owned
+  boundary, not in producer-supplied policy.
+- Source chunk materialization and fact `source_chunk_id` attachment stay in the
+  same MemoryDB-owned helper/request path.
+- A synchronous helper is the safest first implementation. A request event is
+  allowed only if it delegates to that same helper and preserves request,
+  failHard, and no-fallback semantics.
 
-These decisions require W3/W6 review before runtime code lands.
+## Deferred Decisions
+
+- Whether to add `memory.extraction_publish.request.v1` in the first runtime
+  patch or after the synchronous helper has landed and passed parity gates.
+- Whether a later slice should migrate direct `extract_from_transcript()` request
+  routing.
+- Whether future producer payloads need additional source metadata fields after
+  the selected daemon final flush path is stable.

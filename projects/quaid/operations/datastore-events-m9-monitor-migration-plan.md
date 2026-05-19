@@ -128,8 +128,11 @@ Tracking doc: `datastore-events-m9-4-extraction-fact-plan.md`.
 Status:
 
 - Draft plan opened for W3/W6/W8 review.
-- Runtime implementation is not approved until the selected MemoryDB publish
-  slice is reviewed.
+- W3/W6 review selected daemon final flush as the first behavior slice and
+  selected an internal `apply_extracted_payloads()` -> MemoryDB-owned helper
+  split before any broader request routing.
+- Runtime implementation is not approved beyond that reviewed split without a
+  fresh plan update.
 
 Scope:
 
