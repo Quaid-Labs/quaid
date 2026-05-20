@@ -39,21 +39,25 @@ def workspace_dir(tmp_path, monkeypatch):
     reset_adapter()
 
 
-def test_evolutiondb_is_canonical_soul_snippets_module():
-    canonical = importlib.import_module("datastore.evolutiondb.soul_snippets")
-    legacy = importlib.import_module("datastore.notedb.soul_snippets")
-    from datastore.notedb import soul_snippets as legacy_package_module
+def test_insightdb_is_canonical_soul_snippets_module():
+    canonical = importlib.import_module("datastore.insightdb.soul_snippets")
+    from datastore.insightdb import soul_snippets as package_module
     from core.lifecycle import soul_snippets as lifecycle_soul_snippets
 
-    assert legacy is canonical
-    assert legacy_package_module is canonical
+    assert package_module is canonical
     assert lifecycle_soul_snippets.run_soul_snippets_review is canonical.run_soul_snippets_review
     assert lifecycle_soul_snippets.run_journal_distillation is canonical.run_journal_distillation
 
 
-def test_notedb_compat_shim_monkeypatches_canonical_module(monkeypatch):
-    canonical = importlib.import_module("datastore.evolutiondb.soul_snippets")
-    legacy = importlib.import_module("datastore.notedb.soul_snippets")
+def test_legacy_soul_snippets_modules_are_removed():
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("datastore.evolutiondb.soul_snippets")
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("datastore.notedb.soul_snippets")
+
+
+def test_lifecycle_soul_snippets_uses_canonical_insightdb_module(monkeypatch):
+    canonical = importlib.import_module("datastore.insightdb.soul_snippets")
     from core.lifecycle import soul_snippets as lifecycle_soul_snippets
 
     calls = []
@@ -62,7 +66,7 @@ def test_notedb_compat_shim_monkeypatches_canonical_module(monkeypatch):
         calls.append((filename, snippets, kwargs))
         return True
 
-    monkeypatch.setattr(legacy, "write_snippet_entry", _fake_write)
+    monkeypatch.setattr(canonical, "write_snippet_entry", _fake_write)
 
     assert canonical.write_snippet_entry is _fake_write
     assert lifecycle_soul_snippets.write_snippet_entry("USER.md", ["compat works"])
@@ -75,9 +79,15 @@ def test_notedb_compat_shim_monkeypatches_canonical_module(monkeypatch):
     ]
 
 
-def test_notedb_contract_compat_shim_aliases_evolutiondb_contract(monkeypatch):
-    canonical = importlib.import_module("core.plugins.evolutiondb_contract")
-    legacy = importlib.import_module("core.plugins.notedb_contract")
+def test_legacy_contract_modules_are_removed():
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("core.plugins.evolutiondb_contract")
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("core.plugins.notedb_contract")
+
+
+def test_insightdb_contract_uses_canonical_module(monkeypatch):
+    canonical = importlib.import_module("core.plugins.insightdb_contract")
 
     calls = []
 
@@ -89,9 +99,8 @@ def test_notedb_contract_compat_shim_aliases_evolutiondb_contract(monkeypatch):
             "errors": [],
         }
 
-    monkeypatch.setattr(legacy, "run_snippet_journal_write_payload", _fake_write)
+    monkeypatch.setattr(canonical, "run_snippet_journal_write_payload", _fake_write)
 
-    assert legacy is canonical
     assert canonical.run_snippet_journal_write_payload is _fake_write
     result = canonical.run_snippet_journal_write_payload({"source": "extraction-apply-payloads"})
     assert result["status"] == "ok"
@@ -124,11 +133,11 @@ def mock_config():
     return mock_cfg
 
 
-class TestEvolutionDbContractSnippetJournalWrite:
+class TestInsightDbContractSnippetJournalWrite:
     def test_helper_writes_snippet_and_journal_with_target_metrics(self, workspace_dir, mock_config):
-        from core.plugins.evolutiondb_contract import run_snippet_journal_write_payload
+        from core.plugins.insightdb_contract import run_snippet_journal_write_payload
 
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
             result = run_snippet_journal_write_payload({
                 "source": "extraction-apply-payloads",
                 "label": "rolling-reset",
@@ -158,7 +167,7 @@ class TestEvolutionDbContractSnippetJournalWrite:
         ).read_text(encoding="utf-8")
 
     def test_helper_preserves_duplicate_skip_counters(self, workspace_dir, mock_config):
-        from core.plugins.evolutiondb_contract import run_snippet_journal_write_payload
+        from core.plugins.insightdb_contract import run_snippet_journal_write_payload
 
         payload = {
             "source": "extraction-apply-payloads",
@@ -168,7 +177,7 @@ class TestEvolutionDbContractSnippetJournalWrite:
             "snippets": {"USER.md": ["Alden Rook is Owner's test godbrother."]},
             "journal": {"SOUL.md": "A quiet journal note."},
         }
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
             first = run_snippet_journal_write_payload(payload)
             second = run_snippet_journal_write_payload(payload)
 
@@ -180,7 +189,7 @@ class TestEvolutionDbContractSnippetJournalWrite:
         assert second["journal_files_skipped"] == 1
 
     def test_helper_isolates_snippet_only_metrics(self):
-        from core.plugins.evolutiondb_contract import run_snippet_journal_write_payload
+        from core.plugins.insightdb_contract import run_snippet_journal_write_payload
 
         result = run_snippet_journal_write_payload({
             "source": "extraction-apply-payloads",
@@ -205,7 +214,7 @@ class TestEvolutionDbContractSnippetJournalWrite:
         assert result["errors"] == []
 
     def test_helper_isolates_journal_only_metrics(self):
-        from core.plugins.evolutiondb_contract import run_snippet_journal_write_payload
+        from core.plugins.insightdb_contract import run_snippet_journal_write_payload
 
         result = run_snippet_journal_write_payload({
             "source": "extraction-apply-payloads",
@@ -230,7 +239,7 @@ class TestEvolutionDbContractSnippetJournalWrite:
         assert result["errors"] == []
 
     def test_helper_write_flags_preserve_family_skip_counters_and_targets(self):
-        from core.plugins.evolutiondb_contract import run_snippet_journal_write_payload
+        from core.plugins.insightdb_contract import run_snippet_journal_write_payload
 
         result = run_snippet_journal_write_payload({
             "source": "extraction-apply-payloads",
@@ -256,7 +265,7 @@ class TestEvolutionDbContractSnippetJournalWrite:
         assert result["errors"] == []
 
     def test_helper_calls_split_helpers_in_snippet_then_journal_order(self, monkeypatch):
-        import core.plugins.evolutiondb_contract as contract
+        import core.plugins.insightdb_contract as contract
 
         calls = []
 
@@ -287,11 +296,11 @@ class TestEvolutionDbContractSnippetJournalWrite:
         assert result["journal_files_seen"] == 1
 
     def test_helper_logs_and_records_soft_snippet_write_failure(self, caplog):
-        from core.plugins.evolutiondb_contract import run_snippet_journal_write_payload
+        from core.plugins.insightdb_contract import run_snippet_journal_write_payload
 
-        with patch("datastore.notedb.soul_snippets.write_snippet_entry", side_effect=OSError("disk full")), \
+        with patch("datastore.insightdb.soul_snippets.write_snippet_entry", side_effect=OSError("disk full")), \
              patch("lib.fail_policy.is_fail_hard_enabled", return_value=False), \
-             caplog.at_level(logging.WARNING, logger="core.plugins.evolutiondb_contract"):
+             caplog.at_level(logging.WARNING, logger="core.plugins.insightdb_contract"):
             result = run_snippet_journal_write_payload({
                 "source": "extraction-apply-payloads",
                 "snippets": {"SOUL.md": ["Remember the disk warning."]},
@@ -305,11 +314,11 @@ class TestEvolutionDbContractSnippetJournalWrite:
         assert "snippet write failed for SOUL.md: disk full" in caplog.text
 
     def test_helper_logs_before_fail_hard_snippet_write_raise(self, caplog):
-        from core.plugins.evolutiondb_contract import run_snippet_journal_write_payload
+        from core.plugins.insightdb_contract import run_snippet_journal_write_payload
 
-        with patch("datastore.notedb.soul_snippets.write_snippet_entry", side_effect=OSError("disk full")), \
+        with patch("datastore.insightdb.soul_snippets.write_snippet_entry", side_effect=OSError("disk full")), \
              patch("lib.fail_policy.is_fail_hard_enabled", return_value=True), \
-             caplog.at_level(logging.WARNING, logger="core.plugins.evolutiondb_contract"):
+             caplog.at_level(logging.WARNING, logger="core.plugins.insightdb_contract"):
             with pytest.raises(OSError, match="disk full"):
                 run_snippet_journal_write_payload({
                     "source": "extraction-apply-payloads",
@@ -320,11 +329,11 @@ class TestEvolutionDbContractSnippetJournalWrite:
         assert "snippet write failed for SOUL.md: disk full" in caplog.text
 
     def test_helper_logs_and_records_soft_journal_write_failure(self, caplog):
-        from core.plugins.evolutiondb_contract import run_snippet_journal_write_payload
+        from core.plugins.insightdb_contract import run_snippet_journal_write_payload
 
-        with patch("datastore.notedb.soul_snippets.write_journal_entry", side_effect=OSError("disk full")), \
+        with patch("datastore.insightdb.soul_snippets.write_journal_entry", side_effect=OSError("disk full")), \
              patch("lib.fail_policy.is_fail_hard_enabled", return_value=False), \
-             caplog.at_level(logging.WARNING, logger="core.plugins.evolutiondb_contract"):
+             caplog.at_level(logging.WARNING, logger="core.plugins.insightdb_contract"):
             result = run_snippet_journal_write_payload({
                 "source": "extraction-apply-payloads",
                 "snippets": {},
@@ -338,11 +347,11 @@ class TestEvolutionDbContractSnippetJournalWrite:
         assert "journal write failed for SOUL.md: disk full" in caplog.text
 
     def test_helper_logs_before_fail_hard_journal_write_raise(self, caplog):
-        from core.plugins.evolutiondb_contract import run_snippet_journal_write_payload
+        from core.plugins.insightdb_contract import run_snippet_journal_write_payload
 
-        with patch("datastore.notedb.soul_snippets.write_journal_entry", side_effect=OSError("disk full")), \
+        with patch("datastore.insightdb.soul_snippets.write_journal_entry", side_effect=OSError("disk full")), \
              patch("lib.fail_policy.is_fail_hard_enabled", return_value=True), \
-             caplog.at_level(logging.WARNING, logger="core.plugins.evolutiondb_contract"):
+             caplog.at_level(logging.WARNING, logger="core.plugins.insightdb_contract"):
             with pytest.raises(OSError, match="disk full"):
                 run_snippet_journal_write_payload({
                     "source": "extraction-apply-payloads",
@@ -360,8 +369,8 @@ class TestEvolutionDbContractSnippetJournalWrite:
 
 class TestWriteJournalEntry:
     def test_creates_journal_file(self, workspace_dir, mock_config):
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.notedb.soul_snippets import write_journal_entry
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import write_journal_entry
             result = write_journal_entry(
                 "SOUL.md",
                 "Something beautiful happened today.",
@@ -377,8 +386,8 @@ class TestWriteJournalEntry:
         assert "Something beautiful happened today." in content
 
     def test_dedup_by_date_trigger_and_content(self, workspace_dir, mock_config):
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.notedb.soul_snippets import write_journal_entry
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import write_journal_entry
             write_journal_entry("SOUL.md", "First entry.", "Compaction", "2026-02-10")
             # Identical content is still rejected
             result = write_journal_entry("SOUL.md", "First entry.", "Compaction", "2026-02-10")
@@ -387,8 +396,8 @@ class TestWriteJournalEntry:
         assert "First entry." in content
 
     def test_same_date_trigger_new_content_allowed(self, workspace_dir, mock_config):
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.notedb.soul_snippets import write_journal_entry
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import write_journal_entry
             write_journal_entry("SOUL.md", "First entry.", "Compaction", "2026-02-10")
             result = write_journal_entry("SOUL.md", "Second entry.", "Compaction", "2026-02-10")
         assert result is True  # New content, same date+trigger
@@ -398,8 +407,8 @@ class TestWriteJournalEntry:
         assert "## 2026-02-10 — Compaction (2)" in content
 
     def test_different_trigger_same_date_allowed(self, workspace_dir, mock_config):
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.notedb.soul_snippets import write_journal_entry
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import write_journal_entry
             write_journal_entry("SOUL.md", "Compaction entry.", "Compaction", "2026-02-10")
             result = write_journal_entry("SOUL.md", "Reset entry.", "Reset", "2026-02-10")
         assert result is True
@@ -408,14 +417,14 @@ class TestWriteJournalEntry:
         assert "Reset entry." in content
 
     def test_empty_content_skipped(self, workspace_dir, mock_config):
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.notedb.soul_snippets import write_journal_entry
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import write_journal_entry
             result = write_journal_entry("SOUL.md", "", "Compaction", "2026-02-10")
         assert result is False
 
     def test_newest_at_top(self, workspace_dir, mock_config):
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.notedb.soul_snippets import write_journal_entry
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import write_journal_entry
             write_journal_entry("SOUL.md", "Earlier entry.", "Reset", "2026-02-09")
             write_journal_entry("SOUL.md", "Later entry.", "Compaction", "2026-02-10")
         content = (workspace_dir / "journal" / "SOUL.journal.md").read_text()
@@ -427,8 +436,8 @@ class TestWriteJournalEntry:
 class TestJournalMaxEntriesCap:
     def test_archives_when_exceeded(self, workspace_dir, mock_config):
         mock_config.docs.journal.max_entries_per_file = 3
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.notedb.soul_snippets import write_journal_entry
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import write_journal_entry
             for i in range(4):
                 write_journal_entry("SOUL.md", f"Entry {i}.", "Compaction", f"2026-02-{10+i:02d}")
 
@@ -442,8 +451,8 @@ class TestJournalMaxEntriesCap:
 
     def test_unlimited_mode_keeps_all_entries_and_skips_cap_archive(self, workspace_dir, mock_config):
         mock_config.docs.journal.max_entries_per_file = 0
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.notedb.soul_snippets import write_journal_entry
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import write_journal_entry
             for i in range(6):
                 write_journal_entry("SOUL.md", f"Entry {i}.", "Compaction", f"2026-02-{10+i:02d}")
 
@@ -461,8 +470,8 @@ class TestJournalMaxEntriesCap:
 
 class TestReadJournalFile:
     def test_no_file_returns_empty(self, workspace_dir, mock_config):
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.notedb.soul_snippets import read_journal_file
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import read_journal_file
             content, entries = read_journal_file("SOUL.md")
         assert content == ""
         assert entries == []
@@ -478,8 +487,8 @@ class TestReadJournalFile:
             "## 2026-02-09 — Compaction\n"
             "Today I noticed patterns in how I respond.\n"
         )
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.notedb.soul_snippets import read_journal_file
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import read_journal_file
             content, entries = read_journal_file("SOUL.md")
         assert len(entries) == 2
         assert entries[0]["date"] == "2026-02-10"
@@ -495,8 +504,8 @@ class TestReadJournalFile:
 
 class TestArchiveSystem:
     def test_monthly_grouping(self, workspace_dir, mock_config):
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.notedb.soul_snippets import _archive_oldest_entries
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import _archive_oldest_entries
             entries = [
                 {"date": "2026-01-15", "trigger": "Compaction", "content": "January entry."},
                 {"date": "2026-02-10", "trigger": "Reset", "content": "February entry."},
@@ -510,8 +519,8 @@ class TestArchiveSystem:
         assert "February entry." in (archive_dir / "SOUL-2026-02.md").read_text()
 
     def test_archive_dedup(self, workspace_dir, mock_config):
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.notedb.soul_snippets import _archive_oldest_entries
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import _archive_oldest_entries
             entries = [
                 {"date": "2026-01-15", "trigger": "Compaction", "content": "Entry."},
             ]
@@ -532,8 +541,8 @@ class TestArchiveSystem:
             "## 2026-02-09 — Compaction\n"
             "Archive this entry.\n"
         )
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.notedb.soul_snippets import archive_entries
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import archive_entries
             archive_entries("SOUL.md", [
                 {"date": "2026-02-09", "trigger": "Compaction", "content": "Archive this entry."}
             ])
@@ -550,35 +559,35 @@ class TestArchiveSystem:
 
 class TestDistillationState:
     def test_state_file_created(self, workspace_dir, mock_config):
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.notedb.soul_snippets import _save_distillation_state, _get_distillation_state
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import _save_distillation_state, _get_distillation_state
             _save_distillation_state({"SOUL.md": {"last_distilled": "2026-02-10", "entries_distilled": 3}})
             state = _get_distillation_state()
         assert state["SOUL.md"]["last_distilled"] == "2026-02-10"
         assert state["SOUL.md"]["entries_distilled"] == 3
 
     def test_state_persist_uses_atomic_replace(self, workspace_dir, mock_config):
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.notedb import soul_snippets
-            with patch("datastore.notedb.soul_snippets.os.replace", wraps=soul_snippets.os.replace) as mock_replace:
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb import soul_snippets
+            with patch("datastore.insightdb.soul_snippets.os.replace", wraps=soul_snippets.os.replace) as mock_replace:
                 soul_snippets._save_distillation_state({"SOUL.md": {"last_distilled": "2026-02-10"}})
         assert mock_replace.call_count >= 1
 
     def test_distillation_due_when_no_state(self, workspace_dir, mock_config):
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.notedb.soul_snippets import _is_distillation_due
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import _is_distillation_due
             assert _is_distillation_due("SOUL.md") is True
 
     def test_distillation_not_due_when_recent(self, workspace_dir, mock_config):
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.notedb.soul_snippets import _save_distillation_state, _is_distillation_due
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import _save_distillation_state, _is_distillation_due
             today = datetime.now().strftime("%Y-%m-%d")
             _save_distillation_state({"SOUL.md": {"last_distilled": today}})
             assert _is_distillation_due("SOUL.md") is False
 
     def test_distillation_due_after_interval(self, workspace_dir, mock_config):
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.notedb.soul_snippets import _save_distillation_state, _is_distillation_due
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import _save_distillation_state, _is_distillation_due
             old_date = (datetime.now() - timedelta(days=8)).strftime("%Y-%m-%d")
             _save_distillation_state({"SOUL.md": {"last_distilled": old_date}})
             assert _is_distillation_due("SOUL.md") is True
@@ -592,8 +601,8 @@ class TestDistillationState:
 class TestDistillation:
     def test_review_timeout_helpers_use_large_task_floors_and_allow_disable(self, workspace_dir, mock_config, monkeypatch):
         mock_config.docs.update_timeout_seconds = 120
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.notedb.soul_snippets import (
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import (
                 _journal_review_timeout_seconds,
                 _snippet_review_timeout_seconds,
             )
@@ -607,8 +616,8 @@ class TestDistillation:
             assert _snippet_review_timeout_seconds() == 900.0
 
     def test_build_distillation_prompt(self, workspace_dir, mock_config):
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.notedb.soul_snippets import build_distillation_prompt
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import build_distillation_prompt
             entries = [
                 {"date": "2026-02-10", "trigger": "Reset", "content": "A deep reflection."},
             ]
@@ -619,8 +628,8 @@ class TestDistillation:
         assert "edits" in prompt
 
     def test_build_distillation_prompt_keeps_full_visible_content(self, workspace_dir, mock_config):
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.notedb.soul_snippets import build_distillation_prompt
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import build_distillation_prompt
             tail = "TAIL_MARKER_DISTILL_12345"
             parent_content = "# SOUL\n\n" + ("line\n" * 5000) + tail + "\n"
             entries = [{"date": "2026-02-10", "trigger": "Reset", "content": "A deep reflection."}]
@@ -628,8 +637,8 @@ class TestDistillation:
         assert tail in prompt
 
     def test_build_distillation_prompt_includes_project_context(self, workspace_dir, mock_config):
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.notedb.soul_snippets import build_distillation_prompt
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import build_distillation_prompt
             prompt = build_distillation_prompt(
                 "SOUL.md",
                 "# SOUL\nbase context\n",
@@ -641,8 +650,8 @@ class TestDistillation:
         assert "project context" in prompt
 
     def test_build_distillation_prompt_emphasizes_synthesis_over_logs(self, workspace_dir, mock_config):
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.notedb.soul_snippets import build_distillation_prompt
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import build_distillation_prompt
             prompt = build_distillation_prompt(
                 "ENVIRONMENT.md",
                 "# ENVIRONMENT\nbase context\n",
@@ -654,8 +663,8 @@ class TestDistillation:
         assert "guidance, not law" in prompt
 
     def test_build_distillation_prompt_shows_mutable_body_separately_from_template(self, workspace_dir, mock_config):
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.notedb.soul_snippets import build_distillation_prompt
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import build_distillation_prompt
             project = "# SOUL\n\n## What Belongs\n- Reflection\n"
             parent = project + "\n- New distilled body line.\n"
             prompt = build_distillation_prompt(
@@ -669,8 +678,8 @@ class TestDistillation:
         assert "heuristics only" in prompt
 
     def test_build_review_prompt_treats_template_as_guidance(self, workspace_dir, mock_config):
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.notedb.soul_snippets import build_review_prompt
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import build_review_prompt
             prompt = build_review_prompt({
                 "USER.md": {
                     "parent_content": "# USER\n\n## Patterns\n- Existing line\n",
@@ -686,8 +695,8 @@ class TestDistillation:
         assert 'file="USER.md"' in prompt
 
     def test_normalize_distillation_result_drops_loggy_additions_and_caps_count(self, workspace_dir, mock_config):
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.notedb.soul_snippets import _normalize_distillation_result
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import _normalize_distillation_result
             result = _normalize_distillation_result(
                 "ENVIRONMENT.md",
                 {
@@ -722,8 +731,8 @@ class TestDistillation:
     def test_apply_distillation_additions(self, workspace_dir, mock_config):
         parent = workspace_dir / "identity" / "SOUL.md"
         parent.write_text("# SOUL\n\nI am Alfie.\n")
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.notedb.soul_snippets import apply_distillation
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import apply_distillation
             result = {
                 "additions": [{"text": "I value trust deeply.", "after_section": "END"}],
                 "edits": [],
@@ -736,8 +745,8 @@ class TestDistillation:
     def test_apply_distillation_edits(self, workspace_dir, mock_config):
         parent = workspace_dir / "identity" / "SOUL.md"
         parent.write_text("# SOUL\n\nI am a simple bot.\n")
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.notedb.soul_snippets import apply_distillation
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import apply_distillation
             result = {
                 "additions": [],
                 "edits": [{"old_text": "I am a simple bot.", "new_text": "I am Alfie, and I grow.", "reason": "More accurate"}],
@@ -752,8 +761,8 @@ class TestDistillation:
         parent = workspace_dir / "identity" / "SOUL.md"
         parent.write_text("# SOUL\n\nOriginal content.\n")
         original = parent.read_text()
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.notedb.soul_snippets import apply_distillation
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import apply_distillation
             result = {
                 "additions": [{"text": "New insight.", "after_section": "END"}],
                 "edits": [{"old_text": "Original content.", "new_text": "Modified.", "reason": "test"}],
@@ -764,7 +773,7 @@ class TestDistillation:
         # Dry run: file should NOT be changed
         assert parent.read_text() == original
 
-    @patch("datastore.notedb.soul_snippets.call_deep_reasoning")
+    @patch("datastore.insightdb.soul_snippets.call_deep_reasoning")
     def test_full_distillation_dry_run(self, mock_opus, workspace_dir, mock_config):
         """End-to-end dry run with mocked Opus response."""
         journal_dir = workspace_dir / "journal"
@@ -785,8 +794,8 @@ class TestDistillation:
             "captured_dates": ["2026-02-10"],
         }), 1.5)
 
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.notedb.soul_snippets import run_journal_distillation
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import run_journal_distillation
             result = run_journal_distillation(dry_run=True, force_distill=True)
 
         assert result["total_entries"] == 1
@@ -794,7 +803,7 @@ class TestDistillation:
         # Dry run: parent file should NOT be changed
         assert "curiosity" not in (workspace_dir / "identity" / "SOUL.md").read_text()
 
-    @patch("datastore.notedb.soul_snippets.call_deep_reasoning")
+    @patch("datastore.insightdb.soul_snippets.call_deep_reasoning")
     def test_distillation_calls_deep_reasoning_without_model_tier(self, mock_opus, workspace_dir, mock_config):
         """Regression: distillation must not pass unsupported kwargs to call_deep_reasoning."""
         journal_dir = workspace_dir / "journal"
@@ -813,8 +822,8 @@ class TestDistillation:
             "captured_dates": [],
         }), 0.8)
 
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.notedb.soul_snippets import run_journal_distillation
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import run_journal_distillation
             run_journal_distillation(dry_run=True, force_distill=True)
 
         mock_opus.assert_called_once()
@@ -826,7 +835,7 @@ class TestDistillation:
         assert isinstance(kwargs.get("max_tokens"), int)
         assert isinstance(kwargs.get("timeout"), (int, float))
 
-    @patch("datastore.notedb.soul_snippets.call_deep_reasoning")
+    @patch("datastore.insightdb.soul_snippets.call_deep_reasoning")
     def test_journal_distillation_writes_review_telemetry(self, mock_opus, workspace_dir, mock_config):
         journal_dir = workspace_dir / "journal"
         journal_dir.mkdir()
@@ -845,8 +854,8 @@ class TestDistillation:
             "captured_dates": ["2026-02-10"],
         }), 1.5)
 
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.notedb.soul_snippets import run_journal_distillation
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import run_journal_distillation
             run_journal_distillation(dry_run=True, force_distill=True)
 
         telemetry_path = workspace_dir / "logs" / "soul_review_telemetry.jsonl"
@@ -867,7 +876,7 @@ class TestDistillation:
         assert "before_tokens" in apply_events[0]
         assert "after_tokens" in apply_events[0]
 
-    @patch("datastore.notedb.soul_snippets.call_deep_reasoning")
+    @patch("datastore.insightdb.soul_snippets.call_deep_reasoning")
     def test_full_distillation_apply(self, mock_opus, workspace_dir, mock_config):
         """End-to-end apply with mocked Opus response."""
         journal_dir = workspace_dir / "journal"
@@ -888,8 +897,8 @@ class TestDistillation:
             "captured_dates": ["2026-02-10"],
         }), 1.5)
 
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.notedb.soul_snippets import run_journal_distillation
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import run_journal_distillation
             result = run_journal_distillation(dry_run=False, force_distill=True)
 
         assert result["additions"] == 1
@@ -904,8 +913,8 @@ class TestDistillation:
     def test_apply_distillation_edits_plus_additions(self, workspace_dir, mock_config):
         """Regression: edits must not be lost when additions are also applied."""
         (workspace_dir / "identity" / "SOUL.md").write_text("# SOUL\n\nI am Alfie.\n\n## Identity\nI am old text.\n")
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.notedb.soul_snippets import apply_distillation
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import apply_distillation
             result = apply_distillation("SOUL.md", {
                 "edits": [{"old_text": "I am old text.", "new_text": "I am new text."}],
                 "additions": [{"text": "I grow every day.", "after_section": "END"}],
@@ -922,8 +931,8 @@ class TestDistillation:
 
     def test_apply_distillation_missing_file(self, workspace_dir, mock_config):
         """apply_distillation returns error when target file doesn't exist."""
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.notedb.soul_snippets import apply_distillation
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import apply_distillation
             stats = apply_distillation("NONEXISTENT.md", {
                 "additions": [{"text": "Won't be inserted.", "after_section": "END"}],
             }, dry_run=False)
@@ -933,8 +942,8 @@ class TestDistillation:
     def test_apply_distillation_edit_not_found(self, workspace_dir, mock_config):
         """apply_distillation recovers anchor misses by appending tagged entry."""
         (workspace_dir / "identity" / "SOUL.md").write_text("# SOUL\n\nI am Alfie.\n")
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.notedb.soul_snippets import apply_distillation
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import apply_distillation
             stats = apply_distillation("SOUL.md", {
                 "edits": [{"old_text": "text that does not exist", "new_text": "replacement"}],
             }, dry_run=False)
@@ -949,8 +958,8 @@ class TestDistillation:
         """Dry-run recovery should count but not mutate file."""
         original = "# SOUL\n\nI am Alfie.\n"
         (workspace_dir / "identity" / "SOUL.md").write_text(original)
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.notedb.soul_snippets import apply_distillation
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import apply_distillation
             stats = apply_distillation("SOUL.md", {
                 "edits": [{"old_text": "missing anchor", "new_text": "would recover"}],
             }, dry_run=True)
@@ -961,8 +970,8 @@ class TestDistillation:
     def test_apply_distillation_mixed_edit_and_recovery(self, workspace_dir, mock_config):
         """Matching edits apply while unmatched edits recover."""
         (workspace_dir / "identity" / "SOUL.md").write_text("# SOUL\n\nmatch me\n")
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.notedb.soul_snippets import apply_distillation
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import apply_distillation
             stats = apply_distillation("SOUL.md", {
                 "edits": [
                     {"old_text": "match me", "new_text": "matched edit"},
@@ -979,8 +988,8 @@ class TestDistillation:
     def test_apply_distillation_empty_edit_skipped(self, workspace_dir, mock_config):
         """apply_distillation silently skips edits with empty old_text or new_text."""
         (workspace_dir / "identity" / "SOUL.md").write_text("# SOUL\n\nI am Alfie.\n")
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.notedb.soul_snippets import apply_distillation
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import apply_distillation
             stats = apply_distillation("SOUL.md", {
                 "edits": [
                     {"old_text": "", "new_text": "replacement"},
@@ -992,7 +1001,7 @@ class TestDistillation:
         # File unchanged
         assert "I am Alfie." in (workspace_dir / "identity" / "SOUL.md").read_text()
 
-    @patch("datastore.notedb.soul_snippets.call_deep_reasoning")
+    @patch("datastore.insightdb.soul_snippets.call_deep_reasoning")
     def test_distillation_interval_gated(self, mock_opus, workspace_dir, mock_config):
         """force_distill=False respects interval — skips when not due."""
         journal_dir = workspace_dir / "journal"
@@ -1003,8 +1012,8 @@ class TestDistillation:
         (workspace_dir / "identity" / "SOUL.md").write_text("# SOUL\n\nI am Alfie.\n")
 
         # Set distillation state to today (not due yet)
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.notedb.soul_snippets import _save_distillation_state, run_journal_distillation
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import _save_distillation_state, run_journal_distillation
             today = datetime.now().strftime("%Y-%m-%d")
             _save_distillation_state({"SOUL.md": {"last_distilled": today}})
             result = run_journal_distillation(dry_run=True, force_distill=False)
@@ -1013,7 +1022,7 @@ class TestDistillation:
         mock_opus.assert_not_called()
         assert result["total_entries"] == 0
 
-    @patch("datastore.notedb.soul_snippets.call_deep_reasoning")
+    @patch("datastore.insightdb.soul_snippets.call_deep_reasoning")
     def test_distillation_interval_gated_when_due(self, mock_opus, workspace_dir, mock_config):
         """force_distill=False proceeds when interval has elapsed."""
         journal_dir = workspace_dir / "journal"
@@ -1030,8 +1039,8 @@ class TestDistillation:
         }), 1.0)
 
         # Set distillation state to 10 days ago (due)
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.notedb.soul_snippets import _save_distillation_state, run_journal_distillation
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import _save_distillation_state, run_journal_distillation
             old_date = (datetime.now() - timedelta(days=10)).strftime("%Y-%m-%d")
             _save_distillation_state({"SOUL.md": {"last_distilled": old_date}})
             result = run_journal_distillation(dry_run=True, force_distill=False)
@@ -1039,7 +1048,7 @@ class TestDistillation:
         mock_opus.assert_called_once()
         assert result["total_entries"] >= 1
 
-    @patch("datastore.notedb.soul_snippets.call_deep_reasoning")
+    @patch("datastore.insightdb.soul_snippets.call_deep_reasoning")
     def test_distillation_opus_empty_response(self, mock_opus, workspace_dir, mock_config):
         """Distillation handles empty Opus response gracefully."""
         journal_dir = workspace_dir / "journal"
@@ -1051,14 +1060,14 @@ class TestDistillation:
 
         mock_opus.return_value = ("", 0.5)
 
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.notedb.soul_snippets import run_journal_distillation
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import run_journal_distillation
             result = run_journal_distillation(dry_run=True, force_distill=True)
 
         assert len(result["errors"]) >= 1
         assert "no response" in result["errors"][0].lower()
 
-    @patch("datastore.notedb.soul_snippets.call_deep_reasoning")
+    @patch("datastore.insightdb.soul_snippets.call_deep_reasoning")
     def test_distillation_opus_unparseable_json(self, mock_opus, workspace_dir, mock_config):
         """Distillation handles unparseable Opus JSON gracefully."""
         journal_dir = workspace_dir / "journal"
@@ -1070,14 +1079,14 @@ class TestDistillation:
 
         mock_opus.return_value = ("This is not JSON at all {{{broken", 0.5)
 
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.notedb.soul_snippets import run_journal_distillation
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import run_journal_distillation
             result = run_journal_distillation(dry_run=True, force_distill=True)
 
         assert len(result["errors"]) >= 1
         assert "parse" in result["errors"][0].lower()
 
-    @patch("datastore.notedb.soul_snippets.call_deep_reasoning")
+    @patch("datastore.insightdb.soul_snippets.call_deep_reasoning")
     def test_distillation_parent_file_missing(self, mock_opus, workspace_dir, mock_config):
         """Distillation skips files where the parent markdown doesn't exist."""
         journal_dir = workspace_dir / "journal"
@@ -1087,8 +1096,8 @@ class TestDistillation:
         )
         # Note: NOT creating SOUL.md
 
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.notedb.soul_snippets import run_journal_distillation
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import run_journal_distillation
             result = run_journal_distillation(dry_run=True, force_distill=True)
 
         # Opus should NOT be called since parent file is missing
@@ -1104,8 +1113,8 @@ class TestDistillation:
 class TestWriteJournalEdgeCases:
     def test_date_defaults_to_today(self, workspace_dir, mock_config):
         """write_journal_entry with date_str=None defaults to today."""
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.notedb.soul_snippets import write_journal_entry
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import write_journal_entry
             result = write_journal_entry("SOUL.md", "Auto-dated entry.", "Compaction")
         assert result is True
         content = (workspace_dir / "journal" / "SOUL.journal.md").read_text()
@@ -1114,15 +1123,15 @@ class TestWriteJournalEdgeCases:
 
     def test_whitespace_only_content_skipped(self, workspace_dir, mock_config):
         """write_journal_entry rejects whitespace-only content."""
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.notedb.soul_snippets import write_journal_entry
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import write_journal_entry
             result = write_journal_entry("SOUL.md", "   \n  \t  ", "Compaction", "2026-02-10")
         assert result is False
 
     def test_entry_content_with_header_like_text(self, workspace_dir, mock_config):
         """Entry body containing ## date pattern must not break parser."""
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.notedb.soul_snippets import write_journal_entry, read_journal_file
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import write_journal_entry, read_journal_file
             # Write an entry whose body contains something that looks like a header
             write_journal_entry("SOUL.md",
                 "I remembered that on ## 2025-01-01 — something happened.\nBut that was a memory, not a new entry.",
@@ -1146,8 +1155,8 @@ class TestReadJournalEdgeCases:
             "## 2026-02-09 — Compaction\n"
             "This one has content.\n"
         )
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.notedb.soul_snippets import read_journal_file
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import read_journal_file
             _, entries = read_journal_file("SOUL.md")
         # Only the entry with content should be returned
         assert len(entries) == 1
@@ -1161,8 +1170,8 @@ class TestReadJournalEdgeCases:
             "## 2026-02-10 — Reset\n"
             "Entry without title header.\n"
         )
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.notedb.soul_snippets import read_journal_file
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import read_journal_file
             _, entries = read_journal_file("SOUL.md")
         assert len(entries) == 1
         assert entries[0]["content"] == "Entry without title header."
@@ -1178,8 +1187,8 @@ class TestArchiveAllEntries:
             "## 2026-02-10 — Reset\n"
             "Only entry.\n"
         )
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.notedb.soul_snippets import archive_entries
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import archive_entries
             archive_entries("SOUL.md", [
                 {"date": "2026-02-10", "trigger": "Reset", "content": "Only entry."}
             ])
@@ -1195,11 +1204,11 @@ class TestArchiveAllEntries:
 class TestDistillationStateEdgeCases:
     def test_corrupt_state_json(self, workspace_dir, mock_config, caplog):
         """Corrupt state JSON returns empty dict."""
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
             journal_dir = workspace_dir / "journal"
             journal_dir.mkdir()
             (journal_dir / ".distillation-state.json").write_text("NOT VALID JSON{{{")
-            from datastore.notedb.soul_snippets import _get_distillation_state
+            from datastore.insightdb.soul_snippets import _get_distillation_state
             caplog.set_level("WARNING")
             state = _get_distillation_state()
         assert state == {}
@@ -1207,15 +1216,15 @@ class TestDistillationStateEdgeCases:
 
     def test_corrupt_date_triggers_distillation(self, workspace_dir, mock_config):
         """Invalid date string in state triggers distillation (safe fallback)."""
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.notedb.soul_snippets import _save_distillation_state, _is_distillation_due
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import _save_distillation_state, _is_distillation_due
             _save_distillation_state({"SOUL.md": {"last_distilled": "not-a-date"}})
             assert _is_distillation_due("SOUL.md") is True
 
     def test_quaid_now_overrides_distillation_clock(self, workspace_dir, mock_config):
         """QUAID_NOW drives distillation interval checks for deterministic replay."""
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.notedb.soul_snippets import _save_distillation_state, _is_distillation_due
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import _save_distillation_state, _is_distillation_due
             _save_distillation_state({"SOUL.md": {"last_distilled": "2026-03-01"}})
             with patch.dict(os.environ, {"QUAID_NOW": "2026-03-05T00:00:00"}, clear=False):
                 assert _is_distillation_due("SOUL.md") is False
@@ -1226,7 +1235,7 @@ class TestDistillationStateEdgeCases:
 class TestInsertIntoFileEdgeCases:
     def test_section_not_found_appends_to_end(self, workspace_dir):
         """_insert_into_file appends at end when section heading is not found."""
-        from datastore.notedb.soul_snippets import _insert_into_file
+        from datastore.insightdb.soul_snippets import _insert_into_file
         parent = workspace_dir / "identity" / "SOUL.md"
         parent.write_text("# SOUL\n\nI am Alfie.\n")
         result = _insert_into_file("SOUL.md", "Appended text.", "NonexistentSection")
@@ -1239,8 +1248,8 @@ class TestInsertIntoFileEdgeCases:
 
 class TestTokenWindowing:
     def test_build_token_windows_splits_on_budget(self, workspace_dir, mock_config):
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.notedb.soul_snippets import _build_token_windows
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import _build_token_windows
 
             items = ["aaa", "bbb", "ccc"]
             windows = _build_token_windows(
@@ -1255,7 +1264,7 @@ class TestTokenWindowing:
 
     def test_end_insert_no_trailing_newline(self, workspace_dir):
         """_insert_into_file handles files without trailing newline."""
-        from datastore.notedb.soul_snippets import _insert_into_file
+        from datastore.insightdb.soul_snippets import _insert_into_file
         parent = workspace_dir / "identity" / "SOUL.md"
         parent.write_text("# SOUL\n\nI am Alfie.")  # No trailing newline
         result = _insert_into_file("SOUL.md", "New line.", "END")
@@ -1277,8 +1286,8 @@ class TestMigrationFromSnippets:
             "- I noticed something about trust.\n"
             "- The way we work together feels natural.\n"
         )
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.notedb.soul_snippets import migrate_snippets_to_journal
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import migrate_snippets_to_journal
             migrated = migrate_snippets_to_journal()
         assert migrated == 2
         # Old file should be deleted
@@ -1292,14 +1301,14 @@ class TestMigrationFromSnippets:
 
     def test_empty_snippets_file_deleted(self, workspace_dir, mock_config):
         (workspace_dir / "SOUL.snippets.md").write_text("")
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.notedb.soul_snippets import migrate_snippets_to_journal
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import migrate_snippets_to_journal
             migrate_snippets_to_journal()
         assert not (workspace_dir / "SOUL.snippets.md").exists()
 
     def test_no_snippets_files_noop(self, workspace_dir, mock_config):
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.notedb.soul_snippets import migrate_snippets_to_journal
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import migrate_snippets_to_journal
             migrated = migrate_snippets_to_journal()
         assert migrated == 0
 
@@ -1313,8 +1322,8 @@ class TestMigrationFromSnippets:
             "## Reset — 2026-02-09 10:00:00\n"
             "- Earlier insight.\n"
         )
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.notedb.soul_snippets import migrate_snippets_to_journal, read_journal_file
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import migrate_snippets_to_journal, read_journal_file
             migrated = migrate_snippets_to_journal()
             _, entries = read_journal_file("SOUL.md")
 
@@ -1334,8 +1343,8 @@ class TestMigrationFromSnippets:
 class TestDisabledConfig:
     def test_disabled_skips(self, workspace_dir, mock_config):
         mock_config.docs.journal.enabled = False
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.notedb.soul_snippets import run_journal_distillation
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import run_journal_distillation
             result = run_journal_distillation(dry_run=True)
         assert result.get("skipped") is True
 
@@ -1347,13 +1356,13 @@ class TestDisabledConfig:
 
 class TestLegacyReadSnippetsFile:
     def test_no_file_returns_empty(self, workspace_dir):
-        from datastore.notedb.soul_snippets import read_snippets_file
+        from datastore.insightdb.soul_snippets import read_snippets_file
         content, sections = read_snippets_file("SOUL.md")
         assert content == ""
         assert sections == []
 
     def test_parses_single_section(self, workspace_dir):
-        from datastore.notedb.soul_snippets import read_snippets_file
+        from datastore.insightdb.soul_snippets import read_snippets_file
         (workspace_dir / "SOUL.snippets.md").write_text(
             "# SOUL — Pending Snippets\n\n"
             "## Compaction — 2026-02-10 14:30:22\n"
@@ -1367,8 +1376,8 @@ class TestLegacyReadSnippetsFile:
 
 class TestMemoryProjectionFromSnippets:
     def test_memory_snippet_write_keeps_pending_snippet_out_of_environment_md(self, workspace_dir, mock_config):
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.notedb.soul_snippets import write_snippet_entry
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import write_snippet_entry
 
             result = write_snippet_entry(
                 "ENVIRONMENT.md",
@@ -1388,8 +1397,8 @@ class TestMemoryProjectionFromSnippets:
         memory_path = workspace_dir / "identity" / "ENVIRONMENT.md"
         memory_path.write_text("# MEMORY\n\nUser-authored durable memory.\n", encoding="utf-8")
 
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.notedb.soul_snippets import write_snippet_entry
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import write_snippet_entry
 
             result = write_snippet_entry(
                 "ENVIRONMENT.md",
@@ -1412,8 +1421,8 @@ class TestMemoryProjectionFromSnippets:
             encoding="utf-8",
         )
 
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.notedb.soul_snippets import write_snippet_entry
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import write_snippet_entry
 
             result = write_snippet_entry(
                 "ENVIRONMENT.md",
@@ -1432,8 +1441,8 @@ class TestMemoryProjectionFromSnippets:
         assert "Legacy projection should be refreshed from snippets." in snippets_content
 
     def test_memory_snippet_write_allows_same_day_same_trigger_new_fact(self, workspace_dir, mock_config):
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.notedb.soul_snippets import write_snippet_entry
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import write_snippet_entry
 
             first = write_snippet_entry(
                 "ENVIRONMENT.md",
@@ -1457,8 +1466,8 @@ class TestMemoryProjectionFromSnippets:
         assert "Cedric Morn is Owner's test godfather." in snippets_content
 
     def test_memory_snippet_write_skips_duplicate_payload(self, workspace_dir, mock_config):
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.notedb.soul_snippets import write_snippet_entry
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import write_snippet_entry
 
             first = write_snippet_entry(
                 "ENVIRONMENT.md",
@@ -1482,8 +1491,8 @@ class TestMemoryProjectionFromSnippets:
         user_path = workspace_dir / "identity" / "USER.md"
         user_path.write_text("# USER\n\nExisting user-authored context.\n", encoding="utf-8")
 
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.notedb.soul_snippets import write_snippet_entry
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import write_snippet_entry
 
             result = write_snippet_entry(
                 "USER.md",
@@ -1512,8 +1521,8 @@ class TestMemoryProjectionFromSnippets:
             encoding="utf-8",
         )
 
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.notedb.soul_snippets import write_snippet_entry
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import write_snippet_entry
 
             result = write_snippet_entry(
                 "USER.md",
@@ -1532,7 +1541,7 @@ class TestMemoryProjectionFromSnippets:
         assert "Cedric Morn is Owner's test godfather." in snippets
 
     def test_user_projection_block_removed_when_snippets_are_consumed(self, workspace_dir, mock_config):
-        from datastore.notedb.soul_snippets import (
+        from datastore.insightdb.soul_snippets import (
             _GENERATED_USER_SNIPPETS_END,
             _GENERATED_USER_SNIPPETS_START,
             _root_file_path,
@@ -1561,8 +1570,8 @@ class TestMemoryProjectionFromSnippets:
             encoding="utf-8",
         )
 
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.notedb.soul_snippets import apply_decisions
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import apply_decisions
             assert "<!-- generated by quaid user snippets projection start -->" in user_path.read_text(encoding="utf-8")
 
             decisions = [
@@ -1587,7 +1596,7 @@ class TestMemoryProjectionFromSnippets:
 
     def test_user_projection_block_is_not_review_context(self, workspace_dir):
         """The generated USER snippet projection is queue state, not durable identity."""
-        from datastore.notedb.soul_snippets import (
+        from datastore.insightdb.soul_snippets import (
             _GENERATED_USER_SNIPPETS_END,
             _GENERATED_USER_SNIPPETS_START,
             build_review_prompt,
@@ -1621,7 +1630,7 @@ class TestMemoryProjectionFromSnippets:
         assert prompt.count(snippet) == 1
 
     def test_projection_marker_strips_from_any_identity_file(self):
-        from datastore.notedb.soul_snippets import (
+        from datastore.insightdb.soul_snippets import (
             _GENERATED_USER_SNIPPETS_END,
             _GENERATED_USER_SNIPPETS_START,
             _strip_generated_projection_for_review,
@@ -1642,7 +1651,7 @@ class TestMemoryProjectionFromSnippets:
         assert _GENERATED_USER_SNIPPETS_START not in stripped
 
     def test_malformed_projection_marker_raises_under_fail_hard(self, monkeypatch):
-        from datastore.notedb import soul_snippets
+        from datastore.insightdb import soul_snippets
 
         monkeypatch.setattr(soul_snippets, "is_fail_hard_enabled", lambda: True)
 
@@ -1655,11 +1664,11 @@ class TestMemoryProjectionFromSnippets:
             )
 
     def test_malformed_projection_marker_strips_tail_without_fail_hard(self, monkeypatch, caplog):
-        from datastore.notedb import soul_snippets
+        from datastore.insightdb import soul_snippets
 
         monkeypatch.setattr(soul_snippets, "is_fail_hard_enabled", lambda: False)
 
-        with caplog.at_level(logging.WARNING, logger="datastore.notedb.soul_snippets"):
+        with caplog.at_level(logging.WARNING, logger="datastore.insightdb.soul_snippets"):
             stripped = soul_snippets._strip_generated_projection_for_review(
                 "USER.md",
                 "# USER\n\nAuthored.\n\n"
@@ -1672,7 +1681,7 @@ class TestMemoryProjectionFromSnippets:
         assert "missing end marker" in caplog.text
 
     def test_user_projection_block_does_not_make_fold_duplicate(self, workspace_dir, mock_config):
-        from datastore.notedb.soul_snippets import (
+        from datastore.insightdb.soul_snippets import (
             _GENERATED_USER_SNIPPETS_END,
             _GENERATED_USER_SNIPPETS_START,
             _root_file_path,
@@ -1702,8 +1711,8 @@ class TestMemoryProjectionFromSnippets:
             encoding="utf-8",
         )
 
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.notedb.soul_snippets import apply_decisions
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import apply_decisions
 
             stats = apply_decisions(
                 [{"file": "USER.md", "snippet_index": 1, "action": "FOLD", "insert_after": "END"}],
@@ -1726,7 +1735,7 @@ class TestMemoryProjectionFromSnippets:
         assert snippet in content
 
     def test_user_stub_discards_leave_pending_snippets_in_place(self, workspace_dir, mock_config):
-        from datastore.notedb.soul_snippets import (
+        from datastore.insightdb.soul_snippets import (
             _GENERATED_USER_SNIPPETS_END,
             _GENERATED_USER_SNIPPETS_START,
             _root_file_path,
@@ -1757,8 +1766,8 @@ class TestMemoryProjectionFromSnippets:
             encoding="utf-8",
         )
 
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.notedb.soul_snippets import apply_decisions
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import apply_decisions
 
             assert pending_path.exists()
 
@@ -1793,7 +1802,7 @@ class TestMemoryProjectionFromSnippets:
 
 class TestLegacyApplyDecisions:
     def test_discard_counts(self, workspace_dir, mock_config):
-        from datastore.notedb.soul_snippets import apply_decisions
+        from datastore.insightdb.soul_snippets import apply_decisions
         all_snippets = {
             "SOUL.md": {
                 "parent_content": "# SOUL\nExisting content.",
@@ -1808,7 +1817,7 @@ class TestLegacyApplyDecisions:
         assert stats["discarded"] == 1
 
     def test_fold_inserts_text(self, workspace_dir, mock_config):
-        from datastore.notedb.soul_snippets import apply_decisions
+        from datastore.insightdb.soul_snippets import apply_decisions
         parent_path = workspace_dir / "identity" / "SOUL.md"
         parent_path.write_text("# SOUL\n\nI am Alfie.\n")
         snippets_path = workspace_dir / "SOUL.snippets.md"
@@ -1832,7 +1841,7 @@ class TestLegacyApplyDecisions:
         assert "I value trust above all." in parent_path.read_text()
 
     def test_invalid_snippet_index_error(self, workspace_dir):
-        from datastore.notedb.soul_snippets import apply_decisions
+        from datastore.insightdb.soul_snippets import apply_decisions
         all_snippets = {
             "SOUL.md": {"parent_content": "", "snippets": ["one"], "config": {}}
         }
@@ -1841,7 +1850,7 @@ class TestLegacyApplyDecisions:
         assert len(stats["errors"]) == 1
 
     def test_unknown_file_decision_is_ignored(self, workspace_dir):
-        from datastore.notedb.soul_snippets import apply_decisions
+        from datastore.insightdb.soul_snippets import apply_decisions
         all_snippets = {
             "SOUL.md": {"parent_content": "", "snippets": ["one"], "config": {}},
             "USER.md": {"parent_content": "", "snippets": ["two"], "config": {}},
@@ -1854,7 +1863,7 @@ class TestLegacyApplyDecisions:
         assert stats["errors"] == []
 
     def test_unknown_action_defaults_to_discard(self, workspace_dir):
-        from datastore.notedb.soul_snippets import apply_decisions
+        from datastore.insightdb.soul_snippets import apply_decisions
         all_snippets = {
             "SOUL.md": {"parent_content": "# SOUL\n", "snippets": ["A snippet."], "config": {}}
         }
@@ -1863,7 +1872,7 @@ class TestLegacyApplyDecisions:
         assert stats["discarded"] == 1
 
     def test_at_maxlines_is_non_fatal_and_clears_snippet(self, workspace_dir, mock_config):
-        from datastore.notedb.soul_snippets import apply_decisions
+        from datastore.insightdb.soul_snippets import apply_decisions
 
         parent_path = workspace_dir / "identity" / "SOUL.md"
         parent_path.write_text("# SOUL\n" + "line\n" * 80)  # at limit: 81 lines total
@@ -1889,7 +1898,7 @@ class TestLegacyApplyDecisions:
         assert stats["errors"] == []
 
     def test_unknown_file_is_remapped_when_only_one_target_exists(self, workspace_dir, mock_config):
-        from datastore.notedb.soul_snippets import apply_decisions
+        from datastore.insightdb.soul_snippets import apply_decisions
 
         parent_path = workspace_dir / "SPEAKERS.md"
         parent_path.write_text("# SPEAKERS\n\nBaseline.\n")
@@ -1923,7 +1932,7 @@ class TestLegacyApplyDecisions:
 
 class TestInsertIntoFile:
     def test_section_targeted_insert(self, workspace_dir):
-        from datastore.notedb.soul_snippets import _insert_into_file
+        from datastore.insightdb.soul_snippets import _insert_into_file
         parent = workspace_dir / "identity" / "SOUL.md"
         parent.write_text("# SOUL\n\n## Identity\n\nI am Alfie.\n\n## Values\n\nI care about truth.\n")
         result = _insert_into_file("SOUL.md", "I am also curious.", "Identity")
@@ -1935,7 +1944,7 @@ class TestInsertIntoFile:
         assert identity_pos < snippet_pos < values_pos
 
     def test_maxlines_is_soft_target(self, workspace_dir):
-        from datastore.notedb.soul_snippets import _insert_into_file
+        from datastore.insightdb.soul_snippets import _insert_into_file
         parent = workspace_dir / "identity" / "SOUL.md"
         parent.write_text("# SOUL\n" + "line\n" * 9)  # 10 lines
         result = _insert_into_file("SOUL.md", "Should not appear.", "END", max_lines=10)
@@ -1943,12 +1952,12 @@ class TestInsertIntoFile:
         assert "Should not appear." in parent.read_text()
 
     def test_missing_file_returns_false(self, workspace_dir):
-        from datastore.notedb.soul_snippets import _insert_into_file
+        from datastore.insightdb.soul_snippets import _insert_into_file
         with pytest.raises(RuntimeError, match="Identity file missing"):
             _insert_into_file("NONEXISTENT.md", "text", "END")
 
     def test_hash_prefixed_text_gets_bullet(self, workspace_dir):
-        from datastore.notedb.soul_snippets import _insert_into_file
+        from datastore.insightdb.soul_snippets import _insert_into_file
         parent = workspace_dir / "identity" / "SOUL.md"
         parent.write_text("# SOUL\n\nContent.\n")
         _insert_into_file("SOUL.md", "# My heading-like text", "END")
@@ -1964,7 +1973,7 @@ class TestInsertIntoFile:
 
 class TestBackupFile:
     def test_creates_backup(self, workspace_dir):
-        from datastore.notedb.soul_snippets import backup_file
+        from datastore.insightdb.soul_snippets import backup_file
         src = workspace_dir / "identity" / "SOUL.md"
         src.write_text("# SOUL\nOriginal content.")
         result = backup_file("SOUL.md")
@@ -1972,7 +1981,7 @@ class TestBackupFile:
         assert Path(result).exists()
 
     def test_no_file_returns_none(self, workspace_dir):
-        from datastore.notedb.soul_snippets import backup_file
+        from datastore.insightdb.soul_snippets import backup_file
         result = backup_file("NONEXISTENT.md")
         assert result is None
 
@@ -2015,8 +2024,8 @@ class TestSnippetReview:
             encoding="utf-8",
         )
 
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.notedb.soul_snippets import run_soul_snippets_review
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import run_soul_snippets_review
             result = run_soul_snippets_review(dry_run=False)
 
         assert result["total_snippets"] == 0
@@ -2025,13 +2034,13 @@ class TestSnippetReview:
 
     def test_no_snippets_returns_zero(self, workspace_dir, mock_config):
         """No .snippets.md files returns zero total."""
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.notedb.soul_snippets import run_soul_snippets_review
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import run_soul_snippets_review
             result = run_soul_snippets_review(dry_run=True)
         assert result["total_snippets"] == 0
         assert result["folded"] == 0
 
-    @patch("datastore.notedb.soul_snippets.call_deep_reasoning")
+    @patch("datastore.insightdb.soul_snippets.call_deep_reasoning")
     def test_apply_review_clears_stale_user_projection_without_user_snippets(
         self, mock_opus, workspace_dir, mock_config
     ):
@@ -2060,8 +2069,8 @@ class TestSnippetReview:
             ]
         }), 0.5)
 
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.notedb.soul_snippets import run_soul_snippets_review
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import run_soul_snippets_review
             result = run_soul_snippets_review(dry_run=False)
 
         assert result["total_snippets"] == 1
@@ -2070,7 +2079,7 @@ class TestSnippetReview:
         assert "<!-- generated by quaid user snippets projection start -->" not in content
         assert "stale projected line" not in content
 
-    @patch("datastore.notedb.soul_snippets.call_deep_reasoning")
+    @patch("datastore.insightdb.soul_snippets.call_deep_reasoning")
     def test_dry_run_does_not_modify(self, mock_opus, workspace_dir, mock_config):
         """Dry run reviews snippets but does not modify parent files."""
         # Create a snippets file
@@ -2088,8 +2097,8 @@ class TestSnippetReview:
             ]
         }), 1.0)
 
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.notedb.soul_snippets import run_soul_snippets_review
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import run_soul_snippets_review
             result = run_soul_snippets_review(dry_run=True)
 
         assert result["total_snippets"] == 1
@@ -2097,7 +2106,7 @@ class TestSnippetReview:
         # Dry run: parent file should NOT be changed
         assert "trust" not in (workspace_dir / "identity" / "SOUL.md").read_text()
 
-    @patch("datastore.notedb.soul_snippets.call_deep_reasoning")
+    @patch("datastore.insightdb.soul_snippets.call_deep_reasoning")
     def test_snippet_review_calls_deep_reasoning_without_model_tier(self, mock_opus, workspace_dir, mock_config):
         """Regression: snippet review must not pass unsupported kwargs to call_deep_reasoning."""
         (workspace_dir / "SOUL.snippets.md").write_text(
@@ -2113,8 +2122,8 @@ class TestSnippetReview:
             ]
         }), 0.6)
 
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.notedb.soul_snippets import run_soul_snippets_review
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import run_soul_snippets_review
             run_soul_snippets_review(dry_run=True)
 
         mock_opus.assert_called_once()
@@ -2126,7 +2135,7 @@ class TestSnippetReview:
         assert isinstance(kwargs.get("max_tokens"), int)
         assert isinstance(kwargs.get("timeout"), (int, float))
 
-    @patch("datastore.notedb.soul_snippets.call_deep_reasoning")
+    @patch("datastore.insightdb.soul_snippets.call_deep_reasoning")
     def test_snippet_review_writes_apply_telemetry(self, mock_opus, workspace_dir, mock_config):
         (workspace_dir / "SOUL.snippets.md").write_text(
             "# SOUL — Pending Snippets\n\n"
@@ -2142,8 +2151,8 @@ class TestSnippetReview:
             ]
         }), 1.2)
 
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.notedb.soul_snippets import run_soul_snippets_review
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import run_soul_snippets_review
             run_soul_snippets_review(dry_run=False)
 
         telemetry_path = workspace_dir / "logs" / "soul_review_telemetry.jsonl"
@@ -2158,7 +2167,7 @@ class TestSnippetReview:
         assert "before_tokens" in apply_events[0]
         assert "after_tokens" in apply_events[0]
 
-    @patch("datastore.notedb.soul_snippets.call_deep_reasoning")
+    @patch("datastore.insightdb.soul_snippets.call_deep_reasoning")
     def test_apply_folds_into_parent(self, mock_opus, workspace_dir, mock_config):
         """Apply mode folds snippets into parent file and cleans up."""
         (workspace_dir / "SOUL.snippets.md").write_text(
@@ -2175,8 +2184,8 @@ class TestSnippetReview:
             ]
         }), 1.0)
 
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.notedb.soul_snippets import run_soul_snippets_review
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import run_soul_snippets_review
             result = run_soul_snippets_review(dry_run=False)
 
         assert result["folded"] == 1
@@ -2202,7 +2211,7 @@ class TestSnippetReview:
         )
         (workspace_dir / "identity" / "USER.md").write_text("# USER\n\nKnown facts.\n", encoding="utf-8")
 
-        import datastore.notedb.soul_snippets as soul_snippets
+        import datastore.insightdb.soul_snippets as soul_snippets
 
         mock_config.docs.journal.max_tokens = 4096
         monkeypatch.setattr(soul_snippets, "_REVIEW_WINDOW_TOKEN_CAP", 10_000)
@@ -2236,8 +2245,8 @@ class TestSnippetReview:
         monkeypatch.setattr(soul_snippets, "build_review_prompt", _fake_build_review_prompt)
         monkeypatch.setattr(soul_snippets, "call_deep_reasoning", _fake_call)
 
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.notedb.soul_snippets import run_soul_snippets_review
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import run_soul_snippets_review
 
             result = run_soul_snippets_review(dry_run=True)
 
@@ -2261,7 +2270,7 @@ class TestSnippetReview:
         )
         (workspace_dir / "identity" / "USER.md").write_text("# USER\n\nKnown facts.\n", encoding="utf-8")
 
-        import datastore.notedb.soul_snippets as soul_snippets
+        import datastore.insightdb.soul_snippets as soul_snippets
 
         mock_config.docs.journal.max_tokens = 900
         monkeypatch.setattr(soul_snippets, "_REVIEW_WINDOW_TOKEN_CAP", 10_000)
@@ -2290,8 +2299,8 @@ class TestSnippetReview:
         monkeypatch.setattr(soul_snippets, "build_review_prompt", _fake_build_review_prompt)
         monkeypatch.setattr(soul_snippets, "call_deep_reasoning", _fake_call)
 
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.notedb.soul_snippets import run_soul_snippets_review
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import run_soul_snippets_review
 
             result = run_soul_snippets_review(dry_run=True)
 
@@ -2302,8 +2311,8 @@ class TestSnippetReview:
     def test_disabled_skips(self, workspace_dir, mock_config):
         """Snippets disabled returns skipped."""
         mock_config.docs.journal.snippets_enabled = False
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.notedb.soul_snippets import run_soul_snippets_review
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import run_soul_snippets_review
             result = run_soul_snippets_review(dry_run=True)
         assert result.get("skipped") is True
         assert result["reason"] == "snippets_disabled"
@@ -2311,12 +2320,12 @@ class TestSnippetReview:
     def test_enabled_false_disables_snippets(self, workspace_dir, mock_config):
         """enabled=False also disables snippets (snippets depend on enabled)."""
         mock_config.docs.journal.enabled = False
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.notedb.soul_snippets import run_soul_snippets_review
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import run_soul_snippets_review
             result = run_soul_snippets_review(dry_run=True)
         assert result.get("skipped") is True
 
-    @patch("datastore.notedb.soul_snippets.call_deep_reasoning")
+    @patch("datastore.insightdb.soul_snippets.call_deep_reasoning")
     def test_opus_empty_response(self, mock_opus, workspace_dir, mock_config):
         """Empty Opus response returns error, doesn't crash."""
         (workspace_dir / "SOUL.snippets.md").write_text(
@@ -2327,14 +2336,14 @@ class TestSnippetReview:
         (workspace_dir / "identity" / "SOUL.md").write_text("# SOUL\n\nI am Alfie.\n")
         mock_opus.return_value = ("", 0.5)
 
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.notedb.soul_snippets import run_soul_snippets_review
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import run_soul_snippets_review
             result = run_soul_snippets_review(dry_run=True)
 
         assert result["total_snippets"] == 1
         assert len(result["errors"]) >= 1
 
-    @patch("datastore.notedb.soul_snippets.call_deep_reasoning")
+    @patch("datastore.insightdb.soul_snippets.call_deep_reasoning")
     def test_opus_unparseable_json(self, mock_opus, workspace_dir, mock_config):
         """Unparseable Opus response returns error gracefully."""
         (workspace_dir / "SOUL.snippets.md").write_text(
@@ -2345,14 +2354,14 @@ class TestSnippetReview:
         (workspace_dir / "identity" / "SOUL.md").write_text("# SOUL\n\nI am Alfie.\n")
         mock_opus.return_value = ("This is not JSON {{{broken", 0.5)
 
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.notedb.soul_snippets import run_soul_snippets_review
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import run_soul_snippets_review
             result = run_soul_snippets_review(dry_run=True)
 
         assert result["total_snippets"] == 1
         assert len(result["errors"]) >= 1
 
-    @patch("datastore.notedb.soul_snippets.call_deep_reasoning")
+    @patch("datastore.insightdb.soul_snippets.call_deep_reasoning")
     def test_opus_empty_decisions(self, mock_opus, workspace_dir, mock_config):
         """Opus returns valid JSON but empty decisions list."""
         (workspace_dir / "SOUL.snippets.md").write_text(
@@ -2363,15 +2372,15 @@ class TestSnippetReview:
         (workspace_dir / "identity" / "SOUL.md").write_text("# SOUL\n\nI am Alfie.\n")
         mock_opus.return_value = (json.dumps({"decisions": []}), 0.5)
 
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.notedb.soul_snippets import run_soul_snippets_review
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import run_soul_snippets_review
             result = run_soul_snippets_review(dry_run=True)
 
         assert result["total_snippets"] == 1
         assert result["folded"] == 0
         assert result["discarded"] == 0
 
-    @patch("datastore.notedb.soul_snippets.call_deep_reasoning")
+    @patch("datastore.insightdb.soul_snippets.call_deep_reasoning")
     def test_single_snippet_empty_decisions_retries_once(self, mock_opus, workspace_dir, mock_config):
         """A singleton empty-decisions response should get one stricter retry."""
         (workspace_dir / "ENVIRONMENT.snippets.md").write_text(
@@ -2400,8 +2409,8 @@ class TestSnippetReview:
             }), 0.5),
         ]
 
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.notedb.soul_snippets import run_soul_snippets_review
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import run_soul_snippets_review
             result = run_soul_snippets_review(dry_run=True)
 
         assert result["total_snippets"] == 1
@@ -2426,8 +2435,8 @@ class TestDualSystem:
             "## Compaction — 2026-02-10 14:30:22\n"
             "- Active snippet that should remain.\n"
         )
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.notedb.soul_snippets import run_journal_distillation
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import run_journal_distillation
             run_journal_distillation(dry_run=True)
 
         # Snippet file should still exist (not migrated away)
@@ -2451,8 +2460,8 @@ class TestDualSystem:
             "A reflective journal entry.\n"
         )
 
-        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.notedb.soul_snippets import read_snippets_file, read_journal_file
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import read_snippets_file, read_journal_file
 
             _, snippets = read_snippets_file("SOUL.md")
             _, journal_entries = read_journal_file("SOUL.md")
@@ -2486,13 +2495,13 @@ class TestResolveWritableFilePath:
 
     def test_returns_none_when_neither_path_exists(self, workspace_dir):
         """Bug regression: must return None (not raise) when file is absent."""
-        from datastore.notedb.soul_snippets import _resolve_writable_file_path
+        from datastore.insightdb.soul_snippets import _resolve_writable_file_path
         result = _resolve_writable_file_path("NONEXISTENT.md")
         assert result is None
 
     def test_returns_root_path_when_only_root_exists(self, workspace_dir):
         """Falls back to the root (identity) file if no project copy exists."""
-        from datastore.notedb.soul_snippets import _resolve_writable_file_path
+        from datastore.insightdb.soul_snippets import _resolve_writable_file_path
         root = workspace_dir / "identity" / "SOUL.md"
         root.write_text("# SOUL\n\nRoot only.\n")
         result = _resolve_writable_file_path("SOUL.md")
@@ -2502,7 +2511,7 @@ class TestResolveWritableFilePath:
 
     def test_prefers_root_path_over_project(self, workspace_dir):
         """Identity copy stays canonical even when a project base exists."""
-        from datastore.notedb.soul_snippets import _resolve_writable_file_path
+        from datastore.insightdb.soul_snippets import _resolve_writable_file_path
         root = workspace_dir / "identity" / "SOUL.md"
         root.write_text("# SOUL\n\nRoot.\n")
         project = workspace_dir / "projects" / "quaid" / "SOUL.md"
@@ -2513,7 +2522,7 @@ class TestResolveWritableFilePath:
 
     def test_seeds_missing_identity_from_project_base(self, workspace_dir):
         """Missing identity files are seeded from projects/quaid base templates."""
-        from datastore.notedb.soul_snippets import _resolve_writable_file_path
+        from datastore.insightdb.soul_snippets import _resolve_writable_file_path
         project = workspace_dir / "projects" / "quaid" / "SOUL.md"
         project.parent.mkdir(parents=True, exist_ok=True)
         project.write_text("# SOUL\n\nProject base.\n")
@@ -2523,7 +2532,7 @@ class TestResolveWritableFilePath:
 
     def test_returns_none_for_arbitrary_missing_file(self, workspace_dir):
         """Non-identity filename with no matching file returns None."""
-        from datastore.notedb.soul_snippets import _resolve_writable_file_path
+        from datastore.insightdb.soul_snippets import _resolve_writable_file_path
         result = _resolve_writable_file_path("TOTALLY_ABSENT.md")
         assert result is None
 
@@ -2533,13 +2542,13 @@ class TestInsertIntoFileBugRegression:
 
     def test_missing_file_raises_under_fail_hard(self, workspace_dir):
         """_insert_into_file must raise loudly when fail-hard is enabled."""
-        from datastore.notedb.soul_snippets import _insert_into_file
+        from datastore.insightdb.soul_snippets import _insert_into_file
         with pytest.raises(RuntimeError, match="Identity file missing"):
             _insert_into_file("GHOST.md", "Some text.", "END")
 
     def test_existing_file_returns_true(self, workspace_dir):
         """_insert_into_file returns True when target exists and insert succeeds."""
-        from datastore.notedb.soul_snippets import _insert_into_file
+        from datastore.insightdb.soul_snippets import _insert_into_file
         parent = workspace_dir / "identity" / "SOUL.md"
         parent.write_text("# SOUL\n\nBase content.\n")
         result = _insert_into_file("SOUL.md", "New thought.", "END")
@@ -2548,7 +2557,7 @@ class TestInsertIntoFileBugRegression:
 
     def test_insert_into_file_does_not_overwrite_protected_region(self, workspace_dir):
         """Text inserted at END is appended after protected regions, not inside them."""
-        from datastore.notedb.soul_snippets import _insert_into_file
+        from datastore.insightdb.soul_snippets import _insert_into_file
         parent = workspace_dir / "identity" / "SOUL.md"
         protected_block = (
             "# SOUL\n\n"
@@ -2570,7 +2579,7 @@ class TestInsertIntoFileBugRegression:
 
     def test_insert_skips_protected_section_heading_and_finds_next(self, workspace_dir):
         """_insert_into_file skips section headings inside protected regions."""
-        from datastore.notedb.soul_snippets import _insert_into_file
+        from datastore.insightdb.soul_snippets import _insert_into_file
         parent = workspace_dir / "identity" / "SOUL.md"
         content = (
             "# SOUL\n\n"
@@ -2599,7 +2608,7 @@ class TestApplyDecisionsFileMissingBug:
     def test_fold_file_missing_records_error_not_attributeerror(self, workspace_dir):
         """When _insert_into_file returns False AND file is missing, error is
         recorded as 'file missing' string — no AttributeError is raised."""
-        from datastore.notedb.soul_snippets import apply_decisions
+        from datastore.insightdb.soul_snippets import apply_decisions
 
         # DO NOT create the parent file — it must be absent
         all_snippets = {
@@ -2622,7 +2631,7 @@ class TestApplyDecisionsFileMissingBug:
 
     def test_fold_file_missing_does_not_count_as_folded(self, workspace_dir):
         """A FOLD that fails because the file is missing must NOT increment folded."""
-        from datastore.notedb.soul_snippets import apply_decisions
+        from datastore.insightdb.soul_snippets import apply_decisions
 
         all_snippets = {
             "SOUL.md": {
@@ -2640,7 +2649,7 @@ class TestApplyDecisionsFileMissingBug:
 
     def test_rewrite_file_missing_records_error_not_attributeerror(self, workspace_dir):
         """REWRITE with a missing target file records an error string, no exception."""
-        from datastore.notedb.soul_snippets import apply_decisions
+        from datastore.insightdb.soul_snippets import apply_decisions
 
         all_snippets = {
             "USER.md": {
@@ -2671,8 +2680,8 @@ class TestApplyDecisionsSkippedAtLimit:
 
     def test_skipped_at_limit_stat_incremented(self, workspace_dir):
         """When insert returns False but file is at maxLines, skipped_at_limit is set."""
-        from datastore.notedb import soul_snippets
-        from datastore.notedb.soul_snippets import apply_decisions
+        from datastore.insightdb import soul_snippets
+        from datastore.insightdb.soul_snippets import apply_decisions
 
         parent = workspace_dir / "identity" / "SOUL.md"
         # Write a file with exactly max_lines lines (81 including header)
@@ -2699,7 +2708,7 @@ class TestApplyDecisionsSkippedAtLimit:
         ]
 
         # Mock _insert_into_file to return False to simulate the "at limit" branch.
-        with patch("datastore.notedb.soul_snippets._insert_into_file", return_value=False):
+        with patch("datastore.insightdb.soul_snippets._insert_into_file", return_value=False):
             stats = apply_decisions(decisions, all_snippets, dry_run=False)
 
         assert stats["errors"] == []
@@ -2708,7 +2717,7 @@ class TestApplyDecisionsSkippedAtLimit:
 
     def test_skipped_at_limit_clears_snippet_from_file(self, workspace_dir):
         """Snippet is cleared from .snippets.md on skipped_at_limit to prevent retry loops."""
-        from datastore.notedb.soul_snippets import apply_decisions
+        from datastore.insightdb.soul_snippets import apply_decisions
 
         max_lines = 81
         parent = workspace_dir / "identity" / "SOUL.md"
@@ -2733,7 +2742,7 @@ class TestApplyDecisionsSkippedAtLimit:
              "insert_after": "END", "reason": "test"}
         ]
 
-        with patch("datastore.notedb.soul_snippets._insert_into_file", return_value=False):
+        with patch("datastore.insightdb.soul_snippets._insert_into_file", return_value=False):
             apply_decisions(decisions, all_snippets, dry_run=False)
 
         # Snippet file should have been cleaned (snippet removed or file deleted)
@@ -2746,7 +2755,7 @@ class TestApplyDecisionsFoldRewriteDiscard:
 
     def test_discard_removes_snippet_from_snippets_file(self, workspace_dir):
         """DISCARD counts and removes the snippet from .snippets.md."""
-        from datastore.notedb.soul_snippets import apply_decisions
+        from datastore.insightdb.soul_snippets import apply_decisions
 
         snippets_path = workspace_dir / "SOUL.snippets.md"
         snippets_path.write_text(
@@ -2777,7 +2786,7 @@ class TestApplyDecisionsFoldRewriteDiscard:
 
     def test_fold_duplicate_target_in_live_file_is_discarded(self, workspace_dir):
         """FOLD should discard when the target text is already present in the live file."""
-        from datastore.notedb.soul_snippets import apply_decisions
+        from datastore.insightdb.soul_snippets import apply_decisions
 
         parent = workspace_dir / "identity" / "SOUL.md"
         parent.write_text("# SOUL\n\nExisting.\n\nI value quiet precision.\n")
@@ -2812,7 +2821,7 @@ class TestApplyDecisionsFoldRewriteDiscard:
 
     def test_discard_does_not_write_to_parent_file(self, workspace_dir):
         """DISCARD must not insert anything into the parent markdown file."""
-        from datastore.notedb.soul_snippets import apply_decisions
+        from datastore.insightdb.soul_snippets import apply_decisions
 
         parent = workspace_dir / "identity" / "SOUL.md"
         parent.write_text("# SOUL\n\nExisting.\n")
@@ -2834,7 +2843,7 @@ class TestApplyDecisionsFoldRewriteDiscard:
 
     def test_rewrite_uses_rewritten_text_when_provided(self, workspace_dir):
         """REWRITE inserts rewritten_text, not original snippet text."""
-        from datastore.notedb.soul_snippets import apply_decisions
+        from datastore.insightdb.soul_snippets import apply_decisions
 
         parent = workspace_dir / "identity" / "SOUL.md"
         parent.write_text("# SOUL\n\nBase content.\n")
@@ -2868,7 +2877,7 @@ class TestApplyDecisionsFoldRewriteDiscard:
 
     def test_rewrite_falls_back_to_original_when_rewritten_text_missing(self, workspace_dir, caplog):
         """REWRITE with no rewritten_text falls back to original and logs a warning."""
-        from datastore.notedb.soul_snippets import apply_decisions
+        from datastore.insightdb.soul_snippets import apply_decisions
         import logging
 
         parent = workspace_dir / "identity" / "SOUL.md"
@@ -2893,7 +2902,7 @@ class TestApplyDecisionsFoldRewriteDiscard:
              # No rewritten_text key at all
              "insert_after": "END", "reason": "Missing text"}
         ]
-        with caplog.at_level(logging.WARNING, logger="datastore.notedb.soul_snippets"):
+        with caplog.at_level(logging.WARNING, logger="datastore.insightdb.soul_snippets"):
             stats = apply_decisions(decisions, all_snippets, dry_run=False)
 
         assert stats["rewritten"] == 1
@@ -2904,7 +2913,7 @@ class TestApplyDecisionsFoldRewriteDiscard:
 
     def test_rewrite_falls_back_to_original_when_rewritten_text_empty(self, workspace_dir):
         """REWRITE with empty rewritten_text string falls back to original."""
-        from datastore.notedb.soul_snippets import apply_decisions
+        from datastore.insightdb.soul_snippets import apply_decisions
 
         parent = workspace_dir / "identity" / "SOUL.md"
         parent.write_text("# SOUL\n\nBase content.\n")
@@ -2935,7 +2944,7 @@ class TestApplyDecisionsFoldRewriteDiscard:
 
     def test_dry_run_does_not_write_to_parent(self, workspace_dir):
         """dry_run=True: FOLD increments stats but does NOT write to the parent file."""
-        from datastore.notedb.soul_snippets import apply_decisions
+        from datastore.insightdb.soul_snippets import apply_decisions
 
         parent = workspace_dir / "identity" / "SOUL.md"
         parent.write_text("# SOUL\n\nOriginal only.\n")
@@ -2960,7 +2969,7 @@ class TestApplyDecisionsFoldRewriteDiscard:
 
     def test_dry_run_rewrite_increments_rewritten_stat(self, workspace_dir):
         """dry_run=True: REWRITE increments rewritten stat without writing."""
-        from datastore.notedb.soul_snippets import apply_decisions
+        from datastore.insightdb.soul_snippets import apply_decisions
 
         parent = workspace_dir / "identity" / "SOUL.md"
         parent.write_text("# SOUL\n\nOriginal.\n")
@@ -2984,7 +2993,7 @@ class TestApplyDecisionsFoldRewriteDiscard:
 
     def test_dry_run_does_not_clear_snippets_file(self, workspace_dir):
         """dry_run=True: .snippets.md is NOT modified even when DISCARD is chosen."""
-        from datastore.notedb.soul_snippets import apply_decisions
+        from datastore.insightdb.soul_snippets import apply_decisions
 
         snippets_path = workspace_dir / "SOUL.snippets.md"
         snippets_path.write_text(
@@ -3011,7 +3020,7 @@ class TestApplyDecisionsFoldRewriteDiscard:
 
     def test_invalid_snippet_index_logged_as_error_not_raised(self, workspace_dir):
         """Out-of-range snippet_index is recorded as an error, not an exception."""
-        from datastore.notedb.soul_snippets import apply_decisions
+        from datastore.insightdb.soul_snippets import apply_decisions
 
         parent = workspace_dir / "identity" / "SOUL.md"
         parent.write_text("# SOUL\n\nBase.\n")
@@ -3036,7 +3045,7 @@ class TestApplyDecisionsFoldRewriteDiscard:
 
     def test_zero_based_snippet_index_batch_is_accepted(self, workspace_dir):
         """A batch containing snippet_index=0 is treated as zero-based for that file."""
-        from datastore.notedb.soul_snippets import apply_decisions
+        from datastore.insightdb.soul_snippets import apply_decisions
 
         all_snippets = {
             "SOUL.md": {
@@ -3057,7 +3066,7 @@ class TestApplyDecisionsFoldRewriteDiscard:
 
     def test_processed_snippets_removed_from_file_after_fold(self, workspace_dir):
         """After a successful FOLD, the snippet is removed from .snippets.md."""
-        from datastore.notedb.soul_snippets import apply_decisions
+        from datastore.insightdb.soul_snippets import apply_decisions
 
         parent = workspace_dir / "identity" / "SOUL.md"
         parent.write_text("# SOUL\n\nBase content.\n")
@@ -3092,7 +3101,7 @@ class TestApplyDecisionsFoldRewriteDiscard:
 
     def test_all_snippets_processed_removes_snippets_file(self, workspace_dir):
         """When every snippet in the file is processed, .snippets.md is deleted."""
-        from datastore.notedb.soul_snippets import apply_decisions
+        from datastore.insightdb.soul_snippets import apply_decisions
 
         parent = workspace_dir / "identity" / "SOUL.md"
         parent.write_text("# SOUL\n\nBase content.\n")
@@ -3121,7 +3130,7 @@ class TestApplyDecisionsFoldRewriteDiscard:
 
     def test_fold_and_discard_mixed_decisions(self, workspace_dir):
         """Mixed FOLD + DISCARD decisions in one batch are each handled correctly."""
-        from datastore.notedb.soul_snippets import apply_decisions
+        from datastore.insightdb.soul_snippets import apply_decisions
 
         parent = workspace_dir / "identity" / "SOUL.md"
         parent.write_text("# SOUL\n\nBase.\n")

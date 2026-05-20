@@ -89,9 +89,9 @@ _RECALL_REQUEST_ROUTES: Tuple[RecallRequestRoute, ...] = (
     RecallRequestRoute(
         selector="journal",
         event_type=RECALL_JOURNAL_REQUEST,
-        datastore_id="evolutiondb",
+        datastore_id="insightdb",
         handler_store="journal",
-        aliases=("evolution", "notedb"),
+        aliases=("insight",),
     ),
 )
 

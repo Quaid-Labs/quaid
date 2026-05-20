@@ -18,7 +18,7 @@ from core.contracts.datastore import (
 def test_first_party_contracts_match_manifest_handlers_and_ids() -> None:
     contracts = build_first_party_datastore_contracts()
 
-    assert sorted(contracts) == ["docsdb", "evolutiondb", "memorydb", "sessiondb"]
+    assert sorted(contracts) == ["docsdb", "insightdb", "memorydb", "sessiondb"]
     for datastore_id, contract in contracts.items():
         manifest = contract.manifest
         assert manifest["id"] == datastore_id

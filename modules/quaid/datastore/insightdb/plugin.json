@@ -1,10 +1,10 @@
 {
   "plugin_api_version": 1,
-  "plugin_id": "notedb.core",
+  "plugin_id": "insightdb.core",
   "plugin_type": "datastore",
-  "module": "core.plugins.evolutiondb_contract",
+  "module": "core.plugins.insightdb_contract",
   "capabilities": {
-    "display_name": "NoteDB",
+    "display_name": "InsightDB",
     "contract": {
       "init": {
         "mode": "hook",

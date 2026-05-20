@@ -1,8 +1,8 @@
-"""Core wrapper for the EvolutionDB soul snippets implementation."""
+"""Core wrapper for the InsightDB soul snippets implementation."""
 
 from __future__ import annotations
 
-from datastore.evolutiondb import soul_snippets as _soul_snippets
+from datastore.insightdb import soul_snippets as _soul_snippets
 
 
 def write_journal_entry(filename: str, content: str, trigger: str = "Compaction", date_str: str | None = None) -> bool:
@@ -31,7 +31,7 @@ def write_snippet_entry(
 
 
 # These maintenance callables are intentionally bound at import time. Tests or
-# callers that monkeypatch them should patch the canonical EvolutionDB module.
+# callers that monkeypatch them should patch the canonical InsightDB module.
 run_soul_snippets_review = _soul_snippets.run_soul_snippets_review
 run_journal_distillation = _soul_snippets.run_journal_distillation
 

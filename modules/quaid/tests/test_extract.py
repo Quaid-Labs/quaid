@@ -557,7 +557,7 @@ class TestExtractFromTranscript:
 
         monkeypatch.setattr("core.plugins.memorydb_contract.run_extraction_publish_payload", fake_publish)
         monkeypatch.setattr(
-            "core.plugins.evolutiondb_contract.run_snippet_journal_write_payload",
+            "core.plugins.insightdb_contract.run_snippet_journal_write_payload",
             fake_direct_snippet_journal,
         )
 
@@ -3026,7 +3026,7 @@ class TestExtractFromTranscript:
         assert applied["project_logs"]["launch-app"] == ["Moved launch checklist into red binder"]
         fake_enqueue.assert_called_once()
 
-    def test_apply_extracted_payloads_routes_snippet_journal_through_evolutiondb_contract(self, monkeypatch):
+    def test_apply_extracted_payloads_routes_snippet_journal_through_insightdb_contract(self, monkeypatch):
         import ingest.extract as extract_mod
 
         seen = {}
@@ -3055,7 +3055,7 @@ class TestExtractFromTranscript:
             }
 
         monkeypatch.setattr("core.plugins.memorydb_contract.run_extraction_publish_payload", fake_publish)
-        monkeypatch.setattr("core.plugins.evolutiondb_contract.run_snippet_journal_write_payload", fake_snippet_journal)
+        monkeypatch.setattr("core.plugins.insightdb_contract.run_snippet_journal_write_payload", fake_snippet_journal)
 
         payload = {
             "raw_facts": [],
@@ -3210,7 +3210,7 @@ class TestExtractFromTranscript:
             return {
                 "status": "ok",
                 "responses": [{
-                    "datastore_id": "evolutiondb",
+                    "datastore_id": "insightdb",
                     "status": "ok",
                     "result": {
                         "status": "ok",
@@ -3220,9 +3220,9 @@ class TestExtractFromTranscript:
             }
 
         monkeypatch.setattr("core.plugins.memorydb_contract.run_extraction_publish_payload", fake_publish)
-        monkeypatch.setattr("core.plugins.evolutiondb_contract.run_snippet_journal_write_payload", fake_direct_snippet_journal)
-        monkeypatch.setattr("core.plugins.evolutiondb_contract.register_snippet_write_request_handler", lambda: None)
-        monkeypatch.setattr("core.plugins.evolutiondb_contract.register_journal_write_request_handler", lambda: None)
+        monkeypatch.setattr("core.plugins.insightdb_contract.run_snippet_journal_write_payload", fake_direct_snippet_journal)
+        monkeypatch.setattr("core.plugins.insightdb_contract.register_snippet_write_request_handler", lambda: None)
+        monkeypatch.setattr("core.plugins.insightdb_contract.register_journal_write_request_handler", lambda: None)
         monkeypatch.setattr("core.runtime.events.request_broker_event", fake_request)
 
         payload = {
@@ -3334,7 +3334,7 @@ class TestExtractFromTranscript:
             return {
                 "status": "ok",
                 "responses": [{
-                    "datastore_id": "evolutiondb",
+                    "datastore_id": "insightdb",
                     "status": "ok",
                     "result": {
                         "status": "ok",
@@ -3359,9 +3359,9 @@ class TestExtractFromTranscript:
             }
 
         monkeypatch.setattr("core.plugins.memorydb_contract.run_extraction_publish_payload", fake_publish)
-        monkeypatch.setattr("core.plugins.evolutiondb_contract.run_snippet_journal_write_payload", pytest.fail)
-        monkeypatch.setattr("core.plugins.evolutiondb_contract.register_snippet_write_request_handler", lambda: None)
-        monkeypatch.setattr("core.plugins.evolutiondb_contract.register_journal_write_request_handler", lambda: None)
+        monkeypatch.setattr("core.plugins.insightdb_contract.run_snippet_journal_write_payload", pytest.fail)
+        monkeypatch.setattr("core.plugins.insightdb_contract.register_snippet_write_request_handler", lambda: None)
+        monkeypatch.setattr("core.plugins.insightdb_contract.register_journal_write_request_handler", lambda: None)
         monkeypatch.setattr("core.runtime.events.request_broker_event", fake_request)
 
         payload = {
@@ -3418,9 +3418,9 @@ class TestExtractFromTranscript:
             raise AssertionError("request-mode failure must not route around direct snippet/journal helper")
 
         monkeypatch.setattr("core.plugins.memorydb_contract.run_extraction_publish_payload", fake_publish)
-        monkeypatch.setattr("core.plugins.evolutiondb_contract.run_snippet_journal_write_payload", fake_direct_snippet_journal)
-        monkeypatch.setattr("core.plugins.evolutiondb_contract.register_snippet_write_request_handler", lambda: None)
-        monkeypatch.setattr("core.plugins.evolutiondb_contract.register_journal_write_request_handler", lambda: None)
+        monkeypatch.setattr("core.plugins.insightdb_contract.run_snippet_journal_write_payload", fake_direct_snippet_journal)
+        monkeypatch.setattr("core.plugins.insightdb_contract.register_snippet_write_request_handler", lambda: None)
+        monkeypatch.setattr("core.plugins.insightdb_contract.register_journal_write_request_handler", lambda: None)
         monkeypatch.setattr(
             "core.runtime.events.request_broker_event",
             lambda *_args, **_kwargs: {
@@ -3448,7 +3448,7 @@ class TestExtractFromTranscript:
 
         caplog.set_level("WARNING", logger="ingest.extract")
 
-        with pytest.raises(RuntimeError, match="snippet/journal write request returned no evolutiondb response"):
+        with pytest.raises(RuntimeError, match="snippet/journal write request returned no insightdb response"):
             extract_mod.apply_extracted_payloads(
                 payload,
                 owner_id="test",
@@ -3461,7 +3461,7 @@ class TestExtractFromTranscript:
         assert direct_called is False
         assert "snippet_journal_metrics" not in payload
         assert any(
-            "snippet/journal write request returned no evolutiondb response: simulated snippet broker failure"
+            "snippet/journal write request returned no insightdb response: simulated snippet broker failure"
             in record.getMessage()
             for record in caplog.records
         )
@@ -3496,9 +3496,9 @@ class TestExtractFromTranscript:
             }
 
         monkeypatch.setattr("core.plugins.memorydb_contract.run_extraction_publish_payload", fake_publish)
-        monkeypatch.setattr("core.plugins.evolutiondb_contract.run_snippet_journal_write_payload", fake_direct_snippet_journal)
-        monkeypatch.setattr("core.plugins.evolutiondb_contract.register_snippet_write_request_handler", lambda: None)
-        monkeypatch.setattr("core.plugins.evolutiondb_contract.register_journal_write_request_handler", lambda: None)
+        monkeypatch.setattr("core.plugins.insightdb_contract.run_snippet_journal_write_payload", fake_direct_snippet_journal)
+        monkeypatch.setattr("core.plugins.insightdb_contract.register_snippet_write_request_handler", lambda: None)
+        monkeypatch.setattr("core.plugins.insightdb_contract.register_journal_write_request_handler", lambda: None)
         monkeypatch.setattr("core.runtime.events.request_broker_event", fake_request)
 
         payload = {
@@ -3519,7 +3519,7 @@ class TestExtractFromTranscript:
 
         caplog.set_level("WARNING", logger="ingest.extract")
 
-        with pytest.raises(RuntimeError, match="snippet/journal write request returned no evolutiondb response"):
+        with pytest.raises(RuntimeError, match="snippet/journal write request returned no insightdb response"):
             extract_mod.apply_extracted_payloads(
                 payload,
                 owner_id="test",
@@ -3533,7 +3533,7 @@ class TestExtractFromTranscript:
         assert direct_called is False
         assert "snippet_journal_metrics" not in payload
         assert any(
-            "snippet/journal write request returned no evolutiondb response: simulated snippet broker failure"
+            "snippet/journal write request returned no insightdb response: simulated snippet broker failure"
             in record.getMessage()
             for record in caplog.records
         )
@@ -3560,9 +3560,9 @@ class TestExtractFromTranscript:
             raise OSError("simulated broker transport failure")
 
         monkeypatch.setattr("core.plugins.memorydb_contract.run_extraction_publish_payload", fake_publish)
-        monkeypatch.setattr("core.plugins.evolutiondb_contract.run_snippet_journal_write_payload", fake_direct_snippet_journal)
-        monkeypatch.setattr("core.plugins.evolutiondb_contract.register_snippet_write_request_handler", lambda: None)
-        monkeypatch.setattr("core.plugins.evolutiondb_contract.register_journal_write_request_handler", lambda: None)
+        monkeypatch.setattr("core.plugins.insightdb_contract.run_snippet_journal_write_payload", fake_direct_snippet_journal)
+        monkeypatch.setattr("core.plugins.insightdb_contract.register_snippet_write_request_handler", lambda: None)
+        monkeypatch.setattr("core.plugins.insightdb_contract.register_journal_write_request_handler", lambda: None)
         monkeypatch.setattr("core.runtime.events.request_broker_event", fake_request)
 
         payload = {
@@ -3625,7 +3625,7 @@ class TestExtractFromTranscript:
                 return {
                     "status": "ok",
                     "responses": [{
-                        "datastore_id": "evolutiondb",
+                        "datastore_id": "insightdb",
                         "status": "ok",
                         "result": {
                             "status": "ok",
@@ -3652,9 +3652,9 @@ class TestExtractFromTranscript:
             }
 
         monkeypatch.setattr("core.plugins.memorydb_contract.run_extraction_publish_payload", fake_publish)
-        monkeypatch.setattr("core.plugins.evolutiondb_contract.run_snippet_journal_write_payload", fake_direct_snippet_journal)
-        monkeypatch.setattr("core.plugins.evolutiondb_contract.register_snippet_write_request_handler", lambda: None)
-        monkeypatch.setattr("core.plugins.evolutiondb_contract.register_journal_write_request_handler", lambda: None)
+        monkeypatch.setattr("core.plugins.insightdb_contract.run_snippet_journal_write_payload", fake_direct_snippet_journal)
+        monkeypatch.setattr("core.plugins.insightdb_contract.register_snippet_write_request_handler", lambda: None)
+        monkeypatch.setattr("core.plugins.insightdb_contract.register_journal_write_request_handler", lambda: None)
         monkeypatch.setattr("core.runtime.events.request_broker_event", fake_request)
 
         payload = {
@@ -3675,7 +3675,7 @@ class TestExtractFromTranscript:
 
         caplog.set_level("WARNING", logger="ingest.extract")
 
-        with pytest.raises(RuntimeError, match="snippet/journal write request returned no evolutiondb response"):
+        with pytest.raises(RuntimeError, match="snippet/journal write request returned no insightdb response"):
             extract_mod.apply_extracted_payloads(
                 payload,
                 owner_id="test",
@@ -3689,7 +3689,7 @@ class TestExtractFromTranscript:
         assert direct_called is False
         assert "snippet_journal_metrics" not in payload
         assert any(
-            "snippet/journal write request returned no evolutiondb response: simulated journal broker failure"
+            "snippet/journal write request returned no insightdb response: simulated journal broker failure"
             in record.getMessage()
             for record in caplog.records
         )
@@ -3800,25 +3800,25 @@ class TestExtractFromTranscript:
             ([], "snippet/journal write request returned a non-object response"),
             (
                 {"status": "failed", "error": "simulated broker failure", "responses": []},
-                "snippet/journal write request returned no evolutiondb response: simulated broker failure",
+                "snippet/journal write request returned no insightdb response: simulated broker failure",
             ),
             (
                 {"status": "ok", "responses": ["bad-row"]},
-                "snippet/journal write request returned malformed evolutiondb response",
+                "snippet/journal write request returned malformed insightdb response",
             ),
             (
                 {"status": "ok", "responses": [{"datastore_id": "memorydb", "status": "ok", "result": {}}]},
-                "snippet/journal write request returned a non-evolutiondb response",
+                "snippet/journal write request returned a non-insightdb response",
             ),
             (
-                {"status": "ok", "responses": [{"datastore_id": "evolutiondb", "status": "ok", "result": []}]},
-                "snippet/journal write request evolutiondb result is not an object",
+                {"status": "ok", "responses": [{"datastore_id": "insightdb", "status": "ok", "result": []}]},
+                "snippet/journal write request insightdb result is not an object",
             ),
             (
                 {
                     "status": "failed",
                     "responses": [{
-                        "datastore_id": "evolutiondb",
+                        "datastore_id": "insightdb",
                         "status": "failed",
                         "result": {"status": "failed", "error": "handler rejected snippet write"},
                     }],
@@ -3829,18 +3829,18 @@ class TestExtractFromTranscript:
                 {
                     "status": "ok",
                     "responses": [{
-                        "datastore_id": "evolutiondb",
+                        "datastore_id": "insightdb",
                         "status": "ok",
                         "result": {"status": "ok"},
                     }],
                 },
-                "snippet/journal write request evolutiondb snippet_journal_metrics is not an object",
+                "snippet/journal write request insightdb snippet_journal_metrics is not an object",
             ),
             (
                 {
                     "status": "ok",
                     "responses": [{
-                        "datastore_id": "evolutiondb",
+                        "datastore_id": "insightdb",
                         "status": "ok",
                         "result": {
                             "status": "ok",
@@ -3848,13 +3848,13 @@ class TestExtractFromTranscript:
                         },
                     }],
                 },
-                "snippet/journal write request evolutiondb target_files is not an object",
+                "snippet/journal write request insightdb target_files is not an object",
             ),
             (
                 {
                     "status": "ok",
                     "responses": [{
-                        "datastore_id": "evolutiondb",
+                        "datastore_id": "insightdb",
                         "status": "ok",
                         "result": {
                             "status": "ok",
@@ -3865,7 +3865,7 @@ class TestExtractFromTranscript:
                         },
                     }],
                 },
-                "snippet/journal write request evolutiondb errors is not a list",
+                "snippet/journal write request insightdb errors is not a list",
             ),
         ],
     )

@@ -2851,16 +2851,16 @@ def _validate_snippet_journal_write_broker_response(response: Dict[str, Any]) ->
     if not isinstance(responses, list) or len(responses) != 1:
         message = _snippet_journal_write_request_error_message(response)
         _raise_snippet_journal_write_request_error(
-            f"snippet/journal write request returned no evolutiondb response: {message}"
+            f"snippet/journal write request returned no insightdb response: {message}"
         )
     row = responses[0]
     if not isinstance(row, dict):
-        _raise_snippet_journal_write_request_error("snippet/journal write request returned malformed evolutiondb response")
-    if str(row.get("datastore_id") or "").strip() != "evolutiondb":
-        _raise_snippet_journal_write_request_error("snippet/journal write request returned a non-evolutiondb response")
+        _raise_snippet_journal_write_request_error("snippet/journal write request returned malformed insightdb response")
+    if str(row.get("datastore_id") or "").strip() != "insightdb":
+        _raise_snippet_journal_write_request_error("snippet/journal write request returned a non-insightdb response")
     handler_result = row.get("result")
     if not isinstance(handler_result, dict):
-        _raise_snippet_journal_write_request_error("snippet/journal write request evolutiondb result is not an object")
+        _raise_snippet_journal_write_request_error("snippet/journal write request insightdb result is not an object")
 
     response_status = str(response.get("status") or "").strip().lower()
     row_status = str(row.get("status") or handler_result.get("status") or "").strip().lower()
@@ -2872,22 +2872,22 @@ def _validate_snippet_journal_write_broker_response(response: Dict[str, Any]) ->
     metrics = handler_result.get("snippet_journal_metrics")
     if not isinstance(metrics, dict):
         _raise_snippet_journal_write_request_error(
-            "snippet/journal write request evolutiondb snippet_journal_metrics is not an object"
+            "snippet/journal write request insightdb snippet_journal_metrics is not an object"
         )
     target_files = metrics.get("target_files")
     if not isinstance(target_files, dict):
         _raise_snippet_journal_write_request_error(
-            "snippet/journal write request evolutiondb target_files is not an object"
+            "snippet/journal write request insightdb target_files is not an object"
         )
     for field in ("snippets", "journal"):
         if not isinstance(target_files.get(field), list):
             _raise_snippet_journal_write_request_error(
-                f"snippet/journal write request evolutiondb target_files.{field} is not a list"
+                f"snippet/journal write request insightdb target_files.{field} is not a list"
             )
     errors = metrics.get("errors")
     if not isinstance(errors, list):
         _raise_snippet_journal_write_request_error(
-            "snippet/journal write request evolutiondb errors is not a list"
+            "snippet/journal write request insightdb errors is not a list"
         )
     return dict(metrics)
 
@@ -2943,7 +2943,7 @@ def _request_split_snippet_journal_family(
             session_id=session_id,
             owner_id=owner_id,
             provenance={
-                "replacement": "ingest.extract direct EvolutionDB snippet/journal helper call",
+                "replacement": "ingest.extract direct InsightDB snippet/journal helper call",
             },
         )
     except Exception as exc:
@@ -2995,7 +2995,7 @@ def _request_snippet_journal_write_payload(
     owner_id: str,
     session_id: Optional[str],
 ) -> Dict[str, Any]:
-    from core.plugins.evolutiondb_contract import (
+    from core.plugins.insightdb_contract import (
         register_journal_write_request_handler,
         register_snippet_write_request_handler,
     )
@@ -3082,7 +3082,7 @@ def apply_extracted_payloads(
     }
 
     from core.plugins.memorydb_contract import run_extraction_publish_payload, write_extraction_publish_trace
-    from core.plugins.evolutiondb_contract import run_snippet_journal_write_payload
+    from core.plugins.insightdb_contract import run_snippet_journal_write_payload
 
     publish_mode = str(memory_publish_mode or "direct").strip().lower()
     if publish_mode == "request":
@@ -3283,7 +3283,7 @@ def extract_from_transcript(
         write_journal: Whether to write journal entries.
         dry_run: If True, parse and plan but don't store anything.
         memory_publish_mode: MemoryDB publish routing mode ("direct" or "request").
-        snippet_journal_write_mode: EvolutionDB snippet/journal routing mode
+        snippet_journal_write_mode: InsightDB snippet/journal routing mode
             ("direct" or "request").
         wall_timeout_seconds: Deprecated no-op. Extraction processes every chunk;
             per-provider request timeouts are enforced by the LLM client.

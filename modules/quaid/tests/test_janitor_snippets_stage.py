@@ -35,7 +35,7 @@ _tmp_home = Path(tempfile.mkdtemp(prefix="quaid-snippets-test-"))
 os.environ["QUAID_HOME"] = str(_tmp_home)
 
 import core.lifecycle.janitor as janitor
-import datastore.notedb.soul_snippets as soul_snippets
+import datastore.insightdb.soul_snippets as soul_snippets
 
 
 # ---------------------------------------------------------------------------
@@ -137,8 +137,8 @@ class TestApplyDecisionsNoneFilePath:
         error is appended to stats['errors'], not raised as an exception."""
         # apply_decisions calls _insert_into_file first; if that returns False,
         # it calls _resolve_writable_file_path to classify the failure.
-        with patch("datastore.notedb.soul_snippets._insert_into_file", return_value=False):
-            with patch("datastore.notedb.soul_snippets._resolve_writable_file_path", return_value=None):
+        with patch("datastore.insightdb.soul_snippets._insert_into_file", return_value=False):
+            with patch("datastore.insightdb.soul_snippets._resolve_writable_file_path", return_value=None):
                 decisions = [
                     {"file": "SOUL.md", "snippet_index": 1, "action": "FOLD", "insert_after": "END"},
                 ]
@@ -157,8 +157,8 @@ class TestApplyDecisionsNoneFilePath:
 
     def test_none_file_path_on_fold_produces_expected_error_format(self, tmp_path):
         """Error message for missing file on FOLD follows 'Skipped {filename}[N]: file missing' format."""
-        with patch("datastore.notedb.soul_snippets._insert_into_file", return_value=False):
-            with patch("datastore.notedb.soul_snippets._resolve_writable_file_path", return_value=None):
+        with patch("datastore.insightdb.soul_snippets._insert_into_file", return_value=False):
+            with patch("datastore.insightdb.soul_snippets._resolve_writable_file_path", return_value=None):
                 decisions = [
                     {"file": "SOUL.md", "snippet_index": 1, "action": "FOLD", "insert_after": "END"},
                 ]
@@ -185,8 +185,8 @@ class TestApplyDecisionsNoneFilePath:
         target = tmp_path / "SOUL.md"
         target.write_text("# SOUL\n", encoding="utf-8")
 
-        with patch("datastore.notedb.soul_snippets._resolve_writable_file_path", return_value=target):
-            with patch("datastore.notedb.soul_snippets._insert_into_file", side_effect=RuntimeError("disk full")):
+        with patch("datastore.insightdb.soul_snippets._resolve_writable_file_path", return_value=target):
+            with patch("datastore.insightdb.soul_snippets._insert_into_file", side_effect=RuntimeError("disk full")):
                 decisions = [
                     {"file": "SOUL.md", "snippet_index": 1, "action": "FOLD", "insert_after": "END"},
                 ]
@@ -229,9 +229,9 @@ class TestApplyDecisionsNoneFilePath:
                 return None
             return user_file
 
-        with patch("datastore.notedb.soul_snippets._insert_into_file", side_effect=_fake_insert):
-            with patch("datastore.notedb.soul_snippets._resolve_writable_file_path", side_effect=_fake_resolve):
-                with patch("datastore.notedb.soul_snippets._clear_processed_snippets"):
+        with patch("datastore.insightdb.soul_snippets._insert_into_file", side_effect=_fake_insert):
+            with patch("datastore.insightdb.soul_snippets._resolve_writable_file_path", side_effect=_fake_resolve):
+                with patch("datastore.insightdb.soul_snippets._clear_processed_snippets"):
                     decisions = [
                         # SOUL.md snippet will fail (file missing → insert returns False)
                         {"file": "SOUL.md", "snippet_index": 1, "action": "FOLD", "insert_after": "END"},
@@ -258,8 +258,8 @@ class TestApplyDecisionsNoneFilePath:
 
     def test_discard_succeeds_even_when_target_file_missing(self, tmp_path):
         """DISCARD action does not need to write to the file, so it works even if target is missing."""
-        with patch("datastore.notedb.soul_snippets._resolve_writable_file_path", return_value=None):
-            with patch("datastore.notedb.soul_snippets._clear_processed_snippets"):
+        with patch("datastore.insightdb.soul_snippets._resolve_writable_file_path", return_value=None):
+            with patch("datastore.insightdb.soul_snippets._clear_processed_snippets"):
                 decisions = [
                     {"file": "SOUL.md", "snippet_index": 1, "action": "DISCARD", "reason": "redundant"},
                 ]
@@ -560,11 +560,11 @@ class TestJanitorCompleteSuccessFlag:
 
         monkeypatch.setattr("core.lifecycle.janitor_lifecycle.LifecycleRegistry.run", _fake_run)
         monkeypatch.setattr(
-            "datastore.notedb.soul_snippets.run_soul_snippets_review",
+            "datastore.insightdb.soul_snippets.run_soul_snippets_review",
             lambda dry_run, **kwargs: {"folded": 2, "rewritten": 0, "discarded": 1, "errors": []},
         )
         monkeypatch.setattr(
-            "datastore.notedb.soul_snippets.run_journal_distillation",
+            "datastore.insightdb.soul_snippets.run_journal_distillation",
             lambda *, dry_run, force_distill, **kwargs: {"additions": 0, "edits": 0, "recovered_edits": 0, "total_entries": 0},
         )
 
@@ -913,10 +913,10 @@ class TestRunSoulSnippetsReview:
                 })
                 return response, 0.1
 
-            with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_cfg):
-                with patch("datastore.notedb.soul_snippets.call_deep_reasoning", side_effect=_fake_call_deep_reasoning):
-                    with patch("datastore.notedb.soul_snippets.get_prompt", return_value="You are a helpful assistant"):
-                        with patch("datastore.notedb.soul_snippets.backup_file", return_value=None):
+            with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_cfg):
+                with patch("datastore.insightdb.soul_snippets.call_deep_reasoning", side_effect=_fake_call_deep_reasoning):
+                    with patch("datastore.insightdb.soul_snippets.get_prompt", return_value="You are a helpful assistant"):
+                        with patch("datastore.insightdb.soul_snippets.backup_file", return_value=None):
                             # SOUL.md target file does not exist, so insert returns False and
                             # _resolve_writable_file_path returns None
                             result = soul_snippets.run_soul_snippets_review(dry_run=False)
@@ -969,10 +969,10 @@ class TestRunSoulSnippetsReview:
                 })
                 return response, 0.1
 
-            with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_cfg):
-                with patch("datastore.notedb.soul_snippets.call_deep_reasoning", side_effect=_fake_call_deep_reasoning):
-                    with patch("datastore.notedb.soul_snippets.get_prompt", return_value="You are a helpful assistant"):
-                        with patch("datastore.notedb.soul_snippets.backup_file", return_value=None):
+            with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_cfg):
+                with patch("datastore.insightdb.soul_snippets.call_deep_reasoning", side_effect=_fake_call_deep_reasoning):
+                    with patch("datastore.insightdb.soul_snippets.get_prompt", return_value="You are a helpful assistant"):
+                        with patch("datastore.insightdb.soul_snippets.backup_file", return_value=None):
                             result = soul_snippets.run_soul_snippets_review(dry_run=False)
 
             # DISCARD should succeed cleanly

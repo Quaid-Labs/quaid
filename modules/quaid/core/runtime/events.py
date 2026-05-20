@@ -158,7 +158,7 @@ EVENT_REGISTRY: List[Dict[str, Any]] = [
     },
     {
         "name": EVOLUTION_SNIPPET_JOURNAL_WRITE_REQUEST_EVENT,
-        "description": "Request EvolutionDB-owned snippet/journal markdown writes.",
+        "description": "Request InsightDB-owned snippet/journal markdown writes.",
         "fireable": True,
         "processable": False,
         "listenable": True,
@@ -166,7 +166,7 @@ EVENT_REGISTRY: List[Dict[str, Any]] = [
     },
     {
         "name": EVOLUTION_SNIPPET_WRITE_REQUEST_EVENT,
-        "description": "Request EvolutionDB-owned snippet-only markdown writes.",
+        "description": "Request InsightDB-owned snippet-only markdown writes.",
         "fireable": True,
         "processable": False,
         "listenable": True,
@@ -174,7 +174,7 @@ EVENT_REGISTRY: List[Dict[str, Any]] = [
     },
     {
         "name": EVOLUTION_JOURNAL_WRITE_REQUEST_EVENT,
-        "description": "Request EvolutionDB-owned journal-only markdown writes.",
+        "description": "Request InsightDB-owned journal-only markdown writes.",
         "fireable": True,
         "processable": False,
         "listenable": True,

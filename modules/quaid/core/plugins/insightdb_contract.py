@@ -1,4 +1,4 @@
-"""EvolutionDB datastore plugin contract hooks."""
+"""InsightDB datastore plugin contract hooks."""
 
 from __future__ import annotations
 
@@ -42,7 +42,7 @@ def _zero_snippet_journal_metrics() -> Dict[str, Any]:
 
 
 def _reject_split_write_request(message: str) -> Dict[str, Any]:
-    logger.warning("[notedb] %s", message)
+    logger.warning("[insightdb] %s", message)
     if _fail_hard_enabled():
         raise ValueError(message)
     metrics = _zero_snippet_journal_metrics()
@@ -85,7 +85,7 @@ def _run_snippet_write_payload(payload: Dict[str, Any], result: Dict[str, Any], 
             )
         except Exception as exc:
             message = f"snippet write failed for {filename}: {exc}"
-            logger.warning("[notedb] %s", message)
+            logger.warning("[insightdb] %s", message)
             if _fail_hard_enabled():
                 raise
             result["status"] = "failed"
@@ -124,7 +124,7 @@ def _run_journal_write_payload(payload: Dict[str, Any], result: Dict[str, Any], 
             )
         except Exception as exc:
             message = f"journal write failed for {filename}: {exc}"
-            logger.warning("[notedb] %s", message)
+            logger.warning("[insightdb] %s", message)
             if _fail_hard_enabled():
                 raise
             result["status"] = "failed"
@@ -138,7 +138,7 @@ def _run_journal_write_payload(payload: Dict[str, Any], result: Dict[str, Any], 
 
 
 def run_snippet_journal_write_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """Persist extraction snippet/journal payloads through the EvolutionDB seam."""
+    """Persist extraction snippet/journal payloads through the InsightDB seam."""
     if not isinstance(payload, dict):
         raise TypeError("snippet/journal write payload must be an object")
     source = str(payload.get("source") or "").strip()
@@ -194,7 +194,7 @@ def run_snippet_journal_write_payload(payload: Dict[str, Any]) -> Dict[str, Any]
 
 
 def handle_snippet_journal_write_request(event: Dict[str, Any]) -> Dict[str, Any]:
-    """Handle extraction snippet/journal writes through EvolutionDB ownership."""
+    """Handle extraction snippet/journal writes through InsightDB ownership."""
     payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
     source = str(payload.get("source") or "").strip()
     if source != "extraction-apply-payloads":
@@ -216,7 +216,7 @@ def handle_snippet_journal_write_request(event: Dict[str, Any]) -> Dict[str, Any
 
 
 def handle_snippet_write_request(event: Dict[str, Any]) -> Dict[str, Any]:
-    """Handle extraction snippet-only writes through EvolutionDB ownership."""
+    """Handle extraction snippet-only writes through InsightDB ownership."""
     payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
     source = str(payload.get("source") or "").strip()
     if source != "extraction-apply-payloads":
@@ -243,7 +243,7 @@ def handle_snippet_write_request(event: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def handle_journal_write_request(event: Dict[str, Any]) -> Dict[str, Any]:
-    """Handle extraction journal-only writes through EvolutionDB ownership."""
+    """Handle extraction journal-only writes through InsightDB ownership."""
     payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
     source = str(payload.get("source") or "").strip()
     if source != "extraction-apply-payloads":
@@ -275,7 +275,7 @@ def register_snippet_journal_write_request_handler() -> None:
     register_request_handler(
         EVOLUTION_SNIPPET_JOURNAL_WRITE_REQUEST_EVENT,
         handle_snippet_journal_write_request,
-        datastore_id="evolutiondb",
+        datastore_id="insightdb",
         force=True,
     )
 
@@ -286,7 +286,7 @@ def register_snippet_write_request_handler() -> None:
     register_request_handler(
         EVOLUTION_SNIPPET_WRITE_REQUEST_EVENT,
         handle_snippet_write_request,
-        datastore_id="evolutiondb",
+        datastore_id="insightdb",
         force=True,
     )
 
@@ -297,12 +297,12 @@ def register_journal_write_request_handler() -> None:
     register_request_handler(
         EVOLUTION_JOURNAL_WRITE_REQUEST_EVENT,
         handle_journal_write_request,
-        datastore_id="evolutiondb",
+        datastore_id="insightdb",
         force=True,
     )
 
 
-class EvolutionDbPluginContract(PluginContractBase):
+class InsightDbPluginContract(PluginContractBase):
     def on_init(self, ctx: PluginHookContext) -> None:
         _ = ctx
 
@@ -311,11 +311,11 @@ class EvolutionDbPluginContract(PluginContractBase):
 
     def on_status(self, ctx: PluginHookContext) -> dict:
         _ = ctx
-        return {"datastore": "notedb", "ready": True}
+        return {"datastore": "insightdb", "ready": True}
 
     def on_dashboard(self, ctx: PluginHookContext) -> dict:
         _ = ctx
-        return {"panel": "notedb", "enabled": False}
+        return {"panel": "insightdb", "enabled": False}
 
     def on_maintenance(self, ctx: PluginHookContext) -> dict:
         _ = ctx
@@ -330,7 +330,7 @@ class EvolutionDbPluginContract(PluginContractBase):
         return {"healthy": True}
 
 
-_CONTRACT = EvolutionDbPluginContract()
+_CONTRACT = InsightDbPluginContract()
 
 
 def on_init(ctx: PluginHookContext) -> None:

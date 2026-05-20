@@ -623,7 +623,7 @@ def build_default_registry() -> LifecycleRegistry:
         # DocsDB owns this callback. It only requests async project-docs monitor
         # work; heavy docs writes/indexing stay out of janitor.
         ("core.plugins.docsdb_contract", ["project_docs_monitor"]),
-        ("datastore.evolutiondb.soul_snippets", ["snippets", "journal"]),
+        ("datastore.insightdb.soul_snippets", ["snippets", "journal"]),
         ("datastore.memorydb.maintenance", ["memory_graph_maintenance"]),
         ("datastore.memorydb.memory_graph", ["datastore_cleanup"]),
     ])

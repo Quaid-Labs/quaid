@@ -261,43 +261,43 @@ class DocsDbDatastoreContract(DatastoreContractBase):
     )
 
 
-class EvolutionDbDatastoreContract(DatastoreContractBase):
-    datastore_id = "evolutiondb"
+class InsightDbDatastoreContract(DatastoreContractBase):
+    datastore_id = "insightdb"
     handler_specs = (
         DatastoreHandlerSpec(
             "recall.journal.request.v1",
             REQUEST,
-            ("core.facade recallFromJournal / datastore.evolutiondb.soul_snippets journal files",),
+            ("core.facade recallFromJournal / datastore.insightdb.soul_snippets journal files",),
         ),
         DatastoreHandlerSpec(
             "evolution.snippet_journal_write.request.v1",
             REQUEST,
-            ("core.plugins.evolutiondb_contract.handle_snippet_journal_write_request",),
+            ("core.plugins.insightdb_contract.handle_snippet_journal_write_request",),
         ),
         DatastoreHandlerSpec(
             "evolution.snippet_write.request.v1",
             REQUEST,
-            ("core.plugins.evolutiondb_contract.handle_snippet_write_request",),
+            ("core.plugins.insightdb_contract.handle_snippet_write_request",),
         ),
         DatastoreHandlerSpec(
             "evolution.journal_write.request.v1",
             REQUEST,
-            ("core.plugins.evolutiondb_contract.handle_journal_write_request",),
+            ("core.plugins.insightdb_contract.handle_journal_write_request",),
         ),
         DatastoreHandlerSpec(
             "datastore.validate.request.v1",
             REQUEST,
-            ("datastore.evolutiondb.soul_snippets maintenance validation",),
+            ("datastore.insightdb.soul_snippets maintenance validation",),
         ),
         DatastoreHandlerSpec(
             "datastore.explain.request.v1",
             REQUEST,
-            ("datastore.evolutiondb.soul_snippets journal/snippet provenance helpers",),
+            ("datastore.insightdb.soul_snippets journal/snippet provenance helpers",),
         ),
         DatastoreHandlerSpec(
             "maintenance.run.request.v1",
             REQUEST,
-            ("datastore.evolutiondb.soul_snippets.register_lifecycle_routines",),
+            ("datastore.insightdb.soul_snippets.register_lifecycle_routines",),
         ),
     )
 
@@ -331,7 +331,7 @@ class SessionDbDatastoreContract(DatastoreContractBase):
 _FIRST_PARTY_CONTRACT_CLASSES = {
     "memorydb": MemoryDbDatastoreContract,
     "docsdb": DocsDbDatastoreContract,
-    "evolutiondb": EvolutionDbDatastoreContract,
+    "insightdb": InsightDbDatastoreContract,
     "sessiondb": SessionDbDatastoreContract,
 }
 

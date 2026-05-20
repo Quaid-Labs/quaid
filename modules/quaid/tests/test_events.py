@@ -3224,10 +3224,10 @@ def test_request_extraction_publish_rejects_required_payload_fields(monkeypatch,
     assert response["responses"][0]["result"]["error"] == error
 
 
-def test_request_snippet_journal_write_runs_evolutiondb_handler(monkeypatch, tmp_path):
+def test_request_snippet_journal_write_runs_insightdb_handler(monkeypatch, tmp_path):
     set_adapter(TestAdapter(tmp_path))
-    import core.plugins.evolutiondb_contract as evolutiondb_contract
-    from core.plugins.evolutiondb_contract import register_snippet_journal_write_request_handler
+    import core.plugins.insightdb_contract as insightdb_contract
+    from core.plugins.insightdb_contract import register_snippet_journal_write_request_handler
 
     called = {}
 
@@ -3250,7 +3250,7 @@ def test_request_snippet_journal_write_runs_evolutiondb_handler(monkeypatch, tmp
             "errors": [],
         }
 
-    monkeypatch.setattr(evolutiondb_contract, "run_snippet_journal_write_payload", _fake_write)
+    monkeypatch.setattr(insightdb_contract, "run_snippet_journal_write_payload", _fake_write)
 
     register_snippet_journal_write_request_handler()
     response = request_broker_event(
@@ -3272,7 +3272,7 @@ def test_request_snippet_journal_write_runs_evolutiondb_handler(monkeypatch, tmp
 
     assert response["status"] == "ok"
     row = response["responses"][0]
-    assert row["datastore_id"] == "evolutiondb"
+    assert row["datastore_id"] == "insightdb"
     result = row["result"]
     assert result["status"] == "ok"
     metrics = result["snippet_journal_metrics"]
@@ -3304,7 +3304,7 @@ def test_request_snippet_journal_write_runs_evolutiondb_handler(monkeypatch, tmp
 def test_request_snippet_journal_write_rejects_required_payload_fields(monkeypatch, tmp_path, payload, error):
     set_adapter(TestAdapter(tmp_path))
     import core.runtime.events as events
-    from core.plugins.evolutiondb_contract import register_snippet_journal_write_request_handler
+    from core.plugins.insightdb_contract import register_snippet_journal_write_request_handler
 
     monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: False)
 
@@ -3316,7 +3316,7 @@ def test_request_snippet_journal_write_rejects_required_payload_fields(monkeypat
     )
 
     assert response["status"] == "failed"
-    assert response["responses"][0]["datastore_id"] == "evolutiondb"
+    assert response["responses"][0]["datastore_id"] == "insightdb"
     assert response["responses"][0]["result"]["error"] == error
 
 
@@ -3324,26 +3324,26 @@ def test_split_snippet_journal_request_metadata_declared():
     from core.contracts.datastore import build_first_party_datastore_contracts
     from core.datastore_registry import get_datastore_manifest
 
-    manifest = get_datastore_manifest("evolutiondb")
+    manifest = get_datastore_manifest("insightdb")
     assert EVOLUTION_SNIPPET_WRITE_REQUEST_EVENT in manifest["request_handlers"]
     assert EVOLUTION_JOURNAL_WRITE_REQUEST_EVENT in manifest["request_handlers"]
 
-    contract = build_first_party_datastore_contracts()["evolutiondb"]
+    contract = build_first_party_datastore_contracts()["insightdb"]
     handlers = {spec.event_type: spec for spec in contract.list_request_handlers()}
     assert EVOLUTION_SNIPPET_WRITE_REQUEST_EVENT in handlers
     assert EVOLUTION_JOURNAL_WRITE_REQUEST_EVENT in handlers
-    assert "core.plugins.evolutiondb_contract.handle_snippet_write_request" in handlers[
+    assert "core.plugins.insightdb_contract.handle_snippet_write_request" in handlers[
         EVOLUTION_SNIPPET_WRITE_REQUEST_EVENT
     ].replacement_targets
-    assert "core.plugins.evolutiondb_contract.handle_journal_write_request" in handlers[
+    assert "core.plugins.insightdb_contract.handle_journal_write_request" in handlers[
         EVOLUTION_JOURNAL_WRITE_REQUEST_EVENT
     ].replacement_targets
 
 
-def test_split_snippet_journal_request_handlers_register_under_evolutiondb(tmp_path):
+def test_split_snippet_journal_request_handlers_register_under_insightdb(tmp_path):
     set_adapter(TestAdapter(tmp_path))
     import core.runtime.events as events
-    from core.plugins.evolutiondb_contract import (
+    from core.plugins.insightdb_contract import (
         register_journal_write_request_handler,
         register_snippet_write_request_handler,
     )
@@ -3355,13 +3355,13 @@ def test_split_snippet_journal_request_handlers_register_under_evolutiondb(tmp_p
         snippet_handlers = list(events._REQUEST_EVENT_HANDLERS.get(EVOLUTION_SNIPPET_WRITE_REQUEST_EVENT) or [])
         journal_handlers = list(events._REQUEST_EVENT_HANDLERS.get(EVOLUTION_JOURNAL_WRITE_REQUEST_EVENT) or [])
 
-    assert [handler["datastore_id"] for handler in snippet_handlers] == ["evolutiondb"]
-    assert [handler["datastore_id"] for handler in journal_handlers] == ["evolutiondb"]
+    assert [handler["datastore_id"] for handler in snippet_handlers] == ["insightdb"]
+    assert [handler["datastore_id"] for handler in journal_handlers] == ["insightdb"]
 
 
 def test_split_snippet_journal_request_handlers_return_family_zero_metrics(tmp_path):
     set_adapter(TestAdapter(tmp_path))
-    from core.plugins.evolutiondb_contract import (
+    from core.plugins.insightdb_contract import (
         register_journal_write_request_handler,
         register_snippet_write_request_handler,
     )
@@ -3474,11 +3474,11 @@ def test_split_snippet_journal_request_handlers_reject_invalid_payloads_fail_sof
 ):
     set_adapter(TestAdapter(tmp_path))
     import core.runtime.events as events
-    import core.plugins.evolutiondb_contract as evolutiondb_contract
+    import core.plugins.insightdb_contract as insightdb_contract
 
     monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: False)
     monkeypatch.setattr("lib.fail_policy.is_fail_hard_enabled", lambda: False)
-    getattr(evolutiondb_contract, register_name)()
+    getattr(insightdb_contract, register_name)()
 
     response = request_broker_event(event_type, payload, source="pytest")
 
@@ -3546,7 +3546,7 @@ def test_apply_extracted_payloads_request_mode_uses_split_snippet_journal_events
             "status": "ok",
             "responses": [
                 {
-                    "datastore_id": "evolutiondb",
+                    "datastore_id": "insightdb",
                     "status": "ok",
                     "result": {
                         "status": "ok",
@@ -3557,9 +3557,9 @@ def test_apply_extracted_payloads_request_mode_uses_split_snippet_journal_events
         }
 
     monkeypatch.setattr("core.plugins.memorydb_contract.run_extraction_publish_payload", fake_publish)
-    monkeypatch.setattr("core.plugins.evolutiondb_contract.run_snippet_journal_write_payload", fake_direct_snippet_journal)
-    monkeypatch.setattr("core.plugins.evolutiondb_contract.register_snippet_write_request_handler", lambda: None)
-    monkeypatch.setattr("core.plugins.evolutiondb_contract.register_journal_write_request_handler", lambda: None)
+    monkeypatch.setattr("core.plugins.insightdb_contract.run_snippet_journal_write_payload", fake_direct_snippet_journal)
+    monkeypatch.setattr("core.plugins.insightdb_contract.register_snippet_write_request_handler", lambda: None)
+    monkeypatch.setattr("core.plugins.insightdb_contract.register_journal_write_request_handler", lambda: None)
     monkeypatch.setattr("core.runtime.events.request_broker_event", fake_request)
 
     payload = {
@@ -3644,13 +3644,13 @@ def test_split_snippet_journal_request_handlers_warn_before_fail_hard_raise(
     payload,
     error,
 ):
-    import core.plugins.evolutiondb_contract as evolutiondb_contract
+    import core.plugins.insightdb_contract as insightdb_contract
 
     monkeypatch.setattr("lib.fail_policy.is_fail_hard_enabled", lambda: True)
 
-    with caplog.at_level("WARNING", logger="core.plugins.evolutiondb_contract"):
+    with caplog.at_level("WARNING", logger="core.plugins.insightdb_contract"):
         with pytest.raises(ValueError, match=error):
-            getattr(evolutiondb_contract, handler_name)(payload)
+            getattr(insightdb_contract, handler_name)(payload)
 
     assert error in caplog.text
 

@@ -432,4 +432,4 @@ def test_quaid_datastore_lists_manifest_registry(tmp_path: Path) -> None:
 
     payload = json.loads(result.stdout)
     assert payload["status"] == "ok"
-    assert [item["id"] for item in payload["datastores"]] == ["docsdb", "evolutiondb", "memorydb", "sessiondb"]
+    assert [item["id"] for item in payload["datastores"]] == ["docsdb", "insightdb", "memorydb", "sessiondb"]

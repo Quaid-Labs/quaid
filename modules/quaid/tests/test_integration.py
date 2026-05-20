@@ -35,10 +35,10 @@ pytestmark = pytest.mark.integration
 def test_core_lifecycle_soul_snippets_exports_review_and_distillation():
     """Compatibility: lifecycle wrapper must expose LoCoMo review/distillation hooks."""
     from core.lifecycle import soul_snippets as lifecycle_soul_snippets
-    from datastore.notedb import soul_snippets as notedb_soul_snippets
+    from datastore.insightdb import soul_snippets as insightdb_soul_snippets
 
-    assert lifecycle_soul_snippets.run_soul_snippets_review is notedb_soul_snippets.run_soul_snippets_review
-    assert lifecycle_soul_snippets.run_journal_distillation is notedb_soul_snippets.run_journal_distillation
+    assert lifecycle_soul_snippets.run_soul_snippets_review is insightdb_soul_snippets.run_soul_snippets_review
+    assert lifecycle_soul_snippets.run_journal_distillation is insightdb_soul_snippets.run_journal_distillation
 
 
 # ---------------------------------------------------------------------------

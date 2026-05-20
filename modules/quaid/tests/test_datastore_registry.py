@@ -20,9 +20,9 @@ def test_first_party_datastore_registry_lists_canonical_manifests() -> None:
     manifests = list_datastore_manifests()
     ids = [manifest["id"] for manifest in manifests]
 
-    assert ids == ["docsdb", "evolutiondb", "memorydb", "sessiondb"]
-    assert get_datastore_manifest("evolutiondb")["runtime_aliases"] == ["notedb"]
-    assert get_datastore_manifest("evolutiondb")["module"] == "datastore.evolutiondb.soul_snippets"
+    assert ids == ["docsdb", "insightdb", "memorydb", "sessiondb"]
+    assert get_datastore_manifest("insightdb")["runtime_aliases"] == []
+    assert get_datastore_manifest("insightdb")["module"] == "datastore.insightdb.soul_snippets"
     sessiondb = get_datastore_manifest("sessiondb")
     assert sessiondb["module"] == "datastore.sessiondb.session_store"
     assert sessiondb["plugin_id"] == "sessiondb.core"
@@ -42,7 +42,7 @@ def test_datastore_capabilities_surface_manifest_metadata() -> None:
     assert "graph" in capabilities["memorydb"]["recall"]
     assert "session_chunks" in capabilities["memorydb"]["recall"]
     assert "project_context" in capabilities["docsdb"]["recall"]
-    assert capabilities["evolutiondb"]["stores"] == ["snippets", "journal"]
+    assert capabilities["insightdb"]["stores"] == ["snippets", "journal"]
     assert capabilities["sessiondb"]["recall"] == []
     assert capabilities["sessiondb"]["writes"] == [
         "sessions",
@@ -142,7 +142,7 @@ def test_datastore_registry_cli_list_json(capsys) -> None:
     payload = json.loads(capsys.readouterr().out)
 
     assert payload["status"] == "ok"
-    assert [item["id"] for item in payload["datastores"]] == ["docsdb", "evolutiondb", "memorydb", "sessiondb"]
+    assert [item["id"] for item in payload["datastores"]] == ["docsdb", "insightdb", "memorydb", "sessiondb"]
 
 
 def test_datastore_registry_cli_show_unknown(capsys) -> None:

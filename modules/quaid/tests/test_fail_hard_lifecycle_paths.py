@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from datastore.docsdb.rag import register_lifecycle_routines as register_rag_lifecycle_routines
 from datastore.memorydb import memory_graph
-from datastore.notedb.soul_snippets import register_lifecycle_routines as register_snippets_lifecycle_routines
+from datastore.insightdb.soul_snippets import register_lifecycle_routines as register_snippets_lifecycle_routines
 
 
 class _Registry:
@@ -70,8 +70,8 @@ def test_snippets_lifecycle_raises_when_fail_hard_enabled():
     handler = registry.handlers["snippets"]
 
     ctx = SimpleNamespace(dry_run=True, parallel_map=None, options={}, force_distill=False)
-    with patch("datastore.notedb.soul_snippets.run_soul_snippets_review", side_effect=RuntimeError("boom")), \
-         patch("datastore.notedb.soul_snippets.is_fail_hard_enabled", return_value=True):
+    with patch("datastore.insightdb.soul_snippets.run_soul_snippets_review", side_effect=RuntimeError("boom")), \
+         patch("datastore.insightdb.soul_snippets.is_fail_hard_enabled", return_value=True):
         with pytest.raises(RuntimeError, match="Snippets review failed"):
             handler(ctx)
 
@@ -82,8 +82,8 @@ def test_journal_lifecycle_raises_when_fail_hard_enabled():
     handler = registry.handlers["journal"]
 
     ctx = SimpleNamespace(dry_run=True, parallel_map=None, options={}, force_distill=False)
-    with patch("datastore.notedb.soul_snippets.run_journal_distillation", side_effect=RuntimeError("boom")), \
-         patch("datastore.notedb.soul_snippets.is_fail_hard_enabled", return_value=True):
+    with patch("datastore.insightdb.soul_snippets.run_journal_distillation", side_effect=RuntimeError("boom")), \
+         patch("datastore.insightdb.soul_snippets.is_fail_hard_enabled", return_value=True):
         with pytest.raises(RuntimeError, match="Journal distillation failed"):
             handler(ctx)
 

@@ -123,11 +123,11 @@ FIRST_PARTY_DATASTORE_MANIFESTS: List[Dict[str, Any]] = [
         "contracts": {"validate": 1, "explain": 1, "export": 0, "import": 0},
     },
     {
-        "id": "evolutiondb",
-        "display_name": "EvolutionDB",
-        "description": "Canonical datastore id for the EvolutionDB snippets and journal implementation.",
-        "module": "datastore.evolutiondb.soul_snippets",
-        "plugin_id": "notedb.core",
+        "id": "insightdb",
+        "display_name": "InsightDB",
+        "description": "Canonical datastore id for the InsightDB snippets and journal implementation.",
+        "module": "datastore.insightdb.soul_snippets",
+        "plugin_id": "insightdb.core",
         "schema_version": DATASTORE_MANIFEST_SCHEMA_VERSION,
         "capabilities": {
             "stores": ["snippets", "journal"],
@@ -155,7 +155,7 @@ FIRST_PARTY_DATASTORE_MANIFESTS: List[Dict[str, Any]] = [
         "resource_budgets": {"llm": "normal", "io": "markdown_files"},
         "fail_hard_policy": "inherit_global",
         "contracts": {"validate": 1, "explain": 1, "export": 0, "import": 0},
-        "runtime_aliases": ["notedb"],
+        "runtime_aliases": [],
     },
     {
         "id": "sessiondb",

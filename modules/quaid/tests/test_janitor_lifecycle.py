@@ -126,7 +126,7 @@ def test_workspace_lifecycle_disabled_until_user_invoked_redesign(tmp_path):
 def test_snippets_and_journal_lifecycle_run(monkeypatch, tmp_path):
     calls = {"journal": []}
 
-    monkeypatch.setattr("datastore.notedb.soul_snippets.run_soul_snippets_review", lambda dry_run, **kwargs: {
+    monkeypatch.setattr("datastore.insightdb.soul_snippets.run_soul_snippets_review", lambda dry_run, **kwargs: {
         "folded": 4,
         "rewritten": 2,
         "discarded": 1,
@@ -136,7 +136,7 @@ def test_snippets_and_journal_lifecycle_run(monkeypatch, tmp_path):
         calls["journal"].append((dry_run, force_distill))
         return {"additions": 3, "edits": 1, "recovered_edits": 2, "total_entries": 9}
 
-    monkeypatch.setattr("datastore.notedb.soul_snippets.run_journal_distillation", _run_journal_distillation)
+    monkeypatch.setattr("datastore.insightdb.soul_snippets.run_journal_distillation", _run_journal_distillation)
 
     registry = build_default_registry()
 

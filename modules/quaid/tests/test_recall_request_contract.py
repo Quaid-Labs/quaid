@@ -49,9 +49,11 @@ def test_recall_request_selector_aliases_route_to_datastores() -> None:
         ("project", RECALL_DOCS_REQUEST, "docsdb", "docs"),
         ("session_chunks", RECALL_MEMORY_REQUEST, "memorydb", "session_chunks"),
         ("vector_basic", RECALL_MEMORY_REQUEST, "memorydb", "vector"),
-        ("journal", RECALL_JOURNAL_REQUEST, "evolutiondb", "journal"),
+        ("journal", RECALL_JOURNAL_REQUEST, "insightdb", "journal"),
         ("graph", RECALL_GRAPH_REQUEST, "memorydb", "graph"),
     ]
+
+    assert resolve_recall_request_routes(["insight"])[0].selector == "journal"
 
 
 def test_recall_request_payload_keeps_contract_shape() -> None:
