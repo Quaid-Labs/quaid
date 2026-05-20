@@ -6,7 +6,9 @@ import re
 import shutil
 import subprocess
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
+from uuid import UUID
 
 
 def _instance_slug(project_dir: Path) -> str:
@@ -314,6 +316,82 @@ def test_quaid_session_expand_chunk_cli(tmp_path: Path, monkeypatch) -> None:
     assert "User: Mira bought ferry tickets at the Lisbon kiosk." in result.stdout
     assert "Assistant: The receipt is in the red notebook." in result.stdout
     assert "User: The return time is written beside the map." in result.stdout
+
+
+def test_quaid_session_expand_chunk_json_breaks_result_cycles(monkeypatch, capsys) -> None:
+    from core import session_cli
+
+    row = {
+        "chunk_id": "chunk-cycle",
+        "session_id": "sess-cycle",
+        "chunk_index": 0,
+        "text": "cycle-safe output",
+    }
+    row["self"] = row
+
+    class FakeBridge:
+        def get_session_chunk(self, chunk_id: str, *, owner_id: str, before: int = 0, after: int = 0):
+            assert chunk_id == "chunk-cycle"
+            assert owner_id
+            return row
+
+    monkeypatch.setattr(session_cli, "get_session_memory_bridge", lambda: FakeBridge())
+
+    assert session_cli.main(["expand-chunk", "chunk-cycle", "--owner", "owner-cli", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["chunk_id"] == "chunk-cycle"
+    assert payload["self"] == "[Circular]"
+
+
+def test_quaid_session_expand_chunk_json_stringifies_non_json_scalars(monkeypatch, capsys) -> None:
+    from core import session_cli
+
+    created_at = datetime(2026, 5, 20, 1, 2, 3, tzinfo=timezone.utc)
+    row = {
+        "chunk_id": "chunk-scalars",
+        "session_id": "sess-scalars",
+        "chunk_index": 0,
+        "text": "scalar-safe output",
+        "created_at": created_at,
+        "trace_id": UUID("12345678-1234-5678-1234-567812345678"),
+    }
+
+    class FakeBridge:
+        def get_session_chunk(self, chunk_id: str, *, owner_id: str, before: int = 0, after: int = 0):
+            assert chunk_id == "chunk-scalars"
+            assert owner_id
+            return row
+
+    monkeypatch.setattr(session_cli, "get_session_memory_bridge", lambda: FakeBridge())
+
+    assert session_cli.main(["expand-chunk", "chunk-scalars", "--owner", "owner-cli", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["created_at"] == str(created_at)
+    assert payload["trace_id"] == "12345678-1234-5678-1234-567812345678"
+
+
+def test_quaid_session_expand_microchunk_json_breaks_result_cycles(monkeypatch, capsys) -> None:
+    from core import session_cli
+
+    result = {
+        "microchunk": {"microchunk_id": "micro-cycle", "text": "micro text"},
+        "pair": {"pair_id": "pair-cycle"},
+        "window": [],
+    }
+    result["window"].append(result)
+
+    class FakeBridge:
+        def expand_microchunk(self, microchunk_id: str, *, owner_id: str, before: int = 0, after: int = 0):
+            assert microchunk_id == "micro-cycle"
+            assert owner_id
+            return result
+
+    monkeypatch.setattr(session_cli, "get_session_memory_bridge", lambda: FakeBridge())
+
+    assert session_cli.main(["expand-microchunk", "micro-cycle", "--owner", "owner-cli", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["microchunk"]["microchunk_id"] == "micro-cycle"
+    assert payload["window"] == ["[Circular]"]
 
 
 def test_quaid_session_expand_chunk_not_found_exits_nonzero(tmp_path: Path, monkeypatch) -> None:

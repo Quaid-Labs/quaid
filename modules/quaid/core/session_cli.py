@@ -14,6 +14,34 @@ from typing import Any, Dict, List, Optional
 from core.services.session_memory_bridge import get_session_memory_bridge
 
 
+def _json_safe(value: Any, seen: Optional[set[int]] = None) -> Any:
+    """Return a JSON-serializable copy, breaking accidental object cycles."""
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if seen is None:
+        seen = set()
+    obj_id = id(value)
+    if obj_id in seen:
+        return "[Circular]"
+    if isinstance(value, dict):
+        seen.add(obj_id)
+        try:
+            return {str(key): _json_safe(item, seen) for key, item in value.items()}
+        finally:
+            seen.remove(obj_id)
+    if isinstance(value, (list, tuple, set)):
+        seen.add(obj_id)
+        try:
+            return [_json_safe(item, seen) for item in value]
+        finally:
+            seen.remove(obj_id)
+    return str(value)
+
+
+def _print_json_result(result: Dict[str, Any]) -> None:
+    print(json.dumps(_json_safe(result), indent=2, sort_keys=True))
+
+
 def _clean(value: Any) -> str:
     return str(value or "").strip()
 
@@ -109,7 +137,7 @@ def cmd_expand_microchunk(args: argparse.Namespace) -> int:
         return 1
     pair = result.get("pair") if isinstance(result, dict) else None
     if args.json:
-        print(json.dumps(result, indent=2, sort_keys=True))
+        _print_json_result(result)
         return 0 if pair else 1
     _print_expanded_microchunk(result)
     return 0 if pair else 1
@@ -127,7 +155,7 @@ def cmd_expand_chunk(args: argparse.Namespace) -> int:
         print(f"error: session chunk not found: {args.chunk_id}", file=sys.stderr)
         return 1
     if args.json:
-        print(json.dumps(result, indent=2, sort_keys=True))
+        _print_json_result(result)
         return 0
     _print_expanded_chunk(result)
     return 0

@@ -1472,7 +1472,7 @@ elif [[ "$DRY_RUN" == "1" ]]; then
     echo "  [dry-run] would read $REMOTE_HOST:~/matrix-local/matrix-credentials.json + matrix-room.json"
     echo "            then write ~/.openclaw/openclaw.json channels.matrix and scripts/.matrix-config"
 else
-    MATRIX_SEED_OUTPUT="$(ssh "$REMOTE_HOST" python3 <<'PYEOF'
+    if ! MATRIX_SEED_OUTPUT="$(ssh "$REMOTE_HOST" python3 <<'PYEOF'
 import json
 import os
 import pathlib
@@ -1771,12 +1771,40 @@ print(json.dumps({
     "openclaw_user_id": openclaw_user_id,
 }))
 PYEOF
-)"
-    MATRIX_OPENCLAW_CHANGED="$(python3 -c 'import json,sys; print("1" if json.loads(sys.argv[1]).get("openclaw_changed") else "0")' "$MATRIX_SEED_OUTPUT")"
-    MATRIX_HELPER_CHANGED="$(python3 -c 'import json,sys; print("1" if json.loads(sys.argv[1]).get("helper_changed") else "0")' "$MATRIX_SEED_OUTPUT")"
-    MATRIX_ROOM_ID="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("room_id",""))' "$MATRIX_SEED_OUTPUT")"
-    MATRIX_HOMESERVER="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("homeserver",""))' "$MATRIX_SEED_OUTPUT")"
-    MATRIX_SENDER_USER_ID="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("sender_user_id",""))' "$MATRIX_SEED_OUTPUT")"
+)"; then
+        echo "  $FAIL  OC Matrix config seed failed on remote; see error above" >&2
+        exit 1
+    fi
+    if ! MATRIX_SEED_VARS="$(python3 - "$MATRIX_SEED_OUTPUT" <<'PYEOF'
+import json
+import shlex
+import sys
+
+raw = sys.argv[1] if len(sys.argv) > 1 else ""
+try:
+    payload = json.loads(raw)
+except Exception as exc:
+    raise SystemExit(f"invalid Matrix seed JSON from remote: {exc}; raw={raw[:500]!r}")
+if not isinstance(payload, dict):
+    raise SystemExit(f"invalid Matrix seed JSON from remote: expected object, got {type(payload).__name__}")
+for key in ("homeserver", "room_id", "sender_user_id"):
+    if not str(payload.get(key) or "").strip():
+        raise SystemExit(f"invalid Matrix seed JSON from remote: missing {key}; raw={raw[:500]!r}")
+values = {
+    "MATRIX_OPENCLAW_CHANGED": "1" if payload.get("openclaw_changed") else "0",
+    "MATRIX_HELPER_CHANGED": "1" if payload.get("helper_changed") else "0",
+    "MATRIX_ROOM_ID": str(payload.get("room_id") or ""),
+    "MATRIX_HOMESERVER": str(payload.get("homeserver") or ""),
+    "MATRIX_SENDER_USER_ID": str(payload.get("sender_user_id") or ""),
+}
+for key, value in values.items():
+    print(f"{key}={shlex.quote(value)}")
+PYEOF
+)"; then
+        echo "  $FAIL  OC Matrix config seed returned invalid output" >&2
+        exit 1
+    fi
+    eval "$MATRIX_SEED_VARS"
     if [[ "$MATRIX_OPENCLAW_CHANGED" == "1" || "$MATRIX_HELPER_CHANGED" == "1" ]]; then
         echo "  $PASS  OC Matrix config seeded (homeserver=$MATRIX_HOMESERVER room=$MATRIX_ROOM_ID sender=$MATRIX_SENDER_USER_ID)"
     else

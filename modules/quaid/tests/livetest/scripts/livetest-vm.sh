@@ -257,13 +257,18 @@ cmd_start() {
 
 cmd_stop() {
     local vm_name="$RUN_NAME" orig_host=""
+    local state_vm="" state_vm_ip=""
 
     # Try to load state for vm name / original host
     if [[ -f "$STATE_FILE" ]]; then
-        local state_vm
         state_vm="$(load_state vm_name)"
-        [[ -n "$state_vm" ]] && vm_name="$state_vm"
-        orig_host="$(load_state original_host)"
+        state_vm_ip="$(load_state vm_ip)"
+        if [[ -n "$state_vm" && "$state_vm" != "$RUN_NAME" ]]; then
+            echo "  WARN  ignoring stale VM state for '$state_vm' while stopping '$RUN_NAME'" >&2
+        else
+            [[ -n "$state_vm" ]] && vm_name="$state_vm"
+            orig_host="$(load_state original_host)"
+        fi
     fi
 
     echo ""
@@ -290,8 +295,16 @@ cmd_stop() {
 
     # Restore original host in config
     if [[ -f "$CONFIG_PATH" && -n "$orig_host" ]]; then
-        patch_config_host "$CONFIG_PATH" "$orig_host"
-        echo "  Config remote.host restored to '$orig_host'."
+        local current_host expected_host_a expected_host_b
+        current_host="$(read_config_host)"
+        expected_host_a="$state_vm_ip"
+        expected_host_b="${SSH_USER}@${state_vm_ip}"
+        if [[ -n "$state_vm_ip" && ( "$current_host" == "$expected_host_a" || "$current_host" == "$expected_host_b" ) ]]; then
+            patch_config_host "$CONFIG_PATH" "$orig_host"
+            echo "  Config remote.host restored to '$orig_host'."
+        else
+            echo "  WARN  not restoring remote.host from stale state (current='$current_host' state_vm_ip='${state_vm_ip:-}')"
+        fi
     fi
 
     clear_state
