@@ -1537,6 +1537,40 @@ function writeSessionCursorToEnd(sessionId, transcriptPath, agentLabel = "main")
   } catch {
   }
 }
+function seedRollingCursorForTranscript(sessionId, transcriptPath, agentLabel = "main", source = "unknown", opts) {
+  const sid = String(sessionId || "").trim();
+  const resolvedPath = String(transcriptPath || "").trim();
+  if (!sid || !resolvedPath || !fs.existsSync(resolvedPath)) return false;
+  const label = String(agentLabel || "main").trim() || "main";
+  try {
+    const instanceRoot = instanceRootForAgentLabel(label);
+    const cursorDir = path.join(instanceRoot, "data", "session-cursors");
+    const cursorPath = path.join(cursorDir, `${sid}.json`);
+    if (fs.existsSync(cursorPath)) return false;
+    fs.mkdirSync(cursorDir, { recursive: true });
+    const nowIso = (/* @__PURE__ */ new Date()).toISOString().replace(/\.\d+Z$/, "Z");
+    fs.writeFileSync(cursorPath, JSON.stringify({
+      session_id: sid,
+      line_offset: 0,
+      transcript_path: resolvedPath,
+      updated_at: nowIso
+    }, null, 2), "utf8");
+    writeHookTrace("session_index.rolling_cursor_seeded", {
+      session_id: sid,
+      agent_label: label,
+      source,
+      transcript_path: resolvedPath
+    });
+    if (opts?.wakeDaemon !== false) {
+      pingDaemonAliveIfNeeded(getInstanceId(label));
+    }
+    console.log(`[quaid][cursor] seeded rolling cursor for transcript session ${sid} agent=${label}`);
+    return true;
+  } catch (e) {
+    console.warn(`[quaid][cursor] cursor seed error: ${e}`);
+    return false;
+  }
+}
 function purgeInternalSessionArtifacts() {
   const cursorDir = path.join(QUAID_INSTANCE_ROOT, "data", "session-cursors");
   const signalDir = path.join(QUAID_INSTANCE_ROOT, "data", "extraction-signals");
@@ -5344,25 +5378,12 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
             }
           }
           if (sessionId && isSystemEnabled2("memory") && !isInternalSessionContext({ sessionId, sessionKey }, { sessionId, sessionKey })) {
-            const instanceRoot = instanceRootForAgentLabel(transcriptAgentLabel);
-            const cursorDir = path.join(instanceRoot, "data", "session-cursors");
-            const cursorPath = path.join(cursorDir, `${sessionId}.json`);
-            if (!fs.existsSync(cursorPath)) {
-              try {
-                fs.mkdirSync(cursorDir, { recursive: true });
-                const nowIso = (/* @__PURE__ */ new Date()).toISOString().replace(/\.\d+Z$/, "Z");
-                fs.writeFileSync(cursorPath, JSON.stringify({
-                  session_id: sessionId,
-                  line_offset: 0,
-                  transcript_path: sessionFile,
-                  updated_at: nowIso
-                }, null, 2), "utf8");
-                pingDaemonAliveIfNeeded(getInstanceId(transcriptAgentLabel));
-                console.log(`[quaid][cursor] seeded rolling cursor for transcript session ${sessionId} agent=${transcriptAgentLabel}`);
-              } catch (e) {
-                console.warn(`[quaid][cursor] cursor seed error: ${e}`);
-              }
-            }
+            seedRollingCursorForTranscript(
+              sessionId,
+              sessionFile,
+              transcriptAgentLabel,
+              "transcript_update"
+            );
           }
           if (timeoutActivitySessionId && timeoutManager && !isInternalSessionContext(
             { sessionId: timeoutActivitySessionId, sessionKey },
@@ -6226,7 +6247,20 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
             ...transientOrigin ? { originSessionId: transientOriginValue } : {}
           };
           if (sessionId) {
-            appendPreservedTranscriptMessage(sessionId, "user", rawText, "message_received");
+            const preservedPath = appendPreservedTranscriptMessage(sessionId, "user", rawText, "message_received");
+            const resolvedSessionKey = String(
+              (transientOrigin ? currentInteractiveSession?.key : "") || resolveSessionKeyForSessionId(sessionId) || originSessionKey || ""
+            ).trim();
+            const sessionContext = { sessionId, sessionKey: resolvedSessionKey };
+            if (preservedPath && isSystemEnabled2("memory") && !isInternalSessionContext(sessionContext, sessionContext)) {
+              seedRollingCursorForTranscript(
+                sessionId,
+                preservedPath,
+                resolveHookAgentLabel(sessionContext, sessionContext),
+                "message_received_preserved_transcript",
+                { wakeDaemon: false }
+              );
+            }
           }
           writeHookTrace("hook.message_received.user_cache", {
             session_id: sessionId || "",

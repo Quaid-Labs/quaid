@@ -426,6 +426,64 @@ describe("openclaw session_index watcher", () => {
     rmSync(harness.root, { recursive: true, force: true });
   });
 
+  it("seeds a rolling cursor when message_received preserves active user content", async () => {
+    const harness = makeHarness("message-received-rolling-cursor");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const sessionId = "19c8ad44-1111-4111-8111-111111111111";
+    const sessionKey = "agent:main:matrix:room:-12345";
+    writeJson(join(harness.sessionsDir, "sessions.json"), {
+      [sessionKey]: { sessionId, updatedAt: Date.now() },
+    });
+
+    const api = makeFakeApi();
+    const plugin = await loadPlugin(harness);
+    plugin.register(api as any);
+
+    const messageReceivedHook = api.on.mock.calls.find((call: any[]) =>
+      call?.[0] === "message_received" && call?.[2]?.name === "message-received-command-memory-extraction"
+    )?.[1];
+    expect(typeof messageReceivedHook).toBe("function");
+
+    await messageReceivedHook(
+      {
+        sessionId,
+        sessionKey,
+        timestamp: 1_000,
+        message: {
+          timestamp: 1_000,
+          role: "user",
+          content: [{ type: "text", text: "My cyan backpack has a brass compass clipped inside the left pocket." }],
+        },
+      },
+      { sessionId, sessionKey, agentId: "main" },
+    );
+
+    const cursorPath = join(
+      harness.quaidHome,
+      "instances",
+      "openclaw-main",
+      "data",
+      "session-cursors",
+      `${sessionId}.json`,
+    );
+    const cursor = JSON.parse(readFileSync(cursorPath, "utf8"));
+    expect(cursor).toEqual(expect.objectContaining({
+      session_id: sessionId,
+      line_offset: 0,
+    }));
+    expect(String(cursor.transcript_path || "")).toContain(`${sessionId}.jsonl`);
+    expect(readFileSync(String(cursor.transcript_path), "utf8")).toContain("brass compass");
+    expect(readSignalPayloads(harness.signalDir)).toHaveLength(0);
+
+    warn.mockRestore();
+    log.mockRestore();
+    error.mockRestore();
+    rmSync(harness.root, { recursive: true, force: true });
+  });
+
   it("also flushes agent:main:main when /new resets only a TUI lifecycle session", async () => {
     vi.useFakeTimers();
     const harness = makeHarness("command-new-flushes-agent-main");
