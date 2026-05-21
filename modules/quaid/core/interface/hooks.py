@@ -552,7 +552,6 @@ def _is_provider_failure(exc: Exception) -> bool:
     return isinstance(exc, RuntimeError) and (
         "llm" in text
         or "provider" in lowered
-        or "failhard" in lowered
         or "language model" in lowered
         or "invalid-model" in lowered
         or "model" in lowered

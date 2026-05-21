@@ -1385,6 +1385,37 @@ class TestHookInjectRecallResilience:
 
         assert "recall branch timed out" in err
 
+    def test_recall_fast_store_timeout_does_not_surface_provider_notice(
+        self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
+    ):
+        from core import extraction_daemon
+
+        monkeypatch.setattr(extraction_daemon, "write_cursor", lambda *a: None)
+        monkeypatch.setattr("lib.fail_policy.is_fail_hard_enabled", lambda: True)
+        monkeypatch.setattr("core.interface.hooks._get_pending_context", lambda: "")
+        monkeypatch.setattr("core.interface.hooks._get_deferred_notice_hint", lambda: "")
+        monkeypatch.setattr("core.interface.hooks._get_deferred_notice_relay_context", lambda: "")
+
+        timeout_error = (
+            "Recall store 'vector' failed while failHard is enabled "
+            "(planned_stores=['vector'], timeout_like=True, "
+            "cause=TimeoutError: Parallel call timed out after 3.0s (callable_index=0))"
+        )
+        with patch("core.interface.api.recall_fast", side_effect=RuntimeError(timeout_error)), \
+             patch("core.interface.api.projects_search_docs", return_value=None):
+            out, err = _run_hook_inject(
+                {
+                    "prompt": "trigger recall store timeout",
+                    "session_id": "sess-store-timeout-failhard",
+                    "cwd": "/Users/x",
+                },
+                monkeypatch=monkeypatch,
+            )
+
+        assert out.strip() == ""
+        assert "Recall store 'vector' failed while failHard is enabled" in err
+        assert "[Quaid error] [provider]" not in out
+
     def test_recall_fast_empty_list_no_output(
         self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
     ):
