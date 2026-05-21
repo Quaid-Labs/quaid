@@ -2983,6 +2983,68 @@ class TestTimestampOverride:
         assert all("archive-amber-valentine-2023" not in text for text in texts)
         assert all("archive-ironwood-workshop-2023" not in text for text in texts)
 
+    def test_asof_temporal_rerank_is_open_ended_only(self):
+        """Closed ranges keep ordinary relevance ordering after date filtering."""
+        import datastore.memorydb.memory_graph as mg
+
+        old = mg.Node.create("Fact", "archive old", owner_id="quaid")
+        old.occurred_start = "2023-01-01T00:00:00Z"
+        recent = mg.Node.create("Fact", "archive recent", owner_id="quaid")
+        recent.occurred_start = "2024-01-01T00:00:00Z"
+        scored = [(old, 0.9), (recent, 0.7)]
+
+        reranked = mg._apply_open_ended_asof_temporal_rerank(
+            scored,
+            date_from="2023-01-01",
+            date_to="2024-06-30",
+        )
+
+        assert reranked == scored
+
+    def test_asof_temporal_rerank_requires_upper_bound(self):
+        """Unbounded and lower-bound-only searches keep ordinary relevance ordering."""
+        import datastore.memorydb.memory_graph as mg
+
+        old = mg.Node.create("Fact", "archive old", owner_id="quaid")
+        old.occurred_start = "2023-01-01T00:00:00Z"
+        recent = mg.Node.create("Fact", "archive recent", owner_id="quaid")
+        recent.occurred_start = "2024-01-01T00:00:00Z"
+        scored = [(old, 0.9), (recent, 0.7)]
+
+        reranked = mg._apply_open_ended_asof_temporal_rerank(
+            scored,
+            date_from=None,
+            date_to=None,
+        )
+
+        assert reranked == scored
+
+        lower_bound_only = mg._apply_open_ended_asof_temporal_rerank(
+            scored,
+            date_from="2023-01-01",
+            date_to=None,
+        )
+
+        assert lower_bound_only == scored
+
+    def test_asof_temporal_rerank_ignores_narrow_date_spans(self):
+        """Tiny temporal spans should not add ranking noise to equivalent dates."""
+        import datastore.memorydb.memory_graph as mg
+
+        first = mg.Node.create("Fact", "archive first", owner_id="quaid")
+        first.occurred_start = "2024-01-01T00:00:00Z"
+        second = mg.Node.create("Fact", "archive second", owner_id="quaid")
+        second.occurred_start = "2024-01-05T00:00:00Z"
+        scored = [(first, 0.9), (second, 0.7)]
+
+        reranked = mg._apply_open_ended_asof_temporal_rerank(
+            scored,
+            date_from=None,
+            date_to="2024-06-30",
+        )
+
+        assert reranked == scored
+
     def test_temporal_auto_prefers_valid_range_over_source_date(self):
         """Auto mode treats valid_from/until as event-time when occurrence is absent."""
         import datastore.memorydb.memory_graph as mg

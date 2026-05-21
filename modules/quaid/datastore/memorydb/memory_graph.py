@@ -10626,7 +10626,9 @@ def _recall_once(
         use_multi_pass: Whether to attempt a second-pass broader search on low-quality results
         use_reranker: Override config reranker_enabled (None = use config)
         date_from: Only return memories on or after this date (YYYY-MM-DD)
-        date_to: Only return memories on or before this date (YYYY-MM-DD)
+        date_to: Only return memories on or before this date (YYYY-MM-DD). When
+            supplied without date_from, recall treats the bound as an as-of view
+            and prefers newer eligible dated rows after filtering.
         temporal_dimension: Date axis for filters: auto, occurred, mentioned, or record.
         domain: Optional domain filter map (default {"all": true})
         project: Optional project label filter
@@ -11542,7 +11544,7 @@ def _recall_once(
 
     scored_results = _apply_relative_temporal_freshness_rerank(
         scored_results,
-        freshness_preferred=prefer_fresh,
+        freshness_preferred=prefer_fresh and not (date_to and not date_from),
         target_date=target_date,
         temporal_dimension=temporal_dimension,
     )
@@ -16480,7 +16482,7 @@ def _apply_open_ended_asof_temporal_rerank(
     date_to: Optional[str],
     temporal_dimension: Any = None,
 ) -> List[Tuple["Node", float]]:
-    """Prefer the newest eligible dated candidates for open-ended as-of recall."""
+    """Prefer the newest eligible dated candidates for upper-bound as-of recall."""
     normalized_to = _normalize_recall_date_bound(date_to)
     if date_from or not normalized_to or len(scored_results) < 2:
         return scored_results
@@ -16510,6 +16512,8 @@ def _apply_open_ended_asof_temporal_rerank(
         return scored_results
 
     date_by_node_id = {id(node): event_date for node, _score, event_date in dated}
+    # Date_to-only recall is an as-of view: recency within the eligible window is
+    # load-bearing, but semantic score still wins unless stale rows are close.
     max_boost = 0.22
     reranked: List[Tuple[Node, float]] = []
     for node, score in scored_results:
