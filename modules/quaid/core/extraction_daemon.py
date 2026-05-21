@@ -1632,9 +1632,16 @@ def _active_source_cursor_for_stale_signal_transcript(
     return "", ""
 
 
-def _pending_signal_source_keys(signals: List[Dict[str, Any]]) -> set[str]:
+def _pending_signal_source_keys(
+    signals: List[Dict[str, Any]],
+    *,
+    signal_type: Optional[str] = None,
+) -> set[str]:
     keys: set[str] = set()
     for signal in signals:
+        current_type = str(signal.get("type") or signal.get("signal_type") or "")
+        if signal_type and current_type != signal_type:
+            continue
         session_id = str(signal.get("session_id") or "").strip()
         transcript_path = str(signal.get("transcript_path") or "").strip()
         if not session_id:
@@ -4228,7 +4235,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                         # must survive to flush staged facts once rolling completes
                         # (B009; session_end added for FIFO ordering).
                         other_type = other.get("type", "")
-                        if signal_type in ("compaction", "reset", "session_end") and other_type == "rolling":
+                        if signal_type in ("compaction", "reset", "session_end", "timeout") and other_type == "rolling":
                             continue
                         mark_signal_processed(signal_data)
                         break
@@ -4320,12 +4327,11 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
     except Exception:
         pass
 
-    # FIFO ordering: if this is a session_end signal but a rolling signal for
-    # the same session is still pending (not yet processing), defer this
-    # session_end so rolling can stage its facts first.  Without this, a
-    # session_end picked up before the rolling job runs would find empty
-    # rolling_state and lose staged carry_facts.
-    if signal_type == "session_end" and not staged_payload_sweep_signal:
+    # FIFO ordering: if a lifecycle/timeout signal arrives while a rolling
+    # signal for the same session is still pending, defer this signal so rolling
+    # can stage threshold-crossing facts first. The lifecycle/timeout signal
+    # then flushes staged facts and drains any residual tail.
+    if signal_type in ("compaction", "reset", "session_end", "timeout") and not staged_payload_sweep_signal:
         try:
             _ses_sig_path = signal_data.get("_signal_path", "")
             for _rf in list(_signal_dir().iterdir()):
@@ -4335,9 +4341,9 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                     _rs = json.loads(_rf.read_text(encoding="utf-8"))
                     if _rs.get("session_id") == session_id and _rs.get("type") == "rolling":
                         logger.info(
-                            "[%s] session %s: session_end deferred — pending rolling signal "
+                            "[%s] session %s: %s deferred — pending rolling signal "
                             "found; will retry after rolling extraction completes (FIFO)",
-                            label, session_id,
+                            label, session_id, signal_type,
                         )
                         _release_session_processing_lock(lock_owner_key, lock_fd)
                         return  # preserve signal on disk; retry next poll cycle
@@ -6246,8 +6252,7 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
     chunk_budget = int(chunk_tokens or _get_capture_chunk_tokens())
     chunk_line_budget = _get_capture_chunk_max_lines()
     pending = read_pending_signals()
-    pending_session_ids = {s.get("session_id") for s in pending}
-    pending_source_keys = _pending_signal_source_keys(pending)
+    pending_rolling_source_keys = _pending_signal_source_keys(pending, signal_type="rolling")
 
     for cursor_file in cursor_dir.glob("*.json"):
         try:
@@ -6336,10 +6341,8 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
             )
             transcript_path = str(data.get("transcript_path") or transcript_path)
         unfroze_internal_cursor = internal_state == "unfrozen"
-        if session_id in pending_session_ids:
-            continue
         source_key = _signal_source_cursor_key(str(session_id), str(transcript_path), cursor_data=data)
-        if source_key in pending_source_keys:
+        if source_key in pending_rolling_source_keys:
             continue
         if _processing_lock_active(source_key):
             logger.info(
@@ -6523,6 +6526,11 @@ def daemon_loop(poll_interval: float = 5.0, idle_check_interval: float = 300.0) 
                 time.sleep(poll_interval)
                 continue
 
+            try:
+                check_chunk_ready_sessions()
+            except Exception as e:
+                logger.error("rolling chunk readiness check failed: %s", e)
+
             # Process pending signals
             signals = read_pending_signals()
             for sig in signals:
@@ -6573,11 +6581,6 @@ def daemon_loop(poll_interval: float = 5.0, idle_check_interval: float = 300.0) 
                 except Exception as e:
                     logger.error("idle check failed: %s", e)
                 last_idle_check = now
-
-            try:
-                check_chunk_ready_sessions()
-            except Exception as e:
-                logger.error("rolling chunk readiness check failed: %s", e)
 
             # Periodic embedding retry — backfill facts stored without embeddings
             if now - last_embed_retry_check > _EMBED_RETRY_INTERVAL:

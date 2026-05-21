@@ -6321,6 +6321,85 @@ class TestRollingExtraction:
             }
         ]
 
+    def test_check_chunk_ready_sessions_queues_rolling_despite_pending_lifecycle_signal(
+        self, monkeypatch, tmp_path
+    ):
+        transcript_path = tmp_path / "session.jsonl"
+        transcript_path.write_text(
+            '{"role":"user","content":"alpha beta gamma delta epsilon zeta"}\n'
+            '{"role":"assistant","content":"ack"}\n',
+            encoding="utf-8",
+        )
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "rolling-inst")
+        extraction_daemon.write_cursor("sess-roll", 0, str(transcript_path))
+        extraction_daemon.write_signal(
+            signal_type="reset",
+            session_id="sess-roll",
+            transcript_path=str(transcript_path),
+        )
+
+        captured = []
+        monkeypatch.setattr(extraction_daemon, "_get_capture_chunk_tokens", lambda default=8000: 2)
+        monkeypatch.setattr(
+            extraction_daemon,
+            "write_signal",
+            lambda signal_type, session_id, transcript_path, **kwargs: captured.append(
+                {
+                    "signal_type": signal_type,
+                    "session_id": session_id,
+                    "transcript_path": transcript_path,
+                }
+            ),
+        )
+
+        extraction_daemon.check_chunk_ready_sessions()
+
+        assert captured == [
+            {
+                "signal_type": "rolling",
+                "session_id": "sess-roll",
+                "transcript_path": str(transcript_path),
+            }
+        ]
+
+    def test_process_signal_defers_lifecycle_when_rolling_is_pending(
+        self, monkeypatch, tmp_path
+    ):
+        transcript_path = tmp_path / "session.jsonl"
+        transcript_path.write_text(
+            '{"role":"user","content":"alpha beta gamma delta epsilon zeta"}\n',
+            encoding="utf-8",
+        )
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "rolling-inst")
+        extraction_daemon.write_cursor("sess-roll", 0, str(transcript_path))
+        extraction_daemon.write_signal(
+            signal_type="reset",
+            session_id="sess-roll",
+            transcript_path=str(transcript_path),
+        )
+        extraction_daemon.write_signal(
+            signal_type="rolling",
+            session_id="sess-roll",
+            transcript_path=str(transcript_path),
+        )
+        monkeypatch.setattr(
+            extraction_daemon,
+            "_reconcile_internal_cursor_state",
+            lambda *args, **kwargs: "not_internal",
+        )
+
+        signals = extraction_daemon.read_pending_signals()
+        assert [signal["type"] for signal in signals] == ["reset", "rolling"]
+
+        extraction_daemon.process_signal(signals[0])
+
+        remaining = extraction_daemon.read_pending_signals()
+        assert [signal["type"] for signal in remaining] == ["reset", "rolling"]
+
     def test_chunk_scan_trusts_instance_cursor_when_adapter_ownership_rejects(
         self, monkeypatch, tmp_path
     ):
