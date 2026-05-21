@@ -2909,6 +2909,80 @@ class TestTimestampOverride:
         assert mentioned_rows[0]["temporal_filter_basis"] == "mentioned"
         assert record_rows[0]["temporal_filter_basis"] == "record"
 
+    def test_asof_recall_prefers_newer_eligible_occurred_rows(self):
+        """Open-ended as-of recall ranks newer in-window event evidence before stale rows."""
+        import datastore.memorydb.memory_graph as mg
+
+        def _fact(text, occurred_at):
+            node = mg.Node.create("Fact", text, owner_id="quaid", keywords="archive")
+            node.occurred_start = occurred_at
+            node.occurred_end = occurred_at
+            node.mentioned_at = "2026-05-21T00:00:00Z"
+            node.created_at = "2026-05-21T00:00:00Z"
+            return node
+
+        amber = _fact(
+            "archive-amber-valentine-2023: amber-tinted valentine dinner",
+            "2023-02-14T10:00:00Z",
+        )
+        ironwood = _fact(
+            "archive-ironwood-workshop-2023: ironwood workshop series",
+            "2023-05-03T09:30:00Z",
+        )
+        jasper = _fact(
+            "archive-jasper-retreat-2024: jasper company retreat",
+            "2024-01-18T08:00:00Z",
+        )
+        cobalt = _fact(
+            "archive-cobalt-release-2024: cobalt release cut",
+            "2024-04-07T20:00:00Z",
+        )
+        sepia = _fact(
+            "archive-sepia-reading-2024: sepia reading group",
+            "2024-08-30T19:45:00Z",
+        )
+        graph = SimpleNamespace(
+            search_hybrid=MagicMock(return_value=[
+                (amber, 0.96),
+                (ironwood, 0.94),
+                (jasper, 0.80),
+                (cobalt, 0.76),
+                (sepia, 0.99),
+            ]),
+        )
+
+        with patch.object(mg, "get_graph", return_value=graph), \
+             patch.object(mg, "_ollama_healthy", return_value=True), \
+             patch.object(mg, "_log_recall", return_value=None), \
+             patch.object(mg, "_relation_matches_for_query", return_value=[]), \
+             patch.object(mg, "_has_generic_graph_signal", return_value=False), \
+             patch.object(mg, "_expand_high_confidence_entity_anchors", return_value=([], [])):
+            rows = mg._recall_once(
+                "archive",
+                owner_id="quaid",
+                limit=2,
+                min_similarity=0.0,
+                date_to="2024-06-30",
+                use_routing=False,
+                use_aliases=False,
+                use_intent=False,
+                use_multi_pass=False,
+                use_reranker=False,
+                include_graph_traversal=False,
+                include_co_session=False,
+                include_mmr=False,
+                include_lexical_anchor_shaping=False,
+                low_signal_retry=False,
+                track_access=False,
+            )
+
+        texts = [row["text"] for row in rows]
+        assert "archive-cobalt-release-2024: cobalt release cut" in texts
+        assert "archive-jasper-retreat-2024: jasper company retreat" in texts
+        assert all("archive-sepia-reading-2024" not in text for text in texts)
+        assert all("archive-amber-valentine-2023" not in text for text in texts)
+        assert all("archive-ironwood-workshop-2023" not in text for text in texts)
+
     def test_temporal_auto_prefers_valid_range_over_source_date(self):
         """Auto mode treats valid_from/until as event-time when occurrence is absent."""
         import datastore.memorydb.memory_graph as mg

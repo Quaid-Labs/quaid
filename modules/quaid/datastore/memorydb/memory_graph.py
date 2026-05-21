@@ -56,7 +56,7 @@ import uuid
 from collections import Counter
 from contextlib import nullcontext
 from dataclasses import dataclass, field, asdict
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple, Set
 
@@ -11533,6 +11533,12 @@ def _recall_once(
             for node, score in scored_results
             if _node_in_date_range(node)
         ]
+        scored_results = _apply_open_ended_asof_temporal_rerank(
+            scored_results,
+            date_from=date_from,
+            date_to=date_to,
+            temporal_dimension=temporal_dimension,
+        )
 
     scored_results = _apply_relative_temporal_freshness_rerank(
         scored_results,
@@ -16463,6 +16469,56 @@ def _apply_relative_temporal_freshness_rerank(
         age_days = max(0, (latest - parsed).days)
         freshness = max(0.0, 1.0 - (age_days / span_days))
         reranked.append((node, min(1.0, float(score) + max_boost * freshness)))
+    reranked.sort(key=lambda item: item[1], reverse=True)
+    return reranked
+
+
+def _apply_open_ended_asof_temporal_rerank(
+    scored_results: List[Tuple["Node", float]],
+    *,
+    date_from: Optional[str],
+    date_to: Optional[str],
+    temporal_dimension: Any = None,
+) -> List[Tuple["Node", float]]:
+    """Prefer the newest eligible dated candidates for open-ended as-of recall."""
+    normalized_to = _normalize_recall_date_bound(date_to)
+    if date_from or not normalized_to or len(scored_results) < 2:
+        return scored_results
+    try:
+        target = datetime.fromisoformat(normalized_to).date()
+    except Exception:
+        return scored_results
+
+    dated: List[Tuple[Node, float, date]] = []
+    for node, score in scored_results:
+        date_part = _node_temporal_date(node, temporal_dimension=temporal_dimension)
+        if not date_part:
+            continue
+        try:
+            event_date = datetime.fromisoformat(date_part).date()
+        except Exception:
+            continue
+        if event_date <= target:
+            dated.append((node, score, event_date))
+    if len(dated) < 2:
+        return scored_results
+
+    earliest = min(event_date for _node, _score, event_date in dated)
+    latest = max(event_date for _node, _score, event_date in dated)
+    span_days = max(1, (latest - earliest).days)
+    if span_days < 14:
+        return scored_results
+
+    date_by_node_id = {id(node): event_date for node, _score, event_date in dated}
+    max_boost = 0.22
+    reranked: List[Tuple[Node, float]] = []
+    for node, score in scored_results:
+        event_date = date_by_node_id.get(id(node))
+        if event_date is None:
+            reranked.append((node, score))
+            continue
+        relative_recency = max(0.0, min(1.0, (event_date - earliest).days / span_days))
+        reranked.append((node, min(1.0, float(score) + max_boost * relative_recency)))
     reranked.sort(key=lambda item: item[1], reverse=True)
     return reranked
 
