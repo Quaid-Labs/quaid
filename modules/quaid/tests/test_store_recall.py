@@ -75,6 +75,60 @@ def test_recall_command_date_bounds_cli_values_override_config_aliases():
     ) == ("2023-01-01", "2023-12-31")
 
 
+def test_recall_command_owner_alias_prefers_owner_id_before_default():
+    import datastore.memorydb.memory_graph as mg
+
+    with patch.object(
+        mg,
+        "_get_memory_config",
+        return_value=SimpleNamespace(users=SimpleNamespace(default_owner="solomon-steadman")),
+    ):
+        assert mg._resolve_cli_recall_owner({"owner_id": "m9-test-owner"}) == "m9-test-owner"
+        assert mg._resolve_cli_recall_owner({"owner": "manual-owner"}) == "manual-owner"
+        assert mg._resolve_cli_recall_owner({"owner_id": "", "owner": ""}) == "solomon-steadman"
+
+
+def test_recall_owner_id_config_scopes_session_chunks_to_requested_owner(tmp_path):
+    import datastore.memorydb.memory_graph as mg
+
+    graph, _db_file = _make_graph(tmp_path)
+    graph.store_session_chunk(
+        "User: Solomon default owner Lisbon ferry receipt decoy.",
+        owner_id="solomon-steadman",
+        session_id="default-session",
+        chunk_index=0,
+    )
+    target = graph.store_session_chunk(
+        "User: The Lisbon ferry receipt is tucked in the red notebook.",
+        owner_id="m9-test-owner",
+        session_id="m9-session-linked",
+        chunk_index=0,
+    )
+
+    cfg = {"stores": ["session_chunks"], "limit": 3, "owner_id": "m9-test-owner", "max_chunk_tokens": 80}
+    owner = mg._resolve_cli_recall_owner(cfg)
+
+    with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph):
+        rows, meta, _bundle = mg._run_recall_store_plan(
+            "where is the Lisbon ferry receipt",
+            stores=["session_chunks"],
+            limit=3,
+            owner_id=owner,
+            min_similarity=0.0,
+            planner_profile="off",
+            planned_queries=["where is the Lisbon ferry receipt"],
+            planner_meta={"planned_stores": ["session_chunks"]},
+            fast_mode=False,
+            common_kwargs={"max_chunk_tokens": 80},
+        )
+
+    assert rows
+    assert rows[0]["chunk_id"] == target["chunk_id"]
+    assert {row["owner_id"] for row in rows} == {"m9-test-owner"}
+    assert all(row["session_id"] == "m9-session-linked" for row in rows)
+    assert meta["store_runs"][0]["store"] == "session_chunks"
+
+
 def test_print_recall_results_emits_empty_message(capsys):
     from datastore.memorydb.memory_graph import _print_recall_results
 

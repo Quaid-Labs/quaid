@@ -7105,6 +7105,14 @@ def _build_cli_vector_recall_kwargs(
     return recall_kwargs
 
 
+def _resolve_cli_recall_owner(options: Dict[str, Any]) -> str:
+    """Resolve CLI recall owner aliases before falling back to the configured default."""
+    owner = str((options or {}).get("owner_id") or (options or {}).get("owner") or "").strip()
+    if owner:
+        return owner
+    return str(_get_memory_config().users.default_owner)
+
+
 def _validate_cli_vector_recall_kwargs(value: Any) -> Dict[str, Any]:
     if not isinstance(value, dict):
         raise _contract_error("vector request options.recall_kwargs must be an object")
@@ -7252,7 +7260,7 @@ def _build_cli_memory_recall_request_kwargs(options: Dict[str, Any]) -> Dict[str
     use_fast = bool(options.get("fast"))
     return _build_cli_vector_recall_kwargs(
         limit=int(options.get("limit") or 1),
-        owner=str(options.get("owner_id") or _get_memory_config().users.default_owner),
+        owner=_resolve_cli_recall_owner(options),
         min_similarity=options.get("min_similarity", 0.60),
         current_session_id=options.get("current_session_id"),
         compaction_time=options.get("compaction_time"),
@@ -23697,7 +23705,7 @@ if __name__ == "__main__":
 
             # Top-level config with per-store overrides
             limit       = cfg.get("limit", 5)
-            owner       = cfg.get("owner") or _get_memory_config().users.default_owner
+            owner       = _resolve_cli_recall_owner(cfg)
             use_json    = args.json
             use_debug   = args.debug
 
