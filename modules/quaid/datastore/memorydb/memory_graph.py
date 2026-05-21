@@ -6590,7 +6590,12 @@ def _attach_source_chunks_to_recall_rows(
             for row in normalized_rows:
                 if not isinstance(row, dict):
                     continue
+                row_source_type = str(row.get("source_type") or row.get("category") or "").strip().lower()
                 row_chunk_id = str(row.get("source_chunk_id") or "").strip()
+                if not row_chunk_id and row_source_type in {"source_chunk", "session_chunk"}:
+                    row_chunk_id = str(row.get("chunk_id") or row.get("session_chunk_id") or "").strip()
+                if not row_chunk_id:
+                    row_chunk_id = str(row.get("session_window_center_chunk_id") or "").strip()
                 row_owner = str(row.get("owner_id") or "").strip()
                 if row_chunk_id and row_owner:
                     chunk_owner_pairs.add((row_chunk_id, row_owner))
@@ -6624,7 +6629,12 @@ def _attach_source_chunks_to_recall_rows(
         if not isinstance(row, dict):
             continue
         row_id = str(row.get("id") or "").strip()
+        source_type = str(row.get("source_type") or row.get("category") or "").strip().lower()
         chunk_id = str(row.get("source_chunk_id") or "").strip() or None
+        if not chunk_id and source_type in {"source_chunk", "session_chunk"}:
+            chunk_id = str(row.get("chunk_id") or row.get("session_chunk_id") or "").strip() or None
+        if not chunk_id:
+            chunk_id = str(row.get("session_window_center_chunk_id") or "").strip() or None
         row_owner = str(row.get("owner_id") or "").strip() or None
         if not chunk_id and row_id:
             chunk_id, linked_owner = id_to_link.get(row_id, (None, None))
@@ -6683,6 +6693,22 @@ def _attach_source_chunks_to_recall_rows(
     return normalized_rows, summary
 
 
+_DEFAULT_RECALL_RAW_PROVENANCE_FIELDS = {
+    "source_chunk_id",
+    "source_chunk_ids",
+    "session_window_center_chunk_id",
+    "session_window_center_microchunk_id",
+    "session_window_chunk_ids",
+}
+
+
+def _sanitize_default_recall_output_row(row: Dict[str, Any]) -> Dict[str, Any]:
+    sanitized = dict(row)
+    for field in _DEFAULT_RECALL_RAW_PROVENANCE_FIELDS:
+        sanitized.pop(field, None)
+    return sanitized
+
+
 def _prepare_recall_output_rows(
     rows: Any,
     meta: Optional[Dict[str, Any]],
@@ -6697,12 +6723,10 @@ def _prepare_recall_output_rows(
             return rows, meta
         output_rows: List[Any] = []
         for row in rows:
-            if not isinstance(row, dict) or "source_chunk_id" not in row or preserve_source_chunk_ids:
+            if not isinstance(row, dict) or preserve_source_chunk_ids:
                 output_rows.append(row)
                 continue
-            sanitized = dict(row)
-            sanitized.pop("source_chunk_id", None)
-            output_rows.append(sanitized)
+            output_rows.append(_sanitize_default_recall_output_row(row))
         return output_rows, meta
     output_rows, source_chunk_meta = _attach_source_chunks_to_recall_rows(
         rows,

@@ -3678,6 +3678,42 @@ class TestSourceChunkStorage:
         assert meta["session_chunks"]["output_token_count"] <= 1
         assert meta["session_chunks"]["max_total_chunk_tokens"] == 1
 
+    def test_recall_include_chunks_attaches_selected_first_order_chunk_rows(self, tmp_path):
+        """Selected session/source chunk rows are first-order evidence and attach when requested."""
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _db_file = _make_graph(tmp_path)
+        chunk = graph.store_source_chunk(
+            "User: Ren keeps the winter onigiri recipe inside the cedar lunchbox.",
+            owner_id="ren",
+            session_id="session-first-order",
+            chunk_index=0,
+        )
+        rows = [{
+            "id": chunk["chunk_id"],
+            "category": "session_chunk",
+            "source_type": "session_chunk",
+            "via": "session_chunks",
+            "chunk_id": chunk["chunk_id"],
+            "session_chunk_id": chunk["chunk_id"],
+            "owner_id": "ren",
+            "text": "User: Ren keeps the winter onigiri recipe inside the cedar lunchbox.",
+        }]
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph):
+            output_rows, meta = mg._prepare_recall_output_rows(
+                rows,
+                {},
+                include_chunks=True,
+                max_chunk_tokens=12,
+            )
+
+        assert output_rows[0]["source_chunk_id"] == chunk["chunk_id"]
+        assert output_rows[0]["source_chunk"]["chunk_id"] == chunk["chunk_id"]
+        assert output_rows[0]["source_chunk"]["text"].startswith("User: Ren keeps")
+        assert meta["source_chunks"]["attached"] == 1
+        assert meta["source_chunks"]["failed"] is False
+
     def test_recall_include_chunks_raises_on_missing_source_chunk_under_failhard(self, tmp_path):
         """Explicit source chunk dereference is failHard-correct when evidence is missing."""
         from datastore.memorydb.memory_graph import recall, store
@@ -3805,6 +3841,35 @@ class TestSourceChunkStorage:
         assert "source_chunk" not in row
         assert meta["session_chunks"]["attached"] == 0
         assert meta["session_chunks"]["missing"] == 1
+
+    def test_default_recall_output_strips_session_window_raw_provenance_fields(self):
+        """Default recall can include bounded source text without leaking raw chunk provenance IDs."""
+        import datastore.memorydb.memory_graph as mg
+
+        rows = [{
+            "id": "fact-ren",
+            "category": "fact",
+            "text": "[memory] Ren likes onigiri\n[session_chunk] session#1: source context",
+            "source_chunk_id": "source-center",
+            "source_chunk_ids": ["source-a", "source-b"],
+            "session_window_expanded": True,
+            "session_window_expansion_source": "sessiondb_bridge",
+            "session_window_center_chunk_id": "source-center",
+            "session_window_center_microchunk_id": "micro-center",
+            "session_window_chunk_ids": ["source-center", "source-after"],
+            "session_window_size": 2,
+        }]
+
+        output_rows, _meta = mg._prepare_recall_output_rows(rows, {}, include_chunks=False)
+
+        output = output_rows[0]
+        assert "source_chunk_id" not in output
+        assert "source_chunk_ids" not in output
+        assert "session_window_center_chunk_id" not in output
+        assert "session_window_center_microchunk_id" not in output
+        assert "session_window_chunk_ids" not in output
+        assert output["session_window_expanded"] is True
+        assert output["session_window_size"] == 2
 
     def test_source_chunk_store_plan_returns_opt_in_chunk_rows(self, tmp_path):
         """The session_chunks store is an explicit transcript-context lane."""
