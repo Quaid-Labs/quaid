@@ -6694,6 +6694,10 @@ def _attach_source_chunks_to_recall_rows(
 
 
 _DEFAULT_RECALL_RAW_PROVENANCE_FIELDS = {
+    # Raw datastore linkage fields are available to internal callsites via
+    # preserve_source_chunk_ids=True or include_chunks=True, but default recall
+    # output should expose bounded source text rather than provenance IDs.
+    "microchunk_id",
     "source_chunk_id",
     "source_chunk_ids",
     "session_window_center_chunk_id",

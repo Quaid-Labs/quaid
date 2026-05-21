@@ -3714,6 +3714,39 @@ class TestSourceChunkStorage:
         assert meta["source_chunks"]["attached"] == 1
         assert meta["source_chunks"]["failed"] is False
 
+    def test_recall_include_chunks_attaches_session_window_center_chunk_alias(self, tmp_path):
+        """Expanded compact rows can opt into chunk evidence through their center chunk alias."""
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _db_file = _make_graph(tmp_path)
+        chunk = graph.store_source_chunk(
+            "User: Ren keeps the orchard map under the brass kitchen scale.",
+            owner_id="ren",
+            session_id="session-window-center",
+            chunk_index=0,
+        )
+        rows = [{
+            "id": "fact-ren-map",
+            "category": "fact",
+            "owner_id": "ren",
+            "text": "[memory] Ren has an orchard map.\n[session_chunk] session#0: source context",
+            "session_window_center_chunk_id": chunk["chunk_id"],
+            "session_window_expanded": True,
+        }]
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph):
+            output_rows, meta = mg._prepare_recall_output_rows(
+                rows,
+                {},
+                include_chunks=True,
+                max_chunk_tokens=12,
+            )
+
+        assert output_rows[0]["source_chunk_id"] == chunk["chunk_id"]
+        assert output_rows[0]["source_chunk"]["chunk_id"] == chunk["chunk_id"]
+        assert "orchard map" in output_rows[0]["source_chunk"]["text"]
+        assert meta["source_chunks"]["attached"] == 1
+
     def test_recall_include_chunks_raises_on_missing_source_chunk_under_failhard(self, tmp_path):
         """Explicit source chunk dereference is failHard-correct when evidence is missing."""
         from datastore.memorydb.memory_graph import recall, store
@@ -3850,6 +3883,7 @@ class TestSourceChunkStorage:
             "id": "fact-ren",
             "category": "fact",
             "text": "[memory] Ren likes onigiri\n[session_chunk] session#1: source context",
+            "microchunk_id": "micro-row",
             "source_chunk_id": "source-center",
             "source_chunk_ids": ["source-a", "source-b"],
             "session_window_expanded": True,
@@ -3863,6 +3897,7 @@ class TestSourceChunkStorage:
         output_rows, _meta = mg._prepare_recall_output_rows(rows, {}, include_chunks=False)
 
         output = output_rows[0]
+        assert "microchunk_id" not in output
         assert "source_chunk_id" not in output
         assert "source_chunk_ids" not in output
         assert "session_window_center_chunk_id" not in output
