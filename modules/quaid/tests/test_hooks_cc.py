@@ -1364,7 +1364,7 @@ class TestHookInjectRecallResilience:
         # Error should appear on stderr, not propagate
         assert "LLM down" in err or True  # hook silences errors internally
 
-    def test_recall_fast_timeout_returns_empty_when_fail_hard_enabled(
+    def test_recall_fast_store_timeout_returns_empty_when_fail_hard_enabled(
         self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
     ):
         from core import extraction_daemon
@@ -1376,7 +1376,12 @@ class TestHookInjectRecallResilience:
         monkeypatch.setattr("core.interface.hooks._get_deferred_notice_relay_context", lambda: "")
         monkeypatch.setattr("core.interface.hooks._get_quaid_agents_baseline_context", lambda: "")
 
-        with patch("core.interface.api.recall_fast", side_effect=TimeoutError("recall branch timed out")), \
+        timeout_error = (
+            "Recall store 'vector' failed while failHard is enabled "
+            "(planned_stores=['vector'], timeout_like=True, "
+            "cause=TimeoutError: Parallel call timed out after 3.0s (callable_index=0))"
+        )
+        with patch("core.interface.api.recall_fast", side_effect=RuntimeError(timeout_error)), \
              patch("core.interface.api.projects_search_docs", return_value=None):
             out, err = _run_hook_inject(
                 {
@@ -1388,7 +1393,7 @@ class TestHookInjectRecallResilience:
             )
 
         assert out.strip() == ""
-        assert "recall branch timed out" not in err
+        assert "Recall store 'vector' failed while failHard is enabled" not in err
 
     def test_recall_fast_non_timeout_exception_surfaces_when_fail_hard_enabled(
         self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
@@ -1411,7 +1416,7 @@ class TestHookInjectRecallResilience:
 
         assert "local recall invariant broke" in err
 
-    def test_recall_fast_store_timeout_does_not_surface_provider_notice(
+    def test_recall_fast_bare_timeout_returns_empty_when_fail_hard_enabled(
         self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
     ):
         from core import extraction_daemon
@@ -1421,25 +1426,21 @@ class TestHookInjectRecallResilience:
         monkeypatch.setattr("core.interface.hooks._get_pending_context", lambda: "")
         monkeypatch.setattr("core.interface.hooks._get_deferred_notice_hint", lambda: "")
         monkeypatch.setattr("core.interface.hooks._get_deferred_notice_relay_context", lambda: "")
+        monkeypatch.setattr("core.interface.hooks._get_quaid_agents_baseline_context", lambda: "")
 
-        timeout_error = (
-            "Recall store 'vector' failed while failHard is enabled "
-            "(planned_stores=['vector'], timeout_like=True, "
-            "cause=TimeoutError: Parallel call timed out after 3.0s (callable_index=0))"
-        )
-        with patch("core.interface.api.recall_fast", side_effect=RuntimeError(timeout_error)), \
+        with patch("core.interface.api.recall_fast", side_effect=TimeoutError("recall branch timed out")), \
              patch("core.interface.api.projects_search_docs", return_value=None):
             out, err = _run_hook_inject(
                 {
-                    "prompt": "trigger recall store timeout",
-                    "session_id": "sess-store-timeout-failhard",
+                    "prompt": "trigger bare recall timeout",
+                    "session_id": "sess-bare-timeout-failhard",
                     "cwd": "/Users/x",
                 },
                 monkeypatch=monkeypatch,
             )
 
         assert out.strip() == ""
-        assert "Recall store 'vector' failed while failHard is enabled" not in err
+        assert "recall branch timed out" not in err
         assert "[Quaid error] [provider]" not in out
 
     def test_recall_fast_empty_list_no_output(

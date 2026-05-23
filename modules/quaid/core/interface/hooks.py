@@ -559,7 +559,12 @@ def _is_provider_failure(exc: Exception) -> bool:
 
 
 def _is_recall_budget_timeout(exc: Exception) -> bool:
-    """True for opportunistic preinject recall timeouts, not provider failures."""
+    """True for preinject recall budget misses, not provider failures.
+
+    The hook inject path is bounded opportunistic context enrichment. Raising
+    that budget would only delay normal prompt submission; this classifier keeps
+    the fail-open safety net isolated to timeout-like recall misses.
+    """
     if isinstance(exc, TimeoutError):
         return True
     text = str(exc or "").lower()
@@ -1451,6 +1456,13 @@ def hook_inject(args):
                 if _is_provider_failure(mem_exc):
                     raise
                 if _is_recall_budget_timeout(mem_exc):
+                    # Preinject recall is best-effort context enrichment. The
+                    # absorbed RuntimeError may include "while failHard is
+                    # enabled" from the recall-store layer, but at the hook
+                    # boundary a budget timeout means "inject no memories" so
+                    # the user prompt is not dropped. Provider/model failures
+                    # above and non-timeout local recall errors below still
+                    # surface under failHard.
                     _write_hook_trace("hook.inject.recall_timeout", {
                         "query": query[:160],
                         "session_id": session_id,
