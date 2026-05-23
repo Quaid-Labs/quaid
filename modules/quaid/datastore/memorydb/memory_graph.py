@@ -901,6 +901,8 @@ class MemoryGraph:
                     (chunk_id, packed_embedding),
                 )
             except Exception:
+                # If vec0 rejects INSERT OR REPLACE, backfill-at-recall repairs
+                # any fail-soft delete/insert gap before ANN scoring.
                 conn.execute("DELETE FROM vec_source_chunks WHERE chunk_id = ?", (chunk_id,))
                 conn.execute(
                     "INSERT INTO vec_source_chunks(chunk_id, embedding) VALUES (?, ?)",

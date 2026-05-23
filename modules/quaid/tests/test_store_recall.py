@@ -81,11 +81,11 @@ def test_recall_command_owner_alias_prefers_owner_id_before_default():
     with patch.object(
         mg,
         "_get_memory_config",
-        return_value=SimpleNamespace(users=SimpleNamespace(default_owner="solomon-steadman")),
+        return_value=SimpleNamespace(users=SimpleNamespace(default_owner="test-default-owner")),
     ):
         assert mg._resolve_cli_recall_owner({"owner_id": "m9-test-owner"}) == "m9-test-owner"
         assert mg._resolve_cli_recall_owner({"owner": "manual-owner"}) == "manual-owner"
-        assert mg._resolve_cli_recall_owner({"owner_id": "", "owner": ""}) == "solomon-steadman"
+        assert mg._resolve_cli_recall_owner({"owner_id": "", "owner": ""}) == "test-default-owner"
 
 
 def test_recall_owner_id_config_scopes_session_chunks_to_requested_owner(tmp_path):
@@ -3752,6 +3752,81 @@ class TestSourceChunkStorage:
         chunk_meta = meta["session_chunk_telemetry"]
         assert chunk_meta["ann_index_backfilled"] >= len(rows)
         assert chunk_meta["ann_candidate_count"] >= len(rows)
+
+    def test_session_chunk_ann_query_remains_owner_scoped(self, tmp_path):
+        """The shared chunk ANN index cannot return another owner's transcript chunks."""
+        import datastore.memorydb.memory_graph as mg
+
+        if not mg._lib_has_vec():
+            pytest.skip("sqlite-vec unavailable")
+
+        graph, _db_file = _make_graph(tmp_path)
+        wrong_owner = graph.store_session_chunk(
+            "User: The Lisbon ferry receipt is in the private amber notebook.",
+            owner_id="owner-alpha",
+            session_id="session-alpha",
+            chunk_index=0,
+        )
+        right_owner = graph.store_session_chunk(
+            "User: The Lisbon ferry receipt is in the green travel notebook.",
+            owner_id="owner-beta",
+            session_id="session-beta",
+            chunk_index=0,
+        )
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph):
+            rows, meta, _bundle = mg._run_recall_store_plan(
+                "where is the Lisbon ferry receipt",
+                stores=["session_chunks"],
+                limit=3,
+                owner_id="owner-beta",
+                min_similarity=0.0,
+                planner_profile="off",
+                planned_queries=["where is the Lisbon ferry receipt"],
+                planner_meta={"planned_stores": ["session_chunks"]},
+                fast_mode=False,
+                common_kwargs={"max_chunk_tokens": 80},
+            )
+
+        assert rows
+        assert wrong_owner["chunk_id"] not in {row["chunk_id"] for row in rows}
+        assert right_owner["chunk_id"] in {row["chunk_id"] for row in rows}
+        assert {row["owner_id"] for row in rows} == {"owner-beta"}
+        assert meta["session_chunk_telemetry"]["ann_index_used"] is True
+
+    def test_session_chunk_ann_query_failure_raises_under_failhard(self, tmp_path):
+        """failHard must not hide a broken chunk ANN query behind cosine fallback."""
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _db_file = _make_graph(tmp_path)
+        graph.store_session_chunk(
+            "User: The receipt is in the pantry drawer.",
+            owner_id="miko",
+            session_id="session-ann-fail",
+            chunk_index=0,
+        )
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_has_vec", return_value=True), \
+             patch.object(mg, "_is_fail_hard_mode", return_value=True), \
+             patch.object(
+                 graph,
+                 "_backfill_source_chunk_vec_index",
+                 side_effect=sqlite3.OperationalError("vec chunk index unavailable"),
+             ):
+            with pytest.raises(RuntimeError, match="session_chunks recall failed while querying chunk vector index"):
+                mg._run_recall_store_plan(
+                    "proof of purchase storage place",
+                    stores=["session_chunks"],
+                    limit=3,
+                    owner_id="miko",
+                    min_similarity=0.0,
+                    planner_profile="off",
+                    planned_queries=["proof of purchase storage place"],
+                    planner_meta={"planned_stores": ["session_chunks"]},
+                    fast_mode=False,
+                    common_kwargs={"max_chunk_tokens": 50},
+                )
 
     def test_session_chunk_store_plan_uses_semantic_chunk_embeddings(self, tmp_path):
         """session_chunks searches embedded chunks even when lexical terms do not overlap."""
