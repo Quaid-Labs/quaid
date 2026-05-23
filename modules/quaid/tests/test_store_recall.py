@@ -3037,6 +3037,60 @@ class TestTimestampOverride:
         assert all("archive-amber-valentine-2023" not in text for text in texts)
         assert all("archive-ironwood-workshop-2023" not in text for text in texts)
 
+    def test_asof_recall_breaks_saturated_score_ties_by_event_recency(self):
+        """Final as-of truncation keeps the recency preference after scores saturate."""
+        import datastore.memorydb.memory_graph as mg
+
+        def _fact(text, occurred_at):
+            node = mg.Node.create("Fact", text, owner_id="quaid", keywords="archive")
+            node.occurred_start = occurred_at
+            node.occurred_end = occurred_at
+            node.mentioned_at = "2026-05-21T00:00:00Z"
+            node.created_at = "2026-05-21T00:00:00Z"
+            return node
+
+        old = _fact(
+            "archive old workshop evidence",
+            "2023-05-03T09:30:00Z",
+        )
+        recent = _fact(
+            "archive recent retreat evidence",
+            "2024-01-18T08:00:00Z",
+        )
+        graph = SimpleNamespace(
+            search_hybrid=MagicMock(return_value=[
+                (old, 1.0),
+                (recent, 1.0),
+            ]),
+        )
+
+        with patch.object(mg, "get_graph", return_value=graph), \
+             patch.object(mg, "_ollama_healthy", return_value=True), \
+             patch.object(mg, "_log_recall", return_value=None), \
+             patch.object(mg, "_relation_matches_for_query", return_value=[]), \
+             patch.object(mg, "_has_generic_graph_signal", return_value=False), \
+             patch.object(mg, "_expand_high_confidence_entity_anchors", return_value=([], [])):
+            rows = mg._recall_once(
+                "archive",
+                owner_id="quaid",
+                limit=1,
+                min_similarity=0.0,
+                date_to="2024-06-30",
+                use_routing=False,
+                use_aliases=False,
+                use_intent=False,
+                use_multi_pass=False,
+                use_reranker=False,
+                include_graph_traversal=False,
+                include_co_session=False,
+                include_mmr=False,
+                include_lexical_anchor_shaping=False,
+                low_signal_retry=False,
+                track_access=False,
+            )
+
+        assert [row["text"] for row in rows] == ["archive recent retreat evidence"]
+
     def test_asof_temporal_rerank_is_open_ended_only(self):
         """Closed ranges keep ordinary relevance ordering after date filtering."""
         import datastore.memorydb.memory_graph as mg
@@ -3795,6 +3849,7 @@ class TestSourceChunkStorage:
         chunk_row = next(row for row in chunk_rows if row["id"] == stored["id"])
         assert "source_chunk" not in default_row
         assert "source_chunk_id" not in default_row
+        assert "source_id" not in default_row
         assert "session_chunks" not in default_meta
         assert chunk_row["source_chunk_id"] == chunk["chunk_id"]
         assert chunk_row["source_chunk"]["chunk_id"] == chunk["chunk_id"]
@@ -3803,6 +3858,43 @@ class TestSourceChunkStorage:
         assert chunk_row["source_chunk"]["truncated"] is True
         assert chunk_meta["session_chunks"]["attached"] == 1
         assert chunk_meta["session_chunks"]["max_chunk_tokens"] == 5
+
+    def test_default_recall_output_strips_raw_provenance_ids_from_all_rows(self):
+        """Default recall hides raw datastore linkage unless chunk evidence is requested."""
+        import datastore.memorydb.memory_graph as mg
+
+        rows = [
+            {
+                "id": "row-1",
+                "text": "Readable recall text stays visible",
+                "category": "session_chunk",
+                "similarity": 1.0,
+                "chunk_id": "chunk-1",
+                "microchunk_id": "micro-1",
+                "next_chunk_id": "chunk-2",
+                "parent_chunk_id": "chunk-0",
+                "session_chunk_id": "session-chunk-1",
+                "session_window_center_chunk_id": "chunk-1",
+                "session_window_center_microchunk_id": "micro-1",
+                "session_window_chunk_ids": ["chunk-0", "chunk-1", "chunk-2"],
+                "source_chunk_id": "chunk-1",
+                "source_chunk_ids": ["chunk-1"],
+                "source_id": "transcript-1",
+                "source_date": "2024-01-18",
+            }
+        ]
+
+        output_rows, output_meta = mg._prepare_recall_output_rows(
+            rows,
+            {"trace": "kept"},
+            include_chunks=False,
+        )
+
+        assert output_meta == {"trace": "kept"}
+        assert output_rows[0]["text"] == "Readable recall text stays visible"
+        assert output_rows[0]["source_date"] == "2024-01-18"
+        for field_name in mg._DEFAULT_RECALL_RAW_PROVENANCE_FIELDS:
+            assert field_name not in output_rows[0]
 
     def test_recall_include_chunks_respects_aggregate_source_chunk_cap(self, tmp_path):
         """include_chunks cannot let many evidence chunks crowd out the recall response."""

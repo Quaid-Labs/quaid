@@ -6694,15 +6694,19 @@ def _attach_source_chunks_to_recall_rows(
 
 
 _DEFAULT_RECALL_RAW_PROVENANCE_FIELDS = {
-    # Raw datastore linkage fields are available to internal callsites via
-    # preserve_source_chunk_ids=True or include_chunks=True, but default recall
-    # output should expose bounded source text rather than provenance IDs.
+    # Raw datastore/source linkage is opt-in evidence metadata. Default recall
+    # output should keep readable context fields, not internal row ids.
+    "chunk_id",
     "microchunk_id",
-    "source_chunk_id",
-    "source_chunk_ids",
+    "next_chunk_id",
+    "parent_chunk_id",
+    "session_chunk_id",
     "session_window_center_chunk_id",
     "session_window_center_microchunk_id",
     "session_window_chunk_ids",
+    "source_chunk_id",
+    "source_chunk_ids",
+    "source_id",
 }
 
 
@@ -12081,7 +12085,12 @@ def _recall_once(
         output,
         temporal_dimension=temporal_dimension,
     )
-    output.sort(key=lambda x: x["similarity"], reverse=True)
+    output = _sort_recall_rows_for_final_selection(
+        output,
+        date_from=date_from,
+        date_to=date_to,
+        temporal_dimension=temporal_dimension,
+    )
     final_output = _select_final_recall_rows(
         output,
         limit=limit,
@@ -16531,8 +16540,81 @@ def _apply_open_ended_asof_temporal_rerank(
             continue
         relative_recency = max(0.0, min(1.0, (event_date - earliest).days / span_days))
         reranked.append((node, min(1.0, float(score) + max_boost * relative_recency)))
-    reranked.sort(key=lambda item: item[1], reverse=True)
+    reranked.sort(
+        key=lambda item: (
+            round(item[1], 3),
+            date_by_node_id.get(id(item[0]), date.min).toordinal(),
+            item[1],
+        ),
+        reverse=True,
+    )
     return reranked
+
+
+def _recall_row_similarity(row: Dict[str, Any]) -> float:
+    try:
+        return float((row or {}).get("similarity", 0.0) or 0.0)
+    except Exception:
+        return 0.0
+
+
+def _sort_recall_rows_for_final_selection(
+    rows: List[Dict[str, Any]],
+    *,
+    date_from: Optional[str],
+    date_to: Optional[str],
+    temporal_dimension: Any = None,
+) -> List[Dict[str, Any]]:
+    sorted_rows = sorted(rows or [], key=_recall_row_similarity, reverse=True)
+    if date_from or len(sorted_rows) < 2:
+        return sorted_rows
+    try:
+        normalized_to = _normalize_recall_date_bound(date_to)
+    except Exception:
+        return sorted_rows
+    if not normalized_to:
+        return sorted_rows
+    try:
+        target = datetime.fromisoformat(normalized_to).date()
+    except Exception:
+        return sorted_rows
+
+    dated: List[Tuple[int, date]] = []
+    for index, row in enumerate(rows or []):
+        if not isinstance(row, dict):
+            continue
+        start_date, _end_date, _basis = _row_temporal_bounds(
+            row,
+            temporal_dimension=temporal_dimension,
+        )
+        if not start_date:
+            continue
+        try:
+            event_date = datetime.fromisoformat(start_date).date()
+        except Exception:
+            continue
+        if event_date <= target:
+            dated.append((index, event_date))
+    if len(dated) < 2:
+        return sorted_rows
+
+    earliest = min(event_date for _index, event_date in dated)
+    latest = max(event_date for _index, event_date in dated)
+    if max(1, (latest - earliest).days) < 14:
+        return sorted_rows
+
+    date_by_index = dict(dated)
+    return [
+        row
+        for _index, row in sorted(
+            enumerate(rows or []),
+            key=lambda item: (
+                _recall_row_similarity(item[1]),
+                date_by_index.get(item[0], date.min).toordinal(),
+            ),
+            reverse=True,
+        )
+    ]
 
 
 def _collect_recall_temporal_markers(row: Dict[str, Any]) -> List[datetime]:
