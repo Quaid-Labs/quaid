@@ -87,6 +87,23 @@ describe("install daemon policy", () => {
     );
   });
 
+  it("installer preserves a valid installed quaid CLI wrapper", () => {
+    const tempRoot = makeTempDir("quaid-install-cli-valid-");
+    const sourcePlugin = path.join(tempRoot, "source");
+    const installedPlugin = path.join(tempRoot, "installed");
+    fs.mkdirSync(sourcePlugin, { recursive: true });
+    fs.mkdirSync(installedPlugin, { recursive: true });
+    fs.writeFileSync(path.join(sourcePlugin, "quaid"), "#!/usr/bin/env bash\necho source\n", "utf8");
+    const installedCli = path.join(installedPlugin, "quaid");
+    fs.writeFileSync(installedCli, "#!/usr/bin/env bash\necho installed\n", "utf8");
+
+    ensureInstalledQuaidCli(sourcePlugin, installedPlugin);
+
+    expect(fs.readFileSync(installedCli, "utf8")).toContain("echo installed");
+    expect(fs.readFileSync(installedCli, "utf8")).not.toContain("echo source");
+    expect(fs.statSync(installedCli).mode & 0o111).toBeGreaterThan(0);
+  });
+
   it("installer writes shared platform config without inventing a default instance silo", () => {
     const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
     const setupText = fs.readFileSync(path.join(repoRoot, "setup-quaid.mjs"), "utf8");
