@@ -1364,17 +1364,21 @@ class TestHookInjectRecallResilience:
         # Error should appear on stderr, not propagate
         assert "LLM down" in err or True  # hook silences errors internally
 
-    def test_recall_fast_exception_surfaces_when_fail_hard_enabled(
+    def test_recall_fast_timeout_returns_empty_when_fail_hard_enabled(
         self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
     ):
         from core import extraction_daemon
 
         monkeypatch.setattr(extraction_daemon, "write_cursor", lambda *a: None)
         monkeypatch.setattr("lib.fail_policy.is_fail_hard_enabled", lambda: True)
+        monkeypatch.setattr("core.interface.hooks._get_pending_context", lambda: "")
+        monkeypatch.setattr("core.interface.hooks._get_deferred_notice_hint", lambda: "")
+        monkeypatch.setattr("core.interface.hooks._get_deferred_notice_relay_context", lambda: "")
+        monkeypatch.setattr("core.interface.hooks._get_quaid_agents_baseline_context", lambda: "")
 
         with patch("core.interface.api.recall_fast", side_effect=TimeoutError("recall branch timed out")), \
              patch("core.interface.api.projects_search_docs", return_value=None):
-            _out, err = _run_hook_inject(
+            out, err = _run_hook_inject(
                 {
                     "prompt": "trigger recall timeout",
                     "session_id": "sess-timeout-failhard",
@@ -1383,7 +1387,29 @@ class TestHookInjectRecallResilience:
                 monkeypatch=monkeypatch,
             )
 
-        assert "recall branch timed out" in err
+        assert out.strip() == ""
+        assert "recall branch timed out" not in err
+
+    def test_recall_fast_non_timeout_exception_surfaces_when_fail_hard_enabled(
+        self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
+    ):
+        from core import extraction_daemon
+
+        monkeypatch.setattr(extraction_daemon, "write_cursor", lambda *a: None)
+        monkeypatch.setattr("lib.fail_policy.is_fail_hard_enabled", lambda: True)
+
+        with patch("core.interface.api.recall_fast", side_effect=RuntimeError("local recall invariant broke")), \
+             patch("core.interface.api.projects_search_docs", return_value=None):
+            _out, err = _run_hook_inject(
+                {
+                    "prompt": "trigger recall invariant",
+                    "session_id": "sess-invariant-failhard",
+                    "cwd": "/Users/x",
+                },
+                monkeypatch=monkeypatch,
+            )
+
+        assert "local recall invariant broke" in err
 
     def test_recall_fast_store_timeout_does_not_surface_provider_notice(
         self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
@@ -1413,7 +1439,7 @@ class TestHookInjectRecallResilience:
             )
 
         assert out.strip() == ""
-        assert "Recall store 'vector' failed while failHard is enabled" in err
+        assert "Recall store 'vector' failed while failHard is enabled" not in err
         assert "[Quaid error] [provider]" not in out
 
     def test_recall_fast_empty_list_no_output(

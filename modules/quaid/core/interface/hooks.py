@@ -558,6 +558,18 @@ def _is_provider_failure(exc: Exception) -> bool:
     )
 
 
+def _is_recall_budget_timeout(exc: Exception) -> bool:
+    """True for opportunistic preinject recall timeouts, not provider failures."""
+    if isinstance(exc, TimeoutError):
+        return True
+    text = str(exc or "").lower()
+    return (
+        "timeout_like=true" in text
+        or "parallel call timed out" in text
+        or ("recall store" in text and "timed out" in text)
+    )
+
+
 def _provider_failure_notice_message(exc: Exception) -> str:
     text = re.sub(r"\s+", " ", str(exc or "").strip())
     if not text:
@@ -1438,22 +1450,32 @@ def hook_inject(args):
             except Exception as mem_exc:
                 if _is_provider_failure(mem_exc):
                     raise
-                _write_hook_trace("hook.inject.recall_error", {
-                    "query": query[:160],
-                    "session_id": session_id,
-                    "error_type": type(mem_exc).__name__,
-                    "error": str(mem_exc)[:500],
-                })
-                try:
-                    from lib.fail_policy import is_fail_hard_enabled
+                if _is_recall_budget_timeout(mem_exc):
+                    _write_hook_trace("hook.inject.recall_timeout", {
+                        "query": query[:160],
+                        "session_id": session_id,
+                        "error_type": type(mem_exc).__name__,
+                        "error": str(mem_exc)[:500],
+                    })
+                    memories = []
+                    recall_meta = None
+                else:
+                    _write_hook_trace("hook.inject.recall_error", {
+                        "query": query[:160],
+                        "session_id": session_id,
+                        "error_type": type(mem_exc).__name__,
+                        "error": str(mem_exc)[:500],
+                    })
+                    try:
+                        from lib.fail_policy import is_fail_hard_enabled
 
-                    fail_hard = is_fail_hard_enabled()
-                except Exception:
-                    fail_hard = True
-                if fail_hard:
-                    raise
-                memories = []
-                recall_meta = None
+                        fail_hard = is_fail_hard_enabled()
+                    except Exception:
+                        fail_hard = True
+                    if fail_hard:
+                        raise
+                    memories = []
+                    recall_meta = None
             try:
                 docs_result = docs_future.result()
                 if isinstance(docs_result, tuple) and len(docs_result) == 2:
