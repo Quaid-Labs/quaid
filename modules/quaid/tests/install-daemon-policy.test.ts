@@ -1,9 +1,15 @@
 import { describe, expect, it } from "vitest";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { shouldStartExtractionDaemonAfterInstall } from "../../../lib/install-daemon-policy.mjs";
+import { ensureInstalledQuaidCli } from "../../../lib/install-cli-wrapper.mjs";
+
+function makeTempDir(prefix: string): string {
+  return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+}
 
 describe("install daemon policy", () => {
   it("starts the daemon after install for hook-driven hosts", () => {
@@ -37,6 +43,48 @@ describe("install daemon policy", () => {
     expect(setupText).toContain("from core import project_docs");
     expect(setupText).toContain("project_docs.stop_supervisor()");
     expect(setupText).toContain("failed to stop stale Quaid supervisor before daemon restart");
+  });
+
+  it("installer repairs and validates the installed quaid CLI before shimming it", () => {
+    const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+    const setupText = fs.readFileSync(path.join(repoRoot, "setup-quaid.mjs"), "utf8");
+    const helperText = fs.readFileSync(path.join(repoRoot, "lib", "install-cli-wrapper.mjs"), "utf8");
+    const tempRoot = makeTempDir("quaid-install-cli-");
+    const sourcePlugin = path.join(tempRoot, "source");
+    const installedPlugin = path.join(tempRoot, "installed");
+    fs.mkdirSync(sourcePlugin, { recursive: true });
+    fs.mkdirSync(installedPlugin, { recursive: true });
+    const sourceCli = path.join(sourcePlugin, "quaid");
+    const installedCli = path.join(installedPlugin, "quaid");
+    fs.writeFileSync(sourceCli, "#!/usr/bin/env bash\necho quaid\n", { encoding: "utf8", mode: 0o755 });
+    fs.writeFileSync(installedCli, "", "utf8");
+
+    ensureInstalledQuaidCli(sourcePlugin, installedPlugin);
+
+    expect(fs.statSync(installedCli).size).toBe(fs.statSync(sourceCli).size);
+    expect(fs.readFileSync(installedCli, "utf8")).toContain("echo quaid");
+    expect(fs.statSync(installedCli).mode & 0o111).toBeGreaterThan(0);
+    expect(helperText).toContain("function ensureInstalledQuaidCli(sourcePluginDir, installedPluginDir");
+    expect(helperText).toContain("quaid CLI wrapper missing or empty in plugin source");
+    expect(helperText).toContain("quaid CLI wrapper missing or empty after install");
+
+    const repairIdx = setupText.indexOf("ensureInstalledQuaidCli(pluginSrc, PLUGIN_DIR, { log });");
+    const shimIdx = setupText.indexOf("const shimPath = ensureQuaidCliShim(PLUGIN_DIR);");
+    expect(repairIdx).toBeGreaterThan(-1);
+    expect(shimIdx).toBeGreaterThan(repairIdx);
+  });
+
+  it("installer fails loudly when the source quaid CLI wrapper is empty", () => {
+    const tempRoot = makeTempDir("quaid-install-cli-empty-");
+    const sourcePlugin = path.join(tempRoot, "source");
+    const installedPlugin = path.join(tempRoot, "installed");
+    fs.mkdirSync(sourcePlugin, { recursive: true });
+    fs.mkdirSync(installedPlugin, { recursive: true });
+    fs.writeFileSync(path.join(sourcePlugin, "quaid"), "", "utf8");
+
+    expect(() => ensureInstalledQuaidCli(sourcePlugin, installedPlugin)).toThrow(
+      "quaid CLI wrapper missing or empty in plugin source",
+    );
   });
 
   it("installer writes shared platform config without inventing a default instance silo", () => {

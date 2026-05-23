@@ -37,6 +37,7 @@ import {
 } from "./lib/install-config-hydration.mjs";
 import { ensureOpenClawExtensionDependencies } from "./lib/openclaw-extension-deps.mjs";
 import { ensureOpenClawAgentModelDefault } from "./lib/openclaw-agent-model-default.mjs";
+import { ensureInstalledQuaidCli } from "./lib/install-cli-wrapper.mjs";
 import {
   captureOpenClawMatrixConfig,
   restoreOpenClawMatrixConfig,
@@ -4568,6 +4569,7 @@ async function step7_install(pluginSrc, owner, models, embeddings, systems, jani
   if (fs.existsSync(runtimeUpdateSrc)) {
     fs.copyFileSync(runtimeUpdateSrc, path.join(PLUGIN_DIR, "update-quaid.mjs"));
   }
+  ensureInstalledQuaidCli(pluginSrc, PLUGIN_DIR, { log });
   for (const stalePath of [
     path.join(PLUGIN_DIR, "tests"),
     path.join(PLUGIN_DIR, "scripts"),
