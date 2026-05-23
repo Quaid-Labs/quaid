@@ -3704,6 +3704,55 @@ class TestSourceChunkStorage:
         assert expanded is not None
         assert [row["chunk_id"] for row in expanded["window"]] == [row["chunk_id"] for row in rows]
 
+    def test_store_session_chunks_indexes_embeddings_for_chunk_ann(self, tmp_path):
+        """Session chunk writes maintain their dedicated first-order ANN index."""
+        import datastore.memorydb.memory_graph as mg
+
+        if not mg._lib_has_vec():
+            pytest.skip("sqlite-vec unavailable")
+
+        graph, _db_file = _make_graph(tmp_path)
+        rows = graph.store_session_chunks(
+            [
+                "User: The red travel notebook is in the cedar desk.",
+                "User: The notebook has the Lisbon ferry receipt tucked inside.",
+                "User: Remind me the ferry receipt is in the red notebook.",
+            ],
+            owner_id="m9-test-owner",
+            session_id="m9-session-linked",
+            source_id="m9-session-linked",
+            chunk_kind="micro",
+        )
+        chunk_ids = {row["chunk_id"] for row in rows}
+
+        with graph._get_conn() as conn:
+            indexed = {
+                row["chunk_id"]
+                for row in conn.execute("SELECT chunk_id FROM vec_source_chunks").fetchall()
+            }
+            assert chunk_ids <= indexed
+            conn.execute("DELETE FROM vec_source_chunks")
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph):
+            recalled, meta, _bundle = mg._run_recall_store_plan(
+                "where is the Lisbon ferry receipt",
+                stores=["session_chunks"],
+                limit=3,
+                owner_id="m9-test-owner",
+                min_similarity=0.0,
+                planner_profile="off",
+                planned_queries=["where is the Lisbon ferry receipt"],
+                planner_meta={"planned_stores": ["session_chunks"]},
+                fast_mode=False,
+                common_kwargs={"max_chunk_tokens": 80},
+            )
+
+        assert recalled
+        assert {row["owner_id"] for row in recalled} == {"m9-test-owner"}
+        chunk_meta = meta["session_chunk_telemetry"]
+        assert chunk_meta["ann_index_backfilled"] >= len(rows)
+        assert chunk_meta["ann_candidate_count"] >= len(rows)
+
     def test_session_chunk_store_plan_uses_semantic_chunk_embeddings(self, tmp_path):
         """session_chunks searches embedded chunks even when lexical terms do not overlap."""
         import datastore.memorydb.memory_graph as mg
@@ -4553,6 +4602,83 @@ class TestSourceChunkStorage:
         assert rows == []
         assert meta["store_runs"][0]["store"] == "session_chunks"
         assert meta["store_runs"][0]["result_count"] == 0
+
+    def test_source_chunk_store_plan_skips_graph_facet_rescue_for_single_store(self, tmp_path):
+        """session_chunks-only recall returns first-order chunks or nothing, not graph fallback rows."""
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _db_file = _make_graph(tmp_path)
+        graph.store_source_chunk(
+            "User: Ada keeps the Lisbon receipt in the private drawer.",
+            owner_id="ada",
+            session_id="session-wrong-owner",
+            chunk_index=0,
+        )
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch.object(
+                 mg,
+                 "_recover_explicit_entity_facet_rows",
+                 side_effect=AssertionError("session_chunks-only recall must not run facet rescue"),
+             ):
+            rows, meta, _bundle = mg._run_recall_store_plan(
+                "where is the Lisbon receipt",
+                stores=["session_chunks"],
+                limit=3,
+                owner_id="m9-test-owner",
+                min_similarity=0.0,
+                planner_profile="off",
+                planned_queries=["where is the Lisbon receipt"],
+                planner_meta={"planned_stores": ["session_chunks"]},
+                fast_mode=False,
+                common_kwargs={},
+            )
+
+        assert rows == []
+        assert meta["store_runs"][0]["store"] == "session_chunks"
+        assert meta["store_runs"][0]["result_count"] == 0
+        assert "facet_rescue" not in meta
+
+    def test_recall_owner_id_config_scopes_session_chunks_to_requested_owner(self, tmp_path):
+        """CLI-style owner_id config must not fall back to the default owner for session_chunks."""
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _db_file = _make_graph(tmp_path)
+        graph.store_session_chunk(
+            "User: Solomon default owner Lisbon ferry receipt decoy.",
+            owner_id="solomon-steadman",
+            session_id="default-session",
+            chunk_index=0,
+        )
+        target = graph.store_session_chunk(
+            "User: The Lisbon ferry receipt is tucked in the red notebook.",
+            owner_id="m9-test-owner",
+            session_id="m9-session-linked",
+            chunk_index=0,
+        )
+
+        cfg = {"stores": ["session_chunks"], "limit": 3, "owner_id": "m9-test-owner", "max_chunk_tokens": 80}
+        owner = mg._resolve_cli_recall_owner(cfg)
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph):
+            rows, meta, _bundle = mg._run_recall_store_plan(
+                "where is the Lisbon ferry receipt",
+                stores=["session_chunks"],
+                limit=3,
+                owner_id=owner,
+                min_similarity=0.0,
+                planner_profile="off",
+                planned_queries=["where is the Lisbon ferry receipt"],
+                planner_meta={"planned_stores": ["session_chunks"]},
+                fast_mode=False,
+                common_kwargs={"max_chunk_tokens": 80},
+            )
+
+        assert rows
+        assert rows[0]["chunk_id"] == target["chunk_id"]
+        assert {row["owner_id"] for row in rows} == {"m9-test-owner"}
+        assert all(row["session_id"] == "m9-session-linked" for row in rows)
+        assert meta["store_runs"][0]["store"] == "session_chunks"
 
     def test_source_chunk_store_plan_respects_aggregate_cap(self, tmp_path):
         """The session_chunks lane has the same aggregate output budget guard."""

@@ -712,6 +712,7 @@ class MemoryGraph:
         # sqlite-vec: create and populate vector index (separate connection with extension loaded)
         if _lib_has_vec():
             self._init_vec_index()
+            self._init_source_chunk_vec_index()
 
     def _init_vec_index(self):
         """Create vec_nodes virtual table and backfill from existing embeddings.
@@ -830,6 +831,125 @@ class MemoryGraph:
                 f"node_id TEXT PRIMARY KEY, "
                 f"embedding float[{dim}] distance_metric=cosine)"
             )
+
+    def _ensure_source_chunk_vec_table(self, conn: sqlite3.Connection) -> bool:
+        """Ensure the dedicated session/source chunk vector table exists."""
+        if not _lib_has_vec():
+            return False
+        configured_dim = _get_configured_embedding_dim()
+        table_exists = False
+        try:
+            conn.execute("SELECT 1 FROM vec_source_chunks LIMIT 0")
+            table_exists = True
+        except sqlite3.OperationalError as exc:
+            if "no such table" not in str(exc).lower():
+                raise
+            table_exists = False
+
+        if table_exists:
+            existing_dim: Optional[int] = None
+            try:
+                row = conn.execute(
+                    "SELECT sql FROM sqlite_master WHERE name = 'vec_source_chunks'"
+                ).fetchone()
+                if row and row[0]:
+                    match = re.search(r"float\[(\d+)\]", row[0])
+                    if match:
+                        existing_dim = int(match.group(1))
+            except Exception:
+                existing_dim = None
+            if existing_dim is not None and existing_dim != configured_dim:
+                logger.warning(
+                    "vec_source_chunks dimension mismatch: table=%d configured=%d; rebuilding chunk ANN index",
+                    existing_dim,
+                    configured_dim,
+                )
+                conn.execute("DROP TABLE vec_source_chunks")
+                table_exists = False
+
+        if not table_exists:
+            conn.execute(
+                f"CREATE VIRTUAL TABLE vec_source_chunks USING vec0("
+                f"chunk_id TEXT PRIMARY KEY, "
+                f"embedding float[{configured_dim}] distance_metric=cosine)"
+            )
+        return True
+
+    def _init_source_chunk_vec_index(self) -> None:
+        """Create and backfill the dedicated first-order chunk ANN index."""
+        if not _lib_has_vec():
+            return
+        with self._get_conn() as conn:
+            self._ensure_source_chunks_table(conn)
+            self._backfill_source_chunk_vec_index(conn)
+
+    def _sync_source_chunk_vec_index(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        chunk_id: str,
+        packed_embedding: Optional[bytes],
+    ) -> None:
+        """Upsert one source chunk embedding into the chunk ANN index."""
+        if not packed_embedding or not _lib_has_vec():
+            return
+        try:
+            self._ensure_source_chunk_vec_table(conn)
+            try:
+                conn.execute(
+                    "INSERT OR REPLACE INTO vec_source_chunks(chunk_id, embedding) VALUES (?, ?)",
+                    (chunk_id, packed_embedding),
+                )
+            except Exception:
+                conn.execute("DELETE FROM vec_source_chunks WHERE chunk_id = ?", (chunk_id,))
+                conn.execute(
+                    "INSERT INTO vec_source_chunks(chunk_id, embedding) VALUES (?, ?)",
+                    (chunk_id, packed_embedding),
+                )
+        except Exception as exc:
+            logger.warning(
+                "store_source_chunk inserted chunk %s but failed vec_source_chunks upsert: %s",
+                chunk_id,
+                exc,
+            )
+            if _is_fail_hard_mode():
+                raise RuntimeError(
+                    "Session chunk vector index upsert failed while failHard is enabled"
+                ) from exc
+
+    def _backfill_source_chunk_vec_index(self, conn: sqlite3.Connection) -> int:
+        """Backfill stored source chunk embeddings into their dedicated ANN index."""
+        if not _lib_has_vec():
+            return 0
+        self._ensure_source_chunks_table(conn)
+        self._ensure_source_chunk_vec_table(conn)
+        missing = conn.execute(
+            """
+            SELECT sc.chunk_id, sc.embedding
+            FROM source_chunks sc
+            WHERE sc.embedding IS NOT NULL
+              AND sc.chunk_id NOT IN (SELECT chunk_id FROM vec_source_chunks)
+            """
+        ).fetchall()
+        count = 0
+        for row in missing:
+            try:
+                conn.execute(
+                    "INSERT OR REPLACE INTO vec_source_chunks(chunk_id, embedding) VALUES (?, ?)",
+                    (row["chunk_id"], row["embedding"]),
+                )
+                count += 1
+            except Exception as exc:
+                logger.warning(
+                    "source chunk vec backfill skipped chunk %s due to vec_source_chunks insert failure: %s",
+                    row["chunk_id"],
+                    exc,
+                )
+                if _is_fail_hard_mode():
+                    raise RuntimeError(
+                        "Session chunk vector index backfill failed while failHard is enabled"
+                    ) from exc
+        return count
 
     # ==========================================================================
     # Embeddings
@@ -1392,6 +1512,11 @@ class MemoryGraph:
                         chunk.chunk_id,
                     ),
                 )
+            self._sync_source_chunk_vec_index(
+                active_conn,
+                chunk_id=chunk.chunk_id,
+                packed_embedding=packed_embedding,
+            )
             row = active_conn.execute(
                 "SELECT * FROM source_chunks WHERE chunk_id = ?",
                 (chunk.chunk_id,),
@@ -6747,6 +6872,14 @@ def _prepare_recall_output_rows(
     return output_rows, output_meta
 
 
+def _resolve_cli_recall_owner(options: Dict[str, Any]) -> str:
+    """Resolve CLI recall owner aliases before falling back to the configured default."""
+    owner = str((options or {}).get("owner_id") or (options or {}).get("owner") or "").strip()
+    if owner:
+        return owner
+    return str(_get_memory_config().users.default_owner)
+
+
 def _return_validated_recall(
     rows: Any,
     meta: Optional[Dict[str, Any]],
@@ -8402,6 +8535,44 @@ def _source_chunk_store_recall(
             raise RuntimeError("session_chunks recall failed while embedding query") from exc
         logger.warning("[recall] session_chunks embedding unavailable; using lexical search only: %s", exc)
 
+    vec_distance_by_chunk_id: Dict[str, float] = {}
+    ann_backfilled_count = 0
+    if query_embedding and _lib_has_vec():
+        try:
+            with graph._get_conn() as conn:
+                ann_backfilled_count = graph._backfill_source_chunk_vec_index(conn)
+                packed_query = graph._pack_embedding(query_embedding)
+                vec_rows = conn.execute(
+                    f"""
+                    SELECT sc.chunk_id, knn.distance
+                    FROM (
+                        SELECT chunk_id, distance
+                        FROM vec_source_chunks
+                        WHERE embedding MATCH ? AND k = ?
+                    ) knn
+                    JOIN source_chunks sc ON sc.chunk_id = knn.chunk_id
+                    WHERE {" AND ".join(clauses)}
+                    ORDER BY knn.distance
+                    """,
+                    [
+                        packed_query,
+                        max(limit * 128, _SESSION_CHUNK_RECALL_CANDIDATE_FLOOR),
+                        *params,
+                    ],
+                ).fetchall()
+            for vec_row in vec_rows:
+                chunk_id = str(vec_row["chunk_id"] or "").strip()
+                if not chunk_id:
+                    continue
+                try:
+                    vec_distance_by_chunk_id[chunk_id] = float(vec_row["distance"])
+                except (TypeError, ValueError):
+                    continue
+        except Exception as exc:
+            if _is_fail_hard_mode():
+                raise RuntimeError("session_chunks recall failed while querying chunk vector index") from exc
+            logger.warning("[recall] session_chunks ANN index unavailable; using stored chunk embeddings: %s", exc)
+
     candidates: List[Tuple[Tuple[float, str], Dict[str, Any]]] = []
     lexical_candidate_count = 0
     semantic_candidate_count = 0
@@ -8436,7 +8607,10 @@ def _source_chunk_store_recall(
             lexical_score = min(0.99, 0.35 + (0.55 * (overlap / max(1, len(terms)))) + exact_bonus)
             lexical_candidate_count += 1
         semantic_score = 0.0
-        if query_embedding and row["embedding"]:
+        ann_distance = vec_distance_by_chunk_id.get(str(chunk.get("chunk_id") or "").strip())
+        if ann_distance is not None:
+            semantic_score = max(0.0, min(0.99, 1.0 - float(ann_distance)))
+        elif query_embedding and row["embedding"]:
             try:
                 semantic_score = max(0.0, min(0.99, graph.cosine_similarity(query_embedding, graph._unpack_embedding(row["embedding"]))))
             except Exception as exc:
@@ -8581,6 +8755,9 @@ def _source_chunk_store_recall(
         "lexical_probe_count": lexical_probe_count,
         "embedding_timeout_s": embedding_timeout_s,
         "semantic_embedding_used": bool(query_embedding),
+        "ann_index_used": bool(vec_distance_by_chunk_id),
+        "ann_candidate_count": len(vec_distance_by_chunk_id),
+        "ann_index_backfilled": ann_backfilled_count,
     }
     meta["source_chunk_telemetry"] = dict(meta["session_chunk_telemetry"])
     meta["phases_ms"] = {"total_ms": round((time.monotonic() - started) * 1000)}
@@ -10151,15 +10328,26 @@ def _run_recall_store_plan(
     merged = _prioritize_date_relation_callback_rows(query, merged)
     merged = _prioritize_named_entity_activity_anchor_rows(query, merged)
     merged = _prioritize_first_order_session_query_coverage(query, merged)
-    store_plan_facet_rescue_rows, store_plan_facet_rescue_meta = _recover_explicit_entity_facet_rows(
-        query,
-        merged,
-        owner_id=owner_id,
-        limit=limit,
-        intent=None,
-        domain=kwargs.get("domain"),
-        include_unscoped=(kwargs.get("include_unscoped", True) is not False),
-    )
+    store_plan_facet_rescue_rows: List[Dict[str, Any]] = []
+    store_plan_facet_rescue_meta: Dict[str, Any] = {
+        "applied": False,
+        "candidate_count": 0,
+        "anchor_terms": [],
+        "facet_terms": [],
+        "error": None,
+    }
+    if normalized_stores == ["session_chunks"]:
+        store_plan_facet_rescue_meta["skipped_reason"] = "session_chunks_only"
+    else:
+        store_plan_facet_rescue_rows, store_plan_facet_rescue_meta = _recover_explicit_entity_facet_rows(
+            query,
+            merged,
+            owner_id=owner_id,
+            limit=limit,
+            intent=None,
+            domain=kwargs.get("domain"),
+            include_unscoped=(kwargs.get("include_unscoped", True) is not False),
+        )
     if store_plan_facet_rescue_rows:
         merged = _merge_recall_batches(
             [merged, store_plan_facet_rescue_rows],
