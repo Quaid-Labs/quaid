@@ -7099,7 +7099,7 @@ def _sanitize_default_recall_output_row(row: Dict[str, Any]) -> Dict[str, Any]:
             continue
         sanitized.pop(field, None)
     if preserve_session_chunk_navigation:
-        chunk_id = str(row.get("chunk_id") or row.get("session_chunk_id") or row.get("id") or "").strip()
+        chunk_id = str(row.get("chunk_id") or row.get("session_chunk_id") or "").strip()
         if chunk_id:
             sanitized.setdefault("chunk_id", chunk_id)
             sanitized.setdefault("session_chunk_id", chunk_id)
