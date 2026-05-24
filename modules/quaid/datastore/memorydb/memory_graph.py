@@ -3598,7 +3598,19 @@ _SCHEMA_RELATION_GROUP_TOKENS: Dict[str, set[str]] = {
         "teammate", "work", "works_at", "reports to",
     },
 }
-_SYMMETRIC_RELATION_GROUPS = {"spouse", "sibling", "extended_family"}
+_SYMMETRIC_RELATION_GROUPS = {"spouse", "sibling"}
+_SYMMETRIC_RELATIONS = {
+    "spouse_of",
+    "partner_of",
+    "sibling_of",
+    "cousin_of",
+    "family_of",
+    "friend_of",
+    "neighbor_of",
+    "colleague_of",
+    "related_to",
+    "knows",
+}
 
 
 def _canonical_relation_group_for_relation(relation: str) -> str:
@@ -3645,9 +3657,9 @@ def _iter_relation_chain_step_edges(
 ) -> List[Tuple["Edge", str]]:
     """Return next relation-chain hops.
 
-    Forward traversal is valid for every relation. Reverse traversal is only
-    valid for symmetric relation families, e.g. sibling/spouse edges that may be
-    stored once as either A->B or B->A.
+    Direction matters for asymmetric family edges: a parent_of edge points from
+    parent to child, so "my parent" follows incoming parent_of while "my child"
+    follows outgoing parent_of. Symmetric relations can be traversed either way.
     """
     expected_group = str(expected_group or "").strip()
     current_id = str(current_id or "").strip()
@@ -3656,11 +3668,31 @@ def _iter_relation_chain_step_edges(
     out: List[Tuple["Edge", str]] = []
     seen: set[Tuple[str, str]] = set()
 
-    def _append(edge: "Edge", next_id: str) -> None:
+    def _step_matches(relation: str, direction: str) -> bool:
+        relation = str(relation or "").strip().lower().replace("-", "_")
+        direction = str(direction or "").strip().lower()
+        if not relation or direction not in {"out", "in"}:
+            return False
+        if relation in {"parent_of", "grandparent_of"}:
+            return (
+                (expected_group == "child" and direction == "out")
+                or (expected_group == "parent" and direction == "in")
+            )
+        if relation == "child_of":
+            return (
+                (expected_group == "parent" and direction == "out")
+                or (expected_group == "child" and direction == "in")
+            )
+        relation_group = _canonical_relation_group_for_relation(relation)
+        if relation in _SYMMETRIC_RELATIONS or relation_group in _SYMMETRIC_RELATION_GROUPS:
+            return relation_group == expected_group
+        return direction == "out" and relation_group == expected_group
+
+    def _append(edge: "Edge", next_id: str, direction: str) -> None:
         relation = str(getattr(edge, "relation", "") or "").strip()
         if not relation:
             return
-        if _canonical_relation_group_for_relation(relation) != expected_group:
+        if not _step_matches(relation, direction):
             return
         next_id = str(next_id or "").strip()
         if not next_id:
@@ -3677,15 +3709,14 @@ def _iter_relation_chain_step_edges(
     except Exception:
         forward_edges = []
     for edge in forward_edges:
-        _append(edge, str(getattr(edge, "target_id", "") or ""))
+        _append(edge, str(getattr(edge, "target_id", "") or ""), "out")
 
-    if expected_group in _SYMMETRIC_RELATION_GROUPS:
-        try:
-            reverse_edges = list(graph.get_edges(current_id, direction="in"))
-        except Exception:
-            reverse_edges = []
-        for edge in reverse_edges:
-            _append(edge, str(getattr(edge, "source_id", "") or ""))
+    try:
+        reverse_edges = list(graph.get_edges(current_id, direction="in"))
+    except Exception:
+        reverse_edges = []
+    for edge in reverse_edges:
+        _append(edge, str(getattr(edge, "source_id", "") or ""), "in")
 
     return out
 

@@ -13077,7 +13077,7 @@ class TestRecallFastHookInjectContract:
         assert attached[0]["graph_relation_sequence"] == ["spouse_of", "sibling_of", "has_fact"]
         assert "Yuni --sibling_of--> Kai" in attached[0]["graph_path"]
 
-    def test_relation_chain_step_edges_reverse_only_symmetric_relations(self, tmp_path):
+    def test_relation_chain_step_edges_respect_directional_parent_child_semantics(self, tmp_path):
         import datastore.memorydb.memory_graph as mg
 
         graph, _ = _make_graph(tmp_path)
@@ -13090,10 +13090,55 @@ class TestRecallFastHookInjectContract:
         graph.add_edge(mg.Edge.create(sibling.id, child.id, "sibling_of"))
 
         parent_steps = mg._iter_relation_chain_step_edges(graph, child.id, "parent")
+        child_steps = mg._iter_relation_chain_step_edges(graph, parent.id, "child")
+        reverse_child_steps = mg._iter_relation_chain_step_edges(graph, child.id, "child")
         sibling_steps = mg._iter_relation_chain_step_edges(graph, child.id, "sibling")
 
-        assert parent_steps == []
+        assert [next_id for _edge, next_id in parent_steps] == [parent.id]
+        assert [next_id for _edge, next_id in child_steps] == [child.id]
+        assert reverse_child_steps == []
         assert [next_id for _edge, next_id in sibling_steps] == [sibling.id]
+
+    def test_graph_aware_recall_owner_parent_chain_uses_reverse_parent_edge(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _ = _make_graph(tmp_path)
+        owner = mg.Node.create("Person", "Test Owner")
+        parent = mg.Node.create("Person", "Test Parent")
+        sibling = mg.Node.create("Person", "Test Aunt")
+        work = mg.Node.create("Fact", "Test Aunt runs a repair studio")
+        for node in (owner, parent, sibling, work):
+            graph.add_node(node, embed=False)
+        graph.add_edge(mg.Edge.create(parent.id, owner.id, "parent_of"))
+        graph.add_edge(mg.Edge.create(sibling.id, parent.id, "sibling_of"))
+        graph.add_edge(mg.Edge.create(sibling.id, work.id, "has_fact"))
+
+        fake_cfg = SimpleNamespace(
+            users=SimpleNamespace(
+                identities={"test-owner": SimpleNamespace(person_node_name="Test Owner")}
+            )
+        )
+        with patch.object(mg, "get_graph", return_value=graph), \
+             patch.object(mg, "_HAS_CONFIG", True), \
+             patch.object(mg, "_get_memory_config", return_value=fake_cfg), \
+             patch.object(mg, "extract_entities_from_text", return_value=[]), \
+             patch.object(mg, "recall", side_effect=AssertionError("seed recall should not run")), \
+             patch.object(graph, "get_embedding", side_effect=AssertionError("graph embedding should not run")):
+            payload = mg.graph_aware_recall(
+                "what does my parent's sibling do",
+                owner_id="test-owner",
+                limit=8,
+                graph_depth=2,
+            )
+
+        attached = [
+            row for row in payload["graph_results"]
+            if row.get("id") == work.id
+        ]
+        assert payload["meta"]["base_recall_skipped"] == "owner_relation_chain"
+        assert attached
+        assert attached[0]["graph_relation_sequence"] == ["parent_of", "sibling_of", "has_fact"]
+        assert "Test Parent --sibling_of--> Test Aunt" in attached[0]["graph_path"]
 
     def test_graph_aware_recall_relation_chain_recovers_terminal_fact_missing_has_fact_edge(self, tmp_path):
         import datastore.memorydb.memory_graph as mg
