@@ -4158,12 +4158,73 @@ class TestSourceChunkStorage:
                 max_chunk_tokens=20,
             )
 
+        assert len(output_rows) == 2
         assert output_rows[0]["id"] == chunk["chunk_id"]
         assert output_rows[0]["source_chunk"]["chunk_id"] == chunk["chunk_id"]
         assert output_rows[1]["id"] == "legacy-fact-no-chunk"
         assert "source_chunk" not in output_rows[1]
         assert meta["source_chunks"]["attached"] == 1
         assert meta["source_chunks"]["linked_rows"] == 1
+
+    def test_recall_include_chunks_preserves_attached_row_order(self, tmp_path):
+        """Attached evidence rows keep their selected order after promotion."""
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _db_file = _make_graph(tmp_path)
+        first_chunk = graph.store_source_chunk(
+            "User: Ren keeps the umeboshi note in the cedar lunchbox.",
+            owner_id="ren",
+            session_id="session-promote-order",
+            chunk_index=0,
+        )
+        second_chunk = graph.store_source_chunk(
+            "User: Ren keeps the miso note in the blue notebook.",
+            owner_id="ren",
+            session_id="session-promote-order",
+            chunk_index=1,
+        )
+        rows = [
+            {
+                "id": "legacy-fact-no-chunk",
+                "category": "fact",
+                "owner_id": "ren",
+                "text": "Legacy graph fact without source chunk provenance.",
+            },
+            {
+                "id": first_chunk["chunk_id"],
+                "category": "session_chunk",
+                "source_type": "session_chunk",
+                "chunk_id": first_chunk["chunk_id"],
+                "owner_id": "ren",
+                "text": "User: Ren keeps the umeboshi note in the cedar lunchbox.",
+            },
+            {
+                "id": second_chunk["chunk_id"],
+                "category": "session_chunk",
+                "source_type": "session_chunk",
+                "chunk_id": second_chunk["chunk_id"],
+                "owner_id": "ren",
+                "text": "User: Ren keeps the miso note in the blue notebook.",
+            },
+        ]
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph):
+            output_rows, meta = mg._prepare_recall_output_rows(
+                rows,
+                {},
+                include_chunks=True,
+                max_chunk_tokens=20,
+            )
+
+        assert [row["id"] for row in output_rows] == [
+            first_chunk["chunk_id"],
+            second_chunk["chunk_id"],
+            "legacy-fact-no-chunk",
+        ]
+        assert output_rows[0]["source_chunk"]["chunk_id"] == first_chunk["chunk_id"]
+        assert output_rows[1]["source_chunk"]["chunk_id"] == second_chunk["chunk_id"]
+        assert "source_chunk" not in output_rows[2]
+        assert meta["source_chunks"]["attached"] == 2
 
     def test_recall_include_chunks_attaches_session_window_center_chunk_alias(self, tmp_path):
         """Expanded compact rows can opt into chunk evidence through their center chunk alias."""
