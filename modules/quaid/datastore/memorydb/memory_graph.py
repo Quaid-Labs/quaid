@@ -3604,12 +3604,8 @@ _SYMMETRIC_RELATIONS = {
     "partner_of",
     "sibling_of",
     "cousin_of",
-    "family_of",
-    "friend_of",
-    "neighbor_of",
-    "colleague_of",
-    "related_to",
-    "knows",
+    "aunt_of",
+    "uncle_of",
 }
 
 

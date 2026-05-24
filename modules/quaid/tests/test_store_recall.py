@@ -13084,20 +13084,28 @@ class TestRecallFastHookInjectContract:
         parent = mg.Node.create("Person", "Parent")
         child = mg.Node.create("Person", "Child")
         sibling = mg.Node.create("Person", "Sibling")
-        for node in (parent, child, sibling):
+        aunt = mg.Node.create("Person", "Aunt")
+        coworker = mg.Node.create("Person", "Coworker")
+        for node in (parent, child, sibling, aunt, coworker):
             graph.add_node(node, embed=False)
         graph.add_edge(mg.Edge.create(parent.id, child.id, "parent_of"))
         graph.add_edge(mg.Edge.create(sibling.id, child.id, "sibling_of"))
+        graph.add_edge(mg.Edge.create(aunt.id, child.id, "aunt_of"))
+        graph.add_edge(mg.Edge.create(coworker.id, child.id, "colleague_of"))
 
         parent_steps = mg._iter_relation_chain_step_edges(graph, child.id, "parent")
         child_steps = mg._iter_relation_chain_step_edges(graph, parent.id, "child")
         reverse_child_steps = mg._iter_relation_chain_step_edges(graph, child.id, "child")
         sibling_steps = mg._iter_relation_chain_step_edges(graph, child.id, "sibling")
+        extended_family_steps = mg._iter_relation_chain_step_edges(graph, child.id, "extended_family")
+        work_steps = mg._iter_relation_chain_step_edges(graph, child.id, "work")
 
         assert [next_id for _edge, next_id in parent_steps] == [parent.id]
         assert [next_id for _edge, next_id in child_steps] == [child.id]
         assert reverse_child_steps == []
         assert [next_id for _edge, next_id in sibling_steps] == [sibling.id]
+        assert [next_id for _edge, next_id in extended_family_steps] == [aunt.id]
+        assert work_steps == []
 
     def test_graph_aware_recall_owner_parent_chain_uses_reverse_parent_edge(self, tmp_path):
         import datastore.memorydb.memory_graph as mg
