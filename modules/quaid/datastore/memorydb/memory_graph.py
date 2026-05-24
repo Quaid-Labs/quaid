@@ -5197,6 +5197,20 @@ def graph_aware_recall(
             timeout_ms=timeout_ms,
             lexical_anchor_timeout_ms=_resolve_lexical_anchor_timeout_ms(timeout_ms, fast_mode=fast_mode),
             lexical_anchor_planner_mode=lexical_anchor_planner_mode,
+            planned_queries=[query],
+            planner_meta={
+                "query": query,
+                "timeout_ms": 0,
+                "used_llm": False,
+                "bailout_reason": "graph_seed_vector_only",
+                "queries_count": 1,
+                "elapsed_ms": 0,
+                "planner_profile": "graph_seed",
+                "planned_stores": ["vector"],
+                "planned_project": project,
+                "freshness_preferred": False,
+                "suppress_session_chunks_auto_include": True,
+            },
             return_meta=True,
         )
         results["meta"]["phases_ms"]["base_recall_ms"] = round((time.monotonic() - _base_started_at) * 1000)
@@ -10294,11 +10308,16 @@ def _run_recall_store_plan(
             ))
         elif store == "graph":
             graph_candidate_pool = kwargs.get("candidate_pool")
-            if graph_candidate_pool is None and "vector" in normalized_stores:
+            if (
+                graph_candidate_pool is None
+                and "vector" in normalized_stores
+                and not relation_chain_query_for_plan
+            ):
                 # The vector lane is already running in this store plan. Graph
                 # recall should traverse explicit/entity anchors instead of
                 # recursively paying for another full base recall inside the
-                # same plan.
+                # same plan. Relation-chain queries are the exception: graph
+                # needs its own seed facts when owner anchoring is incomplete.
                 graph_candidate_pool = []
             callables.append(lambda store=store, handler=handler, graph_candidate_pool=graph_candidate_pool: (
                 store,

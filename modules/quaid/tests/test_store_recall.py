@@ -13455,7 +13455,7 @@ class TestRecallFastHookInjectContract:
         assert boat_row["via"] == "graph_attached_fact"
         assert boat_row["graph_relation_sequence"] == ["spouse_of", "sibling_of", "has_fact"]
 
-    def test_mixed_store_relation_chain_uses_owner_graph_without_recursive_seed_recall(self, tmp_path):
+    def test_mixed_store_relation_chain_allows_graph_seed_recall(self, tmp_path):
         import datastore.memorydb.memory_graph as mg
 
         graph, _ = _make_graph(tmp_path)
@@ -13494,6 +13494,17 @@ class TestRecallFastHookInjectContract:
 
         registry = dict(base_registry)
         registry["vector"] = {"recall": fake_vector_recall, "recall_fast": fake_vector_recall}
+        seed_calls = []
+
+        def fake_seed_recall(*_args, **kwargs):
+            seed_calls.append(kwargs)
+            return (
+                [
+                    {"id": lives.id, "text": lives.name, "category": "fact", "similarity": 0.99},
+                    {"id": brother.id, "text": brother.name, "category": "fact", "similarity": 0.98},
+                ],
+                {"selected_path": "vector", "counts": {"returned": 2}},
+            )
 
         with patch.object(mg, "get_graph", return_value=graph), \
              patch.object(mg, "_HAS_CONFIG", True), \
@@ -13503,7 +13514,7 @@ class TestRecallFastHookInjectContract:
                  SimpleNamespace(id="noor-1", name="Noor", type="Person"),
              ]), \
              patch.object(mg, "_get_recall_store_registry", return_value=registry), \
-             patch.object(mg, "recall", side_effect=AssertionError("graph lane should not run recursive seed recall")):
+             patch.object(mg, "recall", side_effect=fake_seed_recall):
             rows, meta, bundle = mg._run_recall_store_plan(
                 "what does my partner's brother do?",
                 stores=["vector", "graph"],
@@ -13521,6 +13532,9 @@ class TestRecallFastHookInjectContract:
         assert bundle is None
         assert meta["planned_stores"] == ["vector", "graph"]
         assert meta["store_runs"][1]["selected_path"] == "graph_aware"
+        assert seed_calls
+        assert seed_calls[0]["planner_meta"]["planned_stores"] == ["vector"]
+        assert seed_calls[0]["planner_meta"]["suppress_session_chunks_auto_include"] is True
         assert rows
         assert rows[0]["id"] == boat.id
         assert rows[0]["via"] == "graph_attached_fact"
