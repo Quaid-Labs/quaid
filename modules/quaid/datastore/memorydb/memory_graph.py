@@ -6820,6 +6820,22 @@ def _attach_source_chunks_to_recall_rows(
     return normalized_rows, summary
 
 
+def _prioritize_attached_source_chunk_rows(rows: Any) -> Any:
+    """For include_chunks output, make attached first-order evidence visible first."""
+    if not isinstance(rows, list) or len(rows) <= 1:
+        return rows
+    attached: List[Any] = []
+    other: List[Any] = []
+    for row in rows:
+        if isinstance(row, dict) and isinstance(row.get("source_chunk"), dict):
+            attached.append(row)
+        else:
+            other.append(row)
+    if not attached or not other:
+        return rows
+    return [*attached, *other]
+
+
 _DEFAULT_RECALL_RAW_PROVENANCE_FIELDS = {
     # Raw datastore/source linkage is opt-in evidence metadata. Default recall
     # output should keep readable context fields, not internal row ids.
@@ -6868,6 +6884,8 @@ def _prepare_recall_output_rows(
         max_chunk_tokens=max_chunk_tokens,
         max_total_chunk_tokens=max_total_chunk_tokens,
     )
+    if int(source_chunk_meta.get("attached") or 0) > 0:
+        output_rows = _prioritize_attached_source_chunk_rows(output_rows)
     output_meta = dict(meta or {})
     output_meta["session_chunks"] = source_chunk_meta
     output_meta["source_chunks"] = source_chunk_meta

@@ -4120,6 +4120,51 @@ class TestSourceChunkStorage:
         assert meta["source_chunks"]["attached"] == 1
         assert meta["source_chunks"]["failed"] is False
 
+    def test_recall_include_chunks_promotes_attached_rows_above_unattached_graph_rows(self, tmp_path):
+        """Opt-in chunk evidence should be visible at the top when attachments exist."""
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _db_file = _make_graph(tmp_path)
+        chunk = graph.store_source_chunk(
+            "User: Ren keeps the umeboshi onigiri note in the cedar lunchbox.",
+            owner_id="ren",
+            session_id="session-promote-attached",
+            chunk_index=0,
+        )
+        rows = [
+            {
+                "id": "legacy-fact-no-chunk",
+                "category": "fact",
+                "owner_id": "ren",
+                "text": "Legacy graph fact without source chunk provenance.",
+            },
+            {
+                "id": chunk["chunk_id"],
+                "category": "session_chunk",
+                "source_type": "session_chunk",
+                "via": "session_chunks",
+                "chunk_id": chunk["chunk_id"],
+                "session_chunk_id": chunk["chunk_id"],
+                "owner_id": "ren",
+                "text": "User: Ren keeps the umeboshi onigiri note in the cedar lunchbox.",
+            },
+        ]
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph):
+            output_rows, meta = mg._prepare_recall_output_rows(
+                rows,
+                {},
+                include_chunks=True,
+                max_chunk_tokens=20,
+            )
+
+        assert output_rows[0]["id"] == chunk["chunk_id"]
+        assert output_rows[0]["source_chunk"]["chunk_id"] == chunk["chunk_id"]
+        assert output_rows[1]["id"] == "legacy-fact-no-chunk"
+        assert "source_chunk" not in output_rows[1]
+        assert meta["source_chunks"]["attached"] == 1
+        assert meta["source_chunks"]["linked_rows"] == 1
+
     def test_recall_include_chunks_attaches_session_window_center_chunk_alias(self, tmp_path):
         """Expanded compact rows can opt into chunk evidence through their center chunk alias."""
         import datastore.memorydb.memory_graph as mg
