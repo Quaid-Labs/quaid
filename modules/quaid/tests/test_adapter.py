@@ -2092,6 +2092,102 @@ class TestCodexAdapter:
         transcript = adapter.parse_session_jsonl(path)
         assert transcript == ""
 
+    def test_parse_session_jsonl_strips_codex_visible_memory_context_rows(self, tmp_path):
+        path = tmp_path / "rollout-visible-memory-context.jsonl"
+        path.write_text(
+            "\n".join(
+                [
+                    json.dumps(
+                        {
+                            "timestamp": "2026-05-24T01:31:07.000Z",
+                            "type": "event_msg",
+                            "payload": {
+                                "type": "user_message",
+                                "message": "What grinder do I use for my espresso setup?",
+                            },
+                        }
+                    ),
+                    json.dumps(
+                        {
+                            "timestamp": "2026-05-24T01:31:08.000Z",
+                            "type": "event_msg",
+                            "payload": {
+                                "type": "agent_message",
+                                "message": (
+                                    "[Quaid Memory Context]\n"
+                                    "  1. [fact][session_chunk] The espresso setup uses a Baratza Encore grinder "
+                                    "(relevance: 0.95)\n\n"
+                                    "I checked the stored context and found the grinder detail."
+                                ),
+                            },
+                        }
+                    ),
+                ]
+            ),
+            encoding="utf-8",
+        )
+        adapter = CodexAdapter()
+
+        transcript = adapter.parse_session_jsonl(path)
+
+        assert "User: What grinder do I use for my espresso setup?" in transcript
+        assert "Assistant: I checked the stored context and found the grinder detail." in transcript
+        assert "[Quaid Memory Context]" not in transcript
+        assert "Baratza Encore" not in transcript
+
+    def test_parse_session_jsonl_strips_recalled_source_chunk_output_rows(self, tmp_path):
+        path = tmp_path / "rollout-visible-source-chunks.jsonl"
+        path.write_text(
+            "\n".join(
+                [
+                    json.dumps(
+                        {
+                            "type": "event_msg",
+                            "payload": {
+                                "type": "agent_message",
+                                "message": (
+                                    "[0.95] [session_chunk][C:0.5] [memory] [session_chunk] "
+                                    "rollout-2026-05-23T23-51-25-session#20: M3 guide details\n"
+                                    "[session_chunk] rollout-2026-05-23T23-51-25-session#21: "
+                                    "deliberate recall probes and date-range checks\n\n"
+                                    "Assistant: The retest is complete."
+                                ),
+                            },
+                        }
+                    )
+                ]
+            ),
+            encoding="utf-8",
+        )
+        adapter = CodexAdapter()
+
+        transcript = adapter.parse_session_jsonl(path)
+
+        assert "Assistant: The retest is complete." in transcript
+        assert "M3 guide details" not in transcript
+        assert "deliberate recall probes" not in transcript
+        assert "[session_chunk]" not in transcript
+
+    def test_parse_session_jsonl_keeps_normal_numbered_bracket_lists(self, tmp_path):
+        path = tmp_path / "rollout-numbered-list.jsonl"
+        path.write_text(
+            json.dumps(
+                {
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "user_message",
+                        "message": "1. [task] Buy filters for the espresso setup.",
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        adapter = CodexAdapter()
+
+        transcript = adapter.parse_session_jsonl(path)
+
+        assert "User: 1. [task] Buy filters for the espresso setup." in transcript
+
     def test_parse_session_jsonl_strips_notification_prefix_from_agent_message(self, tmp_path):
         path = tmp_path / "rollout-notify-prefix.jsonl"
         path.write_text(
