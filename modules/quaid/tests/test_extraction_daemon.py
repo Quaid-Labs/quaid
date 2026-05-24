@@ -7324,6 +7324,129 @@ class TestRollingExtraction:
             else:
                 sys.modules.pop("lib.adapter", None)
 
+    def test_check_idle_sessions_dedupes_same_source_alias_cursors(self, monkeypatch, tmp_path):
+        transcript_path = tmp_path / "rollout-2026-05-23T23-35-32-019e5731-a7aa-74b3-b681-bfefb9d1f3ec.jsonl"
+        transcript_path.write_text(
+            '{"type":"event_msg","payload":{"type":"user_message","message":"first idle note with durable details"}}\n'
+            '{"type":"event_msg","payload":{"type":"user_message","message":"second idle note with more durable details"}}\n',
+            encoding="utf-8",
+        )
+
+        now = 1_700_000_000.0
+        os.utime(transcript_path, (now - 3600, now - 3600))
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "rolling-inst")
+        monkeypatch.setattr(extraction_daemon.time, "time", lambda: now)
+        monkeypatch.setattr(extraction_daemon, "_read_installed_at", lambda: now - 7200)
+        monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
+        monkeypatch.setattr(extraction_daemon, "_load_runtime_adapter", lambda: None)
+
+        legacy_session_id = "019e5731-a7aa-74b3-b681-bfefb9d1f3ec"
+        rollout_session_id = "rollout-2026-05-23T23-35-32-019e5731-a7aa-74b3-b681-bfefb9d1f3ec"
+        source_key = extraction_daemon._signal_source_cursor_key(
+            rollout_session_id,
+            str(transcript_path),
+        )
+        extraction_daemon.write_cursor(
+            rollout_session_id,
+            0,
+            str(transcript_path),
+            source_key=source_key,
+        )
+        extraction_daemon.write_cursor(legacy_session_id, 0, str(transcript_path))
+
+        captured = []
+        monkeypatch.setattr(
+            extraction_daemon,
+            "write_signal",
+            lambda signal_type, session_id, transcript_path, **kwargs: captured.append(
+                {
+                    "signal_type": signal_type,
+                    "session_id": session_id,
+                    "transcript_path": transcript_path,
+                }
+            ),
+        )
+
+        extraction_daemon.check_idle_sessions(timeout_minutes=30)
+
+        assert len(captured) == 1
+        assert captured[0]["signal_type"] == "timeout"
+        assert captured[0]["transcript_path"] == str(transcript_path)
+        assert captured[0]["session_id"] in {legacy_session_id, rollout_session_id}
+
+    def test_check_chunk_ready_sessions_keeps_distinct_sources_separate(self, monkeypatch, tmp_path):
+        import sys
+        import types
+
+        transcripts = [
+            (
+                "rollout-2026-05-23T23-35-32-019e5731-a7aa-74b3-b681-bfefb9d1f3ec",
+                "first source durable rolling note",
+            ),
+            (
+                "rollout-2026-05-23T23-41-10-019e5732-b8bb-74b3-b681-bfefb9d1f3ed",
+                "second source durable rolling note",
+            ),
+        ]
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "rolling-inst")
+
+        expected_session_ids = []
+        for session_id, message in transcripts:
+            transcript_path = tmp_path / f"{session_id}.jsonl"
+            transcript_path.write_text(
+                json.dumps({"type": "event_msg", "payload": {"type": "user_message", "message": message}}) + "\n",
+                encoding="utf-8",
+            )
+            expected_session_ids.append(session_id)
+            source_key = extraction_daemon._signal_source_cursor_key(session_id, str(transcript_path))
+            extraction_daemon.write_cursor(session_id, 0, str(transcript_path), source_key=source_key)
+
+        real_adapter = sys.modules.get("lib.adapter")
+        fake_adapter_mod = types.ModuleType("lib.adapter")
+
+        class _FakeAdapter(_OwnedTestAdapterMixin):
+            def parse_session_jsonl(self, path):
+                messages = []
+                for raw in path.read_text(encoding="utf-8").splitlines():
+                    payload = json.loads(raw)
+                    event_payload = payload.get("payload", {})
+                    message = event_payload.get("message")
+                    if message:
+                        messages.append(f"User: {message}")
+                return "\n\n".join(messages)
+
+        fake_adapter_mod.get_adapter = lambda: _FakeAdapter()
+        sys.modules["lib.adapter"] = fake_adapter_mod
+
+        captured = []
+        monkeypatch.setattr(extraction_daemon, "_get_capture_chunk_tokens", lambda default=8000: 5)
+        monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
+        monkeypatch.setattr(
+            extraction_daemon,
+            "write_signal",
+            lambda signal_type, session_id, transcript_path, **kwargs: captured.append(
+                {
+                    "signal_type": signal_type,
+                    "session_id": session_id,
+                    "transcript_path": transcript_path,
+                    "meta": kwargs.get("meta", {}),
+                }
+            ),
+        )
+
+        try:
+            extraction_daemon.check_chunk_ready_sessions()
+            assert len(captured) == 2
+            assert {item["signal_type"] for item in captured} == {"rolling"}
+            assert {item["session_id"] for item in captured} == set(expected_session_ids)
+        finally:
+            if real_adapter is not None:
+                sys.modules["lib.adapter"] = real_adapter
+            else:
+                sys.modules.pop("lib.adapter", None)
+
     def test_process_signal_rolling_requeues_continuation_when_transcript_tail_remains(self, monkeypatch, tmp_path):
         import sys
         import types

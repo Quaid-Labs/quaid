@@ -1673,6 +1673,24 @@ def _remember_queued_source_signal(
         pending_source_keys.add(source_key)
 
 
+def _source_signal_already_pending(
+    *,
+    pending_source_keys: set[str],
+    source_key: str,
+    session_id: str,
+    scanner: str,
+) -> bool:
+    if source_key not in pending_source_keys:
+        return False
+    logger.debug(
+        "session %s source %s already has pending signal during %s scan; skipping duplicate",
+        session_id,
+        source_key,
+        scanner,
+    )
+    return True
+
+
 def _deferred_extraction_dir() -> Path:
     d = _instance_root() / "data" / "deferred-extractions"
     d.mkdir(parents=True, exist_ok=True)
@@ -6145,7 +6163,12 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
 
         if has_flushable_rolling_content and session_id not in pending_session_ids:
             source_key = _signal_source_cursor_key(session_id, transcript_path, cursor_data=row_cursor_data)
-            if source_key in pending_source_keys:
+            if _source_signal_already_pending(
+                pending_source_keys=pending_source_keys,
+                source_key=source_key,
+                session_id=session_id,
+                scanner="idle",
+            ):
                 continue
             newer_session_exists = any(
                 float(other["mtime"]) > mtime and str(other["session_id"]) != session_id
@@ -6185,7 +6208,12 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
                     and session_id not in pending_session_ids
                 ):
                     source_key = _signal_source_cursor_key(session_id, transcript_path, cursor_data=row_cursor_data)
-                    if source_key in pending_source_keys:
+                    if _source_signal_already_pending(
+                        pending_source_keys=pending_source_keys,
+                        source_key=source_key,
+                        session_id=session_id,
+                        scanner="idle",
+                    ):
                         continue
                     logger.info(
                         "session %s idle for %.0fs with cursor at end, generating timeout signal",
@@ -6220,7 +6248,12 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
         if session_id in pending_session_ids:
             continue
         source_key = _signal_source_cursor_key(session_id, transcript_path, cursor_data=data)
-        if source_key in pending_source_keys:
+        if _source_signal_already_pending(
+            pending_source_keys=pending_source_keys,
+            source_key=source_key,
+            session_id=session_id,
+            scanner="idle",
+        ):
             continue
 
         logger.info(
@@ -6381,7 +6414,12 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
             transcript_path = str(data.get("transcript_path") or transcript_path)
         unfroze_internal_cursor = internal_state == "unfrozen"
         source_key = _signal_source_cursor_key(str(session_id), str(transcript_path), cursor_data=data)
-        if source_key in pending_rolling_source_keys:
+        if _source_signal_already_pending(
+            pending_source_keys=pending_rolling_source_keys,
+            source_key=source_key,
+            session_id=session_id,
+            scanner="rolling",
+        ):
             continue
         if _processing_lock_active(source_key):
             logger.info(
