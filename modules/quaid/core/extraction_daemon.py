@@ -1660,6 +1660,19 @@ def _pending_signal_source_keys(
     return keys
 
 
+def _remember_queued_source_signal(
+    *,
+    pending_session_ids: set[str],
+    pending_source_keys: set[str],
+    session_id: str,
+    source_key: str,
+) -> None:
+    """Track a just-written signal so same-scan alias cursors do not queue duplicates."""
+    pending_session_ids.add(str(session_id or "").strip())
+    if source_key:
+        pending_source_keys.add(source_key)
+
+
 def _deferred_extraction_dir() -> Path:
     d = _instance_root() / "data" / "deferred-extractions"
     d.mkdir(parents=True, exist_ok=True)
@@ -6148,6 +6161,12 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
                     session_id=session_id,
                     transcript_path=transcript_path,
                 )
+                _remember_queued_source_signal(
+                    pending_session_ids=pending_session_ids,
+                    pending_source_keys=pending_source_keys,
+                    session_id=session_id,
+                    source_key=source_key,
+                )
                 continue
 
         if cursor_at_end and not has_flushable_rolling_content:
@@ -6165,6 +6184,9 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
                     and (now - mtime) >= timeout_seconds
                     and session_id not in pending_session_ids
                 ):
+                    source_key = _signal_source_cursor_key(session_id, transcript_path, cursor_data=row_cursor_data)
+                    if source_key in pending_source_keys:
+                        continue
                     logger.info(
                         "session %s idle for %.0fs with cursor at end, generating timeout signal",
                         session_id,
@@ -6176,6 +6198,12 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
                         transcript_path=transcript_path,
                         supports_compaction_control=_adapter_supports_compaction_control(),
                         meta={"compact_on_timeout": _get_compact_on_timeout()},
+                    )
+                    _remember_queued_source_signal(
+                        pending_session_ids=pending_session_ids,
+                        pending_source_keys=pending_source_keys,
+                        session_id=session_id,
+                        source_key=source_key,
                     )
                     _cursor_end_timeout_fired.add(session_id)
             continue
@@ -6206,6 +6234,12 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
             transcript_path=transcript_path,
             supports_compaction_control=_adapter_supports_compaction_control(),
             meta={"compact_on_timeout": _get_compact_on_timeout()},
+        )
+        _remember_queued_source_signal(
+            pending_session_ids=pending_session_ids,
+            pending_source_keys=pending_source_keys,
+            session_id=session_id,
+            source_key=source_key,
         )
 
 
@@ -6252,6 +6286,11 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
     chunk_budget = int(chunk_tokens or _get_capture_chunk_tokens())
     chunk_line_budget = _get_capture_chunk_max_lines()
     pending = read_pending_signals()
+    pending_rolling_session_ids = {
+        str(s.get("session_id") or "").strip()
+        for s in pending
+        if str(s.get("type") or s.get("signal_type") or "") == "rolling"
+    }
     pending_rolling_source_keys = _pending_signal_source_keys(pending, signal_type="rolling")
 
     for cursor_file in cursor_dir.glob("*.json"):
@@ -6414,6 +6453,12 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
                         "buffered_line_offset": buffered_line_offset,
                     },
                 )
+                _remember_queued_source_signal(
+                    pending_session_ids=pending_rolling_session_ids,
+                    pending_source_keys=pending_rolling_source_keys,
+                    session_id=session_id,
+                    source_key=source_key,
+                )
             continue
 
         if semantic_tokens >= chunk_budget:
@@ -6446,6 +6491,12 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
             session_id=session_id,
             transcript_path=transcript_path,
             meta=signal_meta,
+        )
+        _remember_queued_source_signal(
+            pending_session_ids=pending_rolling_session_ids,
+            pending_source_keys=pending_rolling_source_keys,
+            session_id=session_id,
+            source_key=source_key,
         )
 
 
