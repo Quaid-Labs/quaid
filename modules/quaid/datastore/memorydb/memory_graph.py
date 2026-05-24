@@ -4129,7 +4129,7 @@ def seed_edge_keywords_from_db() -> int:
 
 
 def resolve_owner_person(owner_id: str) -> Optional[Node]:
-    """Map owner_id to their Person node using config mapping.
+    """Map owner_id to the owner's Person node.
 
     Args:
         owner_id: The owner identifier (e.g., "alice")
@@ -4137,13 +4137,20 @@ def resolve_owner_person(owner_id: str) -> Optional[Node]:
     Returns:
         The Person node for that owner, or None if not found.
     """
-    if not _HAS_CONFIG:
+    owner_key = str(owner_id or "").strip()
+    if not owner_key:
         return None
-
     graph = get_graph()
-    cfg = _get_memory_config()
-    identity = cfg.users.identities.get(owner_id)
     generic_owner_ids = {"default", "shared", "owner", "user", "quaid"}
+    identity = None
+    if _HAS_CONFIG:
+        try:
+            cfg = _get_memory_config()
+            identity = cfg.users.identities.get(owner_key)
+        except Exception:
+            if _is_fail_hard_mode():
+                raise
+            identity = None
 
     # Primary: explicit configured person node name.
     if identity and identity.person_node_name:
@@ -4159,7 +4166,7 @@ def resolve_owner_person(owner_id: str) -> Optional[Node]:
 
     # Fallback: when owner_id is a placeholder, infer the real owner from the
     # current instance ownership edge (e.g. Solomon --owns--> codex-livetest).
-    if owner_id in generic_owner_ids and hasattr(graph, "_get_conn"):
+    if owner_key in generic_owner_ids and hasattr(graph, "_get_conn"):
         instance_name = os.environ.get("QUAID_INSTANCE", "").strip()
         if instance_name:
             with graph._get_conn() as conn:
@@ -4181,9 +4188,9 @@ def resolve_owner_person(owner_id: str) -> Optional[Node]:
 
     # Fallback: owner id itself may map to person name in graph.
     owner_candidates = [
-        owner_id,
-        owner_id.replace("_", " ").title(),
-        re.sub(r"[-_]+", " ", owner_id).title(),
+        owner_key,
+        owner_key.replace("_", " ").title(),
+        re.sub(r"[-_]+", " ", owner_key).title(),
     ]
     seen_owner_candidates: set[str] = set()
     for candidate in owner_candidates:
@@ -4193,6 +4200,50 @@ def resolve_owner_person(owner_id: str) -> Optional[Node]:
         node = graph.find_node_by_name(candidate, type="Person")
         if node:
             return node
+
+    # Installed alpha instances may not have a config identity mapping, but the
+    # graph often has a concrete Person node whose first or last name is the
+    # stable owner id (for example owner_id "alice" -> "Alice Smith").
+    # Keep this token-based so we do not choose an arbitrary Person owned by the
+    # same account.
+    owner_tokens = [
+        token
+        for token in re.findall(r"[a-z0-9]+", owner_key.lower())
+        if token and token not in generic_owner_ids
+    ]
+    if owner_tokens and hasattr(graph, "_get_conn"):
+        with graph._get_conn() as conn:
+            for token in owner_tokens:
+                row = conn.execute(
+                    """
+                    SELECT n.*
+                    FROM nodes n
+                    WHERE n.type = 'Person'
+                      AND (n.status IS NULL OR n.status IN ('approved', 'pending', 'active'))
+                      AND n.deleted_at IS NULL
+                      AND n.superseded_by IS NULL
+                      AND (
+                        LOWER(n.name) = ?
+                        OR LOWER(n.name) LIKE ?
+                        OR LOWER(n.name) LIKE ?
+                        OR LOWER(n.name) LIKE ?
+                      )
+                    ORDER BY
+                      CASE WHEN n.owner_id = ? THEN 0 ELSE 1 END,
+                      LENGTH(n.name) ASC,
+                      COALESCE(n.created_at, '') ASC
+                    LIMIT 1
+                    """,
+                    (
+                        token,
+                        f"{token} %",
+                        f"% {token}",
+                        f"% {token} %",
+                        owner_key,
+                    ),
+                ).fetchone()
+                if row:
+                    return graph._row_to_node(row)
 
     return None
 
@@ -6037,6 +6088,94 @@ def _fast_term_rescue_score(
     ):
         rescue_score = max(rescue_score, min(0.99, max(0.96, best_existing_score + 0.02)))
     return min(rescue_score, 0.99)
+
+
+_FAST_LEXICAL_PREFLIGHT_MAX_BUDGET_MS = 4000
+
+
+def _fast_lexical_preflight_enabled(timeout_ms: Optional[int]) -> bool:
+    """Enable DB-local preflight only for tight hook-inject style budgets."""
+    if timeout_ms is None:
+        try:
+            timeout_ms = int(_get_configured_injection_timeout_ms(3000) or 3000)
+        except Exception:
+            if _is_fail_hard_mode():
+                raise
+            timeout_ms = 3000
+    try:
+        return int(timeout_ms) <= _FAST_LEXICAL_PREFLIGHT_MAX_BUDGET_MS
+    except (TypeError, ValueError):
+        return False
+
+
+def _fast_lexical_preflight_results(
+    graph: "MemoryGraph",
+    query: str,
+    *,
+    limit: int,
+    min_similarity: float,
+    owner_id: Optional[str],
+) -> List[Tuple["Node", float]]:
+    """Return strong DB-local lexical hits for the hook-inject fast path.
+
+    Pre-inject recall has a tight wall-clock budget. When existing FTS/LIKE
+    evidence directly covers the query surface, prefer that first-order DB path
+    instead of starting an embedding/provider call that may exceed the hook
+    timeout. Weak lexical matches still fall through to the normal hybrid path.
+    """
+    query_terms = _extract_distinctive_query_terms(query, limit=8)
+    if len(query_terms) < 2:
+        return []
+    min_overlap = 1 if len(query_terms) <= 2 else 2
+    search_limit = max(limit * 3, 24)
+
+    hits: List[Tuple[Node, float]] = []
+    seen: Set[str] = set()
+
+    def _append_hits(raw_hits: List[Tuple[Node, float]]) -> None:
+        for node, rank in raw_hits or []:
+            node_id = str(getattr(node, "id", "") or "").strip()
+            if not node_id or node_id in seen:
+                continue
+            seen.add(node_id)
+            hits.append((node, float(rank or 1.0)))
+
+    _append_hits(graph.search_fts(query, limit=search_limit, owner_id=owner_id))
+    _append_hits(
+        _search_nodes_by_query_terms(
+            graph,
+            query_terms,
+            limit=search_limit,
+            owner_id=owner_id,
+        )
+    )
+    if not hits:
+        return []
+
+    scored: List[Tuple[Node, float, int, str]] = []
+    best_overlap = 0
+    for node, rank in hits:
+        node_type = str(getattr(node, "type", "") or "").strip().lower()
+        if node_type in {"person", "place", "organization", "entity"}:
+            continue
+        overlap = _query_term_overlap({"text": _node_searchable_text(node)}, query_terms)
+        best_overlap = max(best_overlap, overlap)
+        if overlap < min_overlap:
+            continue
+        overlap_ratio = overlap / max(1, len(query_terms))
+        quality = min(
+            0.99,
+            max(
+                float(min_similarity or 0.0),
+                0.58 + (overlap_ratio * 0.34) + max(0.0, (4.0 - float(rank or 1.0)) * 0.012),
+            ),
+        )
+        scored.append((node, quality, overlap, str(getattr(node, "created_at", "") or "")))
+
+    if best_overlap < min_overlap or (best_overlap / max(1, len(query_terms))) < 0.67:
+        return []
+    scored.sort(key=lambda item: (item[2], item[1], item[3]), reverse=True)
+    return [(node, quality) for node, quality, _overlap, _created in scored[: max(limit * 2, limit)]]
 
 
 _ASSISTANT_PROVENANCE_SOURCE_TYPES = {"assistant", "subagent", "tool"}
@@ -10980,15 +11119,42 @@ def _recall_once(
     target_date = _query_target_date(clean_query)
     prefer_fresh = bool(relative_temporal_freshness) and not target_date
 
-    # Fast Ollama health check — skip semantic search entirely if Ollama is down
-    # Saves ~30s of embedding timeout waits when Ollama is unreachable
-    _phase_t0 = _time.monotonic()
-    _ollama_up = _ollama_healthy()
-    _phase_ms["ollama_health_ms"] = round((_time.monotonic() - _phase_t0) * 1000)
-
     # Search with buffer for composite scoring + MMR selection
     search_limit = limit * 3
-    if _ollama_up:
+    search_query = clean_query
+    results: List[Tuple[Node, float]] = []
+    _fast_lexical_preflight_used = False
+    planner_mode = str(lexical_anchor_planner_mode or "llm").strip().lower()
+    if (
+        use_lightweight_config
+        and planner_mode == "deterministic"
+        and _fast_lexical_preflight_enabled(timeout_ms)
+    ):
+        _phase_t0 = _time.monotonic()
+        results = _fast_lexical_preflight_results(
+            graph,
+            clean_query,
+            limit=search_limit,
+            min_similarity=float(min_similarity or 0.0),
+            owner_id=owner_id,
+        )
+        _phase_ms["fts_fallback_ms"] = round((_time.monotonic() - _phase_t0) * 1000)
+        if results:
+            _fast_lexical_preflight_used = True
+            _fts_fallback_used = True
+
+    # Fast Ollama health check — skip semantic search entirely if Ollama is down
+    # Saves ~30s of embedding timeout waits when Ollama is unreachable. Strong
+    # fast lexical preflight rows intentionally avoid provider calls altogether.
+    _ollama_up = True
+    if not results:
+        _phase_t0 = _time.monotonic()
+        _ollama_up = _ollama_healthy()
+        _phase_ms["ollama_health_ms"] = round((_time.monotonic() - _phase_t0) * 1000)
+
+    if results:
+        search_query = clean_query
+    elif _ollama_up:
         # Route query through LLM (HyDE) — only when embeddings will be used
         cfg_use_hyde = True
         try:
@@ -12374,6 +12540,7 @@ def _recall_once(
         },
         "flags": {
             "fts_fallback_used": _fts_fallback_used,
+            "fast_lexical_preflight_used": _fast_lexical_preflight_used,
             "lexical_rescue_used": bool(_lexical_rescue_added or _lexical_rescue_boosted),
             "multi_pass_triggered": _multi_pass_triggered,
             "reranker_enabled": reranker_enabled,
@@ -20405,10 +20572,18 @@ def recall(
         fanout_meta["planned_stores"] = list(planned_turn1_stores)
         fanout_meta["session_chunks_auto_included"] = True
     turn1_relation_chain_groups = _relation_chain_groups_for_query(query)
+    turn1_relation_chain_detected = (
+        len(turn1_relation_chain_groups) >= 2
+        and _has_relation_chain_structure(query)
+    )
+    if turn1_relation_chain_detected and "graph" not in planned_turn1_stores:
+        planned_turn1_stores = _planner_store_plan([*planned_turn1_stores, "graph"])
+        fanout_meta = dict(fanout_meta or {})
+        fanout_meta["planned_stores"] = list(planned_turn1_stores)
+        fanout_meta["relation_chain_graph_auto_included"] = True
     turn1_relation_chain_query = (
         "graph" in planned_turn1_stores
-        and len(turn1_relation_chain_groups) >= 2
-        and _has_relation_chain_structure(query)
+        and turn1_relation_chain_detected
     )
     if (
         turn1_relation_chain_query

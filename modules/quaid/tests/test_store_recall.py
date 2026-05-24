@@ -1872,6 +1872,49 @@ class TestRecallBasic:
              patch.object(mg, "_get_configured_injection_timeout_ms", return_value=3000):
             assert mg._recall_store_plan_timeout_s(None, fast_mode=True) == 3.0
 
+    def test_recall_fast_uses_strong_lexical_preflight_before_semantic_timeout(self, tmp_path, monkeypatch):
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _ = _make_graph(tmp_path)
+        monkeypatch.setenv("MEMORY_DB_PATH", str(graph.db_path))
+        query = "What scanner do I use for my archive setup?"
+        planner_meta = {
+            "query": query,
+            "timeout_ms": 0,
+            "used_llm": False,
+            "bailout_reason": "preserve_short_exact_query",
+            "queries_count": 1,
+            "elapsed_ms": 0,
+            "planner_profile": "fast",
+            "planned_stores": ["vector"],
+            "planned_project": None,
+        }
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
+             patch("datastore.memorydb.memory_graph._is_fail_hard_mode", return_value=True):
+            stored = mg.store(
+                "The owner keeps a flatbed scanner beside the archive setup",
+                owner_id="quaid",
+                skip_dedup=True,
+                status="approved",
+            )
+            with patch.object(mg, "_plan_fanout_queries", return_value=([query], planner_meta)), \
+                 patch.object(mg.MemoryGraph, "search_hybrid", side_effect=TimeoutError("semantic search should not start")), \
+                 patch.object(mg, "_ollama_healthy", side_effect=AssertionError("lexical preflight should avoid provider health check")):
+                rows, meta = mg.recall_fast(
+                    query,
+                    owner_id="quaid",
+                    return_meta=True,
+                    planner_profile="fast",
+                    domain={"all": True},
+                )
+
+        assert rows
+        assert rows[0]["id"] == stored["id"]
+        branches = (((meta.get("turn_details") or [{}])[0].get("fanout") or {}).get("branches") or [])
+        assert branches[0].get("flags", {}).get("fast_lexical_preflight_used") is True
+
     def test_fast_lexical_anchor_planner_timeout_stays_within_preinject_budget(self):
         import datastore.memorydb.memory_graph as mg
 
@@ -13480,6 +13523,116 @@ class TestRecallFastHookInjectContract:
         assert meta["store_runs"][1]["selected_path"] == "graph_aware"
         assert rows
         assert rows[0]["id"] == boat.id
+        assert rows[0]["via"] == "graph_attached_fact"
+        assert rows[0]["graph_relation_sequence"] == ["spouse_of", "sibling_of", "has_fact"]
+
+    def test_deliberate_relation_chain_auto_includes_graph_after_vector_only_plan(self):
+        import datastore.memorydb.memory_graph as mg
+
+        captured = {}
+
+        def _fake_vector(*_args, **_kwargs):
+            return (
+                [{"id": "fact-vector", "text": "generic family context", "category": "fact", "similarity": 0.72}],
+                {"selected_path": "vector", "phases_ms": {"total_ms": 5}},
+                None,
+            )
+
+        def _fake_session_chunks(*_args, **_kwargs):
+            return (
+                [{"id": "chunk-family", "text": "raw transcript family context", "category": "session_chunk", "similarity": 0.74}],
+                {"selected_path": "session_chunks", "phases_ms": {"total_ms": 5}},
+                None,
+            )
+
+        def _fake_graph(*_args, **_kwargs):
+            captured["called"] = True
+            return (
+                [
+                    {
+                        "id": "terminal-work",
+                        "text": "Casey works at a wooden boat shop",
+                        "category": "fact",
+                        "similarity": 0.96,
+                        "via": "graph_attached_fact",
+                        "graph_discovery_kind": "graph_attached_fact",
+                        "graph_relation_sequence": ["spouse_of", "sibling_of", "has_fact"],
+                    }
+                ],
+                {"selected_path": "graph_aware", "phases_ms": {"total_ms": 5}, "counts": {"graph_discoveries": 1}},
+                None,
+            )
+
+        registry = {
+            "vector": {"recall": _fake_vector, "recall_fast": _fake_vector},
+            "session_chunks": {"recall": _fake_session_chunks, "recall_fast": _fake_session_chunks},
+            "graph": {"recall": _fake_graph, "recall_fast": _fake_graph},
+            "docs": {"recall": lambda *_a, **_k: ([], {}, None), "recall_fast": lambda *_a, **_k: ([], {}, None)},
+        }
+        with patch.object(mg, "_plan_fanout_queries", return_value=(
+            ["what does my partner's brother do"],
+            {
+                "query": "what does my partner's brother do",
+                "used_llm": True,
+                "queries_count": 1,
+                "elapsed_ms": 1,
+                "planner_profile": "full",
+                "planned_stores": ["vector"],
+                "planned_project": None,
+                "freshness_preferred": False,
+            },
+        )), patch.object(mg, "_owner_has_session_chunks", return_value=True), \
+             patch.object(mg, "_get_recall_store_registry", return_value=registry):
+            rows, meta = mg.recall(
+                "what does my partner's brother do",
+                owner_id="alice",
+                return_meta=True,
+                use_intent=False,
+                use_lightweight_config=True,
+                min_similarity=0.0,
+            )
+
+        assert captured["called"] is True
+        assert meta["planned_stores"] == ["vector", "session_chunks", "graph"]
+        assert ((meta.get("turn_details") or [{}])[0].get("planner") or {}).get("relation_chain_graph_auto_included") is True
+        assert any(row.get("id") == "terminal-work" for row in rows)
+
+    def test_graph_store_relation_chain_resolves_owner_person_from_owner_id_token(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _ = _make_graph(tmp_path)
+        owner = mg.Node.create("Person", "Alice Rhodes", owner_id="alice", status="approved")
+        partner = mg.Node.create("Person", "Jordan", owner_id="alice", status="approved")
+        sibling = mg.Node.create("Person", "Casey", owner_id="alice", status="approved")
+        work = mg.Node.create("Fact", "Casey works at a wooden boat shop", owner_id="alice", status="approved")
+        for node in (owner, partner, sibling, work):
+            graph.add_node(node, embed=False)
+        graph.add_edge(mg.Edge.create(owner.id, partner.id, "spouse_of"))
+        graph.add_edge(mg.Edge.create(sibling.id, partner.id, "sibling_of"))
+        graph.add_edge(mg.Edge.create(sibling.id, work.id, "has_fact"))
+
+        with patch.object(mg, "get_graph", return_value=graph), \
+             patch.object(mg, "_HAS_CONFIG", False), \
+             patch.object(mg, "extract_entities_from_text", return_value=[]), \
+             patch.object(mg, "get_edge_keywords", return_value={}):
+            rows, meta, bundle = mg._run_recall_store_plan(
+                "what does my partner's brother do",
+                stores=["graph"],
+                limit=3,
+                owner_id="alice",
+                min_similarity=0.6,
+                planner_profile="fast",
+                planned_queries=None,
+                planner_meta={"planned_stores": ["graph"]},
+                fast_mode=False,
+                graph_depth=2,
+                common_kwargs={"candidate_pool": []},
+            )
+
+        assert bundle is None
+        assert meta["store_runs"][0]["selected_path"] == "graph_aware"
+        assert rows
+        assert rows[0]["id"] == work.id
         assert rows[0]["via"] == "graph_attached_fact"
         assert rows[0]["graph_relation_sequence"] == ["spouse_of", "sibling_of", "has_fact"]
 
