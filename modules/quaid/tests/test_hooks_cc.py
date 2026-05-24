@@ -1738,8 +1738,51 @@ class TestHookInjectRecallResilience:
         payload = json.loads(out)
         context = payload["hookSpecificOutput"]["additionalContext"]
         assert "MANDATORY: Quaid just drained deferred notices" in context
+        assert "Do not call --deferred-drain; relay delivery is complete." in context
         assert "silver lantern" in context
         assert "quaid notify --deferred-drain" not in context
+
+    def test_prompt_model_config_recovery_notice_follows_prior_error(
+        self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
+    ):
+        from core.interface import hooks
+
+        mock_adapter.adapter_id.return_value = "claude-code"
+        mock_adapter.data_dir.return_value = tmp_path / "data"
+        monkeypatch.setattr(
+            hooks,
+            "_adapter_capability",
+            lambda key, default=None: key == "prompt_model_config_probe" or default,
+        )
+        config_path = tmp_path / "claude-code" / "config.json"
+        config_path.parent.mkdir()
+        config_path.write_text("{}", encoding="utf-8")
+        config_mtime = 1
+        monkeypatch.setattr(
+            hooks,
+            "_runtime_config_snapshot",
+            lambda: ((str(config_path), config_mtime),),
+        )
+
+        with patch(
+            "lib.llm_clients.call_fast_reasoning",
+            side_effect=RuntimeError("model=invalid-model-m6-probe"),
+        ):
+            notice = hooks._validate_prompt_model_config_for_hook("claude-code")
+
+        assert "[Quaid error] [provider]" in notice
+        assert "invalid-model-m6-probe" in notice
+
+        config_mtime = 2
+        with patch("lib.llm_clients.call_fast_reasoning", return_value="OK"):
+            restored = hooks._validate_prompt_model_config_for_hook("claude-code")
+
+        assert "healthy again" in restored
+        assert "Ignore earlier provider-error notices" in restored
+
+        with patch("lib.llm_clients.call_fast_reasoning") as probe:
+            assert hooks._validate_prompt_model_config_for_hook("claude-code") == ""
+        probe.assert_not_called()
 
     def test_claude_code_relays_deferred_notice_before_recall_work(
         self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch

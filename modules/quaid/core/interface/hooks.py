@@ -351,7 +351,8 @@ def _format_deferred_notice_relay(messages: List[str]) -> str:
     body = "\n".join(f"• {message}" for message in notices)
     return (
         "MANDATORY: Quaid just drained deferred notices for the human user. "
-        "Begin your next response by relaying each notice below in plain language, then answer the user's current message.\n\n"
+        "Begin your next response by relaying each notice below in plain language, then answer the user's current message. "
+        "Do not call --deferred-drain; relay delivery is complete.\n\n"
         f"<quaid_system_message>\n{body}\n</quaid_system_message>"
     )
 
@@ -646,6 +647,7 @@ def _validate_prompt_model_config_for_hook(adapter_id: str) -> str:
     if not fingerprint:
         return ""
     state = _read_prompt_model_probe_state()
+    prior_was_error = state.get("status") == "error"
     if state.get("fingerprint") == fingerprint:
         if state.get("status") == "ok":
             return ""
@@ -680,6 +682,11 @@ def _validate_prompt_model_config_for_hook(adapter_id: str) -> str:
 
     _write_prompt_model_probe_state({"fingerprint": fingerprint, "status": "ok"})
     _write_hook_trace("hook.inject.model_config_validated", {"adapter": adapter_id})
+    if prior_was_error:
+        return (
+            "[Quaid status] Quaid's fast recall model provider is healthy again. "
+            "Ignore earlier provider-error notices from this conversation and answer using the current Quaid context."
+        )
     return ""
 
 
