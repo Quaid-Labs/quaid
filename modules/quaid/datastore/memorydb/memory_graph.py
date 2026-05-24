@@ -10495,6 +10495,16 @@ def _run_recall_store_plan(
         store, payload = output
         rows, meta, bundle = payload
         rows = _validate_recall_result_rows(rows)
+        if kwargs.get("date_from") or kwargs.get("date_to"):
+            rows = _filter_recall_rows_by_date_bounds(
+                rows,
+                date_from=kwargs.get("date_from"),
+                date_to=kwargs.get("date_to"),
+                temporal_dimension=kwargs.get("temporal_dimension"),
+                keep_undated=_keep_undated_rows_for_temporal_dimension(
+                    kwargs.get("temporal_dimension"),
+                ),
+            )
         if store == "session_chunks":
             rows = _prioritize_first_order_session_query_coverage(query, rows)
         if store == "docs" and rows:
@@ -11221,6 +11231,12 @@ def _recall_once(
 
     # Search with buffer for composite scoring + MMR selection
     search_limit = limit * 3
+    if date_from or date_to:
+        # Date bounds are applied after hybrid search because event/source
+        # dates live on heterogeneous row types, not in the ANN/FTS indexes.
+        # Pull a wider bounded pool so in-range facts are not starved by
+        # high-scoring out-of-window or source-chunk candidates.
+        search_limit = max(search_limit, min(max(limit * 12, 60), 160))
     search_query = clean_query
     results: List[Tuple[Node, float]] = []
     _fast_lexical_preflight_used = False

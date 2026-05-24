@@ -3289,6 +3289,59 @@ class TestTimestampOverride:
         assert record_filtered == [created_at_only_chunk]
         assert record_filtered[0]["temporal_filter_basis"] == "record"
 
+    def test_date_filtered_recall_searches_wider_before_temporal_filter(self):
+        """Date filters need a wider pre-filter pool so eligible facts are reachable."""
+        import datastore.memorydb.memory_graph as mg
+
+        future_nodes = []
+        for index in range(55):
+            node = mg.Node.create("Fact", f"future filler event {index}", owner_id="quaid")
+            node.occurred_start = "2026-05-24T00:00:00Z"
+            future_nodes.append(node)
+        eligible = mg.Node.create("Fact", "archive reading happened in late summer", owner_id="quaid")
+        eligible.occurred_start = "2024-08-30T19:45:00Z"
+        captured = {}
+
+        def _fake_search_hybrid(_query, *, limit, **_kwargs):
+            captured["limit"] = limit
+            nodes = list(future_nodes[:limit])
+            if limit >= 60:
+                nodes.append(eligible)
+            return [(node, 0.99 if node is not eligible else 0.72) for node in nodes]
+
+        graph = SimpleNamespace(
+            search_hybrid=MagicMock(side_effect=_fake_search_hybrid),
+            search_fts=MagicMock(return_value=[]),
+        )
+
+        with patch.object(mg, "get_graph", return_value=graph), \
+             patch.object(mg, "_ollama_healthy", return_value=True), \
+             patch.object(mg, "_log_recall", return_value=None), \
+             patch.object(mg, "_relation_matches_for_query", return_value=[]), \
+             patch.object(mg, "_has_generic_graph_signal", return_value=False), \
+             patch.object(mg, "_expand_high_confidence_entity_anchors", return_value=([], [])):
+            rows = mg._recall_once(
+                "archive",
+                owner_id="quaid",
+                limit=1,
+                min_similarity=0.0,
+                date_to="2024-12-31",
+                use_routing=False,
+                use_aliases=False,
+                use_intent=False,
+                use_multi_pass=False,
+                use_reranker=False,
+                include_graph_traversal=False,
+                include_co_session=False,
+                include_mmr=False,
+                include_lexical_anchor_shaping=False,
+                low_signal_retry=False,
+                track_access=False,
+            )
+
+        assert captured["limit"] >= 60
+        assert [row["id"] for row in rows] == [eligible.id]
+
     def test_temporal_filter_raises_on_malformed_selected_axis_under_failhard(self):
         """Date-bounded recall validates the selected temporal axis instead of string-comparing garbage."""
         import datastore.memorydb.memory_graph as mg
@@ -5053,16 +5106,19 @@ class TestSourceChunkStorage:
             "occurred_start": "2024-08-30T08:00:00Z",
             "created_at": "2026-05-24T01:30:00Z",
         }
-        ingestion_dated_chunk = {
-            "id": "session-current-archive",
-            "chunk_id": "session-current-archive",
-            "text": "The current transcript strongly matches the archive query.",
-            "category": "session_chunk",
-            "source_type": "session_chunk",
-            "via": "session_chunks",
-            "similarity": 0.99,
-            "created_at": "2026-05-24T01:31:07Z",
-        }
+        ingestion_dated_chunks = [
+            {
+                "id": f"session-current-archive-{index}",
+                "chunk_id": f"session-current-archive-{index}",
+                "text": "The current transcript strongly matches the archive query.",
+                "category": "session_chunk",
+                "source_type": "session_chunk",
+                "via": "session_chunks",
+                "similarity": 0.99 - (index * 0.01),
+                "created_at": f"2026-05-24T01:31:0{index}Z",
+            }
+            for index in range(3)
+        ]
 
         def _fake_registry():
             return {
@@ -5084,10 +5140,10 @@ class TestSourceChunkStorage:
                 },
                 "session_chunks": {
                     "recall": lambda *_a, **_k: (
-                        [dict(ingestion_dated_chunk)],
+                        [dict(row) for row in ingestion_dated_chunks],
                         {
                             "selected_path": "session_chunk_store",
-                            "session_chunk_telemetry": {"candidate_count": 1, "output_token_count": 6},
+                            "session_chunk_telemetry": {"candidate_count": 3, "output_token_count": 18},
                             "phases_ms": {"total_ms": 1},
                         },
                         None,
@@ -5109,7 +5165,7 @@ class TestSourceChunkStorage:
             rows, meta, _bundle = mg._run_recall_store_plan(
                 "archive",
                 stores=["vector", "session_chunks"],
-                limit=3,
+                limit=1,
                 owner_id="miko",
                 min_similarity=0.0,
                 planner_profile="off",
@@ -5121,7 +5177,7 @@ class TestSourceChunkStorage:
 
         assert [row["id"] for row in rows] == ["archive-reading-2024"]
         assert rows[0]["temporal_filter_basis"] == "occurred"
-        assert meta["source_chunk_telemetry"]["candidate_count"] == 1
+        assert meta["source_chunk_telemetry"]["candidate_count"] == 3
 
     def test_store_plan_passes_owner_context_to_vector_lane(self):
         """Nested vector recall must retain owner scope before it can auto-include session chunks."""
