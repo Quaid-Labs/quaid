@@ -16559,6 +16559,25 @@ def _temporal_date_bounds_from_values(
     return start, end
 
 
+_SOURCE_CHUNK_TEMPORAL_ROW_TYPES = {
+    "session_chunk",
+    "session_chunks",
+    "source_chunk",
+    "source_chunks",
+}
+
+
+def _row_is_source_chunk_temporal_evidence(row: Dict[str, Any]) -> bool:
+    """First-order transcript chunks need source dates for event-date filters."""
+    if not isinstance(row, dict):
+        return False
+    for field_name in ("category", "source_type", "via", "store"):
+        value = str(row.get(field_name) or "").strip().lower()
+        if value in _SOURCE_CHUNK_TEMPORAL_ROW_TYPES:
+            return True
+    return False
+
+
 def _row_temporal_bounds(
     row: Dict[str, Any],
     *,
@@ -16613,6 +16632,9 @@ def _row_temporal_bounds(
     if source_date:
         start, end = _temporal_date_bounds_from_values(source_date, start_field="source_date")
         return start, end, "source"
+
+    if _row_is_source_chunk_temporal_evidence(row):
+        return "", "", "source"
 
     start, end = _temporal_date_bounds_from_values(row.get("created_at"), start_field="created_at")
     return start, end, "record"
@@ -16737,7 +16759,7 @@ def _filter_recall_rows_by_date_bounds(
             temporal_dimension=temporal_dimension,
         )
         if not start_date:
-            if keep_undated:
+            if keep_undated and not _row_is_source_chunk_temporal_evidence(row):
                 filtered.append(row)
             continue
         if normalized_from and (end_date or start_date) < normalized_from:

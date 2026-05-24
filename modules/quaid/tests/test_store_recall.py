@@ -3240,6 +3240,55 @@ class TestTimestampOverride:
         assert filtered == rows
         assert filtered[0]["temporal_filter_basis"] == "record"
 
+    def test_temporal_auto_requires_source_date_for_session_chunks(self):
+        """Transcript chunks use provenance dates, not ingestion time, for event-date filters."""
+        import datastore.memorydb.memory_graph as mg
+
+        created_at_only_chunk = {
+            "id": "chunk-current-topic",
+            "text": "The current transcript mentioned an unrelated archive topic.",
+            "category": "session_chunk",
+            "source_type": "session_chunk",
+            "via": "session_chunks",
+            "created_at": "2026-05-24T01:31:07Z",
+        }
+        source_dated_chunk = {
+            "id": "chunk-dated-source",
+            "text": "The dated source discussed the archive marker.",
+            "category": "session_chunk",
+            "source_type": "session_chunk",
+            "via": "session_chunks",
+            "source_date": "2024-08-30",
+            "created_at": "2026-05-24T01:31:08Z",
+        }
+        legacy_fact = {
+            "id": "legacy-fact",
+            "text": "Legacy fact with only record time",
+            "created_at": "2024-10-01T09:15:00Z",
+        }
+
+        filtered = mg._filter_recall_rows_by_date_bounds(
+            [created_at_only_chunk, source_dated_chunk, legacy_fact],
+            date_from="2024-07-01",
+            date_to=None,
+            keep_undated=True,
+            temporal_dimension="auto",
+        )
+
+        assert [row["id"] for row in filtered] == ["chunk-dated-source", "legacy-fact"]
+        assert filtered[0]["temporal_filter_basis"] == "source"
+        assert filtered[1]["temporal_filter_basis"] == "record"
+
+        record_filtered = mg._filter_recall_rows_by_date_bounds(
+            [created_at_only_chunk],
+            date_from="2026-05-24",
+            date_to="2026-05-24",
+            temporal_dimension="record",
+        )
+
+        assert record_filtered == [created_at_only_chunk]
+        assert record_filtered[0]["temporal_filter_basis"] == "record"
+
     def test_temporal_filter_raises_on_malformed_selected_axis_under_failhard(self):
         """Date-bounded recall validates the selected temporal axis instead of string-comparing garbage."""
         import datastore.memorydb.memory_graph as mg
@@ -4991,6 +5040,88 @@ class TestSourceChunkStorage:
         assert meta["source_chunk_telemetry"]["output_token_count"] > 0
         assert meta["rrf_shadow"]["enabled"] is True
         assert meta["rrf_shadow"]["branch_counts"]["session_chunks"] >= 1
+
+    def test_store_plan_date_filter_excludes_created_at_only_session_chunks(self):
+        """Event-date filters must not treat transcript ingestion time as source event time."""
+        import datastore.memorydb.memory_graph as mg
+
+        hist_fact = {
+            "id": "archive-reading-2024",
+            "text": "archive-reading-2024 marks the late summer source event.",
+            "category": "fact",
+            "similarity": 0.74,
+            "occurred_start": "2024-08-30T08:00:00Z",
+            "created_at": "2026-05-24T01:30:00Z",
+        }
+        ingestion_dated_chunk = {
+            "id": "session-current-archive",
+            "chunk_id": "session-current-archive",
+            "text": "The current transcript strongly matches the archive query.",
+            "category": "session_chunk",
+            "source_type": "session_chunk",
+            "via": "session_chunks",
+            "similarity": 0.99,
+            "created_at": "2026-05-24T01:31:07Z",
+        }
+
+        def _fake_registry():
+            return {
+                "vector": {
+                    "recall": lambda *_a, **_k: (
+                        [dict(hist_fact)],
+                        {"selected_path": "vector", "phases_ms": {"total_ms": 1}},
+                        None,
+                    ),
+                    "recall_fast": lambda *_a, **_k: ([], {}, None),
+                },
+                "docs": {
+                    "recall": lambda *_a, **_k: ([], {}, None),
+                    "recall_fast": lambda *_a, **_k: ([], {}, None),
+                },
+                "graph": {
+                    "recall": lambda *_a, **_k: ([], {}, None),
+                    "recall_fast": lambda *_a, **_k: ([], {}, None),
+                },
+                "session_chunks": {
+                    "recall": lambda *_a, **_k: (
+                        [dict(ingestion_dated_chunk)],
+                        {
+                            "selected_path": "session_chunk_store",
+                            "session_chunk_telemetry": {"candidate_count": 1, "output_token_count": 6},
+                            "phases_ms": {"total_ms": 1},
+                        },
+                        None,
+                    ),
+                    "recall_fast": lambda *_a, **_k: ([], {}, None),
+                },
+            }
+
+        with patch.object(mg, "_get_recall_store_registry", side_effect=_fake_registry), \
+             patch.object(mg, "_should_apply_rrf_store_plan_fusion", return_value=False), \
+             patch.object(
+                 mg,
+                 "_recover_explicit_entity_facet_rows",
+                 return_value=(
+                     [],
+                     {"applied": False, "candidate_count": 0, "anchor_terms": [], "facet_terms": [], "error": None},
+                 ),
+             ):
+            rows, meta, _bundle = mg._run_recall_store_plan(
+                "archive",
+                stores=["vector", "session_chunks"],
+                limit=3,
+                owner_id="miko",
+                min_similarity=0.0,
+                planner_profile="off",
+                planned_queries=["archive"],
+                planner_meta={"planned_stores": ["vector", "session_chunks"]},
+                fast_mode=False,
+                common_kwargs={"date_from": "2024-07-01"},
+            )
+
+        assert [row["id"] for row in rows] == ["archive-reading-2024"]
+        assert rows[0]["temporal_filter_basis"] == "occurred"
+        assert meta["source_chunk_telemetry"]["candidate_count"] == 1
 
     def test_store_plan_passes_owner_context_to_vector_lane(self):
         """Nested vector recall must retain owner scope before it can auto-include session chunks."""
