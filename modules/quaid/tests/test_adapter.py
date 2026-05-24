@@ -2150,7 +2150,7 @@ class TestCodexAdapter:
                                     "rollout-2026-05-23T23-51-25-session#20: M3 guide details\n"
                                     "[session_chunk] rollout-2026-05-23T23-51-25-session#21: "
                                     "deliberate recall probes and date-range checks\n\n"
-                                    "Assistant: The retest is complete."
+                                    "The retest is complete."
                                 ),
                             },
                         }
@@ -2163,10 +2163,35 @@ class TestCodexAdapter:
 
         transcript = adapter.parse_session_jsonl(path)
 
-        assert "Assistant: The retest is complete." in transcript
+        assert transcript == "Assistant: The retest is complete."
         assert "M3 guide details" not in transcript
         assert "deliberate recall probes" not in transcript
         assert "[session_chunk]" not in transcript
+
+    def test_parse_session_jsonl_keeps_user_relevance_numbered_list(self, tmp_path):
+        path = tmp_path / "rollout-user-relevance-list.jsonl"
+        path.write_text(
+            json.dumps(
+                {
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "user_message",
+                        "message": (
+                            "1. [high-priority] Buy filters for the espresso setup "
+                            "(relevance: 0.85)\n"
+                            "2. Keep the burr brush in the drawer."
+                        ),
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        adapter = CodexAdapter()
+
+        transcript = adapter.parse_session_jsonl(path)
+
+        assert "1. [high-priority] Buy filters for the espresso setup (relevance: 0.85)" in transcript
+        assert "2. Keep the burr brush in the drawer." in transcript
 
     def test_parse_session_jsonl_keeps_normal_numbered_bracket_lists(self, tmp_path):
         path = tmp_path / "rollout-numbered-list.jsonl"

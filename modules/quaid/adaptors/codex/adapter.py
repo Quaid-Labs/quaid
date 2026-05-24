@@ -79,7 +79,7 @@ class CodexAdapter(QuaidAdapter):
         flags=re.IGNORECASE,
     )
     _VISIBLE_MEMORY_CONTEXT_ROW_RE = re.compile(
-        r"^\s*\d+\.\s*(?:\[[a-z0-9_:-]+(?:[^\]]*)\])+\s+.+\s+\(relevance:\s*\d+(?:\.\d+)?\)\s*$",
+        r"^\s*\d+\.\s*(?:\[[a-z0-9_:-]+(?:[^\]]*)\]){2,}\s+.+\s+\(relevance:\s*\d+(?:\.\d+)?\)\s*$",
         flags=re.IGNORECASE,
     )
     _VISIBLE_RECALL_OUTPUT_ROW_RE = re.compile(
