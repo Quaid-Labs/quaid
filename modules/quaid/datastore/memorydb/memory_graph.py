@@ -7082,10 +7082,27 @@ _DEFAULT_RECALL_RAW_PROVENANCE_FIELDS = {
 }
 
 
+_SESSION_CHUNK_NAVIGATION_FIELDS = {"chunk_id", "session_chunk_id"}
+
+
+def _is_session_chunk_output_row(row: Dict[str, Any]) -> bool:
+    source_type = str(row.get("source_type") or "").strip().lower()
+    via = str(row.get("via") or "").strip().lower()
+    return source_type == "session_chunk" or via == "session_chunks"
+
+
 def _sanitize_default_recall_output_row(row: Dict[str, Any]) -> Dict[str, Any]:
     sanitized = dict(row)
+    preserve_session_chunk_navigation = _is_session_chunk_output_row(row)
     for field in _DEFAULT_RECALL_RAW_PROVENANCE_FIELDS:
+        if preserve_session_chunk_navigation and field in _SESSION_CHUNK_NAVIGATION_FIELDS:
+            continue
         sanitized.pop(field, None)
+    if preserve_session_chunk_navigation:
+        chunk_id = str(row.get("chunk_id") or row.get("session_chunk_id") or row.get("id") or "").strip()
+        if chunk_id:
+            sanitized.setdefault("chunk_id", chunk_id)
+            sanitized.setdefault("session_chunk_id", chunk_id)
     return sanitized
 
 

@@ -4165,6 +4165,42 @@ class TestSourceChunkStorage:
         for field_name in mg._DEFAULT_RECALL_RAW_PROVENANCE_FIELDS:
             assert field_name not in output_rows[0]
 
+    def test_recall_default_output_preserves_session_chunk_navigation_ids(self):
+        """Explicit session chunk rows keep their primary expand-chunk navigation key."""
+        import datastore.memorydb.memory_graph as mg
+
+        rows = [
+            {
+                "id": "sch-nav-1",
+                "text": "[session_chunk] session-m9#0: User: M9 receipt context.",
+                "category": "session_chunk",
+                "source_type": "session_chunk",
+                "via": "session_chunks",
+                "chunk_id": "sch-nav-1",
+                "session_chunk_id": "sch-nav-1",
+                "source_chunk_id": "sch-nav-1",
+                "source_chunk_ids": ["sch-nav-1"],
+                "microchunk_id": "micro-nav-1",
+                "parent_chunk_id": "sch-parent",
+                "next_chunk_id": "sch-next",
+                "source_id": "transcript-m9",
+                "session_id": "session-m9",
+            }
+        ]
+
+        output_rows, _meta = mg._prepare_recall_output_rows(rows, {}, include_chunks=False)
+        output = output_rows[0]
+
+        assert output["id"] == "sch-nav-1"
+        assert output["chunk_id"] == "sch-nav-1"
+        assert output["session_chunk_id"] == "sch-nav-1"
+        assert "source_chunk_id" not in output
+        assert "source_chunk_ids" not in output
+        assert "microchunk_id" not in output
+        assert "parent_chunk_id" not in output
+        assert "next_chunk_id" not in output
+        assert "source_id" not in output
+
     def test_recall_include_chunks_respects_aggregate_source_chunk_cap(self, tmp_path):
         """include_chunks cannot let many evidence chunks crowd out the recall response."""
         from datastore.memorydb.memory_graph import recall, store
