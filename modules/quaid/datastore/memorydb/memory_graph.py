@@ -7913,18 +7913,15 @@ def _vector_store_recall(
         date_to=vector_kwargs.get("date_to"),
         graph_seed=False,
     )
-    inner_planner_meta = None
-    if planner_meta is not None:
-        inner_planner_meta = dict(planner_meta)
-        if "planned_stores" in inner_planner_meta:
-            inner_planned_stores = [
-                store
-                for store in _planner_store_plan(inner_planner_meta.get("planned_stores") or ["vector"])
-                if store in {"vector", "docs"}
-            ]
-            inner_planner_meta["planned_stores"] = inner_planned_stores or ["vector"]
-        if not fast_mode:
-            inner_planner_meta["suppress_session_chunks_auto_include"] = True
+    inner_planner_meta = dict(planner_meta or {})
+    if "planned_stores" in inner_planner_meta:
+        inner_planned_stores = [
+            store
+            for store in _planner_store_plan(inner_planner_meta.get("planned_stores") or ["vector"])
+            if store in {"vector", "docs"}
+        ]
+        inner_planner_meta["planned_stores"] = inner_planned_stores or ["vector"]
+    inner_planner_meta["suppress_session_chunks_auto_include"] = True
     results, meta = recall(
         query=query,
         limit=limit,
@@ -10277,6 +10274,14 @@ def _run_recall_store_plan(
             graph_depth = max(int(graph_depth or 1), len(relation_chain_groups_for_plan))
         except (TypeError, ValueError):
             graph_depth = len(relation_chain_groups_for_plan)
+    if relation_chain_query_for_plan and "graph" in normalized_stores:
+        # Graph-aware relation-chain recall already performs a vector-only seed
+        # pass internally. Running a parallel top-level vector lane duplicates
+        # embedding work and can starve the tight search-hybrid pool under
+        # failHard, so make graph the coordinating store for these chains.
+        normalized_stores = [store for store in normalized_stores if store != "vector"]
+        if not normalized_stores:
+            normalized_stores = ["graph"]
 
     callables = []
     for store in normalized_stores:

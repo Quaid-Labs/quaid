@@ -10070,6 +10070,7 @@ class TestRecallFastHookInjectContract:
         assert captured["kwargs"]["planner_meta"] == {
             "planned_stores": ["vector", "docs"],
             "planned_project": "recipe-app",
+            "suppress_session_chunks_auto_include": True,
         }
 
     def test_vector_store_recall_disables_routing_in_fast_mode(self):
@@ -10098,6 +10099,7 @@ class TestRecallFastHookInjectContract:
         assert captured["kwargs"]["lexical_anchor_planner_mode"] == "deterministic"
         assert captured["kwargs"]["use_lightweight_config"] is True
         assert captured["kwargs"]["track_access"] is False
+        assert captured["kwargs"]["planner_meta"] == {"suppress_session_chunks_auto_include": True}
 
     def test_vector_store_recall_uses_deterministic_lexical_anchors_for_date_bounded_named_query(self):
         import datastore.memorydb.memory_graph as mg
@@ -10417,7 +10419,7 @@ class TestRecallFastHookInjectContract:
             )
 
         assert bundle is None
-        assert meta["planned_stores"] == ["vector", "graph"]
+        assert meta["planned_stores"] == ["graph"]
         assert rows[0]["id"] == "kai-boatbuilding"
         assert rows[0]["graph_path"].startswith("Solomon --spouse_of--> Yuni")
         assert rows[0]["graph_relation_sequence"] == ["spouse_of", "sibling_of", "has_fact"]
@@ -13530,8 +13532,8 @@ class TestRecallFastHookInjectContract:
             )
 
         assert bundle is None
-        assert meta["planned_stores"] == ["vector", "graph"]
-        assert meta["store_runs"][1]["selected_path"] == "graph_aware"
+        assert meta["planned_stores"] == ["graph"]
+        assert meta["store_runs"][0]["selected_path"] == "graph_aware"
         assert seed_calls
         assert seed_calls[0]["planner_meta"]["planned_stores"] == ["vector"]
         assert seed_calls[0]["planner_meta"]["suppress_session_chunks_auto_include"] is True
@@ -13607,7 +13609,7 @@ class TestRecallFastHookInjectContract:
             )
 
         assert captured["called"] is True
-        assert meta["planned_stores"] == ["vector", "session_chunks", "graph"]
+        assert meta["planned_stores"] == ["session_chunks", "graph"]
         assert ((meta.get("turn_details") or [{}])[0].get("planner") or {}).get("relation_chain_graph_auto_included") is True
         assert any(row.get("id") == "terminal-work" for row in rows)
 
