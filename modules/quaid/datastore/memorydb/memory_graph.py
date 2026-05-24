@@ -3598,6 +3598,7 @@ _SCHEMA_RELATION_GROUP_TOKENS: Dict[str, set[str]] = {
         "teammate", "work", "works_at", "reports to",
     },
 }
+_SYMMETRIC_RELATION_GROUPS = {"spouse", "sibling", "extended_family"}
 
 
 def _canonical_relation_group_for_relation(relation: str) -> str:
@@ -3637,6 +3638,58 @@ def _has_relation_chain_structure(query: str) -> bool:
     )
 
 
+def _iter_relation_chain_step_edges(
+    graph: "MemoryGraph",
+    current_id: str,
+    expected_group: str,
+) -> List[Tuple["Edge", str]]:
+    """Return next relation-chain hops.
+
+    Forward traversal is valid for every relation. Reverse traversal is only
+    valid for symmetric relation families, e.g. sibling/spouse edges that may be
+    stored once as either A->B or B->A.
+    """
+    expected_group = str(expected_group or "").strip()
+    current_id = str(current_id or "").strip()
+    if not expected_group or not current_id:
+        return []
+    out: List[Tuple["Edge", str]] = []
+    seen: set[Tuple[str, str]] = set()
+
+    def _append(edge: "Edge", next_id: str) -> None:
+        relation = str(getattr(edge, "relation", "") or "").strip()
+        if not relation:
+            return
+        if _canonical_relation_group_for_relation(relation) != expected_group:
+            return
+        next_id = str(next_id or "").strip()
+        if not next_id:
+            return
+        edge_key = str(getattr(edge, "id", "") or "")
+        key = (edge_key, next_id) if edge_key else (relation, next_id)
+        if key in seen:
+            return
+        seen.add(key)
+        out.append((edge, next_id))
+
+    try:
+        forward_edges = list(graph.get_edges(current_id, direction="out"))
+    except Exception:
+        forward_edges = []
+    for edge in forward_edges:
+        _append(edge, str(getattr(edge, "target_id", "") or ""))
+
+    if expected_group in _SYMMETRIC_RELATION_GROUPS:
+        try:
+            reverse_edges = list(graph.get_edges(current_id, direction="in"))
+        except Exception:
+            reverse_edges = []
+        for edge in reverse_edges:
+            _append(edge, str(getattr(edge, "source_id", "") or ""))
+
+    return out
+
+
 def _guided_relation_chain_prefix_maps(
     graph: "MemoryGraph",
     *,
@@ -3666,22 +3719,9 @@ def _guided_relation_chain_prefix_maps(
         next_states: List[Tuple[str, str, List[tuple], List[str], set[str]]] = []
         seen_step_keys: set[Tuple[str, Tuple[str, ...]]] = set()
         for current_id, current_name, current_path, current_sequence, visited in states:
-            try:
-                edges = list(graph.get_edges(current_id, direction="both"))
-            except Exception:
-                continue
-            for edge in edges:
+            for edge, next_id in _iter_relation_chain_step_edges(graph, current_id, expected_group):
                 relation = str(getattr(edge, "relation", "") or "").strip()
                 if not relation:
-                    continue
-                relation_group = _canonical_relation_group_for_relation(relation)
-                if relation_group != expected_group:
-                    continue
-                if edge.source_id == current_id:
-                    next_id = str(edge.target_id or "").strip()
-                elif edge.target_id == current_id:
-                    next_id = str(edge.source_id or "").strip()
-                else:
                     continue
                 if not next_id or next_id in visited:
                     continue
@@ -5160,11 +5200,20 @@ def graph_aware_recall(
             owner_anchor_name = owner_person.name
             results["source_breakdown"]["owner_relation_chain_inferred"] = True
             results["source_breakdown"]["owner_person"] = owner_person.name
+    owner_anchored_relation_chain = bool(
+        relation_chain_query
+        and owner_anchor_id
+        and owner_anchor_name
+        and candidate_pool is None
+    )
 
     # 2. Vector search (fact-only): keep direct hits strictly factual, then
     # combine with graph traversal discoveries in this graph-aware pathway.
     if candidate_pool is not None:
         direct_all = candidate_pool
+    elif owner_anchored_relation_chain:
+        direct_all = []
+        results["meta"]["base_recall_skipped"] = "owner_relation_chain"
     else:
         _base_started_at = time.monotonic()
         lexical_anchor_planner_mode = _seed_recall_lexical_anchor_planner_mode(
@@ -5332,7 +5381,7 @@ def graph_aware_recall(
         chain_prefix_path = relation_chain_path_by_node.get(node_id)
         chain_prefix_sequence = relation_chain_sequence_by_node.get(node_id, [])
         if source_node:
-            if graph_query_embedding is None:
+            if graph_query_embedding is None and not owner_anchored_relation_chain:
                 try:
                     graph_query_embedding = graph.get_embedding(query)
                     if graph_query_embedding is None and _is_fail_hard_mode():

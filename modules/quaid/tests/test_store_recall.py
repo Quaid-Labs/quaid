@@ -13035,6 +13035,66 @@ class TestRecallFastHookInjectContract:
         assert "ceramics practice" in attached[0]["text"]
         assert attached[0]["via_relation"] == "has_fact"
 
+    def test_graph_aware_recall_owner_relation_chain_uses_reverse_symmetric_edge_without_seed_recall(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _ = _make_graph(tmp_path)
+        solomon = mg.Node.create("Person", "Solomon Steadman")
+        yuni = mg.Node.create("Person", "Yuni")
+        kai = mg.Node.create("Person", "Kai")
+        boat = mg.Node.create("Fact", "Kai works at a small boatbuilding studio")
+        for node in (solomon, yuni, kai, boat):
+            graph.add_node(node, embed=False)
+        graph.add_edge(mg.Edge.create(solomon.id, yuni.id, "spouse_of"))
+        graph.add_edge(mg.Edge.create(kai.id, yuni.id, "sibling_of"))
+        graph.add_edge(mg.Edge.create(kai.id, boat.id, "has_fact"))
+
+        fake_cfg = SimpleNamespace(
+            users=SimpleNamespace(
+                identities={"test-owner-alpha": SimpleNamespace(person_node_name="Solomon Steadman")}
+            )
+        )
+        with patch.object(mg, "get_graph", return_value=graph), \
+             patch.object(mg, "_HAS_CONFIG", True), \
+             patch.object(mg, "_get_memory_config", return_value=fake_cfg), \
+             patch.object(mg, "extract_entities_from_text", return_value=[]), \
+             patch.object(mg, "recall", side_effect=AssertionError("seed recall should not run")), \
+             patch.object(graph, "get_embedding", side_effect=AssertionError("graph embedding should not run")):
+            payload = mg.graph_aware_recall(
+                "what does my partner's brother do",
+                owner_id="test-owner-alpha",
+                limit=8,
+                graph_depth=2,
+            )
+
+        attached = [
+            row for row in payload["graph_results"]
+            if row.get("id") == boat.id
+        ]
+        assert payload["meta"]["base_recall_skipped"] == "owner_relation_chain"
+        assert attached
+        assert attached[0]["via"] == "graph_attached_fact"
+        assert attached[0]["graph_relation_sequence"] == ["spouse_of", "sibling_of", "has_fact"]
+        assert "Yuni --sibling_of--> Kai" in attached[0]["graph_path"]
+
+    def test_relation_chain_step_edges_reverse_only_symmetric_relations(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _ = _make_graph(tmp_path)
+        parent = mg.Node.create("Person", "Parent")
+        child = mg.Node.create("Person", "Child")
+        sibling = mg.Node.create("Person", "Sibling")
+        for node in (parent, child, sibling):
+            graph.add_node(node, embed=False)
+        graph.add_edge(mg.Edge.create(parent.id, child.id, "parent_of"))
+        graph.add_edge(mg.Edge.create(sibling.id, child.id, "sibling_of"))
+
+        parent_steps = mg._iter_relation_chain_step_edges(graph, child.id, "parent")
+        sibling_steps = mg._iter_relation_chain_step_edges(graph, child.id, "sibling")
+
+        assert parent_steps == []
+        assert [next_id for _edge, next_id in sibling_steps] == [sibling.id]
+
     def test_graph_aware_recall_relation_chain_recovers_terminal_fact_missing_has_fact_edge(self, tmp_path):
         import datastore.memorydb.memory_graph as mg
 
@@ -13457,7 +13517,7 @@ class TestRecallFastHookInjectContract:
         assert boat_row["via"] == "graph_attached_fact"
         assert boat_row["graph_relation_sequence"] == ["spouse_of", "sibling_of", "has_fact"]
 
-    def test_mixed_store_relation_chain_allows_graph_seed_recall(self, tmp_path):
+    def test_mixed_store_relation_chain_uses_owner_anchored_graph_without_seed_recall(self, tmp_path):
         import datastore.memorydb.memory_graph as mg
 
         graph, _ = _make_graph(tmp_path)
@@ -13534,9 +13594,7 @@ class TestRecallFastHookInjectContract:
         assert bundle is None
         assert meta["planned_stores"] == ["graph"]
         assert meta["store_runs"][0]["selected_path"] == "graph_aware"
-        assert seed_calls
-        assert seed_calls[0]["planner_meta"]["planned_stores"] == ["vector"]
-        assert seed_calls[0]["planner_meta"]["suppress_session_chunks_auto_include"] is True
+        assert seed_calls == []
         assert rows
         assert rows[0]["id"] == boat.id
         assert rows[0]["via"] == "graph_attached_fact"
