@@ -581,7 +581,7 @@ def test_daemon_loop_preserves_signal_when_processing_raises(monkeypatch):
     assert marked == []
 
 
-def test_stage_semantic_buffer_payload_uses_configured_extract_wall_timeout(monkeypatch):
+def test_stage_semantic_buffer_payload_uses_focused_extract_chunks(monkeypatch):
     import ingest.extract as extract_mod
 
     calls = []
@@ -641,6 +641,13 @@ def test_stage_semantic_buffer_payload_uses_configured_extract_wall_timeout(monk
 
     assert len(calls) == 1
     assert "wall_timeout_seconds" not in calls[0]
+    assert calls[0]["chunk_tokens_override"] == 1200
+
+
+def test_daemon_extract_chunk_tokens_focuses_normal_rolling_windows():
+    assert extraction_daemon._daemon_extract_chunk_tokens(1500) == 1200
+    assert extraction_daemon._daemon_extract_chunk_tokens(8000) == 1200
+    assert extraction_daemon._daemon_extract_chunk_tokens(200) == 200
 
 
 def test_rolling_payload_merge_and_flush_preserve_source_chunk_descriptors():

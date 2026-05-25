@@ -3268,6 +3268,7 @@ def extract_from_transcript(
     write_journal: bool = True,
     dry_run: bool = False,
     carry_facts: Optional[List[Dict[str, Any]]] = None,
+    chunk_tokens_override: Optional[int] = None,
     wall_timeout_seconds: Optional[float] = None,
     memory_publish_mode: str = "direct",
     snippet_journal_write_mode: str = "direct",
@@ -3282,6 +3283,9 @@ def extract_from_transcript(
         write_snippets: Whether to write soul snippets.
         write_journal: Whether to write journal entries.
         dry_run: If True, parse and plan but don't store anything.
+        chunk_tokens_override: Optional internal chunk budget for callers that
+            already own a tighter transcript window, such as daemon rolling
+            extraction.
         memory_publish_mode: MemoryDB publish routing mode ("direct" or "request").
         snippet_journal_write_mode: InsightDB snippet/journal routing mode
             ("direct" or "request").
@@ -3425,14 +3429,21 @@ def extract_from_transcript(
     system_prompt = _load_extraction_prompt(domain_defs, owner_id=owner_id, known_projects=known_projects or None)
 
     # Chunk transcript for extraction (split at turn boundaries)
-    try:
-        capture_cfg = get_config().capture
-        chunk_tokens = int(getattr(capture_cfg, "chunk_tokens", 0) or 0)
-        if chunk_tokens <= 0:
+    chunk_tokens = 0
+    if chunk_tokens_override is not None:
+        try:
+            chunk_tokens = int(chunk_tokens_override or 0)
+        except Exception:
+            chunk_tokens = 0
+    if chunk_tokens <= 0:
+        try:
+            capture_cfg = get_config().capture
+            chunk_tokens = int(getattr(capture_cfg, "chunk_tokens", 0) or 0)
+            if chunk_tokens <= 0:
+                chunk_tokens = 8_000
+        except Exception as exc:
+            logger.warning("[extract] capture chunk budget config read failed; defaulting to 8000 tokens: %s", exc)
             chunk_tokens = 8_000
-    except Exception as exc:
-        logger.warning("[extract] capture chunk budget config read failed; defaulting to 8000 tokens: %s", exc)
-        chunk_tokens = 8_000
     # Use batch_utils for consistent chunking across the codebase.
     # chunk_text_by_tokens splits on \n\n (turn boundaries) and uses
     # token estimation instead of raw char count.

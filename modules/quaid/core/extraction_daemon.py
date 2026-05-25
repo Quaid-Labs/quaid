@@ -3467,6 +3467,7 @@ def _stage_semantic_buffer_payload(
         session_id=session_id,
         dry_run=True,
         carry_facts=list(staged_state.get("carry_facts", []) or []),
+        chunk_tokens_override=_daemon_extract_chunk_tokens(chunk_budget),
     )
     stage_embedding_stats = _warm_payload_embeddings(stage_result.get("raw_facts", []) or [])
     chunks_processed = int(stage_result.get("chunks_processed", 0) or 0)
@@ -3620,6 +3621,23 @@ def _get_capture_chunk_tokens(default: int = 8_000) -> int:
         return max(1, tokens)
     except Exception:
         return default
+
+
+def _daemon_extract_chunk_tokens(chunk_budget: int) -> int:
+    """Use smaller daemon extraction chunks than the rolling read window.
+
+    Rolling/session signals often contain dense multi-turn buffers. Keeping
+    root extraction chunks below the read threshold gives the LLM output budget
+    for later facts instead of letting the first dense turn consume the call.
+    """
+    try:
+        budget = max(1, int(chunk_budget or 1))
+    except Exception:
+        budget = 1
+    if budget < 512:
+        return budget
+    focused_budget = max(1, int(budget * 0.8))
+    return max(1, min(budget, 1_200, focused_budget))
 
 
 def _get_capture_chunk_max_lines(default: int = 0) -> int:
@@ -5613,6 +5631,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                 session_id=session_id,
                 dry_run=True,
                 carry_facts=list(staged_state.get("carry_facts", []) or []),
+                chunk_tokens_override=_daemon_extract_chunk_tokens(chunk_budget),
             )
             chunks_processed = int(tail_result.get("chunks_processed", 0) or 0)
             chunks_total = int(tail_result.get("chunks_total", 0) or 0)

@@ -6133,6 +6133,32 @@ class TestExtractFromTranscript:
 
     @patch("lib.batch_utils.chunk_text_by_tokens")
     @patch("ingest.extract.call_deep_reasoning")
+    def test_chunk_tokens_override_controls_root_extraction_budget(self, mock_llm, mock_chunk):
+        from ingest.extract import extract_from_transcript
+
+        seen_budgets = []
+
+        def _chunk_side_effect(_text, max_tokens, split_on):
+            seen_budgets.append((max_tokens, split_on))
+            return ["User: The orange notebook stays in the cabinet."]
+
+        mock_chunk.side_effect = _chunk_side_effect
+        mock_llm.return_value = (json.dumps({"facts": []}), 0.4)
+
+        result = extract_from_transcript(
+            transcript="dummy",
+            owner_id="test",
+            label="chunk-override-test",
+            dry_run=True,
+            chunk_tokens_override=1200,
+        )
+
+        assert seen_budgets == [(1200, "\n\n")]
+        assert result["chunks_total"] == 1
+        assert mock_llm.call_count == 1
+
+    @patch("lib.batch_utils.chunk_text_by_tokens")
+    @patch("ingest.extract.call_deep_reasoning")
     def test_processes_all_chunks_without_silent_cap(self, mock_llm, mock_chunk):
         from ingest.extract import extract_from_transcript
 
