@@ -6615,6 +6615,23 @@ class TestRecallTelemetry:
         assert meta["bailout_reason"] == "preserve_short_exact_query"
         assert meta["planned_stores"] == ["vector", "graph"]
 
+    def test_plan_fanout_queries_fast_preserves_short_anchored_multiclause_without_llm(self):
+        import datastore.memorydb.memory_graph as mg
+
+        query = "What is Jordan's current A1C level, and has she met her clinician's target?"
+        with patch("lib.llm_clients.call_fast_reasoning", side_effect=AssertionError("planner should not be called")):
+            queries, meta = mg._plan_fanout_queries(
+                query,
+                return_meta=True,
+                planner_profile="fast",
+            )
+
+        assert queries == [query]
+        assert meta["bailout_reason"] == "preserve_short_exact_query"
+        assert meta["used_llm"] is False
+        assert meta["token_count"] <= 16
+        assert meta["named_entity_tokens"] >= 1
+
     def test_plan_fanout_queries_fast_profiles_preserve_kinship_chain_as_graph_without_llm(self):
         import datastore.memorydb.memory_graph as mg
 

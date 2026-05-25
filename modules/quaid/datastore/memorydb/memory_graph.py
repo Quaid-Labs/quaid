@@ -18811,11 +18811,28 @@ def _plan_fanout_queries(
         and "multi_clause" not in set(profile["signals"])
         and default_project is None
     )
+    fast_anchored_exact_query = (
+        planner_profile == "fast"
+        and int(profile["token_count"]) <= 16
+        and int(profile["named_entity_tokens"]) >= 1
+        and not bool(profile.get("low_space_query"))
+    )
     if short_broad_exact_query:
         _trace_m15(
             "planner.fanout.short_circuit",
             query=clean,
             reason="short_broad_exact_query",
+            profile=profile,
+            planned_default_stores=planned_default_stores,
+        )
+        return _finish([clean], "preserve_short_exact_query")
+    if fast_anchored_exact_query:
+        # Fast pre-inject should not depend on a provider fanout call for a
+        # short anchored question; deliberate recall can still fan out later.
+        _trace_m15(
+            "planner.fanout.short_circuit",
+            query=clean,
+            reason="fast_anchored_exact_query",
             profile=profile,
             planned_default_stores=planned_default_stores,
         )
