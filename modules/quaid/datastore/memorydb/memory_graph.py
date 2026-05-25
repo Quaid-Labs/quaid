@@ -422,6 +422,9 @@ class MemoryGraph:
             self._init_db_with_busy_retry()
 
     def _init_db_with_busy_retry(self) -> None:
+        # _init_db runs schema/migration statements that can request locks after
+        # sqlite's connection-level busy timeout has already been configured.
+        # During normal OC gateway activity, retry those init-only lock windows.
         attempts = len(_DATASTORE_BUSY_RETRY_DELAYS_SECONDS) + 1
         for attempt in range(1, attempts + 1):
             try:

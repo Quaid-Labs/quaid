@@ -412,6 +412,47 @@ def test_memory_graph_init_retries_locked_database(monkeypatch, tmp_path):
     assert sleeps == list(memory_graph._DATASTORE_BUSY_RETRY_DELAYS_SECONDS[:2])
 
 
+def test_memory_graph_init_raises_non_lock_sqlite_error_without_retry(monkeypatch, tmp_path):
+    from datastore.memorydb import memory_graph
+
+    calls = []
+    sleeps = []
+
+    def broken_init(self):
+        calls.append(self.db_path)
+        raise sqlite3.OperationalError("no such table: nodes")
+
+    monkeypatch.setattr(memory_graph.MemoryGraph, "_init_db", broken_init)
+    monkeypatch.setattr(memory_graph.time, "sleep", lambda delay: sleeps.append(delay))
+
+    with pytest.raises(sqlite3.OperationalError, match="no such table: nodes"):
+        memory_graph.MemoryGraph(db_path=tmp_path / "memory.db")
+
+    assert calls == [tmp_path / "memory.db"]
+    assert sleeps == []
+
+
+def test_memory_graph_init_exhausts_locked_database_retry(monkeypatch, tmp_path):
+    from datastore.memorydb import memory_graph
+
+    calls = []
+    sleeps = []
+
+    def locked_init(self):
+        calls.append(self.db_path)
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(memory_graph.MemoryGraph, "_init_db", locked_init)
+    monkeypatch.setattr(memory_graph.time, "sleep", lambda delay: sleeps.append(delay))
+
+    with pytest.raises(sqlite3.OperationalError, match="database is locked"):
+        memory_graph.MemoryGraph(db_path=tmp_path / "memory.db")
+
+    expected_delays = list(memory_graph._DATASTORE_BUSY_RETRY_DELAYS_SECONDS)
+    assert calls == [tmp_path / "memory.db"] * (len(expected_delays) + 1)
+    assert sleeps == expected_delays
+
+
 def test_lifecycle_registry_run_many_executes_in_parallel_shape(tmp_path):
     registry = build_default_registry()
 
