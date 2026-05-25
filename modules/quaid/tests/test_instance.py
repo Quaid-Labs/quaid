@@ -256,6 +256,28 @@ class TestListInstances:
         assert (tmp_path / "instances" / "openclaw-deleted").exists()
         assert (tmp_path / "instances" / "openclaw-m5silo034449r").exists()
 
+    def test_list_instances_hides_empty_native_openclaw_agent_residue(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("HOME", str(tmp_path))
+        oc_root = tmp_path / "openclaw-runtime"
+        oc_root.mkdir()
+        monkeypatch.setenv("OPENCLAW_CONFIG_PATH", str(oc_root / "openclaw.json"))
+        (oc_root / "openclaw.json").write_text(json.dumps({"agents": {}}), encoding="utf-8")
+        (oc_root / "agents" / "deleted").mkdir(parents=True)
+        active_native = oc_root / "agents" / "native-active"
+        active_native.mkdir(parents=True)
+        (active_native / ".keep").write_text("state", encoding="utf-8")
+        for name in ("openclaw-deleted", "openclaw-native-active", "claude-code-main"):
+            root = tmp_path / "instances" / name
+            root.mkdir(parents=True)
+            adapter_type = "openclaw" if name.startswith("openclaw-") else "claude-code"
+            root.joinpath("config.json").write_text(
+                json.dumps({"adapter": {"type": adapter_type}}),
+                encoding="utf-8",
+            )
+
+        assert list_instances() == ["claude-code-main", "openclaw-native-active"]
+
     def test_openclaw_physical_prune_requires_livetest_harness(self, monkeypatch, tmp_path):
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
         oc_root = tmp_path / "openclaw-runtime"

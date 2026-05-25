@@ -322,8 +322,7 @@ def _is_stale_openclaw_agent_instance(name: str, instance_dir: Path) -> bool:
                 continue
         except OSError:
             return False
-        if agent_dir.exists():
-            return False
+        return False
     return True
 
 
