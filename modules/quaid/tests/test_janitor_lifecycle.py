@@ -289,6 +289,83 @@ def test_datastore_cleanup_lifecycle_runs_with_graph_override(tmp_path):
         conn.close()
 
 
+def test_datastore_cleanup_retries_locked_database(monkeypatch, tmp_path):
+    conn = sqlite3.connect(":memory:")
+    try:
+        conn.executescript(
+            """
+            CREATE TABLE recall_log (created_at TEXT);
+            CREATE TABLE dedup_log (review_status TEXT, created_at TEXT);
+            CREATE TABLE health_snapshots (created_at TEXT);
+            CREATE TABLE embedding_cache (created_at TEXT);
+            CREATE TABLE janitor_metadata (key TEXT, value TEXT, updated_at TEXT);
+            CREATE TABLE janitor_runs (completed_at TEXT);
+            INSERT INTO recall_log VALUES ('2000-01-01');
+            """
+        )
+        sleeps = []
+        raised = {"locked": False}
+
+        class _LockedOnceConn:
+            def __enter__(self):
+                conn.__enter__()
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return conn.__exit__(exc_type, exc, tb)
+
+            def execute(self, sql):
+                if not raised["locked"] and str(sql).startswith("DELETE FROM"):
+                    raised["locked"] = True
+                    raise sqlite3.OperationalError("database is locked")
+                return conn.execute(sql)
+
+        class _Graph:
+            calls = 0
+
+            def _get_conn(self):
+                self.calls += 1
+                return _LockedOnceConn()
+
+        graph = _Graph()
+        monkeypatch.setattr("datastore.memorydb.memory_graph.time.sleep", lambda delay: sleeps.append(delay))
+
+        result = build_default_registry().run(
+            "datastore_cleanup",
+            RoutineContext(cfg=_make_cfg(False), dry_run=False, workspace=tmp_path, graph=graph),
+        )
+
+        assert result.errors == []
+        assert graph.calls == 2
+        assert sleeps == [0.1]
+        assert result.data["cleanup"]["recall_log"] == 1
+        assert any("database busy" in line for line in result.logs)
+    finally:
+        conn.close()
+
+
+def test_datastore_cleanup_does_not_retry_non_lock_sqlite_error(monkeypatch, tmp_path):
+    class _Graph:
+        calls = 0
+
+        def _get_conn(self):
+            self.calls += 1
+            raise sqlite3.OperationalError("no such table: recall_log")
+
+    graph = _Graph()
+    sleeps = []
+    monkeypatch.setattr("datastore.memorydb.memory_graph.time.sleep", lambda delay: sleeps.append(delay))
+
+    result = build_default_registry().run(
+        "datastore_cleanup",
+        RoutineContext(cfg=_make_cfg(False), dry_run=False, workspace=tmp_path, graph=graph),
+    )
+
+    assert graph.calls == 1
+    assert sleeps == []
+    assert result.errors == ["Cleanup error: no such table: recall_log"]
+
+
 def test_lifecycle_registry_run_many_executes_in_parallel_shape(tmp_path):
     registry = build_default_registry()
 

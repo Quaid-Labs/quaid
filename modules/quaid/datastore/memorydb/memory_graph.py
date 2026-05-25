@@ -5775,20 +5775,39 @@ def search(
     return out
 
 
+# Cleanup runs during normal product sessions while adapters may hold SQLite
+# connections. Treat WAL write contention as transient, but keep a hard bound.
+_DATASTORE_CLEANUP_BUSY_RETRY_DELAYS_SECONDS = (0.1, 0.25, 0.5, 1.0, 2.0)
+
+
+def _is_sqlite_busy_or_locked(exc: BaseException) -> bool:
+    if not isinstance(exc, sqlite3.OperationalError):
+        return False
+
+    code = getattr(exc, "sqlite_errorcode", None)
+    if isinstance(code, int):
+        base_code = code & 0xFF
+        busy_code = getattr(sqlite3, "SQLITE_BUSY", None)
+        locked_code = getattr(sqlite3, "SQLITE_LOCKED", None)
+        if base_code in {busy_code, locked_code}:
+            return True
+
+    text = str(exc).lower()
+    return (
+        "database is locked" in text
+        or "database table is locked" in text
+        or "database is busy" in text
+        or "sqlite_busy" in text
+        or "sqlite_locked" in text
+    )
+
+
 def register_lifecycle_routines(registry, result_factory) -> None:
     """Register memory datastore lifecycle maintenance routines."""
 
     def _run_datastore_cleanup(ctx):
         result = result_factory()
         graph = ctx.graph or get_graph()
-        cleanup_stats = {
-            "recall_log": 0,
-            "dedup_log": 0,
-            "embedding_cache": 0,
-            "health_snapshots": 0,
-            "janitor_metadata": 0,
-            "janitor_runs": 0,
-        }
         cleanup_queries = {
             "recall_log": "DELETE FROM recall_log WHERE created_at < datetime('now', '-90 days')",
             "dedup_log": "DELETE FROM dedup_log WHERE review_status != 'unreviewed' AND created_at < datetime('now', '-90 days')",
@@ -5797,16 +5816,37 @@ def register_lifecycle_routines(registry, result_factory) -> None:
             "janitor_metadata": "DELETE FROM janitor_metadata WHERE updated_at < datetime('now', '-180 days')",
             "janitor_runs": "DELETE FROM janitor_runs WHERE completed_at < datetime('now', '-180 days')",
         }
+        attempts = len(_DATASTORE_CLEANUP_BUSY_RETRY_DELAYS_SECONDS) + 1
         try:
-            with graph._get_conn() as conn:
-                for table, sql in cleanup_queries.items():
-                    if ctx.dry_run:
-                        count_sql = sql.replace("DELETE FROM", "SELECT COUNT(*) FROM", 1)
-                        row = conn.execute(count_sql).fetchone()
-                        cleanup_stats[table] = row[0] if row else 0
-                    else:
-                        cur = conn.execute(sql)
-                        cleanup_stats[table] = cur.rowcount
+            for attempt in range(1, attempts + 1):
+                cleanup_stats = {
+                    "recall_log": 0,
+                    "dedup_log": 0,
+                    "embedding_cache": 0,
+                    "health_snapshots": 0,
+                    "janitor_metadata": 0,
+                    "janitor_runs": 0,
+                }
+                try:
+                    with graph._get_conn() as conn:
+                        for table, sql in cleanup_queries.items():
+                            if ctx.dry_run:
+                                count_sql = sql.replace("DELETE FROM", "SELECT COUNT(*) FROM", 1)
+                                row = conn.execute(count_sql).fetchone()
+                                cleanup_stats[table] = row[0] if row else 0
+                            else:
+                                cur = conn.execute(sql)
+                                cleanup_stats[table] = cur.rowcount
+                    break
+                except sqlite3.OperationalError as exc:
+                    if not _is_sqlite_busy_or_locked(exc) or attempt >= attempts:
+                        raise
+                    delay = _DATASTORE_CLEANUP_BUSY_RETRY_DELAYS_SECONDS[attempt - 1]
+                    result.logs.append(
+                        "Datastore cleanup database busy; "
+                        f"retrying in {delay:.2f}s (attempt {attempt}/{attempts}): {exc}"
+                    )
+                    time.sleep(delay)
 
             total = sum(cleanup_stats.values())
             result.logs.append(f"{'Would remove' if ctx.dry_run else 'Removed'}: {total} rows total")
