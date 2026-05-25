@@ -8523,6 +8523,129 @@ class TestRollingExtraction:
             }
         ]
 
+    def test_check_chunk_ready_sessions_uses_openclaw_session_end_source_cursor_tail(
+        self, monkeypatch, tmp_path
+    ):
+        session_id = "858e08d3-4e9d-4a72-b7e1-3df34f10f622"
+        transcript_path = tmp_path / ".openclaw" / "agents" / "main" / "sessions" / f"{session_id}.jsonl"
+        transcript_path.parent.mkdir(parents=True, exist_ok=True)
+        transcript_path.write_text(
+            '{"type":"message","message":{"role":"user","content":"hello"}}\n'
+            '{"type":"message","message":{"role":"assistant","content":"ack"}}\n'
+            '{"type":"message","message":{"role":"user","content":"post-checkpoint rolling detail"}}\n',
+            encoding="utf-8",
+        )
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "openclaw-main")
+        source_key = extraction_daemon._signal_source_cursor_key(session_id, str(transcript_path))
+        extraction_daemon.write_cursor(
+            session_id,
+            2,
+            str(transcript_path),
+            source_key=source_key,
+            processed_signal_type="session_end",
+        )
+        extraction_daemon.write_cursor(session_id, 0, str(transcript_path))
+        alias_file = extraction_daemon._cursor_dir() / f"{session_id}.json"
+
+        real_glob = Path.glob
+
+        def fake_glob(path, pattern):
+            if path == extraction_daemon._cursor_dir() and pattern == "*.json":
+                return iter([alias_file])
+            return real_glob(path, pattern)
+
+        buffered_from_lines = []
+
+        def fake_buffer_transcript_tail(path, from_line, state, adapter=None, **kwargs):
+            buffered_from_lines.append(from_line)
+            return (
+                {
+                    "buffered_line_offset": 3,
+                    "semantic_buffer": "User: post-checkpoint rolling detail",
+                    "semantic_buffer_tokens": 12,
+                },
+                {
+                    "raw_lines_added": 1,
+                    "semantic_chars_added": 36,
+                    "semantic_tokens_added": 12,
+                    "buffered_line_offset": 3,
+                },
+            )
+
+        captured = []
+        monkeypatch.setattr(Path, "glob", fake_glob)
+        monkeypatch.setattr(extraction_daemon, "_ensure_discovered_session_cursors", lambda adapter: None)
+        monkeypatch.setattr(extraction_daemon, "_cursor_or_adapter_owns_transcript_path", lambda *args, **kwargs: True)
+        monkeypatch.setattr(extraction_daemon, "_reconcile_internal_cursor_state", lambda *args, **kwargs: "not_internal")
+        monkeypatch.setattr(extraction_daemon, "_buffer_transcript_tail", fake_buffer_transcript_tail)
+        monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
+        monkeypatch.setattr(
+            extraction_daemon,
+            "write_signal",
+            lambda signal_type, session_id, transcript_path, **kwargs: captured.append(
+                {
+                    "signal_type": signal_type,
+                    "session_id": session_id,
+                    "transcript_path": transcript_path,
+                    "meta": kwargs.get("meta", {}),
+                }
+            ),
+        )
+
+        extraction_daemon.check_chunk_ready_sessions(chunk_tokens=10)
+
+        assert buffered_from_lines == [2]
+        assert captured[0]["signal_type"] == "rolling"
+        assert captured[0]["session_id"] == session_id
+
+    @pytest.mark.parametrize(
+        ("processed_signal_type", "source_offset", "alias_offset"),
+        [
+            ("session_end", 3, 0),
+            ("rolling", 2, 0),
+            ("session_end", 1, 1),
+        ],
+    )
+    def test_terminal_checkpoint_tail_helper_rejects_non_tail_cases(
+        self,
+        monkeypatch,
+        tmp_path,
+        processed_signal_type,
+        source_offset,
+        alias_offset,
+    ):
+        session_id = "019e60ec-838e-7eb1-8ed6-7f52f2b47570"
+        transcript_path = tmp_path / f"{session_id}.jsonl"
+        transcript_path.write_text(
+            '{"type":"event_msg","payload":{"type":"user_message","message":"one"}}\n'
+            '{"type":"event_msg","payload":{"type":"user_message","message":"two"}}\n'
+            '{"type":"event_msg","payload":{"type":"user_message","message":"three"}}\n',
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "rolling-inst")
+
+        source_key = extraction_daemon._signal_source_cursor_key(session_id, str(transcript_path))
+        extraction_daemon.write_cursor(
+            session_id,
+            source_offset,
+            str(transcript_path),
+            source_key=source_key,
+            processed_signal_type=processed_signal_type,
+        )
+        extraction_daemon.write_cursor(session_id, alias_offset, str(transcript_path))
+        alias_file = extraction_daemon._cursor_dir() / f"{session_id}.json"
+        alias_data = json.loads(alias_file.read_text(encoding="utf-8"))
+
+        assert extraction_daemon._active_source_cursor_for_terminal_checkpoint_tail(
+            cursor_file=alias_file,
+            session_id=session_id,
+            transcript_path=str(transcript_path),
+            cursor_data=alias_data,
+        ) == ({}, Path(), "")
+
     def test_check_chunk_ready_sessions_uses_live_cursor_for_empty_preserved_alias(
         self, monkeypatch, tmp_path
     ):

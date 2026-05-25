@@ -1622,7 +1622,13 @@ def _active_source_cursor_for_terminal_checkpoint_tail(
     transcript_path: str,
     cursor_data: Dict[str, Any],
 ) -> tuple[Dict[str, Any], Path, str]:
-    """Return a source cursor that stopped at session_end before transcript EOF."""
+    """Return a source cursor that stopped at session_end before transcript EOF.
+
+    CDX rollout checkpoints can emit a session_end signal at the checkpoint
+    boundary while the rollout transcript continues to receive later user turns.
+    In that state the source cursor is not terminal for rolling; it is the next
+    safe source-relative offset to continue scanning from.
+    """
     if not transcript_path:
         return {}, Path(), ""
     try:
