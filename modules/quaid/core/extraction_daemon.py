@@ -827,6 +827,13 @@ def _is_staged_payload_flush_signal_meta(meta: Dict[str, Any]) -> bool:
     )
 
 
+def _is_late_post_reset_content_signal(signal_type: str, meta: Dict[str, Any]) -> bool:
+    """Return true for OC's active-session post-reset transcript growth signal."""
+    if signal_type != "session_end" or not isinstance(meta, dict):
+        return False
+    return str(meta.get("reason") or "").strip() == "late_post_reset_content"
+
+
 def _rolling_flush_processing_signal_type(signal_type: str, staged_payload_sweep_signal: bool) -> str:
     if staged_payload_sweep_signal:
         return "rolling_flush"
@@ -4335,6 +4342,10 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
     staged_payload_sweep_signal = bool(signal_meta.get("staged_payload_sweep")) or (
         str(signal_meta.get("reason") or "") == "rolling_stage_flush"
     )
+    preserve_active_rolling_state_after_flush = (
+        _is_late_post_reset_content_signal(str(signal_type), signal_meta)
+        and not staged_payload_sweep_signal
+    )
     # Staged rolling sweeps are processed by a synthetic session_end signal, but
     # telemetry consumers need the originating signal type to identify the flush.
     flush_metric_signal_type = (
@@ -5002,6 +5013,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
     if (
         reset_staged_state_for_full_reextract
         and not staged_payload_sweep_signal
+        and not preserve_active_rolling_state_after_flush
         and _rolling_state_has_pending_content(staged_state)
     ):
         logger.info(
@@ -5381,7 +5393,10 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                         lock_fd=lock_fd,
                         cursor_key=lock_owner_key,
                         next_cursor_offset=next_cursor_offset,
-                        clear_state=signal_type in ("reset", "session_end", "compaction"),
+                        clear_state=(
+                            signal_type in ("reset", "session_end", "compaction")
+                            and not preserve_active_rolling_state_after_flush
+                        ),
                     )
                     return
 
@@ -5875,6 +5890,13 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             and _semantic_buffer_has_content(staged_state)
             and not drain_unstaged_semantic_buffer_on_sweep
         ):
+            write_rolling_state(session_id, clear_staged_payload_from_state(staged_state))
+        elif preserve_active_rolling_state_after_flush and _rolling_state_has_pending_content(staged_state):
+            logger.info(
+                "[%s] session %s: preserving active rolling state after late post-reset content flush",
+                label,
+                session_id,
+            )
             write_rolling_state(session_id, clear_staged_payload_from_state(staged_state))
         else:
             clear_rolling_state(session_id)
@@ -6713,8 +6735,13 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
             data["line_offset"] = 0
         state = read_rolling_state(session_id)
         state_buffer_path = str(state.get("buffer_transcript_path") or "").strip()
+        buffer_source_differs_from_cursor = str(buffer_transcript_path) != str(transcript_path)
         if state_buffer_path and state_buffer_path != str(buffer_transcript_path):
             if staged_state_has_payload(state):
+                # A staged payload is already waiting to flush from the prior
+                # source. Do not clear its source-relative offsets here; once
+                # that payload is published and cleared, the next scan resets
+                # the buffer state for the new source.
                 logger.info(
                     "session %s rolling buffer source changed from %s to %s with staged payload present; "
                     "preserving staged state",
@@ -6734,8 +6761,21 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
                 data = dict(data)
                 data["line_offset"] = 0
         elif not state_buffer_path:
-            state = dict(state)
-            state["buffer_transcript_path"] = str(buffer_transcript_path)
+            if buffer_source_differs_from_cursor and not staged_state_has_payload(state):
+                logger.info(
+                    "session %s rolling buffer source %s differs from cursor identity %s with no prior "
+                    "buffer source; resetting source-relative offset",
+                    session_id,
+                    buffer_transcript_path,
+                    transcript_path,
+                )
+                state = _reset_semantic_buffer_for_source(state, str(buffer_transcript_path))
+                cursor_offset = 0
+                data = dict(data)
+                data["line_offset"] = 0
+            else:
+                state = dict(state)
+                state["buffer_transcript_path"] = str(buffer_transcript_path)
         buffered_line_offset = max(
             int(state.get("buffered_line_offset", cursor_offset) or 0),
             cursor_offset,
