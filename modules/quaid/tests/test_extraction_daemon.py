@@ -2424,6 +2424,19 @@ def test_process_signal_reextracts_relocated_transcript_when_content_changed(
         source_key=source_key,
         processed_signal_type="reset",
     )
+    extraction_daemon.write_rolling_state(
+        session_id,
+        {
+            "session_id": session_id,
+            "transcript_path": str(old_path),
+            "processed_line_offset": 0,
+            "buffered_line_offset": 7,
+            "semantic_buffer": "User: pending rolling content from live transcript.",
+            "semantic_buffer_tokens": 12,
+            "raw_facts": [],
+            "carry_facts": [],
+        },
+    )
     old_path.unlink()
 
     captured = {}
@@ -2510,6 +2523,7 @@ def test_process_signal_reextracts_relocated_transcript_when_content_changed(
     cursor = extraction_daemon.read_cursor(session_id, source_key=source_key)
     assert cursor["line_offset"] == 7
     assert cursor["transcript_path"] == str(new_path)
+    assert not extraction_daemon._rolling_state_path(session_id).exists()
 
 
 def test_process_signal_skips_preserved_checkpoint_session_end_while_live_exists(
@@ -7436,6 +7450,105 @@ class TestRollingExtraction:
         captured = []
         monkeypatch.setattr(extraction_daemon, "_get_capture_chunk_tokens", lambda default=8000: 20)
         monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
+        monkeypatch.setattr(
+            extraction_daemon,
+            "write_signal",
+            lambda signal_type, session_id, transcript_path, **kwargs: captured.append(
+                {
+                    "signal_type": signal_type,
+                    "session_id": session_id,
+                    "transcript_path": transcript_path,
+                    "meta": kwargs.get("meta", {}),
+                }
+            ),
+        )
+
+        try:
+            extraction_daemon.check_chunk_ready_sessions()
+        finally:
+            if real_adapter is not None:
+                sys.modules["lib.adapter"] = real_adapter
+            else:
+                sys.modules.pop("lib.adapter", None)
+
+        assert len(captured) == 1
+        assert captured[0]["signal_type"] == "rolling"
+        assert captured[0]["session_id"] == session_id
+
+    def test_legacy_source_cursor_without_size_metadata_still_shadows_alias(
+        self, monkeypatch, tmp_path
+    ):
+        transcript_path = tmp_path / "rollout-2026-05-26T01-40-00-e35ca1a9-11a3-4c21-ad6f-f6525209240e.jsonl"
+        transcript_path.write_text(
+            '{"type":"event_msg","payload":{"type":"user_message","message":"already extracted rolling note"}}\n',
+            encoding="utf-8",
+        )
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "rolling-inst")
+        session_id = "e35ca1a9-11a3-4c21-ad6f-f6525209240e"
+        source_key = extraction_daemon._signal_source_cursor_key(session_id, str(transcript_path))
+        extraction_daemon.write_cursor(session_id, 1, str(transcript_path), source_key=source_key)
+        source_file = extraction_daemon._cursor_dir() / f"{source_key}.json"
+        source_payload = json.loads(source_file.read_text(encoding="utf-8"))
+        source_payload.pop("transcript_size_bytes")
+        source_file.write_text(json.dumps(source_payload), encoding="utf-8")
+
+        extraction_daemon.write_cursor(session_id, 0, str(transcript_path))
+        legacy_file = extraction_daemon._cursor_dir() / f"{session_id}.json"
+        cursor_data = json.loads(legacy_file.read_text(encoding="utf-8"))
+
+        assert extraction_daemon._cursor_shadowed_by_source_cursor(
+            cursor_file=legacy_file,
+            session_id=session_id,
+            transcript_path=str(transcript_path),
+            cursor_data=cursor_data,
+        ) is True
+
+    def test_check_chunk_ready_sessions_rescans_eof_cursor_for_byte_growth(
+        self, monkeypatch, tmp_path
+    ):
+        import sys
+        import types
+
+        transcript_path = tmp_path / "858e08d3-4e9d-4a72-b7e1-3df34f10f622.jsonl"
+        short_lines = [
+            json.dumps({"type": "event_msg", "payload": {"type": "user_message", "message": "Hello"}}) + "\n",
+        ]
+        transcript_path.write_text("".join(short_lines), encoding="utf-8")
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "rolling-inst")
+        session_id = "858e08d3-4e9d-4a72-b7e1-3df34f10f622"
+        extraction_daemon.write_cursor(session_id, 1, str(transcript_path))
+
+        grown_lines = list(short_lines)
+        grown_lines[0] = json.dumps({
+            "type": "event_msg",
+            "payload": {
+                "type": "user_message",
+                "message": "Baxter uses an orange linen notebook from Emília Rosa. " * 40,
+            },
+        }) + "\n"
+        transcript_path.write_text("".join(grown_lines), encoding="utf-8")
+
+        real_adapter = sys.modules.get("lib.adapter")
+        fake_adapter_mod = types.ModuleType("lib.adapter")
+
+        class _FakeAdapter(_OwnedTestAdapterMixin):
+            def parse_session_jsonl(self, path):
+                raw = Path(path).read_text(encoding="utf-8")
+                if "orange linen notebook" in raw:
+                    return "User: " + ("Baxter uses an orange linen notebook from Emília Rosa. " * 40)
+                return "User: Hello\n\nAssistant: ACK"
+
+        fake_adapter_mod.get_adapter = lambda: _FakeAdapter()
+        sys.modules["lib.adapter"] = fake_adapter_mod
+
+        captured = []
+        monkeypatch.setattr(extraction_daemon, "_get_capture_chunk_tokens", lambda default=8000: 20)
+        monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
+        monkeypatch.setattr(extraction_daemon, "_reconcile_internal_cursor_state", lambda *args, **kwargs: "not_internal")
         monkeypatch.setattr(
             extraction_daemon,
             "write_signal",

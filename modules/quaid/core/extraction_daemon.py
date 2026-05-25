@@ -1566,6 +1566,11 @@ def _cursor_shadowed_by_source_cursor(
     source_file = _cursor_dir() / f"{source_key}.json"
     if not source_file.is_file():
         return False
+    source_has_size_metadata = False
+    try:
+        source_has_size_metadata = "transcript_size_bytes" in json.loads(source_file.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        source_has_size_metadata = False
     source_cursor = _read_cursor_file(source_file, session_id)
     source_path = str(source_cursor.get("transcript_path") or "").strip()
     if (
@@ -1575,7 +1580,7 @@ def _cursor_shadowed_by_source_cursor(
         return False
     source_size_bytes = int(source_cursor.get("transcript_size_bytes", 0) or 0)
     current_size_bytes = _transcript_size_bytes(str(transcript_path))
-    if current_size_bytes and current_size_bytes > source_size_bytes:
+    if source_has_size_metadata and current_size_bytes and current_size_bytes > source_size_bytes:
         logger.info(
             "session %s source cursor %s is stale for grown transcript "
             "(cursor_size=%d current_size=%d); allowing alias cursor %s to be scanned",
@@ -4724,6 +4729,9 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             and not _is_daemon_preserved_session_transcript_path(cursor_transcript)
             and _is_daemon_preserved_session_transcript_path(str(transcript_path))
         ):
+            # OpenClaw can emit session_end against the preserved mirror while
+            # the live transcript is still active. Treat that as a checkpoint,
+            # not terminal relocation, so rolling state survives.
             logger.info(
                 "[%s] session %s: preserved transcript mirror changed while live transcript still exists "
                 "(%s -> %s, cursor_size=%d, current_size=%d); treating as active-session checkpoint",
