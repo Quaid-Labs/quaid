@@ -30,7 +30,6 @@ import json
 import math
 import os
 import re
-import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -60,6 +59,7 @@ from lib.runtime_context import (
     get_llm_provider,
 )
 from lib.fail_policy import is_fail_hard_enabled
+from lib.database import get_connection as _lib_get_connection
 
 
 _DATASTORE_RUNTIME = None
@@ -2267,7 +2267,7 @@ def _ambient_instance_graph_summary() -> Optional[Dict[str, Any]]:
                     f"{instance_id}: missing memory db at {db_path}"
                 )
                 continue
-            with sqlite3.connect(db_path) as conn:
+            with _lib_get_connection(db_path) as conn:
                 pending = int(
                     conn.execute(
                         "SELECT COUNT(*) FROM nodes WHERE status = 'pending'"
