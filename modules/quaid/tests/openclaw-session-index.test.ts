@@ -484,6 +484,78 @@ describe("openclaw session_index watcher", () => {
     rmSync(harness.root, { recursive: true, force: true });
   });
 
+  it("repairs an empty preserved rolling cursor when transcript_update supplies the live session", async () => {
+    const harness = makeHarness("transcript-update-repairs-preserved-rolling-cursor");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const sessionId = "19c8ad44-2222-4222-8222-222222222222";
+    const sessionKey = "agent:main:matrix:direct:@quaid-test-bot:localhost";
+    const liveTranscript = join(harness.sessionsDir, `${sessionId}.jsonl`);
+    const preservedTranscript = join(
+      harness.quaidHome,
+      "instances",
+      "openclaw-main",
+      "logs",
+      "quaid",
+      "sessions",
+      `${sessionId}.jsonl`,
+    );
+    const cursorPath = join(
+      harness.quaidHome,
+      "instances",
+      "openclaw-main",
+      "data",
+      "session-cursors",
+      `${sessionId}.json`,
+    );
+
+    writeTranscript(liveTranscript, [
+      "The rolling scanner should read the live OpenClaw transcript, not the empty mirror.",
+    ]);
+    writeFile(preservedTranscript, "");
+    writeJson(cursorPath, {
+      session_id: sessionId,
+      line_offset: 0,
+      transcript_path: preservedTranscript,
+    });
+
+    let transcriptUpdateHook: ((update: any) => void) | undefined;
+    const api = {
+      ...makeFakeApi(),
+      runtime: {
+        events: {
+          onSessionTranscriptUpdate: vi.fn((hook: (update: any) => void) => {
+            transcriptUpdateHook = hook;
+          }),
+        },
+      },
+    };
+    const plugin = await loadPlugin(harness);
+    plugin.register(api as any);
+    expect(typeof transcriptUpdateHook).toBe("function");
+
+    transcriptUpdateHook?.({
+      sessionId,
+      sessionKey,
+      sessionFile: liveTranscript,
+    });
+
+    const cursor = JSON.parse(readFileSync(cursorPath, "utf8"));
+    expect(cursor).toEqual(expect.objectContaining({
+      session_id: sessionId,
+      line_offset: 0,
+      transcript_path: liveTranscript,
+      repaired_from_preserved_mirror: true,
+    }));
+
+    warn.mockRestore();
+    log.mockRestore();
+    error.mockRestore();
+    rmSync(harness.root, { recursive: true, force: true });
+  });
+
   it("also flushes agent:main:main when /new resets only a TUI lifecycle session", async () => {
     vi.useFakeTimers();
     const harness = makeHarness("command-new-flushes-agent-main");

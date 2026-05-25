@@ -1537,6 +1537,33 @@ function writeSessionCursorToEnd(sessionId, transcriptPath, agentLabel = "main")
   } catch {
   }
 }
+function isInstancePreservedSessionTranscript(transcriptPath, instanceRoot) {
+  const resolvedPath = String(transcriptPath || "").trim();
+  if (!resolvedPath) return false;
+  const preservedDir = path.join(instanceRoot, "logs", "quaid", "sessions");
+  const normalizedPath = path.resolve(resolvedPath);
+  const normalizedDir = path.resolve(preservedDir);
+  return normalizedPath === normalizedDir || normalizedPath.startsWith(`${normalizedDir}${path.sep}`);
+}
+function shouldRepairRollingCursorToLiveTranscript(cursorPath, transcriptPath, instanceRoot) {
+  let prior = null;
+  try {
+    prior = JSON.parse(fs.readFileSync(cursorPath, "utf8"));
+  } catch {
+    return false;
+  }
+  const priorPath = String(prior?.transcript_path || "").trim();
+  if (!priorPath || priorPath === transcriptPath) return false;
+  if (path.basename(priorPath) !== path.basename(transcriptPath)) return false;
+  if (!isInstancePreservedSessionTranscript(priorPath, instanceRoot)) return false;
+  if (isInstancePreservedSessionTranscript(transcriptPath, instanceRoot)) return false;
+  try {
+    if (!fs.existsSync(priorPath) || fs.statSync(priorPath).size > 0) return false;
+    return fs.statSync(transcriptPath).size > 0;
+  } catch {
+    return false;
+  }
+}
 function seedRollingCursorForTranscript(sessionId, transcriptPath, agentLabel = "main", source = "unknown", opts) {
   const sid = String(sessionId || "").trim();
   const resolvedPath = String(transcriptPath || "").trim();
@@ -1546,20 +1573,23 @@ function seedRollingCursorForTranscript(sessionId, transcriptPath, agentLabel = 
     const instanceRoot = instanceRootForAgentLabel(label);
     const cursorDir = path.join(instanceRoot, "data", "session-cursors");
     const cursorPath = path.join(cursorDir, `${sid}.json`);
-    if (fs.existsSync(cursorPath)) return false;
+    const repairingPreservedMirror = fs.existsSync(cursorPath) && shouldRepairRollingCursorToLiveTranscript(cursorPath, resolvedPath, instanceRoot);
+    if (fs.existsSync(cursorPath) && !repairingPreservedMirror) return false;
     fs.mkdirSync(cursorDir, { recursive: true });
     const nowIso = (/* @__PURE__ */ new Date()).toISOString().replace(/\.\d+Z$/, "Z");
     fs.writeFileSync(cursorPath, JSON.stringify({
       session_id: sid,
       line_offset: 0,
       transcript_path: resolvedPath,
-      updated_at: nowIso
+      updated_at: nowIso,
+      ...repairingPreservedMirror ? { repaired_from_preserved_mirror: true } : {}
     }, null, 2), "utf8");
     writeHookTrace("session_index.rolling_cursor_seeded", {
       session_id: sid,
       agent_label: label,
       source,
-      transcript_path: resolvedPath
+      transcript_path: resolvedPath,
+      repaired_from_preserved_mirror: repairingPreservedMirror
     });
     if (opts?.wakeDaemon !== false) {
       pingDaemonAliveIfNeeded(getInstanceId(label));
