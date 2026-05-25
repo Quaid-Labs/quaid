@@ -7217,6 +7217,8 @@ class TestRollingExtraction:
 
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
         monkeypatch.setenv("QUAID_INSTANCE", "openclaw-main")
+        monkeypatch.setattr(extraction_daemon, "_instance_id", lambda: "openclaw-main")
+        monkeypatch.setattr(extraction_daemon, "_ensure_discovered_session_cursors", lambda adapter: None)
         extraction_daemon.write_cursor(session_id, 7, str(live_path))
         cursor_path = extraction_daemon._cursor_dir() / f"{session_id}.json"
         cursor_data = json.loads(cursor_path.read_text(encoding="utf-8"))
@@ -7260,6 +7262,8 @@ class TestRollingExtraction:
             )
 
         monkeypatch.setattr(extraction_daemon, "_buffer_transcript_tail", fake_buffer_transcript_tail)
+        monkeypatch.setattr(extraction_daemon, "_cursor_or_adapter_owns_transcript_path", lambda *args, **kwargs: True)
+        monkeypatch.setattr(extraction_daemon, "_reconcile_internal_cursor_state", lambda *args, **kwargs: "not_internal")
         monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
         monkeypatch.setattr(
             extraction_daemon,
@@ -7286,6 +7290,104 @@ class TestRollingExtraction:
             {
                 "signal_type": "rolling",
                 "session_id": session_id,
+                "transcript_path": str(live_path),
+                "meta": {
+                    "reason": "semantic_chunk_budget",
+                    "chunk_tokens": 10,
+                    "semantic_buffer_tokens": 12,
+                    "buffered_line_offset": 3,
+                },
+            }
+        ]
+        source_key = extraction_daemon._signal_source_cursor_key(
+            session_id,
+            str(live_path),
+            cursor_data=extraction_daemon.read_cursor(session_id),
+        )
+        extraction_daemon.write_cursor(
+            session_id,
+            captured[0]["meta"]["buffered_line_offset"],
+            captured[0]["transcript_path"],
+            source_key=source_key,
+            processed_signal_type="rolling",
+        )
+        source_cursor = extraction_daemon.read_cursor(session_id, source_key=source_key)
+        assert source_cursor["transcript_path"] == str(live_path)
+
+        extraction_daemon.check_chunk_ready_sessions(chunk_tokens=10)
+        assert buffered_paths[-1] == str(mirror_path)
+
+    def test_check_chunk_ready_sessions_scans_non_empty_preserved_cursor(
+        self, monkeypatch, tmp_path
+    ):
+        session_id = "92271010-c08d-4eb9-b9d1-7b478cbb426f"
+        mirror_path = (
+            tmp_path
+            / "instances"
+            / "openclaw-main"
+            / "logs"
+            / "quaid"
+            / "sessions"
+            / f"{session_id}.jsonl"
+        )
+        mirror_path.parent.mkdir(parents=True, exist_ok=True)
+        mirror_path.write_text(
+            '{"type":"message","message":{"role":"user","content":"hello"}}\n'
+            '{"type":"message","message":{"role":"user","content":"chunk one"}}\n'
+            '{"type":"message","message":{"role":"user","content":"chunk two"}}\n',
+            encoding="utf-8",
+        )
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "openclaw-main")
+        monkeypatch.setattr(extraction_daemon, "_instance_id", lambda: "openclaw-main")
+        monkeypatch.setattr(extraction_daemon, "_ensure_discovered_session_cursors", lambda adapter: None)
+        extraction_daemon.write_cursor(session_id, 0, str(mirror_path))
+
+        captured = []
+        buffered_paths = []
+
+        def fake_buffer_transcript_tail(path, from_line, state, adapter=None, **kwargs):
+            buffered_paths.append(path)
+            assert path == str(mirror_path)
+            assert from_line == 0
+            return (
+                {
+                    "buffered_line_offset": 3,
+                    "semantic_buffer": "User: chunk one\n\nUser: chunk two",
+                    "semantic_buffer_tokens": 12,
+                },
+                {
+                    "raw_lines_added": 3,
+                    "semantic_chars_added": 30,
+                    "semantic_tokens_added": 12,
+                    "buffered_line_offset": 3,
+                },
+            )
+
+        monkeypatch.setattr(extraction_daemon, "_buffer_transcript_tail", fake_buffer_transcript_tail)
+        monkeypatch.setattr(extraction_daemon, "_reconcile_internal_cursor_state", lambda *args, **kwargs: "not_internal")
+        monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
+        monkeypatch.setattr(
+            extraction_daemon,
+            "write_signal",
+            lambda signal_type, session_id, transcript_path, **kwargs: captured.append(
+                {
+                    "signal_type": signal_type,
+                    "session_id": session_id,
+                    "transcript_path": transcript_path,
+                    "meta": kwargs.get("meta", {}),
+                }
+            ),
+        )
+
+        extraction_daemon.check_chunk_ready_sessions(chunk_tokens=10)
+
+        assert buffered_paths == [str(mirror_path)]
+        assert captured == [
+            {
+                "signal_type": "rolling",
+                "session_id": session_id,
                 "transcript_path": str(mirror_path),
                 "meta": {
                     "reason": "semantic_chunk_budget",
@@ -7295,6 +7397,68 @@ class TestRollingExtraction:
                 },
             }
         ]
+
+    @pytest.mark.parametrize("mirror_case", ["missing", "smaller"])
+    def test_check_chunk_ready_sessions_keeps_live_path_without_larger_mirror(
+        self, monkeypatch, tmp_path, mirror_case
+    ):
+        session_id = "d000074a-c08d-4eb9-b9d1-7b478cbb426f"
+        live_path = tmp_path / ".openclaw" / "agents" / "main" / "sessions" / f"{session_id}.jsonl"
+        mirror_path = (
+            tmp_path
+            / "instances"
+            / "openclaw-main"
+            / "logs"
+            / "quaid"
+            / "sessions"
+            / f"{session_id}.jsonl"
+        )
+        live_path.parent.mkdir(parents=True, exist_ok=True)
+        mirror_path.parent.mkdir(parents=True, exist_ok=True)
+        live_path.write_text(
+            '{"type":"message","message":{"role":"user","content":"hello"}}\n'
+            '{"type":"message","message":{"role":"user","content":"chunk one"}}\n',
+            encoding="utf-8",
+        )
+        if mirror_case == "smaller":
+            mirror_path.write_text(
+                '{"type":"message","message":{"role":"user","content":"h"}}\n',
+                encoding="utf-8",
+            )
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "openclaw-main")
+        monkeypatch.setattr(extraction_daemon, "_instance_id", lambda: "openclaw-main")
+        monkeypatch.setattr(extraction_daemon, "_ensure_discovered_session_cursors", lambda adapter: None)
+        extraction_daemon.write_cursor(session_id, 0, str(live_path))
+
+        buffered_paths = []
+
+        def fake_buffer_transcript_tail(path, from_line, state, adapter=None, **kwargs):
+            buffered_paths.append(path)
+            return (
+                {
+                    "buffered_line_offset": 2,
+                    "semantic_buffer": "User: chunk one",
+                    "semantic_buffer_tokens": 2,
+                },
+                {
+                    "raw_lines_added": 2,
+                    "semantic_chars_added": 15,
+                    "semantic_tokens_added": 2,
+                    "buffered_line_offset": 2,
+                },
+            )
+
+        monkeypatch.setattr(extraction_daemon, "_buffer_transcript_tail", fake_buffer_transcript_tail)
+        monkeypatch.setattr(extraction_daemon, "_cursor_or_adapter_owns_transcript_path", lambda *args, **kwargs: True)
+        monkeypatch.setattr(extraction_daemon, "_reconcile_internal_cursor_state", lambda *args, **kwargs: "not_internal")
+        monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
+        monkeypatch.setattr(extraction_daemon, "write_signal", lambda *args, **kwargs: None)
+
+        extraction_daemon.check_chunk_ready_sessions(chunk_tokens=10)
+
+        assert buffered_paths == [str(live_path)]
 
     def test_check_chunk_ready_sessions_does_not_roll_small_residual_tail_after_flush(
         self, monkeypatch, tmp_path

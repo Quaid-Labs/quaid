@@ -1707,19 +1707,47 @@ def _active_source_cursor_for_empty_preserved_cursor(
     return {}, "", ""
 
 
-def _larger_preserved_mirror_for_live_transcript(transcript_path: str) -> str:
-    """Return the active preserved mirror when OC rewrites the live transcript smaller."""
+def _transcript_has_jsonl_rows(transcript_path: str) -> bool:
+    try:
+        with open(transcript_path, "r", encoding="utf-8", errors="replace") as handle:
+            for raw in handle:
+                line = raw.strip()
+                if not line:
+                    continue
+                loaded = json.loads(line)
+                return isinstance(loaded, dict)
+    except (json.JSONDecodeError, OSError):
+        if _fail_hard_enabled():
+            raise
+    return False
+
+
+def _larger_preserved_mirror_for_live_transcript(session_id: str, transcript_path: str) -> str:
+    """Return the OC mirror read-source when active live JSONL is rewritten smaller.
+
+    OpenClaw can compact/rewrite its live transcript during an active session while
+    the instance-local preserved mirror still has the full user-message payload.
+    Use that mirror only as a semantic-buffer read source; cursor and signal
+    identity must remain on the live transcript path.
+    """
     raw = str(transcript_path or "").strip()
     if not raw or _is_daemon_preserved_session_transcript_path(raw) or not os.path.isfile(raw):
         return ""
     try:
         live_path = Path(raw).expanduser().resolve()
+        live_text = str(live_path)
+        if f"{os.sep}.openclaw{os.sep}agents{os.sep}" not in live_text:
+            return ""
+        session_uuid = _SESSION_ID_UUID_RE.search(str(session_id or ""))
+        filename_uuid = _SESSION_ID_UUID_RE.search(live_path.name)
+        if not session_uuid or not filename_uuid or session_uuid.group(0).lower() != filename_uuid.group(0).lower():
+            return ""
         mirror_path = (_instance_root() / "logs" / "quaid" / "sessions" / live_path.name).resolve()
         if not mirror_path.is_file() or mirror_path == live_path:
             return ""
         live_size = _transcript_size_bytes(str(live_path))
         mirror_size = _transcript_size_bytes(str(mirror_path))
-        if mirror_size > 0 and mirror_size > live_size:
+        if mirror_size > 0 and mirror_size > live_size and _transcript_has_jsonl_rows(str(mirror_path)):
             return str(mirror_path)
     except Exception:
         if _fail_hard_enabled():
@@ -6467,6 +6495,7 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
         transcript_path = data.get("transcript_path", "")
         if not session_id or not transcript_path or not os.path.isfile(transcript_path):
             continue
+        buffer_transcript_path = str(transcript_path)
         if _is_daemon_preserved_session_transcript_path(str(transcript_path)):
             active_cursor, active_path, active_key = _active_source_cursor_for_empty_preserved_cursor(
                 str(session_id),
@@ -6481,19 +6510,26 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
                 )
                 data = active_cursor
                 transcript_path = active_path
+                buffer_transcript_path = str(transcript_path)
                 cursor_file = _cursor_dir() / f"{active_key}.json"
             else:
-                continue
+                if _transcript_size_bytes(str(transcript_path)) <= 0:
+                    continue
+                logger.info(
+                    "session %s rolling scan using non-empty preserved transcript %s",
+                    session_id,
+                    transcript_path,
+                )
         else:
-            mirror_path = _larger_preserved_mirror_for_live_transcript(str(transcript_path))
+            mirror_path = _larger_preserved_mirror_for_live_transcript(str(session_id), str(transcript_path))
             if mirror_path:
                 logger.info(
-                    "session %s rolling scan using larger preserved mirror %s instead of live transcript %s",
+                    "session %s rolling scan reading larger preserved mirror %s while preserving live cursor %s",
                     session_id,
                     mirror_path,
                     transcript_path,
                 )
-                transcript_path = mirror_path
+                buffer_transcript_path = mirror_path
         if _is_discovery_artifact_transcript(Path(str(transcript_path))):
             continue
         if _cursor_shadowed_by_source_cursor(
@@ -6588,7 +6624,7 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
             continue
 
         cursor_offset = int(data.get("line_offset", 0) or 0)
-        total_lines = count_transcript_lines(transcript_path)
+        total_lines = count_transcript_lines(buffer_transcript_path)
         if (
             transcript_grew_since_cursor
             and total_lines > 0
@@ -6614,7 +6650,7 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
         )
         if total_lines > buffered_line_offset:
             state, _buffer_metrics = _buffer_transcript_tail(
-                transcript_path,
+                buffer_transcript_path,
                 buffered_line_offset,
                 state,
                 adapter=adapter,
