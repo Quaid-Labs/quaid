@@ -7414,6 +7414,90 @@ class TestRollingExtraction:
                 },
             }
         ]
+        source_key = extraction_daemon._signal_source_cursor_key(
+            session_id,
+            str(live_path),
+            cursor_data=extraction_daemon.read_cursor(session_id),
+        )
+        extraction_daemon.write_cursor(
+            session_id,
+            captured[0]["meta"]["buffered_line_offset"],
+            captured[0]["transcript_path"],
+            source_key=source_key,
+            processed_signal_type="rolling",
+        )
+        extraction_daemon.clear_rolling_state(session_id)
+        prior_buffer_count = len(buffered_paths)
+
+        extraction_daemon.check_chunk_ready_sessions(chunk_tokens=10)
+
+        assert len(buffered_paths) == prior_buffer_count
+
+    @pytest.mark.parametrize(
+        "live_case",
+        ["missing", "smaller", "uuid_mismatch", "not_owned", "jsonl_empty"],
+    )
+    def test_larger_live_transcript_for_preserved_mirror_rejects_invalid_live_paths(
+        self, monkeypatch, tmp_path, live_case
+    ):
+        session_id = "09cba64f-c08d-4eb9-b9d1-7b478cbb426f"
+        live_session_id = (
+            "aaaaaaaa-c08d-4eb9-b9d1-7b478cbb426f"
+            if live_case == "uuid_mismatch"
+            else session_id
+        )
+        mirror_path = (
+            tmp_path
+            / "instances"
+            / "openclaw-main"
+            / "logs"
+            / "quaid"
+            / "sessions"
+            / f"{session_id}.jsonl"
+        )
+        live_path = tmp_path / "live" / "sessions" / f"{live_session_id}.jsonl"
+        mirror_path.parent.mkdir(parents=True, exist_ok=True)
+        live_path.parent.mkdir(parents=True, exist_ok=True)
+        mirror_path.write_text(
+            '{"type":"message","message":{"role":"user","content":"hello from mirror with enough bytes"}}\n',
+            encoding="utf-8",
+        )
+        if live_case != "missing":
+            live_content = (
+                ""
+                if live_case == "jsonl_empty"
+                else '{"type":"message","message":{"role":"user","content":"h"}}\n'
+                if live_case == "smaller"
+                else (
+                    '{"type":"message","message":{"role":"user","content":"hello"}}\n'
+                    '{"type":"message","message":{"role":"user","content":"chunk one"}}\n'
+                    '{"type":"message","message":{"role":"user","content":"chunk two"}}\n'
+                )
+            )
+            live_path.write_text(live_content, encoding="utf-8")
+
+        class _Adapter:
+            def get_session_path(self, session_id_arg):
+                assert session_id_arg == session_id
+                return live_path
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "openclaw-main")
+        monkeypatch.setattr(extraction_daemon, "_instance_id", lambda: "openclaw-main")
+        monkeypatch.setattr(
+            extraction_daemon,
+            "_adapter_owns_transcript_path",
+            lambda *args, **kwargs: live_case != "not_owned",
+        )
+
+        assert (
+            extraction_daemon._larger_live_transcript_for_preserved_mirror(
+                session_id,
+                str(mirror_path),
+                adapter=_Adapter(),
+            )
+            == ""
+        )
 
     def test_check_chunk_ready_sessions_scans_non_empty_preserved_cursor(
         self, monkeypatch, tmp_path
