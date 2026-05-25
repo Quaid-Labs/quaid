@@ -2044,9 +2044,10 @@ function seedRollingCursorForTranscript(
     const instanceRoot = instanceRootForAgentLabel(label);
     const cursorDir = path.join(instanceRoot, "data", "session-cursors");
     const cursorPath = path.join(cursorDir, `${sid}.json`);
-    const repairingPreservedMirror = fs.existsSync(cursorPath)
+    const cursorExists = fs.existsSync(cursorPath);
+    const repairingPreservedMirror = cursorExists
       && shouldRepairRollingCursorToLiveTranscript(cursorPath, resolvedPath, instanceRoot);
-    if (fs.existsSync(cursorPath) && !repairingPreservedMirror) return false;
+    if (cursorExists && !repairingPreservedMirror) return false;
     fs.mkdirSync(cursorDir, { recursive: true });
     const nowIso = new Date().toISOString().replace(/\.\d+Z$/, "Z");
     fs.writeFileSync(cursorPath, JSON.stringify({

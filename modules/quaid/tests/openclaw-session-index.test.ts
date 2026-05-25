@@ -556,6 +556,138 @@ describe("openclaw session_index watcher", () => {
     rmSync(harness.root, { recursive: true, force: true });
   });
 
+  it("does not replace a non-empty preserved rolling cursor with a live transcript", async () => {
+    const harness = makeHarness("transcript-update-keeps-nonempty-preserved-rolling-cursor");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const sessionId = "19c8ad44-3333-4333-8333-333333333333";
+    const sessionKey = "agent:main:matrix:direct:@quaid-test-bot:localhost";
+    const liveTranscript = join(harness.sessionsDir, `${sessionId}.jsonl`);
+    const preservedTranscript = join(
+      harness.quaidHome,
+      "instances",
+      "openclaw-main",
+      "logs",
+      "quaid",
+      "sessions",
+      `${sessionId}.jsonl`,
+    );
+    const cursorPath = join(
+      harness.quaidHome,
+      "instances",
+      "openclaw-main",
+      "data",
+      "session-cursors",
+      `${sessionId}.json`,
+    );
+
+    writeTranscript(liveTranscript, ["Live transcript should not replace a populated preserved cursor."]);
+    writeTranscript(preservedTranscript, ["Preserved mirror already contains extractable content."]);
+    writeJson(cursorPath, {
+      session_id: sessionId,
+      line_offset: 1,
+      transcript_path: preservedTranscript,
+      updated_at: "2026-05-25T00:00:00Z",
+    });
+
+    let transcriptUpdateHook: ((update: any) => void) | undefined;
+    const api = {
+      ...makeFakeApi(),
+      runtime: {
+        events: {
+          onSessionTranscriptUpdate: vi.fn((hook: (update: any) => void) => {
+            transcriptUpdateHook = hook;
+          }),
+        },
+      },
+    };
+    const plugin = await loadPlugin(harness);
+    plugin.register(api as any);
+    expect(typeof transcriptUpdateHook).toBe("function");
+
+    transcriptUpdateHook?.({
+      sessionId,
+      sessionKey,
+      sessionFile: liveTranscript,
+    });
+
+    const cursor = JSON.parse(readFileSync(cursorPath, "utf8"));
+    expect(cursor).toEqual({
+      session_id: sessionId,
+      line_offset: 1,
+      transcript_path: preservedTranscript,
+      updated_at: "2026-05-25T00:00:00Z",
+    });
+
+    warn.mockRestore();
+    log.mockRestore();
+    error.mockRestore();
+    rmSync(harness.root, { recursive: true, force: true });
+  });
+
+  it("does not rewrite an existing live rolling cursor", async () => {
+    const harness = makeHarness("transcript-update-keeps-existing-live-rolling-cursor");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const sessionId = "19c8ad44-4444-4444-8444-444444444444";
+    const sessionKey = "agent:main:matrix:direct:@quaid-test-bot:localhost";
+    const liveTranscript = join(harness.sessionsDir, `${sessionId}.jsonl`);
+    const cursorPath = join(
+      harness.quaidHome,
+      "instances",
+      "openclaw-main",
+      "data",
+      "session-cursors",
+      `${sessionId}.json`,
+    );
+
+    writeTranscript(liveTranscript, ["Existing live cursor should stay untouched."]);
+    writeJson(cursorPath, {
+      session_id: sessionId,
+      line_offset: 2,
+      transcript_path: liveTranscript,
+      updated_at: "2026-05-25T00:00:00Z",
+    });
+
+    let transcriptUpdateHook: ((update: any) => void) | undefined;
+    const api = {
+      ...makeFakeApi(),
+      runtime: {
+        events: {
+          onSessionTranscriptUpdate: vi.fn((hook: (update: any) => void) => {
+            transcriptUpdateHook = hook;
+          }),
+        },
+      },
+    };
+    const plugin = await loadPlugin(harness);
+    plugin.register(api as any);
+    expect(typeof transcriptUpdateHook).toBe("function");
+
+    transcriptUpdateHook?.({
+      sessionId,
+      sessionKey,
+      sessionFile: liveTranscript,
+    });
+
+    const cursor = JSON.parse(readFileSync(cursorPath, "utf8"));
+    expect(cursor).toEqual({
+      session_id: sessionId,
+      line_offset: 2,
+      transcript_path: liveTranscript,
+      updated_at: "2026-05-25T00:00:00Z",
+    });
+
+    warn.mockRestore();
+    log.mockRestore();
+    error.mockRestore();
+    rmSync(harness.root, { recursive: true, force: true });
+  });
+
   it("also flushes agent:main:main when /new resets only a TUI lifecycle session", async () => {
     vi.useFakeTimers();
     const harness = makeHarness("command-new-flushes-agent-main");
