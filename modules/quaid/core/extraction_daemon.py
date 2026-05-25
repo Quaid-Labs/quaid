@@ -2120,6 +2120,7 @@ def read_rolling_state(session_id: str) -> Dict[str, Any]:
     data.setdefault("rolling_batches", 0)
     data.setdefault("processed_line_offset", 0)
     data.setdefault("buffered_line_offset", int(data.get("processed_line_offset", 0) or 0))
+    data.setdefault("buffer_transcript_path", str(data.get("transcript_path") or ""))
     data.setdefault("semantic_buffer", "")
     data.setdefault("semantic_buffer_tokens", 0)
     data.setdefault("semantic_buffer_prior", "")
@@ -3278,6 +3279,22 @@ def _append_semantic_buffer(state: Dict[str, Any], parsed_text: str, line_offset
 
 def _semantic_buffer_has_content(state: Dict[str, Any]) -> bool:
     return bool(str((state or {}).get("semantic_buffer", "") or "").strip())
+
+
+def _reset_semantic_buffer_for_source(state: Dict[str, Any], buffer_transcript_path: str) -> Dict[str, Any]:
+    """Reset source-relative semantic buffering while preserving staged payloads."""
+    reset = dict(state or {})
+    reset["buffer_transcript_path"] = str(buffer_transcript_path or "")
+    reset["buffered_line_offset"] = 0
+    reset["processed_line_offset"] = 0
+    reset["semantic_buffer"] = ""
+    reset["semantic_buffer_tokens"] = 0
+    reset["semantic_buffer_prior"] = ""
+    reset["semantic_buffer_tail"] = ""
+    reset["semantic_buffer_prior_tokens"] = 0
+    reset["semantic_buffer_tail_tokens"] = 0
+    reset.pop(_INTERNAL_CURSOR_UNFROZEN_PENDING_FLUSH_KEY, None)
+    return reset
 
 
 def _rolling_state_has_pending_content(state: Dict[str, Any]) -> bool:
@@ -6695,6 +6712,30 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
             data = dict(data)
             data["line_offset"] = 0
         state = read_rolling_state(session_id)
+        state_buffer_path = str(state.get("buffer_transcript_path") or "").strip()
+        if state_buffer_path and state_buffer_path != str(buffer_transcript_path):
+            if staged_state_has_payload(state):
+                logger.info(
+                    "session %s rolling buffer source changed from %s to %s with staged payload present; "
+                    "preserving staged state",
+                    session_id,
+                    state_buffer_path,
+                    buffer_transcript_path,
+                )
+            else:
+                logger.info(
+                    "session %s rolling buffer source changed from %s to %s; resetting source-relative offset",
+                    session_id,
+                    state_buffer_path,
+                    buffer_transcript_path,
+                )
+                state = _reset_semantic_buffer_for_source(state, str(buffer_transcript_path))
+                cursor_offset = 0
+                data = dict(data)
+                data["line_offset"] = 0
+        elif not state_buffer_path:
+            state = dict(state)
+            state["buffer_transcript_path"] = str(buffer_transcript_path)
         buffered_line_offset = max(
             int(state.get("buffered_line_offset", cursor_offset) or 0),
             cursor_offset,
@@ -6710,6 +6751,7 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
             )
             if unfroze_internal_cursor and _semantic_buffer_has_content(state):
                 state[_INTERNAL_CURSOR_UNFROZEN_PENDING_FLUSH_KEY] = True
+            state["buffer_transcript_path"] = str(buffer_transcript_path)
             write_rolling_state(session_id, state)
             buffered_line_offset = int(state.get("buffered_line_offset", buffered_line_offset) or buffered_line_offset)
 

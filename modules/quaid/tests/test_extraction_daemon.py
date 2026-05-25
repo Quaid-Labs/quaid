@@ -7433,6 +7433,116 @@ class TestRollingExtraction:
 
         assert len(buffered_paths) == prior_buffer_count
 
+    def test_check_chunk_ready_sessions_resets_offset_when_buffer_source_switches(
+        self, monkeypatch, tmp_path
+    ):
+        session_id = "09cba64f-c08d-4eb9-b9d1-7b478cbb426f"
+        live_path = tmp_path / "live" / "sessions" / f"{session_id}.jsonl"
+        mirror_path = (
+            tmp_path
+            / "instances"
+            / "openclaw-main"
+            / "logs"
+            / "quaid"
+            / "sessions"
+            / f"{session_id}.jsonl"
+        )
+        live_path.parent.mkdir(parents=True, exist_ok=True)
+        mirror_path.parent.mkdir(parents=True, exist_ok=True)
+        live_path.write_text(
+            '{"type":"message","message":{"role":"user","content":"hello"}}\n'
+            '{"type":"message","message":{"role":"assistant","content":"ack"}}\n'
+            '{"type":"message","message":{"role":"user","content":"chunk one"}}\n'
+            '{"type":"message","message":{"role":"assistant","content":"ack"}}\n',
+            encoding="utf-8",
+        )
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "openclaw-main")
+        monkeypatch.setattr(extraction_daemon, "_instance_id", lambda: "openclaw-main")
+        monkeypatch.setattr(extraction_daemon, "_ensure_discovered_session_cursors", lambda adapter: None)
+        monkeypatch.setattr(extraction_daemon, "_adapter_owns_transcript_path", lambda *args, **kwargs: True)
+        monkeypatch.setattr(extraction_daemon, "_cursor_or_adapter_owns_transcript_path", lambda *args, **kwargs: True)
+        monkeypatch.setattr(extraction_daemon, "_reconcile_internal_cursor_state", lambda *args, **kwargs: "not_internal")
+
+        extraction_daemon.write_cursor(session_id, 4, str(live_path))
+        extraction_daemon.write_rolling_state(
+            session_id,
+            {
+                "session_id": session_id,
+                "transcript_path": str(live_path),
+                "buffer_transcript_path": str(live_path),
+                "processed_line_offset": 4,
+                "buffered_line_offset": 4,
+                "semantic_buffer": "User: chunk one",
+                "semantic_buffer_tokens": 8,
+            },
+        )
+
+        live_path.write_text("", encoding="utf-8")
+        mirror_path.write_text(
+            '{"type":"message","message":{"role":"user","content":"hello"}}\n'
+            '{"type":"message","message":{"role":"user","content":"chunk one"}}\n'
+            '{"type":"message","message":{"role":"user","content":"chunk two"}}\n',
+            encoding="utf-8",
+        )
+
+        captured = []
+        buffered_calls = []
+
+        def fake_buffer_transcript_tail(path, from_line, state, adapter=None, **kwargs):
+            buffered_calls.append((path, from_line, dict(state)))
+            assert path == str(mirror_path)
+            assert from_line == 0
+            assert state.get("semantic_buffer", "") == ""
+            return (
+                {
+                    "buffer_transcript_path": str(mirror_path),
+                    "buffered_line_offset": 3,
+                    "semantic_buffer": "User: chunk one\n\nUser: chunk two",
+                    "semantic_buffer_tokens": 12,
+                },
+                {
+                    "raw_lines_added": 3,
+                    "semantic_chars_added": 30,
+                    "semantic_tokens_added": 12,
+                    "buffered_line_offset": 3,
+                },
+            )
+
+        monkeypatch.setattr(extraction_daemon, "_buffer_transcript_tail", fake_buffer_transcript_tail)
+        monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
+        monkeypatch.setattr(
+            extraction_daemon,
+            "write_signal",
+            lambda signal_type, session_id, transcript_path, **kwargs: captured.append(
+                {
+                    "signal_type": signal_type,
+                    "session_id": session_id,
+                    "transcript_path": transcript_path,
+                    "meta": kwargs.get("meta", {}),
+                }
+            ),
+        )
+
+        extraction_daemon.check_chunk_ready_sessions(chunk_tokens=10)
+
+        assert [(path, from_line) for path, from_line, _state in buffered_calls] == [(str(mirror_path), 0)]
+        assert captured == [
+            {
+                "signal_type": "rolling",
+                "session_id": session_id,
+                "transcript_path": str(live_path),
+                "meta": {
+                    "reason": "semantic_chunk_budget",
+                    "chunk_tokens": 10,
+                    "semantic_buffer_tokens": 12,
+                    "buffered_line_offset": 3,
+                    "buffer_transcript_path": str(mirror_path),
+                },
+            }
+        ]
+
     @pytest.mark.parametrize(
         "live_case",
         ["missing", "smaller", "uuid_mismatch", "not_owned", "jsonl_empty"],
