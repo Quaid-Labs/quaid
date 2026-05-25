@@ -5286,6 +5286,7 @@ def graph_aware_recall(
                 "planned_project": project,
                 "freshness_preferred": False,
                 "suppress_session_chunks_auto_include": True,
+                "suppress_graph_auto_include": True,
             },
             return_meta=True,
         )
@@ -8015,6 +8016,7 @@ def _vector_store_recall(
         ]
         inner_planner_meta["planned_stores"] = inner_planned_stores or ["vector"]
     inner_planner_meta["suppress_session_chunks_auto_include"] = True
+    inner_planner_meta["suppress_graph_auto_include"] = True
     results, meta = recall(
         query=query,
         limit=limit,
@@ -20731,7 +20733,11 @@ def recall(
         len(turn1_relation_chain_groups) >= 2
         and _has_relation_chain_structure(query)
     )
-    if turn1_relation_chain_detected and "graph" not in planned_turn1_stores:
+    if (
+        turn1_relation_chain_detected
+        and "graph" not in planned_turn1_stores
+        and not fanout_meta.get("suppress_graph_auto_include")
+    ):
         planned_turn1_stores = _planner_store_plan([*planned_turn1_stores, "graph"])
         fanout_meta = dict(fanout_meta or {})
         fanout_meta["planned_stores"] = list(planned_turn1_stores)

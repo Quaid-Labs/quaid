@@ -10294,6 +10294,7 @@ class TestRecallFastHookInjectContract:
             "planned_stores": ["vector", "docs"],
             "planned_project": "recipe-app",
             "suppress_session_chunks_auto_include": True,
+            "suppress_graph_auto_include": True,
         }
 
     def test_vector_store_recall_disables_routing_in_fast_mode(self):
@@ -10322,7 +10323,10 @@ class TestRecallFastHookInjectContract:
         assert captured["kwargs"]["lexical_anchor_planner_mode"] == "deterministic"
         assert captured["kwargs"]["use_lightweight_config"] is True
         assert captured["kwargs"]["track_access"] is False
-        assert captured["kwargs"]["planner_meta"] == {"suppress_session_chunks_auto_include": True}
+        assert captured["kwargs"]["planner_meta"] == {
+            "suppress_session_chunks_auto_include": True,
+            "suppress_graph_auto_include": True,
+        }
 
     def test_vector_store_recall_uses_deterministic_lexical_anchors_for_date_bounded_named_query(self):
         import datastore.memorydb.memory_graph as mg
@@ -13875,6 +13879,35 @@ class TestRecallFastHookInjectContract:
         assert rows[0]["id"] == boat.id
         assert rows[0]["via"] == "graph_attached_fact"
         assert rows[0]["graph_relation_sequence"] == ["spouse_of", "sibling_of", "has_fact"]
+
+    def test_graph_aware_seed_recall_suppresses_nested_graph_auto_include(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _ = _make_graph(tmp_path)
+        anchor = mg.Node.create("Person", "Test Anchor")
+        graph.add_node(anchor, embed=False)
+        captured = {}
+
+        def fake_seed_recall(_query, **kwargs):
+            captured["planner_meta"] = dict(kwargs.get("planner_meta") or {})
+            return [], {"selected_path": "vector"}
+
+        with patch.object(mg, "get_graph", return_value=graph), \
+             patch.object(mg, "extract_entities_from_text", return_value=[
+                 SimpleNamespace(id=anchor.id, name=anchor.name, type="Person"),
+             ]), \
+             patch.object(graph, "get_embedding", return_value=[0.0]), \
+             patch.object(mg, "recall", side_effect=fake_seed_recall):
+            payload = mg.graph_aware_recall(
+                "partner sibling dietary constraints parent low sodium",
+                owner_id="test-owner",
+                limit=3,
+            )
+
+        assert payload["meta"]["selected_path"] == "graph_aware"
+        assert captured["planner_meta"]["planned_stores"] == ["vector"]
+        assert captured["planner_meta"]["suppress_session_chunks_auto_include"] is True
+        assert captured["planner_meta"]["suppress_graph_auto_include"] is True
 
     def test_deliberate_relation_chain_auto_includes_graph_after_vector_only_plan(self):
         import datastore.memorydb.memory_graph as mg
