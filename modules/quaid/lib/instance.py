@@ -314,7 +314,15 @@ def _is_stale_openclaw_agent_instance(name: str, instance_dir: Path) -> bool:
     if has_authoritative_list:
         return True
     for root in roots:
-        if (root / "agents" / label).exists():
+        agent_dir = root / "agents" / label
+        if not agent_dir.exists():
+            continue
+        try:
+            if agent_dir.is_dir() and not any(agent_dir.iterdir()):
+                continue
+        except OSError:
+            return False
+        if agent_dir.exists():
             return False
     return True
 

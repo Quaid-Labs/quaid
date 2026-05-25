@@ -284,6 +284,31 @@ class TestListInstances:
         for name in deleted_names:
             assert not (tmp_path / "instances" / name).exists()
 
+    def test_openclaw_physical_prune_ignores_empty_native_agent_residue(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("HOME", str(tmp_path))
+        oc_root = tmp_path / "openclaw-runtime"
+        oc_root.mkdir()
+        monkeypatch.setenv("OPENCLAW_CONFIG_PATH", str(oc_root / "openclaw.json"))
+        (oc_root / "openclaw.json").write_text(json.dumps({"agents": {}}), encoding="utf-8")
+        (oc_root / "agents" / "deleted").mkdir(parents=True)
+        active_native = oc_root / "agents" / "native-active"
+        active_native.mkdir(parents=True)
+        (active_native / "state.json").write_text("{}", encoding="utf-8")
+        for name in ("openclaw-deleted", "openclaw-native-active"):
+            deleted = tmp_path / "instances" / name
+            deleted.mkdir(parents=True)
+            deleted.joinpath("config.json").write_text(
+                json.dumps({"adapter": {"type": "openclaw"}}),
+                encoding="utf-8",
+            )
+
+        monkeypatch.setenv("QUAID_LIVETEST_HARNESS", "1")
+
+        assert prune_stale_openclaw_agent_instances(tmp_path) == ["openclaw-deleted"]
+        assert not (tmp_path / "instances" / "openclaw-deleted").exists()
+        assert (tmp_path / "instances" / "openclaw-native-active").exists()
+
     def test_livetest_prune_removes_empty_instance_bind_point_residue(self, monkeypatch, tmp_path):
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
         residue = tmp_path / "instances" / "claude-code-private-tmp-cc-livetest-sibling"
