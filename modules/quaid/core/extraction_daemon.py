@@ -1754,6 +1754,36 @@ def _larger_preserved_mirror_for_live_transcript(session_id: str, transcript_pat
     return ""
 
 
+def _larger_live_transcript_for_preserved_mirror(session_id: str, transcript_path: str, adapter=None) -> str:
+    """Return an adapter-resolved live transcript when it is richer than a preserved mirror."""
+    raw = str(transcript_path or "").strip()
+    if not raw or not _is_daemon_preserved_session_transcript_path(raw) or not os.path.isfile(raw):
+        return ""
+    get_session_path = getattr(adapter, "get_session_path", None)
+    if not callable(get_session_path):
+        return ""
+    try:
+        live_candidate = get_session_path(str(session_id))
+        live_raw = str(live_candidate or "").strip()
+        if not live_raw or _is_daemon_preserved_session_transcript_path(live_raw) or not os.path.isfile(live_raw):
+            return ""
+        live_path = Path(live_raw).expanduser().resolve()
+        if not _adapter_owns_transcript_path(adapter, str(session_id), str(live_path)):
+            return ""
+        session_uuid = _SESSION_ID_UUID_RE.search(str(session_id or ""))
+        filename_uuid = _SESSION_ID_UUID_RE.search(live_path.name)
+        if not session_uuid or not filename_uuid or session_uuid.group(0).lower() != filename_uuid.group(0).lower():
+            return ""
+        mirror_size = _transcript_size_bytes(raw)
+        live_size = _transcript_size_bytes(str(live_path))
+        if live_size > mirror_size and _transcript_has_jsonl_rows(str(live_path)):
+            return str(live_path)
+    except Exception:
+        if _fail_hard_enabled():
+            raise
+    return ""
+
+
 def _pending_signal_source_keys(
     signals: List[Dict[str, Any]],
     *,
@@ -6514,11 +6544,26 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
             else:
                 if _transcript_size_bytes(str(transcript_path)) <= 0:
                     continue
-                logger.info(
-                    "session %s rolling scan using non-empty preserved transcript %s",
-                    session_id,
-                    transcript_path,
+                live_path = _larger_live_transcript_for_preserved_mirror(
+                    str(session_id),
+                    str(transcript_path),
+                    adapter=adapter,
                 )
+                if live_path:
+                    logger.info(
+                        "session %s rolling scan using larger live transcript %s instead of preserved mirror %s",
+                        session_id,
+                        live_path,
+                        transcript_path,
+                    )
+                    transcript_path = live_path
+                    buffer_transcript_path = live_path
+                else:
+                    logger.info(
+                        "session %s rolling scan using non-empty preserved transcript %s",
+                        session_id,
+                        transcript_path,
+                    )
         else:
             mirror_path = _larger_preserved_mirror_for_live_transcript(
                 str(session_id),
@@ -6740,6 +6785,8 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
             "semantic_buffer_tokens": semantic_tokens,
             "buffered_line_offset": buffered_line_offset,
         }
+        if str(buffer_transcript_path) != str(transcript_path):
+            signal_meta["buffer_transcript_path"] = str(buffer_transcript_path)
         if reason == "semantic_chunk_budget_near":
             signal_meta["near_budget_threshold"] = near_budget_threshold
         write_signal(
