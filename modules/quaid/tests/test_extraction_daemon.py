@@ -7315,8 +7315,9 @@ class TestRollingExtraction:
         source_cursor = extraction_daemon.read_cursor(session_id, source_key=source_key)
         assert source_cursor["transcript_path"] == str(live_path)
 
+        prior_buffer_count = len(buffered_paths)
         extraction_daemon.check_chunk_ready_sessions(chunk_tokens=10)
-        assert buffered_paths[-1] == str(mirror_path)
+        assert len(buffered_paths) == prior_buffer_count
 
     def test_check_chunk_ready_sessions_scans_non_empty_preserved_cursor(
         self, monkeypatch, tmp_path

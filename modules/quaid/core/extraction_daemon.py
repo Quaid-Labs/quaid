@@ -6549,6 +6549,9 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
             cursor_data=data,
         ):
             continue
+        # Size/cursor identity stays on transcript_path even when the semantic
+        # buffer reads from a larger mirror. Comparing growth against the mirror
+        # here would make an unchanged mirror look newly grown on every scan.
         current_size_bytes = _transcript_size_bytes(str(transcript_path))
         cursor_size_bytes = int(data.get("transcript_size_bytes", 0) or 0)
         transcript_grew_since_cursor = current_size_bytes > cursor_size_bytes
