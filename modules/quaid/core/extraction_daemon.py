@@ -1573,6 +1573,19 @@ def _cursor_shadowed_by_source_cursor(
         != _canonicalize_transcript_source_path(transcript_path)
     ):
         return False
+    source_size_bytes = int(source_cursor.get("transcript_size_bytes", 0) or 0)
+    current_size_bytes = _transcript_size_bytes(str(transcript_path))
+    if current_size_bytes and current_size_bytes > source_size_bytes:
+        logger.info(
+            "session %s source cursor %s is stale for grown transcript "
+            "(cursor_size=%d current_size=%d); allowing alias cursor %s to be scanned",
+            session_id,
+            source_file.name,
+            source_size_bytes,
+            current_size_bytes,
+            cursor_file.name,
+        )
+        return False
     source_offset = int(source_cursor.get("line_offset", 0) or 0)
     cursor_offset = int(cursor_data.get("line_offset", 0) or 0)
     if source_offset < cursor_offset or (source_offset == cursor_offset == 0):
@@ -6520,6 +6533,24 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
 
         cursor_offset = int(data.get("line_offset", 0) or 0)
         total_lines = count_transcript_lines(transcript_path)
+        if (
+            transcript_grew_since_cursor
+            and total_lines > 0
+            and cursor_offset >= total_lines
+        ):
+            logger.info(
+                "session %s cursor reached EOF before transcript grew in place "
+                "(offset=%d lines=%d cursor_size=%d current_size=%d); "
+                "rescanning from start for rolling readiness",
+                session_id,
+                cursor_offset,
+                total_lines,
+                cursor_size_bytes,
+                current_size_bytes,
+            )
+            cursor_offset = 0
+            data = dict(data)
+            data["line_offset"] = 0
         state = read_rolling_state(session_id)
         buffered_line_offset = max(
             int(state.get("buffered_line_offset", cursor_offset) or 0),

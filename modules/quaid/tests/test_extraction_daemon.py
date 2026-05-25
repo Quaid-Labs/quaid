@@ -7280,6 +7280,94 @@ class TestRollingExtraction:
             cursor_data=cursor_data,
         ) is True
 
+    def test_grown_source_cursor_does_not_shadow_live_alias(
+        self, monkeypatch, tmp_path
+    ):
+        import sys
+        import types
+
+        transcript_path = tmp_path / "e35ca1a9-11a3-4c21-ad6f-f6525209240e.jsonl"
+        short_lines = [
+            json.dumps({"type": "session", "id": "e35ca1a9"}) + "\n",
+            json.dumps({"type": "model_change"}) + "\n",
+            json.dumps({"type": "thinking_level_change"}) + "\n",
+            json.dumps({"type": "custom", "customType": "model-snapshot"}) + "\n",
+            json.dumps({"type": "message", "message": {"role": "user", "content": [{"type": "text", "text": "Hello"}]}}) + "\n",
+            json.dumps({"type": "custom_message", "customType": "openclaw.runtime-context", "content": "context"}) + "\n",
+            json.dumps({"type": "message", "message": {"role": "assistant", "content": [{"type": "text", "text": "ACK"}]}}) + "\n",
+        ]
+        transcript_path.write_text("".join(short_lines), encoding="utf-8")
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "openclaw-main")
+        session_id = "e35ca1a9-11a3-4c21-ad6f-f6525209240e"
+        source_key = extraction_daemon._signal_source_cursor_key(session_id, str(transcript_path))
+        extraction_daemon.write_cursor(session_id, 7, str(transcript_path), source_key=source_key)
+
+        grown_lines = list(short_lines)
+        grown_lines[4] = json.dumps({
+            "type": "message",
+            "message": {
+                "role": "user",
+                "content": [{
+                    "type": "text",
+                    "text": "Baxter uses an orange linen notebook from Emília Rosa. " * 40,
+                }],
+            },
+        }) + "\n"
+        transcript_path.write_text("".join(grown_lines), encoding="utf-8")
+        extraction_daemon.write_cursor(session_id, 0, str(transcript_path))
+
+        legacy_file = extraction_daemon._cursor_dir() / f"{session_id}.json"
+        cursor_data = json.loads(legacy_file.read_text(encoding="utf-8"))
+        assert extraction_daemon._cursor_shadowed_by_source_cursor(
+            cursor_file=legacy_file,
+            session_id=session_id,
+            transcript_path=str(transcript_path),
+            cursor_data=cursor_data,
+        ) is False
+
+        real_adapter = sys.modules.get("lib.adapter")
+        fake_adapter_mod = types.ModuleType("lib.adapter")
+
+        class _FakeAdapter(_OwnedTestAdapterMixin):
+            def parse_session_jsonl(self, path):
+                raw = Path(path).read_text(encoding="utf-8")
+                if "orange linen notebook" in raw:
+                    return "User: " + ("Baxter uses an orange linen notebook from Emília Rosa. " * 40)
+                return "User: Hello\n\nAssistant: ACK"
+
+        fake_adapter_mod.get_adapter = lambda: _FakeAdapter()
+        sys.modules["lib.adapter"] = fake_adapter_mod
+
+        captured = []
+        monkeypatch.setattr(extraction_daemon, "_get_capture_chunk_tokens", lambda default=8000: 20)
+        monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
+        monkeypatch.setattr(
+            extraction_daemon,
+            "write_signal",
+            lambda signal_type, session_id, transcript_path, **kwargs: captured.append(
+                {
+                    "signal_type": signal_type,
+                    "session_id": session_id,
+                    "transcript_path": transcript_path,
+                    "meta": kwargs.get("meta", {}),
+                }
+            ),
+        )
+
+        try:
+            extraction_daemon.check_chunk_ready_sessions()
+        finally:
+            if real_adapter is not None:
+                sys.modules["lib.adapter"] = real_adapter
+            else:
+                sys.modules.pop("lib.adapter", None)
+
+        assert len(captured) == 1
+        assert captured[0]["signal_type"] == "rolling"
+        assert captured[0]["session_id"] == session_id
+
     def test_check_chunk_ready_sessions_dedupes_same_source_alias_cursors(
         self, monkeypatch, tmp_path
     ):
