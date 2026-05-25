@@ -1722,7 +1722,7 @@ def _transcript_has_jsonl_rows(transcript_path: str) -> bool:
     return False
 
 
-def _larger_preserved_mirror_for_live_transcript(session_id: str, transcript_path: str) -> str:
+def _larger_preserved_mirror_for_live_transcript(session_id: str, transcript_path: str, adapter=None) -> str:
     """Return the OC mirror read-source when active live JSONL is rewritten smaller.
 
     OpenClaw can compact/rewrite its live transcript during an active session while
@@ -1735,8 +1735,7 @@ def _larger_preserved_mirror_for_live_transcript(session_id: str, transcript_pat
         return ""
     try:
         live_path = Path(raw).expanduser().resolve()
-        live_text = str(live_path)
-        if f"{os.sep}.openclaw{os.sep}agents{os.sep}" not in live_text:
+        if not _adapter_owns_transcript_path(adapter, str(session_id), str(live_path)):
             return ""
         session_uuid = _SESSION_ID_UUID_RE.search(str(session_id or ""))
         filename_uuid = _SESSION_ID_UUID_RE.search(live_path.name)
@@ -6521,7 +6520,11 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
                     transcript_path,
                 )
         else:
-            mirror_path = _larger_preserved_mirror_for_live_transcript(str(session_id), str(transcript_path))
+            mirror_path = _larger_preserved_mirror_for_live_transcript(
+                str(session_id),
+                str(transcript_path),
+                adapter=adapter,
+            )
             if mirror_path:
                 logger.info(
                     "session %s rolling scan reading larger preserved mirror %s while preserving live cursor %s",
