@@ -344,6 +344,31 @@ def test_datastore_cleanup_retries_locked_database(monkeypatch, tmp_path):
         conn.close()
 
 
+def test_datastore_cleanup_reports_exhausted_locked_database(monkeypatch, tmp_path):
+    from datastore.memorydb import memory_graph
+
+    class _Graph:
+        calls = 0
+
+        def _get_conn(self):
+            self.calls += 1
+            raise sqlite3.OperationalError("database is locked")
+
+    graph = _Graph()
+    sleeps = []
+    monkeypatch.setattr("datastore.memorydb.memory_graph.time.sleep", lambda delay: sleeps.append(delay))
+
+    result = build_default_registry().run(
+        "datastore_cleanup",
+        RoutineContext(cfg=_make_cfg(False), dry_run=False, workspace=tmp_path, graph=graph),
+    )
+
+    expected_delays = list(memory_graph._DATASTORE_BUSY_RETRY_DELAYS_SECONDS)
+    assert graph.calls == len(expected_delays) + 1
+    assert sleeps == expected_delays
+    assert result.errors == ["Cleanup error: database is locked"]
+
+
 def test_datastore_cleanup_does_not_retry_non_lock_sqlite_error(monkeypatch, tmp_path):
     class _Graph:
         calls = 0
@@ -364,6 +389,27 @@ def test_datastore_cleanup_does_not_retry_non_lock_sqlite_error(monkeypatch, tmp
     assert graph.calls == 1
     assert sleeps == []
     assert result.errors == ["Cleanup error: no such table: recall_log"]
+
+
+def test_memory_graph_init_retries_locked_database(monkeypatch, tmp_path):
+    from datastore.memorydb import memory_graph
+
+    calls = []
+    sleeps = []
+
+    def flaky_init(self):
+        calls.append(self.db_path)
+        if len(calls) < 3:
+            raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(memory_graph.MemoryGraph, "_init_db", flaky_init)
+    monkeypatch.setattr(memory_graph.time, "sleep", lambda delay: sleeps.append(delay))
+
+    graph = memory_graph.MemoryGraph(db_path=tmp_path / "memory.db")
+
+    assert graph.db_path == tmp_path / "memory.db"
+    assert len(calls) == 3
+    assert sleeps == list(memory_graph._DATASTORE_BUSY_RETRY_DELAYS_SECONDS[:2])
 
 
 def test_lifecycle_registry_run_many_executes_in_parallel_shape(tmp_path):

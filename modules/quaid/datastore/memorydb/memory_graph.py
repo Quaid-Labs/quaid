@@ -419,7 +419,27 @@ class MemoryGraph:
         self.db_path = Path(db_path) if db_path is not None else get_db_path()
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         if initialize:
-            self._init_db()
+            self._init_db_with_busy_retry()
+
+    def _init_db_with_busy_retry(self) -> None:
+        attempts = len(_DATASTORE_BUSY_RETRY_DELAYS_SECONDS) + 1
+        for attempt in range(1, attempts + 1):
+            try:
+                self._init_db()
+                return
+            except sqlite3.OperationalError as exc:
+                if not _is_sqlite_busy_or_locked(exc) or attempt >= attempts:
+                    raise
+                delay = _DATASTORE_BUSY_RETRY_DELAYS_SECONDS[attempt - 1]
+                logger.warning(
+                    "memory DB initialization busy for %s on attempt %d/%d: %s; retrying in %.2fs",
+                    self.db_path,
+                    attempt,
+                    attempts,
+                    exc,
+                    delay,
+                )
+                time.sleep(delay)
 
     def _init_db(self):
         """Initialize database with schema."""
@@ -5775,9 +5795,9 @@ def search(
     return out
 
 
-# Cleanup runs during normal product sessions while adapters may hold SQLite
-# connections. Treat WAL write contention as transient, but keep a hard bound.
-_DATASTORE_CLEANUP_BUSY_RETRY_DELAYS_SECONDS = (0.1, 0.25, 0.5, 1.0, 2.0)
+# Janitor and normal product adapters can touch the same SQLite DB concurrently.
+# Treat WAL write contention as transient, but keep a hard bound.
+_DATASTORE_BUSY_RETRY_DELAYS_SECONDS = (0.1, 0.25, 0.5, 1.0, 2.0)
 
 
 def _is_sqlite_busy_or_locked(exc: BaseException) -> bool:
@@ -5796,9 +5816,6 @@ def _is_sqlite_busy_or_locked(exc: BaseException) -> bool:
     return (
         "database is locked" in text
         or "database table is locked" in text
-        or "database is busy" in text
-        or "sqlite_busy" in text
-        or "sqlite_locked" in text
     )
 
 
@@ -5816,7 +5833,7 @@ def register_lifecycle_routines(registry, result_factory) -> None:
             "janitor_metadata": "DELETE FROM janitor_metadata WHERE updated_at < datetime('now', '-180 days')",
             "janitor_runs": "DELETE FROM janitor_runs WHERE completed_at < datetime('now', '-180 days')",
         }
-        attempts = len(_DATASTORE_CLEANUP_BUSY_RETRY_DELAYS_SECONDS) + 1
+        attempts = len(_DATASTORE_BUSY_RETRY_DELAYS_SECONDS) + 1
         try:
             for attempt in range(1, attempts + 1):
                 cleanup_stats = {
@@ -5841,7 +5858,7 @@ def register_lifecycle_routines(registry, result_factory) -> None:
                 except sqlite3.OperationalError as exc:
                     if not _is_sqlite_busy_or_locked(exc) or attempt >= attempts:
                         raise
-                    delay = _DATASTORE_CLEANUP_BUSY_RETRY_DELAYS_SECONDS[attempt - 1]
+                    delay = _DATASTORE_BUSY_RETRY_DELAYS_SECONDS[attempt - 1]
                     result.logs.append(
                         "Datastore cleanup database busy; "
                         f"retrying in {delay:.2f}s (attempt {attempt}/{attempts}): {exc}"
