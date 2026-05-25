@@ -1605,6 +1605,12 @@ def _active_source_cursor_for_stale_signal_transcript(
             or _is_daemon_preserved_session_transcript_path(candidate_path)
             or not os.path.isfile(candidate_path)
         ):
+            active_cursor, active_path, active_key = _active_source_cursor_for_empty_preserved_cursor(
+                session_id,
+                transcript_path,
+            )
+            if active_cursor and active_path and active_key:
+                return active_path, active_key
             return "", ""
         source_key = _signal_source_cursor_key(
             session_id,
@@ -1626,10 +1632,61 @@ def _active_source_cursor_for_stale_signal_transcript(
             source_size_bytes > 0 and current_size_bytes > source_size_bytes
         ):
             return candidate_path, source_key
+        active_cursor, active_path, active_key = _active_source_cursor_for_empty_preserved_cursor(
+            session_id,
+            transcript_path,
+        )
+        if active_cursor and active_path and active_key:
+            return active_path, active_key
     except Exception:
         if _fail_hard_enabled():
             raise
     return "", ""
+
+
+def _active_source_cursor_for_empty_preserved_cursor(
+    session_id: str,
+    transcript_path: str,
+) -> tuple[Dict[str, Any], str, str]:
+    """Return the live cursor behind an empty daemon-preserved transcript alias."""
+    if not transcript_path or not _is_daemon_preserved_session_transcript_path(str(transcript_path)):
+        return {}, "", ""
+    try:
+        if os.path.isfile(transcript_path) and _transcript_size_bytes(transcript_path) > 0:
+            return {}, "", ""
+        transcript_name = Path(transcript_path).name
+        best: tuple[float, Dict[str, Any], str, str] | None = None
+        for cursor_file in _cursor_dir().glob("*.json"):
+            if cursor_file.stem == _validate_session_id(session_id):
+                continue
+            cursor_data = _read_cursor_file(cursor_file, session_id)
+            if str(cursor_data.get("session_id") or "").strip() != str(session_id):
+                continue
+            candidate_path = str(cursor_data.get("transcript_path") or "").strip()
+            if (
+                not candidate_path
+                or candidate_path == transcript_path
+                or _is_daemon_preserved_session_transcript_path(candidate_path)
+                or Path(candidate_path).name != transcript_name
+                or not os.path.isfile(candidate_path)
+                or _transcript_size_bytes(candidate_path) <= 0
+            ):
+                continue
+            try:
+                mtime = cursor_file.stat().st_mtime
+            except OSError:
+                mtime = 0.0
+            cursor_key = str(cursor_data.get("cursor_key") or cursor_file.stem or "").strip()
+            if not cursor_key:
+                continue
+            if best is None or mtime >= best[0]:
+                best = (mtime, cursor_data, candidate_path, cursor_key)
+        if best is not None:
+            return best[1], best[2], best[3]
+    except Exception:
+        if _fail_hard_enabled():
+            raise
+    return {}, "", ""
 
 
 def _pending_signal_source_keys(
@@ -6016,11 +6073,26 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
         if not session_id or not transcript_path or not os.path.isfile(transcript_path):
             continue
         if _is_daemon_preserved_session_transcript_path(str(transcript_path)):
-            # Preserved daemon mirrors are valid lifecycle inputs, but they are
-            # not active host transcripts. Let discovery replace stale mirrors
-            # with the live adapter path; otherwise do not let an old mirror fire
-            # timeout extraction before the host materializes the real session.
-            continue
+            active_cursor, active_path, active_key = _active_source_cursor_for_empty_preserved_cursor(
+                str(session_id),
+                str(transcript_path),
+            )
+            if active_cursor and active_path and active_key:
+                logger.info(
+                    "session %s idle scan using live source cursor %s for empty preserved alias %s",
+                    session_id,
+                    active_key,
+                    transcript_path,
+                )
+                data = active_cursor
+                transcript_path = active_path
+                cursor_file = _cursor_dir() / f"{active_key}.json"
+            else:
+                # Preserved daemon mirrors are valid lifecycle inputs, but they are
+                # not active host transcripts. Let discovery replace stale mirrors
+                # with the live adapter path; otherwise do not let an old mirror fire
+                # timeout extraction before the host materializes the real session.
+                continue
         if _is_discovery_artifact_transcript(Path(str(transcript_path))):
             continue
         if _cursor_shadowed_by_source_cursor(
@@ -6029,7 +6101,22 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
             transcript_path=str(transcript_path),
             cursor_data=data,
         ):
-            continue
+            active_cursor, active_path, active_key = _active_source_cursor_for_empty_preserved_cursor(
+                str(session_id),
+                str(transcript_path),
+            )
+            if active_cursor and active_path and active_key:
+                logger.info(
+                    "session %s idle scan using live source cursor %s for empty preserved alias %s",
+                    session_id,
+                    active_key,
+                    transcript_path,
+                )
+                data = active_cursor
+                transcript_path = active_path
+                cursor_file = _cursor_dir() / f"{active_key}.json"
+            else:
+                continue
         if not _cursor_or_adapter_owns_transcript_path(
             adapter,
             str(session_id),
@@ -6336,6 +6423,23 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
         transcript_path = data.get("transcript_path", "")
         if not session_id or not transcript_path or not os.path.isfile(transcript_path):
             continue
+        if _is_daemon_preserved_session_transcript_path(str(transcript_path)):
+            active_cursor, active_path, active_key = _active_source_cursor_for_empty_preserved_cursor(
+                str(session_id),
+                str(transcript_path),
+            )
+            if active_cursor and active_path and active_key:
+                logger.info(
+                    "session %s rolling scan using live source cursor %s for empty preserved alias %s",
+                    session_id,
+                    active_key,
+                    transcript_path,
+                )
+                data = active_cursor
+                transcript_path = active_path
+                cursor_file = _cursor_dir() / f"{active_key}.json"
+            else:
+                continue
         if _is_discovery_artifact_transcript(Path(str(transcript_path))):
             continue
         if _cursor_shadowed_by_source_cursor(

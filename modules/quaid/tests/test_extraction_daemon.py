@@ -5838,6 +5838,40 @@ class TestCursorRoundTrip:
         assert resolved_path == str(live_path)
         assert resolved_key == source_key
 
+    def test_empty_preserved_signal_resolves_to_live_source_cursor_file(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "openclaw-main")
+
+        session_id = "sess-live-source"
+        preserved_path = (
+            tmp_path
+            / "instances"
+            / "openclaw-main"
+            / "logs"
+            / "quaid"
+            / "sessions"
+            / f"{session_id}.jsonl"
+        )
+        preserved_path.parent.mkdir(parents=True, exist_ok=True)
+        preserved_path.write_text("", encoding="utf-8")
+        live_path = tmp_path / ".openclaw" / "agents" / "main" / "sessions" / f"{session_id}.jsonl"
+        live_path.parent.mkdir(parents=True, exist_ok=True)
+        live_path.write_text(
+            '{"role":"user","content":"live OpenClaw session content"}\n',
+            encoding="utf-8",
+        )
+        source_key = extraction_daemon._signal_source_cursor_key(session_id, str(live_path))
+        extraction_daemon.write_cursor(session_id, 0, str(live_path), source_key=source_key)
+        extraction_daemon.write_cursor(session_id, 0, str(preserved_path))
+
+        resolved_path, resolved_key = extraction_daemon._active_source_cursor_for_stale_signal_transcript(
+            session_id,
+            str(preserved_path),
+        )
+
+        assert resolved_path == str(live_path)
+        assert resolved_key == source_key
+
     def test_nonempty_preserved_signal_transcript_does_not_redirect(self, monkeypatch, tmp_path):
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
         monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
@@ -7324,6 +7358,81 @@ class TestRollingExtraction:
             else:
                 sys.modules.pop("lib.adapter", None)
 
+    def test_check_chunk_ready_sessions_uses_live_cursor_for_empty_preserved_alias(
+        self, monkeypatch, tmp_path
+    ):
+        import sys
+        import types
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "openclaw-main")
+        session_id = "sess-oc-live-roll"
+        live_path = tmp_path / ".openclaw" / "agents" / "main" / "sessions" / f"{session_id}.jsonl"
+        live_path.parent.mkdir(parents=True, exist_ok=True)
+        live_path.write_text(
+            '{"role":"user","content":"first durable rolling note with many extractable words"}\n'
+            '{"role":"user","content":"second durable rolling note with more extractable words"}\n',
+            encoding="utf-8",
+        )
+        preserved_path = (
+            tmp_path
+            / "instances"
+            / "openclaw-main"
+            / "logs"
+            / "quaid"
+            / "sessions"
+            / f"{session_id}.jsonl"
+        )
+        preserved_path.parent.mkdir(parents=True, exist_ok=True)
+        preserved_path.write_text("", encoding="utf-8")
+        source_key = extraction_daemon._signal_source_cursor_key(session_id, str(live_path))
+        extraction_daemon.write_cursor(session_id, 0, str(live_path), source_key=source_key)
+        extraction_daemon.write_cursor(session_id, 0, str(preserved_path))
+
+        real_adapter = sys.modules.get("lib.adapter")
+        fake_adapter_mod = types.ModuleType("lib.adapter")
+
+        class _FakeAdapter(_OwnedTestAdapterMixin):
+            def parse_session_jsonl(self, path):
+                messages = []
+                for raw in path.read_text(encoding="utf-8").splitlines():
+                    payload = json.loads(raw)
+                    content = payload.get("content")
+                    if content:
+                        messages.append(f"User: {content}")
+                return "\n\n".join(messages)
+
+        fake_adapter_mod.get_adapter = lambda: _FakeAdapter()
+        sys.modules["lib.adapter"] = fake_adapter_mod
+
+        captured = []
+        monkeypatch.setattr(extraction_daemon, "_get_capture_chunk_tokens", lambda default=8000: 5)
+        monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
+        monkeypatch.setattr(
+            extraction_daemon,
+            "write_signal",
+            lambda signal_type, session_id, transcript_path, **kwargs: captured.append(
+                {
+                    "signal_type": signal_type,
+                    "session_id": session_id,
+                    "transcript_path": transcript_path,
+                    "meta": kwargs.get("meta", {}),
+                }
+            ),
+        )
+
+        try:
+            extraction_daemon.check_chunk_ready_sessions()
+            assert len(captured) == 1
+            assert captured[0]["signal_type"] == "rolling"
+            assert captured[0]["session_id"] == session_id
+            assert captured[0]["transcript_path"] == str(live_path)
+        finally:
+            if real_adapter is not None:
+                sys.modules["lib.adapter"] = real_adapter
+            else:
+                sys.modules.pop("lib.adapter", None)
+
     def test_check_idle_sessions_dedupes_same_source_alias_cursors(self, monkeypatch, tmp_path):
         transcript_path = tmp_path / "rollout-2026-05-23T23-35-32-019e5731-a7aa-74b3-b681-bfefb9d1f3ec.jsonl"
         transcript_path.write_text(
@@ -7374,6 +7483,58 @@ class TestRollingExtraction:
         assert captured[0]["signal_type"] == "timeout"
         assert captured[0]["transcript_path"] == str(transcript_path)
         assert captured[0]["session_id"] in {legacy_session_id, rollout_session_id}
+
+    def test_check_idle_sessions_uses_live_cursor_for_empty_preserved_alias(self, monkeypatch, tmp_path):
+        now = 1_700_000_000.0
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "openclaw-main")
+        monkeypatch.setattr(extraction_daemon.time, "time", lambda: now)
+        monkeypatch.setattr(extraction_daemon, "_read_installed_at", lambda: now - 7200)
+        monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
+        monkeypatch.setattr(extraction_daemon, "_load_runtime_adapter", lambda: None)
+
+        session_id = "sess-oc-live-timeout"
+        live_path = tmp_path / ".openclaw" / "agents" / "main" / "sessions" / f"{session_id}.jsonl"
+        live_path.parent.mkdir(parents=True, exist_ok=True)
+        live_path.write_text(
+            '{"role":"user","content":"timeout path should read this live OpenClaw transcript"}\n',
+            encoding="utf-8",
+        )
+        os.utime(live_path, (now - 3600, now - 3600))
+        preserved_path = (
+            tmp_path
+            / "instances"
+            / "openclaw-main"
+            / "logs"
+            / "quaid"
+            / "sessions"
+            / f"{session_id}.jsonl"
+        )
+        preserved_path.parent.mkdir(parents=True, exist_ok=True)
+        preserved_path.write_text("", encoding="utf-8")
+        source_key = extraction_daemon._signal_source_cursor_key(session_id, str(live_path))
+        extraction_daemon.write_cursor(session_id, 0, str(live_path), source_key=source_key)
+        extraction_daemon.write_cursor(session_id, 0, str(preserved_path))
+
+        captured = []
+        monkeypatch.setattr(
+            extraction_daemon,
+            "write_signal",
+            lambda signal_type, session_id, transcript_path, **kwargs: captured.append(
+                {
+                    "signal_type": signal_type,
+                    "session_id": session_id,
+                    "transcript_path": transcript_path,
+                }
+            ),
+        )
+
+        extraction_daemon.check_idle_sessions(timeout_minutes=30)
+
+        assert len(captured) == 1
+        assert captured[0]["signal_type"] == "timeout"
+        assert captured[0]["session_id"] == session_id
+        assert captured[0]["transcript_path"] == str(live_path)
 
     def test_check_chunk_ready_sessions_keeps_distinct_sources_separate(self, monkeypatch, tmp_path):
         import sys
