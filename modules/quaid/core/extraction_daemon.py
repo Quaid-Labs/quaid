@@ -1613,6 +1613,55 @@ def _cursor_shadowed_by_source_cursor(
     return True
 
 
+def _active_source_cursor_for_terminal_checkpoint_tail(
+    *,
+    cursor_file: Path,
+    session_id: str,
+    transcript_path: str,
+    cursor_data: Dict[str, Any],
+) -> tuple[Dict[str, Any], Path, str]:
+    """Return a source cursor that stopped at session_end before transcript EOF."""
+    if not transcript_path:
+        return {}, Path(), ""
+    try:
+        source_key = _signal_source_cursor_key(
+            session_id,
+            transcript_path,
+            cursor_data=cursor_data,
+        )
+    except Exception:
+        if _fail_hard_enabled():
+            raise
+        return {}, Path(), ""
+    if cursor_file.stem == source_key:
+        return {}, Path(), ""
+    source_file = _cursor_dir() / f"{source_key}.json"
+    if not source_file.is_file():
+        return {}, Path(), ""
+    source_cursor = _read_cursor_file(source_file, session_id)
+    source_path = str(source_cursor.get("transcript_path") or "").strip()
+    if (
+        _canonicalize_transcript_source_path(source_path)
+        != _canonicalize_transcript_source_path(transcript_path)
+    ):
+        return {}, Path(), ""
+    if str(source_cursor.get("processed_signal_type") or "").strip() != "session_end":
+        return {}, Path(), ""
+    source_offset = int(source_cursor.get("line_offset", 0) or 0)
+    cursor_offset = int(cursor_data.get("line_offset", 0) or 0)
+    if source_offset <= cursor_offset:
+        return {}, Path(), ""
+    try:
+        total_lines = count_transcript_lines(transcript_path)
+    except Exception:
+        if _fail_hard_enabled():
+            raise
+        return {}, Path(), ""
+    if source_offset >= total_lines:
+        return {}, Path(), ""
+    return source_cursor, source_file, source_key
+
+
 def _active_source_cursor_for_stale_signal_transcript(
     session_id: str,
     transcript_path: str,
@@ -6638,6 +6687,24 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
                 buffer_transcript_path = mirror_path
         if _is_discovery_artifact_transcript(Path(str(transcript_path))):
             continue
+        active_cursor, active_file, active_key = _active_source_cursor_for_terminal_checkpoint_tail(
+            cursor_file=cursor_file,
+            session_id=str(session_id),
+            transcript_path=str(transcript_path),
+            cursor_data=data,
+        )
+        if active_cursor and active_key:
+            logger.info(
+                "session %s rolling scan using source cursor %s past checkpoint session_end "
+                "(offset=%s transcript=%s)",
+                session_id,
+                active_key,
+                active_cursor.get("line_offset", 0),
+                transcript_path,
+            )
+            data = active_cursor
+            session_id = str(data.get("session_id") or session_id)
+            cursor_file = active_file
         if _cursor_shadowed_by_source_cursor(
             cursor_file=cursor_file,
             session_id=str(session_id),

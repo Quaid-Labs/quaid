@@ -8422,6 +8422,103 @@ class TestRollingExtraction:
             else:
                 sys.modules.pop("lib.adapter", None)
 
+    def test_check_chunk_ready_sessions_uses_session_end_source_cursor_tail(
+        self, monkeypatch, tmp_path
+    ):
+        transcript_path = tmp_path / "rollout-2026-05-25T20-56-13-019e60ec-838e-7eb1-8ed6-7f52f2b47570.jsonl"
+        transcript_path.write_text(
+            '{"type":"event_msg","payload":{"type":"user_message","message":"hello"}}\n'
+            '{"type":"event_msg","payload":{"type":"assistant_message","message":"ack"}}\n'
+            '{"type":"event_msg","payload":{"type":"user_message","message":"Baxter uses an orange linen notebook"}}\n'
+            '{"type":"event_msg","payload":{"type":"user_message","message":"Emília Rosa supplied the notebook"}}\n',
+            encoding="utf-8",
+        )
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "rolling-inst")
+        legacy_session_id = "019e60ec-838e-7eb1-8ed6-7f52f2b47570"
+        rollout_session_id = "rollout-2026-05-25T20-56-13-019e60ec-838e-7eb1-8ed6-7f52f2b47570"
+        source_key = extraction_daemon._signal_source_cursor_key(
+            legacy_session_id,
+            str(transcript_path),
+        )
+        extraction_daemon.write_cursor(
+            legacy_session_id,
+            2,
+            str(transcript_path),
+            source_key=source_key,
+            processed_signal_type="session_end",
+        )
+        source_file = extraction_daemon._cursor_dir() / f"{source_key}.json"
+        source_payload = json.loads(source_file.read_text(encoding="utf-8"))
+        source_payload["session_id"] = rollout_session_id
+        source_file.write_text(json.dumps(source_payload), encoding="utf-8")
+        extraction_daemon.write_cursor(legacy_session_id, 0, str(transcript_path))
+        alias_file = extraction_daemon._cursor_dir() / f"{legacy_session_id}.json"
+
+        real_glob = Path.glob
+
+        def fake_glob(path, pattern):
+            if path == extraction_daemon._cursor_dir() and pattern == "*.json":
+                return iter([alias_file])
+            return real_glob(path, pattern)
+
+        buffered_from_lines = []
+        captured = []
+
+        def fake_buffer_transcript_tail(path, from_line, state, adapter=None, **kwargs):
+            buffered_from_lines.append(from_line)
+            assert path == str(transcript_path)
+            return (
+                {
+                    "buffered_line_offset": 4,
+                    "semantic_buffer": "User: Baxter uses an orange linen notebook\n\nUser: Emília Rosa supplied the notebook",
+                    "semantic_buffer_tokens": 12,
+                },
+                {
+                    "raw_lines_added": 2,
+                    "semantic_chars_added": 84,
+                    "semantic_tokens_added": 12,
+                    "buffered_line_offset": 4,
+                },
+            )
+
+        monkeypatch.setattr(Path, "glob", fake_glob)
+        monkeypatch.setattr(extraction_daemon, "_ensure_discovered_session_cursors", lambda adapter: None)
+        monkeypatch.setattr(extraction_daemon, "_cursor_or_adapter_owns_transcript_path", lambda *args, **kwargs: True)
+        monkeypatch.setattr(extraction_daemon, "_reconcile_internal_cursor_state", lambda *args, **kwargs: "not_internal")
+        monkeypatch.setattr(extraction_daemon, "_buffer_transcript_tail", fake_buffer_transcript_tail)
+        monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
+        monkeypatch.setattr(
+            extraction_daemon,
+            "write_signal",
+            lambda signal_type, session_id, transcript_path, **kwargs: captured.append(
+                {
+                    "signal_type": signal_type,
+                    "session_id": session_id,
+                    "transcript_path": transcript_path,
+                    "meta": kwargs.get("meta", {}),
+                }
+            ),
+        )
+
+        extraction_daemon.check_chunk_ready_sessions(chunk_tokens=10)
+
+        assert buffered_from_lines == [2]
+        assert captured == [
+            {
+                "signal_type": "rolling",
+                "session_id": rollout_session_id,
+                "transcript_path": str(transcript_path),
+                "meta": {
+                    "reason": "semantic_chunk_budget",
+                    "chunk_tokens": 10,
+                    "semantic_buffer_tokens": 12,
+                    "buffered_line_offset": 4,
+                },
+            }
+        ]
+
     def test_check_chunk_ready_sessions_uses_live_cursor_for_empty_preserved_alias(
         self, monkeypatch, tmp_path
     ):
