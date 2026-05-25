@@ -4715,6 +4715,24 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             )
             cursor_offset = 0
             reset_staged_state_for_full_reextract = True
+        elif (
+            _is_dir_relocation
+            and _relocated_content_changed
+            and signal_type == "session_end"
+            and cursor_transcript
+            and os.path.isfile(cursor_transcript)
+            and not _is_daemon_preserved_session_transcript_path(cursor_transcript)
+            and _is_daemon_preserved_session_transcript_path(str(transcript_path))
+        ):
+            logger.info(
+                "[%s] session %s: preserved transcript mirror changed while live transcript still exists "
+                "(%s -> %s, cursor_size=%d, current_size=%d); treating as active-session checkpoint",
+                label, session_id, cursor_transcript, transcript_path,
+                _relocated_cursor_size_bytes, _relocated_current_size_bytes,
+            )
+            mark_signal_processed(signal_data)
+            _release_session_processing_lock(lock_owner_key, lock_fd)
+            return
         elif _is_dir_relocation and _relocated_content_changed:
             logger.info(
                 "[%s] session %s: transcript directory relocation content changed "
