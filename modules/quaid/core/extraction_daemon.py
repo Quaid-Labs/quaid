@@ -6101,22 +6101,7 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
             transcript_path=str(transcript_path),
             cursor_data=data,
         ):
-            active_cursor, active_path, active_key = _active_source_cursor_for_empty_preserved_cursor(
-                str(session_id),
-                str(transcript_path),
-            )
-            if active_cursor and active_path and active_key:
-                logger.info(
-                    "session %s idle scan using live source cursor %s for empty preserved alias %s",
-                    session_id,
-                    active_key,
-                    transcript_path,
-                )
-                data = active_cursor
-                transcript_path = active_path
-                cursor_file = _cursor_dir() / f"{active_key}.json"
-            else:
-                continue
+            continue
         if not _cursor_or_adapter_owns_transcript_path(
             adapter,
             str(session_id),
