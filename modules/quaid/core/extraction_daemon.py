@@ -53,6 +53,8 @@ logger = logging.getLogger("quaid.daemon")
 
 # Valid signal types (B062)
 VALID_SIGNAL_TYPES = ("compaction", "reset", "session_end", "timeout", "rolling")
+DAEMON_EXTRACT_CHUNK_MAX_TOKENS = 1_200
+DAEMON_EXTRACT_CHUNK_RATIO = 0.8
 DAEMON_SIGNAL_TO_LIFECYCLE_EVENT = {
     "reset": "session.reset",
     "compaction": "session.compaction",
@@ -3678,6 +3680,9 @@ def _daemon_extract_chunk_tokens(chunk_budget: int) -> int:
     Rolling/session signals often contain dense multi-turn buffers. Keeping
     root extraction chunks below the read threshold gives the LLM output budget
     for later facts instead of letting the first dense turn consume the call.
+    The 1200-token ceiling split the preserved CDX dense M2 transcript tail
+    into its own extraction call during diagnosis; the ratio keeps smaller
+    operator budgets proportional instead of widening them.
     """
     try:
         budget = max(1, int(chunk_budget or 1))
@@ -3685,8 +3690,8 @@ def _daemon_extract_chunk_tokens(chunk_budget: int) -> int:
         budget = 1
     if budget < 512:
         return budget
-    focused_budget = max(1, int(budget * 0.8))
-    return max(1, min(budget, 1_200, focused_budget))
+    focused_budget = max(1, int(budget * DAEMON_EXTRACT_CHUNK_RATIO))
+    return max(1, min(budget, DAEMON_EXTRACT_CHUNK_MAX_TOKENS, focused_budget))
 
 
 def _get_capture_chunk_max_lines(default: int = 0) -> int:
@@ -5741,6 +5746,8 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                 child_text = str(child_payload.get("child_text") or "").strip()
                 if not child_id or not child_text:
                     continue
+                # Subagent harvests are separately parsed child transcripts, not
+                # rolling buffers, so they keep the configured extraction budget.
                 child_result = extract_from_transcript(
                     transcript=child_text,
                     owner_id=owner,

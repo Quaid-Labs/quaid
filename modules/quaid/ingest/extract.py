@@ -3435,6 +3435,8 @@ def extract_from_transcript(
             chunk_tokens = int(chunk_tokens_override or 0)
         except Exception:
             chunk_tokens = 0
+        if chunk_tokens > 0:
+            logger.debug("[extract] %s: using caller chunk token override=%d", label, chunk_tokens)
     if chunk_tokens <= 0:
         try:
             capture_cfg = get_config().capture
