@@ -6579,8 +6579,29 @@ class TestRecallTelemetry:
 
         assert fast_meta["planner_profile"] == "fast"
         assert aggressive_meta["planner_profile"] == "aggressive"
+        assert fast_meta["used_llm"] is True
+        assert aggressive_meta["used_llm"] is True
         assert fast_meta["fanout_budget"] == 5
         assert aggressive_meta["fanout_budget"] == 5
+
+    def test_plan_fanout_queries_fast_profiles_do_not_preserve_broad_intent_without_llm(self):
+        import datastore.memorydb.memory_graph as mg
+
+        query = "Trace Jordan's career arc from Acme to Northstar"
+        with patch(
+            "lib.llm_clients.call_fast_reasoning",
+            return_value=('{"queries":["Jordan career arc from Acme to Northstar"]}', {}),
+        ) as call:
+            queries, meta = mg._plan_fanout_queries(
+                query,
+                return_meta=True,
+                planner_profile="fast",
+            )
+
+        call.assert_called_once()
+        assert queries
+        assert meta["used_llm"] is True
+        assert "broad_intent" in set(meta["shape_signals"])
 
     def test_plan_fanout_queries_carries_multilingual_freshness_flag(self):
         from datastore.memorydb.memory_graph import _plan_fanout_queries
@@ -6631,6 +6652,45 @@ class TestRecallTelemetry:
         assert meta["used_llm"] is False
         assert meta["token_count"] <= 16
         assert meta["named_entity_tokens"] >= 1
+
+    def test_plan_fanout_queries_fast_does_not_preserve_long_anchor_without_llm(self):
+        import datastore.memorydb.memory_graph as mg
+
+        query = (
+            "What is Jordan's current A1C level and target status after the latest "
+            "clinician follow up and home monitoring update?"
+        )
+        with patch(
+            "lib.llm_clients.call_fast_reasoning",
+            return_value=('{"queries":["Jordan current A1C target status after follow up"]}', {}),
+        ) as call:
+            _queries, meta = mg._plan_fanout_queries(
+                query,
+                return_meta=True,
+                planner_profile="fast",
+            )
+
+        call.assert_called_once()
+        assert meta["used_llm"] is True
+        assert meta["token_count"] > 16
+
+    def test_plan_fanout_queries_fast_does_not_preserve_unanchored_multiclause_without_llm(self):
+        import datastore.memorydb.memory_graph as mg
+
+        query = "health measurement level and target status after latest follow up and monitoring trend"
+        with patch(
+            "lib.llm_clients.call_fast_reasoning",
+            return_value=('{"queries":["current level met target after follow up"]}', {}),
+        ) as call:
+            _queries, meta = mg._plan_fanout_queries(
+                query,
+                return_meta=True,
+                planner_profile="fast",
+            )
+
+        call.assert_called_once()
+        assert meta["used_llm"] is True
+        assert meta["named_entity_tokens"] == 0
 
     def test_plan_fanout_queries_fast_profiles_preserve_kinship_chain_as_graph_without_llm(self):
         import datastore.memorydb.memory_graph as mg

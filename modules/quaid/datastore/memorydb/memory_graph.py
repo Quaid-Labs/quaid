@@ -18805,16 +18805,18 @@ def _plan_fanout_queries(
         _trace_m15("planner.fanout.short_circuit", query=clean, reason="planner_disabled")
         return _finish([clean], "planner_disabled")
     planned_default_stores = list(_planner_store_plan(default_stores))
+    profile_signals = set(profile.get("signals") or [])
     short_broad_exact_query = (
         profile["shape"] == "broad"
         and int(profile["token_count"]) <= 5
-        and "multi_clause" not in set(profile["signals"])
+        and "multi_clause" not in profile_signals
         and default_project is None
     )
     fast_anchored_exact_query = (
         planner_profile == "fast"
         and int(profile["token_count"]) <= 16
         and int(profile["named_entity_tokens"]) >= 1
+        and "broad_intent" not in profile_signals
         and not bool(profile.get("low_space_query"))
     )
     if short_broad_exact_query:
@@ -18839,7 +18841,7 @@ def _plan_fanout_queries(
         return _finish([clean], "preserve_short_exact_query")
     short_causal_lookup = (
         int(profile["token_count"]) <= 12
-        and "multi_clause" not in set(profile["signals"])
+        and "multi_clause" not in profile_signals
         and any(
             marker in clean.lower()
             for marker in ("why ", "reason ", "because ", "cause ", "how come")
