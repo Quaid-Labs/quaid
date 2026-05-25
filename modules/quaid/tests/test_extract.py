@@ -16,17 +16,12 @@ import pytest
 # Ensure modules/quaid is on the path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-# Set env before imports
-os.environ.setdefault("MEMORY_DB_PATH", ":memory:")
-os.environ.setdefault("QUAID_QUIET", "1")
-
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
 
 @pytest.fixture(autouse=True)
-def workspace_dir(tmp_path):
+def workspace_dir(tmp_path, monkeypatch):
     """Create a temporary workspace for each test."""
     from lib.adapter import set_adapter, reset_adapter, TestAdapter
     adapter = TestAdapter(tmp_path)
@@ -34,9 +29,11 @@ def workspace_dir(tmp_path):
     iroot = adapter.instance_root()
     vroot = adapter.visible_instance_root()
 
-    os.environ["OPENCLAW_WORKSPACE"] = str(iroot)
-    os.environ["QUAID_VISIBLE_HOME"] = str(tmp_path)
-    os.environ["MOCK_EMBEDDINGS"] = "1"
+    monkeypatch.setenv("MEMORY_DB_PATH", ":memory:")
+    monkeypatch.setenv("QUAID_QUIET", "1")
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(iroot))
+    monkeypatch.setenv("QUAID_VISIBLE_HOME", str(tmp_path))
+    monkeypatch.setenv("MOCK_EMBEDDINGS", "1")
 
     # Create required directories in both hidden and visible roots.
     (vroot / "journal").mkdir(parents=True, exist_ok=True)
@@ -60,12 +57,6 @@ def workspace_dir(tmp_path):
     yield iroot
 
     reset_adapter()
-    if "OPENCLAW_WORKSPACE" in os.environ:
-        del os.environ["OPENCLAW_WORKSPACE"]
-    if "QUAID_VISIBLE_HOME" in os.environ:
-        del os.environ["QUAID_VISIBLE_HOME"]
-    if "MOCK_EMBEDDINGS" in os.environ:
-        del os.environ["MOCK_EMBEDDINGS"]
 
 
 @pytest.fixture
