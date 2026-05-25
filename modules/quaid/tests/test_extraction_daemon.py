@@ -7464,7 +7464,7 @@ class TestRollingExtraction:
         )
         if live_case != "missing":
             live_content = (
-                ""
+                '["parseable but not a JSONL object", "larger than the mirror", "still rejected"]\n' * 2
                 if live_case == "jsonl_empty"
                 else '{"type":"message","message":{"role":"user","content":"h"}}\n'
                 if live_case == "smaller"
