@@ -1707,6 +1707,26 @@ def _active_source_cursor_for_empty_preserved_cursor(
     return {}, "", ""
 
 
+def _larger_preserved_mirror_for_live_transcript(transcript_path: str) -> str:
+    """Return the active preserved mirror when OC rewrites the live transcript smaller."""
+    raw = str(transcript_path or "").strip()
+    if not raw or _is_daemon_preserved_session_transcript_path(raw) or not os.path.isfile(raw):
+        return ""
+    try:
+        live_path = Path(raw).expanduser().resolve()
+        mirror_path = (_instance_root() / "logs" / "quaid" / "sessions" / live_path.name).resolve()
+        if not mirror_path.is_file() or mirror_path == live_path:
+            return ""
+        live_size = _transcript_size_bytes(str(live_path))
+        mirror_size = _transcript_size_bytes(str(mirror_path))
+        if mirror_size > 0 and mirror_size > live_size:
+            return str(mirror_path)
+    except Exception:
+        if _fail_hard_enabled():
+            raise
+    return ""
+
+
 def _pending_signal_source_keys(
     signals: List[Dict[str, Any]],
     *,
@@ -6464,6 +6484,16 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
                 cursor_file = _cursor_dir() / f"{active_key}.json"
             else:
                 continue
+        else:
+            mirror_path = _larger_preserved_mirror_for_live_transcript(str(transcript_path))
+            if mirror_path:
+                logger.info(
+                    "session %s rolling scan using larger preserved mirror %s instead of live transcript %s",
+                    session_id,
+                    mirror_path,
+                    transcript_path,
+                )
+                transcript_path = mirror_path
         if _is_discovery_artifact_transcript(Path(str(transcript_path))):
             continue
         if _cursor_shadowed_by_source_cursor(
