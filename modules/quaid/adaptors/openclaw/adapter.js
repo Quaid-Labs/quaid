@@ -7114,7 +7114,8 @@ notify_memory_extraction(
               const sigPath = writeDaemonSignal(extractionSessionId, "compaction", {
                 source: "before_compaction_empty_payload",
                 hook_session_id: String(sessionId || ""),
-                extraction_session_id: String(extractionSessionId || "")
+                extraction_session_id: String(extractionSessionId || ""),
+                allow_missing_transcript: true
               });
               console.log(
                 `[quaid][signal] daemon signal compaction (empty-payload) session=${extractionSessionId} wrote=${sigPath ? "yes" : "no"}`
