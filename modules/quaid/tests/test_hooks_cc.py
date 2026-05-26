@@ -361,6 +361,13 @@ def test_claude_code_post_compact_turn_gets_identity_additional_context_under_ca
 
     monkeypatch.setattr("core.interface.api.recall_fast", fail_recall)
     monkeypatch.setattr("core.interface.api.projects_search_docs", lambda **kwargs: pytest.fail("post-compact identity bridge should skip docs on marker turn"))
+    monkeypatch.setattr(
+        "core.interface.hooks._get_deferred_notice_relay_context",
+        lambda: (
+            "MANDATORY: Quaid just drained deferred notices for the human user.\n\n"
+            "<quaid_system_message>\n• Deferred relay should wait until after compaction identity.\n</quaid_system_message>"
+        ),
+    )
 
     out, _err = _run_hook_inject(
         {
@@ -378,12 +385,14 @@ def test_claude_code_post_compact_turn_gets_identity_additional_context_under_ca
     assert "Quaid Refreshed Identity Context" in context
     assert "MANDATORY" in context
     assert "Bartholomew" in context
+    assert "Deferred relay should wait" not in context
     assert "fiddle-leaf fig" in context
     assert "no plant name" not in context
     assert "Baratza Encore" not in context
     assert not marker_path.exists()
 
     adapter.get_pending_context.return_value = ""
+    monkeypatch.setattr("core.interface.hooks._get_deferred_notice_relay_context", lambda: "")
     monkeypatch.setattr("core.interface.api.recall_fast", lambda **kwargs: ([], None))
     monkeypatch.setattr("core.interface.api.projects_search_docs", lambda **kwargs: {})
 
@@ -537,6 +546,10 @@ def test_claude_code_post_compact_turn_uses_identity_bridge_after_session_rollov
 
     monkeypatch.setattr("core.interface.api.recall_fast", fail_recall)
     monkeypatch.setattr("core.interface.api.projects_search_docs", lambda **kwargs: pytest.fail("post-compact identity bridge should skip docs even after session rollover"))
+    monkeypatch.setattr(
+        "core.interface.hooks._validate_prompt_model_config_for_hook",
+        lambda adapter_id: "Provider/model notice should wait until after compaction identity.",
+    )
 
     out, _err = _run_hook_inject(
         {
@@ -553,6 +566,7 @@ def test_claude_code_post_compact_turn_uses_identity_bridge_after_session_rollov
     assert "Quaid Refreshed Identity Context" in context
     assert "Bartholomew" in context
     assert "fiddle-leaf fig" in context
+    assert "Provider/model notice should wait" not in context
     assert not (data_dir / "context-refresh-compaction" / "_latest.json").exists()
     assert not (data_dir / "context-refresh-compaction" / "sess-before-compact.json").exists()
 

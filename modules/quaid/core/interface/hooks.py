@@ -1418,7 +1418,8 @@ def hook_inject(args):
     # additionalContext is bounded by the host; if a daemon probe, provider
     # probe, recall, or docs lookup runs first, the notice can be drained but
     # arrive after prompt dispatch.
-    deferred_notice_relay_context = _get_deferred_notice_relay_context()
+    compaction_marker_pending = _has_compaction_refresh_marker(session_id)
+    deferred_notice_relay_context = "" if compaction_marker_pending else _get_deferred_notice_relay_context()
     if deferred_notice_relay_context:
         pending_context = _get_pending_context()
         context_parts = []
@@ -1447,57 +1448,58 @@ def hook_inject(args):
         }))
         return
 
-    try:
-        from lib.adapter import get_adapter
+    if not compaction_marker_pending:
+        try:
+            from lib.adapter import get_adapter
 
-        model_config_notice = _validate_prompt_model_config_for_hook(get_adapter().adapter_id())
-        if model_config_notice:
-            direct_notice_context = _format_direct_agent_notices([model_config_notice])
-            pending_context = _get_pending_context()
-            context_parts = [direct_notice_context] if direct_notice_context else []
-            if pending_context:
-                context_parts.append(pending_context)
-            project_list_hint = _project_list_cli_hint_context(
-                hook_input if isinstance(hook_input, dict) else {}
-            )
-            if project_list_hint:
-                context_parts.append(project_list_hint)
-            context = "\n\n".join(context_parts)
-            _write_hook_trace("hook.inject.model_config_notice_fastpath", {
-                "query": query[:160],
-                "session_id": session_id,
-                "pending_context_len": len(pending_context or ""),
-                "context_len": len(context),
-            })
-            if context:
-                print(json.dumps({
-                    "hookSpecificOutput": {
-                        "hookEventName": "UserPromptSubmit",
-                        "additionalContext": context,
-                    }
-                }))
-            return
-    except Exception as e:
-        if _is_provider_failure(e):
-            notice = _provider_failure_notice_message(e)
-            context = _format_direct_agent_notices([notice])
-            _write_hook_trace("hook.inject.model_config_notice_fastpath", {
-                "query": query[:160],
-                "session_id": session_id,
-                "pending_context_len": 0,
-                "context_len": len(context),
-                "source": "exception",
-            })
-            if context:
-                print(json.dumps({
-                    "hookSpecificOutput": {
-                        "hookEventName": "UserPromptSubmit",
-                        "additionalContext": context,
-                    }
-                }))
-            return
-        else:
-            raise
+            model_config_notice = _validate_prompt_model_config_for_hook(get_adapter().adapter_id())
+            if model_config_notice:
+                direct_notice_context = _format_direct_agent_notices([model_config_notice])
+                pending_context = _get_pending_context()
+                context_parts = [direct_notice_context] if direct_notice_context else []
+                if pending_context:
+                    context_parts.append(pending_context)
+                project_list_hint = _project_list_cli_hint_context(
+                    hook_input if isinstance(hook_input, dict) else {}
+                )
+                if project_list_hint:
+                    context_parts.append(project_list_hint)
+                context = "\n\n".join(context_parts)
+                _write_hook_trace("hook.inject.model_config_notice_fastpath", {
+                    "query": query[:160],
+                    "session_id": session_id,
+                    "pending_context_len": len(pending_context or ""),
+                    "context_len": len(context),
+                })
+                if context:
+                    print(json.dumps({
+                        "hookSpecificOutput": {
+                            "hookEventName": "UserPromptSubmit",
+                            "additionalContext": context,
+                        }
+                    }))
+                return
+        except Exception as e:
+            if _is_provider_failure(e):
+                notice = _provider_failure_notice_message(e)
+                context = _format_direct_agent_notices([notice])
+                _write_hook_trace("hook.inject.model_config_notice_fastpath", {
+                    "query": query[:160],
+                    "session_id": session_id,
+                    "pending_context_len": 0,
+                    "context_len": len(context),
+                    "source": "exception",
+                })
+                if context:
+                    print(json.dumps({
+                        "hookSpecificOutput": {
+                            "hookEventName": "UserPromptSubmit",
+                            "additionalContext": context,
+                        }
+                    }))
+                return
+            else:
+                raise
 
     # Any prompt traffic is a daemon liveness contact point after higher-priority
     # user-visible notices have had a chance to reach the active turn.
@@ -2231,6 +2233,24 @@ def _consume_compaction_refresh_marker(session_id: str) -> bool:
         except Exception:
             pass
     return True
+
+
+def _has_compaction_refresh_marker(session_id: str) -> bool:
+    if _context_refresh_strategy() != "compaction":
+        return False
+    marker_path = _context_refresh_compaction_marker_path(session_id)
+    if marker_path is not None and isinstance(marker_path, Path) and marker_path.is_file():
+        return True
+
+    latest_path = _context_refresh_compaction_latest_marker_path()
+    if latest_path is None or not isinstance(latest_path, Path) or not latest_path.is_file():
+        return False
+    try:
+        payload = json.loads(latest_path.read_text(encoding="utf-8"))
+        created_at = int(payload.get("created_at") or 0)
+    except Exception:
+        created_at = 0
+    return bool(created_at and int(time.time()) - created_at <= 10 * 60)
 
 
 def _consume_timeout_refresh_marker(session_id: str) -> bool:
