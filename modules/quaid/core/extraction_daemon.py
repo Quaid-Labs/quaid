@@ -6907,11 +6907,19 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
             else:
                 state = dict(state)
                 state["buffer_transcript_path"] = str(buffer_transcript_path)
-        if cursor_rebased_for_byte_growth and not staged_state_has_payload(state):
+        state_buffered_line_offset = int(state.get("buffered_line_offset", cursor_offset) or 0)
+        if (
+            cursor_rebased_for_byte_growth
+            and not staged_state_has_payload(state)
+            and total_lines > 0
+            and state_buffered_line_offset >= total_lines
+        ):
             # Same-line transcript rewrites leave the cursor at EOF while the
-            # content bytes changed. Reset the source-relative rolling buffer so
-            # the rewritten lines are parsed once, then refresh the size
-            # baseline below if the buffer remains sub-threshold.
+            # content bytes changed. If the rolling buffer is also at EOF for
+            # this source, reset it so the rewritten lines are parsed once, then
+            # refresh the size baseline below if the buffer remains
+            # sub-threshold. Partial buffers must keep advancing from their
+            # persisted offset.
             state = _reset_semantic_buffer_for_source(state, str(buffer_transcript_path))
             cursor_rebase_buffer_reset = True
             cursor_offset = 0
