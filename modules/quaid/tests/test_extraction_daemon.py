@@ -8348,6 +8348,84 @@ class TestRollingExtraction:
         assert captured[0]["signal_type"] == "rolling"
         assert captured[0]["session_id"] == session_id
 
+    def test_check_chunk_ready_sessions_refreshes_eof_rewrite_baseline_after_subthreshold_rescan(
+        self, monkeypatch, tmp_path
+    ):
+        transcript_path = tmp_path / "8d01d993-b570-4c5d-bd99-b5e3d269a5b6.jsonl"
+        short_line = (
+            json.dumps({"type": "event_msg", "payload": {"type": "user_message", "message": "Hello"}})
+            + "\n"
+        )
+        transcript_path.write_text(short_line, encoding="utf-8")
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "rolling-inst")
+        session_id = "8d01d993-b570-4c5d-bd99-b5e3d269a5b6"
+        extraction_daemon.write_cursor(session_id, 1, str(transcript_path))
+        extraction_daemon.write_rolling_state(
+            session_id,
+            {
+                "session_id": session_id,
+                "transcript_path": str(transcript_path),
+                "buffer_transcript_path": str(transcript_path),
+                "processed_line_offset": 1,
+                "buffered_line_offset": 1,
+                "semantic_buffer": "User: Hello",
+                "semantic_buffer_tokens": 2,
+            },
+        )
+
+        grown_line = (
+            json.dumps(
+                {
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "user_message",
+                        "message": "Baxter added a short orange linen notebook note.",
+                    },
+                }
+            )
+            + "\n"
+        )
+        transcript_path.write_text(grown_line, encoding="utf-8")
+
+        buffered_from_lines = []
+
+        def fake_buffer_transcript_tail(path, from_line, state, adapter=None, **kwargs):
+            buffered_from_lines.append(from_line)
+            assert path == str(transcript_path)
+            assert from_line == 0
+            assert state.get("semantic_buffer", "") == ""
+            return (
+                {
+                    "buffer_transcript_path": str(transcript_path),
+                    "buffered_line_offset": 1,
+                    "semantic_buffer": "User: Baxter added a short orange linen notebook note.",
+                    "semantic_buffer_tokens": 5,
+                },
+                {
+                    "raw_lines_added": 1,
+                    "semantic_chars_added": 54,
+                    "semantic_tokens_added": 5,
+                    "buffered_line_offset": 1,
+                },
+            )
+
+        monkeypatch.setattr(extraction_daemon, "_buffer_transcript_tail", fake_buffer_transcript_tail)
+        monkeypatch.setattr(extraction_daemon, "_get_capture_chunk_tokens", lambda default=8000: 50)
+        monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
+        monkeypatch.setattr(extraction_daemon, "_reconcile_internal_cursor_state", lambda *args, **kwargs: "not_internal")
+        monkeypatch.setattr(extraction_daemon, "write_signal", lambda *args, **kwargs: None)
+
+        extraction_daemon.check_chunk_ready_sessions()
+        assert buffered_from_lines == [0]
+        cursor_after_first_scan = extraction_daemon.read_cursor(session_id)
+        assert cursor_after_first_scan["line_offset"] == 1
+        assert cursor_after_first_scan["transcript_size_bytes"] == transcript_path.stat().st_size
+
+        extraction_daemon.check_chunk_ready_sessions()
+        assert buffered_from_lines == [0]
+
     def test_check_chunk_ready_sessions_dedupes_same_source_alias_cursors(
         self, monkeypatch, tmp_path
     ):

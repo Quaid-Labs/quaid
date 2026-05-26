@@ -6842,6 +6842,8 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
             continue
 
         cursor_offset = int(data.get("line_offset", 0) or 0)
+        cursor_rebased_for_byte_growth = False
+        cursor_rebase_buffer_reset = False
         total_lines = count_transcript_lines(buffer_transcript_path)
         if (
             transcript_grew_since_cursor
@@ -6859,6 +6861,7 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
                 current_size_bytes,
             )
             cursor_offset = 0
+            cursor_rebased_for_byte_growth = True
             data = dict(data)
             data["line_offset"] = 0
         state = read_rolling_state(session_id)
@@ -6904,6 +6907,16 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
             else:
                 state = dict(state)
                 state["buffer_transcript_path"] = str(buffer_transcript_path)
+        if cursor_rebased_for_byte_growth and not staged_state_has_payload(state):
+            # Same-line transcript rewrites leave the cursor at EOF while the
+            # content bytes changed. Reset the source-relative rolling buffer so
+            # the rewritten lines are parsed once, then refresh the size
+            # baseline below if the buffer remains sub-threshold.
+            state = _reset_semantic_buffer_for_source(state, str(buffer_transcript_path))
+            cursor_rebase_buffer_reset = True
+            cursor_offset = 0
+            data = dict(data)
+            data["line_offset"] = 0
         buffered_line_offset = max(
             int(state.get("buffered_line_offset", cursor_offset) or 0),
             cursor_offset,
@@ -6938,6 +6951,15 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
             or semantic_tokens >= near_budget_threshold
         )
         if not should_signal:
+            if cursor_rebase_buffer_reset and total_lines > 0 and buffered_line_offset >= total_lines:
+                cursor_key_for_write = str(data.get("cursor_key") or cursor_file.stem or "").strip() or None
+                write_cursor(
+                    session_id,
+                    total_lines,
+                    str(transcript_path),
+                    internal=bool(data.get("internal", False)),
+                    source_key=cursor_key_for_write,
+                )
             pending_unfrozen_flush = bool(state.get(_INTERNAL_CURSOR_UNFROZEN_PENDING_FLUSH_KEY))
             if semantic_tokens > 0 and (unfroze_internal_cursor or pending_unfrozen_flush):
                 if recently_modified:
