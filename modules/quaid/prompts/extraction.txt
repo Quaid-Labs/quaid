@@ -56,7 +56,7 @@ WHAT NOT TO EXTRACT (belongs in docs/RAG, not personal memory):
 - Tool/config descriptions ("The janitor has a dedup threshold of 0.85")
 - Raw code snippets and low-level debugging noise
 - Debugging chatter, error messages, stack traces
-- Hypotheticals ("we could try X", "maybe we should Y")
+- Hypotheticals ("we could try X", "maybe we should Y"). Skip speculative options and unadopted maybes; still extract concrete future or conditional plans when the transcript states them as a real user/project plan, schedule, constraint, or preference.
 - Commands and requests ("can you fix X")
 - Acknowledgments ("thanks", "got it", "sounds good")
 - General knowledge not specific to the user

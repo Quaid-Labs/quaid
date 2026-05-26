@@ -398,8 +398,65 @@ class TestExtractFromTranscript:
         assert "recall status, plugin diagnostics, or retrieval/debug progress as user facts." in prompt
         assert "Extraction is exhaustive across the whole chunk" in prompt
         assert "Actionability is not a criterion" in prompt
-        assert "stable background details, conditional or future plans" in prompt
+        assert "stable background details, explicitly stated plans or conditions" in prompt
         assert "=== BEGIN TRANSCRIPT CHUNK ===\n" + chunk in prompt
+
+    @patch("ingest.extract.call_deep_reasoning")
+    def test_extract_from_transcript_keeps_nonaction_background_facts(self, mock_llm):
+        from ingest.extract import extract_from_transcript
+
+        transcript = (
+            "User: Do not manually store any of this. Let automatic extraction pull it.\n"
+            "Assistant: Quaid is noisy on startup here, and the recall output is getting buried.\n"
+            "User: No action needed; the orange linen notebook stays in the hallway pouch.\n"
+            "User: If the venue confirms, I will bring the cedar demo kit to the Friday rehearsal."
+        )
+        payload = {
+            "chunk_assessment": "usable",
+            "facts": [
+                {
+                    "text": "The orange linen notebook stays in the hallway pouch",
+                    "category": "fact",
+                    "speaker": "user",
+                    "domains": ["personal"],
+                    "extraction_confidence": "high",
+                    "keywords": "orange linen notebook hallway pouch",
+                    "privacy": "shared",
+                    "confidence_reason": "Explicitly stated despite nonaction framing",
+                    "edges": [],
+                },
+                {
+                    "text": "The user plans to bring the cedar demo kit to the Friday rehearsal if the venue confirms",
+                    "category": "event",
+                    "speaker": "user",
+                    "domains": ["personal"],
+                    "extraction_confidence": "medium",
+                    "keywords": "cedar demo kit Friday rehearsal venue confirms",
+                    "privacy": "shared",
+                    "confidence_reason": "Explicitly stated conditional plan",
+                    "edges": [],
+                },
+            ],
+            "soul_snippets": {},
+            "journal_entries": {},
+            "project_logs": {},
+        }
+        mock_llm.return_value = (json.dumps(payload), 0.4)
+
+        result = extract_from_transcript(
+            transcript=transcript,
+            owner_id="test",
+            label="test",
+            dry_run=True,
+        )
+
+        texts = [fact.get("text", "") for fact in result["raw_facts"]]
+        joined = "\n".join(texts)
+        assert result["facts_planned"] == 2
+        assert "The orange linen notebook stays in the hallway pouch" in texts
+        assert "cedar demo kit" in joined
+        assert "Quaid is noisy" not in joined
+        assert "recall output" not in joined
 
     @patch("ingest.extract.call_deep_reasoning")
     @patch("ingest.extract.get_config")
