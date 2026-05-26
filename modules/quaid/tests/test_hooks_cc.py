@@ -1471,6 +1471,7 @@ class TestHookInjectRecallResilience:
         self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
     ):
         from core import extraction_daemon
+        from core.interface import hooks
 
         monkeypatch.setattr(extraction_daemon, "write_cursor", lambda *a: None)
         monkeypatch.setattr("core.interface.hooks._get_pending_context", lambda: "")
@@ -1521,8 +1522,102 @@ class TestHookInjectRecallResilience:
         payload = json.loads(out)
         context = payload["hookSpecificOutput"]["additionalContext"]
         assert "[Quaid Memory Context]" in context
+        assert not hooks._is_bare_question_memory_text(rows[0]["text"])
         assert "ScanSnap iX1600" in context
         assert context.count("ScanSnap iX1600") == 1
+
+    def test_recall_fast_close_competitor_skips_query_echo_before_promotion(
+        self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
+    ):
+        from core import extraction_daemon
+        from core.interface import hooks
+
+        monkeypatch.setattr(extraction_daemon, "write_cursor", lambda *a: None)
+        monkeypatch.setattr("core.interface.hooks._get_pending_context", lambda: "")
+        monkeypatch.setattr("core.interface.hooks._get_deferred_notice_hint", lambda: "")
+        monkeypatch.setattr("core.interface.hooks._get_deferred_notice_relay_context", lambda: "")
+        monkeypatch.setattr("core.interface.hooks._get_quaid_agents_baseline_context", lambda: "")
+
+        query = "What grinder do I use for my espresso setup?"
+        rows = [
+            {
+                "text": "What grinder do I use for my espresso setup",
+                "similarity": 1.0,
+                "category": "fact",
+            },
+            {
+                "text": "Solomon Steadman has a Baratza Encore grinder for his Flair 58 espresso setup",
+                "similarity": 0.96,
+                "category": "fact",
+            },
+        ]
+        meta = {
+            "mode": "fast",
+            "quality_gate": {
+                "evaluation": {
+                    "ready": True,
+                    "needs_validation": False,
+                    "top_similarity": 1.0,
+                    "close_competitor_count": 2,
+                }
+            },
+            "memory_quality": {
+                "surface_quality": "good",
+                "signals": ["close_competitors"],
+                "top_similarity": 1.0,
+            },
+        }
+
+        assert hooks._is_bare_question_memory_text(rows[0]["text"])
+
+        with patch("core.interface.api.recall_fast", return_value=(rows, meta)), \
+             patch("core.interface.api.projects_search_docs", return_value=None):
+            out, _err = _run_hook_inject(
+                {
+                    "prompt": query,
+                    "session_id": "sess-close-competitor-query-echo",
+                    "cwd": "/Users/x",
+                },
+                monkeypatch=monkeypatch,
+            )
+
+        payload = json.loads(out)
+        context = payload["hookSpecificOutput"]["additionalContext"]
+        assert "Baratza Encore" in context
+        assert "What grinder do I use" not in context
+
+    def test_recall_fast_close_competitor_recovery_requires_only_signal(self):
+        from core.interface import hooks
+
+        rows = [
+            {
+                "text": "What scanner do I use for receipts",
+                "similarity": 1.0,
+                "category": "fact",
+            },
+            {
+                "text": "What scanner do I use for receipts",
+                "similarity": 0.99,
+                "category": "fact",
+            },
+        ]
+        meta = {
+            "quality_gate": {
+                "evaluation": {
+                    "ready": True,
+                    "needs_validation": True,
+                    "top_similarity": 1.0,
+                    "close_competitor_count": 2,
+                }
+            },
+            "memory_quality": {
+                "surface_quality": "needs_validation",
+                "signals": ["close_competitors", "needs_validation"],
+                "top_similarity": 1.0,
+            },
+        }
+
+        assert hooks._format_memories(rows, recall_meta=meta) == ""
 
     def test_recall_fast_close_competitor_recovery_keeps_negative_claims_blocked(
         self
@@ -1537,6 +1632,41 @@ class TestHookInjectRecallResilience:
             },
             {
                 "text": "No record was previously stored in memory",
+                "similarity": 0.99,
+                "category": "fact",
+            },
+        ]
+        meta = {
+            "quality_gate": {
+                "evaluation": {
+                    "ready": True,
+                    "needs_validation": False,
+                    "top_similarity": 1.0,
+                    "close_competitor_count": 2,
+                }
+            },
+            "memory_quality": {
+                "surface_quality": "good",
+                "signals": ["close_competitors"],
+                "top_similarity": 1.0,
+            },
+        }
+
+        assert hooks._format_memories(rows, recall_meta=meta) == ""
+
+    def test_recall_fast_close_competitor_recovery_keeps_pure_questions_blocked(
+        self
+    ):
+        from core.interface import hooks
+
+        rows = [
+            {
+                "text": "What is my coffee grinder?",
+                "similarity": 1.0,
+                "category": "fact",
+            },
+            {
+                "text": "What is my coffee grinder?",
                 "similarity": 0.99,
                 "category": "fact",
             },

@@ -30,6 +30,7 @@ import shutil
 import subprocess
 import sys
 import time
+from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -135,9 +136,17 @@ _TOOLS_DOMAIN_BLOCK_RE = re.compile(
 )
 
 
-def _format_memories(memories: List[Dict], recall_meta: dict | None = None) -> str:
+def _format_memories(
+    memories: List[Dict],
+    recall_meta: dict | None = None,
+    current_query: str | None = None,
+) -> str:
     """Format recalled memories as readable context text."""
-    filtered_memories = _filter_injectable_memories(memories, recall_meta=recall_meta)
+    filtered_memories = _filter_injectable_memories(
+        memories,
+        recall_meta=recall_meta,
+        current_query=current_query,
+    )
     if not filtered_memories:
         return ""
     anchor_labels = {
@@ -224,20 +233,46 @@ def _is_bare_question_memory_text(text: str) -> bool:
         return False
     if _QUESTION_MEMORY_RE.match(raw):
         return True
+    if "?" in raw:
+        return False
     if raw.endswith((".", "!", ":")):
         return False
     if len(raw.split()) > 24:
         return False
+    tokens = re.findall(r"[a-z0-9]+", raw.lower())
+    if tokens and tokens[0] in {"who", "what", "when", "where", "why", "how", "which", "whose"}:
+        auxiliaries = {
+            "is", "are", "was", "were", "do", "does", "did", "can", "could",
+            "should", "would", "will", "may", "might", "has", "have", "had",
+        }
+        if any(token in auxiliaries for token in tokens[1:8]):
+            return True
     return bool(_QUESTION_MEMORY_NO_MARK_RE.match(raw))
 
 
-def _is_non_injectable_memory(mem: Dict) -> bool:
+def _is_query_echo_memory_text(text: str, current_query: str | None) -> bool:
+    query = str(current_query or "").strip()
+    raw = str(text or "").strip()
+    if not query or not raw:
+        return False
+    if not _is_bare_question_memory_text(query):
+        return False
+    lhs = re.sub(r"\s+", " ", raw).strip().lower()
+    rhs = re.sub(r"\s+", " ", query).strip().lower()
+    if not lhs or not rhs:
+        return False
+    return SequenceMatcher(None, lhs, rhs).ratio() >= 0.98
+
+
+def _is_non_injectable_memory(mem: Dict, current_query: str | None = None) -> bool:
     text = str((mem or {}).get("text") or "").strip()
     if not text:
         return False
     if _is_negative_memory_claim_text(text):
         return True
     if _is_bare_question_memory_text(text):
+        return True
+    if _is_query_echo_memory_text(text, current_query):
         return True
     return False
 
@@ -283,11 +318,15 @@ def _dedupe_close_competitor_memories(memories: List[Dict]) -> List[Dict]:
     return deduped
 
 
-def _filter_injectable_memories(memories: List[Dict], recall_meta: dict | None = None) -> List[Dict]:
+def _filter_injectable_memories(
+    memories: List[Dict],
+    recall_meta: dict | None = None,
+    current_query: str | None = None,
+) -> List[Dict]:
     filtered = [
         mem
         for mem in list(memories or [])
-        if isinstance(mem, dict) and not _is_non_injectable_memory(mem)
+        if isinstance(mem, dict) and not _is_non_injectable_memory(mem, current_query=current_query)
     ]
     close_competitors_only = _close_competitors_only_injection_recovery_enabled(recall_meta)
     if filtered and close_competitors_only:
@@ -297,11 +336,18 @@ def _filter_injectable_memories(memories: List[Dict], recall_meta: dict | None =
     # Duplicate pending facts can be extracted in a question-shaped form. If the
     # only quality concern is close competitors, inject the strongest non-negative
     # row instead of erasing all relevant context from the hook turn.
+    # TODO(recall): fix duplicate close-competitor rows at the recall_fast source
+    # so non-hook consumers receive the same deduped evidence shape.
     for mem in list(memories or []):
         if not isinstance(mem, dict):
             continue
         text = str(mem.get("text") or "").strip()
-        if text and not _is_negative_memory_claim_text(text):
+        if (
+            text
+            and not _is_negative_memory_claim_text(text)
+            and not _is_bare_question_memory_text(text)
+            and not _is_query_echo_memory_text(text, current_query)
+        ):
             return _dedupe_close_competitor_memories([mem])
     return filtered
 
@@ -1566,8 +1612,20 @@ def hook_inject(args):
             "query": query[:160],
             "session_id": session_id,
             "count": len(memories or []),
-            "top_results": _summarize_recall_results(_filter_injectable_memories(memories, recall_meta=recall_meta)),
-            "filtered_count": len(memories or []) - len(_filter_injectable_memories(memories, recall_meta=recall_meta)),
+            "top_results": _summarize_recall_results(
+                _filter_injectable_memories(
+                    memories,
+                    recall_meta=recall_meta,
+                    current_query=query,
+                )
+            ),
+            "filtered_count": len(memories or []) - len(
+                _filter_injectable_memories(
+                    memories,
+                    recall_meta=recall_meta,
+                    current_query=query,
+                )
+            ),
             "diagnostics": _summarize_recall_meta(recall_meta),
         })
         _write_hook_trace("hook.inject.docs_done", {
@@ -1631,7 +1689,7 @@ def hook_inject(args):
             context_parts.append(project_list_hint)
 
         if memories:
-            context_parts.append(_format_memories(memories, recall_meta=recall_meta))
+            context_parts.append(_format_memories(memories, recall_meta=recall_meta, current_query=query))
         docs_context = _format_project_docs(docs_bundle or {})
         if docs_context:
             context_parts.append(docs_context)
