@@ -42,7 +42,7 @@ _LEGACY_RULES_FILE = "quaid-projects.md"
 _COMPACT_IDENTITY_CONTEXT_MAX_CHARS = 9000
 _IDENTITY_CONTEXT_FILES = ("USER.md", "SOUL.md", "ENVIRONMENT.md")
 _TURN_REFRESH_PARALLEL_REPLAY_SECONDS = 5
-_HOOK_INJECT_RECALL_TIMEOUT_MS = 30_000
+_HOOK_INJECT_RECALL_TIMEOUT_FLOOR_MS = 30_000
 
 _DAEMON_START_SKIP_ENV_KEYS = {
     "CLAUDE_CODE_OAUTH_TOKEN",
@@ -56,6 +56,24 @@ def _daemon_start_env() -> dict[str, str]:
         k: v for k, v in os.environ.items()
         if not k.startswith("OPENCLAW_") and k not in _DAEMON_START_SKIP_ENV_KEYS
     }
+
+
+def _hook_inject_recall_timeout_ms() -> int:
+    """Recall budget for hook injection.
+
+    The lightweight config default is 3s, which is too short for normal local
+    vector recall when Ollama is warm or lightly contended.  Keep operator
+    overrides above the floor, but enforce a 30s floor so hook injection uses
+    the normal recall budget.  This intentionally disables the tight-budget
+    lexical preflight path in favor of reliable vector recall.
+    """
+    try:
+        from lib.config import get_injection_timeout_ms
+
+        configured = int(get_injection_timeout_ms(_HOOK_INJECT_RECALL_TIMEOUT_FLOOR_MS))
+    except Exception:
+        configured = _HOOK_INJECT_RECALL_TIMEOUT_FLOOR_MS
+    return max(_HOOK_INJECT_RECALL_TIMEOUT_FLOOR_MS, configured)
 
 
 def _wake_daemon_after_signal() -> None:
@@ -1527,6 +1545,7 @@ def hook_inject(args):
         from core.interface.api import projects_search_docs, recall_fast
 
         owner = _get_owner_id()
+        recall_timeout_ms = _hook_inject_recall_timeout_ms()
         memories = []
         recall_meta = None
         docs_bundle = None
@@ -1544,7 +1563,7 @@ def hook_inject(args):
                 query=query,
                 owner=owner,
                 hook_cwd=hook_cwd,
-                timeout_ms=_HOOK_INJECT_RECALL_TIMEOUT_MS,
+                timeout_ms=recall_timeout_ms,
             )
         except Exception:
             pass
@@ -1566,7 +1585,7 @@ def hook_inject(args):
                     query=query,
                     owner_id=owner,
                     limit=10,
-                    timeout_ms=_HOOK_INJECT_RECALL_TIMEOUT_MS,
+                    timeout_ms=recall_timeout_ms,
                     return_meta=True,
                 )
             )

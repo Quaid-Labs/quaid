@@ -138,6 +138,7 @@ def expand_targets(files: list[Path], mode: str) -> list[str]:
                     f"{rel}::TestHookInjectRecallResilience::test_recall_fast_exception_does_not_crash",
                     f"{rel}::TestHookInjectRecallResilience::test_recall_fast_store_timeout_returns_empty_when_fail_hard_enabled",
                     f"{rel}::TestHookInjectRecallResilience::test_hook_inject_passes_explicit_recall_timeout_budget",
+                    f"{rel}::TestHookInjectRecallResilience::test_hook_inject_preserves_operator_recall_timeout_above_floor",
                     f"{rel}::TestHookInjectRecallResilience::test_recall_fast_non_timeout_exception_surfaces_when_fail_hard_enabled",
                     f"{rel}::TestHookInjectRecallResilience::test_recall_fast_bare_timeout_returns_empty_when_fail_hard_enabled",
                     f"{rel}::TestHookInjectRecallResilience::test_recall_fast_empty_list_no_output",
