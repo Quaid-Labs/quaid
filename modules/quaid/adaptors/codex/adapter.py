@@ -815,7 +815,7 @@ class CodexAdapter(QuaidAdapter):
         fallback_messages = []
         session_source_type = ""
         with open(path, "r", encoding="utf-8") as handle:
-            for line in handle:
+            for line_index, line in enumerate(handle):
                 line = line.strip()
                 if not line:
                     continue
@@ -844,6 +844,7 @@ class CodexAdapter(QuaidAdapter):
                                 "content": text,
                                 "source_type": session_source_type,
                                 "timestamp": row_timestamp,
+                                "line_index": line_index,
                             })
                     elif payload_type == "agent_message":
                         text = str(payload.get("message") or "").strip()
@@ -853,6 +854,7 @@ class CodexAdapter(QuaidAdapter):
                                 "content": text,
                                 "source_type": session_source_type,
                                 "timestamp": row_timestamp,
+                                "line_index": line_index,
                             })
                     continue
 
@@ -878,9 +880,24 @@ class CodexAdapter(QuaidAdapter):
                             "content": text,
                             "source_type": session_source_type,
                             "timestamp": row_timestamp,
+                            "line_index": line_index,
                         })
 
-        selected = messages if messages else fallback_messages
+        if messages:
+            selected = sorted(
+                messages
+                + [
+                    message
+                    for message in fallback_messages
+                    # Event rows remain canonical for assistant output; fallback
+                    # user rows cover CDX task turns whose event row has not
+                    # landed in the current extraction window yet.
+                    if message.get("role") == "user"
+                ],
+                key=lambda message: int(message.get("line_index", 0) or 0),
+            )
+        else:
+            selected = fallback_messages
         deduped = []
         last_pair = None
         for message in selected:

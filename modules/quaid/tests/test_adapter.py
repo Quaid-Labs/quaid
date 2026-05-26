@@ -1872,6 +1872,50 @@ class TestCodexAdapter:
         assert transcript.count("Assistant: First answer") == 1
         assert "fallback answer" not in transcript
 
+    def test_parse_session_jsonl_keeps_later_fallback_user_turns_across_codex_tasks(self, tmp_path):
+        path = tmp_path / "rollout-mixed-tasks.jsonl"
+        first_chunk = "Chunk 1: Ginkgo checklist lives beside the monitor."
+        second_chunk = "Chunk 2: Baxter keeps an orange linen notebook from Emília Rosa."
+        path.write_text(
+            "\n".join(
+                [
+                    json.dumps({"type": "event_msg", "payload": {"type": "task_started"}}),
+                    json.dumps(
+                        {
+                            "type": "response_item",
+                            "payload": {
+                                "type": "message",
+                                "role": "user",
+                                "content": [{"type": "input_text", "text": first_chunk}],
+                            },
+                        }
+                    ),
+                    json.dumps({"type": "event_msg", "payload": {"type": "user_message", "message": first_chunk}}),
+                    json.dumps({"type": "event_msg", "payload": {"type": "agent_message", "message": "ACK"}}),
+                    json.dumps({"type": "event_msg", "payload": {"type": "task_complete"}}),
+                    json.dumps({"type": "event_msg", "payload": {"type": "task_started"}}),
+                    json.dumps({"type": "turn_context", "payload": {"cwd": str(tmp_path)}}),
+                    json.dumps(
+                        {
+                            "type": "response_item",
+                            "payload": {
+                                "type": "message",
+                                "role": "user",
+                                "content": [{"type": "input_text", "text": second_chunk}],
+                            },
+                        }
+                    ),
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        transcript = CodexAdapter().parse_session_jsonl(path)
+
+        assert f"User: {first_chunk}" in transcript
+        assert f"User: {second_chunk}" in transcript
+        assert transcript.count(first_chunk) == 1
+
     def test_parse_session_jsonl_preserves_codex_row_timestamps(self, tmp_path):
         path = tmp_path / "rollout-timestamps.jsonl"
         path.write_text(

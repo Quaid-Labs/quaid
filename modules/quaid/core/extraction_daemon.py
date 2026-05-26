@@ -3428,6 +3428,7 @@ def _buffer_transcript_tail(
     adapter=None,
     max_tokens: Optional[int] = None,
     max_lines: int = 0,
+    include_threshold_crossing_semantic_row: bool = False,
 ) -> Tuple[Dict[str, Any], Dict[str, int]]:
     """Parse new raw session lines into the semantic rolling buffer."""
     if max_tokens is not None and int(max_tokens or 0) > 0:
@@ -3437,6 +3438,7 @@ def _buffer_transcript_tail(
             int(max_tokens),
             int(max_lines or 0),
             adapter=adapter,
+            include_threshold_crossing_semantic_row=include_threshold_crossing_semantic_row,
         )
     else:
         lines = read_transcript_slice(transcript_path, start_line)
@@ -3731,6 +3733,7 @@ def read_transcript_token_window(
     max_tokens: int,
     max_lines: int = 0,
     adapter=None,
+    include_threshold_crossing_semantic_row: bool = False,
 ) -> List[str]:
     """Read a single message-aligned transcript window up to the token budget."""
     from lib.tokens import estimate_tokens
@@ -3739,6 +3742,8 @@ def read_transcript_token_window(
     approx_tokens = 0
     budgeted_lines = 0
     saw_extractable_conversation = False
+    current_parsed = ""
+    stop_after_budget_crossing = False
     try:
         with open(transcript_path, "r", encoding="utf-8", errors="replace") as f:
             for i, line in enumerate(f):
@@ -3784,12 +3789,36 @@ def read_transcript_token_window(
                 candidate_parsed = _parse_transcript_lines(candidate, adapter=adapter)
                 candidate_extractable = bool(candidate_parsed)
                 candidate_tokens = estimate_tokens(candidate_parsed) if candidate_extractable else 0
-                if saw_extractable_conversation and budgeted_lines > 0 and candidate_extractable and candidate_tokens > max_tokens:
+                semantic_changed = candidate_extractable and candidate_parsed != current_parsed
+                if stop_after_budget_crossing and semantic_changed:
                     break
+                if (
+                    saw_extractable_conversation
+                    and budgeted_lines > 0
+                    and candidate_extractable
+                    and candidate_tokens > max_tokens
+                    and semantic_changed
+                ):
+                    if not include_threshold_crossing_semantic_row:
+                        break
+                    lines.append(line)
+                    current_parsed = candidate_parsed
+                    stop_after_budget_crossing = True
+                    if len(lines) >= MAX_TRANSCRIPT_LINES:
+                        logger.warning(
+                            "transcript %s: token window capped at %d lines (from offset %d)",
+                            transcript_path,
+                            MAX_TRANSCRIPT_LINES,
+                            from_line,
+                        )
+                        break
+                    continue
                 lines.append(line)
                 if candidate_extractable:
                     saw_extractable_conversation = True
-                    budgeted_lines += 1
+                    if semantic_changed:
+                        budgeted_lines += 1
+                    current_parsed = candidate_parsed
                 if len(lines) >= MAX_TRANSCRIPT_LINES:
                     logger.warning(
                         "transcript %s: token window capped at %d lines (from offset %d)",
@@ -6887,6 +6916,7 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
                 adapter=adapter,
                 max_tokens=chunk_budget,
                 max_lines=chunk_line_budget,
+                include_threshold_crossing_semantic_row=True,
             )
             if unfroze_internal_cursor and _semantic_buffer_has_content(state):
                 state[_INTERNAL_CURSOR_UNFROZEN_PENDING_FLUSH_KEY] = True

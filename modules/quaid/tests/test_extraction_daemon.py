@@ -12797,3 +12797,119 @@ class TestReadTranscriptSlice:
         )
 
         assert lines == [machine_a, machine_b, user_line]
+
+    def test_read_transcript_token_window_adapter_max_lines_counts_semantic_changes(
+        self,
+        monkeypatch,
+        tmp_path,
+    ):
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "codex-private-tmp-cdx-livetest")
+        from adaptors.codex.adapter import CodexAdapter
+
+        t = tmp_path / "codex-duplicate-row-window.jsonl"
+        first = "First task has a duplicate response/event row pair."
+        second = "Second task should wait for the next window."
+        lines_in = [
+            json.dumps(
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": first}],
+                    },
+                }
+            ) + "\n",
+            json.dumps({"type": "event_msg", "payload": {"type": "user_message", "message": first}}) + "\n",
+            json.dumps({"type": "event_msg", "payload": {"type": "task_started"}}) + "\n",
+            json.dumps(
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": second}],
+                    },
+                }
+            ) + "\n",
+        ]
+        t.write_text("".join(lines_in), encoding="utf-8")
+
+        read_lines = extraction_daemon.read_transcript_token_window(
+            str(t),
+            from_line=0,
+            max_tokens=10_000,
+            max_lines=2,
+            adapter=CodexAdapter(),
+        )
+        parsed = extraction_daemon._parse_transcript_lines(read_lines, adapter=CodexAdapter())
+
+        assert read_lines == lines_in
+        assert first in parsed
+        assert second in parsed
+
+    def test_read_transcript_token_window_includes_crossing_codex_task_user_turn(
+        self,
+        monkeypatch,
+        tmp_path,
+    ):
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "codex-private-tmp-cdx-livetest")
+        from adaptors.codex.adapter import CodexAdapter
+        from lib.tokens import estimate_tokens
+
+        t = tmp_path / "codex-multi-task-rollout.jsonl"
+        chunk_one = "Chunk 1: " + ("ginkgo checklist " * 290)
+        chunk_two = (
+            "Chunk 2: Baxter keeps an orange linen notebook from Emília Rosa "
+            "beside the archive shelf."
+        )
+        lines_in = [
+            json.dumps({"type": "event_msg", "payload": {"type": "task_started"}}) + "\n",
+            json.dumps(
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": chunk_one}],
+                    },
+                }
+            ) + "\n",
+            json.dumps({"type": "event_msg", "payload": {"type": "user_message", "message": chunk_one}}) + "\n",
+            json.dumps({"type": "event_msg", "payload": {"type": "agent_message", "message": "ACK"}}) + "\n",
+            json.dumps({"type": "event_msg", "payload": {"type": "task_complete"}}) + "\n",
+            json.dumps({"type": "event_msg", "payload": {"type": "task_started"}}) + "\n",
+            json.dumps({"type": "turn_context", "payload": {"cwd": str(tmp_path)}}) + "\n",
+            json.dumps(
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": chunk_two}],
+                    },
+                }
+            ) + "\n",
+            json.dumps({"type": "event_msg", "payload": {"type": "user_message", "message": chunk_two}}) + "\n",
+            json.dumps({"type": "event_msg", "payload": {"type": "agent_message", "message": "Second ACK"}}) + "\n",
+        ]
+        t.write_text("".join(lines_in), encoding="utf-8")
+        adapter = CodexAdapter()
+        before_crossing = extraction_daemon._parse_transcript_lines(lines_in[:-3], adapter=adapter)
+
+        read_lines = extraction_daemon.read_transcript_token_window(
+            str(t),
+            from_line=0,
+            max_tokens=estimate_tokens(before_crossing),
+            max_lines=0,
+            adapter=adapter,
+            include_threshold_crossing_semantic_row=True,
+        )
+        parsed = extraction_daemon._parse_transcript_lines(read_lines, adapter=adapter)
+
+        assert read_lines == lines_in[:-1]
+        assert chunk_one.strip() in parsed
+        assert "Baxter keeps an orange linen notebook from Emília Rosa" in parsed
+        assert "Assistant: Second ACK" not in parsed
