@@ -1051,6 +1051,10 @@ def _hook_trace_path() -> Path:
     return root / "logs" / "quaid-hook-trace.jsonl"
 
 
+def _preinject_evidence_path() -> Path:
+    return _hook_trace_path().parent / "daemon" / "preinject.jsonl"
+
+
 def _visible_home_fallback() -> Path:
     home = os.environ.get("QUAID_VISIBLE_HOME", "").strip()
     if home:
@@ -1075,6 +1079,87 @@ def _write_hook_trace(event: str, payload: dict | None = None) -> None:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
     except Exception:
         pass
+
+
+def _preinject_evidence_details(rows: List[Dict], limit: int = 10) -> List[Dict]:
+    details: List[Dict] = []
+    for row in list(rows or [])[: max(1, limit)]:
+        if not isinstance(row, dict):
+            continue
+        text = str(row.get("text") or row.get("content") or "").strip()
+        if not text:
+            continue
+        detail: Dict[str, Any] = {
+            "id": row.get("id"),
+            "text": text[:500],
+        }
+        try:
+            similarity = row.get("similarity")
+            if similarity is not None:
+                detail["similarity"] = round(float(similarity), 3)
+        except Exception:
+            pass
+        for key in ("category", "via", "source"):
+            value = row.get(key)
+            if value:
+                detail[key] = str(value)
+        details.append(detail)
+    return details
+
+
+def _write_preinject_evidence(
+    *,
+    session_id: str,
+    query: str,
+    memories: List[Dict],
+    recall_meta: dict | None,
+    docs_bundle: Dict | None,
+) -> None:
+    injected_memories = _filter_injectable_memories(
+        memories,
+        recall_meta=recall_meta,
+        current_query=query,
+    )
+    injected_docs = []
+    if isinstance(docs_bundle, dict):
+        for chunk in list(docs_bundle.get("chunks") or []):
+            if isinstance(chunk, dict):
+                injected_docs.append({**chunk, "category": "project_doc"})
+
+    injected = _preinject_evidence_details([*injected_memories, *injected_docs])
+    if not injected:
+        return
+
+    entry = {
+        "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "sessionId": str(session_id or "unknown").strip() or "unknown",
+        "query": str(query or "").strip(),
+        "source": "hook_inject",
+        "recallCount": len(_preinject_evidence_details(list(memories or []))),
+        "recall": _preinject_evidence_details(list(memories or [])),
+        "injectedCount": len(injected),
+        "injected": injected,
+        "diagnostics": _summarize_recall_meta(recall_meta),
+    }
+    log_path = _preinject_evidence_path()
+    try:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with log_path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except Exception as exc:
+        _write_hook_trace("hook.inject.preinject_evidence_error", {
+            "session_id": session_id,
+            "error_type": type(exc).__name__,
+            "error": str(exc)[:500],
+        })
+        try:
+            from lib.fail_policy import is_fail_hard_enabled
+
+            fail_hard = is_fail_hard_enabled()
+        except Exception:
+            fail_hard = True
+        if fail_hard:
+            raise
 
 
 def _extract_codex_tool_output_trace(hook_input: dict, max_chars: int = 12000) -> Dict[str, Any]:
@@ -1834,6 +1919,13 @@ def hook_inject(args):
             return
 
         context = "\n\n".join(context_parts)
+        _write_preinject_evidence(
+            session_id=session_id,
+            query=query,
+            memories=memories or [],
+            recall_meta=recall_meta,
+            docs_bundle=docs_bundle if isinstance(docs_bundle, dict) else None,
+        )
         _write_hook_trace("hook.inject.context_emitted", {
             "query": query[:160],
             "session_id": session_id,

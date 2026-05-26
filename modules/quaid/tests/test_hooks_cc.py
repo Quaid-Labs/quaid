@@ -1603,6 +1603,60 @@ class TestHookInjectRecallResilience:
         assert "ScanSnap iX1600" in context
         assert context.count("ScanSnap iX1600") == 1
 
+    def test_hook_inject_writes_preinject_evidence_for_memory_context(
+        self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
+    ):
+        from core import extraction_daemon
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "claude-code-test")
+        monkeypatch.setattr(extraction_daemon, "write_cursor", lambda *a: None)
+        monkeypatch.setattr("core.interface.hooks._get_pending_context", lambda: "")
+        monkeypatch.setattr("core.interface.hooks._get_deferred_notice_hint", lambda: "")
+        monkeypatch.setattr("core.interface.hooks._get_deferred_notice_relay_context", lambda: "")
+        monkeypatch.setattr("core.interface.hooks._get_quaid_agents_baseline_context", lambda: "")
+        monkeypatch.setattr("core.interface.hooks._build_turn_based_refresh_context", lambda *a, **kw: "")
+
+        rows = [
+            {
+                "id": "m-grinder",
+                "text": "Espresso setup uses a Baratza Encore grinder.",
+                "similarity": 0.96,
+                "category": "fact",
+                "via": "vector",
+            },
+        ]
+
+        with patch("core.interface.api.recall_fast", return_value=(rows, {"mode": "fast"})), \
+             patch("core.interface.api.projects_search_docs", return_value=None):
+            out, _err = _run_hook_inject(
+                {
+                    "prompt": "What grinder do I use for espresso?",
+                    "session_id": "sess-preinject-python",
+                    "cwd": "/Users/x",
+                },
+                monkeypatch=monkeypatch,
+            )
+
+        payload = json.loads(out)
+        context = payload["hookSpecificOutput"]["additionalContext"]
+        assert "Baratza Encore" in context
+
+        log_path = tmp_path / "instances" / "claude-code-test" / "logs" / "daemon" / "preinject.jsonl"
+        entries = [
+            json.loads(line)
+            for line in log_path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        assert len(entries) == 1
+        entry = entries[0]
+        assert entry["sessionId"] == "sess-preinject-python"
+        assert entry["source"] == "hook_inject"
+        assert entry["injectedCount"] == 1
+        assert entry["injected"][0]["text"] == "Espresso setup uses a Baratza Encore grinder."
+        assert entry["injected"][0]["similarity"] == 0.96
+        assert entry["recallCount"] == 1
+
     def test_recall_fast_close_competitor_skips_query_echo_before_promotion(
         self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
     ):
