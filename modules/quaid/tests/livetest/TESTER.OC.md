@@ -17,10 +17,15 @@ Milestone files reference these; export them once at session start:
 export LANE=oc
 export LANE_UPPER=OC
 export INSTANCE=openclaw-main
-export QCLI=~/.openclaw/extensions/quaid/quaid
+export QCLI=~/.quaid/plugins/quaid/quaid
 export SILO=~/.quaid/instances/openclaw-main
 export LIFECYCLE="/new"  # Matrix-side /new or /reset; OC has no /clear
 ```
+
+Use `~/.quaid/plugins/quaid/quaid` for milestone CLI commands. The OpenClaw
+runtime mirror at `~/.openclaw/extensions/quaid/quaid` may also exist for
+gateway/plugin execution, but `~/.quaid/extensions/quaid/quaid` is not an
+installed path and must not be used in briefs or test commands.
 
 `SEND` mechanism: Matrix. Use the `matrix-send` script:
 
