@@ -384,10 +384,12 @@ describe("openclaw auto-provision", () => {
       call?.[0] === "before_prompt_build" && call?.[2]?.name === "memory-injection-prompt-build"
     );
     expect(beforePromptBuildCall).toBeTruthy();
+    expect(beforePromptBuildCall?.[2]?.timeout).toBeGreaterThanOrEqual(60_000);
     const beforePromptBuildRegisterHookCall = api.registerHook.mock.calls.find((call: any[]) =>
       call?.[0] === "before_prompt_build" && call?.[2]?.name === "memory-injection-prompt-build-registerHook"
     );
     expect(beforePromptBuildRegisterHookCall).toBeTruthy();
+    expect(beforePromptBuildRegisterHookCall?.[2]?.timeout).toBeGreaterThanOrEqual(60_000);
     const beforeResetRegisterHookCall = api.registerHook.mock.calls.find((call: any[]) =>
       call?.[0] === "before_reset" && call?.[2]?.name === "reset-memory-extraction-registerHook"
     );

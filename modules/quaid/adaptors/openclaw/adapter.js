@@ -3269,6 +3269,7 @@ const AUTO_INJECT_RECALL_TIMEOUT_MS = Math.max(
   )
 );
 const MODEL_CONFIG_VALIDATION_TIMEOUT_MS = _envTimeoutMs("QUAID_MODEL_CONFIG_VALIDATION_TIMEOUT_MS", 8e3);
+const BEFORE_PROMPT_BUILD_HOOK_TIMEOUT_MS = 6e4;
 const IMMEDIATE_PROVIDER_NOTICE_SUPPRESS_MS = 500;
 let promptModelConfigFingerprint = "";
 let promptModelConfigNotice = "";
@@ -4480,13 +4481,14 @@ const quaidPlugin = {
         assertDeclaredRegistration("events", eventName, contractDecl.events, strictContracts, (m) => console.warn(m));
       }
       console.log(
-        `[quaid][debug][hook.register] registration=on event=${eventName} name=${String(options?.name || "")} priority=${String(options?.priority || "")}`
+        `[quaid][debug][hook.register] registration=on event=${eventName} name=${String(options?.name || "")} priority=${String(options?.priority || "")} timeout=${String(options?.timeout || "")}`
       );
       writeHookTrace("hook.register", {
         registration_type: "on",
         hook_event: eventName,
         name: String(options?.name || ""),
-        priority: Number(options?.priority || 0)
+        priority: Number(options?.priority || 0),
+        timeout: Number(options?.timeout || 0)
       });
       return api.on(eventName, wrapHookHandler("on", eventName, handler), options);
     };
@@ -4495,13 +4497,14 @@ const quaidPlugin = {
         assertDeclaredRegistration("events", eventName, contractDecl.events, strictContracts, (m) => console.warn(m));
       }
       console.log(
-        `[quaid][debug][hook.register] event=${eventName} name=${String(options?.name || "")} priority=${String(options?.priority || "")}`
+        `[quaid][debug][hook.register] event=${eventName} name=${String(options?.name || "")} priority=${String(options?.priority || "")} timeout=${String(options?.timeout || "")}`
       );
       writeHookTrace("hook.register", {
         registration_type: "registerHook",
         hook_event: eventName,
         name: String(options?.name || ""),
-        priority: Number(options?.priority || 0)
+        priority: Number(options?.priority || 0),
+        timeout: Number(options?.timeout || 0)
       });
       return api.registerHook(eventName, wrapHookHandler("registerHook", eventName, handler), options);
     };
@@ -5328,11 +5331,13 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
     });
     onChecked("before_prompt_build", beforePromptBuildHandler, {
       name: "memory-injection-prompt-build",
-      priority: 10
+      priority: 10,
+      timeout: BEFORE_PROMPT_BUILD_HOOK_TIMEOUT_MS
     });
     registerInternalHookChecked("before_prompt_build", beforePromptBuildHandler, {
       name: "memory-injection-prompt-build-registerHook",
-      priority: 10
+      priority: 10,
+      timeout: BEFORE_PROMPT_BUILD_HOOK_TIMEOUT_MS
     });
     console.log("[quaid] agent_end auto-capture disabled; using session_end + compaction hooks");
     const transcriptLifecycleCursor = /* @__PURE__ */ new Map();

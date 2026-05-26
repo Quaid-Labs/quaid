@@ -4087,6 +4087,10 @@ const AUTO_INJECT_RECALL_TIMEOUT_MS = Math.max(
   ),
 );
 const MODEL_CONFIG_VALIDATION_TIMEOUT_MS = _envTimeoutMs("QUAID_MODEL_CONFIG_VALIDATION_TIMEOUT_MS", 8_000);
+// OC enforces the registration timeout outside this handler. Keep it above
+// the internal recall deadline plus sync docs/model-context work so prompt
+// dispatch waits for the returned injection payload.
+const BEFORE_PROMPT_BUILD_HOOK_TIMEOUT_MS = 60_000;
 const IMMEDIATE_PROVIDER_NOTICE_SUPPRESS_MS = 500;
 let promptModelConfigFingerprint = "";
 let promptModelConfigNotice = "";
@@ -5569,13 +5573,14 @@ const quaidPlugin = {
         assertDeclaredRegistration("events", eventName, contractDecl.events, strictContracts, (m) => console.warn(m));
       }
       console.log(
-        `[quaid][debug][hook.register] registration=on event=${eventName} name=${String(options?.name || "")} priority=${String(options?.priority || "")}`
+        `[quaid][debug][hook.register] registration=on event=${eventName} name=${String(options?.name || "")} priority=${String(options?.priority || "")} timeout=${String(options?.timeout || "")}`
       );
       writeHookTrace("hook.register", {
         registration_type: "on",
         hook_event: eventName,
         name: String(options?.name || ""),
         priority: Number(options?.priority || 0),
+        timeout: Number(options?.timeout || 0),
       });
       return api.on(eventName as any, wrapHookHandler("on", eventName, handler), options);
     };
@@ -5584,13 +5589,14 @@ const quaidPlugin = {
         assertDeclaredRegistration("events", eventName, contractDecl.events, strictContracts, (m) => console.warn(m));
       }
       console.log(
-        `[quaid][debug][hook.register] event=${eventName} name=${String(options?.name || "")} priority=${String(options?.priority || "")}`
+        `[quaid][debug][hook.register] event=${eventName} name=${String(options?.name || "")} priority=${String(options?.priority || "")} timeout=${String(options?.timeout || "")}`
       );
       writeHookTrace("hook.register", {
         registration_type: "registerHook",
         hook_event: eventName,
         name: String(options?.name || ""),
         priority: Number(options?.priority || 0),
+        timeout: Number(options?.timeout || 0),
       });
       return api.registerHook(eventName as any, wrapHookHandler("registerHook", eventName, handler), options);
     };
@@ -6562,7 +6568,8 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
     // (often without the prompt). This is where recall-based injection lives.
     onChecked("before_prompt_build", beforePromptBuildHandler, {
       name: "memory-injection-prompt-build",
-      priority: 10
+      priority: 10,
+      timeout: BEFORE_PROMPT_BUILD_HOOK_TIMEOUT_MS,
     });
     // OC gateway variants can route prompt hooks only through registerHook.
     // Keep api.on registration for compatibility, but add registerHook parity so
@@ -6570,6 +6577,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
     registerInternalHookChecked("before_prompt_build", beforePromptBuildHandler, {
       name: "memory-injection-prompt-build-registerHook",
       priority: 10,
+      timeout: BEFORE_PROMPT_BUILD_HOOK_TIMEOUT_MS,
     });
 
     // Lifecycle extraction is hook-driven:
