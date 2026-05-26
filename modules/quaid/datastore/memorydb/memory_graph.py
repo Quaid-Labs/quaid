@@ -18883,6 +18883,12 @@ def _plan_fanout_queries(
         and "broad_intent" not in profile_signals
         and not bool(profile.get("low_space_query"))
     )
+    fast_long_broad_query = (
+        planner_profile == "fast"
+        and profile["shape"] == "broad"
+        and int(profile["token_count"]) > 16
+        and not bool(profile.get("low_space_query"))
+    )
     if short_broad_exact_query:
         _trace_m15(
             "planner.fanout.short_circuit",
@@ -18903,6 +18909,18 @@ def _plan_fanout_queries(
             planned_default_stores=planned_default_stores,
         )
         return _finish([clean], "preserve_short_exact_query")
+    if fast_long_broad_query:
+        # Fast pre-inject is a latency-sensitive context seed, not deliberate
+        # recall. Preserve the full prompt as one search query rather than
+        # making a broad provider planning call that can block the turn.
+        _trace_m15(
+            "planner.fanout.short_circuit",
+            query=clean,
+            reason="fast_long_broad_query",
+            profile=profile,
+            planned_default_stores=planned_default_stores,
+        )
+        return _finish([clean], "fast_long_broad_query")
     short_causal_lookup = (
         int(profile["token_count"]) <= 12
         and "multi_clause" not in profile_signals

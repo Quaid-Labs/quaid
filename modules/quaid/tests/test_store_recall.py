@@ -6653,26 +6653,45 @@ class TestRecallTelemetry:
         assert meta["token_count"] <= 16
         assert meta["named_entity_tokens"] >= 1
 
-    def test_plan_fanout_queries_fast_does_not_preserve_long_anchor_without_llm(self):
+    def test_plan_fanout_queries_fast_preserves_long_broad_query_without_llm(self):
         import datastore.memorydb.memory_graph as mg
 
         query = (
             "What is Jordan's current A1C level and target status after the latest "
             "clinician follow up and home monitoring update?"
         )
-        with patch(
-            "lib.llm_clients.call_fast_reasoning",
-            return_value=('{"queries":["Jordan current A1C target status after follow up"]}', {}),
-        ) as call:
-            _queries, meta = mg._plan_fanout_queries(
+        with patch("lib.llm_clients.call_fast_reasoning", side_effect=AssertionError("planner should not be called")):
+            queries, meta = mg._plan_fanout_queries(
                 query,
                 return_meta=True,
                 planner_profile="fast",
             )
 
-        call.assert_called_once()
-        assert meta["used_llm"] is True
+        assert queries == [query]
+        assert meta["used_llm"] is False
+        assert meta["bailout_reason"] == "fast_long_broad_query"
         assert meta["token_count"] > 16
+
+    def test_plan_fanout_queries_fast_preserves_live_broad_inference_without_llm(self):
+        import datastore.memorydb.memory_graph as mg
+
+        query = (
+            "Maya and David are buying a house in East Austin in a walkable pocket, "
+            "and David wants a workshop for woodworking. What can be inferred about "
+            "how each of them weighted their priorities in choosing that specific "
+            "location and property type?"
+        )
+        with patch("lib.llm_clients.call_fast_reasoning", side_effect=AssertionError("planner should not be called")):
+            queries, meta = mg._plan_fanout_queries(
+                query,
+                return_meta=True,
+                planner_profile="fast",
+            )
+
+        assert queries == [query]
+        assert meta["used_llm"] is False
+        assert meta["bailout_reason"] == "fast_long_broad_query"
+        assert meta["query_shape"] == "broad"
 
     def test_plan_fanout_queries_fast_does_not_preserve_unanchored_multiclause_without_llm(self):
         import datastore.memorydb.memory_graph as mg
@@ -9368,7 +9387,7 @@ class TestRecallTelemetry:
         assert "planner_timeout_ms=" in str(exc.value)
         assert "planner_elapsed_ms=" in str(exc.value)
 
-    def test_plan_fanout_queries_raises_on_planner_timeout_when_failhard_enabled(self):
+    def test_plan_fanout_queries_full_raises_on_planner_timeout_when_failhard_enabled(self):
         import datastore.memorydb.memory_graph as mg
         query = "How should Maya migrate from SQLite to PostgreSQL while preserving old REST clients and avoiding downtime during the cutover?"
 
@@ -9380,10 +9399,10 @@ class TestRecallTelemetry:
                 mg._plan_fanout_queries(
                     query,
                     return_meta=True,
-                    planner_profile="fast",
+                    planner_profile="full",
                 )
 
-    def test_plan_fanout_queries_times_out_to_base_query_when_failhard_disabled(self):
+    def test_plan_fanout_queries_full_times_out_to_base_query_when_failhard_disabled(self):
         import datastore.memorydb.memory_graph as mg
         query = "How should Maya migrate from SQLite to PostgreSQL while preserving old REST clients and avoiding downtime during the cutover?"
 
@@ -9394,7 +9413,7 @@ class TestRecallTelemetry:
             queries, meta = mg._plan_fanout_queries(
                 query,
                 return_meta=True,
-                planner_profile="fast",
+                planner_profile="full",
             )
 
         assert queries == [query]
