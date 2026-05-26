@@ -495,6 +495,7 @@ export type QuaidFacade = {
   getQueuedExtractionPromise: () => Promise<void> | null;
   queueDelayedRequest: (request: DelayedRequestInput) => boolean;
   maybeQueueJanitorHealthAlert: (options: JanitorHealthAlertOptions) => boolean;
+  maybeQueueJanitorHealthAlertAsync: (options: JanitorHealthAlertOptions) => Promise<boolean>;
   collectJanitorNudges: (options: JanitorNudgeOptions) => string[];
   isInternalMaintenancePrompt: (text: string) => boolean;
   resolveExtractionTrigger: (label: string) => ExtractionTrigger;
@@ -1261,8 +1262,7 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
     return _cachedNodeCount ?? 100;
   }
 
-  function getJanitorHealthIssue(): string | null {
-    const stats = getDatastoreStatsSync(60 * 1000);
+  function getJanitorHealthIssueFromStats(stats: Record<string, any> | null): string | null {
     const completedAt = String(stats?.last_janitor_completed_at || "").trim();
     if (!completedAt) {
       return "[Quaid] Janitor has never run. Please run janitor and ensure schedule is active.";
@@ -1279,8 +1279,11 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
     return null;
   }
 
-  function maybeQueueJanitorHealthAlert(options: JanitorHealthAlertOptions): boolean {
-    const issue = getJanitorHealthIssue();
+  function getJanitorHealthIssue(): string | null {
+    return getJanitorHealthIssueFromStats(getDatastoreStatsSync(60 * 1000));
+  }
+
+  function queueJanitorHealthIssueAlert(issue: string | null, options: JanitorHealthAlertOptions): boolean {
     if (!issue) return false;
     const now = Number(options?.nowMs || Date.now());
     const cooldown = Math.max(1, Number(options?.cooldownMs || 6 * 60 * 60 * 1000));
@@ -1302,6 +1305,27 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
     state.lastJanitorHealthIssue = issue;
     writeObjectFile(statePath, state);
     return true;
+  }
+
+  function maybeQueueJanitorHealthAlert(options: JanitorHealthAlertOptions): boolean {
+    return queueJanitorHealthIssueAlert(getJanitorHealthIssue(), options);
+  }
+
+  async function maybeQueueJanitorHealthAlertAsync(options: JanitorHealthAlertOptions): Promise<boolean> {
+    try {
+      const output = await datastoreBridge.stats();
+      const parsed = JSON.parse(output || "{}");
+      const stats = parsed && typeof parsed === "object" && !Array.isArray(parsed)
+        ? parsed as Record<string, any>
+        : null;
+      return queueJanitorHealthIssueAlert(getJanitorHealthIssueFromStats(stats), options);
+    } catch (err: unknown) {
+      console.warn(`[quaid][facade] async janitor health stats probe failed: ${String((err as Error)?.message || err)}`);
+      if (deps.isFailHardEnabled()) {
+        throw err;
+      }
+      return false;
+    }
   }
 
   function collectJanitorNudges(options: JanitorNudgeOptions): string[] {
@@ -4455,6 +4479,7 @@ ${lines.join("\n")}
     getQueuedExtractionPromise,
     queueDelayedRequest,
     maybeQueueJanitorHealthAlert,
+    maybeQueueJanitorHealthAlertAsync,
     collectJanitorNudges,
     isInternalMaintenancePrompt,
     resolveExtractionTrigger,

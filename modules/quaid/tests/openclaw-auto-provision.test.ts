@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { EventEmitter } from "node:events";
 
 type AdapterPlugin = {
   register: (api: any) => void;
@@ -24,7 +25,8 @@ const childProcessState = vi.hoisted(() => ({
   daemonStartCalls: [] as Array<{ file: string; args: readonly string[]; env: Record<string, string | undefined> }>,
   daemonStatusCalls: [] as Array<{ file: string; args: readonly string[]; env: Record<string, string | undefined> }>,
   daemonStatusByInstance: {} as Record<string, Array<boolean | "throw" | "bad-json">>,
-  datastoreStatsCalls: [] as Array<{ file: string; args: readonly string[]; env: Record<string, string | undefined> }>,
+  datastoreStatsSyncCalls: [] as Array<{ file: string; args: readonly string[]; env: Record<string, string | undefined> }>,
+  datastoreStatsSpawnCalls: [] as Array<{ file: string; args: readonly string[]; env: Record<string, string | undefined> }>,
 }));
 
 vi.mock("node:child_process", async () => {
@@ -65,7 +67,7 @@ vi.mock("node:child_process", async () => {
         });
       }
       if (normalizedArgs[1] === "stats") {
-        childProcessState.datastoreStatsCalls.push({
+        childProcessState.datastoreStatsSyncCalls.push({
           file,
           args: normalizedArgs,
           env: (options?.env || {}) as Record<string, string | undefined>,
@@ -73,6 +75,35 @@ vi.mock("node:child_process", async () => {
       }
       return actual.execFileSync(file, args as any, options);
     }) as typeof actual.execFileSync,
+    spawn: ((file: string, args?: readonly string[] | null, options?: any) => {
+      const normalizedArgs = Array.isArray(args) ? args.map((arg) => String(arg)) : [];
+      if (normalizedArgs[1] === "stats") {
+        childProcessState.datastoreStatsSpawnCalls.push({
+          file,
+          args: normalizedArgs,
+          env: (options?.env || {}) as Record<string, string | undefined>,
+        });
+        const proc = new EventEmitter() as EventEmitter & {
+          stdout: EventEmitter;
+          stderr: EventEmitter;
+          kill: ReturnType<typeof vi.fn>;
+        };
+        proc.stdout = new EventEmitter();
+        proc.stderr = new EventEmitter();
+        proc.kill = vi.fn();
+        queueMicrotask(() => {
+          proc.stdout.emit("data", JSON.stringify({
+            total_nodes: 10,
+            edges: 0,
+            active_nodes: 10,
+            last_janitor_completed_at: "2020-01-01T00:00:00.000Z",
+          }));
+          proc.emit("close", 0);
+        });
+        return proc;
+      }
+      return actual.spawn(file, args as any, options);
+    }) as typeof actual.spawn,
   };
 });
 
@@ -121,7 +152,8 @@ afterEach(() => {
   childProcessState.daemonStartCalls = [];
   childProcessState.daemonStatusCalls = [];
   childProcessState.daemonStatusByInstance = {};
-  childProcessState.datastoreStatsCalls = [];
+  childProcessState.datastoreStatsSyncCalls = [];
+  childProcessState.datastoreStatsSpawnCalls = [];
   vi.clearAllTimers();
   vi.useRealTimers();
   vi.restoreAllMocks();
@@ -355,7 +387,8 @@ describe("openclaw auto-provision", () => {
 
     const beforeAgentStartHandler = beforeAgentStartCall?.[1];
     childProcessState.daemonStatusByInstance["openclaw-m13test"] = ["throw", true];
-    childProcessState.datastoreStatsCalls = [];
+    childProcessState.datastoreStatsSyncCalls = [];
+    childProcessState.datastoreStatsSpawnCalls = [];
     await beforeAgentStartHandler(
       { prependContext: "" },
       {
@@ -389,11 +422,14 @@ describe("openclaw auto-provision", () => {
         (call) => String(call.env?.QUAID_INSTANCE || "") === "openclaw-m13test",
       ),
     ).toHaveLength(2);
-    expect(childProcessState.datastoreStatsCalls).toHaveLength(0);
+    expect(childProcessState.datastoreStatsSyncCalls).toHaveLength(0);
+    await vi.waitFor(() => {
+      expect(childProcessState.datastoreStatsSpawnCalls).toHaveLength(1);
+    });
     expect(
       readTraceEvents(hiddenHome, "openclaw-main").some(
-        (event) => event.event === "hook.before_agent_start.janitor_health_skipped" &&
-          event.reason === "hot_path_no_sync_stats" &&
+        (event) => event.event === "hook.before_agent_start.janitor_health_queued" &&
+          event.reason === "async_stats" &&
           event.instance_id === "openclaw-m13test",
       ),
     ).toBe(true);

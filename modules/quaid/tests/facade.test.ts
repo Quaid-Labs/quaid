@@ -2935,7 +2935,38 @@ describe("QuaidFacade", () => {
     expect(typeof state.lastJanitorHealthIssue).toBe("string");
     expect(Number(state.lastJanitorHealthAlertAt)).toBe(1_700_000_000_000);
     await rm(workspace, { recursive: true, force: true });
+  });
+
+  it("maybeQueueJanitorHealthAlertAsync queues through async stats", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "quaid-facade-janitor-health-async-"));
+    const execPython = vi.fn(async (command: string) => {
+      expect(command).toBe("stats");
+      return JSON.stringify({
+        total_nodes: 12,
+        edges: 1,
+        active_nodes: 12,
+        last_janitor_completed_at: "2020-01-01T00:00:00.000Z",
+      });
     });
+    const getDatastoreStatsSync = vi.fn(() => {
+      throw new Error("sync stats should not run");
+    });
+    const facade = createQuaidFacade(makeMockDeps({ workspace, execPython, getDatastoreStatsSync }));
+    const statePath = path.join(workspace, "runtime", "notes", "janitor-nudge-state.json");
+
+    const queued = await facade.maybeQueueJanitorHealthAlertAsync({
+      statePath,
+      nowMs: 1_700_000_000_000,
+    });
+
+    expect(queued).toBe(true);
+    expect(execPython).toHaveBeenCalledWith("stats", []);
+    expect(getDatastoreStatsSync).not.toHaveBeenCalled();
+    const state = JSON.parse(await readFile(statePath, "utf8"));
+    expect(typeof state.lastJanitorHealthIssue).toBe("string");
+    expect(Number(state.lastJanitorHealthAlertAt)).toBe(1_700_000_000_000);
+    await rm(workspace, { recursive: true, force: true });
+  });
   });
 
   it("queueDelayedRequest respects deps.delayedRequestsPath when provided", async () => {

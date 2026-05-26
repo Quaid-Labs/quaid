@@ -722,8 +722,7 @@ function createQuaidFacade(deps) {
     }
     return _cachedNodeCount ?? 100;
   }
-  function getJanitorHealthIssue() {
-    const stats = getDatastoreStatsSync(60 * 1e3);
+  function getJanitorHealthIssueFromStats(stats) {
     const completedAt = String(stats?.last_janitor_completed_at || "").trim();
     if (!completedAt) {
       return "[Quaid] Janitor has never run. Please run janitor and ensure schedule is active.";
@@ -739,8 +738,10 @@ function createQuaidFacade(deps) {
     }
     return null;
   }
-  function maybeQueueJanitorHealthAlert(options) {
-    const issue = getJanitorHealthIssue();
+  function getJanitorHealthIssue() {
+    return getJanitorHealthIssueFromStats(getDatastoreStatsSync(60 * 1e3));
+  }
+  function queueJanitorHealthIssueAlert(issue, options) {
     if (!issue) return false;
     const now = Number(options?.nowMs || Date.now());
     const cooldown = Math.max(1, Number(options?.cooldownMs || 6 * 60 * 60 * 1e3));
@@ -762,6 +763,23 @@ function createQuaidFacade(deps) {
     state.lastJanitorHealthIssue = issue;
     writeObjectFile(statePath, state);
     return true;
+  }
+  function maybeQueueJanitorHealthAlert(options) {
+    return queueJanitorHealthIssueAlert(getJanitorHealthIssue(), options);
+  }
+  async function maybeQueueJanitorHealthAlertAsync(options) {
+    try {
+      const output = await datastoreBridge.stats();
+      const parsed = JSON.parse(output || "{}");
+      const stats = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+      return queueJanitorHealthIssueAlert(getJanitorHealthIssueFromStats(stats), options);
+    } catch (err) {
+      console.warn(`[quaid][facade] async janitor health stats probe failed: ${String(err?.message || err)}`);
+      if (deps.isFailHardEnabled()) {
+        throw err;
+      }
+      return false;
+    }
   }
   function collectJanitorNudges(options) {
     const now = Number(options?.nowMs || Date.now());
@@ -3462,6 +3480,7 @@ ${combined}` : combined;
     getQueuedExtractionPromise,
     queueDelayedRequest,
     maybeQueueJanitorHealthAlert,
+    maybeQueueJanitorHealthAlertAsync,
     collectJanitorNudges,
     isInternalMaintenancePrompt,
     resolveExtractionTrigger

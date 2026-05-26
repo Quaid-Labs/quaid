@@ -5676,12 +5676,22 @@ notify_user(${JSON.stringify(message)})
         }
         console.warn(`[quaid] Janitor nudge dispatch failed: ${String((err as Error)?.message || err)}`);
       }
-      // before_agent_start is on OpenClaw's dispatch hot path. The janitor
-      // health check reads datastore stats through a synchronous Python bridge;
-      // doing that here can freeze the Node event loop long enough for OC to
-      // abandon the turn before it dispatches the agent.
-      writeHookTrace("hook.before_agent_start.janitor_health_skipped", {
-        reason: "hot_path_no_sync_stats",
+      // before_agent_start is on OpenClaw's dispatch hot path. Queue janitor
+      // health through the async bridge so datastore stats cannot freeze the
+      // Node event loop before OC dispatches the agent.
+      void facade.maybeQueueJanitorHealthAlertAsync({ statePath: JANITOR_NUDGE_STATE_PATH })
+        .catch((err: unknown) => {
+          const message = String((err as Error)?.message || err);
+          console.warn(`[quaid] Async janitor health alert dispatch failed: ${message}`);
+          writeHookTrace("hook.before_agent_start.janitor_health_failed", {
+            error: message.slice(0, 240),
+          });
+          if (isFailHardEnabled()) {
+            setTimeout(() => { throw err; }, 0);
+          }
+        });
+      writeHookTrace("hook.before_agent_start.janitor_health_queued", {
+        reason: "async_stats",
         instance_id: startInstanceId,
       });
       // api.on hooks can fire during plugin bootstrap before timeoutManager is constructed.
