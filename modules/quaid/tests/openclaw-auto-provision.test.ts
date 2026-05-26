@@ -24,6 +24,7 @@ const childProcessState = vi.hoisted(() => ({
   daemonStartCalls: [] as Array<{ file: string; args: readonly string[]; env: Record<string, string | undefined> }>,
   daemonStatusCalls: [] as Array<{ file: string; args: readonly string[]; env: Record<string, string | undefined> }>,
   daemonStatusByInstance: {} as Record<string, Array<boolean | "throw" | "bad-json">>,
+  datastoreStatsCalls: [] as Array<{ file: string; args: readonly string[]; env: Record<string, string | undefined> }>,
 }));
 
 vi.mock("node:child_process", async () => {
@@ -61,6 +62,13 @@ vi.mock("node:child_process", async () => {
           running,
           pid: running ? 12345 : null,
           instance,
+        });
+      }
+      if (normalizedArgs[1] === "stats") {
+        childProcessState.datastoreStatsCalls.push({
+          file,
+          args: normalizedArgs,
+          env: (options?.env || {}) as Record<string, string | undefined>,
         });
       }
       return actual.execFileSync(file, args as any, options);
@@ -113,6 +121,7 @@ afterEach(() => {
   childProcessState.daemonStartCalls = [];
   childProcessState.daemonStatusCalls = [];
   childProcessState.daemonStatusByInstance = {};
+  childProcessState.datastoreStatsCalls = [];
   vi.clearAllTimers();
   vi.useRealTimers();
   vi.restoreAllMocks();
@@ -346,6 +355,7 @@ describe("openclaw auto-provision", () => {
 
     const beforeAgentStartHandler = beforeAgentStartCall?.[1];
     childProcessState.daemonStatusByInstance["openclaw-m13test"] = ["throw", true];
+    childProcessState.datastoreStatsCalls = [];
     await beforeAgentStartHandler(
       { prependContext: "" },
       {
@@ -379,6 +389,14 @@ describe("openclaw auto-provision", () => {
         (call) => String(call.env?.QUAID_INSTANCE || "") === "openclaw-m13test",
       ),
     ).toHaveLength(2);
+    expect(childProcessState.datastoreStatsCalls).toHaveLength(0);
+    expect(
+      readTraceEvents(hiddenHome, "openclaw-main").some(
+        (event) => event.event === "hook.before_agent_start.janitor_health_skipped" &&
+          event.reason === "hot_path_no_sync_stats" &&
+          event.instance_id === "openclaw-m13test",
+      ),
+    ).toBe(true);
 
     const beforePromptBuildCall = api.on.mock.calls.find((call: any[]) =>
       call?.[0] === "before_prompt_build" && call?.[2]?.name === "memory-injection-prompt-build"

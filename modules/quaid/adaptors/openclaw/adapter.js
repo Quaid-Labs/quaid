@@ -4574,18 +4574,10 @@ notify_user(${JSON.stringify(message)})
         }
         console.warn(`[quaid] Janitor nudge dispatch failed: ${String(err?.message || err)}`);
       }
-      try {
-        facade.maybeQueueJanitorHealthAlert({ statePath: JANITOR_NUDGE_STATE_PATH });
-      } catch (err) {
-        const message = String(err?.message || err);
-        console.warn(`[quaid] Janitor health alert dispatch failed: ${message}`);
-        writeHookTrace("hook.before_agent_start.janitor_health_failed", {
-          error: message.slice(0, 240)
-        });
-        if (isFailHardEnabled2()) {
-          throw err;
-        }
-      }
+      writeHookTrace("hook.before_agent_start.janitor_health_skipped", {
+        reason: "hot_path_no_sync_stats",
+        instance_id: startInstanceId
+      });
       if (timeoutManager) {
         timeoutManager.onAgentStart(resolveActiveUserSessionId(event, ctx));
       } else {
