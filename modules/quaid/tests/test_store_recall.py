@@ -17016,9 +17016,10 @@ class TestGraphFactClusterRecall:
 
         captured = {}
 
-        def fake_call(*, prompt, system_prompt=None, **_kwargs):
+        def fake_call(*, prompt, system_prompt=None, **kwargs):
             captured["prompt"] = prompt
             captured["system_prompt"] = system_prompt
+            captured["max_tokens"] = kwargs.get("max_tokens")
             return '{"supported": true, "interpretation": "Ari tiene evidencia sobre el archivo y la bicicleta."}', 0.01
 
         cluster = {
@@ -17039,7 +17040,9 @@ class TestGraphFactClusterRecall:
 
         assert meta["annotated"] == 1
         assert "Respond in the same language as the Query" in captured["prompt"]
+        assert "Keep interpretation under 700 characters" in captured["prompt"]
         assert "Match the user's query language" in captured["system_prompt"]
+        assert captured["max_tokens"] >= 512
         assert rows[0]["graph_cluster_interpretation"].startswith("Ari tiene")
 
     def test_graph_fact_cluster_interpretation_no_provider_respects_failhard(self):

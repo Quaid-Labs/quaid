@@ -112,7 +112,9 @@ _GRAPH_FACT_CLUSTER_INTERPRETATION_MIN_CLUSTER_SIZE = 8
 _GRAPH_FACT_CLUSTER_INTERPRETATION_MIN_QUERY_OVERLAP = 2
 _GRAPH_FACT_CLUSTER_INTERPRETATION_MAX_EVIDENCE_CHARS = 5000
 _GRAPH_FACT_CLUSTER_INTERPRETATION_MAX_CHARS = 700
-_GRAPH_FACT_CLUSTER_INTERPRETATION_MAX_TOKENS = 240
+# Covers the 700-character interpretation plus strict JSON wrapper without
+# triggering provider truncation under failHard on dense graph clusters.
+_GRAPH_FACT_CLUSTER_INTERPRETATION_MAX_TOKENS = 512
 # This runs only in deliberate recall after store retrieval/ranking has already
 # selected a broad graph cluster; keep it bounded below the overall recall SLA.
 _GRAPH_FACT_CLUSTER_INTERPRETATION_TIMEOUT_S = 12.0
@@ -14549,6 +14551,7 @@ def _interpret_selected_graph_fact_cluster_rows(
         "- Do not claim that something never happened or that no evidence exists; this cluster is not the full memory.\n"
         "- If the evidence does not affirmatively help answer or narrow the query, set supported=false and interpretation=\"\".\n"
         "- Respond in the same language as the Query.\n"
+        f"- Keep interpretation under {_GRAPH_FACT_CLUSTER_INTERPRETATION_MAX_CHARS} characters.\n"
         "- Return JSON only: {\"supported\": true|false, \"interpretation\": \"...\"}\n\n"
         f"Query:\n{str(query or '').strip()}\n\n"
         f"First-order graph evidence:\n{evidence}"
