@@ -1467,6 +1467,98 @@ class TestHookInjectRecallResilience:
 
         assert out.strip() == "", f"Expected no stdout, got: {out!r}"
 
+    def test_recall_fast_close_competitor_duplicates_still_inject_best_memory(
+        self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
+    ):
+        from core import extraction_daemon
+
+        monkeypatch.setattr(extraction_daemon, "write_cursor", lambda *a: None)
+        monkeypatch.setattr("core.interface.hooks._get_pending_context", lambda: "")
+        monkeypatch.setattr("core.interface.hooks._get_deferred_notice_hint", lambda: "")
+        monkeypatch.setattr("core.interface.hooks._get_deferred_notice_relay_context", lambda: "")
+        monkeypatch.setattr("core.interface.hooks._get_quaid_agents_baseline_context", lambda: "")
+
+        rows = [
+            {
+                "text": "What scanner do I use for receipts? ScanSnap iX1600",
+                "similarity": 1.0,
+                "category": "fact",
+            },
+            {
+                "text": "What scanner do I use for receipts? ScanSnap iX1600",
+                "similarity": 0.99,
+                "category": "fact",
+            },
+        ]
+        meta = {
+            "mode": "fast",
+            "quality_gate": {
+                "evaluation": {
+                    "ready": True,
+                    "needs_validation": False,
+                    "top_similarity": 1.0,
+                    "close_competitor_count": 2,
+                }
+            },
+            "memory_quality": {
+                "surface_quality": "good",
+                "signals": ["close_competitors"],
+                "top_similarity": 1.0,
+            },
+        }
+
+        with patch("core.interface.api.recall_fast", return_value=(rows, meta)), \
+             patch("core.interface.api.projects_search_docs", return_value=None):
+            out, _err = _run_hook_inject(
+                {
+                    "prompt": "What scanner do I use for receipts?",
+                    "session_id": "sess-close-competitors",
+                    "cwd": "/Users/x",
+                },
+                monkeypatch=monkeypatch,
+            )
+
+        payload = json.loads(out)
+        context = payload["hookSpecificOutput"]["additionalContext"]
+        assert "[Quaid Memory Context]" in context
+        assert "ScanSnap iX1600" in context
+        assert context.count("ScanSnap iX1600") == 1
+
+    def test_recall_fast_close_competitor_recovery_keeps_negative_claims_blocked(
+        self
+    ):
+        from core.interface import hooks
+
+        rows = [
+            {
+                "text": "No record was previously stored in memory",
+                "similarity": 1.0,
+                "category": "fact",
+            },
+            {
+                "text": "No record was previously stored in memory",
+                "similarity": 0.99,
+                "category": "fact",
+            },
+        ]
+        meta = {
+            "quality_gate": {
+                "evaluation": {
+                    "ready": True,
+                    "needs_validation": False,
+                    "top_similarity": 1.0,
+                    "close_competitor_count": 2,
+                }
+            },
+            "memory_quality": {
+                "surface_quality": "good",
+                "signals": ["close_competitors"],
+                "top_similarity": 1.0,
+            },
+        }
+
+        assert hooks._format_memories(rows, recall_meta=meta) == ""
+
     def test_recall_fast_empty_list_still_injects_quaid_agents_baseline(
         self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
     ):

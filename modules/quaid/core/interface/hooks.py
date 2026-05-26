@@ -135,9 +135,9 @@ _TOOLS_DOMAIN_BLOCK_RE = re.compile(
 )
 
 
-def _format_memories(memories: List[Dict]) -> str:
+def _format_memories(memories: List[Dict], recall_meta: dict | None = None) -> str:
     """Format recalled memories as readable context text."""
-    filtered_memories = _filter_injectable_memories(memories)
+    filtered_memories = _filter_injectable_memories(memories, recall_meta=recall_meta)
     if not filtered_memories:
         return ""
     anchor_labels = {
@@ -242,12 +242,68 @@ def _is_non_injectable_memory(mem: Dict) -> bool:
     return False
 
 
-def _filter_injectable_memories(memories: List[Dict]) -> List[Dict]:
-    return [
+def _close_competitors_only_injection_recovery_enabled(recall_meta: dict | None) -> bool:
+    if not isinstance(recall_meta, dict):
+        return False
+    quality = recall_meta.get("memory_quality") if isinstance(recall_meta.get("memory_quality"), dict) else {}
+    signals = {
+        str(signal or "").strip()
+        for signal in list(quality.get("signals") or [])
+        if str(signal or "").strip()
+    }
+    if signals != {"close_competitors"}:
+        return False
+    gate = recall_meta.get("quality_gate") if isinstance(recall_meta.get("quality_gate"), dict) else {}
+    evaluation = gate.get("evaluation") if isinstance(gate.get("evaluation"), dict) else {}
+    if evaluation and not bool(evaluation.get("ready", True)):
+        return False
+    if evaluation and bool(evaluation.get("needs_validation")):
+        return False
+    top_similarity = float(
+        quality.get("top_similarity")
+        or evaluation.get("top_similarity")
+        or 0.0
+    )
+    return top_similarity >= 0.85
+
+
+def _dedupe_close_competitor_memories(memories: List[Dict]) -> List[Dict]:
+    deduped: List[Dict] = []
+    seen: set[str] = set()
+    for mem in list(memories or []):
+        if not isinstance(mem, dict):
+            continue
+        text = str(mem.get("text") or "").strip()
+        key = _context_dedupe_key(text)
+        if key:
+            if key in seen:
+                continue
+            seen.add(key)
+        deduped.append(mem)
+    return deduped
+
+
+def _filter_injectable_memories(memories: List[Dict], recall_meta: dict | None = None) -> List[Dict]:
+    filtered = [
         mem
         for mem in list(memories or [])
         if isinstance(mem, dict) and not _is_non_injectable_memory(mem)
     ]
+    close_competitors_only = _close_competitors_only_injection_recovery_enabled(recall_meta)
+    if filtered and close_competitors_only:
+        return _dedupe_close_competitor_memories(filtered)
+    if filtered or not close_competitors_only:
+        return filtered
+    # Duplicate pending facts can be extracted in a question-shaped form. If the
+    # only quality concern is close competitors, inject the strongest non-negative
+    # row instead of erasing all relevant context from the hook turn.
+    for mem in list(memories or []):
+        if not isinstance(mem, dict):
+            continue
+        text = str(mem.get("text") or "").strip()
+        if text and not _is_negative_memory_claim_text(text):
+            return _dedupe_close_competitor_memories([mem])
+    return filtered
 
 
 _CONTEXT_DEDUPE_WS_RE = re.compile(r"\s+")
@@ -1510,8 +1566,8 @@ def hook_inject(args):
             "query": query[:160],
             "session_id": session_id,
             "count": len(memories or []),
-            "top_results": _summarize_recall_results(_filter_injectable_memories(memories)),
-            "filtered_count": len(memories or []) - len(_filter_injectable_memories(memories)),
+            "top_results": _summarize_recall_results(_filter_injectable_memories(memories, recall_meta=recall_meta)),
+            "filtered_count": len(memories or []) - len(_filter_injectable_memories(memories, recall_meta=recall_meta)),
             "diagnostics": _summarize_recall_meta(recall_meta),
         })
         _write_hook_trace("hook.inject.docs_done", {
@@ -1575,7 +1631,7 @@ def hook_inject(args):
             context_parts.append(project_list_hint)
 
         if memories:
-            context_parts.append(_format_memories(memories))
+            context_parts.append(_format_memories(memories, recall_meta=recall_meta))
         docs_context = _format_project_docs(docs_bundle or {})
         if docs_context:
             context_parts.append(docs_context)
