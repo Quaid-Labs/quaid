@@ -1550,6 +1550,16 @@ class TestHookInjectRecallResilience:
                 "similarity": 0.96,
                 "category": "fact",
             },
+            {
+                "text": "Solomon Steadman has a Baratza Encore grinder and Flair 58 espresso setup",
+                "similarity": 0.95,
+                "category": "fact",
+            },
+            {
+                "text": "Solomon Steadman has an espresso setup",
+                "similarity": 0.94,
+                "category": "fact",
+            },
         ]
         meta = {
             "mode": "fast",
@@ -1584,6 +1594,7 @@ class TestHookInjectRecallResilience:
         payload = json.loads(out)
         context = payload["hookSpecificOutput"]["additionalContext"]
         assert "Baratza Encore" in context
+        assert context.count("Baratza Encore") == 1
         assert "What grinder do I use" not in context
 
     def test_recall_fast_close_competitor_recovery_requires_only_signal(self):
@@ -1591,12 +1602,12 @@ class TestHookInjectRecallResilience:
 
         rows = [
             {
-                "text": "What scanner do I use for receipts",
+                "text": "Solomon Steadman has a ScanSnap iX1600 scanner for receipts",
                 "similarity": 1.0,
                 "category": "fact",
             },
             {
-                "text": "What scanner do I use for receipts",
+                "text": "Solomon Steadman has a ScanSnap iX1600 scanner for receipts",
                 "similarity": 0.99,
                 "category": "fact",
             },
@@ -1613,6 +1624,35 @@ class TestHookInjectRecallResilience:
             "memory_quality": {
                 "surface_quality": "needs_validation",
                 "signals": ["close_competitors", "needs_validation"],
+                "top_similarity": 1.0,
+            },
+        }
+
+        context = hooks._format_memories(rows, recall_meta=meta)
+        assert context.count("ScanSnap iX1600") == 2
+
+    def test_recall_fast_close_competitor_recovery_requires_gate_evaluation(
+        self
+    ):
+        from core.interface import hooks
+
+        rows = [
+            {
+                "text": "What scanner do I use for receipts",
+                "similarity": 1.0,
+                "category": "fact",
+            },
+            {
+                "text": "What scanner do I use for receipts",
+                "similarity": 0.99,
+                "category": "fact",
+            },
+        ]
+        meta = {
+            "quality_gate": {},
+            "memory_quality": {
+                "surface_quality": "good",
+                "signals": ["close_competitors"],
                 "top_similarity": 1.0,
             },
         }

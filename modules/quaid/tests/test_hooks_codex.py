@@ -986,6 +986,7 @@ def test_codex_hook_inject_promotes_recall_router_warning_to_provider_notice(mon
     adapter.instance_root.return_value = tmp_path
     monkeypatch.setattr("lib.adapter.get_adapter", lambda: adapter)
     monkeypatch.setattr(hooks, "_get_owner_id", lambda: "test-owner")
+    monkeypatch.setattr(hooks, "_get_deferred_notice_relay_context", lambda: "")
     monkeypatch.setattr(hooks, "_get_deferred_notice_hint", lambda: "")
     monkeypatch.setattr("core.extraction_daemon.write_cursor", lambda *args: None)
 

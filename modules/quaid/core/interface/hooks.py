@@ -290,6 +290,8 @@ def _close_competitors_only_injection_recovery_enabled(recall_meta: dict | None)
         return False
     gate = recall_meta.get("quality_gate") if isinstance(recall_meta.get("quality_gate"), dict) else {}
     evaluation = gate.get("evaluation") if isinstance(gate.get("evaluation"), dict) else {}
+    if not evaluation:
+        return False
     if evaluation and not bool(evaluation.get("ready", True)):
         return False
     if evaluation and bool(evaluation.get("needs_validation")):
@@ -305,6 +307,7 @@ def _close_competitors_only_injection_recovery_enabled(recall_meta: dict | None)
 def _dedupe_close_competitor_memories(memories: List[Dict]) -> List[Dict]:
     deduped: List[Dict] = []
     seen: set[str] = set()
+    seen_token_sets: List[set[str]] = []
     for mem in list(memories or []):
         if not isinstance(mem, dict):
             continue
@@ -314,6 +317,17 @@ def _dedupe_close_competitor_memories(memories: List[Dict]) -> List[Dict]:
             if key in seen:
                 continue
             seen.add(key)
+        tokens = set(re.findall(r"[a-z0-9]+", text.lower()))
+        if len(tokens) >= 4:
+            is_near_duplicate = False
+            for prior in seen_token_sets:
+                smaller = min(len(tokens), len(prior))
+                if smaller >= 4 and (len(tokens & prior) / smaller) >= 0.80:
+                    is_near_duplicate = True
+                    break
+            if is_near_duplicate:
+                continue
+            seen_token_sets.append(tokens)
         deduped.append(mem)
     return deduped
 
