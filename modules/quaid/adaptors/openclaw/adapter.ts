@@ -649,20 +649,29 @@ function resolveHookAgentLabel(event: any, ctx: any): string {
   return "main";
 }
 
-function ensureAgentInstanceProvisioned(agentLabel: string, reason: string): boolean {
+function ensureAgentInstanceProvisioned(
+  agentLabel: string,
+  reason: string,
+  opts: { wakeDaemon?: boolean } = {},
+): boolean {
   const label = String(agentLabel || "").trim().toLowerCase() || "main";
   const instanceId = getInstanceId(label);
+  const wakeDaemon = opts.wakeDaemon !== false;
   if (!instanceId) {
     return false;
   }
   const configPath = path.join(WORKSPACE, "instances", instanceId, "config.json");
   if (fs.existsSync(configPath)) {
     provisionedAgentInstances.add(instanceId);
-    pingDaemonAliveIfNeeded(instanceId);
+    if (wakeDaemon) {
+      pingDaemonAliveIfNeeded(instanceId);
+    }
     return true;
   }
   if (provisionedAgentInstances.has(instanceId)) {
-    pingDaemonAliveIfNeeded(instanceId);
+    if (wakeDaemon) {
+      pingDaemonAliveIfNeeded(instanceId);
+    }
     return true;
   }
   try {
@@ -687,7 +696,9 @@ function ensureAgentInstanceProvisioned(agentLabel: string, reason: string): boo
       return false;
     }
     provisionedAgentInstances.add(instanceId);
-    ensureDaemonAlive(instanceId);
+    if (wakeDaemon) {
+      ensureDaemonAlive(instanceId);
+    }
     writeHookTrace("instance.auto_provisioned", {
       instance_id: instanceId,
       agent_label: label,
@@ -3423,6 +3434,23 @@ function pingDaemonAliveIfNeeded(instanceId: string = _QUAID_INSTANCE, nowMs: nu
   ensureDaemonAlive(target);
 }
 
+function warmDaemonAliveAtBoot(instanceId: string = _QUAID_INSTANCE): void {
+  try {
+    ensureDaemonAlive(instanceId);
+    console.log("[quaid][daemon] extraction daemon ensure_alive called at boot");
+  } catch (err: unknown) {
+    // Register-time daemon warmup must not disable the whole OC plugin. Later
+    // signal/prompt wakeups still use ensureDaemonAlive() and preserve failHard.
+    const message = String((err as Error)?.message || err);
+    writeHookTrace("daemon.ensure_alive.boot_warmup_failed", {
+      instance_id: String(instanceId || _QUAID_INSTANCE || "default"),
+      error: message.slice(0, 500),
+      fail_hard: isFailHardEnabled(),
+    });
+    console.warn(`[quaid][daemon] boot warmup failed: ${message}`);
+  }
+}
+
 for (const p of [
   QUAID_RUNTIME_DIR,
   QUAID_TMP_DIR,
@@ -5619,7 +5647,7 @@ const quaidPlugin = {
       return api.registerHttpRoute(route as any);
     };
 
-    const mainProvisioned = ensureAgentInstanceProvisioned("main", "plugin_bootstrap");
+    const mainProvisioned = ensureAgentInstanceProvisioned("main", "plugin_bootstrap", { wakeDaemon: false });
     if (!mainProvisioned) {
       const err = new Error("failed to provision primary OpenClaw instance before datastore init");
       console.error("[quaid] Primary instance provisioning failed before plugin bootstrap");
@@ -8102,8 +8130,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
     // timeoutManager.startWorker() is no longer called.
 
     // Start the shared extraction daemon
-    ensureDaemonAlive();
-    console.log("[quaid][daemon] extraction daemon ensure_alive called at boot");
+    warmDaemonAliveAtBoot();
     repairSessionCursorPathsFromQuaidEventLogs();
     purgeInternalSessionArtifacts();
     startSessionIndexWatcher();

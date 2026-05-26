@@ -31,8 +31,48 @@ const childProcessState = vi.hoisted(() => ({
 
 vi.mock("node:child_process", async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+  const fsMod = await vi.importActual<typeof import("node:fs")>("node:fs");
+  const pathMod = await vi.importActual<typeof import("node:path")>("node:path");
   return {
     ...actual,
+    spawnSync: ((file: string, args?: readonly string[] | null, options?: any) => {
+      const normalizedArgs = Array.isArray(args) ? args.map((arg) => String(arg)) : [];
+      const script = normalizedArgs[1] || "";
+      if (normalizedArgs[0] === "-c" && script.includes("sys.version_info")) {
+        return { status: 0, stdout: "", stderr: "", error: undefined } as any;
+      }
+      if (normalizedArgs[0] === "-c" && script.includes("_auto_provision_from_env_if_needed")) {
+        const env = (options?.env || {}) as Record<string, string | undefined>;
+        const instance = String(env.QUAID_INSTANCE || "");
+        const hiddenHome = String(env.QUAID_HOME || "");
+        const visibleHome = String(env.QUAID_VISIBLE_HOME || "");
+        if (instance && hiddenHome && visibleHome) {
+          const hiddenRoot = pathMod.join(hiddenHome, "instances", instance);
+          const visibleRoot = pathMod.join(visibleHome, "instances", instance);
+          fsMod.mkdirSync(pathMod.join(hiddenRoot, "data"), { recursive: true });
+          fsMod.mkdirSync(pathMod.join(hiddenRoot, "logs"), { recursive: true });
+          fsMod.mkdirSync(pathMod.join(visibleRoot, "journal"), { recursive: true });
+          fsMod.writeFileSync(
+            pathMod.join(hiddenRoot, "config.json"),
+            `${JSON.stringify({ instance: { id: instance }, adapter: { type: "openclaw" } }, null, 2)}\n`,
+            "utf8",
+          );
+          for (const name of ["SOUL.md", "USER.md", "ENVIRONMENT.md"]) {
+            fsMod.writeFileSync(pathMod.join(visibleRoot, name), `# ${name.replace(/\\.md$/, "")}\n`, "utf8");
+          }
+        }
+        return { status: 0, stdout: "", stderr: "", error: undefined } as any;
+      }
+      if (normalizedArgs[0] === "-c" && script.includes("drain_deferred_notices")) {
+        return {
+          status: 0,
+          stdout: JSON.stringify({ drained: 0, messages: [], kinds: [] }),
+          stderr: "",
+          error: undefined,
+        } as any;
+      }
+      return actual.spawnSync(file, args as any, options);
+    }) as typeof actual.spawnSync,
     execFileSync: ((file: string, args?: readonly string[] | null, options?: any) => {
       const normalizedArgs = Array.isArray(args) ? args.map((arg) => String(arg)) : [];
       if (normalizedArgs[0] === "daemon" && normalizedArgs[1] === "start") {
@@ -221,6 +261,67 @@ describe("openclaw auto-provision", () => {
     expect(unref).toHaveBeenCalledOnce();
 
     setIntervalSpy.mockRestore();
+    warn.mockRestore();
+    log.mockRestore();
+    error.mockRestore();
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+
+  it("does not fail plugin register when boot daemon warmup misses under failHard", async () => {
+    const home = makeTempDir("quaid-oc-boot-daemon-soft-home-");
+    const hiddenHome = path.join(home, ".quaid");
+    const visibleHome = path.join(home, "quaid");
+    const openClawRoot = path.join(home, ".openclaw");
+    const openClawConfigPath = path.join(openClawRoot, "openclaw.json");
+    const repoModulesRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+    const linkedModulesRoot = path.join(hiddenHome, "modules", "quaid");
+
+    fs.mkdirSync(path.dirname(linkedModulesRoot), { recursive: true });
+    fs.symlinkSync(repoModulesRoot, linkedModulesRoot, "dir");
+    writeJson(path.join(hiddenHome, "instances", "openclaw-main", "config.json"), {
+      adapter: { type: "openclaw" },
+      retrieval: { failHard: true, maxLimit: 20, autoInject: false },
+      models: {
+        llmProvider: "openai-codex",
+        deepReasoningProvider: "openai-codex",
+        fastReasoningProvider: "openai-codex",
+        deepReasoning: "gpt-5.1-codex",
+        fastReasoning: "gpt-5.1-codex",
+      },
+      plugins: { strict: false },
+    });
+    fs.mkdirSync(path.join(hiddenHome, "instances", "openclaw-main", "data"), { recursive: true });
+    fs.mkdirSync(path.join(hiddenHome, "instances", "openclaw-main", "logs"), { recursive: true });
+    fs.mkdirSync(path.join(visibleHome, "projects", "quaid"), { recursive: true });
+    fs.writeFileSync(path.join(visibleHome, "projects", "quaid", "SOUL.md"), "# SOUL\n", "utf8");
+    fs.writeFileSync(path.join(visibleHome, "projects", "quaid", "USER.md"), "# USER\n", "utf8");
+    fs.writeFileSync(path.join(visibleHome, "projects", "quaid", "ENVIRONMENT.md"), "# ENVIRONMENT\n", "utf8");
+    writeJson(openClawConfigPath, {
+      agents: {
+        list: [{ id: "main", default: true }],
+      },
+      env: {
+        vars: {
+          QUAID_INSTANCE: "openclaw-main",
+        },
+      },
+    });
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    childProcessState.daemonStatusByInstance["openclaw-main"] = [false, false];
+    const { plugin } = await loadAdapterWithHomes(hiddenHome, visibleHome, openClawConfigPath);
+    const api = makeFakeApi();
+    expect(() => plugin.register(api as any)).not.toThrow();
+    expect(
+      readTraceEvents(hiddenHome, "openclaw-main").some(
+        (event) => event.event === "daemon.ensure_alive.boot_warmup_failed" &&
+          event.fail_hard === true,
+      ),
+    ).toBe(true);
+
     warn.mockRestore();
     log.mockRestore();
     error.mockRestore();
