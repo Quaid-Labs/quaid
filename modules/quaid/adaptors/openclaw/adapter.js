@@ -2388,6 +2388,9 @@ function buildExecCompletedHeartbeatVisibleReply(event) {
   }
   return void 0;
 }
+function allowMissingTranscriptSignal(meta) {
+  return Boolean(meta?.allow_missing_transcript);
+}
 function writeDaemonSignal(sessionId, signalType, meta) {
   if (!sessionId) return null;
   let preservedConversationFallback;
@@ -2448,7 +2451,7 @@ function writeDaemonSignal(sessionId, signalType, meta) {
   }
   if (!resolvedPath) {
     const message = `[quaid][daemon-signal] no transcript path for session ${sessionId}, skipping ${signalType} signal`;
-    if (isFailHardEnabled()) {
+    if (isFailHardEnabled() && !allowMissingTranscriptSignal(meta)) {
       throw new Error(message);
     }
     console.warn(message);
@@ -2514,9 +2517,10 @@ function writeDaemonSignal(sessionId, signalType, meta) {
     writeHookTrace("session.daemon_signal_no_transcript", {
       session_id: sessionId,
       signal_type: signalType,
-      resolved_path: resolvedPath
+      resolved_path: resolvedPath,
+      allow_missing_transcript: allowMissingTranscriptSignal(meta)
     });
-    if (isFailHardEnabled()) {
+    if (isFailHardEnabled() && !allowMissingTranscriptSignal(meta)) {
       throw new Error(message);
     }
     console.warn(message);
@@ -6212,7 +6216,8 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
           source: sourceEvent,
           command: commandAction,
           hook_session_id: sessionId,
-          hook_session_key: String(event?.sessionKey || ctx?.sessionKey || "")
+          hook_session_key: String(event?.sessionKey || ctx?.sessionKey || ""),
+          allow_missing_transcript: commandAction === "new" || commandAction === "reset"
         });
         if (sigPath) {
           console.log(`[quaid][signal] daemon signal ${daemonSigType} session=${sessionId} source=${sourceEvent} command=${commandAction}`);
@@ -6432,7 +6437,8 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
           source: `command:${action}`,
           command: action,
           hook_session_id: sessionId,
-          hook_session_key: String(event?.sessionKey || ctx?.sessionKey || "")
+          hook_session_key: String(event?.sessionKey || ctx?.sessionKey || ""),
+          allow_missing_transcript: true
         });
         if (sigPath) {
           console.log(`[quaid][signal] daemon signal reset session=${sessionId} source=command:${action}`);
@@ -7236,6 +7242,7 @@ notify_memory_extraction(
                 reason: String(reason || "unknown"),
                 event_message_count: messages.length,
                 conversation_message_count: conversationMessages.length,
+                allow_missing_transcript: conversationMessages.length === 0,
                 ...preserved.usedHookPayload ? { bypass_recent_reset_dedup: true } : {}
               });
               console.log(`[quaid][signal] daemon signal reset session=${extractionSessionId}`);
@@ -7343,7 +7350,8 @@ notify_memory_extraction(
           source: "session_end",
           hook_session_id: sessionId,
           hook_session_key: sessionKey,
-          message_count: Number.isFinite(messageCount) ? messageCount : 0
+          message_count: Number.isFinite(messageCount) ? messageCount : 0,
+          allow_missing_transcript: Number.isFinite(messageCount) ? messageCount === 0 : true
         });
         console.log(
           `[quaid][signal] daemon signal session_end session=${sessionId} key=${sessionKey || "unknown"}`

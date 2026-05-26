@@ -129,6 +129,69 @@ afterEach(() => {
 });
 
 describe("openclaw session_index watcher", () => {
+  it("does not fail /new when the prior OC session has no transcript yet under failHard", async () => {
+    const harness = makeHarness("command-new-missing-transcript-failhard");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const missingSessionId = "0d89fa0f-8877-4eb4-a768-43cff87c687a";
+    const sessionKey = "agent:main:matrix:direct:@quaid-test-bot:localhost";
+    const visibleHome = harness.quaidHome.replace("/.quaid", "/quaid");
+    writeFile(join(visibleHome, "projects", "quaid", "SOUL.md"), "# SOUL\n");
+    writeFile(join(visibleHome, "projects", "quaid", "USER.md"), "# USER\n");
+    writeFile(join(visibleHome, "projects", "quaid", "ENVIRONMENT.md"), "# ENVIRONMENT\n");
+    const api = makeFakeApi();
+    const plugin = await loadPlugin(harness);
+    plugin.register(api as any);
+    writeJson(join(harness.quaidHome, "config", "config.json"), {
+      models: {
+        llmProvider: "openai-codex",
+        deepReasoningProvider: "openai-codex",
+        fastReasoningProvider: "openai-codex",
+        deepReasoning: "gpt-5.1-codex",
+        fastReasoning: "gpt-5.1-codex",
+      },
+      retrieval: {
+        failHard: true,
+        maxLimit: 20,
+      },
+      plugins: {
+        strict: false,
+      },
+    });
+
+    const commandNewHook = api.registerHook.mock.calls.find((call: any[]) =>
+      call[0] === "command:new" && call[2]?.name === "command-new-memory-extraction"
+    )?.[1];
+    expect(typeof commandNewHook).toBe("function");
+
+    await expect(commandNewHook(
+      {
+        action: "new",
+        sessionId: missingSessionId,
+        sessionKey,
+        context: {
+          sessionEntry: {
+            sessionId: missingSessionId,
+            sessionFile: join(harness.sessionsDir, `${missingSessionId}.jsonl`),
+          },
+        },
+      },
+      {
+        sessionId: missingSessionId,
+        sessionKey,
+      },
+    )).resolves.toBeUndefined();
+
+    expect(readSignalPayloads(harness.signalDir)).toEqual([]);
+
+    warn.mockRestore();
+    log.mockRestore();
+    error.mockRestore();
+    rmSync(harness.root, { recursive: true, force: true });
+  });
+
   it("routes command:new from a named empty TUI lane to the generated content transcript", async () => {
     vi.useFakeTimers();
     const harness = makeHarness("command-new-generated-content");
