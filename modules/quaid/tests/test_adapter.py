@@ -2384,7 +2384,7 @@ class TestCodexAdapter:
         assert "pending Quaid notice" not in transcript
         assert "Tell me about Baxter." in transcript
 
-    def test_parse_session_jsonl_strips_assistant_recall_debug_commentary(self, tmp_path):
+    def test_parse_session_jsonl_preserves_assistant_recall_debug_commentary(self, tmp_path):
         path = tmp_path / "rollout-quaid-recall-debug-commentary.jsonl"
         path.write_text(
             "\n".join(
@@ -2405,18 +2405,6 @@ class TestCodexAdapter:
                         {
                             "type": "event_msg",
                             "payload": {
-                                "type": "agent_message",
-                                "message": (
-                                    "The first recall only surfaced startup noise, not the fact itself. "
-                                    "I'm narrowing the query."
-                                ),
-                            },
-                        }
-                    ),
-                    json.dumps(
-                        {
-                            "type": "event_msg",
-                            "payload": {
                                 "type": "user_message",
                                 "message": "My espresso setup uses a Baratza Encore grinder.",
                             },
@@ -2428,8 +2416,7 @@ class TestCodexAdapter:
         )
         adapter = CodexAdapter()
         transcript = adapter.parse_session_jsonl(path)
-        assert "Quaid is noisy" not in transcript
-        assert "first recall only surfaced startup noise" not in transcript
+        assert "Assistant: Quaid is noisy on startup here" in transcript
         assert "User: My espresso setup uses a Baratza Encore grinder." in transcript
 
     def test_parse_session_jsonl_strips_openclaw_self_memory_acknowledgement(self, tmp_path):

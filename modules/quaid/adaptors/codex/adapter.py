@@ -94,17 +94,6 @@ class CodexAdapter(QuaidAdapter):
         r"^\s*(?:You started a new interaction\..*?pending Quaid notice.*?|I(?:'|’)m checking .*?Quaid.*?notice.*?)\s*$",
         flags=re.DOTALL | re.IGNORECASE,
     )
-    _QUAID_RECALL_META_COMMENTARY_RE = re.compile(
-        r"^\s*(?:"
-        r"Quaid\s+(?:is\s+)?(?:noisy|only\s+surfaced|surfaced|returned|found|did\s+not\s+surface|"
-        r"didn['’]t\s+surface|failed|timed\s+out)|"
-        r"(?:The\s+)?(?:first|second|third|next|prior|previous)?\s*recall\s+"
-        r"(?:only\s+)?(?:surfaced|returned|found|missed|failed|timed\s+out)|"
-        r"I(?:'|’)m\s+(?:narrowing|polling|retrying|rerunning|checking)\s+"
-        r"(?:the\s+)?(?:query|recall|memory|Quaid)"
-        r").*$",
-        flags=re.DOTALL | re.IGNORECASE,
-    )
     _QUAID_NOTICE_BULLET_BLOCK_RE = re.compile(
         r"\n\nQuaid notices?:\n(?:- .*(?:\n|$))+",
         flags=re.IGNORECASE,
@@ -727,7 +716,6 @@ class CodexAdapter(QuaidAdapter):
         if not value:
             return ""
         value = self._QUAID_NOTICE_COMMENTARY_RE.sub("", value)
-        value = self._QUAID_RECALL_META_COMMENTARY_RE.sub("", value)
         value = self._QUAID_NOTICE_BULLET_BLOCK_RE.sub("", value)
         value = self._QUAID_NOTICE_INLINE_RE.sub("", value)
         value = re.sub(r"\n{3,}", "\n\n", value).strip()
