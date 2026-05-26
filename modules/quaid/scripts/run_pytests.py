@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import concurrent.futures
 import os
 from pathlib import Path
@@ -173,8 +174,30 @@ def expand_targets(files: list[Path], mode: str) -> list[str]:
                 ]
             )
             continue
+        if (
+            mode == "unit"
+            and file_path.name == "test_project_docs.py"
+            and os.environ.get("QUAID_PYTEST_SPLIT_PROJECT_DOCS", "1") != "0"
+        ):
+            # Project-docs tests are independent top-level functions. Running
+            # the whole file as one target can exceed the wrapper timeout under
+            # loaded CI, so split automatically without weakening the timeout.
+            targets.extend(_top_level_test_function_targets(file_path, rel))
+            continue
         targets.append(rel)
     return targets
+
+
+def _top_level_test_function_targets(file_path: Path, rel: str) -> list[str]:
+    try:
+        module = ast.parse(file_path.read_text(encoding="utf-8"))
+    except Exception:
+        return [rel]
+    names = [
+        node.name for node in module.body
+        if isinstance(node, ast.FunctionDef) and node.name.startswith("test_")
+    ]
+    return [f"{rel}::{name}" for name in names] or [rel]
 
 
 def cleanup_stale_tmp_dirs(base: Path, older_than_hours: int = 24) -> None:

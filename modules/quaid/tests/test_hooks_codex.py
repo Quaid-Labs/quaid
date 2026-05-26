@@ -846,6 +846,7 @@ def test_codex_hook_inject_traces_raw_tool_output_when_present(monkeypatch, tmp_
     monkeypatch.setattr("core.extraction_daemon.read_cursor", lambda sid: {"line_offset": 0, "transcript_path": ""})
     monkeypatch.setattr("core.extraction_daemon.write_cursor", lambda *args: None)
     monkeypatch.setattr(hooks, "_get_pending_context", lambda: "")
+    monkeypatch.setattr(hooks, "_get_deferred_notice_relay_context", lambda: "")
     monkeypatch.setattr(hooks, "_get_deferred_notice_hint", lambda: "")
     monkeypatch.setattr(hooks, "_write_hook_trace", lambda event, payload=None: trace_entries.append((event, payload or {})))
 
