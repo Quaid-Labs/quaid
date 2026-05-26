@@ -42,6 +42,7 @@ _LEGACY_RULES_FILE = "quaid-projects.md"
 _COMPACT_IDENTITY_CONTEXT_MAX_CHARS = 9000
 _IDENTITY_CONTEXT_FILES = ("USER.md", "SOUL.md", "ENVIRONMENT.md")
 _TURN_REFRESH_PARALLEL_REPLAY_SECONDS = 5
+_HOOK_INJECT_RECALL_TIMEOUT_MS = 30_000
 
 _DAEMON_START_SKIP_ENV_KEYS = {
     "CLAUDE_CODE_OAUTH_TOKEN",
@@ -1543,6 +1544,7 @@ def hook_inject(args):
                 query=query,
                 owner=owner,
                 hook_cwd=hook_cwd,
+                timeout_ms=_HOOK_INJECT_RECALL_TIMEOUT_MS,
             )
         except Exception:
             pass
@@ -1560,7 +1562,13 @@ def hook_inject(args):
 
         with ThreadPoolExecutor(max_workers=2) as pool:
             mem_future = pool.submit(
-                lambda: recall_fast(query=query, owner_id=owner, limit=10, return_meta=True)
+                lambda: recall_fast(
+                    query=query,
+                    owner_id=owner,
+                    limit=10,
+                    timeout_ms=_HOOK_INJECT_RECALL_TIMEOUT_MS,
+                    return_meta=True,
+                )
             )
 
             def _run_docs_search():

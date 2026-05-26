@@ -1395,6 +1395,37 @@ class TestHookInjectRecallResilience:
         assert out.strip() == ""
         assert "Recall store 'vector' failed while failHard is enabled" not in err
 
+    def test_hook_inject_passes_explicit_recall_timeout_budget(
+        self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
+    ):
+        from core import extraction_daemon
+
+        monkeypatch.setattr(extraction_daemon, "write_cursor", lambda *a: None)
+        monkeypatch.setattr("core.interface.hooks._get_pending_context", lambda: "")
+        monkeypatch.setattr("core.interface.hooks._get_deferred_notice_hint", lambda: "")
+        monkeypatch.setattr("core.interface.hooks._get_deferred_notice_relay_context", lambda: "")
+        monkeypatch.setattr("core.interface.hooks._get_quaid_agents_baseline_context", lambda: "")
+
+        captured = {}
+
+        def fake_recall_fast(**kwargs):
+            captured.update(kwargs)
+            return [], None
+
+        with patch("core.interface.api.recall_fast", side_effect=fake_recall_fast), \
+             patch("core.interface.api.projects_search_docs", return_value=None):
+            _run_hook_inject(
+                {
+                    "prompt": "What grinder do I use for my espresso setup?",
+                    "session_id": "sess-timeout-budget",
+                    "cwd": "/Users/x",
+                },
+                monkeypatch=monkeypatch,
+            )
+
+        assert captured["timeout_ms"] == 30_000
+        assert captured["return_meta"] is True
+
     def test_recall_fast_non_timeout_exception_surfaces_when_fail_hard_enabled(
         self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
     ):
