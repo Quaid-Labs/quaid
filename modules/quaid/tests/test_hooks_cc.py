@@ -1910,8 +1910,13 @@ class TestHookInjectRecallResilience:
             side_effect=RuntimeError(
                 "Quaid could not access its fast language model provider: model=invalid-model-m6-probe"
             ),
-        ) as probe, patch("core.interface.api.recall_fast", return_value=([], None)), \
-             patch("core.interface.api.projects_search_docs", return_value=None):
+        ) as probe, patch(
+            "core.interface.api.recall_fast",
+            side_effect=AssertionError("recall should not run after model-config notice"),
+        ) as recall, patch(
+            "core.interface.api.projects_search_docs",
+            side_effect=AssertionError("docs should not run after model-config notice"),
+        ) as docs:
             out, _err = _run_hook_inject(
                 {
                     "prompt": "What grinder do I use?",
@@ -1923,6 +1928,8 @@ class TestHookInjectRecallResilience:
 
         probe.assert_called_once()
         assert probe.call_args.kwargs["timeout"] == 8
+        recall.assert_not_called()
+        docs.assert_not_called()
         payload = json.loads(out)
         context = payload["hookSpecificOutput"]["additionalContext"]
         assert "[Quaid error] [provider]" in context
@@ -2129,6 +2136,15 @@ class TestHookInjectRecallResilience:
             "core.interface.hooks._write_hook_trace",
             lambda event, payload=None: trace_events.append((event, payload or {})),
         )
+        monkeypatch.setattr(
+            "core.interface.hooks._validate_prompt_model_config_for_hook",
+            lambda _adapter_id: (_ for _ in ()).throw(AssertionError("model probe should not run before relay")),
+        )
+        monkeypatch.setattr(
+            extraction_daemon,
+            "ensure_alive",
+            lambda: (_ for _ in ()).throw(AssertionError("daemon liveness should not run before relay")),
+        )
 
         with patch("core.interface.api.recall_fast", side_effect=AssertionError("recall should not run before relay")) as recall, \
              patch("core.interface.api.projects_search_docs", side_effect=AssertionError("docs should not run before relay")) as docs:
@@ -2147,7 +2163,10 @@ class TestHookInjectRecallResilience:
         context = payload["hookSpecificOutput"]["additionalContext"]
         assert "MANDATORY: Quaid just drained deferred notices" in context
         assert "blue sparrow" in context
-        assert any(event == "hook.inject.deferred_relay_fastpath" for event, _payload in trace_events)
+        assert any(
+            event == "hook.inject.deferred_relay_fastpath" and _payload.get("phase") == "pre_probe"
+            for event, _payload in trace_events
+        )
 
     def test_memory_context_still_injected_without_tool_hint_round_trip(
         self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch

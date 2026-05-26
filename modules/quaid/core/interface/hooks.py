@@ -1414,7 +1414,93 @@ def hook_inject(args):
     if not query:
         return
 
-    # Any prompt traffic is a daemon liveness contact point.
+    # Human-facing notices must be the first real prompt work. CC's hook
+    # additionalContext is bounded by the host; if a daemon probe, provider
+    # probe, recall, or docs lookup runs first, the notice can be drained but
+    # arrive after prompt dispatch.
+    deferred_notice_relay_context = _get_deferred_notice_relay_context()
+    if deferred_notice_relay_context:
+        pending_context = _get_pending_context()
+        context_parts = []
+        if pending_context:
+            context_parts.append(pending_context)
+        context_parts.append(deferred_notice_relay_context)
+        project_list_hint = _project_list_cli_hint_context(
+            hook_input if isinstance(hook_input, dict) else {}
+        )
+        if project_list_hint:
+            context_parts.append(project_list_hint)
+        context = "\n\n".join(context_parts)
+        _write_hook_trace("hook.inject.deferred_relay_fastpath", {
+            "query": query[:160],
+            "session_id": session_id,
+            "pending_context_len": len(pending_context or ""),
+            "deferred_relay_len": len(deferred_notice_relay_context or ""),
+            "context_len": len(context),
+            "phase": "pre_probe",
+        })
+        print(json.dumps({
+            "hookSpecificOutput": {
+                "hookEventName": "UserPromptSubmit",
+                "additionalContext": context,
+            }
+        }))
+        return
+
+    try:
+        from lib.adapter import get_adapter
+
+        model_config_notice = _validate_prompt_model_config_for_hook(get_adapter().adapter_id())
+        if model_config_notice:
+            direct_notice_context = _format_direct_agent_notices([model_config_notice])
+            pending_context = _get_pending_context()
+            context_parts = [direct_notice_context] if direct_notice_context else []
+            if pending_context:
+                context_parts.append(pending_context)
+            project_list_hint = _project_list_cli_hint_context(
+                hook_input if isinstance(hook_input, dict) else {}
+            )
+            if project_list_hint:
+                context_parts.append(project_list_hint)
+            context = "\n\n".join(context_parts)
+            _write_hook_trace("hook.inject.model_config_notice_fastpath", {
+                "query": query[:160],
+                "session_id": session_id,
+                "pending_context_len": len(pending_context or ""),
+                "context_len": len(context),
+            })
+            if context:
+                print(json.dumps({
+                    "hookSpecificOutput": {
+                        "hookEventName": "UserPromptSubmit",
+                        "additionalContext": context,
+                    }
+                }))
+            return
+    except Exception as e:
+        if _is_provider_failure(e):
+            notice = _provider_failure_notice_message(e)
+            context = _format_direct_agent_notices([notice])
+            _write_hook_trace("hook.inject.model_config_notice_fastpath", {
+                "query": query[:160],
+                "session_id": session_id,
+                "pending_context_len": 0,
+                "context_len": len(context),
+                "source": "exception",
+            })
+            if context:
+                print(json.dumps({
+                    "hookSpecificOutput": {
+                        "hookEventName": "UserPromptSubmit",
+                        "additionalContext": context,
+                    }
+                }))
+            return
+        else:
+            raise
+
+    # Any prompt traffic is a daemon liveness contact point after higher-priority
+    # user-visible notices have had a chance to reach the active turn.
     # ensure_alive is instance-scoped and lock-guarded, so repeated calls are cheap.
     try:
         from core.extraction_daemon import ensure_alive
@@ -1426,18 +1512,6 @@ def hook_inject(args):
             "New memories may not be processed until Quaid recovers. "
             f"{_safe_agent_error(e)}"
         )
-
-    try:
-        from lib.adapter import get_adapter
-
-        model_config_notice = _validate_prompt_model_config_for_hook(get_adapter().adapter_id())
-        if model_config_notice:
-            direct_notices.append(model_config_notice)
-    except Exception as e:
-        if _is_provider_failure(e):
-            direct_notices.append(_provider_failure_notice_message(e))
-        else:
-            raise
 
     # Ensure a cursor exists for this session so the daemon can discover it
     # for timeout extraction.  Lightweight: skips if cursor already exists.
@@ -1507,8 +1581,9 @@ def hook_inject(args):
             "rules_identity_context_len": len(rules_identity_context),
         })
 
-    # Human-facing deferred notices must not wait behind recall/docs work, but
-    # lifecycle identity bridges still take precedence on post-compaction turns.
+    # Deferred notices were already drained before provider/daemon probes. Keep
+    # this fallback for adapters/tests that monkeypatch the helper after the
+    # early phase or for future non-draining implementations.
     deferred_notice_relay_context = _get_deferred_notice_relay_context()
     if deferred_notice_relay_context:
         pending_context = _get_pending_context()
