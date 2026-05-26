@@ -17040,9 +17040,12 @@ class TestGraphFactClusterRecall:
 
         assert meta["annotated"] == 1
         assert "Respond in the same language as the Query" in captured["prompt"]
-        assert "Keep interpretation under 700 characters" in captured["prompt"]
+        assert (
+            f"Keep interpretation under {mg._GRAPH_FACT_CLUSTER_INTERPRETATION_MAX_CHARS} characters"
+            in captured["prompt"]
+        )
         assert "Match the user's query language" in captured["system_prompt"]
-        assert captured["max_tokens"] >= 512
+        assert captured["max_tokens"] == mg._GRAPH_FACT_CLUSTER_INTERPRETATION_MAX_TOKENS
         assert rows[0]["graph_cluster_interpretation"].startswith("Ari tiene")
 
     def test_graph_fact_cluster_interpretation_no_provider_respects_failhard(self):

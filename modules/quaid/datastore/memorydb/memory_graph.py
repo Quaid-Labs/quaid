@@ -113,7 +113,8 @@ _GRAPH_FACT_CLUSTER_INTERPRETATION_MIN_QUERY_OVERLAP = 2
 _GRAPH_FACT_CLUSTER_INTERPRETATION_MAX_EVIDENCE_CHARS = 5000
 _GRAPH_FACT_CLUSTER_INTERPRETATION_MAX_CHARS = 700
 # Covers the 700-character interpretation plus strict JSON wrapper without
-# triggering provider truncation under failHard on dense graph clusters.
+# triggering provider truncation under failHard on dense graph clusters; ALS
+# r1642 hit truncation at the old 240-token cap with 1143 input tokens.
 _GRAPH_FACT_CLUSTER_INTERPRETATION_MAX_TOKENS = 512
 # This runs only in deliberate recall after store retrieval/ranking has already
 # selected a broad graph cluster; keep it bounded below the overall recall SLA.
