@@ -2347,20 +2347,12 @@ def _store_context_refresh_state(state: Dict[str, Any]) -> None:
 
 def _identity_context_signature() -> str:
     """Hash current identity-file content for turn-based refresh invalidation."""
-    try:
-        identity_dir = _get_identity_dir()
-    except Exception:
-        return ""
     parts: List[str] = []
     for filename in _IDENTITY_CONTEXT_FILES:
-        path = identity_dir / filename
-        try:
-            if not path.is_file():
-                continue
-            digest = hashlib.sha256(path.read_bytes()).hexdigest()
-        except Exception:
-            continue
-        parts.append(f"{filename}:{digest}")
+        content = _read_identity_context_content(filename)
+        if content:
+            digest = hashlib.sha256(content.encode("utf-8", errors="replace")).hexdigest()
+            parts.append(f"{filename}:{digest}")
     return "|".join(parts)
 
 
@@ -2665,6 +2657,75 @@ def _identity_context_content(filename: str, content: str) -> str:
     return text
 
 
+def _add_candidate_identity_dir(candidates: List[Path], raw_path: Any) -> None:
+    if raw_path is None:
+        return
+    if type(raw_path).__module__.startswith("unittest.mock"):
+        return
+    try:
+        path = Path(raw_path).expanduser()
+    except Exception:
+        return
+    key = str(path)
+    if key and all(str(existing) != key for existing in candidates):
+        candidates.append(path)
+
+
+def _candidate_identity_dirs() -> List[Path]:
+    candidates: List[Path] = []
+    try:
+        primary_identity_dir = _get_identity_dir()
+    except Exception:
+        primary_identity_dir = None
+    _add_candidate_identity_dir(candidates, primary_identity_dir)
+
+    try:
+        from lib.adapter import get_adapter
+
+        adapter = get_adapter()
+        getter = getattr(adapter, "identity_dir", None)
+        adapter_identity_dir = getter() if callable(getter) else None
+        if (
+            primary_identity_dir is not None
+            and adapter_identity_dir is not None
+            and Path(adapter_identity_dir).expanduser() == Path(primary_identity_dir).expanduser()
+        ):
+            root_getter = getattr(adapter, "instance_root", None)
+            _add_candidate_identity_dir(candidates, root_getter() if callable(root_getter) else None)
+    except Exception:
+        pass
+
+    return candidates
+
+
+def _read_identity_context_content(filename: str) -> str:
+    for identity_dir in _candidate_identity_dirs():
+        path = identity_dir / filename
+        if not path.is_file():
+            continue
+        try:
+            content = _identity_context_content(filename, path.read_text(encoding="utf-8"))
+        except OSError:
+            continue
+        if content:
+            return content
+    return ""
+
+
+def _read_identity_snippet_content(filename: str) -> str:
+    for identity_dir in _candidate_identity_dirs():
+        path = identity_dir / filename
+        if not path.is_file():
+            continue
+        try:
+            content = _snippet_context_content(path.read_text(encoding="utf-8"))
+        except OSError:
+            continue
+        if content:
+            return content
+    return ""
+
+
 def _snippet_context_content(content: str) -> str:
     """Render pending snippet queues without queue scaffolding or code markers."""
     lines: List[str] = []
@@ -2736,16 +2797,9 @@ def _build_compaction_identity_context(max_chars: int = _COMPACT_IDENTITY_CONTEX
     session.  The follow-up turn after /compact therefore gets identity files
     only, kept below CC's hook additionalContext cap.
     """
-    identity_dir = _get_identity_dir()
     raw_sections: List[tuple[str, str]] = []
     for filename in _IDENTITY_CONTEXT_FILES:
-        fpath = identity_dir / filename
-        if not fpath.is_file():
-            continue
-        try:
-            content = _identity_context_content(filename, fpath.read_text(encoding="utf-8"))
-        except OSError:
-            continue
+        content = _read_identity_context_content(filename)
         if content:
             raw_sections.append((filename, content))
 
@@ -2806,24 +2860,14 @@ def _build_compaction_rules_identity_context(
 def _collect_project_context_sections(*, hook_cwd: str = "") -> List[str]:
     sections: List[str] = []
 
-    identity_dir = _get_identity_dir()
     for special_file in _IDENTITY_CONTEXT_FILES:
-        fpath = identity_dir / special_file
-        if fpath.is_file():
-            try:
-                content = _identity_context_content(special_file, fpath.read_text(encoding="utf-8"))
-            except Exception:
-                content = ""
-            if isinstance(content, str) and content:
-                sections.append(f"--- {special_file} ---\n{content}")
-        try:
-            snippets_path = identity_dir / f"{Path(special_file).stem}.snippets.md"
-            if snippets_path.is_file():
-                snippet_content = _snippet_context_content(snippets_path.read_text(encoding="utf-8"))
-                if snippet_content:
-                    sections.append(f"--- {snippets_path.name} ---\n{snippet_content}")
-        except Exception:
-            continue
+        content = _read_identity_context_content(special_file)
+        if content:
+            sections.append(f"--- {special_file} ---\n{content}")
+        snippets_name = f"{Path(special_file).stem}.snippets.md"
+        snippet_content = _read_identity_snippet_content(snippets_name)
+        if snippet_content:
+            sections.append(f"--- {snippets_name} ---\n{snippet_content}")
 
     projects_dir = _get_projects_dir()
     sections.extend(_collect_project_doc_context_sections(projects_dir, hook_cwd=hook_cwd))

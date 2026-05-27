@@ -408,6 +408,90 @@ def test_claude_code_post_compact_turn_gets_identity_additional_context_under_ca
     assert out2.strip() == ""
 
 
+def test_claude_code_compact_refresh_uses_hidden_identity_when_visible_empty(monkeypatch, tmp_path, cursor_dir):
+    from adaptors.claude_code.adapter import ClaudeCodeAdapter
+
+    transcript_path = tmp_path / "cc-compact-hidden-identity.jsonl"
+    transcript_path.write_text(
+        json.dumps({"type": "user", "message": {"role": "user", "content": "/compact"}}) + "\n",
+        encoding="utf-8",
+    )
+    projects_dir = tmp_path / "projects"
+    visible_identity_dir = tmp_path / "visible" / "instances" / "claude-code-test"
+    hidden_instance_root = tmp_path / ".quaid" / "instances" / "claude-code-test"
+    projects_dir.mkdir()
+    visible_identity_dir.mkdir(parents=True)
+    hidden_instance_root.mkdir(parents=True)
+    for filename in ("USER.md", "SOUL.md", "ENVIRONMENT.md"):
+        (visible_identity_dir / filename).write_text("", encoding="utf-8")
+    (hidden_instance_root / "USER.md").write_text("The office plant is named Bartholomew.", encoding="utf-8")
+    (hidden_instance_root / "SOUL.md").write_text("SOUL live", encoding="utf-8")
+    (hidden_instance_root / "ENVIRONMENT.md").write_text("It is a fiddle-leaf fig.", encoding="utf-8")
+
+    rules_dir = tmp_path / ".claude" / "rules"
+    data_dir = hidden_instance_root / "data"
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path / ".quaid"))
+    monkeypatch.setenv("QUAID_VISIBLE_HOME", str(tmp_path / "visible"))
+    monkeypatch.setenv("QUAID_INSTANCE", "claude-code-test")
+    monkeypatch.setenv("QUAID_RULES_DIR", str(rules_dir))
+
+    adapter = _adapter_mock()
+    cc_adapter = ClaudeCodeAdapter()
+    adapter.adapter_id.return_value = "claude-code"
+    adapter.resolve_prompt_submit_signal.side_effect = cc_adapter.resolve_prompt_submit_signal
+    adapter.projects_dir.return_value = projects_dir
+    adapter.identity_dir.return_value = visible_identity_dir
+    adapter.instance_root.return_value = hidden_instance_root
+    adapter.data_dir.return_value = data_dir
+    adapter.get_base_context_files.return_value = {}
+    adapter.get_cli_tools_snippet.return_value = ""
+    adapter.get_pending_context.return_value = ""
+    adapter.get_deferred_notice_relay_context.return_value = ""
+
+    monkeypatch.setattr("core.extraction_daemon.write_signal", lambda **kwargs: tmp_path / "signals" / "sig-compact.json")
+    monkeypatch.setattr("core.extraction_daemon.ensure_alive", lambda: None)
+    monkeypatch.setattr("core.extraction_daemon.read_cursor", lambda session_id: {"transcript_path": str(transcript_path)})
+    monkeypatch.setattr("core.interface.hooks._runtime_config_snapshot", lambda: tuple())
+    monkeypatch.setattr("lib.adapter.get_adapter", lambda: adapter)
+
+    _run_hook_inject(
+        {
+            "session_id": "sess-cc-compact-hidden-identity",
+            "transcript_path": str(transcript_path),
+            "cwd": str(tmp_path),
+            "prompt": "/compact",
+        },
+        monkeypatch=monkeypatch,
+    )
+
+    marker_path = data_dir / "context-refresh-compaction" / "sess-cc-compact-hidden-identity.json"
+    assert marker_path.is_file()
+    assert "Bartholomew" in (rules_dir / "quaid-user.md").read_text(encoding="utf-8")
+    assert "fiddle-leaf fig" in (rules_dir / "quaid-environment.md").read_text(encoding="utf-8")
+
+    def fail_recall(**kwargs):
+        pytest.fail("post-compact hidden identity bridge should skip recall")
+
+    monkeypatch.setattr("core.interface.api.recall_fast", fail_recall)
+    monkeypatch.setattr("core.interface.api.projects_search_docs", lambda **kwargs: pytest.fail("post-compact hidden identity bridge should skip docs"))
+
+    out, _err = _run_hook_inject(
+        {
+            "session_id": "sess-cc-compact-hidden-identity",
+            "transcript_path": str(transcript_path),
+            "cwd": str(tmp_path),
+            "prompt": "What is the office plant named?",
+        },
+        monkeypatch=monkeypatch,
+    )
+
+    payload = json.loads(out)
+    context = payload["hookSpecificOutput"]["additionalContext"]
+    assert "Quaid Refreshed Identity Context" in context
+    assert "Bartholomew" in context
+    assert "fiddle-leaf fig" in context
+
+
 def test_claude_code_post_compact_turn_falls_back_to_refreshed_identity_rules(monkeypatch, tmp_path, cursor_dir):
     from adaptors.claude_code.adapter import ClaudeCodeAdapter
 
