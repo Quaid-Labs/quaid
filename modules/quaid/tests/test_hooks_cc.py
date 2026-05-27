@@ -2184,21 +2184,26 @@ class TestHookInjectRecallResilience:
             assert hooks._validate_prompt_model_config_for_hook("claude-code") == ""
         probe.assert_not_called()
 
-    def test_claude_code_relays_deferred_notice_before_recall_work(
+    def test_claude_code_predrains_deferred_notice_without_skipping_recall(
         self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
     ):
         from core import extraction_daemon
 
         trace_events = []
+        call_order = []
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "claude-code-test")
         monkeypatch.setattr(extraction_daemon, "write_cursor", lambda *a: None)
-        monkeypatch.setattr(
-            "core.interface.hooks._get_deferred_notice_relay_context",
-            lambda: (
+
+        def deferred_relay():
+            call_order.append("relay")
+            return (
                 "MANDATORY: Quaid just drained deferred notices for the human user. "
                 "Start your next response by briefly relaying them, then answer the user's current message.\n\n"
                 "<quaid_system_message>\n• First-turn relay: blue sparrow is ready.\n</quaid_system_message>"
-            ),
-        )
+            )
+
+        monkeypatch.setattr("core.interface.hooks._get_deferred_notice_relay_context", deferred_relay)
         monkeypatch.setattr("core.interface.hooks._get_pending_context", lambda: "")
         monkeypatch.setattr(
             "core.interface.hooks._write_hook_trace",
@@ -2206,35 +2211,51 @@ class TestHookInjectRecallResilience:
         )
         monkeypatch.setattr(
             "core.interface.hooks._validate_prompt_model_config_for_hook",
-            lambda _adapter_id: (_ for _ in ()).throw(AssertionError("model probe should not run before relay")),
+            lambda _adapter_id: call_order.append("probe") or "",
         )
         monkeypatch.setattr(
             extraction_daemon,
             "ensure_alive",
-            lambda: (_ for _ in ()).throw(AssertionError("daemon liveness should not run before relay")),
+            lambda: call_order.append("daemon"),
         )
 
-        with patch("core.interface.api.recall_fast", side_effect=AssertionError("recall should not run before relay")) as recall, \
-             patch("core.interface.api.projects_search_docs", side_effect=AssertionError("docs should not run before relay")) as docs:
+        def recall_fast(**_kwargs):
+            call_order.append("recall")
+            return [
+                {
+                    "id": "m-grinder",
+                    "text": "Espresso setup uses a Baratza Encore grinder.",
+                    "similarity": 0.96,
+                    "category": "fact",
+                }
+            ], {"mode": "fast"}
+
+        with patch("core.interface.api.recall_fast", side_effect=recall_fast) as recall, \
+             patch("core.interface.api.projects_search_docs", return_value=None):
             out, _err = _run_hook_inject(
                 {
-                    "prompt": "Hey, what is up?",
+                    "prompt": "What grinder do I use for my espresso setup?",
                     "session_id": "sess-deferred-fastpath",
                     "cwd": "/Users/x",
                 },
                 monkeypatch=monkeypatch,
             )
 
-        recall.assert_not_called()
-        docs.assert_not_called()
+        recall.assert_called_once()
+        assert call_order[:4] == ["relay", "probe", "daemon", "recall"]
         payload = json.loads(out)
         context = payload["hookSpecificOutput"]["additionalContext"]
         assert "MANDATORY: Quaid just drained deferred notices" in context
         assert "blue sparrow" in context
+        assert "Baratza Encore" in context
         assert any(
-            event == "hook.inject.deferred_relay_fastpath" and _payload.get("phase") == "pre_probe"
+            event == "hook.inject.deferred_relay_predrained" and _payload.get("phase") == "pre_probe"
             for event, _payload in trace_events
         )
+        assert any(event == "hook.inject.context_emitted" for event, _payload in trace_events)
+        log_path = tmp_path / "instances" / "claude-code-test" / "logs" / "daemon" / "preinject.jsonl"
+        entry = json.loads(log_path.read_text(encoding="utf-8").splitlines()[0])
+        assert entry["injected"][0]["text"] == "Espresso setup uses a Baratza Encore grinder."
 
     def test_memory_context_still_injected_without_tool_hint_round_trip(
         self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
