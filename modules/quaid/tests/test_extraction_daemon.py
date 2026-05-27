@@ -7764,8 +7764,8 @@ class TestRollingExtraction:
                 "buffer_transcript_path": str(mirror_path),
                 "processed_line_offset": 3,
                 "buffered_line_offset": 3,
-                "semantic_buffer": "User: " + ("looping duplicate content " * 140),
-                "semantic_buffer_tokens": 1646,
+                "semantic_buffer": "",
+                "semantic_buffer_tokens": 0,
             },
         )
 
@@ -7808,7 +7808,6 @@ class TestRollingExtraction:
                 },
             }
         ]
-        assert extraction_daemon._rolling_state_path(session_id).exists()
 
     def test_check_chunk_ready_sessions_prefers_larger_live_path_for_preserved_cursor(
         self, monkeypatch, tmp_path

@@ -7095,7 +7095,10 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
         if (
             ended_preserved_buffer_path
             and (cursor_points_at_ended_source or preserved_buffer_larger_than_cursor_source)
-            and state_semantic_tokens >= _rolling_ready_threshold(chunk_budget)
+            and (
+                state_semantic_tokens >= _rolling_ready_threshold(chunk_budget)
+                or preserved_buffer_larger_than_cursor_source
+            )
             and (
                 _adapter_live_transcript_missing(str(session_id), adapter=adapter)
                 or preserved_buffer_larger_than_cursor_source
