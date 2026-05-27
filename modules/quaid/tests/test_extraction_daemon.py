@@ -11481,6 +11481,204 @@ class TestRollingExtraction:
             else:
                 sys.modules.pop("core.runtime.notify", None)
 
+    def test_process_signal_ended_rolling_flush_migrates_alias_cursor_to_preserved_eof(
+        self, monkeypatch, tmp_path
+    ):
+        import sys
+        import types
+
+        session_id = "8817b065-c63a-43f3-a68a-72b70f2729ed"
+        live_path = tmp_path / ".openclaw" / "agents" / "main" / "sessions" / f"{session_id}.jsonl"
+        mirror_path = (
+            tmp_path
+            / "instances"
+            / "openclaw-main"
+            / "logs"
+            / "quaid"
+            / "sessions"
+            / f"{session_id}.jsonl"
+        )
+        live_path.parent.mkdir(parents=True, exist_ok=True)
+        mirror_path.parent.mkdir(parents=True, exist_ok=True)
+        live_path.write_text(
+            '{"role":"user","content":"Chunk one"}\n',
+            encoding="utf-8",
+        )
+        mirror_path.write_text(
+            '{"role":"user","content":"Chunk one"}\n'
+            '{"role":"user","content":"Chunk two"}\n'
+            '{"role":"user","content":"Chunk three"}\n',
+            encoding="utf-8",
+        )
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "openclaw-main")
+        instance_root = tmp_path / "instances" / "openclaw-main"
+        instance_root.mkdir(parents=True, exist_ok=True)
+        (instance_root / "config.json").write_text(
+            json.dumps({"adapter": {"type": "openclaw"}}),
+            encoding="utf-8",
+        )
+        source_key = "live-openclaw-cursor"
+        extraction_daemon.write_cursor(session_id, 0, str(mirror_path), source_key=source_key)
+        extraction_daemon.write_cursor(session_id, 7, str(live_path))
+        extraction_daemon.write_rolling_state(
+            session_id,
+            {
+                "session_id": session_id,
+                "transcript_path": str(live_path),
+                "buffer_transcript_path": str(mirror_path),
+                "processed_line_offset": 3,
+                "buffered_line_offset": 3,
+                "semantic_buffer": "User: Chunk two\n\nUser: Chunk three",
+                "semantic_buffer_tokens": 1646,
+                "raw_facts": [{"text": "Owner mentioned Chunk two", "category": "fact"}],
+            },
+        )
+
+        monkeypatch.setattr(extraction_daemon, "_get_owner_id", lambda: "Owner")
+        real_registry = sys.modules.get("core.subagent_registry")
+        real_adapter = sys.modules.get("lib.adapter")
+        fake_registry = types.ModuleType("core.subagent_registry")
+        fake_registry.is_registered_subagent = lambda sid: False
+        fake_registry.get_harvestable = lambda sid: []
+        fake_registry.mark_harvested = lambda sid, cid: None
+        fake_registry._registry_dir = lambda: tmp_path / "registry"
+        sys.modules["core.subagent_registry"] = fake_registry
+
+        fake_adapter_mod = types.ModuleType("lib.adapter")
+
+        class _FakeAdapter(_OwnedTestAdapterMixin):
+            def quaid_home(self):
+                return tmp_path
+
+            def instance_root(self):
+                return instance_root
+
+            def data_dir(self):
+                return instance_root / "data"
+
+            def parse_session_jsonl(self, path):
+                return "unused when semantic buffer is present"
+
+        fake_adapter_mod.get_adapter = lambda: _FakeAdapter()
+        fake_adapter_mod.quaid_projects_dir = lambda home: Path(home) / "projects"
+        fake_adapter_mod.quaid_tracking_dir = lambda home: Path(home) / ".git-tracking"
+        sys.modules["lib.adapter"] = fake_adapter_mod
+
+        import core.docs_updater_hook as docs_updater_mod
+        import core.ingest_runtime as ingest_runtime_mod
+        import core.project_registry as project_registry_mod
+        import ingest.extract as extract_mod
+
+        real_notify = sys.modules.get("core.runtime.notify")
+        fake_notify = types.ModuleType("core.runtime.notify")
+        fake_notify.notify_memory_extraction = lambda **kwargs: None
+        sys.modules["core.runtime.notify"] = fake_notify
+
+        seen_transcripts = []
+        monkeypatch.setattr(
+            extract_mod,
+            "extract_from_transcript",
+            lambda **kwargs: seen_transcripts.append(kwargs["transcript"]) or {
+                "facts_stored": 1,
+                "facts_skipped": 0,
+                "edges_created": 0,
+                "facts": [],
+                "snippets": {},
+                "journal": {},
+                "project_logs": {},
+                "project_log_metrics": {},
+                "dry_run": True,
+                "raw_facts": [],
+                "raw_snippets": {},
+                "raw_journal": {},
+                "raw_project_logs": {},
+                "carry_facts": [{"text": "Owner mentioned Chunk two"}],
+                "carry_duplicate_facts_dropped": 0,
+                "chunks_processed": 1,
+                "chunks_total": 1,
+                "root_chunks": 1,
+                "split_events": 0,
+                "split_child_chunks": 0,
+                "leaf_chunks": 1,
+                "max_split_depth": 0,
+                "chunk_calls": 1,
+                "deep_calls": 1,
+                "repair_calls": 0,
+                "assessment_usable": 1,
+                "assessment_nothing_usable": 0,
+                "assessment_needs_smaller_chunk": 0,
+                "unclassified_empty_payloads": 0,
+            },
+        )
+        monkeypatch.setattr(
+            extract_mod,
+            "apply_extracted_payloads",
+            lambda payload, **kwargs: {
+                **payload,
+                "facts": [],
+                "snippets": {},
+                "journal": {},
+                "project_logs": {},
+                "project_log_metrics": {},
+            },
+        )
+        monkeypatch.setattr(ingest_runtime_mod, "run_session_logs_ingest", lambda **kwargs: {"status": "indexed"})
+        monkeypatch.setattr(extraction_daemon, "_request_session_logs_ingest", lambda **kwargs: {"status": "indexed"})
+        monkeypatch.setattr(project_registry_mod, "snapshot_all_projects", lambda: [])
+        monkeypatch.setattr(docs_updater_mod, "update_project_docs", lambda snapshots, extraction_result: {"docs_updated": 0})
+        monkeypatch.setattr(
+            extraction_daemon,
+            "_read_usage_totals",
+            lambda: {
+                "calls": 0,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "fast_calls": 0,
+                "fast_input_tokens": 0,
+                "fast_output_tokens": 0,
+                "deep_calls": 0,
+                "deep_input_tokens": 0,
+                "deep_output_tokens": 0,
+            },
+        )
+
+        try:
+            extraction_daemon.write_signal(
+                signal_type="session_end",
+                session_id=session_id,
+                transcript_path=str(mirror_path),
+                meta={
+                    "reason": "ended_rolling_buffer_flush",
+                    "source_cursor_key": source_key,
+                },
+            )
+            extraction_daemon.process_signal(extraction_daemon.read_pending_signals()[0])
+
+            source_cursor = extraction_daemon.read_cursor(session_id, source_key=source_key)
+            alias_cursor = extraction_daemon.read_cursor(session_id)
+            assert source_cursor["transcript_path"] == str(mirror_path)
+            assert alias_cursor["transcript_path"] == str(mirror_path)
+            assert source_cursor["line_offset"] == 3
+            assert alias_cursor["line_offset"] == 3
+            assert source_cursor["processed_signal_type"] == "session_end"
+            assert alias_cursor["processed_signal_type"] == "session_end"
+            assert not extraction_daemon._rolling_state_path(session_id).exists()
+        finally:
+            if real_registry is not None:
+                sys.modules["core.subagent_registry"] = real_registry
+            else:
+                sys.modules.pop("core.subagent_registry", None)
+            if real_adapter is not None:
+                sys.modules["lib.adapter"] = real_adapter
+            else:
+                sys.modules.pop("lib.adapter", None)
+            if real_notify is not None:
+                sys.modules["core.runtime.notify"] = real_notify
+            else:
+                sys.modules.pop("core.runtime.notify", None)
+
     def test_staged_flush_without_completed_rolling_batch_drains_semantic_buffer(self, monkeypatch, tmp_path):
         import sys
         import types

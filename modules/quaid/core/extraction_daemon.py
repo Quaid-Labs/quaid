@@ -4505,6 +4505,15 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
     staged_payload_sweep_signal = bool(signal_meta.get("staged_payload_sweep")) or (
         str(signal_meta.get("reason") or "") == "rolling_stage_flush"
     )
+    ended_rolling_buffer_flush_signal = (
+        signal_type == "session_end"
+        and str(signal_meta.get("reason") or "").strip() == "ended_rolling_buffer_flush"
+    )
+    ended_rolling_buffer_flush_source_key = (
+        str(signal_meta.get("source_cursor_key") or "").strip()
+        if ended_rolling_buffer_flush_signal
+        else ""
+    )
     preserve_active_rolling_state_after_flush = (
         _is_late_post_reset_content_signal(str(signal_type), signal_meta)
         and not staged_payload_sweep_signal
@@ -6094,6 +6103,21 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             source_key=lock_owner_key,
             processed_signal_type=signal_type,
         )
+        if ended_rolling_buffer_flush_signal:
+            if ended_rolling_buffer_flush_source_key:
+                write_cursor(
+                    session_id,
+                    final_cursor_offset,
+                    transcript_path,
+                    source_key=ended_rolling_buffer_flush_source_key,
+                    processed_signal_type=signal_type,
+                )
+            write_cursor(
+                session_id,
+                final_cursor_offset,
+                transcript_path,
+                processed_signal_type=signal_type,
+            )
         if (
             staged_payload_sweep_signal
             and _semantic_buffer_has_content(staged_state)
