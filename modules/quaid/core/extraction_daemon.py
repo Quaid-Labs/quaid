@@ -7055,12 +7055,27 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
             or _is_daemon_preserved_session_transcript_path(str(transcript_path))
             or _is_daemon_rolling_transcript_snapshot_path(str(transcript_path))
         )
+        preserved_buffer_larger_than_cursor_source = False
+        if (
+            ended_preserved_buffer_path
+            and os.path.isfile(str(transcript_path))
+            and not _is_daemon_preserved_session_transcript_path(str(transcript_path))
+            and not _is_daemon_rolling_transcript_snapshot_path(str(transcript_path))
+            and not defer_internal_advance
+        ):
+            preserved_buffer_larger_than_cursor_source = (
+                _transcript_size_bytes(ended_preserved_buffer_path)
+                > _transcript_size_bytes(str(transcript_path))
+            )
         state_semantic_tokens = int(state.get("semantic_buffer_tokens", 0) or 0)
         if (
             ended_preserved_buffer_path
-            and cursor_points_at_ended_source
+            and (cursor_points_at_ended_source or preserved_buffer_larger_than_cursor_source)
             and state_semantic_tokens >= _rolling_ready_threshold(chunk_budget)
-            and _adapter_live_transcript_missing(str(session_id), adapter=adapter)
+            and (
+                _adapter_live_transcript_missing(str(session_id), adapter=adapter)
+                or preserved_buffer_larger_than_cursor_source
+            )
         ):
             if str(session_id) in pending_session_end_session_ids:
                 continue
@@ -7068,7 +7083,7 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
             cursor_key_for_signal = str(data.get("cursor_key") or cursor_file.stem or session_id).strip()
             cursor_offset_for_flush = min(int(data.get("line_offset", 0) or 0), preserved_total_lines)
             logger.info(
-                "session %s rolling scan found ended preserved buffer %s with no active live transcript; "
+                "session %s rolling scan found ended preserved buffer %s with no active growth; "
                 "queueing lifecycle flush from preserved cursor offset %d before threshold check",
                 session_id,
                 ended_preserved_buffer_path,
