@@ -5061,6 +5061,25 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                 label, session_id, _relocated_total_lines - cursor_offset, cursor_offset,
                 cursor_transcript, transcript_path,
             )
+        elif (
+            _is_dir_relocation
+            and _relocated_content_changed
+            and signal_type == "timeout"
+            and _relocated_cursor_size_bytes
+            and _relocated_current_size_bytes
+            and _relocated_current_size_bytes < _relocated_cursor_size_bytes
+            and _is_daemon_preserved_session_transcript_path(cursor_transcript)
+            and not _is_daemon_preserved_session_transcript_path(str(transcript_path))
+        ):
+            logger.info(
+                "[%s] session %s: timeout points at smaller stale live transcript after preserved flush "
+                "(%s -> %s, cursor_offset=%d, cursor_size=%d, current_size=%d); preserving cursor",
+                label, session_id, cursor_transcript, transcript_path, cursor_offset,
+                _relocated_cursor_size_bytes, _relocated_current_size_bytes,
+            )
+            mark_signal_processed(signal_data)
+            _release_session_processing_lock(lock_owner_key, lock_fd)
+            return
         elif _is_dir_relocation and _relocated_content_changed:
             logger.info(
                 "[%s] session %s: transcript directory relocation content changed "
@@ -7111,6 +7130,30 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
             preserved_total_lines = count_transcript_lines(ended_preserved_buffer_path)
             cursor_key_for_signal = str(data.get("cursor_key") or cursor_file.stem or session_id).strip()
             cursor_offset_for_flush = min(int(data.get("line_offset", 0) or 0), preserved_total_lines)
+            if cursor_offset_for_flush >= preserved_total_lines and not _rolling_state_has_pending_content(state):
+                logger.info(
+                    "session %s rolling scan found ended preserved buffer %s already consumed at EOF; "
+                    "preserving cursor without queueing lifecycle flush",
+                    session_id,
+                    ended_preserved_buffer_path,
+                )
+                write_cursor(
+                    str(session_id),
+                    preserved_total_lines,
+                    ended_preserved_buffer_path,
+                    internal=bool(data.get("internal", False)),
+                    source_key=cursor_key_for_signal,
+                    processed_signal_type="session_end",
+                )
+                if _cursor_storage_key(str(session_id), cursor_key_for_signal) != str(session_id):
+                    write_cursor(
+                        str(session_id),
+                        preserved_total_lines,
+                        ended_preserved_buffer_path,
+                        internal=bool(data.get("internal", False)),
+                        processed_signal_type="session_end",
+                    )
+                continue
             logger.info(
                 "session %s rolling scan found ended preserved buffer %s with no active growth; "
                 "queueing lifecycle flush from preserved cursor offset %d before threshold check",

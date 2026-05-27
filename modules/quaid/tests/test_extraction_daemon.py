@@ -2728,6 +2728,87 @@ def test_process_signal_skips_preserved_checkpoint_session_end_while_live_exists
     assert "orange linen notebook" in state["semantic_buffer"]
 
 
+def test_process_signal_timeout_preserves_cursor_on_larger_preserved_mirror(
+    monkeypatch,
+    tmp_path,
+):
+    from lib.adapter import set_adapter, reset_adapter
+    from ingest import extract as extract_mod
+
+    session_id = "8817b065-c63a-43f3-a68a-72b70f2729ed"
+    live_dir = tmp_path / ".openclaw" / "agents" / "main" / "sessions"
+    preserved_dir = tmp_path / "instances" / "openclaw-main" / "logs" / "quaid" / "sessions"
+    live_dir.mkdir(parents=True)
+    preserved_dir.mkdir(parents=True)
+    live_path = live_dir / f"{session_id}.jsonl"
+    preserved_path = preserved_dir / f"{session_id}.jsonl"
+    live_path.write_text(
+        "\n".join([
+            f'{{"type":"session","id":"{session_id}"}}',
+            '{"type":"message","message":{"role":"user","content":[{"type":"text","text":"live subset"}]}}',
+        ]) + "\n",
+        encoding="utf-8",
+    )
+    preserved_path.write_text(
+        "\n".join([
+            f'{{"type":"session","id":"{session_id}"}}',
+            '{"type":"message","message":{"role":"user","content":[{"type":"text","text":"live subset"}]}}',
+            '{"type":"message","message":{"role":"user","content":[{"type":"text","text":"preserved mirror tail"}]}}',
+        ]) + "\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "openclaw-main")
+    source_key = extraction_daemon._signal_source_cursor_key(session_id, str(live_path))
+    extraction_daemon.write_cursor(
+        session_id,
+        3,
+        str(preserved_path),
+        source_key=source_key,
+        processed_signal_type="session_end",
+    )
+
+    class _Adapter(_OwnedTestAdapterMixin):
+        def instance_root(self):
+            return tmp_path / "instances" / "openclaw-main"
+
+        def parse_session_jsonl(self, path):
+            return Path(path).read_text(encoding="utf-8")
+
+        def is_subagent_session(self, session_id, transcript_path=None):
+            return False
+
+    set_adapter(_Adapter())
+    monkeypatch.setattr(extraction_daemon, "_reconcile_internal_cursor_state", lambda *args, **kwargs: "not_internal")
+    monkeypatch.setattr(
+        extract_mod,
+        "extract_from_transcript",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("timeout must not reset to smaller stale live transcript")
+        ),
+    )
+
+    try:
+        signal_path = extraction_daemon.write_signal(
+            signal_type="timeout",
+            session_id=session_id,
+            transcript_path=str(live_path),
+        )
+        signal_data = json.loads(signal_path.read_text(encoding="utf-8"))
+        signal_data["_signal_path"] = str(signal_path)
+
+        extraction_daemon.process_signal(signal_data)
+    finally:
+        reset_adapter()
+
+    cursor = extraction_daemon.read_cursor(session_id, source_key=source_key)
+    assert cursor["line_offset"] == 3
+    assert cursor["transcript_path"] == str(preserved_path)
+    assert cursor["processed_signal_type"] == "session_end"
+    assert extraction_daemon.read_pending_signals() == []
+
+
 def test_process_signal_recovers_full_transcript_before_too_short_skip(
     monkeypatch,
     tmp_path,
@@ -7755,15 +7836,15 @@ class TestRollingExtraction:
         monkeypatch.setattr(extraction_daemon, "_adapter_owns_transcript_path", lambda *args, **kwargs: True)
         monkeypatch.setattr(extraction_daemon, "_cursor_or_adapter_owns_transcript_path", lambda *args, **kwargs: True)
         monkeypatch.setattr(extraction_daemon, "_reconcile_internal_cursor_state", lambda *args, **kwargs: "not_internal")
-        extraction_daemon.write_cursor(session_id, 3, str(live_path))
+        extraction_daemon.write_cursor(session_id, 0, str(live_path))
         extraction_daemon.write_rolling_state(
             session_id,
             {
                 "session_id": session_id,
                 "transcript_path": str(live_path),
                 "buffer_transcript_path": str(mirror_path),
-                "processed_line_offset": 3,
-                "buffered_line_offset": 3,
+                "processed_line_offset": 0,
+                "buffered_line_offset": 0,
                 "semantic_buffer": "",
                 "semantic_buffer_tokens": 0,
             },
@@ -7795,7 +7876,7 @@ class TestRollingExtraction:
 
         cursor = extraction_daemon.read_cursor(session_id)
         assert cursor["transcript_path"] == str(mirror_path)
-        assert cursor["line_offset"] == 3
+        assert cursor["line_offset"] == 0
         assert cursor["processed_signal_type"] == ""
         assert captured == [
             {
@@ -7808,6 +7889,80 @@ class TestRollingExtraction:
                 },
             }
         ]
+
+    def test_check_chunk_ready_sessions_does_not_requeue_stale_larger_preserved_buffer_at_eof(
+        self, monkeypatch, tmp_path
+    ):
+        session_id = "8817b065-c63a-43f3-a68a-72b70f2729ed"
+        live_path = tmp_path / ".openclaw" / "agents" / "main" / "sessions" / f"{session_id}.jsonl"
+        mirror_path = (
+            tmp_path
+            / "instances"
+            / "openclaw-main"
+            / "logs"
+            / "quaid"
+            / "sessions"
+            / f"{session_id}.jsonl"
+        )
+        live_path.parent.mkdir(parents=True, exist_ok=True)
+        mirror_path.parent.mkdir(parents=True, exist_ok=True)
+        live_path.write_text(
+            '{"type":"message","message":{"role":"user","content":"chunk one"}}\n',
+            encoding="utf-8",
+        )
+        mirror_path.write_text(
+            '{"type":"message","message":{"role":"user","content":"chunk one"}}\n'
+            '{"type":"message","message":{"role":"user","content":"chunk two"}}\n'
+            '{"type":"message","message":{"role":"user","content":"chunk three"}}\n',
+            encoding="utf-8",
+        )
+        stale_mtime = time.time() - 600
+        os.utime(live_path, (stale_mtime, stale_mtime))
+
+        class _Adapter(_OwnedTestAdapterMixin):
+            def get_session_path(self, session_id_arg):
+                assert session_id_arg == session_id
+                return live_path
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "openclaw-main")
+        monkeypatch.setattr(extraction_daemon, "_instance_id", lambda: "openclaw-main")
+        monkeypatch.setattr(extraction_daemon, "_load_runtime_adapter", lambda: _Adapter())
+        monkeypatch.setattr(extraction_daemon, "_ensure_discovered_session_cursors", lambda adapter: None)
+        monkeypatch.setattr(extraction_daemon, "_adapter_owns_transcript_path", lambda *args, **kwargs: True)
+        monkeypatch.setattr(extraction_daemon, "_cursor_or_adapter_owns_transcript_path", lambda *args, **kwargs: True)
+        monkeypatch.setattr(extraction_daemon, "_reconcile_internal_cursor_state", lambda *args, **kwargs: "not_internal")
+        extraction_daemon.write_cursor(session_id, 3, str(live_path))
+
+        monkeypatch.setattr(
+            extraction_daemon,
+            "_buffer_transcript_tail",
+            lambda *args, **kwargs: (_ for _ in ()).throw(
+                AssertionError("already-consumed preserved mirror must not rebuffer")
+            ),
+        )
+        monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
+        captured = []
+        monkeypatch.setattr(
+            extraction_daemon,
+            "write_signal",
+            lambda signal_type, session_id, transcript_path, **kwargs: captured.append(
+                {
+                    "signal_type": signal_type,
+                    "session_id": session_id,
+                    "transcript_path": transcript_path,
+                    "meta": kwargs.get("meta", {}),
+                }
+            ),
+        )
+
+        extraction_daemon.check_chunk_ready_sessions(chunk_tokens=1500)
+
+        cursor = extraction_daemon.read_cursor(session_id)
+        assert cursor["transcript_path"] == str(mirror_path)
+        assert cursor["line_offset"] == 3
+        assert cursor["processed_signal_type"] == "session_end"
+        assert captured == []
 
     def test_check_chunk_ready_sessions_prefers_larger_live_path_for_preserved_cursor(
         self, monkeypatch, tmp_path
