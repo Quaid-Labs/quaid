@@ -6039,6 +6039,8 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                 )
             except Exception:
                 final_cursor_offset = int(buffered_line_offset or cursor_offset or 0)
+        if ended_rolling_buffer_flush_signal:
+            final_cursor_offset = max(int(final_cursor_offset or 0), int(total_lines or 0))
         transcript_rebased_during_flush = False
         transcript_rebased_followup = False
         transcript_rebase_retry_limit_reached = False

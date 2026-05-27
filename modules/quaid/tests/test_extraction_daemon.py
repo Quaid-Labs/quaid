@@ -11651,6 +11651,9 @@ class TestRollingExtraction:
                 meta={
                     "reason": "ended_rolling_buffer_flush",
                     "source_cursor_key": source_key,
+                    "staged_payload_sweep": True,
+                    "flush_staged_payload_only": True,
+                    "buffered_line_offset": 0,
                 },
             )
             extraction_daemon.process_signal(extraction_daemon.read_pending_signals()[0])
