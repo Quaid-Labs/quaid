@@ -1524,6 +1524,8 @@ def hook_inject(args):
                 context_parts = [direct_notice_context] if direct_notice_context else []
                 if pending_context:
                     context_parts.append(pending_context)
+                if deferred_notice_relay_context:
+                    context_parts.append(deferred_notice_relay_context)
                 project_list_hint = _project_list_cli_hint_context(
                     hook_input if isinstance(hook_input, dict) else {}
                 )
@@ -1534,6 +1536,7 @@ def hook_inject(args):
                     "query": query[:160],
                     "session_id": session_id,
                     "pending_context_len": len(pending_context or ""),
+                    "deferred_relay_len": len(deferred_notice_relay_context or ""),
                     "context_len": len(context),
                 })
                 if context:

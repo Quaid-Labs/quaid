@@ -1153,21 +1153,25 @@ def test_codex_hook_inject_relays_deferred_notice_before_recall_work(monkeypatch
     adapter.get_sessions_dir.return_value = str(tmp_path / "sessions")
 
     trace_events = []
+    call_order = []
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "codex-test")
     monkeypatch.setattr("lib.adapter.get_adapter", lambda: adapter)
     monkeypatch.setattr("lib.adapter._ensure_instance_projects_bootstrapped", lambda _adapter: None)
-    monkeypatch.setattr("core.extraction_daemon.ensure_alive", lambda: None)
+    monkeypatch.setattr("core.extraction_daemon.ensure_alive", lambda: call_order.append("daemon"))
     monkeypatch.setattr("core.extraction_daemon.read_cursor", lambda sid: {"line_offset": 0, "transcript_path": ""})
     monkeypatch.setattr("core.extraction_daemon.write_cursor", lambda *args: None)
     monkeypatch.setattr(hooks, "_get_pending_context", lambda: "")
-    monkeypatch.setattr(
-        hooks,
-        "_get_deferred_notice_relay_context",
-        lambda: (
+
+    def deferred_relay():
+        call_order.append("relay")
+        return (
             "MANDATORY: Quaid just drained deferred notices for the human user. "
             "Start your next response by briefly relaying them, then answer the user's current message.\n\n"
             "<quaid_system_message>\n• First-turn relay: brass lantern is ready.\n</quaid_system_message>"
-        ),
-    )
+        )
+
+    monkeypatch.setattr(hooks, "_get_deferred_notice_relay_context", deferred_relay)
     monkeypatch.setattr(hooks, "_get_deferred_notice_hint", lambda: "")
     monkeypatch.setattr(hooks, "_get_owner_id", lambda: "codex-owner")
     monkeypatch.setattr(
@@ -1176,11 +1180,22 @@ def test_codex_hook_inject_relays_deferred_notice_before_recall_work(monkeypatch
         lambda event, payload=None: trace_events.append((event, payload or {})),
     )
 
-    with patch("core.interface.api.recall_fast", side_effect=AssertionError("recall should not run before relay")) as recall, \
-         patch("core.interface.api.projects_search_docs", side_effect=AssertionError("docs should not run before relay")) as docs:
+    def recall_fast(**_kwargs):
+        call_order.append("recall")
+        return [
+            {
+                "id": "m-codex-grinder",
+                "text": "Espresso setup uses a Baratza Encore grinder.",
+                "similarity": 0.96,
+                "category": "fact",
+            }
+        ], {"mode": "fast"}
+
+    with patch("core.interface.api.recall_fast", side_effect=recall_fast) as recall, \
+         patch("core.interface.api.projects_search_docs", return_value=None):
         out, _err = _run_hook_inject(
             {
-                "prompt": "Hey, what is up?",
+                "prompt": "What grinder do I use for my espresso setup?",
                 "session_id": "sess-codex-deferred-fastpath",
                 "cwd": str(tmp_path),
                 "thread_id": "sess-codex-deferred-fastpath",
@@ -1188,13 +1203,21 @@ def test_codex_hook_inject_relays_deferred_notice_before_recall_work(monkeypatch
             monkeypatch=monkeypatch,
         )
 
-    recall.assert_not_called()
-    docs.assert_not_called()
+    recall.assert_called_once()
+    assert call_order[:3] == ["relay", "daemon", "recall"]
     payload = json.loads(out)
     context = payload["hookSpecificOutput"]["additionalContext"]
     assert "MANDATORY: Quaid just drained deferred notices" in context
     assert "brass lantern" in context
-    assert any(event == "hook.inject.deferred_relay_fastpath" for event, _payload in trace_events)
+    assert "Baratza Encore" in context
+    assert any(
+        event == "hook.inject.deferred_relay_predrained" and _payload.get("phase") == "pre_probe"
+        for event, _payload in trace_events
+    )
+    assert any(event == "hook.inject.context_emitted" for event, _payload in trace_events)
+    log_path = tmp_path / "instances" / "codex-test" / "logs" / "daemon" / "preinject.jsonl"
+    entry = json.loads(log_path.read_text(encoding="utf-8").splitlines()[0])
+    assert entry["injected"][0]["text"] == "Espresso setup uses a Baratza Encore grinder."
 
 
 def test_codex_hook_inject_surfaces_new_pending_notice_on_same_turn(monkeypatch, tmp_path):

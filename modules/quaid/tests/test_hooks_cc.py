@@ -2184,7 +2184,7 @@ class TestHookInjectRecallResilience:
             assert hooks._validate_prompt_model_config_for_hook("claude-code") == ""
         probe.assert_not_called()
 
-    def test_claude_code_predrains_deferred_notice_without_skipping_recall(
+    def test_claude_code_relays_deferred_notice_before_recall_work(
         self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
     ):
         from core import extraction_daemon
