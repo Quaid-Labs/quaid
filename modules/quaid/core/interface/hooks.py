@@ -1550,11 +1550,15 @@ def hook_inject(args):
         except Exception as e:
             if _is_provider_failure(e):
                 notice = _provider_failure_notice_message(e)
-                context = _format_direct_agent_notices([notice])
+                context_parts = [_format_direct_agent_notices([notice])]
+                if deferred_notice_relay_context:
+                    context_parts.append(deferred_notice_relay_context)
+                context = "\n\n".join(part for part in context_parts if part)
                 _write_hook_trace("hook.inject.model_config_notice_fastpath", {
                     "query": query[:160],
                     "session_id": session_id,
                     "pending_context_len": 0,
+                    "deferred_relay_len": len(deferred_notice_relay_context or ""),
                     "context_len": len(context),
                     "source": "exception",
                 })

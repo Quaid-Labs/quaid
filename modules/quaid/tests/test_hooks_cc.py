@@ -2003,6 +2003,54 @@ class TestHookInjectRecallResilience:
         assert "[Quaid error] [provider]" in context
         assert "invalid-model-m6-probe" in context
 
+    def test_model_config_provider_failure_preserves_predrained_relay(
+        self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
+    ):
+        from core import extraction_daemon
+        from core.interface import hooks
+
+        mock_adapter.adapter_id.return_value = "claude-code"
+        mock_adapter.instance_root.return_value = tmp_path
+        mock_adapter.data_dir.return_value = tmp_path / "data"
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "claude-code-test")
+        monkeypatch.setattr(extraction_daemon, "write_cursor", lambda *a: None)
+        monkeypatch.setattr("lib.fail_policy.is_fail_hard_enabled", lambda: True)
+        monkeypatch.setattr(
+            hooks,
+            "_runtime_config_snapshot",
+            lambda: ((str(tmp_path / "claude-code" / "config.json"), 123),),
+        )
+        monkeypatch.setattr(
+            "core.interface.hooks._get_deferred_notice_relay_context",
+            lambda: (
+                "MANDATORY: Quaid just drained deferred notices for the human user.\n\n"
+                "<quaid_system_message>\n• Provider relay survives fastpath.\n</quaid_system_message>"
+            ),
+        )
+
+        with patch(
+            "lib.llm_clients.call_fast_reasoning",
+            side_effect=RuntimeError("model=invalid-model-m6-probe"),
+        ), patch(
+            "core.interface.api.recall_fast",
+            side_effect=AssertionError("recall should not run after model-config notice"),
+        ):
+            out, _err = _run_hook_inject(
+                {
+                    "prompt": "What grinder do I use?",
+                    "session_id": "sess-cc-provider-probe-relay",
+                    "cwd": "/Users/x",
+                },
+                monkeypatch=monkeypatch,
+            )
+
+        payload = json.loads(out)
+        context = payload["hookSpecificOutput"]["additionalContext"]
+        assert "[Quaid error] [provider]" in context
+        assert "invalid-model-m6-probe" in context
+        assert "Provider relay survives fastpath" in context
+
     def test_recall_fast_provider_failure_does_not_relay_after_next_successful_turn(
         self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
     ):
