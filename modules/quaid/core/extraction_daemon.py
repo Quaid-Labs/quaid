@@ -1867,6 +1867,27 @@ def _adapter_live_transcript_exists(session_id: str, adapter=None) -> bool:
     return False
 
 
+def _preserved_mirror_for_missing_transcript_cursor(session_id: str, transcript_path: str, adapter=None) -> str:
+    raw = str(transcript_path or "").strip()
+    if not raw or os.path.isfile(raw) or _is_daemon_preserved_session_transcript_path(raw):
+        return ""
+    try:
+        live_path = Path(raw).expanduser()
+        session_uuid = _SESSION_ID_UUID_RE.search(str(session_id or ""))
+        filename_uuid = _SESSION_ID_UUID_RE.search(live_path.name)
+        if not session_uuid or not filename_uuid or session_uuid.group(0).lower() != filename_uuid.group(0).lower():
+            return ""
+        if _adapter_live_transcript_exists(str(session_id), adapter=adapter):
+            return ""
+        mirror_path = (_instance_root() / "logs" / "quaid" / "sessions" / live_path.name).resolve()
+        if mirror_path.is_file() and _transcript_has_jsonl_rows(str(mirror_path)):
+            return str(mirror_path)
+    except Exception:
+        if _fail_hard_enabled():
+            raise
+    return ""
+
+
 def _pending_signal_source_keys(
     signals: List[Dict[str, Any]],
     *,
@@ -6733,7 +6754,39 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
 
         session_id = data.get("session_id", "")
         transcript_path = data.get("transcript_path", "")
-        if not session_id or not transcript_path or not os.path.isfile(transcript_path):
+        if not session_id or not transcript_path:
+            continue
+        if not os.path.isfile(transcript_path):
+            mirror_path = _preserved_mirror_for_missing_transcript_cursor(
+                str(session_id),
+                str(transcript_path),
+                adapter=adapter,
+            )
+            if mirror_path:
+                mirror_total_lines = count_transcript_lines(mirror_path)
+                source_key_for_write = None
+                if cursor_file.stem != str(session_id):
+                    source_key_for_write = _signal_source_cursor_key(
+                        str(session_id),
+                        mirror_path,
+                        cursor_data=data,
+                    )
+                logger.info(
+                    "session %s rolling scan found missing transcript %s with preserved transcript %s; "
+                    "advancing cursor to preserved EOF and clearing rolling state",
+                    session_id,
+                    transcript_path,
+                    mirror_path,
+                )
+                write_cursor(
+                    str(session_id),
+                    mirror_total_lines,
+                    mirror_path,
+                    internal=bool(data.get("internal", False)),
+                    source_key=source_key_for_write,
+                    processed_signal_type="session_end",
+                )
+                clear_rolling_state(str(session_id))
             continue
         buffer_transcript_path = str(transcript_path)
         if _is_daemon_preserved_session_transcript_path(str(transcript_path)):
