@@ -2537,6 +2537,103 @@ def test_process_signal_reextracts_relocated_transcript_when_content_changed(
     assert not extraction_daemon._rolling_state_path(session_id).exists()
 
 
+def test_process_signal_skips_smaller_preserved_relocation_already_consumed(
+    monkeypatch,
+    tmp_path,
+):
+    from lib.adapter import set_adapter, reset_adapter
+    from ingest import extract as extract_mod
+
+    session_id = "df9c21db-8445-43e5-b4df-181575fbe2e2"
+    live_dir = tmp_path / ".openclaw" / "agents" / "main" / "sessions"
+    preserved_dir = tmp_path / ".quaid" / "instances" / "openclaw-main" / "logs" / "quaid" / "sessions"
+    live_dir.mkdir(parents=True)
+    preserved_dir.mkdir(parents=True)
+    live_path = live_dir / f"{session_id}.jsonl"
+    preserved_path = preserved_dir / f"{session_id}.jsonl"
+    live_path.write_text(
+        "\n".join([
+            f'{{"type":"session","id":"{session_id}"}}',
+            '{"type":"message","message":{"role":"user","content":[{"type":"text","text":"M1 canary line one"}]}}',
+            '{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"ack one"}]}}',
+            '{"type":"message","message":{"role":"user","content":[{"type":"text","text":"M1 canary line two"}]}}',
+            '{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"ack two"}]}}',
+        ]) + "\n",
+        encoding="utf-8",
+    )
+    preserved_path.write_text(
+        "\n".join([
+            f'{{"type":"session","id":"{session_id}"}}',
+            '{"type":"message","message":{"role":"user","content":[{"type":"text","text":"M1 canary line one"}]}}',
+        ]) + "\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path / ".quaid"))
+    monkeypatch.setenv("QUAID_INSTANCE", "openclaw-main")
+    source_key = extraction_daemon._signal_source_cursor_key(session_id, str(live_path))
+    extraction_daemon.write_cursor(
+        session_id,
+        5,
+        str(live_path),
+        source_key=source_key,
+        processed_signal_type="reset",
+    )
+    extraction_daemon.write_rolling_state(
+        session_id,
+        {
+            "session_id": session_id,
+            "transcript_path": str(live_path),
+            "processed_line_offset": 5,
+            "buffered_line_offset": 5,
+            "semantic_buffer": "User: Part B rolling content should survive relocation.",
+            "semantic_buffer_tokens": 9,
+            "raw_facts": [],
+            "carry_facts": [],
+        },
+    )
+    live_path.unlink()
+
+    class _Adapter(_OwnedTestAdapterMixin):
+        def instance_root(self):
+            return tmp_path / ".quaid" / "instances" / "openclaw-main"
+
+        def parse_session_jsonl(self, path):
+            return Path(path).read_text(encoding="utf-8")
+
+        def is_subagent_session(self, session_id, transcript_path=None):
+            return False
+
+    set_adapter(_Adapter())
+    monkeypatch.setattr(
+        extract_mod,
+        "extract_from_transcript",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("already-consumed preserved relocation must not re-extract")
+        ),
+    )
+
+    try:
+        signal_path = extraction_daemon.write_signal(
+            signal_type="session_end",
+            session_id=session_id,
+            transcript_path=str(preserved_path),
+        )
+        signal_data = json.loads(signal_path.read_text(encoding="utf-8"))
+        signal_data["_signal_path"] = str(signal_path)
+
+        extraction_daemon.process_signal(signal_data)
+    finally:
+        reset_adapter()
+
+    cursor = extraction_daemon.read_cursor(session_id, source_key=source_key)
+    assert cursor["line_offset"] == 2
+    assert cursor["transcript_path"] == str(preserved_path)
+    assert cursor["processed_signal_type"] == "session_end"
+    assert extraction_daemon.read_pending_signals() == []
+    assert extraction_daemon._rolling_state_path(session_id).exists()
+
+
 def test_process_signal_skips_preserved_checkpoint_session_end_while_live_exists(
     monkeypatch,
     tmp_path,

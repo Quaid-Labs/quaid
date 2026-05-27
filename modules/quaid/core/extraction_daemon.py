@@ -4880,6 +4880,18 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             _is_dir_relocation
             and (_relocated_size_changed or _relocated_zero_size_cursor_rebased)
         )
+        _relocated_preserved_subset_already_consumed = bool(
+            _is_dir_relocation
+            and signal_type == "session_end"
+            and cursor_offset > 0
+            and _relocated_cursor_size_bytes
+            and _relocated_current_size_bytes
+            and _relocated_current_size_bytes < _relocated_cursor_size_bytes
+            and cursor_transcript
+            and not os.path.isfile(cursor_transcript)
+            and not _is_daemon_preserved_session_transcript_path(cursor_transcript)
+            and _is_daemon_preserved_session_transcript_path(str(transcript_path))
+        )
         # Cross-directory reset rename: cursor is at a relocated path (dir2/X.jsonl)
         # and the new transcript is the .reset.* backup in the original directory
         # (dir1/X.jsonl.reset.<ts>).  The directory-level _is_reset_rename check
@@ -4953,6 +4965,37 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             mark_signal_processed(signal_data)
             _release_session_processing_lock(lock_owner_key, lock_fd)
             return
+        elif _relocated_preserved_subset_already_consumed:
+            _relocated_total_lines = count_transcript_lines(transcript_path)
+            if _relocated_total_lines <= cursor_offset:
+                # OpenClaw /new can move an already-consumed subset of the live
+                # transcript into Quaid's preserved sessions dir after the live
+                # file disappears. The smaller preserved copy should not rewind
+                # the extraction cursor and replay the prior session.
+                logger.info(
+                    "[%s] session %s: relocated preserved transcript is already consumed "
+                    "(%s -> %s, cursor_offset=%d, preserved_lines=%d, cursor_size=%d, current_size=%d); "
+                    "advancing relocated cursor to EOF",
+                    label, session_id, cursor_transcript, transcript_path,
+                    cursor_offset, _relocated_total_lines,
+                    _relocated_cursor_size_bytes, _relocated_current_size_bytes,
+                )
+                write_cursor(
+                    session_id,
+                    _relocated_total_lines,
+                    transcript_path,
+                    source_key=lock_owner_key,
+                    processed_signal_type=signal_type,
+                )
+                mark_signal_processed(signal_data)
+                _release_session_processing_lock(lock_owner_key, lock_fd)
+                return
+            logger.info(
+                "[%s] session %s: relocated preserved transcript is smaller but has %d new line(s) "
+                "past cursor offset %d (%s -> %s); continuing from cursor",
+                label, session_id, _relocated_total_lines - cursor_offset, cursor_offset,
+                cursor_transcript, transcript_path,
+            )
         elif _is_dir_relocation and _relocated_content_changed:
             logger.info(
                 "[%s] session %s: transcript directory relocation content changed "
