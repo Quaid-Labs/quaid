@@ -7500,11 +7500,17 @@ class TestRollingExtraction:
             ),
         )
         monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
+        captured = []
         monkeypatch.setattr(
             extraction_daemon,
             "write_signal",
-            lambda *args, **kwargs: (_ for _ in ()).throw(
-                AssertionError("ended snapshot must not queue rolling extraction")
+            lambda signal_type, session_id, transcript_path, **kwargs: captured.append(
+                {
+                    "signal_type": signal_type,
+                    "session_id": session_id,
+                    "transcript_path": transcript_path,
+                    "meta": kwargs.get("meta", {}),
+                }
             ),
         )
 
@@ -7512,9 +7518,20 @@ class TestRollingExtraction:
 
         cursor = extraction_daemon.read_cursor(session_id)
         assert cursor["transcript_path"] == str(mirror_path)
-        assert cursor["line_offset"] == 3
-        assert cursor["processed_signal_type"] == "session_end"
-        assert not extraction_daemon._rolling_state_path(session_id).exists()
+        assert cursor["line_offset"] == 2
+        assert cursor["processed_signal_type"] == ""
+        assert captured == [
+            {
+                "signal_type": "session_end",
+                "session_id": session_id,
+                "transcript_path": str(mirror_path),
+                "meta": {
+                    "reason": "ended_rolling_buffer_flush",
+                    "source_cursor_key": session_id,
+                },
+            }
+        ]
+        assert extraction_daemon._rolling_state_path(session_id).exists()
 
     def test_check_chunk_ready_sessions_finalizes_missing_live_cursor_with_preserved_mirror(
         self, monkeypatch, tmp_path
@@ -7571,11 +7588,17 @@ class TestRollingExtraction:
             ),
         )
         monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
+        captured = []
         monkeypatch.setattr(
             extraction_daemon,
             "write_signal",
-            lambda *args, **kwargs: (_ for _ in ()).throw(
-                AssertionError("missing live cursor must not queue rolling extraction")
+            lambda signal_type, session_id, transcript_path, **kwargs: captured.append(
+                {
+                    "signal_type": signal_type,
+                    "session_id": session_id,
+                    "transcript_path": transcript_path,
+                    "meta": kwargs.get("meta", {}),
+                }
             ),
         )
 
@@ -7583,9 +7606,20 @@ class TestRollingExtraction:
 
         cursor = extraction_daemon.read_cursor(session_id)
         assert cursor["transcript_path"] == str(mirror_path)
-        assert cursor["line_offset"] == 3
-        assert cursor["processed_signal_type"] == "session_end"
-        assert not extraction_daemon._rolling_state_path(session_id).exists()
+        assert cursor["line_offset"] == 2
+        assert cursor["processed_signal_type"] == ""
+        assert captured == [
+            {
+                "signal_type": "session_end",
+                "session_id": session_id,
+                "transcript_path": str(mirror_path),
+                "meta": {
+                    "reason": "ended_rolling_buffer_flush",
+                    "source_cursor_key": session_id,
+                },
+            }
+        ]
+        assert extraction_daemon._rolling_state_path(session_id).exists()
 
     def test_check_chunk_ready_sessions_clears_ended_preserved_buffer_before_signaling(
         self, monkeypatch, tmp_path
@@ -7645,11 +7679,17 @@ class TestRollingExtraction:
             ),
         )
         monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
+        captured = []
         monkeypatch.setattr(
             extraction_daemon,
             "write_signal",
-            lambda *args, **kwargs: (_ for _ in ()).throw(
-                AssertionError("ended preserved buffer must be cleared before threshold signal")
+            lambda signal_type, session_id, transcript_path, **kwargs: captured.append(
+                {
+                    "signal_type": signal_type,
+                    "session_id": session_id,
+                    "transcript_path": transcript_path,
+                    "meta": kwargs.get("meta", {}),
+                }
             ),
         )
 
@@ -7658,8 +7698,19 @@ class TestRollingExtraction:
         cursor = extraction_daemon.read_cursor(session_id)
         assert cursor["transcript_path"] == str(mirror_path)
         assert cursor["line_offset"] == 3
-        assert cursor["processed_signal_type"] == "session_end"
-        assert not extraction_daemon._rolling_state_path(session_id).exists()
+        assert cursor["processed_signal_type"] == ""
+        assert captured == [
+            {
+                "signal_type": "session_end",
+                "session_id": session_id,
+                "transcript_path": str(mirror_path),
+                "meta": {
+                    "reason": "ended_rolling_buffer_flush",
+                    "source_cursor_key": session_id,
+                },
+            }
+        ]
+        assert extraction_daemon._rolling_state_path(session_id).exists()
 
     def test_check_chunk_ready_sessions_prefers_larger_live_path_for_preserved_cursor(
         self, monkeypatch, tmp_path

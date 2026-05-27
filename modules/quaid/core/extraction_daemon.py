@@ -6761,6 +6761,11 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
         if str(s.get("type") or s.get("signal_type") or "") == "rolling"
     }
     pending_rolling_source_keys = _pending_signal_source_keys(pending, signal_type="rolling")
+    pending_session_end_session_ids = {
+        str(s.get("session_id") or "").strip()
+        for s in pending
+        if str(s.get("type") or s.get("signal_type") or "") == "session_end"
+    }
 
     for cursor_file in cursor_dir.glob("*.json"):
         try:
@@ -6779,30 +6784,38 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
                 adapter=adapter,
             )
             if mirror_path:
-                mirror_total_lines = count_transcript_lines(mirror_path)
-                source_key_for_write = None
-                if cursor_file.stem != str(session_id):
-                    source_key_for_write = _signal_source_cursor_key(
-                        str(session_id),
-                        mirror_path,
-                        cursor_data=data,
-                    )
+                if str(session_id) in pending_session_end_session_ids:
+                    continue
+                cursor_key_for_signal = str(data.get("cursor_key") or cursor_file.stem or session_id).strip()
+                cursor_offset_for_flush = min(
+                    int(data.get("line_offset", 0) or 0),
+                    count_transcript_lines(mirror_path),
+                )
                 logger.info(
                     "session %s rolling scan found missing transcript %s with preserved transcript %s; "
-                    "advancing cursor to preserved EOF and clearing rolling state",
+                    "queueing lifecycle flush from preserved cursor offset %d",
                     session_id,
                     transcript_path,
                     mirror_path,
+                    cursor_offset_for_flush,
                 )
                 write_cursor(
                     str(session_id),
-                    mirror_total_lines,
+                    cursor_offset_for_flush,
                     mirror_path,
                     internal=bool(data.get("internal", False)),
-                    source_key=source_key_for_write,
-                    processed_signal_type="session_end",
+                    source_key=cursor_key_for_signal,
                 )
-                clear_rolling_state(str(session_id))
+                write_signal(
+                    signal_type="session_end",
+                    session_id=str(session_id),
+                    transcript_path=mirror_path,
+                    meta={
+                        "reason": "ended_rolling_buffer_flush",
+                        "source_cursor_key": cursor_key_for_signal,
+                    },
+                )
+                pending_session_end_session_ids.add(str(session_id))
             continue
         buffer_transcript_path = str(transcript_path)
         if _is_daemon_preserved_session_transcript_path(str(transcript_path)):
@@ -6855,24 +6868,36 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
                     _is_daemon_rolling_transcript_snapshot_path(str(transcript_path))
                     and not _adapter_live_transcript_exists(str(session_id), adapter=adapter)
                 ):
+                    if str(session_id) in pending_session_end_session_ids:
+                        continue
                     mirror_total_lines = count_transcript_lines(mirror_path)
-                    cursor_key_for_write = str(data.get("cursor_key") or "").strip() or None
+                    cursor_key_for_signal = str(data.get("cursor_key") or cursor_file.stem or session_id).strip()
+                    cursor_offset_for_flush = min(int(data.get("line_offset", 0) or 0), mirror_total_lines)
                     logger.info(
                         "session %s rolling scan found ended snapshot %s with preserved transcript %s; "
-                        "advancing cursor to preserved EOF and clearing rolling state",
+                        "queueing lifecycle flush from preserved cursor offset %d",
                         session_id,
                         transcript_path,
                         mirror_path,
+                        cursor_offset_for_flush,
                     )
                     write_cursor(
                         session_id,
-                        mirror_total_lines,
+                        cursor_offset_for_flush,
                         mirror_path,
                         internal=bool(data.get("internal", False)),
-                        source_key=cursor_key_for_write,
-                        processed_signal_type="session_end",
+                        source_key=cursor_key_for_signal,
                     )
-                    clear_rolling_state(str(session_id))
+                    write_signal(
+                        signal_type="session_end",
+                        session_id=session_id,
+                        transcript_path=mirror_path,
+                        meta={
+                            "reason": "ended_rolling_buffer_flush",
+                            "source_cursor_key": cursor_key_for_signal,
+                        },
+                    )
+                    pending_session_end_session_ids.add(str(session_id))
                     continue
                 logger.info(
                     "session %s rolling scan reading larger preserved mirror %s while preserving live cursor %s",
@@ -7037,29 +7062,35 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
             and state_semantic_tokens >= _rolling_ready_threshold(chunk_budget)
             and _adapter_live_transcript_missing(str(session_id), adapter=adapter)
         ):
+            if str(session_id) in pending_session_end_session_ids:
+                continue
             preserved_total_lines = count_transcript_lines(ended_preserved_buffer_path)
-            cursor_key_for_write = None
-            if cursor_file.stem != str(session_id):
-                cursor_key_for_write = _signal_source_cursor_key(
-                    str(session_id),
-                    ended_preserved_buffer_path,
-                    cursor_data=data,
-                )
+            cursor_key_for_signal = str(data.get("cursor_key") or cursor_file.stem or session_id).strip()
+            cursor_offset_for_flush = min(int(data.get("line_offset", 0) or 0), preserved_total_lines)
             logger.info(
                 "session %s rolling scan found ended preserved buffer %s with no active live transcript; "
-                "advancing cursor to preserved EOF and clearing rolling state before threshold check",
+                "queueing lifecycle flush from preserved cursor offset %d before threshold check",
                 session_id,
                 ended_preserved_buffer_path,
+                cursor_offset_for_flush,
             )
             write_cursor(
                 str(session_id),
-                preserved_total_lines,
+                cursor_offset_for_flush,
                 ended_preserved_buffer_path,
                 internal=bool(data.get("internal", False)),
-                source_key=cursor_key_for_write,
-                processed_signal_type="session_end",
+                source_key=cursor_key_for_signal,
             )
-            clear_rolling_state(str(session_id))
+            write_signal(
+                signal_type="session_end",
+                session_id=str(session_id),
+                transcript_path=ended_preserved_buffer_path,
+                meta={
+                    "reason": "ended_rolling_buffer_flush",
+                    "source_cursor_key": cursor_key_for_signal,
+                },
+            )
+            pending_session_end_session_ids.add(str(session_id))
             continue
         buffer_source_differs_from_cursor = str(buffer_transcript_path) != str(transcript_path)
         if state_buffer_path and state_buffer_path != str(buffer_transcript_path):
