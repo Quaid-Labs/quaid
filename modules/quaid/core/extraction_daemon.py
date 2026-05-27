@@ -1848,6 +1848,25 @@ def _larger_live_transcript_for_preserved_mirror(session_id: str, transcript_pat
     return ""
 
 
+def _adapter_live_transcript_exists(session_id: str, adapter=None) -> bool:
+    get_session_path = getattr(adapter, "get_session_path", None)
+    if not callable(get_session_path):
+        return False
+    try:
+        live_candidate = get_session_path(str(session_id))
+        live_raw = str(live_candidate or "").strip()
+        return bool(
+            live_raw
+            and not _is_daemon_preserved_session_transcript_path(live_raw)
+            and os.path.isfile(live_raw)
+            and _adapter_owns_transcript_path(adapter, str(session_id), live_raw)
+        )
+    except Exception:
+        if _fail_hard_enabled():
+            raise
+    return False
+
+
 def _pending_signal_source_keys(
     signals: List[Dict[str, Any]],
     *,
@@ -6763,6 +6782,29 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
                 adapter=adapter,
             )
             if mirror_path:
+                if (
+                    _is_daemon_rolling_transcript_snapshot_path(str(transcript_path))
+                    and not _adapter_live_transcript_exists(str(session_id), adapter=adapter)
+                ):
+                    mirror_total_lines = count_transcript_lines(mirror_path)
+                    cursor_key_for_write = str(data.get("cursor_key") or "").strip() or None
+                    logger.info(
+                        "session %s rolling scan found ended snapshot %s with preserved transcript %s; "
+                        "advancing cursor to preserved EOF and clearing rolling state",
+                        session_id,
+                        transcript_path,
+                        mirror_path,
+                    )
+                    write_cursor(
+                        session_id,
+                        mirror_total_lines,
+                        mirror_path,
+                        internal=bool(data.get("internal", False)),
+                        source_key=cursor_key_for_write,
+                        processed_signal_type="session_end",
+                    )
+                    clear_rolling_state(str(session_id))
+                    continue
                 logger.info(
                     "session %s rolling scan reading larger preserved mirror %s while preserving live cursor %s",
                     session_id,
