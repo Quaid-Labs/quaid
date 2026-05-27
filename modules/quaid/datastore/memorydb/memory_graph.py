@@ -13446,7 +13446,7 @@ def _preserve_strong_store_plan_rows(
             continue
         if not branch_rows:
             continue
-        candidate_limit = 3 if branch == "session_chunks" else 1
+        candidate_limit = 1
         branch_candidates = [
             row for row in branch_rows
             if isinstance(row, dict)
@@ -13462,23 +13462,15 @@ def _preserve_strong_store_plan_rows(
             replacement = dict(candidate)
             replacement["store_plan_preserved_branch_top"] = branch
             replacement["store_plan_preserved_confidence"] = round(float(confidence), 4)
+            # Preserve first-order session evidence in the final window, but do
+            # not force it above a higher-confidence compact fact for ordinary
+            # fact lookups. Source-specific queries are promoted by the
+            # first-order coverage gates before this preservation step.
             insert_at = len(out)
             for idx, existing in enumerate(out):
                 if _store_plan_row_best_confidence(existing) < confidence:
                     insert_at = idx
                     break
-            if branch == "session_chunks" and confidence >= 0.65:
-                insert_at = sum(
-                    1
-                    for existing in out
-                    if isinstance(existing, dict)
-                    and existing.get("store_plan_preserved_branch_top") == "session_chunks"
-                )
-            if branch == "session_chunks" and confidence >= 0.75 and not branch_already_present:
-                # SessionDB is first-order source evidence. When the planner chose
-                # it and the branch produced a strong hit, lead with the original
-                # transcript evidence rather than a synthesized memory paraphrase.
-                insert_at = 0
             if insert_at >= top_limit and len(out) >= top_limit:
                 replacement_idx = next(
                     (

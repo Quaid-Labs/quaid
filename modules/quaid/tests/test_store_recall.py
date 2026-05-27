@@ -5495,8 +5495,8 @@ class TestSourceChunkStorage:
 
         preserved, meta = mg._preserve_strong_store_plan_rows(rows, batches, limit=2)
 
-        assert [row["id"] for row in preserved] == ["sch-1", "fact-a"]
-        assert preserved[0]["store_plan_preserved_branch_top"] == "session_chunks"
+        assert [row["id"] for row in preserved] == ["fact-a", "sch-1"]
+        assert preserved[1]["store_plan_preserved_branch_top"] == "session_chunks"
         assert meta["preserved"] == 1
         assert meta["rows"][0]["store"] == "session_chunks"
 
@@ -5524,11 +5524,11 @@ class TestSourceChunkStorage:
 
         preserved, meta = mg._preserve_strong_store_plan_rows(rows, batches, limit=2)
 
-        assert [row["id"] for row in preserved] == ["sch-1", "fact-a"]
-        assert preserved[0]["store_plan_preserved_branch_top"] == "session_chunks"
+        assert [row["id"] for row in preserved] == ["fact-a", "sch-1"]
+        assert preserved[1]["store_plan_preserved_branch_top"] == "session_chunks"
         assert meta["preserved"] == 1
 
-    def test_store_plan_preserves_multiple_strong_session_rows(self):
+    def test_store_plan_preserves_single_strong_session_row_without_crowding_facts(self):
         import datastore.memorydb.memory_graph as mg
 
         rows = [
@@ -5572,9 +5572,10 @@ class TestSourceChunkStorage:
 
         preserved, meta = mg._preserve_strong_store_plan_rows(rows, batches, limit=3)
 
-        assert [row["id"] for row in preserved] == ["sch-1", "sch-2", "sch-3"]
-        assert meta["preserved"] == 3
-        assert {row["key"] for row in meta["rows"]} == {"id:sch-1", "id:sch-2", "id:sch-3"}
+        assert [row["id"] for row in preserved] == ["fact-a", "fact-b", "sch-1"]
+        assert preserved[2]["store_plan_preserved_branch_top"] == "session_chunks"
+        assert meta["preserved"] == 1
+        assert {row["key"] for row in meta["rows"]} == {"id:sch-1"}
 
     def test_store_plan_does_not_preserve_weak_unique_branch_top(self):
         import datastore.memorydb.memory_graph as mg
@@ -9888,6 +9889,76 @@ class TestRecallFastHookInjectContract:
         assert any(row.get("category") == "docs" and "DIETARY_LABELS" in row["text"] for row in rows)
         assert sum(1 for row in rows if row.get("category") == "fact") == 7
         assert meta["preserved_docs_rows"] == 1
+
+    def test_recall_store_plan_keeps_stronger_fact_above_preserved_session_chunk(self):
+        import datastore.memorydb.memory_graph as mg
+
+        def _fake_vector(*args, **kwargs):
+            return (
+                [
+                    {
+                        "id": "compact-fact",
+                        "text": "The archive marker stays in the cedar tray",
+                        "category": "fact",
+                        "similarity": 0.99,
+                    },
+                    {
+                        "id": "related-fact",
+                        "text": "The cedar tray has labeled compartments",
+                        "category": "fact",
+                        "similarity": 0.98,
+                    },
+                ],
+                {"selected_path": "vector", "phases_ms": {"total_ms": 10}},
+                None,
+            )
+
+        def _fake_session_chunks(*args, **kwargs):
+            return (
+                [
+                    {
+                        "chunk_id": "session-archive-marker",
+                        "source_chunk_id": "session-archive-marker",
+                        "session_chunk_id": "session-archive-marker",
+                        "text": "[session_chunk] session#2: User: The archive marker stays in the cedar tray.",
+                        "category": "session_chunk",
+                        "source_type": "session_chunk",
+                        "via": "session_chunks",
+                        "similarity": 0.95,
+                    }
+                ],
+                {"selected_path": "session_chunk_store", "phases_ms": {"total_ms": 5}},
+                None,
+            )
+
+        registry = {
+            "vector": {"recall": _fake_vector, "recall_fast": _fake_vector},
+            "session_chunks": {"recall": _fake_session_chunks, "recall_fast": _fake_session_chunks},
+            "docs": {"recall": lambda *a, **k: ([], {}, None), "recall_fast": lambda *a, **k: ([], {}, None)},
+            "graph": {"recall": lambda *a, **k: ([], {}, None), "recall_fast": lambda *a, **k: ([], {}, None)},
+        }
+
+        with patch.object(mg, "_get_recall_store_registry", return_value=registry):
+            rows, meta, _ = mg._run_recall_store_plan(
+                "archive marker",
+                stores=["vector", "session_chunks"],
+                limit=2,
+                owner_id="test-owner",
+                min_similarity=0.6,
+                planner_profile="fast",
+                planned_queries=["archive marker"],
+                planner_meta={"planned_stores": ["vector", "session_chunks"]},
+                fast_mode=True,
+                common_kwargs={},
+            )
+
+        assert [row.get("id") or row.get("chunk_id") for row in rows] == [
+            "compact-fact",
+            "session-archive-marker",
+        ]
+        assert rows[0]["similarity"] > rows[1]["similarity"]
+        assert rows[1]["store_plan_preserved_branch_top"] == "session_chunks"
+        assert meta["store_plan_preserved_branch_tops"]["preserved"] == 1
 
     def test_recall_store_plan_preserves_target_date_docs_rows(self):
         import datastore.memorydb.memory_graph as mg
