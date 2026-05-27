@@ -4172,6 +4172,13 @@ def _discovered_transcript_supersedes_cursor(existing_path: str, transcript_path
             return True
         existing_size = _transcript_size_bytes(str(existing))
         current_size = _transcript_size_bytes(str(current))
+        if (
+            _is_daemon_preserved_session_transcript_path(str(existing))
+            and current_size
+            and existing_size
+            and current_size < existing_size
+        ):
+            return False
         if current_size != existing_size:
             return True
         return current.stat().st_mtime > existing.stat().st_mtime

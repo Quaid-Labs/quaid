@@ -1624,6 +1624,50 @@ def test_ensure_discovered_session_cursors_replaces_stale_relocated_cursor(monke
     assert cursor["internal"] is False
 
 
+def test_ensure_discovered_session_cursors_keeps_larger_preserved_mirror_cursor(monkeypatch, tmp_path):
+    instance_id = os.environ.get("QUAID_INSTANCE", "pytest-runner")
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    sessions_dir = tmp_path / "sessions"
+    preserved_dir = tmp_path / "instances" / instance_id / "logs" / "quaid" / "sessions"
+    sessions_dir.mkdir(parents=True, exist_ok=True)
+    preserved_dir.mkdir(parents=True, exist_ok=True)
+
+    session_id = "8817b065-c63a-43f3-a68a-72b70f2729ed"
+    canonical = sessions_dir / f"{session_id}.jsonl"
+    preserved = preserved_dir / f"{session_id}.jsonl"
+    canonical.write_text(
+        '{"role":"user","content":"live subset"}\n',
+        encoding="utf-8",
+    )
+    preserved.write_text(
+        '{"role":"user","content":"live subset"}\n'
+        '{"role":"user","content":"larger preserved mirror tail"}\n',
+        encoding="utf-8",
+    )
+
+    source_key = extraction_daemon._signal_source_cursor_key(session_id, str(canonical))
+    extraction_daemon.write_cursor(
+        session_id,
+        2,
+        str(preserved),
+        internal=False,
+        source_key=source_key,
+        processed_signal_type="session_end",
+    )
+
+    class _Adapter(_OwnedTestAdapterMixin):
+        def get_sessions_dir(self):
+            return sessions_dir
+
+    discovered = extraction_daemon._ensure_discovered_session_cursors(_Adapter())
+    assert discovered == 0
+
+    cursor = extraction_daemon.read_cursor(session_id, source_key=source_key)
+    assert cursor["line_offset"] == 2
+    assert cursor["transcript_path"] == str(preserved)
+    assert cursor["processed_signal_type"] == "session_end"
+
+
 def test_ensure_discovered_session_cursors_skips_foreign_adapter_transcripts(monkeypatch, tmp_path):
     instance_id = os.environ.get("QUAID_INSTANCE", "pytest-runner")
     monkeypatch.setenv("QUAID_HOME", str(tmp_path))
