@@ -1867,6 +1867,22 @@ def _adapter_live_transcript_exists(session_id: str, adapter=None) -> bool:
     return False
 
 
+def _adapter_live_transcript_missing(session_id: str, adapter=None) -> bool:
+    get_session_path = getattr(adapter, "get_session_path", None)
+    if not callable(get_session_path):
+        return False
+    try:
+        live_candidate = get_session_path(str(session_id))
+        live_raw = str(live_candidate or "").strip()
+        if not live_raw or _is_daemon_preserved_session_transcript_path(live_raw):
+            return True
+        return not os.path.isfile(live_raw)
+    except Exception:
+        if _fail_hard_enabled():
+            raise
+    return False
+
+
 def _preserved_mirror_for_missing_transcript_cursor(session_id: str, transcript_path: str, adapter=None) -> str:
     raw = str(transcript_path or "").strip()
     if not raw or os.path.isfile(raw) or _is_daemon_preserved_session_transcript_path(raw):
@@ -7004,6 +7020,47 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
             data["line_offset"] = 0
         state = read_rolling_state(session_id)
         state_buffer_path = str(state.get("buffer_transcript_path") or "").strip()
+        ended_preserved_buffer_path = ""
+        for candidate_path in (str(buffer_transcript_path), str(transcript_path), state_buffer_path):
+            if candidate_path and _is_daemon_preserved_session_transcript_path(candidate_path):
+                ended_preserved_buffer_path = candidate_path
+                break
+        cursor_points_at_ended_source = (
+            not os.path.isfile(str(transcript_path))
+            or _is_daemon_preserved_session_transcript_path(str(transcript_path))
+            or _is_daemon_rolling_transcript_snapshot_path(str(transcript_path))
+        )
+        state_semantic_tokens = int(state.get("semantic_buffer_tokens", 0) or 0)
+        if (
+            ended_preserved_buffer_path
+            and cursor_points_at_ended_source
+            and state_semantic_tokens >= _rolling_ready_threshold(chunk_budget)
+            and _adapter_live_transcript_missing(str(session_id), adapter=adapter)
+        ):
+            preserved_total_lines = count_transcript_lines(ended_preserved_buffer_path)
+            cursor_key_for_write = None
+            if cursor_file.stem != str(session_id):
+                cursor_key_for_write = _signal_source_cursor_key(
+                    str(session_id),
+                    ended_preserved_buffer_path,
+                    cursor_data=data,
+                )
+            logger.info(
+                "session %s rolling scan found ended preserved buffer %s with no active live transcript; "
+                "advancing cursor to preserved EOF and clearing rolling state before threshold check",
+                session_id,
+                ended_preserved_buffer_path,
+            )
+            write_cursor(
+                str(session_id),
+                preserved_total_lines,
+                ended_preserved_buffer_path,
+                internal=bool(data.get("internal", False)),
+                source_key=cursor_key_for_write,
+                processed_signal_type="session_end",
+            )
+            clear_rolling_state(str(session_id))
+            continue
         buffer_source_differs_from_cursor = str(buffer_transcript_path) != str(transcript_path)
         if state_buffer_path and state_buffer_path != str(buffer_transcript_path):
             if staged_state_has_payload(state):
