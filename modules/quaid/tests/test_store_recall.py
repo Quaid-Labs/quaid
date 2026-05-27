@@ -93,8 +93,8 @@ def test_recall_owner_id_config_scopes_session_chunks_to_requested_owner(tmp_pat
 
     graph, _db_file = _make_graph(tmp_path)
     graph.store_session_chunk(
-        "User: Solomon default owner Lisbon ferry receipt decoy.",
-        owner_id="solomon-steadman",
+        "User: Default owner Lisbon ferry receipt decoy.",
+        owner_id="default-owner-decoy",
         session_id="default-session",
         chunk_index=0,
     )
@@ -5007,8 +5007,8 @@ class TestSourceChunkStorage:
 
         graph, _db_file = _make_graph(tmp_path)
         graph.store_session_chunk(
-            "User: Solomon default owner Lisbon ferry receipt decoy.",
-            owner_id="solomon-steadman",
+            "User: Default owner Lisbon ferry receipt decoy.",
+            owner_id="default-owner-decoy",
             session_id="default-session",
             chunk_index=0,
         )
