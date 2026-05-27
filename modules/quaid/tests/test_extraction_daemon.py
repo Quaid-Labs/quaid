@@ -11686,6 +11686,7 @@ class TestRollingExtraction:
                 "buffered_line_offset": 3,
                 "semantic_buffer": "User: Chunk two\n\nUser: Chunk three",
                 "semantic_buffer_tokens": 1646,
+                "rolling_batches": 1,
                 "raw_facts": [{"text": "Owner mentioned Chunk two", "category": "fact"}],
             },
         )

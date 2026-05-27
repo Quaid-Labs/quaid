@@ -6139,7 +6139,9 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                 transcript_path,
                 processed_signal_type=signal_type,
             )
-        if (
+        if ended_rolling_buffer_flush_signal:
+            clear_rolling_state(session_id)
+        elif (
             staged_payload_sweep_signal
             and _semantic_buffer_has_content(staged_state)
             and not drain_unstaged_semantic_buffer_on_sweep
