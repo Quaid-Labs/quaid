@@ -196,7 +196,7 @@ Respond with JSON only:
       "mentioned_at": "optional ISO timestamp or YYYY-MM-DD from the transcript message that introduced the fact",
       "occurred_start": "optional ISO timestamp or YYYY-MM-DD for when the fact/event happened, if explicitly stated",
       "occurred_end": "optional ISO timestamp or YYYY-MM-DD for the end of the event/range, if explicitly stated",
-      "category": "fact|preference|decision|relationship",
+      "category": "fact|event|preference|decision|relationship",
       "subject_entity_name": "optional exact named entity this fact is directly about",
       "extraction_confidence": "high|medium|low",
       "domains": ["personal", "technical"],

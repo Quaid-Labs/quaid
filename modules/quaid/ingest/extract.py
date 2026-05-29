@@ -111,38 +111,6 @@ def _transcript_timestamp_hints(transcript_text: str) -> List[str]:
     return hints
 
 
-def _timestamp_sort_key(value: Any) -> Tuple[int, str]:
-    """Return a comparison key that prefers earlier valid timestamps."""
-    normalized = _normalize_extracted_timestamp(value)
-    if not normalized:
-        return (1, "")
-    try:
-        parsed = datetime.fromisoformat(normalized.replace("Z", "+00:00"))
-    except ValueError:
-        return (1, normalized)
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return (0, parsed.astimezone(timezone.utc).isoformat(timespec="seconds"))
-
-
-def _prefer_earlier_timestamp(first: Any, second: Any) -> Optional[str]:
-    """Pick the earliest valid timestamp, preferring any valid value over missing."""
-    a = _normalize_extracted_timestamp(first)
-    b = _normalize_extracted_timestamp(second)
-    if a and b:
-        return a if _timestamp_sort_key(a) <= _timestamp_sort_key(b) else b
-    return a or b
-
-
-def _prefer_later_timestamp(first: Any, second: Any) -> Optional[str]:
-    """Pick the latest valid timestamp, preferring any valid value over missing."""
-    a = _normalize_extracted_timestamp(first)
-    b = _normalize_extracted_timestamp(second)
-    if a and b:
-        return a if _timestamp_sort_key(a) >= _timestamp_sort_key(b) else b
-    return a or b
-
-
 def _current_utc_timestamp() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
@@ -158,6 +126,7 @@ def _normalize_fact_temporal_hint(
     normalized = dict(fact or {})
     raw_created_at = str(normalized.get("created_at") or "").strip()
     source_created_at = _normalize_extracted_timestamp(raw_created_at)
+    existing_source_timestamp = _normalize_extracted_timestamp(normalized.get("_source_timestamp"))
     fallback_source_at = _normalize_extracted_timestamp(default_created_at)
     fallback_mentioned_at = _normalize_extracted_timestamp(default_mentioned_at) or fallback_source_at
     if (
@@ -167,7 +136,7 @@ def _normalize_fact_temporal_hint(
         and raw_created_at == fallback_source_at[:10]
     ):
         source_created_at = fallback_source_at
-    source_timestamp = source_created_at or fallback_source_at
+    source_timestamp = source_created_at or existing_source_timestamp or fallback_source_at
     # MemoryDB owns created_at as record/write time. Extracted source timestamps
     # are source mention time and must not override the datastore record axis.
     normalized.pop("created_at", None)
@@ -987,178 +956,10 @@ def _fact_text_key(text: str) -> str:
     return " ".join(str(text or "").strip().lower().split())
 
 
-def _confidence_rank(value: Any) -> int:
-    conf = str(value or "medium").strip().lower()
-    return {"high": 3, "medium": 2, "low": 1}.get(conf, 2)
-
-
-def _merge_fact_edges(existing: Any, incoming: Any) -> List[Dict[str, Any]]:
-    merged: List[Dict[str, Any]] = []
-    seen: set[tuple[str, str, str]] = set()
-    for source in (existing, incoming):
-        if not isinstance(source, list):
-            continue
-        for edge in source:
-            if not isinstance(edge, dict):
-                continue
-            subj = str(edge.get("subject", "") or "").strip()
-            rel = str(edge.get("relation", "") or "").strip()
-            obj = str(edge.get("object", "") or "").strip()
-            key = (subj, rel, obj)
-            if not all(key) or key in seen:
-                continue
-            seen.add(key)
-            merged.append({"subject": subj, "relation": rel, "object": obj})
-    return merged
-
-
-def _merge_fact_keywords(existing: Any, incoming: Any) -> Optional[str]:
-    tokens: List[str] = []
-    seen: set[str] = set()
-    for raw in (existing, incoming):
-        if not isinstance(raw, str):
-            continue
-        for token in raw.split():
-            tok = token.strip()
-            if not tok or tok in seen:
-                continue
-            seen.add(tok)
-            tokens.append(tok)
-    return " ".join(tokens) if tokens else None
-
-
-def _fact_provenance_specificity(fact: Dict[str, Any]) -> int:
-    score = 0
-    raw_source = str((fact or {}).get("source", "") or "").strip().lower()
-    if raw_source == "subagent":
-        score += 100
-    elif raw_source in {"assistant", "agent", "tool", "both", "user"}:
-        score += 10
-    if str((fact or {}).get("_source_label", "") or "").strip():
-        score += 5
-    if str((fact or {}).get("_source_id", "") or "").strip():
-        score += 5
-    if str((fact or {}).get("_source_chunk_id") or (fact or {}).get("source_chunk_id") or "").strip():
-        score += 3
-    return score
-
-
-def _merge_duplicate_fact_entries(primary: Dict[str, Any], duplicate: Dict[str, Any]) -> Dict[str, Any]:
-    merged = dict(primary)
-    primary_provenance = _fact_provenance_specificity(primary)
-    duplicate_provenance = _fact_provenance_specificity(duplicate)
-    if duplicate_provenance > primary_provenance:
-        merged = dict(duplicate)
-    elif duplicate_provenance == primary_provenance:
-        primary_rank = _confidence_rank(primary.get("extraction_confidence"))
-        duplicate_rank = _confidence_rank(duplicate.get("extraction_confidence"))
-        if duplicate_rank > primary_rank:
-            merged = dict(duplicate)
-        elif duplicate_rank == primary_rank:
-            primary_text = str(primary.get("text", "") or "")
-            duplicate_text = str(duplicate.get("text", "") or "")
-            if len(duplicate_text) > len(primary_text):
-                merged = dict(duplicate)
-
-    other = duplicate if merged is primary else primary
-
-    merged["edges"] = _merge_fact_edges(merged.get("edges"), other.get("edges"))
-
-    domains: List[str] = []
-    seen_domains: set[str] = set()
-    for source in (merged.get("domains"), other.get("domains")):
-        if isinstance(source, str):
-            source = [source]
-        if not isinstance(source, list):
-            continue
-        for raw in source:
-            dom = str(raw or "").strip()
-            if not dom or dom in seen_domains:
-                continue
-            seen_domains.add(dom)
-            domains.append(dom)
-    if domains:
-        merged["domains"] = domains
-
-    keywords = _merge_fact_keywords(merged.get("keywords"), other.get("keywords"))
-    if keywords:
-        merged["keywords"] = keywords
-
-    for key in ("category", "speaker", "project", "privacy"):
-        if not merged.get(key) and other.get(key):
-            merged[key] = other.get(key)
-
-    if _fact_provenance_specificity(other) > _fact_provenance_specificity(merged):
-        for key in ("source", "_source_label", "_source_id", "_source_chunk_id", "source_chunk_id", "_source_chunk_index"):
-            if other.get(key):
-                merged[key] = other.get(key)
-    else:
-        for key in ("source", "_source_label", "_source_id", "_source_chunk_id", "source_chunk_id", "_source_chunk_index"):
-            if not merged.get(key) and other.get(key):
-                merged[key] = other.get(key)
-
-    if _confidence_rank(other.get("extraction_confidence")) > _confidence_rank(merged.get("extraction_confidence")):
-        merged["extraction_confidence"] = other.get("extraction_confidence")
-
-    merged.pop("created_at", None)
-    merged_source_timestamp = _prefer_earlier_timestamp(
-        merged.get("_source_timestamp"),
-        other.get("_source_timestamp"),
-    )
-    if merged_source_timestamp:
-        merged["_source_timestamp"] = merged_source_timestamp
-    else:
-        merged.pop("_source_timestamp", None)
-    merged_occurred_start = _prefer_earlier_timestamp(merged.get("occurred_start"), other.get("occurred_start"))
-    if merged_occurred_start:
-        merged["occurred_start"] = merged_occurred_start
-    else:
-        merged.pop("occurred_start", None)
-    merged_occurred_end = _prefer_later_timestamp(merged.get("occurred_end"), other.get("occurred_end"))
-    if merged_occurred_end:
-        merged["occurred_end"] = merged_occurred_end
-    else:
-        merged.pop("occurred_end", None)
-    merged_mentioned_at = _prefer_earlier_timestamp(merged.get("mentioned_at"), other.get("mentioned_at"))
-    if merged_mentioned_at:
-        merged["mentioned_at"] = merged_mentioned_at
-    else:
-        merged.pop("mentioned_at", None)
-
-    return merged
-
-
 def _collapse_duplicate_payload_facts(facts: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], int]:
-    """Collapse exact duplicate fact texts within one extracted payload before publish.
+    from lib.extraction_fact_merge import collapse_duplicate_payload_facts as _collapse
 
-    This is intentionally narrow: only exact normalized-text duplicates are merged.
-    Semantic dedup remains the datastore's responsibility.
-    """
-    collapsed: List[Dict[str, Any]] = []
-    seen: Dict[str, int] = {}
-    dropped = 0
-
-    for fact in facts or []:
-        if not isinstance(fact, dict):
-            collapsed.append(fact)
-            continue
-        text = fact.get("text", "")
-        if not isinstance(text, str):
-            collapsed.append(fact)
-            continue
-        key = _fact_text_key(text)
-        if not key:
-            collapsed.append(fact)
-            continue
-        prior_idx = seen.get(key)
-        if prior_idx is None:
-            seen[key] = len(collapsed)
-            collapsed.append(dict(fact))
-            continue
-        collapsed[prior_idx] = _merge_duplicate_fact_entries(collapsed[prior_idx], fact)
-        dropped += 1
-
-    return collapsed, dropped
+    return _collapse(facts)
 
 
 _SPEAKER_PREFIX_RE = re.compile(

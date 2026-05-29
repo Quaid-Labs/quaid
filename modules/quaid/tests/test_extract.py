@@ -4041,6 +4041,190 @@ class TestExtractFromTranscript:
         assert call["mentioned_at"] == "2026-03-12T23:59:59"
         assert sorted(call["domains"]) == ["health", "personal"]
 
+    def test_collapse_duplicate_payload_facts_merges_temporal_sibling_variants(self):
+        from ingest.extract import collapse_duplicate_payload_facts
+
+        facts = [
+            {
+                "text": "Test Owner picked up a 14mm brass travel nib in late May 2026",
+                "category": "fact",
+                "speaker": "user",
+                "domains": ["personal"],
+                "extraction_confidence": "high",
+                "_source_timestamp": "2026-05-29T09:00:00+00:00",
+                "occurred_start": "2026-05-20T23:59:59",
+                "occurred_end": "2026-05-28T23:59:59",
+            },
+            {
+                "text": "Test Owner picked up a 14mm brass travel nib this week",
+                "category": "fact",
+                "speaker": "user",
+                "domains": ["personal"],
+                "extraction_confidence": "medium",
+                "_source_timestamp": "2026-05-29T09:00:00+00:00",
+            },
+        ]
+
+        collapsed, dropped = collapse_duplicate_payload_facts(facts)
+
+        assert dropped == 1
+        assert len(collapsed) == 1
+        assert collapsed[0]["occurred_start"] == "2026-05-20T23:59:59"
+        assert collapsed[0]["occurred_end"] == "2026-05-28T23:59:59"
+
+    def test_collapse_duplicate_payload_facts_backfills_unbounded_event_from_source_timestamp(self):
+        from ingest.extract import collapse_duplicate_payload_facts
+
+        facts = [
+            {
+                "text": "Maya started using the brass travel sketchbook this week",
+                "category": "event",
+                "speaker": "user",
+                "domains": ["personal"],
+                "extraction_confidence": "medium",
+                "_source_timestamp": "2026-05-29T09:00:00+00:00",
+            },
+        ]
+
+        collapsed, dropped = collapse_duplicate_payload_facts(facts)
+
+        assert dropped == 0
+        assert len(collapsed) == 1
+        assert collapsed[0]["occurred_start"] == "2026-05-29T09:00:00+00:00"
+        assert collapsed[0]["occurred_end"] == "2026-05-29T09:00:00+00:00"
+        assert "_occurred_filled_from_source_timestamp" not in collapsed[0]
+
+    def test_collapse_duplicate_payload_facts_prefers_source_filled_event_over_unsupported_year(self):
+        from ingest.extract import collapse_duplicate_payload_facts
+
+        facts = [
+            {
+                "text": "Test Owner started using a 14mm brass travel nib this week",
+                "category": "event",
+                "speaker": "user",
+                "domains": ["personal"],
+                "extraction_confidence": "medium",
+                "_source_timestamp": "2026-05-29T09:00:00+00:00",
+                "occurred_start": "2025-01-01T23:59:59",
+                "occurred_end": "2025-01-01T23:59:59",
+            },
+            {
+                "text": "Test Owner started using a 14mm brass travel nib this week",
+                "category": "event",
+                "speaker": "user",
+                "domains": ["personal"],
+                "extraction_confidence": "medium",
+                "_source_timestamp": "2026-05-29T09:00:00+00:00",
+            },
+        ]
+
+        collapsed, dropped = collapse_duplicate_payload_facts(facts)
+
+        assert dropped == 1
+        assert len(collapsed) == 1
+        assert collapsed[0]["occurred_start"] == "2026-05-29T09:00:00+00:00"
+        assert collapsed[0]["occurred_end"] == "2026-05-29T09:00:00+00:00"
+
+    @patch("ingest.extract._memory.store")
+    def test_apply_extracted_payloads_collapses_temporal_sibling_fact_rows(self, mock_store):
+        from ingest.extract import apply_extracted_payloads
+
+        mock_store.return_value = {"id": "n-temporal", "status": "created", "dedup_telemetry": {}}
+
+        payload = {
+            "raw_facts": [
+                {
+                    "text": "Test Owner picked up a 14mm brass travel nib in late May 2026",
+                    "category": "fact",
+                    "speaker": "user",
+                    "domains": ["personal"],
+                    "extraction_confidence": "high",
+                    "_source_timestamp": "2026-05-29T09:00:00+00:00",
+                    "occurred_start": "2026-05-20T23:59:59",
+                    "occurred_end": "2026-05-28T23:59:59",
+                },
+                {
+                    "text": "Test Owner picked up a 14mm brass travel nib this week",
+                    "category": "fact",
+                    "speaker": "user",
+                    "domains": ["personal"],
+                    "extraction_confidence": "medium",
+                    "_source_timestamp": "2026-05-29T09:00:00+00:00",
+                },
+            ],
+            "raw_snippets": {},
+            "raw_journal": {},
+            "raw_project_logs": {},
+            "facts": [],
+            "snippets": {},
+            "journal": {},
+            "project_logs": {},
+            "project_log_metrics": {},
+            "facts_stored": 0,
+            "facts_skipped": 0,
+            "edges_created": 0,
+            "dry_run": False,
+        }
+
+        applied = apply_extracted_payloads(
+            payload,
+            owner_id="test",
+            label="flush",
+            session_id="sess-temporal-sibling",
+            dry_run=False,
+        )
+
+        assert applied["payload_duplicate_facts_collapsed"] == 1
+        assert applied["facts_stored"] == 1
+        assert mock_store.call_count == 1
+        call = mock_store.call_args.kwargs
+        assert call["occurred_start"] == "2026-05-20T23:59:59"
+        assert call["occurred_end"] == "2026-05-28T23:59:59"
+
+    @patch("ingest.extract._memory.store")
+    def test_apply_extracted_payloads_backfills_unbounded_event_occurred_from_source(self, mock_store):
+        from ingest.extract import apply_extracted_payloads
+
+        mock_store.return_value = {"id": "n-event", "status": "created", "dedup_telemetry": {}}
+
+        payload = {
+            "raw_facts": [
+                {
+                    "text": "Maya started using the brass travel sketchbook this week",
+                    "category": "event",
+                    "speaker": "user",
+                    "domains": ["personal"],
+                    "extraction_confidence": "medium",
+                    "_source_timestamp": "2026-05-29T09:00:00+00:00",
+                },
+            ],
+            "raw_snippets": {},
+            "raw_journal": {},
+            "raw_project_logs": {},
+            "facts": [],
+            "snippets": {},
+            "journal": {},
+            "project_logs": {},
+            "project_log_metrics": {},
+            "facts_stored": 0,
+            "facts_skipped": 0,
+            "edges_created": 0,
+            "dry_run": False,
+        }
+
+        applied = apply_extracted_payloads(
+            payload,
+            owner_id="test",
+            label="flush",
+            session_id="sess-event-source-time",
+            dry_run=False,
+        )
+
+        assert applied["facts_stored"] == 1
+        call = mock_store.call_args.kwargs
+        assert call["occurred_start"] == "2026-05-29T09:00:00+00:00"
+        assert call["occurred_end"] == "2026-05-29T09:00:00+00:00"
+
     @patch("ingest.extract._memory.store")
     def test_apply_extracted_payloads_resolves_domain_policy_inside_memorydb_boundary(
         self,
@@ -6500,6 +6684,7 @@ class TestLoadPrompt:
         assert '"facts"' in prompt
         assert '"text"' in prompt
         assert '"category"' in prompt
+        assert '"category": "fact|event|preference|decision|relationship"' in prompt
 
     def test_prompt_preserves_chunk_assessment_guidance(self):
         from ingest.extract import _load_extraction_prompt
