@@ -26,7 +26,7 @@ import re
 import sys
 import time
 from contextlib import nullcontext
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -131,180 +131,12 @@ def _current_utc_timestamp() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-_RELATIVE_TEMPORAL_STOPWORDS = {
-    "about",
-    "after",
-    "also",
-    "and",
-    "are",
-    "because",
-    "been",
-    "for",
-    "from",
-    "had",
-    "has",
-    "have",
-    "her",
-    "him",
-    "his",
-    "into",
-    "its",
-    "last",
-    "line",
-    "now",
-    "our",
-    "she",
-    "that",
-    "the",
-    "their",
-    "them",
-    "then",
-    "this",
-    "today",
-    "tomorrow",
-    "using",
-    "user",
-    "was",
-    "week",
-    "were",
-    "with",
-    "yesterday",
-}
-_RELATIVE_WEEKDAYS = {
-    "monday": 0,
-    "tuesday": 1,
-    "wednesday": 2,
-    "thursday": 3,
-    "friday": 4,
-    "saturday": 5,
-    "sunday": 6,
-}
-
-
-def _utc_datetime_for_timestamp(value: Any) -> Optional[datetime]:
-    normalized = _normalize_extracted_timestamp(value)
-    if not normalized:
-        return None
-    try:
-        parsed = datetime.fromisoformat(normalized.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc)
-
-
-def _date_range_strings(start_date, end_date) -> Tuple[str, str]:
-    return start_date.isoformat(), end_date.isoformat()
-
-
-def _relative_date_range_for_text(text: str, *, anchor_dt: datetime) -> Optional[Tuple[str, str]]:
-    """Resolve common relative date phrases against a source timestamp."""
-    lowered = str(text or "").lower()
-    if not lowered:
-        return None
-    anchor_date = anchor_dt.date()
-
-    match = re.search(
-        r"\blast\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b",
-        lowered,
-    )
-    if match:
-        target_weekday = _RELATIVE_WEEKDAYS[match.group(1)]
-        days_back = (anchor_date.weekday() - target_weekday) % 7
-        if days_back == 0:
-            days_back = 7
-        target = anchor_date - timedelta(days=days_back)
-        return _date_range_strings(target, target)
-
-    if re.search(r"\byesterday\b", lowered):
-        target = anchor_date - timedelta(days=1)
-        return _date_range_strings(target, target)
-    if re.search(r"\btomorrow\b", lowered):
-        target = anchor_date + timedelta(days=1)
-        return _date_range_strings(target, target)
-    if re.search(r"\b(today|tonight|this morning|this afternoon|this evening|this week)\b", lowered):
-        return _date_range_strings(anchor_date, anchor_date)
-    if re.search(r"\blast week\b", lowered):
-        this_week_start = anchor_date - timedelta(days=anchor_date.weekday())
-        start = this_week_start - timedelta(days=7)
-        end = start + timedelta(days=6)
-        return _date_range_strings(start, end)
-    return None
-
-
-def _relative_temporal_terms(text: str) -> set[str]:
-    return {
-        token.lower()
-        for token in re.findall(r"\w+", str(text or ""), flags=re.UNICODE)
-        if len(token) >= 3 and token.lower() not in _RELATIVE_TEMPORAL_STOPWORDS
-    }
-
-
-def _relative_temporal_candidate_segments(transcript_text: str) -> List[str]:
-    segments: List[str] = []
-    for raw_line in str(transcript_text or "").splitlines():
-        line = raw_line.strip()
-        if not line:
-            continue
-        line = re.sub(rf"^\s*(?:\[[^\]]+\]\s*)?(?:{_TRANSCRIPT_TIMESTAMP_PATTERN}\s+)?", "", line)
-        line = re.sub(
-            r"^(?:User|Assistant|Agent|System|Tool|Developer|Subagent/User|Subagent/Assistant):\s+",
-            "",
-            line,
-            flags=re.IGNORECASE,
-        )
-        for segment in re.split(r"(?<=[.!?])\s+|\n+", line):
-            segment = segment.strip()
-            if segment:
-                segments.append(segment)
-    return segments
-
-
-def _resolve_relative_occurred_bounds(
-    *,
-    fact: Dict[str, Any],
-    transcript_text: str,
-    source_timestamp: Optional[str],
-) -> Tuple[Optional[str], Optional[str]]:
-    """Infer occurred bounds for relative phrases grounded in source metadata."""
-    anchor_dt = _utc_datetime_for_timestamp(source_timestamp)
-    if anchor_dt is None:
-        return None, None
-
-    fact_text = str((fact or {}).get("text") or "")
-    direct = _relative_date_range_for_text(fact_text, anchor_dt=anchor_dt)
-    if direct:
-        return direct
-
-    fact_terms = _relative_temporal_terms(fact_text)
-    if not fact_terms:
-        return None, None
-    best: Optional[Tuple[int, Tuple[str, str]]] = None
-    for segment in _relative_temporal_candidate_segments(transcript_text):
-        resolved = _relative_date_range_for_text(segment, anchor_dt=anchor_dt)
-        if not resolved:
-            continue
-        segment_terms = _relative_temporal_terms(segment)
-        overlap = len(fact_terms & segment_terms)
-        threshold = 1 if len(fact_terms) <= 2 else 2
-        if overlap < threshold:
-            continue
-        candidate = (overlap, resolved)
-        if best is None or candidate[0] > best[0]:
-            best = candidate
-    if best is None:
-        return None, None
-    return best[1]
-
-
 def _normalize_fact_temporal_hint(
     fact: Dict[str, Any],
     *,
     default_created_at: Optional[str] = None,
     default_mentioned_at: Optional[str] = None,
     prefer_default_mentioned_at: bool = False,
-    source_text: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Normalize fact temporal metadata and backfill source mention time."""
     normalized = dict(fact or {})
@@ -331,16 +163,6 @@ def _normalize_fact_temporal_hint(
         normalized.get("occurred_start") or normalized.get("occurred_at")
     )
     occurred_end = _normalize_extracted_timestamp(normalized.get("occurred_end"))
-    if (not occurred_start or not occurred_end) and source_text and source_timestamp:
-        relative_start, relative_end = _resolve_relative_occurred_bounds(
-            fact=normalized,
-            transcript_text=source_text,
-            source_timestamp=source_timestamp,
-        )
-        if not occurred_start and relative_start:
-            occurred_start = _normalize_extracted_timestamp(relative_start)
-        if not occurred_end and relative_end:
-            occurred_end = _normalize_extracted_timestamp(relative_end)
     if occurred_start:
         normalized["occurred_start"] = occurred_start
     else:
@@ -2601,7 +2423,6 @@ def _merge_parsed_payloads(
                     raw_fact,
                     default_created_at=effective_date_hint,
                     default_mentioned_at=effective_mention_hint,
-                    source_text=transcript_text,
                     # effective_mention_hint is structural when present: transcript
                     # timestamp, session hint, or caller wall-clock fallback.
                     prefer_default_mentioned_at=True,
