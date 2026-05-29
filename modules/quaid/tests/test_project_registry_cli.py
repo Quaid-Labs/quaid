@@ -184,6 +184,7 @@ class TestCmdCreate:
         assert exc_info.value.code == 1
         err = capsys.readouterr().err
         assert "Project already exists: dup" in err
+        assert "Project names are global across Quaid instances" in err
         assert "standalone-runtime" in err
         assert "cc-livetest" in err
         assert "quaid project link dup" in err

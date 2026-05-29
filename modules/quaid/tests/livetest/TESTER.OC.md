@@ -289,7 +289,12 @@ OC creates new instances via the native agent system, not the installer:
 ```bash
 ssh REMOTE_HOST 'source ~/.zprofile; openclaw agents add --help'
 # Use openclaw agents add to create a test agent (e.g. m13test)
-ssh REMOTE_HOST 'mkdir -p /tmp/oc-m13-workspace && source ~/.zprofile; openclaw agents add m13test --non-interactive --workspace /tmp/oc-m13-workspace'
+~/quaidcode/dev/modules/quaid/tests/livetest/scripts/openclaw-cli-safe.sh \
+  --timeout 60 \
+  --label oc-m13-agents-add \
+  --on-timeout "ssh REMOTE_HOST 'pkill -f openclaw-update >/dev/null 2>&1 || true; pkill -f openclaw-completion >/dev/null 2>&1 || true; pkill -f openclaw-agent >/dev/null 2>&1 || true; pkill -f openclaw-agents >/dev/null 2>&1 || true'" \
+  -- ssh REMOTE_HOST 'mkdir -p /tmp/oc-m13-workspace && source ~/.zprofile; openclaw agents add m13test --non-interactive --workspace /tmp/oc-m13-workspace'
+ssh REMOTE_HOST 'source ~/.zprofile; openclaw agents list'
 ```
 
 Safety: never use `~/quaid` as the M13 test workspace. `openclaw agents delete`

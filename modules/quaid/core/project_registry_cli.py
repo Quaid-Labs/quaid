@@ -110,6 +110,11 @@ def _print_existing_project_context(name: str, project: Optional[Dict[str, Any]]
         return
     instances = _dedupe_instances(project.get("instances", []))
     current = _current_instance_id()
+    print(
+        "Project names are global across Quaid instances; `project create` "
+        "does not create a per-instance duplicate.",
+        file=sys.stderr,
+    )
     if instances:
         print(
             f"Existing project '{name}' is linked to instance(s): {', '.join(instances)}",
