@@ -4046,7 +4046,7 @@ class TestExtractFromTranscript:
 
         facts = [
             {
-                "text": "Test Owner picked up a 14mm brass travel nib in late May 2026",
+                "text": "Test Owner picked up a brass fountain pen at a stationery shop in Riverside in late May 2026",
                 "category": "fact",
                 "speaker": "user",
                 "domains": ["personal"],
@@ -4056,8 +4056,8 @@ class TestExtractFromTranscript:
                 "occurred_end": "2026-05-28T23:59:59",
             },
             {
-                "text": "Test Owner picked up a 14mm brass travel nib this week",
-                "category": "fact",
+                "text": "Test Owner purchased a brass fountain pen at a stationery shop in Riverside this week",
+                "category": "event",
                 "speaker": "user",
                 "domains": ["personal"],
                 "extraction_confidence": "medium",
@@ -4090,8 +4090,8 @@ class TestExtractFromTranscript:
 
         assert dropped == 0
         assert len(collapsed) == 1
-        assert collapsed[0]["occurred_start"] == "2026-05-29T09:00:00+00:00"
-        assert collapsed[0]["occurred_end"] == "2026-05-29T09:00:00+00:00"
+        assert collapsed[0]["occurred_start"] == "2026-05-25T00:00:00+00:00"
+        assert collapsed[0]["occurred_end"] == "2026-05-31T23:59:59+00:00"
         assert "_occurred_filled_from_source_timestamp" not in collapsed[0]
 
     def test_collapse_duplicate_payload_facts_prefers_source_filled_event_over_unsupported_year(self):
@@ -4122,8 +4122,8 @@ class TestExtractFromTranscript:
 
         assert dropped == 1
         assert len(collapsed) == 1
-        assert collapsed[0]["occurred_start"] == "2026-05-29T09:00:00+00:00"
-        assert collapsed[0]["occurred_end"] == "2026-05-29T09:00:00+00:00"
+        assert collapsed[0]["occurred_start"] == "2026-05-25T00:00:00+00:00"
+        assert collapsed[0]["occurred_end"] == "2026-05-31T23:59:59+00:00"
 
     @patch("ingest.extract._memory.store")
     def test_apply_extracted_payloads_collapses_temporal_sibling_fact_rows(self, mock_store):
@@ -4134,7 +4134,7 @@ class TestExtractFromTranscript:
         payload = {
             "raw_facts": [
                 {
-                    "text": "Test Owner picked up a 14mm brass travel nib in late May 2026",
+                    "text": "Test Owner picked up a brass fountain pen at a stationery shop in Riverside in late May 2026",
                     "category": "fact",
                     "speaker": "user",
                     "domains": ["personal"],
@@ -4144,8 +4144,8 @@ class TestExtractFromTranscript:
                     "occurred_end": "2026-05-28T23:59:59",
                 },
                 {
-                    "text": "Test Owner picked up a 14mm brass travel nib this week",
-                    "category": "fact",
+                    "text": "Test Owner purchased a brass fountain pen at a stationery shop in Riverside this week",
+                    "category": "event",
                     "speaker": "user",
                     "domains": ["personal"],
                     "extraction_confidence": "medium",
@@ -4222,8 +4222,8 @@ class TestExtractFromTranscript:
 
         assert applied["facts_stored"] == 1
         call = mock_store.call_args.kwargs
-        assert call["occurred_start"] == "2026-05-29T09:00:00+00:00"
-        assert call["occurred_end"] == "2026-05-29T09:00:00+00:00"
+        assert call["occurred_start"] == "2026-05-25T00:00:00+00:00"
+        assert call["occurred_end"] == "2026-05-31T23:59:59+00:00"
 
     @patch("ingest.extract._memory.store")
     def test_apply_extracted_payloads_resolves_domain_policy_inside_memorydb_boundary(

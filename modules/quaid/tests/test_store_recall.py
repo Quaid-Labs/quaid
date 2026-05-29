@@ -2927,6 +2927,38 @@ class TestTimestampOverride:
         assert node.occurred_end == "2025-06-30"
         assert node.mentioned_at == "2026-05-06T10:30:00"
 
+    def test_store_dedup_merges_temporal_variant_rows(self, tmp_path):
+        """Rolling/session-end re-extractions should not keep unbounded event variants."""
+        from datastore.memorydb.memory_graph import store
+
+        graph, _db_file = _make_graph(tmp_path)
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+            first = store(
+                "Test Owner picked up a brass fountain pen at a stationery shop in Riverside in late May 2026",
+                owner_id="test-owner",
+                category="fact",
+                occurred_start="2026-05-20T23:59:59",
+                occurred_end="2026-05-28T23:59:59",
+                mentioned_at="2026-05-29T13:57:53",
+            )
+            second = store(
+                "Test Owner purchased a brass fountain pen at a stationery shop in Riverside this week",
+                owner_id="test-owner",
+                category="event",
+                occurred_start="2026-05-25T00:00:00",
+                occurred_end="2026-05-31T23:59:59",
+                mentioned_at="2026-05-29T13:57:53",
+            )
+
+        assert first["status"] == "created"
+        assert second["status"] == "duplicate"
+        assert second["id"] == first["id"]
+        assert second["dedup_telemetry"]["temporal_variant_hits"] == 1
+        node = graph.get_node(first["id"])
+        assert node.occurred_start == "2026-05-20T23:59:59"
+        assert node.occurred_end == "2026-05-28T23:59:59"
+
     def test_date_bounds_can_filter_by_occurred_or_mentioned_dimension(self, tmp_path):
         """Date-bounded recall can choose event time separately from mention time."""
         import datastore.memorydb.memory_graph as mg

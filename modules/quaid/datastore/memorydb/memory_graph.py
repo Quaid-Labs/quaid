@@ -89,6 +89,10 @@ from lib.embeddings import (
     pack_embedding as _lib_pack_embedding,
     unpack_embedding as _lib_unpack_embedding,
 )
+from lib.extraction_fact_merge import (
+    facts_are_temporal_sibling_variants as _facts_are_extraction_temporal_siblings,
+    merge_duplicate_fact_entries as _merge_extraction_duplicate_fact_entries,
+)
 from lib.worker_pool import run_callables
 from lib.similarity import cosine_similarity as _lib_cosine_similarity
 from lib.tokens import (
@@ -22242,6 +22246,7 @@ def store(
         "fallback_candidates_returned": 0,
         "token_prefilter_terms": 0,
         "token_prefilter_skips": 0,
+        "temporal_variant_hits": 0,
     }
 
     def _with_dedup_telemetry(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -22398,6 +22403,65 @@ def store(
                     subject_entity_name=subject_entity_name,
                 )
 
+    def _node_temporal_merge_fact(existing: Node) -> Dict[str, Any]:
+        attrs = existing.attributes if isinstance(existing.attributes, dict) else (existing.attributes or {})
+        return {
+            "text": existing.name,
+            "category": attrs.get("category") or existing.knowledge_type or existing.type,
+            "_source_timestamp": existing.mentioned_at or existing.created_at,
+            "occurred_start": existing.occurred_start,
+            "occurred_end": existing.occurred_end,
+            "mentioned_at": existing.mentioned_at,
+            "extraction_confidence": existing.extraction_confidence,
+            "source": existing.source,
+            "_source_id": existing.source_id,
+            "source_chunk_id": existing.source_chunk_id,
+        }
+
+    def _incoming_temporal_merge_fact() -> Dict[str, Any]:
+        return {
+            "text": text,
+            "category": category,
+            "_source_timestamp": mentioned_at or created_at,
+            "occurred_start": occurred_start,
+            "occurred_end": occurred_end,
+            "mentioned_at": mentioned_at,
+            "extraction_confidence": extraction_confidence,
+            "source": source,
+            "_source_id": source_id,
+            "source_chunk_id": source_chunk_id,
+        }
+
+    def _apply_temporal_variant_update(
+        existing: Node,
+        *,
+        incoming_embedding: Optional[List[float]] = None,
+    ) -> None:
+        merged_fact = _merge_extraction_duplicate_fact_entries(
+            _node_temporal_merge_fact(existing),
+            _incoming_temporal_merge_fact(),
+        )
+        merged_start = merged_fact.get("occurred_start")
+        merged_end = merged_fact.get("occurred_end")
+        merged_mentioned = merged_fact.get("mentioned_at")
+        if merged_start:
+            existing.occurred_start = merged_start
+        if merged_end:
+            existing.occurred_end = merged_end
+        if merged_mentioned and not existing.mentioned_at:
+            existing.mentioned_at = merged_mentioned
+        merged_text = str(merged_fact.get("text") or "").strip()
+        if incoming_embedding is not None and merged_text == text and existing.name != text:
+            existing.name = text
+            existing.embedding = incoming_embedding
+            existing.content_hash = text_hash
+
+    def _is_temporal_variant_of_existing(existing: Node) -> bool:
+        return _facts_are_extraction_temporal_siblings(
+            _node_temporal_merge_fact(existing),
+            _incoming_temporal_merge_fact(),
+        )
+
     rowid_filter_parts: List[str] = []
     rowid_filter_params: List[Any] = []
     rowid_min = None
@@ -22446,7 +22510,11 @@ def store(
                 existing.confidence = min(existing.confidence + 0.02, 0.95)
                 # Bjork: re-encoding strengthens storage (smaller than retrieval increment)
                 existing.storage_strength = min(10.0, existing.storage_strength + 0.03)
+                existing_had_occurred = bool(existing.occurred_start or existing.occurred_end)
                 _apply_metadata_flags(existing, allow_structural_anchor_upgrade=True)
+                if existing_had_occurred and _is_temporal_variant_of_existing(existing):
+                    dedup_telemetry["temporal_variant_hits"] += 1
+                    _apply_temporal_variant_update(existing)
                 if update_if_dup and verified and not existing.verified:
                     existing.verified = True
                     existing.confidence = 0.9
@@ -22525,6 +22593,37 @@ def store(
                         continue
                     sim = graph.cosine_similarity(embedding, existing.embedding)
                 dedup_telemetry["scanned_rows"] += 1
+
+                if _is_temporal_variant_of_existing(existing):
+                    dedup_telemetry["temporal_variant_hits"] += 1
+                    log_dedup_decision(
+                        graph,
+                        text,
+                        existing.id,
+                        existing.name,
+                        sim,
+                        "temporal_variant",
+                        owner_id=owner_id,
+                        source=source,
+                        conn=_conn,
+                    )
+                    existing.confirmation_count += 1
+                    existing.last_confirmed_at = _now_iso()
+                    existing.confidence = min(existing.confidence + 0.02, 0.95)
+                    existing.storage_strength = min(10.0, existing.storage_strength + 0.03)
+                    _apply_metadata_flags(existing, allow_structural_anchor_upgrade=True)
+                    _apply_temporal_variant_update(existing, incoming_embedding=embedding)
+                    if update_if_dup and verified and not existing.verified:
+                        existing.verified = True
+                        existing.confidence = 0.9
+                    graph.update_node(existing, conn=_conn)
+                    return _with_dedup_telemetry({
+                        "id": existing.id,
+                        "status": "duplicate",
+                        "similarity": round(sim, 3),
+                        "existing_text": existing.name,
+                        "confirmation_count": existing.confirmation_count,
+                    })
 
                 if sim >= auto_reject_thresh and texts_are_near_identical(text, existing.name):
                     dedup_telemetry["auto_reject_hits"] += 1

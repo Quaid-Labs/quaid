@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -34,6 +34,31 @@ def _timestamp_sort_key(value: Any) -> Tuple[int, str]:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return (0, parsed.astimezone(timezone.utc).isoformat(timespec="seconds"))
+
+
+def _parse_extracted_datetime(value: Any) -> Optional[datetime]:
+    normalized = _normalize_extracted_timestamp(value)
+    if not normalized:
+        return None
+    try:
+        return datetime.fromisoformat(normalized.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _source_week_bounds(value: Any) -> Tuple[Optional[str], Optional[str]]:
+    """Return the ISO-week bounds containing a source timestamp."""
+    parsed = _parse_extracted_datetime(value)
+    if parsed is None:
+        return (None, None)
+    week_start = parsed - timedelta(days=parsed.weekday())
+    week_start = week_start.replace(hour=0, minute=0, second=0, microsecond=0)
+    week_end = week_start + timedelta(days=6)
+    week_end = week_end.replace(hour=23, minute=59, second=59, microsecond=0)
+    return (
+        week_start.isoformat(timespec="seconds"),
+        week_end.isoformat(timespec="seconds"),
+    )
 
 
 def _prefer_earlier_timestamp(first: Any, second: Any) -> Optional[str]:
@@ -93,7 +118,7 @@ def _fact_is_event_category(fact: Dict[str, Any]) -> bool:
 
 
 def _fill_unbounded_event_occurred_from_source(fact: Dict[str, Any]) -> Dict[str, Any]:
-    """Use source time for event rows only when the extractor left occurred blank."""
+    """Use the source week for event rows only when the extractor left occurred blank."""
     if (
         not isinstance(fact, dict)
         or not _fact_is_event_category(fact)
@@ -103,9 +128,12 @@ def _fill_unbounded_event_occurred_from_source(fact: Dict[str, Any]) -> Dict[str
     source_timestamp = _fact_source_timestamp(fact)
     if not source_timestamp:
         return fact
+    source_start, source_end = _source_week_bounds(source_timestamp)
+    if not source_start:
+        return fact
     filled = dict(fact)
-    filled["occurred_start"] = source_timestamp
-    filled["occurred_end"] = source_timestamp
+    filled["occurred_start"] = source_start
+    filled["occurred_end"] = source_end or source_start
     filled[_OCCURRED_SOURCE_TIMESTAMP_FILL_KEY] = True
     return filled
 
@@ -214,7 +242,10 @@ def _fact_text_contains_timestamp_year(fact: Dict[str, Any], timestamp: Any) -> 
 
 
 def _source_filled_occurred_should_win(source_filled: Dict[str, Any], other: Dict[str, Any]) -> bool:
-    if not bool((source_filled or {}).get(_OCCURRED_SOURCE_TIMESTAMP_FILL_KEY)):
+    if not (
+        bool((source_filled or {}).get(_OCCURRED_SOURCE_TIMESTAMP_FILL_KEY))
+        or _fact_bounds_match_source_week(source_filled)
+    ):
         return False
     source_timestamp = _fact_source_timestamp(source_filled)
     other_start = _normalize_extracted_timestamp((other or {}).get("occurred_start"))
@@ -228,6 +259,27 @@ def _source_filled_occurred_should_win(source_filled: Dict[str, Any], other: Dic
     return not _fact_text_contains_timestamp_year(other, other_start)
 
 
+def _fact_bounds_match_source_week(fact: Dict[str, Any]) -> bool:
+    source_timestamp = _fact_source_timestamp(fact)
+    if not source_timestamp:
+        return False
+    source_start, source_end = _source_week_bounds(source_timestamp)
+    if not source_start:
+        return False
+    return (
+        _normalize_extracted_timestamp((fact or {}).get("occurred_start")) == source_start
+        and _normalize_extracted_timestamp((fact or {}).get("occurred_end")) == (source_end or source_start)
+    )
+
+
+def _explicit_occurred_should_win_over_source_fill(explicit: Dict[str, Any], source_filled: Dict[str, Any]) -> bool:
+    return (
+        _fact_has_occurred_bounds(explicit)
+        and not _fact_bounds_match_source_week(explicit)
+        and _fact_bounds_match_source_week(source_filled)
+    )
+
+
 def _merged_occurred_bounds_for_duplicate(
     primary: Dict[str, Any],
     duplicate: Dict[str, Any],
@@ -236,6 +288,12 @@ def _merged_occurred_bounds_for_duplicate(
         start = _normalize_extracted_timestamp(primary.get("occurred_start"))
         return (start, _normalize_extracted_timestamp(primary.get("occurred_end")) or start)
     if _source_filled_occurred_should_win(duplicate, primary):
+        start = _normalize_extracted_timestamp(duplicate.get("occurred_start"))
+        return (start, _normalize_extracted_timestamp(duplicate.get("occurred_end")) or start)
+    if _explicit_occurred_should_win_over_source_fill(primary, duplicate):
+        start = _normalize_extracted_timestamp(primary.get("occurred_start"))
+        return (start, _normalize_extracted_timestamp(primary.get("occurred_end")) or start)
+    if _explicit_occurred_should_win_over_source_fill(duplicate, primary):
         start = _normalize_extracted_timestamp(duplicate.get("occurred_start"))
         return (start, _normalize_extracted_timestamp(duplicate.get("occurred_end")) or start)
     return (
@@ -407,6 +465,16 @@ def _merge_duplicate_fact_entries(primary: Dict[str, Any], duplicate: Dict[str, 
         merged.pop("mentioned_at", None)
 
     return merged
+
+
+def facts_are_temporal_sibling_variants(first: Dict[str, Any], second: Dict[str, Any]) -> bool:
+    """Public wrapper for datastore-boundary temporal duplicate checks."""
+    return _facts_are_temporal_sibling_variants(first, second)
+
+
+def merge_duplicate_fact_entries(primary: Dict[str, Any], duplicate: Dict[str, Any]) -> Dict[str, Any]:
+    """Public wrapper for deterministic duplicate fact metadata merging."""
+    return _strip_temporal_merge_internal_fields(_merge_duplicate_fact_entries(primary, duplicate))
 
 
 def collapse_duplicate_payload_facts(facts: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], int]:
