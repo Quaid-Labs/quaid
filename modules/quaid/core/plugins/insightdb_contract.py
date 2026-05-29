@@ -319,6 +319,8 @@ class InsightDbPluginContract(PluginContractBase):
 
     def on_maintenance(self, ctx: PluginHookContext) -> dict:
         _ = ctx
+        # InsightDB has request handlers for snippet/journal writes, but no
+        # active periodic maintenance routine in this contract milestone.
         return {"handled": False}
 
     def on_tool_runtime(self, ctx: PluginHookContext) -> dict:

@@ -8,6 +8,9 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
+from core.contracts.plugin_contract import PluginContractBase
+from core.runtime.plugins import PluginHookContext
+
 
 def record_session_lifecycle_observation(event: Dict[str, Any]) -> Dict[str, Any]:
     """Record SessionDB-owned lifecycle metadata for concrete sessions."""
@@ -73,3 +76,63 @@ def register_session_ingest_log_request_handler() -> None:
         datastore_id="sessiondb",
         force=True,
     )
+
+
+class SessionDbPluginContract(PluginContractBase):
+    def on_init(self, ctx: PluginHookContext) -> None:
+        _ = ctx
+
+    def on_config(self, ctx: PluginHookContext) -> None:
+        _ = ctx
+
+    def on_status(self, ctx: PluginHookContext) -> dict:
+        _ = ctx
+        return {"datastore": "sessiondb", "ready": True}
+
+    def on_dashboard(self, ctx: PluginHookContext) -> dict:
+        _ = ctx
+        return {"panel": "sessiondb", "enabled": False}
+
+    def on_maintenance(self, ctx: PluginHookContext) -> dict:
+        _ = ctx
+        # SessionDB currently exposes lifecycle/provenance metadata only; no
+        # periodic janitor task is active for this datastore.
+        return {"handled": False}
+
+    def on_tool_runtime(self, ctx: PluginHookContext) -> dict:
+        _ = ctx
+        return {"ready": True}
+
+    def on_health(self, ctx: PluginHookContext) -> dict:
+        return {"healthy": True, "status": self.on_status(ctx)}
+
+
+_CONTRACT = SessionDbPluginContract()
+
+
+def on_init(ctx: PluginHookContext) -> None:
+    _CONTRACT.on_init(ctx)
+
+
+def on_config(ctx: PluginHookContext) -> None:
+    _CONTRACT.on_config(ctx)
+
+
+def on_status(ctx: PluginHookContext) -> dict:
+    return _CONTRACT.on_status(ctx)
+
+
+def on_dashboard(ctx: PluginHookContext) -> dict:
+    return _CONTRACT.on_dashboard(ctx)
+
+
+def on_maintenance(ctx: PluginHookContext) -> dict:
+    return _CONTRACT.on_maintenance(ctx)
+
+
+def on_tool_runtime(ctx: PluginHookContext) -> dict:
+    return _CONTRACT.on_tool_runtime(ctx)
+
+
+def on_health(ctx: PluginHookContext) -> dict:
+    return _CONTRACT.on_health(ctx)

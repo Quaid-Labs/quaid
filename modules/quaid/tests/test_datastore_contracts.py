@@ -3,10 +3,12 @@ from __future__ import annotations
 import pytest
 
 from core.contracts.datastore import (
+    CONTRACT_RUNTIME_STATUS,
     DOMAIN_EVENT,
     REQUEST,
     DatastoreHandlerSpec,
     DatastoreIdempotencyLedger,
+    MemoryDbDatastoreContract,
     ack,
     build_first_party_datastore_contracts,
     list_first_party_datastore_contracts,
@@ -55,6 +57,8 @@ def test_contract_health_and_validation_are_metadata_only() -> None:
     contract = build_first_party_datastore_contracts()["memorydb"]
 
     assert contract.health() == {"datastore_id": "memorydb", "healthy": True, "active": False}
+    assert contract.runtime_status()["status"] == CONTRACT_RUNTIME_STATUS
+    assert contract.runtime_status()["active"] is False
     assert contract.validate() == {"datastore_id": "memorydb", "valid": True, "errors": []}
 
 
@@ -125,3 +129,40 @@ def test_contract_lists_split_domain_and_request_specs() -> None:
     assert all(spec.kind == DOMAIN_EVENT for spec in contract.list_domain_event_listeners())
     assert all(spec.kind == REQUEST for spec in contract.list_request_handlers())
     assert [spec.event_type for spec in contract.list_domain_event_listeners()] == ["janitor.run_completed"]
+
+
+def test_validate_datastore_contract_reports_missing_and_extra_specs() -> None:
+    manifest = build_first_party_datastore_contracts()["memorydb"].manifest
+
+    class MissingRequestContract(MemoryDbDatastoreContract):
+        handler_specs = tuple(
+            spec
+            for spec in MemoryDbDatastoreContract.handler_specs
+            if spec.event_type != "recall.memory.request.v1"
+        )
+
+    class ExtraRequestContract(MemoryDbDatastoreContract):
+        handler_specs = MemoryDbDatastoreContract.handler_specs + (
+            DatastoreHandlerSpec("memorydb.extra.request.v1", REQUEST, ("extra.handler",)),
+        )
+
+    class MissingAndExtraDomainContract(MemoryDbDatastoreContract):
+        handler_specs = tuple(
+            spec
+            for spec in MemoryDbDatastoreContract.handler_specs
+            if spec.event_type != "janitor.run_completed"
+        ) + (
+            DatastoreHandlerSpec("memorydb.extra.domain", DOMAIN_EVENT, ("extra.listener",)),
+        )
+
+    assert any(
+        "missing request handler specs" in error and "recall.memory.request.v1" in error
+        for error in validate_datastore_contract(MissingRequestContract(manifest))
+    )
+    assert any(
+        "extra request handler specs" in error and "memorydb.extra.request.v1" in error
+        for error in validate_datastore_contract(ExtraRequestContract(manifest))
+    )
+    domain_errors = validate_datastore_contract(MissingAndExtraDomainContract(manifest))
+    assert any("missing domain listener specs" in error and "janitor.run_completed" in error for error in domain_errors)
+    assert any("extra domain listener specs" in error and "memorydb.extra.domain" in error for error in domain_errors)

@@ -382,6 +382,25 @@ def _is_fail_hard_enabled() -> bool:
         return True
 
 
+def _request_handler_fail_hard_enabled(datastore_id: str) -> bool:
+    try:
+        from core.datastore_registry import is_datastore_fail_hard_enabled
+
+        return bool(
+            is_datastore_fail_hard_enabled(
+                datastore_id,
+                global_fail_hard=_is_fail_hard_enabled(),
+            )
+        )
+    except Exception as exc:
+        if _is_fail_hard_enabled():
+            raise RuntimeError(
+                "Failed to resolve request handler fail-hard policy while fail-hard mode is enabled"
+            ) from exc
+        logger.error("Failed to resolve request handler fail-hard policy for %s: %s", datastore_id, exc)
+        return False
+
+
 def _read_json(path: Path, default: Any) -> Any:
     try:
         if not path.exists():
@@ -1382,7 +1401,7 @@ class EventBroker:
                     history_path,
                     {"ts": _now(), "op": "broker.request_failed", "event": _trace_event(event), "handler": datastore_id, "error": message},
                 )
-                if _is_fail_hard_enabled():
+                if _request_handler_fail_hard_enabled(datastore_id):
                     raise RuntimeError(
                         "Request handler failed while fail-hard mode is enabled"
                     ) from exc
@@ -1418,7 +1437,7 @@ class EventBroker:
                     history_path,
                     {"ts": _now(), "op": "broker.request_failed", "event": _trace_event(event), "handler": datastore_id, "error": message},
                 )
-                if _is_fail_hard_enabled():
+                if _request_handler_fail_hard_enabled(datastore_id):
                     raise RuntimeError(
                         f"Request handler failed while fail-hard mode is enabled: {message}"
                     )

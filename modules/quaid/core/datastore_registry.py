@@ -19,6 +19,9 @@ logger = logging.getLogger(__name__)
 
 DATASTORE_MANIFEST_SCHEMA_VERSION = 1
 SESSIONDB_METADATA_VERSION = 2
+FAIL_HARD_INHERIT_GLOBAL = "inherit_global"
+FAIL_HARD_ALWAYS = "always"
+FAIL_HARD_POLICIES = frozenset({FAIL_HARD_INHERIT_GLOBAL, FAIL_HARD_ALWAYS})
 _DATASTORE_ID_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 _MODULE_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+$")
 _REQUIRED_FIELDS = (
@@ -213,6 +216,10 @@ def _copy_manifest(manifest: Dict[str, Any]) -> Dict[str, Any]:
     return copy.deepcopy(manifest)
 
 
+def _normalize_fail_hard_policy(value: Any) -> str:
+    return str(value or "").strip().lower()
+
+
 def validate_datastore_manifest(manifest: Dict[str, Any]) -> List[str]:
     errors: List[str] = []
     if not isinstance(manifest, dict):
@@ -231,6 +238,10 @@ def validate_datastore_manifest(manifest: Dict[str, Any]) -> List[str]:
     for field in ("display_name", "description", "plugin_id", "fail_hard_policy"):
         if not str(manifest.get(field) or "").strip():
             errors.append(f"{field} is required")
+
+    fail_hard_policy = _normalize_fail_hard_policy(manifest.get("fail_hard_policy"))
+    if fail_hard_policy and fail_hard_policy not in FAIL_HARD_POLICIES:
+        errors.append(f"unsupported fail_hard_policy: {manifest.get('fail_hard_policy')}")
 
     module = str(manifest.get("module") or "").strip()
     if not module:
@@ -305,6 +316,25 @@ def get_datastore_manifest(datastore_id: str) -> Optional[Dict[str, Any]]:
     registry = build_datastore_registry()
     manifest = registry.get(key)
     return _copy_manifest(manifest) if manifest is not None else None
+
+
+def get_datastore_fail_hard_policy(datastore_id: str) -> Optional[str]:
+    manifest = get_datastore_manifest(datastore_id)
+    if manifest is None:
+        return None
+    policy = _normalize_fail_hard_policy(manifest.get("fail_hard_policy"))
+    return policy if policy in FAIL_HARD_POLICIES else None
+
+
+def is_datastore_fail_hard_enabled(
+    datastore_id: str,
+    *,
+    global_fail_hard: Optional[bool] = None,
+) -> bool:
+    policy = get_datastore_fail_hard_policy(datastore_id) or FAIL_HARD_INHERIT_GLOBAL
+    if policy == FAIL_HARD_ALWAYS:
+        return True
+    return _is_fail_hard_enabled() if global_fail_hard is None else bool(global_fail_hard)
 
 
 def list_datastore_capabilities() -> Dict[str, Dict[str, Any]]:

@@ -13,6 +13,11 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 
 from core.datastore_registry import build_datastore_registry
 
+CONTRACT_RUNTIME_STATUS = "metadata_only"
+CONTRACT_RUNTIME_STATUS_DETAIL = (
+    "Datastore contracts declare target handler metadata only; production dispatch still uses "
+    "core.runtime.events request-handler registrations until a later activation milestone."
+)
 DOMAIN_EVENT = "domain_event"
 REQUEST = "request"
 HANDLER_KINDS = {DOMAIN_EVENT, REQUEST}
@@ -147,6 +152,14 @@ class DatastoreContractBase:
 
     def health(self) -> Dict[str, Any]:
         return {"datastore_id": self.datastore_id, "healthy": True, "active": False}
+
+    def runtime_status(self) -> Dict[str, Any]:
+        return {
+            "datastore_id": self.datastore_id,
+            "status": CONTRACT_RUNTIME_STATUS,
+            "active": False,
+            "detail": CONTRACT_RUNTIME_STATUS_DETAIL,
+        }
 
     def validate(self) -> Dict[str, Any]:
         errors = validate_datastore_contract(self)

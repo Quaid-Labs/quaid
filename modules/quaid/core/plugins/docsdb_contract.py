@@ -9,11 +9,14 @@ from typing import Any, Dict, Optional, Tuple
 
 from core.contracts.plugin_contract import PluginContractBase
 from core.runtime.plugins import PluginHookContext
-from datastore.docsdb.system_context import (
-    build_system_context_metadata as build_docsdb_system_context_metadata,
-)
 
 logger = logging.getLogger(__name__)
+
+
+def build_docsdb_system_context_metadata(*args: Any, **kwargs: Any) -> dict[str, object]:
+    from datastore.docsdb.system_context import build_system_context_metadata
+
+    return build_system_context_metadata(*args, **kwargs)
 
 
 def _fail_hard_enabled() -> bool:

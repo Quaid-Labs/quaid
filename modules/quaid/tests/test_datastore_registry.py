@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -9,6 +10,7 @@ from core.datastore_registry import (
     DATASTORE_MANIFEST_SCHEMA_VERSION,
     build_datastore_registry,
     get_datastore_manifest,
+    is_datastore_fail_hard_enabled,
     list_datastore_capabilities,
     list_datastore_manifests,
     validate_datastore_manifest,
@@ -122,6 +124,44 @@ def test_datastore_registry_rejects_unsupported_schema_version() -> None:
 
     with pytest.raises(RuntimeError, match="schema_version must be 1"):
         build_datastore_registry([manifest], fail_hard=True)
+
+
+def test_datastore_registry_rejects_unsupported_fail_hard_policy() -> None:
+    manifest = get_datastore_manifest("memorydb")
+    manifest["fail_hard_policy"] = "sometimes"
+
+    with pytest.raises(RuntimeError, match="unsupported fail_hard_policy: sometimes"):
+        build_datastore_registry([manifest], fail_hard=True)
+
+
+def test_datastore_fail_hard_policy_resolves_manifest_modes(monkeypatch) -> None:
+    manifest = get_datastore_manifest("memorydb")
+    monkeypatch.setattr(
+        datastore_registry,
+        "get_datastore_manifest",
+        lambda _datastore_id: dict(manifest, fail_hard_policy="always"),
+    )
+    assert is_datastore_fail_hard_enabled("memorydb", global_fail_hard=False) is True
+
+    monkeypatch.setattr(
+        datastore_registry,
+        "get_datastore_manifest",
+        lambda _datastore_id: dict(manifest, fail_hard_policy="inherit_global"),
+    )
+    assert is_datastore_fail_hard_enabled("memorydb", global_fail_hard=True) is True
+    assert is_datastore_fail_hard_enabled("memorydb", global_fail_hard=False) is False
+
+
+def test_first_party_datastore_manifests_have_matching_plugin_json() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+
+    for manifest in list_datastore_manifests():
+        plugin_json = repo_root / "datastore" / manifest["id"] / "plugin.json"
+        assert plugin_json.exists(), manifest["id"]
+        payload = json.loads(plugin_json.read_text(encoding="utf-8"))
+        assert payload["plugin_id"] == manifest["plugin_id"]
+        assert payload["plugin_type"] == "datastore"
+        assert payload["capabilities"]["display_name"] == manifest["display_name"]
 
 
 def test_datastore_registry_logs_and_skips_invalid_manifest_when_not_fail_hard(caplog) -> None:

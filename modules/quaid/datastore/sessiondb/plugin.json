@@ -1,0 +1,74 @@
+{
+  "plugin_api_version": 1,
+  "plugin_id": "sessiondb.core",
+  "plugin_type": "datastore",
+  "module": "core.plugins.sessiondb_contract",
+  "capabilities": {
+    "display_name": "SessionDB",
+    "contract": {
+      "init": {
+        "mode": "hook",
+        "handler": "on_init"
+      },
+      "config": {
+        "mode": "hook",
+        "handler": "on_config"
+      },
+      "status": {
+        "mode": "hook",
+        "handler": "on_status"
+      },
+      "dashboard": {
+        "mode": "tbd",
+        "handler": "on_dashboard"
+      },
+      "maintenance": {
+        "mode": "hook",
+        "handler": "on_maintenance"
+      },
+      "tool_runtime": {
+        "mode": "hook",
+        "handler": "on_tool_runtime"
+      },
+      "health": {
+        "mode": "hook",
+        "handler": "on_health"
+      },
+      "tools": {
+        "mode": "declared",
+        "exports": []
+      },
+      "api": {
+        "mode": "declared",
+        "exports": [
+          "session.ingest_log.request.v1"
+        ]
+      },
+      "events": {
+        "mode": "declared",
+        "exports": []
+      },
+      "ingest_triggers": {
+        "mode": "declared",
+        "exports": []
+      },
+      "auth_requirements": {
+        "mode": "declared",
+        "exports": []
+      },
+      "migrations": {
+        "mode": "declared",
+        "exports": []
+      },
+      "notifications": {
+        "mode": "declared",
+        "exports": []
+      }
+    },
+    "supports_multi_user": true,
+    "supports_policy_metadata": true,
+    "supports_redaction": false
+  },
+  "priority": 130,
+  "enabled": true
+}

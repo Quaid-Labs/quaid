@@ -18,24 +18,76 @@ from core.runtime.identity_runtime import (
     register_identity_resolver,
     register_privacy_policy,
 )
-from datastore.facade import (
-    batch_memory_write,
-    store_memory,
-    recall_memories,
-    recall_memories_fast,
-    search_memories,
-    warm_memory_embeddings,
-    create_edge,
-    datastore_stats,
-    list_memory_domains,
-    register_memory_domain,
-    forget_memory,
-    get_memory_by_id,
-    store_memory_source_chunk,
-    store_memory_source_chunks,
-    list_memory_source_chunks,
-    get_memory_source_chunk,
-)
+
+
+def _datastore_facade() -> Any:
+    from datastore import facade
+
+    return facade
+
+
+def batch_memory_write(*args: Any, **kwargs: Any) -> Any:
+    return _datastore_facade().batch_memory_write(*args, **kwargs)
+
+
+def store_memory(*args: Any, **kwargs: Any) -> Any:
+    return _datastore_facade().store_memory(*args, **kwargs)
+
+
+def recall_memories(*args: Any, **kwargs: Any) -> Any:
+    return _datastore_facade().recall_memories(*args, **kwargs)
+
+
+def recall_memories_fast(*args: Any, **kwargs: Any) -> Any:
+    return _datastore_facade().recall_memories_fast(*args, **kwargs)
+
+
+def search_memories(*args: Any, **kwargs: Any) -> Any:
+    return _datastore_facade().search_memories(*args, **kwargs)
+
+
+def warm_memory_embeddings(*args: Any, **kwargs: Any) -> Any:
+    return _datastore_facade().warm_memory_embeddings(*args, **kwargs)
+
+
+def create_edge(*args: Any, **kwargs: Any) -> Any:
+    return _datastore_facade().create_edge(*args, **kwargs)
+
+
+def datastore_stats(*args: Any, **kwargs: Any) -> Any:
+    return _datastore_facade().datastore_stats(*args, **kwargs)
+
+
+def list_memory_domains(*args: Any, **kwargs: Any) -> Any:
+    return _datastore_facade().list_memory_domains(*args, **kwargs)
+
+
+def register_memory_domain(*args: Any, **kwargs: Any) -> Any:
+    return _datastore_facade().register_memory_domain(*args, **kwargs)
+
+
+def forget_memory(*args: Any, **kwargs: Any) -> Any:
+    return _datastore_facade().forget_memory(*args, **kwargs)
+
+
+def get_memory_by_id(*args: Any, **kwargs: Any) -> Any:
+    return _datastore_facade().get_memory_by_id(*args, **kwargs)
+
+
+def store_memory_source_chunk(*args: Any, **kwargs: Any) -> Any:
+    return _datastore_facade().store_memory_source_chunk(*args, **kwargs)
+
+
+def store_memory_source_chunks(*args: Any, **kwargs: Any) -> Any:
+    return _datastore_facade().store_memory_source_chunks(*args, **kwargs)
+
+
+def list_memory_source_chunks(*args: Any, **kwargs: Any) -> Any:
+    return _datastore_facade().list_memory_source_chunks(*args, **kwargs)
+
+
+def get_memory_source_chunk(*args: Any, **kwargs: Any) -> Any:
+    return _datastore_facade().get_memory_source_chunk(*args, **kwargs)
 
 
 class DatastoreMemoryService(MemoryServicePort):

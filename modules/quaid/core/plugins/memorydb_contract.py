@@ -13,20 +13,41 @@ from typing import Any, Dict, List
 
 from core.contracts.plugin_contract import PluginContractBase
 from core.runtime.plugins import PluginHookContext
-from datastore.memorydb.system_context import (
-    build_system_context_metadata as build_memorydb_system_context_metadata,
-)
-from datastore.memorydb.domain_registry import (
-    apply_domain_set,
-    ensure_domain_tables,
-    load_active_domains,
-    normalize_domain_map,
-)
 from lib.config import get_db_path
 from lib.domain_runtime import publish_domains_to_runtime_config
 from lib.tools_domain_sync import sync_tools_domain_block
 
 logger = logging.getLogger(__name__)
+
+
+def build_memorydb_system_context_metadata(*args: Any, **kwargs: Any) -> dict[str, object]:
+    from datastore.memorydb.system_context import build_system_context_metadata
+
+    return build_system_context_metadata(*args, **kwargs)
+
+
+def apply_domain_set(*args: Any, **kwargs: Any) -> Any:
+    from datastore.memorydb.domain_registry import apply_domain_set as _apply_domain_set
+
+    return _apply_domain_set(*args, **kwargs)
+
+
+def ensure_domain_tables(*args: Any, **kwargs: Any) -> Any:
+    from datastore.memorydb.domain_registry import ensure_domain_tables as _ensure_domain_tables
+
+    return _ensure_domain_tables(*args, **kwargs)
+
+
+def load_active_domains(*args: Any, **kwargs: Any) -> Any:
+    from datastore.memorydb.domain_registry import load_active_domains as _load_active_domains
+
+    return _load_active_domains(*args, **kwargs)
+
+
+def normalize_domain_map(*args: Any, **kwargs: Any) -> Any:
+    from datastore.memorydb.domain_registry import normalize_domain_map as _normalize_domain_map
+
+    return _normalize_domain_map(*args, **kwargs)
 
 
 def _optional_payload_str(payload: Dict[str, Any], key: str) -> str | None:

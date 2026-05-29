@@ -346,6 +346,29 @@ def test_broker_request_handler_nack_respects_fail_hard(monkeypatch, tmp_path):
         request_broker_event("recall.memory.request.v1", {"query": "baratza"}, source="pytest")
 
 
+def test_broker_request_handler_nack_respects_datastore_fail_hard_policy(monkeypatch, tmp_path):
+    set_adapter(TestAdapter(tmp_path))
+
+    import core.datastore_registry as datastore_registry
+    import core.runtime.events as events
+
+    manifest = datastore_registry.get_datastore_manifest("memorydb")
+    register_request_handler(
+        "recall.memory.request.v1",
+        lambda _event: {"status": "nacked", "error": "policy failure"},
+        datastore_id="memorydb",
+    )
+    monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: False)
+    monkeypatch.setattr(
+        datastore_registry,
+        "get_datastore_manifest",
+        lambda _datastore_id: dict(manifest, fail_hard_policy="always"),
+    )
+
+    with pytest.raises(RuntimeError, match="policy failure"):
+        request_broker_event("recall.memory.request.v1", {"query": "baratza"}, source="pytest")
+
+
 def test_broker_request_handler_malformed_response_fails_closed(monkeypatch, tmp_path):
     set_adapter(TestAdapter(tmp_path))
 
