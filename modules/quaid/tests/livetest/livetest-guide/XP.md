@@ -131,6 +131,12 @@ Ask the `PLATFORM2` agent naturally:
 Expected behavior: the agent runs `quaid project link livetest-agentmsg-xp`
 or equivalent project-link action before proceeding, then adds the doc.
 
+Force indexing on the PLATFORM2 instance after the agent creates the doc:
+
+```bash
+ssh REMOTE_HOST "QUAID_INSTANCE=\$INSTANCE_2 \$QCLI_2 docs update --apply"
+```
+
 Verify from the shell:
 
 ```bash
@@ -141,8 +147,8 @@ ssh REMOTE_HOST "QUAID_INSTANCE=\$INSTANCE_2 \$QCLI_2 recall 'Copper Basin' \
   '{\"stores\":[\"docs\"],\"project\":\"livetest-agentmsg-xp\"}'"
 ```
 
-These checks run after the PLATFORM2 agent has linked the shared project and
-added the durable-work doc.
+These checks run after the PLATFORM2 agent has linked the shared project,
+added the durable-work doc, and `docs update --apply` has been run.
 
 Pass: PLATFORM2 uses the existing project rather than needing a new one;
 PLATFORM2 can add a doc and Quaid can recall it on that instance.

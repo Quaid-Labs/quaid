@@ -69,23 +69,49 @@ non-trivial plan.
    ssh REMOTE_HOST "\$QCLI janitor --task all --dry-run"
    ```
 
-   Must complete within ~60 s and produce a non-empty plan. Note the
-   approximate count of pending rows it intends to review.
+   Must complete and produce a non-empty plan. Dry-run time scales with
+   pending row count — budget ~2 min for heavily-loaded instances (150+ pending
+   nodes). If dry-run hangs past 3 min, check for orphaned `janitor.py`
+   processes from prior SSH timeouts and kill them before retrying:
 
-3. **Apply.** This is slow — budget 15–30 min for the first apply. LLM
-   review of each fact batch is the bottleneck. The host-wide command is
-   supervisor-owned: stdout reports the request ID, final status, aggregate
-   maintenance effects, and `~/.quaid/logs/janitor-stats.json`. Per-batch
-   worker progress is written under
-   `~/.quaid/instances/<INSTANCE>/logs/janitor/supervisor-worker.log`.
+   ```bash
+   ssh REMOTE_HOST "pgrep -f 'janitor.py' | xargs kill 2>/dev/null; echo done"
+   ```
+
+   Note the approximate count of pending rows the plan intends to review.
+
+3. **Apply.** This is slow — budget 5–30 min depending on instance count and
+   pending row volume (e.g. 137 nodes across all instances takes ~5 min; heavier
+   loads can take longer). LLM review of each fact batch is the bottleneck.
+
+   **Important:** janitor output goes to log files, not stdout. The command
+   below returns quickly with a request ID; the actual apply runs in the
+   background. Do NOT use `| head -N` or a short shell timeout — that will
+   always produce empty output and may leave the apply running orphaned.
 
    ```bash
    ssh REMOTE_HOST "\$QCLI janitor --task all --apply --approve"
    ```
 
-   Stream output until the request status is terminal, then inspect the host
-   stats and any relevant per-instance worker log if the aggregate effects do
-   not match the dry-run plan.
+   After launching, poll the per-instance janitor log for the `janitor_complete`
+   event instead of waiting on stdout:
+
+   ```bash
+   ssh REMOTE_HOST "tail -f ~/.quaid/instances/*/logs/janitor.log 2>/dev/null \
+     | grep --line-buffered 'janitor_complete\|error'"
+   ```
+
+   Alternatively poll until the event appears:
+
+   ```bash
+   until ssh REMOTE_HOST "grep -ql 'janitor_complete' \
+     ~/.quaid/instances/*/logs/janitor.log 2>/dev/null"; do sleep 10; done
+   ssh REMOTE_HOST "grep 'janitor_complete' ~/.quaid/instances/*/logs/janitor.log"
+   ```
+
+   Once `janitor_complete` appears, inspect the host stats and any relevant
+   per-instance worker log if the aggregate effects do not match the dry-run
+   plan.
 
 4. **Post-state verification.** Diff identity / snippet / journal files
    against the pre-state snapshot. Identity line counts may go DOWN
@@ -147,7 +173,8 @@ non-trivial plan.
 
 ### PWN vs FAIL
 
-- Dry-run hangs > 60 s — FAIL (regression in checkpoint bypass).
+- Dry-run hangs > 3 min after killing any orphaned `janitor.py` processes —
+  FAIL (regression in checkpoint bypass).
 - Apply completes but no maintenance effect occurs despite dry-run reporting
   actionable work — FAIL.
 - Matching snippet inputs are present before apply, but the instance worker
