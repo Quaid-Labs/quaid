@@ -16603,8 +16603,13 @@ def _normalize_recall_date_bound(value: Any) -> Optional[str]:
     if not match:
         raise ValueError(
             f"Recall date filters must be concrete YYYY-MM-DD dates, got {raw!r}"
-    )
-    return match.group(1)
+        )
+    normalized = match.group(1)
+    try:
+        date.fromisoformat(normalized)
+    except ValueError as exc:
+        raise ValueError(f"Recall date filters must be valid YYYY-MM-DD dates, got {raw!r}") from exc
+    return normalized
 
 
 def _normalize_recall_temporal_dimension(value: Any) -> str:
@@ -16791,7 +16796,7 @@ def _resolve_recall_command_date_bounds(
         or _first_present_config_value(cfg, "date_to", "dateTo", "before", "until", "as_of", "asOf")
         or _first_present_config_value(date_range, "to", "date_to", "dateTo", "before", "until", "as_of", "asOf")
     )
-    return date_from, date_to
+    return _normalize_recall_date_bound(date_from), _normalize_recall_date_bound(date_to)
 
 
 def _resolve_recall_command_temporal_dimension(

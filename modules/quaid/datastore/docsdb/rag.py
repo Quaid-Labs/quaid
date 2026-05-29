@@ -12,7 +12,7 @@ import os
 import re
 import sqlite3
 import sys
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, List, Dict, Optional, Tuple
 
@@ -436,7 +436,12 @@ def _normalize_date_bound(value: Any) -> Optional[str]:
     match = re.search(r"\b(20\d{2}-\d{2}-\d{2})\b", raw)
     if not match:
         raise ValueError(f"Doc recall date filters must be concrete YYYY-MM-DD dates, got {raw!r}")
-    return match.group(1)
+    normalized = match.group(1)
+    try:
+        date.fromisoformat(normalized)
+    except ValueError as exc:
+        raise ValueError(f"Doc recall date filters must be valid YYYY-MM-DD dates, got {raw!r}") from exc
+    return normalized
 
 
 def _project_log_line_date(line: str) -> Optional[str]:

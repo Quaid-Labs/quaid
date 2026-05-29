@@ -75,6 +75,22 @@ def test_recall_command_date_bounds_cli_values_override_config_aliases():
     ) == ("2023-01-01", "2023-12-31")
 
 
+@pytest.mark.parametrize("bad_date", ["2023-13-01", "2023-99-99"])
+def test_recall_date_bound_rejects_invalid_calendar_dates(bad_date):
+    import datastore.memorydb.memory_graph as mg
+
+    with pytest.raises(ValueError, match="valid YYYY-MM-DD"):
+        mg._normalize_recall_date_bound(bad_date)
+
+
+@pytest.mark.parametrize("bad_date", ["2023-13-01", "2023-99-99"])
+def test_recall_command_date_bounds_rejects_invalid_calendar_dates_before_planner(bad_date):
+    import datastore.memorydb.memory_graph as mg
+
+    with pytest.raises(ValueError, match="valid YYYY-MM-DD"):
+        mg._resolve_recall_command_date_bounds({}, cli_date_from=bad_date)
+
+
 def test_recall_command_owner_alias_prefers_owner_id_before_default():
     import datastore.memorydb.memory_graph as mg
 

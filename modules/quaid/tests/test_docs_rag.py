@@ -18,6 +18,14 @@ import pytest
 from datastore.docsdb.rag import DocsRAG
 
 
+@pytest.mark.parametrize("bad_date", ["2023-13-01", "2023-99-99"])
+def test_docs_recall_date_bound_rejects_invalid_calendar_dates(bad_date):
+    from datastore.docsdb.rag import _normalize_date_bound
+
+    with pytest.raises(ValueError, match="valid YYYY-MM-DD"):
+        _normalize_date_bound(bad_date)
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
