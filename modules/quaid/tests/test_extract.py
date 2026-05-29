@@ -401,6 +401,24 @@ class TestExtractFromTranscript:
         assert "stable background details, explicitly stated plans or conditions" in prompt
         assert "=== BEGIN TRANSCRIPT CHUNK ===\n" + chunk in prompt
 
+    def test_extraction_prompt_includes_authoritative_timestamp_context(self):
+        from ingest.extract import _build_extraction_user_message
+
+        chunk = (
+            "[2026-05-29T13:30:00Z] User: I started using my new sketchbook this week.\n"
+            "[2026-05-29T13:31:00Z] Assistant: Noted."
+        )
+
+        prompt = _build_extraction_user_message(chunk)
+
+        assert "AUTHORITATIVE TEMPORAL CONTEXT:" in prompt
+        assert "This transcript chunk contains 2 timestamped speaker line(s)." in prompt
+        assert "First transcript timestamp: 2026-05-29T13:30:00+00:00." in prompt
+        assert "Last transcript timestamp: 2026-05-29T13:31:00+00:00." in prompt
+        assert "same transcript line as a fact is the authoritative clock" in prompt
+        assert "Do not use current wall-clock time, model context, unrelated memories" in prompt
+        assert "do not also emit an unbounded duplicate variant" in prompt
+
     @patch("ingest.extract.call_deep_reasoning")
     def test_extract_from_transcript_keeps_nonaction_background_facts(self, mock_llm):
         from ingest.extract import extract_from_transcript
@@ -909,6 +927,20 @@ class TestExtractFromTranscript:
             )
             == "2026-05-02T14:29:23+00:00"
         )
+
+    def test_transcript_timestamp_hints_are_unique_and_source_ordered(self):
+        from ingest import extract as extract_mod
+
+        assert extract_mod._transcript_timestamp_hints(
+            "\n".join(
+                [
+                    "- [2023-02-14T10:00:00] hist-amber-valentine-2023",
+                    "[2026-05-02T14:29:21.414Z] User: My shelf marker is cedar-lantern-4821.",
+                    "[2026-05-02T14:29:21.414Z] Assistant: Noted.",
+                    "2026-05-03T09:10:11Z Subagent/User: Child task found Mendoza Malbec.",
+                ]
+            )
+        ) == ["2026-05-02T14:29:21+00:00", "2026-05-03T09:10:11+00:00"]
 
     @patch("ingest.extract.call_deep_reasoning")
     def test_extraction_defaults_mentioned_at_to_transcript_timestamp(self, mock_llm):
@@ -6501,7 +6533,9 @@ class TestLoadPrompt:
         assert '"occurred_start"' in prompt
         assert "Do not copy the message timestamp into `occurred_start`" in prompt
         assert '"May 2023" -> `occurred_start: "2023-05-01"`' in prompt
-        assert 'relative event-time phrases such as "today", "yesterday", "last Friday", or "this week"' in prompt
+        assert "Resolve relative event-time wording against the timestamp on the same transcript line" in prompt
+        assert "The transcript line timestamp is authoritative" in prompt
+        assert "Do not also emit a second unbounded duplicate fact" in prompt
 
     def test_truncated_array_scanner_stops_on_mid_string_truncation(self):
         from ingest.extract import _complete_json_objects_from_array

@@ -121,7 +121,8 @@ TEMPORAL PROVENANCE (per fact):
 - Do not copy the message timestamp into `occurred_start` or `occurred_end` unless the fact says the event happened at that message time.
 - For a stated month range, use the first and last calendar day. Example: "May 2023" -> `occurred_start: "2023-05-01"`, `occurred_end: "2023-05-31"`.
 - For a stated single day, set both `occurred_start` and `occurred_end` to that day.
-- Resolve relative event-time phrases such as "today", "yesterday", "last Friday", or "this week" against the transcript message timestamp when one is available.
+- Resolve relative event-time wording against the timestamp on the same transcript line when one is available. The transcript line timestamp is authoritative; do not use current wall-clock time, model context, unrelated memories, or dates from other transcript lines as the anchor.
+- When a relative event-time expression is resolvable from transcript metadata, emit concrete `occurred_start` and `occurred_end` values. Do not also emit a second unbounded duplicate fact that preserves only the relative wording.
 - Omit `occurred_start` and `occurred_end` only when no event-time anchor is explicitly stated or derivable from transcript metadata.
 - Example: if a user message sent in 2026 says "Back in May 2023 I attended a leatherworking workshop", the fact's `mentioned_at` is in 2026 and its `occurred_start`/`occurred_end` are the May 2023 range.
 
