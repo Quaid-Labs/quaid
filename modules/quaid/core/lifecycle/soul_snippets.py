@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
-from datastore.insightdb import soul_snippets as _soul_snippets
+def _soul_snippets_module():
+    from datastore.insightdb import soul_snippets
+
+    return soul_snippets
 
 
 def write_journal_entry(filename: str, content: str, trigger: str = "Compaction", date_str: str | None = None) -> bool:
-    return _soul_snippets.write_journal_entry(
+    return _soul_snippets_module().write_journal_entry(
         filename=filename,
         content=content,
         trigger=trigger,
@@ -21,7 +24,7 @@ def write_snippet_entry(
     date_str: str | None = None,
     time_str: str | None = None,
 ) -> bool:
-    return _soul_snippets.write_snippet_entry(
+    return _soul_snippets_module().write_snippet_entry(
         filename=filename,
         snippets=snippets,
         trigger=trigger,
@@ -30,15 +33,21 @@ def write_snippet_entry(
     )
 
 
-# These maintenance callables are intentionally bound at import time. Tests or
-# callers that monkeypatch them should patch the canonical InsightDB module.
-run_soul_snippets_review = _soul_snippets.run_soul_snippets_review
-run_journal_distillation = _soul_snippets.run_journal_distillation
+_CANONICAL_EXPORTS = {
+    "run_soul_snippets_review",
+    "run_journal_distillation",
+}
+
+
+def __getattr__(name: str):
+    if name in _CANONICAL_EXPORTS:
+        return getattr(_soul_snippets_module(), name)
+    raise AttributeError(name)
 
 
 __all__ = [
-    "run_journal_distillation",
-    "run_soul_snippets_review",
+    "run_journal_distillation",  # noqa: F822 - exported through module __getattr__
+    "run_soul_snippets_review",  # noqa: F822 - exported through module __getattr__
     "write_journal_entry",
     "write_snippet_entry",
 ]

@@ -6,11 +6,40 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from datastore.docsdb import updater as _updater
-from datastore.docsdb import project_log_queue as _project_log_queue
-from datastore.docsdb.project_updater import append_project_logs as _append_project_logs
-
 logger = logging.getLogger(__name__)
+
+
+class _LazyModuleProxy:
+    def __init__(self, loader):
+        object.__setattr__(self, "_loader", loader)
+
+    def __getattr__(self, name: str):
+        return getattr(self._loader(), name)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        setattr(self._loader(), name, value)
+
+
+def _docs_updater_module():
+    from datastore.docsdb import updater
+
+    return updater
+
+
+def _project_log_queue_module():
+    from datastore.docsdb import project_log_queue
+
+    return project_log_queue
+
+
+def _append_project_logs_impl(*args: Any, **kwargs: Any):
+    from datastore.docsdb.project_updater import append_project_logs as _append_project_logs
+
+    return _append_project_logs(*args, **kwargs)
+
+
+_updater = _LazyModuleProxy(_docs_updater_module)
+_project_log_queue = _LazyModuleProxy(_project_log_queue_module)
 
 
 def _fail_hard_enabled() -> bool:
@@ -23,11 +52,11 @@ def _fail_hard_enabled() -> bool:
 
 
 def check_staleness():
-    return _updater.check_staleness()
+    return _docs_updater_module().check_staleness()
 
 
 def cmd_update_from_transcript(transcript_path: str, dry_run: bool = False, max_docs: int = 3):
-    return _updater.cmd_update_from_transcript(transcript_path, dry_run=dry_run, max_docs=max_docs)
+    return _docs_updater_module().cmd_update_from_transcript(transcript_path, dry_run=dry_run, max_docs=max_docs)
 
 
 def append_project_logs(
@@ -39,7 +68,7 @@ def append_project_logs(
     index_history: bool = True,
     update_project_md: bool = True,
 ):
-    return _append_project_logs(
+    return _append_project_logs_impl(
         project_logs,
         trigger=trigger,
         date_str=date_str,
@@ -60,7 +89,7 @@ def enqueue_project_logs(
     source_adapter: str | None = None,
     dry_run: bool = False,
 ):
-    return _project_log_queue.enqueue_project_logs(
+    return _project_log_queue_module().enqueue_project_logs(
         project_logs,
         trigger=trigger,
         date_str=date_str,
@@ -73,19 +102,19 @@ def enqueue_project_logs(
 
 
 def pending_project_log_count(project: str) -> int:
-    return int(_project_log_queue.pending_project_log_count(project) or 0)
+    return int(_project_log_queue_module().pending_project_log_count(project) or 0)
 
 
 def drain_project_log_queue(project: str):
-    return _project_log_queue.drain_project_log_queue(project)
+    return _project_log_queue_module().drain_project_log_queue(project)
 
 
 def mark_project_log_queue_committed(project: str, item_ids: list[str]) -> dict[str, int]:
-    return _project_log_queue.mark_project_log_queue_committed(project, item_ids)
+    return _project_log_queue_module().mark_project_log_queue_committed(project, item_ids)
 
 
 def cleanup_project_log_queue(project: str) -> dict[str, int]:
-    return _project_log_queue.cleanup_project_log_queue(project)
+    return _project_log_queue_module().cleanup_project_log_queue(project)
 
 
 def queued_project_log_projects(project: str | None = None) -> list[str]:
@@ -93,7 +122,7 @@ def queued_project_log_projects(project: str | None = None) -> list[str]:
     if project:
         candidates = [str(project)]
     else:
-        root = _project_log_queue.queue_root()
+        root = _project_log_queue_module().queue_root()
         try:
             candidates = sorted(path.name for path in root.iterdir() if path.is_dir())
         except FileNotFoundError:
@@ -103,13 +132,13 @@ def queued_project_log_projects(project: str | None = None) -> list[str]:
     seen: set[str] = set()
     for raw_name in candidates:
         try:
-            name = _project_log_queue._validate_project(str(raw_name or ""))  # datastore-owned queue validation
+            name = _project_log_queue_module()._validate_project(str(raw_name or ""))  # datastore-owned queue validation
         except ValueError:
             continue
         if name in seen:
             continue
         try:
-            if _project_log_queue.pending_project_log_count(name) <= 0:
+            if _project_log_queue_module().pending_project_log_count(name) <= 0:
                 continue
         except Exception as exc:
             logger.warning("Failed checking queued PROJECT.log count for %s: %s", name, exc)
@@ -129,7 +158,7 @@ def update_registered_docs(
     index_project_logs_after: bool = True,
 ) -> int:
     """Update/reindex registered docs, optionally scoped to one project."""
-    return _updater.cmd_update_stale(
+    return _docs_updater_module().cmd_update_stale(
         dry_run=dry_run,
         project=project,
         protected_names=protected_names,
@@ -386,7 +415,7 @@ def sync_project_visible_docs(project: str, canonical_path: str, *, root_docs: s
 
 def main(argv: list[str] | None = None) -> int:
     """Core-owned docs updater CLI wrapper for composition-only callbacks."""
-    return _updater.main(argv, project_log_indexer=index_project_logs)
+    return _docs_updater_module().main(argv, project_log_indexer=index_project_logs)
 
 
 __all__ = [
