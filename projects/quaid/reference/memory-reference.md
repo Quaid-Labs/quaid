@@ -743,7 +743,7 @@ Core orchestrators import ingest via this bridge rather than importing `ingest.*
 
 ### 2.15 Soul Snippets and Journal
 
-**`datastore/notedb/soul_snippets.py`:** Dual extraction system producing both fast-path snippets and slow-path journal entries at compaction/reset.
+**`datastore/insightdb/soul_snippets.py`:** Dual extraction system producing both fast-path snippets and slow-path journal entries at compaction/reset.
 - **Snippets (fast path):** Bullet-point observations written to `*.snippets.md` staging files in the identity dir. Nightly janitor reviews each snippet with `FOLD` (integrate into core file), `REWRITE` (synthesize), or `DISCARD` decisions. Keeps `SOUL.md`, `USER.md`, `ENVIRONMENT.md` current day-to-day. Target files configurable; `AGENTS.md` is optional via config.
 - **Journal (slow path):** Diary-style paragraphs written to `journal/*.journal.md`. Deep-reasoning distillation runs weekly, synthesizing themes into core markdown. Old journal entries archived monthly.
 - Entry points: `run_soul_snippets_review()` — nightly snippet FOLD/REWRITE/DISCARD (janitor Task 1d-snippets); `run_journal_distillation()` — weekly deep-reasoning distillation (janitor Task 1d-journal).
@@ -756,7 +756,7 @@ Core orchestrators import ingest via this bridge rather than importing `ingest.*
 - `core/contracts/memory.py` — `MemoryServicePort` Protocol (structural typing) defining the store/recall/search/create_edge/forget/stats/domain API that all memory service implementations must satisfy.
 - `core/plugins/memorydb_contract.py` — MemoryDB contract. Notable: domain lifecycle (schema/table sync and TOOLS domain block sync) is datastore-owned and implemented here, invoked by core plugin contract execution. Uses `lib/domain_runtime.publish_domains_to_runtime_config` and `lib/tools_domain_sync.sync_tools_domain_block`. The synced `TOOLS.md` block remains useful for docs/CLI visibility, but live domains and graph relation types are injected separately through runtime metadata at context-build time.
 - `core/plugins/docsdb_contract.py` — DocsDB contract; handles visible project workspace init and misc project bootstrap.
-- `core/plugins/notedb_contract.py` — NoteDB contract; minimal stub (all hooks return `ready: True`; dashboard disabled).
+- `core/plugins/insightdb_contract.py` — InsightDB contract for snippets and journal lifecycle surfaces.
 - `core/services/memory_service.py` — `DatastoreMemoryService` class implementing `MemoryServicePort`; core-side composition point wrapping `datastore.facade` behind identity enforcement (`identity_runtime` assertion, privacy policy, write contract).
 
 ---

@@ -437,7 +437,7 @@ The janitor dispatches maintenance tasks through a `LifecycleRegistry` — a plu
 **Default registry** (`build_default_registry()`): Loads routines from these modules in order:
 1. Adapter maintenance module (discovered from active adapter manifest or `adaptors/` tree)
 2. `core.plugins.docsdb_contract` — `project_docs_monitor`
-3. `datastore.notedb.soul_snippets` — `snippets`, `journal`
+3. `datastore.insightdb.soul_snippets` — `snippets`, `journal`
 4. `datastore.memorydb.maintenance` — `memory_graph_maintenance`
 5. `datastore.memorydb.memory_graph` — `datastore_cleanup`
 

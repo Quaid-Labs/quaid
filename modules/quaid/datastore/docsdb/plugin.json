@@ -47,7 +47,10 @@
       },
       "events": {
         "mode": "declared",
-        "exports": []
+        "exports": [
+          "docs.ingest_transcript",
+          "docs.project_maintenance_observed"
+        ]
       },
       "ingest_triggers": {
         "mode": "declared",

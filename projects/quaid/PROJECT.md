@@ -20,7 +20,7 @@ This file is the starter brief for working on Quaid itself. It should help an ag
 - Recall, storage, dedup, or retrieval behavior:
   `reference/memory-reference.md`, `reference/memory-deduplication-system.md`, `modules/quaid/datastore/memorydb/memory_graph.py`
 - Identity distillation or janitor maintenance:
-  `reference/janitor-reference.md`, `reference/runtime-supervisor.md`, `modules/quaid/core/lifecycle/janitor.py`, `modules/quaid/core/janitor_worker.py`, `modules/quaid/datastore/notedb/soul_snippets.py`
+  `reference/janitor-reference.md`, `reference/runtime-supervisor.md`, `modules/quaid/core/lifecycle/janitor.py`, `modules/quaid/core/janitor_worker.py`, `modules/quaid/datastore/insightdb/soul_snippets.py`
 - Projects, docs, and RAG behavior:
   `reference/projects-reference.md`, `reference/rag-docs-system.md`, `modules/quaid/datastore/docsdb/registry.py`, `modules/quaid/datastore/docsdb/project_updater.py`, `modules/quaid/datastore/docsdb/rag.py`, `modules/quaid/core/project_registry.py`
 - Adapter, hook, or platform-specific behavior:
