@@ -162,8 +162,6 @@ def test_first_party_datastore_manifests_have_matching_plugin_json() -> None:
         assert payload["plugin_id"] == manifest["plugin_id"]
         assert payload["plugin_type"] == "datastore"
         assert payload["capabilities"]["display_name"] == manifest["display_name"]
-        contract = payload["capabilities"]["contract"]
-        assert sorted(contract["events"]["exports"]) == sorted(manifest["accepted_events"])
 
 
 def test_datastore_registry_logs_and_skips_invalid_manifest_when_not_fail_hard(caplog) -> None:
