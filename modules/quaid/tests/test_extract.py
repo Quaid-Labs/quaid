@@ -1089,6 +1089,112 @@ class TestExtractFromTranscript:
         assert "created_at" not in fact
 
     @patch("ingest.extract.call_deep_reasoning")
+    def test_extraction_resolves_this_week_against_transcript_timestamp(self, mock_llm):
+        from ingest.extract import extract_from_transcript
+
+        mock_llm.return_value = (json.dumps({
+            "chunk_assessment": "usable",
+            "facts": [
+                {
+                    "text": "The user started using a 14mm copper fountain pen nib for their journal",
+                    "category": "fact",
+                    "speaker": "user",
+                    "domains": ["personal"],
+                    "extraction_confidence": "high",
+                    "privacy": "shared",
+                }
+            ],
+            "soul_snippets": {},
+            "journal_entries": {},
+            "project_logs": {},
+        }), 0.1)
+
+        result = extract_from_transcript(
+            transcript=(
+                "[2026-05-23T16:30:00Z] User: I started using a 14mm copper fountain pen nib "
+                "this week for my journal.\n\n"
+                "[2026-05-23T16:30:03Z] Assistant: Noted."
+            ),
+            owner_id="Solomon Steadman",
+            dry_run=True,
+        )
+
+        fact = result["raw_facts"][0]
+        assert fact["occurred_start"] == "2026-05-23T23:59:59"
+        assert fact["occurred_end"] == "2026-05-23T23:59:59"
+        assert fact["mentioned_at"] == "2026-05-23T16:30:00+00:00"
+
+    @patch("ingest.extract.call_deep_reasoning")
+    def test_extraction_resolves_last_friday_against_transcript_timestamp(self, mock_llm):
+        from ingest.extract import extract_from_transcript
+
+        mock_llm.return_value = (json.dumps({
+            "chunk_assessment": "usable",
+            "facts": [
+                {
+                    "text": "The user mailed the repair form for the brass lamp",
+                    "category": "event",
+                    "speaker": "user",
+                    "domains": ["personal"],
+                    "extraction_confidence": "high",
+                    "privacy": "shared",
+                }
+            ],
+            "soul_snippets": {},
+            "journal_entries": {},
+            "project_logs": {},
+        }), 0.1)
+
+        result = extract_from_transcript(
+            transcript=(
+                "[2026-05-27T09:00:00Z] User: Last Friday I mailed the repair form "
+                "for the brass lamp.\n\n"
+                "[2026-05-27T09:00:03Z] Assistant: Noted."
+            ),
+            owner_id="Solomon Steadman",
+            dry_run=True,
+        )
+
+        fact = result["raw_facts"][0]
+        assert fact["occurred_start"] == "2026-05-22T23:59:59"
+        assert fact["occurred_end"] == "2026-05-22T23:59:59"
+
+    @patch("ingest.extract.call_deep_reasoning")
+    def test_relative_temporal_resolution_requires_fact_overlap(self, mock_llm):
+        from ingest.extract import extract_from_transcript
+
+        mock_llm.return_value = (json.dumps({
+            "chunk_assessment": "usable",
+            "facts": [
+                {
+                    "text": "The user's sibling lives in Ottawa",
+                    "category": "fact",
+                    "speaker": "user",
+                    "domains": ["personal"],
+                    "extraction_confidence": "high",
+                    "privacy": "shared",
+                }
+            ],
+            "soul_snippets": {},
+            "journal_entries": {},
+            "project_logs": {},
+        }), 0.1)
+
+        result = extract_from_transcript(
+            transcript=(
+                "[2026-05-27T09:00:00Z] User: Yesterday I moved the spare notebook "
+                "to the shelf.\n\n"
+                "[2026-05-27T09:01:00Z] User: My sibling lives in Ottawa."
+            ),
+            owner_id="Solomon Steadman",
+            dry_run=True,
+        )
+
+        fact = result["raw_facts"][0]
+        assert "occurred_start" not in fact
+        assert "occurred_end" not in fact
+
+    @patch("ingest.extract.call_deep_reasoning")
     def test_extraction_prefers_source_mention_time_over_llm_mentioned_at(self, mock_llm):
         from ingest.extract import extract_from_transcript
 
@@ -6501,6 +6607,7 @@ class TestLoadPrompt:
         assert '"occurred_start"' in prompt
         assert "Do not copy the message timestamp into `occurred_start`" in prompt
         assert '"May 2023" -> `occurred_start: "2023-05-01"`' in prompt
+        assert 'relative event-time phrases such as "today", "yesterday", "last Friday", or "this week"' in prompt
 
     def test_truncated_array_scanner_stops_on_mid_string_truncation(self):
         from ingest.extract import _complete_json_objects_from_array
