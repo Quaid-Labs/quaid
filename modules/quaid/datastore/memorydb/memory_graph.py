@@ -16807,6 +16807,7 @@ def _resolve_recall_command_temporal_dimension(
     config: Dict[str, Any],
     *,
     cli_temporal_dimension: Optional[str] = None,
+    cli_after: Optional[str] = None,
 ) -> str:
     cfg = config if isinstance(config, dict) else {}
     explicit_dimension = _first_present_config_value(
@@ -16820,6 +16821,8 @@ def _resolve_recall_command_temporal_dimension(
     )
     if cli_temporal_dimension or explicit_dimension:
         return _normalize_recall_temporal_dimension(cli_temporal_dimension or explicit_dimension)
+    if cli_after not in (None, ""):
+        return "occurred"
     date_range = cfg.get("date_range") if isinstance(cfg.get("date_range"), dict) else {}
     if (
         _first_present_config_value(cfg, "after", "since") is not None
@@ -24141,7 +24144,7 @@ if __name__ == "__main__":
         recall_p.add_argument("--debug", action="store_true", help="Show scoring breakdown per result")
         recall_p.add_argument("--date-from", "--date_from", dest="date_from", default=None, help="Only return memories from this date onward (YYYY-MM-DD)")
         recall_p.add_argument("--date-to", "--date_to", dest="date_to", default=None, help="Only return memories up to this date (YYYY-MM-DD)")
-        recall_p.add_argument("--after", "--since", dest="date_from", help="Alias for --date-from")
+        recall_p.add_argument("--after", "--since", dest="date_after", help="Alias for --date-from using occurred/event time")
         recall_p.add_argument("--before", "--until", "--as-of", "--as_of", "--asOf", dest="date_to", help="Alias for --date-to")
         recall_p.add_argument("--temporal-dimension", "--temporal_dimension", choices=["auto", "occurred", "mentioned", "record"], default=None, help="Date axis for date filters")
         recall_p.add_argument("--include-chunks", "--include_chunks", action="store_true", help="Include bounded session chunk evidence for linked facts")
@@ -24551,12 +24554,13 @@ if __name__ == "__main__":
             compaction_time = cfg.get("compaction_time")
             date_from, date_to = _resolve_recall_command_date_bounds(
                 cfg,
-                cli_date_from=getattr(args, "date_from", None),
+                cli_date_from=getattr(args, "date_from", None) or getattr(args, "date_after", None),
                 cli_date_to=getattr(args, "date_to", None),
             )
             temporal_dimension = _resolve_recall_command_temporal_dimension(
                 cfg,
                 cli_temporal_dimension=getattr(args, "temporal_dimension", None),
+                cli_after=getattr(args, "date_after", None),
             )
             archive         = cfg.get("archive", False)
             candidate_pool  = cfg.get("candidate_pool")

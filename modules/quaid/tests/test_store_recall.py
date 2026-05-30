@@ -3623,6 +3623,16 @@ class TestTimestampOverride:
         ) == "occurred"
         assert mg._resolve_recall_command_temporal_dimension({"date_dimension": "created_at"}) == "record"
         assert mg._resolve_recall_command_temporal_dimension({}) == "auto"
+        assert mg._resolve_recall_command_temporal_dimension({"date_from": "2024-06-30"}) == "auto"
+        assert mg._resolve_recall_command_temporal_dimension(
+            {},
+            cli_after="2024-06-30",
+        ) == "occurred"
+        assert mg._resolve_recall_command_temporal_dimension(
+            {},
+            cli_after="2024-06-30",
+            cli_temporal_dimension="record",
+        ) == "record"
         assert mg._resolve_recall_command_temporal_dimension({"after": "2024-06-30"}) == "occurred"
         assert mg._resolve_recall_command_temporal_dimension({"since": "2024-06-30"}) == "occurred"
         assert mg._resolve_recall_command_temporal_dimension(
