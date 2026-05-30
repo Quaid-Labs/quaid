@@ -3623,6 +3623,14 @@ class TestTimestampOverride:
         ) == "occurred"
         assert mg._resolve_recall_command_temporal_dimension({"date_dimension": "created_at"}) == "record"
         assert mg._resolve_recall_command_temporal_dimension({}) == "auto"
+        assert mg._resolve_recall_command_temporal_dimension({"after": "2024-06-30"}) == "occurred"
+        assert mg._resolve_recall_command_temporal_dimension({"since": "2024-06-30"}) == "occurred"
+        assert mg._resolve_recall_command_temporal_dimension(
+            {"date_range": {"since": "2024-06-30"}}
+        ) == "occurred"
+        assert mg._resolve_recall_command_temporal_dimension(
+            {"after": "2024-06-30", "temporal_dimension": "record"}
+        ) == "record"
 
 
 class TestSourceChunkStorage:
@@ -5262,6 +5270,70 @@ class TestSourceChunkStorage:
         assert [row["id"] for row in rows] == ["archive-reading-2024"]
         assert rows[0]["temporal_filter_basis"] == "occurred"
         assert meta["source_chunk_telemetry"]["candidate_count"] == 3
+
+    def test_store_plan_occurred_date_filter_excludes_created_at_only_facts(self):
+        """Occurred-axis date filters must not use ingestion time for undated facts."""
+        import datastore.memorydb.memory_graph as mg
+
+        archive_reading = {
+            "id": "archive-reading-2024",
+            "text": "archive-reading-2024 marks a late summer reading event.",
+            "category": "fact",
+            "similarity": 0.88,
+            "occurred_start": "2024-08-30T08:00:00Z",
+            "created_at": "2026-05-24T01:30:00Z",
+        }
+        archive_audit = {
+            "id": "archive-audit-2024",
+            "text": "archive-audit-2024 marks an autumn audit event.",
+            "category": "fact",
+            "similarity": 0.84,
+            "occurred_start": "2024-11-11T08:00:00Z",
+            "created_at": "2026-05-24T01:31:00Z",
+        }
+        undated_book_club = {
+            "id": "book-club-current",
+            "text": "The current book club row mentions history but has no event date.",
+            "category": "fact",
+            "similarity": 0.95,
+            "created_at": "2026-05-24T01:32:00Z",
+        }
+
+        def _fake_vector(*args, **kwargs):
+            return (
+                [dict(undated_book_club), dict(archive_reading), dict(archive_audit)],
+                {"selected_path": "vector", "phases_ms": {"total_ms": 1}},
+                None,
+            )
+
+        registry = {
+            "vector": {"recall": _fake_vector, "recall_fast": _fake_vector},
+            "graph": {"recall": lambda *a, **k: ([], {}, None), "recall_fast": lambda *a, **k: ([], {}, None)},
+            "docs": {"recall": lambda *a, **k: ([], {}, None), "recall_fast": lambda *a, **k: ([], {}, None)},
+            "session_chunks": {"recall": lambda *a, **k: ([], {}, None), "recall_fast": lambda *a, **k: ([], {}, None)},
+        }
+
+        with patch.object(mg, "_get_recall_store_registry", return_value=registry):
+            rows, meta, _bundle = mg._run_recall_store_plan(
+                "archive",
+                stores=["vector"],
+                limit=5,
+                owner_id="quaid",
+                min_similarity=0.6,
+                planner_profile="full",
+                planned_queries=["archive"],
+                planner_meta={"planned_stores": ["vector"]},
+                fast_mode=False,
+                common_kwargs={
+                    "date_from": "2024-06-30",
+                    "temporal_dimension": "occurred",
+                },
+            )
+
+        assert [row["id"] for row in rows] == ["archive-reading-2024", "archive-audit-2024"]
+        assert "book-club-current" not in {row["id"] for row in rows}
+        assert all(row["temporal_filter_basis"] == "occurred" for row in rows)
+        assert meta["planned_stores"] == ["vector"]
 
     def test_store_plan_passes_owner_context_to_vector_lane(self):
         """Nested vector recall must retain owner scope before it can auto-include session chunks."""

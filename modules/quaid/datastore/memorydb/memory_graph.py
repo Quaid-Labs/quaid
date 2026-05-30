@@ -16809,18 +16809,24 @@ def _resolve_recall_command_temporal_dimension(
     cli_temporal_dimension: Optional[str] = None,
 ) -> str:
     cfg = config if isinstance(config, dict) else {}
-    return _normalize_recall_temporal_dimension(
-        cli_temporal_dimension
-        or _first_present_config_value(
-            cfg,
-            "temporal_dimension",
-            "temporalDimension",
-            "time_dimension",
-            "timeDimension",
-            "date_dimension",
-            "dateDimension",
-        )
+    explicit_dimension = _first_present_config_value(
+        cfg,
+        "temporal_dimension",
+        "temporalDimension",
+        "time_dimension",
+        "timeDimension",
+        "date_dimension",
+        "dateDimension",
     )
+    if cli_temporal_dimension or explicit_dimension:
+        return _normalize_recall_temporal_dimension(cli_temporal_dimension or explicit_dimension)
+    date_range = cfg.get("date_range") if isinstance(cfg.get("date_range"), dict) else {}
+    if (
+        _first_present_config_value(cfg, "after", "since") is not None
+        or _first_present_config_value(date_range, "after", "since") is not None
+    ):
+        return "occurred"
+    return "auto"
 
 
 def _recall_row_temporal_date(
