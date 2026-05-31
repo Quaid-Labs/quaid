@@ -1651,7 +1651,11 @@ class OllamaEmbeddingsProvider(EmbeddingsProvider):
             batch_chars = sum(len(str(item or "")) for item in batch)
             batch_started = time.monotonic()
             for attempt in range(retries + 1):
-                request_timeout_s = float(timeout_s) if explicit_timeout else _remaining_embedding_timeout(deadline)
+                # Batch embedding can process dozens of chunks. Use the configured
+                # timeout per provider request instead of shrinking one global
+                # deadline across all batches; failHard should catch a slow batch,
+                # not normal cumulative work from a large extraction.
+                request_timeout_s = float(timeout_s)
                 request_started = time.monotonic()
                 try:
                     data = json.dumps({
