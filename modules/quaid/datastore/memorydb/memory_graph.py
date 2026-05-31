@@ -13879,15 +13879,13 @@ def _annotate_rrf_shadow_comparison(
 
 
 def _prioritize_fast_anchor_direct_rows(query: str, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Keep fresh direct memory rows ahead of graph context for explicit-anchor hook recall."""
+    """Keep direct answer-bearing memory rows ahead of broader fast-recall context."""
     if not rows:
         return rows
     explicit_anchor_terms = _priority_anchor_terms_for_fast_attribution(
         query,
         _extract_explicit_query_anchor_terms(query, limit=8),
     )
-    if not explicit_anchor_terms:
-        return rows
     query_terms = _priority_query_terms_for_fast_attribution(
         query,
         _extract_distinctive_query_terms(query, limit=8),
@@ -13942,6 +13940,40 @@ def _prioritize_fast_anchor_direct_rows(query: str, rows: List[Dict[str, Any]]) 
         for row in rows
         if isinstance(row, dict) and _is_direct_memory_row(row) and _row_matches_anchor(row)
     ]
+    if not explicit_anchor_terms:
+        direct_rows = [
+            row
+            for row in rows
+            if isinstance(row, dict) and _is_direct_memory_row(row)
+        ]
+        if len(query_terms) < 2 or not direct_rows:
+            return rows
+        overlap_by_id = {
+            str(row.get("id")): _query_term_overlap({"text": _row_text(row)}, query_terms)
+            for row in direct_rows
+        }
+        max_overlap = max(overlap_by_id.values(), default=0)
+        # Without an explicit entity anchor, only promote rows that directly
+        # cover every distinctive query term. Partial lexical hits remain in
+        # the store's ranked order to avoid broad fast-recall reshaping.
+        if max_overlap < len(query_terms):
+            return rows
+        priority_rows = [
+            row for row in direct_rows
+            if overlap_by_id.get(str(row.get("id")), 0) == max_overlap
+        ]
+        priority_rows.sort(
+            key=lambda row: (
+                _row_created_sort_key(row),
+                float(row.get("similarity", 0.0) or 0.0),
+            ),
+            reverse=True,
+        )
+        priority_keys = {_recall_row_identity(row) for row in priority_rows}
+        return priority_rows + [
+            row for row in rows
+            if _recall_row_identity(row) not in priority_keys
+        ]
     if not direct_anchor_rows:
         return rows
 

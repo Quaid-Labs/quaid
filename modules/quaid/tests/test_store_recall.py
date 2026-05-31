@@ -2051,6 +2051,37 @@ class TestRecallBasic:
             "anchor-only",
         ]
 
+    def test_fast_direct_priority_uses_full_query_coverage_without_named_anchor(self):
+        import datastore.memorydb.memory_graph as mg
+
+        query = "what is my cedar ritual"
+        assert mg._extract_explicit_query_anchor_terms(query) == []
+        rows = [
+            {
+                "id": "partial-same-topic",
+                "text": "Test Owner checks the cedar shelf on Friday after the gym.",
+                "category": "fact",
+                "similarity": 0.98,
+                "confidence": 0.92,
+                "created_at": "2026-05-30T22:31:11",
+            },
+            {
+                "id": "direct-ritual",
+                "text": "Test Owner has a cedar ritual of rinsing river stones after breakfast.",
+                "category": "fact",
+                "similarity": 0.94,
+                "confidence": 0.90,
+                "created_at": "2026-05-30T23:31:20",
+            },
+        ]
+
+        ranked = mg._prioritize_fast_anchor_direct_rows(query, rows)
+
+        assert [row["id"] for row in ranked[:2]] == [
+            "direct-ritual",
+            "partial-same-topic",
+        ]
+
     def test_prioritize_date_relation_callback_rows_prefers_day_after_connection(self):
         import datastore.memorydb.memory_graph as mg
 
