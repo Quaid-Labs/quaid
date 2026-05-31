@@ -6764,10 +6764,20 @@ class TestLoadPrompt:
         assert '"occurred_start"' in prompt
         assert "Do not copy the message timestamp into `occurred_start`" in prompt
         assert "Do not emit `created_at` or `_source_timestamp`" in prompt
+        assert '"created_at": "optional ISO timestamp' not in prompt
         assert '"May 2023" -> `occurred_start: "2023-05-01"`' in prompt
         assert "Resolve relative event-time wording against the timestamp on the same transcript line" in prompt
         assert "The transcript line timestamp is authoritative" in prompt
         assert "Do not also emit a second unbounded duplicate fact" in prompt
+
+    def test_prompt_project_logs_do_not_request_created_at(self):
+        from ingest.extract import _load_extraction_prompt
+
+        prompt = _load_extraction_prompt()
+        assert 'Values are arrays of short strings.' in prompt
+        assert '"project_logs": {"project-id": ["note 1", "note 2"]}' in prompt
+        assert 'Values are arrays of short strings or objects with {"text", "created_at"}' not in prompt
+        assert '"project-id": [{"text": "note 1", "created_at"' not in prompt
 
     def test_truncated_array_scanner_stops_on_mid_string_truncation(self):
         from ingest.extract import _complete_json_objects_from_array
