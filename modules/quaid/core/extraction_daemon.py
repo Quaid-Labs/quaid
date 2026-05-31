@@ -1615,6 +1615,27 @@ def _cursor_shadowed_by_source_cursor(
     return True
 
 
+def _retire_shadowed_cursor_alias(
+    *,
+    cursor_file: Path,
+    session_id: str,
+    transcript_path: str,
+    cursor_data: Dict[str, Any],
+) -> bool:
+    if not _cursor_shadowed_by_source_cursor(
+        cursor_file=cursor_file,
+        session_id=session_id,
+        transcript_path=transcript_path,
+        cursor_data=cursor_data,
+    ):
+        return False
+    try:
+        cursor_file.unlink(missing_ok=True)
+    except OSError as exc:
+        logger.warning("failed to retire shadowed cursor alias %s: %s", cursor_file, exc)
+    return True
+
+
 def _active_source_cursor_for_terminal_checkpoint_tail(
     *,
     cursor_file: Path,
@@ -6513,7 +6534,7 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
                 continue
         if _is_discovery_artifact_transcript(Path(str(transcript_path))):
             continue
-        if _cursor_shadowed_by_source_cursor(
+        if _retire_shadowed_cursor_alias(
             cursor_file=cursor_file,
             session_id=str(session_id),
             transcript_path=str(transcript_path),
@@ -6980,7 +7001,7 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
             data = active_cursor
             session_id = str(data.get("session_id") or session_id)
             cursor_file = active_file
-        if _cursor_shadowed_by_source_cursor(
+        if _retire_shadowed_cursor_alias(
             cursor_file=cursor_file,
             session_id=str(session_id),
             transcript_path=str(transcript_path),

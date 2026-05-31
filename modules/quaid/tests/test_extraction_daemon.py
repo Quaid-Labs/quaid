@@ -8752,6 +8752,7 @@ class TestRollingExtraction:
             rollout_session_id,
             str(transcript_path),
         )
+        legacy_cursor_file = extraction_daemon._cursor_dir() / f"{legacy_session_id}.json"
         extraction_daemon.write_cursor(
             rollout_session_id,
             2,
@@ -8795,6 +8796,7 @@ class TestRollingExtraction:
         try:
             extraction_daemon.check_chunk_ready_sessions()
             assert captured == []
+            assert not legacy_cursor_file.exists()
             assert not extraction_daemon._rolling_state_path(legacy_session_id).exists()
         finally:
             if real_adapter is not None:
@@ -13299,6 +13301,54 @@ class TestRollingExtraction:
         extraction_daemon.check_idle_sessions(timeout_minutes=30)
 
         assert captured == []
+
+    def test_check_idle_sessions_retires_legacy_cursor_shadowed_by_source_cursor(
+        self, monkeypatch, tmp_path
+    ):
+        transcript_path = tmp_path / "rollout-2026-05-27T00-00-00-019e802e-aaaa-4aaa-8aaa-aaaaaaaaaaaa.jsonl"
+        transcript_path.write_text(
+            '{"type":"event_msg","payload":{"type":"user_message","message":"CDX finished this session."}}\n',
+            encoding="utf-8",
+        )
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "pytest-runner")
+        legacy_session_id = "019e802e-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        rollout_session_id = "rollout-2026-05-27T00-00-00-019e802e-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        extraction_daemon.write_cursor(legacy_session_id, 0, str(transcript_path))
+        source_key = extraction_daemon._signal_source_cursor_key(
+            rollout_session_id,
+            str(transcript_path),
+        )
+        extraction_daemon.write_cursor(
+            rollout_session_id,
+            1,
+            str(transcript_path),
+            source_key=source_key,
+        )
+        legacy_cursor_file = extraction_daemon._cursor_dir() / f"{legacy_session_id}.json"
+        assert legacy_cursor_file.exists()
+
+        captured = []
+        monkeypatch.setattr(extraction_daemon, "_read_installed_at", lambda: 0.0)
+        monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
+        monkeypatch.setattr(extraction_daemon, "_ensure_discovered_session_cursors", lambda adapter: 0)
+        monkeypatch.setattr(
+            extraction_daemon,
+            "write_signal",
+            lambda signal_type, session_id, transcript_path, **kwargs: captured.append(
+                {
+                    "signal_type": signal_type,
+                    "session_id": session_id,
+                    "transcript_path": transcript_path,
+                }
+            ),
+        )
+
+        extraction_daemon.check_idle_sessions(timeout_minutes=0)
+
+        assert captured == []
+        assert not legacy_cursor_file.exists()
 
     def test_skips_session_with_pending_signal_already(self, monkeypatch, tmp_path):
         """If there is already a pending signal for the session, no duplicate is written."""
