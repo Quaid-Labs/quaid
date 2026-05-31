@@ -1037,4 +1037,48 @@ describe("openclaw session_index watcher", () => {
     error.mockRestore();
     rmSync(harness.root, { recursive: true, force: true });
   });
+
+  it("does not emit same-session rollover for a post-new empty transcript", async () => {
+    vi.useFakeTimers();
+    const harness = makeHarness("same-session-empty-post-new");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const sessionId = "44444444-4444-4444-8444-444444444444";
+    const sessionKey = "agent:main:tui-m2-partb";
+    const transcript = join(harness.sessionsDir, `${sessionId}.jsonl`);
+    writeTranscript(transcript, ["M2 prior turn has already been processed before /new."]);
+    writeJson(join(harness.sessionsDir, "sessions.json"), {
+      [sessionKey]: { sessionId, updatedAt: Date.now() },
+    });
+
+    const plugin = await loadPlugin(harness);
+    plugin.register(makeFakeApi() as any);
+    vi.advanceTimersByTime(1000);
+    expect(readSignalPayloads(harness.signalDir)).toHaveLength(0);
+
+    writeFile(transcript, "");
+    utimesSync(transcript, new Date(Date.now() + 1_000), new Date(Date.now() + 1_000));
+    writeJson(join(harness.sessionsDir, "sessions.json"), {
+      [sessionKey]: { sessionId, updatedAt: Date.now() + 1_000 },
+    });
+    vi.advanceTimersByTime(1000);
+
+    expect(readSignalPayloads(harness.signalDir)).toHaveLength(0);
+
+    writeTranscript(transcript, ["M2 Part B fresh content should be left for rolling extraction."]);
+    utimesSync(transcript, new Date(Date.now() + 2_000), new Date(Date.now() + 2_000));
+    writeJson(join(harness.sessionsDir, "sessions.json"), {
+      [sessionKey]: { sessionId, updatedAt: Date.now() + 2_000 },
+    });
+    vi.advanceTimersByTime(1000);
+
+    expect(readSignalPayloads(harness.signalDir)).toHaveLength(0);
+
+    warn.mockRestore();
+    log.mockRestore();
+    error.mockRestore();
+    rmSync(harness.root, { recursive: true, force: true });
+  });
 });

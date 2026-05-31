@@ -510,6 +510,9 @@ function isSameSessionTranscriptRollover(
   priorSize: number,
   currentSize: number,
 ): boolean {
+  if (currentCount <= 0 && currentSize <= 0) {
+    return false;
+  }
   const rowTruncated = priorCount > 0 && currentCount >= 0 && currentCount < priorCount;
   const sizeTruncated = priorSize > 0 && currentSize >= 0 && currentSize < priorSize;
   return rowTruncated || sizeTruncated;

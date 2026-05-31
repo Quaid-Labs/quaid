@@ -343,6 +343,9 @@ const SESSION_INDEX_POLL_MS = 1e3;
 let sessionIndexWatcherStarted = false;
 let sessionIndexWatcherTimer = null;
 function isSameSessionTranscriptRollover(priorCount, currentCount, priorSize, currentSize) {
+  if (currentCount <= 0 && currentSize <= 0) {
+    return false;
+  }
   const rowTruncated = priorCount > 0 && currentCount >= 0 && currentCount < priorCount;
   const sizeTruncated = priorSize > 0 && currentSize >= 0 && currentSize < priorSize;
   return rowTruncated || sizeTruncated;
