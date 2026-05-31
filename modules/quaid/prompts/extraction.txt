@@ -116,7 +116,8 @@ Examples:
 
 TEMPORAL PROVENANCE (per fact):
 - Always distinguish the event time from the source/record time.
-- `created_at` and `mentioned_at` are the transcript message time that introduced the fact. If the transcript line has a timestamp, copy that timestamp into both fields.
+- `mentioned_at` is the transcript message time that introduced the fact. If the transcript line has a timestamp, copy that timestamp into `mentioned_at`.
+- Do not emit `created_at` or `_source_timestamp`; runtime assigns record/source metadata outside the LLM response.
 - `occurred_start` and `occurred_end` are when the fact or event happened. Include them when the source text explicitly states a date, time, month, year, or bounded range for the event itself.
 - Do not copy the message timestamp into `occurred_start` or `occurred_end` unless the fact says the event happened at that message time.
 - For a stated month range, use the first and last calendar day. Example: "May 2023" -> `occurred_start: "2023-05-01"`, `occurred_end: "2023-05-31"`.

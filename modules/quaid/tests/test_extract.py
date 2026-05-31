@@ -942,8 +942,9 @@ class TestExtractFromTranscript:
             )
         ) == ["2026-05-02T14:29:21+00:00", "2026-05-03T09:10:11+00:00"]
 
+    @patch("ingest.extract._current_utc_timestamp", return_value="2026-05-02T14:30:00+00:00")
     @patch("ingest.extract.call_deep_reasoning")
-    def test_extraction_defaults_mentioned_at_to_transcript_timestamp(self, mock_llm):
+    def test_extraction_defaults_mentioned_at_to_transcript_timestamp(self, mock_llm, _mock_now):
         from ingest.extract import extract_from_transcript
 
         mock_llm.return_value = (json.dumps({
@@ -974,7 +975,7 @@ class TestExtractFromTranscript:
         )
 
         assert result["raw_facts"][0]["mentioned_at"] == "2026-05-02T14:29:21+00:00"
-        assert result["raw_facts"][0]["_source_timestamp"] == "2026-05-02T14:29:21+00:00"
+        assert result["raw_facts"][0]["_source_timestamp"] == "2026-05-02T14:30:00+00:00"
         assert "created_at" not in result["raw_facts"][0]
 
     @patch("ingest.extract._current_utc_timestamp", return_value="2026-05-09T08:00:00+00:00")
@@ -1009,11 +1010,11 @@ class TestExtractFromTranscript:
         fact = result["raw_facts"][0]
         assert "created_at" not in fact
         assert fact["mentioned_at"] == "2026-05-09T08:00:00+00:00"
-        assert "_source_timestamp" not in fact
+        assert fact["_source_timestamp"] == "2026-05-09T08:00:00+00:00"
 
     @patch("ingest.extract._current_utc_timestamp", return_value="2026-05-07T03:42:00+00:00")
     @patch("ingest.extract.call_deep_reasoning")
-    def test_extraction_defaults_mentioned_at_without_source_timestamp(self, mock_llm, mock_now):
+    def test_extraction_defaults_mentioned_at_to_runtime_timestamp(self, mock_llm, mock_now):
         from ingest.extract import extract_from_transcript
 
         mock_llm.return_value = (json.dumps({
@@ -1041,11 +1042,13 @@ class TestExtractFromTranscript:
 
         fact = result["raw_facts"][0]
         assert fact["mentioned_at"] == "2026-05-07T03:42:00+00:00"
+        assert fact["_source_timestamp"] == "2026-05-07T03:42:00+00:00"
         assert "created_at" not in fact
         assert mock_now.called
 
+    @patch("ingest.extract._current_utc_timestamp", return_value="2026-05-02T14:50:00+00:00")
     @patch("ingest.extract.call_deep_reasoning")
-    def test_extraction_prefers_transcript_timestamp_over_same_day_date_only_fact(self, mock_llm):
+    def test_extraction_prefers_transcript_timestamp_over_same_day_date_only_fact(self, mock_llm, _mock_now):
         from ingest.extract import extract_from_transcript
 
         mock_llm.return_value = (json.dumps({
@@ -1077,11 +1080,12 @@ class TestExtractFromTranscript:
         )
 
         assert result["raw_facts"][0]["mentioned_at"] == "2026-05-02T14:49:46+00:00"
-        assert result["raw_facts"][0]["_source_timestamp"] == "2026-05-02T14:49:46+00:00"
+        assert result["raw_facts"][0]["_source_timestamp"] == "2026-05-02T14:50:00+00:00"
         assert "created_at" not in result["raw_facts"][0]
 
+    @patch("ingest.extract._current_utc_timestamp", return_value="2026-05-02T14:50:00+00:00")
     @patch("ingest.extract.call_deep_reasoning")
-    def test_extraction_preserves_occurred_range_separate_from_mentioned_at(self, mock_llm):
+    def test_extraction_preserves_occurred_range_separate_from_mentioned_at(self, mock_llm, _mock_now):
         from ingest.extract import extract_from_transcript
 
         mock_llm.return_value = (json.dumps({
@@ -1117,8 +1121,50 @@ class TestExtractFromTranscript:
         assert fact["occurred_start"] == "2023-05-01T23:59:59"
         assert fact["occurred_end"] == "2023-05-31T23:59:59"
         assert fact["mentioned_at"] == "2026-05-02T14:49:46+00:00"
-        assert fact["_source_timestamp"] == "2026-05-02T14:49:46+00:00"
+        assert fact["_source_timestamp"] == "2026-05-02T14:50:00+00:00"
         assert "created_at" not in fact
+
+    @patch("ingest.extract._current_utc_timestamp", return_value="2026-05-29T13:57:53+00:00")
+    @patch("ingest.extract.call_deep_reasoning")
+    def test_extraction_ignores_llm_source_timestamp_for_relative_event_fallback(self, mock_llm, _mock_now):
+        from ingest.extract import extract_from_transcript
+
+        mock_llm.return_value = (json.dumps({
+            "chunk_assessment": "usable",
+            "facts": [
+                {
+                    "text": "Test Owner purchased a brass travel nib this week",
+                    "category": "event",
+                    "speaker": "user",
+                    "domains": ["personal"],
+                    "extraction_confidence": "medium",
+                    "created_at": "2024-01-01",
+                    "mentioned_at": "2024-01-01",
+                    "_source_timestamp": "2024-01-01T00:00:00+00:00",
+                }
+            ],
+            "soul_snippets": {},
+            "journal_entries": {},
+            "project_logs": {},
+        }), 0.1)
+
+        with patch("ingest.extract._memory.store") as mock_store:
+            mock_store.return_value = {"id": "n-nib", "status": "created", "dedup_telemetry": {}}
+            result = extract_from_transcript(
+                transcript="User: I purchased a brass travel nib this week.\n\nAssistant: Noted.",
+                owner_id="Test Owner",
+                dry_run=False,
+                write_snippets=False,
+                write_journal=False,
+            )
+
+        fact = result["raw_facts"][0]
+        assert fact["_source_timestamp"] == "2026-05-29T13:57:53+00:00"
+        assert fact["mentioned_at"] == "2026-05-29T13:57:53+00:00"
+        assert "created_at" not in fact
+        call = mock_store.call_args.kwargs
+        assert call["occurred_start"] == "2026-05-25T00:00:00+00:00"
+        assert call["occurred_end"] == "2026-05-31T23:59:59+00:00"
 
     @patch("ingest.extract.call_deep_reasoning")
     def test_extraction_prefers_source_mention_time_over_llm_mentioned_at(self, mock_llm):
@@ -6717,6 +6763,7 @@ class TestLoadPrompt:
         assert '"mentioned_at"' in prompt
         assert '"occurred_start"' in prompt
         assert "Do not copy the message timestamp into `occurred_start`" in prompt
+        assert "Do not emit `created_at` or `_source_timestamp`" in prompt
         assert '"May 2023" -> `occurred_start: "2023-05-01"`' in prompt
         assert "Resolve relative event-time wording against the timestamp on the same transcript line" in prompt
         assert "The transcript line timestamp is authoritative" in prompt

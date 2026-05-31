@@ -119,26 +119,20 @@ def _normalize_fact_temporal_hint(
     fact: Dict[str, Any],
     *,
     default_created_at: Optional[str] = None,
+    default_source_timestamp: Optional[str] = None,
     default_mentioned_at: Optional[str] = None,
     prefer_default_mentioned_at: bool = False,
 ) -> Dict[str, Any]:
     """Normalize fact temporal metadata and backfill source mention time."""
     normalized = dict(fact or {})
-    raw_created_at = str(normalized.get("created_at") or "").strip()
-    source_created_at = _normalize_extracted_timestamp(raw_created_at)
-    existing_source_timestamp = _normalize_extracted_timestamp(normalized.get("_source_timestamp"))
-    fallback_source_at = _normalize_extracted_timestamp(default_created_at)
+    fallback_source_at = (
+        _normalize_extracted_timestamp(default_source_timestamp)
+        or _normalize_extracted_timestamp(default_created_at)
+    )
     fallback_mentioned_at = _normalize_extracted_timestamp(default_mentioned_at) or fallback_source_at
-    if (
-        source_created_at
-        and fallback_source_at
-        and re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw_created_at)
-        and raw_created_at == fallback_source_at[:10]
-    ):
-        source_created_at = fallback_source_at
-    source_timestamp = source_created_at or existing_source_timestamp or fallback_source_at
-    # MemoryDB owns created_at as record/write time. Extracted source timestamps
-    # are source mention time and must not override the datastore record axis.
+    source_timestamp = fallback_source_at
+    # MemoryDB owns created_at as record/write time. _source_timestamp is
+    # runtime-owned extraction metadata, not a field trusted from LLM output.
     normalized.pop("created_at", None)
     if source_timestamp:
         normalized["_source_timestamp"] = source_timestamp
@@ -2233,6 +2227,7 @@ def _merge_parsed_payloads(
     mention_date_hint: Optional[str] = None,
     source_chunk_id: Optional[str] = None,
     source_chunk_ref: Optional[str] = None,
+    source_timestamp_hint: Optional[str] = None,
 ) -> None:
     """Merge extracted payloads into top-level accumulators in chunk order."""
     effective_date_hint = _first_transcript_timestamp_hint(transcript_text) or session_date_hint
@@ -2253,6 +2248,7 @@ def _merge_parsed_payloads(
                 normalized_fact = _normalize_fact_temporal_hint(
                     raw_fact,
                     default_created_at=effective_date_hint,
+                    default_source_timestamp=source_timestamp_hint,
                     default_mentioned_at=effective_mention_hint,
                     # effective_mention_hint is structural when present: transcript
                     # timestamp, session hint, or caller wall-clock fallback.
@@ -3392,6 +3388,7 @@ def extract_from_transcript(
                 transcript_text=transcript_chunks[ci],
                 session_date_hint=session_date_hint,
                 mention_date_hint=extraction_mentioned_at,
+                source_timestamp_hint=extraction_mentioned_at,
                 source_chunk_ref=source_chunk_ref,
             )
     else:
@@ -3431,6 +3428,7 @@ def extract_from_transcript(
                 transcript_text=chunk,
                 session_date_hint=session_date_hint,
                 mention_date_hint=extraction_mentioned_at,
+                source_timestamp_hint=extraction_mentioned_at,
                 source_chunk_ref=source_chunk_ref,
             )
 
