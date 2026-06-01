@@ -130,15 +130,28 @@ class OpenClawAdapter(QuaidAdapter):
             try:
                 with open(cfg_path, "r", encoding="utf-8") as f:
                     cfg = json.load(f)
-                primary = str(
-                    cfg.get("agents", {}).get("main", {}).get("modelPrimary")
-                    or cfg.get("agents", {}).get("defaults", {}).get("modelPrimary")
-                    or cfg.get("agents", {}).get("main", {}).get("model", {}).get("primary")
-                    or cfg.get("agents", {}).get("defaults", {}).get("model", {}).get("primary")
-                    or ""
-                ).strip()
-                if "/" in primary:
-                    return str(primary.split("/", 1)[0] or "").strip().lower()
+                agents = cfg.get("agents", {}) if isinstance(cfg, dict) else {}
+                candidates = [
+                    agents.get("main", {}),
+                ]
+                agents_list = agents.get("list", []) if isinstance(agents, dict) else []
+                if isinstance(agents_list, list):
+                    candidates.extend(
+                        row for row in agents_list
+                        if isinstance(row, dict) and (row.get("id") == "main" or row.get("default") is True)
+                    )
+                candidates.append(agents.get("defaults", {}))
+                for candidate in candidates:
+                    if not isinstance(candidate, dict):
+                        continue
+                    model = candidate.get("model", {}) if isinstance(candidate.get("model", {}), dict) else {}
+                    primary = str(
+                        candidate.get("modelPrimary")
+                        or model.get("primary")
+                        or ""
+                    ).strip()
+                    if "/" in primary:
+                        return str(primary.split("/", 1)[0] or "").strip().lower()
             except Exception:
                 pass
         profiles_path = self._get_agent_config_dir() / "auth-profiles.json"
@@ -801,6 +814,7 @@ class OpenClawAdapter(QuaidAdapter):
         deep_model = str(getattr(cfg.models, "deep_reasoning", "") or "").strip()
         fast_model = str(getattr(cfg.models, "fast_reasoning", "") or "").strip()
         provider = str(getattr(cfg.models, "llm_provider", "") or "").strip()
+        provider_inferred = not provider or provider == "default"
         if not provider or provider == "default":
             provider = self._normalize_installer_provider(
                 self._detect_gateway_primary_provider() or "anthropic"
@@ -811,15 +825,24 @@ class OpenClawAdapter(QuaidAdapter):
             fast_provider = str(getattr(cfg.models, "fast_reasoning_provider", "") or "").strip()
             if fast_provider and fast_provider != "default":
                 provider = self._normalize_installer_provider(fast_provider)
+                provider_inferred = False
         elif model_tier == "deep":
             deep_provider = str(getattr(cfg.models, "deep_reasoning_provider", "") or "").strip()
             if deep_provider and deep_provider != "default":
                 provider = self._normalize_installer_provider(deep_provider)
+                provider_inferred = False
         if not deep_model or not fast_model:
             raise RuntimeError(
                 "LLM provider requires deepReasoning and fastReasoning to be set in config.json. "
                 f"Got deep={deep_model!r} fast={fast_model!r}."
             )
+        if (
+            provider == "anthropic"
+            and provider_inferred
+            and not self.get_api_key("ANTHROPIC_API_KEY")
+            and self.get_api_key("OPENAI_API_KEY")
+        ):
+            provider = "openai"
         if provider == "openclaw-gateway":
             return OpenClawGatewayLLMProvider()
         if provider == "anthropic":

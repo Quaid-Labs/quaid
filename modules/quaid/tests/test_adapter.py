@@ -979,6 +979,99 @@ class TestOpenClawAdapter:
         assert adapter.get_deep_model_default("default") == "gpt-5.4"
         assert adapter.get_fast_model_default("default") == "gpt-5.4-mini"
 
+    def test_get_llm_provider_detects_agents_list_codex_oauth(self, monkeypatch, tmp_path):
+        home = tmp_path / "home"
+        cfg_dir = home / ".openclaw"
+        cfg_dir.mkdir(parents=True)
+        (cfg_dir / "openclaw.json").write_text(
+            json.dumps({
+                "agents": {
+                    "defaults": {"model": {"primary": "anthropic/claude-haiku-4-5"}},
+                    "list": [{"id": "main", "default": True, "model": {"primary": "openai-codex/gpt-5.4"}}],
+                }
+            }),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(Path, "home", lambda: home)
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path / ".quaid"))
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        monkeypatch.delenv("OPENAI_OAUTH_TOKEN", raising=False)
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        adapter = OpenClawAdapter()
+        adapter.store_shared_auth_token("codex_oauth", "tok.a.b")
+        cfg = SimpleNamespace(models=SimpleNamespace(
+            llm_provider="default",
+            deep_reasoning="gpt-5.4",
+            fast_reasoning="gpt-5.4-mini",
+            fast_reasoning_effort="none",
+            deep_reasoning_effort="high",
+            fast_reasoning_provider="default",
+            deep_reasoning_provider="default",
+            base_url="",
+        ))
+
+        with patch("config.get_config", return_value=cfg):
+            llm = adapter.get_llm_provider(model_tier="deep")
+
+        assert isinstance(llm, OpenAICodexOAuthLLMProvider)
+        assert llm._deep_model == "gpt-5.4"
+        assert llm._fast_model == "gpt-5.4-mini"
+
+    def test_get_llm_provider_falls_back_to_codex_oauth_for_inferred_anthropic(self, monkeypatch, tmp_path):
+        home = tmp_path / "home"
+        cfg_dir = home / ".openclaw"
+        cfg_dir.mkdir(parents=True)
+        (cfg_dir / "openclaw.json").write_text(
+            json.dumps({"agents": {"defaults": {"model": {"primary": "anthropic/claude-haiku-4-5"}}}}),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(Path, "home", lambda: home)
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path / ".quaid"))
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        monkeypatch.delenv("OPENAI_OAUTH_TOKEN", raising=False)
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        adapter = OpenClawAdapter()
+        monkeypatch.setattr(adapter, "_resolve_anthropic_credential", lambda: None)
+        adapter.store_shared_auth_token("codex_oauth", "tok.a.b")
+        cfg = SimpleNamespace(models=SimpleNamespace(
+            llm_provider="default",
+            deep_reasoning="gpt-5.4",
+            fast_reasoning="gpt-5.4-mini",
+            fast_reasoning_effort="none",
+            deep_reasoning_effort="high",
+            fast_reasoning_provider="default",
+            deep_reasoning_provider="default",
+            base_url="",
+        ))
+
+        with patch("config.get_config", return_value=cfg):
+            llm = adapter.get_llm_provider(model_tier="deep")
+
+        assert isinstance(llm, OpenAICodexOAuthLLMProvider)
+
+    def test_get_llm_provider_keeps_explicit_anthropic_failhard(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path / ".quaid"))
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        monkeypatch.delenv("OPENAI_OAUTH_TOKEN", raising=False)
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        adapter = OpenClawAdapter()
+        monkeypatch.setattr(adapter, "_resolve_anthropic_credential", lambda: None)
+        adapter.store_shared_auth_token("codex_oauth", "tok.a.b")
+        cfg = SimpleNamespace(models=SimpleNamespace(
+            llm_provider="anthropic",
+            deep_reasoning="claude-sonnet-4-5",
+            fast_reasoning="claude-haiku-4-5",
+            fast_reasoning_effort="none",
+            deep_reasoning_effort="high",
+            fast_reasoning_provider="default",
+            deep_reasoning_provider="default",
+            base_url="",
+        ))
+
+        with patch("config.get_config", return_value=cfg):
+            with pytest.raises(RuntimeError, match="no OpenClaw Anthropic token"):
+                adapter.get_llm_provider(model_tier="deep")
+
     def test_installer_review_model_pair_flags_unknown_gateway_provider(self, monkeypatch, tmp_path):
         home = tmp_path / "home"
         cfg_dir = home / ".openclaw"
