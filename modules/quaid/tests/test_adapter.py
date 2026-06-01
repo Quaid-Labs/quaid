@@ -1072,6 +1072,28 @@ class TestOpenClawAdapter:
             with pytest.raises(RuntimeError, match="no OpenClaw Anthropic token"):
                 adapter.get_llm_provider(model_tier="deep")
 
+    def test_get_llm_provider_keeps_explicit_anthropic_even_when_codex_oauth_exists(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path / ".quaid"))
+        monkeypatch.setenv("OPENAI_API_KEY", "tok.a.b")
+        monkeypatch.delenv("OPENAI_OAUTH_TOKEN", raising=False)
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        adapter = OpenClawAdapter()
+        monkeypatch.setattr(adapter, "_resolve_anthropic_credential", lambda: None)
+        cfg = SimpleNamespace(models=SimpleNamespace(
+            llm_provider="anthropic",
+            deep_reasoning="claude-sonnet-4-5",
+            fast_reasoning="claude-haiku-4-5",
+            fast_reasoning_effort="none",
+            deep_reasoning_effort="high",
+            fast_reasoning_provider="default",
+            deep_reasoning_provider="default",
+            base_url="",
+        ))
+
+        with patch("config.get_config", return_value=cfg):
+            with pytest.raises(RuntimeError, match="no OpenClaw Anthropic token"):
+                adapter.get_llm_provider(model_tier="deep")
+
     def test_installer_review_model_pair_flags_unknown_gateway_provider(self, monkeypatch, tmp_path):
         home = tmp_path / "home"
         cfg_dir = home / ".openclaw"
