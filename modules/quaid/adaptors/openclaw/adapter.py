@@ -814,23 +814,25 @@ class OpenClawAdapter(QuaidAdapter):
         deep_model = str(getattr(cfg.models, "deep_reasoning", "") or "").strip()
         fast_model = str(getattr(cfg.models, "fast_reasoning", "") or "").strip()
         provider = str(getattr(cfg.models, "llm_provider", "") or "").strip()
+        detected_provider = self._normalize_installer_provider(self._detect_gateway_primary_provider())
         provider_inferred = not provider or provider == "default"
         if not provider or provider == "default":
-            provider = self._normalize_installer_provider(
-                self._detect_gateway_primary_provider() or "anthropic"
-            )
+            provider = detected_provider or "anthropic"
         fast_effort = str(getattr(cfg.models, "fast_reasoning_effort", "") or "").strip()
         deep_effort = str(getattr(cfg.models, "deep_reasoning_effort", "") or "").strip()
+        provider_tier_overridden = False
         if model_tier == "fast":
             fast_provider = str(getattr(cfg.models, "fast_reasoning_provider", "") or "").strip()
             if fast_provider and fast_provider != "default":
                 provider = self._normalize_installer_provider(fast_provider)
                 provider_inferred = False
+                provider_tier_overridden = True
         elif model_tier == "deep":
             deep_provider = str(getattr(cfg.models, "deep_reasoning_provider", "") or "").strip()
             if deep_provider and deep_provider != "default":
                 provider = self._normalize_installer_provider(deep_provider)
                 provider_inferred = False
+                provider_tier_overridden = True
         if not deep_model or not fast_model:
             raise RuntimeError(
                 "LLM provider requires deepReasoning and fastReasoning to be set in config.json. "
@@ -838,9 +840,8 @@ class OpenClawAdapter(QuaidAdapter):
             )
         if (
             provider == "anthropic"
-            and provider_inferred
+            and (provider_inferred or (detected_provider == "openai" and not provider_tier_overridden))
             and not self.get_api_key("ANTHROPIC_API_KEY")
-            and self.get_api_key("OPENAI_API_KEY")
         ):
             provider = "openai"
         if provider == "openclaw-gateway":
