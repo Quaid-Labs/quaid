@@ -1131,6 +1131,45 @@ class TestOpenClawAdapter:
             llm = adapter.get_llm_provider(model_tier="deep")
 
         assert isinstance(llm, OpenAICodexOAuthLLMProvider)
+        assert llm._deep_model == "gpt-5.4"
+        assert llm._fast_model == "gpt-5.4-mini"
+
+    def test_get_llm_provider_keeps_openai_models_when_overriding_global_anthropic(self, monkeypatch, tmp_path):
+        home = tmp_path / "home"
+        cfg_dir = home / ".openclaw"
+        cfg_dir.mkdir(parents=True)
+        (cfg_dir / "openclaw.json").write_text(
+            json.dumps({
+                "agents": {
+                    "list": [{"id": "main", "default": True, "model": {"primary": "openai-codex/gpt-5.4"}}],
+                }
+            }),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(Path, "home", lambda: home)
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path / ".quaid"))
+        monkeypatch.setenv("OPENAI_API_KEY", "tok.a.b")
+        monkeypatch.delenv("OPENAI_OAUTH_TOKEN", raising=False)
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        adapter = OpenClawAdapter()
+        monkeypatch.setattr(adapter, "_resolve_anthropic_credential", lambda: None)
+        cfg = SimpleNamespace(models=SimpleNamespace(
+            llm_provider="anthropic",
+            deep_reasoning="gpt-5.4",
+            fast_reasoning="gpt-5.4-mini",
+            fast_reasoning_effort="none",
+            deep_reasoning_effort="high",
+            fast_reasoning_provider="default",
+            deep_reasoning_provider="default",
+            base_url="",
+        ))
+
+        with patch("config.get_config", return_value=cfg):
+            llm = adapter.get_llm_provider(model_tier="deep")
+
+        assert isinstance(llm, OpenAICodexOAuthLLMProvider)
+        assert llm._deep_model == "gpt-5.4"
+        assert llm._fast_model == "gpt-5.4-mini"
 
     def test_get_llm_provider_reports_missing_codex_when_oc_detects_codex_without_token(self, monkeypatch, tmp_path):
         home = tmp_path / "home"

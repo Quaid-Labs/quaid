@@ -844,6 +844,11 @@ class OpenClawAdapter(QuaidAdapter):
             and not self.get_api_key("ANTHROPIC_API_KEY")
         ):
             provider = "openai"
+            defaults = self.installer_default_models("openai") or {}
+            if deep_model.startswith("claude-") and defaults.get("deep"):
+                deep_model = str(defaults["deep"])
+            if fast_model.startswith("claude-") and defaults.get("fast"):
+                fast_model = str(defaults["fast"])
         if provider == "openclaw-gateway":
             return OpenClawGatewayLLMProvider()
         if provider == "anthropic":
