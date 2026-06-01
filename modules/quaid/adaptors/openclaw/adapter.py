@@ -842,6 +842,7 @@ class OpenClawAdapter(QuaidAdapter):
             provider == "anthropic"
             and (provider_inferred or (detected_provider == "openai" and not provider_tier_overridden))
             and not self.get_api_key("ANTHROPIC_API_KEY")
+            and (detected_provider == "openai" or self.get_api_key("OPENAI_API_KEY"))
         ):
             provider = "openai"
             defaults = self.installer_default_models("openai") or {}
