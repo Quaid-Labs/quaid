@@ -240,6 +240,7 @@ import os
 from pathlib import Path
 p = Path.home() / ".quaid" / "instances" / os.environ["QUAID_INSTANCE"] / "config.json"
 data = json.loads(p.read_text())
+data.pop("inactivity_timeout_minutes", None)
 data.setdefault("capture", {})["inactivity_timeout_minutes"] = 1
 p.write_text(json.dumps(data, indent=2) + "\n")
 PY'
@@ -263,6 +264,7 @@ import os
 from pathlib import Path
 p = Path.home() / ".quaid" / "instances" / os.environ["QUAID_INSTANCE"] / "config.json"
 data = json.loads(p.read_text())
+data.pop("inactivity_timeout_minutes", None)
 data.setdefault("capture", {})["inactivity_timeout_minutes"] = 60
 p.write_text(json.dumps(data, indent=2) + "\n")
 PY'
