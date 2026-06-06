@@ -393,8 +393,6 @@ def _requested_janitor_instances(request: Dict[str, object]) -> tuple[list[str],
             return [raw], []
         if raw in deleted:
             return [], [f"instance {raw} is deleted"]
-        if raw in all_instances:
-            return [], [f"instance {raw} is not eligible for janitor"]
         return [], [f"instance {raw} was not found"]
     return sorted(all_instances - deleted), []
 
