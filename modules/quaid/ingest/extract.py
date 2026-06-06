@@ -228,6 +228,65 @@ def _unsupported_date_anchor_reason(
     return None
 
 
+_EXPLICIT_YEAR_RE = re.compile(r"(?<!\d)(?:1[6-9]\d{2}|20\d{2}|21\d{2})(?!\d)")
+
+
+def _explicit_years_in_text(text: str) -> set[int]:
+    years: set[int] = set()
+    for match in _EXPLICIT_YEAR_RE.finditer(str(text or "")):
+        try:
+            years.add(int(match.group(0)))
+        except ValueError:
+            continue
+    return years
+
+
+def _occurred_years_for_fact(fact: Dict[str, Any]) -> set[int]:
+    years: set[int] = set()
+    for key in ("occurred_start", "occurred_end"):
+        normalized = _normalize_extracted_timestamp((fact or {}).get(key))
+        if not normalized:
+            continue
+        try:
+            parsed = datetime.fromisoformat(normalized.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        years.add(parsed.year)
+    return years
+
+
+def _strip_inconsistent_occurred_years(
+    fact: Dict[str, Any],
+    *,
+    result: Dict[str, Any],
+    label: str,
+    chunk_label: str,
+) -> Dict[str, Any]:
+    """Remove model-supplied occurrence bounds that contradict explicit years."""
+    text_years = _explicit_years_in_text(str((fact or {}).get("text") or ""))
+    if not text_years:
+        return fact
+    occurred_years = _occurred_years_for_fact(fact)
+    if not occurred_years or occurred_years.issubset(text_years):
+        return fact
+    cleaned = dict(fact)
+    cleaned.pop("occurred_start", None)
+    cleaned.pop("occurred_end", None)
+    result["unsupported_temporal_bounds_stripped"] = (
+        int(result.get("unsupported_temporal_bounds_stripped", 0) or 0) + 1
+    )
+    logger.warning(
+        "[extract] %s chunk %s: stripped occurred bounds with unsupported year(s) %s "
+        "from fact with explicit year(s) %s: %s",
+        label,
+        chunk_label,
+        sorted(occurred_years),
+        sorted(text_years),
+        str(cleaned.get("text") or "")[:240],
+    )
+    return cleaned
+
+
 def _filter_unsupported_specificity_facts(
     facts: List[Dict[str, Any]],
     *,
@@ -256,6 +315,12 @@ def _filter_unsupported_specificity_facts(
                 text,
             )
             continue
+        fact = _strip_inconsistent_occurred_years(
+            fact,
+            result=result,
+            label=label,
+            chunk_label=chunk_label,
+        )
         filtered.append(fact)
     if dropped:
         result["facts_skipped"] = int(result.get("facts_skipped", 0) or 0) + dropped

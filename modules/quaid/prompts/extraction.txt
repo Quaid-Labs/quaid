@@ -120,6 +120,7 @@ TEMPORAL PROVENANCE (per fact):
 - Do not emit `created_at` or `_source_timestamp`; runtime assigns record/source metadata outside the LLM response.
 - `occurred_start` and `occurred_end` are when the fact or event happened. Include them when the source text explicitly states a date, time, month, year, or bounded range for the event itself.
 - Do not copy the message timestamp into `occurred_start` or `occurred_end` unless the fact says the event happened at that message time.
+- If the source text states a calendar year for the event, `occurred_start` and `occurred_end` must use that same stated year. Do not replace a stated historical year with the transcript/message year.
 - For a stated month range, use the first and last calendar day. Example: "May 2023" -> `occurred_start: "2023-05-01"`, `occurred_end: "2023-05-31"`.
 - For a stated single day, set both `occurred_start` and `occurred_end` to that day.
 - Resolve relative event-time wording against the timestamp on the same transcript line when one is available. The transcript line timestamp is authoritative; do not use current wall-clock time, model context, unrelated memories, or dates from other transcript lines as the anchor.

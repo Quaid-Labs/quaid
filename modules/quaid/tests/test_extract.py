@@ -6618,6 +6618,72 @@ class TestUnsupportedSpecificityFilters:
         assert result["facts_skipped"] == 0
         assert result["unsupported_specificity_facts_dropped"] == 0
 
+    def test_strips_occurred_bounds_when_explicit_year_contradicts_model_date(self):
+        from ingest.extract import _filter_unsupported_specificity_facts
+
+        facts = [
+            {
+                "text": "Maya attended a leatherworking workshop in May 2023",
+                "category": "event",
+                "speaker": "user",
+                "extraction_confidence": "high",
+                "mentioned_at": "2026-06-06T09:00:00+00:00",
+                "occurred_start": "2026-06-01T00:00:00+00:00",
+                "occurred_end": "2026-06-30T23:59:59+00:00",
+            }
+        ]
+        result = {"facts_skipped": 0, "unsupported_specificity_facts_dropped": 0}
+
+        filtered = _filter_unsupported_specificity_facts(
+            facts,
+            transcript_text=(
+                "[2026-06-06T09:00:00+00:00] User: "
+                "Back in May 2023 I attended a leatherworking workshop."
+            ),
+            session_date_hint="2026-06-06T09:00:00+00:00",
+            result=result,
+            label="unit",
+            chunk_label="2",
+        )
+
+        assert len(filtered) == 1
+        assert filtered[0]["text"] == facts[0]["text"]
+        assert "occurred_start" not in filtered[0]
+        assert "occurred_end" not in filtered[0]
+        assert result["unsupported_temporal_bounds_stripped"] == 1
+        assert result["facts_skipped"] == 0
+
+    def test_keeps_generated_month_bounds_when_they_use_explicit_year(self):
+        from ingest.extract import _filter_unsupported_specificity_facts
+
+        facts = [
+            {
+                "text": "Maya attended a leatherworking workshop in May 2023",
+                "category": "event",
+                "speaker": "user",
+                "extraction_confidence": "high",
+                "mentioned_at": "2026-06-06T09:00:00+00:00",
+                "occurred_start": "2023-05-01",
+                "occurred_end": "2023-05-31",
+            }
+        ]
+        result = {"facts_skipped": 0, "unsupported_specificity_facts_dropped": 0}
+
+        filtered = _filter_unsupported_specificity_facts(
+            facts,
+            transcript_text=(
+                "[2026-06-06T09:00:00+00:00] User: "
+                "Back in May 2023 I attended a leatherworking workshop."
+            ),
+            session_date_hint="2026-06-06T09:00:00+00:00",
+            result=result,
+            label="unit",
+            chunk_label="3",
+        )
+
+        assert filtered == facts
+        assert result.get("unsupported_temporal_bounds_stripped", 0) == 0
+
     def test_non_iso_date_anchors_are_left_to_prompt_layer(self):
         from ingest.extract import _filter_unsupported_specificity_facts
 
@@ -6763,6 +6829,7 @@ class TestLoadPrompt:
         assert '"mentioned_at"' in prompt
         assert '"occurred_start"' in prompt
         assert "Do not copy the message timestamp into `occurred_start`" in prompt
+        assert "must use that same stated year" in prompt
         assert "Do not emit `created_at` or `_source_timestamp`" in prompt
         assert '"created_at": "optional ISO timestamp' not in prompt
         assert '"May 2023" -> `occurred_start: "2023-05-01"`' in prompt
