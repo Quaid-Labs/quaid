@@ -4898,6 +4898,8 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
 
     cursor_offset = int(cursor_data["line_offset"] or 0)
     cursor_transcript = cursor_data["transcript_path"]
+    cursor_processed_signal_type = str(cursor_data.get("processed_signal_type") or "").strip()
+    cursor_marks_processed_extraction = cursor_processed_signal_type in VALID_SIGNAL_TYPES
     reset_staged_state_for_full_reextract = False
 
     # Write a preliminary cursor entry before extraction begins so that
@@ -4977,6 +4979,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             _is_dir_relocation
             and signal_type == "session_end"
             and cursor_offset > 0
+            and cursor_marks_processed_extraction
             and _relocated_cursor_size_bytes
             and _relocated_current_size_bytes
             and _relocated_current_size_bytes < _relocated_cursor_size_bytes
@@ -5015,7 +5018,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                 "[%s] session %s: transcript path is reset backup of cursor path (%s -> %s), preserving cursor",
                 label, session_id, cursor_transcript, transcript_path,
             )
-        elif _is_reset_rename and cursor_offset > 0:
+        elif _is_reset_rename and cursor_offset > 0 and cursor_marks_processed_extraction:
             # Reset signal on a renamed backup, but content was already extracted
             # from the plain path (cursor_offset > 0). This is a late duplicate
             # signal — the backup contains the same content already consumed.

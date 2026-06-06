@@ -2671,12 +2671,237 @@ def test_process_signal_skips_smaller_preserved_relocation_already_consumed(
     finally:
         reset_adapter()
 
-    cursor = extraction_daemon.read_cursor(session_id, source_key=source_key)
+    preserved_source_key = extraction_daemon._signal_source_cursor_key(session_id, str(preserved_path))
+    cursor = extraction_daemon.read_cursor(session_id, source_key=preserved_source_key)
     assert cursor["line_offset"] == 2
     assert cursor["transcript_path"] == str(preserved_path)
     assert cursor["processed_signal_type"] == "session_end"
     assert extraction_daemon.read_pending_signals() == []
     assert extraction_daemon._rolling_state_path(session_id).exists()
+
+
+def test_process_signal_reset_backup_extracts_after_scan_only_cursor(
+    monkeypatch,
+    tmp_path,
+):
+    from lib.adapter import set_adapter, reset_adapter
+    from ingest import extract as extract_mod
+    from core import ingest_runtime
+    from core.runtime import notify as notify_mod
+
+    session_id = "cdde839e-1f02-4adc-a1ff-ocm2parta"
+    live_dir = tmp_path / ".openclaw" / "agents" / "main" / "sessions"
+    live_dir.mkdir(parents=True)
+    live_path = live_dir / f"{session_id}.jsonl"
+    backup_path = live_dir / f"{session_id}.jsonl.reset.20260606"
+    live_path.write_text(
+        "\n".join([
+            f'{{"type":"session","id":"{session_id}"}}',
+            '{"type":"message","message":{"role":"user","content":[{"type":"text","text":"Niseko chunk one should extract after reset."}]}}',
+            '{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"ACK"}]}}',
+            '{"type":"message","message":{"role":"user","content":[{"type":"text","text":"Aurora scarf marker."}]}}',
+            '{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"ACK"}]}}',
+            '{"type":"custom_message","customType":"openclaw.runtime-context","content":"context"}',
+            '{"type":"message","message":{"role":"user","content":[{"type":"text","text":"Final stable fact."}]}}',
+        ]) + "\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path / ".quaid"))
+    monkeypatch.setenv("QUAID_INSTANCE", "openclaw-main")
+    source_key = extraction_daemon._signal_source_cursor_key(session_id, str(live_path))
+    extraction_daemon.write_cursor(session_id, 7, str(live_path), source_key=source_key)
+    live_path.rename(backup_path)
+
+    captured = {}
+
+    class _Adapter(_OwnedTestAdapterMixin):
+        def instance_root(self):
+            return tmp_path / ".quaid" / "instances" / "openclaw-main"
+
+        def parse_session_jsonl(self, path):
+            captured["parsed_path"] = str(path)
+            return "User: Niseko chunk one should extract after reset.\nAssistant: ACK"
+
+        def is_subagent_session(self, session_id, transcript_path=None):
+            return False
+
+    set_adapter(_Adapter())
+    monkeypatch.setattr(extraction_daemon, "_get_owner_id", lambda: "owner-1")
+    monkeypatch.setattr(extraction_daemon, "_read_usage_totals", lambda: {})
+    monkeypatch.setattr(extraction_daemon, "_session_has_harvestable_subagents", lambda *args, **kwargs: False)
+    monkeypatch.setattr(extraction_daemon, "_warm_payload_embeddings", lambda _facts: {})
+    monkeypatch.setattr(notify_mod, "notify_memory_extraction", lambda **_kwargs: None)
+    monkeypatch.setattr(ingest_runtime, "run_session_logs_ingest", lambda **_kwargs: {"status": "indexed"})
+
+    def fake_extract_from_transcript(transcript, **kwargs):
+        captured["transcript"] = transcript
+        return {
+            "chunks_processed": 1,
+            "chunks_total": 1,
+            "unclassified_empty_payloads": 0,
+            "raw_facts": [{"text": "Niseko chunk one should extract after reset.", "category": "fact"}],
+            "facts": [],
+            "soul_snippets": {},
+            "journal_entries": {},
+            "project_logs": {},
+            "raw_snippets": {},
+            "raw_journal": {},
+            "raw_project_logs": {},
+            "carry_facts": [],
+        }
+
+    monkeypatch.setattr(extract_mod, "extract_from_transcript", fake_extract_from_transcript)
+    monkeypatch.setattr(
+        extract_mod,
+        "apply_extracted_payloads",
+        lambda *_args, **_kwargs: {
+            "facts_stored": 1,
+            "facts_skipped": 0,
+            "edges_created": 0,
+            "facts": [],
+            "snippets": {},
+            "journal": {},
+            "project_log_metrics": {},
+        },
+    )
+
+    try:
+        signal_path = extraction_daemon.write_signal(
+            signal_type="reset",
+            session_id=session_id,
+            transcript_path=str(backup_path),
+        )
+        signal_data = json.loads(signal_path.read_text(encoding="utf-8"))
+        signal_data["_signal_path"] = str(signal_path)
+
+        extraction_daemon.process_signal(signal_data)
+    finally:
+        reset_adapter()
+
+    assert captured["parsed_path"].endswith(".jsonl")
+    assert "Niseko chunk one" in captured["transcript"]
+    cursor = extraction_daemon.read_cursor(session_id, source_key=source_key)
+    assert cursor["line_offset"] == 7
+    assert cursor["transcript_path"] == str(backup_path)
+    assert cursor["processed_signal_type"] == "reset"
+
+
+def test_process_signal_smaller_preserved_relocation_extracts_after_scan_only_cursor(
+    monkeypatch,
+    tmp_path,
+):
+    from lib.adapter import set_adapter, reset_adapter
+    from ingest import extract as extract_mod
+    from core import ingest_runtime
+    from core.runtime import notify as notify_mod
+
+    session_id = "cdde839e-1f02-4adc-a1ff-ocm2partb"
+    live_dir = tmp_path / ".openclaw" / "agents" / "main" / "sessions"
+    preserved_dir = tmp_path / ".quaid" / "instances" / "openclaw-main" / "logs" / "quaid" / "sessions"
+    live_dir.mkdir(parents=True)
+    preserved_dir.mkdir(parents=True)
+    live_path = live_dir / f"{session_id}.jsonl"
+    preserved_path = preserved_dir / f"{session_id}.jsonl"
+    live_path.write_text(
+        "\n".join([
+            f'{{"type":"session","id":"{session_id}"}}',
+            '{"type":"message","message":{"role":"user","content":[{"type":"text","text":"Niseko scan-only cursor should not mark extraction complete."}]}}',
+            '{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"ACK"}]}}',
+            '{"type":"message","message":{"role":"user","content":[{"type":"text","text":"Aurora scarf marker."}]}}',
+            '{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"ACK"}]}}',
+            '{"type":"custom_message","customType":"openclaw.runtime-context","content":"context"}',
+            '{"type":"message","message":{"role":"user","content":[{"type":"text","text":"Final stable fact."}]}}',
+        ]) + "\n",
+        encoding="utf-8",
+    )
+    preserved_path.write_text(
+        "\n".join([
+            f'{{"type":"session","id":"{session_id}"}}',
+            '{"type":"message","message":{"role":"user","content":[{"type":"text","text":"Niseko scan-only cursor should not mark extraction complete."}]}}',
+        ]) + "\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path / ".quaid"))
+    monkeypatch.setenv("QUAID_INSTANCE", "openclaw-main")
+    source_key = extraction_daemon._signal_source_cursor_key(session_id, str(live_path))
+    extraction_daemon.write_cursor(session_id, 7, str(live_path), source_key=source_key)
+    live_path.unlink()
+
+    captured = {}
+
+    class _Adapter(_OwnedTestAdapterMixin):
+        def instance_root(self):
+            return tmp_path / ".quaid" / "instances" / "openclaw-main"
+
+        def parse_session_jsonl(self, path):
+            captured["parsed_path"] = str(path)
+            return "User: Niseko scan-only cursor should not mark extraction complete.\nAssistant: ACK"
+
+        def is_subagent_session(self, session_id, transcript_path=None):
+            return False
+
+    set_adapter(_Adapter())
+    monkeypatch.setattr(extraction_daemon, "_get_owner_id", lambda: "owner-1")
+    monkeypatch.setattr(extraction_daemon, "_read_usage_totals", lambda: {})
+    monkeypatch.setattr(extraction_daemon, "_session_has_harvestable_subagents", lambda *args, **kwargs: False)
+    monkeypatch.setattr(extraction_daemon, "_warm_payload_embeddings", lambda _facts: {})
+    monkeypatch.setattr(notify_mod, "notify_memory_extraction", lambda **_kwargs: None)
+    monkeypatch.setattr(ingest_runtime, "run_session_logs_ingest", lambda **_kwargs: {"status": "indexed"})
+
+    def fake_extract_from_transcript(transcript, **kwargs):
+        captured["transcript"] = transcript
+        return {
+            "chunks_processed": 1,
+            "chunks_total": 1,
+            "unclassified_empty_payloads": 0,
+            "raw_facts": [{"text": "Niseko scan-only cursor should not mark extraction complete.", "category": "fact"}],
+            "facts": [],
+            "soul_snippets": {},
+            "journal_entries": {},
+            "project_logs": {},
+            "raw_snippets": {},
+            "raw_journal": {},
+            "raw_project_logs": {},
+            "carry_facts": [],
+        }
+
+    monkeypatch.setattr(extract_mod, "extract_from_transcript", fake_extract_from_transcript)
+    monkeypatch.setattr(
+        extract_mod,
+        "apply_extracted_payloads",
+        lambda *_args, **_kwargs: {
+            "facts_stored": 1,
+            "facts_skipped": 0,
+            "edges_created": 0,
+            "facts": [],
+            "snippets": {},
+            "journal": {},
+            "project_log_metrics": {},
+        },
+    )
+
+    try:
+        signal_path = extraction_daemon.write_signal(
+            signal_type="session_end",
+            session_id=session_id,
+            transcript_path=str(preserved_path),
+        )
+        signal_data = json.loads(signal_path.read_text(encoding="utf-8"))
+        signal_data["_signal_path"] = str(signal_path)
+
+        extraction_daemon.process_signal(signal_data)
+    finally:
+        reset_adapter()
+
+    assert captured["parsed_path"].endswith(".jsonl")
+    assert "Niseko scan-only cursor" in captured["transcript"]
+    preserved_source_key = extraction_daemon._signal_source_cursor_key(session_id, str(preserved_path))
+    cursor = extraction_daemon.read_cursor(session_id, source_key=preserved_source_key)
+    assert cursor["line_offset"] == 2
+    assert cursor["transcript_path"] == str(preserved_path)
+    assert cursor["processed_signal_type"] == "session_end"
 
 
 def test_process_signal_skips_preserved_checkpoint_session_end_while_live_exists(
