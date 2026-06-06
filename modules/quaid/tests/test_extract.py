@@ -6746,6 +6746,37 @@ class TestUnsupportedSpecificityFilters:
         assert filtered == facts
         assert result.get("unsupported_temporal_bounds_stripped", 0) == 0
 
+    def test_keeps_full_session_month_event_with_incidental_past_year(self):
+        from ingest.extract import _filter_unsupported_specificity_facts
+
+        facts = [
+            {
+                "text": "Maya trained all of June for the 2023 marathon route",
+                "category": "event",
+                "speaker": "user",
+                "extraction_confidence": "high",
+                "mentioned_at": "2026-06-06T09:00:00+00:00",
+                "occurred_start": "2026-06-01",
+                "occurred_end": "2026-06-30",
+            }
+        ]
+        result = {"facts_skipped": 0, "unsupported_specificity_facts_dropped": 0}
+
+        filtered = _filter_unsupported_specificity_facts(
+            facts,
+            transcript_text=(
+                "[2026-06-06T09:00:00+00:00] User: "
+                "I trained all of June for the 2023 marathon route."
+            ),
+            session_date_hint="2026-06-06T09:00:00+00:00",
+            result=result,
+            label="unit",
+            chunk_label="6",
+        )
+
+        assert filtered == facts
+        assert result.get("unsupported_temporal_bounds_stripped", 0) == 0
+
     def test_keeps_occurrence_bounds_when_any_stated_year_matches(self):
         from ingest.extract import _filter_unsupported_specificity_facts
 

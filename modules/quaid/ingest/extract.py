@@ -291,6 +291,18 @@ def _fact_uses_session_month_range(fact: Dict[str, Any], session_dt: datetime) -
     )
 
 
+def _text_mentions_session_month(text: str, session_dt: datetime) -> bool:
+    month_terms = {
+        calendar.month_name[session_dt.month].lower(),
+        calendar.month_abbr[session_dt.month].lower(),
+    }
+    normalized = str(text or "").lower()
+    return any(
+        term and re.search(rf"(?<!\w){re.escape(term)}(?!\w)", normalized)
+        for term in month_terms
+    )
+
+
 def _strip_inconsistent_occurred_years(
     fact: Dict[str, Any],
     *,
@@ -312,6 +324,8 @@ def _strip_inconsistent_occurred_years(
     if occurred_years != {session_dt.year}:
         return fact
     if not _fact_uses_session_month_range(fact, session_dt):
+        return fact
+    if _text_mentions_session_month(str((fact or {}).get("text") or ""), session_dt):
         return fact
     cleaned = dict(fact)
     cleaned.pop("occurred_start", None)
