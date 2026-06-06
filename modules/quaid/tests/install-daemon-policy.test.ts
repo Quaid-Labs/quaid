@@ -331,6 +331,7 @@ describe("install daemon policy", () => {
     expect(setupText).toContain("plugins?.installRecords?.quaid?.installPath");
     expect(setupText).toContain("plugins?.installs?.quaid?.installPath");
     expect(setupText).toContain("parsed?.installRecords?.quaid?.installPath");
+    expect(setupText).toContain("installPathExists: !!(installPath ? fs.existsSync(installPath) : fs.existsSync(extensionDir))");
     expect(setupText).toContain("Avoid OpenClaw plugin");
     expect(setupText).not.toContain("const preUninstallList = pluginListHasQuaid();");
     expect(setupText).not.toContain('runCliWithTimeout(cli, ["plugins", "uninstall", "quaid", "--force"], 45_000)');

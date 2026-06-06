@@ -2938,7 +2938,7 @@ function _readOpenClawPluginState(options = {}) {
     pluginEnabled,
     memorySlotBound,
     installPath,
-    installPathExists: !!installPath && fs.existsSync(installPath),
+    installPathExists: !!(installPath ? fs.existsSync(installPath) : fs.existsSync(extensionDir)),
     pluginListCheckOk,
     pluginListed,
   };
