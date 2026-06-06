@@ -6684,6 +6684,99 @@ class TestUnsupportedSpecificityFilters:
         assert filtered == facts
         assert result.get("unsupported_temporal_bounds_stripped", 0) == 0
 
+    def test_keeps_session_year_event_when_text_year_is_product_descriptor(self):
+        from ingest.extract import _filter_unsupported_specificity_facts
+
+        facts = [
+            {
+                "text": "Maya's 2015 Honda broke down yesterday",
+                "category": "event",
+                "speaker": "user",
+                "extraction_confidence": "high",
+                "mentioned_at": "2026-06-06T09:00:00+00:00",
+                "occurred_start": "2026-06-05",
+                "occurred_end": "2026-06-05",
+            }
+        ]
+        result = {"facts_skipped": 0, "unsupported_specificity_facts_dropped": 0}
+
+        filtered = _filter_unsupported_specificity_facts(
+            facts,
+            transcript_text=(
+                "[2026-06-06T09:00:00+00:00] User: "
+                "My 2015 Honda broke down yesterday."
+            ),
+            session_date_hint="2026-06-06T09:00:00+00:00",
+            result=result,
+            label="unit",
+            chunk_label="4",
+        )
+
+        assert filtered == facts
+        assert result.get("unsupported_temporal_bounds_stripped", 0) == 0
+
+    def test_keeps_session_year_event_when_text_year_is_biographical_context(self):
+        from ingest.extract import _filter_unsupported_specificity_facts
+
+        facts = [
+            {
+                "text": "Maya, born in 1985, got married last week",
+                "category": "event",
+                "speaker": "user",
+                "extraction_confidence": "high",
+                "mentioned_at": "2026-06-06T09:00:00+00:00",
+                "occurred_start": "2026-06-01",
+                "occurred_end": "2026-06-07",
+            }
+        ]
+        result = {"facts_skipped": 0, "unsupported_specificity_facts_dropped": 0}
+
+        filtered = _filter_unsupported_specificity_facts(
+            facts,
+            transcript_text=(
+                "[2026-06-06T09:00:00+00:00] User: "
+                "I was born in 1985 and got married last week."
+            ),
+            session_date_hint="2026-06-06T09:00:00+00:00",
+            result=result,
+            label="unit",
+            chunk_label="5",
+        )
+
+        assert filtered == facts
+        assert result.get("unsupported_temporal_bounds_stripped", 0) == 0
+
+    def test_keeps_occurrence_bounds_when_any_stated_year_matches(self):
+        from ingest.extract import _filter_unsupported_specificity_facts
+
+        facts = [
+            {
+                "text": "Maya compared the 2023 workshop with the 2024 workshop",
+                "category": "event",
+                "speaker": "user",
+                "extraction_confidence": "high",
+                "mentioned_at": "2026-06-06T09:00:00+00:00",
+                "occurred_start": "2024-05-01",
+                "occurred_end": "2024-05-31",
+            }
+        ]
+        result = {"facts_skipped": 0, "unsupported_specificity_facts_dropped": 0}
+
+        filtered = _filter_unsupported_specificity_facts(
+            facts,
+            transcript_text=(
+                "[2026-06-06T09:00:00+00:00] User: "
+                "I compared the 2023 workshop with the 2024 workshop."
+            ),
+            session_date_hint="2026-06-06T09:00:00+00:00",
+            result=result,
+            label="unit",
+            chunk_label="6",
+        )
+
+        assert filtered == facts
+        assert result.get("unsupported_temporal_bounds_stripped", 0) == 0
+
     def test_non_iso_date_anchors_are_left_to_prompt_layer(self):
         from ingest.extract import _filter_unsupported_specificity_facts
 
@@ -6830,6 +6923,7 @@ class TestLoadPrompt:
         assert '"occurred_start"' in prompt
         assert "Do not copy the message timestamp into `occurred_start`" in prompt
         assert "must use that same stated year" in prompt
+        assert "product/model years" in prompt
         assert "Do not emit `created_at` or `_source_timestamp`" in prompt
         assert '"created_at": "optional ISO timestamp' not in prompt
         assert '"May 2023" -> `occurred_start: "2023-05-01"`' in prompt

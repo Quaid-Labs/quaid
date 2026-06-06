@@ -17,6 +17,7 @@ Usage:
 """
 
 import argparse
+import calendar
 import concurrent.futures
 import hashlib
 import json
@@ -241,8 +242,8 @@ def _explicit_years_in_text(text: str) -> set[int]:
     return years
 
 
-def _occurred_years_for_fact(fact: Dict[str, Any]) -> set[int]:
-    years: set[int] = set()
+def _occurred_datetimes_for_fact(fact: Dict[str, Any]) -> List[datetime]:
+    dates: List[datetime] = []
     for key in ("occurred_start", "occurred_end"):
         normalized = _normalize_extracted_timestamp((fact or {}).get(key))
         if not normalized:
@@ -251,23 +252,66 @@ def _occurred_years_for_fact(fact: Dict[str, Any]) -> set[int]:
             parsed = datetime.fromisoformat(normalized.replace("Z", "+00:00"))
         except ValueError:
             continue
-        years.add(parsed.year)
-    return years
+        dates.append(parsed)
+    return dates
+
+
+def _occurred_years_for_fact(fact: Dict[str, Any]) -> set[int]:
+    return {parsed.year for parsed in _occurred_datetimes_for_fact(fact)}
+
+
+def _session_datetime_hint(session_date_hint: Optional[str]) -> Optional[datetime]:
+    normalized = _normalize_extracted_timestamp(session_date_hint)
+    if not normalized:
+        return None
+    try:
+        return datetime.fromisoformat(normalized.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _fact_uses_session_month_range(fact: Dict[str, Any], session_dt: datetime) -> bool:
+    start_raw = _normalize_extracted_timestamp((fact or {}).get("occurred_start"))
+    end_raw = _normalize_extracted_timestamp((fact or {}).get("occurred_end"))
+    if not start_raw or not end_raw:
+        return False
+    try:
+        start_dt = datetime.fromisoformat(start_raw.replace("Z", "+00:00"))
+        end_dt = datetime.fromisoformat(end_raw.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    last_day = calendar.monthrange(session_dt.year, session_dt.month)[1]
+    return (
+        start_dt.year == session_dt.year
+        and start_dt.month == session_dt.month
+        and start_dt.day == 1
+        and end_dt.year == session_dt.year
+        and end_dt.month == session_dt.month
+        and end_dt.day == last_day
+    )
 
 
 def _strip_inconsistent_occurred_years(
     fact: Dict[str, Any],
     *,
+    session_date_hint: Optional[str],
     result: Dict[str, Any],
     label: str,
     chunk_label: str,
 ) -> Dict[str, Any]:
-    """Remove model-supplied occurrence bounds that contradict explicit years."""
+    """Remove model month bounds that substituted the transcript year."""
     text_years = _explicit_years_in_text(str((fact or {}).get("text") or ""))
     if not text_years:
         return fact
+    session_dt = _session_datetime_hint(session_date_hint)
+    if session_dt is None:
+        return fact
     occurred_years = _occurred_years_for_fact(fact)
     if not occurred_years or occurred_years.issubset(text_years):
+        return fact
+    if occurred_years != {session_dt.year}:
+        return fact
+    if not _fact_uses_session_month_range(fact, session_dt):
         return fact
     cleaned = dict(fact)
     cleaned.pop("occurred_start", None)
@@ -317,6 +361,7 @@ def _filter_unsupported_specificity_facts(
             continue
         fact = _strip_inconsistent_occurred_years(
             fact,
+            session_date_hint=session_date_hint,
             result=result,
             label=label,
             chunk_label=chunk_label,
