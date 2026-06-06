@@ -452,21 +452,7 @@ def _format_project_docs_scope_hint(docs_bundle: Dict) -> str:
     if not candidates:
         return ""
 
-    lines = [
-        "[Quaid Project Discovery]",
-        str(hint.get("message") or "").strip()
-        or (
-            "Likely unlinked project candidates were found. For read-only one-fact lookups, "
-            "use scoped docs recall or read candidate files directly without linking."
-        ),
-    ]
-    requested = str(hint.get("requested_project") or "").strip()
-    if requested:
-        lines.append(f"requested_project: {requested}")
-    linked = [str(name or "").strip() for name in list(hint.get("linked_projects") or []) if str(name or "").strip()]
-    if linked:
-        lines.append(f"currently_linked_projects: {', '.join(linked)}")
-    lines.append("candidate_projects:")
+    candidate_lines: List[str] = []
     for candidate in candidates[:3]:
         project = str(candidate.get("project") or "").strip()
         path = str(candidate.get("path") or "").strip()
@@ -478,7 +464,23 @@ def _format_project_docs_scope_hint(docs_bundle: Dict) -> str:
             score_text = ""
         path_text = f" path={path}" if path else ""
         if project or path_text:
-            lines.append(f"- {project or '(unknown)'}{path_text}{score_text}")
+            candidate_lines.append(f"- {project or '(unknown)'}{path_text}{score_text}")
+    if not candidate_lines:
+        return ""
+
+    lines = [
+        "[Quaid Project Discovery]",
+        "Likely unlinked project candidates were found. For read-only one-fact lookups, "
+        "use scoped docs recall or read candidate files directly without linking.",
+    ]
+    requested = str(hint.get("requested_project") or "").strip()
+    if requested:
+        lines.append(f"requested_project: {requested}")
+    linked = [str(name or "").strip() for name in list(hint.get("linked_projects") or []) if str(name or "").strip()]
+    if linked:
+        lines.append(f"currently_linked_projects: {', '.join(linked)}")
+    lines.append("candidate_projects:")
+    lines.extend(candidate_lines)
     lines.append(
         "For this turn: do not run `quaid project link` unless the user asks to link or requests durable project work."
     )

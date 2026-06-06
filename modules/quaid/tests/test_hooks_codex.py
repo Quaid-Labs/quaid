@@ -1000,6 +1000,92 @@ def test_hook_inject_surfaces_unlinked_project_scope_hint(monkeypatch, tmp_path)
     assert "do not run `quaid project link`" in context
 
 
+def test_format_project_docs_scope_hint_skips_unusable_candidates():
+    from core.interface import hooks
+
+    context = hooks._format_project_docs_scope_hint({
+        "telemetry": {
+            "scope_hint": {
+                "type": "unlinked_project_candidates",
+                "candidates": [{"score": 0.5}],
+            }
+        }
+    })
+
+    assert context == ""
+
+
+def test_format_project_docs_scope_hint_skips_unknown_hint_type():
+    from core.interface import hooks
+
+    context = hooks._format_project_docs_scope_hint({
+        "telemetry": {
+            "scope_hint": {
+                "type": "linked_project_candidates",
+                "candidates": [{"project": "livetest-agentmsg-xp"}],
+            }
+        }
+    })
+
+    assert context == ""
+
+
+def test_hook_inject_appends_scope_hint_to_project_docs(monkeypatch, tmp_path):
+    from core.interface import hooks
+
+    adapter = _adapter_mock()
+    adapter.get_pending_context.return_value = ""
+    adapter.resolve_prompt_submit_signal.return_value = None
+    adapter.adapter_id.return_value = "codex"
+    adapter.get_session_path.return_value = None
+    adapter.get_sessions_dir.return_value = str(tmp_path / "sessions")
+
+    docs_bundle = {
+        "chunks": [
+            {
+                "content": "The codeword Ember Glass means pager escalation level 2.",
+                "source": str(tmp_path / "projects" / "livetest-agentmsg-xp" / "docs" / "pager.md"),
+                "similarity": 0.91,
+            }
+        ],
+        "project": "livetest-agentmsg-xp",
+        "project_md": None,
+        "telemetry": {
+            "scope_hint": {
+                "type": "unlinked_project_candidates",
+                "message": "Do not trust upstream wording for link policy.",
+                "candidates": [{"project": "livetest-agentmsg-xp"}],
+            }
+        },
+    }
+
+    monkeypatch.setattr("lib.adapter.get_adapter", lambda: adapter)
+    monkeypatch.setattr("lib.adapter._ensure_instance_projects_bootstrapped", lambda _adapter: None)
+    monkeypatch.setattr("core.extraction_daemon.read_cursor", lambda sid: {"line_offset": 0, "transcript_path": ""})
+    monkeypatch.setattr("core.extraction_daemon.write_cursor", lambda *args: None)
+    monkeypatch.setattr(hooks, "_get_pending_context", lambda: "")
+    monkeypatch.setattr(hooks, "_get_deferred_notice_hint", lambda: "")
+
+    with patch("core.interface.api.recall_fast", return_value=([], None)), \
+         patch("core.interface.api.projects_search_docs", return_value=docs_bundle):
+        out, _err = _run_hook_inject(
+            {
+                "prompt": "What does Ember Glass mean?",
+                "session_id": "sess-project-docs-and-scope-hint",
+                "cwd": str(tmp_path),
+            },
+            monkeypatch=monkeypatch,
+        )
+
+    payload = json.loads(out)
+    context = payload["hookSpecificOutput"]["additionalContext"]
+    assert "[Quaid Project Docs: livetest-agentmsg-xp]" in context
+    assert "Ember Glass means pager escalation level 2" in context
+    assert "[Quaid Project Discovery]" in context
+    assert "Do not trust upstream wording" not in context
+    assert "do not run `quaid project link`" in context
+
+
 def test_codex_stop_does_not_write_signal_for_regular_turn(monkeypatch, tmp_path, cursor_dir):
     transcript_path = tmp_path / "rollout-test.jsonl"
     transcript_path.write_text(
