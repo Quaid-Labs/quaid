@@ -5129,16 +5129,17 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             )
         elif _is_dir_relocation:
             # Reset signal on a relocated transcript. Two sub-cases:
-            # (a) cursor_offset == 0: content not yet extracted — reset and extract
+            # (a) cursor_offset == 0 or scan-only cursor: content not yet extracted — reset and extract
             #     the full content from the relocated file (M10 scenario: first
-            #     signal for this session arrives via the relocated path).
-            # (b) cursor_offset > 0: content already extracted in a prior pass
-            #     (M2 scenario: duplicate reset signal after relocation). The
-            #     relocated file has identical content; preserve cursor to avoid
-            #     re-extracting and storing duplicate facts.
-            if cursor_offset == 0:
+            #     signal for this session arrives via the relocated path; OC
+            #     rolling scans may also have advanced to EOF without extracting).
+            # (b) cursor_offset > 0 with processed_signal_type: content already
+            #     extracted in a prior pass (M2 scenario: duplicate reset signal
+            #     after relocation). The relocated file has identical content;
+            #     preserve cursor to avoid re-extracting duplicate facts.
+            if cursor_offset == 0 or not cursor_marks_processed_extraction:
                 logger.info(
-                    "[%s] session %s: reset signal on relocated transcript, no prior extraction (%s -> %s), resetting cursor for full extraction",
+                    "[%s] session %s: reset signal on relocated transcript, no prior extraction marker (%s -> %s), resetting cursor for full extraction",
                     label, session_id, cursor_transcript, transcript_path,
                 )
                 cursor_offset = 0

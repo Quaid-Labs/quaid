@@ -2904,6 +2904,112 @@ def test_process_signal_smaller_preserved_relocation_extracts_after_scan_only_cu
     assert cursor["processed_signal_type"] == "session_end"
 
 
+def test_process_signal_reset_relocated_transcript_extracts_after_scan_only_cursor(
+    monkeypatch,
+    tmp_path,
+):
+    from lib.adapter import set_adapter, reset_adapter
+    from ingest import extract as extract_mod
+    from core import ingest_runtime
+    from core.runtime import notify as notify_mod
+
+    session_id = "cdde839e-1f02-4adc-a1ff-ocm2partc"
+    live_dir = tmp_path / ".openclaw" / "agents" / "main" / "sessions"
+    relocated_dir = tmp_path / ".quaid" / "instances" / "openclaw-main" / "logs" / "quaid" / "sessions"
+    live_dir.mkdir(parents=True)
+    relocated_dir.mkdir(parents=True)
+    live_path = live_dir / f"{session_id}.jsonl"
+    relocated_path = relocated_dir / f"{session_id}.jsonl"
+    transcript_lines = [
+        f'{{"type":"session","id":"{session_id}"}}',
+        '{"type":"message","message":{"role":"user","content":[{"type":"text","text":"Relocated reset scan-only cursor must extract."}]}}',
+        '{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"ACK"}]}}',
+    ]
+    transcript_body = "\n".join(transcript_lines) + "\n"
+    live_path.write_text(transcript_body, encoding="utf-8")
+    relocated_path.write_text(transcript_body, encoding="utf-8")
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path / ".quaid"))
+    monkeypatch.setenv("QUAID_INSTANCE", "openclaw-main")
+    source_key = extraction_daemon._signal_source_cursor_key(session_id, str(live_path))
+    extraction_daemon.write_cursor(session_id, 3, str(live_path), source_key=source_key)
+    live_path.unlink()
+
+    captured = {}
+
+    class _Adapter(_OwnedTestAdapterMixin):
+        def instance_root(self):
+            return tmp_path / ".quaid" / "instances" / "openclaw-main"
+
+        def parse_session_jsonl(self, path):
+            captured["parsed_path"] = str(path)
+            return "User: Relocated reset scan-only cursor must extract.\nAssistant: ACK"
+
+        def is_subagent_session(self, session_id, transcript_path=None):
+            return False
+
+    set_adapter(_Adapter())
+    monkeypatch.setattr(extraction_daemon, "_get_owner_id", lambda: "owner-1")
+    monkeypatch.setattr(extraction_daemon, "_read_usage_totals", lambda: {})
+    monkeypatch.setattr(extraction_daemon, "_session_has_harvestable_subagents", lambda *args, **kwargs: False)
+    monkeypatch.setattr(extraction_daemon, "_warm_payload_embeddings", lambda _facts: {})
+    monkeypatch.setattr(notify_mod, "notify_memory_extraction", lambda **_kwargs: None)
+    monkeypatch.setattr(ingest_runtime, "run_session_logs_ingest", lambda **_kwargs: {"status": "indexed"})
+
+    def fake_extract_from_transcript(transcript, **kwargs):
+        captured["transcript"] = transcript
+        return {
+            "chunks_processed": 1,
+            "chunks_total": 1,
+            "unclassified_empty_payloads": 0,
+            "raw_facts": [{"text": "Relocated reset scan-only cursor must extract.", "category": "fact"}],
+            "facts": [],
+            "soul_snippets": {},
+            "journal_entries": {},
+            "project_logs": {},
+            "raw_snippets": {},
+            "raw_journal": {},
+            "raw_project_logs": {},
+            "carry_facts": [],
+        }
+
+    monkeypatch.setattr(extract_mod, "extract_from_transcript", fake_extract_from_transcript)
+    monkeypatch.setattr(
+        extract_mod,
+        "apply_extracted_payloads",
+        lambda *_args, **_kwargs: {
+            "facts_stored": 1,
+            "facts_skipped": 0,
+            "edges_created": 0,
+            "facts": [],
+            "snippets": {},
+            "journal": {},
+            "project_log_metrics": {},
+        },
+    )
+
+    try:
+        signal_path = extraction_daemon.write_signal(
+            signal_type="reset",
+            session_id=session_id,
+            transcript_path=str(relocated_path),
+        )
+        signal_data = json.loads(signal_path.read_text(encoding="utf-8"))
+        signal_data["_signal_path"] = str(signal_path)
+
+        extraction_daemon.process_signal(signal_data)
+    finally:
+        reset_adapter()
+
+    assert captured["parsed_path"].endswith(".jsonl")
+    assert "Relocated reset scan-only cursor" in captured["transcript"]
+    relocated_source_key = extraction_daemon._signal_source_cursor_key(session_id, str(relocated_path))
+    cursor = extraction_daemon.read_cursor(session_id, source_key=relocated_source_key)
+    assert cursor["line_offset"] == 3
+    assert cursor["transcript_path"] == str(relocated_path)
+    assert cursor["processed_signal_type"] == "reset"
+
+
 def test_process_signal_skips_preserved_checkpoint_session_end_while_live_exists(
     monkeypatch,
     tmp_path,
