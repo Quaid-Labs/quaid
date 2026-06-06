@@ -195,6 +195,7 @@ _candidate_is_placeholder() {
         "Improve this code"*|\
         "Improve documentation in @filename"*|\
         "Review this code"*|\
+        "Run /review on my current changes"*|\
         "Explain this file"*|\
         "new task?"*|\
         "/clear to save"*)
