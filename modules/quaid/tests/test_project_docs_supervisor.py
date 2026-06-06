@@ -329,6 +329,32 @@ def test_supervisor_stops_stale_internal_path_derived_instance_monitor(monkeypat
     assert known == {}
 
 
+def test_supervisor_stops_disabled_configured_internal_path_derived_instance_monitor(monkeypatch, tmp_path):
+    from core import project_docs_supervisor as supervisor
+    from lib.instance import internal_path_derived_instance_ids
+
+    stopped = []
+    internal_instance = next(
+        name
+        for name in internal_path_derived_instance_ids(tmp_path)
+        if name.startswith("claude-code-") and name.endswith("-plugins-quaid")
+    )
+    (tmp_path / "instances" / internal_instance).mkdir(parents=True)
+    (tmp_path / "instances" / internal_instance / "config.json").write_text("{}")
+    known = {internal_instance: 222}
+
+    monkeypatch.setattr(supervisor, "quaid_home", lambda: tmp_path)
+    monkeypatch.setattr(supervisor, "list_instances", lambda: [])
+    monkeypatch.setattr(supervisor, "_instance_misc_project_deleted", lambda _name: False)
+    monkeypatch.setattr(supervisor.project_docs, "is_instance_monitor_disabled", lambda _name: True)
+    monkeypatch.setattr(supervisor, "_stop_instance_monitor", lambda name: stopped.append(name) or True)
+
+    supervisor._maintain_instance_monitors(known)
+
+    assert stopped == [internal_instance]
+    assert known == {}
+
+
 def test_supervisor_stops_disabled_instance_monitor(monkeypatch):
     from core import project_docs_supervisor as supervisor
 
@@ -891,6 +917,37 @@ def test_janitor_worker_throttles_per_instance(monkeypatch):
 
     assert starts == ["alpha"]
     assert "alpha" in workers
+
+
+def test_janitor_worker_includes_configured_internal_path_derived_instance(monkeypatch, tmp_path):
+    from core import project_docs_supervisor as supervisor
+    from lib.instance import internal_path_derived_instance_ids
+
+    starts = []
+    internal_instance = next(
+        name
+        for name in internal_path_derived_instance_ids(tmp_path)
+        if name.startswith("codex-") and name.endswith("-plugins-quaid")
+    )
+    (tmp_path / "instances" / internal_instance).mkdir(parents=True)
+    (tmp_path / "instances" / internal_instance / "config.json").write_text("{}")
+
+    class _RunningProc:
+        def poll(self):
+            return None
+
+    monkeypatch.setattr(supervisor, "quaid_home", lambda: tmp_path)
+    monkeypatch.setattr(supervisor, "list_instances", lambda: [])
+    monkeypatch.setattr(supervisor, "_instance_misc_project_deleted", lambda _name: False)
+    monkeypatch.setattr(supervisor.project_docs, "is_instance_monitor_disabled", lambda _name: False)
+    monkeypatch.setattr(supervisor, "_start_janitor_worker", lambda name: starts.append(name) or _RunningProc())
+
+    workers: dict[str, subprocess.Popen] = {}
+    checks: dict[str, float] = {}
+    supervisor._maintain_janitor_workers(workers, checks, now=100.0, check_interval=10.0)
+
+    assert starts == [internal_instance]
+    assert set(workers) == {internal_instance}
 
 
 def test_supervisor_stops_deleted_misc_janitor_worker(monkeypatch, tmp_path):
