@@ -380,7 +380,7 @@ def _spawn_janitor_worker(instance: str, *, command: str) -> subprocess.Popen:
 
 
 def _requested_janitor_instances(request: Dict[str, object]) -> tuple[list[str], list[str]]:
-    all_instances = set(list_instances())
+    all_instances = set(list_instances()) | _internal_path_derived_instances_on_disk()
     deleted = {
         instance
         for instance in all_instances

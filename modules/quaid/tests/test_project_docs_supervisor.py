@@ -734,6 +734,49 @@ def test_requested_janitor_run_completes_single_instance(monkeypatch, tmp_path):
     assert payload["exit_codes"] == {"beta": 0}
 
 
+def test_requested_janitor_run_accepts_configured_internal_path_derived_instance(monkeypatch, tmp_path):
+    from core import project_docs, project_docs_supervisor as supervisor
+
+    starts = []
+    internal_instance = "codex-users-admin-quaid-plugins-quaid"
+    (tmp_path / "instances" / internal_instance).mkdir(parents=True)
+    (tmp_path / "instances" / internal_instance / "config.json").write_text("{}")
+
+    class _DoneProc:
+        def __init__(self, pid):
+            self.pid = pid
+
+        def poll(self):
+            return 0
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setattr(supervisor, "quaid_home", lambda: tmp_path)
+    monkeypatch.setattr(supervisor, "list_instances", lambda: [])
+    monkeypatch.setattr(supervisor, "internal_path_derived_instance_ids", lambda _home: {internal_instance})
+    monkeypatch.setattr(supervisor, "_instance_misc_project_deleted", lambda _name: False)
+    monkeypatch.setattr(supervisor.project_docs, "is_instance_monitor_disabled", lambda _name: False)
+    monkeypatch.setattr(supervisor.project_docs, "reap_child_processes", lambda: 0)
+    _write_janitor_checkpoint(tmp_path, internal_instance)
+    monkeypatch.setattr(
+        supervisor,
+        "_spawn_janitor_worker",
+        lambda name, *, command: starts.append((name, command)) or _DoneProc(321),
+    )
+
+    request = project_docs.request_janitor_run(instance=internal_instance, reason="pytest", requested_by="pytest")
+    workers: dict[str, subprocess.Popen] = {}
+    active = supervisor._maintain_on_demand_janitor_request(None, {}, workers)
+    active = supervisor._maintain_on_demand_janitor_request(active, {}, workers)
+
+    assert active is None
+    assert starts == [(internal_instance, "run-all-once")]
+    payload = project_docs.read_janitor_request()
+    assert payload["request_id"] == request["request_id"]
+    assert payload["status"] == "completed"
+    assert payload["instances"] == [internal_instance]
+    assert payload["exit_codes"] == {internal_instance: 0}
+
+
 def test_requested_janitor_run_accumulates_exit_codes_across_polls(monkeypatch, tmp_path):
     from core import project_docs, project_docs_supervisor as supervisor
 
