@@ -192,13 +192,13 @@ def _instance_misc_project_deleted(instance: str) -> bool:
 
 
 def _live_instances_for_supervisor() -> tuple[set[str], set[str]]:
-    all_instances = set(list_instances())
+    configured_path_derived = _internal_path_derived_instances_on_disk()
+    all_instances = set(list_instances()) | configured_path_derived
     inactive = {
         instance
         for instance in all_instances
         if _instance_misc_project_deleted(instance) or project_docs.is_instance_monitor_disabled(instance)
     }
-    inactive.update(_internal_path_derived_instances_on_disk())
     return all_instances - inactive, inactive
 
 

@@ -275,7 +275,7 @@ def test_supervisor_stops_deleted_misc_instance_monitor(monkeypatch, tmp_path):
     assert known == {"claude-code-live": 111}
 
 
-def test_supervisor_stops_internal_path_derived_instance_monitor(monkeypatch, tmp_path):
+def test_supervisor_preserves_configured_internal_path_derived_instance_monitor(monkeypatch, tmp_path):
     from core import project_docs_supervisor as supervisor
     from lib.instance import internal_path_derived_instance_ids
 
@@ -288,7 +288,7 @@ def test_supervisor_stops_internal_path_derived_instance_monitor(monkeypatch, tm
     )
     (tmp_path / "instances" / internal_instance).mkdir(parents=True)
     (tmp_path / "instances" / internal_instance / "config.json").write_text("{}")
-    known = {internal_instance: 222}
+    known = {}
 
     monkeypatch.setattr(supervisor, "quaid_home", lambda: tmp_path)
     monkeypatch.setattr(supervisor, "list_instances", lambda: ["claude-code-live"])
@@ -300,9 +300,33 @@ def test_supervisor_stops_internal_path_derived_instance_monitor(monkeypatch, tm
 
     supervisor._maintain_instance_monitors(known)
 
+    assert stopped == []
+    assert started == ["claude-code-live", internal_instance]
+    assert known == {"claude-code-live": 111, internal_instance: 111}
+
+
+def test_supervisor_stops_stale_internal_path_derived_instance_monitor(monkeypatch, tmp_path):
+    from core import project_docs_supervisor as supervisor
+    from lib.instance import internal_path_derived_instance_ids
+
+    stopped = []
+    internal_instance = next(
+        name
+        for name in internal_path_derived_instance_ids(tmp_path)
+        if name.startswith("claude-code-") and name.endswith("-plugins-quaid")
+    )
+    known = {internal_instance: 222}
+
+    monkeypatch.setattr(supervisor, "quaid_home", lambda: tmp_path)
+    monkeypatch.setattr(supervisor, "list_instances", lambda: [])
+    monkeypatch.setattr(supervisor, "_instance_misc_project_deleted", lambda _name: False)
+    monkeypatch.setattr(supervisor.project_docs, "is_instance_monitor_disabled", lambda _name: False)
+    monkeypatch.setattr(supervisor, "_stop_instance_monitor", lambda name: stopped.append(name) or True)
+
+    supervisor._maintain_instance_monitors(known)
+
     assert stopped == [internal_instance]
-    assert started == ["claude-code-live"]
-    assert known == {"claude-code-live": 111}
+    assert known == {}
 
 
 def test_supervisor_stops_disabled_instance_monitor(monkeypatch):
