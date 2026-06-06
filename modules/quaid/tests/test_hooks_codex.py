@@ -938,6 +938,68 @@ def test_hook_inject_skips_project_list_hint_when_names_only_used(monkeypatch, t
     assert out.strip() == ""
 
 
+def test_hook_inject_surfaces_unlinked_project_scope_hint(monkeypatch, tmp_path):
+    from core.interface import hooks
+
+    adapter = _adapter_mock()
+    adapter.get_pending_context.return_value = ""
+    adapter.resolve_prompt_submit_signal.return_value = None
+    adapter.adapter_id.return_value = "codex"
+    adapter.get_session_path.return_value = None
+    adapter.get_sessions_dir.return_value = str(tmp_path / "sessions")
+
+    project_path = tmp_path / "projects" / "livetest-agentmsg-xp"
+    docs_bundle = {
+        "chunks": [],
+        "project": None,
+        "project_md": None,
+        "telemetry": {
+            "scope_hint": {
+                "type": "unlinked_project_candidates",
+                "message": (
+                    "No docs matched inside currently linked projects. "
+                    "Likely unlinked project candidates were found."
+                ),
+                "requested_project": None,
+                "linked_projects": ["quaid"],
+                "candidates": [
+                    {
+                        "project": "livetest-agentmsg-xp",
+                        "path": str(project_path),
+                        "score": 0.91,
+                    }
+                ],
+            }
+        },
+    }
+
+    monkeypatch.setattr("lib.adapter.get_adapter", lambda: adapter)
+    monkeypatch.setattr("lib.adapter._ensure_instance_projects_bootstrapped", lambda _adapter: None)
+    monkeypatch.setattr("core.extraction_daemon.read_cursor", lambda sid: {"line_offset": 0, "transcript_path": ""})
+    monkeypatch.setattr("core.extraction_daemon.write_cursor", lambda *args: None)
+    monkeypatch.setattr(hooks, "_get_pending_context", lambda: "")
+    monkeypatch.setattr(hooks, "_get_deferred_notice_hint", lambda: "")
+
+    with patch("core.interface.api.recall_fast", return_value=([], None)), \
+         patch("core.interface.api.projects_search_docs", return_value=docs_bundle):
+        out, _err = _run_hook_inject(
+            {
+                "prompt": "I just want one fact from the livetest-agentmsg-xp project. What does Ember Glass mean?",
+                "session_id": "sess-project-scope-hint",
+                "cwd": str(tmp_path),
+            },
+            monkeypatch=monkeypatch,
+        )
+
+    payload = json.loads(out)
+    context = payload["hookSpecificOutput"]["additionalContext"]
+    assert "[Quaid Project Discovery]" in context
+    assert "livetest-agentmsg-xp" in context
+    assert str(project_path) in context
+    assert "currently_linked_projects: quaid" in context
+    assert "do not run `quaid project link`" in context
+
+
 def test_codex_stop_does_not_write_signal_for_regular_turn(monkeypatch, tmp_path, cursor_dir):
     transcript_path = tmp_path / "rollout-test.jsonl"
     transcript_path.write_text(

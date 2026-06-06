@@ -440,6 +440,52 @@ def _format_project_docs(docs_bundle: Dict) -> str:
     return f"<quaid_system_message>\n{body}\n</quaid_system_message>"
 
 
+def _format_project_docs_scope_hint(docs_bundle: Dict) -> str:
+    """Format docs scope hints when linked-project recall finds likely unlinked projects."""
+    telemetry = (docs_bundle or {}).get("telemetry") or {}
+    hint = telemetry.get("scope_hint") if isinstance(telemetry, dict) else None
+    if not isinstance(hint, dict):
+        return ""
+    if str(hint.get("type") or "").strip() != "unlinked_project_candidates":
+        return ""
+    candidates = [item for item in list(hint.get("candidates") or []) if isinstance(item, dict)]
+    if not candidates:
+        return ""
+
+    lines = [
+        "[Quaid Project Discovery]",
+        str(hint.get("message") or "").strip()
+        or (
+            "Likely unlinked project candidates were found. For read-only one-fact lookups, "
+            "use scoped docs recall or read candidate files directly without linking."
+        ),
+    ]
+    requested = str(hint.get("requested_project") or "").strip()
+    if requested:
+        lines.append(f"requested_project: {requested}")
+    linked = [str(name or "").strip() for name in list(hint.get("linked_projects") or []) if str(name or "").strip()]
+    if linked:
+        lines.append(f"currently_linked_projects: {', '.join(linked)}")
+    lines.append("candidate_projects:")
+    for candidate in candidates[:3]:
+        project = str(candidate.get("project") or "").strip()
+        path = str(candidate.get("path") or "").strip()
+        score = candidate.get("score")
+        score_text = ""
+        try:
+            score_text = f" score={float(score):.2f}" if score is not None else ""
+        except Exception:
+            score_text = ""
+        path_text = f" path={path}" if path else ""
+        if project or path_text:
+            lines.append(f"- {project or '(unknown)'}{path_text}{score_text}")
+    lines.append(
+        "For this turn: do not run `quaid project link` unless the user asks to link or requests durable project work."
+    )
+    body = "\n".join(line for line in lines if line)
+    return f"<quaid_system_message>\n{body}\n</quaid_system_message>"
+
+
 def _format_direct_agent_notices(messages: List[str]) -> str:
     notices = [str(message or "").strip() for message in messages if str(message or "").strip()]
     if not notices:
@@ -1860,6 +1906,9 @@ def hook_inject(args):
         docs_context = _format_project_docs(docs_bundle or {})
         if docs_context:
             context_parts.append(docs_context)
+        docs_scope_hint_context = _format_project_docs_scope_hint(docs_bundle or {})
+        if docs_scope_hint_context:
+            context_parts.append(docs_scope_hint_context)
         baseline_agents_context = _get_quaid_agents_baseline_context()
         if baseline_agents_context:
             context_parts.append(baseline_agents_context)
