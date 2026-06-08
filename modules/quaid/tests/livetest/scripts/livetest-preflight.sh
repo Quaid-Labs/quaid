@@ -1267,7 +1267,7 @@ echo "[7b/8] Seeding Quaid shared auth credentials on remote..."
 if [[ "$DRY_RUN" == "1" ]]; then
     echo "  [dry-run] would read platforms.cc.auth_token_file (or fallback token path) and the freshly-copied $REMOTE_HOST:~/.codex/auth.json"
     echo "            then write $REMOTE_HOST:~/.quaid/shared/auth/credentials.json, seed ~/.openclaw/agents/main/agent/auth-profiles.json,"
-    echo "            using access-only openai-codex credentials, and pin ~/.openclaw/openclaw.json agents.defaults.model.primary to openai-codex/gpt-5.4"
+    echo "            using access-only openai-codex credentials, and pin ~/.openclaw/openclaw.json agents.defaults.model.primary to openai/gpt-5.4"
 else
     LOCAL_SHARED_TOKEN_FILE="$(read_config platforms.cc.auth_token_file)"
     LOCAL_SHARED_TOKEN_FILE="${LOCAL_SHARED_TOKEN_FILE/#\~/$HOME}"
@@ -1434,14 +1434,14 @@ if codex_token:
         if not isinstance(model_cfg, dict):
             model_cfg = {}
             defaults["model"] = model_cfg
-        model_cfg["primary"] = "openai-codex/gpt-5.4"
-        model_cfg["fallbacks"] = ["openai-codex/gpt-5.4-mini"]
+        model_cfg["primary"] = "openai/gpt-5.4"
+        model_cfg["fallbacks"] = ["openai/gpt-5.4-mini"]
         allowed_models = defaults.setdefault("models", {})
         if not isinstance(allowed_models, dict):
             allowed_models = {}
             defaults["models"] = allowed_models
-        allowed_models.setdefault("openai-codex/gpt-5.4", {})
-        allowed_models.setdefault("openai-codex/gpt-5.4-mini", {})
+        allowed_models.setdefault("openai/gpt-5.4", {})
+        allowed_models.setdefault("openai/gpt-5.4-mini", {})
         openclaw_tmp = openclaw_path.with_name(f".{openclaw_path.name}.{os.getpid()}.tmp")
         with open(openclaw_tmp, "w", encoding="utf-8") as handle:
             json.dump(cfg, handle, indent=2)
@@ -1449,7 +1449,7 @@ if codex_token:
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(openclaw_tmp, openclaw_path)
-        print(f"  wrote {openclaw_path} agent model openai-codex/gpt-5.4")
+        print(f"  wrote {openclaw_path} agent model openai/gpt-5.4")
     else:
         print(f"  WARN  {openclaw_path} missing — OC agent model default not updated")
 else:
