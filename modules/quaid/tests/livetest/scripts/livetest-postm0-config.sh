@@ -120,6 +120,12 @@ done
 REMEOF
 "
 
+if printf '%s\n' "${platforms[@]}" | grep -qx 'openclaw'; then
+    echo
+    echo "[postm0] restarting OpenClaw gateway so it loads the M0-installed Quaid extension..."
+    "$SCRIPT_DIR/livetest-openclaw-gateway-restart.sh" --restart --host "$REMOTE_HOST" --config "$CONFIG_PATH"
+fi
+
 echo
 echo "[postm0] verification — resolved chunk_tokens per instance:"
 ssh "$REMOTE_HOST" "bash <<'REMEOF'

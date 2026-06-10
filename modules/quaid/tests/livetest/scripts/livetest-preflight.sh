@@ -1387,21 +1387,29 @@ if codex_token:
     # OpenClaw and Codex CLI run on the same VM but do not share refresh-token
     # writeback. Give OpenClaw only the long-lived access token so it cannot
     # rotate and invalidate the Codex CLI refresh token mid-run.
-    credential = {
+    base_credential = {
         "type": "token",
-        "provider": "openai-codex",
         "token": codex_token,
         "managedBy": "quaid-preflight-access-only",
     }
     if expires:
-        credential["expires"] = expires
+        base_credential["expires"] = expires
     if codex_account_id:
-        credential["accountId"] = codex_account_id
+        base_credential["accountId"] = codex_account_id
 
     profiles.setdefault("version", 1)
-    profiles.setdefault("profiles", {})["openai-codex:default"] = credential
-    profiles.setdefault("lastGood", {})["openai-codex"] = "openai-codex:default"
-    profiles.setdefault("order", {})["openai-codex"] = ["openai-codex:default"]
+    profile_rows = profiles.setdefault("profiles", {})
+    last_good = profiles.setdefault("lastGood", {})
+    order = profiles.setdefault("order", {})
+    # OC 2026.6.1 renamed model routing from openai-codex/... to openai/...,
+    # but the same Codex OAuth access token backs both provider keys.
+    for provider in ("openai-codex", "openai"):
+        profile_name = f"{provider}:default"
+        credential = dict(base_credential)
+        credential["provider"] = provider
+        profile_rows[profile_name] = credential
+        last_good[provider] = profile_name
+        order[provider] = [profile_name]
     profiles_tmp = profiles_path.with_name(f".{profiles_path.name}.{os.getpid()}.tmp")
     fd = os.open(str(profiles_tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     try:
