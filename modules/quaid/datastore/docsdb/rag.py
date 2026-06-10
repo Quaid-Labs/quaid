@@ -351,8 +351,15 @@ def _docs_scaffold_penalty(
     if file_name == "project.md":
         if header_lower in scaffold_headers:
             penalty += 0.28
-        elif header_lower in generic_project_headers and content_hits < 2:
-            penalty += 0.12
+        elif header_lower in generic_project_headers:
+            header_query_hits = sum(1 for term in query_terms if term in header_lower)
+            if header_query_hits <= 0:
+                # Root PROJECT.md overview/current-state sections often catalog
+                # where evidence lives. For concrete docs lookups, source files
+                # with the same exact terms should outrank that catalog mention.
+                penalty += 0.22 if content_hits >= 2 else 0.12
+            elif content_hits < 2:
+                penalty += 0.06
     if file_name == "status.md" and content_hits < 2:
         penalty += 0.10
     return penalty

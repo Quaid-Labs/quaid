@@ -1247,6 +1247,56 @@ class TestDocsSearchFiltering:
     @patch("datastore.docsdb.rag._lib_get_embedding", return_value=[0.1, 0.2, 0.3])
     @patch("datastore.docsdb.rag._lib_unpack_embedding", return_value=[0.1, 0.2, 0.3])
     @patch("datastore.docsdb.rag._lib_cosine_similarity", return_value=0.95)
+    def test_search_docs_prefers_source_file_over_project_catalog_mention(self, _sim, _unpack, _embed, tmp_path):
+        rag = _make_rag(tmp_path)
+        db = sqlite3.connect(rag.db_path)
+        try:
+            db.execute(
+                "INSERT INTO doc_chunks (id, source_file, chunk_index, content, section_header, embedding) VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    "project-current:0",
+                    "/tmp/workspace/projects/widget-router/PROJECT.md",
+                    0,
+                    (
+                        "## Current State\n"
+                        "- Includes examples.md with distinctive amber field token marker for docs recall probes"
+                    ),
+                    "## Current State",
+                    b"e",
+                ),
+            )
+            db.execute(
+                "INSERT INTO doc_chunks (id, source_file, chunk_index, content, section_header, embedding) VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    "examples:0",
+                    "/tmp/workspace/projects/widget-router/docs/examples.md",
+                    0,
+                    "send('amber field token: subscribed delivery')",
+                    "## Subscription Example",
+                    b"e",
+                ),
+            )
+            db.commit()
+        finally:
+            db.close()
+
+        with patch.object(
+            rag,
+            "_get_project_paths",
+            return_value={
+                "home_dir": "/tmp/workspace/projects/widget-router",
+                "source_roots": ["/tmp/workspace/projects/widget-router"],
+            },
+        ):
+            results = rag.search_docs("amber field token", limit=2, project="widget-router")
+
+        assert len(results) == 2
+        assert results[0]["source"].endswith("docs/examples.md")
+        assert results[0]["similarity"] >= results[1]["similarity"]
+
+    @patch("datastore.docsdb.rag._lib_get_embedding", return_value=[0.1, 0.2, 0.3])
+    @patch("datastore.docsdb.rag._lib_unpack_embedding", return_value=[0.1, 0.2, 0.3])
+    @patch("datastore.docsdb.rag._lib_cosine_similarity", return_value=0.95)
     def test_search_docs_prefers_project_log_answer_line_over_project_scaffold(self, _sim, _unpack, _embed, tmp_path):
         rag = _make_rag(tmp_path)
         db = sqlite3.connect(rag.db_path)
