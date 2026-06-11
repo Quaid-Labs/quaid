@@ -5,6 +5,7 @@ import sys
 import json
 import struct
 import sqlite3
+import subprocess
 import urllib.error
 import uuid
 from pathlib import Path
@@ -3725,6 +3726,42 @@ class TestTimestampOverride:
         assert mg._resolve_recall_command_temporal_dimension(
             {"after": "2024-06-30", "temporal_dimension": "record"}
         ) == "record"
+
+    def test_recall_cli_accepts_created_at_temporal_dimension_alias(self, tmp_path):
+        module_root = Path(__file__).resolve().parents[1]
+        env = {
+            **os.environ,
+            "MEMORY_DB_PATH": str(tmp_path / "memory.db"),
+            "QUAID_HOME": str(tmp_path / ".quaid"),
+            "QUAID_INSTANCE": "cli-temporal-alias",
+            "QUAID_ADAPTER_TYPE": "standalone",
+        }
+
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "datastore.memorydb.memory_graph",
+                "recall",
+                "nothing-to-find",
+                '{"stores":["vector"],"limit":1}',
+                "--temporal-dimension",
+                "created_at",
+                "--json",
+            ],
+            cwd=str(module_root),
+            env=env,
+            text=True,
+            capture_output=True,
+            timeout=20,
+            check=False,
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert "invalid choice" not in result.stderr
+        payload = json.loads(result.stdout)
+        assert payload["contract"] == "quaid.recall.v1"
+        assert payload["results"] == []
 
 
 class TestSourceChunkStorage:
