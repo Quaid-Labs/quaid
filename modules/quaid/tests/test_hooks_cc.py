@@ -749,6 +749,60 @@ def test_refresh_runtime_config_if_changed_uses_persisted_snapshot_for_fresh_hoo
     assert cleared == [{"provider", "llm_config", "embeddings"}]
 
 
+def test_runtime_config_reload_invalidates_cached_model_config_error(monkeypatch, tmp_path):
+    from core.interface import hooks
+
+    cfg = tmp_path / "config.json"
+    cfg.write_text("{}", encoding="utf-8")
+    config_mtime = 1
+    data_dir = tmp_path / "data"
+    adapter = MagicMock()
+    adapter.data_dir.return_value = data_dir
+
+    monkeypatch.setattr("lib.adapter.get_adapter", lambda: adapter)
+    monkeypatch.setattr("config._config_paths", lambda: [cfg])
+    monkeypatch.setattr("config.reload_config", lambda: None)
+    monkeypatch.setattr("lib.embeddings.reset_embeddings_provider", lambda: None)
+    monkeypatch.setattr("lib.llm_clients.reset_model_config_cache", lambda: None)
+    monkeypatch.setattr("lib.agent_notice.clear_pending_notices_by_source", lambda *, sources: 1)
+    monkeypatch.setattr("lib.agent_notice.clear_deferred_notices_by_source", lambda *, sources: 1)
+    monkeypatch.setattr(
+        hooks,
+        "_runtime_config_snapshot",
+        lambda: ((str(cfg), config_mtime),),
+    )
+    monkeypatch.setattr(hooks, "_HOOK_RUNTIME_CONFIG_SNAPSHOT", ((str(cfg), 0),))
+    monkeypatch.setattr(
+        hooks,
+        "_adapter_capability",
+        lambda key, default=None: key == "prompt_model_config_probe" or default,
+    )
+
+    state_path = data_dir / "prompt-model-config-probe.json"
+    state_path.parent.mkdir(parents=True)
+    state_path.write_text(
+        json.dumps({
+            "fingerprint": hooks._runtime_config_fingerprint(),
+            "status": "error",
+            "message": "[Quaid error] [provider] stale invalid-model-m6-probe",
+        }),
+        encoding="utf-8",
+    )
+
+    assert hooks._refresh_runtime_config_if_changed("test") is True
+    invalidated_state = json.loads(state_path.read_text(encoding="utf-8"))
+    assert invalidated_state["status"] == "error"
+    assert invalidated_state["fingerprint"] == ""
+    assert invalidated_state["stale_after_runtime_reload"] is True
+
+    with patch("lib.llm_clients.call_fast_reasoning", return_value="OK") as probe:
+        restored = hooks._validate_prompt_model_config_for_hook("claude-code")
+
+    probe.assert_called_once()
+    assert "healthy again" in restored
+    assert "Ignore earlier provider-error notices" in restored
+
+
 def test_claude_code_inject_writes_session_end_signal_for_empty_prompt_reset_metadata(
     monkeypatch, tmp_path, cursor_dir
 ):

@@ -674,6 +674,7 @@ def _refresh_runtime_config_if_changed(reason: str) -> bool:
 
         reload_config()
         _reset_runtime_resolution_caches()
+        invalidated_probe_error = _invalidate_prompt_model_probe_error_state(reason)
         cleared = _clear_provider_notice_state()
     except Exception as exc:
         _write_hook_trace(
@@ -694,6 +695,7 @@ def _refresh_runtime_config_if_changed(reason: str) -> bool:
             "paths": [path for path, _mtime in snapshot],
             "cleared_pending": cleared.get("pending", 0),
             "cleared_deferred": cleared.get("deferred", 0),
+            "invalidated_model_config_probe_error": invalidated_probe_error,
         },
     )
     return True
@@ -835,6 +837,19 @@ def _write_prompt_model_probe_state(payload: Dict[str, Any]) -> None:
                 tmp_path.unlink()
             except Exception:
                 pass
+
+
+def _invalidate_prompt_model_probe_error_state(reason: str) -> bool:
+    """Force the next prompt-model probe to recheck after config/runtime reload."""
+    state = _read_prompt_model_probe_state()
+    if state.get("status") != "error":
+        return False
+    state = dict(state)
+    state["fingerprint"] = ""
+    state["stale_after_runtime_reload"] = True
+    state["stale_reason"] = str(reason or "")
+    _write_prompt_model_probe_state(state)
+    return True
 
 
 def _validate_prompt_model_config_for_hook(adapter_id: str) -> str:
