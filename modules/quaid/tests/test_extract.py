@@ -6983,6 +6983,23 @@ class TestLoadPrompt:
         assert "Do not extract agent statements of memory absence" in prompt
         assert "transient answer states, not user knowledge" in prompt
 
+    def test_prompt_keeps_tentative_plans_and_object_provenance(self):
+        from ingest.extract import _build_extraction_user_message, _load_extraction_prompt
+
+        prompt = _load_extraction_prompt()
+        assert "aspirational personal plans" in prompt
+        assert "not yet actionable" in prompt
+        assert "Durable object provenance and source context" in prompt
+        assert "named makers, shops, recommenders, or source relationships" in prompt
+
+        chunk_prompt = _build_extraction_user_message(
+            "User: No action needed. I might someday keep a dog, "
+            "and I write in a blue notebook from a local stationery shop."
+        )
+        assert "No-action or not-yet-actionable wording is task context only" in chunk_prompt
+        assert "tentative plans" in chunk_prompt
+        assert "object provenance" in chunk_prompt
+
     def test_prompt_requires_full_sentence_facts_not_bare_fragments(self):
         from ingest.extract import _load_extraction_prompt
 

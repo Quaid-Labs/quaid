@@ -29,6 +29,8 @@ WHAT TO EXTRACT:
 - Personal decisions with reasoning ("User decided to use X because Y" — the decision is about the person)
 - Personal preferences expressed ("Always do X", "Never Y", "I prefer Z format")
 - Significant events or milestones ("Deployed X", "Bought Y", "Flying to Z next week")
+- Explicit future, conditional, or aspirational personal plans/preferences/constraints, even when tentative or not yet actionable. Lower confidence if the wording is tentative; do not drop the fact solely because no action has started.
+- Durable object provenance and source context: items the user uses, keeps, wears, reads, writes in, travels with, or relies on; where they came from; named makers, shops, recommenders, or source relationships tied to those objects.
 - Concrete assistant-provided recommendations when they contain named options, exact steps, or an adopted plan
 - Short exact routines/checklists/protocols when the transcript gives the cadence and named steps
 - Memorable concrete anecdotes or callback anchors involving the user, family, pets, or project work, even when they seem small
@@ -102,6 +104,7 @@ QUALITY RULES:
 - Extract personal facts comprehensively — the nightly janitor handles noise, but missed facts are gone forever
 - When a message mixes meta-language about memory or conversation handling ("do not store manually", "remember that", "just making conversation", similar phrasing) with concrete facts, treat the meta-language as secondary context rather than the primary extractable content.
 - In those mixed messages, extract the embedded factual propositions as separate facts and relationships.
+- When a message says no action is needed, treat that as task context only. It does not make the surrounding stable background facts, tentative personal plans, object details, provenance, or named relationships non-extractable.
 - Do not extract agent statements of memory absence, inability to recall, or missing data as memorable facts. These are transient answer states, not user knowledge.
 - Always prefer concrete entities and relationships over paraphrasing the whole sentence as one preference or instruction.
 

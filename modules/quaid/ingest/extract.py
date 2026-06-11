@@ -819,6 +819,9 @@ def _build_extraction_user_message(chunk: str, carry_context: str = "") -> str:
         "Do not extract facts about Quaid operational behavior, recall status, plugin diagnostics, or retrieval/debug progress as user facts.",
         "Do not extract agent statements of memory absence, inability to recall, or missing data as memorable facts; these are transient answer states, not user knowledge.",
         "Extraction is exhaustive across the whole chunk: scan through the final line. Actionability is not a criterion; stable background details, explicitly stated plans or conditions tied to the speaker, object/location details, routines, and relationships remain extractable when explicitly stated.",
+        "No-action or not-yet-actionable wording is task context only; still extract explicitly stated "
+        "tentative plans, durable personal object details, and object provenance such as named sources, "
+        "makers, shops, or recommenders.",
     ]
     if timestamp_hints:
         parts.extend(
