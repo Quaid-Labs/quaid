@@ -53,7 +53,7 @@ logger = logging.getLogger("quaid.daemon")
 
 # Valid signal types (B062)
 VALID_SIGNAL_TYPES = ("compaction", "reset", "session_end", "timeout", "rolling")
-DAEMON_EXTRACT_CHUNK_MAX_TOKENS = 1_200
+DAEMON_EXTRACT_CHUNK_MAX_TOKENS = 900
 DAEMON_EXTRACT_CHUNK_RATIO = 0.8
 DAEMON_SIGNAL_TO_LIFECYCLE_EVENT = {
     "reset": "session.reset",
@@ -3765,9 +3765,10 @@ def _daemon_extract_chunk_tokens(chunk_budget: int) -> int:
     Rolling/session signals often contain dense multi-turn buffers. Keeping
     root extraction chunks below the read threshold gives the LLM output budget
     for later facts instead of letting the first dense turn consume the call.
-    The 1200-token ceiling split the preserved CDX dense M2 transcript tail
-    into its own extraction call during diagnosis; the ratio keeps smaller
-    operator budgets proportional instead of widening them.
+    A 1200-token ceiling still allowed dense combined task messages to bury
+    stable background facts in the first extraction call. The 900-token ceiling
+    keeps dense single-message context dumps split into smaller calls, while the
+    ratio keeps smaller operator budgets proportional instead of widening them.
     """
     try:
         budget = max(1, int(chunk_budget or 1))

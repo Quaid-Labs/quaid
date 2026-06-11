@@ -642,16 +642,16 @@ def test_stage_semantic_buffer_payload_uses_focused_extract_chunks(monkeypatch):
 
     assert len(calls) == 1
     assert "wall_timeout_seconds" not in calls[0]
-    assert calls[0]["chunk_tokens_override"] == 1200
+    assert calls[0]["chunk_tokens_override"] == 900
 
 
 def test_daemon_extract_chunk_tokens_focuses_normal_rolling_windows():
     assert extraction_daemon._daemon_extract_chunk_tokens(511) == 511
     assert extraction_daemon._daemon_extract_chunk_tokens(512) == 409
     assert extraction_daemon._daemon_extract_chunk_tokens(600) == 480
-    assert extraction_daemon._daemon_extract_chunk_tokens(1200) == 960
-    assert extraction_daemon._daemon_extract_chunk_tokens(1500) == 1200
-    assert extraction_daemon._daemon_extract_chunk_tokens(8000) == 1200
+    assert extraction_daemon._daemon_extract_chunk_tokens(1200) == 900
+    assert extraction_daemon._daemon_extract_chunk_tokens(1500) == 900
+    assert extraction_daemon._daemon_extract_chunk_tokens(8000) == 900
     assert extraction_daemon._daemon_extract_chunk_tokens(200) == 200
 
 
