@@ -31,9 +31,11 @@ Raw `tmux send-keys` remains banned for milestone prompts and recovery turns.
 `/exit` or `/clear`. Wait at least 2 minutes after the trigger before
 checking the DB.
 
-**CC hook trace markers:** look for `hook.session.ended` on `/exit` and
-`hook.session.cleared` on `/clear` in
-`$SILO/logs/daemon/extraction-daemon.log`.
+**CC hook trace markers:** for `/clear`, look for
+`hook.inject.command_detected` with `command=/clear` in
+`$SILO/logs/quaid-hook-trace.jsonl`, then confirm the daemon log shows a real
+`[daemon-session_end]` for the same session. For `/exit`, confirm the
+SessionEnd hook wrote a `session_end` signal and the daemon processed it.
 
 ---
 
@@ -129,6 +131,19 @@ buffered while the transcript is active so Chunk 2 can cross the rolling
 threshold. If `internal_cursor_unfrozen_flush` fires before Chunk 2 or inside the
 active rolling window, route W1; that flush is only for quiet subthreshold
 recovery tails.
+
+For M2 Part B specifically, after Chunk 2 receives its `ACK` and the rolling
+stage publishes, send the lane lifecycle command exactly:
+
+```bash
+~/quaidcode/dev/modules/quaid/tests/livetest/scripts/tmux-msg.sh --no-chrome livetest:CC "/clear"
+```
+
+Do not grade Chunk-2-only keywords until that `/clear` is visible in
+`quaid-hook-trace.jsonl` as `hook.inject.command_detected` and the daemon has
+processed the resulting `session_end`. The synthetic `rolling_stage_flush` is
+not the lifecycle drain; it only publishes the already-staged rolling payload and
+may intentionally preserve a subthreshold Chunk-2 semantic tail for `/clear`.
 
 ---
 
