@@ -454,6 +454,42 @@ class TestOpenClawAdapter:
         assert "Assistant: First assistant event" in transcript
         assert adapter.filter_system_messages("What about HEARTBEAT mechanisms?") is False
 
+    def test_parse_session_jsonl_preserves_openclaw_row_timestamps(self, tmp_path):
+        session_file = tmp_path / "oc-session-timestamps.jsonl"
+        session_file.write_text(
+            "\n".join(
+                [
+                    json.dumps(
+                        {
+                            "timestamp": "2026-06-11T15:09:12.914Z",
+                            "type": "message",
+                            "message": {
+                                "role": "user",
+                                "content": "I started using a 14mm Sailor Pro Gear nib this week.",
+                            },
+                        }
+                    ),
+                    json.dumps(
+                        {
+                            "timestamp": "2026-06-11T15:09:17.625Z",
+                            "type": "message",
+                            "message": {
+                                "role": "assistant",
+                                "content": "Noted.",
+                            },
+                        }
+                    ),
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        adapter = OpenClawAdapter()
+        transcript = adapter.parse_session_jsonl(session_file)
+
+        assert "[2026-06-11T15:09:12.914Z] User: I started using a 14mm Sailor" in transcript
+        assert "[2026-06-11T15:09:17.625Z] Assistant: Noted." in transcript
+
     def test_parse_session_jsonl_marks_subagent_turns_and_strips_oc_wrapper(self, tmp_path):
         session_file = tmp_path / "oc-subagent.jsonl"
         session_file.write_text(
@@ -1706,6 +1742,42 @@ class TestClaudeCodeAdapter:
         transcript = adapter.parse_session_jsonl(path)
         assert "Subagent/User: My sister is Diana." in transcript
         assert "Subagent/Assistant: Understood." in transcript
+
+    def test_parse_session_jsonl_preserves_claude_code_row_timestamps(self, tmp_path):
+        path = tmp_path / "claude-timestamps.jsonl"
+        path.write_text(
+            "\n".join(
+                [
+                    json.dumps(
+                        {
+                            "timestamp": "2026-06-11T15:08:30.000Z",
+                            "type": "user",
+                            "message": {
+                                "role": "user",
+                                "content": [{"type": "text", "text": "I started using a travel nib this week."}],
+                            },
+                        }
+                    ),
+                    json.dumps(
+                        {
+                            "timestamp": "2026-06-11T15:08:35.000Z",
+                            "type": "assistant",
+                            "message": {
+                                "role": "assistant",
+                                "content": [{"type": "text", "text": "Noted."}],
+                            },
+                        }
+                    ),
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        adapter = ClaudeCodeAdapter()
+        transcript = adapter.parse_session_jsonl(path)
+
+        assert "[2026-06-11T15:08:30.000Z] User: I started using a travel nib this week." in transcript
+        assert "[2026-06-11T15:08:35.000Z] Assistant: Noted." in transcript
 
 class TestCodexAdapter:
     def test_installer_provider_surface_is_direct_provider_models(self):

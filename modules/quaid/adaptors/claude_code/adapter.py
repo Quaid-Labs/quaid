@@ -76,6 +76,9 @@ class ClaudeCodeAdapter(QuaidAdapter):
         r"([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}|[0-9a-f]{8,})",
         flags=re.IGNORECASE,
     )
+    _ROW_TIMESTAMP_RE = re.compile(
+        r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?$"
+    )
     """Adapter for running Quaid inside Claude Code sessions."""
 
     def __init__(self, home: Optional[Path] = None):
@@ -719,6 +722,21 @@ class ClaudeCodeAdapter(QuaidAdapter):
             return True
         return False
 
+    @classmethod
+    def _row_timestamp(cls, row: dict) -> str:
+        value = str(row.get("timestamp") or "").strip()
+        return value if cls._ROW_TIMESTAMP_RE.match(value) else ""
+
+    def _build_timestamped_transcript(self, messages: list[dict]) -> str:
+        parts = []
+        for message in messages:
+            rendered = self.build_transcript([message]).strip()
+            if not rendered:
+                continue
+            timestamp = str(message.get("timestamp") or "").strip()
+            parts.append(f"[{timestamp}] {rendered}" if timestamp else rendered)
+        return "\n\n".join(parts)
+
     def parse_session_jsonl(self, path: Path) -> str:
         """Parse Claude Code session JSONL into a normalized transcript.
 
@@ -748,6 +766,7 @@ class ClaudeCodeAdapter(QuaidAdapter):
                     "result", "summary",
                 ):
                     continue
+                row_timestamp = self._row_timestamp(obj)
 
                 # Handle wrapped message format
                 # CC v2.1.89+ may encode message as a Python repr string instead
@@ -767,6 +786,8 @@ class ClaudeCodeAdapter(QuaidAdapter):
                         msg = obj
                 else:
                     msg = obj
+                if isinstance(msg, dict):
+                    row_timestamp = row_timestamp or self._row_timestamp(msg)
 
                 role = msg.get("role")
                 if role not in ("user", "assistant"):
@@ -800,9 +821,14 @@ class ClaudeCodeAdapter(QuaidAdapter):
                 if bool(obj.get("isSidechain")) or str(obj.get("agentId", "")).strip():
                     source_type = "subagent"
 
-                messages.append({"role": role, "content": content, "source_type": source_type})
+                messages.append({
+                    "role": role,
+                    "content": content,
+                    "source_type": source_type,
+                    "timestamp": row_timestamp,
+                })
 
-        return self.build_transcript(messages)
+        return self._build_timestamped_transcript(messages)
 
     def get_llm_provider(self, model_tier: Optional[str] = None):
         from adaptors.claude_code.providers import ClaudeCodeOAuthLLMProvider

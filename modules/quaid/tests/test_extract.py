@@ -421,6 +421,22 @@ class TestExtractFromTranscript:
         assert "Do not use current wall-clock time, model context, unrelated memories" in prompt
         assert "do not also emit an unbounded duplicate variant" in prompt
 
+    def test_extraction_prompt_includes_runtime_fallback_for_untimestamped_chunks(self):
+        from ingest.extract import _build_extraction_user_message
+
+        chunk = "User: I started using my new sketchbook this week.\nAssistant: Noted."
+
+        prompt = _build_extraction_user_message(
+            chunk,
+            source_timestamp_hint="2026-05-29T13:57:53+00:00",
+        )
+
+        assert "AUTHORITATIVE TEMPORAL CONTEXT:" in prompt
+        assert "This transcript chunk has no timestamped speaker lines." in prompt
+        assert "Runtime fallback source timestamp: 2026-05-29T13:57:53+00:00." in prompt
+        assert "Use that fallback timestamp as the anchor for relative event-time wording" in prompt
+        assert "do not also emit an unbounded duplicate variant" in prompt
+
     @patch("ingest.extract.call_deep_reasoning")
     def test_extract_from_transcript_keeps_nonaction_background_facts(self, mock_llm):
         from ingest.extract import extract_from_transcript
@@ -1047,6 +1063,8 @@ class TestExtractFromTranscript:
         assert fact["_source_timestamp"] == "2026-05-07T03:42:00+00:00"
         assert "created_at" not in fact
         assert mock_now.called
+        prompt = mock_llm.call_args.kwargs["prompt"]
+        assert "Runtime fallback source timestamp: 2026-05-07T03:42:00+00:00." in prompt
 
     @patch("ingest.extract._current_utc_timestamp", return_value="2026-05-02T14:50:00+00:00")
     @patch("ingest.extract.call_deep_reasoning")
