@@ -10791,6 +10791,11 @@ def _run_recall_store_plan(
         final_rows,
         temporal_dimension=kwargs.get("temporal_dimension"),
     )
+    final_rows, session_chunk_cap_meta = _cap_mixed_session_chunk_results(
+        final_rows,
+        merged,
+        limit=limit,
+    )
     final_rows, session_conflict_meta = _suppress_weaker_synthetic_temporal_conflicts_after_session_source(
         query,
         final_rows,
@@ -10860,6 +10865,8 @@ def _run_recall_store_plan(
         meta["preserved_graph_cluster_rows"] = preserved_graph_cluster_rows
     if session_conflict_meta.get("suppressed"):
         meta["session_source_conflict_suppression"] = session_conflict_meta
+    if session_chunk_cap_meta.get("applied"):
+        meta["session_chunk_result_cap"] = session_chunk_cap_meta
     if store_plan_facet_rescue_meta.get("applied") or store_plan_facet_rescue_meta.get("error"):
         meta["facet_rescue"] = store_plan_facet_rescue_meta
     if graph_cluster_interpretation_meta.get("enabled"):
@@ -14304,6 +14311,71 @@ def _docs_row_latest_iso_date(row: Dict[str, Any]) -> str:
 def _is_first_order_session_source_row(row: Dict[str, Any]) -> bool:
     source_type = str((row or {}).get("source_type") or (row or {}).get("category") or "").strip().lower()
     return source_type in {"session_chunk", "source_chunk"} or str((row or {}).get("via") or "") == "session_chunks"
+
+
+def _mixed_session_chunk_result_cap(limit: int) -> int:
+    if limit <= 1:
+        return max(0, int(limit or 0))
+    return max(1, min(3, math.ceil(int(limit) / 2)))
+
+
+def _cap_mixed_session_chunk_results(
+    rows: List[Dict[str, Any]],
+    candidate_rows: List[Dict[str, Any]],
+    *,
+    limit: int,
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """Prevent first-order transcript hits from crowding all compact memories out."""
+    top_limit = max(1, int(limit or 1))
+    selected = [row for row in list(rows or [])[:top_limit] if isinstance(row, dict)]
+    if not selected:
+        return rows, {"applied": False}
+    selected_session_count = sum(1 for row in selected if _is_first_order_session_source_row(row))
+    cap = _mixed_session_chunk_result_cap(top_limit)
+    if selected_session_count <= cap:
+        return rows, {"applied": False, "cap": cap, "selected_session_count": selected_session_count}
+
+    selected_keys = {_rrf_recall_row_identity(row) for row in selected}
+    candidate_pool: List[Dict[str, Any]] = []
+    for row in list(candidate_rows or []):
+        if not isinstance(row, dict) or _is_first_order_session_source_row(row):
+            continue
+        key = _rrf_recall_row_identity(row)
+        if not key or key in selected_keys:
+            continue
+        if not str(row.get("text") or "").strip():
+            continue
+        selected_keys.add(key)
+        candidate_pool.append(row)
+    if not candidate_pool:
+        return rows, {
+            "applied": False,
+            "cap": cap,
+            "selected_session_count": selected_session_count,
+            "candidate_count": 0,
+        }
+
+    out: List[Dict[str, Any]] = []
+    kept_session = 0
+    for row in selected:
+        if _is_first_order_session_source_row(row):
+            if kept_session >= cap:
+                continue
+            kept_session += 1
+        out.append(row)
+    for candidate in candidate_pool:
+        if len(out) >= top_limit:
+            break
+        out.append(candidate)
+
+    return out[:top_limit], {
+        "applied": True,
+        "cap": cap,
+        "selected_session_count": selected_session_count,
+        "final_session_count": sum(1 for row in out if _is_first_order_session_source_row(row)),
+        "candidate_count": len(candidate_pool),
+        "replaced": max(0, selected_session_count - kept_session),
+    }
 
 
 def _preserve_requested_docs_rows(

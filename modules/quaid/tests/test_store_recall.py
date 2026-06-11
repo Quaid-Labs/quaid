@@ -4106,6 +4106,93 @@ class TestSourceChunkStorage:
         assert rows[0]["match_modes"] == ["semantic"]
         assert meta["session_chunk_telemetry"]["semantic_candidate_count"] == 1
 
+    def test_mixed_store_plan_caps_session_chunks_to_keep_answer_facts(self):
+        """Repeated query transcript chunks cannot crowd answer facts out of mixed recall."""
+        import datastore.memorydb.memory_graph as mg
+
+        session_rows = [
+            {
+                "id": f"chunk-{idx}",
+                "chunk_id": f"chunk-{idx}",
+                "session_chunk_id": f"chunk-{idx}",
+                "source_chunk_id": f"chunk-{idx}",
+                "text": "[session_chunk] prior-session: What receipt notebook do I use for the studio setup?",
+                "category": "session_chunk",
+                "source_type": "session_chunk",
+                "via": "session_chunks",
+                "similarity": 0.95,
+            }
+            for idx in range(4)
+        ]
+        generic_fact = {
+            "id": "generic-setup",
+            "text": "Miko has a studio setup.",
+            "category": "Fact",
+            "source_type": "memory",
+            "similarity": 0.80,
+        }
+        answer_fact = {
+            "id": "answer-fact",
+            "text": "Miko uses the red linen receipt notebook for the studio setup.",
+            "category": "Fact",
+            "source_type": "memory",
+            "similarity": 0.74,
+        }
+        fused_rows = [*session_rows, generic_fact, answer_fact]
+
+        def _payload(rows):
+            return rows, {"selected_path": "test", "counts": {"final_results": len(rows)}}, None
+
+        registry = {
+            "vector": {
+                "recall": lambda *_args, **_kwargs: _payload([generic_fact, answer_fact]),
+                "recall_fast": lambda *_args, **_kwargs: _payload([generic_fact, answer_fact]),
+            },
+            "session_chunks": {
+                "recall": lambda *_args, **_kwargs: _payload(session_rows),
+                "recall_fast": lambda *_args, **_kwargs: _payload(session_rows),
+            },
+            "docs": {
+                "recall": lambda *_args, **_kwargs: _payload([]),
+                "recall_fast": lambda *_args, **_kwargs: _payload([]),
+            },
+            "graph": {
+                "recall": lambda *_args, **_kwargs: _payload([]),
+                "recall_fast": lambda *_args, **_kwargs: _payload([]),
+            },
+        }
+
+        with patch.object(mg, "_get_recall_store_registry", return_value=registry), \
+             patch.object(
+                 mg,
+                 "_active_rrf_recall_store_plan",
+                 return_value=(fused_rows, {"enabled": True}),
+             ), \
+             patch.object(mg, "_shadow_rrf_recall_store_plan", return_value={"enabled": True}), \
+             patch.object(mg, "_recover_explicit_entity_facet_rows", return_value=([], {"applied": False})):
+            rows, meta, _bundle = mg._run_recall_store_plan(
+                "What receipt notebook do I use for the studio setup?",
+                stores=["vector", "session_chunks"],
+                limit=5,
+                owner_id="miko",
+                min_similarity=0.0,
+                planner_profile="fast",
+                planned_queries=["What receipt notebook do I use for the studio setup?"],
+                planner_meta={"planned_stores": ["vector", "session_chunks"]},
+                fast_mode=True,
+                common_kwargs={
+                    "session_chunk_window_before": 0,
+                    "session_chunk_window_after": 0,
+                },
+            )
+
+        assert len(rows) == 5
+        assert sum(1 for row in rows if mg._is_first_order_session_source_row(row)) == 3
+        assert "answer-fact" in {row["id"] for row in rows}
+        assert meta["session_chunk_result_cap"]["applied"] is True
+        assert meta["session_chunk_result_cap"]["selected_session_count"] == 4
+        assert meta["session_chunk_result_cap"]["final_session_count"] == 3
+
     def test_store_fact_persists_source_chunk_id(self, tmp_path):
         """Facts can carry a durable pointer to the source chunk that produced them."""
         from datastore.memorydb.memory_graph import get_memory, store
