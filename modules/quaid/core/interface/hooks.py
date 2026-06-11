@@ -863,46 +863,16 @@ def _validate_prompt_model_config_for_hook(adapter_id: str) -> str:
         return ""
     state = _read_prompt_model_probe_state()
     prior_was_error = state.get("status") == "error"
-    state_fingerprint = str(state.get("fingerprint") or "")
-    state_status = str(state.get("status") or "")
-    cache_matches = state_fingerprint == fingerprint
-    _write_hook_trace("hook.inject.model_config_probe_state", {
-        "adapter": adapter_id,
-        "fingerprint": fingerprint[:16],
-        "state_fingerprint": state_fingerprint[:16],
-        "state_status": state_status,
-        "cache_matches": cache_matches,
-        "prior_was_error": prior_was_error,
-        "stale_after_runtime_reload": bool(state.get("stale_after_runtime_reload")),
-    })
-    if cache_matches:
+    if state.get("fingerprint") == fingerprint:
         if state.get("status") == "ok":
-            _write_hook_trace("hook.inject.model_config_probe_cache_hit", {
-                "adapter": adapter_id,
-                "fingerprint": fingerprint[:16],
-                "state_status": "ok",
-            })
             return ""
         cached_message = str(state.get("message") or "").strip()
         if state.get("status") == "error" and cached_message:
-            _write_hook_trace("hook.inject.model_config_probe_cache_hit", {
-                "adapter": adapter_id,
-                "fingerprint": fingerprint[:16],
-                "state_status": "error",
-                "message_preview": cached_message[:500],
-            })
             return cached_message
 
     try:
         from lib.llm_clients import call_fast_reasoning
 
-        _write_hook_trace("hook.inject.model_config_probe_call", {
-            "adapter": adapter_id,
-            "fingerprint": fingerprint[:16],
-            "state_fingerprint": state_fingerprint[:16],
-            "state_status": state_status,
-            "prior_was_error": prior_was_error,
-        })
         call_fast_reasoning(
             "Reply with OK only.",
             max_tokens=4,
@@ -920,19 +890,13 @@ def _validate_prompt_model_config_for_hook(adapter_id: str) -> str:
         })
         _write_hook_trace("hook.inject.model_config_error", {
             "adapter": adapter_id,
-            "fingerprint": fingerprint[:16],
-            "prior_was_error": prior_was_error,
             "error_type": type(exc).__name__,
             "error": str(exc)[:500],
         })
         return notice
 
     _write_prompt_model_probe_state({"fingerprint": fingerprint, "status": "ok"})
-    _write_hook_trace("hook.inject.model_config_validated", {
-        "adapter": adapter_id,
-        "fingerprint": fingerprint[:16],
-        "prior_was_error": prior_was_error,
-    })
+    _write_hook_trace("hook.inject.model_config_validated", {"adapter": adapter_id})
     if prior_was_error:
         cleared = _clear_provider_notice_state()
         _write_hook_trace("hook.inject.model_config_recovery_cleared_notices", {
@@ -1670,9 +1634,7 @@ def hook_inject(args):
                 _write_hook_trace("hook.inject.model_config_notice_fastpath", {
                     "query": query[:160],
                     "session_id": session_id,
-                    "notice_preview": model_config_notice[:500],
                     "pending_context_len": len(pending_context or ""),
-                    "pending_context_preview": (pending_context or "")[:500],
                     "deferred_relay_len": len(deferred_notice_relay_context or ""),
                     "context_len": len(context),
                 })
