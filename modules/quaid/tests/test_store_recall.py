@@ -3995,6 +3995,52 @@ class TestSourceChunkStorage:
         assert chunk_meta["ann_index_backfilled"] >= len(rows)
         assert chunk_meta["ann_candidate_count"] >= len(rows)
 
+    def test_semantic_search_backfills_missing_node_vec_index(self, tmp_path):
+        """Recall repairs stored node embeddings that missed the sqlite-vec side index."""
+        import datastore.memorydb.memory_graph as mg
+
+        if not mg._lib_has_vec():
+            pytest.skip("sqlite-vec unavailable")
+
+        graph, _db_file = _make_graph(tmp_path)
+        node_id = graph.add_node(
+            mg.Node.create(
+                "fact",
+                "Rowan keeps the cedar receipt box in the workshop cabinet",
+                owner_id="rowan",
+                status="pending",
+            ),
+            embed=True,
+        )
+
+        with graph._get_conn() as conn:
+            assert conn.execute(
+                "SELECT COUNT(*) FROM vec_nodes WHERE node_id = ?",
+                (node_id,),
+            ).fetchone()[0] == 1
+            conn.execute("DELETE FROM vec_nodes WHERE node_id = ?", (node_id,))
+            assert conn.execute(
+                "SELECT COUNT(*) FROM vec_nodes WHERE node_id = ?",
+                (node_id,),
+            ).fetchone()[0] == 0
+
+        graph.get_embedding.reset_mock()
+        rows = graph.search_semantic(
+            "cedar receipt box workshop cabinet",
+            limit=1,
+            owner_id="rowan",
+            min_similarity=0.0,
+        )
+
+        assert [node.id for node, _score in rows] == [node_id]
+        # Backfill uses the stored node embedding; only the query should be embedded.
+        assert graph.get_embedding.call_count == 1
+        with graph._get_conn() as conn:
+            assert conn.execute(
+                "SELECT COUNT(*) FROM vec_nodes WHERE node_id = ?",
+                (node_id,),
+            ).fetchone()[0] == 1
+
     def test_session_chunk_ann_query_remains_owner_scoped(self, tmp_path):
         """The shared chunk ANN index cannot return another owner's transcript chunks."""
         import datastore.memorydb.memory_graph as mg

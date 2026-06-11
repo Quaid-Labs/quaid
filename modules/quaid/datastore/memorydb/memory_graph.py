@@ -817,30 +817,47 @@ class MemoryGraph:
             if not nodes_table_exists:
                 return
 
-            # Backfill: insert any nodes with embeddings not yet in vec_nodes
-            missing = conn.execute("""
+            backfilled = self._backfill_vec_index(conn)
+            if backfilled:
+                print(f"[vec] Backfilled {backfilled} embeddings into vec_nodes", file=sys.stderr)
+
+    def _backfill_vec_index(self, conn: sqlite3.Connection, *, owner_id: Optional[str] = None) -> int:
+        """Insert stored node embeddings that are missing from the sqlite-vec index."""
+        clauses = [
+            "n.embedding IS NOT NULL",
+            "n.id NOT IN (SELECT node_id FROM vec_nodes)",
+        ]
+        params: List[Any] = []
+        if owner_id:
+            clauses.append("(n.owner_id = ? OR n.owner_id IS NULL OR n.privacy IN ('shared', 'public'))")
+            params.append(owner_id)
+
+        missing = conn.execute(
+            f"""
                 SELECT n.id, n.embedding FROM nodes n
-                WHERE n.embedding IS NOT NULL
-                  AND n.id NOT IN (SELECT node_id FROM vec_nodes)
-            """).fetchall()
-            if missing:
-                for row in missing:
-                    try:
-                        conn.execute(
-                            "INSERT INTO vec_nodes(node_id, embedding) VALUES (?, ?)",
-                            (row["id"], row["embedding"])
-                        )
-                    except Exception as exc:
-                        logger.warning(
-                            "vec backfill skipped node %s due to vec_nodes insert failure: %s",
-                            row["id"],
-                            exc,
-                        )
-                        if _is_fail_hard_mode():
-                            raise RuntimeError(
-                                "Vector index backfill failed while fail-hard mode is enabled"
-                            ) from exc
-                print(f"[vec] Backfilled {len(missing)} embeddings into vec_nodes", file=sys.stderr)
+                WHERE {' AND '.join(clauses)}
+            """,
+            params,
+        ).fetchall()
+        backfilled = 0
+        for row in missing:
+            try:
+                conn.execute(
+                    "INSERT INTO vec_nodes(node_id, embedding) VALUES (?, ?)",
+                    (row["id"], row["embedding"])
+                )
+                backfilled += 1
+            except Exception as exc:
+                logger.warning(
+                    "vec backfill skipped node %s due to vec_nodes insert failure: %s",
+                    row["id"],
+                    exc,
+                )
+                if _is_fail_hard_mode():
+                    raise RuntimeError(
+                        "Vector index backfill failed while fail-hard mode is enabled"
+                    ) from exc
+        return backfilled
 
     def _get_conn(self) -> sqlite3.Connection:
         """Get database connection. Delegates to lib.database."""
@@ -2425,6 +2442,10 @@ class MemoryGraph:
         results = []
         with self._get_conn() as conn:
             _refresh_db_read_visibility(conn)
+            self._ensure_vec_table(conn, query_embedding)
+            backfilled = self._backfill_vec_index(conn, owner_id=owner_id)
+            if backfilled:
+                logger.info("vec search backfilled %d missing node embedding(s)", backfilled)
             # vec0 KNN query — retrieve more candidates than needed for post-filtering
             vec_rows = conn.execute(
                 "SELECT node_id, distance FROM vec_nodes WHERE embedding MATCH ? AND k = ? ORDER BY distance",
