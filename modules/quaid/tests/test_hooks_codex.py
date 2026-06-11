@@ -445,6 +445,83 @@ def test_codex_hook_inject_turn_based_refresh_replays_parallel_same_prompt(monke
     assert out3.strip() == ""
 
 
+def test_codex_hook_inject_identity_refresh_survives_recall_init_failure(monkeypatch, tmp_path):
+    from core.interface import hooks
+
+    projects_dir = tmp_path / "projects"
+    identity_dir = tmp_path / "identity"
+    data_dir = tmp_path / "data"
+    projects_dir.mkdir()
+    identity_dir.mkdir()
+    data_dir.mkdir(parents=True, exist_ok=True)
+    (identity_dir / "USER.md").write_text(
+        "The office plant is named Bartholomew. It is a fiddle-leaf fig.",
+        encoding="utf-8",
+    )
+    (identity_dir / "SOUL.md").write_text("SOUL baseline", encoding="utf-8")
+    (identity_dir / "ENVIRONMENT.md").write_text("ENV baseline", encoding="utf-8")
+
+    adapter = _adapter_mock()
+    adapter.projects_dir.return_value = projects_dir
+    adapter.identity_dir.return_value = identity_dir
+    adapter.get_base_context_files.return_value = {}
+    adapter.get_cli_tools_snippet.return_value = ""
+    adapter.get_pending_context.return_value = ""
+    adapter.data_dir.return_value = data_dir
+    adapter.instance_root.return_value = tmp_path
+    adapter.adapter_id.return_value = "codex"
+    adapter.resolve_prompt_submit_signal.return_value = None
+    adapter.get_session_path.return_value = None
+    adapter.get_sessions_dir.return_value = str(tmp_path / "sessions")
+
+    def _capability(key, default=None):
+        if key == "context_refresh_strategy":
+            return "turn_based"
+        if key == "context_refresh_guard":
+            return {"min_turns": 500, "min_interval_minutes": 999}
+        return default
+
+    monkeypatch.setattr("lib.adapter.get_adapter", lambda: adapter)
+    monkeypatch.setattr("lib.adapter._ensure_instance_projects_bootstrapped", lambda _adapter: None)
+    monkeypatch.setattr(hooks, "_adapter_capability", _capability)
+    monkeypatch.setattr(hooks, "_get_pending_context", lambda: "")
+    monkeypatch.setattr(hooks, "_get_deferred_notice_hint", lambda: "")
+    monkeypatch.setattr(hooks, "_get_deferred_notice_relay_context", lambda: "")
+    monkeypatch.setattr(hooks, "_get_quaid_agents_baseline_context", lambda: "")
+    monkeypatch.setattr(hooks, "_context_refresh_state_path", lambda: data_dir / "context-refresh-state.json")
+    monkeypatch.setattr("core.compatibility.notify_on_use_if_degraded", lambda *_args, **_kwargs: "")
+    monkeypatch.setattr("core.extraction_daemon.ensure_alive", lambda: None)
+    monkeypatch.setattr("core.extraction_daemon.read_cursor", lambda _sid: {"line_offset": 0, "transcript_path": ""})
+    monkeypatch.setattr("core.extraction_daemon.write_cursor", lambda *args: None)
+    monkeypatch.setattr("lib.fail_policy.is_fail_hard_enabled", lambda: True)
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "codex-test")
+
+    with patch(
+        "core.interface.api.recall_fast",
+        side_effect=ValueError(
+            "Plugin contract init failures: Plugin memorydb.core init hook failed "
+            "(on_init): unable to open database file"
+        ),
+    ), patch("core.interface.api.projects_search_docs", return_value=None):
+        out, err = _run_hook_inject(
+            {
+                "prompt": "What is the office plant named?",
+                "session_id": "codex-m7-recall-init-failure",
+                "cwd": str(tmp_path),
+            },
+            monkeypatch=monkeypatch,
+        )
+
+    payload = json.loads(out)
+    context = payload["hookSpecificOutput"]["additionalContext"]
+    assert "[Quaid error] [recall]" in context
+    assert "# Quaid Refreshed Identity Context" in context
+    assert "The office plant is named Bartholomew" in context
+    assert "unable to open database file" not in context
+    assert "hook-inject" in err
+
+
 def test_codex_hook_inject_turn_based_refresh_emits_context_after_timeout_marker(monkeypatch, tmp_path):
     from core.interface import hooks
 

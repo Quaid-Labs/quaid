@@ -145,6 +145,18 @@ class TestGetConnection:
         with get_connection(db_path) as conn:
             assert conn.row_factory == sqlite3.Row
 
+    def test_creates_missing_database_parent_directory(self, tmp_path):
+        from lib.database import get_connection
+
+        db_path = tmp_path / "missing" / "nested" / "memory.db"
+        assert not db_path.parent.exists()
+
+        with get_connection(db_path) as conn:
+            conn.execute("CREATE TABLE ready (id INTEGER PRIMARY KEY)")
+
+        assert db_path.parent.is_dir()
+        assert db_path.is_file()
+
     def test_foreign_keys_enabled(self, tmp_path):
         from lib.database import get_connection
         db_path = tmp_path / "test.db"

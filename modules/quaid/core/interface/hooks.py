@@ -1568,6 +1568,17 @@ def hook_inject(args):
     if not query:
         return
 
+    try:
+        turn_refresh_context = _build_turn_based_refresh_context(session_id, prompt=query)
+    except Exception as exc:
+        turn_refresh_context = ""
+        _write_hook_trace("hook.inject.context_refresh_error", {
+            "query": query[:160],
+            "session_id": session_id,
+            "strategy": _context_refresh_strategy(),
+            "error": str(exc)[:500],
+        })
+
     # Human-facing notices must be drained before provider/daemon/recall work
     # so a later failure cannot mark them delivered without model-visible text.
     # Do not return here: ordinary notices should ride alongside memory/docs
@@ -1595,6 +1606,8 @@ def hook_inject(args):
                     context_parts.append(pending_context)
                 if deferred_notice_relay_context:
                     context_parts.append(deferred_notice_relay_context)
+                if turn_refresh_context:
+                    context_parts.append(turn_refresh_context)
                 project_list_hint = _project_list_cli_hint_context(
                     hook_input if isinstance(hook_input, dict) else {}
                 )
@@ -1622,6 +1635,8 @@ def hook_inject(args):
                 context_parts = [_format_direct_agent_notices([notice])]
                 if deferred_notice_relay_context:
                     context_parts.append(deferred_notice_relay_context)
+                if turn_refresh_context:
+                    context_parts.append(turn_refresh_context)
                 context = "\n\n".join(part for part in context_parts if part)
                 _write_hook_trace("hook.inject.model_config_notice_fastpath", {
                     "query": query[:160],
@@ -1935,9 +1950,8 @@ def hook_inject(args):
         baseline_agents_context = _get_quaid_agents_baseline_context()
         if baseline_agents_context:
             context_parts.append(baseline_agents_context)
-        refresh_context = _build_turn_based_refresh_context(session_id, prompt=query)
-        if refresh_context:
-            context_parts.append(refresh_context)
+        if turn_refresh_context:
+            context_parts.append(turn_refresh_context)
             _write_hook_trace("hook.inject.context_refreshed", {
                 "query": query[:160],
                 "session_id": session_id,
@@ -2031,12 +2045,23 @@ def hook_inject(args):
             fallback_context_parts.append(
                 f"<quaid_system_message>{_provider_failure_notice_message(e)}</quaid_system_message>"
             )
+        elif turn_refresh_context:
+            fallback_context_parts.append(
+                _format_direct_agent_notices(
+                    [
+                        "[Quaid error] [recall] Quaid recall failed before memory injection. "
+                        f"{_safe_agent_error(e)}"
+                    ]
+                )
+            )
         if pending_context:
             fallback_context_parts.append(pending_context)
         if deferred_notice_relay_context:
             fallback_context_parts.append(deferred_notice_relay_context)
         if deferred_notice_hint:
             fallback_context_parts.append(deferred_notice_hint)
+        if turn_refresh_context:
+            fallback_context_parts.append(turn_refresh_context)
         if fallback_context_parts:
             try:
                 from lib.m15_trace import trace_m15

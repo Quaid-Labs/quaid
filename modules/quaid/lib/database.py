@@ -84,6 +84,7 @@ def _open_configured_connection(path: Path) -> sqlite3.Connection:
     long-lived supervisor; if contention persists after bounded retries, callers
     still get the original sqlite error.
     """
+    path.parent.mkdir(parents=True, exist_ok=True)
     attempts = len(_CONNECT_RETRY_DELAYS_SECONDS) + 1
     last_exc: sqlite3.OperationalError | None = None
     for attempt in range(1, attempts + 1):
