@@ -657,6 +657,7 @@ def _refresh_runtime_config_if_changed(reason: str) -> bool:
             # restored configs. Use the persisted signature to clear stale
             # provider notices only when the config actually changed.
             return _refresh_runtime_config_if_changed(reason)
+        invalidated_probe_error = _invalidate_prompt_model_probe_error_state(reason)
         _write_runtime_config_snapshot_state(snapshot)
         _write_hook_trace(
             "hook.runtime_config.baseline",
@@ -664,6 +665,7 @@ def _refresh_runtime_config_if_changed(reason: str) -> bool:
                 "reason": reason,
                 "paths": [path for path, _mtime in snapshot],
                 "cleared_pending": 0,
+                "invalidated_model_config_probe_error": invalidated_probe_error,
             },
         )
         return False
