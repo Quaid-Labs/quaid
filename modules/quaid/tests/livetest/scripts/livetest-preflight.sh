@@ -1449,6 +1449,22 @@ if codex_token:
             plugins = {}
             cfg["plugins"] = plugins
         plugins["bundledDiscovery"] = "compat"
+        tools = cfg.setdefault("tools", {})
+        if not isinstance(tools, dict):
+            tools = {}
+            cfg["tools"] = tools
+        # OC 2026.6.5 requires the message tool for Matrix replies. Preserve
+        # the coding profile while explicitly allowing the channel delivery tool.
+        if isinstance(tools.get("allow"), list) and tools.get("allow"):
+            if "message" not in tools["allow"]:
+                tools["allow"].append("message")
+        else:
+            also_allow = tools.get("alsoAllow")
+            if not isinstance(also_allow, list):
+                also_allow = []
+                tools["alsoAllow"] = also_allow
+            if "message" not in also_allow:
+                also_allow.append("message")
         allowed_models = defaults.setdefault("models", {})
         if not isinstance(allowed_models, dict):
             allowed_models = {}

@@ -37,6 +37,7 @@ import {
 } from "./lib/install-config-hydration.mjs";
 import { ensureOpenClawExtensionDependencies } from "./lib/openclaw-extension-deps.mjs";
 import { ensureOpenClawAgentModelDefault } from "./lib/openclaw-agent-model-default.mjs";
+import { ensureOpenClawMessageToolAllowed } from "./lib/openclaw-message-tool-allow.mjs";
 import { ensureInstalledQuaidCli } from "./lib/install-cli-wrapper.mjs";
 import {
   captureOpenClawMatrixConfig,
@@ -2663,6 +2664,15 @@ function _ensureOpenClawDefaultAgentModel() {
   }
 }
 
+function _ensureOpenClawMessageToolAllowed() {
+  const cfgPath = path.join(os.homedir(), ".openclaw", "openclaw.json");
+  try {
+    return !!ensureOpenClawMessageToolAllowed(cfgPath).changed;
+  } catch {
+    return false;
+  }
+}
+
 function _sanitizeOpenClawNativeMemoryPlugins() {
   const cfgPath = path.join(os.homedir(), ".openclaw", "openclaw.json");
   try {
@@ -2699,6 +2709,7 @@ async function _reassertOpenClawPostRestartState(context = "gateway restart", ma
   const matrixRestore = _restoreOpenClawMatrixConfig(matrixSnapshot);
   if (matrixRestore.changed) changedBits.push("matrix-channel");
   if (_ensureOpenClawPluginsAllowQuaid()) changedBits.push("plugins.allow");
+  if (_ensureOpenClawMessageToolAllowed()) changedBits.push("tools.message");
   if (_sanitizeOpenClawNativeMemoryPlugins()) changedBits.push("native-memory-plugins");
   if (_sanitizeOpenClawQuaidPluginEntry()) changedBits.push("plugins.entries.quaid");
 
