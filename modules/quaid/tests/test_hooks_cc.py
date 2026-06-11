@@ -1841,6 +1841,107 @@ class TestHookInjectRecallResilience:
         assert entry["injected"][0]["similarity"] == 0.96
         assert entry["recallCount"] == 1
 
+    def test_hook_inject_preserve_short_exact_query_keeps_supported_memories(
+        self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
+    ):
+        from core import extraction_daemon
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "claude-code-test")
+        monkeypatch.setattr(extraction_daemon, "write_cursor", lambda *a: None)
+        monkeypatch.setattr("core.interface.hooks._get_pending_context", lambda: "")
+        monkeypatch.setattr("core.interface.hooks._get_deferred_notice_hint", lambda: "")
+        monkeypatch.setattr("core.interface.hooks._get_deferred_notice_relay_context", lambda: "")
+        monkeypatch.setattr("core.interface.hooks._get_quaid_agents_baseline_context", lambda: "")
+        monkeypatch.setattr("core.interface.hooks._build_turn_based_refresh_context", lambda *a, **kw: "")
+
+        query = "What grinder do I use for my espresso setup?"
+        rows = [
+            {
+                "id": "m-baratzaflair",
+                "text": (
+                    "[memory] Solomon Steadman has a Baratza Encore grinder and Flair 58 espresso setup in his workspace\n"
+                    "[session_chunk] sess#2: Before we get going, let me give you some context so you don't have to keep asking."
+                ),
+                "similarity": 1.0,
+                "category": "fact",
+            },
+            {
+                "id": "m-flair",
+                "text": (
+                    "[memory] Solomon Steadman owns a Flair 58 espresso setup\n"
+                    "[session_chunk] sess#3: User: Before we get going, let me give you context."
+                ),
+                "similarity": 1.0,
+                "category": "fact",
+            },
+        ]
+        meta = {
+            "mode": "fast",
+            "stop_reason": "max_turns",
+            "selected_path": "vector",
+            "planned_stores": ["vector"],
+            "turn_details": [
+                {
+                    "planner": {
+                        "bailout_reason": "preserve_short_exact_query",
+                        "planner_profile": "fast",
+                        "queries_count": 1,
+                        "used_llm": False,
+                    }
+                }
+            ],
+            "quality_gate": {
+                "evaluation": {
+                    "ready": True,
+                    "needs_validation": False,
+                    "covered_terms_ratio": 1.0,
+                    "top_similarity": 1.0,
+                }
+            },
+            "memory_quality": {
+                "surface_quality": "good",
+                "another_recall_may_help": False,
+                "signals": ["close_competitors"],
+                "top_similarity": 1.0,
+            },
+        }
+        docs_bundle = {
+            "project": "Quaid",
+            "chunks": [
+                {
+                    "text": "# Project: Quaid",
+                    "source": "/Users/admin/quaid/projects/quaid/PROJECT.md",
+                    "similarity": 0.713,
+                }
+            ],
+        }
+
+        with patch("core.interface.api.recall_fast", return_value=(rows, meta)), \
+             patch("core.interface.api.projects_search_docs", return_value=docs_bundle):
+            out, _err = _run_hook_inject(
+                {
+                    "prompt": query,
+                    "session_id": "sess-preserve-short-exact-query",
+                    "cwd": "/Users/x",
+                },
+                monkeypatch=monkeypatch,
+            )
+
+        payload = json.loads(out)
+        context = payload["hookSpecificOutput"]["additionalContext"]
+        assert "[Quaid Memory Context]" in context
+        assert "Baratza Encore" in context
+        assert "Flair 58" in context
+        assert "[Quaid Project Docs: Quaid]" in context
+
+        log_path = tmp_path / "instances" / "claude-code-test" / "logs" / "daemon" / "preinject.jsonl"
+        entry = json.loads(log_path.read_text(encoding="utf-8").splitlines()[0])
+        injected_texts = [item["text"] for item in entry["injected"]]
+        assert any("Baratza Encore" in text for text in injected_texts)
+        assert any(item.get("category") == "project_doc" for item in entry["injected"])
+        assert entry["diagnostics"]["planner"]["bailout_reason"] == "preserve_short_exact_query"
+
     def test_recall_fast_close_competitor_skips_query_echo_before_promotion(
         self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
     ):

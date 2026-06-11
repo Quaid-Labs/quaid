@@ -221,6 +221,11 @@ _NEGATIVE_MEMORY_CLAIM_RE = re.compile(
     r")\b",
     re.IGNORECASE,
 )
+_MEMORY_PREFIX_RE = re.compile(r"^\s*\[memory\]\s*", re.IGNORECASE)
+_MEMORY_SUPPORT_LINE_RE = re.compile(
+    r"^\s*\[(?:session_chunk|source_chunk|project_doc|doc)\]",
+    re.IGNORECASE,
+)
 _QUESTION_MEMORY_RE = re.compile(
     r"^\s*(?:who|what|when|where|why|how|which|whose|is|are|was|were|do|does|did|can|could|"
     r"should|would|will|may|might|has|have|had)\b.*\?\s*$",
@@ -236,8 +241,21 @@ _QUESTION_MEMORY_NO_MARK_RE = re.compile(
 )
 
 
-def _is_negative_memory_claim_text(text: str) -> bool:
+def _primary_memory_assertion_text(text: str) -> str:
     raw = str(text or "").strip()
+    if not raw:
+        return ""
+    lines: List[str] = []
+    for line in raw.splitlines():
+        if _MEMORY_SUPPORT_LINE_RE.match(line):
+            break
+        lines.append(line)
+    primary = "\n".join(lines).strip() or raw
+    return _MEMORY_PREFIX_RE.sub("", primary, count=1).strip() or primary
+
+
+def _is_negative_memory_claim_text(text: str) -> bool:
+    raw = _primary_memory_assertion_text(text)
     if not raw:
         return False
     return bool(
@@ -247,7 +265,7 @@ def _is_negative_memory_claim_text(text: str) -> bool:
 
 
 def _is_bare_question_memory_text(text: str) -> bool:
-    raw = str(text or "").strip()
+    raw = _primary_memory_assertion_text(text)
     if not raw:
         return False
     if _QUESTION_MEMORY_RE.match(raw):
