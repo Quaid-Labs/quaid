@@ -102,6 +102,7 @@ QUALITY RULES:
 - Extract personal facts comprehensively — the nightly janitor handles noise, but missed facts are gone forever
 - When a message mixes meta-language about memory or conversation handling ("do not store manually", "remember that", "just making conversation", similar phrasing) with concrete facts, treat the meta-language as secondary context rather than the primary extractable content.
 - In those mixed messages, extract the embedded factual propositions as separate facts and relationships.
+- Do not extract agent statements of memory absence, inability to recall, or missing data as memorable facts. These are transient answer states, not user knowledge.
 - Always prefer concrete entities and relationships over paraphrasing the whole sentence as one preference or instruction.
 
 KEYWORDS (per fact):

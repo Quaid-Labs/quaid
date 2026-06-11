@@ -396,6 +396,8 @@ class TestExtractFromTranscript:
         assert "Do not suppress extraction because a transcript speaker asks for non-storage." in prompt
         assert "Do not extract facts about Quaid operational behavior" in prompt
         assert "recall status, plugin diagnostics, or retrieval/debug progress as user facts." in prompt
+        assert "Do not extract agent statements of memory absence" in prompt
+        assert "transient answer states, not user knowledge" in prompt
         assert "Extraction is exhaustive across the whole chunk" in prompt
         assert "Actionability is not a criterion" in prompt
         assert "stable background details, explicitly stated plans or conditions" in prompt
@@ -6973,6 +6975,13 @@ class TestLoadPrompt:
         assert "needs_smaller_chunk" in prompt
         assert "nothing_usable" in prompt
         assert "usable" in prompt
+
+    def test_prompt_excludes_agent_memory_absence_claims(self):
+        from ingest.extract import _load_extraction_prompt
+
+        prompt = _load_extraction_prompt()
+        assert "Do not extract agent statements of memory absence" in prompt
+        assert "transient answer states, not user knowledge" in prompt
 
     def test_prompt_requires_full_sentence_facts_not_bare_fragments(self):
         from ingest.extract import _load_extraction_prompt
