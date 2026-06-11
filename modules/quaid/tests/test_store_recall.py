@@ -2854,6 +2854,59 @@ class TestStoreKeywords:
             ).fetchone()
             assert row["keywords"] == "sport ocean waves beach fitness"
 
+    def test_init_repairs_legacy_content_fts_triggers(self, tmp_path):
+        """Current FTS tables with stale content-column triggers are repaired."""
+        from datastore.memorydb.memory_graph import MemoryGraph, store
+
+        graph, db_file = _make_graph(tmp_path)
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+            result = store(
+                "Quaid keeps an office fiddle-leaf fig",
+                owner_id="quaid",
+                skip_dedup=True,
+                keywords="office plant bartholomew",
+            )
+
+        legacy_triggers = """
+        DROP TRIGGER IF EXISTS nodes_ai;
+        DROP TRIGGER IF EXISTS nodes_ad;
+        DROP TRIGGER IF EXISTS nodes_au;
+        CREATE TRIGGER nodes_ai AFTER INSERT ON nodes BEGIN
+            INSERT INTO nodes_fts(rowid, content) VALUES (new.rowid, new.name);
+        END;
+        CREATE TRIGGER nodes_ad AFTER DELETE ON nodes BEGIN
+            INSERT INTO nodes_fts(nodes_fts, rowid, content) VALUES('delete', old.rowid, old.name);
+        END;
+        CREATE TRIGGER nodes_au AFTER UPDATE ON nodes BEGIN
+            INSERT INTO nodes_fts(nodes_fts, rowid, content) VALUES('delete', old.rowid, old.name);
+            INSERT INTO nodes_fts(rowid, content) VALUES (new.rowid, new.name);
+        END;
+        """
+        with graph._get_conn() as conn:
+            conn.executescript(legacy_triggers)
+            stale_sql = conn.execute(
+                "SELECT sql FROM sqlite_master WHERE type='trigger' AND name='nodes_au'"
+            ).fetchone()[0]
+            assert "content" in stale_sql
+
+        repaired = MemoryGraph(db_path=db_file)
+        with repaired._get_conn() as conn:
+            repaired_sql = conn.execute(
+                "SELECT sql FROM sqlite_master WHERE type='trigger' AND name='nodes_au'"
+            ).fetchone()[0]
+            assert "content" not in repaired_sql
+            assert "name, keywords" in repaired_sql
+            conn.execute(
+                "UPDATE nodes SET name = ?, keywords = ? WHERE id = ?",
+                ("Quaid keeps Bartholomew on the office shelf", "office plant shelf", result["id"]),
+            )
+            rows = conn.execute(
+                "SELECT rowid FROM nodes_fts WHERE nodes_fts MATCH ?",
+                ("shelf",),
+            ).fetchall()
+            assert rows
+
 
 # ---------------------------------------------------------------------------
 # Feature 10: Gateway Restart Recovery Scan

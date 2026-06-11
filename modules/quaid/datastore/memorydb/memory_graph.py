@@ -585,6 +585,33 @@ class MemoryGraph:
             except Exception:
                 pass  # Fresh DB or FTS not yet created
 
+            # Older keyword migrations could leave current FTS table shape with
+            # stale triggers that still write nodes_fts(content). SQLite accepts
+            # those triggers until the next nodes UPDATE/INSERT fires.
+            try:
+                trigger_rows = conn.execute(
+                    """
+                    SELECT name, sql FROM sqlite_master
+                    WHERE type='trigger' AND name IN ('nodes_ai', 'nodes_ad', 'nodes_au')
+                    """
+                ).fetchall()
+                stale_fts_triggers = any(
+                    re.search(
+                        r"nodes_fts\s*\([^)]*\bcontent\b",
+                        str(row["sql"] or ""),
+                        re.IGNORECASE,
+                    )
+                    for row in trigger_rows
+                )
+                if stale_fts_triggers:
+                    conn.execute("DROP TRIGGER IF EXISTS nodes_ai")
+                    conn.execute("DROP TRIGGER IF EXISTS nodes_ad")
+                    conn.execute("DROP TRIGGER IF EXISTS nodes_au")
+                    conn.executescript(schema)
+                    conn.execute("INSERT INTO nodes_fts(nodes_fts) VALUES('rebuild')")
+            except Exception:
+                pass  # Fresh DB or FTS triggers not yet created
+
             # Migrate recall_log: add reranker delta tracking columns
             for col, typedef in [
                 ("reranker_top1_changed", "INTEGER DEFAULT 0"),
