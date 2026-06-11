@@ -1925,6 +1925,7 @@ class TestRecallBasic:
                     return_meta=True,
                     planner_profile="fast",
                     domain={"all": True},
+                    timeout_ms=30_000,
                 )
 
         assert rows

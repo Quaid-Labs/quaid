@@ -6296,11 +6296,11 @@ def _fast_term_rescue_score(
     return min(rescue_score, 0.99)
 
 
-_FAST_LEXICAL_PREFLIGHT_MAX_BUDGET_MS = 4000
+_FAST_LEXICAL_PREFLIGHT_MAX_BUDGET_MS = 30000
 
 
 def _fast_lexical_preflight_enabled(timeout_ms: Optional[int]) -> bool:
-    """Enable DB-local preflight only for tight hook-inject style budgets."""
+    """Enable DB-local preflight within the normal hook-inject recall budget."""
     if timeout_ms is None:
         try:
             timeout_ms = int(_get_configured_injection_timeout_ms(3000) or 3000)

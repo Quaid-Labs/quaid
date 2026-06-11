@@ -64,8 +64,8 @@ def _hook_inject_recall_timeout_ms() -> int:
     The lightweight config default is 3s, which is too short for normal local
     vector recall when Ollama is warm or lightly contended.  Keep operator
     overrides above the floor, but enforce a 30s floor so hook injection uses
-    the normal recall budget.  This intentionally disables the tight-budget
-    lexical preflight path in favor of reliable vector recall.
+    the normal recall budget.  Recall may still use strong DB-local lexical
+    preflight inside that budget when exact stored evidence is already indexed.
     """
     try:
         from lib.config import get_injection_timeout_ms
