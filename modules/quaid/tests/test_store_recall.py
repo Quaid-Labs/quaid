@@ -1621,13 +1621,15 @@ class TestRecallBasic:
             ]), \
                  patch.object(mg.MemoryGraph, "search_fts", return_value=[]), \
                  patch.object(mg, "_plan_fanout_queries", return_value=([query], planner_meta)):
+                # Keep this test on the later lexical-rescue branch; a normal
+                # hook budget now lets strong lexical preflight satisfy it first.
                 rows, meta = mg.recall_fast(
                     query,
                     owner_id="quaid",
                     return_meta=True,
                     planner_profile="fast",
                     domain={"all": True},
-                    timeout_ms=20000,
+                    timeout_ms=45_000,
                 )
 
         assert rows
@@ -1688,13 +1690,15 @@ class TestRecallBasic:
             ]), \
                  patch.object(mg.MemoryGraph, "search_fts", return_value=[(generic_node, 1.0)]), \
                  patch.object(mg, "_plan_fanout_queries", return_value=([query], planner_meta)):
+                # Keep this test on the later lexical-rescue branch; a normal
+                # hook budget now lets strong lexical preflight satisfy it first.
                 rows, meta = mg.recall_fast(
                     query,
                     owner_id="quaid",
                     return_meta=True,
                     planner_profile="fast",
                     domain={"all": True},
-                    timeout_ms=20000,
+                    timeout_ms=45_000,
                 )
 
         assert rows
@@ -1773,13 +1777,15 @@ class TestRecallBasic:
             ]), \
                  patch.object(graph, "search_fts", return_value=[(exact_node, 1.0)]), \
                  patch.object(mg, "_plan_fanout_queries", return_value=([query], planner_meta)):
+                # Keep this test on the later lexical-rescue branch; a normal
+                # hook budget now lets strong lexical preflight satisfy it first.
                 rows, meta = mg.recall_fast(
                     query,
                     owner_id="quaid",
                     return_meta=True,
                     planner_profile="fast",
                     domain={"all": True},
-                    timeout_ms=20000,
+                    timeout_ms=45_000,
                 )
 
         assert rows
