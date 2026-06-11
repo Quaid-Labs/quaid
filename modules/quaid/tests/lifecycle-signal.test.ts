@@ -1269,6 +1269,65 @@ describe("lifecycle signal detection", () => {
     }
   });
 
+  it("can recover a delayed post-new query after an initial stale transcript-tail read", async () => {
+    const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), "quaid-oc-delayed-tail-"));
+    const sessionId = "sess-delayed-tail-recovery";
+    const sessionFile = path.join(baseDir, `${sessionId}.jsonl`);
+    fs.writeFileSync(
+      sessionFile,
+      [
+        JSON.stringify({
+          type: "message",
+          message: { role: "user", content: "Hello" },
+        }),
+        JSON.stringify({
+          type: "message",
+          message: { role: "assistant", content: "Hello" },
+        }),
+      ].join("\n"),
+      "utf8",
+    );
+    try {
+      vi.resetModules();
+      const isolatedAdapter = await import("../adaptors/openclaw/adapter.js");
+      const isolatedTest = isolatedAdapter.__test;
+      isolatedTest.rememberSessionTranscriptPath(sessionId, sessionFile, "test");
+      const stale = isolatedTest.selectAutoInjectQuery(
+        {
+          prompt: "",
+          messages: [],
+        },
+        null,
+        10_000,
+        sessionId,
+      );
+      expect(stale.query).toBe("Hello");
+      expect(stale.source).toBe("transcript_tail");
+
+      fs.appendFileSync(
+        sessionFile,
+        `\n${JSON.stringify({
+          type: "message",
+          message: { role: "user", content: "What is my Friday ritual?" },
+        })}`,
+        "utf8",
+      );
+      const settled = isolatedTest.selectAutoInjectQuery(
+        {
+          prompt: "",
+          messages: [],
+        },
+        null,
+        10_500,
+        sessionId,
+      );
+      expect(settled.query).toBe("What is my Friday ritual?");
+      expect(settled.source).toBe("transcript_tail");
+    } finally {
+      fs.rmSync(baseDir, { recursive: true, force: true });
+    }
+  });
+
   it("keys duplicate auto-inject hook surfaces by agent, session, and normalized query", () => {
     const sessionKey = "agent:main:matrix:direct:@quaid-test-bot:localhost";
     const first = __test.autoInjectTurnKey("main", "What do you know about my dog Baxter?", sessionKey);

@@ -1238,6 +1238,10 @@ const QUEUED_STARTUP_RECOVERY_CACHE_MS = Math.max(
   10_000,
   Math.min(_envTimeoutMs("QUAID_QUEUED_STARTUP_RECOVERY_CACHE_MS", 300_000), 600_000),
 );
+const TRANSCRIPT_TAIL_SETTLE_MS = Math.max(
+  0,
+  Math.min(_envTimeoutMs("QUAID_OC_TRANSCRIPT_TAIL_SETTLE_MS", 500), 2_000),
+);
 type LifecycleSlashAction = "new" | "reset" | "compact";
 
 function normalizeLifecycleSlashAction(text: string): LifecycleSlashAction | null {
@@ -1616,6 +1620,10 @@ function buildAutoInjectPreparationMessages(params: {
       ...(sessionKey ? { sessionKey } : {}),
     },
   ];
+}
+
+function sleepMs(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, Math.max(0, ms)));
 }
 
 function selectAutoInjectQuery(
@@ -6197,6 +6205,46 @@ notify_user(${JSON.stringify(message)})
           nowMs,
           promptSessionId,
         );
+        if (
+          querySource === "transcript_tail"
+          && TRANSCRIPT_TAIL_SETTLE_MS > 0
+          && promptFacade.isLowQualityQuery(query)
+        ) {
+          await sleepMs(TRANSCRIPT_TAIL_SETTLE_MS);
+          const settled = selectAutoInjectQuery(
+            event,
+            lastUserMessageQuery,
+            Date.now(),
+            promptSessionId,
+          );
+          if (
+            settled.query.length >= 3
+            && (
+              settled.source !== querySource
+              || settled.query !== query
+            )
+            && !promptFacade.isLowQualityQuery(settled.query)
+          ) {
+            writeHookTrace("hook.before_prompt_build.transcript_tail_settled", {
+              prior_query: query.slice(0, 80),
+              prior_source: querySource,
+              query: settled.query.slice(0, 80),
+              source: settled.source,
+              settle_ms: TRANSCRIPT_TAIL_SETTLE_MS,
+            });
+            query = settled.query;
+            querySource = settled.source;
+            rawPrompt = settled.rawPrompt;
+          } else {
+            writeHookTrace("hook.before_prompt_build.transcript_tail_settle_unchanged", {
+              query: query.slice(0, 80),
+              source: querySource,
+              settled_query: settled.query.slice(0, 80),
+              settled_source: settled.source,
+              settle_ms: TRANSCRIPT_TAIL_SETTLE_MS,
+            });
+          }
+        }
         const eventMessages: any[] = Array.isArray(event.messages) ? event.messages : [];
 
         writeHookTrace("hook.before_prompt_build.query_extracted", {
