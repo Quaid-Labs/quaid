@@ -626,6 +626,24 @@ def _reset_runtime_resolution_caches() -> None:
             pass
 
 
+def _clear_provider_notice_state() -> dict:
+    sources = {"provider", "llm_config", "embeddings"}
+    cleared = {"pending": 0, "deferred": 0}
+    try:
+        from lib.agent_notice import clear_pending_notices_by_source
+
+        cleared["pending"] = int(clear_pending_notices_by_source(sources=sources) or 0)
+    except Exception:
+        pass
+    try:
+        from lib.agent_notice import clear_deferred_notices_by_source
+
+        cleared["deferred"] = int(clear_deferred_notices_by_source(sources=sources) or 0)
+    except Exception:
+        pass
+    return cleared
+
+
 def _refresh_runtime_config_if_changed(reason: str) -> bool:
     global _HOOK_RUNTIME_CONFIG_SNAPSHOT
     snapshot = _runtime_config_snapshot()
@@ -656,12 +674,7 @@ def _refresh_runtime_config_if_changed(reason: str) -> bool:
 
         reload_config()
         _reset_runtime_resolution_caches()
-        try:
-            from lib.agent_notice import clear_pending_notices_by_source
-
-            clear_pending_notices_by_source(sources={"provider", "llm_config", "embeddings"})
-        except Exception:
-            pass
+        cleared = _clear_provider_notice_state()
     except Exception as exc:
         _write_hook_trace(
             "hook.runtime_config.reload_failed",
@@ -679,6 +692,8 @@ def _refresh_runtime_config_if_changed(reason: str) -> bool:
         {
             "reason": reason,
             "paths": [path for path, _mtime in snapshot],
+            "cleared_pending": cleared.get("pending", 0),
+            "cleared_deferred": cleared.get("deferred", 0),
         },
     )
     return True
@@ -866,6 +881,12 @@ def _validate_prompt_model_config_for_hook(adapter_id: str) -> str:
     _write_prompt_model_probe_state({"fingerprint": fingerprint, "status": "ok"})
     _write_hook_trace("hook.inject.model_config_validated", {"adapter": adapter_id})
     if prior_was_error:
+        cleared = _clear_provider_notice_state()
+        _write_hook_trace("hook.inject.model_config_recovery_cleared_notices", {
+            "adapter": adapter_id,
+            "cleared_pending": cleared.get("pending", 0),
+            "cleared_deferred": cleared.get("deferred", 0),
+        })
         return (
             "[Quaid status] Quaid's fast recall model provider is healthy again. "
             "Ignore earlier provider-error notices from this conversation and answer using the current Quaid context."

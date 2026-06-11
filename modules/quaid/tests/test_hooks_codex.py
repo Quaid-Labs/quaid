@@ -752,6 +752,99 @@ def test_codex_hook_inject_probes_prompt_model_config(monkeypatch, tmp_path):
     assert "invalid-model-m6-probe" in context
 
 
+def test_codex_prompt_model_recovery_clears_sticky_provider_notices(monkeypatch, tmp_path):
+    from core.interface import hooks
+
+    adapter = _adapter_mock()
+    adapter.adapter_id.return_value = "codex"
+    adapter.data_dir.return_value = tmp_path / "data"
+    adapter.instance_root.return_value = tmp_path / "instance"
+
+    pending_path = tmp_path / "data" / "codex-pending-notifications.jsonl"
+    pending_path.parent.mkdir(parents=True)
+    pending_path.write_text(
+        "\n".join(
+            [
+                json.dumps({
+                    "message": "[Quaid error] [provider] invalid-model-m6-probe persisted",
+                    "source": "provider",
+                }),
+                json.dumps({
+                    "message": "[Quaid info] [janitor] keep this notice",
+                    "source": "janitor",
+                }),
+            ]
+        ) + "\n",
+        encoding="utf-8",
+    )
+
+    deferred_path = tmp_path / "instance" / ".runtime" / "notes" / "delayed-llm-requests.json"
+    deferred_path.parent.mkdir(parents=True)
+    deferred_path.write_text(
+        json.dumps({
+            "version": 1,
+            "requests": [
+                {
+                    "id": "provider-old",
+                    "dedupe_key": "provider-old",
+                    "source": "provider",
+                    "kind": "provider",
+                    "priority": "high",
+                    "status": "pending",
+                    "message": "deferred invalid-model-m6-probe",
+                },
+                {
+                    "id": "janitor-keep",
+                    "dedupe_key": "janitor-keep",
+                    "source": "janitor",
+                    "kind": "janitor",
+                    "priority": "normal",
+                    "status": "pending",
+                    "message": "keep janitor notice",
+                },
+            ],
+        }),
+        encoding="utf-8",
+    )
+
+    config_path = tmp_path / "codex" / "config.json"
+    config_path.parent.mkdir()
+    config_mtime = 1
+    monkeypatch.setattr("lib.adapter.get_adapter", lambda: adapter)
+    monkeypatch.setattr("lib.agent_notice.get_adapter", lambda: adapter)
+    monkeypatch.setattr(
+        hooks,
+        "_adapter_capability",
+        lambda key, default=None: True if key == "prompt_model_config_probe" else default,
+    )
+    monkeypatch.setattr(
+        hooks,
+        "_runtime_config_snapshot",
+        lambda: ((str(config_path), config_mtime),),
+    )
+
+    with patch(
+        "lib.llm_clients.call_fast_reasoning",
+        side_effect=RuntimeError("model=invalid-model-m6-probe"),
+    ):
+        first_notice = hooks._validate_prompt_model_config_for_hook("codex")
+
+    assert "invalid-model-m6-probe" in first_notice
+
+    config_mtime = 2
+    with patch("lib.llm_clients.call_fast_reasoning", return_value="OK"):
+        recovery_notice = hooks._validate_prompt_model_config_for_hook("codex")
+
+    assert "healthy again" in recovery_notice
+    pending_text = pending_path.read_text(encoding="utf-8")
+    assert "invalid-model-m6-probe persisted" not in pending_text
+    assert "keep this notice" in pending_text
+    deferred_payload = json.loads(deferred_path.read_text(encoding="utf-8"))
+    messages = [item["message"] for item in deferred_payload["requests"]]
+    assert "deferred invalid-model-m6-probe" not in messages
+    assert "keep janitor notice" in messages
+
+
 def test_codex_provider_failure_does_not_relay_after_next_successful_turn(monkeypatch, tmp_path):
     from core.interface import hooks
 
