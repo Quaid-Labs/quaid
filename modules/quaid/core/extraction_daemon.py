@@ -6119,7 +6119,6 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
         if signal_type == "timeout":
             write_context_refresh_timeout_marker(session_id)
         final_cursor_offset = total_lines
-        queue_residual_semantic_followup = False
         if flush_staged_payload_only:
             try:
                 final_cursor_offset = max(
@@ -6217,7 +6216,6 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             and not drain_unstaged_semantic_buffer_on_sweep
         ):
             write_rolling_state(session_id, clear_staged_payload_from_state(staged_state))
-            queue_residual_semantic_followup = True
         elif preserve_active_rolling_state_after_flush and _rolling_state_has_pending_content(staged_state):
             logger.info(
                 "[%s] session %s: preserving active rolling state after late post-reset content flush",
@@ -6356,26 +6354,6 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                     "read_guard_count": transcript_read_guard_count,
                     "transcript_rebase_retry_count": transcript_rebase_retry_count + 1,
                     "transcript_rebase_max_retries": TRANSCRIPT_REBASE_MAX_RETRIES,
-                },
-            )
-        if queue_residual_semantic_followup:
-            logger.info(
-                "[%s] session %s: staged rolling flush left residual semantic buffer; "
-                "queueing lifecycle flush for buffered tail",
-                label,
-                session_id,
-            )
-            write_signal(
-                signal_type="session_end",
-                session_id=session_id,
-                transcript_path=transcript_path,
-                meta={
-                    "reason": "residual_semantic_buffer_flush",
-                    "source_signal": flush_metric_signal_type,
-                    "source_cursor_key": lock_owner_key,
-                    "buffered_line_offset": int(
-                        staged_state.get("buffered_line_offset", buffered_line_offset) or buffered_line_offset
-                    ),
                 },
             )
 
