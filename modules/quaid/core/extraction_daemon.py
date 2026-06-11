@@ -7444,7 +7444,7 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
 def _retry_missing_embeddings() -> int:
     """Retry embeddings for nodes stored without one (e.g. when Ollama was down).
 
-    Called every ~5 minutes from the daemon loop. Returns count of nodes updated.
+    Called periodically from the daemon loop. Returns count of nodes updated.
     """
     try:
         from datastore.memorydb.memory_graph import MemoryGraph
@@ -7487,7 +7487,7 @@ def daemon_loop(poll_interval: float = 5.0, idle_check_interval: float = 300.0) 
 
     last_idle_check = 0.0
     last_embed_retry_check = 0.0
-    _EMBED_RETRY_INTERVAL = 300.0  # retry missing embeddings every 5 minutes
+    _EMBED_RETRY_INTERVAL = 30.0  # keep fresh extracted facts vector-searchable during active sessions
 
     # Initialize version watcher. Janitor scheduling is supervisor-owned.
     from core.compatibility import VersionWatcher, read_circuit_breaker
@@ -7517,6 +7517,16 @@ def daemon_loop(poll_interval: float = 5.0, idle_check_interval: float = 300.0) 
                     logger.debug("Circuit breaker %s: %s", breaker.status, breaker.message)
                 time.sleep(poll_interval)
                 continue
+
+            # Run before session scans so active-session cursor churn cannot
+            # starve facts that were stored while the embedding provider was busy.
+            now = time.time()
+            if now - last_embed_retry_check > _EMBED_RETRY_INTERVAL:
+                try:
+                    _retry_missing_embeddings()
+                except Exception as e:
+                    logger.debug("embed retry failed: %s", e)
+                last_embed_retry_check = now
 
             try:
                 check_chunk_ready_sessions()
@@ -7573,14 +7583,6 @@ def daemon_loop(poll_interval: float = 5.0, idle_check_interval: float = 300.0) 
                 except Exception as e:
                     logger.error("idle check failed: %s", e)
                 last_idle_check = now
-
-            # Periodic embedding retry — backfill facts stored without embeddings
-            if now - last_embed_retry_check > _EMBED_RETRY_INTERVAL:
-                try:
-                    _retry_missing_embeddings()
-                except Exception as e:
-                    logger.debug("embed retry failed: %s", e)
-                last_embed_retry_check = now
 
             time.sleep(poll_interval)
 

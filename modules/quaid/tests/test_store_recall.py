@@ -4138,6 +4138,44 @@ class TestSourceChunkStorage:
                 (node_id,),
             ).fetchone()[0] == 1
 
+    def test_retry_missing_embeddings_indexes_pending_nodes(self, tmp_path):
+        """Daemon retry repairs fresh pending facts stored while embeddings were unavailable."""
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _db_file = _make_graph(tmp_path)
+        node_id = graph.add_node(
+            mg.Node.create(
+                "fact",
+                "Rowan keeps the copper field notebook beside the scanner",
+                owner_id="rowan",
+                status="pending",
+            ),
+            embed=False,
+        )
+        with graph._get_conn() as conn:
+            row = conn.execute(
+                "SELECT embedding, status FROM nodes WHERE id = ?",
+                (node_id,),
+            ).fetchone()
+            assert row["embedding"] is None
+            assert row["status"] == "pending"
+
+        graph.get_embedding.reset_mock()
+        assert graph.retry_missing_embeddings(limit=10) == 1
+
+        with graph._get_conn() as conn:
+            row = conn.execute(
+                "SELECT embedding FROM nodes WHERE id = ?",
+                (node_id,),
+            ).fetchone()
+            assert row["embedding"] is not None
+            if mg._lib_has_vec():
+                assert conn.execute(
+                    "SELECT COUNT(*) FROM vec_nodes WHERE node_id = ?",
+                    (node_id,),
+                ).fetchone()[0] == 1
+        assert graph.get_embedding.call_count == 1
+
     def test_session_chunk_ann_query_remains_owner_scoped(self, tmp_path):
         """The shared chunk ANN index cannot return another owner's transcript chunks."""
         import datastore.memorydb.memory_graph as mg

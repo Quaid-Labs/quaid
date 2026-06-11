@@ -971,6 +971,37 @@ def test_daemon_loop_leaves_docs_refresh_to_project_docs_supervisor(monkeypatch)
     assert docs_refresh_calls == []
 
 
+def test_daemon_loop_retries_embeddings_before_session_scans(monkeypatch):
+    calls = []
+
+    def fake_sleep(_seconds):
+        raise _StopDaemonLoop()
+
+    def fake_retry():
+        calls.append("embed_retry")
+        return 0
+
+    def fake_check_chunk_ready_sessions():
+        calls.append("scan_sessions")
+
+    monkeypatch.setattr(extraction_daemon, "write_pid", lambda _pid: None)
+    monkeypatch.setattr(extraction_daemon, "remove_pid", lambda: None)
+    monkeypatch.setattr(extraction_daemon, "_supervisor_alive", lambda: True)
+    monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
+    monkeypatch.setattr(extraction_daemon, "process_signal", lambda _sig: None)
+    monkeypatch.setattr(extraction_daemon, "check_chunk_ready_sessions", fake_check_chunk_ready_sessions)
+    monkeypatch.setattr(extraction_daemon, "check_idle_sessions", lambda _mins: None)
+    monkeypatch.setattr(extraction_daemon, "_retry_missing_embeddings", fake_retry)
+    monkeypatch.setattr(extraction_daemon.time, "time", lambda: 1_700_000_000.0)
+    monkeypatch.setattr(extraction_daemon.time, "sleep", fake_sleep)
+    monkeypatch.setattr(extraction_daemon.signal, "signal", lambda *_args, **_kwargs: None)
+
+    with pytest.raises(_StopDaemonLoop):
+        extraction_daemon.daemon_loop(poll_interval=5.0, idle_check_interval=999999.0)
+
+    assert calls[:2] == ["embed_retry", "scan_sessions"]
+
+
 def test_daemon_loop_exits_when_supervisor_disappears(monkeypatch):
     monkeypatch.setattr(extraction_daemon, "write_pid", lambda _pid: None)
     monkeypatch.setattr(extraction_daemon, "remove_pid", lambda: None)

@@ -1201,7 +1201,16 @@ class MemoryGraph:
         try:
             with self._get_conn() as conn:
                 rows = conn.execute(
-                    "SELECT id, text FROM nodes WHERE embedding IS NULL AND state = 'active' LIMIT ?",
+                    """
+                    SELECT id, name, attributes
+                    FROM nodes
+                    WHERE embedding IS NULL
+                      AND (status IS NULL OR status IN ('approved', 'pending', 'active'))
+                      AND deleted_at IS NULL
+                      AND superseded_by IS NULL
+                    ORDER BY COALESCE(updated_at, created_at, '') DESC
+                    LIMIT ?
+                    """,
                     (limit,),
                 ).fetchall()
         except Exception:
@@ -1209,7 +1218,15 @@ class MemoryGraph:
 
         for row in rows:
             node_id = row["id"]
-            text = row["text"] or ""
+            text = row["name"] or ""
+            try:
+                attrs = json.loads(row["attributes"] or "{}")
+            except Exception:
+                attrs = {}
+            if isinstance(attrs, dict) and attrs:
+                text = " ".join(
+                    [text, *[str(value) for value in attrs.values() if value]]
+                ).strip()
             if not text.strip():
                 continue
             try:
