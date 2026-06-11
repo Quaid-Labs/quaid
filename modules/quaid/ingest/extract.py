@@ -1683,7 +1683,7 @@ def _explicit_user_mirrored_anchor_facts(
             continue
         assistant_overlap_tokens = set(_structural_overlap_tokens(next_text, min_len=4))
         raw_sentences = _split_fact_sentences(turn_text)
-        candidate_sentences: List[Tuple[str, bool]] = []
+        candidate_sentences: List[Tuple[str, bool, bool]] = []
         for sentence_index, sentence in enumerate(raw_sentences):
             stripped_sentence = str(sentence or "").strip()
             is_question_shaped = stripped_sentence.rstrip().endswith("?")
@@ -1695,9 +1695,11 @@ def _explicit_user_mirrored_anchor_facts(
                     candidate_sentences.append((
                         f"{stripped_sentence.rstrip('?').rstrip()} {next_sentence}",
                         True,
+                        True,
                     ))
-            candidate_sentences.append((stripped_sentence, is_question_shaped))
-        for sentence, question_shaped in candidate_sentences:
+                    continue
+            candidate_sentences.append((stripped_sentence, is_question_shaped, False))
+        for sentence, question_shaped, combined_question_shape in candidate_sentences:
             if not question_shaped:
                 continue
             fact_text = _normalize_structural_anchor_sentence(str(sentence or "").rstrip("?"))
@@ -1713,6 +1715,8 @@ def _explicit_user_mirrored_anchor_facts(
             ]
             overlap_ratio = len(overlap_tokens) / max(1, len(candidate_tokens))
             strong_structural_overlap = len(overlap_tokens) >= 2 and overlap_ratio >= 0.5
+            if combined_question_shape and len(overlap_tokens) >= 3:
+                strong_structural_overlap = True
             question_overlap = len(overlap_tokens) >= 1 and len(fact_text.split()) >= 6 and overlap_ratio >= 0.6
             if not strong_structural_overlap and not question_overlap:
                 continue
@@ -2045,6 +2049,20 @@ def materialize_cached_extraction_payload(
     explicit_anchor_facts.extend(_explicit_assistant_anchor_facts(anchor_transcript, all_facts))
     if explicit_anchor_facts:
         all_facts = explicit_anchor_facts + all_facts
+    question_echo_keys = _user_question_echo_keys(anchor_transcript)
+    if question_echo_keys:
+        filtered_facts = [
+            fact
+            for fact in all_facts
+            if not _is_user_question_echo_fact(fact, question_echo_keys)
+        ]
+        question_echo_dropped = len(all_facts) - len(filtered_facts)
+        if question_echo_dropped:
+            result["facts_skipped"] = int(result.get("facts_skipped", 0) or 0) + question_echo_dropped
+            result["question_echo_facts_dropped"] = int(
+                result.get("question_echo_facts_dropped", 0) or 0
+            ) + question_echo_dropped
+            all_facts = filtered_facts
 
     return {
         "facts": list(all_facts),
@@ -2082,6 +2100,64 @@ def _filter_extraction_artifact_facts(parsed: Dict[str, Any]) -> Tuple[Dict[str,
             continue
         filtered.append(fact)
 
+    if not dropped:
+        return parsed, 0
+
+    out = dict(parsed)
+    out["facts"] = filtered
+    if not _payload_has_signal(out) and _chunk_assessment(out) in {"", "usable"}:
+        out["chunk_assessment"] = "nothing_usable"
+    return out, dropped
+
+
+_QUESTION_TERMINATORS = ("?", "？", "؟")
+
+
+def _question_echo_key(text: str) -> str:
+    normalized = " ".join(str(text or "").strip().split())
+    normalized = normalized.strip(" \t\r\n\"'`")
+    normalized = normalized.rstrip(" \t\r\n" + "".join(_QUESTION_TERMINATORS))
+    normalized = normalized.rstrip(" .")
+    return " ".join(normalized.lower().split())
+
+
+def _user_question_echo_keys(transcript: str) -> set[str]:
+    keys: set[str] = set()
+    for turn in _iter_user_turn_texts(transcript):
+        for sentence in _split_fact_sentences(turn):
+            stripped = str(sentence or "").strip()
+            if not stripped.endswith(_QUESTION_TERMINATORS):
+                continue
+            key = _question_echo_key(stripped)
+            if key:
+                keys.add(key)
+    return keys
+
+
+def _is_user_question_echo_fact(fact: Dict[str, Any], question_keys: set[str]) -> bool:
+    if not question_keys or not isinstance(fact, dict):
+        return False
+    text = str(fact.get("text") or "").strip()
+    if not text:
+        return False
+    return _question_echo_key(text) in question_keys
+
+
+def _filter_user_question_echo_facts(parsed: Dict[str, Any], transcript: str) -> Tuple[Dict[str, Any], int]:
+    facts = parsed.get("facts", []) or []
+    if not isinstance(facts, list) or not facts:
+        return parsed, 0
+    question_keys = _user_question_echo_keys(transcript)
+    if not question_keys:
+        return parsed, 0
+
+    filtered: List[Any] = []
+    dropped = 0
+    for fact in facts:
+        if isinstance(fact, dict) and _is_user_question_echo_fact(fact, question_keys):
+            dropped += 1
+            continue
+        filtered.append(fact)
     if not dropped:
         return parsed, 0
 
@@ -2314,6 +2390,7 @@ def _merge_extract_telemetry(target: Dict[str, Any], source: Dict[str, Any]) -> 
         "unclassified_empty_payloads",
         "carry_duplicate_facts_dropped",
         "artifact_facts_dropped",
+        "question_echo_facts_dropped",
     ):
         target[key] = int(target.get(key, 0) or 0) + int(source.get(key, 0) or 0)
     target["max_split_depth"] = max(
@@ -2342,18 +2419,23 @@ def _merge_parsed_payloads(
     """Merge extracted payloads into top-level accumulators in chunk order."""
     effective_date_hint = _first_transcript_timestamp_hint(transcript_text) or session_date_hint
     effective_mention_hint = effective_date_hint or mention_date_hint
+    question_echo_keys = _user_question_echo_keys(transcript_text)
     for parsed in payloads:
         result["chunks_processed"] = int(result.get("chunks_processed", 0) or 0) + 1
         parsed_facts = parsed.get("facts", []) or []
         if isinstance(parsed_facts, list):
             valid_facts: List[Dict[str, Any]] = []
             invalid_fact_count = 0
+            question_echo_count = 0
             for raw_fact in parsed_facts:
                 if not isinstance(raw_fact, dict):
                     invalid_fact_count += 1
                     continue
                 if not isinstance(raw_fact.get("text"), str):
                     invalid_fact_count += 1
+                    continue
+                if _is_user_question_echo_fact(raw_fact, question_echo_keys):
+                    question_echo_count += 1
                     continue
                 normalized_fact = _normalize_fact_temporal_hint(
                     raw_fact,
@@ -2376,6 +2458,17 @@ def _merge_parsed_payloads(
                     f"[extract] {label} chunk {chunk_label}: skipped {invalid_fact_count} invalid fact payload(s)"
                 )
                 result["facts_skipped"] += invalid_fact_count
+            if question_echo_count:
+                logger.info(
+                    "[extract] %s chunk %s: dropped %d user question echo fact payload(s)",
+                    label,
+                    chunk_label,
+                    question_echo_count,
+                )
+                result["facts_skipped"] += question_echo_count
+                result["question_echo_facts_dropped"] = int(
+                    result.get("question_echo_facts_dropped", 0) or 0
+                ) + question_echo_count
             valid_facts = _filter_unsupported_specificity_facts(
                 valid_facts,
                 transcript_text=transcript_text,
@@ -2557,6 +2650,18 @@ def _extract_chunk_payloads(
                 label,
                 chunk_label,
                 artifact_dropped,
+            )
+        parsed, question_echo_dropped = _filter_user_question_echo_facts(parsed, chunk)
+        if question_echo_dropped:
+            if isinstance(telemetry, dict):
+                telemetry["question_echo_facts_dropped"] = int(
+                    telemetry.get("question_echo_facts_dropped", 0) or 0
+                ) + question_echo_dropped
+            logger.info(
+                "[extract] %s chunk %s: dropped %d user question echo fact(s)",
+                label,
+                chunk_label,
+                question_echo_dropped,
             )
 
     estimated_tokens = estimate_tokens(chunk)
@@ -3269,6 +3374,7 @@ def extract_from_transcript(
                 "unclassified_empty_payloads": 0,
                 "carry_duplicate_facts_dropped": 0,
                 "artifact_facts_dropped": 0,
+                "question_echo_facts_dropped": 0,
                 "unsupported_specificity_facts_dropped": 0,
                 "source_chunks_stored": 0,
                 "source_chunks_existing": 0,
@@ -3315,6 +3421,7 @@ def extract_from_transcript(
         "unclassified_empty_payloads": 0,
         "carry_duplicate_facts_dropped": 0,
         "artifact_facts_dropped": 0,
+        "question_echo_facts_dropped": 0,
         "unsupported_specificity_facts_dropped": 0,
         "source_chunks_stored": 0,
         "source_chunks_existing": 0,
@@ -3474,6 +3581,7 @@ def extract_from_transcript(
                     "unclassified_empty_payloads": 0,
                     "carry_duplicate_facts_dropped": 0,
                     "artifact_facts_dropped": 0,
+                    "question_echo_facts_dropped": 0,
                 }
                 future = executor.submit(_process_root_chunk, ci, chunk, [], local_telemetry)
                 future_map[future] = (ci, local_telemetry, source_chunk_ref)
@@ -3561,7 +3669,26 @@ def extract_from_transcript(
         all_facts = explicit_anchor_facts + all_facts
     else:
         result["explicit_structural_anchor_facts"] = 0
+    question_echo_keys = _user_question_echo_keys(anchor_transcript)
+    if question_echo_keys:
+        filtered_facts = [
+            fact
+            for fact in all_facts
+            if not _is_user_question_echo_fact(fact, question_echo_keys)
+        ]
+        question_echo_dropped = len(all_facts) - len(filtered_facts)
+        if question_echo_dropped:
+            logger.info(
+                "[extract] %s: dropped %d explicit user question echo fact(s)",
+                label,
+                question_echo_dropped,
+            )
+            result["question_echo_facts_dropped"] = int(
+                result.get("question_echo_facts_dropped", 0) or 0
+            ) + question_echo_dropped
+            all_facts = filtered_facts
     result["facts_skipped"] += int(result.get("artifact_facts_dropped", 0) or 0)
+    result["facts_skipped"] += int(result.get("question_echo_facts_dropped", 0) or 0)
 
     result["raw_facts"] = list(all_facts)
     result["raw_snippets"] = dict(all_snippets)
@@ -3605,6 +3732,8 @@ def _format_human_summary(result: Dict[str, Any]) -> str:
         lines.append(
             f"  Unsupported specificity facts dropped: {result['unsupported_specificity_facts_dropped']}"
         )
+    if int(result.get("question_echo_facts_dropped", 0) or 0):
+        lines.append(f"  Question echo facts dropped: {result['question_echo_facts_dropped']}")
     lines.append(f"  Edges created: {result['edges_created']}")
 
     if result["snippets"]:

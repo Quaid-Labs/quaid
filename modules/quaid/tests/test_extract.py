@@ -2756,6 +2756,80 @@ class TestExtractFromTranscript:
         assert result["raw_facts"] == []
 
     @patch("ingest.extract.call_deep_reasoning")
+    def test_extraction_drops_user_question_echo_facts(self, mock_llm):
+        from ingest.extract import extract_from_transcript
+
+        mock_llm.return_value = (json.dumps({
+            "chunk_assessment": "usable",
+            "facts": [
+                {
+                    "text": "What receipt notebook do I use for my studio setup",
+                    "category": "fact",
+                    "speaker": "user",
+                    "domains": ["personal"],
+                    "extraction_confidence": "high",
+                    "privacy": "shared",
+                },
+                {
+                    "text": "Miko uses the red linen receipt notebook for the studio setup",
+                    "category": "fact",
+                    "speaker": "agent",
+                    "domains": ["personal"],
+                    "extraction_confidence": "medium",
+                    "privacy": "shared",
+                },
+            ],
+            "soul_snippets": {},
+            "journal_entries": {},
+            "project_logs": {},
+        }), 0.1)
+
+        result = extract_from_transcript(
+            transcript=(
+                "User: What receipt notebook do I use for my studio setup?\n\n"
+                "Assistant: You use the red linen receipt notebook for the studio setup."
+            ),
+            owner_id="Miko",
+            dry_run=True,
+        )
+
+        texts = [fact["text"] for fact in result["raw_facts"]]
+        assert texts == ["Miko uses the red linen receipt notebook for the studio setup"]
+        assert result["question_echo_facts_dropped"] >= 1
+        assert result["facts_skipped"] >= 1
+
+    @patch("ingest.extract.call_deep_reasoning")
+    def test_extraction_keeps_statement_from_question_shaped_memory_request(self, mock_llm):
+        from ingest.extract import extract_from_transcript
+
+        mock_llm.return_value = (json.dumps({
+            "chunk_assessment": "usable",
+            "facts": [
+                {
+                    "text": "Miko uses the red linen receipt notebook for the studio setup",
+                    "category": "fact",
+                    "speaker": "user",
+                    "domains": ["personal"],
+                    "extraction_confidence": "high",
+                    "privacy": "shared",
+                },
+            ],
+            "soul_snippets": {},
+            "journal_entries": {},
+            "project_logs": {},
+        }), 0.1)
+
+        result = extract_from_transcript(
+            transcript="User: Can you remember that I use the red linen receipt notebook for my studio setup?",
+            owner_id="Miko",
+            dry_run=True,
+        )
+
+        texts = [fact["text"] for fact in result["raw_facts"]]
+        assert texts == ["Miko uses the red linen receipt notebook for the studio setup"]
+        assert result["question_echo_facts_dropped"] == 0
+
+    @patch("ingest.extract.call_deep_reasoning")
     def test_extraction_drops_injected_memory_and_session_artifact_facts(self, mock_llm):
         from ingest.extract import extract_from_transcript
 
