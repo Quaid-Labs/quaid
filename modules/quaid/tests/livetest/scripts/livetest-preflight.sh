@@ -1444,6 +1444,11 @@ if codex_token:
             defaults["model"] = model_cfg
         model_cfg["primary"] = "openai/gpt-5.4"
         model_cfg["fallbacks"] = ["openai/gpt-5.4-mini"]
+        plugins = cfg.setdefault("plugins", {})
+        if not isinstance(plugins, dict):
+            plugins = {}
+            cfg["plugins"] = plugins
+        plugins["bundledDiscovery"] = "compat"
         allowed_models = defaults.setdefault("models", {})
         if not isinstance(allowed_models, dict):
             allowed_models = {}
