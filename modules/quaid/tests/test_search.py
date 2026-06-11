@@ -232,7 +232,12 @@ class TestSearchSemantic:
             assert out == []
             assert len(calls) >= 2
             assert calls[0][0] == "PRAGMA wal_checkpoint(PASSIVE)"
-            assert "SELECT node_id, distance FROM vec_nodes" in calls[1][0]
+            knn_index = next(
+                idx
+                for idx, (sql, _params) in enumerate(calls)
+                if "SELECT node_id, distance FROM vec_nodes" in sql
+            )
+            assert knn_index > 0
 
     def test_returns_empty_when_no_embedding(self, tmp_path):
         """When get_embedding returns None, search_semantic returns []."""
