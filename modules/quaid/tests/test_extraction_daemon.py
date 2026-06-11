@@ -3184,6 +3184,121 @@ def test_process_signal_timeout_preserves_cursor_on_larger_preserved_mirror(
     assert extraction_daemon.read_pending_signals() == []
 
 
+def test_process_signal_timeout_extracts_smaller_live_after_scan_only_preserved_cursor(
+    monkeypatch,
+    tmp_path,
+):
+    from lib.adapter import set_adapter, reset_adapter
+    from ingest import extract as extract_mod
+    from core import ingest_runtime
+    from core.runtime import notify as notify_mod
+
+    session_id = "b817b065-c63a-43f3-a68a-72b70f2729ed"
+    live_dir = tmp_path / ".openclaw" / "agents" / "main" / "sessions"
+    preserved_dir = tmp_path / "instances" / "openclaw-main" / "logs" / "quaid" / "sessions"
+    live_dir.mkdir(parents=True)
+    preserved_dir.mkdir(parents=True)
+    live_path = live_dir / f"{session_id}.jsonl"
+    preserved_path = preserved_dir / f"{session_id}.jsonl"
+    live_path.write_text(
+        "\n".join([
+            f'{{"type":"session","id":"{session_id}"}}',
+            '{"type":"message","message":{"role":"user","content":[{"type":"text","text":"garden shed lantern timeout fact"}]}}',
+        ]) + "\n",
+        encoding="utf-8",
+    )
+    preserved_path.write_text(
+        "\n".join([
+            f'{{"type":"session","id":"{session_id}"}}',
+            '{"type":"message","message":{"role":"user","content":[{"type":"text","text":"prior preserved payload"}]}}',
+            '{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"ack"}]}}',
+        ]) + "\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "openclaw-main")
+    source_key = extraction_daemon._signal_source_cursor_key(session_id, str(live_path))
+    extraction_daemon.write_cursor(
+        session_id,
+        3,
+        str(preserved_path),
+        source_key=source_key,
+    )
+
+    captured = {}
+
+    class _Adapter(_OwnedTestAdapterMixin):
+        def instance_root(self):
+            return tmp_path / "instances" / "openclaw-main"
+
+        def parse_session_jsonl(self, path):
+            captured["parsed_path"] = str(path)
+            return "User: garden shed lantern timeout fact.\nAssistant: ACK"
+
+        def is_subagent_session(self, session_id, transcript_path=None):
+            return False
+
+    set_adapter(_Adapter())
+    monkeypatch.setattr(extraction_daemon, "_get_owner_id", lambda: "owner-1")
+    monkeypatch.setattr(extraction_daemon, "_read_usage_totals", lambda: {})
+    monkeypatch.setattr(extraction_daemon, "_session_has_harvestable_subagents", lambda *args, **kwargs: False)
+    monkeypatch.setattr(extraction_daemon, "_warm_payload_embeddings", lambda _facts: {})
+    monkeypatch.setattr(notify_mod, "notify_memory_extraction", lambda **_kwargs: None)
+    monkeypatch.setattr(ingest_runtime, "run_session_logs_ingest", lambda **_kwargs: {"status": "indexed"})
+
+    def fake_extract_from_transcript(transcript, **kwargs):
+        captured["transcript"] = transcript
+        return {
+            "chunks_processed": 1,
+            "chunks_total": 1,
+            "unclassified_empty_payloads": 0,
+            "raw_facts": [{"text": "garden shed lantern timeout fact", "category": "fact"}],
+            "facts": [],
+            "soul_snippets": {},
+            "journal_entries": {},
+            "project_logs": {},
+            "raw_snippets": {},
+            "raw_journal": {},
+            "raw_project_logs": {},
+            "carry_facts": [],
+        }
+
+    monkeypatch.setattr(extract_mod, "extract_from_transcript", fake_extract_from_transcript)
+    monkeypatch.setattr(
+        extract_mod,
+        "apply_extracted_payloads",
+        lambda *_args, **_kwargs: {
+            "facts_stored": 1,
+            "facts_skipped": 0,
+            "edges_created": 0,
+            "facts": [],
+            "snippets": {},
+            "journal": {},
+            "project_log_metrics": {},
+        },
+    )
+
+    try:
+        signal_path = extraction_daemon.write_signal(
+            signal_type="timeout",
+            session_id=session_id,
+            transcript_path=str(live_path),
+        )
+        signal_data = json.loads(signal_path.read_text(encoding="utf-8"))
+        signal_data["_signal_path"] = str(signal_path)
+
+        extraction_daemon.process_signal(signal_data)
+    finally:
+        reset_adapter()
+
+    assert captured["parsed_path"].endswith(".jsonl")
+    assert "garden shed lantern timeout fact" in captured["transcript"]
+    cursor = extraction_daemon.read_cursor(session_id, source_key=source_key)
+    assert cursor["transcript_path"] == str(live_path)
+    assert cursor["processed_signal_type"] == "timeout"
+
+
 def test_process_signal_recovers_full_transcript_before_too_short_skip(
     monkeypatch,
     tmp_path,
@@ -5668,6 +5783,79 @@ def test_check_idle_sessions_treats_file_growth_past_eof_cursor_as_new_content(m
         }
     ]
     assert "sess-grown" not in extraction_daemon._cursor_end_timeout_fired
+
+
+def test_check_idle_sessions_uses_live_transcript_for_preserved_cursor(monkeypatch, tmp_path):
+    session_id = "04719640-c63a-43f3-a68a-72b70f2729ed"
+    live_dir = tmp_path / ".openclaw" / "agents" / "main" / "sessions"
+    preserved_dir = tmp_path / "instances" / "openclaw-main" / "logs" / "quaid" / "sessions"
+    live_dir.mkdir(parents=True)
+    preserved_dir.mkdir(parents=True)
+    live_path = live_dir / f"{session_id}.jsonl"
+    preserved_path = preserved_dir / f"{session_id}.jsonl"
+    live_path.write_text(
+        '{"type":"message","message":{"role":"user","content":[{"type":"text","text":"garden shed lantern"}]}}\n',
+        encoding="utf-8",
+    )
+    preserved_path.write_text(
+        (
+            '{"type":"message","message":{"role":"user","content":[{"type":"text","text":"prior preserved row"}]}}\n'
+            '{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"ack"}]}}\n'
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "openclaw-main")
+    source_key = extraction_daemon._signal_source_cursor_key(session_id, str(live_path))
+    extraction_daemon.write_cursor(session_id, 2, str(preserved_path), source_key=source_key)
+
+    class _Adapter(_OwnedTestAdapterMixin):
+        def get_session_path(self, requested_session_id):
+            assert requested_session_id == session_id
+            return live_path
+
+    now = 1_700_000_000.0
+    old_mtime = now - (3 * 60)
+    os.utime(live_path, (old_mtime, old_mtime))
+    os.utime(preserved_path, (now, now))
+
+    captured = []
+    monkeypatch.setattr(extraction_daemon, "_load_runtime_adapter", lambda: _Adapter())
+    monkeypatch.setattr(extraction_daemon.time, "time", lambda: now)
+    monkeypatch.setattr(extraction_daemon, "_read_installed_at", lambda: now - 7200)
+    monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
+    monkeypatch.setattr(extraction_daemon, "_adapter_supports_compaction_control", lambda: True)
+    monkeypatch.setattr(extraction_daemon, "_get_compact_on_timeout", lambda: True)
+    monkeypatch.setattr(
+        extraction_daemon,
+        "write_signal",
+        lambda signal_type, session_id, transcript_path, **kwargs: captured.append(
+            {
+                "signal_type": signal_type,
+                "session_id": session_id,
+                "transcript_path": transcript_path,
+                "kwargs": kwargs,
+            }
+        ),
+    )
+
+    try:
+        extraction_daemon.check_idle_sessions(timeout_minutes=1)
+    finally:
+        extraction_daemon._cursor_end_timeout_fired.discard(session_id)
+
+    assert captured == [
+        {
+            "signal_type": "timeout",
+            "session_id": session_id,
+            "transcript_path": str(live_path.resolve()),
+            "kwargs": {
+                "supports_compaction_control": True,
+                "meta": {"compact_on_timeout": True},
+            },
+        }
+    ]
 
 
 def test_index_one_stale_doc_resolves_relative_registry_paths_from_workspace(monkeypatch, tmp_path):

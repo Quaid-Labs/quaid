@@ -1869,6 +1869,33 @@ def _larger_live_transcript_for_preserved_mirror(session_id: str, transcript_pat
     return ""
 
 
+def _live_transcript_for_preserved_mirror(session_id: str, transcript_path: str, adapter=None) -> str:
+    """Return the adapter live transcript behind a daemon-preserved mirror."""
+    raw = str(transcript_path or "").strip()
+    if not raw or not _is_daemon_preserved_session_transcript_path(raw) or not os.path.isfile(raw):
+        return ""
+    get_session_path = getattr(adapter, "get_session_path", None)
+    if not callable(get_session_path):
+        return ""
+    try:
+        live_candidate = get_session_path(str(session_id))
+        live_raw = str(live_candidate or "").strip()
+        if not live_raw or _is_daemon_preserved_session_transcript_path(live_raw) or not os.path.isfile(live_raw):
+            return ""
+        live_path = Path(live_raw).expanduser().resolve()
+        if not _adapter_owns_transcript_path(adapter, str(session_id), str(live_path)):
+            return ""
+        session_uuid = _SESSION_ID_UUID_RE.search(str(session_id or ""))
+        filename_uuid = _SESSION_ID_UUID_RE.search(live_path.name)
+        if session_uuid and filename_uuid and session_uuid.group(0).lower() != filename_uuid.group(0).lower():
+            return ""
+        return str(live_path)
+    except Exception:
+        if _fail_hard_enabled():
+            raise
+    return ""
+
+
 def _adapter_live_transcript_exists(session_id: str, adapter=None) -> bool:
     get_session_path = getattr(adapter, "get_session_path", None)
     if not callable(get_session_path):
@@ -5103,15 +5130,24 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             and _is_daemon_preserved_session_transcript_path(cursor_transcript)
             and not _is_daemon_preserved_session_transcript_path(str(transcript_path))
         ):
+            if cursor_marks_processed_extraction:
+                logger.info(
+                    "[%s] session %s: timeout points at smaller stale live transcript after preserved flush "
+                    "(%s -> %s, cursor_offset=%d, cursor_size=%d, current_size=%d); preserving cursor",
+                    label, session_id, cursor_transcript, transcript_path, cursor_offset,
+                    _relocated_cursor_size_bytes, _relocated_current_size_bytes,
+                )
+                mark_signal_processed(signal_data)
+                _release_session_processing_lock(lock_owner_key, lock_fd)
+                return
             logger.info(
-                "[%s] session %s: timeout points at smaller stale live transcript after preserved flush "
-                "(%s -> %s, cursor_offset=%d, cursor_size=%d, current_size=%d); preserving cursor",
+                "[%s] session %s: timeout points at smaller live transcript after scan-only preserved cursor "
+                "(%s -> %s, cursor_offset=%d, cursor_size=%d, current_size=%d); resetting cursor for extraction",
                 label, session_id, cursor_transcript, transcript_path, cursor_offset,
                 _relocated_cursor_size_bytes, _relocated_current_size_bytes,
             )
-            mark_signal_processed(signal_data)
-            _release_session_processing_lock(lock_owner_key, lock_fd)
-            return
+            cursor_offset = 0
+            reset_staged_state_for_full_reextract = True
         elif _is_dir_relocation and _relocated_content_changed:
             logger.info(
                 "[%s] session %s: transcript directory relocation content changed "
@@ -6536,7 +6572,20 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
                 # not active host transcripts. Let discovery replace stale mirrors
                 # with the live adapter path; otherwise do not let an old mirror fire
                 # timeout extraction before the host materializes the real session.
-                continue
+                live_path = _live_transcript_for_preserved_mirror(
+                    str(session_id),
+                    str(transcript_path),
+                    adapter=adapter,
+                )
+                if not live_path:
+                    continue
+                logger.info(
+                    "session %s idle scan using live transcript %s for preserved cursor %s",
+                    session_id,
+                    live_path,
+                    transcript_path,
+                )
+                transcript_path = live_path
         if _is_discovery_artifact_transcript(Path(str(transcript_path))):
             continue
         if _retire_shadowed_cursor_alias(
