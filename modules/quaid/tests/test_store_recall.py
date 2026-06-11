@@ -3770,6 +3770,66 @@ class TestTimestampOverride:
         assert payload["contract"] == "quaid.recall.v1"
         assert payload["results"] == []
 
+    def test_recall_cli_session_id_filter_reads_node_name_column(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+
+        module_root = Path(__file__).resolve().parents[1]
+        db_path = tmp_path / "memory.db"
+        graph = mg.MemoryGraph(db_path=db_path)
+        graph.add_node(
+            mg.Node.create(
+                type="fact",
+                name="The leatherworking awl lives in the brass toolkit.",
+                owner_id="m9-test-owner",
+                session_id="m9-session-filter",
+                status="active",
+                extraction_confidence=0.91,
+            ),
+            embed=False,
+        )
+        graph.add_node(
+            mg.Node.create(
+                type="fact",
+                name="Decoy fact from a different session.",
+                owner_id="m9-test-owner",
+                session_id="other-session",
+                status="active",
+            ),
+            embed=False,
+        )
+
+        env = {
+            **os.environ,
+            "MEMORY_DB_PATH": str(db_path),
+            "QUAID_HOME": str(tmp_path / ".quaid"),
+            "QUAID_INSTANCE": "cli-session-filter",
+            "QUAID_ADAPTER_TYPE": "standalone",
+        }
+
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "datastore.memorydb.memory_graph",
+                "recall",
+                "leatherworking",
+                '{"session_id":"m9-session-filter","owner_id":"m9-test-owner","limit":5}',
+                "--json",
+            ],
+            cwd=str(module_root),
+            env=env,
+            text=True,
+            capture_output=True,
+            timeout=20,
+            check=False,
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert "no such column: content" not in result.stderr
+        payload = json.loads(result.stdout)
+        texts = [row["text"] for row in payload["results"]]
+        assert texts == ["The leatherworking awl lives in the brass toolkit."]
+
 
 class TestSourceChunkStorage:
     """Tests for additive source chunk evidence storage."""

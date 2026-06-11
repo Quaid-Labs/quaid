@@ -24795,7 +24795,7 @@ if __name__ == "__main__":
                 mg = MemoryGraph()
                 with mg._get_conn() as conn:
                     rows = conn.execute(
-                        "SELECT id, type, name, content, extraction_confidence, created_at, privacy, owner_id, session_id "
+                        "SELECT id, type, name, extraction_confidence, created_at, privacy, owner_id, session_id "
                         "FROM nodes WHERE session_id = ? AND owner_id = ? AND status IN ('active', 'approved', 'pending') "
                         "ORDER BY created_at DESC LIMIT ?",
                         (session_id, owner, int(limit))
@@ -24803,7 +24803,7 @@ if __name__ == "__main__":
                 out = []
                 for r in rows:
                     out.append({
-                        "text": r["content"] or r["name"],
+                        "text": r["name"],
                         "category": r["type"],
                         "similarity": 1.0,
                         "id": r["id"],
