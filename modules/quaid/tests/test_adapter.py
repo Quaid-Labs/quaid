@@ -1780,6 +1780,10 @@ class TestClaudeCodeAdapter:
         assert "[2026-06-11T15:08:35.000Z] Assistant: Noted." in transcript
 
 class TestCodexAdapter:
+    def test_turn_scoped_provider_notices_enabled(self):
+        adapter = CodexAdapter()
+        assert adapter.get_capability("turn_scoped_provider_notices", False) is True
+
     def test_installer_provider_surface_is_direct_provider_models(self):
         adapter = CodexAdapter()
         assert adapter.installer_supported_providers() == ["anthropic", "openai"]
