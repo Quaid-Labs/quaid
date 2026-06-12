@@ -93,7 +93,9 @@ Before an overnight loop, run presnapshot maintenance:
 ```bash
 tests/livetest/scripts/livetest-presnapshot-preflight.sh --config tests/livetest/livetest-config.json
 ```
-This clones the current base, applies slow platform CLI upgrades, and refreshes
+This clones the current base, applies slow platform CLI upgrades, bakes the
+OpenClaw Matrix plugin required for Matrix bot replies (`openclaw >=2026.6.5`,
+Matrix plugin pinned by default to `@openclaw/matrix@2026.6.1`), and refreshes
 the base snapshot only if the clone actually changed. If nothing changed, it
 destroys the clone and leaves the base untouched.
 

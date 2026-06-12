@@ -503,6 +503,25 @@ describe("install daemon policy", () => {
     expect(preflightText).not.toContain('room_entry["allow"] = True');
   });
 
+  it("presnapshot preflight bakes the OpenClaw Matrix plugin into the base image", () => {
+    const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+    const presnapshotText = fs.readFileSync(
+      path.join(repoRoot, "modules/quaid/tests/livetest/scripts/livetest-presnapshot-preflight.sh"),
+      "utf8",
+    );
+
+    expect(presnapshotText).toContain("run_presnapshot_matrix_plugin_install() {");
+    expect(presnapshotText).toContain('min_openclaw_version="${OPENCLAW_MATRIX_MIN_OPENCLAW_VERSION:-2026.6.5}"');
+    expect(presnapshotText).toContain('matrix_plugin_version="${OPENCLAW_MATRIX_PLUGIN_VERSION:-2026.6.1}"');
+    expect(presnapshotText).toContain('matrix_plugin_spec="${OPENCLAW_MATRIX_PLUGIN_SPEC:-@openclaw/matrix@${matrix_plugin_version}}"');
+    expect(presnapshotText).toContain("openclaw plugins list");
+    expect(presnapshotText).toContain("openclaw plugins install --force --pin '${matrix_plugin_spec}'");
+    expect(presnapshotText).toContain("OpenClaw ${oc_version:-unknown} is too old for Matrix plugin bake");
+    expect(presnapshotText).toContain("OpenClaw Matrix plugin install failed");
+    expect(presnapshotText).toContain("livetest-openclaw-gateway-restart.sh");
+    expect(presnapshotText).toContain("PRESNAPSHOT_CLEANUP_CHANGED=1");
+  });
+
   it("OpenClaw install acquires a host-level config lock before preflight writes", () => {
     const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
     const setupText = fs.readFileSync(path.join(repoRoot, "setup-quaid.mjs"), "utf8");

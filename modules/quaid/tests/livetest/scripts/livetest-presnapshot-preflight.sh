@@ -66,17 +66,107 @@ normalize_ssh_target() {
     fi
 }
 
-run_presnapshot_cleanup() {
-    local configured_host remote_host prune_script stale
-    configured_host="$(read_config_value remote.host)"
-    remote_host="$(normalize_ssh_target "$configured_host")"
-    if [[ -z "$remote_host" ]]; then
-        echo "Skipping presnapshot cleanup: remote.host is not set in $CONFIG_PATH" >&2
+version_at_least() {
+    python3 - "$1" "$2" <<'PY'
+import re
+import sys
+
+def parts(value: str) -> tuple[int, int, int]:
+    match = re.search(r"(\d+)\.(\d+)\.(\d+)", value or "")
+    if not match:
+        return (0, 0, 0)
+    return tuple(int(piece) for piece in match.groups())
+
+print("1" if parts(sys.argv[1]) >= parts(sys.argv[2]) else "0")
+PY
+}
+
+run_presnapshot_matrix_plugin_install() {
+    local remote_host="$1"
+    local oc_enabled matrix_plugin_version matrix_plugin_spec matrix_state install_output oc_version min_openclaw_version
+    oc_enabled="$(read_config_value platforms.oc.enabled)"
+    if [[ "$oc_enabled" != "True" && "$oc_enabled" != "true" ]]; then
+        echo "  OpenClaw disabled in config; skipping Matrix plugin bake"
         return 0
     fi
+
+    # R223: OC Matrix requires both a new enough gateway plugin API and the
+    # actual @openclaw/matrix plugin in the base image. Keep this
+    # presnapshot-only so normal runs stay fast.
+    min_openclaw_version="${OPENCLAW_MATRIX_MIN_OPENCLAW_VERSION:-2026.6.5}"
+    matrix_plugin_version="${OPENCLAW_MATRIX_PLUGIN_VERSION:-2026.6.1}"
+    matrix_plugin_spec="${OPENCLAW_MATRIX_PLUGIN_SPEC:-@openclaw/matrix@${matrix_plugin_version}}"
+    oc_version="$(ssh "$remote_host" "set -euo pipefail; export PATH=\"/opt/homebrew/bin:\$HOME/.local/bin:\$PATH\"; eval \"\$(/opt/homebrew/bin/brew shellenv 2>/dev/null)\" 2>/dev/null || true; if ! command -v openclaw >/dev/null 2>&1; then echo MISSING_OPENCLAW; exit 0; fi; OC_ROOT=\"\$(npm root -g 2>/dev/null)/openclaw\"; if [[ -f \"\$OC_ROOT/package.json\" ]]; then node -e 'console.log(require(process.argv[1]).version || \"\")' \"\$OC_ROOT/package.json\"; else openclaw --version 2>/dev/null | head -1; fi" 2>&1 || true)"
+    if [[ "$oc_version" == "MISSING_OPENCLAW" ]]; then
+        echo "  openclaw CLI not present; skipping Matrix plugin bake"
+        return 0
+    fi
+    if [[ "$(version_at_least "$oc_version" "$min_openclaw_version")" != "1" ]]; then
+        echo "  ERROR: OpenClaw ${oc_version:-unknown} is too old for Matrix plugin bake; need >= ${min_openclaw_version}." >&2
+        echo "         Presnapshot platform upgrades should update OpenClaw before Matrix install." >&2
+        return 1
+    fi
+    echo "  OpenClaw ${oc_version} satisfies Matrix plugin floor >= ${min_openclaw_version}"
+
+    matrix_state="$(ssh "$remote_host" "set -euo pipefail; export PATH=\"/opt/homebrew/bin:\$HOME/.local/bin:\$PATH\"; eval \"\$(/opt/homebrew/bin/brew shellenv 2>/dev/null)\" 2>/dev/null || true; openclaw plugins list --json" 2>/dev/null | python3 -c 'import json, sys
+desired = sys.argv[1]
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    print("UNKNOWN")
+    raise SystemExit(0)
+plugins = data.get("plugins") if isinstance(data, dict) else []
+matches = []
+for plugin in plugins or []:
+    if not isinstance(plugin, dict):
+        continue
+    values = [str(plugin.get(key) or "") for key in ("id", "name", "source", "rootDir")]
+    if any(value == "matrix" or "@openclaw/matrix" in value for value in values):
+        matches.append(plugin)
+if not matches:
+    print("MISSING")
+    raise SystemExit(0)
+versions = sorted({str(plugin.get("version") or "") for plugin in matches})
+if desired in versions:
+    print("INSTALLED")
+else:
+    print("WRONG_VERSION:" + ",".join(versions))
+' "$matrix_plugin_version" 2>/dev/null || echo UNKNOWN)"
+    case "$matrix_state" in
+        INSTALLED)
+            echo "  OpenClaw Matrix plugin already installed at ${matrix_plugin_version}"
+            "$SCRIPT_DIR/livetest-openclaw-gateway-restart.sh" --restart --host "$remote_host" --config "$CONFIG_PATH"
+            return 0
+            ;;
+        MISSING)
+            echo "  OpenClaw Matrix plugin missing; installing ${matrix_plugin_spec}..."
+            ;;
+        WRONG_VERSION:*)
+            echo "  OpenClaw Matrix plugin version ${matrix_state#WRONG_VERSION:} does not match ${matrix_plugin_version}; reinstalling ${matrix_plugin_spec}..."
+            ;;
+        *)
+            echo "  WARN: could not verify OpenClaw Matrix plugin state; attempting install"
+            printf '%s\n' "$matrix_state" | tail -5 | sed 's/^/    /'
+            ;;
+    esac
+
+    if ! install_output="$(ssh "$remote_host" "set -euo pipefail; export PATH=\"/opt/homebrew/bin:\$HOME/.local/bin:\$PATH\"; eval \"\$(/opt/homebrew/bin/brew shellenv 2>/dev/null)\" 2>/dev/null || true; openclaw plugins install --force --pin '${matrix_plugin_spec}'" 2>&1)"; then
+        echo "  ERROR: OpenClaw Matrix plugin install failed:" >&2
+        printf '%s\n' "$install_output" | tail -10 | sed 's/^/    /' >&2
+        return 1
+    fi
+    echo "  OpenClaw Matrix plugin installed at ${matrix_plugin_version}"
+    if [[ -n "$install_output" ]]; then
+        printf '%s\n' "$install_output" | tail -5 | sed 's/^/    /'
+    fi
+    "$SCRIPT_DIR/livetest-openclaw-gateway-restart.sh" --restart --host "$remote_host" --config "$CONFIG_PATH"
+    PRESNAPSHOT_CLEANUP_CHANGED=1
+}
+
+run_presnapshot_stale_silo_cleanup() {
+    local remote_host="$1"
+    local prune_script stale
     prune_script="~/quaidcode/dev/modules/quaid/tests/livetest/scripts/livetest-prune-openclaw-silos.sh"
-    echo ""
-    echo "Running presnapshot cleanup on $remote_host..."
     if ! ssh "$remote_host" "test -x $prune_script"; then
         echo "  prune helper not found on remote; skipping stale OpenClaw silo cleanup"
         return 0
@@ -90,6 +180,20 @@ run_presnapshot_cleanup() {
     printf '%s\n' "$stale" | sed 's/^/    /'
     ssh "$remote_host" "$prune_script --home ~/.quaid"
     PRESNAPSHOT_CLEANUP_CHANGED=1
+}
+
+run_presnapshot_cleanup() {
+    local configured_host remote_host
+    configured_host="$(read_config_value remote.host)"
+    remote_host="$(normalize_ssh_target "$configured_host")"
+    if [[ -z "$remote_host" ]]; then
+        echo "Skipping presnapshot cleanup: remote.host is not set in $CONFIG_PATH" >&2
+        return 0
+    fi
+    echo ""
+    echo "Running presnapshot cleanup on $remote_host..."
+    run_presnapshot_matrix_plugin_install "$remote_host"
+    run_presnapshot_stale_silo_cleanup "$remote_host"
 }
 
 while [[ $# -gt 0 ]]; do
@@ -123,6 +227,8 @@ if [[ "$DRY_RUN" == "1" ]]; then
     echo "  $SCRIPT_DIR/livetest-preflight.sh --config $CONFIG_PATH --platform-upgrades-only"
     echo "[dry-run] that maintenance pass includes platform CLI upgrades and VM Claude/Codex OAuth refresh"
     echo "[dry-run] would run final presnapshot cleanup:"
+    echo "  ssh <remote.host> openclaw plugins install --force --pin @openclaw/matrix@2026.6.1"
+    echo "  $SCRIPT_DIR/livetest-openclaw-gateway-restart.sh --restart --host <remote.host> --config $CONFIG_PATH"
     echo "  ssh <remote.host> ~/quaidcode/dev/modules/quaid/tests/livetest/scripts/livetest-prune-openclaw-silos.sh --home ~/.quaid"
     echo "[dry-run] if platform upgrades, OAuth refresh, or cleanup changed the clone, would run:"
     echo "  $SCRIPT_DIR/livetest-refresh-base.sh --base $BASE_IMAGE --name $RUN_NAME --config $CONFIG_PATH"
