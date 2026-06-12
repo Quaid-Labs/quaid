@@ -612,6 +612,34 @@ class MemoryGraph:
             except Exception:
                 pass  # Fresh DB or FTS triggers not yet created
 
+            # External-content FTS maintenance only depends on name/keywords.
+            # Older installs used a broad UPDATE trigger, which made direct
+            # sqlite3 UPDATEs of temporal/lifecycle columns invoke FTS5 under
+            # strict trusted_schema settings.
+            try:
+                trigger_row = conn.execute(
+                    "SELECT sql FROM sqlite_master WHERE type='trigger' AND name='nodes_au'"
+                ).fetchone()
+                trigger_sql = str(trigger_row["sql"] or "") if trigger_row else ""
+                broad_update_trigger = bool(
+                    trigger_sql
+                    and re.search(
+                        r"AFTER\s+UPDATE\s+ON\s+nodes",
+                        trigger_sql,
+                        re.IGNORECASE,
+                    )
+                    and not re.search(
+                        r"AFTER\s+UPDATE\s+OF\s+name\s*,\s*keywords\s+ON\s+nodes",
+                        trigger_sql,
+                        re.IGNORECASE,
+                    )
+                )
+                if broad_update_trigger:
+                    conn.execute("DROP TRIGGER IF EXISTS nodes_au")
+                    conn.executescript(schema)
+            except Exception:
+                pass  # Fresh DB or FTS triggers not yet created
+
             # Migrate recall_log: add reranker delta tracking columns
             for col, typedef in [
                 ("reranker_top1_changed", "INTEGER DEFAULT 0"),

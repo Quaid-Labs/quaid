@@ -2904,6 +2904,7 @@ class TestStoreKeywords:
                 "SELECT sql FROM sqlite_master WHERE type='trigger' AND name='nodes_au'"
             ).fetchone()[0]
             assert "content" not in repaired_sql
+            assert "AFTER UPDATE OF name, keywords ON nodes" in repaired_sql
             assert "name, keywords" in repaired_sql
             conn.execute(
                 "UPDATE nodes SET name = ?, keywords = ? WHERE id = ?",
@@ -2912,6 +2913,50 @@ class TestStoreKeywords:
             rows = conn.execute(
                 "SELECT rowid FROM nodes_fts WHERE nodes_fts MATCH ?",
                 ("shelf",),
+            ).fetchall()
+            assert rows
+
+    def test_init_repairs_broad_fts_update_trigger(self, tmp_path):
+        """FTS update trigger should fire only when indexed text columns change."""
+        from datastore.memorydb.memory_graph import MemoryGraph, store
+
+        graph, db_file = _make_graph(tmp_path)
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+            result = store(
+                "Quaid tracks leatherworking dates for recall tests",
+                owner_id="quaid",
+                skip_dedup=True,
+                keywords="leatherworking temporal recall",
+            )
+
+        broad_trigger = """
+        DROP TRIGGER IF EXISTS nodes_au;
+        CREATE TRIGGER nodes_au AFTER UPDATE ON nodes BEGIN
+            INSERT INTO nodes_fts(nodes_fts, rowid, name, keywords) VALUES('delete', old.rowid, old.name, old.keywords);
+            INSERT INTO nodes_fts(rowid, name, keywords) VALUES (new.rowid, new.name, new.keywords);
+        END;
+        """
+        with graph._get_conn() as conn:
+            conn.executescript(broad_trigger)
+            broad_sql = conn.execute(
+                "SELECT sql FROM sqlite_master WHERE type='trigger' AND name='nodes_au'"
+            ).fetchone()[0]
+            assert "AFTER UPDATE ON nodes" in broad_sql
+
+        repaired = MemoryGraph(db_path=db_file)
+        with repaired._get_conn() as conn:
+            repaired_sql = conn.execute(
+                "SELECT sql FROM sqlite_master WHERE type='trigger' AND name='nodes_au'"
+            ).fetchone()[0]
+            assert "AFTER UPDATE OF name, keywords ON nodes" in repaired_sql
+            conn.execute(
+                "UPDATE nodes SET occurred_start = 'not-a-date' WHERE id = ?",
+                (result["id"],),
+            )
+            rows = conn.execute(
+                "SELECT rowid FROM nodes_fts WHERE nodes_fts MATCH ?",
+                ("leatherworking",),
             ).fetchall()
             assert rows
 
