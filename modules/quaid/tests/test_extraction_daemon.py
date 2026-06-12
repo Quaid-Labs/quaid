@@ -11326,9 +11326,14 @@ class TestRollingExtraction:
         uuid = "019dcf34-52b2-7010-9b01-eec8ba485b54"
         full_session_id = f"rollout-2026-04-27T13-50-06-{uuid}"
         transcript_path = tmp_path / f"{full_session_id}.jsonl"
+        lifecycle_signal_path = tmp_path / "codex-session-end.jsonl"
         transcript_path.write_text(
             '{"role":"user","content":"chunk one stable memory"}\n'
             '{"role":"user","content":"chunk two Baxter residual"}\n',
+            encoding="utf-8",
+        )
+        lifecycle_signal_path.write_text(
+            '{"role":"assistant","content":"checkpoint ack"}\n',
             encoding="utf-8",
         )
 
@@ -11465,7 +11470,7 @@ class TestRollingExtraction:
             extraction_daemon.write_signal(
                 signal_type="session_end",
                 session_id=uuid,
-                transcript_path=str(transcript_path),
+                transcript_path=str(lifecycle_signal_path),
             )
             extraction_daemon.process_signal(extraction_daemon.read_pending_signals()[0])
 

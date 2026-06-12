@@ -3487,6 +3487,9 @@ def _read_rolling_state_for_signal(session_id: str, transcript_path: str) -> Tup
         return direct_state, normalized_session_id
 
     wanted_canonical_path = _canonicalize_transcript_source_path(raw_transcript_path)
+    wanted_uuid = _session_uuid_for_alias_match(
+        normalized_session_id
+    ) or _session_uuid_for_alias_match(raw_transcript_path)
     try:
         wanted_identity = _signal_source_identity(normalized_session_id, raw_transcript_path)
     except Exception:
@@ -3520,8 +3523,20 @@ def _read_rolling_state_for_signal(session_id: str, transcript_path: str) -> Tup
             state_identity = ""
         if wanted_identity and state_identity == wanted_identity:
             return state, _validate_session_id(str(state.get("session_id") or state_key))
+        state_uuid = (
+            _session_uuid_for_alias_match(state_key)
+            or _session_uuid_for_alias_match(str(state.get("session_id") or ""))
+            or _session_uuid_for_alias_match(state_transcript_path)
+        )
+        if wanted_uuid and state_uuid and wanted_uuid == state_uuid:
+            return state, _validate_session_id(str(state.get("session_id") or state_key))
 
     return direct_state, normalized_session_id
+
+
+def _session_uuid_for_alias_match(value: str) -> str:
+    match = _SESSION_ID_UUID_RE.search(str(value or ""))
+    return match.group(0).lower() if match else ""
 
 
 def _buffer_transcript_tail(
@@ -4550,6 +4565,9 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
     staged_state, rolling_state_session_id = _read_rolling_state_for_signal(session_id, transcript_path)
     if rolling_state_session_id != session_id:
         session_id = rolling_state_session_id
+        adopted_transcript_path = str(staged_state.get("transcript_path") or "").strip()
+        if adopted_transcript_path:
+            transcript_path = adopted_transcript_path
         logger.info(
             "[%s] session %s: adopting rolling state for aliased session %s",
             label,
