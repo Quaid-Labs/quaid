@@ -7428,6 +7428,25 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
             state["buffer_transcript_path"] = str(buffer_transcript_path)
             write_rolling_state(session_id, state)
             buffered_line_offset = int(state.get("buffered_line_offset", buffered_line_offset) or buffered_line_offset)
+        if (
+            transcript_grew_since_cursor
+            and total_lines > 0
+            and buffered_line_offset >= total_lines
+            and current_size_bytes > cursor_size_bytes
+            and not bool(data.get("internal", False))
+            and not unfroze_internal_cursor
+        ):
+            cursor_key_for_write = str(data.get("cursor_key") or cursor_file.stem or "").strip() or None
+            write_cursor(
+                session_id,
+                buffered_line_offset,
+                str(transcript_path),
+                internal=bool(data.get("internal", False)),
+                source_key=cursor_key_for_write,
+            )
+            data = dict(data)
+            data["line_offset"] = buffered_line_offset
+            data["transcript_size_bytes"] = current_size_bytes
 
         semantic_tokens = int(state.get("semantic_buffer_tokens", 0) or 0)
         near_budget_threshold = _rolling_ready_threshold(chunk_budget)

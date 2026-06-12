@@ -9779,6 +9779,94 @@ class TestRollingExtraction:
                 },
             }
         ]
+        source_cursor = extraction_daemon.read_cursor(session_id, source_key=source_key)
+        assert source_cursor["line_offset"] == 2
+        assert source_cursor["transcript_size_bytes"] == transcript_path.stat().st_size
+
+    def test_check_chunk_ready_sessions_refreshes_grown_source_cursor_without_alias(
+        self, monkeypatch, tmp_path
+    ):
+        session_id = "019ebe37-0000-7000-b000-000000000000"
+        transcript_path = tmp_path / f"rollout-2026-06-12T23-42-25-{session_id}.jsonl"
+        transcript_path.write_text(
+            '{"type":"event_msg","payload":{"type":"user_message","message":"placeholder"}}\n',
+            encoding="utf-8",
+        )
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "rolling-inst")
+        source_key = extraction_daemon._signal_source_cursor_key(session_id, str(transcript_path))
+        extraction_daemon.write_cursor(session_id, 0, str(transcript_path), source_key=source_key)
+
+        transcript_path.write_text(
+            json.dumps(
+                {
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "user_message",
+                        "message": "Baxter uses an orange linen notebook from Emília Rosa. " * 40,
+                    },
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        def fake_buffer_transcript_tail(path, from_line, state, adapter=None, **kwargs):
+            assert path == str(transcript_path)
+            assert from_line == 0
+            return (
+                {
+                    "buffer_transcript_path": str(transcript_path),
+                    "buffered_line_offset": 1,
+                    "semantic_buffer": "User: Baxter uses an orange linen notebook from Emília Rosa.",
+                    "semantic_buffer_tokens": 12,
+                },
+                {
+                    "raw_lines_added": 1,
+                    "semantic_chars_added": 62,
+                    "semantic_tokens_added": 12,
+                    "buffered_line_offset": 1,
+                },
+            )
+
+        captured = []
+        monkeypatch.setattr(extraction_daemon, "_ensure_discovered_session_cursors", lambda adapter: None)
+        monkeypatch.setattr(extraction_daemon, "_cursor_or_adapter_owns_transcript_path", lambda *args, **kwargs: True)
+        monkeypatch.setattr(extraction_daemon, "_reconcile_internal_cursor_state", lambda *args, **kwargs: "not_internal")
+        monkeypatch.setattr(extraction_daemon, "_buffer_transcript_tail", fake_buffer_transcript_tail)
+        monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
+        monkeypatch.setattr(
+            extraction_daemon,
+            "write_signal",
+            lambda signal_type, session_id, transcript_path, **kwargs: captured.append(
+                {
+                    "signal_type": signal_type,
+                    "session_id": session_id,
+                    "transcript_path": transcript_path,
+                    "meta": kwargs.get("meta", {}),
+                }
+            ),
+        )
+
+        extraction_daemon.check_chunk_ready_sessions(chunk_tokens=10)
+
+        assert captured == [
+            {
+                "signal_type": "rolling",
+                "session_id": session_id,
+                "transcript_path": str(transcript_path),
+                "meta": {
+                    "reason": "semantic_chunk_budget",
+                    "chunk_tokens": 10,
+                    "semantic_buffer_tokens": 12,
+                    "buffered_line_offset": 1,
+                },
+            }
+        ]
+        source_cursor = extraction_daemon.read_cursor(session_id, source_key=source_key)
+        assert source_cursor["line_offset"] == 1
+        assert source_cursor["transcript_size_bytes"] == transcript_path.stat().st_size
 
     def test_check_chunk_ready_sessions_dedupes_same_source_alias_cursors(
         self, monkeypatch, tmp_path
