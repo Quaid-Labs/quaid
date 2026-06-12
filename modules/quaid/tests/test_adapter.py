@@ -2748,6 +2748,59 @@ class TestCodexAdapter:
         assert "Janitor has never completed successfully" not in transcript
         assert "What do you want to work on in this repo?" in transcript
 
+    def test_parse_session_jsonl_strips_assistant_extraction_relay(self, tmp_path):
+        path = tmp_path / "rollout-extraction-relay.jsonl"
+        chunk_two = (
+            "Chunk 2: Baxter keeps an orange linen notebook from Emília Rosa "
+            "beside the archive shelf."
+        )
+        path.write_text(
+            "\n".join(
+                [
+                    json.dumps(
+                        {
+                            "type": "event_msg",
+                            "payload": {
+                                "type": "user_message",
+                                "message": "Chunk 1: Ginkgo checklist lives beside the monitor.",
+                            },
+                        }
+                    ),
+                    json.dumps(
+                        {
+                            "type": "event_msg",
+                            "payload": {
+                                "type": "agent_message",
+                                "message": (
+                                    "Quaid extracted 5 memories, skipped 0, and created 2 relationships. "
+                                    "It stored that Solomon Steadman lives in Singapore, uses a Flair 58, "
+                                    "and listens to Nils Frahm."
+                                ),
+                            },
+                        }
+                    ),
+                    json.dumps(
+                        {
+                            "type": "event_msg",
+                            "payload": {
+                                "type": "user_message",
+                                "message": chunk_two,
+                            },
+                        }
+                    ),
+                    json.dumps({"type": "event_msg", "payload": {"type": "agent_message", "message": "ACK"}}),
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        transcript = CodexAdapter().parse_session_jsonl(path)
+
+        assert "Solomon Steadman lives in Singapore" not in transcript
+        assert "Flair 58" not in transcript
+        assert chunk_two in transcript
+        assert "Assistant: ACK" in transcript
+
     def test_parse_session_jsonl_strips_assistant_pending_notice_commentary(self, tmp_path):
         path = tmp_path / "rollout-quaid-notice-commentary.jsonl"
         path.write_text(
