@@ -623,11 +623,50 @@ class DocsRegistry:
 
         _run_locked_write_with_retry(_write, op_name=f"save_project_definition({name})")
 
+    def _preserve_global_project_description(self, name: str, defn):
+        """Keep stale docs workers from overwriting user-edited descriptions."""
+        try:
+            from config import ProjectDefinition
+            from lib.project_registry import lookup as global_project_lookup
+
+            existing = global_project_lookup(name) or {}
+            if not str(existing.get("updated_at") or "").strip():
+                return defn
+            existing_path = str(existing.get("canonical_path") or "").strip()
+            home_dir = str(getattr(defn, "home_dir", "") or "").strip()
+            if existing_path and home_dir:
+                try:
+                    existing_resolved = Path(existing_path).expanduser().resolve(strict=False)
+                    definition_resolved = self._resolve_path(home_dir).resolve(strict=False)
+                    if existing_resolved != definition_resolved:
+                        return defn
+                except Exception:
+                    return defn
+            existing_description = str(existing.get("description") or "").strip()
+            incoming_description = str(getattr(defn, "description", "") or "").strip()
+            if not existing_description or existing_description == incoming_description:
+                return defn
+            return ProjectDefinition(
+                label=getattr(defn, "label", ""),
+                home_dir=getattr(defn, "home_dir", ""),
+                source_roots=list(getattr(defn, "source_roots", []) or []),
+                auto_index=bool(getattr(defn, "auto_index", True)),
+                patterns=list(getattr(defn, "patterns", []) or []),
+                exclude=list(getattr(defn, "exclude", []) or []),
+                description=existing_description,
+                state=getattr(defn, "state", "active"),
+            )
+        except Exception:
+            if _fail_hard_enabled():
+                raise
+            return defn
+
     def save_project_definition(self, name: str, defn, *, link_current_instance: bool = True):
         """Upsert a project definition to DB."""
         name = _normalize_project_name(name)
         if not name:
             raise ValueError("Project name is required")
+        defn = self._preserve_global_project_description(name, defn)
         self._write_project_definition_row(name, defn)
         self._ensure_global_project_entry(
             name,

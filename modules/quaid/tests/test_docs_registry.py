@@ -1195,6 +1195,42 @@ class TestProjectDefinitionsTable:
         assert loaded.label == "Updated Label"
         assert loaded.description == "Updated description"
 
+    def test_save_project_definition_preserves_global_description(self, setup_env):
+        """Stale docs workers must not revert project update descriptions."""
+        from config import ProjectDefinition
+        from lib.project_registry import lookup as global_project_lookup
+        from lib.project_registry import register as global_project_register
+
+        r = _get_registry()
+        global_project_register(
+            name="test-project",
+            canonical_path=str(Path(setup_env).parent.parent / "projects" / "test-project"),
+            description="agentmsg livetest fixture",
+            link_current_instance=False,
+        )
+        global_project_register(
+            name="test-project",
+            canonical_path=str(Path(setup_env).parent.parent / "projects" / "test-project"),
+            description="updated livetest fixture",
+            link_current_instance=False,
+        )
+
+        stale_defn = ProjectDefinition(
+            label="Test Project",
+            home_dir="projects/test-project/",
+            source_roots=["src/"],
+            auto_index=True,
+            patterns=["*.md"],
+            exclude=["*.log", "__pycache__/"],
+            description="agentmsg livetest fixture",
+            state="active",
+        )
+        r.save_project_definition("test-project", stale_defn, link_current_instance=False)
+
+        loaded = r.get_project_definition("test-project")
+        assert loaded.description == "updated livetest fixture"
+        assert global_project_lookup("test-project")["description"] == "updated livetest fixture"
+
     def test_save_project_definition_retries_transient_locked_db(self, setup_env):
         """Transient sqlite lock during project-definition save should retry and succeed."""
         from config import ProjectDefinition
