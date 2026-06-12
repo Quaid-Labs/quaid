@@ -1691,6 +1691,55 @@ def _active_source_cursor_for_terminal_checkpoint_tail(
     return source_cursor, source_file, source_key
 
 
+def _active_source_cursor_for_grown_transcript(
+    *,
+    cursor_file: Path,
+    session_id: str,
+    transcript_path: str,
+    cursor_data: Dict[str, Any],
+) -> tuple[Dict[str, Any], Path, str]:
+    """Return a source cursor whose transcript grew in bytes after EOF."""
+    if not transcript_path:
+        return {}, Path(), ""
+    try:
+        source_key = _signal_source_cursor_key(
+            session_id,
+            transcript_path,
+            cursor_data=cursor_data,
+        )
+    except Exception:
+        if _fail_hard_enabled():
+            raise
+        return {}, Path(), ""
+    if cursor_file.stem == source_key:
+        return {}, Path(), ""
+    source_file = _cursor_dir() / f"{source_key}.json"
+    if not source_file.is_file():
+        return {}, Path(), ""
+    try:
+        source_raw = json.loads(source_file.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}, Path(), ""
+    if "transcript_size_bytes" not in source_raw:
+        return {}, Path(), ""
+    source_cursor = _read_cursor_file(source_file, session_id)
+    source_path = str(source_cursor.get("transcript_path") or "").strip()
+    if (
+        _canonicalize_transcript_source_path(source_path)
+        != _canonicalize_transcript_source_path(transcript_path)
+    ):
+        return {}, Path(), ""
+    source_size_bytes = int(source_cursor.get("transcript_size_bytes", 0) or 0)
+    current_size_bytes = _transcript_size_bytes(str(transcript_path))
+    if not source_size_bytes or not current_size_bytes or current_size_bytes <= source_size_bytes:
+        return {}, Path(), ""
+    source_offset = int(source_cursor.get("line_offset", 0) or 0)
+    cursor_offset = int(cursor_data.get("line_offset", 0) or 0)
+    if source_offset < cursor_offset:
+        return {}, Path(), ""
+    return source_cursor, source_file, source_key
+
+
 def _active_source_cursor_for_stale_signal_transcript(
     session_id: str,
     transcript_path: str,
@@ -7068,6 +7117,26 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
                 session_id,
                 active_key,
                 active_cursor.get("line_offset", 0),
+                transcript_path,
+            )
+            data = active_cursor
+            session_id = str(data.get("session_id") or session_id)
+            cursor_file = active_file
+        active_cursor, active_file, active_key = _active_source_cursor_for_grown_transcript(
+            cursor_file=cursor_file,
+            session_id=str(session_id),
+            transcript_path=str(transcript_path),
+            cursor_data=data,
+        )
+        if active_cursor and active_key:
+            logger.info(
+                "session %s rolling scan using stale source cursor %s for grown transcript "
+                "(offset=%s cursor_size=%s current_size=%s transcript=%s)",
+                session_id,
+                active_key,
+                active_cursor.get("line_offset", 0),
+                active_cursor.get("transcript_size_bytes", 0),
+                _transcript_size_bytes(str(transcript_path)),
                 transcript_path,
             )
             data = active_cursor

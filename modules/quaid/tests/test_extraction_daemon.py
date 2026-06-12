@@ -9655,6 +9655,131 @@ class TestRollingExtraction:
         extraction_daemon.check_chunk_ready_sessions()
         assert buffered_from_lines == [0]
 
+    def test_check_chunk_ready_sessions_uses_stale_source_cursor_for_byte_growth_alias(
+        self, monkeypatch, tmp_path
+    ):
+        import sys
+        import types
+
+        session_id = "019ebe06-8112-7570-bec0-92e35205188d"
+        transcript_path = tmp_path / f"rollout-2026-06-12T22-49-17-{session_id}.jsonl"
+        transcript_path.write_text(
+            '{"type":"event_msg","payload":{"type":"user_message","message":"chunk one"}}\n'
+            '{"type":"event_msg","payload":{"type":"user_message","message":"short placeholder"}}\n',
+            encoding="utf-8",
+        )
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "rolling-inst")
+        source_key = extraction_daemon._signal_source_cursor_key(session_id, str(transcript_path))
+        extraction_daemon.write_cursor(session_id, 2, str(transcript_path), source_key=source_key)
+        extraction_daemon.write_rolling_state(
+            session_id,
+            {
+                "session_id": session_id,
+                "transcript_path": str(transcript_path),
+                "buffer_transcript_path": str(transcript_path),
+                "processed_line_offset": 2,
+                "buffered_line_offset": 2,
+                "semantic_buffer": "User: chunk one",
+                "semantic_buffer_tokens": 2,
+            },
+        )
+
+        transcript_path.write_text(
+            '{"type":"event_msg","payload":{"type":"user_message","message":"chunk one"}}\n'
+            + json.dumps(
+                {
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "user_message",
+                        "message": "Baxter uses an orange linen notebook from Emília Rosa. " * 40,
+                    },
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        extraction_daemon.write_cursor(session_id, 0, str(transcript_path))
+        alias_file = extraction_daemon._cursor_dir() / f"{session_id}.json"
+
+        real_glob = Path.glob
+
+        def fake_glob(path, pattern):
+            if path == extraction_daemon._cursor_dir() and pattern == "*.json":
+                return iter([alias_file])
+            return real_glob(path, pattern)
+
+        buffered_from_lines = []
+
+        def fake_buffer_transcript_tail(path, from_line, state, adapter=None, **kwargs):
+            buffered_from_lines.append(from_line)
+            assert path == str(transcript_path)
+            assert from_line == 0
+            assert state.get("semantic_buffer", "") == ""
+            return (
+                {
+                    "buffer_transcript_path": str(transcript_path),
+                    "buffered_line_offset": 2,
+                    "semantic_buffer": "User: Baxter uses an orange linen notebook from Emília Rosa.",
+                    "semantic_buffer_tokens": 12,
+                },
+                {
+                    "raw_lines_added": 2,
+                    "semantic_chars_added": 62,
+                    "semantic_tokens_added": 12,
+                    "buffered_line_offset": 2,
+                },
+            )
+
+        real_adapter = sys.modules.get("lib.adapter")
+        fake_adapter_mod = types.ModuleType("lib.adapter")
+        fake_adapter_mod.get_adapter = lambda: _OwnedTestAdapterMixin()
+        sys.modules["lib.adapter"] = fake_adapter_mod
+
+        captured = []
+        monkeypatch.setattr(Path, "glob", fake_glob)
+        monkeypatch.setattr(extraction_daemon, "_ensure_discovered_session_cursors", lambda adapter: None)
+        monkeypatch.setattr(extraction_daemon, "_cursor_or_adapter_owns_transcript_path", lambda *args, **kwargs: True)
+        monkeypatch.setattr(extraction_daemon, "_reconcile_internal_cursor_state", lambda *args, **kwargs: "not_internal")
+        monkeypatch.setattr(extraction_daemon, "_buffer_transcript_tail", fake_buffer_transcript_tail)
+        monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
+        monkeypatch.setattr(
+            extraction_daemon,
+            "write_signal",
+            lambda signal_type, session_id, transcript_path, **kwargs: captured.append(
+                {
+                    "signal_type": signal_type,
+                    "session_id": session_id,
+                    "transcript_path": transcript_path,
+                    "meta": kwargs.get("meta", {}),
+                }
+            ),
+        )
+
+        try:
+            extraction_daemon.check_chunk_ready_sessions(chunk_tokens=10)
+        finally:
+            if real_adapter is not None:
+                sys.modules["lib.adapter"] = real_adapter
+            else:
+                sys.modules.pop("lib.adapter", None)
+
+        assert buffered_from_lines == [0]
+        assert captured == [
+            {
+                "signal_type": "rolling",
+                "session_id": session_id,
+                "transcript_path": str(transcript_path),
+                "meta": {
+                    "reason": "semantic_chunk_budget",
+                    "chunk_tokens": 10,
+                    "semantic_buffer_tokens": 12,
+                    "buffered_line_offset": 2,
+                },
+            }
+        ]
+
     def test_check_chunk_ready_sessions_dedupes_same_source_alias_cursors(
         self, monkeypatch, tmp_path
     ):
