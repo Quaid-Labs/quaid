@@ -1195,22 +1195,50 @@ class TestProjectDefinitionsTable:
         assert loaded.label == "Updated Label"
         assert loaded.description == "Updated description"
 
-    def test_save_project_definition_preserves_global_description(self, setup_env):
-        """Stale docs workers must not revert project update descriptions."""
+    def test_save_project_definition_allows_docs_definition_description_update(self, setup_env):
+        """Docs-side project definition edits should still update docs DB metadata."""
         from config import ProjectDefinition
-        from lib.project_registry import lookup as global_project_lookup
         from lib.project_registry import register as global_project_register
 
         r = _get_registry()
         global_project_register(
             name="test-project",
             canonical_path=str(Path(setup_env).parent.parent / "projects" / "test-project"),
+            description="existing global description",
+            link_current_instance=False,
+        )
+        edited_defn = ProjectDefinition(
+            label="Test Project",
+            home_dir="projects/test-project/",
+            source_roots=["src/"],
+            auto_index=True,
+            patterns=["*.md"],
+            exclude=["*.log", "__pycache__/"],
+            description="docs-side updated description",
+            state="active",
+        )
+        r.save_project_definition("test-project", edited_defn, link_current_instance=False)
+
+        loaded = r.get_project_definition("test-project")
+        assert loaded.description == "docs-side updated description"
+
+    def test_global_reconcile_preserves_cli_updated_description(self, setup_env):
+        """Stale docs workers must not revert project update descriptions."""
+        from config import ProjectDefinition
+        from lib.project_registry import lookup as global_project_lookup
+        from lib.project_registry import register as global_project_register
+
+        r = _get_registry()
+        canonical = Path(setup_env).parent.parent / "projects" / "test-project"
+        global_project_register(
+            name="test-project",
+            canonical_path=str(canonical),
             description="agentmsg livetest fixture",
             link_current_instance=False,
         )
         global_project_register(
             name="test-project",
-            canonical_path=str(Path(setup_env).parent.parent / "projects" / "test-project"),
+            canonical_path=str(canonical),
             description="updated livetest fixture",
             link_current_instance=False,
         )
@@ -1227,8 +1255,8 @@ class TestProjectDefinitionsTable:
         )
         r.save_project_definition("test-project", stale_defn, link_current_instance=False)
 
-        loaded = r.get_project_definition("test-project")
-        assert loaded.description == "updated livetest fixture"
+        assert r.get_project_definition("test-project").description == "agentmsg livetest fixture"
+        r.reconcile_global_project_registry()
         assert global_project_lookup("test-project")["description"] == "updated livetest fixture"
 
     def test_save_project_definition_retries_transient_locked_db(self, setup_env):
