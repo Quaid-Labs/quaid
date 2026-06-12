@@ -24452,6 +24452,8 @@ if __name__ == "__main__":
 
         # Parse args
         args = parser.parse_args()
+        if args.command in {"recall", "recall-fast"} and bool(getattr(args, "json", False)):
+            os.environ["QUAID_QUIET"] = "1"
 
         if not args.command:
             graph = get_graph()

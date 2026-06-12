@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import atexit
+import os
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError, as_completed
@@ -39,15 +40,19 @@ def shutdown_worker_pools(wait: bool = False) -> None:
     with _POOL_GUARD:
         pool_items = list(_POOLS.items())
         _POOLS.clear()
+    quiet = bool(os.environ.get("QUAID_QUIET"))
     if pool_items:
-        print(f"[worker_pool][atexit] shutting down {len(pool_items)} pool(s), wait={wait}", flush=True, file=sys.stderr)
+        if not quiet:
+            print(f"[worker_pool][atexit] shutting down {len(pool_items)} pool(s), wait={wait}", flush=True, file=sys.stderr)
     for key, ex in pool_items:
         running = getattr(ex, "_work_queue", None)
         qsize = running.qsize() if running is not None else "?"
-        print(f"[worker_pool][atexit]   pool={key[0]!r} max_workers={key[1]} queue_depth={qsize}", flush=True, file=sys.stderr)
+        if not quiet:
+            print(f"[worker_pool][atexit]   pool={key[0]!r} max_workers={key[1]} queue_depth={qsize}", flush=True, file=sys.stderr)
         ex.shutdown(wait=wait, cancel_futures=True)
-        print(f"[worker_pool][atexit]   pool={key[0]!r} shutdown complete", flush=True, file=sys.stderr)
-    if pool_items:
+        if not quiet:
+            print(f"[worker_pool][atexit]   pool={key[0]!r} shutdown complete", flush=True, file=sys.stderr)
+    if pool_items and not quiet:
         print(f"[worker_pool][atexit] all pools shut down", flush=True, file=sys.stderr)
 
 

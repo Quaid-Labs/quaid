@@ -3815,6 +3815,48 @@ class TestTimestampOverride:
         assert payload["contract"] == "quaid.recall.v1"
         assert payload["results"] == []
 
+    def test_recall_json_cli_keeps_combined_stream_parseable(self, tmp_path):
+        module_root = Path(__file__).resolve().parents[1]
+        quaid_home = tmp_path / ".quaid"
+        instance_root = quaid_home / "instances" / "cli-json-clean"
+        instance_root.mkdir(parents=True)
+        (instance_root / "config.json").write_text(
+            json.dumps({"unexpected_json_noise_probe": True}),
+            encoding="utf-8",
+        )
+        env = {
+            **os.environ,
+            "MEMORY_DB_PATH": str(tmp_path / "memory.db"),
+            "QUAID_HOME": str(quaid_home),
+            "QUAID_INSTANCE": "cli-json-clean",
+            "QUAID_ADAPTER_TYPE": "standalone",
+        }
+
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "datastore.memorydb.memory_graph",
+                "recall",
+                "json-output-probe",
+                '{"stores":["docs"],"limit":1}',
+                "--json",
+            ],
+            cwd=str(module_root),
+            env=env,
+            text=True,
+            capture_output=True,
+            timeout=20,
+            check=False,
+        )
+
+        combined_output = result.stdout + result.stderr
+        assert result.returncode == 0, combined_output
+        assert "[config]" not in combined_output
+        payload = json.loads(combined_output)
+        assert payload["contract"] == "quaid.recall.v1"
+        assert payload["results"] == []
+
     def test_recall_cli_session_id_filter_reads_node_name_column(self, tmp_path):
         import datastore.memorydb.memory_graph as mg
 
