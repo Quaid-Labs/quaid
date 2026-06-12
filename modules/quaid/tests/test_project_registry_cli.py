@@ -256,6 +256,19 @@ class TestCmdUpdate:
         out = capsys.readouterr().out
         assert "Updated project: proj" in out
 
+    def test_update_relinks_current_instance_if_sync_drops_it(self, capsys):
+        linked = {"description": "New", "instances": ["cdx-livetest"]}
+        with patch("core.project_registry.get_project", return_value={"instances": ["cdx-livetest"]}), \
+             patch("core.project_registry.update_project", return_value={"description": "New", "instances": []}), \
+             patch("core.project_registry.link_project", return_value=linked) as link_project, \
+             patch("core.project_registry_cli._current_instance_id", return_value="cdx-livetest"):
+            cli.cmd_update(_args(name="proj", description="New", source_root=None, json=True))
+
+        link_project.assert_called_once_with("proj", instance_id="cdx-livetest")
+        out = capsys.readouterr().out
+        parsed = json.loads("\n".join(out.strip().splitlines()[1:]))
+        assert parsed["instances"] == ["cdx-livetest"]
+
     def test_update_source_root_only(self, capsys):
         entry = {"description": "", "instances": []}
         with patch("core.project_registry.get_project", return_value={"instances": []}), \

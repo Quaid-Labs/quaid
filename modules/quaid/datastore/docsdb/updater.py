@@ -1652,6 +1652,23 @@ def cmd_update_stale(
                     ) from exc
                 continue
             if not resolved.exists():
+                fail_hard = is_fail_hard_enabled()
+                message = (
+                    "Docs update skipped a missing registered path. "
+                    f"path={raw_path!r} resolved={str(resolved)!r}"
+                )
+                logger.warning("%s", message)
+                try:
+                    notify_agent(
+                        message,
+                        severity="error" if fail_hard else "warning",
+                        source="docs_update_missing_registered_path",
+                        dedupe_key=f"docs-update-missing:{raw_path}",
+                    )
+                except Exception:
+                    pass
+                if fail_hard:
+                    raise RuntimeError(message)
                 continue
             resolved_str = str(resolved)
             registry_paths.append(resolved_str)

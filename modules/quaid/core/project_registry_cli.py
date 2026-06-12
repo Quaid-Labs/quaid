@@ -199,7 +199,7 @@ def cmd_show(args):
 
 
 def cmd_update(args):
-    from core.project_registry import get_project, update_project
+    from core.project_registry import get_project, link_project, update_project
     _require_project_visible(args.name, get_project(args.name))
     updates = {}
     if args.description is not None:
@@ -211,6 +211,9 @@ def cmd_update(args):
         sys.exit(1)
     try:
         entry = update_project(args.name, **updates)
+        current = _current_instance_id()
+        if current and current not in _dedupe_instances(entry.get("instances", [])):
+            entry = link_project(args.name, instance_id=current)
         print(f"Updated project: {args.name}")
         if args.json:
             print(json.dumps(entry, indent=2))

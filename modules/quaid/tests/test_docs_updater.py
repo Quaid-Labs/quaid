@@ -1133,6 +1133,32 @@ class TestCmdUpdateStaleNeverIndexed:
             with pytest.raises(RuntimeError, match="Failed to resolve docs registry path"):
                 updater.cmd_update_stale(dry_run=False, project="quaid")
 
+    def test_update_stale_raises_on_missing_registered_path_when_fail_hard(self, tmp_path, monkeypatch):
+        with _adapter_patch(tmp_path):
+            from datastore.docsdb import updater
+
+            missing = tmp_path / "docs" / "missing.md"
+
+            class _FakeRegistry:
+                def list_docs(self, project=None):
+                    return [{"file_path": str(missing), "last_indexed_at": None}]
+
+                def _resolve_path(self, path_str):
+                    return Path(path_str)
+
+            class _FakeRag:
+                def needs_reindex_many(self, paths):
+                    return {}
+
+            monkeypatch.setattr("datastore.docsdb.registry.DocsRegistry", _FakeRegistry)
+            monkeypatch.setattr("datastore.docsdb.rag.DocsRAG", _FakeRag)
+            monkeypatch.setattr(updater, "check_staleness", lambda project=None: {})
+            monkeypatch.setattr(updater, "is_fail_hard_enabled", lambda: True)
+            monkeypatch.setattr(updater, "notify_agent", lambda *args, **kwargs: True)
+
+            with pytest.raises(RuntimeError, match="missing registered path"):
+                updater.cmd_update_stale(dry_run=False, project="quaid")
+
     def test_update_stale_warns_and_stops_when_registry_index_times_out(self, tmp_path, monkeypatch):
         with _adapter_patch(tmp_path) as iroot:
             from datastore.docsdb import updater
