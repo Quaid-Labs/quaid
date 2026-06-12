@@ -192,6 +192,7 @@ _candidate_is_placeholder() {
         "Write tests"*|\
         "Write tests for @filename"*|\
         "Add a feature"*|\
+        "Implement {feature}"*|\
         "Improve this code"*|\
         "Improve documentation in @filename"*|\
         "Review this code"*|\
