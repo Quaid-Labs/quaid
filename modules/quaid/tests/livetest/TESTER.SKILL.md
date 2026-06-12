@@ -244,7 +244,7 @@ Note that agent derived summaries of system/hook chatter is valid and does not c
 
 ## M0: Agent-Driven Install
 
-M0 is unique in that you delegate the install to the platform rather than running it yourself. Procedure, dry-run commands, `--add-platform` handling, credential-prompt handling, and PASS/FAIL criteria all live in `tests/livetest/livetest-guide/M0.md` — read that file before executing M0.
+M0 is unique in that you delegate the install to the platform rather than running it yourself. Procedure, dry-run commands, `--add-instance` handling, credential-prompt handling, and PASS/FAIL criteria all live in `tests/livetest/livetest-guide/M0.md` — read that file before executing M0.
 
 ---
 
