@@ -786,6 +786,8 @@ def write_signal(
     adapter: str = "",
     supports_compaction_control: bool = False,
     meta: Optional[Dict[str, Any]] = None,
+    *,
+    dedupe: bool = True,
 ) -> Path:
     """Write an extraction signal file for the daemon to process.
 
@@ -804,29 +806,30 @@ def write_signal(
     sig_dir = _signal_dir()
     existing_path = None
     existing_payload: Optional[Dict[str, Any]] = None
-    for f in sorted(sig_dir.iterdir()):
-        if not f.name.endswith(".json"):
-            continue
-        try:
-            existing = json.loads(f.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            continue
-        if _validate_session_id(existing.get("session_id", "")) != session_id:
-            continue
-        existing_type = str(existing.get("type", "") or existing.get("signal_type", "")).strip()
-        if existing_type != signal_type:
-            continue
-        existing_meta = existing.get("meta", {}) if isinstance(existing.get("meta", {}), dict) else {}
-        if not _signal_dedupe_compatible(
-            existing_type=existing_type,
-            existing_meta=existing_meta,
-            new_type=signal_type,
-            new_meta=incoming_meta,
-        ):
-            continue
-        existing_path = f
-        existing_payload = existing if isinstance(existing, dict) else None
-        break
+    if dedupe:
+        for f in sorted(sig_dir.iterdir()):
+            if not f.name.endswith(".json"):
+                continue
+            try:
+                existing = json.loads(f.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                continue
+            if _validate_session_id(existing.get("session_id", "")) != session_id:
+                continue
+            existing_type = str(existing.get("type", "") or existing.get("signal_type", "")).strip()
+            if existing_type != signal_type:
+                continue
+            existing_meta = existing.get("meta", {}) if isinstance(existing.get("meta", {}), dict) else {}
+            if not _signal_dedupe_compatible(
+                existing_type=existing_type,
+                existing_meta=existing_meta,
+                new_type=signal_type,
+                new_meta=incoming_meta,
+            ):
+                continue
+            existing_path = f
+            existing_payload = existing if isinstance(existing, dict) else None
+            break
 
     payload = {
         "type": signal_type,
@@ -6300,7 +6303,6 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                     source_key=lock_owner_key,
                     processed_signal_type=signal_type,
                 )
-                mark_signal_processed(signal_data)
                 has_remaining_tail = total_lines > staged_processed_offset
                 if has_remaining_tail:
                     continued_transcript_path = _stable_transcript_snapshot_for_continued_rolling(
@@ -6316,6 +6318,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                         signal_type="rolling",
                         session_id=session_id,
                         transcript_path=continued_transcript_path,
+                        dedupe=False,
                         meta={
                             "reason": "continued_chunk_budget",
                             "chunk_tokens": chunk_budget,
@@ -6347,6 +6350,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                         "recovered_staged_payload_retry": True,
                     },
                 )
+                mark_signal_processed(signal_data)
                 if not has_remaining_tail:
                     _cleanup_daemon_transcript_snapshot_path(transcript_path)
                 return
@@ -6411,7 +6415,6 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                 source_key=lock_owner_key,
                 processed_signal_type=signal_type,
             )
-            mark_signal_processed(signal_data)
             has_remaining_tail = buffered_line_offset > cursor_offset and total_lines > buffered_line_offset
             if has_remaining_tail:
                 continued_transcript_path = _stable_transcript_snapshot_for_continued_rolling(
@@ -6427,6 +6430,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                     signal_type="rolling",
                     session_id=session_id,
                     transcript_path=continued_transcript_path,
+                    dedupe=False,
                     meta={
                         "reason": "continued_chunk_budget",
                         "chunk_tokens": chunk_budget,
@@ -6458,6 +6462,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                         "source_cursor_key": lock_owner_key,
                     },
                 )
+            mark_signal_processed(signal_data)
             _cleanup_daemon_transcript_snapshot_path(transcript_path)
             return
 
