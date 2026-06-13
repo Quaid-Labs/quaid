@@ -30,7 +30,7 @@ def _run(transcript_path: Path, label: str, session_id: str | None = None) -> Di
     if stale_docs == 0:
         return {"status": "up_to_date", "staleDocs": 0, "updatedDocs": 0}
 
-    max_docs = int(getattr(docs_cfg, "max_docs_per_update", 3) or 3)
+    max_docs = int(getattr(docs_cfg, "max_docs_per_update", 3))
     updated = int(cmd_update_from_transcript(str(transcript_path), dry_run=False, max_docs=max_docs))
     return {
         "status": "updated",

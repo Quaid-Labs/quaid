@@ -99,10 +99,10 @@ def _read_transcript_path(path: Path) -> str:
 def _safe_read_transcript_path(path: Path, source_kind: str, *, session_jsonl: bool) -> Optional[str]:
     try:
         return _build_transcript_from_session_file(path) if session_jsonl else _read_transcript_path(path)
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         if is_fail_hard_enabled():
             raise
-        logger.warning("Session transcript source disappeared during %s read: %s", source_kind, path)
+        logger.warning("Session transcript source could not be read during %s read: %s", source_kind, path)
         return None
 
 
@@ -116,20 +116,20 @@ def _resolve_transcript_source(
         p = Path(str(transcript_path)).expanduser()
         if p.exists() and p.is_file():
             transcript = _safe_read_transcript_path(p, "transcript_path", session_jsonl=False)
-            if transcript is not None:
+            if transcript and transcript.strip():
                 return p, transcript, "transcript_path"
 
     if session_file:
         p = Path(str(session_file)).expanduser()
         if p.exists() and p.is_file():
             transcript = _safe_read_transcript_path(p, "session_file", session_jsonl=True)
-            if transcript is not None:
+            if transcript and transcript.strip():
                 return p, transcript, "session_file"
 
     session_path = get_adapter_instance().get_session_path(session_id)
     if session_path and session_path.exists() and session_path.is_file():
         transcript = _safe_read_transcript_path(session_path, "adapter_session_path", session_jsonl=True)
-        if transcript is not None:
+        if transcript and transcript.strip():
             return session_path, transcript, "adapter_session_path"
 
     return None, None, "missing"

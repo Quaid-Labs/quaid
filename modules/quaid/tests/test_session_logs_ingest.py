@@ -214,6 +214,67 @@ def test_resolve_transcript_source_raises_toctou_deleted_path_under_failhard(mon
         raise AssertionError("expected FileNotFoundError under failHard")
 
 
+def test_resolve_transcript_source_skips_unicode_decode_error_when_failsoft(monkeypatch, tmp_path):
+    adapter = TestAdapter(tmp_path)
+    set_adapter(adapter)
+    transcript = tmp_path / "non-utf8.txt"
+    transcript.write_bytes(b"\xff\xfe\x00")
+
+    monkeypatch.setattr(session_logs_ingest, "is_fail_hard_enabled", lambda: False)
+
+    src_path, content, source_kind = session_logs_ingest._resolve_transcript_source(
+        session_id="sess-unicode",
+        session_file=None,
+        transcript_path=str(transcript),
+    )
+
+    assert src_path is None
+    assert content is None
+    assert source_kind == "missing"
+
+
+def test_resolve_transcript_source_raises_unicode_decode_error_under_failhard(monkeypatch, tmp_path):
+    adapter = TestAdapter(tmp_path)
+    set_adapter(adapter)
+    transcript = tmp_path / "non-utf8.txt"
+    transcript.write_bytes(b"\xff\xfe\x00")
+
+    monkeypatch.setattr(session_logs_ingest, "is_fail_hard_enabled", lambda: True)
+
+    try:
+        session_logs_ingest._resolve_transcript_source(
+            session_id="sess-unicode",
+            session_file=None,
+            transcript_path=str(transcript),
+        )
+    except UnicodeDecodeError:
+        pass
+    else:
+        raise AssertionError("expected UnicodeDecodeError under failHard")
+
+
+def test_resolve_transcript_source_falls_back_from_empty_transcript_path(monkeypatch, tmp_path):
+    adapter = TestAdapter(tmp_path)
+    set_adapter(adapter)
+    empty_transcript = tmp_path / "empty.txt"
+    empty_transcript.write_text("", encoding="utf-8")
+    session_file = tmp_path / "session.jsonl"
+    session_file.write_text(
+        json.dumps({"role": "user", "content": "Fallback transcript survives empty source."}) + "\n",
+        encoding="utf-8",
+    )
+
+    src_path, content, source_kind = session_logs_ingest._resolve_transcript_source(
+        session_id="sess-empty",
+        session_file=str(session_file),
+        transcript_path=str(empty_transcript),
+    )
+
+    assert src_path == session_file
+    assert source_kind == "session_file"
+    assert "Fallback transcript survives empty source." in str(content)
+
+
 def test_main_accepts_json_flag_for_list_and_load(monkeypatch, tmp_path, capsys):
     adapter = TestAdapter(tmp_path); set_adapter(adapter)
     fake_bridge = MagicMock()

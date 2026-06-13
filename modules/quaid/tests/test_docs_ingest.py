@@ -67,3 +67,23 @@ def test_docs_ingest_updates_docs(monkeypatch, tmp_path):
     assert calls["path"] == str(t)
     assert calls["dry_run"] is False
     assert calls["max_docs"] == 5
+
+
+def test_docs_ingest_preserves_explicit_zero_max_docs(monkeypatch, tmp_path):
+    t = tmp_path / "t.txt"
+    t.write_text("hello")
+    monkeypatch.setattr(docs_ingest, "get_config", lambda: _cfg(max_docs=0))
+    monkeypatch.setattr(docs_ingest, "check_staleness", lambda: {"docs/a.md": object()})
+
+    calls = {}
+
+    def _update(path: str, dry_run: bool, max_docs: int):
+        calls["max_docs"] = max_docs
+        return 0
+
+    monkeypatch.setattr(docs_ingest, "cmd_update_from_transcript", _update)
+
+    result = docs_ingest._run(t, "Compaction", "s1")
+
+    assert result["status"] == "updated"
+    assert calls["max_docs"] == 0
