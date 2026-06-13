@@ -514,6 +514,25 @@ class TestApplyDecayOptimizedReal:
         assert not any(mem["id"] == node.id for mem in not_stale)
         assert any(mem["id"] == node.id for mem in stale)
 
+    def test_find_stale_memories_includes_minimum_confidence_dead_band(self, tmp_path):
+        """Rows clamped at minimum confidence must still reach queue/delete decisions."""
+        from datastore.memorydb.maintenance_ops import find_stale_memories_optimized, JanitorMetrics
+        graph, _ = _make_graph(tmp_path)
+        minimum = _make_node(graph, "Minimum confidence stale fact", confidence=0.1)
+        zero = _make_node(graph, "Zero confidence archival fact", confidence=0.0)
+        old_date = (datetime.now() - timedelta(days=120)).isoformat()
+        with graph._get_conn() as conn:
+            conn.execute(
+                "UPDATE nodes SET accessed_at = ? WHERE id IN (?, ?)",
+                (old_date, minimum.id, zero.id),
+            )
+
+        stale = find_stale_memories_optimized(graph, JanitorMetrics())
+        stale_ids = {mem["id"] for mem in stale}
+
+        assert minimum.id in stale_ids
+        assert zero.id not in stale_ids
+
 
 # ===========================================================================
 # decay_memories() CLI path

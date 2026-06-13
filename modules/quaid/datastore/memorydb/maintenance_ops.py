@@ -3204,7 +3204,7 @@ def find_stale_memories_optimized(graph: MemoryGraph, metrics: JanitorMetrics) -
         rows = conn.execute("""
             SELECT * FROM nodes
             WHERE accessed_at < ?
-            AND confidence > 0.1
+            AND confidence > 0.0
             AND pinned = 0  -- Never decay pinned memories
             AND status IN ('approved', 'active')  -- Don't decay pending/unreviewed
             ORDER BY accessed_at ASC
