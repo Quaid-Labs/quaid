@@ -8441,72 +8441,74 @@ def flush_pending_signals(
     """
     previous_daemon_env = os.environ.get("QUAID_DAEMON")
     os.environ["QUAID_DAEMON"] = "1"
-    started = time.time()
-    deadline = started + max(0.0, float(timeout_seconds))
-    summary: Dict[str, Any] = {
-        "status": "running",
-        "attempted": 0,
-        "processed": 0,
-        "preserved": 0,
-        "errors": 0,
-        "passes": 0,
-        "remaining_signals": 0,
-        "elapsed_seconds": 0.0,
-        "instance": _instance_id(),
-        "instance_root": str(_instance_root()),
-    }
+    try:
+        started = time.time()
+        deadline = started + max(0.0, float(timeout_seconds))
+        summary: Dict[str, Any] = {
+            "status": "running",
+            "attempted": 0,
+            "processed": 0,
+            "preserved": 0,
+            "errors": 0,
+            "passes": 0,
+            "remaining_signals": 0,
+            "elapsed_seconds": 0.0,
+            "instance": _instance_id(),
+            "instance_root": str(_instance_root()),
+        }
 
-    while True:
-        signals = read_pending_signals()
-        remaining = _pending_signal_count()
-        if not signals:
+        while True:
+            signals = read_pending_signals()
+            remaining = _pending_signal_count()
+            if not signals:
+                summary["remaining_signals"] = remaining
+                if remaining == 0:
+                    summary["status"] = "drained"
+                    break
+                if time.time() >= deadline:
+                    summary["status"] = "timeout"
+                    break
+                time.sleep(max(0.0, float(poll_interval)))
+                continue
+
+            summary["passes"] = int(summary["passes"]) + 1
+            for sig in signals:
+                summary["attempted"] = int(summary["attempted"]) + 1
+                sig_path_raw = str(sig.get("_signal_path") or "").strip()
+                sig_path = Path(sig_path_raw) if sig_path_raw else None
+                try:
+                    process_signal(sig)
+                except _ProviderUnavailableError as exc:
+                    summary["errors"] = int(summary["errors"]) + 1
+                    logger.error("flush signal provider unavailable; signal preserved: %s", exc)
+                except Exception as exc:
+                    summary["errors"] = int(summary["errors"]) + 1
+                    logger.error("flush signal processing failed; signal preserved: %s", exc, exc_info=True)
+                if sig_path is not None and sig_path.exists():
+                    summary["preserved"] = int(summary["preserved"]) + 1
+                else:
+                    summary["processed"] = int(summary["processed"]) + 1
+
+            remaining = _pending_signal_count()
             summary["remaining_signals"] = remaining
             if remaining == 0:
                 summary["status"] = "drained"
+                break
+            if int(max_passes or 0) > 0 and int(summary["passes"]) >= int(max_passes):
+                summary["status"] = "max_passes"
                 break
             if time.time() >= deadline:
                 summary["status"] = "timeout"
                 break
             time.sleep(max(0.0, float(poll_interval)))
-            continue
 
-        summary["passes"] = int(summary["passes"]) + 1
-        for sig in signals:
-            summary["attempted"] = int(summary["attempted"]) + 1
-            sig_path_raw = str(sig.get("_signal_path") or "").strip()
-            sig_path = Path(sig_path_raw) if sig_path_raw else None
-            try:
-                process_signal(sig)
-            except _ProviderUnavailableError as exc:
-                summary["errors"] = int(summary["errors"]) + 1
-                logger.error("flush signal provider unavailable; signal preserved: %s", exc)
-            except Exception as exc:
-                summary["errors"] = int(summary["errors"]) + 1
-                logger.error("flush signal processing failed; signal preserved: %s", exc, exc_info=True)
-            if sig_path is not None and sig_path.exists():
-                summary["preserved"] = int(summary["preserved"]) + 1
-            else:
-                summary["processed"] = int(summary["processed"]) + 1
-
-        remaining = _pending_signal_count()
-        summary["remaining_signals"] = remaining
-        if remaining == 0:
-            summary["status"] = "drained"
-            break
-        if int(max_passes or 0) > 0 and int(summary["passes"]) >= int(max_passes):
-            summary["status"] = "max_passes"
-            break
-        if time.time() >= deadline:
-            summary["status"] = "timeout"
-            break
-        time.sleep(max(0.0, float(poll_interval)))
-
-    summary["elapsed_seconds"] = round(time.time() - started, 3)
-    if previous_daemon_env is None:
-        os.environ.pop("QUAID_DAEMON", None)
-    else:
-        os.environ["QUAID_DAEMON"] = previous_daemon_env
-    return summary
+        summary["elapsed_seconds"] = round(time.time() - started, 3)
+        return summary
+    finally:
+        if previous_daemon_env is None:
+            os.environ.pop("QUAID_DAEMON", None)
+        else:
+            os.environ["QUAID_DAEMON"] = previous_daemon_env
 
 
 # ---------------------------------------------------------------------------

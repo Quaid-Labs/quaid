@@ -609,6 +609,35 @@ def test_daemon_loop_preserves_signal_when_processing_raises(monkeypatch):
     assert marked == []
 
 
+@pytest.mark.parametrize("initial_daemon_env", [None, "caller"])
+def test_flush_pending_signals_restores_daemon_env_when_pending_read_raises(
+    monkeypatch,
+    tmp_path,
+    initial_daemon_env,
+):
+    if initial_daemon_env is None:
+        monkeypatch.delenv("QUAID_DAEMON", raising=False)
+    else:
+        monkeypatch.setenv("QUAID_DAEMON", initial_daemon_env)
+
+    monkeypatch.setattr(extraction_daemon, "_instance_id", lambda: "pytest-runner")
+    monkeypatch.setattr(extraction_daemon, "_instance_root", lambda: tmp_path)
+
+    def _raise_pending_read():
+        assert os.environ.get("QUAID_DAEMON") == "1"
+        raise RuntimeError("pending signal read failed")
+
+    monkeypatch.setattr(extraction_daemon, "read_pending_signals", _raise_pending_read)
+
+    with pytest.raises(RuntimeError, match="pending signal read failed"):
+        extraction_daemon.flush_pending_signals(timeout_seconds=0, poll_interval=0)
+
+    if initial_daemon_env is None:
+        assert "QUAID_DAEMON" not in os.environ
+    else:
+        assert os.environ["QUAID_DAEMON"] == initial_daemon_env
+
+
 def test_stage_semantic_buffer_payload_uses_focused_extract_chunks(monkeypatch):
     import ingest.extract as extract_mod
 
