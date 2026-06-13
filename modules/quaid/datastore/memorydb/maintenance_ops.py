@@ -154,6 +154,7 @@ def _janitor_embedding_backfill_limit(default_limit: int = 1000) -> int:
             value = int(raw)
             if value > 0:
                 return value
+            raise ValueError("must be positive")
         except Exception as exc:
             if is_fail_hard_enabled():
                 raise RuntimeError(
@@ -1534,6 +1535,13 @@ def backfill_embeddings(graph: MemoryGraph, metrics: JanitorMetrics,
     found = len(rows)
     embedded = 0
     print(f"  Found {found} nodes with NULL embeddings")
+    if found >= batch_limit:
+        warning = (
+            f"Embedding backfill reached batch cap ({batch_limit}); "
+            "remaining NULL-embedding rows will be processed in later janitor runs"
+        )
+        logger.warning(warning)
+        metrics.add_warning(warning)
     embed_timeout_s = _janitor_embedding_timeout_seconds()
 
     for row in rows:

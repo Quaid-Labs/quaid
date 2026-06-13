@@ -511,8 +511,50 @@ def test_backfill_embeddings_applies_env_query_limit(monkeypatch):
     assert out["found"] == 0
 
 
+def test_backfill_embeddings_warns_when_query_limit_is_reached(monkeypatch):
+    class _Conn:
+        def execute(self, sql, params=()):
+            text = str(sql).strip().upper()
+            if text.startswith("SELECT ID, NAME FROM NODES WHERE EMBEDDING IS NULL"):
+                assert params == (2,)
+                return _DummyResult(rows=[
+                    {"id": "n1", "name": "alpha node"},
+                    {"id": "n2", "name": "beta node"},
+                ])
+            if text.startswith("SELECT COUNT(*) FROM NODES_FTS"):
+                return _DummyResult(rows=[(0,)])
+            if text.startswith("SELECT COUNT(*) FROM NODES"):
+                return _DummyResult(rows=[(2,)])
+            return _DummyResult(rowcount=1)
+
+    class _Graph:
+        @contextmanager
+        def _get_conn(self):
+            yield _Conn()
+
+    monkeypatch.setenv("QUAID_JANITOR_EMBED_BACKFILL_LIMIT", "2")
+    metrics = maintenance_ops.JanitorMetrics()
+
+    out = maintenance_ops.backfill_embeddings(_Graph(), metrics, dry_run=True)
+
+    assert out["found"] == 2
+    assert metrics.summary()["warnings"] == 1
+    assert "batch cap (2)" in metrics.warnings[0]["warning"]
+
+
 def test_backfill_embeddings_invalid_limit_honors_fail_hard(monkeypatch):
     monkeypatch.setenv("QUAID_JANITOR_EMBED_BACKFILL_LIMIT", "not-an-int")
+
+    with patch.object(maintenance_ops, "is_fail_hard_enabled", return_value=False):
+        assert maintenance_ops._janitor_embedding_backfill_limit(default_limit=11) == 11
+
+    with patch.object(maintenance_ops, "is_fail_hard_enabled", return_value=True):
+        with pytest.raises(RuntimeError, match="Invalid QUAID_JANITOR_EMBED_BACKFILL_LIMIT"):
+            maintenance_ops._janitor_embedding_backfill_limit(default_limit=11)
+
+
+def test_backfill_embeddings_non_positive_limit_honors_fail_hard(monkeypatch):
+    monkeypatch.setenv("QUAID_JANITOR_EMBED_BACKFILL_LIMIT", "0")
 
     with patch.object(maintenance_ops, "is_fail_hard_enabled", return_value=False):
         assert maintenance_ops._janitor_embedding_backfill_limit(default_limit=11) == 11
