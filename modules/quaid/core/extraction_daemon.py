@@ -904,6 +904,29 @@ def read_pending_signals() -> List[Dict[str, Any]]:
     return signals[:MAX_SIGNALS_PER_POLL]
 
 
+def _signal_file_was_consumed(signal_data: Dict[str, Any]) -> bool:
+    """Return True when a disk-backed signal was deleted after an in-memory read."""
+    sig_path_raw = str(signal_data.get("_signal_path") or "").strip()
+    if not sig_path_raw:
+        return False
+    sig_path = Path(sig_path_raw)
+    try:
+        signal_root = _signal_dir().resolve()
+        if not sig_path.resolve(strict=False).is_relative_to(signal_root):
+            return False
+        sig_path.stat()
+    except FileNotFoundError:
+        logger.info("skipping stale in-memory signal whose file was already consumed: %s", sig_path)
+        return True
+    except OSError as exc:
+        logger.warning(
+            "failed checking pending signal file %s; processing in-memory signal: %s",
+            sig_path,
+            exc,
+        )
+    return False
+
+
 def _pending_signal_count() -> int:
     sig_dir = _signal_dir()
     if not sig_dir.is_dir():
@@ -4958,6 +4981,8 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
     Reads transcript from cursor, passes to extract_from_transcript()
     which handles chunking and storage internally.
     """
+    if _signal_file_was_consumed(signal_data):
+        return
     _reload_config_if_changed("signal processing")
     signal_type = signal_data.get("type", "unknown")
     session_id = _validate_session_id(signal_data.get("session_id", "unknown"))

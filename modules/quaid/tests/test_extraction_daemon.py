@@ -15538,6 +15538,31 @@ class TestRollingExtraction:
 class TestProcessSignalRetryOnException:
     """process_signal() must not mark the signal processed when an exception occurs."""
 
+    def test_process_signal_skips_signal_already_consumed_from_disk(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
+
+        transcript = tmp_path / "stale-signal.jsonl"
+        transcript.write_text('{"role":"user","content":"hello"}\n', encoding="utf-8")
+        sig_path = extraction_daemon.write_signal(
+            signal_type="session_end",
+            session_id="sess-stale-signal",
+            transcript_path=str(transcript),
+        )
+        signal_data = extraction_daemon.read_pending_signals()[0]
+        sig_path.unlink()
+
+        reloaded = []
+        monkeypatch.setattr(
+            extraction_daemon,
+            "_reload_config_if_changed",
+            lambda reason: reloaded.append(reason),
+        )
+
+        extraction_daemon.process_signal(signal_data)
+
+        assert reloaded == []
+
     def test_signal_file_preserved_when_daemon_extraction_empty_response_raises(self, monkeypatch, tmp_path):
         from ingest import extract as extract_mod
         from lib.adapter import reset_adapter, set_adapter
