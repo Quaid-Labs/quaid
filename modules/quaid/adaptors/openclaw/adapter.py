@@ -18,7 +18,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from adaptors.openclaw.providers import GatewayLLMProvider, OpenClawGatewayLLMProvider
+from adaptors.openclaw.providers import OpenClawGatewayLLMProvider
 from lib.adapter import ChannelInfo, QuaidAdapter, read_env_file
 from lib.fail_policy import is_fail_hard_enabled
 from lib.providers import AnthropicLLMProvider, OpenAICodexOAuthLLMProvider
@@ -27,10 +27,10 @@ from lib.providers import AnthropicLLMProvider, OpenAICodexOAuthLLMProvider
 class OpenClawAdapter(QuaidAdapter):
     """Adapter for running inside the OpenClaw gateway.
 
-    - Home dir: QUAID_HOME env or ${QUAID_WORKSPACE}/
+    - Home dir: QUAID_HOME env or ~/.quaid
     - Notifications: openclaw message send CLI
     - Credentials: env var -> workspace .env
-    - Sessions: ~/.openclaw/sessions/
+    - Sessions: ~/.openclaw/agents/<label>/sessions/
     - Filtering: HEARTBEAT, GatewayRestart, System: messages
     """
 
@@ -47,6 +47,16 @@ class OpenClawAdapter(QuaidAdapter):
         "anthropic-claude-code": "anthropic",
     }
     _NON_ROUTABLE_NOTIFY_CHANNELS = {"webchat"}
+    _SAFE_AGENT_LABEL_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+    _SAFE_SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+    _OTHER_ADAPTER_INSTANCE_PREFIXES = (
+        "claude-",
+        "claude_code-",
+        "claude-code-",
+        "codex-",
+        "test-",
+        "standalone-",
+    )
     _ROW_TIMESTAMP_RE = re.compile(
         r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?$"
     )
@@ -103,9 +113,22 @@ class OpenClawAdapter(QuaidAdapter):
         if env_path:
             expanded = Path(env_path).expanduser()
             try:
-                candidates.append(expanded.resolve())
+                resolved = expanded.resolve()
             except (OSError, RuntimeError):
-                candidates.append(expanded)
+                if is_fail_hard_enabled():
+                    raise
+                print(
+                    f"[adapter] OPENCLAW_CONFIG_PATH could not be resolved: {expanded}",
+                    file=sys.stderr,
+                )
+                resolved = expanded
+            if self._path_is_under(resolved, Path.home()):
+                candidates.append(resolved)
+            else:
+                message = f"OPENCLAW_CONFIG_PATH outside home ignored: {resolved}"
+                print(f"[adapter] {message}", file=sys.stderr)
+                if is_fail_hard_enabled():
+                    raise PermissionError(message)
         candidates.append((Path.home() / ".openclaw" / "openclaw.json").resolve())
         deduped: list[Path] = []
         seen: set[str] = set()
@@ -129,6 +152,70 @@ class OpenClawAdapter(QuaidAdapter):
         if not normalized:
             return ""
         return cls._PROVIDER_ALIASES.get(normalized, normalized)
+
+    @classmethod
+    def _sanitize_agent_label(cls, label: str, *, default: str = "main") -> str:
+        clean = str(label or "").strip().lower()
+        if not clean:
+            return default
+        if cls._SAFE_AGENT_LABEL_RE.fullmatch(clean):
+            return clean
+        message = f"Unsafe OpenClaw agent label: {label!r}"
+        print(f"[adapter] {message}", file=sys.stderr)
+        if is_fail_hard_enabled():
+            raise ValueError(message)
+        return default
+
+    @classmethod
+    def _safe_session_id(cls, session_id: str) -> str:
+        value = str(session_id or "").strip()
+        return value if cls._SAFE_SESSION_ID_RE.fullmatch(value) else ""
+
+    @staticmethod
+    def _log_value(value: str) -> str:
+        return str(value or "").replace("\r", "\\r").replace("\n", "\\n")
+
+    @staticmethod
+    def _safe_cli_arg_value(value: str) -> str:
+        text = str(value or "").strip()
+        if not text:
+            return ""
+        if text.startswith("-") or "\n" in text or "\r" in text or "\x00" in text:
+            return ""
+        if len(text) > 512:
+            return ""
+        return text
+
+    @staticmethod
+    def _message_cli_allowed_dirs() -> tuple[Path, ...]:
+        return (
+            Path("/opt/homebrew/bin"),
+            Path("/opt/homebrew/Cellar"),
+            Path("/opt/homebrew/lib"),
+            Path("/usr/local/bin"),
+            Path("/usr/local/Cellar"),
+            Path("/usr/local/lib"),
+            Path.home() / ".local" / "bin",
+        )
+
+    def _validate_message_cli_candidate(self, candidate: str) -> Optional[str]:
+        if not candidate:
+            return None
+        requested = Path(candidate).expanduser()
+        try:
+            resolved = requested.resolve()
+        except (OSError, RuntimeError) as exc:
+            print(f"[notify] Invalid message CLI path: {exc}", file=sys.stderr)
+            if is_fail_hard_enabled():
+                raise
+            return None
+        if (
+            resolved.is_file()
+            and requested.name == "openclaw"
+            and any(self._path_is_under(resolved, allowed_dir) for allowed_dir in self._message_cli_allowed_dirs())
+        ):
+            return str(resolved)
+        return None
 
     def _detect_gateway_primary_provider(self) -> str:
         cfg_path = self.get_gateway_config_path()
@@ -228,13 +315,22 @@ class OpenClawAdapter(QuaidAdapter):
             return self._pick_recent_channel_info(sessions, file_mtime_ms, preferred_channel=preferred_channel)
         except (json.JSONDecodeError, IOError) as e:
             print(f"[notify] Error reading sessions: {e}", file=sys.stderr)
+            if is_fail_hard_enabled():
+                raise
             return None
 
     def _resolve_message_cli(self) -> Optional[str]:
         """Resolve message CLI binary path for notification delivery."""
         explicit = os.environ.get("QUAID_MESSAGE_CLI", "").strip()
         if explicit:
-            return explicit
+            resolved = self._validate_message_cli_candidate(explicit)
+            if resolved:
+                return resolved
+            message = f"Rejected unsafe QUAID_MESSAGE_CLI path: {explicit}"
+            print(f"[notify] {message}", file=sys.stderr)
+            if is_fail_hard_enabled():
+                raise PermissionError(message)
+            return None
 
         candidates = [
             shutil.which("openclaw"),
@@ -243,8 +339,9 @@ class OpenClawAdapter(QuaidAdapter):
             str(Path.home() / ".local" / "bin" / "openclaw"),
         ]
         for candidate in candidates:
-            if candidate and Path(candidate).exists():
-                return candidate
+            resolved = self._validate_message_cli_candidate(candidate or "")
+            if resolved:
+                return resolved
         return None
 
     def _notify_subprocess_env(self) -> dict:
@@ -322,9 +419,11 @@ class OpenClawAdapter(QuaidAdapter):
         """
         raw = os.environ.get("QUAID_INSTANCE", "").strip()
         if raw.startswith("openclaw-"):
-            return raw[len("openclaw-"):] or "main"
+            return self._sanitize_agent_label(raw[len("openclaw-"):], default="main")
         if raw == "openclaw":
             return "main"
+        if raw and not raw.lower().startswith(self._OTHER_ADAPTER_INSTANCE_PREFIXES):
+            return self._sanitize_agent_label(raw, default="main")
         return "main"
 
     def get_host_info(self):
@@ -349,6 +448,8 @@ class OpenClawAdapter(QuaidAdapter):
                     if parsed:
                         version = parsed
             except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+                if is_fail_hard_enabled():
+                    raise
                 pass
             if version == "unknown":
                 package_version = self._read_openclaw_package_version(binary)
@@ -419,8 +520,16 @@ class OpenClawAdapter(QuaidAdapter):
                 if not ws:
                     ws = str(agents.get("defaults", {}).get("workspace", "")).strip()
                 if ws:
-                    return Path(ws).resolve()
+                    resolved = Path(ws).expanduser().resolve()
+                    if self._path_is_under(resolved, Path.home()):
+                        return resolved
+                    message = f"OpenClaw workspace outside home ignored: {resolved}"
+                    print(f"[adapter] {message}", file=sys.stderr)
+                    if is_fail_hard_enabled():
+                        raise PermissionError(message)
             except (json.JSONDecodeError, KeyError):
+                if is_fail_hard_enabled():
+                    raise
                 pass
         raise RuntimeError(
             "Could not resolve OpenClaw workspace from OpenClaw config "
@@ -441,9 +550,17 @@ class OpenClawAdapter(QuaidAdapter):
             return False
 
         effective_channel = channel_override or info.channel
+        effective_channel = self._safe_cli_arg_value(effective_channel)
+        target = self._safe_cli_arg_value(info.target)
+        account_id = self._safe_cli_arg_value(info.account_id)
+        if not effective_channel or not target:
+            print("[notify] Unsafe or empty notification route", file=sys.stderr)
+            if is_fail_hard_enabled():
+                raise ValueError("Unsafe or empty notification route")
+            return False
         if str(effective_channel or "").strip().lower() in self._NON_ROUTABLE_NOTIFY_CHANNELS:
             print(
-                f"[notify] Channel not routable via message CLI: {effective_channel}",
+                f"[notify] Channel not routable via message CLI: {self._log_value(effective_channel)}",
                 file=sys.stderr,
             )
             return False
@@ -456,11 +573,11 @@ class OpenClawAdapter(QuaidAdapter):
             cmd = [
                 message_cli, "message", "send",
                 "--channel", channel,
-                "--target", info.target,
+                "--target", target,
                 "--message", message,
             ]
-            if info.account_id and info.account_id != "default":
-                cmd.extend(["--account", info.account_id])
+            if account_id and account_id != "default":
+                cmd.extend(["--account", account_id])
             if dry_run:
                 print(f"[notify] Would run: {' '.join(cmd)}")
                 return True
@@ -472,10 +589,10 @@ class OpenClawAdapter(QuaidAdapter):
                 env=self._notify_subprocess_env(),
             )
             if result.returncode == 0:
-                print(f"[notify] Sent to {channel}:{info.target}")
+                print(f"[notify] Sent to {self._log_value(channel)}:{self._log_value(target)}")
                 return True
             err = (result.stderr or "").strip() or "(no stderr)"
-            print(f"[notify] Send failed on channel={channel}: {err}", file=sys.stderr)
+            print(f"[notify] Send failed on channel={self._log_value(channel)}: {err}", file=sys.stderr)
             return False
 
         try:
@@ -484,10 +601,13 @@ class OpenClawAdapter(QuaidAdapter):
             # Fallback: if override channel fails, retry on the last active channel.
             if channel_override and channel_override != info.channel:
                 print(
-                    f"[notify] Override channel failed; retrying with last channel={info.channel}",
+                    f"[notify] Override channel failed; retrying with last channel={self._log_value(info.channel)}",
                     file=sys.stderr,
                 )
-                return _send(info.channel)
+                fallback_channel = self._safe_cli_arg_value(info.channel)
+                if not fallback_channel:
+                    return False
+                return _send(fallback_channel)
             return False
         except subprocess.TimeoutExpired:
             print("[notify] Send timed out", file=sys.stderr)
@@ -531,6 +651,8 @@ class OpenClawAdapter(QuaidAdapter):
             return self._pick_recent_channel_info(sessions, file_mtime_ms)
         except (json.JSONDecodeError, IOError) as e:
             print(f"[notify] Error reading sessions: {e}", file=sys.stderr)
+            if is_fail_hard_enabled():
+                raise
             return None
 
     def get_api_key(self, env_var_name: str) -> Optional[str]:
@@ -620,7 +742,10 @@ class OpenClawAdapter(QuaidAdapter):
             if row_sid != sid:
                 continue
             saw_session = True
-            row_label = self.extract_agent_label_from_session_key(session_key) or "main"
+            row_label = self._sanitize_agent_label(
+                self.extract_agent_label_from_session_key(session_key) or "main",
+                default="",
+            )
             if row_label != label:
                 continue
             row_path = self._session_path_from_index_row(main_sessions_json.parent, row, sid)
@@ -844,9 +969,20 @@ class OpenClawAdapter(QuaidAdapter):
             if not hook.get("enabled", True):
                 return []
             paths = hook.get("paths") or hook.get("patterns") or hook.get("files") or []
-            return paths if isinstance(paths, list) else []
+            if not isinstance(paths, list):
+                return []
+            safe_paths = []
+            for item in paths:
+                value = str(item or "").strip() if isinstance(item, str) else ""
+                if not value or value.startswith("/") or ".." in Path(value).parts:
+                    print(f"[adapter] skipped unsafe bootstrap markdown glob: {value!r}", file=sys.stderr)
+                    continue
+                safe_paths.append(value)
+            return safe_paths
         except (json.JSONDecodeError, IOError, KeyError, UnicodeDecodeError) as e:
             print(f"[adapter] bootstrap markdown globs unavailable: {e}", file=sys.stderr)
+            if is_fail_hard_enabled():
+                raise
             return []
 
     def get_llm_provider(self, model_tier: Optional[str] = None):
@@ -983,14 +1119,6 @@ class OpenClawAdapter(QuaidAdapter):
     def installer_supported_providers(self) -> list:
         return ["anthropic", "openai"]
 
-    # Deprecated gateway validation support kept in-tree for possible future
-    # resurrection only. Do not route active Quaid service calls through this.
-    # Fast-lane candidates for the legacy openai-codex provider, probed in priority order.
-    _OPENAI_CODEX_FAST_CANDIDATES = [
-        "gpt-5.4-mini",  # ~3.0s via gateway — broadly available
-        "gpt-5.4",       # ~10s  via gateway — always available
-    ]
-
     def installer_default_models(self, provider: str) -> Optional[dict]:
         raw = str(provider or "").strip().lower()
         # Check exact match first so provider-specific overrides (e.g. openai-codex)
@@ -1007,43 +1135,6 @@ class OpenClawAdapter(QuaidAdapter):
         if fast_effort:
             out["fastEffort"] = fast_effort
         return out
-
-    def _probe_openai_codex_fast_model(self) -> Optional[str]:
-        """Probe openai-codex fast-lane candidates via gateway; return best available."""
-        try:
-            port, token = self._get_gateway_auth()
-        except Exception:
-            if is_fail_hard_enabled():
-                raise
-            return None
-        candidates = self._OPENAI_CODEX_FAST_CANDIDATES
-        # Ensure all candidates are in the allowlist before pinging.
-        self.installer_ensure_gateway_model_allowlist(
-            [f"openai-codex/{m}" for m in candidates]
-        )
-        for candidate in candidates:
-            try:
-                llm = GatewayLLMProvider(
-                    port=port,
-                    token=token,
-                    deep_model="gpt-5.4",
-                    fast_model=candidate,
-                    default_provider="openai-codex",
-                )
-                response = llm.llm_call(
-                    [{"role": "user", "content": "PING"}],
-                    model_tier="fast",
-                    max_tokens=8,
-                    timeout=35,
-                )
-                if str(getattr(response, "text", "") or "").strip():
-                    return candidate
-            except Exception:
-                if is_fail_hard_enabled():
-                    raise
-                print(f"[notify] Deprecated OpenClaw fast-model probe failed for {candidate}", file=sys.stderr)
-                continue
-        return None
 
     def get_fast_provider_default(self) -> str:
         detected = self._normalize_installer_provider(self._detect_gateway_primary_provider())
@@ -1168,45 +1259,6 @@ class OpenClawAdapter(QuaidAdapter):
     def installer_supports_live_model_validation(self) -> bool:
         return False
 
-    def installer_ensure_gateway_model_allowlist(self, model_strings: list) -> None:
-        """Add model strings to the OC gateway's per-agent model allowlist.
-
-        The OC gateway rejects any model not present in agents.defaults.models
-        with HTTP 400 before the request reaches the upstream provider.  Call
-        this before pinging a new model so the gateway lets it through.
-        """
-        cfg_path = Path.home() / ".openclaw" / "openclaw.json"
-        if not cfg_path.exists():
-            return
-        try:
-            import os as _os
-            with open(cfg_path, "r", encoding="utf-8") as f:
-                cfg = json.load(f)
-            models_map = (
-                cfg
-                .setdefault("agents", {})
-                .setdefault("defaults", {})
-                .setdefault("models", {})
-            )
-            changed = False
-            for m in model_strings:
-                key = str(m or "").strip()
-                if key and key not in models_map:
-                    models_map[key] = {}
-                    changed = True
-            if not changed:
-                return
-            tmp = str(cfg_path) + f".tmp-allowlist-{_os.getpid()}"
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(cfg, f, indent=2)
-                f.write("\n")
-            _os.replace(tmp, cfg_path)
-        except Exception as e:
-            print(
-                f"[adapter] installer_ensure_gateway_model_allowlist: {e}",
-                file=sys.stderr,
-            )
-
     def installer_validate_model_pair_live(
         self,
         provider: str,
@@ -1221,11 +1273,7 @@ class OpenClawAdapter(QuaidAdapter):
         return self._openclaw_root_dir() / "agents" / "main" / "agent"
 
     def _resolve_anthropic_credential(self) -> Optional[str]:
-        """Resolve an Anthropic API key or OAuth token from the gateway's auth store.
-
-        Resolution chain:
-        1. Gateway auth-profiles.json (lastGood.anthropic -> profile token/key)
-        """
+        """Resolve an Anthropic API key or OAuth token from the gateway auth store."""
         openclaw_dir = self._get_agent_config_dir()
 
         # 1. Auth profiles - the gateway's active credential store
@@ -1244,6 +1292,8 @@ class OpenClawAdapter(QuaidAdapter):
                         return token
             except (json.JSONDecodeError, IOError, OSError):
                 print("[adapter] anthropic credential resolution from auth-profiles failed", file=sys.stderr)
+                if is_fail_hard_enabled():
+                    raise
 
         # No env/.env fallback here: avoid implicit paid API usage.
         return None
@@ -1264,6 +1314,8 @@ class OpenClawAdapter(QuaidAdapter):
                 })
         except Exception as e:
             print(f"[adapter] discover_llm_providers fallback to default: {e}", file=sys.stderr)
+            if is_fail_hard_enabled():
+                raise
         return providers
 
     def _get_gateway_auth(self):
@@ -1279,6 +1331,8 @@ class OpenClawAdapter(QuaidAdapter):
                 )
             except Exception as e:
                 print(f"[adapter] gateway auth config read failed, using defaults: {e}", file=sys.stderr)
+                if is_fail_hard_enabled():
+                    raise
         return 18789, ""
 
     # ---- Multi-agent support ----
@@ -1331,18 +1385,21 @@ class OpenClawAdapter(QuaidAdapter):
                 with open(cfg_path) as f:
                     cfg = json.load(f)
                 agents_list = cfg.get("agents", {}).get("list", []) or []
-                labels = [
-                    str(a.get("id", "")).strip().lower()
-                    for a in agents_list
-                    if isinstance(a, dict) and a.get("id")
-                ]
+                for agent_row in agents_list:
+                    if not isinstance(agent_row, dict):
+                        continue
+                    label = self._sanitize_agent_label(str(agent_row.get("id", "")).strip(), default="")
+                    if label and label not in labels:
+                        labels.append(label)
                 agents = cfg.get("agents", {})
                 if isinstance(agents, dict):
                     for key in agents.keys():
-                        label = str(key or "").strip().lower()
+                        label = self._sanitize_agent_label(str(key or "").strip(), default="")
                         if label and label not in {"defaults", "list"} and label not in labels:
                             labels.append(label)
             except (json.JSONDecodeError, IOError, KeyError):
+                if is_fail_hard_enabled():
+                    raise
                 pass
 
         # Source 2: silo directories under quaid_home()/instances
@@ -1351,10 +1408,12 @@ class OpenClawAdapter(QuaidAdapter):
             home = self.quaid_home() / "instances"
             for entry in home.iterdir():
                 if entry.is_dir() and entry.name.startswith(silo_prefix):
-                    label = entry.name[len(silo_prefix):]
+                    label = self._sanitize_agent_label(entry.name[len(silo_prefix):], default="")
                     if label and label not in labels and self._agent_label_has_platform_state(label):
                         labels.append(label)
         except (OSError, RuntimeError):
+            if is_fail_hard_enabled():
+                raise
             pass
 
         if not labels:
@@ -1363,13 +1422,13 @@ class OpenClawAdapter(QuaidAdapter):
         # Ensure "main" is always first
         if "main" in labels:
             labels = ["main"] + [l for l in labels if l != "main"]
-        elif "main" not in labels:
+        else:
             labels = ["main"] + labels
 
         return [f"{prefix}-{label}" for label in labels]
 
     def _agent_label_has_platform_state(self, label: str) -> bool:
-        clean = str(label or "").strip().lower()
+        clean = self._sanitize_agent_label(label, default="")
         if not clean:
             return False
         if clean == "main":
@@ -1386,6 +1445,8 @@ class OpenClawAdapter(QuaidAdapter):
                     if clean in {str(key or "").strip().lower() for key in agents.keys()}:
                         return True
             except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+                if is_fail_hard_enabled():
+                    raise
                 pass
         return (self._openclaw_root_dir() / "agents" / clean).exists()
 
@@ -1405,20 +1466,24 @@ class OpenClawAdapter(QuaidAdapter):
         return None
 
     def _agent_sessions_dir(self, label: str) -> Path:
-        clean = str(label or "main").strip().lower() or "main"
+        clean = self._sanitize_agent_label(label, default="main")
         return self._openclaw_root_dir() / "agents" / clean / "sessions"
 
     def _sessions_json_has_agent_label(self, sessions_json: Path, label: str) -> bool:
-        wanted = str(label or "main").strip().lower() or "main"
-        return any(
-            (self.extract_agent_label_from_session_key(session_key) or "main") == wanted
-            for session_key, _row in self._iter_sessions_index(sessions_json)
-        )
+        wanted = self._sanitize_agent_label(label, default="main")
+        for session_key, _row in self._iter_sessions_index(sessions_json):
+            raw_label = self.extract_agent_label_from_session_key(session_key)
+            row_label = "main" if raw_label is None else self._sanitize_agent_label(raw_label, default="")
+            if row_label == wanted:
+                return True
+        return False
 
     def _iter_sessions_index(self, sessions_json: Path):
         try:
             data = json.loads(sessions_json.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+            if is_fail_hard_enabled():
+                raise
             return []
         if not isinstance(data, dict):
             return []
@@ -1426,37 +1491,52 @@ class OpenClawAdapter(QuaidAdapter):
         for session_key, row in data.items():
             if isinstance(row, dict):
                 rows.append((str(session_key or ""), row))
+            else:
+                print(
+                    f"[adapter] skipped unexpected sessions.json row for {session_key!r}",
+                    file=sys.stderr,
+                )
         return rows
 
     def _session_path_from_index_row(self, sessions_dir: Path, row: dict, session_id: str) -> Optional[Path]:
+        safe_session_id = self._safe_session_id(session_id)
+        if not safe_session_id:
+            return None
+        sessions_root = sessions_dir.expanduser().resolve()
         candidates = [
             row.get("sessionFile"),
             row.get("file"),
             row.get("path"),
-            sessions_dir / f"{session_id}.jsonl",
+            sessions_root / f"{safe_session_id}.jsonl",
         ]
         for candidate in candidates:
             text = str(candidate or "").strip()
             if not text:
                 continue
             try:
-                return Path(text).expanduser().resolve()
+                raw_path = Path(text).expanduser()
+                resolved = raw_path.resolve() if raw_path.is_absolute() else (sessions_root / raw_path).resolve()
             except (OSError, RuntimeError):
-                return Path(text).expanduser()
+                continue
+            if not self._path_is_under(resolved, sessions_root):
+                print(f"[adapter] skipped session path outside sessions dir: {resolved}", file=sys.stderr)
+                continue
+            return resolved
         return None
 
-    @staticmethod
-    def _session_id_from_path(path: Path) -> str:
+    @classmethod
+    def _session_id_from_path(cls, path: Path) -> str:
         name = Path(path).name
         marker = ".jsonl.reset."
         if marker in name:
-            return name.split(marker, 1)[0]
+            return cls._safe_session_id(name.split(marker, 1)[0])
         if name.endswith(".jsonl"):
-            return name[: -len(".jsonl")]
+            return cls._safe_session_id(name[: -len(".jsonl")])
         return ""
 
     def _path_matches_session_id(self, path: Path, session_id: str) -> bool:
-        return self._session_id_from_path(path) == str(session_id or "").strip()
+        safe_session_id = self._safe_session_id(session_id)
+        return bool(safe_session_id) and self._session_id_from_path(path) == safe_session_id
 
     @staticmethod
     def _same_path(left: Path, right: Path) -> bool:

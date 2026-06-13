@@ -369,6 +369,23 @@ class TestOpenClawAdapter:
         adapter = OpenClawAdapter()
         assert adapter.oc_workspace() == workspace
 
+    def test_oc_workspace_rejects_config_workspace_outside_home_when_fail_hard(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("OPENCLAW_WORKSPACE", raising=False)
+        home = tmp_path / "home"
+        outside = tmp_path / "outside-workspace"
+        outside.mkdir(parents=True)
+        cfg_dir = home / ".openclaw"
+        cfg_dir.mkdir(parents=True)
+        (cfg_dir / "openclaw.json").write_text(json.dumps({
+            "agents": {"defaults": {"workspace": str(outside)}}
+        }))
+        monkeypatch.setattr(Path, "home", staticmethod(lambda: home))
+        adapter = OpenClawAdapter()
+
+        with patch("adaptors.openclaw.adapter.is_fail_hard_enabled", return_value=True):
+            with pytest.raises(PermissionError, match="workspace outside home"):
+                adapter.oc_workspace()
+
     def test_oc_workspace_ignores_non_openclaw_config(self, tmp_path, monkeypatch):
         """Only ~/.openclaw/openclaw.json is used for workspace fallback."""
         monkeypatch.delenv("OPENCLAW_WORKSPACE", raising=False)
@@ -883,6 +900,18 @@ class TestOpenClawAdapter:
         adapter = OpenClawAdapter()
         assert adapter.get_sessions_dir() == sessions_dir
 
+    def test_get_instance_name_accepts_bare_openclaw_label(self, monkeypatch):
+        monkeypatch.setenv("QUAID_INSTANCE", "coding")
+        adapter = OpenClawAdapter()
+        assert adapter.get_instance_name() == "coding"
+
+    def test_get_instance_name_rejects_unsafe_label_when_fail_hard(self, monkeypatch):
+        monkeypatch.setenv("QUAID_INSTANCE", "openclaw-../evil")
+        adapter = OpenClawAdapter()
+        with patch("adaptors.openclaw.adapter.is_fail_hard_enabled", return_value=True):
+            with pytest.raises(ValueError, match="Unsafe OpenClaw agent label"):
+                adapter.get_instance_name()
+
     def test_get_sessions_dir_non_main_without_matching_session_key_is_none(self, tmp_path, monkeypatch):
         sessions_dir = tmp_path / ".openclaw" / "agents" / "main" / "sessions"
         sessions_dir.mkdir(parents=True)
@@ -936,6 +965,28 @@ class TestOpenClawAdapter:
         assert adapter.get_sessions_dir() == sessions_dir
         assert adapter.owns_session_path(worker_transcript, session_id="worker-session") is True
 
+    def test_owns_session_path_rejects_index_path_outside_sessions_dir(self, tmp_path, monkeypatch):
+        sessions_dir = tmp_path / ".openclaw" / "agents" / "main" / "sessions"
+        sessions_dir.mkdir(parents=True)
+        outside = tmp_path / "outside.jsonl"
+        outside.write_text('{"role":"user","content":"do not ingest"}\n', encoding="utf-8")
+        (sessions_dir / "sessions.json").write_text(json.dumps({
+            "agent:main:matrix:channel:!room": {
+                "sessionId": "session-1",
+                "sessionFile": str(outside),
+            }
+        }), encoding="utf-8")
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        monkeypatch.setenv("QUAID_INSTANCE", "openclaw-main")
+
+        adapter = OpenClawAdapter()
+
+        assert adapter.owns_session_path(outside, session_id="session-1") is False
+
+    def test_session_id_from_path_rejects_unsafe_filename(self):
+        assert OpenClawAdapter._session_id_from_path(Path("safe-session_1.jsonl")) == "safe-session_1"
+        assert OpenClawAdapter._session_id_from_path(Path("bad.session?.jsonl")) == ""
+
     def test_get_bootstrap_markdown_globs(self, tmp_path, monkeypatch):
         import json
         config_path = tmp_path / ".openclaw" / "openclaw.json"
@@ -958,6 +1009,87 @@ class TestOpenClawAdapter:
             "projects/*/TOOLS.md",
             "projects/*/AGENTS.md",
         ]
+
+    def test_get_bootstrap_markdown_globs_filters_unsafe_paths(self, tmp_path, monkeypatch):
+        config_path = tmp_path / ".openclaw" / "openclaw.json"
+        config_path.parent.mkdir(parents=True)
+        config_path.write_text(json.dumps({
+            "hooks": {
+                "internal": {
+                    "entries": {
+                        "bootstrap-extra-files": {
+                            "enabled": True,
+                            "paths": [
+                                "projects/*/TOOLS.md",
+                                "../secrets/*.md",
+                                "/etc/*.md",
+                                7,
+                            ],
+                        }
+                    }
+                }
+            }
+        }))
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        adapter = OpenClawAdapter()
+        assert adapter.get_bootstrap_markdown_globs() == ["projects/*/TOOLS.md"]
+
+    def test_resolve_message_cli_accepts_home_local_openclaw(self, tmp_path, monkeypatch):
+        home = tmp_path / "home"
+        binary = home / ".local" / "bin" / "openclaw"
+        binary.parent.mkdir(parents=True)
+        binary.write_text("#!/bin/sh\n", encoding="utf-8")
+        monkeypatch.setattr(Path, "home", lambda: home)
+        monkeypatch.setenv("QUAID_MESSAGE_CLI", str(binary))
+
+        adapter = OpenClawAdapter()
+
+        assert adapter._resolve_message_cli() == str(binary.resolve())
+
+    def test_resolve_message_cli_accepts_allowed_symlink_target(self, tmp_path, monkeypatch):
+        prefix = tmp_path / "prefix"
+        requested = prefix / "bin" / "openclaw"
+        target = prefix / "lib" / "node_modules" / "openclaw" / "bin" / "cli.js"
+        requested.parent.mkdir(parents=True)
+        target.parent.mkdir(parents=True)
+        target.write_text("#!/usr/bin/env node\n", encoding="utf-8")
+        requested.symlink_to(target)
+        monkeypatch.setenv("QUAID_MESSAGE_CLI", str(requested))
+        adapter = OpenClawAdapter()
+        monkeypatch.setattr(
+            adapter,
+            "_message_cli_allowed_dirs",
+            lambda: (prefix / "bin", prefix / "lib"),
+        )
+
+        assert adapter._resolve_message_cli() == str(target.resolve())
+
+    def test_resolve_message_cli_rejects_unsafe_env_path(self, tmp_path, monkeypatch):
+        binary = tmp_path / "openclaw"
+        binary.write_text("#!/bin/sh\n", encoding="utf-8")
+        monkeypatch.setenv("QUAID_MESSAGE_CLI", str(binary))
+        monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+        adapter = OpenClawAdapter()
+
+        with patch("adaptors.openclaw.adapter.is_fail_hard_enabled", return_value=False):
+            assert adapter._resolve_message_cli() is None
+        with patch("adaptors.openclaw.adapter.is_fail_hard_enabled", return_value=True):
+            with pytest.raises(PermissionError, match="Rejected unsafe QUAID_MESSAGE_CLI"):
+                adapter._resolve_message_cli()
+
+    def test_notify_rejects_option_like_route_values(self, monkeypatch):
+        adapter = OpenClawAdapter()
+        mock_info = ChannelInfo(
+            channel="matrix", target="--help", account_id="default",
+            session_key="agent:main:main"
+        )
+        monkeypatch.setattr(adapter, "get_last_channel", lambda s="": mock_info)
+        monkeypatch.setattr(adapter, "_resolve_message_cli", lambda: "openclaw")
+
+        with patch("adaptors.openclaw.adapter.subprocess.run") as mock_run:
+            with patch("adaptors.openclaw.adapter.is_fail_hard_enabled", return_value=False):
+                assert adapter.notify("test") is False
+        mock_run.assert_not_called()
 
     def test_notify_delegates_to_openclaw(self, monkeypatch):
         """Verify notify calls OpenClaw message CLI."""
@@ -3926,7 +4058,18 @@ class TestSessionsEdgeCases:
         sessions_file.write_text("{broken json")
         adapter = OpenClawAdapter()
         monkeypatch.setattr(adapter, "_find_sessions_json", lambda: sessions_file)
-        assert adapter.get_last_channel() is None
+        with patch("adaptors.openclaw.adapter.is_fail_hard_enabled", return_value=False):
+            assert adapter.get_last_channel() is None
+
+    def test_corrupt_sessions_json_raises_when_fail_hard(self, monkeypatch, tmp_path):
+        sessions_file = tmp_path / "sessions.json"
+        sessions_file.write_text("{broken json")
+        adapter = OpenClawAdapter()
+        monkeypatch.setattr(adapter, "_find_sessions_json", lambda: sessions_file)
+
+        with patch("adaptors.openclaw.adapter.is_fail_hard_enabled", return_value=True):
+            with pytest.raises(json.JSONDecodeError):
+                adapter.get_last_channel()
 
     def test_empty_sessions_json(self, monkeypatch, tmp_path):
         """Empty sessions.json returns None."""
@@ -3934,7 +4077,8 @@ class TestSessionsEdgeCases:
         sessions_file.write_text("")
         adapter = OpenClawAdapter()
         monkeypatch.setattr(adapter, "_find_sessions_json", lambda: sessions_file)
-        assert adapter.get_last_channel() is None
+        with patch("adaptors.openclaw.adapter.is_fail_hard_enabled", return_value=False):
+            assert adapter.get_last_channel() is None
 
     def test_sessions_missing_channel(self, monkeypatch, tmp_path):
         """Session without lastChannel returns None."""
@@ -3961,14 +4105,15 @@ class TestSessionsEdgeCases:
 
     def test_find_sessions_json_honors_openclaw_config_path(self, monkeypatch, tmp_path):
         """OPENCLAW_CONFIG_PATH reroots sessions lookup."""
-        cfg_dir = tmp_path / "alt-oc"
+        home = tmp_path / "home"
+        cfg_dir = home / "alt-oc"
         sessions_dir = cfg_dir / "agents" / "main" / "sessions"
         sessions_dir.mkdir(parents=True)
         (sessions_dir / "sessions.json").write_text("{}")
         cfg_path = cfg_dir / "openclaw.json"
         cfg_path.write_text("{}")
         monkeypatch.setenv("OPENCLAW_CONFIG_PATH", str(cfg_path))
-        monkeypatch.setattr(Path, "home", lambda: tmp_path / "other-home")
+        monkeypatch.setattr(Path, "home", lambda: home)
         adapter = OpenClawAdapter()
         assert adapter._find_sessions_json() == sessions_dir / "sessions.json"
 
@@ -3995,13 +4140,29 @@ class TestGatewayConfigPath:
         assert adapter.get_gateway_config_path() == config_path
 
     def test_honors_openclaw_config_path_env(self, monkeypatch, tmp_path):
-        cfg_path = tmp_path / "oc-alt" / "openclaw.json"
+        home = tmp_path / "home"
+        cfg_path = home / "oc-alt" / "openclaw.json"
         cfg_path.parent.mkdir(parents=True)
         cfg_path.write_text("{}")
         monkeypatch.setenv("OPENCLAW_CONFIG_PATH", str(cfg_path))
-        monkeypatch.setattr(Path, "home", lambda: tmp_path / "other-home")
+        monkeypatch.setattr(Path, "home", lambda: home)
         adapter = OpenClawAdapter()
         assert adapter.get_gateway_config_path() == cfg_path
+
+    def test_rejects_openclaw_config_path_outside_home(self, monkeypatch, tmp_path):
+        home = tmp_path / "home"
+        cfg_path = tmp_path / "outside" / "openclaw.json"
+        cfg_path.parent.mkdir(parents=True)
+        cfg_path.write_text("{}")
+        monkeypatch.setenv("OPENCLAW_CONFIG_PATH", str(cfg_path))
+        monkeypatch.setattr(Path, "home", lambda: home)
+        adapter = OpenClawAdapter()
+
+        with patch("adaptors.openclaw.adapter.is_fail_hard_enabled", return_value=False):
+            assert adapter.get_gateway_config_path() is None
+        with patch("adaptors.openclaw.adapter.is_fail_hard_enabled", return_value=True):
+            with pytest.raises(PermissionError, match="OPENCLAW_CONFIG_PATH outside home"):
+                adapter.get_gateway_config_path()
 
 
 class TestProviderFactoryMethods:
@@ -4156,6 +4317,26 @@ class TestProviderFactoryMethods:
         assert providers[1]["id"] == "anthropic-oauth"
         assert providers[1]["provider"] == "anthropic"
 
+    @pytest.mark.adapter_openclaw
+    def test_openclaw_discover_llm_providers_raises_bad_config_when_fail_hard(self, openclaw_adapter, tmp_path, monkeypatch):
+        config_path = tmp_path / "openclaw.json"
+        config_path.write_text("{bad json", encoding="utf-8")
+        monkeypatch.setattr(openclaw_adapter, "get_gateway_config_path", lambda: config_path)
+
+        with patch("adaptors.openclaw.adapter.is_fail_hard_enabled", return_value=True):
+            with pytest.raises(json.JSONDecodeError):
+                openclaw_adapter.discover_llm_providers()
+
+    @pytest.mark.adapter_openclaw
+    def test_get_gateway_auth_raises_bad_config_when_fail_hard(self, openclaw_adapter, tmp_path, monkeypatch):
+        config_path = tmp_path / "openclaw.json"
+        config_path.write_text("{bad json", encoding="utf-8")
+        monkeypatch.setattr(openclaw_adapter, "get_gateway_config_path", lambda: config_path)
+
+        with patch("adaptors.openclaw.adapter.is_fail_hard_enabled", return_value=True):
+            with pytest.raises(json.JSONDecodeError):
+                openclaw_adapter._get_gateway_auth()
+
 
 @pytest.mark.adapter_openclaw
 class TestResolveAnthropicCredential:
@@ -4230,6 +4411,14 @@ class TestResolveAnthropicCredential:
         adapter, _ = self._make_adapter(tmp_path, monkeypatch)
         cred = adapter._resolve_anthropic_credential()
         assert cred is None
+
+    def test_raises_bad_auth_profiles_when_fail_hard(self, tmp_path, monkeypatch):
+        adapter, agent_dir = self._make_adapter(tmp_path, monkeypatch)
+        (agent_dir / "auth-profiles.json").write_text("{bad json", encoding="utf-8")
+
+        with patch("adaptors.openclaw.adapter.is_fail_hard_enabled", return_value=True):
+            with pytest.raises(json.JSONDecodeError):
+                adapter._resolve_anthropic_credential()
 
     def test_profiles_take_priority_when_env_present(self, tmp_path, monkeypatch):
         """Gateway-auth profile still wins when env var is present."""
