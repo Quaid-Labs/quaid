@@ -3751,7 +3751,16 @@ def read_transcript_slice(transcript_path: str, from_line: int) -> List[str]:
     return lines
 
 
-def _parse_transcript_lines(lines: List[str], adapter=None) -> str:
+class _TranscriptParseError(RuntimeError):
+    """Raised when adapter transcript parsing fails for a semantic buffer window."""
+
+
+_TRANSCRIPT_PARSE_FAILURE_PATH_KEY = "transcript_parse_failure_path"
+_TRANSCRIPT_PARSE_FAILURE_OFFSET_KEY = "transcript_parse_failure_offset"
+_TRANSCRIPT_PARSE_FAILURE_END_LINE_KEY = "transcript_parse_failure_end_line"
+
+
+def _parse_transcript_lines(lines: List[str], adapter=None, *, raise_on_parse_error: bool = False) -> str:
     """Parse raw session JSONL lines into the semantic transcript text the model sees."""
     if not lines:
         return ""
@@ -3770,6 +3779,8 @@ def _parse_transcript_lines(lines: List[str], adapter=None) -> str:
         return str(parsed or "").strip()
     except Exception as exc:
         logger.warning("failed parsing transcript window for semantic rolling budget: %s", exc)
+        if raise_on_parse_error:
+            raise _TranscriptParseError("failed parsing transcript window for semantic rolling budget") from exc
         return ""
     finally:
         if tmp_path:
@@ -3777,6 +3788,66 @@ def _parse_transcript_lines(lines: List[str], adapter=None) -> str:
                 os.unlink(tmp_path)
             except OSError:
                 pass
+
+
+def _handle_transcript_parse_failure(
+    exc: _TranscriptParseError,
+    *,
+    lines: List[str],
+    state: Dict[str, Any],
+    transcript_path: str,
+    start_line: int,
+    session_id: str,
+    owner_id: str,
+    label: str,
+) -> Tuple[Dict[str, Any], Dict[str, int]]:
+    if _fail_hard_enabled():
+        raise RuntimeError("Failed parsing transcript window while failHard is enabled") from exc
+    raw_lines = list(lines or [])
+    if not raw_lines:
+        raw_lines = read_transcript_slice(transcript_path, start_line)
+    transcript_text = "".join(raw_lines)
+    preserved_state = dict(state or {})
+    failure_end_line = int(start_line or 0) + len(raw_lines)
+    raw_failure_offset = preserved_state.get(_TRANSCRIPT_PARSE_FAILURE_OFFSET_KEY)
+    raw_failure_end_line = preserved_state.get(_TRANSCRIPT_PARSE_FAILURE_END_LINE_KEY)
+    try:
+        prior_failure_offset = int(raw_failure_offset) if raw_failure_offset is not None else -1
+    except Exception:
+        prior_failure_offset = -1
+    try:
+        prior_failure_end_line = int(raw_failure_end_line) if raw_failure_end_line is not None else -1
+    except Exception:
+        prior_failure_end_line = -1
+    already_deferred = (
+        str(preserved_state.get(_TRANSCRIPT_PARSE_FAILURE_PATH_KEY) or "") == str(transcript_path or "")
+        and prior_failure_offset == int(start_line or 0)
+        and prior_failure_end_line >= failure_end_line
+    )
+    if not already_deferred:
+        logger.error(
+            "[%s] session %s: failed parsing transcript window; saving deferred extraction and preserving offset %d",
+            label,
+            session_id,
+            start_line,
+        )
+        _save_deferred_extraction(
+            session_id=session_id or "unknown",
+            transcript_text=transcript_text,
+            owner_id=owner_id or _get_owner_id(),
+            label=label,
+            reason="transcript_parse_failure",
+        )
+    preserved_state[_TRANSCRIPT_PARSE_FAILURE_PATH_KEY] = str(transcript_path or "")
+    preserved_state[_TRANSCRIPT_PARSE_FAILURE_OFFSET_KEY] = int(start_line or 0)
+    preserved_state[_TRANSCRIPT_PARSE_FAILURE_END_LINE_KEY] = failure_end_line
+    return preserved_state, {
+        "raw_lines_added": len(raw_lines),
+        "semantic_chars_added": 0,
+        "semantic_tokens_added": 0,
+        "buffered_line_offset": int(start_line or 0),
+        "parse_failed": 1,
+    }
 
 
 def _append_semantic_buffer(state: Dict[str, Any], parsed_text: str, line_offset: int) -> Dict[str, Any]:
@@ -3924,17 +3995,33 @@ def _buffer_transcript_tail(
     max_tokens: Optional[int] = None,
     max_lines: int = 0,
     include_threshold_crossing_semantic_row: bool = False,
+    session_id: str = "",
+    owner_id: str = "",
+    label: str = "daemon-rolling",
 ) -> Tuple[Dict[str, Any], Dict[str, int]]:
     """Parse new raw session lines into the semantic rolling buffer."""
     if max_tokens is not None and int(max_tokens or 0) > 0:
-        lines = read_transcript_token_window(
-            transcript_path,
-            start_line,
-            int(max_tokens),
-            int(max_lines or 0),
-            adapter=adapter,
-            include_threshold_crossing_semantic_row=include_threshold_crossing_semantic_row,
-        )
+        try:
+            lines = read_transcript_token_window(
+                transcript_path,
+                start_line,
+                int(max_tokens),
+                int(max_lines or 0),
+                adapter=adapter,
+                include_threshold_crossing_semantic_row=include_threshold_crossing_semantic_row,
+                raise_on_parse_error=True,
+            )
+        except _TranscriptParseError as exc:
+            return _handle_transcript_parse_failure(
+                exc,
+                lines=[],
+                state=state,
+                transcript_path=transcript_path,
+                start_line=start_line,
+                session_id=session_id,
+                owner_id=owner_id,
+                label=label,
+            )
     else:
         lines = read_transcript_slice(transcript_path, start_line)
     metrics = {
@@ -3947,9 +4034,24 @@ def _buffer_transcript_tail(
         return dict(state or {}), metrics
 
     before_tokens = int((state or {}).get("semantic_buffer_tokens", 0) or 0)
-    parsed_text = _parse_transcript_lines(lines, adapter=adapter)
+    try:
+        parsed_text = _parse_transcript_lines(lines, adapter=adapter, raise_on_parse_error=True)
+    except _TranscriptParseError as exc:
+        return _handle_transcript_parse_failure(
+            exc,
+            lines=lines,
+            state=state,
+            transcript_path=transcript_path,
+            start_line=start_line,
+            session_id=session_id,
+            owner_id=owner_id,
+            label=label,
+        )
     merged = _append_semantic_buffer(state, parsed_text, start_line + len(lines))
     merged["transcript_path"] = str(transcript_path or merged.get("transcript_path", "") or "")
+    merged.pop(_TRANSCRIPT_PARSE_FAILURE_PATH_KEY, None)
+    merged.pop(_TRANSCRIPT_PARSE_FAILURE_OFFSET_KEY, None)
+    merged.pop(_TRANSCRIPT_PARSE_FAILURE_END_LINE_KEY, None)
     metrics["semantic_chars_added"] = len(str(parsed_text or "").strip())
     metrics["semantic_tokens_added"] = max(
         0,
@@ -4324,6 +4426,7 @@ def read_transcript_token_window(
     max_lines: int = 0,
     adapter=None,
     include_threshold_crossing_semantic_row: bool = False,
+    raise_on_parse_error: bool = False,
 ) -> List[str]:
     """Read a single message-aligned transcript window up to the token budget."""
     from lib.tokens import estimate_tokens
@@ -4376,7 +4479,11 @@ def read_transcript_token_window(
                         break
                     continue
                 candidate = lines + [line]
-                candidate_parsed = _parse_transcript_lines(candidate, adapter=adapter)
+                candidate_parsed = _parse_transcript_lines(
+                    candidate,
+                    adapter=adapter,
+                    raise_on_parse_error=raise_on_parse_error,
+                )
                 candidate_extractable = bool(candidate_parsed)
                 candidate_tokens = estimate_tokens(candidate_parsed) if candidate_extractable else 0
                 semantic_changed = candidate_extractable and candidate_parsed != current_parsed
@@ -5876,12 +5983,19 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
         if rolling_mode:
             buffer_kwargs["max_tokens"] = chunk_budget
             buffer_kwargs["max_lines"] = chunk_line_budget
+        buffer_kwargs["session_id"] = session_id
+        buffer_kwargs["label"] = label
         staged_state, semantic_buffer_metrics = _buffer_transcript_tail(
             transcript_path,
             buffered_line_offset,
             staged_state,
             **buffer_kwargs,
         )
+        if int(semantic_buffer_metrics.get("parse_failed", 0) or 0):
+            write_rolling_state(session_id, staged_state)
+            mark_signal_processed(signal_data)
+            _release_session_processing_lock(lock_owner_key, lock_fd)
+            return
         write_rolling_state(session_id, staged_state)
         if rolling_mode:
             buffered_line_offset = int(
@@ -8024,7 +8138,13 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
                 max_tokens=chunk_budget,
                 max_lines=chunk_line_budget,
                 include_threshold_crossing_semantic_row=True,
+                session_id=str(session_id),
+                label="daemon-rolling-scan",
             )
+            if int(_buffer_metrics.get("parse_failed", 0) or 0):
+                state["buffer_transcript_path"] = str(buffer_transcript_path)
+                write_rolling_state(session_id, state)
+                continue
             if unfroze_internal_cursor and _semantic_buffer_has_content(state):
                 state[_INTERNAL_CURSOR_UNFROZEN_PENDING_FLUSH_KEY] = True
             state["buffer_transcript_path"] = str(buffer_transcript_path)

@@ -903,6 +903,87 @@ def test_save_deferred_extraction_raises_write_failure_when_fail_hard(monkeypatc
         )
 
 
+def test_buffer_transcript_tail_defers_parse_failure_without_advancing(monkeypatch, tmp_path):
+    transcript = tmp_path / "session.jsonl"
+    transcript.write_text(
+        '{"type":"user","message":{"content":"alpha"}}\n'
+        '{"type":"assistant","message":{"content":"beta"}}\n',
+        encoding="utf-8",
+    )
+    deferred = []
+
+    class FailingAdapter:
+        def parse_session_jsonl(self, _path):
+            raise ValueError("parse exploded")
+
+    monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: False)
+    monkeypatch.setattr(extraction_daemon, "_save_deferred_extraction", lambda **kwargs: deferred.append(kwargs))
+
+    state, metrics = extraction_daemon._buffer_transcript_tail(
+        str(transcript),
+        0,
+        {"buffered_line_offset": 0},
+        adapter=FailingAdapter(),
+        session_id="sess-parse",
+        owner_id="owner-id",
+        label="daemon-rolling",
+    )
+
+    assert metrics["parse_failed"] == 1
+    assert metrics["buffered_line_offset"] == 0
+    assert state["buffered_line_offset"] == 0
+    assert state["transcript_parse_failure_path"] == str(transcript)
+    assert state["transcript_parse_failure_offset"] == 0
+    assert deferred == [{
+        "session_id": "sess-parse",
+        "transcript_text": transcript.read_text(encoding="utf-8"),
+        "owner_id": "owner-id",
+        "label": "daemon-rolling",
+        "reason": "transcript_parse_failure",
+    }]
+
+    state_again, metrics_again = extraction_daemon._buffer_transcript_tail(
+        str(transcript),
+        0,
+        state,
+        adapter=FailingAdapter(),
+        session_id="sess-parse",
+        owner_id="owner-id",
+        label="daemon-rolling",
+    )
+
+    assert metrics_again["parse_failed"] == 1
+    assert state_again["buffered_line_offset"] == 0
+    assert len(deferred) == 1
+
+
+def test_buffer_transcript_tail_parse_failure_raises_when_fail_hard(monkeypatch, tmp_path):
+    transcript = tmp_path / "session.jsonl"
+    transcript.write_text('{"type":"user","message":{"content":"alpha"}}\n', encoding="utf-8")
+    deferred = []
+
+    class FailingAdapter:
+        def parse_session_jsonl(self, _path):
+            raise ValueError("parse exploded")
+
+    monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: True)
+    monkeypatch.setattr(extraction_daemon, "_save_deferred_extraction", lambda **kwargs: deferred.append(kwargs))
+
+    with pytest.raises(RuntimeError, match="Failed parsing transcript window while failHard is enabled"):
+        extraction_daemon._buffer_transcript_tail(
+            str(transcript),
+            0,
+            {"buffered_line_offset": 0},
+            adapter=FailingAdapter(),
+            max_tokens=100,
+            session_id="sess-parse",
+            owner_id="owner-id",
+            label="daemon-rolling",
+        )
+
+    assert deferred == []
+
+
 def test_stage_semantic_buffer_payload_defers_without_staging_partial_facts(monkeypatch):
     import ingest.extract as extract_mod
 
