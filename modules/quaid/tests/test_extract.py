@@ -946,6 +946,23 @@ class TestExtractFromTranscript:
             == "2026-05-02T14:29:23+00:00"
         )
 
+    def test_user_transcript_timestamp_hint_skips_prior_assistant_turns(self):
+        from ingest import extract as extract_mod
+
+        transcript = (
+            "[2026-06-12T23:57:42Z] Assistant: Previous reply before the seed.\n"
+            "[2026-06-13T00:05:23Z] User: I started leatherworking with a saddle-stitch awl."
+        )
+
+        assert extract_mod._first_transcript_timestamp_hint(transcript) == "2026-06-12T23:57:42+00:00"
+        assert extract_mod._first_user_transcript_timestamp_hint(transcript) == "2026-06-13T00:05:23+00:00"
+        assert (
+            extract_mod._first_user_transcript_timestamp_hint(
+                "[2026-06-12T23:57:42Z] Assistant: Previous reply before the seed."
+            )
+            is None
+        )
+
     def test_transcript_timestamp_hints_are_unique_and_source_ordered(self):
         from ingest import extract as extract_mod
 
@@ -995,6 +1012,42 @@ class TestExtractFromTranscript:
         assert result["raw_facts"][0]["mentioned_at"] == "2026-05-02T14:29:21+00:00"
         assert result["raw_facts"][0]["_source_timestamp"] == "2026-05-02T14:30:00+00:00"
         assert "created_at" not in result["raw_facts"][0]
+
+    @patch("ingest.extract._current_utc_timestamp", return_value="2026-06-13T00:07:18+00:00")
+    @patch("ingest.extract.call_deep_reasoning")
+    def test_extraction_defaults_mentioned_at_to_user_timestamp_after_prior_assistant_turn(self, mock_llm, _mock_now):
+        from ingest.extract import extract_from_transcript
+
+        mock_llm.return_value = (json.dumps({
+            "chunk_assessment": "usable",
+            "facts": [
+                {
+                    "text": "Solomon started leatherworking with a saddle-stitch awl",
+                    "category": "fact",
+                    "speaker": "user",
+                    "domains": ["personal"],
+                    "extraction_confidence": "high",
+                    "privacy": "private",
+                }
+            ],
+            "soul_snippets": {},
+            "journal_entries": {},
+            "project_logs": {},
+        }), 0.1)
+
+        result = extract_from_transcript(
+            transcript=(
+                "[2026-06-12T23:57:42Z] Assistant: Previous reply before the seed.\n\n"
+                "[2026-06-13T00:05:23Z] User: I started leatherworking with a saddle-stitch awl today."
+            ),
+            owner_id="Solomon Steadman",
+            dry_run=True,
+        )
+
+        fact = result["raw_facts"][0]
+        assert fact["mentioned_at"] == "2026-06-13T00:05:23+00:00"
+        assert fact["_source_timestamp"] == "2026-06-13T00:07:18+00:00"
+        assert "created_at" not in fact
 
     @patch("ingest.extract._current_utc_timestamp", return_value="2026-05-09T08:00:00+00:00")
     @patch("ingest.extract.call_deep_reasoning")

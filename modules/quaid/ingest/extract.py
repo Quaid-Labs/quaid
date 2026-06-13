@@ -57,7 +57,7 @@ _TRANSCRIPT_TIMESTAMP_PATTERN = (
 _TRANSCRIPT_TIMESTAMP_RE = re.compile(_TRANSCRIPT_TIMESTAMP_PATTERN)
 _TIMESTAMPED_TRANSCRIPT_TURN_RE = re.compile(
     rf"^\s*(?:\[(?P<bracketed>{_TRANSCRIPT_TIMESTAMP_PATTERN})\]|(?P<plain>{_TRANSCRIPT_TIMESTAMP_PATTERN}))"
-    r"\s+(?:User|Assistant|Agent|System|Tool|Developer|Subagent/User|Subagent/Assistant):\s+",
+    r"\s+(?P<role>User|Assistant|Agent|System|Tool|Developer|Subagent/User|Subagent/Assistant):\s+",
     re.IGNORECASE,
 )
 
@@ -91,6 +91,18 @@ def _first_transcript_timestamp_hint(transcript_text: str) -> Optional[str]:
     for line in str(transcript_text or "").splitlines():
         match = _TIMESTAMPED_TRANSCRIPT_TURN_RE.match(line)
         if not match:
+            continue
+        return _normalize_extracted_timestamp(match.group("bracketed") or match.group("plain"))
+    return None
+
+
+def _first_user_transcript_timestamp_hint(transcript_text: str) -> Optional[str]:
+    for line in str(transcript_text or "").splitlines():
+        match = _TIMESTAMPED_TRANSCRIPT_TURN_RE.match(line)
+        if not match:
+            continue
+        role = str(match.group("role") or "").strip().lower()
+        if role not in {"user", "subagent/user"}:
             continue
         return _normalize_extracted_timestamp(match.group("bracketed") or match.group("plain"))
     return None
@@ -2444,7 +2456,11 @@ def _merge_parsed_payloads(
 ) -> None:
     """Merge extracted payloads into top-level accumulators in chunk order."""
     effective_date_hint = _first_transcript_timestamp_hint(transcript_text) or session_date_hint
-    effective_mention_hint = effective_date_hint or mention_date_hint
+    effective_mention_hint = (
+        _first_user_transcript_timestamp_hint(transcript_text)
+        or effective_date_hint
+        or mention_date_hint
+    )
     question_echo_keys = _user_question_echo_keys(transcript_text)
     for parsed in payloads:
         result["chunks_processed"] = int(result.get("chunks_processed", 0) or 0) + 1
