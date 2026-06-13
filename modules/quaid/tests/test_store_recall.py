@@ -5484,6 +5484,38 @@ class TestSourceChunkStorage:
         assert meta["store_runs"][0]["store"] == "session_chunks"
         assert meta["store_runs"][0]["result_count"] == 1
 
+    def test_source_chunk_store_plan_carries_original_author_provenance(self, tmp_path):
+        """Session chunk rows keep original author role separate from output type."""
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _db_file = _make_graph(tmp_path)
+        graph.store_source_chunk(
+            "Assistant: The opal prism calibration detail was discussed.",
+            owner_id="test-owner",
+            session_id="session-author-role",
+            source_id="transcript-author-role",
+            chunk_index=0,
+            source_type="assistant",
+        )
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph):
+            rows, _meta, _bundle = mg._run_recall_store_plan(
+                "opal prism calibration detail",
+                stores=["session_chunks"],
+                limit=3,
+                owner_id="test-owner",
+                min_similarity=0.0,
+                planner_profile="off",
+                planned_queries=["opal prism calibration detail"],
+                planner_meta={"planned_stores": ["session_chunks"]},
+                fast_mode=False,
+                common_kwargs={"max_chunk_tokens": 50},
+            )
+
+        assert rows
+        assert rows[0]["source_type"] == "session_chunk"
+        assert rows[0]["source_provenance_type"] == "assistant"
+
     def test_source_chunk_store_plan_keeps_source_date_header(self, tmp_path):
         """Dated transcript rows expose source_date without deterministic language parsing."""
         import datastore.memorydb.memory_graph as mg
@@ -10856,6 +10888,157 @@ class TestRecallFastHookInjectContract:
         assert any(row.get("category") == "docs" and "DIETARY_LABELS" in row["text"] for row in rows)
         assert sum(1 for row in rows if row.get("category") == "fact") == 7
         assert meta["preserved_docs_rows"] == 1
+
+    def test_recall_store_plan_suppresses_assistant_session_chunks_when_docs_are_strong(self):
+        import datastore.memorydb.memory_graph as mg
+
+        def _fake_vector(*args, **kwargs):
+            return [], {"selected_path": "vector", "phases_ms": {"total_ms": 10}}, None
+
+        def _fake_docs(*args, **kwargs):
+            return (
+                [
+                    {
+                        "text": "[docs] opal-prism.md: The opal prism accepts daylight calibration.",
+                        "category": "docs",
+                        "source_type": "docs",
+                        "similarity": 0.984,
+                    }
+                ],
+                {"selected_path": "docs_bundle", "phases_ms": {"total_ms": 5}},
+                {
+                    "chunks": [
+                        {
+                            "source": "opal-prism.md",
+                            "content": "The opal prism accepts daylight calibration.",
+                            "similarity": 0.984,
+                        }
+                    ]
+                },
+            )
+
+        def _fake_session_chunks(*args, **kwargs):
+            return (
+                [
+                    {
+                        "chunk_id": "assistant-opal-1",
+                        "text": "[session_chunk] s#1: Assistant discussed opal prism calibration without source evidence.",
+                        "category": "session_chunk",
+                        "source_type": "session_chunk",
+                        "source_provenance_type": "assistant",
+                        "via": "session_chunks",
+                        "similarity": 1.0,
+                    },
+                    {
+                        "chunk_id": "assistant-opal-2",
+                        "text": "[session_chunk] s#2: Assistant revisited opal prism calibration without a durable source.",
+                        "category": "session_chunk",
+                        "source_type": "session_chunk",
+                        "source_provenance_type": "assistant",
+                        "via": "session_chunks",
+                        "similarity": 0.975,
+                    },
+                ],
+                {"selected_path": "session_chunk_store", "phases_ms": {"total_ms": 5}},
+                None,
+            )
+
+        registry = {
+            "vector": {"recall": _fake_vector, "recall_fast": _fake_vector},
+            "docs": {"recall": _fake_docs, "recall_fast": _fake_docs},
+            "session_chunks": {"recall": _fake_session_chunks, "recall_fast": _fake_session_chunks},
+            "graph": {"recall": lambda *a, **k: ([], {}, None), "recall_fast": lambda *a, **k: ([], {}, None)},
+        }
+
+        with patch.object(mg, "_get_recall_store_registry", return_value=registry), \
+             patch.object(mg, "_should_apply_rrf_store_plan_fusion", return_value=False):
+            rows, meta, _ = mg._run_recall_store_plan(
+                "opal prism calibration",
+                stores=["vector", "docs", "session_chunks"],
+                limit=3,
+                owner_id="test-owner",
+                min_similarity=0.6,
+                planner_profile="fast",
+                planned_queries=["opal prism calibration"],
+                planner_meta={"planned_stores": ["vector", "docs", "session_chunks"]},
+                fast_mode=True,
+                common_kwargs={},
+            )
+
+        assert rows
+        assert rows[0]["category"] == "docs"
+        assert all(row.get("source_provenance_type") != "assistant" for row in rows)
+        assert meta["assistant_session_suppression"]["suppressed"] == 2
+
+    def test_recall_store_plan_keeps_user_session_chunks_when_docs_are_strong(self):
+        import datastore.memorydb.memory_graph as mg
+
+        def _fake_vector(*args, **kwargs):
+            return [], {"selected_path": "vector", "phases_ms": {"total_ms": 10}}, None
+
+        def _fake_docs(*args, **kwargs):
+            return (
+                [
+                    {
+                        "text": "[docs] brass-lamp.md: The brass lamp uses a linen shade.",
+                        "category": "docs",
+                        "source_type": "docs",
+                        "similarity": 0.94,
+                    }
+                ],
+                {"selected_path": "docs_bundle", "phases_ms": {"total_ms": 5}},
+                {
+                    "chunks": [
+                        {
+                            "source": "brass-lamp.md",
+                            "content": "The brass lamp uses a linen shade.",
+                            "similarity": 0.94,
+                        }
+                    ]
+                },
+            )
+
+        def _fake_session_chunks(*args, **kwargs):
+            return (
+                [
+                    {
+                        "chunk_id": "user-brass-lamp",
+                        "text": "[session_chunk] s#1: User: The brass lamp uses a linen shade.",
+                        "category": "session_chunk",
+                        "source_type": "session_chunk",
+                        "source_provenance_type": "user",
+                        "via": "session_chunks",
+                        "similarity": 0.99,
+                    }
+                ],
+                {"selected_path": "session_chunk_store", "phases_ms": {"total_ms": 5}},
+                None,
+            )
+
+        registry = {
+            "vector": {"recall": _fake_vector, "recall_fast": _fake_vector},
+            "docs": {"recall": _fake_docs, "recall_fast": _fake_docs},
+            "session_chunks": {"recall": _fake_session_chunks, "recall_fast": _fake_session_chunks},
+            "graph": {"recall": lambda *a, **k: ([], {}, None), "recall_fast": lambda *a, **k: ([], {}, None)},
+        }
+
+        with patch.object(mg, "_get_recall_store_registry", return_value=registry), \
+             patch.object(mg, "_should_apply_rrf_store_plan_fusion", return_value=False):
+            rows, meta, _ = mg._run_recall_store_plan(
+                "brass lamp linen shade",
+                stores=["vector", "docs", "session_chunks"],
+                limit=3,
+                owner_id="test-owner",
+                min_similarity=0.6,
+                planner_profile="fast",
+                planned_queries=["brass lamp linen shade"],
+                planner_meta={"planned_stores": ["vector", "docs", "session_chunks"]},
+                fast_mode=True,
+                common_kwargs={},
+            )
+
+        assert any(row.get("chunk_id") == "user-brass-lamp" for row in rows)
+        assert "assistant_session_suppression" not in meta
 
     def test_recall_store_plan_keeps_stronger_fact_above_preserved_session_chunk(self):
         import datastore.memorydb.memory_graph as mg

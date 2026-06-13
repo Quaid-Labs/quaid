@@ -7243,6 +7243,7 @@ _DEFAULT_RECALL_RAW_PROVENANCE_FIELDS = {
     "source_chunk_id",
     "source_chunk_ids",
     "source_id",
+    "source_provenance_type",
 }
 
 
@@ -9129,6 +9130,7 @@ def _source_chunk_store_recall(
             "text": f"{prefix}: {payload_text}",
             "category": "session_chunk",
             "source_type": "session_chunk",
+            "source_provenance_type": payload.get("source_type"),
             "via": "session_chunks",
             "similarity": round(float(score), 3),
             "chunk_id": chunk_id,
@@ -10849,6 +10851,12 @@ def _run_recall_store_plan(
         limit=limit,
         date_to=kwargs.get("date_to"),
     )
+    final_rows, assistant_session_suppression_meta = _suppress_assistant_session_rows_when_strong_evidence_exists(
+        query,
+        final_rows,
+        merged,
+        limit=limit,
+    )
     final_rows, preserved_graph_relation_summary_rows = _preserve_compact_graph_relation_summary_row(
         query,
         final_rows,
@@ -10955,6 +10963,8 @@ def _run_recall_store_plan(
             meta["source_chunk_telemetry"] = dict(session_chunk_telemetry)
     if preserved_docs_rows:
         meta["preserved_docs_rows"] = preserved_docs_rows
+    if assistant_session_suppression_meta.get("applied"):
+        meta["assistant_session_suppression"] = assistant_session_suppression_meta
     if preserved_shared_quoted_item_rows.get("preserved"):
         meta["preserved_shared_quoted_item_rows"] = preserved_shared_quoted_item_rows
     if preserved_source_dated_fact_rows.get("preserved"):
@@ -14439,6 +14449,95 @@ def _docs_row_latest_iso_date(row: Dict[str, Any]) -> str:
 def _is_first_order_session_source_row(row: Dict[str, Any]) -> bool:
     source_type = str((row or {}).get("source_type") or (row or {}).get("category") or "").strip().lower()
     return source_type in {"session_chunk", "source_chunk"} or str((row or {}).get("via") or "") == "session_chunks"
+
+
+def _session_row_provenance_source_type(row: Dict[str, Any]) -> str:
+    if not isinstance(row, dict):
+        return ""
+    value = str(row.get("source_provenance_type") or "").strip().lower()
+    if value:
+        return value
+    source_type = str(row.get("source_type") or "").strip().lower()
+    if source_type and source_type not in {"session_chunk", "source_chunk"}:
+        return source_type
+    return ""
+
+
+def _is_assistant_provenance_session_row(row: Dict[str, Any]) -> bool:
+    if not _is_first_order_session_source_row(row):
+        return False
+    return _session_row_provenance_source_type(row) in _ASSISTANT_PROVENANCE_SOURCE_TYPES
+
+
+def _query_requests_assistant_source(query: str) -> bool:
+    try:
+        analysis = _derive_query_requirements(
+            query,
+            intent="GENERAL",
+            include_relation_keywords=False,
+        )
+    except Exception:
+        if _is_fail_hard_mode():
+            raise
+        return False
+    return "assistant_source" in set(analysis.get("requirements") or [])
+
+
+def _suppress_assistant_session_rows_when_strong_evidence_exists(
+    query: str,
+    rows: List[Dict[str, Any]],
+    candidate_rows: List[Dict[str, Any]],
+    *,
+    limit: int,
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """Keep assistant transcript echoes below durable evidence for fact/docs recall."""
+    top_limit = max(1, int(limit or 1))
+    selected = [row for row in list(rows or [])[:top_limit] if isinstance(row, dict)]
+    if not selected:
+        return rows, {"applied": False}
+    assistant_rows = [row for row in selected if _is_assistant_provenance_session_row(row)]
+    if not assistant_rows:
+        return rows, {"applied": False}
+    if _query_requests_assistant_source(query):
+        return rows, {"applied": False, "skipped_reason": "assistant_source_query"}
+
+    def _row_score(row: Dict[str, Any]) -> float:
+        try:
+            return float(row.get("similarity") or row.get("score") or 0.0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    strong_evidence = [
+        row for row in selected
+        if not _is_assistant_provenance_session_row(row)
+        and _row_score(row) >= 0.75
+        and str(row.get("text") or "").strip()
+    ]
+    if not strong_evidence:
+        return rows, {"applied": False, "assistant_session_count": len(assistant_rows)}
+
+    selected_keys = {_rrf_recall_row_identity(row) for row in selected}
+    out = [row for row in selected if not _is_assistant_provenance_session_row(row)]
+    original_kept_count = len(out)
+    for candidate in list(candidate_rows or []):
+        if len(out) >= top_limit:
+            break
+        if not isinstance(candidate, dict) or _is_assistant_provenance_session_row(candidate):
+            continue
+        key = _rrf_recall_row_identity(candidate)
+        if not key or key in selected_keys:
+            continue
+        if not str(candidate.get("text") or "").strip():
+            continue
+        selected_keys.add(key)
+        out.append(candidate)
+
+    return out[:top_limit], {
+        "applied": True,
+        "suppressed": len(assistant_rows),
+        "strong_evidence_count": len(strong_evidence),
+        "refilled": max(0, len(out) - original_kept_count),
+    }
 
 
 def _mixed_session_chunk_result_cap(limit: int) -> int:
