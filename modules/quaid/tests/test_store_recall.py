@@ -7249,6 +7249,26 @@ class TestRecallTelemetry:
         assert meta["bailout_reason"] == "fast_long_broad_query"
         assert meta["token_count"] > 16
 
+    def test_plan_fanout_queries_fast_preserves_long_focused_query_without_llm(self):
+        import datastore.memorydb.memory_graph as mg
+
+        query = (
+            "If Nora wanted to add real-time alerts when a shared inventory sheet "
+            "is updated, what existing webhook infrastructure could she leverage?"
+        )
+        with patch("lib.llm_clients.call_fast_reasoning", side_effect=AssertionError("planner should not be called")):
+            queries, meta = mg._plan_fanout_queries(
+                query,
+                return_meta=True,
+                planner_profile="fast",
+            )
+
+        assert queries == [query]
+        assert meta["used_llm"] is False
+        assert meta["bailout_reason"] == "fast_long_focused_query"
+        assert meta["query_shape"] == "focused"
+        assert meta["token_count"] > 16
+
     def test_plan_fanout_queries_fast_preserves_live_broad_inference_without_llm(self):
         import datastore.memorydb.memory_graph as mg
 
