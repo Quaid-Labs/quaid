@@ -300,7 +300,14 @@ def _update_single_doc(
         return False
 
     from datastore.docsdb.updater import apply_edit_blocks
-    updated, applied = apply_edit_blocks(current_doc, edits)
+    updated, applied, unmatched = apply_edit_blocks(current_doc, edits)
+
+    if unmatched:
+        message = f"{unmatched} edit block(s) did not match {doc_name} content"
+        if is_fail_hard_enabled():
+            raise RuntimeError(message)
+        logger.warning("[docs-hook] %s", message)
+        return False
 
     if applied > 0 and updated != current_doc:
         doc_path.write_text(updated, encoding="utf-8")

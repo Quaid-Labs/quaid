@@ -16,24 +16,27 @@ class TestApplyEditBlocks:
     def test_replace_text(self):
         doc = "# Title\n\nOld content here.\n\nMore stuff."
         edits = ["SECTION: Title\nOLD: Old content here.\nNEW: New content here."]
-        updated, applied = apply_edit_blocks(doc, edits)
+        updated, applied, unmatched = apply_edit_blocks(doc, edits)
         assert applied == 1
+        assert unmatched == 0
         assert "New content here." in updated
         assert "Old content here." not in updated
 
     def test_add_content(self):
         doc = "# Title\n\nExisting."
         edits = ["SECTION: end\nOLD: ADD\nNEW: ## New Section\n\nNew stuff."]
-        updated, applied = apply_edit_blocks(doc, edits)
+        updated, applied, unmatched = apply_edit_blocks(doc, edits)
         assert applied == 1
+        assert unmatched == 0
         assert "New Section" in updated
         assert "New stuff." in updated
 
     def test_no_match(self):
         doc = "# Title\n\nContent."
         edits = ["SECTION: Title\nOLD: Nonexistent text\nNEW: Replacement"]
-        updated, applied = apply_edit_blocks(doc, edits)
+        updated, applied, unmatched = apply_edit_blocks(doc, edits)
         assert applied == 0
+        assert unmatched == 1
         assert updated == doc
 
     def test_multiple_edits(self):
@@ -42,15 +45,17 @@ class TestApplyEditBlocks:
             "SECTION: a\nOLD: AAA\nNEW: CCC",
             "SECTION: b\nOLD: BBB\nNEW: DDD",
         ]
-        updated, applied = apply_edit_blocks(doc, edits)
+        updated, applied, unmatched = apply_edit_blocks(doc, edits)
         assert applied == 2
+        assert unmatched == 0
         assert "CCC" in updated
         assert "DDD" in updated
 
     def test_empty_edits(self):
         doc = "hello"
-        updated, applied = apply_edit_blocks(doc, [])
+        updated, applied, unmatched = apply_edit_blocks(doc, [])
         assert applied == 0
+        assert unmatched == 0
         assert updated == doc
 
 
@@ -191,3 +196,79 @@ class TestUpdateProjectDocs:
 
             with pytest.raises(RuntimeError, match="doc update failed"):
                 update_project_docs(snapshots)
+
+    def test_update_rejects_partial_edit_blocks_without_writing(self, tmp_path):
+        project_dir = tmp_path / "projects" / "my-app"
+        project_dir.mkdir(parents=True)
+        doc_path = project_dir / "PROJECT.md"
+        original = "# Project\n\nInitial.\n\nStable."
+        doc_path.write_text(original, encoding="utf-8")
+        snapshots = [{
+            "project": "my-app",
+            "is_initial": False,
+            "diff": "diff --git a/main.py b/main.py\n+print('hello')",
+            "changes": [{"status": "M", "path": "main.py", "old_path": None}],
+        }]
+        response = (
+            "<<<EDIT\n"
+            "SECTION: Project\n"
+            "OLD: Initial.\n"
+            "NEW: Changed.\n"
+            ">>>\n"
+            "<<<EDIT\n"
+            "SECTION: Project\n"
+            "OLD: Missing old text\n"
+            "NEW: Should not write\n"
+            ">>>"
+        )
+
+        with patch("datastore.docsdb.updater.classify_doc_change") as mock_classify, \
+             patch("core.project_registry.get_project", return_value={"canonical_path": str(project_dir)}), \
+             patch("core.docs_updater_hook.is_fail_hard_enabled", return_value=False), \
+             patch("lib.llm_clients.call_deep_reasoning", return_value=(response, 0.1)):
+            mock_classify.return_value = {
+                "classification": "significant",
+                "confidence": 0.8,
+                "reasons": ["clear doc update"],
+            }
+
+            metrics = update_project_docs(snapshots)
+
+        assert metrics["docs_updated"] == 0
+        assert metrics["docs_skipped"] == 1
+        assert doc_path.read_text(encoding="utf-8") == original
+
+    def test_update_unmatched_edit_raises_when_fail_hard_enabled(self, tmp_path):
+        project_dir = tmp_path / "projects" / "my-app"
+        project_dir.mkdir(parents=True)
+        doc_path = project_dir / "PROJECT.md"
+        original = "# Project\n\nInitial."
+        doc_path.write_text(original, encoding="utf-8")
+        snapshots = [{
+            "project": "my-app",
+            "is_initial": False,
+            "diff": "diff --git a/main.py b/main.py\n+print('hello')",
+            "changes": [{"status": "M", "path": "main.py", "old_path": None}],
+        }]
+        response = (
+            "<<<EDIT\n"
+            "SECTION: Project\n"
+            "OLD: Missing old text\n"
+            "NEW: Should not write\n"
+            ">>>"
+        )
+
+        with patch("datastore.docsdb.updater.classify_doc_change") as mock_classify, \
+             patch("core.project_registry.get_project", return_value={"canonical_path": str(project_dir)}), \
+             patch("core.docs_updater_hook.is_fail_hard_enabled", return_value=True), \
+             patch("lib.llm_clients.call_deep_reasoning", return_value=(response, 0.1)):
+            mock_classify.return_value = {
+                "classification": "significant",
+                "confidence": 0.8,
+                "reasons": ["clear doc update"],
+            }
+
+            with pytest.raises(RuntimeError, match="did not match PROJECT.md content"):
+                update_project_docs(snapshots)
+
+        assert doc_path.read_text(encoding="utf-8") == original
