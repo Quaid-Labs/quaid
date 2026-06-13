@@ -522,6 +522,8 @@ def _check_for_updates() -> Optional[Dict[str, str]]:
             return None
     except Exception as exc:
         janitor_logger.warn("update_check_cache_read_failed", error=str(exc))
+        if is_fail_hard_enabled():
+            raise RuntimeError("Update check cache read failed") from exc
 
     def _release_summary(data: Dict[str, Any]) -> str:
         """Extract a short relay-friendly update message from release metadata."""
@@ -559,14 +561,20 @@ def _check_for_updates() -> Optional[Dict[str, str]]:
                 "update_check_invalid_payload_type",
                 payload_type=type(data).__name__,
             )
+            if is_fail_hard_enabled():
+                raise RuntimeError("Update check returned invalid release payload")
             return None
         latest_tag = data.get("tag_name", "").lstrip("v")
         html_url = data.get("html_url", f"https://github.com/{REPO}/releases")
     except urllib.error.URLError as e:
         janitor_logger.warn("update_check_network_failed", error=str(e))
+        if is_fail_hard_enabled():
+            raise RuntimeError("Update check network request failed") from e
         return None
     except Exception as e:
         janitor_logger.warn("update_check_failed", error=str(e))
+        if is_fail_hard_enabled():
+            raise RuntimeError("Update check failed") from e
         return None
 
     # Cache the result via datastore helper
@@ -581,6 +589,8 @@ def _check_for_updates() -> Optional[Dict[str, str]]:
         write_update_check_cache(graph, result)
     except Exception as exc:
         janitor_logger.warn("update_check_cache_write_failed", error=str(exc))
+        if is_fail_hard_enabled():
+            raise RuntimeError("Update check cache write failed") from exc
 
     if latest_tag and latest_tag != current:
         # Only notify if latest is actually newer (semver comparison)
@@ -1288,6 +1298,7 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
         lambda: checkpoint_state.get("current_stage", ""),
         enabled=(task == "all" and not dry_run),
     )
+    critical_error: Optional[BaseException] = None
 
     try:
         # --- Task 0a: Project Docs Monitor Kick ---
@@ -1758,6 +1769,8 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
                 else:
                     print("  Up to date")
             except Exception as e:
+                if is_fail_hard_enabled():
+                    raise RuntimeError("Update check task failed") from e
                 print(f"  Update check error: {e}")
             metrics.end_task("update_check")
             print(f"Task completed in {metrics.task_duration('update_check'):.2f}s\n")
@@ -1871,9 +1884,11 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
         memory_pipeline_ok = False
         print(f"ERROR: {e}")
         _checkpoint_save(status="failed")
+        if is_fail_hard_enabled():
+            critical_error = e
 
     # Benchmark-mode validity gate: janitor owns run validity semantics.
-    if is_benchmark_mode() and not dry_run and task in ("all", "graduate"):
+    if critical_error is None and is_benchmark_mode() and not dry_run and task in ("all", "graduate"):
         try:
             counts = count_nodes_by_status(graph, ["pending", "approved"])
             pending = int(counts.get("pending", 0))
@@ -1894,6 +1909,8 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
         checkpoint_heartbeat_stop.set()
     if checkpoint_heartbeat_thread is not None:
         checkpoint_heartbeat_thread.join(timeout=1.0)
+    if critical_error is not None:
+        raise RuntimeError(f"Critical error in task {task}") from critical_error
 
     # Generate comprehensive report
     final_metrics = metrics.summary()

@@ -219,6 +219,66 @@ def test_janitor_scheduler_reset_warns_when_not_fail_hard(monkeypatch, capsys):
     assert "Failed to reset global LLM scheduler" in captured.err
 
 
+def test_janitor_update_check_network_failure_honors_fail_hard(monkeypatch, tmp_path):
+    import urllib.error
+    import urllib.request
+
+    from core.lifecycle import janitor
+
+    (tmp_path / "VERSION").write_text("1.0.0", encoding="utf-8")
+    monkeypatch.setattr(janitor, "__file__", str(tmp_path / "janitor.py"))
+    monkeypatch.setattr(janitor, "get_repo_slug", lambda: "owner/repo")
+    monkeypatch.setattr(janitor, "get_graph", lambda: object())
+    monkeypatch.setattr(janitor, "get_update_check_cache", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(janitor, "is_fail_hard_enabled", lambda: True)
+    monkeypatch.setattr(
+        urllib.request,
+        "urlopen",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(urllib.error.URLError("offline")),
+    )
+
+    with pytest.raises(RuntimeError, match="Update check network request failed"):
+        janitor._check_for_updates()
+
+
+def test_janitor_update_check_task_failure_honors_fail_hard(monkeypatch, tmp_path):
+    from core.lifecycle import janitor
+
+    class _Metrics:
+        def __init__(self) -> None:
+            self.errors = []
+            self.started = []
+
+        def start_task(self, name: str) -> None:
+            self.started.append(name)
+
+        def add_error(self, error: str) -> None:
+            self.errors.append(error)
+
+    metrics = _Metrics()
+    monkeypatch.setattr(janitor, "rotate_logs", lambda: None)
+    monkeypatch.setattr(janitor, "reset_token_usage", lambda: None)
+    monkeypatch.setattr(janitor, "get_graph", lambda: object())
+    monkeypatch.setattr(janitor, "JanitorMetrics", lambda: metrics)
+    monkeypatch.setattr(janitor, "_ambient_instance_graph_summary", lambda: None)
+    monkeypatch.setattr(janitor, "init_janitor_metadata", lambda _graph: None)
+    monkeypatch.setattr(janitor, "get_last_run_time", lambda _graph, _task: None)
+    monkeypatch.setattr(janitor, "_logs_dir", lambda: tmp_path / "logs")
+    monkeypatch.setattr(janitor, "is_benchmark_mode", lambda: False)
+    monkeypatch.setattr(janitor, "is_fail_hard_enabled", lambda: True)
+    monkeypatch.setattr(
+        janitor,
+        "_check_for_updates",
+        lambda: (_ for _ in ()).throw(RuntimeError("release API failed")),
+    )
+
+    with pytest.raises(RuntimeError, match="Critical error in task update_check"):
+        janitor._run_task_optimized_inner("update_check", dry_run=True)
+
+    assert metrics.started == ["update_check"]
+    assert any("Update check task failed" in error for error in metrics.errors)
+
+
 def test_janitor_lock_attempt_does_not_truncate_held_lock(monkeypatch, tmp_path):
     import fcntl
 
