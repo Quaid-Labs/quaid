@@ -1052,6 +1052,29 @@ describe("QuaidFacade", () => {
     expect(warning).toBe("");
   });
 
+  it("getDocsStalenessWarning degrades when docs updater check fails", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const execDocsUpdater = vi.fn(async () => {
+      throw new Error("docs updater unavailable");
+    });
+    const facade = createQuaidFacade(makeMockDeps({ execDocsUpdater }));
+    const warning = await facade.getDocsStalenessWarning();
+    expect(warning).toBe("");
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("docs staleness check failed"));
+    warn.mockRestore();
+  });
+
+  it("getDocsStalenessWarning raises docs updater failures under failHard", async () => {
+    const execDocsUpdater = vi.fn(async () => {
+      throw new Error("docs updater unavailable");
+    });
+    const facade = createQuaidFacade(makeMockDeps({
+      execDocsUpdater,
+      isFailHardEnabled: vi.fn(() => true),
+    }));
+    await expect(facade.getDocsStalenessWarning()).rejects.toThrow("docs updater unavailable");
+  });
+
   it("buildDocsSearchNotificationPayload parses doc search lines", () => {
     const facade = createQuaidFacade(makeMockDeps());
     const payload = facade.buildDocsSearchNotificationPayload(
@@ -1937,6 +1960,23 @@ describe("QuaidFacade", () => {
     await rm(workspace, { recursive: true, force: true });
   });
 
+  it("sanitizes memory note session ids before building paths", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "quaid-facade-notes-safe-"));
+    const facade = createQuaidFacade(makeMockDeps({ workspace }));
+    const maliciousSessionId = "x/../../../escape";
+    facade.addMemoryNote(maliciousSessionId, "Path traversal must not escape notes dir", "fact");
+    const notesDir = path.join(workspace, "runtime", "notes");
+    const noteFiles = await readdir(notesDir);
+    expect(noteFiles).toHaveLength(1);
+    expect(noteFiles[0]).toMatch(/^memory-notes-/);
+    expect(noteFiles[0]).not.toContain("/");
+    expect(path.resolve(notesDir, noteFiles[0]).startsWith(`${path.resolve(notesDir)}${path.sep}`)).toBe(true);
+    expect(await readdir(workspace)).toEqual(["runtime"]);
+    const drained = facade.getAndClearMemoryNotes(maliciousSessionId);
+    expect(drained.join("\n")).toContain("Path traversal must not escape notes dir");
+    await rm(workspace, { recursive: true, force: true });
+  });
+
   it("runExtractionPipeline runs for notes-only sessions", async () => {
     const workspace = await mkdtemp(path.join(tmpdir(), "quaid-facade-notes-only-"));
     const execExtractPipeline = vi.fn(async () => JSON.stringify({ facts_stored: 0, facts_skipped: 0, edges_created: 0 }));
@@ -2220,6 +2260,30 @@ describe("QuaidFacade", () => {
     expect(injectionLog.newlyInjected).toEqual(injectionLog.injectedMemoriesDetail);
     facade.resetInjectionDedupAfterCompaction("sess-1");
     expect(facade.loadInjectedMemoryKeys("sess-1")).toEqual([]);
+    await rm(workspace, { recursive: true, force: true });
+  });
+
+  it("sanitizes injection log session ids before building paths", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "quaid-facade-injection-safe-"));
+    await mkdir(path.join(workspace, "runtime", "injection"), { recursive: true });
+    const facade = createQuaidFacade(makeMockDeps({ workspace }));
+    const maliciousSessionId = "x/../../../escape";
+    const merged = facade.saveInjectedMemoryKeys(
+      maliciousSessionId,
+      [],
+      [{ text: "safe memory", category: "fact", similarity: 0.9 }],
+      100,
+    );
+    expect(merged).toEqual(["safe memory"]);
+    const injectionDir = path.join(workspace, "runtime", "injection");
+    const files = await readdir(injectionDir);
+    expect(files).toHaveLength(1);
+    expect(files[0]).toMatch(/^memory-injection-/);
+    expect(files[0]).not.toContain("/");
+    expect(path.resolve(injectionDir, files[0]).startsWith(`${path.resolve(injectionDir)}${path.sep}`)).toBe(true);
+    const payload = JSON.parse(await readFile(path.join(injectionDir, files[0]), "utf8"));
+    expect(payload.uniqueSessionId).toBe(maliciousSessionId);
+    expect(await readdir(workspace)).toEqual(["runtime"]);
     await rm(workspace, { recursive: true, force: true });
   });
 

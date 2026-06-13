@@ -12,6 +12,11 @@ import {
 import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
+function sanitizePathSegment(value, fallback) {
+  const raw = String(value || "").trim();
+  const safe = raw.normalize("NFKC").replace(/[\\/:\0-\x1f\x7f]+/g, "_").replace(/\.\.+/g, "_").replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^[-_.]+|[-_.]+$/g, "").slice(0, 160);
+  return safe || fallback;
+}
 function recallItemIdentity(item) {
   const id = typeof item?.id === "string" ? item.id.trim() : "";
   if (id) return `id:${id}`;
@@ -511,7 +516,7 @@ function createQuaidFacade(deps) {
   }
   const INJECTION_LOG_DIR = path.join(deps.workspace, "runtime", "injection");
   function getInjectionLogPath(sessionId) {
-    return path.join(INJECTION_LOG_DIR, `memory-injection-${sessionId}.log`);
+    return path.join(INJECTION_LOG_DIR, `memory-injection-${sanitizePathSegment(sessionId, "unknown-session")}.log`);
   }
   function pruneInjectionLogFiles() {
     try {
@@ -1863,13 +1868,20 @@ function createQuaidFacade(deps) {
     }
   }
   async function getDocsStalenessWarning() {
-    const stalenessJson = await deps.execDocsUpdater("check", ["--json"]);
-    const staleRaw = JSON.parse(stalenessJson || "{}");
-    const staleDocs = staleRaw && typeof staleRaw === "object" && !Array.isArray(staleRaw) ? staleRaw : {};
-    const staleKeys = Object.keys(staleDocs);
-    if (staleKeys.length === 0) {
+    let staleDocs = {};
+    try {
+      const stalenessJson = await deps.execDocsUpdater("check", ["--json"]);
+      const staleRaw = JSON.parse(stalenessJson || "{}");
+      staleDocs = staleRaw && typeof staleRaw === "object" && !Array.isArray(staleRaw) ? staleRaw : {};
+    } catch (err) {
+      if (deps.isFailHardEnabled()) {
+        throw err;
+      }
+      console.warn(`[quaid][facade] docs staleness check failed: ${String(err?.message || err)}`);
       return "";
     }
+    const staleKeys = Object.keys(staleDocs);
+    if (staleKeys.length === 0) return "";
     const warnings = staleKeys.map((k) => {
       const entry = staleDocs[k] && typeof staleDocs[k] === "object" ? staleDocs[k] : {};
       const gapHours = Number(entry?.gap_hours);
@@ -2323,7 +2335,7 @@ Consider running: docs staleness updater (update-stale --apply)`;
   const _memoryNotesTouchedAt = /* @__PURE__ */ new Map();
   const NOTES_DIR = path.join(deps.workspace, "runtime", "notes");
   function getNotesPath(sessionId) {
-    return path.join(NOTES_DIR, `memory-notes-${sessionId}.json`);
+    return path.join(NOTES_DIR, `memory-notes-${sanitizePathSegment(sessionId, "unknown-session")}.json`);
   }
   function _sleepMs(ms) {
     const i32 = new Int32Array(new SharedArrayBuffer(4));

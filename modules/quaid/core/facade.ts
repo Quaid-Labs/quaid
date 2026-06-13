@@ -24,6 +24,18 @@ import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
+function sanitizePathSegment(value: unknown, fallback: string): string {
+  const raw = String(value || "").trim();
+  const safe = raw
+    .normalize("NFKC")
+    .replace(/[\\/:\0-\x1f\x7f]+/g, "_")
+    .replace(/\.\.+/g, "_")
+    .replace(/[^A-Za-z0-9._-]+/g, "_")
+    .replace(/^[-_.]+|[-_.]+$/g, "")
+    .slice(0, 160);
+  return safe || fallback;
+}
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -1018,7 +1030,7 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
   const INJECTION_LOG_DIR = path.join(deps.workspace, "runtime", "injection");
 
   function getInjectionLogPath(sessionId: string): string {
-    return path.join(INJECTION_LOG_DIR, `memory-injection-${sessionId}.log`);
+    return path.join(INJECTION_LOG_DIR, `memory-injection-${sanitizePathSegment(sessionId, "unknown-session")}.log`);
   }
 
   function pruneInjectionLogFiles(): void {
@@ -2596,15 +2608,22 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
   }
 
   async function getDocsStalenessWarning(): Promise<string> {
-    const stalenessJson = await deps.execDocsUpdater("check", ["--json"]);
-    const staleRaw = JSON.parse(stalenessJson || "{}");
-    const staleDocs = staleRaw && typeof staleRaw === "object" && !Array.isArray(staleRaw)
-      ? (staleRaw as Record<string, any>)
-      : {};
-    const staleKeys = Object.keys(staleDocs);
-    if (staleKeys.length === 0) {
+    let staleDocs: Record<string, any> = {};
+    try {
+      const stalenessJson = await deps.execDocsUpdater("check", ["--json"]);
+      const staleRaw = JSON.parse(stalenessJson || "{}");
+      staleDocs = staleRaw && typeof staleRaw === "object" && !Array.isArray(staleRaw)
+        ? (staleRaw as Record<string, any>)
+        : {};
+    } catch (err: unknown) {
+      if (deps.isFailHardEnabled()) {
+        throw err;
+      }
+      console.warn(`[quaid][facade] docs staleness check failed: ${String((err as Error)?.message || err)}`);
       return "";
     }
+    const staleKeys = Object.keys(staleDocs);
+    if (staleKeys.length === 0) return "";
     const warnings = staleKeys.map((k) => {
       const entry = staleDocs[k] && typeof staleDocs[k] === "object" ? staleDocs[k] : {};
       const gapHours = Number(entry?.gap_hours);
@@ -3129,7 +3148,7 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
   const NOTES_DIR = path.join(deps.workspace, "runtime", "notes");
 
   function getNotesPath(sessionId: string): string {
-    return path.join(NOTES_DIR, `memory-notes-${sessionId}.json`);
+    return path.join(NOTES_DIR, `memory-notes-${sanitizePathSegment(sessionId, "unknown-session")}.json`);
   }
 
   function _sleepMs(ms: number): void {

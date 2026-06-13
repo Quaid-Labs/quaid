@@ -148,6 +148,72 @@ def test_normalize_participant_aliases_rejects_non_object_json():
         raise AssertionError("expected ValueError")
 
 
+def test_normalize_participant_aliases_rejects_malformed_json():
+    try:
+        session_logs_ingest._normalize_participant_aliases('{"operator":')
+    except ValueError as exc:
+        assert "valid JSON object" in str(exc)
+    else:
+        raise AssertionError("expected ValueError")
+
+
+def test_resolve_transcript_source_skips_toctou_deleted_path_when_failsoft(monkeypatch, tmp_path):
+    adapter = TestAdapter(tmp_path)
+    set_adapter(adapter)
+    transcript = tmp_path / "vanishing.txt"
+    transcript.write_text("User: hello", encoding="utf-8")
+
+    monkeypatch.setattr(session_logs_ingest, "is_fail_hard_enabled", lambda: False)
+
+    original_read_text = type(transcript).read_text
+
+    def _vanish(self, *args, **kwargs):
+        if self == transcript:
+            transcript.unlink(missing_ok=True)
+            raise FileNotFoundError(str(transcript))
+        return original_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(type(transcript), "read_text", _vanish)
+    src_path, content, source_kind = session_logs_ingest._resolve_transcript_source(
+        session_id="sess-vanish",
+        session_file=None,
+        transcript_path=str(transcript),
+    )
+
+    assert src_path is None
+    assert content is None
+    assert source_kind == "missing"
+
+
+def test_resolve_transcript_source_raises_toctou_deleted_path_under_failhard(monkeypatch, tmp_path):
+    adapter = TestAdapter(tmp_path)
+    set_adapter(adapter)
+    transcript = tmp_path / "vanishing.txt"
+    transcript.write_text("User: hello", encoding="utf-8")
+
+    monkeypatch.setattr(session_logs_ingest, "is_fail_hard_enabled", lambda: True)
+
+    original_read_text = type(transcript).read_text
+
+    def _vanish(self, *args, **kwargs):
+        if self == transcript:
+            transcript.unlink(missing_ok=True)
+            raise FileNotFoundError(str(transcript))
+        return original_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(type(transcript), "read_text", _vanish)
+    try:
+        session_logs_ingest._resolve_transcript_source(
+            session_id="sess-vanish",
+            session_file=None,
+            transcript_path=str(transcript),
+        )
+    except FileNotFoundError:
+        pass
+    else:
+        raise AssertionError("expected FileNotFoundError under failHard")
+
+
 def test_main_accepts_json_flag_for_list_and_load(monkeypatch, tmp_path, capsys):
     adapter = TestAdapter(tmp_path); set_adapter(adapter)
     fake_bridge = MagicMock()
