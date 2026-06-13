@@ -241,6 +241,50 @@ class TestEmbeddingsProviderSelection:
         assert provider.calls == [(["alpha", "beta"], 7.5)]
         assert out == [[1.0], [2.0], [1.0]]
 
+    def test_get_embeddings_wrong_batch_length_falls_back_when_failhard_disabled(self, caplog):
+        class _BadBatchProvider(MockEmbeddingsProvider):
+            def __init__(self):
+                self.embed_calls = []
+
+            def embed(self, text):
+                self.embed_calls.append(text)
+                return [float(len(text))]
+
+            def embed_many(self, texts, *, timeout_s=None):
+                return [[99.0]]
+
+        provider = _BadBatchProvider()
+        reset_embeddings_provider()
+        set_embeddings_provider(provider)
+
+        try:
+            with patch("lib.embeddings.is_fail_hard_enabled", return_value=False), caplog.at_level("WARNING"):
+                out = get_embeddings(["alpha", "beta", "alpha"])
+        finally:
+            reset_embeddings_provider()
+
+        assert out == [[5.0], [4.0], [5.0]]
+        assert provider.embed_calls == ["alpha", "beta"]
+        assert "embedding provider returned 1 result(s) for 2 unique input(s)" in caplog.text
+
+    def test_get_embeddings_wrong_batch_length_raises_when_failhard_enabled(self):
+        class _BadBatchProvider(MockEmbeddingsProvider):
+            def embed(self, text):
+                raise AssertionError("per-item fallback must not run under failHard")
+
+            def embed_many(self, texts, *, timeout_s=None):
+                return [[99.0]]
+
+        reset_embeddings_provider()
+        set_embeddings_provider(_BadBatchProvider())
+
+        try:
+            with patch("lib.embeddings.is_fail_hard_enabled", return_value=True):
+                with pytest.raises(RuntimeError, match="embedding provider returned 1 result"):
+                    get_embeddings(["alpha", "beta"], return_exceptions=True)
+        finally:
+            reset_embeddings_provider()
+
     def test_embedding_workers_use_separate_parallel_setting(self, monkeypatch):
         class _Cfg:
             core = type(

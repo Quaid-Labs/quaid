@@ -293,18 +293,25 @@ def get_embeddings(
     if callable(embed_many):
         try:
             out = _call_embed_many(provider, unique_items, timeout_s)
-            if len(out) == len(unique_items):
-                try:
-                    from lib.agent_notice import clear_pending_notices_by_source
-
-                    clear_pending_notices_by_source(sources={"embeddings"})
-                except Exception:
-                    pass
-                return _fan_out(out)
         except Exception:
             if not return_exceptions:
                 raise
             return [None] * len(items)
+        if len(out) == len(unique_items):
+            try:
+                from lib.agent_notice import clear_pending_notices_by_source
+
+                clear_pending_notices_by_source(sources={"embeddings"})
+            except Exception:
+                pass
+            return _fan_out(out)
+        message = (
+            f"embedding provider returned {len(out)} result(s) for "
+            f"{len(unique_items)} unique input(s)"
+        )
+        logger.warning("%s; falling back to per-item embedding", message)
+        if is_fail_hard_enabled():
+            raise RuntimeError(f"{message} while failHard is enabled")
 
     worker_count = (
         _embedding_parallel_workers(task_name)
