@@ -121,6 +121,69 @@ def test_recall_candidates_fail_hard_behavior():
             maintenance_ops.recall_candidates(graph, "alice likes coffee", "x1", limit=5)
 
 
+def test_get_nodes_since_applies_sql_limit_before_materializing():
+    calls = []
+
+    class _Conn:
+        def execute(self, sql, params=()):
+            calls.append((str(sql), params))
+            return _DummyResult(rows=[])
+
+    class _Graph:
+        @contextmanager
+        def _get_conn(self):
+            yield _Conn()
+
+        def _row_to_node(self, row):
+            return row
+
+    since = maintenance_ops.datetime(2026, 1, 2, 3, 4, 5)
+    maintenance_ops.get_nodes_since(_Graph(), limit=10)
+    maintenance_ops.get_nodes_since(_Graph(), since=since, limit=7)
+
+    assert "LIMIT ?" in calls[0][0]
+    assert calls[0][1] == (10,)
+    assert "created_at > ?" in calls[1][0]
+    assert "LIMIT ?" in calls[1][0]
+    assert calls[1][1] == (since.isoformat(), 7)
+
+
+def test_recall_similar_pairs_forwards_max_nodes_as_query_limit(monkeypatch):
+    calls = []
+
+    def fake_get_nodes_since(graph, since=None, limit=0):
+        calls.append({"since": since, "limit": limit})
+        return []
+
+    monkeypatch.setattr(maintenance_ops, "get_nodes_since", fake_get_nodes_since)
+
+    metrics = maintenance_ops.JanitorMetrics()
+    out = maintenance_ops.recall_similar_pairs(object(), metrics, since=None, max_nodes=23)
+
+    assert out == {"duplicates": [], "contradictions": [], "node_carryover": 0}
+    assert calls == [{"since": None, "limit": 24}]
+
+
+def test_recall_similar_pairs_bounds_materialized_nodes_and_reports_carryover(monkeypatch):
+    calls = []
+    rows = [
+        SimpleNamespace(id=f"n{idx}", name=f"node {idx}", embedding=None)
+        for idx in range(3)
+    ]
+
+    def fake_get_nodes_since(graph, since=None, limit=0):
+        calls.append({"since": since, "limit": limit})
+        return rows[:limit]
+
+    monkeypatch.setattr(maintenance_ops, "get_nodes_since", fake_get_nodes_since)
+
+    metrics = maintenance_ops.JanitorMetrics()
+    out = maintenance_ops.recall_similar_pairs(object(), metrics, since=None, max_nodes=2)
+
+    assert out == {"duplicates": [], "contradictions": [], "node_carryover": 1}
+    assert calls == [{"since": None, "limit": 3}]
+
+
 def test_fix_vec_nodes_insert_error_respects_fail_hard():
     class _ConnRecovering:
         def execute(self, sql, params):

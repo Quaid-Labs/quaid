@@ -1388,20 +1388,29 @@ def get_last_successful_janitor_completed_at(graph: MemoryGraph) -> Optional[str
     return None
 
 
-def get_nodes_since(graph: MemoryGraph, since: Optional[datetime] = None) -> List[Node]:
+def get_nodes_since(graph: MemoryGraph, since: Optional[datetime] = None, limit: int = 0) -> List[Node]:
     """Get nodes created since a specific datetime. Includes pending, active, and approved memories."""
+    effective_limit = int(limit or 0)
     if not since:
         # If no timestamp, return all active nodes (full scan)
         with graph._get_conn() as conn:
-            rows = conn.execute(
-                "SELECT * FROM nodes WHERE embedding IS NOT NULL AND status IN ('approved', 'active', 'pending')"
-            ).fetchall()
+            sql = "SELECT * FROM nodes WHERE embedding IS NOT NULL AND status IN ('approved', 'active', 'pending')"
+            params: tuple[Any, ...] = ()
+            if effective_limit > 0:
+                sql += " LIMIT ?"
+                params = (effective_limit,)
+            rows = conn.execute(sql, params).fetchall()
     else:
         with graph._get_conn() as conn:
-            rows = conn.execute(
-                "SELECT * FROM nodes WHERE embedding IS NOT NULL AND status IN ('approved', 'active', 'pending') AND created_at > ?",
-                (since.isoformat(),)
-            ).fetchall()
+            sql = (
+                "SELECT * FROM nodes WHERE embedding IS NOT NULL "
+                "AND status IN ('approved', 'active', 'pending') AND created_at > ?"
+            )
+            params = (since.isoformat(),)
+            if effective_limit > 0:
+                sql += " LIMIT ?"
+                params = (since.isoformat(), effective_limit)
+            rows = conn.execute(sql, params).fetchall()
     
     return [graph._row_to_node(row) for row in rows]
 
@@ -1561,16 +1570,18 @@ def recall_similar_pairs(
     """
     metrics.start_task("recall_pass")
 
-    all_nodes = get_nodes_since(graph, since) if since else get_nodes_since(graph, None)
+    node_limit = int(max_nodes or 0)
+    fetched_limit = node_limit + 1 if node_limit > 0 else 0
+    fetched_nodes = get_nodes_since(graph, since, limit=fetched_limit)
     node_carryover = 0
-    if max_nodes and int(max_nodes) > 0 and len(all_nodes) > int(max_nodes):
-        node_carryover = len(all_nodes) - int(max_nodes)
-        new_nodes = all_nodes[: int(max_nodes)]
+    if node_limit > 0 and len(fetched_nodes) > node_limit:
+        node_carryover = len(fetched_nodes) - node_limit
+        new_nodes = fetched_nodes[:node_limit]
     else:
-        new_nodes = all_nodes
+        new_nodes = fetched_nodes
     print(
         f"  Recall pass: {len(new_nodes)} {'new' if since else 'all'} nodes"
-        + (f" (carryover={node_carryover})" if node_carryover else "")
+        + (f" (carryover>={node_carryover})" if node_carryover else "")
     )
 
     seen_pairs: set = set()
