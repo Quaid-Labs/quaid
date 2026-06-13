@@ -5041,6 +5041,33 @@ class TestSourceChunkStorage:
         assert "next_chunk_id" not in output
         assert "source_id" not in output
 
+    def test_print_recall_results_hides_session_chunk_provenance_suffix(self, capsys):
+        """Text recall should not expose internal chunk ids on session chunk rows."""
+        import datastore.memorydb.memory_graph as mg
+
+        mg._print_recall_results([
+            {
+                "id": "sch_56fdafff16d463126d6cc67ee56eae24",
+                "text": "[session_chunk] sess#46: orange linen notebook context",
+                "category": "session_chunk",
+                "source_type": "session_chunk",
+                "via": "session_chunks",
+                "similarity": 0.984,
+                "extraction_confidence": 0.7,
+                "created_at": "2026-06-13T19:31:01.946033",
+                "privacy": "shared",
+                "owner_id": "solomon-steadman",
+            }
+        ])
+
+        out = capsys.readouterr().out
+        assert "[0.98] [session_chunk][C:0.7]" in out
+        assert "orange linen notebook context" in out
+        assert "|ID:" not in out
+        assert "|T:" not in out
+        assert "|P:" not in out
+        assert "|O:" not in out
+
     def test_recall_include_chunks_respects_aggregate_source_chunk_cap(self, tmp_path):
         """include_chunks cannot let many evidence chunks crowd out the recall response."""
         from datastore.memorydb.memory_graph import recall, store

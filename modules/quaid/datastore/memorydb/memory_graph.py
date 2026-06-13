@@ -15269,7 +15269,10 @@ def _print_recall_results(results: List[Dict[str, Any]]) -> None:
         privacy = r.get('privacy', 'shared')
         owner = r.get('owner_id', '')
         source_suffix = f"|source_date:{source_date}" if source_date else ""
-        print(f"[{similarity:.2f}] [{category}]{flag_str}[C:{conf:.1f}] {text} |ID:{result_id}|T:{created}{source_suffix}|P:{privacy}|O:{owner}")
+        if _is_session_chunk_output_row(r):
+            print(f"[{similarity:.2f}] [{category}]{flag_str}[C:{conf:.1f}] {text}")
+        else:
+            print(f"[{similarity:.2f}] [{category}]{flag_str}[C:{conf:.1f}] {text} |ID:{result_id}|T:{created}{source_suffix}|P:{privacy}|O:{owner}")
         graph_path = str(r.get("graph_path") or "").strip()
         if graph_path:
             print(f"  [graph_path] {graph_path}")
