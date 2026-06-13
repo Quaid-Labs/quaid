@@ -3140,6 +3140,9 @@ class TestExtractFromTranscript:
             "Le suivi indique 2 semaines.",
             "練習ログは3日続いた。",
             "التقرير يذكر ٤ أيام من التدريب.",
+            "Solomon ran 5 miles yesterday.",
+            "100 users last month.",
+            "Maya trained for 3 weeks before the race.",
             "The checkpoint is 2026-06-13.",
             "Release v2.4.1 is installed.",
             "The lap time was 1:42.",
@@ -3148,6 +3151,11 @@ class TestExtractFromTranscript:
             assert _has_exact_value_signal(text), text
 
         assert not _has_exact_value_signal("General reminder without numeric detail.")
+        assert not _has_exact_value_signal("Page 3 was interesting.")
+        assert not _has_exact_value_signal("There are 3 options.")
+        assert not _has_exact_value_signal("The score was 5 overall.")
+        assert not _has_exact_value_signal("Page 3.")
+        assert not _has_exact_value_signal("The score was 5.")
 
     def test_carry_selection_is_bounded_and_persistable(self):
         from ingest.extract import _select_carry_facts, _persistable_carry_facts
