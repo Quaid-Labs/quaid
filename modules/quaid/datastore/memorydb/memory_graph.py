@@ -24017,6 +24017,8 @@ def queue_for_decay_review(mem: Dict[str, Any]) -> str:
     graph = get_graph()
     queue_id = str(uuid.uuid4())
     with graph._get_conn() as conn:
+        # queued_for_decay intentionally leaves normal recall/search status
+        # filters until a reviewer EXTENDs/PINs the memory or deletes it.
         # Skip if this node is already queued (prevents duplicate entries on re-runs)
         existing = conn.execute(
             "SELECT id FROM decay_review_queue WHERE node_id = ? AND status = 'pending'",

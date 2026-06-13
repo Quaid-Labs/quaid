@@ -1050,6 +1050,78 @@ class TestDecayReviewAtomicity:
         assert node_row["status"] == "active"
         assert float(node_row["confidence"]) > 0.1
 
+    def test_pin_restores_node_to_active(self, tmp_path):
+        from datastore.memorydb.maintenance_ops import review_decayed_memories, JanitorMetrics
+
+        graph, _ = _make_graph(tmp_path, "decay_review_pin.db")
+        node = _make_node(
+            graph,
+            "Stale core identity fact",
+            attributes={"extraction_confidence": 0.8},
+            confidence=0.1,
+            status="queued_for_decay",
+        )
+
+        queue_entry = {
+            "id": "drq-pin-1",
+            "node_id": node.id,
+            "node_text": node.name,
+            "node_type": node.type,
+            "confidence_at_queue": 0.1,
+            "access_count": 0,
+            "last_accessed": datetime.now().isoformat(),
+            "created_at_node": datetime.now().isoformat(),
+            "verified": 0,
+        }
+        with graph._get_conn() as conn:
+            conn.execute(
+                """
+                INSERT INTO decay_review_queue (id, node_id, node_text, node_type, confidence_at_queue, access_count, last_accessed, created_at_node, verified, status)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
+                """,
+                (
+                    queue_entry["id"],
+                    queue_entry["node_id"],
+                    queue_entry["node_text"],
+                    queue_entry["node_type"],
+                    queue_entry["confidence_at_queue"],
+                    queue_entry["access_count"],
+                    queue_entry["last_accessed"],
+                    queue_entry["created_at_node"],
+                    queue_entry["verified"],
+                ),
+            )
+
+        metrics = JanitorMetrics()
+        fake_llm = [{
+            "batch_num": 1,
+            "batch": [queue_entry],
+            "prompt_tag": "",
+            "response_duration": ("[]", 0.0),
+        }]
+
+        with patch("datastore.memorydb.maintenance_ops.get_pending_decay_reviews", return_value=[queue_entry]), \
+             patch("datastore.memorydb.maintenance_ops._run_llm_batches_parallel", return_value=fake_llm), \
+             patch("datastore.memorydb.maintenance_ops.parse_json_response", return_value=[{"item": 1, "action": "PIN", "reason": "core fact"}]):
+            result = review_decayed_memories(graph, metrics, dry_run=False, max_items=10)
+
+        with graph._get_conn() as conn:
+            queue_row = conn.execute(
+                "SELECT status, decision FROM decay_review_queue WHERE id = ?",
+                (queue_entry["id"],),
+            ).fetchone()
+            node_row = conn.execute(
+                "SELECT pinned, confidence, status FROM nodes WHERE id = ?",
+                (node.id,),
+            ).fetchone()
+
+        assert result["pinned"] == 1
+        assert queue_row["status"] == "reviewed"
+        assert queue_row["decision"] == "pin"
+        assert node_row["status"] == "active"
+        assert int(node_row["pinned"]) == 1
+        assert float(node_row["confidence"]) >= 0.8
+
 
 class TestMergeAtomicity:
     def test_merge_rolls_back_created_node_when_cleanup_fails(self, tmp_path):
