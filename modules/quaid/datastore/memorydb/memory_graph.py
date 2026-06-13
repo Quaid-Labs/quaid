@@ -10776,6 +10776,8 @@ def _run_recall_store_plan(
     merged = _prioritize_first_order_session_query_coverage(query, merged)
     if fast_mode:
         merged = _prioritize_fast_anchor_direct_rows(query, merged)
+    else:
+        merged = _prioritize_deliberate_confident_direct_anchor_rows(query, merged)
     store_plan_facet_rescue_rows: List[Dict[str, Any]] = []
     store_plan_facet_rescue_meta: Dict[str, Any] = {
         "applied": False,
@@ -10904,6 +10906,8 @@ def _run_recall_store_plan(
     )
     final_rows = _prioritize_first_order_session_query_coverage(query, final_rows)
     final_rows = _prioritize_source_dated_session_rows_for_temporal_answers(query, final_rows)
+    if not fast_mode:
+        final_rows = _prioritize_deliberate_confident_direct_anchor_rows(query, final_rows)
     final_rows = _prioritize_high_signal_facet_rescue_rows(query, final_rows)
     final_rows = _prioritize_compact_graph_relation_rows(
         query,
@@ -12773,9 +12777,9 @@ def _recall_once(
         anchor_rows=anchor_rows,
         expansion_limit_per_anchor=expansion_limit_per_anchor,
     )
+    final_output = _prioritize_named_entity_activity_anchor_rows(query, final_output)
     if include_lexical_anchor_shaping:
         final_output = _prioritize_fast_anchor_direct_rows(query, final_output)
-    final_output = _prioritize_named_entity_activity_anchor_rows(query, final_output)
     _phase_ms["filtering_ms"] = round((_time.monotonic() - _phase_t0) * 1000)
 
     # Update access stats for returned results (feeds into Ebbinghaus decay)
@@ -14142,8 +14146,8 @@ def _prioritize_fast_anchor_direct_rows(query: str, rows: List[Dict[str, Any]]) 
     ]
 
 
-def _prioritize_deliberate_fresh_direct_anchor_rows(query: str, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Use recency as a tiebreaker for broad same-anchor deliberate recall rows."""
+def _prioritize_deliberate_confident_direct_anchor_rows(query: str, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Prefer confident direct same-anchor facts over entity stubs and support chunks."""
     if not rows:
         return rows
     anchor_terms = _extract_explicit_query_anchor_terms(query, limit=8)
@@ -14167,6 +14171,17 @@ def _prioritize_deliberate_fresh_direct_anchor_rows(query: str, rows: List[Dict[
                 return raw
         return ""
 
+    def _row_confidence_sort_key(row: Dict[str, Any]) -> float:
+        for key in ("extraction_confidence", "confidence"):
+            raw = (row or {}).get(key)
+            if raw is None or raw == "":
+                continue
+            try:
+                return float(raw)
+            except (TypeError, ValueError):
+                continue
+        return 0.0
+
     def _is_direct_memory_row(row: Dict[str, Any]) -> bool:
         if str((row or {}).get("category") or "").strip().lower() == "docs":
             return False
@@ -14187,6 +14202,8 @@ def _prioritize_deliberate_fresh_direct_anchor_rows(query: str, rows: List[Dict[
         for row in direct_anchor_rows
     }
     max_overlap = max(overlap_by_id.values(), default=0)
+    if max_overlap < 2 or (max_overlap / max(1, len(query_terms))) < 0.67:
+        return rows
     priority_rows = [
         row for row in direct_anchor_rows
         if overlap_by_id.get(str(row.get("id")), 0) == max_overlap
@@ -14196,6 +14213,7 @@ def _prioritize_deliberate_fresh_direct_anchor_rows(query: str, rows: List[Dict[
 
     priority_rows.sort(
         key=lambda row: (
+            _row_confidence_sort_key(row),
             _row_created_sort_key(row),
             float(row.get("similarity", 0.0) or 0.0),
         ),
@@ -21245,9 +21263,9 @@ def recall(
 
     if not fanout_queries:
         stop_reason = fanout_meta.get("bailout_reason") or "planner_returned_empty"
-        merged = _prioritize_deliberate_fresh_direct_anchor_rows(query, merged)
         merged = _prioritize_date_relation_callback_rows(query, merged)
         merged = _prioritize_named_entity_activity_anchor_rows(query, merged)
+        merged = _prioritize_deliberate_confident_direct_anchor_rows(query, merged)
         facet_rescue_rows, facet_rescue_meta = _recover_explicit_entity_facet_rows(
             query,
             merged,
@@ -21556,9 +21574,9 @@ def recall(
         )
 
     # Final merge to requested limit
-    merged = _prioritize_deliberate_fresh_direct_anchor_rows(query, merged)
     merged = _prioritize_date_relation_callback_rows(query, merged)
     merged = _prioritize_named_entity_activity_anchor_rows(query, merged)
+    merged = _prioritize_deliberate_confident_direct_anchor_rows(query, merged)
     relation_chain_groups = _relation_chain_groups_for_query(query)
     relation_chain_query = (
         len(relation_chain_groups) >= 2

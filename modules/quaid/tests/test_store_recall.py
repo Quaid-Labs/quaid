@@ -13366,6 +13366,89 @@ class TestRecallFastHookInjectContract:
         assert meta["planned_stores"] == ["vector", "graph"]
         assert bundle is None
 
+    def test_run_recall_store_plan_deliberate_prefers_confident_fact_over_entity_stub(self):
+        import datastore.memorydb.memory_graph as mg
+
+        query = "Nimbus Marker 74"
+
+        def _fake_vector(*args, **kwargs):
+            return (
+                [
+                    {
+                        "id": "late-entity-stub",
+                        "text": "Nimbus Marker 74",
+                        "category": "fact",
+                        "similarity": 1.0,
+                        "extraction_confidence": 0.50,
+                        "created_at": "2026-05-30T23:31:20",
+                    },
+                    {
+                        "id": "late-entity-stub-2",
+                        "text": "Nimbus Marker 74 fountain pen",
+                        "category": "fact",
+                        "similarity": 0.99,
+                        "extraction_confidence": 0.50,
+                        "created_at": "2026-05-30T23:31:21",
+                    },
+                    {
+                        "id": "answer-fact",
+                        "text": "Test Owner's daily-use marker is a Nimbus Marker 74 with a brass cap.",
+                        "category": "fact",
+                        "similarity": 0.77,
+                        "extraction_confidence": 0.93,
+                        "created_at": "2026-05-30T22:31:11",
+                    },
+                ],
+                {"selected_path": "vector", "phases_ms": {"total_ms": 1}},
+                None,
+            )
+
+        def _fake_session_chunks(*args, **kwargs):
+            return (
+                [
+                    {
+                        "id": f"chunk-{idx}",
+                        "text": f"[session_chunk] notes mention Nimbus Marker 74 with brass cap detail {idx}",
+                        "category": "session_chunk",
+                        "source_type": "session_chunk",
+                        "via": "session_chunks",
+                        "similarity": 0.95,
+                        "created_at": f"2026-05-30T23:31:2{idx}",
+                        "chunk_id": f"chunk-{idx}",
+                    }
+                    for idx in range(3)
+                ],
+                {"selected_path": "session_chunks", "phases_ms": {"total_ms": 1}},
+                None,
+            )
+
+        registry = {
+            "vector": {"recall": _fake_vector, "recall_fast": _fake_vector},
+            "session_chunks": {"recall": _fake_session_chunks, "recall_fast": _fake_session_chunks},
+            "graph": {"recall": lambda *a, **k: ([], {}, None), "recall_fast": lambda *a, **k: ([], {}, None)},
+            "docs": {"recall": lambda *a, **k: ([], {}, None), "recall_fast": lambda *a, **k: ([], {}, None)},
+        }
+
+        with patch.object(mg, "_get_recall_store_registry", return_value=self._registry_with_source_chunks(registry)):
+            rows, meta, bundle = mg._run_recall_store_plan(
+                query,
+                stores=["vector", "session_chunks"],
+                limit=5,
+                owner_id="quaid",
+                min_similarity=0.6,
+                planner_profile="full",
+                planned_queries=[query],
+                planner_meta={"planned_stores": ["vector", "session_chunks"]},
+                fast_mode=False,
+                graph_depth=1,
+                common_kwargs={},
+            )
+
+        assert rows[0]["id"] == "answer-fact"
+        assert meta["mode"] == "deliberate"
+        assert meta["planned_stores"] == ["vector", "session_chunks"]
+        assert bundle is None
+
     def test_recall_final_merge_filters_out_of_window_branch_rows(self):
         import datastore.memorydb.memory_graph as mg
 
