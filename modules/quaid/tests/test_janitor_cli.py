@@ -21,6 +21,17 @@ def _fresh_import_janitor():
     return importlib.import_module("core.lifecycle.janitor")
 
 
+def test_janitor_import_config_failure_honors_fail_hard(monkeypatch):
+    import config
+    import lib.fail_policy
+
+    monkeypatch.setattr(config, "get_config", lambda: (_ for _ in ()).throw(RuntimeError("bad config")))
+    monkeypatch.setattr(lib.fail_policy, "is_fail_hard_enabled", lambda: True)
+
+    with pytest.raises(RuntimeError, match="Failed to load janitor config"):
+        _fresh_import_janitor()
+
+
 def test_janitor_worker_run_all_once_bypasses_schedule_gate(monkeypatch, tmp_path):
     monkeypatch.setenv("QUAID_HOME", str(tmp_path))
     monkeypatch.setenv("QUAID_VISIBLE_HOME", str(tmp_path))
@@ -232,6 +243,19 @@ def test_janitor_lock_attempt_does_not_truncate_held_lock(monkeypatch, tmp_path)
         fcntl.flock(holder, fcntl.LOCK_UN)
         holder.close()
         janitor._lock_fd = None
+
+
+def test_janitor_lock_filesystem_failure_honors_fail_hard(monkeypatch, tmp_path):
+    from core.lifecycle import janitor
+
+    blocked_data_dir = tmp_path / "data-file"
+    blocked_data_dir.write_text("not a directory", encoding="utf-8")
+    monkeypatch.setattr(janitor, "_data_dir", lambda: blocked_data_dir)
+    monkeypatch.setattr(janitor, "is_fail_hard_enabled", lambda: True)
+    janitor._lock_fd = None
+
+    with pytest.raises(OSError):
+        janitor._acquire_lock()
 
 
 def test_janitor_main_routes_all_apply_without_instance_bootstrap(monkeypatch, tmp_path):

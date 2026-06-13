@@ -219,7 +219,9 @@ _registry_init_lock = threading.Lock()
 # Thresholds - now loaded from config.json
 try:
     _cfg = get_config()
-except Exception:
+except Exception as exc:
+    if is_fail_hard_enabled():
+        raise RuntimeError("Failed to load janitor config") from exc
     _cfg = None
 DUPLICATE_MIN_SIM = 0.85  # Lower bound for "might be duplicate"
 DUPLICATE_MAX_SIM = 0.94  # Upper bound (auto-reject above)
@@ -462,10 +464,17 @@ def _acquire_lock() -> bool:
             _lock_fd.write(f"{os.getpid()}\n{datetime.now().isoformat()}")
             _lock_fd.flush()
             return True
+        except BlockingIOError:
+            if _lock_fd:
+                _lock_fd.close()
+                _lock_fd = None
+            return False
         except (IOError, OSError):
             if _lock_fd:
                 _lock_fd.close()
                 _lock_fd = None
+            if is_fail_hard_enabled():
+                raise
             return False
 
 
