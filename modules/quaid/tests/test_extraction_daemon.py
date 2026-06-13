@@ -972,6 +972,57 @@ def test_stage_semantic_buffer_payload_defers_without_staging_partial_facts(monk
     assert writes == [result]
 
 
+def test_rolling_debug_dir_defaults_to_instance_logs(monkeypatch, tmp_path):
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
+    monkeypatch.delenv("QUAID_ROLLING_DEBUG_DIR", raising=False)
+
+    assert extraction_daemon._rolling_debug_dir() == (
+        tmp_path / "instances" / "test-inst" / "logs" / "daemon" / "rolling-debug"
+    )
+
+
+def test_rolling_debug_dir_rejects_env_path_outside_quaid_home(monkeypatch, tmp_path, caplog):
+    outside = tmp_path / "outside-debug"
+    home = tmp_path / "home"
+    monkeypatch.setenv("QUAID_HOME", str(home))
+    monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
+    monkeypatch.setenv("QUAID_ROLLING_DEBUG_DIR", str(outside))
+
+    with caplog.at_level("WARNING", logger="quaid.daemon"):
+        debug_dir = extraction_daemon._rolling_debug_dir()
+
+    assert debug_dir == home / "instances" / "test-inst" / "logs" / "daemon" / "rolling-debug"
+    assert "ignoring QUAID_ROLLING_DEBUG_DIR outside QUAID_HOME" in caplog.text
+
+
+def test_rolling_debug_dir_accepts_env_path_inside_quaid_home(monkeypatch, tmp_path):
+    home = tmp_path / "home"
+    debug_path = home / "debug" / "rolling"
+    monkeypatch.setenv("QUAID_HOME", str(home))
+    monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
+    monkeypatch.setenv("QUAID_ROLLING_DEBUG_DIR", str(debug_path))
+
+    assert extraction_daemon._rolling_debug_dir() == debug_path.resolve()
+
+
+def test_rolling_debug_dir_rejects_flag_path_outside_quaid_home(monkeypatch, tmp_path, caplog):
+    home = tmp_path / "home"
+    outside = tmp_path / "outside-debug"
+    flag = home / "instances" / "test-inst" / "data" / "rolling-debug.enabled"
+    flag.parent.mkdir(parents=True)
+    flag.write_text(str(outside), encoding="utf-8")
+    monkeypatch.setenv("QUAID_HOME", str(home))
+    monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
+    monkeypatch.delenv("QUAID_ROLLING_DEBUG_DIR", raising=False)
+
+    with caplog.at_level("WARNING", logger="quaid.daemon"):
+        debug_dir = extraction_daemon._rolling_debug_dir()
+
+    assert debug_dir == home / "instances" / "test-inst" / "logs" / "daemon" / "rolling-debug"
+    assert "rolling-debug.enabled outside QUAID_HOME" in caplog.text
+
+
 def test_stage_semantic_buffer_payload_raises_on_partial_chunks_when_fail_hard(monkeypatch):
     import ingest.extract as extract_mod
 

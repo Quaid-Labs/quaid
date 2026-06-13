@@ -3480,18 +3480,38 @@ def _rolling_debug_dump_enabled() -> bool:
 
 
 def _rolling_debug_dir() -> Path:
+    default_dir = _instance_root() / "logs" / "daemon" / "rolling-debug"
+
+    def _contained_debug_dir(raw_path: str, source: str) -> Optional[Path]:
+        try:
+            candidate = Path(raw_path).expanduser().resolve()
+            candidate.relative_to(_quaid_home().resolve())
+            return candidate
+        except (OSError, ValueError) as exc:
+            logger.warning(
+                "[rolling-debug] ignoring %s outside QUAID_HOME: %s (%s)",
+                source,
+                raw_path,
+                exc,
+            )
+            return None
+
     raw = str(os.environ.get("QUAID_ROLLING_DEBUG_DIR", "") or "").strip()
     if raw:
-        return Path(raw).expanduser()
+        debug_dir = _contained_debug_dir(raw, "QUAID_ROLLING_DEBUG_DIR")
+        if debug_dir is not None:
+            return debug_dir
     try:
         flag_path = _instance_root() / "data" / "rolling-debug.enabled"
         if flag_path.is_file():
             configured = flag_path.read_text(encoding="utf-8").strip()
             if configured:
-                return Path(configured).expanduser()
+                debug_dir = _contained_debug_dir(configured, str(flag_path))
+                if debug_dir is not None:
+                    return debug_dir
     except Exception:
         pass
-    return Path("/tmp")
+    return default_dir
 
 
 def _rolling_debug_markers() -> List[str]:
