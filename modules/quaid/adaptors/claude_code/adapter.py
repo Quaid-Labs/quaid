@@ -59,7 +59,7 @@ class ClaudeCodeAdapter(QuaidAdapter):
         flags=re.DOTALL | re.IGNORECASE,
     )
     _LOCAL_COMMAND_STDOUT_RE = re.compile(
-        r"<local-command-stdout>.*?(?:</local-command-stdout>|$)",
+        r"<local-command-stdout>.*?</local-command-stdout>",
         flags=re.DOTALL | re.IGNORECASE,
     )
     _LOCAL_COMMAND_METADATA_RE = re.compile(

@@ -1765,6 +1765,7 @@ class TestClaudeCodeAdapter:
                                             "<command-message>clear</command-message>\n"
                                             "<command-args></command-args>\n"
                                             "<local-command-stdout>[2mCompacted (ctrl+o to see full summary)[22m"
+                                            "</local-command-stdout>"
                                         ),
                                     }
                                 ],
@@ -1791,6 +1792,32 @@ class TestClaudeCodeAdapter:
         assert "Compacted (ctrl+o to see full summary)" not in transcript
         assert "/clear" not in transcript
         assert "My sister is Diana." in transcript
+
+    def test_parse_session_jsonl_preserves_text_after_unclosed_local_command_stdout(self, tmp_path):
+        path = tmp_path / "claude-local-command-unclosed-stdout.jsonl"
+        path.write_text(
+            json.dumps(
+                {
+                    "type": "user",
+                    "message": {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": (
+                                    "<local-command-stdout>command started\n"
+                                    "This visible follow-up should stay in the transcript."
+                                ),
+                            }
+                        ],
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        adapter = ClaudeCodeAdapter()
+        transcript = adapter.parse_session_jsonl(path)
+        assert "This visible follow-up should stay in the transcript." in transcript
 
     def test_parse_session_jsonl_strips_local_command_metadata_without_hiding_normal_text(self, tmp_path):
         path = tmp_path / "claude-local-command-inline.jsonl"
