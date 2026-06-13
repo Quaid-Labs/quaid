@@ -23673,6 +23673,7 @@ def hard_delete_node(node_id: str, conn: Optional[sqlite3.Connection] = None) ->
         active_conn.execute("DELETE FROM decay_review_queue WHERE node_id = ?", (node_id,))
         # Explicit cleanup for callers supplying connections with foreign_keys=OFF.
         active_conn.execute("DELETE FROM node_domains WHERE node_id = ?", (node_id,))
+        active_conn.execute("UPDATE nodes SET superseded_by = NULL WHERE superseded_by = ?", (node_id,))
         # Clean up vec_nodes index (virtual table, no CASCADE)
         try:
             active_conn.execute("DELETE FROM vec_nodes WHERE node_id = ?", (node_id,))

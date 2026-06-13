@@ -122,6 +122,41 @@ class TestHardDeleteNode:
                                  (node_a.id, node_a.id)).fetchall()
             assert len(edges) == 0
 
+    def test_clears_superseded_by_references_with_fk_disabled_connection(self, tmp_path):
+        """Hard deletes clear supersession pointers even for caller-managed connections."""
+        from datastore.memorydb.memory_graph import hard_delete_node
+        graph, db_file = _make_graph(tmp_path)
+        old = _make_node(graph, "Old workshop address")
+        new = _make_node(graph, "New workshop address")
+
+        assert graph.supersede_node(old.id, new.id) is True
+
+        raw_conn = sqlite3.connect(str(db_file))
+        raw_conn.row_factory = sqlite3.Row
+        raw_conn.execute("PRAGMA foreign_keys = OFF")
+        try:
+            with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph):
+                assert hard_delete_node(new.id, conn=raw_conn) is True
+            raw_conn.commit()
+        finally:
+            raw_conn.close()
+
+        verify_conn = sqlite3.connect(str(db_file))
+        verify_conn.row_factory = sqlite3.Row
+        try:
+            old_row = verify_conn.execute(
+                "SELECT superseded_by FROM nodes WHERE id = ?", (old.id,)
+            ).fetchone()
+            deleted_row = verify_conn.execute(
+                "SELECT id FROM nodes WHERE id = ?", (new.id,)
+            ).fetchone()
+        finally:
+            verify_conn.close()
+
+        assert old_row is not None
+        assert old_row["superseded_by"] is None
+        assert deleted_row is None
+
 
 def test_create_edge_rejects_placeholder_owner_entity_labels(tmp_path):
     from datastore.memorydb.memory_graph import create_edge
