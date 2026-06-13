@@ -608,6 +608,9 @@ def call_llm(system_prompt: str, user_message: str,
     """
     if os.environ.get("QUAID_DISABLE_LLM"):
         _trace_m15("llm.call.disabled", model=model, model_tier=model_tier)
+        logger.warning("[llm_clients] QUAID_DISABLE_LLM is set; aborting LLM call")
+        if is_fail_hard_enabled():
+            raise RuntimeError("LLM call disabled by QUAID_DISABLE_LLM while failHard is enabled")
         return (None, 0.0)
 
     _load_model_config()

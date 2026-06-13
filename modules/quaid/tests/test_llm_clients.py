@@ -431,6 +431,30 @@ class TestCallLlmProvider:
         assert payload["duration_ms"] >= 0
         assert isinstance(payload["model_usage"], dict)
 
+    def test_disabled_llm_returns_none_when_failhard_disabled(self, test_adapter, monkeypatch, caplog):
+        """QUAID_DISABLE_LLM may degrade only when failHard is disabled."""
+        import core.llm.clients as llm_clients
+
+        monkeypatch.setenv("QUAID_DISABLE_LLM", "1")
+        with patch("core.llm.clients.is_fail_hard_enabled", return_value=False), caplog.at_level("WARNING"):
+            result, duration = llm_clients.call_llm("system", "user")
+
+        assert result is None
+        assert duration == 0.0
+        assert "QUAID_DISABLE_LLM is set" in caplog.text
+        assert test_adapter.llm_calls == []
+
+    def test_disabled_llm_raises_when_failhard_enabled(self, test_adapter, monkeypatch):
+        """QUAID_DISABLE_LLM must not silently suppress LLM calls under failHard."""
+        import core.llm.clients as llm_clients
+
+        monkeypatch.setenv("QUAID_DISABLE_LLM", "1")
+        with patch("core.llm.clients.is_fail_hard_enabled", return_value=True):
+            with pytest.raises(RuntimeError, match="QUAID_DISABLE_LLM"):
+                llm_clients.call_llm("system", "user")
+
+        assert test_adapter.llm_calls == []
+
     def test_cost_cap_abort(self, test_adapter, monkeypatch):
         """call_llm should abort when cost cap is exceeded."""
         import core.llm.clients as llm_clients
