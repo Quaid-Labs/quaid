@@ -1339,7 +1339,18 @@ def detect_changed_sources_from_transcript(transcript: str) -> List[str]:
             json_match = re.search(r"\{[\s\S]*\}", json_str)
             if json_match:
                 data = json.loads(json_match.group(0))
-                for f in data.get("changed", []):
+                changed = data.get("changed", [])
+                if changed is None:
+                    changed = []
+                if not isinstance(changed, list):
+                    logger.warning(
+                        "Ignoring malformed changed-sources payload: changed=%r",
+                        changed,
+                    )
+                    if is_fail_hard_enabled():
+                        raise RuntimeError("Malformed changed-sources payload from LLM")
+                    continue
+                for f in changed:
                     if f in monitored:
                         all_changed.add(f)
         except (json.JSONDecodeError, AttributeError):

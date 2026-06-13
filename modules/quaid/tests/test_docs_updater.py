@@ -433,6 +433,45 @@ class TestDetectChangedSources:
             assert "core.lifecycle.janitor.py" in result
             assert "unknown.py" not in result
 
+    def test_changed_null_is_treated_as_empty(self, monkeypatch):
+        cfg = _make_test_config(
+            source_mapping={"core.lifecycle.janitor.py": {"docs": ["docs/ref.md"]}},
+        )
+
+        class _Result:
+            output = '{"changed": null}'
+            error = None
+
+        monkeypatch.setattr(
+            "lib.llm_chunked_call.parallel_llm_call",
+            lambda **_kwargs: [_Result()],
+        )
+        with patch("datastore.docsdb.updater.get_config", return_value=cfg):
+            from datastore.docsdb.updater import detect_changed_sources_from_transcript
+
+            assert detect_changed_sources_from_transcript("modified janitor.py") == []
+
+    def test_changed_non_list_raises_when_fail_hard(self, monkeypatch):
+        cfg = _make_test_config(
+            source_mapping={"core.lifecycle.janitor.py": {"docs": ["docs/ref.md"]}},
+        )
+
+        class _Result:
+            output = '{"changed": "core.lifecycle.janitor.py"}'
+            error = None
+
+        monkeypatch.setattr(
+            "lib.llm_chunked_call.parallel_llm_call",
+            lambda **_kwargs: [_Result()],
+        )
+        with patch("datastore.docsdb.updater.get_config", return_value=cfg):
+            from datastore.docsdb import updater
+
+            monkeypatch.setattr(updater, "is_fail_hard_enabled", lambda: True)
+
+            with pytest.raises(RuntimeError, match="Malformed changed-sources payload"):
+                updater.detect_changed_sources_from_transcript("modified janitor.py")
+
     def test_no_mapping_returns_empty(self):
         cfg = _make_test_config(source_mapping={})
         with patch("datastore.docsdb.updater.get_config", return_value=cfg):
