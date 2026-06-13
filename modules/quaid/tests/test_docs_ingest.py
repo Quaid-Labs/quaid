@@ -1,6 +1,8 @@
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 import ingest.docs_ingest as docs_ingest
 
 
@@ -30,9 +32,19 @@ def test_docs_ingest_disabled_when_auto_update_off(monkeypatch, tmp_path):
 def test_docs_ingest_missing_transcript_returns_error(monkeypatch, tmp_path):
     missing = tmp_path / "missing.txt"
     monkeypatch.setattr(docs_ingest, "get_config", lambda: _cfg())
+    monkeypatch.setattr(docs_ingest, "is_fail_hard_enabled", lambda: False)
     result = docs_ingest._run(missing, "Compaction", "s1")
     assert result["status"] == "error"
     assert "not found" in result["message"]
+
+
+def test_docs_ingest_missing_transcript_raises_when_fail_hard(monkeypatch, tmp_path):
+    missing = tmp_path / "missing.txt"
+    monkeypatch.setattr(docs_ingest, "get_config", lambda: _cfg())
+    monkeypatch.setattr(docs_ingest, "is_fail_hard_enabled", lambda: True)
+
+    with pytest.raises(RuntimeError, match="docs ingest transcript file not found"):
+        docs_ingest._run(missing, "Compaction", "s1")
 
 
 def test_docs_ingest_up_to_date(monkeypatch, tmp_path):

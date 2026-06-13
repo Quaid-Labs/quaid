@@ -2,6 +2,8 @@ import json
 import sys
 from unittest.mock import MagicMock
 
+import pytest
+
 from ingest import session_logs_ingest
 from lib.adapter import TestAdapter, reset_adapter, set_adapter
 
@@ -132,6 +134,37 @@ def test_transcript_path_malformed_jsonl_after_session_shape_still_uses_adapter(
     assert "malformed-json" not in transcript
     assert "stop_reason" not in transcript
     assert "input_tokens" not in transcript
+
+
+def test_transcript_path_malformed_first_line_still_uses_adapter(monkeypatch, tmp_path):
+    adapter = TestAdapter(tmp_path)
+    set_adapter(adapter)
+
+    fake_bridge = MagicMock()
+    fake_bridge.store_session_transcript.return_value = {"status": "indexed", "session_id": "sess-early-malformed", "chunks": 1}
+    monkeypatch.setattr("ingest.session_logs_ingest.get_session_memory_bridge", lambda: fake_bridge)
+
+    raw_session = tmp_path / "session-early-malformed.jsonl"
+    raw_session.write_text(
+        "{not-json-yet}\n"
+        + json.dumps({"role": "user", "content": "The first valid row should still classify this as JSONL."})
+        + "\n"
+        + json.dumps({"role": "assistant", "content": "Stored."})
+        + "\n",
+        encoding="utf-8",
+    )
+
+    out = session_logs_ingest._run(
+        session_id="sess-early-malformed",
+        owner_id="quaid",
+        label="SessionEnd",
+        transcript_path=str(raw_session),
+    )
+
+    assert out["status"] == "indexed"
+    transcript = fake_bridge.store_session_transcript.call_args.kwargs["transcript"]
+    assert "User: The first valid row should still classify this as JSONL." in transcript
+    assert "{not-json-yet}" not in transcript
 
 
 def test_normalize_participant_aliases_accepts_json_object_string():
@@ -273,6 +306,21 @@ def test_resolve_transcript_source_falls_back_from_empty_transcript_path(monkeyp
     assert src_path == session_file
     assert source_kind == "session_file"
     assert "Fallback transcript survives empty source." in str(content)
+
+
+def test_session_logs_ingest_unavailable_transcript_raises_when_fail_hard(monkeypatch, tmp_path):
+    adapter = TestAdapter(tmp_path)
+    set_adapter(adapter)
+    monkeypatch.setattr(session_logs_ingest, "is_fail_hard_enabled", lambda: True)
+
+    with pytest.raises(RuntimeError, match="session transcript unavailable under failHard"):
+        session_logs_ingest._run(
+            session_id="sess-missing",
+            owner_id="quaid",
+            label="SessionEnd",
+            session_file=None,
+            transcript_path=str(tmp_path / "missing.txt"),
+        )
 
 
 def test_main_accepts_json_flag_for_list_and_load(monkeypatch, tmp_path, capsys):

@@ -72,12 +72,12 @@ def _looks_like_session_jsonl(text: str) -> bool:
                     exc_info=True,
                 )
                 return True
-            return False
+            continue
         if not isinstance(obj, dict):
             if seen_session_shape:
                 logger.warning("Non-object row in session JSONL transcript; routing through adapter parser")
                 return True
-            return False
+            continue
         seen_json_object = True
         keys = {str(key) for key in obj.keys()}
         if {"type", "message", "payload"} & keys or {"role", "content"} <= keys:
@@ -157,6 +157,8 @@ def _run(
         transcript_path=transcript_path,
     )
     if not transcript:
+        if is_fail_hard_enabled():
+            raise RuntimeError(f"session transcript unavailable under failHard: {sid} ({source_kind})")
         return {
             "status": "skipped",
             "reason": "transcript_unavailable",

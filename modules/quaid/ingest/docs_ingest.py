@@ -13,6 +13,7 @@ from typing import Any, Dict
 
 from config import get_config
 from core.docs.updater import check_staleness, cmd_update_from_transcript
+from lib.fail_policy import is_fail_hard_enabled
 
 
 def _run(transcript_path: Path, label: str, session_id: str | None = None) -> Dict[str, Any]:
@@ -23,6 +24,8 @@ def _run(transcript_path: Path, label: str, session_id: str | None = None) -> Di
     if not docs_cfg or not getattr(docs_cfg, "auto_update_on_compact", False):
         return {"status": "disabled", "message": "docs auto-update disabled"}
     if not transcript_path.exists():
+        if is_fail_hard_enabled():
+            raise RuntimeError(f"docs ingest transcript file not found: {transcript_path}")
         return {"status": "error", "message": "transcript file not found"}
 
     stale = check_staleness()
