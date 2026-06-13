@@ -6681,6 +6681,33 @@ class TestSignalRoundTrip:
         # Corrupt file should have been removed
         assert not (sig_dir / "00000_corrupt.json").exists()
 
+    def test_read_pending_signals_preserves_transient_read_failure(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
+
+        sig_dir = extraction_daemon._signal_dir()
+        signal_file = sig_dir / "00000_transient.json"
+        signal_file.write_text(
+            json.dumps({
+                "type": "session_end",
+                "session_id": "sess-transient",
+                "transcript_path": "/tmp/session.jsonl",
+            }),
+            encoding="utf-8",
+        )
+        real_read_text = pathlib.Path.read_text
+
+        def _read_text(path, *args, **kwargs):
+            if path == signal_file:
+                raise OSError("nfs timeout")
+            return real_read_text(path, *args, **kwargs)
+
+        monkeypatch.setattr(pathlib.Path, "read_text", _read_text)
+
+        signals = extraction_daemon.read_pending_signals()
+        assert signals == []
+        assert signal_file.exists()
+
     def test_read_pending_signals_non_json_files_skipped(self, monkeypatch, tmp_path):
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
         monkeypatch.setenv("QUAID_INSTANCE", "test-inst")

@@ -891,12 +891,15 @@ def read_pending_signals() -> List[Dict[str, Any]]:
                 data["type"] = data.get("signal_type")
             data["_signal_path"] = str(f)
             signals.append(data)
-        except (json.JSONDecodeError, OSError):
-            # Remove corrupt signal files
+        except json.JSONDecodeError:
+            # Remove structurally corrupt signal files; atomic signal writes make
+            # ordinary read failures transient and retryable.
             try:
                 f.unlink()
             except OSError:
                 pass
+        except OSError as exc:
+            logger.warning("failed reading pending signal %s; preserving for retry: %s", f, exc)
     signals.sort(key=_pending_signal_sort_key)
     return signals[:MAX_SIGNALS_PER_POLL]
 
