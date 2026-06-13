@@ -1124,6 +1124,9 @@ def _read_cursor_file(cursor_file: Path, fallback_session_id: str) -> Dict[str, 
         "transcript_mtime_ns": 0,
         "transcript_inode": 0,
         "transcript_device": 0,
+        "transcript_guard_start_line": 0,
+        "transcript_guard_line_count": 0,
+        "transcript_guard_digest": "",
         "processed_signal_type": "",
         "cursor_key": cursor_file.stem,
     }
@@ -1143,6 +1146,9 @@ def _read_cursor_file(cursor_file: Path, fallback_session_id: str) -> Dict[str, 
             "transcript_mtime_ns": int(data.get("transcript_mtime_ns", 0) or 0),
             "transcript_inode": int(data.get("transcript_inode", 0) or 0),
             "transcript_device": int(data.get("transcript_device", 0) or 0),
+            "transcript_guard_start_line": int(data.get("transcript_guard_start_line", 0) or 0),
+            "transcript_guard_line_count": int(data.get("transcript_guard_line_count", 0) or 0),
+            "transcript_guard_digest": str(data.get("transcript_guard_digest") or ""),
             "processed_signal_type": str(data.get("processed_signal_type") or ""),
             "cursor_key": cursor_key or cursor_file.stem,
         }
@@ -1240,6 +1246,38 @@ def _transcript_line_window_digest(transcript_path: str, start_line: int, line_c
         "line_count": lines_read,
         "digest": digest.hexdigest() if lines_read else "",
     }
+
+
+_CURSOR_REBASE_GUARD_LINES = 3
+
+
+def _cursor_rebase_guard_digest(transcript_path: str, line_offset: int) -> Dict[str, Any]:
+    """Digest the processed line boundary used to validate same-path cursor reuse."""
+    offset = max(0, int(line_offset or 0))
+    if offset <= 0:
+        return {"start_line": 0, "line_count": 0, "digest": ""}
+    line_count = min(_CURSOR_REBASE_GUARD_LINES, offset)
+    start_line = max(0, offset - line_count)
+    return _transcript_line_window_digest(transcript_path, start_line, line_count)
+
+
+def _cursor_rebase_guard_matches(cursor_data: Dict[str, Any], transcript_path: str) -> bool:
+    """Return False when a cursor's processed boundary no longer matches the file."""
+    expected_digest = str(cursor_data.get("transcript_guard_digest") or "")
+    expected_count = int(cursor_data.get("transcript_guard_line_count", 0) or 0)
+    if not expected_digest or expected_count <= 0:
+        return True
+    expected = {
+        "start_line": int(cursor_data.get("transcript_guard_start_line", 0) or 0),
+        "line_count": expected_count,
+        "digest": expected_digest,
+    }
+    current = _transcript_line_window_digest(
+        transcript_path,
+        expected["start_line"],
+        expected["line_count"],
+    )
+    return current == expected
 
 
 def _should_raise_transcript_stat_error(transcript_path: str, exc: OSError) -> bool:
@@ -1443,6 +1481,7 @@ def write_cursor(
                 transcript_path,
             )
             line_offset = existing_offset
+    guard_digest = _cursor_rebase_guard_digest(transcript_path, int(line_offset or 0))
     payload = {
         "session_id": session_id,
         "cursor_key": cursor_key,
@@ -1453,6 +1492,9 @@ def write_cursor(
         "transcript_mtime_ns": int(current_stat.get("mtime_ns", 0) or 0),
         "transcript_inode": int(current_stat.get("inode", 0) or 0),
         "transcript_device": int(current_stat.get("device", 0) or 0),
+        "transcript_guard_start_line": int(guard_digest.get("start_line", 0) or 0),
+        "transcript_guard_line_count": int(guard_digest.get("line_count", 0) or 0),
+        "transcript_guard_digest": str(guard_digest.get("digest") or ""),
         "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
     processed_signal_type = str(processed_signal_type or "").strip()
@@ -1718,7 +1760,9 @@ def _active_source_cursor_for_grown_transcript(
         return {}, Path(), ""
     try:
         source_raw = json.loads(source_file.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
+    except (json.JSONDecodeError, OSError) as exc:
+        if isinstance(exc, OSError) and _fail_hard_enabled():
+            raise
         return {}, Path(), ""
     if "transcript_size_bytes" not in source_raw:
         return {}, Path(), ""
@@ -1732,6 +1776,31 @@ def _active_source_cursor_for_grown_transcript(
     source_size_bytes = int(source_cursor.get("transcript_size_bytes", 0) or 0)
     current_size_bytes = _transcript_size_bytes(str(transcript_path))
     if not source_size_bytes or not current_size_bytes or current_size_bytes <= source_size_bytes:
+        return {}, Path(), ""
+    current_stat = _transcript_stat_metadata(str(transcript_path))
+    current_inode = int(current_stat.get("inode", 0) or 0)
+    current_device = int(current_stat.get("device", 0) or 0)
+    source_inode = int(source_cursor.get("transcript_inode", 0) or 0)
+    source_device = int(source_cursor.get("transcript_device", 0) or 0)
+    if (source_inode and current_inode and source_inode != current_inode) or (
+        source_device and current_device and source_device != current_device
+    ):
+        logger.info(
+            "session %s source cursor %s belongs to a replaced transcript; "
+            "keeping alias cursor active (source_inode=%s current_inode=%s)",
+            session_id,
+            source_file.name,
+            source_inode,
+            current_inode,
+        )
+        return {}, Path(), ""
+    if not _cursor_rebase_guard_matches(source_cursor, str(transcript_path)):
+        logger.info(
+            "session %s source cursor %s processed-boundary guard no longer matches "
+            "grown transcript; keeping alias cursor active",
+            session_id,
+            source_file.name,
+        )
         return {}, Path(), ""
     source_offset = int(source_cursor.get("line_offset", 0) or 0)
     cursor_offset = int(cursor_data.get("line_offset", 0) or 0)
@@ -3553,7 +3622,7 @@ def _read_rolling_state_for_signal(session_id: str, transcript_path: str) -> Tup
         wanted_identity = ""
 
     try:
-        state_files = list(_rolling_state_dir().glob("*.json"))
+        state_files = sorted(_rolling_state_dir().glob("*.json"))
     except OSError:
         return direct_state, normalized_session_id
 
