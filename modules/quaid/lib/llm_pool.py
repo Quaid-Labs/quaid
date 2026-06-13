@@ -182,10 +182,15 @@ def acquire_llm_slot(timeout_seconds: Optional[float] = None, pool_kind: str = "
             deep_acquired = deep_sem.acquire(timeout=max(0.0, float(timeout_seconds)))
         if not deep_acquired:
             raise TimeoutError("Timed out waiting for deep LLM worker slot")
-    if timeout_seconds is None:
-        acquired = sem.acquire()
-    else:
-        acquired = sem.acquire(timeout=max(0.0, float(timeout_seconds)))
+    try:
+        if timeout_seconds is None:
+            acquired = sem.acquire()
+        else:
+            acquired = sem.acquire(timeout=max(0.0, float(timeout_seconds)))
+    except BaseException:
+        if deep_acquired and deep_sem is not None:
+            deep_sem.release()
+        raise
     if not acquired:
         if deep_acquired and deep_sem is not None:
             deep_sem.release()

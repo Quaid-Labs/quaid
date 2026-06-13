@@ -89,6 +89,38 @@ class TestAcquireLlmSlot:
             with acquire_llm_slot():
                 pass
 
+    def test_interrupt_during_global_acquire_releases_deep_slot(self, monkeypatch):
+        """KeyboardInterrupt after deep reservation must not leak deep capacity."""
+        import lib.llm_pool as m
+        from lib.llm_pool import acquire_llm_slot
+
+        class FakeDeepSemaphore:
+            def __init__(self):
+                self.acquired = 0
+                self.released = 0
+
+            def acquire(self, *args, **kwargs):
+                self.acquired += 1
+                return True
+
+            def release(self):
+                self.released += 1
+
+        class InterruptingSemaphore:
+            def acquire(self, *args, **kwargs):
+                raise KeyboardInterrupt("interrupted")
+
+        deep_sem = FakeDeepSemaphore()
+        monkeypatch.setattr(m, "_ensure_pool", lambda: InterruptingSemaphore())
+        monkeypatch.setattr(m, "_ensure_deep_pool", lambda: deep_sem)
+
+        with pytest.raises(KeyboardInterrupt, match="interrupted"):
+            with acquire_llm_slot(pool_kind="deep"):
+                pass
+
+        assert deep_sem.acquired == 1
+        assert deep_sem.released == 1
+
 
 # ---------------------------------------------------------------------------
 # Concurrency gate
