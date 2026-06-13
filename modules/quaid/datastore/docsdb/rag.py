@@ -1188,6 +1188,10 @@ class DocsRAG:
                 source_variants.append(candidate)
         try:
             with open(canonical_file_path, 'r', encoding='utf-8') as f:
+                source_indexed_at = datetime.fromtimestamp(
+                    os.fstat(f.fileno()).st_mtime,
+                    tz=timezone.utc,
+                ).isoformat()
                 content = f.read()
         except Exception as e:
             if is_fail_hard_enabled():
@@ -1260,9 +1264,9 @@ class DocsRAG:
                 """
                     INSERT INTO doc_chunks
                     (id, source_file, chunk_index, content, section_header, embedding, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+                    VALUES (?, ?, ?, ?, ?, ?, datetime('now'), ?)
                 """,
-                prepared_chunks,
+                [(*chunk, source_indexed_at) for chunk in prepared_chunks],
             )
             chunks_created = len(prepared_chunks)
             if _lib_has_vec() and prepared_chunks:
@@ -1312,13 +1316,12 @@ class DocsRAG:
             try:
                 from datastore.docsdb.registry import DocsRegistry
                 registry = DocsRegistry(self.db_path)
-                now = datetime.now().isoformat()
                 # Try both absolute and relative paths
-                registry.update_timestamps(file_path, indexed_at=now)
-                registry.update_timestamps(canonical_file_path, indexed_at=now)
+                registry.update_timestamps(file_path, indexed_at=source_indexed_at)
+                registry.update_timestamps(canonical_file_path, indexed_at=source_indexed_at)
                 try:
                     rel = str(Path(canonical_file_path).relative_to(_workspace()))
-                    registry.update_timestamps(rel, indexed_at=now)
+                    registry.update_timestamps(rel, indexed_at=source_indexed_at)
                 except ValueError:
                     pass
             except Exception as exc:

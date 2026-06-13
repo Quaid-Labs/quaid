@@ -311,6 +311,41 @@ class TestIndexDocument:
             (str(test_file), 1, "## Notes\nChunk B", "## Notes"),
         ]
 
+    def test_index_document_uses_open_file_mtime_for_staleness(self, tmp_path):
+        rag = _make_rag(tmp_path)
+        test_file = tmp_path / "guide.md"
+        test_file.write_text("# Guide\nOriginal.", encoding="utf-8")
+
+        original_open = open
+
+        def mutate_after_read(path, *args, **kwargs):
+            handle = original_open(path, *args, **kwargs)
+
+            class MutatingHandle:
+                def __enter__(self):
+                    handle.__enter__()
+                    return self
+
+                def __exit__(self, *exc_info):
+                    return handle.__exit__(*exc_info)
+
+                def fileno(self):
+                    return handle.fileno()
+
+                def read(self, *read_args, **read_kwargs):
+                    content = handle.read(*read_args, **read_kwargs)
+                    test_file.write_text("# Guide\nChanged after read.", encoding="utf-8")
+                    return content
+
+            return MutatingHandle()
+
+        with patch.object(rag, "chunk_markdown", return_value=["# Guide\nOriginal."]), \
+             patch("datastore.docsdb.rag._lib_get_embeddings", return_value=[[0.1, 0.2, 0.3]]), \
+             patch("datastore.docsdb.rag.open", side_effect=mutate_after_read, create=True):
+            assert rag.index_document(str(test_file)) == 1
+
+        assert rag.needs_reindex(str(test_file)) is True
+
     def test_index_document_chunks_project_log_into_focused_day_slices(self, tmp_path):
         rag = _make_rag(tmp_path)
         project_dir = tmp_path / "projects" / "recipe-app"
