@@ -398,6 +398,84 @@ describe("openclaw deferred notices", () => {
     removeTempDir(fixture.home);
   });
 
+  it("replays deferred prompt-build notices across duplicate OC hook surfaces", async () => {
+    vi.useFakeTimers();
+    vi.stubEnv("QUAID_DISABLE_NOTIFICATIONS", "1");
+    const fixture = seedDeferredNoticeFixture(
+      "quaid-oc-deferred-duplicate-prompt-home-",
+      "openclaw-main",
+      "[Quaid] M6 test notice: scheduled review found 3 facts.",
+    );
+    writeJson(fixture.noticeFile, {
+      version: 1,
+      requests: [{
+        id: "m6-partA-duplicate-surface",
+        status: "pending",
+        kind: "janitor_notice",
+        message: "[Quaid] M6 test notice: scheduled review found 3 facts.",
+      }],
+    });
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const plugin = await loadAdapterWithHomes(
+      fixture.hiddenHome,
+      fixture.visibleHome,
+      fixture.openClawConfigPath,
+      "openclaw-main",
+    );
+    const api = makeFakeApi();
+    plugin.register(api as any);
+
+    const beforePromptBuildCall = api.on.mock.calls.find((call: any[]) =>
+      call?.[0] === "before_prompt_build" && call?.[2]?.name === "memory-injection-prompt-build"
+    );
+    const beforePromptBuildRegisterCall = api.registerHook.mock.calls.find((call: any[]) =>
+      call?.[0] === "before_prompt_build" && call?.[2]?.name === "memory-injection-prompt-build-registerHook"
+    );
+    expect(beforePromptBuildCall).toBeTruthy();
+    expect(beforePromptBuildRegisterCall).toBeTruthy();
+
+    const sessionId = "session-main-duplicate-relay";
+    const sessionKey = "agent:main:tui-main";
+    const ctx = { sessionId, sessionKey, agentId: "main", trigger: "user" };
+    const firstResult = await beforePromptBuildCall?.[1](
+      { prompt: "Hey, what is up?", sessionId, sessionKey },
+      ctx,
+    );
+    expect(String(firstResult?.prependContext || "")).toContain("scheduled review found 3 facts");
+
+    const afterFirst = JSON.parse(fs.readFileSync(fixture.noticeFile, "utf8"));
+    expect(
+      (Array.isArray(afterFirst?.requests) ? afterFirst.requests : [])
+        .filter((item: any) => String(item?.status || "").trim().toLowerCase() === "pending"),
+    ).toHaveLength(0);
+
+    const secondResult = await beforePromptBuildRegisterCall?.[1](
+      { prompt: "Hey, what is up?", sessionId, sessionKey },
+      ctx,
+    );
+    expect(String(secondResult?.prependContext || "")).toContain("scheduled review found 3 facts");
+    expect(combinedSystemContext(secondResult)).toContain("MANDATORY: Quaid has active notices for the human user.");
+
+    const afterSecond = JSON.parse(fs.readFileSync(fixture.noticeFile, "utf8"));
+    expect(
+      (Array.isArray(afterSecond?.requests) ? afterSecond.requests : [])
+        .filter((item: any) => String(item?.status || "").trim().toLowerCase() === "delivered"),
+    ).toHaveLength(1);
+    expect(
+      readHookTraceEvents(fixture.hiddenHome, "openclaw-main")
+        .map((row) => String(row.event || "")),
+    ).toContain("deferred_notice.relay_context_reused");
+
+    warn.mockRestore();
+    log.mockRestore();
+    error.mockRestore();
+    removeTempDir(fixture.home);
+  });
+
   it("delivers deferred notices from the install-bound instance during before_prompt_build", async () => {
     vi.useFakeTimers();
     vi.stubEnv("QUAID_DISABLE_NOTIFICATIONS", "1");

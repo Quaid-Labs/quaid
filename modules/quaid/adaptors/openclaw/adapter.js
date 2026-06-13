@@ -624,6 +624,7 @@ function drainDeferredNoticeMessagesForAgent(agentLabel, reason) {
       env: buildPythonEnv({ QUAID_INSTANCE: instanceId })
     });
     if (result.error || result.status !== 0) {
+      const errorMessage = `deferred notice reply relay failed status=${String(result.status ?? "unknown")}: ${String(result.stderr || result.error?.message || "").trim()}`;
       writeHookTrace("deferred_notice.reply_relay_error", {
         instance_id: instanceId,
         agent_label: agentLabel,
@@ -632,6 +633,9 @@ function drainDeferredNoticeMessagesForAgent(agentLabel, reason) {
         stderr: String(result.stderr || "").trim().slice(0, 500),
         error: String(result.error?.message || "")
       });
+      if (isFailHardEnabled()) {
+        throw new Error(errorMessage);
+      }
       return [];
     }
     let payload = {};
@@ -645,6 +649,9 @@ function drainDeferredNoticeMessagesForAgent(agentLabel, reason) {
         stdout: String(result.stdout || "").trim().slice(0, 500),
         error: String(parseErr?.message || parseErr)
       });
+      if (isFailHardEnabled()) {
+        throw parseErr;
+      }
       return [];
     }
     const messages = Array.isArray(payload?.messages) ? payload.messages.map((message) => String(message || "").trim()).filter(Boolean) : [];
@@ -665,6 +672,9 @@ function drainDeferredNoticeMessagesForAgent(agentLabel, reason) {
       reason,
       error: String(err?.message || err)
     });
+    if (isFailHardEnabled()) {
+      throw err;
+    }
     return [];
   }
 }
@@ -698,6 +708,7 @@ function drainDeferredNoticeRelayContextForAgent(agentLabel, reason) {
       env: buildPythonEnv({ QUAID_INSTANCE: instanceId })
     });
     if (result.error || result.status !== 0) {
+      const errorMessage = `deferred notice relay failed status=${String(result.status ?? "unknown")}: ${String(result.stderr || result.error?.message || "").trim()}`;
       writeHookTrace("deferred_notice.relay_error", {
         instance_id: instanceId,
         agent_label: agentLabel,
@@ -706,6 +717,9 @@ function drainDeferredNoticeRelayContextForAgent(agentLabel, reason) {
         stderr: String(result.stderr || "").trim().slice(0, 500),
         error: String(result.error?.message || "")
       });
+      if (isFailHardEnabled()) {
+        throw new Error(errorMessage);
+      }
       return "";
     }
     let payload = {};
@@ -719,6 +733,9 @@ function drainDeferredNoticeRelayContextForAgent(agentLabel, reason) {
         stdout: String(result.stdout || "").trim().slice(0, 500),
         error: String(parseErr?.message || parseErr)
       });
+      if (isFailHardEnabled()) {
+        throw parseErr;
+      }
       return "";
     }
     const relay = String(payload?.relay || "").trim();
@@ -740,6 +757,9 @@ function drainDeferredNoticeRelayContextForAgent(agentLabel, reason) {
       reason,
       error: String(err?.message || err)
     });
+    if (isFailHardEnabled()) {
+      throw err;
+    }
     return "";
   }
 }
@@ -3327,9 +3347,106 @@ function resetPromptModelConfigTracking() {
   promptModelConfigFingerprint = "";
   promptModelConfigNotice = "";
   promptScopedProviderNoticeByAgent.clear();
+  clearDeferredNoticeRelayContextCache();
 }
 function providerNoticeAgentKey(agentLabel) {
   return String(agentLabel || "main").trim().toLowerCase() || "main";
+}
+const DEFERRED_NOTICE_RELAY_CACHE_TTL_MS = 5e3;
+const DEFERRED_NOTICE_RELAY_CACHE_MAX = 32;
+const deferredNoticeRelayContextByTurn = /* @__PURE__ */ new Map();
+function deferredNoticeRelayTurnKey(agentLabel, event, ctx, promptSessionId) {
+  const sessionScope = firstNonEmptyString(
+    event?.sessionKey,
+    ctx?.sessionKey,
+    event?.targetSessionKey,
+    ctx?.targetSessionKey,
+    event?.session?.sessionKey,
+    ctx?.session?.sessionKey,
+    resolveSessionKeyForSessionId(promptSessionId),
+    promptSessionId,
+    event?.roomId,
+    ctx?.roomId
+  ).toLowerCase() || "unknown-session";
+  const turnIdentity = firstNonEmptyString(
+    event?.turnId,
+    ctx?.turnId,
+    event?.messageId,
+    ctx?.messageId,
+    event?.requestId,
+    ctx?.requestId,
+    event?.id,
+    ctx?.id,
+    event?.timestamp,
+    ctx?.timestamp
+  ).toLowerCase();
+  const promptText = firstNonEmptyString(
+    event?.prompt,
+    ctx?.prompt,
+    event?.cleanedBody,
+    event?.body,
+    event?.text,
+    ctx?.text,
+    event?.content,
+    ctx?.content
+  ).replace(/\s+/g, " ").toLowerCase().slice(0, 500);
+  return `${providerNoticeAgentKey(agentLabel)}
+${sessionScope}
+${turnIdentity}
+${promptText}`;
+}
+function pruneDeferredNoticeRelayContextCache(nowMs = Date.now()) {
+  for (const [key, value] of deferredNoticeRelayContextByTurn.entries()) {
+    if (value.expiresAtMs <= nowMs) {
+      deferredNoticeRelayContextByTurn.delete(key);
+    }
+  }
+  while (deferredNoticeRelayContextByTurn.size > DEFERRED_NOTICE_RELAY_CACHE_MAX) {
+    const oldestKey = deferredNoticeRelayContextByTurn.keys().next().value;
+    if (!oldestKey) break;
+    deferredNoticeRelayContextByTurn.delete(oldestKey);
+  }
+}
+function clearDeferredNoticeRelayContextCache() {
+  deferredNoticeRelayContextByTurn.clear();
+}
+function rememberDeferredNoticeRelayContext(turnKey, context, nowMs = Date.now()) {
+  const key = String(turnKey || "").trim();
+  const relay = String(context || "").trim();
+  if (!key || !relay) return;
+  pruneDeferredNoticeRelayContextCache(nowMs);
+  deferredNoticeRelayContextByTurn.set(key, {
+    context: relay,
+    expiresAtMs: nowMs + DEFERRED_NOTICE_RELAY_CACHE_TTL_MS
+  });
+  pruneDeferredNoticeRelayContextCache(nowMs);
+}
+function consumeDeferredNoticeRelayContext(turnKey, nowMs = Date.now()) {
+  pruneDeferredNoticeRelayContextCache(nowMs);
+  const key = String(turnKey || "").trim();
+  if (!key) return "";
+  const cached = deferredNoticeRelayContextByTurn.get(key);
+  if (!cached) return "";
+  deferredNoticeRelayContextByTurn.delete(key);
+  if (cached.expiresAtMs <= nowMs) {
+    return "";
+  }
+  return cached.context;
+}
+function drainDeferredNoticeRelayContextForTurn(agentLabel, reason, turnKey) {
+  const cached = consumeDeferredNoticeRelayContext(turnKey);
+  if (cached) {
+    writeHookTrace("deferred_notice.relay_context_reused", {
+      agent_label: providerNoticeAgentKey(agentLabel),
+      reason
+    });
+    return cached;
+  }
+  const context = drainDeferredNoticeRelayContextForAgent(agentLabel, reason);
+  if (context) {
+    rememberDeferredNoticeRelayContext(turnKey, context);
+  }
+  return context;
 }
 function clearImmediateProviderNoticeDispatch(agentLabel, reason) {
   const key = providerNoticeAgentKey(agentLabel);
@@ -4999,15 +5116,25 @@ ${projectPlacementContext}` : projectPlacementContext;
         if (autoInjectEnabled || hasProviderDeferredNoticesForAgent(promptAgentLabel)) {
           await validatePromptModelConfigForTurn();
         }
-        const deferredNoticeRelayContext = drainDeferredNoticeRelayContextForAgent(
+        const deferredNoticeRelayContext = drainDeferredNoticeRelayContextForTurn(
           promptAgentLabel,
-          "before_prompt_build"
+          "before_prompt_build",
+          deferredNoticeRelayTurnKey(promptAgentLabel, event, ctx, promptSessionId)
         );
         if (deferredNoticeRelayContext) {
-          prependContextParts.push(deferredNoticeRelayContext);
-          appendSystemContext = appendSystemContext ? `${appendSystemContext}
+          const existingContext = [
+            event?.prependContext,
+            event?.prependSystemContext,
+            event?.appendSystemContext,
+            prependSystemContext,
+            appendSystemContext
+          ].map((value) => String(value || "")).join("\n\n");
+          if (!existingContext.includes(deferredNoticeRelayContext)) {
+            prependContextParts.push(deferredNoticeRelayContext);
+            appendSystemContext = appendSystemContext ? `${appendSystemContext}
 
 ${deferredNoticeRelayContext}` : deferredNoticeRelayContext;
+          }
         }
         let { query, source: querySource, rawPrompt } = selectAutoInjectQuery(
           event,

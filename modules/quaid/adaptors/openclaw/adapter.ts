@@ -816,6 +816,7 @@ function drainDeferredNoticeMessagesForAgent(agentLabel: string, reason: string)
       env: buildPythonEnv({ QUAID_INSTANCE: instanceId }) as NodeJS.ProcessEnv,
     });
     if (result.error || result.status !== 0) {
+      const errorMessage = `deferred notice reply relay failed status=${String(result.status ?? "unknown")}: ${String(result.stderr || result.error?.message || "").trim()}`;
       writeHookTrace("deferred_notice.reply_relay_error", {
         instance_id: instanceId,
         agent_label: agentLabel,
@@ -824,6 +825,9 @@ function drainDeferredNoticeMessagesForAgent(agentLabel: string, reason: string)
         stderr: String(result.stderr || "").trim().slice(0, 500),
         error: String(result.error?.message || ""),
       });
+      if (isFailHardEnabled()) {
+        throw new Error(errorMessage);
+      }
       return [];
     }
     let payload: { drained?: number; messages?: string[]; kinds?: string[] } = {};
@@ -837,6 +841,9 @@ function drainDeferredNoticeMessagesForAgent(agentLabel: string, reason: string)
         stdout: String(result.stdout || "").trim().slice(0, 500),
         error: String((parseErr as Error)?.message || parseErr),
       });
+      if (isFailHardEnabled()) {
+        throw parseErr;
+      }
       return [];
     }
     const messages = Array.isArray(payload?.messages)
@@ -859,6 +866,9 @@ function drainDeferredNoticeMessagesForAgent(agentLabel: string, reason: string)
       reason,
       error: String((err as Error)?.message || err),
     });
+    if (isFailHardEnabled()) {
+      throw err;
+    }
     return [];
   }
 }
@@ -893,6 +903,7 @@ function drainDeferredNoticeRelayContextForAgent(agentLabel: string, reason: str
       env: buildPythonEnv({ QUAID_INSTANCE: instanceId }) as NodeJS.ProcessEnv,
     });
     if (result.error || result.status !== 0) {
+      const errorMessage = `deferred notice relay failed status=${String(result.status ?? "unknown")}: ${String(result.stderr || result.error?.message || "").trim()}`;
       writeHookTrace("deferred_notice.relay_error", {
         instance_id: instanceId,
         agent_label: agentLabel,
@@ -901,6 +912,9 @@ function drainDeferredNoticeRelayContextForAgent(agentLabel: string, reason: str
         stderr: String(result.stderr || "").trim().slice(0, 500),
         error: String(result.error?.message || ""),
       });
+      if (isFailHardEnabled()) {
+        throw new Error(errorMessage);
+      }
       return "";
     }
     let payload: { drained?: number; relay?: string; kinds?: string[] } = {};
@@ -914,6 +928,9 @@ function drainDeferredNoticeRelayContextForAgent(agentLabel: string, reason: str
         stdout: String(result.stdout || "").trim().slice(0, 500),
         error: String((parseErr as Error)?.message || parseErr),
       });
+      if (isFailHardEnabled()) {
+        throw parseErr;
+      }
       return "";
     }
     const relay = String(payload?.relay || "").trim();
@@ -935,6 +952,9 @@ function drainDeferredNoticeRelayContextForAgent(agentLabel: string, reason: str
       reason,
       error: String((err as Error)?.message || err),
     });
+    if (isFailHardEnabled()) {
+      throw err;
+    }
     return "";
   }
 }
@@ -4168,10 +4188,111 @@ function resetPromptModelConfigTracking(): void {
   promptModelConfigFingerprint = "";
   promptModelConfigNotice = "";
   promptScopedProviderNoticeByAgent.clear();
+  clearDeferredNoticeRelayContextCache();
 }
 
 function providerNoticeAgentKey(agentLabel: string): string {
   return String(agentLabel || "main").trim().toLowerCase() || "main";
+}
+
+const DEFERRED_NOTICE_RELAY_CACHE_TTL_MS = 5_000;
+const DEFERRED_NOTICE_RELAY_CACHE_MAX = 32;
+const deferredNoticeRelayContextByTurn = new Map<string, { context: string; expiresAtMs: number }>();
+
+function deferredNoticeRelayTurnKey(agentLabel: string, event: any, ctx: any, promptSessionId: string): string {
+  const sessionScope = firstNonEmptyString(
+    event?.sessionKey,
+    ctx?.sessionKey,
+    event?.targetSessionKey,
+    ctx?.targetSessionKey,
+    event?.session?.sessionKey,
+    ctx?.session?.sessionKey,
+    resolveSessionKeyForSessionId(promptSessionId),
+    promptSessionId,
+    event?.roomId,
+    ctx?.roomId,
+  ).toLowerCase() || "unknown-session";
+  const turnIdentity = firstNonEmptyString(
+    event?.turnId,
+    ctx?.turnId,
+    event?.messageId,
+    ctx?.messageId,
+    event?.requestId,
+    ctx?.requestId,
+    event?.id,
+    ctx?.id,
+    event?.timestamp,
+    ctx?.timestamp,
+  ).toLowerCase();
+  const promptText = firstNonEmptyString(
+    event?.prompt,
+    ctx?.prompt,
+    event?.cleanedBody,
+    event?.body,
+    event?.text,
+    ctx?.text,
+    event?.content,
+    ctx?.content,
+  ).replace(/\s+/g, " ").toLowerCase().slice(0, 500);
+  return `${providerNoticeAgentKey(agentLabel)}\n${sessionScope}\n${turnIdentity}\n${promptText}`;
+}
+
+function pruneDeferredNoticeRelayContextCache(nowMs: number = Date.now()): void {
+  for (const [key, value] of deferredNoticeRelayContextByTurn.entries()) {
+    if (value.expiresAtMs <= nowMs) {
+      deferredNoticeRelayContextByTurn.delete(key);
+    }
+  }
+  while (deferredNoticeRelayContextByTurn.size > DEFERRED_NOTICE_RELAY_CACHE_MAX) {
+    const oldestKey = deferredNoticeRelayContextByTurn.keys().next().value;
+    if (!oldestKey) break;
+    deferredNoticeRelayContextByTurn.delete(oldestKey);
+  }
+}
+
+function clearDeferredNoticeRelayContextCache(): void {
+  deferredNoticeRelayContextByTurn.clear();
+}
+
+function rememberDeferredNoticeRelayContext(turnKey: string, context: string, nowMs: number = Date.now()): void {
+  const key = String(turnKey || "").trim();
+  const relay = String(context || "").trim();
+  if (!key || !relay) return;
+  pruneDeferredNoticeRelayContextCache(nowMs);
+  deferredNoticeRelayContextByTurn.set(key, {
+    context: relay,
+    expiresAtMs: nowMs + DEFERRED_NOTICE_RELAY_CACHE_TTL_MS,
+  });
+  pruneDeferredNoticeRelayContextCache(nowMs);
+}
+
+function consumeDeferredNoticeRelayContext(turnKey: string, nowMs: number = Date.now()): string {
+  pruneDeferredNoticeRelayContextCache(nowMs);
+  const key = String(turnKey || "").trim();
+  if (!key) return "";
+  const cached = deferredNoticeRelayContextByTurn.get(key);
+  if (!cached) return "";
+  deferredNoticeRelayContextByTurn.delete(key);
+  if (cached.expiresAtMs <= nowMs) {
+    return "";
+  }
+  return cached.context;
+}
+
+function drainDeferredNoticeRelayContextForTurn(agentLabel: string, reason: string, turnKey: string): string {
+  const cached = consumeDeferredNoticeRelayContext(turnKey);
+  if (cached) {
+    writeHookTrace("deferred_notice.relay_context_reused", {
+      agent_label: providerNoticeAgentKey(agentLabel),
+      reason,
+    });
+    return cached;
+  }
+  const context = drainDeferredNoticeRelayContextForAgent(agentLabel, reason);
+  if (context) {
+    rememberDeferredNoticeRelayContext(turnKey, context);
+  }
+  return context;
 }
 
 function clearImmediateProviderNoticeDispatch(agentLabel: string, reason: string): void {
@@ -6199,15 +6320,25 @@ notify_user(${JSON.stringify(message)})
         if (autoInjectEnabled || hasProviderDeferredNoticesForAgent(promptAgentLabel)) {
           await validatePromptModelConfigForTurn();
         }
-        const deferredNoticeRelayContext = drainDeferredNoticeRelayContextForAgent(
+        const deferredNoticeRelayContext = drainDeferredNoticeRelayContextForTurn(
           promptAgentLabel,
           "before_prompt_build",
+          deferredNoticeRelayTurnKey(promptAgentLabel, event, ctx, promptSessionId),
         );
         if (deferredNoticeRelayContext) {
-          prependContextParts.push(deferredNoticeRelayContext);
-          appendSystemContext = appendSystemContext
-            ? `${appendSystemContext}\n\n${deferredNoticeRelayContext}`
-            : deferredNoticeRelayContext;
+          const existingContext = [
+            event?.prependContext,
+            event?.prependSystemContext,
+            event?.appendSystemContext,
+            prependSystemContext,
+            appendSystemContext,
+          ].map((value) => String(value || "")).join("\n\n");
+          if (!existingContext.includes(deferredNoticeRelayContext)) {
+            prependContextParts.push(deferredNoticeRelayContext);
+            appendSystemContext = appendSystemContext
+              ? `${appendSystemContext}\n\n${deferredNoticeRelayContext}`
+              : deferredNoticeRelayContext;
+          }
         }
 
         let { query, source: querySource, rawPrompt } = selectAutoInjectQuery(
