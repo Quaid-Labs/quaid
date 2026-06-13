@@ -1947,7 +1947,9 @@ class DocsRegistry:
             from lib.project_registry import remove as remove_global_project
             remove_global_project(project_name, force=True)
         except Exception as e:
-            logger.debug("Global project registry delete skipped: %s", e)
+            if _fail_hard_enabled():
+                raise RuntimeError(f"Failed to delete global project registry entry {project_name!r}") from e
+            logger.warning("Global project registry delete skipped: %s", e)
 
         result = {"deleted": deleted, "dir_deleted": dir_deleted, "rag_chunks_deleted": rag_chunk_deleted}
         print(

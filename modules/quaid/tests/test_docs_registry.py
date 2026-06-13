@@ -1195,6 +1195,21 @@ A test project.
         assert result["deleted"] == 1
         assert removed == {"name": "test-project", "force": True}
 
+    def test_delete_global_registry_failure_raises_when_fail_hard(self, setup_env, monkeypatch):
+        from datastore.docsdb import registry as registry_mod
+
+        r = _get_registry()
+        r.register("projects/test-project/PROJECT.md", project="test-project")
+
+        def _fail_global_remove(*_args, **_kwargs):
+            raise RuntimeError("global registry unavailable")
+
+        monkeypatch.setattr("lib.project_registry.remove", _fail_global_remove)
+        monkeypatch.setattr(registry_mod, "_fail_hard_enabled", lambda: True)
+
+        with pytest.raises(RuntimeError, match="Failed to delete global project registry entry"):
+            r.delete_project("test-project")
+
 
 class TestPathPrefixBoundary:
     """Ensure path matching doesn't have false positives on similar prefixes."""
