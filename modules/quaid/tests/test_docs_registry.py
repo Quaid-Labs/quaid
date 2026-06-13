@@ -1259,6 +1259,52 @@ class TestProjectDefinitionsTable:
         r.reconcile_global_project_registry()
         assert global_project_lookup("test-project")["description"] == "updated livetest fixture"
 
+    def test_global_reconcile_path_resolution_failure_raises_under_failhard(self, setup_env, monkeypatch):
+        """failHard should not hide path-resolution failures during global sync."""
+        from config import ProjectDefinition
+        from datastore.docsdb import registry as registry_mod
+        from lib import project_registry as global_project_registry
+
+        r = _get_registry()
+        canonical = Path(setup_env).parent.parent / "projects" / "test-project"
+        global_project_registry.register(
+            name="test-project",
+            canonical_path=str(canonical),
+            description="existing global description",
+            link_current_instance=False,
+        )
+        stale_defn = ProjectDefinition(
+            label="Test Project",
+            home_dir="projects/test-project/",
+            source_roots=["src/"],
+            auto_index=True,
+            patterns=["*.md"],
+            exclude=["*.log", "__pycache__/"],
+            description="docs-side description",
+            state="active",
+        )
+        r.save_project_definition("test-project", stale_defn, link_current_instance=False)
+
+        original_path = registry_mod.Path
+        broken_existing_path = str(canonical) + "-broken"
+
+        class _ExplodingPath(type(original_path())):
+            def resolve(self, *args, **kwargs):
+                if str(self) == broken_existing_path:
+                    raise OSError("path resolution failed")
+                return super().resolve(*args, **kwargs)
+
+        monkeypatch.setattr(
+            global_project_registry,
+            "lookup",
+            lambda name: {"canonical_path": broken_existing_path, "description": "existing global description"},
+        )
+        monkeypatch.setattr(registry_mod, "Path", _ExplodingPath)
+        monkeypatch.setattr(registry_mod, "_fail_hard_enabled", lambda: True)
+
+        with pytest.raises(RuntimeError, match="Failed resolving project registry path"):
+            r.reconcile_global_project_registry()
+
     def test_save_project_definition_retries_transient_locked_db(self, setup_env):
         """Transient sqlite lock during project-definition save should retry and succeed."""
         from config import ProjectDefinition

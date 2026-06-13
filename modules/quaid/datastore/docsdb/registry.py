@@ -833,8 +833,12 @@ class DocsRegistry:
                     canonical_resolved = canonical.resolve(strict=False)
                     if existing_resolved == canonical_resolved:
                         description = existing_description
-                except OSError:
-                    pass
+                except OSError as exc:
+                    if _fail_hard_enabled():
+                        raise RuntimeError(
+                            f"Failed resolving project registry path for {name!r}: {exc}"
+                        ) from exc
+                    logger.warning("Project registry path resolution failed for %s: %s", name, exc)
             global_register(
                 name=name,
                 canonical_path=str(canonical),
