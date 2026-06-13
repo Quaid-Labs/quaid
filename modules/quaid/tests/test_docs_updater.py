@@ -869,7 +869,26 @@ class TestAuditLogFallback:
 
 
 class TestDriftDetectionFallback:
-    def test_detect_drift_logs_git_timestamp_failures(self, tmp_path, caplog):
+    def test_detect_drift_registry_failure_raises_when_fail_hard(self, tmp_path, monkeypatch):
+        cfg = _make_test_config(
+            source_mapping={"src.py": {"docs": ["docs/doc.md"]}},
+        )
+
+        class _BrokenRegistry:
+            def get_source_mappings(self):
+                raise RuntimeError("registry offline")
+
+        with patch("datastore.docsdb.updater.get_config", return_value=cfg), \
+             _adapter_patch(tmp_path), \
+             patch("datastore.docsdb.registry.DocsRegistry", return_value=_BrokenRegistry()):
+            import datastore.docsdb.updater as updater
+
+            monkeypatch.setattr(updater, "is_fail_hard_enabled", lambda: True)
+
+            with pytest.raises(RuntimeError, match="Failed to load docs registry source mappings"):
+                updater.detect_drift_from_git()
+
+    def test_detect_drift_logs_git_timestamp_failures(self, tmp_path, monkeypatch, caplog):
         cfg = _make_test_config(
             source_mapping={"src.py": {"docs": ["docs/doc.md"]}},
         )
@@ -885,13 +904,14 @@ class TestDriftDetectionFallback:
 
             import datastore.docsdb.updater as updater
 
+            monkeypatch.setattr(updater, "is_fail_hard_enabled", lambda: False)
             caplog.set_level("WARNING")
             out = updater.detect_drift_from_git()
 
         assert out == []
         assert "Failed reading doc commit timestamp" in caplog.text
 
-    def test_detect_drift_uses_conservative_lines_changed_fallback(self, tmp_path, caplog):
+    def test_detect_drift_uses_conservative_lines_changed_fallback(self, tmp_path, monkeypatch, caplog):
         cfg = _make_test_config(
             source_mapping={"src.py": {"docs": ["docs/doc.md"]}},
         )
@@ -922,6 +942,7 @@ class TestDriftDetectionFallback:
 
             import datastore.docsdb.updater as updater
 
+            monkeypatch.setattr(updater, "is_fail_hard_enabled", lambda: False)
             caplog.set_level("WARNING")
             out = updater.detect_drift_from_git()
 
@@ -931,7 +952,7 @@ class TestDriftDetectionFallback:
         # args: commits_behind, lines_changed, days_stale
         assert score_mock.call_args.args[1] == 1
 
-    def test_detect_drift_returns_partial_results_when_budget_exhausted(self, tmp_path, caplog):
+    def test_detect_drift_returns_partial_results_when_budget_exhausted(self, tmp_path, monkeypatch, caplog):
         cfg = _make_test_config(
             source_mapping={
                 "src1.py": {"docs": ["docs/doc1.md"]},
@@ -979,6 +1000,7 @@ class TestDriftDetectionFallback:
             src2.write_text("print('two')\n")
 
             import datastore.docsdb.updater as updater
+            monkeypatch.setattr(updater, "is_fail_hard_enabled", lambda: False)
             caplog.set_level("WARNING")
             out = updater.detect_drift_from_git()
 

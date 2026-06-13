@@ -1958,6 +1958,8 @@ def detect_drift_from_git(since_hours: int = 24) -> List[DriftReport]:
         for doc_path, sources in registry.get_source_mappings().items():
             doc_to_sources[doc_path] = sources
     except Exception as exc:
+        if is_fail_hard_enabled():
+            raise RuntimeError("Failed to load docs registry source mappings for drift detection") from exc
         logger.warning("Drift detection using config-only mappings; registry unavailable: %s", exc)
 
     source_mapping = cfg.docs.source_mapping
