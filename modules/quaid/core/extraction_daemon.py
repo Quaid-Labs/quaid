@@ -2328,7 +2328,7 @@ def _save_deferred_extraction(
     owner_id: str,
     label: str,
     reason: str,
-) -> None:
+) -> bool:
     """Save an unextracted transcript chunk for later janitor recovery.
 
     Written when a provider outage exhausts the 6-hour retry window.
@@ -2353,6 +2353,7 @@ def _save_deferred_extraction(
             "[daemon] saved deferred extraction for session %s: %s (%d chars)",
             session_id, path, len(transcript_text),
         )
+        return True
     except Exception as e:
         if _fail_hard_enabled():
             raise
@@ -2360,6 +2361,7 @@ def _save_deferred_extraction(
             "[daemon] failed to save deferred extraction for session %s: %s",
             session_id, e,
         )
+        return False
 
 
 def _rolling_state_dir() -> Path:
@@ -3824,6 +3826,7 @@ def _handle_transcript_parse_failure(
         and prior_failure_offset == int(start_line or 0)
         and prior_failure_end_line >= failure_end_line
     )
+    deferred_saved = already_deferred
     if not already_deferred:
         logger.error(
             "[%s] session %s: failed parsing transcript window; saving deferred extraction and preserving offset %d",
@@ -3831,16 +3834,21 @@ def _handle_transcript_parse_failure(
             session_id,
             start_line,
         )
-        _save_deferred_extraction(
+        deferred_saved = _save_deferred_extraction(
             session_id=session_id or "unknown",
             transcript_text=transcript_text,
             owner_id=owner_id or _get_owner_id(),
             label=label,
             reason="transcript_parse_failure",
         )
-    preserved_state[_TRANSCRIPT_PARSE_FAILURE_PATH_KEY] = str(transcript_path or "")
-    preserved_state[_TRANSCRIPT_PARSE_FAILURE_OFFSET_KEY] = int(start_line or 0)
-    preserved_state[_TRANSCRIPT_PARSE_FAILURE_END_LINE_KEY] = failure_end_line
+    if deferred_saved:
+        preserved_state[_TRANSCRIPT_PARSE_FAILURE_PATH_KEY] = str(transcript_path or "")
+        preserved_state[_TRANSCRIPT_PARSE_FAILURE_OFFSET_KEY] = int(start_line or 0)
+        preserved_state[_TRANSCRIPT_PARSE_FAILURE_END_LINE_KEY] = failure_end_line
+    else:
+        preserved_state.pop(_TRANSCRIPT_PARSE_FAILURE_PATH_KEY, None)
+        preserved_state.pop(_TRANSCRIPT_PARSE_FAILURE_OFFSET_KEY, None)
+        preserved_state.pop(_TRANSCRIPT_PARSE_FAILURE_END_LINE_KEY, None)
     return preserved_state, {
         "raw_lines_added": len(raw_lines),
         "semantic_chars_added": 0,

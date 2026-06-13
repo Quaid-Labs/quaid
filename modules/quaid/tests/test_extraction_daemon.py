@@ -868,13 +868,13 @@ def test_save_deferred_extraction_writes_unique_atomic_files(monkeypatch, tmp_pa
     monkeypatch.setattr(extraction_daemon, "_atomic_write", _record_atomic_write)
 
     for reason in ("first", "second"):
-        extraction_daemon._save_deferred_extraction(
+        assert extraction_daemon._save_deferred_extraction(
             session_id="sess-deferred",
             transcript_text=f"User: deferred payload {reason}",
             owner_id="owner-id",
             label="daemon-rolling",
             reason=reason,
-        )
+        ) is True
 
     deferred_dir = tmp_path / "instances" / "test-inst" / "data" / "deferred-extractions"
     files = sorted(deferred_dir.glob("*.json"))
@@ -933,6 +933,25 @@ def test_save_deferred_extraction_raises_write_failure_when_fail_hard(monkeypatc
         )
 
 
+def test_save_deferred_extraction_returns_false_on_write_failure_when_fail_open(monkeypatch, tmp_path):
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
+    monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: False)
+
+    def _raise_atomic_write(_path, _text):
+        raise OSError("deferred write failed")
+
+    monkeypatch.setattr(extraction_daemon, "_atomic_write", _raise_atomic_write)
+
+    assert extraction_daemon._save_deferred_extraction(
+        session_id="sess-deferred",
+        transcript_text="User: deferred payload",
+        owner_id="owner-id",
+        label="daemon-rolling",
+        reason="provider-timeout",
+    ) is False
+
+
 def test_buffer_transcript_tail_defers_parse_failure_without_advancing(monkeypatch, tmp_path):
     transcript = tmp_path / "session.jsonl"
     transcript.write_text(
@@ -947,7 +966,12 @@ def test_buffer_transcript_tail_defers_parse_failure_without_advancing(monkeypat
             raise ValueError("parse exploded")
 
     monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: False)
-    monkeypatch.setattr(extraction_daemon, "_save_deferred_extraction", lambda **kwargs: deferred.append(kwargs))
+
+    def _save_deferred(**kwargs):
+        deferred.append(kwargs)
+        return True
+
+    monkeypatch.setattr(extraction_daemon, "_save_deferred_extraction", _save_deferred)
 
     state, metrics = extraction_daemon._buffer_transcript_tail(
         str(transcript),
@@ -985,6 +1009,52 @@ def test_buffer_transcript_tail_defers_parse_failure_without_advancing(monkeypat
     assert metrics_again["parse_failed"] == 1
     assert state_again["buffered_line_offset"] == 0
     assert len(deferred) == 1
+
+
+def test_buffer_transcript_tail_retries_parse_failure_save_after_write_failure(monkeypatch, tmp_path):
+    transcript = tmp_path / "session.jsonl"
+    transcript.write_text('{"type":"user","message":{"content":"alpha"}}\n', encoding="utf-8")
+    save_calls = []
+
+    class FailingAdapter:
+        def parse_session_jsonl(self, _path):
+            raise ValueError("parse exploded")
+
+    def _failed_deferred_save(**kwargs):
+        save_calls.append(kwargs)
+        return False
+
+    monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: False)
+    monkeypatch.setattr(extraction_daemon, "_save_deferred_extraction", _failed_deferred_save)
+
+    state, metrics = extraction_daemon._buffer_transcript_tail(
+        str(transcript),
+        0,
+        {"buffered_line_offset": 0},
+        adapter=FailingAdapter(),
+        session_id="sess-parse",
+        owner_id="owner-id",
+        label="daemon-rolling",
+    )
+
+    assert metrics["parse_failed"] == 1
+    assert "transcript_parse_failure_path" not in state
+    assert "transcript_parse_failure_offset" not in state
+    assert len(save_calls) == 1
+
+    state_again, metrics_again = extraction_daemon._buffer_transcript_tail(
+        str(transcript),
+        0,
+        state,
+        adapter=FailingAdapter(),
+        session_id="sess-parse",
+        owner_id="owner-id",
+        label="daemon-rolling",
+    )
+
+    assert metrics_again["parse_failed"] == 1
+    assert "transcript_parse_failure_path" not in state_again
+    assert len(save_calls) == 2
 
 
 def test_buffer_transcript_tail_parse_failure_raises_when_fail_hard(monkeypatch, tmp_path):
