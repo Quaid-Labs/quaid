@@ -6722,6 +6722,27 @@ class TestExtractFromTranscript:
 
     @patch("lib.batch_utils.chunk_text_by_tokens")
     @patch("ingest.extract.call_deep_reasoning")
+    def test_llm_timeout_and_retry_overrides_forward_to_chunk_calls(self, mock_llm, mock_chunk):
+        from ingest.extract import extract_from_transcript
+
+        mock_chunk.return_value = ["User: first chunk"]
+        mock_llm.return_value = (json.dumps({"facts": []}), 0.4)
+
+        result = extract_from_transcript(
+            transcript="dummy",
+            owner_id="test",
+            label="bounded-llm-test",
+            llm_timeout_seconds=7.5,
+            llm_max_retries=0,
+        )
+
+        assert result["chunks_total"] == 1
+        assert mock_llm.call_count == 1
+        assert mock_llm.call_args.kwargs["timeout"] == pytest.approx(7.5)
+        assert mock_llm.call_args.kwargs["max_retries"] == 0
+
+    @patch("lib.batch_utils.chunk_text_by_tokens")
+    @patch("ingest.extract.call_deep_reasoning")
     def test_chunk_tokens_override_controls_root_extraction_budget(self, mock_llm, mock_chunk):
         from ingest.extract import extract_from_transcript
 

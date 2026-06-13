@@ -2629,6 +2629,8 @@ def _extract_chunk_payloads(
     source_timestamp_hint: Optional[str] = None,
     split_depth: int = 0,
     telemetry: Optional[Dict[str, Any]] = None,
+    llm_timeout_seconds: Optional[float] = None,
+    llm_max_retries: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
     """Extract a chunk, recursively splitting if the model cannot produce usable JSON."""
     if isinstance(telemetry, dict):
@@ -2645,10 +2647,17 @@ def _extract_chunk_payloads(
     )
     if isinstance(telemetry, dict):
         telemetry["deep_calls"] = int(telemetry.get("deep_calls", 0) or 0) + 1
+    llm_kwargs: Dict[str, Any] = {
+        "max_tokens": _extraction_max_output_tokens(),
+    }
+    if llm_timeout_seconds is not None:
+        llm_kwargs["timeout"] = llm_timeout_seconds
+    if llm_max_retries is not None:
+        llm_kwargs["max_retries"] = llm_max_retries
     response_text, duration = call_deep_reasoning(
         prompt=user_message,
         system_prompt=system_prompt,
-        max_tokens=_extraction_max_output_tokens(),
+        **llm_kwargs,
     )
 
     if not response_text:
@@ -3370,6 +3379,8 @@ def extract_from_transcript(
     carry_facts: Optional[List[Dict[str, Any]]] = None,
     chunk_tokens_override: Optional[int] = None,
     wall_timeout_seconds: Optional[float] = None,
+    llm_timeout_seconds: Optional[float] = None,
+    llm_max_retries: Optional[int] = None,
     memory_publish_mode: str = "direct",
     snippet_journal_write_mode: str = "direct",
 ) -> Dict[str, Any]:
@@ -3386,6 +3397,11 @@ def extract_from_transcript(
         chunk_tokens_override: Optional internal chunk budget for callers that
             already own a tighter transcript window, such as daemon rolling
             extraction.
+        llm_timeout_seconds: Optional per-root-chunk LLM timeout override for
+            callers that hold runtime locks while extracting.
+        llm_max_retries: Optional per-root-chunk LLM retry override. Runtime
+            daemons use signal retry rather than holding source locks across
+            provider retry loops.
         memory_publish_mode: MemoryDB publish routing mode ("direct" or "request").
         snippet_journal_write_mode: InsightDB snippet/journal routing mode
             ("direct" or "request").
@@ -3494,6 +3510,17 @@ def extract_from_transcript(
         logger.info(f"[extract] {label}: empty transcript, nothing to extract")
         return result
 
+    effective_llm_timeout_seconds: Optional[float] = None
+    if llm_timeout_seconds is not None:
+        effective_llm_timeout_seconds = float(llm_timeout_seconds)
+        if effective_llm_timeout_seconds <= 0:
+            raise ValueError("llm_timeout_seconds must be positive when provided")
+    effective_llm_max_retries: Optional[int] = None
+    if llm_max_retries is not None:
+        effective_llm_max_retries = int(llm_max_retries)
+        if effective_llm_max_retries < 0:
+            raise ValueError("llm_max_retries must be non-negative when provided")
+
     capture_skip_patterns: List[str] = []
     try:
         capture_cfg = get_config().capture
@@ -3598,6 +3625,8 @@ def extract_from_transcript(
             carry_facts=local_carry_facts,
             source_timestamp_hint=extraction_mentioned_at,
             telemetry=telemetry,
+            llm_timeout_seconds=effective_llm_timeout_seconds,
+            llm_max_retries=effective_llm_max_retries,
         )
 
     if parallel_root_workers > 1 and not carry_context_enabled and len(transcript_chunks) > 1:

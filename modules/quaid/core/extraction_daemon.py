@@ -55,6 +55,8 @@ logger = logging.getLogger("quaid.daemon")
 VALID_SIGNAL_TYPES = ("compaction", "reset", "session_end", "timeout", "rolling")
 DAEMON_EXTRACT_CHUNK_MAX_TOKENS = 900
 DAEMON_EXTRACT_CHUNK_RATIO = 0.8
+DAEMON_EXTRACT_LLM_TIMEOUT_SECONDS = 120.0
+DAEMON_EXTRACT_LLM_MAX_RETRIES = 0
 DAEMON_SIGNAL_TO_LIFECYCLE_EVENT = {
     "reset": "session.reset",
     "compaction": "session.compaction",
@@ -3822,6 +3824,8 @@ def _stage_semantic_buffer_payload(
         dry_run=True,
         carry_facts=list(staged_state.get("carry_facts", []) or []),
         chunk_tokens_override=_daemon_extract_chunk_tokens(chunk_budget),
+        llm_timeout_seconds=_daemon_extract_llm_timeout_seconds(),
+        llm_max_retries=_daemon_extract_llm_max_retries(),
     )
     stage_embedding_stats = _warm_payload_embeddings(stage_result.get("raw_facts", []) or [])
     chunks_processed = int(stage_result.get("chunks_processed", 0) or 0)
@@ -3996,6 +4000,62 @@ def _daemon_extract_chunk_tokens(chunk_budget: int) -> int:
         return budget
     focused_budget = max(1, int(budget * DAEMON_EXTRACT_CHUNK_RATIO))
     return max(1, min(budget, DAEMON_EXTRACT_CHUNK_MAX_TOKENS, focused_budget))
+
+
+def _daemon_extract_llm_timeout_seconds(default: float = DAEMON_EXTRACT_LLM_TIMEOUT_SECONDS) -> float:
+    """Bound provider calls made while daemon source locks are held."""
+    raw = str(os.environ.get("QUAID_DAEMON_EXTRACT_LLM_TIMEOUT_SECONDS", "") or "").strip()
+    if not raw:
+        return max(1.0, float(default))
+    try:
+        value = float(raw)
+    except Exception as exc:
+        if _fail_hard_enabled():
+            raise RuntimeError("Invalid QUAID_DAEMON_EXTRACT_LLM_TIMEOUT_SECONDS") from exc
+        logger.warning(
+            "invalid QUAID_DAEMON_EXTRACT_LLM_TIMEOUT_SECONDS=%r; using default %.1fs",
+            raw,
+            default,
+        )
+        return max(1.0, float(default))
+    if value <= 0:
+        if _fail_hard_enabled():
+            raise RuntimeError("QUAID_DAEMON_EXTRACT_LLM_TIMEOUT_SECONDS must be positive")
+        logger.warning(
+            "non-positive QUAID_DAEMON_EXTRACT_LLM_TIMEOUT_SECONDS=%r; using default %.1fs",
+            raw,
+            default,
+        )
+        return max(1.0, float(default))
+    return max(1.0, value)
+
+
+def _daemon_extract_llm_max_retries(default: int = DAEMON_EXTRACT_LLM_MAX_RETRIES) -> int:
+    """Use daemon signal retry instead of holding source locks across provider retries."""
+    raw = str(os.environ.get("QUAID_DAEMON_EXTRACT_LLM_MAX_RETRIES", "") or "").strip()
+    if not raw:
+        return max(0, int(default))
+    try:
+        value = int(raw)
+    except Exception as exc:
+        if _fail_hard_enabled():
+            raise RuntimeError("Invalid QUAID_DAEMON_EXTRACT_LLM_MAX_RETRIES") from exc
+        logger.warning(
+            "invalid QUAID_DAEMON_EXTRACT_LLM_MAX_RETRIES=%r; using default %d",
+            raw,
+            default,
+        )
+        return max(0, int(default))
+    if value < 0:
+        if _fail_hard_enabled():
+            raise RuntimeError("QUAID_DAEMON_EXTRACT_LLM_MAX_RETRIES must be non-negative")
+        logger.warning(
+            "negative QUAID_DAEMON_EXTRACT_LLM_MAX_RETRIES=%r; using default %d",
+            raw,
+            default,
+        )
+        return max(0, int(default))
+    return value
 
 
 def _get_capture_chunk_max_lines(default: int = 0) -> int:
@@ -6111,6 +6171,8 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                 dry_run=True,
                 carry_facts=list(staged_state.get("carry_facts", []) or []),
                 chunk_tokens_override=_daemon_extract_chunk_tokens(chunk_budget),
+                llm_timeout_seconds=_daemon_extract_llm_timeout_seconds(),
+                llm_max_retries=_daemon_extract_llm_max_retries(),
             )
             chunks_processed = int(tail_result.get("chunks_processed", 0) or 0)
             chunks_total = int(tail_result.get("chunks_total", 0) or 0)
@@ -6180,6 +6242,8 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                     session_id=session_id,
                     dry_run=True,
                     carry_facts=[],
+                    llm_timeout_seconds=_daemon_extract_llm_timeout_seconds(),
+                    llm_max_retries=_daemon_extract_llm_max_retries(),
                 )
                 flush_payload = _append_payload_result(
                     flush_payload,
