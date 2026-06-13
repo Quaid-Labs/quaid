@@ -1219,7 +1219,7 @@ class DocsRAG:
                 # and the doc will be re-indexed on the next run.
                 vec_placeholders = ",".join("?" for _ in target_chunk_ids)
                 vec_rows = conn.execute(
-                    f"SELECT id FROM vec_doc_chunks_rowids WHERE id IN ({vec_placeholders})",
+                    f"SELECT chunk_id FROM vec_doc_chunks WHERE chunk_id IN ({vec_placeholders})",
                     tuple(target_chunk_ids),
                 ).fetchall()
                 missing_vec_ids = sorted(set(target_chunk_ids) - {str(row[0]) for row in vec_rows})
@@ -1885,6 +1885,7 @@ class DocsRAG:
                 if similarity >= min_similarity or is_dated_project_log:
                     rank_similarity = max(similarity, min_similarity) if is_dated_project_log else similarity
                     section_header = row[4]
+                    source_date = None
                     rank_score = _docs_rank_score(
                         query_terms,
                         query,

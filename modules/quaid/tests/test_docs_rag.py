@@ -441,6 +441,34 @@ class TestIndexDocument:
         assert doc_ids == [f"{test_file}:0", f"{test_file}:1"]
         assert vec_ids == doc_ids
 
+    def test_index_document_verifies_vec_rows_against_vec_doc_chunks_table(self, tmp_path):
+        rag = _make_rag(tmp_path)
+        test_file = tmp_path / "guide.md"
+        test_file.write_text("# Guide\nBody.")
+
+        with sqlite3.connect(rag.db_path) as conn:
+            conn.execute("CREATE TABLE vec_doc_chunks (chunk_id TEXT PRIMARY KEY, embedding BLOB)")
+
+        chunk_texts = ["# Guide\nChunk A", "## Notes\nChunk B"]
+        embeddings = [[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]]
+
+        with patch.object(rag, "chunk_markdown", return_value=chunk_texts), \
+             patch.object(rag, "_ensure_doc_vec_table", side_effect=AssertionError("vec table should already exist")), \
+             patch("datastore.docsdb.rag._lib_has_vec", return_value=True), \
+             patch("datastore.docsdb.rag._lib_get_embeddings", return_value=embeddings):
+            chunks = rag.index_document(str(test_file))
+
+        assert chunks == 2
+        with sqlite3.connect(rag.db_path) as conn:
+            vec_ids = [
+                row[0]
+                for row in conn.execute(
+                    "SELECT chunk_id FROM vec_doc_chunks ORDER BY chunk_id"
+                ).fetchall()
+            ]
+
+        assert vec_ids == [f"{test_file}:0", f"{test_file}:1"]
+
     def test_index_document_collapses_symlinked_source_alias_paths(self, tmp_path):
         rag = _make_rag(tmp_path)
         real_file = tmp_path / "projects" / "quaid" / "reference" / "memory-reference.md"
@@ -645,6 +673,24 @@ class TestDocsSearchFiltering:
         results = rag.search_docs("alpha", limit=10, docs=["alpha.md"])
         assert len(results) == 1
         assert results[0]["source"].endswith("alpha.md")
+
+    @patch("datastore.docsdb.rag._lib_get_embedding", return_value=[0.1, 0.2, 0.3])
+    @patch("datastore.docsdb.rag._lib_unpack_embedding", return_value=[0.1, 0.2, 0.3])
+    @patch("datastore.docsdb.rag._lib_cosine_similarity", return_value=0.95)
+    def test_search_docs_regular_chunk_sets_source_date_none(self, _sim, _unpack, _embed, tmp_path):
+        rag = _make_rag(tmp_path)
+        with sqlite3.connect(rag.db_path) as db:
+            db.execute(
+                "INSERT INTO doc_chunks (id, source_file, chunk_index, content, section_header, embedding) VALUES (?, ?, ?, ?, ?, ?)",
+                ("regular:0", "/tmp/docs/guide.md", 0, "alpha regular content", "# Guide", b"e"),
+            )
+            db.commit()
+
+        results = rag.search_docs("alpha", limit=5)
+
+        assert len(results) == 1
+        assert results[0]["source"].endswith("guide.md")
+        assert results[0]["source_date"] is None
 
     def test_search_docs_empty_query_raises_under_failhard(self, tmp_path):
         rag = _make_rag(tmp_path)
