@@ -365,13 +365,19 @@ class TestCallHighReasoning:
 
         monkeypatch.setattr(llm_clients, "call_llm", fake_call_llm)
 
-        result, duration = call_deep_reasoning("test prompt", timeout=12.0, max_retries=0)
+        result, duration = call_deep_reasoning(
+            "test prompt",
+            timeout=12.0,
+            max_retries=0,
+            slot_timeout=45.0,
+        )
 
         assert result == "{}"
         assert duration == 0.01
         assert captured["model_tier"] == "deep"
         assert captured["timeout"] == 12.0
         assert captured["max_retries"] == 0
+        assert captured["slot_timeout"] == 45.0
 
 
 # ---------------------------------------------------------------------------
@@ -722,3 +728,43 @@ class TestCallLlmProvider:
 
         assert captured_slot_timeouts[0] == pytest.approx(0.8, rel=1e-3)
         assert captured_call_timeouts[0] == pytest.approx(0.5, rel=1e-3)
+
+    def test_explicit_slot_timeout_preserves_provider_timeout(self):
+        """Daemon callers can queue for a slot without spending provider call budget."""
+        import core.llm.clients as llm_clients
+
+        captured_slot_timeouts = []
+        captured_call_timeouts = []
+
+        @contextmanager
+        def _slot(timeout_seconds=None, pool_kind=None):
+            captured_slot_timeouts.append(timeout_seconds)
+            yield
+
+        provider = MagicMock()
+
+        def _llm_call(_messages, _tier, _max_tokens, timeout):
+            captured_call_timeouts.append(timeout)
+            return LLMResult(text='{"ok":true}', duration=0.01, model="test")
+
+        provider.llm_call.side_effect = _llm_call
+
+        with patch("core.llm.clients.get_llm_provider", return_value=provider), \
+             patch("core.llm.clients.acquire_llm_slot", side_effect=_slot), \
+             patch("core.llm.clients.time.time", side_effect=[100.0, 100.2, 100.5]):
+            llm_clients.call_llm(
+                "system",
+                "user",
+                timeout=1.0,
+                slot_timeout=30.0,
+                max_retries=0,
+            )
+
+        assert captured_slot_timeouts[0] == pytest.approx(30.0)
+        assert captured_call_timeouts[0] == pytest.approx(1.0)
+
+    def test_explicit_slot_timeout_must_be_positive(self, test_adapter):
+        import core.llm.clients as llm_clients
+
+        with pytest.raises(ValueError, match="slot_timeout must be positive"):
+            llm_clients.call_llm("system", "user", slot_timeout=0, max_retries=0)

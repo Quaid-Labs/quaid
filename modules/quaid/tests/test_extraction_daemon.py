@@ -670,6 +670,7 @@ def test_stage_semantic_buffer_payload_uses_focused_extract_chunks(monkeypatch):
     assert "wall_timeout_seconds" not in calls[0]
     assert calls[0]["chunk_tokens_override"] == 900
     assert calls[0]["llm_timeout_seconds"] == pytest.approx(120.0)
+    assert calls[0]["llm_slot_wait_timeout_seconds"] == pytest.approx(1800.0)
     assert calls[0]["llm_max_retries"] == 0
     assert calls[0]["raise_on_llm_failure"] is True
 
@@ -686,9 +687,11 @@ def test_daemon_extract_chunk_tokens_focuses_normal_rolling_windows():
 
 def test_daemon_extract_llm_timeout_and_retries_can_be_tuned(monkeypatch):
     monkeypatch.setenv("QUAID_DAEMON_EXTRACT_LLM_TIMEOUT_SECONDS", "45.5")
+    monkeypatch.setenv("QUAID_DAEMON_EXTRACT_LLM_SLOT_WAIT_SECONDS", "456.5")
     monkeypatch.setenv("QUAID_DAEMON_EXTRACT_LLM_MAX_RETRIES", "2")
 
     assert extraction_daemon._daemon_extract_llm_timeout_seconds() == pytest.approx(45.5)
+    assert extraction_daemon._daemon_extract_llm_slot_wait_seconds() == pytest.approx(456.5)
     assert extraction_daemon._daemon_extract_llm_max_retries() == 2
 
 

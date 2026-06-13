@@ -2597,6 +2597,7 @@ def _extract_chunk_payloads(
     split_depth: int = 0,
     telemetry: Optional[Dict[str, Any]] = None,
     llm_timeout_seconds: Optional[float] = None,
+    llm_slot_wait_timeout_seconds: Optional[float] = None,
     llm_max_retries: Optional[int] = None,
     raise_on_llm_failure: bool = False,
 ) -> List[Dict[str, Any]]:
@@ -2620,6 +2621,8 @@ def _extract_chunk_payloads(
     }
     if llm_timeout_seconds is not None:
         llm_kwargs["timeout"] = llm_timeout_seconds
+    if llm_slot_wait_timeout_seconds is not None:
+        llm_kwargs["slot_timeout"] = llm_slot_wait_timeout_seconds
     if llm_max_retries is not None:
         llm_kwargs["max_retries"] = llm_max_retries
     response_text, duration = call_deep_reasoning(
@@ -2763,6 +2766,7 @@ def _extract_chunk_payloads(
                         split_depth=split_depth + 1,
                         telemetry=telemetry,
                         llm_timeout_seconds=llm_timeout_seconds,
+                        llm_slot_wait_timeout_seconds=llm_slot_wait_timeout_seconds,
                         llm_max_retries=llm_max_retries,
                         raise_on_llm_failure=raise_on_llm_failure,
                     )
@@ -3366,6 +3370,7 @@ def extract_from_transcript(
     chunk_tokens_override: Optional[int] = None,
     wall_timeout_seconds: Optional[float] = None,
     llm_timeout_seconds: Optional[float] = None,
+    llm_slot_wait_timeout_seconds: Optional[float] = None,
     llm_max_retries: Optional[int] = None,
     raise_on_llm_failure: bool = False,
     memory_publish_mode: str = "direct",
@@ -3386,6 +3391,9 @@ def extract_from_transcript(
             extraction.
         llm_timeout_seconds: Optional per-root-chunk LLM timeout override for
             callers that hold runtime locks while extracting.
+        llm_slot_wait_timeout_seconds: Optional per-root-chunk LLM worker-slot
+            wait budget. When set, provider timeout starts after the slot is
+            acquired instead of including queue time.
         llm_max_retries: Optional per-root-chunk LLM retry override. Runtime
             daemons use signal retry rather than holding source locks across
             provider retry loops.
@@ -3505,6 +3513,11 @@ def extract_from_transcript(
         effective_llm_timeout_seconds = float(llm_timeout_seconds)
         if effective_llm_timeout_seconds <= 0:
             raise ValueError("llm_timeout_seconds must be positive when provided")
+    effective_llm_slot_wait_timeout_seconds: Optional[float] = None
+    if llm_slot_wait_timeout_seconds is not None:
+        effective_llm_slot_wait_timeout_seconds = float(llm_slot_wait_timeout_seconds)
+        if effective_llm_slot_wait_timeout_seconds <= 0:
+            raise ValueError("llm_slot_wait_timeout_seconds must be positive when provided")
     effective_llm_max_retries: Optional[int] = None
     if llm_max_retries is not None:
         effective_llm_max_retries = int(llm_max_retries)
@@ -3625,6 +3638,7 @@ def extract_from_transcript(
             source_timestamp_hint=extraction_mentioned_at,
             telemetry=telemetry,
             llm_timeout_seconds=effective_llm_timeout_seconds,
+            llm_slot_wait_timeout_seconds=effective_llm_slot_wait_timeout_seconds,
             llm_max_retries=effective_llm_max_retries,
             raise_on_llm_failure=raise_on_llm_failure,
         )

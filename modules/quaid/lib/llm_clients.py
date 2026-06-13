@@ -593,12 +593,15 @@ def call_llm(system_prompt: str, user_message: str,
              model_tier: Optional[str] = None,
              max_tokens: int = 4000,
              timeout: float = DEEP_REASONING_TIMEOUT,
-             max_retries: Optional[int] = None) -> Tuple[Optional[str], float]:
+             max_retries: Optional[int] = None,
+             slot_timeout: Optional[float] = None) -> Tuple[Optional[str], float]:
     """Call the configured LLM provider and return (response text, duration).
 
     Dispatches to the adapter's LLM provider (Gateway, ClaudeCode, Test, etc.).
     Retries up to max_retries times on transient errors with exponential backoff.
     Returns (None, duration) on persistent errors.
+    If slot_timeout is provided, it bounds worker-slot queue time separately
+    from the provider call timeout.
 
     Set QUAID_DISABLE_LLM=1 to disable all LLM calls (returns None immediately).
     Used by subprocess tests to avoid hitting real providers.
@@ -618,6 +621,7 @@ def call_llm(system_prompt: str, user_message: str,
         resolved_tier=resolved_tier,
         max_tokens=max_tokens,
         timeout=timeout,
+        slot_timeout=slot_timeout,
         max_retries=max_retries,
         prompt_preview=user_message[:1000],
         system_preview=system_prompt[:500],
@@ -680,6 +684,11 @@ def call_llm(system_prompt: str, user_message: str,
         deadline = start_time + max(0.0, float(timeout))
     retries = _MAX_RETRIES if max_retries is None else max_retries
     last_error = None
+    explicit_slot_timeout = slot_timeout is not None
+    if explicit_slot_timeout:
+        slot_timeout = float(slot_timeout)
+        if slot_timeout <= 0:
+            raise ValueError("slot_timeout must be positive when provided")
 
     _RETRYABLE_HTTP_CODES = {408, 429, 500, 502, 503, 504, 529}
 
@@ -687,13 +696,14 @@ def call_llm(system_prompt: str, user_message: str,
         attempt_started = time.monotonic()
         try:
             timeout_for_attempt = timeout
-            if deadline is not None:
+            if deadline is not None and not explicit_slot_timeout:
                 timeout_for_attempt = deadline - time.time()
                 if timeout_for_attempt <= 0:
                     raise TimeoutError("LLM deadline exhausted before provider call")
-            with acquire_llm_slot(timeout_seconds=timeout_for_attempt, pool_kind=resolved_tier):
+            acquire_timeout = slot_timeout if explicit_slot_timeout else timeout_for_attempt
+            with acquire_llm_slot(timeout_seconds=acquire_timeout, pool_kind=resolved_tier):
                 call_timeout = timeout_for_attempt
-                if deadline is not None:
+                if deadline is not None and not explicit_slot_timeout:
                     call_timeout = deadline - time.time()
                     if call_timeout <= 0:
                         raise TimeoutError("LLM deadline exhausted while waiting for worker slot")
@@ -937,7 +947,8 @@ def call_fast_reasoning(prompt: str, max_tokens: int = 200,
 def call_deep_reasoning(prompt: str, system_prompt: Optional[str] = None,
                         max_tokens: int = 2000,
                         timeout: float = DEEP_REASONING_TIMEOUT,
-                        max_retries: Optional[int] = None) -> Tuple[Optional[str], float]:
+                        max_retries: Optional[int] = None,
+                        slot_timeout: Optional[float] = None) -> Tuple[Optional[str], float]:
     """Call the deep-reasoning model and return (response text, duration).
 
     Used for: memory review, workspace audit, contradiction resolution, edge extraction.
@@ -954,6 +965,7 @@ def call_deep_reasoning(prompt: str, system_prompt: Optional[str] = None,
         max_tokens=max_tokens,
         timeout=timeout,
         max_retries=max_retries,
+        slot_timeout=slot_timeout,
     )
 
 

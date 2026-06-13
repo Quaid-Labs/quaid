@@ -271,6 +271,21 @@ Important telemetry families on `rolling_flush`:
   benchmark rerun can resume from "stage already done, flush still pending"
   instead of re-extracting the whole transcript.
 
+### Daemon LLM contention budgets
+
+Daemon extraction uses two separate Deep Reasoning budgets while processing
+signals:
+
+- `QUAID_DAEMON_EXTRACT_LLM_TIMEOUT_SECONDS` caps the provider call itself
+  after a worker slot has been acquired. Default: `120`.
+- `QUAID_DAEMON_EXTRACT_LLM_SLOT_WAIT_SECONDS` caps how long daemon extraction
+  may wait for a shared cross-process LLM worker slot before the provider call
+  starts. Default: `1800`.
+
+This separation keeps provider calls bounded while allowing background rolling
+or lifecycle extraction to wait behind other active LLM work instead of treating
+normal slot contention as a provider failure.
+
 Rolling extraction is still fail-hard on publish errors. It is a staging strategy,
 not a degraded mode.
 

@@ -56,6 +56,7 @@ VALID_SIGNAL_TYPES = ("compaction", "reset", "session_end", "timeout", "rolling"
 DAEMON_EXTRACT_CHUNK_MAX_TOKENS = 900
 DAEMON_EXTRACT_CHUNK_RATIO = 0.8
 DAEMON_EXTRACT_LLM_TIMEOUT_SECONDS = 120.0
+DAEMON_EXTRACT_LLM_SLOT_WAIT_SECONDS = 1800.0
 DAEMON_EXTRACT_LLM_MAX_RETRIES = 0
 DAEMON_SIGNAL_TO_LIFECYCLE_EVENT = {
     "reset": "session.reset",
@@ -4022,6 +4023,7 @@ def _stage_semantic_buffer_payload(
         carry_facts=list(staged_state.get("carry_facts", []) or []),
         chunk_tokens_override=_daemon_extract_chunk_tokens(chunk_budget),
         llm_timeout_seconds=_daemon_extract_llm_timeout_seconds(),
+        llm_slot_wait_timeout_seconds=_daemon_extract_llm_slot_wait_seconds(),
         llm_max_retries=_daemon_extract_llm_max_retries(),
         raise_on_llm_failure=True,
     )
@@ -4227,6 +4229,34 @@ def _daemon_extract_llm_timeout_seconds(default: float = DAEMON_EXTRACT_LLM_TIME
             raise RuntimeError("QUAID_DAEMON_EXTRACT_LLM_TIMEOUT_SECONDS must be positive")
         logger.warning(
             "non-positive QUAID_DAEMON_EXTRACT_LLM_TIMEOUT_SECONDS=%r; using default %.1fs",
+            raw,
+            default,
+        )
+        return max(1.0, float(default))
+    return max(1.0, value)
+
+
+def _daemon_extract_llm_slot_wait_seconds(default: float = DAEMON_EXTRACT_LLM_SLOT_WAIT_SECONDS) -> float:
+    """Allow daemon extraction to queue behind active cross-process LLM work."""
+    raw = str(os.environ.get("QUAID_DAEMON_EXTRACT_LLM_SLOT_WAIT_SECONDS", "") or "").strip()
+    if not raw:
+        return max(1.0, float(default))
+    try:
+        value = float(raw)
+    except Exception as exc:
+        if _fail_hard_enabled():
+            raise RuntimeError("Invalid QUAID_DAEMON_EXTRACT_LLM_SLOT_WAIT_SECONDS") from exc
+        logger.warning(
+            "invalid QUAID_DAEMON_EXTRACT_LLM_SLOT_WAIT_SECONDS=%r; using default %.1fs",
+            raw,
+            default,
+        )
+        return max(1.0, float(default))
+    if value <= 0:
+        if _fail_hard_enabled():
+            raise RuntimeError("QUAID_DAEMON_EXTRACT_LLM_SLOT_WAIT_SECONDS must be positive")
+        logger.warning(
+            "non-positive QUAID_DAEMON_EXTRACT_LLM_SLOT_WAIT_SECONDS=%r; using default %.1fs",
             raw,
             default,
         )
@@ -6480,6 +6510,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                 carry_facts=list(staged_state.get("carry_facts", []) or []),
                 chunk_tokens_override=_daemon_extract_chunk_tokens(chunk_budget),
                 llm_timeout_seconds=_daemon_extract_llm_timeout_seconds(),
+                llm_slot_wait_timeout_seconds=_daemon_extract_llm_slot_wait_seconds(),
                 llm_max_retries=_daemon_extract_llm_max_retries(),
                 raise_on_llm_failure=True,
             )
@@ -6552,6 +6583,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                     dry_run=True,
                     carry_facts=[],
                     llm_timeout_seconds=_daemon_extract_llm_timeout_seconds(),
+                    llm_slot_wait_timeout_seconds=_daemon_extract_llm_slot_wait_seconds(),
                     llm_max_retries=_daemon_extract_llm_max_retries(),
                     raise_on_llm_failure=True,
                 )
