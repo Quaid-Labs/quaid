@@ -6,6 +6,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
+from lib.fail_policy import is_fail_hard_enabled
+
 
 def _auto_provision_if_needed() -> None:
     """Create a Quaid silo for this project if one does not exist yet.
@@ -30,6 +32,8 @@ def _auto_provision_if_needed() -> None:
             print(f"[quaid] Auto-provisioned instance: {instance_id}", file=sys.stderr)
     except Exception as e:
         print(f"[quaid] Auto-provision failed: {e}", file=sys.stderr)
+        if is_fail_hard_enabled():
+            raise
 
 
 def main():
