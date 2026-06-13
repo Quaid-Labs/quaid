@@ -2246,6 +2246,8 @@ def register_lifecycle_routines(registry, result_factory) -> None:
                         updated += 1
             result.metrics["docs_updated"] = updated
         except Exception as exc:
+            if is_fail_hard_enabled():
+                raise
             result.errors.append(f"Docs staleness failed: {exc}")
         return result
 
@@ -2276,6 +2278,8 @@ def register_lifecycle_routines(registry, result_factory) -> None:
                         cleaned += 1
             result.metrics["docs_cleaned"] = cleaned
         except Exception as exc:
+            if is_fail_hard_enabled():
+                raise
             result.errors.append(f"Docs cleanup failed: {exc}")
         return result
 

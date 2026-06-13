@@ -214,6 +214,56 @@ def test_docs_lifecycle_staleness_and_cleanup(monkeypatch, tmp_path):
     assert ("projects/x/NOTES.md", "cleanup") in allow_calls
 
 
+def test_docs_lifecycle_staleness_raises_when_fail_hard(monkeypatch, tmp_path):
+    from datastore.docsdb import updater
+    from datastore.docsdb.updater import register_lifecycle_routines
+
+    monkeypatch.setattr(updater, "is_fail_hard_enabled", lambda: True)
+
+    def fail_staleness():
+        raise RuntimeError("stale failed")
+
+    monkeypatch.setattr(updater, "check_staleness", fail_staleness)
+
+    handlers = {}
+
+    class _Registry:
+        def register(self, name, handler):
+            handlers[name] = handler
+
+    register_lifecycle_routines(_Registry(), RoutineResult)
+
+    with pytest.raises(RuntimeError, match="stale failed"):
+        handlers["docs_staleness"](
+            RoutineContext(cfg=_make_cfg(False), dry_run=False, workspace=tmp_path)
+        )
+
+
+def test_docs_lifecycle_cleanup_raises_when_fail_hard(monkeypatch, tmp_path):
+    from datastore.docsdb import updater
+    from datastore.docsdb.updater import register_lifecycle_routines
+
+    monkeypatch.setattr(updater, "is_fail_hard_enabled", lambda: True)
+
+    def fail_cleanup():
+        raise RuntimeError("cleanup failed")
+
+    monkeypatch.setattr(updater, "check_cleanup_needed", fail_cleanup)
+
+    handlers = {}
+
+    class _Registry:
+        def register(self, name, handler):
+            handlers[name] = handler
+
+    register_lifecycle_routines(_Registry(), RoutineResult)
+
+    with pytest.raises(RuntimeError, match="cleanup failed"):
+        handlers["docs_cleanup"](
+            RoutineContext(cfg=_make_cfg(False), dry_run=False, workspace=tmp_path)
+        )
+
+
 def test_docsdb_monitor_lifecycle_queues_async_project_docs(monkeypatch, tmp_path):
     from core.plugins import docsdb_contract
 
