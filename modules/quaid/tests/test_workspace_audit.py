@@ -450,6 +450,30 @@ class TestDetectChangedFiles:
 
 
 class TestMtimePersistence:
+    def test_load_last_mtimes_warns_and_returns_empty_when_fail_open(self, tmp_path, caplog):
+        from core.lifecycle.workspace_audit import load_last_mtimes
+
+        with _hidden_adapter_patch(tmp_path) as iroot, \
+             patch("core.lifecycle.workspace_audit.is_fail_hard_enabled", return_value=False):
+            mtime_file = iroot / "logs" / "janitor" / "workspace-mtimes.json"
+            mtime_file.parent.mkdir(parents=True, exist_ok=True)
+            mtime_file.write_text("{broken json", encoding="utf-8")
+            with caplog.at_level("WARNING", logger="core.lifecycle.workspace_audit"):
+                assert load_last_mtimes() == {}
+
+        assert "Failed to load workspace mtimes" in caplog.text
+
+    def test_load_last_mtimes_raises_when_fail_hard(self, tmp_path):
+        from core.lifecycle.workspace_audit import load_last_mtimes
+
+        with _hidden_adapter_patch(tmp_path) as iroot, \
+             patch("core.lifecycle.workspace_audit.is_fail_hard_enabled", return_value=True):
+            mtime_file = iroot / "logs" / "janitor" / "workspace-mtimes.json"
+            mtime_file.parent.mkdir(parents=True, exist_ok=True)
+            mtime_file.write_text("{broken json", encoding="utf-8")
+            with pytest.raises(json.JSONDecodeError):
+                load_last_mtimes()
+
     def test_save_mtimes_uses_file_lock(self, tmp_path):
         from core.lifecycle.workspace_audit import save_mtimes
 
@@ -516,6 +540,38 @@ class TestMtimePersistence:
 
 
 class TestReviewDecisionApplyLocking:
+    def test_apply_review_decisions_warns_on_corrupt_file_when_fail_open(self, tmp_path, caplog):
+        from core.lifecycle.workspace_audit import apply_review_decisions
+
+        with _hidden_adapter_patch(tmp_path) as iroot, \
+             patch("core.lifecycle.workspace_audit.is_fail_hard_enabled", return_value=False):
+            decisions_file = iroot / "logs" / "janitor" / "workspace-review-decisions.json"
+            decisions_file.parent.mkdir(parents=True, exist_ok=True)
+            decisions_file.write_text("{broken json", encoding="utf-8")
+            with caplog.at_level("WARNING", logger="core.lifecycle.workspace_audit"):
+                stats = apply_review_decisions(dry_run=True)
+
+        assert stats == {
+            "moved_to_docs": 0,
+            "moved_to_memory": 0,
+            "trimmed": 0,
+            "bloat_warnings": 0,
+            "project_detected": 0,
+            "errors": 0,
+        }
+        assert "Failed to load workspace audit review decisions" in caplog.text
+
+    def test_apply_review_decisions_raises_corrupt_file_when_fail_hard(self, tmp_path):
+        from core.lifecycle.workspace_audit import apply_review_decisions
+
+        with _hidden_adapter_patch(tmp_path) as iroot, \
+             patch("core.lifecycle.workspace_audit.is_fail_hard_enabled", return_value=True):
+            decisions_file = iroot / "logs" / "janitor" / "workspace-review-decisions.json"
+            decisions_file.parent.mkdir(parents=True, exist_ok=True)
+            decisions_file.write_text("{broken json", encoding="utf-8")
+            with pytest.raises(json.JSONDecodeError):
+                apply_review_decisions(dry_run=True)
+
     def test_apply_review_decisions_locks_file_transaction(self, tmp_path):
         from core.lifecycle.workspace_audit import apply_review_decisions
 

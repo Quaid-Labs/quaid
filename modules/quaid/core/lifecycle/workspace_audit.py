@@ -452,8 +452,10 @@ def load_last_mtimes() -> Dict[str, float]:
             with open(_mtime_tracker(), 'r') as f:
                 data = json.load(f)
                 return data.get("mtimes", {})
-        except Exception:
-            pass
+        except Exception as exc:
+            if is_fail_hard_enabled():
+                raise
+            logger.warning("Failed to load workspace mtimes %s: %s", _mtime_tracker(), exc)
     return {}
 
 
@@ -558,8 +560,10 @@ def apply_review_decisions(dry_run: bool = True,
             try:
                 with open(_review_decisions(), 'r') as f:
                     decisions_data = json.load(f)
-            except Exception:
-                pass
+            except Exception as exc:
+                if is_fail_hard_enabled():
+                    raise
+                logger.warning("Failed to load workspace audit review decisions %s: %s", _review_decisions(), exc)
 
     if not decisions_data:
         print("  No decisions data available")
