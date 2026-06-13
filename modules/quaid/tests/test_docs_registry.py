@@ -165,6 +165,42 @@ class TestRegisterAndGet:
         assert entry["title"] == "Test Doc"
         assert entry["state"] == "active"
 
+    def test_register_rejects_path_escape(self, setup_env):
+        r = _get_registry()
+        with pytest.raises(ValueError, match="outside workspace"):
+            r.register("../../../escape.md", project="test-project")
+
+    def test_register_rejects_unsafe_project_name(self, setup_env):
+        r = _get_registry()
+        visible_home = setup_env.parents[1]
+
+        with pytest.raises(ValueError, match="Invalid project name"):
+            r.register("docs/test.md", project="../../escape")
+
+        assert not (visible_home.parent / "escape").exists()
+
+    def test_read_rejects_corrupt_outside_registry_path(self, setup_env):
+        from lib.database import get_connection
+
+        r = _get_registry()
+        outside = setup_env.parents[1].parent / "outside-secret.md"
+        outside.write_text("secret", encoding="utf-8")
+        try:
+            with get_connection(r.db_path) as conn:
+                r._ensure_doc_registry_table(conn)
+                conn.execute(
+                    """
+                    INSERT INTO doc_registry (file_path, project, asset_type, title, registered_by)
+                    VALUES (?, 'test-project', 'doc', 'Outside Secret', 'test')
+                    """,
+                    (str(outside),),
+                )
+
+            with pytest.raises(ValueError, match="outside workspace"):
+                r.read(str(outside))
+        finally:
+            outside.unlink(missing_ok=True)
+
     def test_cli_register_relative_path_uses_current_directory(self, setup_env, monkeypatch, capsys):
         from datastore.docsdb import registry as registry_mod
 
@@ -475,6 +511,15 @@ class TestCreateProject:
         assert "An essay project" in content
         assert "## Primary Artifacts" in content
         assert "## Where To Learn More" in content
+
+    def test_rejects_unsafe_project_name_before_scaffold(self, setup_env):
+        r = _get_registry()
+        visible_home = setup_env.parents[1]
+
+        with pytest.raises(ValueError, match="Invalid project name"):
+            r.create_project("../../escape")
+
+        assert not (visible_home.parent / "escape").exists()
 
 
 class TestSyncFromChunks:
@@ -898,7 +943,7 @@ A test project.
         assert captured == {
             "old_name": "test-project",
             "new_name": "renamed-proj",
-            "canonical_path": str(tmp_path / "projects" / "renamed-proj"),
+            "canonical_path": str(setup_env.parents[1] / "projects" / "renamed-proj"),
         }
 
     def test_rename_rewrites_project_prefixed_source_roots(self, setup_env):

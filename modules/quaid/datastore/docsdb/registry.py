@@ -143,8 +143,30 @@ def _workspace() -> Path:
 def _visible_home() -> Path:
     return get_visible_quaid_home()
 
+
+# Keep underscores for installed alpha projects, but reject dots and separators.
+_PROJECT_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+
+
 def _normalize_project_name(name: str) -> str:
     return str(name or "").strip().lower()
+
+
+def _validate_project_name(name: str) -> str:
+    normalized = _normalize_project_name(name)
+    if not normalized:
+        raise ValueError("Project name is required")
+    if not _PROJECT_NAME_RE.fullmatch(normalized):
+        raise ValueError(f"Invalid project name: {name!r}")
+    return normalized
+
+
+def _path_is_under(path: Path, root: Path) -> bool:
+    try:
+        path.resolve().relative_to(root.resolve())
+        return True
+    except (OSError, ValueError):
+        return False
 
 
 def _validate_inside_workspace(resolved_path: Path, label: str = "path") -> None:
@@ -156,9 +178,9 @@ def _validate_inside_workspace(resolved_path: Path, label: str = "path") -> None
         workspace_real = _workspace().resolve()
         hidden_home_real = get_quaid_home().resolve()
         visible_home_real = _visible_home().resolve()
-        inside_instance = str(real).startswith(str(workspace_real) + "/") or real == workspace_real
-        inside_hidden = str(real).startswith(str(hidden_home_real) + "/") or real == hidden_home_real
-        inside_visible = str(real).startswith(str(visible_home_real) + "/") or real == visible_home_real
+        inside_instance = _path_is_under(real, workspace_real)
+        inside_hidden = _path_is_under(real, hidden_home_real)
+        inside_visible = _path_is_under(real, visible_home_real)
         if not inside_instance and not inside_hidden and not inside_visible:
             raise ValueError(f"Refusing {label} outside workspace: {real}")
     except (OSError, ValueError) as e:
@@ -589,9 +611,7 @@ class DocsRegistry:
             return result
 
     def _write_project_definition_row(self, name: str, defn) -> None:
-        name = _normalize_project_name(name)
-        if not name:
-            raise ValueError("Project name is required")
+        name = _validate_project_name(name)
         def _write():
             with get_connection(self.db_path) as conn:
                 self._ensure_project_definitions_table(conn)
@@ -625,9 +645,7 @@ class DocsRegistry:
 
     def save_project_definition(self, name: str, defn, *, link_current_instance: bool = True):
         """Upsert a project definition to DB."""
-        name = _normalize_project_name(name)
-        if not name:
-            raise ValueError("Project name is required")
+        name = _validate_project_name(name)
         self._write_project_definition_row(name, defn)
         self._ensure_global_project_entry(
             name,
@@ -648,7 +666,7 @@ class DocsRegistry:
         name = _normalize_project_name(project or "")
         if not name or name == "default":
             return None
-        return name
+        return _validate_project_name(name)
 
     def _source_root_from_paths(self, paths_in: Optional[List[str]]) -> Optional[str]:
         paths: List[str] = []
@@ -704,6 +722,8 @@ class DocsRegistry:
         source_root: Optional[str],
         write_project_md: bool,
     ) -> None:
+        name = _validate_project_name(name)
+        _validate_inside_workspace(canonical, "project directory")
         canonical.mkdir(parents=True, exist_ok=True)
         (canonical / "docs").mkdir(exist_ok=True)
         project_md = canonical / "PROJECT.md"
@@ -800,6 +820,7 @@ class DocsRegistry:
             canonical = (_visible_home() / "projects" / name).resolve()
             if source_root is None:
                 source_root = self._source_root_from_paths([file_path] if file_path else None)
+        _validate_inside_workspace(canonical, "project directory")
 
         if create_scaffold:
             project_dir_existed = canonical.exists()
@@ -941,11 +962,14 @@ class DocsRegistry:
     ) -> int:
         """Register a document in the registry. Returns the row ID."""
         project = _normalize_project_name(project) or "default"
+        if project != "default":
+            project = _validate_project_name(project)
         if not file_path or not file_path.strip():
             raise ValueError("file_path must be a non-empty string")
-        resolved = Path(file_path.strip()).expanduser().resolve()
+        raw_path = file_path.strip()
+        resolved = self._resolve_path(raw_path).resolve()
         tmp_dir = Path(tempfile.gettempdir()).resolve()
-        if str(resolved).startswith(str(tmp_dir) + os.sep) or resolved == tmp_dir:
+        if Path(raw_path).expanduser().is_absolute() and _path_is_under(resolved, tmp_dir):
             raise ValueError(
                 f"Cannot register a file under a temporary directory ({tmp_dir}). "
                 "Quaid only tracks durable file paths that persist across reboots. "
@@ -1174,6 +1198,8 @@ class DocsRegistry:
             updates["auto_update"] = 1 if updates["auto_update"] else 0
         if "project" in updates:
             updates["project"] = _normalize_project_name(updates["project"]) or "default"
+            if updates["project"] != "default":
+                updates["project"] = _validate_project_name(updates["project"])
 
         set_clause = ", ".join(f"{k} = ?" for k in updates)
         params = list(updates.values()) + [file_path]
@@ -1324,9 +1350,7 @@ class DocsRegistry:
 
         Returns path to created PROJECT.md.
         """
-        name = _normalize_project_name(name)
-        if not name:
-            raise ValueError("Project name is required")
+        name = _validate_project_name(name)
 
         # Guard: don't overwrite an existing project
         cfg = self._get_config()
@@ -1408,7 +1432,7 @@ class DocsRegistry:
 
         Returns list of newly registered file paths.
         """
-        project_name = _normalize_project_name(project_name)
+        project_name = _validate_project_name(project_name)
         cfg = self._get_config()
         defn = cfg.projects.definitions.get(project_name)
         if not defn:
@@ -1462,7 +1486,7 @@ class DocsRegistry:
 
         Returns list of newly registered file paths.
         """
-        project_name = _normalize_project_name(project_name)
+        project_name = _validate_project_name(project_name)
         cfg = self._get_config()
         defn = cfg.projects.definitions.get(project_name)
         if not defn:
@@ -1560,10 +1584,8 @@ class DocsRegistry:
 
         Returns: {"renamed": count, "dir_moved": bool}
         """
-        old_name = _normalize_project_name(old_name)
-        new_name = _normalize_project_name(new_name)
-        if not old_name or not new_name:
-            raise ValueError("Project name is required")
+        old_name = _validate_project_name(old_name)
+        new_name = _validate_project_name(new_name)
 
         # Guard: old project must exist (in config or registry)
         cfg = self._get_config()
@@ -1614,7 +1636,7 @@ class DocsRegistry:
         dir_moved = False
         if defn:
             old_dir = self._resolve_path(defn.home_dir)
-            new_dir = _workspace() / "projects" / new_name
+            new_dir = _visible_home() / "projects" / new_name
             _validate_inside_workspace(new_dir, "target directory")
             if old_dir.exists() and not new_dir.exists():
                 old_dir.rename(new_dir)
@@ -1645,7 +1667,7 @@ class DocsRegistry:
 
         try:
             from lib.project_registry import rename as rename_global_project
-            rename_global_project(old_name, new_name, canonical_path=str(_workspace() / "projects" / new_name))
+            rename_global_project(old_name, new_name, canonical_path=str(_visible_home() / "projects" / new_name))
         except Exception as e:
             logger.debug("Global project registry rename skipped: %s", e)
 
@@ -1664,7 +1686,7 @@ class DocsRegistry:
 
         Returns: {"archived": count, "dir_moved": bool}
         """
-        project_name = _normalize_project_name(project_name)
+        project_name = _validate_project_name(project_name)
         # Guard: project must exist (in config or registry)
         cfg = self._get_config()
         has_config = project_name in cfg.projects.definitions
@@ -1686,9 +1708,10 @@ class DocsRegistry:
         dir_moved = False
         if defn:
             src_dir = self._resolve_path(defn.home_dir)
-            archive_dir = _workspace() / "projects" / "archive"
+            archive_dir = _visible_home() / "projects" / "archive"
             if src_dir.exists():
                 _validate_inside_workspace(src_dir, "archive source")
+                _validate_inside_workspace(archive_dir, "archive directory")
                 archive_dir.mkdir(parents=True, exist_ok=True)
                 dest = archive_dir / project_name
                 src_dir.rename(dest)
@@ -1717,7 +1740,7 @@ class DocsRegistry:
 
         Returns: {"deleted": count, "dir_deleted": bool}
         """
-        project_name = _normalize_project_name(project_name)
+        project_name = _validate_project_name(project_name)
         # Guard: project must exist (in config or registry)
         cfg = self._get_config()
         has_config = project_name in cfg.projects.definitions
@@ -1814,7 +1837,7 @@ class DocsRegistry:
 
         Returns: {"moved": bool, "new_path": str}
         """
-        to_project = _normalize_project_name(to_project)
+        to_project = _validate_project_name(to_project)
         # Guard: target project must exist
         cfg = self._get_config()
         if to_project not in cfg.projects.definitions:
@@ -1846,7 +1869,7 @@ class DocsRegistry:
 
         Returns: {"total": N, "exists": N, "missing": [...], "orphans": [...]}
         """
-        project_name = _normalize_project_name(project_name)
+        project_name = _validate_project_name(project_name)
         cfg = self._get_config()
         defn = cfg.projects.definitions.get(project_name)
 
@@ -1992,18 +2015,22 @@ class DocsRegistry:
         projects/staging/. Paths starting with 'shared/' also live at
         QUAID_HOME for the remaining shared-config surfaces.
         """
-        p = Path(relative)
+        value = str(relative or "").strip()
+        p = Path(value).expanduser()
         if p.is_absolute():
-            return p
-        if relative == "projects" or (
-            relative.startswith("projects/")
-            and relative != "projects/staging"
-            and not relative.startswith("projects/staging/")
+            resolved = p.resolve()
+        elif value == "projects" or (
+            value.startswith("projects/")
+            and value != "projects/staging"
+            and not value.startswith("projects/staging/")
         ):
-            return _visible_home() / relative
-        if relative.startswith("shared/"):
-            return get_quaid_home() / relative
-        return _workspace() / relative
+            resolved = (_visible_home() / value).resolve()
+        elif value.startswith("shared/"):
+            resolved = (get_quaid_home() / value).resolve()
+        else:
+            resolved = (_workspace() / value).resolve()
+        _validate_inside_workspace(resolved, "registry path")
+        return resolved
 
     def _is_excluded(self, file_path: str, patterns: List[str]) -> bool:
         """Check if a file matches any exclusion pattern."""
