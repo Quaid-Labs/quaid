@@ -24,7 +24,7 @@ def _fail_hard_enabled() -> bool:
 
         return bool(is_fail_hard_enabled())
     except ImportError:
-        return False
+        return True
 
 
 class GlobalLlmScheduler:
@@ -317,6 +317,24 @@ def _scheduler_max_workers(default_max_workers: int = 32) -> int:
     return int(default_max_workers)
 
 
+def _platform_scheduler_slots(raw: Any, default_slots: int = 8) -> int:
+    if raw is None:
+        return int(default_slots)
+    try:
+        parsed = int(raw)
+    except (TypeError, ValueError):
+        logger.warning("Invalid platform_scheduler_slots=%r; using default", raw)
+        if _fail_hard_enabled():
+            raise
+        return int(default_slots)
+    if parsed <= 0:
+        logger.warning("Invalid platform_scheduler_slots=%r; using default", raw)
+        if _fail_hard_enabled():
+            raise ValueError("platform_scheduler_slots must be positive")
+        return int(default_slots)
+    return parsed
+
+
 def get_global_llm_scheduler() -> GlobalLlmScheduler:
     global _SCHEDULER
     with _SCHEDULER_LOCK:
@@ -362,11 +380,10 @@ def get_platform_scheduler_client_for_current_instance():
                 from core.runtime.parallel_runtime import get_parallel_config
                 cfg = get_config()
                 parallel_cfg = get_parallel_config(cfg)
-                raw = getattr(parallel_cfg, "platform_scheduler_slots", None)
-                if raw is not None:
-                    parsed = int(raw)
-                    if parsed > 0:
-                        total_slots = parsed
+                total_slots = _platform_scheduler_slots(
+                    getattr(parallel_cfg, "platform_scheduler_slots", None),
+                    default_slots=total_slots,
+                )
             except Exception:
                 if _fail_hard_enabled():
                     raise

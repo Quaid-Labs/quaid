@@ -1,8 +1,16 @@
+import builtins
 import time
 
 import pytest
 
 from core.llm.scheduler import GlobalLlmScheduler
+
+
+@pytest.fixture(autouse=True)
+def _disable_platform_scheduler(monkeypatch):
+    import core.llm.scheduler as scheduler_mod
+
+    monkeypatch.setattr(scheduler_mod, "get_platform_scheduler_client_for_current_instance", lambda: None)
 
 
 def test_scheduler_timeout_backoff_and_slow_release():
@@ -230,3 +238,36 @@ def test_scheduler_invalid_worker_env_raises_when_fail_hard(monkeypatch):
 
     with pytest.raises(ValueError):
         scheduler_mod._scheduler_max_workers()
+
+
+def test_scheduler_fail_hard_wrapper_fails_closed_on_import_error(monkeypatch):
+    import core.llm.scheduler as scheduler_mod
+
+    original_import = __import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "lib.fail_policy":
+            raise ImportError("missing fail policy")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+
+    assert scheduler_mod._fail_hard_enabled() is True
+
+
+def test_scheduler_non_positive_platform_slots_warns_when_not_fail_hard(monkeypatch, caplog):
+    import core.llm.scheduler as scheduler_mod
+
+    monkeypatch.setattr(scheduler_mod, "_fail_hard_enabled", lambda: False)
+
+    assert scheduler_mod._platform_scheduler_slots(0) == 8
+    assert "Invalid platform_scheduler_slots=0" in caplog.text
+
+
+def test_scheduler_non_positive_platform_slots_raises_when_fail_hard(monkeypatch):
+    import core.llm.scheduler as scheduler_mod
+
+    monkeypatch.setattr(scheduler_mod, "_fail_hard_enabled", lambda: True)
+
+    with pytest.raises(ValueError, match="platform_scheduler_slots must be positive"):
+        scheduler_mod._platform_scheduler_slots(0)
