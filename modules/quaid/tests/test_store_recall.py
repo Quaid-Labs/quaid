@@ -7269,6 +7269,49 @@ class TestRecallTelemetry:
         assert meta["query_shape"] == "focused"
         assert meta["token_count"] > 16
 
+    def test_plan_fanout_queries_fast_calls_provider_for_mid_band_focused_query(self):
+        import datastore.memorydb.memory_graph as mg
+
+        query = (
+            "how should alerts update shared records across teams without blocking "
+            "existing webhooks or dashboards today safely"
+        )
+        with patch(
+            "lib.llm_clients.call_fast_reasoning",
+            return_value=('{"queries":["shared records alert update infrastructure"]}', {}),
+        ) as call:
+            queries, meta = mg._plan_fanout_queries(
+                query,
+                return_meta=True,
+                planner_profile="fast",
+            )
+
+        call.assert_called_once()
+        assert queries
+        assert meta["used_llm"] is True
+        assert meta["query_shape"] == "focused"
+        assert meta["token_count"] == 16
+
+    def test_plan_fanout_queries_fast_preserves_seventeen_token_focused_query_without_llm(self):
+        import datastore.memorydb.memory_graph as mg
+
+        query = (
+            "how should alerts update shared records across teams without blocking "
+            "existing webhooks or dashboards today safely online"
+        )
+        with patch("lib.llm_clients.call_fast_reasoning", side_effect=AssertionError("planner should not be called")):
+            queries, meta = mg._plan_fanout_queries(
+                query,
+                return_meta=True,
+                planner_profile="fast",
+            )
+
+        assert queries == [query]
+        assert meta["used_llm"] is False
+        assert meta["bailout_reason"] == "fast_long_focused_query"
+        assert meta["query_shape"] == "focused"
+        assert meta["token_count"] == 17
+
     def test_plan_fanout_queries_fast_preserves_live_broad_inference_without_llm(self):
         import datastore.memorydb.memory_graph as mg
 

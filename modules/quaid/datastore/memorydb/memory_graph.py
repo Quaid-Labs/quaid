@@ -19090,9 +19090,8 @@ def _plan_fanout_queries(
         and "broad_intent" not in profile_signals
         and not bool(profile.get("low_space_query"))
     )
-    fast_long_direct_query = (
+    fast_long_query = (
         planner_profile == "fast"
-        and profile["shape"] in {"broad", "focused"}
         and int(profile["token_count"]) > 16
         and not bool(profile.get("low_space_query"))
     )
@@ -19116,10 +19115,11 @@ def _plan_fanout_queries(
             planned_default_stores=planned_default_stores,
         )
         return _finish([clean], "preserve_short_exact_query")
-    if fast_long_direct_query:
+    if fast_long_query:
         # Fast pre-inject is a latency-sensitive context seed, not deliberate
         # recall. Preserve the full prompt as one search query rather than
-        # making a provider planning call that can block the turn.
+        # making a provider planning call that can block the turn. Full and
+        # deliberate recall still use the planner and surface failHard errors.
         reason = (
             "fast_long_broad_query"
             if profile["shape"] == "broad"
