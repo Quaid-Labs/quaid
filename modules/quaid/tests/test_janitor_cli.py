@@ -290,6 +290,27 @@ def test_janitor_status_reports_running_supervisor_request(monkeypatch, capsys):
     assert "exit_codes: alpha=0" in captured.out
 
 
+@pytest.mark.parametrize("status", ["pending", "completed"])
+def test_janitor_status_returns_zero_for_non_failed_supervisor_request(monkeypatch, capsys, status):
+    from core import project_docs
+    from core.lifecycle import janitor
+
+    monkeypatch.setattr(
+        project_docs,
+        "read_janitor_request",
+        lambda: {
+            "request_id": f"req-{status}",
+            "status": status,
+            "errors": [],
+        },
+    )
+
+    assert janitor.main(["--status"]) == 0
+    captured = capsys.readouterr()
+    assert f"Request status: {status}" in captured.out
+    assert f"request_id: req-{status}" in captured.out
+
+
 def test_janitor_status_returns_nonzero_for_failed_supervisor_request(monkeypatch, capsys):
     from core import project_docs
     from core.lifecycle import janitor

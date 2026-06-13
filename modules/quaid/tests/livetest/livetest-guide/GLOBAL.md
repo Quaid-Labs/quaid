@@ -100,6 +100,9 @@ non-trivial plan.
    ssh REMOTE_HOST "\$QCLI janitor --status"
    ```
 
+   `--status` exits `0` for no request, pending, running, or completed; it
+   exits `1` only when the supervisor request status is `failed`.
+
    For log-based polling:
 
    ```bash
