@@ -150,6 +150,45 @@ class TestPlatformSchedulerServer:
         c1.close()
         c3.close()
 
+    def test_late_acquire_after_disconnect_does_not_leak_slots(self, tmp_path):
+        """Acquire threads racing with disconnect must not grant dead clients."""
+        from core.platform_scheduler import PlatformSchedulerServer, _Connection
+
+        left, right = socket.socketpair()
+        try:
+            server = PlatformSchedulerServer(tmp_path, "tp", total_slots=1)
+            conn = _Connection(left, None)
+
+            server._handle_acquire(conn, 1)
+
+            assert server._used == 0
+            assert conn.held == 0
+        finally:
+            left.close()
+            right.close()
+
+    def test_late_queued_acquire_after_disconnect_returns_without_waiter_leak(self, tmp_path):
+        """Dead clients must not be queued after disconnect cleanup has run."""
+        from core.platform_scheduler import PlatformSchedulerServer, _Connection
+
+        left, right = socket.socketpair()
+        try:
+            server = PlatformSchedulerServer(tmp_path, "tp", total_slots=1)
+            server._used = 1
+            conn = _Connection(left, None)
+
+            thread = threading.Thread(target=server._handle_acquire, args=(conn, 1), daemon=True)
+            thread.start()
+            thread.join(timeout=0.5)
+
+            assert not thread.is_alive()
+            assert server._queue == []
+            assert server._used == 1
+            assert conn.held == 0
+        finally:
+            left.close()
+            right.close()
+
     def test_client_release_unblocks_while_same_client_acquire_waits(self):
         """A blocked acquire must not hold the lock needed by release."""
         from core.platform_scheduler import PlatformSchedulerClient

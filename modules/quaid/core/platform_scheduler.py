@@ -135,6 +135,8 @@ class PlatformSchedulerServer:
         event = threading.Event()
         conn_id = id(conn_obj.conn)
         with self._lock:
+            if conn_id not in self._connections:
+                return
             if self._available() >= n:
                 self._used += n
                 conn_obj.held += n
