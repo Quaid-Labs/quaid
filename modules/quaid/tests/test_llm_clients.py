@@ -351,6 +351,28 @@ class TestCallHighReasoning:
             with pytest.raises(RuntimeError, match="no provider"):
                 call_deep_reasoning("test prompt")
 
+    def test_passes_max_retries_to_call_llm(self, monkeypatch):
+        """Daemon extraction can disable wrapper retries for bounded signal retry."""
+        import core.llm.clients as llm_clients
+
+        captured = {}
+        monkeypatch.setattr(llm_clients, "_load_model_config", lambda: None)
+        monkeypatch.setattr(llm_clients, "get_prompt", lambda _key: "json-only")
+
+        def fake_call_llm(**kwargs):
+            captured.update(kwargs)
+            return "{}", 0.01
+
+        monkeypatch.setattr(llm_clients, "call_llm", fake_call_llm)
+
+        result, duration = call_deep_reasoning("test prompt", timeout=12.0, max_retries=0)
+
+        assert result == "{}"
+        assert duration == 0.01
+        assert captured["model_tier"] == "deep"
+        assert captured["timeout"] == 12.0
+        assert captured["max_retries"] == 0
+
 
 # ---------------------------------------------------------------------------
 # call_llm — provider delegation and token tracking

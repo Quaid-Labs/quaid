@@ -936,7 +936,8 @@ def call_fast_reasoning(prompt: str, max_tokens: int = 200,
 
 def call_deep_reasoning(prompt: str, system_prompt: Optional[str] = None,
                         max_tokens: int = 2000,
-                        timeout: float = DEEP_REASONING_TIMEOUT) -> Tuple[Optional[str], float]:
+                        timeout: float = DEEP_REASONING_TIMEOUT,
+                        max_retries: Optional[int] = None) -> Tuple[Optional[str], float]:
     """Call the deep-reasoning model and return (response text, duration).
 
     Used for: memory review, workspace audit, contradiction resolution, edge extraction.
@@ -952,6 +953,7 @@ def call_deep_reasoning(prompt: str, system_prompt: Optional[str] = None,
         model_tier="deep",
         max_tokens=max_tokens,
         timeout=timeout,
+        max_retries=max_retries,
     )
 
 
