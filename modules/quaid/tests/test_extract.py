@@ -367,6 +367,21 @@ class TestExtractFromTranscript:
         assert _extract_carry_context_enabled() is False
         assert _get_extract_parallel_root_workers() == 4
 
+    def test_invalid_parallel_workers_raises_under_failhard(self, monkeypatch):
+        from ingest.extract import _get_extract_parallel_root_workers
+
+        monkeypatch.setenv("QUAID_EXTRACT_PARALLEL_ROOT_WORKERS", "bogus")
+        with patch("ingest.extract.is_fail_hard_enabled", return_value=True):
+            with pytest.raises(ValueError, match="invalid QUAID_EXTRACT_PARALLEL_ROOT_WORKERS"):
+                _get_extract_parallel_root_workers()
+
+    def test_invalid_bare_date_timestamp_is_rejected(self):
+        from ingest.extract import _normalize_extracted_timestamp
+
+        assert _normalize_extracted_timestamp("2024-02-29") == "2024-02-29T23:59:59"
+        assert _normalize_extracted_timestamp("2023-02-29") is None
+        assert _normalize_extracted_timestamp("2024-13-01") is None
+
     def test_empty_transcript(self):
         from ingest.extract import extract_from_transcript
 
@@ -493,6 +508,102 @@ class TestExtractFromTranscript:
         assert "cedar demo kit" in joined
         assert "Quaid is noisy" not in joined
         assert "recall output" not in joined
+
+    def test_circuit_breaker_import_unavailable_does_not_block_extraction(
+        self,
+        mock_opus_response,
+    ):
+        import builtins
+        from ingest.extract import extract_from_transcript
+
+        real_import = builtins.__import__
+
+        def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+            if name == "core.compatibility":
+                raise ImportError("compat unavailable")
+            return real_import(name, globals, locals, fromlist, level)
+
+        with patch("builtins.__import__", side_effect=fake_import), \
+             patch("ingest.extract.call_deep_reasoning", return_value=(mock_opus_response, 1.0)):
+            result = extract_from_transcript(
+                transcript="User: I keep a brass postal scale on the desk.",
+                owner_id="test",
+                dry_run=True,
+                write_snippets=False,
+                write_journal=False,
+            )
+
+        assert result["facts_planned"] == 2
+
+    def test_circuit_breaker_runtime_failure_raises_under_failhard(self, monkeypatch):
+        from ingest.extract import extract_from_transcript
+        import core.compatibility as compatibility
+
+        monkeypatch.setattr(
+            compatibility,
+            "check_write_allowed",
+            lambda _path: (_ for _ in ()).throw(PermissionError("denied")),
+        )
+
+        with patch("ingest.extract.is_fail_hard_enabled", return_value=True):
+            with pytest.raises(PermissionError, match="denied"):
+                extract_from_transcript(
+                    transcript="User: I keep a brass postal scale on the desk.",
+                    owner_id="test",
+                    dry_run=True,
+                )
+
+    def test_project_definitions_load_failure_raises_under_failhard(self, monkeypatch):
+        from ingest.extract import extract_from_transcript
+
+        class _BrokenProjects:
+            @property
+            def definitions(self):
+                raise RuntimeError("definitions broken")
+
+        cfg = SimpleNamespace(
+            capture=SimpleNamespace(enabled=True, chunk_tokens=8000, skip_patterns=[]),
+            retrieval=SimpleNamespace(domains={"personal": "Personal facts"}),
+            projects=_BrokenProjects(),
+        )
+        monkeypatch.setattr("ingest.extract.get_config", lambda: cfg)
+
+        with patch("ingest.extract.is_fail_hard_enabled", return_value=True):
+            with pytest.raises(RuntimeError, match="Failed to load extraction project definitions"):
+                extract_from_transcript(
+                    transcript="User: I keep a brass postal scale on the desk.",
+                    owner_id="test",
+                    dry_run=True,
+                )
+
+    def test_chunk_budget_config_failure_raises_under_failhard(self, monkeypatch):
+        from ingest.extract import extract_from_transcript
+
+        class _BrokenCapture:
+            enabled = True
+            skip_patterns = []
+
+            @property
+            def chunk_tokens(self):
+                raise RuntimeError("chunk budget broken")
+
+        cfg = SimpleNamespace(
+            capture=_BrokenCapture(),
+            retrieval=SimpleNamespace(domains={"personal": "Personal facts"}),
+            projects=SimpleNamespace(definitions={}),
+        )
+        monkeypatch.setattr("ingest.extract.get_config", lambda: cfg)
+
+        with patch("ingest.extract.is_fail_hard_enabled", return_value=True), \
+             patch("ingest.extract.call_deep_reasoning") as mock_llm:
+            with pytest.raises(RuntimeError, match="Failed to load extraction chunk token budget"):
+                extract_from_transcript(
+                    transcript="User: I keep a brass postal scale on the desk.",
+                    owner_id="test",
+                    dry_run=True,
+                )
+
+        mock_llm.assert_not_called()
 
     @patch("ingest.extract.call_deep_reasoning")
     @patch("ingest.extract.get_config")

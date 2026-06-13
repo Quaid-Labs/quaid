@@ -79,7 +79,12 @@ def _normalize_extracted_timestamp(value: Any) -> Optional[str]:
     if not raw:
         return None
     if re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw):
-        return f"{raw}T23:59:59"
+        normalized = f"{raw}T23:59:59"
+        try:
+            datetime.fromisoformat(normalized)
+        except ValueError:
+            return None
+        return normalized
     try:
         parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
     except ValueError:
@@ -551,8 +556,10 @@ def _get_extract_parallel_root_workers() -> int:
         return 1
     try:
         workers = int(raw)
-    except Exception:
+    except Exception as exc:
         logger.warning("[extract] invalid QUAID_EXTRACT_PARALLEL_ROOT_WORKERS=%r; defaulting to 1", raw)
+        if is_fail_hard_enabled():
+            raise ValueError("invalid QUAID_EXTRACT_PARALLEL_ROOT_WORKERS") from exc
         return 1
     return max(1, workers)
 
@@ -3396,41 +3403,48 @@ def extract_from_transcript(
     # Circuit breaker guard — block extraction if writes are disabled
     try:
         from core.compatibility import check_write_allowed
-        from lib.adapter import get_adapter
-        breaker = check_write_allowed(get_adapter().data_dir())
-        if not breaker.allows_writes():
-            logger.warning("[extract] blocked by circuit breaker (%s): %s", breaker.status, breaker.message)
-            return {
-                "facts_stored": 0, "facts_skipped": 0, "edges_created": 0,
-                "facts_planned": 0,
-                "facts": [], "snippets": {}, "journal": {}, "project_logs": {},
-                "project_log_metrics": {}, "dry_run": dry_run,
-                "raw_facts": [], "raw_snippets": {}, "raw_journal": {}, "raw_project_logs": {},
-                "raw_source_chunks": [],
-                "carry_facts": [],
-                "chunks_processed": 0, "chunks_total": 0,
-                "carry_context_enabled": _extract_carry_context_enabled(),
-                "parallel_root_workers": _get_extract_parallel_root_workers(),
-                "root_chunks": 0, "split_events": 0, "split_child_chunks": 0,
-                "leaf_chunks": 0, "max_split_depth": 0,
-                "chunk_calls": 0, "deep_calls": 0, "repair_calls": 0,
-                "truncated_salvage_calls": 0,
-                "truncated_salvage_facts": 0,
-                "assessment_usable": 0,
-                "assessment_nothing_usable": 0,
-                "assessment_needs_smaller_chunk": 0,
-                "unclassified_empty_payloads": 0,
-                "carry_duplicate_facts_dropped": 0,
-                "artifact_facts_dropped": 0,
-                "question_echo_facts_dropped": 0,
-                "unsupported_specificity_facts_dropped": 0,
-                "source_chunks_stored": 0,
-                "source_chunks_existing": 0,
-                "source_chunks_failed": 0,
-                "circuit_breaker": breaker.status,
-            }
-    except Exception:
-        pass  # If compatibility module unavailable, proceed normally
+    except ImportError:
+        pass  # Compatibility module may be absent in older plugin layouts.
+    else:
+        try:
+            from lib.adapter import get_adapter
+
+            breaker = check_write_allowed(get_adapter().data_dir())
+            if not breaker.allows_writes():
+                logger.warning("[extract] blocked by circuit breaker (%s): %s", breaker.status, breaker.message)
+                return {
+                    "facts_stored": 0, "facts_skipped": 0, "edges_created": 0,
+                    "facts_planned": 0,
+                    "facts": [], "snippets": {}, "journal": {}, "project_logs": {},
+                    "project_log_metrics": {}, "dry_run": dry_run,
+                    "raw_facts": [], "raw_snippets": {}, "raw_journal": {}, "raw_project_logs": {},
+                    "raw_source_chunks": [],
+                    "carry_facts": [],
+                    "chunks_processed": 0, "chunks_total": 0,
+                    "carry_context_enabled": _extract_carry_context_enabled(),
+                    "parallel_root_workers": _get_extract_parallel_root_workers(),
+                    "root_chunks": 0, "split_events": 0, "split_child_chunks": 0,
+                    "leaf_chunks": 0, "max_split_depth": 0,
+                    "chunk_calls": 0, "deep_calls": 0, "repair_calls": 0,
+                    "truncated_salvage_calls": 0,
+                    "truncated_salvage_facts": 0,
+                    "assessment_usable": 0,
+                    "assessment_nothing_usable": 0,
+                    "assessment_needs_smaller_chunk": 0,
+                    "unclassified_empty_payloads": 0,
+                    "carry_duplicate_facts_dropped": 0,
+                    "artifact_facts_dropped": 0,
+                    "question_echo_facts_dropped": 0,
+                    "unsupported_specificity_facts_dropped": 0,
+                    "source_chunks_stored": 0,
+                    "source_chunks_existing": 0,
+                    "source_chunks_failed": 0,
+                    "circuit_breaker": breaker.status,
+                }
+        except Exception as exc:
+            if is_fail_hard_enabled():
+                raise
+            logger.warning("[extract] circuit breaker check failed; proceeding without write guard: %s", exc)
 
     result = {
         "facts_stored": 0,
@@ -3519,8 +3533,10 @@ def extract_from_transcript(
     try:
         for proj_name, proj_def in get_config().projects.definitions.items():
             known_projects[proj_name] = getattr(proj_def, "description", "") or ""
-    except Exception:
-        pass
+    except Exception as exc:
+        if is_fail_hard_enabled():
+            raise RuntimeError("Failed to load extraction project definitions") from exc
+        logger.warning("[extract] project definitions load failed; proceeding without known projects: %s", exc)
     system_prompt = _load_extraction_prompt(domain_defs, owner_id=owner_id, known_projects=known_projects or None)
 
     # Chunk transcript for extraction (split at turn boundaries)
@@ -3540,6 +3556,8 @@ def extract_from_transcript(
                 chunk_tokens = 8_000
         except Exception as exc:
             logger.warning("[extract] capture chunk budget config read failed; defaulting to 8000 tokens: %s", exc)
+            if is_fail_hard_enabled():
+                raise RuntimeError("Failed to load extraction chunk token budget") from exc
             chunk_tokens = 8_000
     # Use batch_utils for consistent chunking across the codebase.
     # chunk_text_by_tokens splits on \n\n (turn boundaries) and uses
