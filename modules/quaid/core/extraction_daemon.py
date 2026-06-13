@@ -79,6 +79,7 @@ _SIGNAL_POLL_PRIORITY = {
 }
 _ROLLING_INTERNAL_ADVANCE_GRACE_SECONDS = 60.0
 _INTERNAL_CURSOR_UNFROZEN_PENDING_FLUSH_KEY = "internal_cursor_unfrozen_pending_flush"
+_STAGED_PAYLOAD_PENDING_FLUSH_KEY = "staged_payload_pending_flush"
 _DISCOVERY_STALE_ORPHAN_GRACE_SECONDS = 10 * 60
 _ORPHANED_CURSOR_RETENTION_SECONDS = 7 * 24 * 60 * 60
 _IGNORED_TIMEOUT_USER_TURN_MAX_CHARS = 12
@@ -2240,20 +2241,21 @@ def _read_processing_lock_payload(lock_path: Path) -> Dict[str, Any]:
         raw = lock_path.read_text(encoding="utf-8").strip()
         if not raw:
             return {}
-        loaded = json.loads(raw)
-        return loaded if isinstance(loaded, dict) else {}
+        try:
+            loaded = json.loads(raw)
+        except json.JSONDecodeError:
+            loaded = raw.splitlines()[0].strip()
+        if isinstance(loaded, dict):
+            return loaded
+        try:
+            return {"pid": int(str(loaded).strip()), "legacy_pid_lock": True}
+        except (TypeError, ValueError):
+            return {}
     except Exception:
         return {}
 
 
-def _processing_lock_holder_dead(lock_path: Path) -> bool:
-    payload = _read_processing_lock_payload(lock_path)
-    try:
-        pid = int(payload.get("pid") or 0)
-    except Exception:
-        return False
-    if pid <= 0 or pid == os.getpid():
-        return False
+def _processing_lock_old_enough(lock_path: Path) -> bool:
     try:
         raw_min_age = os.environ.get("QUAID_PROCESSING_LOCK_STALE_SECONDS", "")
         min_age_seconds = max(0.0, float(raw_min_age) if raw_min_age.strip() else 10.0)
@@ -2263,8 +2265,40 @@ def _processing_lock_holder_dead(lock_path: Path) -> bool:
         age_seconds = time.time() - lock_path.stat().st_mtime
     except OSError:
         return False
-    if age_seconds < min_age_seconds:
+    return age_seconds >= min_age_seconds
+
+
+def _processing_lock_unlocked(lock_path: Path) -> bool:
+    fd: Optional[int] = None
+    try:
+        fd = os.open(str(lock_path), os.O_RDWR)
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        return True
+    except (OSError, IOError):
         return False
+    finally:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+
+def _processing_lock_holder_dead(lock_path: Path) -> bool:
+    payload = _read_processing_lock_payload(lock_path)
+    try:
+        pid = int(payload.get("pid") or 0)
+    except Exception:
+        return False
+    if pid == os.getpid():
+        return False
+    if not _processing_lock_old_enough(lock_path):
+        return False
+    if pid <= 0:
+        # A daemon crash can leave an empty or partially-written lock file after
+        # the OS releases flock. Treat only old, currently-unlocked files as stale.
+        return _processing_lock_unlocked(lock_path)
     return not _pid_alive(pid)
 
 
@@ -2985,6 +3019,7 @@ def clear_staged_payload_from_state(state: Dict[str, Any]) -> Dict[str, Any]:
     cleaned["facts_skipped"] = 0
     cleaned["payload_duplicate_facts_collapsed"] = 0
     cleaned["carry_duplicate_facts_dropped"] = 0
+    cleaned.pop(_STAGED_PAYLOAD_PENDING_FLUSH_KEY, None)
     for key in (
         "root_chunks",
         "split_events",
@@ -3895,6 +3930,8 @@ def _stage_semantic_buffer_payload(
     staged_state["semantic_buffer_prior_tokens"] = 0
     staged_state["semantic_buffer_tail_tokens"] = 0
     staged_state["transcript_path"] = transcript_path
+    if staged_state_has_payload(staged_state):
+        staged_state[_STAGED_PAYLOAD_PENDING_FLUSH_KEY] = True
     write_rolling_state(session_id, staged_state)
     write_rolling_metric(
         "rolling_stage",
@@ -4912,9 +4949,9 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             session_id,
             lock_owner_key,
         )
-        # Dedup: if another signal for this session already exists in the queue,
-        # mark this one processed to prevent unbounded pile-up when orphan scan
-        # generates multiple redundant signals while a lock is held.
+        # Dedup only redundant rolling signals. Lifecycle and synthetic staged
+        # flushes are the publish trigger for durable rolling payloads; dropping
+        # them while the lock is unavailable can strand already-extracted facts.
         try:
             sig_dir = _signal_dir()
             current_path = signal_data.get("_signal_path", "")
@@ -4924,15 +4961,17 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                 try:
                     other = json.loads(f.read_text(encoding="utf-8"))
                     if other.get("session_id") == session_id:
-                        # Do not discard a compaction/reset/session_end signal just
-                        # because a rolling signal is already queued — these signals
-                        # must survive to flush staged facts once rolling completes
-                        # (B009; session_end added for FIFO ordering).
                         other_type = other.get("type", "")
-                        if signal_type in ("compaction", "reset", "session_end", "timeout") and other_type == "rolling":
+                        if signal_type != "rolling" or other_type != "rolling":
                             continue
-                        mark_signal_processed(signal_data)
-                        break
+                        other_meta = other.get("meta") if isinstance(other.get("meta"), dict) else {}
+                        other_source_key = _signal_meta_cursor_key(session_id, other_meta)
+                        other_path = str(other.get("transcript_path") or "").strip()
+                        if not other_source_key and other_path:
+                            other_source_key = _signal_source_cursor_key(session_id, other_path)
+                        if other_source_key == lock_owner_key:
+                            mark_signal_processed(signal_data)
+                            break
                 except (json.JSONDecodeError, OSError):
                     pass
         except Exception:
@@ -7005,6 +7044,34 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
                 session_id=session_id,
                 scanner="idle",
             ):
+                continue
+            if has_staged_payload and bool(rolling.get(_STAGED_PAYLOAD_PENDING_FLUSH_KEY)):
+                logger.warning(
+                    "session %s has staged rolling payload without a pending flush signal; regenerating rolling_stage_flush",
+                    session_id,
+                )
+                write_signal(
+                    signal_type="session_end",
+                    session_id=session_id,
+                    transcript_path=transcript_path,
+                    meta={
+                        "reason": "rolling_stage_flush",
+                        "source_signal": "rolling",
+                        "staged_payload_sweep": True,
+                        "recovered_missing_flush": True,
+                        "source_cursor_key": source_key,
+                        "buffered_line_offset": int(
+                            rolling.get("buffered_line_offset", cursor_offset) or cursor_offset
+                        ),
+                        "flush_staged_payload_only": bool(_semantic_buffer_has_content(rolling)),
+                    },
+                )
+                _remember_queued_source_signal(
+                    pending_session_ids=pending_session_ids,
+                    pending_source_keys=pending_source_keys,
+                    session_id=session_id,
+                    source_key=source_key,
+                )
                 continue
             newer_session_exists = any(
                 float(other["mtime"]) > mtime and str(other["session_id"]) != session_id
