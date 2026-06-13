@@ -2505,6 +2505,8 @@ def read_rolling_state(session_id: str) -> Dict[str, Any]:
     try:
         data = json.loads(state_path.read_text(encoding="utf-8"))
     except Exception:
+        if _fail_hard_enabled():
+            raise
         logger.warning("rolling state read failed for %s; resetting staged state", session_id)
         return {
             "session_id": session_id,
@@ -7198,8 +7200,10 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
             has_semantic_buffer = _semantic_buffer_has_content(rolling)
             buffered_line_offset = int(rolling.get("buffered_line_offset", cursor_offset) or 0)
             semantic_buffer_at_end = bool(has_semantic_buffer and total_lines <= max(buffered_line_offset, cursor_offset))
-        except Exception:
-            pass
+        except Exception as exc:
+            if _fail_hard_enabled():
+                raise
+            logger.warning("rolling state read failed during idle scan for %s: %s", session_id, exc)
         has_flushable_rolling_content = bool(
             has_staged_payload or (has_semantic_buffer and (cursor_at_end or semantic_buffer_at_end))
         )

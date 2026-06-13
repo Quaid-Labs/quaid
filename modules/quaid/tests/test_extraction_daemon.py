@@ -7225,6 +7225,74 @@ class TestCheckIdleSessions:
         )
         return state_file
 
+    def test_read_rolling_state_raises_corrupt_state_when_fail_hard(self, monkeypatch, tmp_path):
+        instance_id = os.environ.get("QUAID_INSTANCE", "pytest-runner")
+        rolling_dir = tmp_path / "instances" / instance_id / "data" / "rolling-extraction"
+        rolling_dir.mkdir(parents=True, exist_ok=True)
+        (rolling_dir / "sess-corrupt.json").write_text("{not-json", encoding="utf-8")
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: True)
+
+        with pytest.raises(json.JSONDecodeError):
+            extraction_daemon.read_rolling_state("sess-corrupt")
+
+    def test_check_idle_sessions_logs_rolling_state_read_failure(self, monkeypatch, tmp_path, caplog):
+        instance_id = os.environ.get("QUAID_INSTANCE", "pytest-runner")
+        transcript_path = tmp_path / "idle-corrupt-state.jsonl"
+        transcript_path.write_text(
+            '{"role":"user","content":"staged payload needs a visible read failure"}\n',
+            encoding="utf-8",
+        )
+        self._setup_cursor(tmp_path, instance_id, "sess-corrupt-state", 1, transcript_path)
+        self._setup_rolling_state(
+            tmp_path,
+            instance_id,
+            "sess-corrupt-state",
+            [{"text": "staged fact", "category": "fact"}],
+            transcript_path,
+        )
+
+        now = 1_700_000_000.0
+        os.utime(transcript_path, (now - 3600, now - 3600))
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setattr(extraction_daemon.time, "time", lambda: now)
+        monkeypatch.setattr(extraction_daemon, "_read_installed_at", lambda: now - 7200)
+        monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
+        monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: False)
+        monkeypatch.setattr(extraction_daemon, "read_rolling_state", lambda _sid: (_ for _ in ()).throw(
+            OSError("rolling state unavailable")
+        ))
+
+        with caplog.at_level("WARNING", logger="quaid.daemon"):
+            extraction_daemon.check_idle_sessions(timeout_minutes=30)
+
+        assert "rolling state read failed during idle scan for sess-corrupt-state" in caplog.text
+        assert "rolling state unavailable" in caplog.text
+
+    def test_check_idle_sessions_raises_rolling_state_failure_when_fail_hard(self, monkeypatch, tmp_path):
+        instance_id = os.environ.get("QUAID_INSTANCE", "pytest-runner")
+        transcript_path = tmp_path / "idle-failhard-state.jsonl"
+        transcript_path.write_text(
+            '{"role":"user","content":"failHard should not hide idle rolling read failures"}\n',
+            encoding="utf-8",
+        )
+        self._setup_cursor(tmp_path, instance_id, "sess-failhard-state", 1, transcript_path)
+
+        now = 1_700_000_000.0
+        os.utime(transcript_path, (now - 3600, now - 3600))
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setattr(extraction_daemon.time, "time", lambda: now)
+        monkeypatch.setattr(extraction_daemon, "_read_installed_at", lambda: now - 7200)
+        monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
+        monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: True)
+        monkeypatch.setattr(extraction_daemon, "read_rolling_state", lambda _sid: (_ for _ in ()).throw(
+            OSError("rolling state unavailable")
+        ))
+
+        with pytest.raises(OSError, match="rolling state unavailable"):
+            extraction_daemon.check_idle_sessions(timeout_minutes=30)
+
     def test_skips_session_when_transcript_file_missing(self, monkeypatch, tmp_path):
         """check_idle_sessions must skip cursors pointing to non-existent transcripts."""
         instance_id = os.environ.get("QUAID_INSTANCE", "pytest-runner")
