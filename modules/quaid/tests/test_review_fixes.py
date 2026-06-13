@@ -200,6 +200,39 @@ class TestJanitorLockRetry:
         assert len(wait_calls) == 1
         assert wait_calls[0] == 5  # 5 second wait
 
+    def test_retry_survives_legacy_thirty_second_window(self, monkeypatch):
+        from core.lifecycle import janitor
+
+        attempt_count = 0
+
+        def mock_acquire():
+            nonlocal attempt_count
+            attempt_count += 1
+            return attempt_count >= 8
+
+        wait_calls = []
+        import threading
+
+        def mock_event_wait(self, timeout=None):
+            wait_calls.append(timeout)
+
+        monkeypatch.setattr(janitor, "_acquire_lock", mock_acquire)
+        monkeypatch.setattr(janitor, "_release_lock", lambda: None)
+        monkeypatch.setattr(janitor, "_refresh_runtime_state", lambda: None)
+        monkeypatch.setattr(janitor, "set_token_budget", lambda _: None)
+        monkeypatch.setattr(janitor, "reset_token_budget", lambda: None)
+        monkeypatch.setattr(
+            janitor,
+            "_run_task_optimized_inner",
+            lambda *a, **kw: {"success": True},
+        )
+        monkeypatch.setattr(threading.Event, "wait", mock_event_wait)
+
+        result = janitor.run_task_optimized("all", dry_run=True)
+        assert result.get("success") is True
+        assert attempt_count == 8
+        assert len(wait_calls) == 7
+
 
 # ---------------------------------------------------------------------------
 # Project-docs stale-doc indexer

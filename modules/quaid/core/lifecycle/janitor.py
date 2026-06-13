@@ -424,6 +424,56 @@ def _lock_file_path() -> Path:
     return _data_dir() / ".janitor.lock"
 _lock_fd = None  # File descriptor for flock-based locking
 _lock_guard = threading.Lock()
+_LOCK_RETRY_SECONDS = 5.0
+_LOCK_WAIT_SECONDS = 30 * 60
+
+
+def _janitor_lock_wait_seconds() -> float:
+    """Return how long a direct janitor run should wait for an active janitor."""
+    raw = str(os.environ.get("QUAID_JANITOR_LOCK_WAIT_SECONDS", "") or "").strip()
+    if not raw:
+        return float(_LOCK_WAIT_SECONDS)
+    try:
+        return max(0.0, float(raw))
+    except ValueError as exc:
+        janitor_logger.warn("invalid_janitor_lock_wait_seconds", value=raw)
+        if is_fail_hard_enabled():
+            raise RuntimeError("Invalid QUAID_JANITOR_LOCK_WAIT_SECONDS") from exc
+        return float(_LOCK_WAIT_SECONDS)
+
+
+def _pid_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except Exception:
+        # Unknown PID probe failures should not cause lock stealing.
+        return True
+
+
+def _lock_owner_summary() -> str:
+    """Best-effort lock metadata for wait diagnostics; flock remains authoritative."""
+    try:
+        lines = _lock_file_path().read_text(encoding="utf-8").splitlines()
+    except Exception:
+        return ""
+    if not lines:
+        return ""
+    try:
+        pid = int(str(lines[0]).strip())
+    except ValueError:
+        return "owner_pid=unknown"
+    started = str(lines[1]).strip() if len(lines) > 1 else ""
+    status = "alive" if _pid_alive(pid) else "dead"
+    if started:
+        return f"owner_pid={pid} owner_status={status} started_at={started}"
+    return f"owner_pid={pid} owner_status={status}"
 
 
 def _acquire_lock() -> bool:
@@ -602,16 +652,26 @@ def run_task_optimized(task: str, dry_run: bool = True, incremental: bool = True
         set_token_budget(token_budget)
     else:
         reset_token_budget()
-    # Prevent concurrent janitor runs; retry up to 30s in case a prior run is finishing.
+    # Prevent concurrent janitor runs. Real apply/journal runs can take minutes;
+    # keep waiting for the existing flock instead of making normal overlap fatal.
     # Uses threading.Event().wait() instead of time.sleep() so the wait is
     # interruptible by signals and other threads.
     if not _acquire_lock():
-        _wait_secs = 5
-        _max_attempts = 6
+        lock_wait_seconds = _janitor_lock_wait_seconds()
+        deadline = time.monotonic() + lock_wait_seconds
         _interrupt = threading.Event()
-        for _attempt in range(_max_attempts):
-            print(f"  Another janitor is running; waiting {_wait_secs}s (attempt {_attempt + 1}/{_max_attempts})...")
-            _interrupt.wait(timeout=_wait_secs)
+        attempt = 0
+        while time.monotonic() < deadline:
+            attempt += 1
+            wait_secs = min(_LOCK_RETRY_SECONDS, max(0.0, deadline - time.monotonic()))
+            owner = _lock_owner_summary()
+            owner_suffix = f" ({owner})" if owner else ""
+            print(
+                "  Another janitor is running; waiting "
+                f"{wait_secs:.1f}s (attempt {attempt}, timeout {lock_wait_seconds:.1f}s)"
+                f"{owner_suffix}..."
+            )
+            _interrupt.wait(timeout=wait_secs)
             if _acquire_lock():
                 break
         else:
