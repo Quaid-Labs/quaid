@@ -1574,6 +1574,49 @@ class TestClaudeCodeAdapter:
         assert state["status"] == "cannot_install"
         assert "requires claude" in state["reason"]
 
+    def test_get_llm_provider_raises_config_failure_when_failhard_enabled(
+        self, monkeypatch
+    ):
+        from adaptors.claude_code import adapter as adapter_mod
+
+        adapter = ClaudeCodeAdapter()
+        monkeypatch.setattr(adapter_mod, "is_fail_hard_enabled", lambda: True)
+
+        with patch("config.get_config", side_effect=RuntimeError("bad config")):
+            with pytest.raises(RuntimeError, match="bad config"):
+                adapter.get_llm_provider()
+
+    def test_get_llm_provider_warns_and_falls_back_when_failhard_disabled(
+        self, monkeypatch, caplog
+    ):
+        from adaptors.claude_code import adapter as adapter_mod
+        from adaptors.claude_code.providers import ClaudeCodeOAuthLLMProvider
+
+        adapter = ClaudeCodeAdapter()
+        monkeypatch.setattr(adapter_mod, "is_fail_hard_enabled", lambda: False)
+
+        with patch("config.get_config", side_effect=RuntimeError("bad config")), caplog.at_level(
+            "WARNING"
+        ):
+            provider = adapter.get_llm_provider()
+
+        assert isinstance(provider, ClaudeCodeOAuthLLMProvider)
+        assert provider._deep_model is None
+        assert provider._fast_model is None
+        assert "failed to load Claude Code model config: bad config" in caplog.text
+
+    def test_get_llm_provider_preserves_explicit_empty_model_strings(self):
+        cfg = SimpleNamespace(
+            models=SimpleNamespace(deep_reasoning="", fast_reasoning="")
+        )
+        adapter = ClaudeCodeAdapter()
+
+        with patch("config.get_config", return_value=cfg):
+            provider = adapter.get_llm_provider()
+
+        assert provider._deep_model == ""
+        assert provider._fast_model == ""
+
     def test_get_discovery_sessions_dir_scopes_path_derived_instance_to_own_project(self, tmp_path, monkeypatch):
         sessions_root = tmp_path / ".claude" / "projects"
         original_dir = sessions_root / "-private-tmp-cc-livetest"

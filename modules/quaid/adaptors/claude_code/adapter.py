@@ -12,6 +12,7 @@ Uses CLI subcommands via the existing Bash tool + hooks for automation.
 """
 
 import json
+import logging
 import os
 import re
 import sys
@@ -27,6 +28,8 @@ from lib.agent_notice import (
 )
 from lib.fail_policy import is_fail_hard_enabled
 from lib.instance import _legacy_instance_slug_from_project_dir, instance_slug_from_project_dir
+
+logger = logging.getLogger(__name__)
 
 
 def _trace_m15(event: str, **fields) -> None:
@@ -885,9 +888,12 @@ class ClaudeCodeAdapter(QuaidAdapter):
         try:
             from config import get_config
             cfg = get_config()
-            deep = cfg.models.deep_reasoning or None
-            fast = cfg.models.fast_reasoning or None
-        except Exception:
+            deep = cfg.models.deep_reasoning
+            fast = cfg.models.fast_reasoning
+        except Exception as exc:
+            logger.warning("failed to load Claude Code model config: %s", exc)
+            if is_fail_hard_enabled():
+                raise
             deep = None
             fast = None
         return ClaudeCodeOAuthLLMProvider(deep_model=deep, fast_model=fast)
