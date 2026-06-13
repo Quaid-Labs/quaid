@@ -645,6 +645,7 @@ def test_stage_semantic_buffer_payload_uses_focused_extract_chunks(monkeypatch):
     assert calls[0]["chunk_tokens_override"] == 900
     assert calls[0]["llm_timeout_seconds"] == pytest.approx(120.0)
     assert calls[0]["llm_max_retries"] == 0
+    assert calls[0]["raise_on_llm_failure"] is True
 
 
 def test_daemon_extract_chunk_tokens_focuses_normal_rolling_windows():
@@ -14439,6 +14440,56 @@ class TestRollingExtraction:
 
 class TestProcessSignalRetryOnException:
     """process_signal() must not mark the signal processed when an exception occurs."""
+
+    def test_signal_file_preserved_when_daemon_extraction_empty_response_raises(self, monkeypatch, tmp_path):
+        from ingest import extract as extract_mod
+        from lib.adapter import reset_adapter, set_adapter
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
+        monkeypatch.setattr(extraction_daemon, "_get_owner_id", lambda: "owner-id")
+        monkeypatch.setattr(extraction_daemon, "_read_usage_totals", lambda: {})
+        monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: False)
+        monkeypatch.setattr(extraction_daemon, "_session_has_harvestable_subagents", lambda *args, **kwargs: False)
+        monkeypatch.setattr(extraction_daemon, "_request_session_logs_ingest", lambda **_kwargs: {"status": "indexed"})
+
+        transcript_path = tmp_path / "provider-timeout-session.jsonl"
+        transcript_path.write_text(
+            '{"role":"user","content":"The provider timeout retry fact is blue-spindle."}\n',
+            encoding="utf-8",
+        )
+        extraction_daemon.write_cursor("sess-provider-timeout", 0, str(transcript_path))
+
+        class _Adapter(_OwnedTestAdapterMixin):
+            def parse_session_jsonl(self, path):
+                _ = path
+                return "User: The provider timeout retry fact is blue-spindle."
+
+        calls = []
+        marked = []
+
+        def _raise_empty_response(*_args, **kwargs):
+            calls.append(kwargs)
+            assert kwargs["raise_on_llm_failure"] is True
+            raise RuntimeError("Deep Reasoning returned no response")
+
+        monkeypatch.setattr(extract_mod, "extract_from_transcript", _raise_empty_response)
+        monkeypatch.setattr(extraction_daemon, "mark_signal_processed", lambda sig: marked.append(sig))
+
+        set_adapter(_Adapter())
+        try:
+            sig_path = extraction_daemon.write_signal(
+                signal_type="session_end",
+                session_id="sess-provider-timeout",
+                transcript_path=str(transcript_path),
+            )
+            extraction_daemon.process_signal(extraction_daemon.read_pending_signals()[0])
+        finally:
+            reset_adapter()
+
+        assert calls
+        assert marked == []
+        assert sig_path.exists()
 
     def test_signal_file_preserved_when_process_signal_inner_raises(self, monkeypatch, tmp_path):
         """The signal file must remain intact if extraction raises partway through."""

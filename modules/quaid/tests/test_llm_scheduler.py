@@ -118,6 +118,28 @@ def test_scheduler_cancels_pending_on_worker_error():
         scheduler.shutdown(wait=False)
 
 
+def test_scheduler_serial_path_times_out_instead_of_blocking():
+    scheduler = GlobalLlmScheduler(max_workers=1)
+    started = []
+    try:
+        start = time.monotonic()
+        with pytest.raises(TimeoutError, match="Serial map timed out"):
+            scheduler.run_map(
+                workload_key="test.serial_timeout",
+                items=[1],
+                fn=lambda item: started.append(item) or time.sleep(0.2),
+                configured_workers=1,
+                requested_workers=1,
+                timeout_seconds=0.01,
+                timeout_retries=0,
+            )
+        assert time.monotonic() - start < 0.15
+        assert started == [1]
+        assert scheduler._caps["test.serial_timeout"] == 1
+    finally:
+        scheduler.shutdown(wait=False)
+
+
 def test_scheduler_backoff_is_scoped_per_workload():
     scheduler = GlobalLlmScheduler(max_workers=8)
     try:

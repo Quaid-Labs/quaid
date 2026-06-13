@@ -87,9 +87,9 @@ class GlobalLlmScheduler:
         if not seq:
             return []
 
-        # Acquire a platform-level slot before submitting work to the executor.
-        # This bounds total concurrent LLM calls across all instances sharing the
-        # same API credentials. Non-fatal: if no platform client, proceed normally.
+        # Acquire one platform-level slot for this run_map invocation. The local
+        # scheduler still owns in-process worker fanout; this is not a per-worker
+        # lease. Non-fatal: if no platform client, proceed normally.
         _platform_client = get_platform_scheduler_client_for_current_instance()
         if _platform_client is not None:
             try:
@@ -133,6 +133,7 @@ class GlobalLlmScheduler:
         timeout_retries: int = 1,
     ) -> List[Any]:
         configured = max(1, min(int(configured_workers), self._max_workers))
+        timeout = max(0.001, float(timeout_seconds))
         worker_count = self._resolve_start_workers(
             workload_key=workload_key,
             configured_workers=configured,
@@ -140,11 +141,14 @@ class GlobalLlmScheduler:
             item_count=len(seq),
         )
         if worker_count <= 1:
-            out = [fn(item) for item in seq]
-            self._record_success(workload_key, configured, 1)
-            return out
+            return self._run_serial_with_timeout(
+                workload_key=workload_key,
+                seq=seq,
+                fn=fn,
+                configured_workers=configured,
+                timeout_seconds=timeout,
+            )
 
-        timeout = max(0.001, float(timeout_seconds))
         retries_left = max(0, int(timeout_retries))
         results: List[Any] = [None] * len(seq)
         remaining_indices = list(range(len(seq)))
@@ -155,9 +159,15 @@ class GlobalLlmScheduler:
                 return results
 
             if worker_count <= 1:
-                for idx in remaining_indices:
-                    results[idx] = fn(seq[idx])
-                self._record_success(workload_key, configured, 1)
+                serial_results = self._run_serial_with_timeout(
+                    workload_key=workload_key,
+                    seq=[seq[idx] for idx in remaining_indices],
+                    fn=fn,
+                    configured_workers=configured,
+                    timeout_seconds=timeout,
+                )
+                for idx, value in zip(remaining_indices, serial_results):
+                    results[idx] = value
                 return results
 
             deadline = time.monotonic() + timeout
@@ -243,6 +253,46 @@ class GlobalLlmScheduler:
             )
             worker_count = max(1, min(next_workers, len(remaining_indices)))
             retries_left -= 1
+
+    def _run_serial_with_timeout(
+        self,
+        *,
+        workload_key: str,
+        seq: List[Any],
+        fn: Callable[[Any], Any],
+        configured_workers: int,
+        timeout_seconds: float,
+    ) -> List[Any]:
+        timeout = max(0.001, float(timeout_seconds))
+        deadline = time.monotonic() + timeout
+        results: List[Any] = []
+        serial_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="quaid-llm-serial")
+        try:
+            for idx, item in enumerate(seq):
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    self._set_backoff_cap(workload_key, configured_workers, 1)
+                    raise TimeoutError(
+                        f"Serial map timed out after {timeout:.2f}s "
+                        f"(items={len(seq)}, item={idx + 1}, workload={workload_key})"
+                    )
+                fut = serial_executor.submit(fn, item)
+                try:
+                    results.append(fut.result(timeout=remaining))
+                except TimeoutError:
+                    fut.cancel()
+                    self._set_backoff_cap(workload_key, configured_workers, 1)
+                    raise TimeoutError(
+                        f"Serial map timed out after {timeout:.2f}s "
+                        f"(items={len(seq)}, item={idx + 1}, workload={workload_key})"
+                    )
+                except Exception:
+                    fut.cancel()
+                    raise
+            self._record_success(workload_key, configured_workers, 1)
+            return results
+        finally:
+            serial_executor.shutdown(wait=False, cancel_futures=True)
 
 
 _SCHEDULER: Optional[GlobalLlmScheduler] = None

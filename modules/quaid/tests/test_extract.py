@@ -605,6 +605,32 @@ class TestExtractFromTranscript:
 
         mock_llm.assert_not_called()
 
+    def test_capture_skip_patterns_config_failure_raises_under_failhard(self, monkeypatch):
+        from ingest.extract import extract_from_transcript
+
+        class _BrokenCapture:
+            enabled = True
+            chunk_tokens = 8000
+
+            @property
+            def skip_patterns(self):
+                raise RuntimeError("skip patterns broken")
+
+        cfg = SimpleNamespace(
+            capture=_BrokenCapture(),
+            retrieval=SimpleNamespace(domains={"personal": "Personal facts"}),
+            projects=SimpleNamespace(definitions={}),
+        )
+        monkeypatch.setattr("ingest.extract.get_config", lambda: cfg)
+
+        with patch("ingest.extract.is_fail_hard_enabled", return_value=True):
+            with pytest.raises(RuntimeError, match="Failed to load capture skip patterns"):
+                extract_from_transcript(
+                    transcript="User: I keep a brass postal scale on the desk.",
+                    owner_id="test",
+                    dry_run=True,
+                )
+
     @patch("ingest.extract.call_deep_reasoning")
     @patch("ingest.extract.get_config")
     def test_capture_disabled_skips_extraction(self, mock_get_config, mock_llm):
@@ -849,12 +875,40 @@ class TestExtractFromTranscript:
 
         mock_llm.return_value = (None, 1.0)
 
-        result = extract_from_transcript(
-            transcript="User: test\n\nAssistant: ok",
-            owner_id="test",
-        )
+        with patch("ingest.extract.is_fail_hard_enabled", return_value=False):
+            result = extract_from_transcript(
+                transcript="User: test\n\nAssistant: ok",
+                owner_id="test",
+            )
 
         assert result["facts_stored"] == 0
+
+    @patch("ingest.extract.call_deep_reasoning")
+    def test_no_response_raises_under_failhard(self, mock_llm):
+        from ingest.extract import extract_from_transcript
+
+        mock_llm.return_value = (None, 1.0)
+
+        with patch("ingest.extract.is_fail_hard_enabled", return_value=True):
+            with pytest.raises(RuntimeError, match="Deep Reasoning returned no response"):
+                extract_from_transcript(
+                    transcript="User: test\n\nAssistant: ok",
+                    owner_id="test",
+                )
+
+    @patch("ingest.extract.call_deep_reasoning")
+    def test_no_response_raises_when_daemon_retry_requested(self, mock_llm):
+        from ingest.extract import extract_from_transcript
+
+        mock_llm.return_value = (None, 1.0)
+
+        with patch("ingest.extract.is_fail_hard_enabled", return_value=False):
+            with pytest.raises(RuntimeError, match="Deep Reasoning returned no response"):
+                extract_from_transcript(
+                    transcript="User: test\n\nAssistant: ok",
+                    owner_id="test",
+                    raise_on_llm_failure=True,
+                )
 
     @patch("ingest.extract.call_deep_reasoning")
     def test_unparseable_response(self, mock_llm):
@@ -862,12 +916,26 @@ class TestExtractFromTranscript:
 
         mock_llm.return_value = ("This is not JSON at all", 1.0)
 
-        result = extract_from_transcript(
-            transcript="User: test\n\nAssistant: ok",
-            owner_id="test",
-        )
+        with patch("ingest.extract.is_fail_hard_enabled", return_value=False):
+            result = extract_from_transcript(
+                transcript="User: test\n\nAssistant: ok",
+                owner_id="test",
+            )
 
         assert result["facts_stored"] == 0
+
+    @patch("ingest.extract.call_deep_reasoning")
+    def test_unparseable_response_raises_under_failhard_after_repair_fails(self, mock_llm):
+        from ingest.extract import extract_from_transcript
+
+        mock_llm.return_value = ("This is not JSON at all", 1.0)
+
+        with patch("ingest.extract.is_fail_hard_enabled", return_value=True):
+            with pytest.raises(RuntimeError, match="empty or irreparable"):
+                extract_from_transcript(
+                    transcript="User: test\n\nAssistant: ok",
+                    owner_id="test",
+                )
 
     @patch("ingest.extract.call_deep_reasoning")
     @patch("ingest.extract._memory.store")
@@ -6742,6 +6810,45 @@ class TestExtractFromTranscript:
         assert mock_llm.call_args.kwargs["max_retries"] == 0
 
     @patch("lib.batch_utils.chunk_text_by_tokens")
+    @patch("ingest.extract._repair_non_json_extraction_payload")
+    @patch("ingest.extract.call_deep_reasoning")
+    def test_llm_timeout_and_retry_overrides_forward_to_split_children(self, mock_llm, mock_repair, mock_chunk):
+        from ingest.extract import extract_from_transcript
+
+        giant_chunk = "User: " + ("large context " * 20000)
+
+        def _chunk_side_effect(text, max_tokens, split_on):
+            if text == "dummy":
+                return [giant_chunk]
+            return [
+                "User: first child chunk",
+                "User: second child chunk",
+            ]
+
+        mock_chunk.side_effect = _chunk_side_effect
+        mock_repair.return_value = None
+        mock_llm.side_effect = [
+            ("not valid json", 0.4),
+            (json.dumps({"chunk_assessment": "nothing_usable", "facts": []}), 0.3),
+            (json.dumps({"chunk_assessment": "nothing_usable", "facts": []}), 0.2),
+        ]
+
+        result = extract_from_transcript(
+            transcript="dummy",
+            owner_id="test",
+            label="bounded-split-test",
+            dry_run=True,
+            llm_timeout_seconds=7.5,
+            llm_max_retries=0,
+        )
+
+        assert result["split_events"] == 1
+        assert mock_llm.call_count == 3
+        for call in mock_llm.call_args_list:
+            assert call.kwargs["timeout"] == pytest.approx(7.5)
+            assert call.kwargs["max_retries"] == 0
+
+    @patch("lib.batch_utils.chunk_text_by_tokens")
     @patch("ingest.extract.call_deep_reasoning")
     def test_chunk_tokens_override_controls_root_extraction_budget(self, mock_llm, mock_chunk):
         from ingest.extract import extract_from_transcript
@@ -6766,6 +6873,17 @@ class TestExtractFromTranscript:
         assert seen_budgets == [(1200, "\n\n")]
         assert result["chunks_total"] == 1
         assert mock_llm.call_count == 1
+
+    def test_invalid_chunk_tokens_override_raises_under_failhard(self):
+        from ingest.extract import extract_from_transcript
+
+        with patch("ingest.extract.is_fail_hard_enabled", return_value=True):
+            with pytest.raises(ValueError, match="Invalid chunk_tokens_override"):
+                extract_from_transcript(
+                    transcript="User: test",
+                    owner_id="test",
+                    chunk_tokens_override="bogus",
+                )
 
     @patch("lib.batch_utils.chunk_text_by_tokens")
     @patch("ingest.extract.call_deep_reasoning")

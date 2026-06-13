@@ -3826,6 +3826,7 @@ def _stage_semantic_buffer_payload(
         chunk_tokens_override=_daemon_extract_chunk_tokens(chunk_budget),
         llm_timeout_seconds=_daemon_extract_llm_timeout_seconds(),
         llm_max_retries=_daemon_extract_llm_max_retries(),
+        raise_on_llm_failure=True,
     )
     stage_embedding_stats = _warm_payload_embeddings(stage_result.get("raw_facts", []) or [])
     chunks_processed = int(stage_result.get("chunks_processed", 0) or 0)
@@ -6173,6 +6174,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                 chunk_tokens_override=_daemon_extract_chunk_tokens(chunk_budget),
                 llm_timeout_seconds=_daemon_extract_llm_timeout_seconds(),
                 llm_max_retries=_daemon_extract_llm_max_retries(),
+                raise_on_llm_failure=True,
             )
             chunks_processed = int(tail_result.get("chunks_processed", 0) or 0)
             chunks_total = int(tail_result.get("chunks_total", 0) or 0)
@@ -6244,6 +6246,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                     carry_facts=[],
                     llm_timeout_seconds=_daemon_extract_llm_timeout_seconds(),
                     llm_max_retries=_daemon_extract_llm_max_retries(),
+                    raise_on_llm_failure=True,
                 )
                 flush_payload = _append_payload_result(
                     flush_payload,

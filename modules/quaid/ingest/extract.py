@@ -2631,6 +2631,7 @@ def _extract_chunk_payloads(
     telemetry: Optional[Dict[str, Any]] = None,
     llm_timeout_seconds: Optional[float] = None,
     llm_max_retries: Optional[int] = None,
+    raise_on_llm_failure: bool = False,
 ) -> List[Dict[str, Any]]:
     """Extract a chunk, recursively splitting if the model cannot produce usable JSON."""
     if isinstance(telemetry, dict):
@@ -2662,6 +2663,10 @@ def _extract_chunk_payloads(
 
     if not response_text:
         logger.error("[extract] %s chunk %s: Deep Reasoning returned no response", label, chunk_label)
+        if raise_on_llm_failure or is_fail_hard_enabled():
+            raise RuntimeError(
+                f"[extract] {label} chunk {chunk_label}: Deep Reasoning returned no response"
+            )
         return []
 
     logger.info("[extract] %s chunk %s: Deep Reasoning responded in %.1fs", label, chunk_label, duration)
@@ -2790,6 +2795,9 @@ def _extract_chunk_payloads(
                         source_timestamp_hint=source_timestamp_hint,
                         split_depth=split_depth + 1,
                         telemetry=telemetry,
+                        llm_timeout_seconds=llm_timeout_seconds,
+                        llm_max_retries=llm_max_retries,
+                        raise_on_llm_failure=raise_on_llm_failure,
                     )
                 )
             return payloads
@@ -2797,11 +2805,22 @@ def _extract_chunk_payloads(
     if isinstance(telemetry, dict):
         telemetry["leaf_chunks"] = int(telemetry.get("leaf_chunks", 0) or 0) + 1
     if isinstance(parsed, dict):
-        telemetry["unclassified_empty_payloads"] = int(telemetry.get("unclassified_empty_payloads", 0) or 0) + 1
+        if isinstance(telemetry, dict):
+            telemetry["unclassified_empty_payloads"] = int(telemetry.get("unclassified_empty_payloads", 0) or 0) + 1
         logger.warning(
             "[extract] %s chunk %s: extraction payload empty after retries",
             label,
             chunk_label,
+        )
+    else:
+        logger.error(
+            "[extract] %s chunk %s: extraction payload irreparable after retries",
+            label,
+            chunk_label,
+        )
+    if not isinstance(parsed, dict) and (raise_on_llm_failure or is_fail_hard_enabled()):
+        raise RuntimeError(
+            f"[extract] {label} chunk {chunk_label}: extraction payload empty or irreparable after retries"
         )
     return []
 
@@ -3381,6 +3400,7 @@ def extract_from_transcript(
     wall_timeout_seconds: Optional[float] = None,
     llm_timeout_seconds: Optional[float] = None,
     llm_max_retries: Optional[int] = None,
+    raise_on_llm_failure: bool = False,
     memory_publish_mode: str = "direct",
     snippet_journal_write_mode: str = "direct",
 ) -> Dict[str, Any]:
@@ -3402,6 +3422,9 @@ def extract_from_transcript(
         llm_max_retries: Optional per-root-chunk LLM retry override. Runtime
             daemons use signal retry rather than holding source locks across
             provider retry loops.
+        raise_on_llm_failure: If True, empty or irreparable LLM responses raise
+            so daemon callers preserve the signal for retry instead of marking
+            the chunk as successfully empty.
         memory_publish_mode: MemoryDB publish routing mode ("direct" or "request").
         snippet_journal_write_mode: InsightDB snippet/journal routing mode
             ("direct" or "request").
@@ -3531,6 +3554,8 @@ def extract_from_transcript(
         if isinstance(raw_skip, list):
             capture_skip_patterns = [str(p) for p in raw_skip if str(p).strip()]
     except Exception as exc:
+        if is_fail_hard_enabled():
+            raise RuntimeError("Failed to load capture skip patterns") from exc
         logger.warning("[extract] capture config read failed; proceeding without skip patterns: %s", exc)
 
     transcript = _apply_capture_skip_patterns(transcript, capture_skip_patterns)
@@ -3571,7 +3596,14 @@ def extract_from_transcript(
     if chunk_tokens_override is not None:
         try:
             chunk_tokens = int(chunk_tokens_override or 0)
-        except Exception:
+        except Exception as exc:
+            if is_fail_hard_enabled():
+                raise ValueError(f"Invalid chunk_tokens_override: {chunk_tokens_override!r}") from exc
+            logger.warning(
+                "[extract] invalid chunk_tokens_override=%r; falling back to configured capture chunk budget: %s",
+                chunk_tokens_override,
+                exc,
+            )
             chunk_tokens = 0
         if chunk_tokens > 0:
             logger.debug("[extract] %s: using caller chunk token override=%d", label, chunk_tokens)
@@ -3627,6 +3659,7 @@ def extract_from_transcript(
             telemetry=telemetry,
             llm_timeout_seconds=effective_llm_timeout_seconds,
             llm_max_retries=effective_llm_max_retries,
+            raise_on_llm_failure=raise_on_llm_failure,
         )
 
     if parallel_root_workers > 1 and not carry_context_enabled and len(transcript_chunks) > 1:
