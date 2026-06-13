@@ -978,6 +978,66 @@ def test_save_changelog_uses_atomic_replace(tmp_path):
         assert mock_replace.call_count >= 1
 
 
+def test_update_doc_from_transcript_skips_partial_edit_blocks(tmp_path, monkeypatch):
+    with _adapter_patch(tmp_path) as iroot:
+        from datastore.docsdb import updater
+
+        doc = iroot / "docs" / "doc.md"
+        doc.parent.mkdir(parents=True, exist_ok=True)
+        doc.write_text("# Doc\n\nExisting line.\n", encoding="utf-8")
+
+        response = """<<<EDIT
+OLD: Existing line.
+NEW: Updated line.
+>>>
+<<<EDIT
+OLD: Missing line.
+NEW: Should not be written.
+>>>
+<<<SUMMARY: partial >>>"""
+
+        monkeypatch.setattr(updater, "call_deep_reasoning", lambda **_kwargs: (response, 0.1))
+        monkeypatch.setattr(updater, "is_fail_hard_enabled", lambda: False)
+
+        ok = updater.update_doc_from_transcript(
+            "docs/doc.md",
+            "test purpose",
+            "transcript",
+            dry_run=False,
+        )
+
+    assert ok is False
+    assert doc.read_text(encoding="utf-8") == "# Doc\n\nExisting line.\n"
+
+
+def test_update_doc_from_transcript_unmatched_edit_raises_when_fail_hard(tmp_path, monkeypatch):
+    with _adapter_patch(tmp_path) as iroot:
+        from datastore.docsdb import updater
+
+        doc = iroot / "docs" / "doc.md"
+        doc.parent.mkdir(parents=True, exist_ok=True)
+        doc.write_text("# Doc\n\nExisting line.\n", encoding="utf-8")
+
+        response = """<<<EDIT
+OLD: Missing line.
+NEW: Should not be written.
+>>>
+<<<SUMMARY: partial >>>"""
+
+        monkeypatch.setattr(updater, "call_deep_reasoning", lambda **_kwargs: (response, 0.1))
+        monkeypatch.setattr(updater, "is_fail_hard_enabled", lambda: True)
+
+        with pytest.raises(RuntimeError, match="unmatched edit blocks"):
+            updater.update_doc_from_transcript(
+                "docs/doc.md",
+                "test purpose",
+                "transcript",
+                dry_run=False,
+            )
+
+    assert doc.read_text(encoding="utf-8") == "# Doc\n\nExisting line.\n"
+
+
 class TestCmdUpdateStaleNeverIndexed:
     def test_update_doc_from_diffs_caps_total_diff_prompt(self, tmp_path, monkeypatch):
         with _adapter_patch(tmp_path) as iroot:

@@ -1466,8 +1466,17 @@ def update_doc_from_transcript(
                        dry_run, False, chars_before, 0)
         return False
 
-    updated_doc, applied = apply_edit_blocks(current_doc, edits)
+    updated_doc, applied, unmatched = apply_edit_blocks(current_doc, edits)
     chars_after = len(updated_doc)
+
+    if unmatched:
+        message = f"{unmatched} edit block(s) did not match doc content"
+        print(f"  WARNING: {message}")
+        if is_fail_hard_enabled():
+            raise RuntimeError(f"Docs update produced unmatched edit blocks for {doc_path}: {message}")
+        log_doc_update(doc_path, trigger, sources, message,
+                       dry_run, False, chars_before, chars_after)
+        return False
 
     if applied > 0:
         if dry_run:
@@ -1492,7 +1501,7 @@ def update_doc_from_transcript(
         return False
 
 
-def apply_edit_blocks(doc_text: str, edits: List[str]) -> Tuple[str, int]:
+def apply_edit_blocks(doc_text: str, edits: List[str]) -> Tuple[str, int, int]:
     """Apply <<<EDIT blocks to a document.
 
     Parses OLD:/NEW: pairs from each edit block and applies replacements.
@@ -1503,10 +1512,11 @@ def apply_edit_blocks(doc_text: str, edits: List[str]) -> Tuple[str, int]:
         edits: List of edit block strings (content between <<<EDIT and >>>).
 
     Returns:
-        (updated_doc, applied_count) tuple.
+        (updated_doc, applied_count, unmatched_count) tuple.
     """
     updated = doc_text
     applied = 0
+    unmatched = 0
 
     for edit_block in edits:
         lines = edit_block.strip().split('\n')
@@ -1533,8 +1543,10 @@ def apply_edit_blocks(doc_text: str, edits: List[str]) -> Tuple[str, int]:
         elif old_text and new_text and old_text in updated:
             updated = updated.replace(old_text, new_text, 1)
             applied += 1
+        else:
+            unmatched += 1
 
-    return updated, applied
+    return updated, applied, unmatched
 
 
 def cmd_check(json_output: bool = False) -> Dict[str, StalenessInfo]:
