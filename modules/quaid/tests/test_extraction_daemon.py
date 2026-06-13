@@ -4166,6 +4166,28 @@ def test_count_transcript_lines_raises_on_stat_error_when_fail_hard(monkeypatch)
         extraction_daemon.count_transcript_lines("/tmp/unreadable-session.jsonl")
 
 
+def test_read_transcript_slice_raises_read_error_under_failhard(monkeypatch):
+    def _raise_permission_error(*_args, **_kwargs):
+        raise PermissionError("slice denied")
+
+    monkeypatch.setattr(extraction_daemon, "open", _raise_permission_error, raising=False)
+    monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: True)
+
+    with pytest.raises(PermissionError, match="slice denied"):
+        extraction_daemon.read_transcript_slice("/tmp/unreadable-session.jsonl", 0)
+
+
+def test_read_transcript_token_window_raises_read_error_under_failhard(monkeypatch):
+    def _raise_permission_error(*_args, **_kwargs):
+        raise PermissionError("token denied")
+
+    monkeypatch.setattr(extraction_daemon, "open", _raise_permission_error, raising=False)
+    monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: True)
+
+    with pytest.raises(PermissionError, match="token denied"):
+        extraction_daemon.read_transcript_token_window("/tmp/unreadable-session.jsonl", 0, 100)
+
+
 def test_check_idle_sessions_skips_transcripts_older_than_installed_at(monkeypatch, tmp_path):
     transcript_path = tmp_path / "session.jsonl"
     transcript_path.write_text('{"role":"user","content":"hello"}\n{"role":"assistant","content":"hi"}\n', encoding="utf-8")
@@ -6817,6 +6839,22 @@ class TestCursorRoundTrip:
 
         result = extraction_daemon.read_cursor("sess-rebase", source_key=source_key)
         assert result["line_offset"] == 0
+
+    def test_write_cursor_raises_write_failure_under_failhard(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
+        monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: True)
+
+        transcript_path = tmp_path / "session.jsonl"
+        transcript_path.write_text('{"role":"user","content":"one"}\n', encoding="utf-8")
+
+        def _raise_atomic_write(_path, _text):
+            raise OSError("cursor disk full")
+
+        monkeypatch.setattr(extraction_daemon, "_atomic_write", _raise_atomic_write)
+
+        with pytest.raises(OSError, match="cursor disk full"):
+            extraction_daemon.write_cursor("sess-write-fail", 1, str(transcript_path))
 
     def test_cursor_file_is_per_session(self, monkeypatch, tmp_path):
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))

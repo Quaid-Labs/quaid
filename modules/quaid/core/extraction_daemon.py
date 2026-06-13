@@ -1514,6 +1514,8 @@ def write_cursor(
     try:
         _atomic_write(cursor_file, json.dumps(payload))
     except OSError as e:
+        if _fail_hard_enabled():
+            raise
         logger.error("cursor write failed for %s: %s", session_id, e)
         return
     # Migration cleanup: when writing source-keyed cursors, retire stale legacy
@@ -3655,6 +3657,8 @@ def read_transcript_slice(transcript_path: str, from_line: int) -> List[str]:
                         )
                         break
     except OSError as e:
+        if _should_raise_transcript_stat_error(transcript_path, e):
+            raise
         logger.error("failed reading transcript %s: %s", transcript_path, e)
     return lines
 
@@ -4293,6 +4297,8 @@ def read_transcript_token_window(
                     )
                     break
     except OSError as e:
+        if _should_raise_transcript_stat_error(transcript_path, e):
+            raise
         logger.error("failed reading token window %s: %s", transcript_path, e)
     return lines
 
