@@ -1368,7 +1368,7 @@ def _fail_hard_enabled() -> bool:
 
         return bool(is_fail_hard_enabled())
     except ImportError:
-        return False
+        return True
 
 
 def _is_daemon_rolling_transcript_snapshot_path(transcript_path: str) -> bool:

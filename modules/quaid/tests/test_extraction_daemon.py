@@ -1,3 +1,4 @@
+import builtins
 import json
 import os
 import pathlib
@@ -4478,6 +4479,19 @@ def test_read_transcript_token_window_raises_read_error_under_failhard(monkeypat
 
     with pytest.raises(PermissionError, match="token denied"):
         extraction_daemon.read_transcript_token_window("/tmp/unreadable-session.jsonl", 0, 100)
+
+
+def test_fail_hard_wrapper_fails_closed_on_import_error(monkeypatch):
+    original_import = __import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "lib.fail_policy":
+            raise ImportError("missing fail policy")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+
+    assert extraction_daemon._fail_hard_enabled() is True
 
 
 def test_check_idle_sessions_skips_transcripts_older_than_installed_at(monkeypatch, tmp_path):
