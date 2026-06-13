@@ -15563,6 +15563,65 @@ class TestProcessSignalRetryOnException:
 
         assert reloaded == []
 
+    def test_process_signal_preserves_pending_staged_flush_when_real_lifecycle_runs(
+        self, monkeypatch, tmp_path
+    ):
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
+
+        transcript = tmp_path / "session.jsonl"
+        transcript.write_text('{"role":"user","content":"hello"}\n', encoding="utf-8")
+        extraction_daemon.write_cursor(
+            "sess-staged-flush-preserved",
+            1,
+            str(transcript),
+        )
+        real_signal = extraction_daemon.write_signal(
+            signal_type="session_end",
+            session_id="sess-staged-flush-preserved",
+            transcript_path=str(transcript),
+            meta={"reason": "real_lifecycle"},
+        )
+        staged_flush_signal = extraction_daemon.write_signal(
+            signal_type="session_end",
+            session_id="sess-staged-flush-preserved",
+            transcript_path=str(transcript),
+            meta={
+                "reason": "rolling_stage_flush",
+                "source_signal": "rolling",
+                "staged_payload_sweep": True,
+            },
+        )
+
+        marked = []
+        monkeypatch.setattr(
+            extraction_daemon,
+            "_cursor_or_adapter_owns_transcript_path",
+            lambda *_args, **_kwargs: True,
+        )
+        monkeypatch.setattr(
+            extraction_daemon,
+            "_request_session_logs_ingest",
+            lambda **_kwargs: {"status": "indexed"},
+        )
+        monkeypatch.setattr(
+            extraction_daemon,
+            "_get_owner_id",
+            lambda: "owner-id",
+        )
+        monkeypatch.setattr(
+            extraction_daemon,
+            "mark_signal_processed",
+            lambda signal_data: marked.append(Path(signal_data.get("_signal_path") or "")),
+        )
+
+        signal_data = json.loads(real_signal.read_text(encoding="utf-8"))
+        signal_data["_signal_path"] = str(real_signal)
+        extraction_daemon.process_signal(signal_data)
+
+        assert staged_flush_signal.exists()
+        assert Path(staged_flush_signal) not in marked
+
     def test_signal_file_preserved_when_daemon_extraction_empty_response_raises(self, monkeypatch, tmp_path):
         from ingest import extract as extract_mod
         from lib.adapter import reset_adapter, set_adapter

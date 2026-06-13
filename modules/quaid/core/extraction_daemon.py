@@ -5265,6 +5265,15 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                         continue
                     _dup_meta = _dup.get("meta") if isinstance(_dup.get("meta"), dict) else {}
                     if (
+                        not staged_payload_sweep_signal
+                        and _is_staged_payload_flush_signal_meta(_dup_meta)
+                    ):
+                        # Synthetic rolling flushes are the only durable publish
+                        # trigger for already-staged payloads. A real lifecycle
+                        # signal may drain tail content, but it must not consume
+                        # the staged-payload flush before it publishes.
+                        continue
+                    if (
                         staged_payload_sweep_signal
                         and _semantic_buffer_has_content(staged_state)
                         and _dup.get("type") in ("session_end", "reset", "compaction", "timeout")
