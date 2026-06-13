@@ -459,6 +459,61 @@ class TestMtimePersistence:
 
         assert mock_flock.call_count >= 2
 
+    def test_save_mtimes_truncates_only_after_lock(self, tmp_path):
+        import builtins
+
+        from core.lifecycle.workspace_audit import save_mtimes
+
+        operations = []
+        real_open = builtins.open
+
+        class _TrackedFile:
+            def __init__(self, wrapped):
+                self._wrapped = wrapped
+
+            def __enter__(self):
+                self._wrapped.__enter__()
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return self._wrapped.__exit__(exc_type, exc, tb)
+
+            def fileno(self):
+                return self._wrapped.fileno()
+
+            def seek(self, *args, **kwargs):
+                operations.append("seek")
+                return self._wrapped.seek(*args, **kwargs)
+
+            def truncate(self, *args, **kwargs):
+                operations.append("truncate")
+                return self._wrapped.truncate(*args, **kwargs)
+
+            def __getattr__(self, name):
+                return getattr(self._wrapped, name)
+
+        def _tracked_open(path, mode="r", *args, **kwargs):
+            opened = real_open(path, mode, *args, **kwargs)
+            if str(path).endswith("workspace-mtimes.json"):
+                operations.append(f"open:{mode}")
+                return _TrackedFile(opened)
+            return opened
+
+        def _flock(_fd, mode):
+            import fcntl
+
+            if mode & fcntl.LOCK_EX:
+                operations.append("lock")
+            elif mode & fcntl.LOCK_UN:
+                operations.append("unlock")
+
+        with _adapter_patch(tmp_path), \
+             patch("core.lifecycle.workspace_audit.open", _tracked_open, create=True), \
+             patch("core.lifecycle.workspace_audit.fcntl.flock", _flock):
+            save_mtimes({"A.md": 123.0})
+
+        assert operations[:4] == ["open:a+", "lock", "seek", "truncate"]
+
 
 class TestReviewDecisionApplyLocking:
     def test_apply_review_decisions_locks_file_transaction(self, tmp_path):

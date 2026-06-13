@@ -460,9 +460,11 @@ def load_last_mtimes() -> Dict[str, float]:
 def save_mtimes(mtimes: Dict[str, float]):
     """Save current modification times."""
     _data_dir().mkdir(parents=True, exist_ok=True)
-    with open(_mtime_tracker(), "w", encoding="utf-8") as f:
+    with open(_mtime_tracker(), "a+", encoding="utf-8") as f:
         fcntl.flock(f.fileno(), fcntl.LOCK_EX)
         try:
+            f.seek(0)
+            f.truncate(0)
             json.dump({
                 "mtimes": mtimes,
                 "updated_at": datetime.now().isoformat()
