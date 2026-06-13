@@ -33,6 +33,7 @@ import json
 import logging
 import os
 import re
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -838,6 +839,13 @@ def _resolve_path(relative: str) -> Path:
     return path
 
 
+def _missing_doc_registry_table(exc: BaseException) -> bool:
+    return (
+        isinstance(exc, sqlite3.OperationalError)
+        and "no such table: doc_registry" in str(exc).lower()
+    )
+
+
 def check_staleness(project: Optional[str] = None) -> Dict[str, StalenessInfo]:
     """Check which docs are stale relative to their source files.
 
@@ -864,7 +872,7 @@ def check_staleness(project: Optional[str] = None) -> Dict[str, StalenessInfo]:
         for doc_path, sources in registry_mappings.items():
             doc_to_sources[doc_path] = sources
     except Exception as exc:
-        if is_fail_hard_enabled():
+        if is_fail_hard_enabled() and not _missing_doc_registry_table(exc):
             raise RuntimeError("Failed to load docs registry source mappings") from exc
         logger.warning("Falling back to config source mappings; registry mappings unavailable: %s", exc)
 

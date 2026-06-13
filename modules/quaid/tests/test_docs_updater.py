@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 import sys
 import os
 import json
+import sqlite3
 import tempfile
 import threading
 from pathlib import Path
@@ -217,6 +218,36 @@ class TestCheckStaleness:
 
             with pytest.raises(RuntimeError, match="Failed to load docs registry source mappings"):
                 updater.check_staleness()
+
+    def test_missing_registry_table_falls_back_to_config_when_fail_hard(self, tmp_path, monkeypatch):
+        cfg = _make_test_config(
+            source_mapping={"src.py": {"docs": ["docs/doc.md"]}},
+        )
+        with patch("datastore.docsdb.updater.get_config", return_value=cfg), \
+             _adapter_patch(tmp_path) as iroot:
+            from datastore.docsdb import updater
+
+            doc_file = iroot / "docs" / "doc.md"
+            doc_file.parent.mkdir(parents=True)
+            doc_file.write_text("old doc content")
+
+            import time
+            time.sleep(0.05)
+
+            src_file = iroot / "src.py"
+            src_file.write_text("updated source")
+
+            class _MissingTableRegistry:
+                def get_source_mappings(self, project=None):
+                    raise sqlite3.OperationalError("no such table: doc_registry")
+
+            monkeypatch.setattr("datastore.docsdb.registry.DocsRegistry", lambda: _MissingTableRegistry())
+            monkeypatch.setattr(updater, "is_fail_hard_enabled", lambda: True)
+
+            stale = updater.check_staleness()
+
+        assert "docs/doc.md" in stale
+        assert "src.py" in stale["docs/doc.md"].stale_sources
 
 
 class TestMapSourcesToDocs:
