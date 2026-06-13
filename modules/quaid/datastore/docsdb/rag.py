@@ -1063,7 +1063,14 @@ class DocsRAG:
         except sqlite3.OperationalError as exc:
             if "no such table: doc_chunks" in str(exc).lower():
                 return {file_path: True for file_path in requested_files}
-            raise
+            if is_fail_hard_enabled():
+                raise RuntimeError("Failed to query docs index staleness") from exc
+            logger.warning(
+                "Failed to query docs index staleness; skipping reindex for %d file(s): %s",
+                len(requested_files),
+                exc,
+            )
+            return {file_path: False for file_path in requested_files}
 
         result: Dict[str, bool] = {}
         for file_path in requested_files:
@@ -1081,8 +1088,10 @@ class DocsRAG:
         try:
             return self.needs_reindex_many([file_path]).get(file_path, True)
         except Exception as e:
+            if is_fail_hard_enabled():
+                raise RuntimeError(f"Error checking if {file_path} needs reindex") from e
             logger.warning("Error checking if %s needs reindex: %s", file_path, e)
-            return True  # When in doubt, reindex
+            return False
 
     def _is_archive_log(self, file_path: str) -> bool:
         """Check if a file is an archived log (e.g. projects/myapp/log/2026-01.log)."""

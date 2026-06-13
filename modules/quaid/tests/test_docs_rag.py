@@ -179,6 +179,74 @@ class TestNeedsReindex:
             str(second): True,
         }
 
+    def test_needs_reindex_many_skips_reindex_on_lookup_failure_when_fail_open(self, tmp_path, caplog):
+        rag = _make_rag(tmp_path)
+        first = tmp_path / "first.md"
+        second = tmp_path / "second.md"
+        first.write_text("# First\nContent.")
+        second.write_text("# Second\nContent.")
+
+        class BrokenConn:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def execute(self, *_args, **_kwargs):
+                raise sqlite3.OperationalError("database is locked")
+
+        caplog.set_level("WARNING")
+        with patch("datastore.docsdb.rag._lib_get_connection", return_value=BrokenConn()), \
+             patch("datastore.docsdb.rag.is_fail_hard_enabled", return_value=False):
+            result = rag.needs_reindex_many([str(first), str(second)])
+
+        assert result == {
+            str(first): False,
+            str(second): False,
+        }
+        assert "Failed to query docs index staleness" in caplog.text
+
+    def test_needs_reindex_many_raises_on_lookup_failure_when_failhard(self, tmp_path):
+        rag = _make_rag(tmp_path)
+        test_file = tmp_path / "first.md"
+        test_file.write_text("# First\nContent.")
+
+        class BrokenConn:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def execute(self, *_args, **_kwargs):
+                raise sqlite3.OperationalError("database is locked")
+
+        with patch("datastore.docsdb.rag._lib_get_connection", return_value=BrokenConn()), \
+             patch("datastore.docsdb.rag.is_fail_hard_enabled", return_value=True), \
+             pytest.raises(RuntimeError, match="Failed to query docs index staleness"):
+            rag.needs_reindex_many([str(test_file)])
+
+    def test_needs_reindex_wrapper_skips_reindex_on_unexpected_failure_when_fail_open(self, tmp_path, caplog):
+        rag = _make_rag(tmp_path)
+        test_file = tmp_path / "first.md"
+
+        caplog.set_level("WARNING")
+        with patch.object(rag, "needs_reindex_many", side_effect=ValueError("bad timestamp")), \
+             patch("datastore.docsdb.rag.is_fail_hard_enabled", return_value=False):
+            assert rag.needs_reindex(str(test_file)) is False
+
+        assert "Error checking if" in caplog.text
+
+    def test_needs_reindex_wrapper_raises_on_unexpected_failure_when_failhard(self, tmp_path):
+        rag = _make_rag(tmp_path)
+        test_file = tmp_path / "first.md"
+
+        with patch.object(rag, "needs_reindex_many", side_effect=ValueError("bad timestamp")), \
+             patch("datastore.docsdb.rag.is_fail_hard_enabled", return_value=True), \
+             pytest.raises(RuntimeError, match="needs reindex"):
+            rag.needs_reindex(str(test_file))
+
 
 # ---------------------------------------------------------------------------
 # index_document
