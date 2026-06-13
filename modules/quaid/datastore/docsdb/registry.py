@@ -33,7 +33,7 @@ import time
 from datetime import datetime
 from fnmatch import fnmatch
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 from lib.config import get_docs_db_path
 from lib.database import get_connection
@@ -240,6 +240,7 @@ def _visible_home() -> Path:
 
 # Keep underscores for installed alpha projects, but reject dots/separators and cap path length.
 _PROJECT_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,127}$")
+_WINDOWS_ABSOLUTE_RE = re.compile(r"^[A-Za-z]:")
 
 
 def _normalize_project_name(name: str) -> str:
@@ -279,6 +280,59 @@ def _validate_inside_workspace(resolved_path: Path, label: str = "path") -> None
             raise ValueError(f"Refusing {label} outside workspace: {real}")
     except (OSError, ValueError) as e:
         raise ValueError(f"Invalid {label}: {e}")
+
+
+def _validate_discovery_glob(pattern: Any) -> str:
+    value = str(pattern or "").strip()
+    if not value:
+        raise ValueError("empty project discovery glob pattern")
+    if "\x00" in value:
+        raise ValueError("NUL byte is not allowed in project discovery glob pattern")
+    if "\\" in value:
+        raise ValueError("backslashes are not allowed in project discovery glob pattern")
+    if value.startswith("/") or _WINDOWS_ABSOLUTE_RE.match(value):
+        raise ValueError("absolute project discovery glob patterns are not allowed")
+
+    for part in value.split("/"):
+        if part in ("", ".", ".."):
+            raise ValueError("empty, current, or parent path segments are not allowed in project discovery glob patterns")
+        if "**" in part and part != "**":
+            raise ValueError("'**' must be an entire path segment in project discovery glob patterns")
+    return value
+
+
+def _iter_project_files(home_abs: Path, patterns: List[str], context: str) -> Iterator[Path]:
+    home_real = home_abs.resolve()
+    _validate_inside_workspace(home_real, f"{context} root")
+
+    for raw_pattern in patterns:
+        try:
+            pattern = _validate_discovery_glob(raw_pattern)
+        except ValueError as exc:
+            logger.warning("Skipping unsafe project discovery glob %r for %s: %s", raw_pattern, context, exc)
+            if _fail_hard_enabled():
+                raise
+            continue
+
+        try:
+            for file_path in home_abs.rglob(pattern):
+                try:
+                    resolved = file_path.resolve()
+                    if not _path_is_under(resolved, home_real):
+                        raise ValueError(f"project discovery match escaped project root: {resolved}")
+                    _validate_inside_workspace(resolved, f"{context} match")
+                    if not resolved.is_file():
+                        continue
+                except (OSError, ValueError) as exc:
+                    logger.warning("Skipping unsafe project discovery match %s for %s: %s", file_path, context, exc)
+                    if _fail_hard_enabled():
+                        raise RuntimeError(f"Unsafe project discovery match for {context}: {file_path}") from exc
+                    continue
+                yield resolved
+        except (OSError, ValueError) as exc:
+            logger.warning("Project discovery glob %r failed for %s: %s", raw_pattern, context, exc)
+            if _fail_hard_enabled():
+                raise RuntimeError(f"Project discovery glob failed for {context}: {raw_pattern!r}") from exc
 
 
 def _get_default_db_path() -> Path:
@@ -1530,36 +1584,29 @@ class DocsRegistry:
         file_patterns = defn.patterns or ["*.md"]
         newly_registered = []
 
-        for pattern in file_patterns:
-            for file_path in home_abs.rglob(pattern):
-                if not file_path.is_file():
-                    continue
+        for file_path in _iter_project_files(home_abs, file_patterns, f"auto_discover:{project_name}"):
+            # Check exclusions
+            rel_path = _to_registry_path(file_path)
+            if self._is_excluded(str(file_path), exclude_patterns):
+                continue
 
-                # Check exclusions
-                try:
-                    rel_path = _to_registry_path(file_path)
-                except ValueError:
-                    rel_path = _to_registry_path(file_path)
-                if self._is_excluded(str(file_path), exclude_patterns):
-                    continue
+            # Check if already registered
+            existing = self.get(rel_path)
+            if existing:
+                continue
 
-                # Check if already registered
-                existing = self.get(rel_path)
-                if existing:
-                    continue
+            # Extract title from first heading
+            title = self._extract_title(file_path)
 
-                # Extract title from first heading
-                title = self._extract_title(file_path)
-
-                self.register(
-                    file_path=rel_path,
-                    project=project_name,
-                    asset_type="doc",
-                    title=title,
-                    registered_by="auto-discover",
-                )
-                newly_registered.append(rel_path)
-                print(f"  Discovered: {rel_path}")
+            self.register(
+                file_path=rel_path,
+                project=project_name,
+                asset_type="doc",
+                title=title,
+                registered_by="auto-discover",
+            )
+            newly_registered.append(rel_path)
+            print(f"  Discovered: {rel_path}")
 
         return newly_registered
 
@@ -2022,15 +2069,12 @@ class DocsRegistry:
                 file_patterns = defn.patterns or ["*.md"]
                 registered_paths = {d["file_path"] for d in docs}
 
-                for pattern in file_patterns:
-                    for file_path in home_abs.rglob(pattern):
-                        if not file_path.is_file():
-                            continue
-                        rel_path = _to_registry_path(file_path)
-                        if self._is_excluded(str(file_path), exclude_patterns):
-                            continue
-                        if rel_path not in registered_paths:
-                            orphans.append(rel_path)
+                for file_path in _iter_project_files(home_abs, file_patterns, f"verify_project:{project_name}"):
+                    rel_path = _to_registry_path(file_path)
+                    if self._is_excluded(str(file_path), exclude_patterns):
+                        continue
+                    if rel_path not in registered_paths:
+                        orphans.append(rel_path)
 
         result = {
             "total": len(docs),

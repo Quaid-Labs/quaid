@@ -563,6 +563,49 @@ class TestAutoDiscover:
         paths = [f for f in found]
         assert all(".log" not in p for p in paths)
 
+    def test_rejects_parent_segment_discovery_pattern_when_failhard(self, setup_env, monkeypatch):
+        from datastore.docsdb import registry as registry_mod
+
+        r = _get_registry()
+        r._get_config().projects.definitions["test-project"].patterns = ["../*.md"]
+        monkeypatch.setattr(registry_mod, "_fail_hard_enabled", lambda: True)
+
+        with pytest.raises(ValueError, match="parent path segments"):
+            r.auto_discover("test-project")
+
+    def test_verify_project_rejects_parent_segment_discovery_pattern_when_failhard(self, setup_env, monkeypatch):
+        from datastore.docsdb import registry as registry_mod
+
+        r = _get_registry()
+        r._get_config().projects.definitions["test-project"].patterns = ["../*.md"]
+        monkeypatch.setattr(registry_mod, "_fail_hard_enabled", lambda: True)
+
+        with pytest.raises(ValueError, match="parent path segments"):
+            r.verify_project("test-project")
+
+    def test_skips_discovery_match_that_escapes_project_root(self, setup_env, monkeypatch, caplog):
+        from datastore.docsdb import registry as registry_mod
+
+        tmp_path = setup_env
+        r = _get_registry()
+        project_dir = tmp_path / "projects" / "test-project"
+        outside_doc = tmp_path / "outside.md"
+        outside_doc.write_text("# Outside\n", encoding="utf-8")
+        escape_link = project_dir / "escape.md"
+        try:
+            escape_link.symlink_to(outside_doc)
+        except OSError as exc:
+            pytest.skip(f"symlink unavailable in test environment: {exc}")
+
+        monkeypatch.setattr(registry_mod, "_fail_hard_enabled", lambda: False)
+
+        with caplog.at_level(logging.WARNING):
+            found = r.auto_discover("test-project")
+
+        assert all("escape.md" not in path for path in found)
+        assert r.get("projects/test-project/escape.md") is None
+        assert "escaped project root" in caplog.text
+
 
 class TestCreateProject:
     def test_scaffolds_directory(self, setup_env):
