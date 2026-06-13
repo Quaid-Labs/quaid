@@ -1828,6 +1828,53 @@ class TestClaudeCodeAdapter:
         assert second == ""
         assert not pending_path.exists()
 
+    def test_pending_context_does_not_emit_when_cleanup_fails_failopen(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        from adaptors.claude_code import adapter as adapter_mod
+
+        monkeypatch.setenv("QUAID_INSTANCE", "claude-code-pending-cleanup-soft")
+        adapter = ClaudeCodeAdapter(home=tmp_path)
+        pending_path = adapter.data_dir() / "cc-pending-notifications.jsonl"
+        pending_path.parent.mkdir(parents=True, exist_ok=True)
+        pending_path.write_text(
+            json.dumps({"message": "deliver-once"}) + "\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(adapter_mod, "is_fail_hard_enabled", lambda: False)
+
+        def fail_unlink(*_args, **_kwargs):
+            raise OSError("unlink failed")
+
+        monkeypatch.setattr(Path, "unlink", fail_unlink)
+
+        assert adapter.get_pending_context() == ""
+        captured = capsys.readouterr()
+        assert "deliver-once" not in captured.out
+        assert "Failed to clean up pending notifications: unlink failed" in captured.err
+        assert pending_path.exists()
+
+    def test_pending_context_raises_when_cleanup_fails_failhard(self, tmp_path, monkeypatch):
+        from adaptors.claude_code import adapter as adapter_mod
+
+        monkeypatch.setenv("QUAID_INSTANCE", "claude-code-pending-cleanup-hard")
+        adapter = ClaudeCodeAdapter(home=tmp_path)
+        pending_path = adapter.data_dir() / "cc-pending-notifications.jsonl"
+        pending_path.parent.mkdir(parents=True, exist_ok=True)
+        pending_path.write_text(
+            json.dumps({"message": "deliver-once"}) + "\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(adapter_mod, "is_fail_hard_enabled", lambda: True)
+
+        def fail_unlink(*_args, **_kwargs):
+            raise OSError("unlink failed")
+
+        monkeypatch.setattr(Path, "unlink", fail_unlink)
+
+        with pytest.raises(OSError, match="unlink failed"):
+            adapter.get_pending_context()
+
     def test_parse_session_jsonl_strips_local_command_wrapper_blocks(self, tmp_path):
         path = tmp_path / "claude-local-command.jsonl"
         path.write_text(

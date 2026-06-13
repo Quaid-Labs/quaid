@@ -206,6 +206,14 @@ class ClaudeCodeAdapter(QuaidAdapter):
                     except (json.JSONDecodeError, ValueError):
                         malformed += 1
                         continue
+        except Exception as e:
+            _trace_m15("adapter.claude_code.pending.read_error", path=str(pending), error=str(e))
+            print(f"[notify] Failed to read pending notifications: {e}", file=sys.stderr)
+            if is_fail_hard_enabled():
+                raise
+            return ""
+
+        try:
             if sticky_entries:
                 with open(pending, "w", encoding="utf-8") as f:
                     for entry in sticky_entries.values():
@@ -226,8 +234,11 @@ class ClaudeCodeAdapter(QuaidAdapter):
                 messages=[m for m in messages if m],
             )
         except Exception as e:
-            _trace_m15("adapter.claude_code.pending.error", path=str(pending), error=str(e))
-            print(f"[notify] Failed to drain pending notifications: {e}", file=sys.stderr)
+            _trace_m15("adapter.claude_code.pending.cleanup_error", path=str(pending), error=str(e))
+            print(f"[notify] Failed to clean up pending notifications: {e}", file=sys.stderr)
+            if is_fail_hard_enabled():
+                raise
+            return ""
 
         notes = dedupe_pending_notice_messages(messages)
         if not notes:
