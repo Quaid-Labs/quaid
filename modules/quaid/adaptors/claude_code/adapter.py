@@ -151,6 +151,8 @@ class ClaudeCodeAdapter(QuaidAdapter):
         except Exception as e:
             _trace_m15("adapter.claude_code.notify.error", message=message, error=str(e))
             print(f"[notify] Failed to queue notification: {e}", file=sys.stderr)
+            if is_fail_hard_enabled():
+                raise
             return False
 
     def get_pending_context(self, max_age_seconds: int = 300) -> str:

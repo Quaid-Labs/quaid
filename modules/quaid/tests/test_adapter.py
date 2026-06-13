@@ -5,6 +5,7 @@ import os
 import re
 import shutil
 import sys
+import builtins
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch, MagicMock
@@ -1662,6 +1663,44 @@ class TestClaudeCodeAdapter:
         assert adapter.owns_session_path(sibling, session_id=sibling.stem) is True
         assert adapter.get_session_path(sibling.stem) == sibling
         assert adapter.get_session_path(original.stem) is None
+
+    def test_notify_raises_queue_failure_when_failhard_enabled(self, tmp_path, monkeypatch):
+        from adaptors.claude_code import adapter as adapter_mod
+
+        monkeypatch.setenv("QUAID_INSTANCE", "claude-code-notify-failhard")
+        adapter = ClaudeCodeAdapter(home=tmp_path)
+        real_open = builtins.open
+
+        def failing_open(path, *args, **kwargs):
+            if Path(path) == adapter.data_dir() / "cc-pending-notifications.jsonl":
+                raise OSError("disk full")
+            return real_open(path, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "open", failing_open)
+        monkeypatch.setattr(adapter_mod, "is_fail_hard_enabled", lambda: True)
+
+        with pytest.raises(OSError, match="disk full"):
+            adapter.notify("hello")
+
+    def test_notify_returns_false_queue_failure_when_failhard_disabled(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        from adaptors.claude_code import adapter as adapter_mod
+
+        monkeypatch.setenv("QUAID_INSTANCE", "claude-code-notify-failopen")
+        adapter = ClaudeCodeAdapter(home=tmp_path)
+        real_open = builtins.open
+
+        def failing_open(path, *args, **kwargs):
+            if Path(path) == adapter.data_dir() / "cc-pending-notifications.jsonl":
+                raise OSError("disk full")
+            return real_open(path, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "open", failing_open)
+        monkeypatch.setattr(adapter_mod, "is_fail_hard_enabled", lambda: False)
+
+        assert adapter.notify("hello") is False
+        assert "Failed to queue notification: disk full" in capsys.readouterr().err
 
     def test_pending_context_default_ttl_drops_stale_entries(self, tmp_path, monkeypatch):
         monkeypatch.setenv("QUAID_INSTANCE", "claude-code-pending-ttl")
