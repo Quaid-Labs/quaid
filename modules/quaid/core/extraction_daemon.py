@@ -3532,15 +3532,23 @@ def _read_rolling_state_for_signal(session_id: str, transcript_path: str) -> Tup
         return direct_state, normalized_session_id
 
     raw_transcript_path = str(transcript_path or "").strip()
-    if not raw_transcript_path:
+    wanted_session_uuid = _session_uuid_for_alias_match(normalized_session_id)
+    wanted_path_uuid = _session_uuid_for_alias_match(raw_transcript_path)
+    wanted_uuid = wanted_session_uuid or wanted_path_uuid
+    if not raw_transcript_path and not wanted_uuid:
         return direct_state, normalized_session_id
 
-    wanted_canonical_path = _canonicalize_transcript_source_path(raw_transcript_path)
-    wanted_uuid = _session_uuid_for_alias_match(
-        normalized_session_id
-    ) or _session_uuid_for_alias_match(raw_transcript_path)
+    wanted_canonical_path = (
+        _canonicalize_transcript_source_path(raw_transcript_path)
+        if raw_transcript_path
+        else ""
+    )
     try:
-        wanted_identity = _signal_source_identity(normalized_session_id, raw_transcript_path)
+        wanted_identity = (
+            _signal_source_identity(normalized_session_id, raw_transcript_path)
+            if raw_transcript_path
+            else ""
+        )
     except Exception:
         wanted_identity = ""
 
@@ -3559,6 +3567,18 @@ def _read_rolling_state_for_signal(session_id: str, transcript_path: str) -> Tup
         state_transcript_path = str(state.get("transcript_path") or "").strip()
         if not state_transcript_path:
             continue
+        state_uuid = (
+            _session_uuid_for_alias_match(state_key)
+            or _session_uuid_for_alias_match(str(state.get("session_id") or ""))
+            or _session_uuid_for_alias_match(state_transcript_path)
+        )
+        # A Codex lifecycle signal may carry the old session UUID while the
+        # transcript path already points at the new /new session. The explicit
+        # signal UUID is the stronger ownership signal for residual buffers.
+        if wanted_session_uuid and state_uuid and state_uuid != wanted_session_uuid:
+            continue
+        if wanted_uuid and state_uuid and wanted_uuid == state_uuid:
+            return state, _validate_session_id(str(state.get("session_id") or state_key))
         state_canonical_path = _canonicalize_transcript_source_path(state_transcript_path)
         if wanted_canonical_path and state_canonical_path == wanted_canonical_path:
             return state, _validate_session_id(str(state.get("session_id") or state_key))
@@ -3571,13 +3591,6 @@ def _read_rolling_state_for_signal(session_id: str, transcript_path: str) -> Tup
         except Exception:
             state_identity = ""
         if wanted_identity and state_identity == wanted_identity:
-            return state, _validate_session_id(str(state.get("session_id") or state_key))
-        state_uuid = (
-            _session_uuid_for_alias_match(state_key)
-            or _session_uuid_for_alias_match(str(state.get("session_id") or ""))
-            or _session_uuid_for_alias_match(state_transcript_path)
-        )
-        if wanted_uuid and state_uuid and wanted_uuid == state_uuid:
             return state, _validate_session_id(str(state.get("session_id") or state_key))
 
     return direct_state, normalized_session_id

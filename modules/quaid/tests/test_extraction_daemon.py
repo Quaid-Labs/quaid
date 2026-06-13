@@ -12728,6 +12728,51 @@ class TestRollingExtraction:
             else:
                 sys.modules.pop("core.runtime.notify", None)
 
+    def test_rolling_state_alias_prefers_signal_uuid_without_stable_transcript_path(self, monkeypatch, tmp_path):
+        old_uuid = "019ebe53-23ee-7561-9e54-dbc9c08085d7"
+        new_uuid = "019ebe57-f843-7853-8130-49d1b5efb5bb"
+        old_session_id = f"rollout-2026-06-13T00-13-00-{old_uuid}"
+        new_session_id = f"rollout-2026-06-13T00-18-16-{new_uuid}"
+        old_transcript_path = tmp_path / f"{old_session_id}.jsonl"
+        new_transcript_path = tmp_path / f"{new_session_id}.jsonl"
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "rolling-inst")
+        (tmp_path / "instances" / "rolling-inst").mkdir(parents=True, exist_ok=True)
+
+        extraction_daemon.write_rolling_state(
+            old_session_id,
+            {
+                "session_id": old_session_id,
+                "transcript_path": str(old_transcript_path),
+                "processed_line_offset": 34,
+                "buffered_line_offset": 34,
+                "semantic_buffer": "User: Baxter uses an orange linen notebook from Emília Rosa.",
+                "semantic_buffer_tokens": 435,
+                "raw_facts": [],
+            },
+        )
+        extraction_daemon.write_rolling_state(
+            new_session_id,
+            {
+                "session_id": new_session_id,
+                "transcript_path": str(new_transcript_path),
+                "processed_line_offset": 10,
+                "buffered_line_offset": 10,
+                "semantic_buffer": "User: New session maintenance tail.",
+                "semantic_buffer_tokens": 14,
+                "raw_facts": [],
+            },
+        )
+
+        state, state_key = extraction_daemon._read_rolling_state_for_signal(old_uuid, "")
+        assert state_key == old_session_id
+        assert "Baxter" in state["semantic_buffer"]
+
+        state, state_key = extraction_daemon._read_rolling_state_for_signal(old_uuid, str(new_transcript_path))
+        assert state_key == old_session_id
+        assert "Baxter" in state["semantic_buffer"]
+
     def test_staged_flush_without_completed_rolling_batch_drains_semantic_buffer(self, monkeypatch, tmp_path):
         import sys
         import types
