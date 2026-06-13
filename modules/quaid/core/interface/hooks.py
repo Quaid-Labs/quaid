@@ -43,6 +43,7 @@ _COMPACT_IDENTITY_CONTEXT_MAX_CHARS = 9000
 _IDENTITY_CONTEXT_FILES = ("USER.md", "SOUL.md", "ENVIRONMENT.md")
 _TURN_REFRESH_PARALLEL_REPLAY_SECONDS = 5
 _HOOK_INJECT_RECALL_TIMEOUT_FLOOR_MS = 30_000
+_SAFE_SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 
 _DAEMON_START_SKIP_ENV_KEYS = {
     "CLAUDE_CODE_OAUTH_TOKEN",
@@ -74,6 +75,20 @@ def _hook_inject_recall_timeout_ms() -> int:
     except Exception:
         configured = _HOOK_INJECT_RECALL_TIMEOUT_FLOOR_MS
     return max(_HOOK_INJECT_RECALL_TIMEOUT_FLOOR_MS, configured)
+
+
+def _fail_hard_enabled() -> bool:
+    try:
+        from lib.fail_policy import is_fail_hard_enabled
+
+        return bool(is_fail_hard_enabled())
+    except Exception:
+        return True
+
+
+def _safe_session_id_for_path(session_id: str) -> str:
+    sid = str(session_id or "").strip()
+    return sid if _SAFE_SESSION_ID_RE.match(sid) else ""
 
 
 def _wake_daemon_after_signal() -> None:
@@ -1462,7 +1477,8 @@ def hook_inject(args):
     """
     try:
         hook_input = _read_stdin_json()
-    except (json.JSONDecodeError, ValueError):
+    except (json.JSONDecodeError, ValueError) as exc:
+        print(json.dumps({"error": "invalid_hook_input", "detail": str(exc)}))
         return
     _ensure_hook_instance_ready(hook_input)
     _refresh_runtime_config_if_changed("hook_inject")
@@ -1720,19 +1736,25 @@ def hook_inject(args):
                 )
                 if transcript_path:
                     write_cursor(session_id, 0, transcript_path)
-        except Exception:
-            pass
+        except Exception as exc:
+            if _fail_hard_enabled():
+                raise
+            print(f"[quaid][hook-inject] cursor seed error: {exc}", file=sys.stderr)
 
     deferred_notice_hint = ""
 
     compaction_marker_consumed = _consume_compaction_refresh_marker(session_id)
     if compaction_marker_consumed:
+        if not deferred_notice_relay_context:
+            deferred_notice_relay_context = _get_deferred_notice_relay_context()
         identity_context = _build_compaction_identity_context()
         rules_identity_context = "" if identity_context else _build_compaction_rules_identity_context(hook_input)
         context_parts = []
         direct_notice_context = _format_direct_agent_notices(direct_notices)
         if direct_notice_context:
             context_parts.append(direct_notice_context)
+        if deferred_notice_relay_context:
+            context_parts.append(deferred_notice_relay_context)
         if identity_context:
             context_parts.append(identity_context)
         elif rules_identity_context:
@@ -1746,6 +1768,7 @@ def hook_inject(args):
             "identity_context_len": len(identity_context),
             "rules_identity_context_len": len(rules_identity_context),
             "has_direct_notices": bool(direct_notice_context),
+            "deferred_relay_len": len(deferred_notice_relay_context or ""),
             "reason": "compact_identity_additional_context_bridge",
         })
         if context:
@@ -1890,6 +1913,8 @@ def hook_inject(args):
                     docs_bundle = docs_result
                     docs_project_hint = None
             except Exception:
+                if _fail_hard_enabled():
+                    raise
                 docs_bundle = None
                 docs_project_hint = None
 
@@ -2040,8 +2065,10 @@ def hook_inject(args):
             }
         }))
 
-    except (RuntimeError, Exception) as e:
+    except Exception as e:
         provider_failure = _is_provider_failure(e)
+        if isinstance(e, RuntimeError) and not provider_failure and _fail_hard_enabled():
+            raise
         try:
             from lib.m15_trace import trace_m15
 
@@ -2302,7 +2329,7 @@ def _context_refresh_state_path() -> Path | None:
 
 
 def _context_refresh_timeout_marker_path(session_id: str) -> Path | None:
-    sid = str(session_id or "").strip()
+    sid = _safe_session_id_for_path(session_id)
     if not sid:
         return None
     try:
@@ -2314,7 +2341,7 @@ def _context_refresh_timeout_marker_path(session_id: str) -> Path | None:
 
 
 def _context_refresh_compaction_marker_path(session_id: str) -> Path | None:
-    sid = str(session_id or "").strip()
+    sid = _safe_session_id_for_path(session_id)
     if not sid:
         return None
     try:
@@ -2470,11 +2497,30 @@ def _store_context_refresh_state(state: Dict[str, Any]) -> None:
     path = _context_refresh_state_path()
     if path is None:
         return
+    tmp_path: Path | None = None
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(state, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
+        tmp_path = path.with_suffix(f".tmp.{os.getpid()}.{time.time_ns()}")
+        tmp_path.write_text(json.dumps(state, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
+        os.replace(tmp_path, path)
+    except Exception:
+        if _fail_hard_enabled():
+            raise
+    finally:
+        if tmp_path is not None:
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass
+
+
+def _path_within(root: Path, candidate: Path) -> bool:
+    try:
+        candidate.resolve().relative_to(root.resolve())
+        return True
     except Exception:
         pass
+    return False
 
 
 def _identity_context_signature() -> str:
@@ -3288,6 +3334,12 @@ def _resolve_hook_transcript_path(session_id: str, hook_cwd: str = "", transcrip
     if explicit:
         return explicit
 
+    safe_session_id = _safe_session_id_for_path(session_id)
+    if not safe_session_id:
+        _write_hook_trace("hook.session_id.invalid", {"session_id": session_id[:160]})
+        return ""
+    session_id = safe_session_id
+
     sessions_dir = None
     try:
         from lib.adapter import get_adapter
@@ -3304,15 +3356,19 @@ def _resolve_hook_transcript_path(session_id: str, hook_cwd: str = "", transcrip
         lookup_template = _adapter_capability("session_lookup_glob_template", "{session_id}.jsonl")
         lookup_glob = _render_path_template(str(lookup_template or ""), session_id)
         if lookup_glob:
-            for candidate in Path(sessions_dir).rglob(lookup_glob):
-                return str(candidate)
+            root = Path(sessions_dir)
+            for candidate in root.rglob(lookup_glob):
+                if _path_within(root, candidate):
+                    return str(candidate)
 
     if hook_cwd and sessions_dir:
         cwd_template = _adapter_capability("session_cwd_path_template", "")
         cwd_encoded = hook_cwd.replace("/", "-")
         relative = _render_path_template(str(cwd_template or ""), session_id, cwd_encoded=cwd_encoded)
         if relative:
-            return str(Path(sessions_dir) / relative)
+            root = Path(sessions_dir)
+            candidate = root / relative
+            return str(candidate) if _path_within(root, candidate) else ""
 
     pending_template = _adapter_capability("session_pending_path_template", "")
     pending_relative = ""
@@ -3334,13 +3390,17 @@ def _resolve_hook_transcript_path(session_id: str, hook_cwd: str = "", transcrip
                 if fallback_root:
                     pending_root = Path(fallback_root).expanduser()
             if pending_root:
-                return str(Path(pending_root) / pending_relative)
+                root = Path(pending_root)
+                candidate = root / pending_relative
+                return str(candidate) if _path_within(root, candidate) else ""
 
     if sessions_dir:
         fallback_template = _adapter_capability("session_fallback_path_template", "{session_id}.jsonl")
         fallback_relative = _render_path_template(str(fallback_template or ""), session_id)
         if fallback_relative:
-            return str(Path(sessions_dir) / fallback_relative)
+            root = Path(sessions_dir)
+            candidate = root / fallback_relative
+            return str(candidate) if _path_within(root, candidate) else ""
 
     return ""
 
@@ -3493,7 +3553,11 @@ def hook_extract(args):
         # cancellation cannot interrupt daemon startup.
         _wake_daemon_after_signal()
 
+    except RuntimeError:
+        raise
     except Exception as e:
+        if _fail_hard_enabled():
+            raise
         print(f"[quaid][{label}] error: {e}", file=sys.stderr)
 
 
@@ -3816,6 +3880,8 @@ def hook_session_init(args):
                     write_cursor(current_session_id, 0, transcript_path)
                     print(f"[quaid][session-init] seeded cursor for {current_session_id}", file=sys.stderr)
         except Exception as e:
+            if _fail_hard_enabled():
+                raise
             print(f"[quaid][session-init] cursor seed error: {e}", file=sys.stderr)
 
     projects_dir = _get_projects_dir()

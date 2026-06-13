@@ -139,6 +139,19 @@ def _run_hook_subagent_stop(hook_input: dict, *, monkeypatch):
     return captured_err.getvalue()
 
 
+def test_hook_inject_reports_invalid_json_input():
+    from core.interface import hooks
+
+    captured_out = io.StringIO()
+    with patch("core.interface.hooks._read_stdin_json", side_effect=ValueError("invalid json")), \
+         patch("core.interface.hooks.sys.stdout", captured_out):
+        hooks.hook_inject(MagicMock())
+
+    payload = json.loads(captured_out.getvalue())
+    assert payload["error"] == "invalid_hook_input"
+    assert "invalid json" in payload["detail"]
+
+
 def test_wake_daemon_after_signal_skips_start_when_daemon_is_live(monkeypatch):
     from core import extraction_daemon
     from core.interface import hooks
@@ -385,7 +398,7 @@ def test_claude_code_post_compact_turn_gets_identity_additional_context_under_ca
     assert "Quaid Refreshed Identity Context" in context
     assert "MANDATORY" in context
     assert "Bartholomew" in context
-    assert "Deferred relay should wait" not in context
+    assert "Deferred relay should wait" in context
     assert "fiddle-leaf fig" in context
     assert "no plant name" not in context
     assert "Baratza Encore" not in context
@@ -1152,6 +1165,31 @@ class TestHookInjectCursorSeeding:
 
         assert write_calls == [], "write_cursor must not be called when cursor already has transcript_path"
 
+    def test_cursor_seed_failure_raises_when_fail_hard_enabled(
+        self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
+    ):
+        from core import extraction_daemon
+
+        session_id = "sess-cursor-failhard"
+        transcript = sessions_dir / f"{session_id}.jsonl"
+        transcript.write_text('{"role":"user","content":"hello"}\n', encoding="utf-8")
+
+        monkeypatch.setattr("core.interface.hooks._fail_hard_enabled", lambda: True)
+        monkeypatch.setattr("core.extraction_daemon.read_cursor", lambda _sid: {"transcript_path": ""})
+        monkeypatch.setattr("core.interface.hooks._resolve_hook_transcript_path", lambda **_kwargs: str(transcript))
+        monkeypatch.setattr("core.extraction_daemon.write_cursor", lambda *a: (_ for _ in ()).throw(OSError("cursor unwritable")))
+
+        with patch("core.interface.api.recall_fast", return_value=[]), \
+             pytest.raises(OSError, match="cursor unwritable"):
+            _run_hook_inject(
+                {
+                    "prompt": "query to trigger cursor seed",
+                    "session_id": session_id,
+                    "cwd": "/Users/foo",
+                },
+                monkeypatch=monkeypatch,
+            )
+
     def test_no_session_id_skips_cursor_gracefully(
         self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
     ):
@@ -1243,6 +1281,73 @@ class TestHookInjectCursorSeeding:
             "offset": 0,
             "path": str(expected_path),
         }
+
+    def test_malicious_session_id_does_not_escape_session_lookup_root(
+        self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
+    ):
+        from core.interface import hooks
+
+        outside = tmp_path / "escaped.jsonl"
+        outside.write_text("outside", encoding="utf-8")
+        mock_adapter.adapter_id.return_value = "claude-code"
+        mock_adapter.get_session_path.return_value = None
+        mock_adapter.get_sessions_dir.return_value = str(sessions_dir)
+
+        resolved = hooks._resolve_hook_transcript_path(
+            "../../../escaped",
+            hook_cwd="/tmp/quaid-dev",
+        )
+
+        assert resolved == ""
+
+    def test_explicit_transcript_path_is_preserved_for_host_supplied_session_id(
+        self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
+    ):
+        from core.interface import hooks
+
+        transcript = tmp_path / "host-supplied.jsonl"
+        transcript.write_text('{"role":"user","content":"hello"}\n', encoding="utf-8")
+
+        assert hooks._resolve_hook_transcript_path(
+            "host/session:id",
+            transcript_path=str(transcript),
+        ) == str(transcript)
+
+
+def test_context_refresh_marker_paths_reject_unsafe_session_ids(tmp_path, mock_adapter):
+    from core.interface import hooks
+
+    mock_adapter.data_dir.return_value = tmp_path / "data"
+
+    assert hooks._context_refresh_timeout_marker_path("../escape") is None
+    assert hooks._context_refresh_compaction_marker_path("bad/session") is None
+    assert hooks._context_refresh_timeout_marker_path("safe-session_123") == (
+        tmp_path / "data" / "context-refresh-timeout" / "safe-session_123.json"
+    )
+
+
+def test_store_context_refresh_state_uses_atomic_replace(tmp_path, monkeypatch):
+    from core.interface import hooks
+
+    state_path = tmp_path / "data" / "context-refresh-state.json"
+    replacements = []
+    real_replace = os.replace
+
+    def fake_replace(src, dst):
+        src_path = Path(src)
+        dst_path = Path(dst)
+        assert src_path.is_file()
+        replacements.append((src_path.name, dst_path))
+        real_replace(src, dst)
+
+    monkeypatch.setattr(hooks, "_context_refresh_state_path", lambda: state_path)
+    monkeypatch.setattr(hooks.os, "replace", fake_replace)
+
+    hooks._store_context_refresh_state({"sessions": {"sess-1": {"turn_count": 2}}})
+
+    assert replacements and replacements[0][1] == state_path
+    assert json.loads(state_path.read_text(encoding="utf-8"))["sessions"]["sess-1"]["turn_count"] == 2
+    assert not list(state_path.parent.glob("context-refresh-state.tmp.*"))
 
 
 def test_hook_extract_precompact_resolves_cc_transcript_and_flushes_staged_payload(
@@ -1533,6 +1638,38 @@ def test_hook_extract_precompact_refreshes_rules_context_from_identity_and_proje
     assert "stale rules body" not in user_rules + tools_rules
 
 
+def test_hook_extract_raises_signal_write_failure_when_fail_hard_enabled(
+    tmp_path, mock_adapter, monkeypatch
+):
+    transcript = tmp_path / "hook-extract-failhard.jsonl"
+    transcript.write_text(
+        json.dumps({"type": "user", "message": {"role": "user", "content": "store copper sundial"}}) + "\n",
+        encoding="utf-8",
+    )
+
+    mock_adapter.adapter_id.return_value = "claude-code"
+    mock_adapter.get_session_path.return_value = None
+    mock_adapter.get_sessions_dir.return_value = str(tmp_path / "sessions")
+    mock_adapter.store_auth_token.return_value = tmp_path / ".auth-token"
+
+    monkeypatch.setattr("lib.fail_policy.is_fail_hard_enabled", lambda: True)
+    monkeypatch.setattr("core.interface.hooks.subprocess.Popen", lambda *a, **kw: None)
+    monkeypatch.setattr(
+        "core.extraction_daemon.write_signal",
+        lambda **_kwargs: (_ for _ in ()).throw(OSError("signals unwritable")),
+    )
+
+    with pytest.raises(OSError, match="signals unwritable"):
+        _run_hook_extract(
+            {
+                "session_id": "sess-hook-extract-failhard",
+                "cwd": str(tmp_path),
+                "transcript_path": str(transcript),
+            },
+            monkeypatch=monkeypatch,
+        )
+
+
 # ===========================================================================
 # hook_inject — recall resilience
 # ===========================================================================
@@ -1665,8 +1802,9 @@ class TestHookInjectRecallResilience:
         monkeypatch.setattr("lib.fail_policy.is_fail_hard_enabled", lambda: True)
 
         with patch("core.interface.api.recall_fast", side_effect=RuntimeError("local recall invariant broke")), \
-             patch("core.interface.api.projects_search_docs", return_value=None):
-            _out, err = _run_hook_inject(
+             patch("core.interface.api.projects_search_docs", return_value=None), \
+             pytest.raises(RuntimeError, match="local recall invariant broke"):
+            _run_hook_inject(
                 {
                     "prompt": "trigger recall invariant",
                     "session_id": "sess-invariant-failhard",
@@ -1674,8 +1812,6 @@ class TestHookInjectRecallResilience:
                 },
                 monkeypatch=monkeypatch,
             )
-
-        assert "local recall invariant broke" in err
 
     def test_recall_fast_bare_timeout_returns_empty_when_fail_hard_enabled(
         self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
@@ -2896,6 +3032,7 @@ class TestHookInjectRecallResilience:
     ):
         from core import extraction_daemon
         monkeypatch.setattr(extraction_daemon, "write_cursor", lambda *a: None)
+        monkeypatch.setattr("lib.fail_policy.is_fail_hard_enabled", lambda: False)
 
         with patch(
             "core.interface.api.recall_fast",
@@ -2917,6 +3054,32 @@ class TestHookInjectRecallResilience:
         context = payload["hookSpecificOutput"]["additionalContext"]
         assert "South Austin" in context
         assert "[Quaid Project Docs" not in context
+
+    def test_project_docs_failure_raises_when_fail_hard_enabled(
+        self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
+    ):
+        from core import extraction_daemon
+
+        monkeypatch.setattr(extraction_daemon, "write_cursor", lambda *a: None)
+        monkeypatch.setattr("lib.fail_policy.is_fail_hard_enabled", lambda: True)
+        monkeypatch.setattr("core.interface.hooks._get_deferred_notice_hint", lambda: "")
+        monkeypatch.setattr("core.interface.hooks._get_deferred_notice_relay_context", lambda: "")
+
+        with patch(
+            "core.interface.api.recall_fast",
+            return_value=[{"text": "Maya lives in South Austin", "similarity": 0.9, "category": "fact"}],
+        ), patch(
+            "core.interface.api.projects_search_docs",
+            side_effect=RuntimeError("docs down"),
+        ), pytest.raises(RuntimeError, match="docs down"):
+            _run_hook_inject(
+                {
+                    "prompt": "Where does Maya live?",
+                    "session_id": "sess-docs-failhard",
+                    "cwd": "/Users/x",
+                },
+                monkeypatch=monkeypatch,
+            )
 
     def test_recall_telemetry_helpers_summarize_meta_and_rows(self):
         from core.interface import hooks
