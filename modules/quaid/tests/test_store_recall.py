@@ -10970,6 +10970,76 @@ class TestRecallFastHookInjectContract:
         assert all(row.get("source_provenance_type") != "assistant" for row in rows)
         assert meta["assistant_session_suppression"]["suppressed"] == 2
 
+    def test_recall_store_plan_keeps_assistant_session_chunks_for_assistant_source_query(self):
+        import datastore.memorydb.memory_graph as mg
+
+        def _fake_vector(*args, **kwargs):
+            return [], {"selected_path": "vector", "phases_ms": {"total_ms": 10}}, None
+
+        def _fake_docs(*args, **kwargs):
+            return (
+                [
+                    {
+                        "text": "[docs] opal-prism.md: The opal prism accepts daylight calibration.",
+                        "category": "docs",
+                        "source_type": "docs",
+                        "similarity": 0.984,
+                    }
+                ],
+                {"selected_path": "docs_bundle", "phases_ms": {"total_ms": 5}},
+                {
+                    "chunks": [
+                        {
+                            "source": "opal-prism.md",
+                            "content": "The opal prism accepts daylight calibration.",
+                            "similarity": 0.984,
+                        }
+                    ]
+                },
+            )
+
+        def _fake_session_chunks(*args, **kwargs):
+            return (
+                [
+                    {
+                        "chunk_id": "assistant-opal-source",
+                        "text": "[session_chunk] s#1: Assistant: The opal prism calibration came from prior docs.",
+                        "category": "session_chunk",
+                        "source_type": "session_chunk",
+                        "source_provenance_type": "assistant",
+                        "via": "session_chunks",
+                        "similarity": 1.0,
+                    }
+                ],
+                {"selected_path": "session_chunk_store", "phases_ms": {"total_ms": 5}},
+                None,
+            )
+
+        registry = {
+            "vector": {"recall": _fake_vector, "recall_fast": _fake_vector},
+            "docs": {"recall": _fake_docs, "recall_fast": _fake_docs},
+            "session_chunks": {"recall": _fake_session_chunks, "recall_fast": _fake_session_chunks},
+            "graph": {"recall": lambda *a, **k: ([], {}, None), "recall_fast": lambda *a, **k: ([], {}, None)},
+        }
+
+        with patch.object(mg, "_get_recall_store_registry", return_value=registry), \
+             patch.object(mg, "_should_apply_rrf_store_plan_fusion", return_value=False):
+            rows, meta, _ = mg._run_recall_store_plan(
+                "what did the assistant say about opal prism calibration",
+                stores=["vector", "docs", "session_chunks"],
+                limit=3,
+                owner_id="test-owner",
+                min_similarity=0.6,
+                planner_profile="fast",
+                planned_queries=["assistant opal prism calibration"],
+                planner_meta={"planned_stores": ["vector", "docs", "session_chunks"]},
+                fast_mode=True,
+                common_kwargs={},
+            )
+
+        assert any(row.get("chunk_id") == "assistant-opal-source" for row in rows)
+        assert "assistant_session_suppression" not in meta
+
     def test_recall_store_plan_keeps_user_session_chunks_when_docs_are_strong(self):
         import datastore.memorydb.memory_graph as mg
 
