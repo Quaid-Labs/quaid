@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from lib.fail_policy import is_fail_hard_enabled
 from lib.instance_manager import InstanceManager
 
 if TYPE_CHECKING:
@@ -116,6 +117,8 @@ class ClaudeCodeInstanceManager(InstanceManager):
             print(f"  Auth token written to {path}")
         except Exception as e:
             print(f"  Warning: could not write auth token: {e}")
+            if is_fail_hard_enabled():
+                raise
 
     def _write_model_config(self, silo_root: Path, deep_model: str, fast_model: str) -> None:
         """Write model IDs into the instance config.json.

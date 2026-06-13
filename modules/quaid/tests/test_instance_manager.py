@@ -520,6 +520,31 @@ class TestClaudeCodeInstanceManager:
         with pytest.raises(ValueError, match="does not exist"):
             mgr.make_instance(str(tmp_path / "nonexistent"), "myapp")
 
+    def test_store_auth_token_raises_write_failure_when_failhard_enabled(self, monkeypatch):
+        from adaptors.claude_code import instance_manager as manager_mod
+        from adaptors.claude_code.instance_manager import ClaudeCodeInstanceManager
+
+        adapter = MagicMock()
+        adapter.store_auth_token.side_effect = OSError("disk full")
+        mgr = ClaudeCodeInstanceManager(adapter)
+        monkeypatch.setattr(manager_mod, "is_fail_hard_enabled", lambda: True)
+
+        with pytest.raises(OSError, match="disk full"):
+            mgr._store_auth_token("token-value")
+
+    def test_store_auth_token_warns_write_failure_when_failhard_disabled(self, monkeypatch, capsys):
+        from adaptors.claude_code import instance_manager as manager_mod
+        from adaptors.claude_code.instance_manager import ClaudeCodeInstanceManager
+
+        adapter = MagicMock()
+        adapter.store_auth_token.side_effect = OSError("disk full")
+        mgr = ClaudeCodeInstanceManager(adapter)
+        monkeypatch.setattr(manager_mod, "is_fail_hard_enabled", lambda: False)
+
+        mgr._store_auth_token("token-value")
+
+        assert "Warning: could not write auth token: disk full" in capsys.readouterr().out
+
 
 # ---- Adapter registration ----
 
