@@ -23,6 +23,7 @@ from core.runtime.events import (
     get_event_registry,
     list_events,
     process_events,
+    queue_delayed_notification,
     register_request_handler,
     request_broker_event,
     register_event_handler,
@@ -33,10 +34,16 @@ from core.runtime.paths import get_runtime_root
 from lib.adapter import TestAdapter, reset_adapter, set_adapter
 
 
+_ORIGINAL_EVENT_HANDLERS = dict(EVENT_HANDLERS)
+
+
 def setup_function():
     reset_adapter()
     import core.runtime.events as events
 
+    with events._EVENT_HANDLERS_LOCK:
+        events.EVENT_HANDLERS.clear()
+        events.EVENT_HANDLERS.update(_ORIGINAL_EVENT_HANDLERS)
     with events._REQUEST_EVENT_HANDLERS_LOCK:
         events._REQUEST_EVENT_HANDLERS.clear()
 
@@ -45,6 +52,9 @@ def teardown_function():
     reset_adapter()
     import core.runtime.events as events
 
+    with events._EVENT_HANDLERS_LOCK:
+        events.EVENT_HANDLERS.clear()
+        events.EVENT_HANDLERS.update(_ORIGINAL_EVENT_HANDLERS)
     with events._REQUEST_EVENT_HANDLERS_LOCK:
         events._REQUEST_EVENT_HANDLERS.clear()
 
@@ -87,6 +97,14 @@ def test_event_emit_list_and_capabilities(tmp_path):
     assert event["event_class"] == "domain"
     assert event["schema_version"] == EVENT_ENVELOPE_SCHEMA_VERSION
     assert event["status"] == "pending"
+    assert event["instance_id"] is None
+    assert event["project_id"] is None
+    assert event["session_id"] == "sess-1"
+    assert event["owner_id"] == "quaid"
+    assert event["correlation_id"] is None
+    assert event["idempotency_key"] is None
+    assert event["duplicate"] is False
+    assert event["duplicate_of"] is None
     assert validate_event_envelope(event) == []
 
     items = list_events(status="pending", limit=10)
@@ -344,6 +362,31 @@ def test_broker_request_handler_nack_respects_fail_hard(monkeypatch, tmp_path):
     monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: True)
     with pytest.raises(RuntimeError, match="handler not activated"):
         request_broker_event("recall.memory.request.v1", {"query": "baratza"}, source="pytest")
+
+
+def test_broker_request_failhard_collects_full_fanout_before_raising(monkeypatch, tmp_path):
+    set_adapter(TestAdapter(tmp_path))
+
+    import core.runtime.events as events
+
+    calls = []
+
+    register_request_handler(
+        "datastore.validate.request.v1",
+        lambda _event: calls.append("memorydb") or {"status": "nacked", "error": "memory unavailable"},
+        datastore_id="memorydb",
+    )
+    register_request_handler(
+        "datastore.validate.request.v1",
+        lambda _event: calls.append("docsdb") or {"status": "ok", "datastore": "docsdb"},
+        datastore_id="docsdb",
+    )
+    monkeypatch.setattr(events, "_request_handler_fail_hard_enabled", lambda _datastore_id: True)
+
+    with pytest.raises(RuntimeError, match="memorydb: memory unavailable"):
+        request_broker_event("datastore.validate.request.v1", {"target": "all"}, source="pytest")
+
+    assert calls == ["memorydb", "docsdb"]
 
 
 def test_broker_request_handler_nack_respects_datastore_fail_hard_policy(monkeypatch, tmp_path):
@@ -3885,20 +3928,354 @@ def test_event_process_janitor_daily_digest_is_independently_gated(monkeypatch, 
     assert "janitor_daily_digest" not in kinds
 
 
-def test_emit_event_caps_queue_length(monkeypatch, tmp_path):
+def test_emit_event_caps_queue_length(monkeypatch, tmp_path, caplog):
     adapter = TestAdapter(tmp_path); set_adapter(adapter); iroot = adapter.instance_root()
 
     import core.runtime.events as events
 
     monkeypatch.setattr(events, "MAX_EVENT_QUEUE", 3)
-    for i in range(5):
-        emit_event(name="session.reset", payload={"idx": i}, source="pytest")
+    monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: False)
+    with caplog.at_level("WARNING"):
+        for i in range(5):
+            emitted = emit_event(name="session.reset", payload={"idx": i}, source="pytest")
+    assert emitted["dropped"] == 1
+    assert "Event queue overflow" in caplog.text
 
     queue_path = get_runtime_root(iroot) / "events" / "queue.json"
     payload = json.loads(queue_path.read_text(encoding="utf-8"))
     queued = payload.get("events") or []
     assert len(queued) == 3
     assert [int(item.get("payload", {}).get("idx")) for item in queued] == [2, 3, 4]
+
+
+def test_emit_event_queue_overflow_raises_under_fail_hard(monkeypatch, tmp_path):
+    set_adapter(TestAdapter(tmp_path))
+
+    import core.runtime.events as events
+
+    monkeypatch.setattr(events, "MAX_EVENT_QUEUE", 1)
+    monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: True)
+    emit_event(name="session.reset", payload={"idx": 1}, source="pytest")
+
+    with pytest.raises(RuntimeError, match="Event queue overflow"):
+        emit_event(name="session.reset", payload={"idx": 2}, source="pytest")
+
+
+def test_emit_event_validates_envelope_before_enqueue(monkeypatch, tmp_path):
+    adapter = TestAdapter(tmp_path)
+    set_adapter(adapter)
+
+    import core.runtime.events as events
+
+    monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: True)
+    with pytest.raises(RuntimeError, match="Invalid event envelope"):
+        emit_event(name="session.reset", payload=["not", "an", "object"], source="pytest")  # type: ignore[arg-type]
+
+    monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: False)
+    event = emit_event(name="session.reset", payload=["not", "an", "object"], source="pytest")  # type: ignore[arg-type]
+    assert event["validation_errors"] == ["payload must be an object"]
+
+    queue_path = get_runtime_root(adapter.instance_root()) / "events" / "queue.json"
+    queued = json.loads(queue_path.read_text(encoding="utf-8")).get("events") or []
+    assert queued[0]["validation_errors"] == ["payload must be an object"]
+
+
+def test_emit_event_dedup_ignores_failed_events_for_retry(monkeypatch, tmp_path):
+    adapter = TestAdapter(tmp_path)
+    set_adapter(adapter)
+
+    import core.runtime.events as events
+
+    monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: False)
+
+    def _failed(_event):
+        return {"status": "failed", "error": "first attempt failed"}
+
+    original = EVENT_HANDLERS["session.reset"]
+    try:
+        register_event_handler("session.reset", _failed, force=True)
+        first = emit_event(
+            name="session.reset",
+            payload={"attempt": 1},
+            source="pytest",
+            session_id="sess-retry",
+            idempotency_key="retry-key",
+        )
+        out = process_events(limit=5, names=["session.reset"])
+        assert out["failed"] == 1
+
+        second = emit_event(
+            name="session.reset",
+            payload={"attempt": 2},
+            source="pytest",
+            session_id="sess-retry",
+            idempotency_key="retry-key",
+        )
+    finally:
+        register_event_handler("session.reset", original, force=True)
+
+    assert second["duplicate"] is False
+    queue_path = get_runtime_root(adapter.instance_root()) / "events" / "queue.json"
+    queued = json.loads(queue_path.read_text(encoding="utf-8")).get("events") or []
+    matching = [event for event in queued if event.get("idempotency_key") == "retry-key"]
+    assert [event["id"] for event in matching] == [first["id"], second["id"]]
+    assert matching[0]["status"] == "failed"
+    assert matching[1]["status"] == "pending"
+
+
+def test_emit_event_dedup_is_session_scoped_when_sessions_present(tmp_path):
+    set_adapter(TestAdapter(tmp_path))
+
+    first = emit_event(
+        name="session.reset",
+        payload={"session": 1},
+        source="pytest",
+        session_id="sess-one",
+        idempotency_key="same-key",
+    )
+    second = emit_event(
+        name="session.reset",
+        payload={"session": 2},
+        source="pytest",
+        session_id="sess-two",
+        idempotency_key="same-key",
+    )
+
+    assert first["duplicate"] is False
+    assert second["duplicate"] is False
+    queued = list_events(status="pending", limit=10)
+    matching = [event for event in queued if event.get("idempotency_key") == "same-key"]
+    assert {event["session_id"] for event in matching} == {"sess-one", "sess-two"}
+
+
+def test_process_events_treats_error_and_nacked_status_as_failed(monkeypatch, tmp_path):
+    set_adapter(TestAdapter(tmp_path))
+
+    import core.runtime.events as events
+
+    monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: False)
+
+    def _error(event):
+        return {"status": event["payload"]["status"], "error": "bad handler status"}
+
+    original = EVENT_HANDLERS["session.reset"]
+    try:
+        register_event_handler("session.reset", _error, force=True)
+        emit_event(name="session.reset", payload={"status": "error"}, source="pytest")
+        emit_event(name="session.reset", payload={"status": "nacked"}, source="pytest")
+        out = process_events(limit=5, names=["session.reset"])
+    finally:
+        register_event_handler("session.reset", original, force=True)
+
+    assert out["processed"] == 0
+    assert out["failed"] == 2
+    assert [detail["status"] for detail in out["details"]] == ["failed", "failed"]
+
+
+def test_process_events_commits_statuses_before_failhard_raise(monkeypatch, tmp_path):
+    adapter = TestAdapter(tmp_path)
+    set_adapter(adapter)
+
+    import core.runtime.events as events
+
+    monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: True)
+    calls = []
+
+    def _mixed(event):
+        idx = int(event["payload"]["idx"])
+        calls.append(idx)
+        if idx == 2:
+            return {"status": "failed", "error": "second failed"}
+        return {"status": "processed"}
+
+    original = EVENT_HANDLERS["session.reset"]
+    try:
+        register_event_handler("session.reset", _mixed, force=True)
+        emit_event(name="session.reset", payload={"idx": 1}, source="pytest")
+        emit_event(name="session.reset", payload={"idx": 2}, source="pytest")
+        with pytest.raises(RuntimeError, match="second failed"):
+            process_events(limit=5, names=["session.reset"])
+
+        queue_path = get_runtime_root(adapter.instance_root()) / "events" / "queue.json"
+        queued = json.loads(queue_path.read_text(encoding="utf-8")).get("events") or []
+        assert [event["status"] for event in queued] == ["processed", "failed"]
+
+        out = process_events(limit=5, names=["session.reset"])
+    finally:
+        register_event_handler("session.reset", original, force=True)
+
+    assert out["touched"] == 0
+    assert calls == [1, 2]
+
+
+def test_process_events_snapshots_handlers_for_claimed_batch(monkeypatch, tmp_path):
+    set_adapter(TestAdapter(tmp_path))
+
+    import core.runtime.events as events
+
+    monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: False)
+    seen = []
+
+    def _replacement(_event):
+        seen.append("replacement")
+        return {"status": "processed"}
+
+    def _first(event):
+        seen.append(event["payload"]["idx"])
+        register_event_handler("session.reset", _replacement, force=True)
+        return {"status": "processed"}
+
+    original = EVENT_HANDLERS["session.reset"]
+    try:
+        register_event_handler("session.reset", _first, force=True)
+        emit_event(name="session.reset", payload={"idx": 1}, source="pytest")
+        emit_event(name="session.reset", payload={"idx": 2}, source="pytest")
+        out = process_events(limit=5, names=["session.reset"])
+    finally:
+        register_event_handler("session.reset", original, force=True)
+
+    assert out["processed"] == 2
+    assert seen == [1, 2]
+
+
+def test_process_events_reports_name_filter_skips(monkeypatch, tmp_path):
+    set_adapter(TestAdapter(tmp_path))
+    monkeypatch.setattr("core.runtime.events._is_fail_hard_enabled", lambda: False)
+
+    emit_event(name="session.reset", payload={"idx": 1}, source="pytest")
+    emit_event(name="notification.delayed", payload={"message": "queued"}, source="pytest")
+
+    out = process_events(limit=5, names=["notification.delayed"])
+    assert out["processed"] == 1
+    assert out["skipped"] == 1
+
+
+def test_process_events_expires_stale_pending_events(monkeypatch, tmp_path):
+    adapter = TestAdapter(tmp_path)
+    set_adapter(adapter)
+
+    import core.runtime.events as events
+
+    monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: True)
+    called = []
+
+    def _handler(_event):
+        called.append(True)
+        return {"status": "processed"}
+
+    original = EVENT_HANDLERS["session.reset"]
+    try:
+        register_event_handler("session.reset", _handler, force=True)
+        emitted = emit_event(name="session.reset", payload={"idx": 1}, source="pytest")
+        queue_path = get_runtime_root(adapter.instance_root()) / "events" / "queue.json"
+        payload = json.loads(queue_path.read_text(encoding="utf-8"))
+        payload["events"][0]["created_at"] = "2020-01-01T00:00:00+00:00"
+        queue_path.write_text(json.dumps(payload), encoding="utf-8")
+
+        out = process_events(limit=5, names=["session.reset"], max_age_seconds=60)
+    finally:
+        register_event_handler("session.reset", original, force=True)
+
+    assert called == []
+    assert out["expired"] == 1
+    assert out["details"][0]["id"] == emitted["id"]
+    assert out["details"][0]["status"] == "expired"
+    queued = list_events(status="expired", limit=10)
+    assert queued[0]["result"]["reason"] == "event_exceeded_max_age"
+
+
+def test_process_events_recovers_stale_processing_events(monkeypatch, tmp_path):
+    adapter = TestAdapter(tmp_path)
+    set_adapter(adapter)
+
+    import core.runtime.events as events
+
+    monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: False)
+    emitted = emit_event(name="session.reset", payload={"idx": 1}, source="pytest")
+    queue_path = get_runtime_root(adapter.instance_root()) / "events" / "queue.json"
+    payload = json.loads(queue_path.read_text(encoding="utf-8"))
+    payload["events"][0]["status"] = "processing"
+    payload["events"][0]["processing_started_at"] = "2020-01-01T00:00:00+00:00"
+    queue_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    out = process_events(limit=5, names=["session.reset"])
+
+    assert out["processed"] == 1
+    queued = list_events(status="processed", limit=10)
+    assert queued[0]["id"] == emitted["id"]
+    assert "processing_started_at" not in queued[0]
+
+
+def test_lifecycle_daemon_signal_rejects_transcript_outside_managed_roots(monkeypatch, tmp_path):
+    adapter = TestAdapter(tmp_path)
+    set_adapter(adapter)
+    outside = tmp_path.parent / f"{tmp_path.name}-outside.jsonl"
+    outside.write_text('{"role":"user","content":"outside"}\n', encoding="utf-8")
+
+    import core.runtime.events as events
+
+    monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: False)
+    emit_event(
+        name="session.agent_end",
+        payload={"daemon_signal": {"enabled": True, "transcript_path": str(outside)}},
+        source="pytest",
+        session_id="sess-outside",
+        owner_id="owner-life",
+    )
+
+    out = process_events(limit=5, names=["session.agent_end"])
+    assert out["processed"] == 1
+    assert out["failed"] == 0
+    result = out["details"][0]["result"]
+    assert result["daemon_signal_queued"] is False
+    assert "outside Quaid-managed roots" in result["daemon_signal_error"]
+
+
+def test_docs_ingest_rejects_transcript_outside_managed_roots(monkeypatch, tmp_path):
+    set_adapter(TestAdapter(tmp_path))
+    outside = tmp_path.parent / f"{tmp_path.name}-docs-outside.jsonl"
+    outside.write_text("session transcript", encoding="utf-8")
+
+    import core.runtime.events as events
+
+    monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: False)
+    monkeypatch.setattr(
+        events,
+        "run_docs_ingest",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("unsafe path must not ingest")),
+    )
+    emit_event(
+        name="docs.ingest_transcript",
+        payload={"transcript_path": str(outside), "label": "Compaction"},
+        source="pytest",
+    )
+
+    out = process_events(limit=5, names=["docs.ingest_transcript"])
+    assert out["processed"] == 0
+    assert out["failed"] == 1
+    assert "outside Quaid-managed roots" in str(out["details"][0]["result"]["error"])
+
+
+def test_queue_delayed_notification_reports_when_different_event_processed(monkeypatch, tmp_path):
+    adapter = TestAdapter(tmp_path)
+    set_adapter(adapter)
+
+    import core.runtime.events as events
+
+    queued_messages = []
+    monkeypatch.setattr(events, "_queue_delayed_llm_request", lambda **kwargs: queued_messages.append(kwargs["message"]) or True)
+    emit_event(
+        name="notification.delayed",
+        payload={"message": "older notice", "kind": "janitor", "priority": "normal"},
+        source="pytest",
+    )
+
+    result = queue_delayed_notification("new notice", kind="janitor", priority="normal", source="pytest")
+
+    assert result["status"] == "queued_not_processed"
+    assert queued_messages == ["older notice"]
+    pending = list_events(status="pending", limit=10)
+    assert [event["payload"]["message"] for event in pending] == ["new notice"]
 
 
 def test_emit_event_trims_history_file_before_append(monkeypatch, tmp_path):
@@ -3913,7 +4290,7 @@ def test_emit_event_trims_history_file_before_append(monkeypatch, tmp_path):
     history_path.parent.mkdir(parents=True, exist_ok=True)
     seed = "".join(
         json.dumps({"ts": f"t{i}", "op": "seed", "event": {"id": i}}) + "\n"
-        for i in range(12)
+        for i in range(80)
     )
     history_path.write_text(seed, encoding="utf-8")
 
@@ -4031,6 +4408,18 @@ def test_register_event_handler_does_not_overwrite_without_force(caplog):
         register_event_handler("session.reset", _replacement)
     assert EVENT_HANDLERS["session.reset"] is original
     assert "skipped overwrite" in caplog.text
+
+
+def test_register_event_handler_rejects_unknown_or_request_events():
+    def _handler(_event):
+        return {"status": "processed"}
+
+    with pytest.raises(ValueError, match="not registered"):
+        register_event_handler("totally.unknown.event", _handler)
+    with pytest.raises(ValueError, match="not an active processable event"):
+        register_event_handler("recall.memory.request.v1", _handler)
+    with pytest.raises(TypeError, match="not callable"):
+        register_event_handler("session.reset", object())  # type: ignore[arg-type]
 
 
 def test_register_event_handler_overwrites_with_force(caplog):

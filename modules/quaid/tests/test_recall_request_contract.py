@@ -114,7 +114,7 @@ def test_recall_request_payload_requires_query_and_positive_limit() -> None:
         build_recall_request_payload(query="docs", route=route, limit=0)
 
 
-def test_unactivated_recall_request_fails_closed_when_dispatched(monkeypatch, tmp_path) -> None:
+def test_request_recall_event_is_ignored_when_dispatched_as_active_event(monkeypatch, tmp_path) -> None:
     import core.runtime.events as events
 
     monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: False)
@@ -123,19 +123,23 @@ def test_unactivated_recall_request_fails_closed_when_dispatched(monkeypatch, tm
     emit_broker_event(RECALL_MEMORY_REQUEST, {"query": "baratza"}, source="pytest")
     result = process_events(limit=1, names=[RECALL_MEMORY_REQUEST])
 
-    assert result["processed"] == 0
-    assert result["failed"] == 1
-    failed = list_events(status="failed", limit=10)
-    assert len(failed) == 1
-    assert failed[0]["result"]["error"] == "recall.memory.request.v1 request handler not activated in M4"
+    assert result["processed"] == 1
+    assert result["failed"] == 0
+    assert result["details"][0]["status"] == "ignored"
+    processed = list_events(status="processed", limit=10)
+    assert len(processed) == 1
+    assert processed[0]["result"] == {"status": "ignored", "reason": "no_handler"}
 
 
-def test_unactivated_recall_request_raises_under_fail_hard(monkeypatch, tmp_path) -> None:
+def test_request_recall_event_active_dispatch_does_not_raise_under_fail_hard(monkeypatch, tmp_path) -> None:
     import core.runtime.events as events
 
     set_adapter(TestAdapter(tmp_path))
     emit_broker_event(RECALL_DOCS_REQUEST, {"query": "docs"}, source="pytest")
     monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: True)
 
-    with pytest.raises(RuntimeError, match="Event handler failed while fail-hard mode is enabled"):
-        process_events(limit=1, names=[RECALL_DOCS_REQUEST])
+    result = process_events(limit=1, names=[RECALL_DOCS_REQUEST])
+
+    assert result["processed"] == 1
+    assert result["failed"] == 0
+    assert result["details"][0]["status"] == "ignored"

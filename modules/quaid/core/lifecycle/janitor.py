@@ -35,7 +35,7 @@ import sys
 import tempfile
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Dict, Any, Tuple, Optional
 
@@ -1955,7 +1955,7 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
         try:
             from core.runtime.events import emit_event, process_events
 
-            today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+            today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
             today_memories = [
                 {"text": text, "category": "fact"}
                 for text in list_recent_fact_texts(graph, since_iso=today_start, limit=25)
