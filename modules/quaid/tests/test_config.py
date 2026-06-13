@@ -1663,6 +1663,21 @@ class TestLightweightLibConfig:
         with patch("lib.fail_policy.is_fail_hard_enabled", return_value=False):
             assert get_ollama_url() == "http://localhost:11434"
 
+    def test_lightweight_config_parse_error_uses_valid_failhard_policy(self, tmp_path, monkeypatch):
+        from lib.config import get_ollama_url
+
+        global_cfg = tmp_path / "shared" / "config" / "global" / "config.json"
+        platform_cfg = tmp_path / "shared" / "config" / "codex" / "config.json"
+        global_cfg.parent.mkdir(parents=True, exist_ok=True)
+        platform_cfg.parent.mkdir(parents=True, exist_ok=True)
+        global_cfg.write_text("{not-json", encoding="utf-8")
+        platform_cfg.write_text(json.dumps({"retrieval": {"failHard": False}}), encoding="utf-8")
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "codex-main")
+        monkeypatch.delenv("OLLAMA_URL", raising=False)
+
+        assert get_ollama_url() == "http://localhost:11434"
+
     def test_db_paths_use_env_home_without_instance(self, tmp_path, monkeypatch):
         from lib.config import get_archive_db_path, get_db_path
 

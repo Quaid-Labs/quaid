@@ -68,7 +68,25 @@ def test_fail_policy_logs_when_config_load_fails(caplog, tmp_path, monkeypatch):
     with caplog.at_level("WARNING"):
         assert is_fail_hard_enabled() is True
 
-    assert any("defaulting to enabled" in rec.message for rec in caplog.records)
+    assert any("Failed to load fail-hard policy" in rec.message for rec in caplog.records)
+
+
+def test_fail_policy_skips_corrupt_layer_and_uses_valid_policy(caplog, tmp_path, monkeypatch):
+    from lib.fail_policy import is_fail_hard_enabled
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "codex-main")
+    global_cfg = tmp_path / "shared" / "config" / "global" / "config.json"
+    platform_cfg = tmp_path / "shared" / "config" / "codex" / "config.json"
+    global_cfg.parent.mkdir(parents=True, exist_ok=True)
+    platform_cfg.parent.mkdir(parents=True, exist_ok=True)
+    global_cfg.write_text("{not-json", encoding="utf-8")
+    platform_cfg.write_text('{"retrieval": {"fail_hard": false}}', encoding="utf-8")
+
+    with caplog.at_level("WARNING"):
+        assert is_fail_hard_enabled() is False
+
+    assert any("Failed to load fail-hard policy" in rec.message for rec in caplog.records)
 
 
 def test_get_deferred_notice_status_passes_through_options():

@@ -32,11 +32,11 @@ def is_fail_hard_enabled() -> bool:
                 parsed = json.loads(config_path.read_text(encoding="utf-8"))
             except Exception as exc:
                 logger.warning(
-                    "Failed to load fail-hard policy from lightweight config %s; defaulting to enabled: %s",
+                    "Failed to load fail-hard policy from lightweight config %s; skipping layer: %s",
                     config_path,
                     exc,
                 )
-                return True
+                continue
             if isinstance(parsed, dict):
                 data = _deep_merge_dicts(data, _normalize_config_keys(parsed))
 
