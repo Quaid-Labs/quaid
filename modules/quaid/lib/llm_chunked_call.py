@@ -279,6 +279,9 @@ def waterfall_llm_call(
                 )
         except Exception as e:
             logger.error("[waterfall-llm] Chunk %d/%d failed: %s", i + 1, total, e)
+            from lib.fail_policy import is_fail_hard_enabled
+            if is_fail_hard_enabled():
+                raise RuntimeError(f"waterfall LLM chunk {i + 1}/{total} failed") from e
             # Continue with existing carryover — don't lose previous work
 
     return carryover

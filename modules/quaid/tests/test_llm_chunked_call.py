@@ -215,7 +215,10 @@ class TestWaterfallLlmCall:
                 raise RuntimeError("LLM error")
             return (f"ok-{call_num[0]}", 1.0)
 
-        with patch(_DEEP, side_effect=mock_call):
+        with patch(_DEEP, side_effect=mock_call), patch(
+            "lib.fail_policy.is_fail_hard_enabled",
+            return_value=False,
+        ):
             result = waterfall_llm_call(
                 system_prompt="sys",
                 content=content,
@@ -225,13 +228,35 @@ class TestWaterfallLlmCall:
         # Chunk 2 failed, so carryover from chunk 1 should persist
         assert "ok-1" in result or result.startswith("ok-")
 
+    def test_error_raises_when_fail_hard_enabled(self):
+        content = "\n".join([f"line {i} " + "x" * 200 for i in range(30)])
+        call_num = [0]
+
+        def mock_call(prompt, system_prompt=None, max_tokens=4000, timeout=300):
+            call_num[0] += 1
+            if call_num[0] == 2:
+                raise RuntimeError("LLM error")
+            return (f"ok-{call_num[0]}", 1.0)
+
+        with patch(_DEEP, side_effect=mock_call), patch(
+            "lib.fail_policy.is_fail_hard_enabled",
+            return_value=True,
+        ):
+            with pytest.raises(RuntimeError, match="waterfall LLM chunk 2/"):
+                waterfall_llm_call(
+                    system_prompt="sys",
+                    content=content,
+                    max_chunk_tokens=500,
+                )
+
     def test_empty_content_returns_initial(self):
-        result = waterfall_llm_call(
-            system_prompt="sys",
-            content="",
-            initial_carryover="init",
-            max_chunk_tokens=1000,
-        )
+        with patch(_DEEP, return_value=("init", 0.1)):
+            result = waterfall_llm_call(
+                system_prompt="sys",
+                content="",
+                initial_carryover="init",
+                max_chunk_tokens=1000,
+            )
         assert result == "init"
 
     def test_uses_fast_reasoning_when_specified(self):
