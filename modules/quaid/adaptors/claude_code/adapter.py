@@ -467,10 +467,58 @@ class ClaudeCodeAdapter(QuaidAdapter):
     def _normalize_claude_project_dir_name(value: str) -> str:
         return re.sub(r"[^a-z0-9]+", "-", str(value or "").lower()).strip("-")
 
+    def _bound_project_dir_for_current_instance(self) -> str:
+        try:
+            instance_id = str(self.instance_id() or "").strip()
+        except Exception:
+            instance_id = os.environ.get("QUAID_INSTANCE", "").strip()
+        if not instance_id:
+            return ""
+
+        bindings_dir = self.quaid_home() / "shared" / "instance-bindings" / self.adapter_id()
+        try:
+            binding_paths = sorted(
+                bindings_dir.glob("*.json"),
+                key=lambda candidate: candidate.stat().st_mtime,
+                reverse=True,
+            )
+        except (OSError, RuntimeError):
+            return ""
+
+        explicit_matches: list[str] = []
+        prefix = f"{self.agent_id_prefix()}-"
+        for binding_path in binding_paths:
+            try:
+                data = json.loads(binding_path.read_text(encoding="utf-8"))
+                if str(data.get("instance") or "").strip() != instance_id:
+                    continue
+                adapter_id = str(data.get("adapter") or "").strip()
+                if adapter_id and adapter_id != self.adapter_id():
+                    continue
+                project_dir = str(data.get("project_dir") or "").strip()
+                if not project_dir:
+                    continue
+                resolved_project = Path(project_dir).expanduser().resolve()
+                new_slug = instance_slug_from_project_dir(str(resolved_project))
+                legacy_slug = _legacy_instance_slug_from_project_dir(str(resolved_project))
+                if binding_path.name not in {f"{new_slug}.json", f"{legacy_slug}.json"}:
+                    continue
+                if instance_id in {f"{prefix}{new_slug}", f"{prefix}{legacy_slug}"}:
+                    return str(resolved_project)
+                explicit_matches.append(str(resolved_project))
+            except Exception:
+                continue
+
+        unique_matches = list(dict.fromkeys(explicit_matches))
+        return unique_matches[0] if len(unique_matches) == 1 else ""
+
     def _current_project_session_slug(self) -> str:
         project_dir = os.environ.get("CLAUDE_PROJECT_DIR", "").strip()
         if project_dir:
             return _legacy_instance_slug_from_project_dir(project_dir)
+        bound_project_dir = self._bound_project_dir_for_current_instance()
+        if bound_project_dir:
+            return _legacy_instance_slug_from_project_dir(bound_project_dir)
         instance_id = ""
         try:
             instance_id = str(self.instance_id() or "").strip()

@@ -129,6 +129,69 @@ def test_quaid_project_create_links_claude_code_instance_from_safe_cwd(tmp_path:
     assert registry["projects"]["livetest-agentmsg-xp"]["instances"] == [instance]
 
 
+def test_quaid_project_create_reads_legacy_claude_code_binding_from_safe_cwd(tmp_path: Path) -> None:
+    from lib.instance import _legacy_instance_slug_from_project_dir
+
+    repo_root = Path(__file__).resolve().parents[1]
+    quaid_bin = repo_root / "quaid"
+
+    home = tmp_path / "home"
+    quaid_home = home / ".quaid"
+    visible_home = home / "quaid"
+    short_root = Path(tempfile.mkdtemp(prefix="qcli-", dir="/tmp"))
+    project_dir = short_root / "cc_project"
+    project_dir.mkdir(parents=True)
+
+    instance = "claude-code-explicit-alpha"
+    instance_dir = quaid_home / "instances" / instance
+    instance_dir.mkdir(parents=True)
+    (instance_dir / "config.json").write_text(
+        json.dumps({"adapter": {"type": "claude-code"}}) + "\n",
+        encoding="utf-8",
+    )
+    legacy_slug = _legacy_instance_slug_from_project_dir(str(project_dir))
+    binding_path = quaid_home / "shared" / "instance-bindings" / "claude-code" / f"{legacy_slug}.json"
+    binding_path.parent.mkdir(parents=True)
+    binding_path.write_text(
+        json.dumps(
+            {
+                "adapter": "claude-code",
+                "instance": instance,
+                "project_dir": str(project_dir.resolve()),
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    env = {
+        **os.environ,
+        "HOME": str(home),
+        "QUAID_HOME": str(quaid_home),
+        "QUAID_VISIBLE_HOME": str(visible_home),
+        "QUAID_PYTHON_BIN": os.environ.get("QUAID_PYTHON_BIN", "python3"),
+    }
+    env.pop("QUAID_INSTANCE", None)
+    env.pop("CLAUDE_PROJECT_DIR", None)
+    env.pop("CODEX_PROJECT_DIR", None)
+    env.pop("QUAID_ADAPTER_TYPE", None)
+
+    try:
+        subprocess.run(
+            [str(quaid_bin), "project", "create", "legacy-bound-project"],
+            cwd=project_dir,
+            env=env,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    finally:
+        shutil.rmtree(short_root, ignore_errors=True)
+
+    registry = json.loads((quaid_home / "project-registry.json").read_text(encoding="utf-8"))
+    assert registry["projects"]["legacy-bound-project"]["instances"] == [instance]
+
+
 def test_quaid_cli_does_not_guess_ambiguous_project_cwd(tmp_path: Path) -> None:
     repo_root = Path(__file__).resolve().parents[1]
     quaid_bin = repo_root / "quaid"

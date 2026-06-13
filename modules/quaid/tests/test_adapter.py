@@ -1605,6 +1605,44 @@ class TestClaudeCodeAdapter:
         assert adapter.get_instance_name() == instance_slug_from_project_dir(str(project_dir))
         assert adapter.get_discovery_sessions_dir() == claude_session_dir
 
+    def test_get_discovery_sessions_dir_uses_binding_without_claude_project_dir(self, tmp_path, monkeypatch):
+        from lib.instance import _legacy_instance_slug_from_project_dir
+
+        project_dir = tmp_path / "my_project"
+        project_dir.mkdir()
+        sessions_root = tmp_path / ".claude" / "projects"
+        claude_session_dir = sessions_root / f"-{_legacy_instance_slug_from_project_dir(str(project_dir))}"
+        claude_session_dir.mkdir(parents=True)
+        hashed_instance = f"claude-code-{instance_slug_from_project_dir(str(project_dir))}"
+        cfg_dir = tmp_path / "instances" / hashed_instance
+        cfg_dir.mkdir(parents=True)
+        (cfg_dir / "config.json").write_text(
+            json.dumps({"adapter": {"type": "claude-code"}}),
+            encoding="utf-8",
+        )
+        binding_path = _project_instance_binding_path(tmp_path, "claude-code", str(project_dir))
+        assert binding_path is not None
+        binding_path.parent.mkdir(parents=True)
+        binding_path.write_text(
+            json.dumps(
+                {
+                    "adapter": "claude-code",
+                    "instance": hashed_instance,
+                    "project_dir": str(project_dir.resolve()),
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", hashed_instance)
+
+        adapter = ClaudeCodeAdapter()
+
+        assert adapter.get_discovery_sessions_dir() == claude_session_dir
+
     def test_owns_session_path_rejects_sibling_claude_project_transcript(self, tmp_path, monkeypatch):
         sessions_root = tmp_path / ".claude" / "projects"
         original_dir = sessions_root / "-private-tmp-cc-livetest"
