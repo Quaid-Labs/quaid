@@ -70,15 +70,80 @@ fi
 
 # Check for an existing instance before detaching so we can report failure
 # to the caller before disappearing into the background.
-_SAFE_TARGET_PRE="$(echo "$WINDOW" | tr -c 'A-Za-z0-9_.-' '_')"
+_resolve_target_pane_for_files() {
+    local target="$1"
+    local pane=""
+    case "$target" in
+        self)
+            pane="${TMUX_PANE:-}"
+            ;;
+        [0-9]|[0-9][0-9])
+            pane="main:${target}.0"
+            ;;
+        main:*|livetest:*)
+            pane="$target"
+            ;;
+        *)
+            pane="$(python3 - "$TARGETS_FILE" "$target" <<'PY'
+import json
+import pathlib
+import sys
+
+cfg = pathlib.Path(sys.argv[1])
+key = sys.argv[2]
+if not cfg.is_file():
+    print("")
+    raise SystemExit(0)
+try:
+    data = json.loads(cfg.read_text(encoding="utf-8"))
+except Exception:
+    print("")
+    raise SystemExit(0)
+if not isinstance(data, dict):
+    print("")
+    raise SystemExit(0)
+value = data.get(key, "")
+print(value if isinstance(value, str) else "")
+PY
+)"
+            ;;
+    esac
+    if [[ -n "$pane" ]]; then
+        tmux display-message -p -t "$pane" '#{session_name}:#{window_index}.#{pane_index}' 2>/dev/null && return 0
+        printf '%s\n' "$pane"
+        return 0
+    fi
+    printf '%s\n' "$target"
+}
+
+_safe_target_for_files() {
+    # Preserve the historical trailing underscore used by documented pidfile
+    # paths, while canonicalizing aliases/window numbers to main:N.0 first.
+    local canonical="$1"
+    printf '%s' "$canonical" | tr -c 'A-Za-z0-9_.-' '_'
+    printf '_'
+}
+
+_legacy_safe_target_for_files() {
+    local target="$1"
+    printf '%s' "$target" | tr -c 'A-Za-z0-9_.-' '_'
+    printf '_'
+}
+
+CANONICAL_TARGET="$(_resolve_target_pane_for_files "$WINDOW")"
+_SAFE_TARGET_PRE="$(_safe_target_for_files "$CANONICAL_TARGET")"
+_LEGACY_SAFE_TARGET_PRE="$(_legacy_safe_target_for_files "$WINDOW")"
 _PID_FILE_PRE="/tmp/autonomous_mode_${_SAFE_TARGET_PRE}.pid"
-if [[ -f "$_PID_FILE_PRE" ]]; then
-    _EXISTING_PID="$(cat "$_PID_FILE_PRE" 2>/dev/null || true)"
+_LEGACY_PID_FILE_PRE="/tmp/autonomous_mode_${_LEGACY_SAFE_TARGET_PRE}.pid"
+for _CANDIDATE_PID_FILE_PRE in "$_PID_FILE_PRE" "$_LEGACY_PID_FILE_PRE"; do
+    [[ -f "$_CANDIDATE_PID_FILE_PRE" ]] || continue
+    _EXISTING_PID="$(cat "$_CANDIDATE_PID_FILE_PRE" 2>/dev/null || true)"
     if [[ -n "$_EXISTING_PID" ]] && kill -0 "$_EXISTING_PID" 2>/dev/null; then
         echo "autonomous_mode already running for target '$WINDOW' (pid=$_EXISTING_PID)" >&2
+        echo "  pidfile: $_CANDIDATE_PID_FILE_PRE" >&2
         exit 1
     fi
-fi
+done
 
 # Auto-detach by default so loops survive transient launch shells.
 # Use -f to force foreground mode (debug/manual sessions).
@@ -107,7 +172,8 @@ else
 fi
 
 # --- PID file (one instance per target) ---
-SAFE_TARGET="$(echo "$WINDOW" | tr -c 'A-Za-z0-9_.-' '_')"
+CANONICAL_TARGET="$(_resolve_target_pane_for_files "$WINDOW")"
+SAFE_TARGET="$(_safe_target_for_files "$CANONICAL_TARGET")"
 PID_FILE="/tmp/autonomous_mode_${SAFE_TARGET}.pid"
 LOG_FILE="/tmp/autonomous_mode_${SAFE_TARGET}.log"
 TRACE_LOG="/tmp/autonomous_mode_${SAFE_TARGET}.trace.log"
@@ -138,6 +204,7 @@ write_status() {
   "script": "autonomous_mode.sh",
   "state": $(_json_escape "$state"),
   "target": $(_json_escape "$WINDOW"),
+  "canonical_target": $(_json_escape "$CANONICAL_TARGET"),
   "pid": $PID,
   "interval_seconds": $INTERVAL,
   "started_at": $(_json_escape "$STARTED_AT"),

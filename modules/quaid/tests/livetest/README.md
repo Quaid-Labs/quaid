@@ -378,6 +378,10 @@ Telemetry/debug files:
 - Trace: `/tmp/autonomous_mode_<target>.trace.log`
 - Status JSON: `/tmp/autonomous_mode_<target>.status.json`
 
+Window numbers and aliases are canonicalized to their resolved pane target for
+these files. For example, `-w 3`, `-w main:3.0`, and an alias resolving to
+`main:3.0` all use `/tmp/autonomous_mode_main_3.0_.pid`.
+
 The status JSON is the first place to check for drops (`state`, `stop_reason`,
 `exit_code`, `last_send_rc`, `last_outcome`).
 
