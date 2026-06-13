@@ -168,6 +168,14 @@ def _atomic_write_text(path: Path, content: str, *, encoding: str = "utf-8") -> 
         _atomic_write_text_unlocked(path, content, encoding=encoding)
 
 
+def _write_text_if_missing(path: Path, content: str, *, encoding: str = "utf-8") -> bool:
+    with _project_md_write_lock(path):
+        if path.exists():
+            return False
+        _atomic_write_text_unlocked(path, content, encoding=encoding)
+        return True
+
+
 def _docs_project_visible_to_current_instance(project: Optional[str]) -> bool:
     name = str(project or "").strip()
     current = _current_quaid_instance_id()
@@ -800,8 +808,8 @@ class DocsRegistry:
         canonical.mkdir(parents=True, exist_ok=True)
         (canonical / "docs").mkdir(exist_ok=True)
         project_md = canonical / "PROJECT.md"
-        if write_project_md and not project_md.exists():
-            _atomic_write_text(
+        if write_project_md:
+            _write_text_if_missing(
                 project_md,
                 render_project_md_template(
                     label=name.replace("-", " ").replace("_", " ").title(),
@@ -1450,8 +1458,7 @@ class DocsRegistry:
         )
 
         project_md_path = home_abs / "PROJECT.md"
-        if not project_md_path.exists():
-            _atomic_write_text(project_md_path, project_md)
+        _write_text_if_missing(project_md_path, project_md)
 
         # Save project definition to DB (source of truth)
         from config import ProjectDefinition, reload_config

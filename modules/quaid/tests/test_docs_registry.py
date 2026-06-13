@@ -573,6 +573,24 @@ class TestCreateProject:
 
         assert project_md.read_text(encoding="utf-8") == "existing content"
 
+    def test_write_text_if_missing_checks_existence_under_lock(self, setup_env, monkeypatch):
+        from datastore.docsdb import registry as registry_mod
+
+        project_md = setup_env / "projects" / "test-project" / "PROJECT.md"
+        project_md.unlink(missing_ok=True)
+
+        @contextmanager
+        def _seed_during_lock(_path):
+            project_md.write_text("seeded by racing writer", encoding="utf-8")
+            yield
+
+        monkeypatch.setattr(registry_mod, "_project_md_write_lock", _seed_during_lock)
+
+        wrote = registry_mod._write_text_if_missing(project_md, "new scaffold")
+
+        assert wrote is False
+        assert project_md.read_text(encoding="utf-8") == "seeded by racing writer"
+
     def test_rejects_unsafe_project_name_before_scaffold(self, setup_env):
         r = _get_registry()
         visible_home = setup_env.parents[1]
