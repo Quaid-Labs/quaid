@@ -765,6 +765,38 @@ class TestSyncFromChunks:
         assert count == 1
 
 
+class TestRegistryGc:
+    def test_apply_removes_orphaned_doc_chunks(self, setup_env):
+        from lib.database import get_connection
+        from datastore.docsdb.rag import DocsRAG
+
+        r = _get_registry()
+        docs_dir = setup_env / "docs"
+        docs_dir.mkdir(exist_ok=True)
+        doc_path = docs_dir / "stale.md"
+        doc_path.write_text("# Stale\nold content", encoding="utf-8")
+
+        r.register("docs/stale.md", project="test-project")
+        DocsRAG(_tmp_db)
+        with get_connection(_tmp_db) as conn:
+            conn.execute(
+                """
+                INSERT INTO doc_chunks (id, source_file, chunk_index, content, embedding)
+                VALUES (?, ?, 0, 'old content', X'00')
+                """,
+                ("stale:0", str(doc_path.resolve())),
+            )
+
+        doc_path.unlink()
+        result = r.gc(dry_run=False)
+
+        assert result["rag_chunks_deleted"] == 1
+        assert result["removed"][0]["file_path"] == "docs/stale.md"
+        with get_connection(_tmp_db) as conn:
+            assert conn.execute("SELECT COUNT(*) FROM doc_registry").fetchone()[0] == 0
+            assert conn.execute("SELECT COUNT(*) FROM doc_chunks").fetchone()[0] == 0
+
+
 class TestUpdateMetadata:
     def test_update_title(self, setup_env):
         r = _get_registry()

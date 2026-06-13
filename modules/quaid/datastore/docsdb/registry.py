@@ -2113,14 +2113,75 @@ class DocsRegistry:
 
         return result
 
+    def _rag_source_variants_for_registry_path(self, file_path: str) -> List[str]:
+        variants: List[str] = []
+        raw_path = str(file_path or "").strip()
+        if not raw_path:
+            return variants
+        for candidate in (raw_path, str(self._resolve_path(raw_path))):
+            value = str(candidate or "").strip()
+            if not value or value in variants:
+                continue
+            variants.append(value)
+            try:
+                resolved = str(Path(value).expanduser().resolve(strict=False))
+            except TypeError:
+                resolved = str(Path(value).expanduser().resolve())
+            if resolved and resolved not in variants:
+                variants.append(resolved)
+        return variants
+
+    def _vec_doc_chunks_table_exists(self, conn: sqlite3.Connection) -> bool:
+        row = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE name = 'vec_doc_chunks' LIMIT 1"
+        ).fetchone()
+        return row is not None
+
+    def _remove_rag_chunks_for_registry_path(self, conn: sqlite3.Connection, file_path: str) -> int:
+        source_variants = self._rag_source_variants_for_registry_path(file_path)
+        if not source_variants:
+            return 0
+        placeholders = ",".join("?" for _ in source_variants)
+        try:
+            old_chunk_ids = [
+                row[0]
+                for row in conn.execute(
+                    f"SELECT id FROM doc_chunks WHERE source_file IN ({placeholders})",
+                    tuple(source_variants),
+                ).fetchall()
+            ]
+        except sqlite3.OperationalError as exc:
+            if "no such table: doc_chunks" in str(exc).lower():
+                return 0
+            raise
+        if not old_chunk_ids:
+            return 0
+
+        conn.execute(
+            f"DELETE FROM doc_chunks WHERE source_file IN ({placeholders})",
+            tuple(source_variants),
+        )
+        if self._vec_doc_chunks_table_exists(conn):
+            try:
+                conn.executemany(
+                    "DELETE FROM vec_doc_chunks WHERE chunk_id = ?",
+                    [(chunk_id,) for chunk_id in old_chunk_ids],
+                )
+            except sqlite3.OperationalError as exc:
+                if "no such table: vec_doc_chunks" not in str(exc).lower():
+                    raise
+        return len(old_chunk_ids)
+
     def gc(self, dry_run: bool = True) -> Dict[str, Any]:
         """Garbage collect: remove registry entries pointing to missing files.
 
-        Returns: {"removed": [...], "kept": N}
+        Returns: {"removed": [...], "kept": N, "rag_chunks_deleted": N}
         """
         from lib.database import get_connection
         removed = []
+        failed = []
         kept = 0
+        rag_chunks_deleted = 0
         with get_connection(self.db_path) as conn:
             rows = conn.execute("SELECT id, file_path, project FROM doc_registry WHERE state = 'active'").fetchall()
             for row in rows:
@@ -2128,20 +2189,40 @@ class DocsRegistry:
                     continue
                 abs_path = self._resolve_path(row["file_path"])
                 if not abs_path.exists():
-                    removed.append({"id": row["id"], "file_path": row["file_path"], "project": row["project"]})
+                    entry = {"id": row["id"], "file_path": row["file_path"], "project": row["project"]}
                     if not dry_run:
-                        conn.execute("DELETE FROM doc_registry WHERE id = ?", (row["id"],))
+                        try:
+                            deleted = self._remove_rag_chunks_for_registry_path(conn, row["file_path"])
+                            conn.execute("DELETE FROM doc_registry WHERE id = ?", (row["id"],))
+                            entry["rag_chunks_deleted"] = deleted
+                            rag_chunks_deleted += deleted
+                        except Exception as exc:
+                            if _fail_hard_enabled():
+                                raise RuntimeError(f"Failed to clean docs RAG chunks for {row['file_path']!r}") from exc
+                            logger.warning(
+                                "Skipping broken docs registry entry %s after RAG chunk cleanup failed: %s",
+                                row["file_path"],
+                                exc,
+                            )
+                            failed.append({**entry, "error": str(exc)})
+                            continue
+                    removed.append(entry)
                 else:
                     kept += 1
 
-        result = {"removed": removed, "kept": kept}
+        result = {"removed": removed, "kept": kept, "rag_chunks_deleted": rag_chunks_deleted}
+        if failed:
+            result["failed"] = failed
         if removed:
             action = "Would remove" if dry_run else "Removed"
-            print(f"{action} {len(removed)} broken registry entries ({kept} kept)")
+            suffix = f", {rag_chunks_deleted} indexed chunk(s) removed" if not dry_run else ""
+            print(f"{action} {len(removed)} broken registry entries ({kept} kept{suffix})")
             for r in removed:
                 print(f"  {r['file_path']} (project: {r['project']})")
         else:
             print(f"No broken entries found ({kept} entries all valid)")
+        if failed:
+            print(f"Failed to remove {len(failed)} broken registry entries; see logs.")
         return result
 
     # ========================================================================
