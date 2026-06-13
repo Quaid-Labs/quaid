@@ -4508,17 +4508,11 @@ function _buildAutoInjectRecallOptions(query, limit, domain, usePreInjectionPass
     limit,
     expandGraph: true,
     graphDepth: 2,
-    // When pre-injection pass is enabled, honor the routed fast planner so
-    // project/docs questions can surface project-log evidence during normal
-    // turns. If that feature is disabled, keep the older bounded memory-only
-    // path for minimal hook overhead.
-    ...usePreInjectionPass ? {
-      datastores: void 0,
-      routeStores: true
-    } : {
-      datastores: ["vector_basic", "graph"],
-      routeStores: false
-    },
+    // Passive hook recall must include shared docs.db directly. Relying on the
+    // route planner can miss unlinked registered docs, leaving hooks with only
+    // instance-local graph/vector rows even when scoped docs recall would hit.
+    datastores: ["project", "vector_basic", "graph"],
+    routeStores: false,
     intent,
     ranking,
     domain,

@@ -1385,7 +1385,7 @@ describe("lifecycle signal detection", () => {
       { all: true },
       false,
     );
-    expect(direct.datastores).toEqual(["vector_basic", "graph"]);
+    expect(direct.datastores).toEqual(["project", "vector_basic", "graph"]);
     expect(direct.expandGraph).toBe(true);
     expect(direct.graphDepth).toBe(2);
     expect(direct.timeoutMs).toBeGreaterThan(0);
@@ -1396,14 +1396,14 @@ describe("lifecycle signal detection", () => {
       { all: true },
       false,
     );
-    expect(relational.datastores).toEqual(["vector_basic", "graph"]);
+    expect(relational.datastores).toEqual(["project", "vector_basic", "graph"]);
     expect(relational.expandGraph).toBe(true);
     expect(relational.graphDepth).toBe(2);
     expect(relational.intent).toBe("general");
 
     const facadeOpts = __test.buildFacadeRecallOptions(relational);
     expect(facadeOpts.timeoutMs).toBe(relational.timeoutMs);
-    expect(facadeOpts.datastores).toEqual(["vector_basic", "graph"]);
+    expect(facadeOpts.datastores).toEqual(["project", "vector_basic", "graph"]);
   });
 
   it("writes preinject evidence entries under daemon logs", () => {
@@ -1735,7 +1735,7 @@ describe("lifecycle signal detection", () => {
     })).toHaveLength(0);
   });
 
-  it("uses routed stores for generic auto-inject when pre-injection pass is enabled", () => {
+  it("includes project docs for generic auto-inject when pre-injection pass is enabled", () => {
     const opts = __test.buildAutoInjectRecallOptions(
       "What grinder do I use for my Flair 58 espresso setup?",
       6,
@@ -1743,8 +1743,8 @@ describe("lifecycle signal detection", () => {
       true,
     );
 
-    expect(opts.routeStores).toBe(true);
-    expect(opts.datastores).toBeUndefined();
+    expect(opts.routeStores).toBe(false);
+    expect(opts.datastores).toEqual(["project", "vector_basic", "graph"]);
     expect(opts.sourceTag).toBe("auto_inject");
   });
 
@@ -1840,7 +1840,7 @@ describe("lifecycle signal detection", () => {
     expect(opts.ranking?.sourceTypeBoosts?.assistant).toBe(1);
   });
 
-  it("keeps bounded memory-only auto-inject stores when pre-injection pass is disabled", () => {
+  it("keeps bounded docs and memory auto-inject stores when pre-injection pass is disabled", () => {
     const opts = __test.buildAutoInjectRecallOptions(
       "What grinder do I use for my Flair 58 espresso setup?",
       6,
@@ -1849,7 +1849,7 @@ describe("lifecycle signal detection", () => {
     );
 
     expect(opts.routeStores).toBe(false);
-    expect(opts.datastores).toEqual(["vector_basic", "graph"]);
+    expect(opts.datastores).toEqual(["project", "vector_basic", "graph"]);
     expect(opts.sourceTag).toBe("auto_inject");
   });
 
