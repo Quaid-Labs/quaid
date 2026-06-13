@@ -21100,11 +21100,15 @@ def recall(
         or "session_chunks" in planned_turn1_stores
     ):
         store_plan_graph_depth = max(1, len(turn1_relation_chain_groups))
+        # Deliberate recall still returns the requested limit, but store lanes
+        # need a wider candidate pool so compact facts below entity stubs/chunks
+        # can reach the post-merge priority chain.
+        store_plan_limit = max(limit, min(20, limit * 2))
         try:
             rows, meta, docs_bundle = _run_recall_store_plan(
                 query,
                 stores=planned_turn1_stores,
-                limit=limit,
+                limit=store_plan_limit,
                 owner_id=owner_id,
                 min_similarity=min_similarity,
                 planner_profile=planner_profile,
@@ -21115,7 +21119,7 @@ def recall(
                 common_kwargs=branch_common_kwargs,
             )
             return _return_validated_recall(
-                rows,
+                rows[:limit],
                 meta,
                 return_meta,
                 include_chunks=include_chunks,

@@ -2369,6 +2369,53 @@ class TestRecallBasic:
         assert recalled[0]["id"] == "fresh-friday"
         assert meta["query"] == query
 
+    def test_recall_deliberate_store_plan_uses_wider_candidate_pool_before_trim(self):
+        import datastore.memorydb.memory_graph as mg
+
+        captured = {}
+
+        def _fake_store_plan(query, **kwargs):
+            captured["limit"] = kwargs.get("limit")
+            return (
+                [
+                    {
+                        "id": f"row-{idx}",
+                        "text": f"Generic candidate row {idx}",
+                        "category": "fact",
+                        "similarity": 1.0 - (idx * 0.01),
+                    }
+                    for idx in range(10)
+                ],
+                {"mode": "deliberate", "selected_path": "store_plan"},
+                None,
+            )
+
+        query = "Nimbus Marker 74"
+        planner_meta = {
+            "query": query,
+            "used_llm": False,
+            "queries_count": 1,
+            "elapsed_ms": 0,
+            "planner_profile": "full",
+            "planned_stores": ["vector", "session_chunks"],
+            "planned_project": None,
+        }
+        with patch.object(mg, "_run_recall_store_plan", side_effect=_fake_store_plan):
+            recalled, meta = mg.recall(
+                query,
+                limit=5,
+                return_meta=True,
+                planned_queries=[query],
+                planner_meta=planner_meta,
+                max_turns=1,
+                use_lightweight_config=True,
+                use_intent=False,
+            )
+
+        assert captured["limit"] == 10
+        assert [row["id"] for row in recalled] == [f"row-{idx}" for idx in range(5)]
+        assert meta["selected_path"] == "store_plan"
+
 # ---------------------------------------------------------------------------
 # store() dedup behavior
 # ---------------------------------------------------------------------------
