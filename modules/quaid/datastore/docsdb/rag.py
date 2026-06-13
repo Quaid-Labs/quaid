@@ -1868,9 +1868,7 @@ class DocsRAG:
 
                 content = row[3]
                 is_dated_project_log = False
-                if date_from or date_to:
-                    if not _is_project_log_source(source_file):
-                        continue
+                if (date_from or date_to) and _is_project_log_source(source_file):
                     filtered_content = _filter_project_log_content_by_date(
                         content,
                         date_from=date_from,

@@ -760,7 +760,13 @@ class TestDocsSearchFiltering:
     @patch("datastore.docsdb.rag._lib_get_embedding", return_value=[0.1, 0.2, 0.3])
     @patch("datastore.docsdb.rag._lib_unpack_embedding", return_value=[0.1, 0.2, 0.3])
     @patch("datastore.docsdb.rag._lib_cosine_similarity", return_value=0.95)
-    def test_search_docs_filters_project_log_lines_by_date(self, _sim, _unpack, _embed, tmp_path):
+    def test_search_docs_filters_project_log_lines_by_date_and_preserves_regular_docs(
+        self,
+        _sim,
+        _unpack,
+        _embed,
+        tmp_path,
+    ):
         rag = _make_rag(tmp_path)
         db = sqlite3.connect(rag.db_path)
         try:
@@ -803,11 +809,13 @@ class TestDocsSearchFiltering:
             date_to="2026-03-10",
         )
 
-        assert len(results) == 1
-        assert results[0]["source"].endswith("PROJECT.log")
-        assert "Added legacy recall mode" in results[0]["content"]
-        assert "Switched recall planner to hybrid" not in results[0]["content"]
-        assert "Current recall planner summary" not in results[0]["content"]
+        by_source = {Path(result["source"]).name: result for result in results}
+        assert set(by_source) == {"PROJECT.log", "PROJECT.md"}
+        assert "Added legacy recall mode" in by_source["PROJECT.log"]["content"]
+        assert "Switched recall planner to hybrid" not in by_source["PROJECT.log"]["content"]
+        assert by_source["PROJECT.log"]["source_date"] == "2026-03-05"
+        assert "Current recall planner summary" in by_source["PROJECT.md"]["content"]
+        assert by_source["PROJECT.md"]["source_date"] is None
 
     @patch("datastore.docsdb.rag._lib_get_embedding", return_value=[0.1, 0.2, 0.3])
     @patch("datastore.docsdb.rag._lib_unpack_embedding", return_value=[0.1, 0.2, 0.3])
