@@ -2498,15 +2498,50 @@ def _store_context_refresh_state(state: Dict[str, Any]) -> None:
     if path is None:
         return
     tmp_path: Path | None = None
+    lock_file = None
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
+        lock_path = path.with_suffix(path.suffix + ".lock")
+        lock_file = lock_path.open("a+", encoding="utf-8")
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        state_to_write = dict(state or {})
+        try:
+            if path.is_file():
+                existing = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(existing, dict):
+                    merged = dict(existing)
+                    for key, value in state_to_write.items():
+                        if key != "sessions":
+                            merged[key] = value
+                    existing_sessions = existing.get("sessions")
+                    incoming_sessions = state_to_write.get("sessions")
+                    if isinstance(existing_sessions, dict) or isinstance(incoming_sessions, dict):
+                        sessions: Dict[str, Any] = {}
+                        if isinstance(existing_sessions, dict):
+                            sessions.update(existing_sessions)
+                        if isinstance(incoming_sessions, dict):
+                            sessions.update(incoming_sessions)
+                        merged["sessions"] = sessions
+                    state_to_write = merged
+        except Exception:
+            if _fail_hard_enabled():
+                raise
         tmp_path = path.with_suffix(f".tmp.{os.getpid()}.{time.time_ns()}")
-        tmp_path.write_text(json.dumps(state, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
+        tmp_path.write_text(json.dumps(state_to_write, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
         os.replace(tmp_path, path)
     except Exception:
         if _fail_hard_enabled():
             raise
     finally:
+        if lock_file is not None:
+            try:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+            except OSError:
+                pass
+            try:
+                lock_file.close()
+            except OSError:
+                pass
         if tmp_path is not None:
             try:
                 tmp_path.unlink()

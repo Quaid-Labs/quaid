@@ -1330,6 +1330,11 @@ def test_store_context_refresh_state_uses_atomic_replace(tmp_path, monkeypatch):
     from core.interface import hooks
 
     state_path = tmp_path / "data" / "context-refresh-state.json"
+    state_path.parent.mkdir(parents=True)
+    state_path.write_text(
+        json.dumps({"sessions": {"existing": {"turn_count": 7}}, "schema": 1}) + "\n",
+        encoding="utf-8",
+    )
     replacements = []
     real_replace = os.replace
 
@@ -1346,7 +1351,10 @@ def test_store_context_refresh_state_uses_atomic_replace(tmp_path, monkeypatch):
     hooks._store_context_refresh_state({"sessions": {"sess-1": {"turn_count": 2}}})
 
     assert replacements and replacements[0][1] == state_path
-    assert json.loads(state_path.read_text(encoding="utf-8"))["sessions"]["sess-1"]["turn_count"] == 2
+    payload = json.loads(state_path.read_text(encoding="utf-8"))
+    assert payload["schema"] == 1
+    assert payload["sessions"]["existing"]["turn_count"] == 7
+    assert payload["sessions"]["sess-1"]["turn_count"] == 2
     assert not list(state_path.parent.glob("context-refresh-state.tmp.*"))
 
 
