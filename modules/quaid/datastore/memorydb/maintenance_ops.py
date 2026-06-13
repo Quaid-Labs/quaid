@@ -3382,7 +3382,9 @@ def apply_decay_optimized(stale: List[Dict[str, Any]], graph: MemoryGraph,
             )
             # Use extraction_confidence as baseline to avoid compounding decay
             # (applying retention to already-decayed confidence would create exp-of-exp)
-            baseline = mem.get("extraction_confidence") or mem["confidence"]
+            baseline = mem.get("extraction_confidence")
+            if baseline is None:
+                baseline = mem["confidence"]
             new_confidence = max(min_conf, baseline * retention)
             decay_type = f"EXP(R={retention:.3f})"
         else:

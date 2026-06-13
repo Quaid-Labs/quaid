@@ -417,6 +417,28 @@ class TestApplyDecayOptimizedReal:
         # new_confidence = baseline * retention = 0.8 * 0.5 = 0.4
         assert updated.confidence == pytest.approx(0.4, abs=0.05)
 
+    def test_explicit_zero_extraction_confidence_is_not_replaced(self, tmp_path):
+        """0.0 extraction_confidence is a real baseline, not a missing value."""
+        from datastore.memorydb.maintenance_ops import apply_decay_optimized, JanitorMetrics
+        graph, _ = _make_graph(tmp_path)
+        metrics = JanitorMetrics()
+        mem = self._make_stale_mem(graph, "Zero-confidence extraction", days_ago=60, confidence=0.8)
+        mem["extraction_confidence"] = 0.0
+
+        with patch("datastore.memorydb.maintenance_ops._cfg") as mock_cfg, \
+             patch("datastore.memorydb.maintenance_ops._archive_node", return_value=True), \
+             patch("datastore.memorydb.maintenance_ops.hard_delete_node") as mock_delete:
+            mock_cfg.decay.mode = "exponential"
+            mock_cfg.decay.base_half_life_days = 60.0
+            mock_cfg.decay.access_bonus_factor = 0.15
+            mock_cfg.decay.minimum_confidence = 0.1
+            mock_cfg.decay.review_queue_enabled = False
+
+            result = apply_decay_optimized([mem], graph, metrics, dry_run=False)
+
+        assert result["deleted"] == 1
+        mock_delete.assert_called_once_with(mem["id"])
+
     def test_storage_strength_extends_half_life(self, tmp_path):
         """High storage_strength → slower decay (longer half-life)."""
         from datastore.memorydb.maintenance_ops import apply_decay_optimized, JanitorMetrics
