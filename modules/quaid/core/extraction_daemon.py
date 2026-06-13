@@ -78,6 +78,7 @@ _SIGNAL_POLL_PRIORITY = {
 _ROLLING_INTERNAL_ADVANCE_GRACE_SECONDS = 60.0
 _INTERNAL_CURSOR_UNFROZEN_PENDING_FLUSH_KEY = "internal_cursor_unfrozen_pending_flush"
 _DISCOVERY_STALE_ORPHAN_GRACE_SECONDS = 10 * 60
+_ORPHANED_CURSOR_RETENTION_SECONDS = 7 * 24 * 60 * 60
 _IGNORED_TIMEOUT_USER_TURN_MAX_CHARS = 12
 _TRANSCRIPT_ROLE_RE = re.compile(
     r"^\s*(?:\[\d{4}-\d{2}-\d{2}[T ][^\]]+\]\s*)?(User|Assistant|System):\s*(.*)$",
@@ -2068,6 +2069,48 @@ def _preserved_mirror_for_missing_transcript_cursor(session_id: str, transcript_
         if _fail_hard_enabled():
             raise
     return ""
+
+
+def _reap_orphaned_cursor_if_stale(
+    *,
+    cursor_file: Path,
+    session_id: str,
+    transcript_path: str,
+    now: float,
+    adapter=None,
+    scanner: str,
+) -> bool:
+    """Delete old cursors whose source transcript is gone and unrecoverable."""
+    raw_path = str(transcript_path or "").strip()
+    if not raw_path or os.path.isfile(raw_path):
+        return False
+    if _preserved_mirror_for_missing_transcript_cursor(str(session_id), raw_path, adapter=adapter):
+        return False
+    try:
+        cursor_mtime = cursor_file.stat().st_mtime
+    except OSError as exc:
+        if _fail_hard_enabled():
+            raise
+        logger.debug("failed to stat orphaned cursor %s during %s: %s", cursor_file, scanner, exc)
+        return False
+    age_seconds = max(0.0, float(now) - float(cursor_mtime))
+    if age_seconds < _ORPHANED_CURSOR_RETENTION_SECONDS:
+        return False
+    try:
+        cursor_file.unlink()
+    except OSError as exc:
+        if _fail_hard_enabled():
+            raise
+        logger.warning("failed to delete orphaned cursor %s during %s: %s", cursor_file, scanner, exc)
+        return False
+    logger.info(
+        "deleted orphaned cursor %s for missing transcript %s during %s (age=%.0fs)",
+        cursor_file.name,
+        raw_path,
+        scanner,
+        age_seconds,
+    )
+    return True
 
 
 def _pending_signal_source_keys(
@@ -6701,7 +6744,17 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
 
         session_id = data.get("session_id", "")
         transcript_path = data.get("transcript_path", "")
-        if not session_id or not transcript_path or not os.path.isfile(transcript_path):
+        if not session_id or not transcript_path:
+            continue
+        if not os.path.isfile(transcript_path):
+            _reap_orphaned_cursor_if_stale(
+                cursor_file=cursor_file,
+                session_id=str(session_id),
+                transcript_path=str(transcript_path),
+                now=now,
+                adapter=adapter,
+                scanner="idle scan",
+            )
             continue
         if _is_daemon_preserved_session_transcript_path(str(transcript_path)):
             active_cursor, active_path, active_key = _active_source_cursor_for_empty_preserved_cursor(
@@ -7096,6 +7149,15 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
                     },
                 )
                 pending_session_end_session_ids.add(str(session_id))
+            else:
+                _reap_orphaned_cursor_if_stale(
+                    cursor_file=cursor_file,
+                    session_id=str(session_id),
+                    transcript_path=str(transcript_path),
+                    now=time.time(),
+                    adapter=adapter,
+                    scanner="rolling scan",
+                )
             continue
         buffer_transcript_path = str(transcript_path)
         if _is_daemon_preserved_session_transcript_path(str(transcript_path)):

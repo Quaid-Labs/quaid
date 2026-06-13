@@ -6855,7 +6855,7 @@ class TestCheckIdleSessions:
     def test_skips_session_when_transcript_file_missing(self, monkeypatch, tmp_path):
         """check_idle_sessions must skip cursors pointing to non-existent transcripts."""
         instance_id = os.environ.get("QUAID_INSTANCE", "pytest-runner")
-        self._setup_cursor(tmp_path, instance_id, "ghost-sess", 1, tmp_path / "nonexistent.jsonl")
+        cursor_file = self._setup_cursor(tmp_path, instance_id, "ghost-sess", 1, tmp_path / "nonexistent.jsonl")
 
         captured = []
         now = 1_700_000_000.0
@@ -6868,6 +6868,42 @@ class TestCheckIdleSessions:
         extraction_daemon.check_idle_sessions(timeout_minutes=30)
 
         assert captured == []
+        assert cursor_file.exists()
+
+    def test_check_idle_sessions_reaps_old_orphaned_cursor(self, monkeypatch, tmp_path):
+        instance_id = os.environ.get("QUAID_INSTANCE", "pytest-runner")
+        cursor_file = self._setup_cursor(tmp_path, instance_id, "ghost-old", 1, tmp_path / "missing-old.jsonl")
+
+        now = 1_700_000_000.0
+        old_mtime = now - extraction_daemon._ORPHANED_CURSOR_RETENTION_SECONDS - 60
+        os.utime(cursor_file, (old_mtime, old_mtime))
+        captured = []
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setattr(extraction_daemon.time, "time", lambda: now)
+        monkeypatch.setattr(extraction_daemon, "_read_installed_at", lambda: now - 3600)
+        monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
+        monkeypatch.setattr(extraction_daemon, "write_signal", lambda *a, **kw: captured.append((a, kw)))
+
+        extraction_daemon.check_idle_sessions(timeout_minutes=30)
+
+        assert captured == []
+        assert not cursor_file.exists()
+
+    def test_check_chunk_ready_sessions_reaps_old_orphaned_cursor(self, monkeypatch, tmp_path):
+        instance_id = os.environ.get("QUAID_INSTANCE", "pytest-runner")
+        cursor_file = self._setup_cursor(tmp_path, instance_id, "ghost-roll", 1, tmp_path / "missing-roll.jsonl")
+
+        now = 1_700_000_000.0
+        old_mtime = now - extraction_daemon._ORPHANED_CURSOR_RETENTION_SECONDS - 60
+        os.utime(cursor_file, (old_mtime, old_mtime))
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setattr(extraction_daemon.time, "time", lambda: now)
+        monkeypatch.setattr(extraction_daemon, "_ensure_discovered_session_cursors", lambda adapter: None)
+        monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
+
+        extraction_daemon.check_chunk_ready_sessions(chunk_tokens=10)
+
+        assert not cursor_file.exists()
 
     def test_recent_idle_sessions_timeout_before_stale_backlog(self, monkeypatch, tmp_path):
         """A fresh idle session must not wait behind old stale timeout work."""
