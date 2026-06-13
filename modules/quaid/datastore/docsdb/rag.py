@@ -191,7 +191,20 @@ def _chunk_max_tokens() -> int:
 
 def _chunk_overlap_tokens() -> int:
     cfg = _rag_config()
-    return cfg.chunk_overlap_tokens if cfg else 100
+    raw = cfg.chunk_overlap_tokens if cfg else 100
+    try:
+        value = int(raw)
+    except (TypeError, ValueError) as exc:
+        if is_fail_hard_enabled():
+            raise RuntimeError(f"Invalid docs RAG chunk_overlap_tokens value: {raw!r}") from exc
+        logger.warning("Invalid docs RAG chunk_overlap_tokens=%r; using default 100", raw)
+        return 100
+    if value < 0:
+        if is_fail_hard_enabled():
+            raise RuntimeError(f"Invalid docs RAG chunk_overlap_tokens value: {raw!r}")
+        logger.warning("Negative docs RAG chunk_overlap_tokens=%r; using default 100", raw)
+        return 100
+    return value
 
 
 def _escape_like(value: str) -> str:

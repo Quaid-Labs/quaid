@@ -141,6 +141,32 @@ Content B.
         assert rag_mod._chunk_max_tokens() == 800
         assert "Non-positive docs RAG chunk_max_tokens" in caplog.text
 
+    def test_chunk_overlap_tokens_preserves_explicit_zero(self, monkeypatch):
+        import datastore.docsdb.rag as rag_mod
+
+        monkeypatch.setattr(rag_mod, "_rag_config", lambda: SimpleNamespace(chunk_overlap_tokens=0))
+
+        assert rag_mod._chunk_overlap_tokens() == 0
+
+    def test_chunk_overlap_tokens_rejects_invalid_failhard(self, monkeypatch):
+        import datastore.docsdb.rag as rag_mod
+
+        monkeypatch.setattr(rag_mod, "_rag_config", lambda: SimpleNamespace(chunk_overlap_tokens=None))
+        monkeypatch.setattr(rag_mod, "is_fail_hard_enabled", lambda: True)
+
+        with pytest.raises(RuntimeError, match="chunk_overlap_tokens"):
+            rag_mod._chunk_overlap_tokens()
+
+    def test_chunk_overlap_tokens_invalid_falls_back_when_fail_open(self, monkeypatch, caplog):
+        import datastore.docsdb.rag as rag_mod
+
+        monkeypatch.setattr(rag_mod, "_rag_config", lambda: SimpleNamespace(chunk_overlap_tokens="bad"))
+        monkeypatch.setattr(rag_mod, "is_fail_hard_enabled", lambda: False)
+
+        caplog.set_level("WARNING")
+        assert rag_mod._chunk_overlap_tokens() == 100
+        assert "Invalid docs RAG chunk_overlap_tokens" in caplog.text
+
 
 # ---------------------------------------------------------------------------
 # needs_reindex
