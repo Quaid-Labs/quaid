@@ -623,7 +623,7 @@ def _read_valid_pid(path: Path, *, role: str, project: Optional[str] = None) -> 
     return None
 
 
-def _write_pid_record(path: Path, *, role: str, pid: int, token: str, project: Optional[str] = None) -> None:
+def _write_pid_record(path: Path, *, role: str, pid: int, token: Optional[str], project: Optional[str] = None) -> None:
     payload: Dict[str, Any] = {
         "pid": int(pid),
         "role": role,
@@ -1881,7 +1881,7 @@ def write_worker_heartbeat(project: str, payload: Optional[Dict[str, Any]] = Non
     if payload:
         data.update(payload)
     _atomic_write_json(worker_heartbeat_path(project), data)
-    token = os.environ.get("QUAID_PROJECT_DOCS_WORKER_TOKEN", "").strip()
+    token = os.environ.get("QUAID_PROJECT_DOCS_WORKER_TOKEN", "").strip() or None
     _write_pid_record(worker_pid_path(project), role=WORKER_ROLE, pid=os.getpid(), token=token, project=project)
 
 

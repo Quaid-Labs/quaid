@@ -1917,6 +1917,7 @@ def test_worker_heartbeat_writes_atomic_json_pid_record(project_env):
     assert pid_data["pid"] == os.getpid()
     assert pid_data["role"] == project_docs.WORKER_ROLE
     assert pid_data["project"] == "demo"
+    assert pid_data["token"] is None
 
 
 def test_pid_startup_wait_allows_first_bootstrap_headroom(project_env, monkeypatch):
