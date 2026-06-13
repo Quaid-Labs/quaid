@@ -184,6 +184,77 @@ def test_recall_similar_pairs_bounds_materialized_nodes_and_reports_carryover(mo
     assert calls == [{"since": None, "limit": 3}]
 
 
+def test_recall_similar_pairs_includes_temporal_metadata_for_dedup(monkeypatch):
+    new_node = SimpleNamespace(
+        id="new",
+        name="Alex moved to Boston",
+        embedding=[1.0, 0.0],
+        type="Fact",
+        created_at="2024-02-01T00:00:00",
+        valid_from="2024-02-01",
+        valid_until=None,
+        occurred_start="2024-02-01",
+        occurred_end="2024-02-01",
+        mentioned_at="2024-02-02T00:00:00",
+    )
+    old_node = SimpleNamespace(
+        id="old",
+        name="Alex moved to Seattle",
+        embedding=[1.0, 0.0],
+        type="Fact",
+        created_at="2025-03-01T00:00:00",
+        valid_from="2025-03-01",
+        valid_until=None,
+        occurred_start="2025-03-01",
+        occurred_end="2025-03-01",
+        mentioned_at="2025-03-02T00:00:00",
+    )
+
+    class _Graph:
+        def cosine_similarity(self, emb_a, emb_b):
+            return 0.9
+
+    monkeypatch.setattr(maintenance_ops, "get_nodes_since", lambda graph, since=None, limit=0: [new_node])
+    monkeypatch.setattr(maintenance_ops, "recall_candidates", lambda graph, text, node_id: [old_node])
+
+    out = maintenance_ops.recall_similar_pairs(_Graph(), maintenance_ops.JanitorMetrics())
+
+    dup = out["duplicates"][0]
+    assert dup["occurred_start_a"] == "2024-02-01"
+    assert dup["mentioned_at_a"] == "2024-02-02T00:00:00"
+    assert dup["occurred_start_b"] == "2025-03-01"
+    assert dup["mentioned_at_b"] == "2025-03-02T00:00:00"
+
+
+def test_batch_duplicate_check_includes_temporal_context_in_prompt(monkeypatch):
+    captured = {}
+
+    def fake_call_fast_reasoning(prompt, **kwargs):
+        captured["prompt"] = prompt
+        return ('[{"pair": 1, "action": "keep_both", "reason": "different dates"}]', 0.01)
+
+    monkeypatch.setattr(maintenance_ops, "call_fast_reasoning", fake_call_fast_reasoning)
+
+    pairs = [{
+        "text_a": "Alex moved to Boston",
+        "text_b": "Alex moved to Seattle",
+        "similarity": 0.9,
+        "occurred_start_a": "2024-02-01",
+        "occurred_start_b": "2025-03-01",
+        "valid_from_a": "2024-02-01",
+        "valid_from_b": "2025-03-01",
+        "mentioned_at_a": "2024-02-02T00:00:00",
+        "mentioned_at_b": "2025-03-02T00:00:00",
+    }]
+
+    result = maintenance_ops.batch_duplicate_check(pairs, maintenance_ops.JanitorMetrics())
+
+    assert result == [None]
+    assert "occurred_start: 2024-02-01" in captured["prompt"]
+    assert "occurred_start: 2025-03-01" in captured["prompt"]
+    assert "different dates or validity periods" in captured["prompt"]
+
+
 def test_fix_vec_nodes_insert_error_respects_fail_hard():
     class _ConnRecovering:
         def execute(self, sql, params):

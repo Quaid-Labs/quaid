@@ -1492,6 +1492,22 @@ def _is_subset_duplicate_candidate(text_a: str, text_b: str) -> bool:
     return is_subset_overlap_candidate(text_a, text_b)
 
 
+def _temporal_pair_context(row: Dict[str, Any], suffix: str) -> str:
+    parts = []
+    for label, key in (
+        ("created", f"created_{suffix}"),
+        ("valid_from", f"valid_from_{suffix}"),
+        ("valid_until", f"valid_until_{suffix}"),
+        ("occurred_start", f"occurred_start_{suffix}"),
+        ("occurred_end", f"occurred_end_{suffix}"),
+        ("mentioned_at", f"mentioned_at_{suffix}"),
+    ):
+        value = row.get(key)
+        if value:
+            parts.append(f"{label}: {value}")
+    return ", ".join(parts) if parts else "no temporal metadata"
+
+
 # =============================================================================
 # Shared recall pass — builds candidate pairs once for both dedup & contradiction
 # =============================================================================
@@ -1641,8 +1657,20 @@ def recall_similar_pairs(
                 dup_candidates.append({
                     "id_a": new_node.id,
                     "text_a": new_node.name,
+                    "created_a": new_node.created_at,
+                    "valid_from_a": new_node.valid_from,
+                    "valid_until_a": new_node.valid_until,
+                    "occurred_start_a": new_node.occurred_start,
+                    "occurred_end_a": new_node.occurred_end,
+                    "mentioned_at_a": new_node.mentioned_at,
                     "id_b": cand.id,
                     "text_b": cand.name,
+                    "created_b": cand.created_at,
+                    "valid_from_b": cand.valid_from,
+                    "valid_until_b": cand.valid_until,
+                    "occurred_start_b": cand.occurred_start,
+                    "occurred_end_b": cand.occurred_end,
+                    "mentioned_at_b": cand.mentioned_at,
                     "similarity": round(sim, 3),
                     "type_a": new_node.type,
                     "type_b": cand.type,
@@ -1745,7 +1773,13 @@ def batch_duplicate_check(pairs: List[Dict[str, Any]], metrics: JanitorMetrics) 
 
     numbered = []
     for i, p in enumerate(pairs):
-        numbered.append(f'{i+1}. Fact A: "{p["text_a"]}"\n   Fact B: "{p["text_b"]}"\n   Similarity: {p["similarity"]}')
+        numbered.append(
+            f'{i+1}. Fact A: "{p["text_a"]}"\n'
+            f'     (time: {_temporal_pair_context(p, "a")})\n'
+            f'   Fact B: "{p["text_b"]}"\n'
+            f'     (time: {_temporal_pair_context(p, "b")})\n'
+            f'   Similarity: {p["similarity"]}'
+        )
 
     prompt = f"""You are checking {len(pairs)} candidate duplicate pairs from a personal knowledge base.
 For each pair, decide:
@@ -1756,6 +1790,7 @@ When merging, the merged_text should be the MORE SPECIFIC/DETAILED version. If F
 For facts, the merged_text MUST be at least 3 words (subject + verb + object). Never produce a bare noun phrase like "Montrose, Houston" for a fact — instead write "Alex lives in Montrose, Houston". Entity names (people, places) can be 1-2 words.
 
 IMPORTANT: Negation flips meaning. "likes X" vs "doesn't like X" = keep_both.
+IMPORTANT: If facts describe similar event types at different dates or validity periods, keep_both unless one fact clearly restates or corrects the same dated event.
 
 {chr(10).join(numbered)}
 
