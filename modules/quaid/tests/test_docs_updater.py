@@ -171,6 +171,53 @@ class TestCheckStaleness:
             from datastore.docsdb.updater import check_staleness
             assert check_staleness() == {}
 
+    def test_registry_mapping_failure_warns_and_uses_config_when_fail_open(self, tmp_path, monkeypatch, caplog):
+        cfg = _make_test_config(
+            source_mapping={"src.py": {"docs": ["docs/doc.md"]}},
+        )
+        with patch("datastore.docsdb.updater.get_config", return_value=cfg), \
+             _adapter_patch(tmp_path) as iroot:
+            from datastore.docsdb import updater
+
+            doc_file = iroot / "docs" / "doc.md"
+            doc_file.parent.mkdir(parents=True)
+            doc_file.write_text("old doc content")
+
+            import time
+            time.sleep(0.05)
+
+            src_file = iroot / "src.py"
+            src_file.write_text("updated source")
+
+            class _BrokenRegistry:
+                def get_source_mappings(self, project=None):
+                    raise OSError("registry unavailable")
+
+            monkeypatch.setattr("datastore.docsdb.registry.DocsRegistry", lambda: _BrokenRegistry())
+            monkeypatch.setattr(updater, "is_fail_hard_enabled", lambda: False)
+            caplog.set_level("WARNING")
+
+            stale = updater.check_staleness()
+
+        assert "docs/doc.md" in stale
+        assert "registry mappings unavailable" in caplog.text
+
+    def test_registry_mapping_failure_raises_when_fail_hard(self, tmp_path, monkeypatch):
+        cfg = _make_test_config(source_mapping={"src.py": {"docs": ["docs/doc.md"]}})
+        with patch("datastore.docsdb.updater.get_config", return_value=cfg), \
+             _adapter_patch(tmp_path):
+            from datastore.docsdb import updater
+
+            class _BrokenRegistry:
+                def get_source_mappings(self, project=None):
+                    raise OSError("registry unavailable")
+
+            monkeypatch.setattr("datastore.docsdb.registry.DocsRegistry", lambda: _BrokenRegistry())
+            monkeypatch.setattr(updater, "is_fail_hard_enabled", lambda: True)
+
+            with pytest.raises(RuntimeError, match="Failed to load docs registry source mappings"):
+                updater.check_staleness()
+
 
 class TestMapSourcesToDocs:
     """Tests for map_sources_to_docs()."""
@@ -1337,4 +1384,72 @@ class TestCmdUpdateStaleNeverIndexed:
             monkeypatch.setattr(updater, "notify_agent", lambda *args, **kwargs: True)
 
             with pytest.raises(RuntimeError, match="docs update index timeout"):
+                updater.cmd_update_stale(dry_run=False, project="quaid")
+
+    def test_update_stale_warns_when_registry_index_fails_fail_open(self, tmp_path, monkeypatch, caplog):
+        with _adapter_patch(tmp_path) as iroot:
+            from datastore.docsdb import updater
+
+            doc_path = iroot / "docs" / "broken.md"
+            doc_path.parent.mkdir(parents=True, exist_ok=True)
+            doc_path.write_text("# Broken\n", encoding="utf-8")
+
+            class _FakeRegistry:
+                def list_docs(self, project=None):
+                    return [{"file_path": str(doc_path), "last_indexed_at": None}]
+
+                def _resolve_path(self, path_str):
+                    return Path(path_str)
+
+            class _FakeRag:
+                def needs_reindex_many(self, paths):
+                    return {str(Path(p)): True for p in paths}
+
+            monkeypatch.setattr("datastore.docsdb.registry.DocsRegistry", _FakeRegistry)
+            monkeypatch.setattr("datastore.docsdb.rag.DocsRAG", _FakeRag)
+            monkeypatch.setattr(updater, "check_staleness", lambda project=None: {})
+            monkeypatch.setattr("core.docs.updater.index_project_logs", lambda project=None: 0)
+            monkeypatch.setattr(updater, "is_fail_hard_enabled", lambda: False)
+            monkeypatch.setattr(
+                updater,
+                "_index_doc_with_timeout",
+                lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("index failed")),
+            )
+
+            caplog.set_level("WARNING")
+            count = updater.cmd_update_stale(dry_run=False, project="quaid")
+
+        assert count == 0
+        assert "failed to index" in caplog.text
+
+    def test_update_stale_raises_when_registry_index_fails_fail_hard(self, tmp_path, monkeypatch):
+        with _adapter_patch(tmp_path) as iroot:
+            from datastore.docsdb import updater
+
+            doc_path = iroot / "docs" / "broken-hard.md"
+            doc_path.parent.mkdir(parents=True, exist_ok=True)
+            doc_path.write_text("# Broken Hard\n", encoding="utf-8")
+
+            class _FakeRegistry:
+                def list_docs(self, project=None):
+                    return [{"file_path": str(doc_path), "last_indexed_at": None}]
+
+                def _resolve_path(self, path_str):
+                    return Path(path_str)
+
+            class _FakeRag:
+                def needs_reindex_many(self, paths):
+                    return {str(Path(p)): True for p in paths}
+
+            monkeypatch.setattr("datastore.docsdb.registry.DocsRegistry", _FakeRegistry)
+            monkeypatch.setattr("datastore.docsdb.rag.DocsRAG", _FakeRag)
+            monkeypatch.setattr(updater, "check_staleness", lambda project=None: {})
+            monkeypatch.setattr(updater, "is_fail_hard_enabled", lambda: True)
+            monkeypatch.setattr(
+                updater,
+                "_index_doc_with_timeout",
+                lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("index failed")),
+            )
+
+            with pytest.raises(RuntimeError, match="failed to index registered doc"):
                 updater.cmd_update_stale(dry_run=False, project="quaid")

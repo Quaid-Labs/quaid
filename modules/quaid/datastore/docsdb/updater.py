@@ -864,6 +864,8 @@ def check_staleness(project: Optional[str] = None) -> Dict[str, StalenessInfo]:
         for doc_path, sources in registry_mappings.items():
             doc_to_sources[doc_path] = sources
     except Exception as exc:
+        if is_fail_hard_enabled():
+            raise RuntimeError("Failed to load docs registry source mappings") from exc
         logger.warning("Falling back to config source mappings; registry mappings unavailable: %s", exc)
 
     # 2. Config sourceMapping (fallback for unmigrated docs, skip when project filter active)
@@ -1750,6 +1752,8 @@ def cmd_update_stale(
                         print(f"  WARN: {message}")
                         break
                     except Exception as e:
+                        if is_fail_hard_enabled():
+                            raise RuntimeError(f"failed to index registered doc {fp}") from e
                         logger.warning("failed to index %s: %s", fp, e)
                 if newly_indexed:
                     print(f"\nIndexed {newly_indexed} never-indexed doc(s)")
