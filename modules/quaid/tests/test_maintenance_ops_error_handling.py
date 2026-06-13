@@ -295,11 +295,14 @@ def test_contradiction_keep_a_uses_atomic_sql_path(monkeypatch):
 def test_backfill_embeddings_vec_upsert_failure_warns_and_continues(monkeypatch):
     monkeypatch.delenv("QUAID_JANITOR_EMBED_TIMEOUT_SECONDS", raising=False)
     monkeypatch.delenv("OLLAMA_EMBED_TIMEOUT_S", raising=False)
+    monkeypatch.delenv("QUAID_JANITOR_EMBED_BACKFILL_LIMIT", raising=False)
 
     class _Conn:
         def execute(self, sql, params=()):
             text = str(sql).strip().upper()
             if text.startswith("SELECT ID, NAME FROM NODES WHERE EMBEDDING IS NULL"):
+                assert "LIMIT ?" in text
+                assert params == (1000,)
                 return _DummyResult(rows=[{"id": "n1", "name": "alpha node"}])
             if text.startswith("SELECT COUNT(*) FROM NODES_FTS"):
                 return _DummyResult(rows=[(0,)])
@@ -335,6 +338,8 @@ def test_backfill_embeddings_uses_global_timeout_when_janitor_override_unset(mon
         def execute(self, sql, params=()):
             text = str(sql).strip().upper()
             if text.startswith("SELECT ID, NAME FROM NODES WHERE EMBEDDING IS NULL"):
+                assert "LIMIT ?" in text
+                assert params == (1000,)
                 return _DummyResult(rows=[{"id": "n1", "name": "alpha node"}])
             if text.startswith("SELECT COUNT(*) FROM NODES_FTS"):
                 return _DummyResult(rows=[(0,)])
@@ -352,6 +357,7 @@ def test_backfill_embeddings_uses_global_timeout_when_janitor_override_unset(mon
             yield _Conn()
 
     monkeypatch.delenv("QUAID_JANITOR_EMBED_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.delenv("QUAID_JANITOR_EMBED_BACKFILL_LIMIT", raising=False)
     monkeypatch.setenv("OLLAMA_EMBED_TIMEOUT_S", "85")
     metrics = maintenance_ops.JanitorMetrics()
     graph = _Graph()
@@ -371,6 +377,8 @@ def test_backfill_embeddings_uses_env_override_timeout(monkeypatch):
         def execute(self, sql, params=()):
             text = str(sql).strip().upper()
             if text.startswith("SELECT ID, NAME FROM NODES WHERE EMBEDDING IS NULL"):
+                assert "LIMIT ?" in text
+                assert params == (1000,)
                 return _DummyResult(rows=[{"id": "n1", "name": "alpha node"}])
             if text.startswith("SELECT COUNT(*) FROM NODES_FTS"):
                 return _DummyResult(rows=[(0,)])
@@ -388,6 +396,7 @@ def test_backfill_embeddings_uses_env_override_timeout(monkeypatch):
             yield _Conn()
 
     monkeypatch.setenv("QUAID_JANITOR_EMBED_TIMEOUT_SECONDS", "17")
+    monkeypatch.delenv("QUAID_JANITOR_EMBED_BACKFILL_LIMIT", raising=False)
     metrics = maintenance_ops.JanitorMetrics()
     graph = _Graph()
 
@@ -399,3 +408,44 @@ def test_backfill_embeddings_uses_env_override_timeout(monkeypatch):
     assert out["found"] == 1
     assert out["embedded"] == 1
     get_embedding.assert_called_once_with("alpha node", timeout_s=17.0)
+
+
+def test_backfill_embeddings_applies_env_query_limit(monkeypatch):
+    captured = {}
+
+    class _Conn:
+        def execute(self, sql, params=()):
+            text = str(sql).strip().upper()
+            if text.startswith("SELECT ID, NAME FROM NODES WHERE EMBEDDING IS NULL"):
+                captured["sql"] = str(sql)
+                captured["params"] = params
+                return _DummyResult(rows=[])
+            if text.startswith("SELECT COUNT(*) FROM NODES_FTS"):
+                return _DummyResult(rows=[(0,)])
+            if text.startswith("SELECT COUNT(*) FROM NODES"):
+                return _DummyResult(rows=[(0,)])
+            return _DummyResult(rowcount=1)
+
+    class _Graph:
+        @contextmanager
+        def _get_conn(self):
+            yield _Conn()
+
+    monkeypatch.setenv("QUAID_JANITOR_EMBED_BACKFILL_LIMIT", "17")
+
+    out = maintenance_ops.backfill_embeddings(_Graph(), maintenance_ops.JanitorMetrics(), dry_run=True)
+
+    assert "LIMIT ?" in captured["sql"]
+    assert captured["params"] == (17,)
+    assert out["found"] == 0
+
+
+def test_backfill_embeddings_invalid_limit_honors_fail_hard(monkeypatch):
+    monkeypatch.setenv("QUAID_JANITOR_EMBED_BACKFILL_LIMIT", "not-an-int")
+
+    with patch.object(maintenance_ops, "is_fail_hard_enabled", return_value=False):
+        assert maintenance_ops._janitor_embedding_backfill_limit(default_limit=11) == 11
+
+    with patch.object(maintenance_ops, "is_fail_hard_enabled", return_value=True):
+        with pytest.raises(RuntimeError, match="Invalid QUAID_JANITOR_EMBED_BACKFILL_LIMIT"):
+            maintenance_ops._janitor_embedding_backfill_limit(default_limit=11)

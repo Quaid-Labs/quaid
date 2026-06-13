@@ -147,6 +147,26 @@ def _janitor_embedding_timeout_seconds() -> float:
     return max(5.0, global_timeout)
 
 
+def _janitor_embedding_backfill_limit(default_limit: int = 1000) -> int:
+    raw = str(os.environ.get("QUAID_JANITOR_EMBED_BACKFILL_LIMIT", "") or "").strip()
+    if raw:
+        try:
+            value = int(raw)
+            if value > 0:
+                return value
+        except Exception as exc:
+            if is_fail_hard_enabled():
+                raise RuntimeError(
+                    f"Invalid QUAID_JANITOR_EMBED_BACKFILL_LIMIT={raw!r}"
+                ) from exc
+            logger.warning(
+                "Invalid QUAID_JANITOR_EMBED_BACKFILL_LIMIT=%r; using default limit %d",
+                raw,
+                default_limit,
+            )
+    return default_limit
+
+
 def _owner_display_name() -> str:
     """Get the owner's display name from config for use in prompts."""
     try:
@@ -1485,9 +1505,11 @@ def backfill_embeddings(graph: MemoryGraph, metrics: JanitorMetrics,
     metrics.start_task("embedding_backfill")
     from lib.embeddings import get_embedding as _get_emb, pack_embedding as _pack_emb
 
+    batch_limit = _janitor_embedding_backfill_limit()
     with graph._get_conn() as conn:
         rows = conn.execute(
-            "SELECT id, name FROM nodes WHERE embedding IS NULL"
+            "SELECT id, name FROM nodes WHERE embedding IS NULL LIMIT ?",
+            (batch_limit,),
         ).fetchall()
 
     found = len(rows)

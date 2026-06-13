@@ -154,6 +154,7 @@ quaid notify --deferred-drain                 # fetch buffered notices when a hu
 - **When you detect pending deferred notices at the start of a human-facing session or task, drain them proactively** using `quaid notify --deferred-drain` and relay the results to the user. Do not wait for the user to ask.
 - If a notice arrived mid-task, drain at the next natural break in the human-facing conversation and mention it briefly ("I have a Quaid notice — [summary]").
 - Active outage/failure notices use the normal live notification path and should be relayed immediately when surfaced.
+- `QUAID_JANITOR_EMBED_BACKFILL_LIMIT` caps one janitor embedding-backfill batch (default `1000`) so maintenance does not materialize every missing-embedding row at once.
 
 ---
 
