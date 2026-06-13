@@ -4691,12 +4691,23 @@ def _classify_transcript_session(
         active_adapter = adapter if adapter is not None else _load_runtime_adapter()
         if active_adapter is None:
             return _TRANSCRIPT_CLASS_MEANINGFUL_USER_CONTENT
-        transcript_text = active_adapter.parse_session_jsonl(Path(transcript_path))
+        parse_session_jsonl = getattr(active_adapter, "parse_session_jsonl", None)
+        if not callable(parse_session_jsonl):
+            return _TRANSCRIPT_CLASS_MEANINGFUL_USER_CONTENT
+        transcript_text = parse_session_jsonl(Path(transcript_path))
         stripped = (transcript_text or "").strip()
         if not stripped:
             return _TRANSCRIPT_CLASS_INTERNAL_MAINTENANCE
         return _classify_timeout_transcript_content(stripped)
-    except Exception:
+    except Exception as exc:
+        if _fail_hard_enabled():
+            raise
+        logger.warning(
+            "transcript classification failed for session %s (%s): %s",
+            session_id,
+            transcript_path,
+            exc,
+        )
         return _TRANSCRIPT_CLASS_MEANINGFUL_USER_CONTENT
 
 

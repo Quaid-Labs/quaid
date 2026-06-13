@@ -4667,6 +4667,52 @@ def test_timeout_classifier_keeps_real_startup_user_turn_meaningful():
     assert extraction_daemon._transcript_has_meaningful_timeout_user_content(transcript)
 
 
+def test_classify_transcript_session_warns_on_parse_failure_when_fail_open(
+    monkeypatch, tmp_path, caplog
+):
+    transcript_path = tmp_path / "parse-failure.jsonl"
+    transcript_path.write_text('{"role":"user","content":"hello"}\n', encoding="utf-8")
+
+    class _BrokenAdapter(_OwnedTestAdapterMixin):
+        def parse_session_jsonl(self, path):
+            assert path == transcript_path
+            raise RuntimeError("parse exploded")
+
+    monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: False)
+
+    with caplog.at_level("WARNING", logger="quaid.daemon"):
+        result = extraction_daemon._classify_transcript_session(
+            "sess-parse-failure",
+            str(transcript_path),
+            adapter=_BrokenAdapter(),
+        )
+
+    assert result == extraction_daemon._TRANSCRIPT_CLASS_MEANINGFUL_USER_CONTENT
+    assert "transcript classification failed for session sess-parse-failure" in caplog.text
+    assert "parse exploded" in caplog.text
+
+
+def test_classify_transcript_session_raises_parse_failure_when_fail_hard(
+    monkeypatch, tmp_path
+):
+    transcript_path = tmp_path / "parse-failure.jsonl"
+    transcript_path.write_text('{"role":"user","content":"hello"}\n', encoding="utf-8")
+
+    class _BrokenAdapter(_OwnedTestAdapterMixin):
+        def parse_session_jsonl(self, path):
+            assert path == transcript_path
+            raise RuntimeError("parse exploded")
+
+    monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: True)
+
+    with pytest.raises(RuntimeError, match="parse exploded"):
+        extraction_daemon._classify_transcript_session(
+            "sess-parse-failure",
+            str(transcript_path),
+            adapter=_BrokenAdapter(),
+        )
+
+
 def test_process_signal_merges_subagent_transcript_with_per_turn_labels(monkeypatch, tmp_path):
     parent_path = tmp_path / "parent.jsonl"
     child_path = tmp_path / "child.jsonl"
