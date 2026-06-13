@@ -53,15 +53,63 @@ def _resolved_workspace() -> Path:
             return Path.cwd().resolve()
 
 
+def _path_is_under(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
+def _allowed_project_roots() -> List[Path]:
+    roots: List[Path] = []
+    for root in (_resolved_workspace(), get_visible_quaid_home()):
+        try:
+            resolved = root.expanduser().resolve(strict=False)
+        except TypeError:
+            resolved = root.expanduser().resolve()
+        if resolved not in roots:
+            roots.append(resolved)
+    return roots
+
+
 def _resolve_project_root(raw: str) -> Path:
-    p = Path(str(raw or "").strip())
+    value = str(raw or "").strip()
+    p = Path(value)
     if p.is_absolute():
-        return p
-    if not str(raw or "").strip():
-        return _workspace()
-    if str(raw).startswith("projects/") or str(raw) == "projects":
-        return get_visible_quaid_home() / raw
-    return _workspace() / raw
+        candidate = p
+    elif not value:
+        candidate = _workspace()
+    elif value.startswith("projects/") or value == "projects":
+        candidate = get_visible_quaid_home() / value
+    else:
+        candidate = _workspace() / value
+    try:
+        resolved = candidate.expanduser().resolve(strict=False)
+    except TypeError:
+        resolved = candidate.expanduser().resolve()
+    if not any(_path_is_under(resolved, root) for root in _allowed_project_roots()):
+        raise ValueError(f"Docs project path escapes Quaid workspace: {raw!r}")
+    return resolved
+
+
+def _safe_project_roots(raw_paths: List[Any]) -> List[str]:
+    roots: List[str] = []
+    for raw in raw_paths:
+        value = str(raw or "").strip()
+        if not value:
+            continue
+        resolved = str(_resolve_project_root(value))
+        if resolved not in roots:
+            roots.append(resolved)
+    return roots
+
+
+def _safe_project_home(raw: str) -> str:
+    value = str(raw or "").strip()
+    if not value:
+        return ""
+    return str(_resolve_project_root(value))
 
 
 def _canonical_source_path(raw_path: str) -> str:
@@ -2038,12 +2086,15 @@ class DocsRAG:
 
             defn = DocsRegistry(self.db_path).get_project_definition(project)
             if defn is not None:
+                home_dir = _safe_project_home(defn.home_dir)
                 return {
-                    "home_dir": str(_resolve_project_root(defn.home_dir)),
-                    "source_roots": [str(_resolve_project_root(r)) for r in (defn.source_roots or [])],
+                    "home_dir": home_dir,
+                    "source_roots": _safe_project_roots(list(defn.source_roots or [])),
                 }
         except Exception as exc:
             errors.append(exc)
+            if is_fail_hard_enabled():
+                raise RuntimeError(f"Failed resolving docs project paths via docs registry for {project!r}") from exc
             logger.warning("docs project path lookup failed via docs registry for %r: %s", project, exc)
 
         try:
@@ -2053,22 +2104,26 @@ class DocsRAG:
             canonical_path = str(entry.get("canonical_path") or "").strip()
             if canonical_path:
                 return {
-                    "home_dir": canonical_path,
+                    "home_dir": _safe_project_home(canonical_path),
                     "source_roots": [],
                 }
         except Exception as exc:
             errors.append(exc)
+            if is_fail_hard_enabled():
+                raise RuntimeError(f"Failed resolving docs project paths via project registry for {project!r}") from exc
             logger.warning("docs project path lookup failed via project registry for %r: %s", project, exc)
 
         try:
             visible_project_dir = get_visible_quaid_home() / "projects" / str(project or "").strip()
             if visible_project_dir.is_dir():
                 return {
-                    "home_dir": str(visible_project_dir),
+                    "home_dir": _safe_project_home(str(visible_project_dir)),
                     "source_roots": [],
                 }
         except Exception as exc:
             errors.append(exc)
+            if is_fail_hard_enabled():
+                raise RuntimeError(f"Failed resolving docs project paths via visible projects dir for {project!r}") from exc
             logger.warning("docs project path lookup failed via visible projects dir for %r: %s", project, exc)
 
         if errors and is_fail_hard_enabled():

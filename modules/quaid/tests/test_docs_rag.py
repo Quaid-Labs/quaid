@@ -2175,6 +2175,41 @@ class TestDocsSearchFiltering:
         assert paths["home_dir"] == str(project_dir)
         assert paths["source_roots"] == []
 
+    def test_get_project_paths_rejects_docs_registry_escape_when_failhard(self, tmp_path):
+        rag = _make_rag(tmp_path)
+        escaped = tmp_path.parent / "outside-project"
+        escaped.mkdir(parents=True, exist_ok=True)
+
+        class _Registry:
+            def __init__(self, _db_path):
+                pass
+
+            def get_project_definition(self, _project):
+                return SimpleNamespace(home_dir=str(escaped), source_roots=[])
+
+        with patch("datastore.docsdb.registry.DocsRegistry", _Registry), \
+             patch("datastore.docsdb.rag.is_fail_hard_enabled", return_value=True), \
+             pytest.raises(RuntimeError, match="Failed resolving docs project paths via docs registry"):
+            rag._get_project_paths("portfolio-site")
+
+    def test_get_project_paths_rejects_project_registry_escape_when_failhard(self, tmp_path):
+        rag = _make_rag(tmp_path)
+        escaped = tmp_path.parent / "outside-project"
+        escaped.mkdir(parents=True, exist_ok=True)
+
+        class _Registry:
+            def __init__(self, _db_path):
+                pass
+
+            def get_project_definition(self, _project):
+                return None
+
+        with patch("datastore.docsdb.registry.DocsRegistry", _Registry), \
+             patch("lib.project_registry.lookup", return_value={"canonical_path": str(escaped)}), \
+             patch("datastore.docsdb.rag.is_fail_hard_enabled", return_value=True), \
+             pytest.raises(RuntimeError, match="Failed resolving docs project paths via project registry"):
+            rag._get_project_paths("portfolio-site")
+
     @patch("datastore.docsdb.rag._lib_get_embedding", return_value=[0.1, 0.2, 0.3])
     def test_search_docs_bundle_reads_project_sources_when_index_empty(self, _embed, tmp_path, monkeypatch):
         rag = _make_rag(tmp_path)
