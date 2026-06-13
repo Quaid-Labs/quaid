@@ -554,32 +554,35 @@ def _merge_nodes_into(
     # Node uses .type (PascalCase: "Person", "Fact", etc.) → store uses lowercase category
     category = originals[0].type.lower() if originals else "fact"
 
-    # Store merged version with inherited signals
-    result = store_memory(
-        text=merged_text,
-        category=category,
-        source=source,
-        owner_id=owner,
-        verified=True,
-        confidence=max_confidence,
-        skip_dedup=True,
-        status="active",
-        created_at=earliest_created,
-        session_id=earliest_session,
-    )
-    merged_id = result.get("id")
-    if not merged_id:
-        return result
-
-    # Update confirmation_count and storage_strength on the merged node
-    merged_node = graph.get_node(merged_id)
-    if merged_node:
-        merged_node.confirmation_count = total_confirms
-        merged_node.storage_strength = max_storage
-        graph.update_node(merged_node)
-
-    # Migrate edges: repoint to merged node instead of deleting
     with graph._get_conn() as conn:
+        # Create the merged node and remove originals in one transaction. This
+        # prevents concurrent recall from seeing both versions and prevents
+        # crash-only partial merges.
+        result = store_memory(
+            text=merged_text,
+            category=category,
+            source=source,
+            owner_id=owner,
+            verified=True,
+            confidence=max_confidence,
+            skip_dedup=True,
+            status="active",
+            created_at=earliest_created,
+            session_id=earliest_session,
+            _conn=conn,
+        )
+        merged_id = result.get("id")
+        if not merged_id:
+            return result
+
+        # Update confirmation_count and storage_strength on the merged node.
+        merged_node = graph.get_node(merged_id)
+        if merged_node:
+            merged_node.confirmation_count = total_confirms
+            merged_node.storage_strength = max_storage
+            graph.update_node(merged_node, conn=conn)
+
+        # Migrate edges: repoint to merged node instead of deleting.
         source_fact_ids = [oid for oid in original_ids if oid]
         if source_fact_ids:
             placeholders = ",".join("?" for _ in source_fact_ids)

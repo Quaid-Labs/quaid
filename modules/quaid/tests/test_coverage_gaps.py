@@ -14,6 +14,7 @@ import json
 import math
 import hashlib
 import sqlite3
+from contextlib import contextmanager
 from pathlib import Path
 from datetime import datetime, timedelta
 from unittest.mock import patch, MagicMock
@@ -1048,6 +1049,57 @@ class TestDecayReviewAtomicity:
         assert queue_row["decision"] == "extend"
         assert node_row["status"] == "active"
         assert float(node_row["confidence"]) > 0.1
+
+
+class TestMergeAtomicity:
+    def test_merge_rolls_back_created_node_when_cleanup_fails(self, tmp_path):
+        from datastore.memorydb.maintenance_ops import _merge_nodes_into
+
+        graph, _ = _make_graph(tmp_path, "merge_atomic.db")
+        left = _make_node(graph, "Alex lives in Boston", confidence=0.7)
+        right = _make_node(graph, "Alex resides in Boston", confidence=0.8)
+
+        original_get_conn = graph._get_conn
+
+        class _FailingConn:
+            def __init__(self, wrapped):
+                self._wrapped = wrapped
+
+            def execute(self, sql, params=()):
+                if "DELETE FROM NODES WHERE ID = ?" in str(sql).upper():
+                    raise RuntimeError("simulated cleanup failure")
+                return self._wrapped.execute(sql, params)
+
+            def __getattr__(self, name):
+                return getattr(self._wrapped, name)
+
+        @contextmanager
+        def failing_get_conn():
+            with original_get_conn() as conn:
+                yield _FailingConn(conn)
+
+        with patch.object(graph, "_get_conn", failing_get_conn), \
+             patch("datastore.memorydb.maintenance_ops.get_graph", return_value=graph):
+            with pytest.raises(RuntimeError, match="simulated cleanup failure"):
+                _merge_nodes_into(
+                    graph,
+                    "Alex lives in Boston, Massachusetts",
+                    [left.id, right.id],
+                    source="dedup_merge",
+                )
+
+        with original_get_conn() as conn:
+            merged = conn.execute(
+                "SELECT id FROM nodes WHERE name = ?",
+                ("Alex lives in Boston, Massachusetts",),
+            ).fetchone()
+            originals = conn.execute(
+                "SELECT COUNT(*) FROM nodes WHERE id IN (?, ?)",
+                (left.id, right.id),
+            ).fetchone()[0]
+
+        assert merged is None
+        assert originals == 2
 
 
 class TestCreateEdgeAtomicity:
