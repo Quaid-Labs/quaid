@@ -10771,11 +10771,11 @@ def _run_recall_store_plan(
             reverse=True,
         )
         merged = merged[:merge_limit]
-    if fast_mode:
-        merged = _prioritize_fast_anchor_direct_rows(query, merged)
     merged = _prioritize_date_relation_callback_rows(query, merged)
     merged = _prioritize_named_entity_activity_anchor_rows(query, merged)
     merged = _prioritize_first_order_session_query_coverage(query, merged)
+    if fast_mode:
+        merged = _prioritize_fast_anchor_direct_rows(query, merged)
     store_plan_facet_rescue_rows: List[Dict[str, Any]] = []
     store_plan_facet_rescue_meta: Dict[str, Any] = {
         "applied": False,

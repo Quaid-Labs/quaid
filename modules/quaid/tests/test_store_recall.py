@@ -2152,6 +2152,50 @@ class TestRecallBasic:
             "late-entity-stub",
         ]
 
+    def test_fast_anchor_priority_runs_after_entity_and_session_boosts(self):
+        import datastore.memorydb.memory_graph as mg
+
+        query = "What does Nimbus Marker 74 do?"
+        rows = [
+            {
+                "id": "late-entity-stub",
+                "text": "Nimbus Marker 74",
+                "category": "fact",
+                "similarity": 1.0,
+                "extraction_confidence": 0.50,
+                "created_at": "2026-05-30T23:31:20",
+                "via": "graph_attached_fact",
+                "source_name": "nimbus",
+            },
+            {
+                "id": "session-context",
+                "text": "[session_chunk] Nimbus Marker 74 with brass cap appeared in the daily marker notes",
+                "category": "session_chunk",
+                "source_type": "session_chunk",
+                "via": "session_chunks",
+                "similarity": 0.95,
+                "created_at": "2026-05-30T23:31:22",
+                "chunk_id": "session-context",
+            },
+            {
+                "id": "earlier-answer-fact",
+                "text": "Test Owner's daily-use marker is a Nimbus Marker 74 with a brass cap.",
+                "category": "fact",
+                "similarity": 0.77,
+                "extraction_confidence": 0.93,
+                "created_at": "2026-05-30T22:31:11",
+            },
+        ]
+
+        rows = mg._prioritize_date_relation_callback_rows(query, rows)
+        rows = mg._prioritize_named_entity_activity_anchor_rows(query, rows)
+        rows = mg._prioritize_first_order_session_query_coverage(query, rows)
+        assert rows[0]["id"] == "late-entity-stub"
+
+        ranked = mg._prioritize_fast_anchor_direct_rows(query, rows)
+
+        assert ranked[0]["id"] == "earlier-answer-fact"
+
     def test_recall_fast_uses_wider_candidate_pool_before_trim(self, monkeypatch):
         import datastore.memorydb.memory_graph as mg
 
