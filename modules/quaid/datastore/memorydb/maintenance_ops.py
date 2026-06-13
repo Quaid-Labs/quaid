@@ -1312,18 +1312,21 @@ def record_health_snapshot(graph: MemoryGraph, health: Dict[str, Any]) -> Dict[s
 
     conf_dist = {"0.0-0.3": 0, "0.3-0.5": 0, "0.5-0.7": 0, "0.7-0.9": 0, "0.9-1.0": 0}
     with graph._get_conn() as conn:
-        for row in conn.execute("SELECT confidence FROM nodes").fetchall():
-            c = float(row["confidence"] or 0)
-            if c < 0.3:
-                conf_dist["0.0-0.3"] += 1
-            elif c < 0.5:
-                conf_dist["0.3-0.5"] += 1
-            elif c < 0.7:
-                conf_dist["0.5-0.7"] += 1
-            elif c < 0.9:
-                conf_dist["0.7-0.9"] += 1
-            else:
-                conf_dist["0.9-1.0"] += 1
+        row = conn.execute("""
+            SELECT
+                SUM(CASE WHEN COALESCE(confidence, 0) < 0.3 THEN 1 ELSE 0 END) AS b0,
+                SUM(CASE WHEN COALESCE(confidence, 0) >= 0.3 AND COALESCE(confidence, 0) < 0.5 THEN 1 ELSE 0 END) AS b1,
+                SUM(CASE WHEN COALESCE(confidence, 0) >= 0.5 AND COALESCE(confidence, 0) < 0.7 THEN 1 ELSE 0 END) AS b2,
+                SUM(CASE WHEN COALESCE(confidence, 0) >= 0.7 AND COALESCE(confidence, 0) < 0.9 THEN 1 ELSE 0 END) AS b3,
+                SUM(CASE WHEN COALESCE(confidence, 0) >= 0.9 THEN 1 ELSE 0 END) AS b4
+            FROM nodes
+        """).fetchone()
+        if row:
+            conf_dist["0.0-0.3"] = int(row["b0"] or 0)
+            conf_dist["0.3-0.5"] = int(row["b1"] or 0)
+            conf_dist["0.5-0.7"] = int(row["b2"] or 0)
+            conf_dist["0.7-0.9"] = int(row["b3"] or 0)
+            conf_dist["0.9-1.0"] = int(row["b4"] or 0)
 
         conn.execute(
             """

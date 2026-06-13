@@ -1,5 +1,6 @@
 import os
 import sys
+import json
 from contextlib import contextmanager
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -48,6 +49,51 @@ def test_get_last_successful_janitor_completed_at_fail_hard_behavior():
     with patch.object(maintenance_ops, "is_fail_hard_enabled", return_value=True):
         with pytest.raises(RuntimeError, match="janitor completion status"):
             maintenance_ops.get_last_successful_janitor_completed_at(graph)
+
+
+def test_record_health_snapshot_aggregates_confidence_buckets_in_sql():
+    inserted = {}
+
+    class _Conn:
+        def execute(self, sql, params=()):
+            text = str(sql).strip().upper()
+            if text == "SELECT CONFIDENCE FROM NODES":
+                raise AssertionError("record_health_snapshot must not fetch every node confidence")
+            if "SUM(CASE WHEN COALESCE(CONFIDENCE, 0) < 0.3" in text:
+                return _DummyResult(rows=[{"b0": 2, "b1": 3, "b2": 5, "b3": 7, "b4": 11}])
+            if text.startswith("INSERT INTO HEALTH_SNAPSHOTS"):
+                inserted["params"] = params
+                return _DummyResult(rowcount=1)
+            raise AssertionError(f"unexpected SQL: {sql}")
+
+    class _Graph:
+        @contextmanager
+        def _get_conn(self):
+            yield _Conn()
+
+    health = {
+        "total_nodes": 28,
+        "total_edges": 4,
+        "confidence_by_status": {
+            "active": {"count": 10, "avg_confidence": 0.8},
+            "approved": {"count": 5, "avg_confidence": 0.4},
+        },
+        "embedding_coverage": "14/28",
+        "staleness_distribution": {"90d+": 2},
+        "orphan_nodes": 1,
+    }
+
+    summary = maintenance_ops.record_health_snapshot(_Graph(), health)
+
+    assert summary == {"total": 28, "avg_confidence": pytest.approx(10 / 15), "total_edges": 4}
+    confidence_distribution = json.loads(inserted["params"][4])
+    assert confidence_distribution == {
+        "0.0-0.3": 2,
+        "0.3-0.5": 3,
+        "0.5-0.7": 5,
+        "0.7-0.9": 7,
+        "0.9-1.0": 11,
+    }
 
 
 def test_recall_candidates_fail_hard_behavior():
