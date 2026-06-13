@@ -990,6 +990,7 @@ def _finalize_no_payload_signal(
     next_cursor_offset: Optional[int] = None,
     clear_state: bool = False,
     emit_noop_metric: Optional[Callable[[], None]] = None,
+    release_lock: bool = True,
 ) -> None:
     """Finalize a no-payload branch consistently across short-circuit paths."""
     signal_type = str(
@@ -1016,7 +1017,8 @@ def _finalize_no_payload_signal(
     if callable(emit_noop_metric):
         emit_noop_metric()
     mark_signal_processed(signal_data)
-    _release_session_processing_lock(lock_owner_key, lock_fd)
+    if release_lock:
+        _release_session_processing_lock(lock_owner_key, lock_fd)
 
 
 def _daemon_lifecycle_event_id(
@@ -2384,15 +2386,8 @@ def _processing_lock_holder_dead(lock_path: Path) -> bool:
 def _remove_stale_processing_lock(lock_path: Path, *, holder_dead: bool) -> bool:
     if not holder_dead:
         return False
-    try:
-        lock_path.unlink()
-        logger.warning("removed stale session processing lock with dead holder: %s", lock_path)
-        return True
-    except FileNotFoundError:
-        return True
-    except OSError as exc:
-        logger.warning("failed removing stale session processing lock %s: %s", lock_path, exc)
-        return False
+    logger.warning("stale session processing lock has dead holder: %s", lock_path)
+    return True
 
 
 def _acquire_session_processing_lock(session_id: str) -> Optional[int]:
@@ -2411,21 +2406,20 @@ def _acquire_session_processing_lock(session_id: str) -> Optional[int]:
             os.close(fd)
         except OSError:
             pass
-        if _remove_stale_processing_lock(lock_path, holder_dead=holder_dead):
+        if not _remove_stale_processing_lock(lock_path, holder_dead=holder_dead):
+            return None
+        try:
+            fd = os.open(str(lock_path), os.O_RDWR | os.O_CREAT, 0o600)
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except (OSError, IOError) as exc:
+            logger.warning("failed reclaiming stale session processing lock for %s: %s", session_id, exc)
             try:
-                fd = os.open(str(lock_path), os.O_RDWR | os.O_CREAT, 0o600)
-                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except (OSError, IOError) as exc:
-                logger.warning("failed reclaiming stale session processing lock for %s: %s", session_id, exc)
-                try:
-                    os.close(fd)
-                except Exception:
-                    pass
-                return None
-            except Exception as exc:
-                logger.warning("failed reopening stale session processing lock for %s: %s", session_id, exc)
-                return None
-        else:
+                os.close(fd)
+            except Exception:
+                pass
+            return None
+        except Exception as exc:
+            logger.warning("failed reopening stale session processing lock for %s: %s", session_id, exc)
             return None
     payload = {
         "session_id": _validate_session_id(session_id),
@@ -2452,16 +2446,14 @@ def _release_session_processing_lock(session_id: str, lock_fd: Optional[int]) ->
         os.close(lock_fd)
     except OSError:
         pass
-    try:
-        _processing_lock_path(session_id).unlink()
-    except OSError:
-        pass
 
 
 def _processing_lock_active(session_id: str) -> bool:
     """Return True when another live worker owns this source/session lock."""
     lock_path = _processing_lock_path(session_id)
     if not lock_path.is_file():
+        return False
+    if _processing_lock_unlocked(lock_path):
         return False
     holder_dead = _processing_lock_holder_dead(lock_path)
     if _remove_stale_processing_lock(lock_path, holder_dead=holder_dead):
@@ -5986,6 +5978,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                 lock_fd=lock_fd,
                 cursor_key=lock_owner_key,
                 emit_noop_metric=lambda: _emit_noop_flush_metric(noop_reason),
+                release_lock=False,
             )
             return
 
@@ -6010,6 +6003,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                     lock_fd=lock_fd,
                     cursor_key=lock_owner_key,
                     next_cursor_offset=total_lines,
+                    release_lock=False,
                 )
                 return
 
@@ -6073,6 +6067,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                             signal_type in ("reset", "session_end", "compaction")
                             and not preserve_active_rolling_state_after_flush
                         ),
+                        release_lock=False,
                     )
                     return
 
@@ -7234,7 +7229,7 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
         # Check if we already have a pending signal for this session
         if session_id in pending_session_ids:
             continue
-        source_key = _signal_source_cursor_key(session_id, transcript_path, cursor_data=data)
+        source_key = _signal_source_cursor_key(session_id, transcript_path, cursor_data=row_cursor_data)
         if _source_signal_already_pending(
             pending_source_keys=pending_source_keys,
             source_key=source_key,

@@ -374,6 +374,32 @@ def test_finalize_no_payload_signal_records_lifecycle_before_signal_finalization
     assert order == ["record", "timeout_marker", "cursor", "mark", "release"]
 
 
+def test_finalize_no_payload_signal_can_defer_lock_release_to_outer_finally(monkeypatch):
+    order = []
+    monkeypatch.setattr(
+        extraction_daemon,
+        "_record_daemon_lifecycle_observation",
+        lambda *_args, **_kwargs: order.append("record") or {"persisted": True},
+    )
+    monkeypatch.setattr(extraction_daemon, "mark_signal_processed", lambda _signal: order.append("mark"))
+    monkeypatch.setattr(
+        extraction_daemon,
+        "_release_session_processing_lock",
+        lambda *_args, **_kwargs: order.append("release"),
+    )
+
+    extraction_daemon._finalize_no_payload_signal(
+        session_id="sess-finalize",
+        transcript_path="/tmp/session.jsonl",
+        signal_data={"type": "session_end", "session_id": "sess-finalize"},
+        lock_owner_key="sess-finalize",
+        lock_fd=123,
+        release_lock=False,
+    )
+
+    assert order == ["record", "mark"]
+
+
 def test_finalize_no_payload_signal_failhard_observation_error_prevents_finalization(
     monkeypatch,
 ):
@@ -6379,6 +6405,42 @@ class TestSignalRoundTrip:
         extraction_daemon._release_session_processing_lock("sess-lock", first)
         extraction_daemon._release_session_processing_lock("sess-other", other)
 
+    def test_session_processing_lock_release_keeps_reclaimable_sidecar(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
+
+        first = extraction_daemon._acquire_session_processing_lock("sess-sidecar")
+        assert first is not None
+        lock_path = extraction_daemon._processing_lock_path("sess-sidecar")
+        assert lock_path.exists()
+
+        extraction_daemon._release_session_processing_lock("sess-sidecar", first)
+        assert lock_path.exists()
+
+        second = extraction_daemon._acquire_session_processing_lock("sess-sidecar")
+        assert second is not None
+        extraction_daemon._release_session_processing_lock("sess-sidecar", second)
+        assert lock_path.exists()
+
+    def test_processing_lock_active_ignores_unlocked_sidecar_with_live_pid(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
+        monkeypatch.setattr(extraction_daemon, "_pid_alive", lambda _pid: True)
+
+        lock_path = extraction_daemon._processing_lock_path("source-released-live-pid")
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        lock_path.write_text(
+            json.dumps({
+                "session_id": "source-released-live-pid",
+                "pid": 999999,
+                "started_at": "2026-06-13T14:38:20Z",
+            }),
+            encoding="utf-8",
+        )
+
+        assert extraction_daemon._processing_lock_active("source-released-live-pid") is False
+        assert lock_path.exists()
+
     def test_processing_lock_active_reaps_old_unlocked_legacy_pid_file(self, monkeypatch, tmp_path):
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
         monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
@@ -6390,7 +6452,7 @@ class TestSignalRoundTrip:
         os.utime(lock_path, (old_time, old_time))
 
         assert extraction_daemon._processing_lock_active("source-legacy-lock") is False
-        assert not lock_path.exists()
+        assert lock_path.exists()
 
     def test_processing_lock_active_reaps_fresh_dead_pid_file(self, monkeypatch, tmp_path):
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
@@ -6409,7 +6471,7 @@ class TestSignalRoundTrip:
         )
 
         assert extraction_daemon._processing_lock_active("source-fresh-dead-lock") is False
-        assert not lock_path.exists()
+        assert lock_path.exists()
 
     def test_processing_lock_active_reaps_old_unlocked_empty_file(self, monkeypatch, tmp_path):
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
@@ -6422,7 +6484,7 @@ class TestSignalRoundTrip:
         os.utime(lock_path, (old_time, old_time))
 
         assert extraction_daemon._processing_lock_active("source-empty-lock") is False
-        assert not lock_path.exists()
+        assert lock_path.exists()
 
     def test_process_signal_preserves_signal_when_session_lock_unavailable(self, monkeypatch, tmp_path):
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
@@ -7035,6 +7097,79 @@ class TestCheckIdleSessions:
 
         assert [item["session_id"] for item in captured] == ["z-fresh-sess", "a-stale-sess"]
 
+    def test_idle_timeout_source_key_uses_current_row_cursor_data(self, monkeypatch, tmp_path):
+        """Idle dedup must use the cursor row being processed, not the last discovery-loop cursor."""
+        instance_id = os.environ.get("QUAID_INSTANCE", "pytest-runner")
+        cursor_dir = tmp_path / "instances" / instance_id / "data" / "session-cursors"
+        cursor_dir.mkdir(parents=True, exist_ok=True)
+        idle_transcript = tmp_path / "idle-row.jsonl"
+        fresh_transcript = tmp_path / "fresh-row.jsonl"
+        idle_transcript.write_text('{"role":"user","content":"older row"}\n', encoding="utf-8")
+        fresh_transcript.write_text('{"role":"user","content":"fresh row"}\n', encoding="utf-8")
+        idle_cursor = self._setup_cursor(tmp_path, instance_id, "idle-row-sess", 0, idle_transcript)
+        fresh_cursor = self._setup_cursor(tmp_path, instance_id, "fresh-row-sess", 0, fresh_transcript)
+
+        now = 1_700_000_000.0
+        os.utime(idle_transcript, (now - 3600, now - 3600))
+        os.utime(fresh_transcript, (now - 120, now - 120))
+
+        class _OrderedCursorDir:
+            def __init__(self, root, files):
+                self.root = root
+                self.files = files
+
+            def is_dir(self):
+                return True
+
+            def glob(self, pattern):
+                assert pattern == "*.json"
+                return iter(self.files)
+
+            def __truediv__(self, name):
+                return self.root / name
+
+        seen_source_keys = []
+
+        def _source_key(_session_id, _transcript_path, *, cursor_data=None, staged_state=None):
+            _ = staged_state
+            cursor_session = str((cursor_data or {}).get("session_id") or "missing")
+            return f"key-for-{cursor_session}"
+
+        def _already_pending(*, pending_source_keys, source_key, session_id, scanner):
+            _ = pending_source_keys
+            seen_source_keys.append((scanner, session_id, source_key))
+            return False
+
+        captured = []
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", instance_id)
+        monkeypatch.setattr(extraction_daemon, "_cursor_dir", lambda: _OrderedCursorDir(cursor_dir, [idle_cursor, fresh_cursor]))
+        monkeypatch.setattr(extraction_daemon.time, "time", lambda: now)
+        monkeypatch.setattr(extraction_daemon, "_read_installed_at", lambda: now - 7200)
+        monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
+        monkeypatch.setattr(extraction_daemon, "_ensure_discovered_session_cursors", lambda _adapter: 0)
+        monkeypatch.setattr(extraction_daemon, "_cursor_or_adapter_owns_transcript_path", lambda *_args, **_kwargs: True)
+        monkeypatch.setattr(extraction_daemon, "_reconcile_internal_cursor_state", lambda *_args, **_kwargs: "not_internal")
+        monkeypatch.setattr(extraction_daemon, "_signal_source_cursor_key", _source_key)
+        monkeypatch.setattr(extraction_daemon, "_source_signal_already_pending", _already_pending)
+        monkeypatch.setattr(
+            extraction_daemon,
+            "write_signal",
+            lambda signal_type, session_id, transcript_path, **kwargs: captured.append(
+                {
+                    "signal_type": signal_type,
+                    "session_id": session_id,
+                    "transcript_path": transcript_path,
+                    "meta": kwargs.get("meta"),
+                }
+            ),
+        )
+
+        extraction_daemon.check_idle_sessions(timeout_minutes=30)
+
+        assert seen_source_keys == [("idle", "idle-row-sess", "key-for-idle-row-sess")]
+        assert [item["session_id"] for item in captured] == ["idle-row-sess"]
+
     def test_idle_scan_trusts_instance_cursor_when_adapter_ownership_rejects(
         self, monkeypatch, tmp_path
     ):
@@ -7643,7 +7778,9 @@ class TestRollingExtraction:
 
         assert extraction_daemon.read_pending_signals() == []
         lock_dir = tmp_path / "instances" / "rolling-inst" / "data" / "session-processing"
-        assert list(lock_dir.glob("*.lock")) == []
+        lock_files = list(lock_dir.glob("*.lock"))
+        assert len(lock_files) == 1
+        assert extraction_daemon._processing_lock_active(lock_files[0].stem) is False
 
     def test_session_end_no_new_content_routes_session_ingest_through_broker(self, monkeypatch, tmp_path):
         import core.ingest_runtime as ingest_runtime
@@ -7927,11 +8064,8 @@ class TestRollingExtraction:
         session_id = "sess-roll-locked"
         source_key = extraction_daemon._signal_source_cursor_key(session_id, str(transcript_path))
         extraction_daemon.write_cursor(session_id, 0, str(transcript_path), source_key=source_key)
-        lock_path = extraction_daemon._processing_lock_path(source_key)
-        lock_path.write_text(
-            json.dumps({"session_id": source_key, "pid": os.getpid()}),
-            encoding="utf-8",
-        )
+        lock_fd = extraction_daemon._acquire_session_processing_lock(source_key)
+        assert lock_fd is not None
 
         real_adapter = sys.modules.get("lib.adapter")
         fake_adapter_mod = types.ModuleType("lib.adapter")
@@ -7963,6 +8097,7 @@ class TestRollingExtraction:
             assert captured == []
             assert not extraction_daemon._rolling_state_path(session_id).exists()
         finally:
+            extraction_daemon._release_session_processing_lock(source_key, lock_fd)
             if real_adapter is not None:
                 sys.modules["lib.adapter"] = real_adapter
             else:
@@ -14541,7 +14676,7 @@ class TestRollingExtraction:
         assert captured[0]["meta"]["recovered_from_rolling_state"] is True
         assert captured[0]["meta"]["source_cursor_key"] == source_key
         assert captured[0]["meta"]["flush_staged_payload_only"] is True
-        assert not lock_path.exists()
+        assert lock_path.exists()
 
     def test_missing_rolling_stage_flush_recovery_waits_for_active_source_lock(self, monkeypatch, tmp_path):
         """Durable-state recovery must not publish while a live rolling worker owns the source lock."""
@@ -14670,7 +14805,7 @@ class TestRollingExtraction:
         assert captured[0]["meta"]["recovered_missing_flush"] is True
         assert captured[0]["meta"]["recovered_from_rolling_state"] is True
         assert captured[0]["meta"]["source_cursor_key"] == source_key
-        assert not lock_path.exists()
+        assert lock_path.exists()
 
     def test_check_idle_sessions_retires_legacy_cursor_shadowed_by_source_cursor(
         self, monkeypatch, tmp_path
