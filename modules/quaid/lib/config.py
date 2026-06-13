@@ -87,8 +87,35 @@ def _deep_merge_dicts(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[st
     return merged
 
 
+def _known_platform_from_name(name: str) -> str:
+    if name.startswith("claude-code-") or name in {"claude-code", "claudecode"}:
+        return "claude-code"
+    if name.startswith("codex-") or name == "codex":
+        return "codex"
+    if name.startswith("openclaw-") or name == "openclaw":
+        return "openclaw"
+    if name.startswith("standalone-") or name == "standalone":
+        return "standalone"
+    return ""
+
+
+def _platform_from_instance_name_no_manifest(instance_name: str) -> str:
+    name = str(instance_name or "").strip().lower().replace("_", "-")
+    known = _known_platform_from_name(name)
+    if known:
+        return known
+    if name.startswith("standalone-") or name == "standalone":
+        return "standalone"
+    if "-" in name:
+        return name.split("-", 1)[0] or "standalone"
+    return name or "standalone"
+
+
 def _platform_from_instance_name(instance_name: str) -> str:
     name = str(instance_name or "").strip().lower().replace("_", "-")
+    known = _known_platform_from_name(name)
+    if known:
+        return known
     compact_name = name.replace("-", "")
     for adapter_id, prefix in _adapter_prefix_rows():
         compact_adapter = adapter_id.replace("-", "")
@@ -108,12 +135,18 @@ def _adapter_prefix_rows() -> List[tuple[str, str]]:
     manifest_root = Path(__file__).resolve().parent.parent / "adaptors" / "manifests"
     try:
         manifests = sorted(manifest_root.glob("*.json"))
-    except Exception:
-        manifests = []
+    except Exception as exc:
+        logger.warning("Failed to list adapter manifests from %s: %s", manifest_root, exc)
+        if _fail_hard_from_raw_lightweight_config():
+            raise RuntimeError(f"Failed to list adapter manifests from {manifest_root}") from exc
+        return rows
     for manifest_path in manifests:
         try:
             data = json.loads(manifest_path.read_text(encoding="utf-8"))
-        except Exception:
+        except Exception as exc:
+            logger.warning("Failed to load adapter manifest %s: %s", manifest_path, exc)
+            if _fail_hard_from_raw_lightweight_config():
+                raise RuntimeError(f"Failed to load adapter manifest {manifest_path}") from exc
             continue
         adapter_id = str(data.get("id") or manifest_path.stem).strip().lower()
         runtime = data.get("runtime") if isinstance(data, dict) else {}
@@ -125,6 +158,41 @@ def _adapter_prefix_rows() -> List[tuple[str, str]]:
             rows.append((adapter_id, prefix))
     rows.sort(key=lambda item: len(item[1]), reverse=True)
     return rows
+
+
+def _fail_hard_from_raw_lightweight_config() -> bool:
+    """Read failHard directly without calling lib.fail_policy and recursing."""
+    data: Dict[str, Any] = {}
+    try:
+        from lib.instance import quaid_home
+
+        home = quaid_home()
+        instance = os.environ.get("QUAID_INSTANCE", "").strip()
+        explicit = os.environ.get("QUAID_ADAPTER_TYPE", "").strip()
+        adapter_type = _adapter_type_from_instance_config(home, instance) if not explicit else ""
+        platform = _platform_from_instance_name_no_manifest(explicit or adapter_type or instance)
+        paths: List[Path] = []
+        if instance:
+            paths.append(home / "instances" / instance / "config.json")
+        paths.append(home / "shared" / "config" / platform / "config.json")
+        paths.append(home / "shared" / "config" / "global" / "config.json")
+        for config_path in reversed(paths):
+            if not config_path.is_file():
+                continue
+            try:
+                parsed = json.loads(config_path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            if isinstance(parsed, dict):
+                data = _deep_merge_dicts(data, _normalize_config_keys(parsed))
+    except Exception:
+        return True
+    retrieval = data.get("retrieval", {})
+    if not isinstance(retrieval, dict):
+        return True
+    if "fail_hard" in retrieval:
+        return bool(retrieval.get("fail_hard"))
+    return True
 
 
 def _adapter_type_from_instance_config(home: Path, instance: str) -> str:

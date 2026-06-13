@@ -1636,6 +1636,54 @@ class TestLightweightLibConfig:
         with patch("config.get_config", side_effect=AssertionError("full config should not load")):
             assert get_ollama_url() == "http://env-ollama:11434"
 
+    def test_lightweight_platform_manifest_glob_failure_logs_when_fail_open(
+        self,
+        caplog,
+        tmp_path,
+        monkeypatch,
+    ):
+        from lib.config import _platform_from_instance_name
+
+        global_cfg = tmp_path / "shared" / "config" / "global" / "config.json"
+        global_cfg.parent.mkdir(parents=True, exist_ok=True)
+        global_cfg.write_text(json.dumps({"retrieval": {"failHard": False}}), encoding="utf-8")
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "custom-main")
+        original_glob = Path.glob
+
+        def _glob(path, pattern):
+            if path.name == "manifests":
+                raise OSError("manifest dir unavailable")
+            return original_glob(path, pattern)
+
+        monkeypatch.setattr(Path, "glob", _glob)
+
+        with caplog.at_level("WARNING"):
+            assert _platform_from_instance_name("custom-main") == "custom"
+
+        assert "Failed to list adapter manifests" in caplog.text
+
+    def test_lightweight_platform_manifest_glob_failure_raises_when_failhard(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        from lib.config import _platform_from_instance_name
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "custom-main")
+        original_glob = Path.glob
+
+        def _glob(path, pattern):
+            if path.name == "manifests":
+                raise OSError("manifest dir unavailable")
+            return original_glob(path, pattern)
+
+        monkeypatch.setattr(Path, "glob", _glob)
+
+        with pytest.raises(RuntimeError, match="Failed to list adapter manifests"):
+            _platform_from_instance_name("custom-main")
+
     def test_lightweight_config_parse_error_raises_when_failhard_enabled(self, tmp_path, monkeypatch):
         from lib.config import get_ollama_url
 
