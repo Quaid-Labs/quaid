@@ -2152,6 +2152,79 @@ class TestRecallBasic:
             "late-entity-stub",
         ]
 
+    def test_recall_fast_uses_wider_candidate_pool_before_trim(self, monkeypatch):
+        import datastore.memorydb.memory_graph as mg
+
+        query = "Nimbus Marker 74"
+        captured = {}
+        planner_meta = {
+            "query": query,
+            "timeout_ms": 0,
+            "used_llm": False,
+            "bailout_reason": "preserve_short_exact_query",
+            "queries_count": 1,
+            "elapsed_ms": 0,
+            "planner_profile": "fast",
+            "planned_stores": ["vector", "session_chunks"],
+            "planned_project": None,
+        }
+        candidate_rows = [
+            {
+                "id": "late-entity-stub",
+                "text": "Nimbus Marker 74",
+                "category": "fact",
+                "similarity": 1.0,
+                "extraction_confidence": 0.50,
+                "created_at": "2026-05-30T23:31:20",
+            },
+            {
+                "id": "late-entity-stub-2",
+                "text": "Nimbus Marker 74 pen",
+                "category": "fact",
+                "similarity": 0.99,
+                "extraction_confidence": 0.50,
+                "created_at": "2026-05-30T23:31:21",
+            },
+            *[
+                {
+                    "id": f"chunk-{idx}",
+                    "text": f"[session_chunk] notes mention Nimbus Marker 74 with cap detail {idx}",
+                    "category": "session_chunk",
+                    "source_type": "session_chunk",
+                    "via": "session_chunks",
+                    "similarity": 0.95,
+                    "created_at": f"2026-05-30T23:31:2{idx}",
+                    "chunk_id": f"chunk-{idx}",
+                }
+                for idx in range(3)
+            ],
+            {
+                "id": "earlier-answer-fact",
+                "text": "Test Owner's daily-use marker is a Nimbus Marker 74 with a brass cap.",
+                "category": "fact",
+                "similarity": 0.77,
+                "extraction_confidence": 0.93,
+                "created_at": "2026-05-30T22:31:11",
+            },
+        ]
+
+        def fake_run_store_plan(*args, **kwargs):
+            captured["limit"] = kwargs.get("limit")
+            return list(candidate_rows), {"phases_ms": {}, "store_runs": []}, None
+
+        monkeypatch.setattr(mg, "_plan_fanout_queries", lambda *args, **kwargs: ([query], planner_meta))
+        monkeypatch.setattr(mg, "_run_recall_store_plan", fake_run_store_plan)
+        monkeypatch.setattr(mg, "_recover_assistant_memory_cluster_rows", lambda *args, **kwargs: [])
+        monkeypatch.setattr(mg, "_recover_assistant_suggestion_cluster_rows", lambda *args, **kwargs: [])
+        monkeypatch.setattr(mg, "_should_fast_drill_follow_up", lambda *args, **kwargs: (False, {}, [], "GENERAL"))
+        monkeypatch.setattr(mg, "_summarize_memory_quality", lambda *args, **kwargs: {})
+
+        rows, _meta = mg.recall_fast(query, limit=5, return_meta=True)
+
+        assert captured["limit"] == 10
+        assert len(rows) == 5
+        assert rows[0]["id"] == "earlier-answer-fact"
+
     def test_prioritize_date_relation_callback_rows_prefers_day_after_connection(self):
         import datastore.memorydb.memory_graph as mg
 

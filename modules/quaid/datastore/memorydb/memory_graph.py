@@ -19913,6 +19913,10 @@ def recall_fast(
     )
     temporal_dimension = _normalize_recall_temporal_dimension(temporal_dimension)
     effective_limit = min(limit, 6 if planner_profile == "aggressive" else 8)
+    # Fast recall still returns the requested small hook payload, but stores
+    # need a wider pool so compact answer facts can survive exact entity stubs
+    # and first-order chunks before direct-row prioritizers trim the result.
+    store_plan_limit = max(effective_limit, min(20, effective_limit * 2))
     planner_timeout_s = _recall_planner_timeout_s(timeout_ms, fast_mode=True)
     planner_started = _time.monotonic()
     try:
@@ -19984,7 +19988,7 @@ def recall_fast(
     rows, meta, docs_bundle = _run_recall_store_plan(
         query,
         stores=planned_stores,
-        limit=effective_limit,
+        limit=store_plan_limit,
         owner_id=owner_id,
         min_similarity=min_similarity,
         planner_profile=planner_profile,
