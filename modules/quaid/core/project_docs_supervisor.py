@@ -29,6 +29,7 @@ from lib.instance import internal_path_derived_instance_ids, list_instances, qua
 
 _STOP = False
 _INSTANCE_DB_OVERRIDE_ENV_KEYS = ("MEMORY_DB_PATH", "MEMORY_ARCHIVE_DB_PATH")
+_LOGGER = logging.getLogger(__name__)
 
 
 def _handle_stop(_signum, _frame) -> None:
@@ -359,6 +360,32 @@ def _dispatcher_only_mode() -> bool:
 
 def _supervisor_projects() -> Dict[str, Dict[str, object]]:
     return list_projects_raw() if _dispatcher_only_mode() else list_projects()
+
+
+def _valid_linked_project_instances(entry: Dict[str, object]) -> list[str]:
+    linked_instances: list[str] = []
+    for raw in list(entry.get("instances") or []):
+        try:
+            linked_instances.append(validate_instance_id(str(raw or "").strip()))
+        except Exception:
+            continue
+    return sorted(set(linked_instances))
+
+
+def _project_worker_start_skip_reason(project: str, entry: Dict[str, object]) -> Optional[str]:
+    if project_docs.read_worker_pid(project) is not None:
+        return None
+    request = project_docs.read_update_request(project) or {}
+    if str(request.get("requested_instance") or "").strip():
+        return None
+    valid_linked = _valid_linked_project_instances(entry)
+    if len(valid_linked) == 1:
+        return None
+    return (
+        f"cannot resolve QUAID_INSTANCE for project {project}; queued request must include "
+        "requested_instance or project must be linked to exactly one valid instance "
+        f"(valid_linked_instances={len(valid_linked)}: {', '.join(valid_linked) or 'none'})"
+    )
 
 
 def _start_janitor_worker(instance: str) -> subprocess.Popen:
@@ -713,6 +740,23 @@ def run_supervisor(*, once: bool = False, interval_seconds: float | None = None)
                 continue
             try:
                 project_docs.reap_stale_worker(project, stale_after_seconds=stale_after)
+                skip_reason = _project_worker_start_skip_reason(project, projects.get(project) or {})
+                if skip_reason:
+                    _LOGGER.warning(
+                        "project docs worker start skipped for %s: %s",
+                        project,
+                        skip_reason,
+                    )
+                    project_docs.merge_state(
+                        project,
+                        {
+                            "status": "error",
+                            "last_error": f"worker start skipped: {skip_reason}",
+                            "last_failed_at": project_docs.utc_now(),
+                        },
+                    )
+                    known_workers.pop(project, None)
+                    continue
                 pid = project_docs.start_worker(project)
                 known_workers[project] = pid
             except KeyError:

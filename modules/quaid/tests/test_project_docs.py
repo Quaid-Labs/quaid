@@ -2178,7 +2178,7 @@ def test_supervisor_removal_path_cleans_full_project_state(project_env):
         path.write_text("lock", encoding="utf-8")
         return False
 
-    with patch("core.project_docs_supervisor.list_projects", side_effect=[{"demo": {}}, {}]), \
+    with patch("core.project_docs_supervisor.list_projects", side_effect=[{"demo": {"instances": ["pytest-runner"]}}, {}]), \
          patch("core.project_docs_supervisor._maintain_instance_monitors", lambda _known: None), \
          patch("core.project_docs_supervisor._maintain_janitor_workers", lambda *_args, **_kwargs: None), \
          patch("core.project_docs.project_is_registered_for_worker", return_value=True), \

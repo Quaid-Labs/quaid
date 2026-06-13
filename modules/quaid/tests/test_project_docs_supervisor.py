@@ -24,6 +24,12 @@ def _write_janitor_checkpoint(tmp_path, instance_id: str, status: str = "complet
     checkpoint.write_text(json.dumps({"status": status}), encoding="utf-8")
 
 
+def _internal_instance_for(tmp_path, adapter_id: str, *parts: str) -> str:
+    from lib.instance import instance_slug_from_project_dir
+
+    return f"{adapter_id}-{instance_slug_from_project_dir(str(tmp_path.joinpath(*parts)))}"
+
+
 def _install_authoritative_docs_tick_supervisor_proxy(monkeypatch, supervisor) -> None:
     proxy = types.SimpleNamespace(
         write_supervisor_pid=lambda _token: None,
@@ -101,7 +107,7 @@ def test_supervisor_boot_mode_skips_docs_ticks_and_uses_raw_project_listing(monk
         "list_projects",
         lambda: (_ for _ in ()).throw(AssertionError("dispatcher boot should not reconcile projects")),
     )
-    monkeypatch.setattr(supervisor, "list_projects_raw", lambda: calls.append("raw") or {"demo": {}})
+    monkeypatch.setattr(supervisor, "list_projects_raw", lambda: calls.append("raw") or {"demo": {"instances": ["pytest-runner"]}})
 
     assert supervisor.run_supervisor(once=True, interval_seconds=0.5) == 0
     assert calls == ["raw"]
@@ -139,7 +145,7 @@ def test_supervisor_without_instance_skips_docs_ticks_and_uses_raw_project_listi
         "list_projects",
         lambda: (_ for _ in ()).throw(AssertionError("dispatcher-only mode should not reconcile projects")),
     )
-    monkeypatch.setattr(supervisor, "list_projects_raw", lambda: calls.append("raw") or {"demo": {}})
+    monkeypatch.setattr(supervisor, "list_projects_raw", lambda: calls.append("raw") or {"demo": {"instances": ["pytest-runner"]}})
 
     assert supervisor.run_supervisor(once=True, interval_seconds=0.5) == 0
     assert calls == ["raw"]
@@ -286,10 +292,57 @@ def test_supervisor_worker_start_failure_raises_when_failhard(monkeypatch):
     monkeypatch.setattr(supervisor, "_maintain_instance_monitors", lambda _known: None)
     monkeypatch.setattr(supervisor, "_maintain_on_demand_janitor_request", lambda *args: None)
     monkeypatch.setattr(supervisor, "_maintain_janitor_workers", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(supervisor, "_supervisor_projects", lambda: {"demo": {}})
+    monkeypatch.setattr(supervisor, "_supervisor_projects", lambda: {"demo": {"instances": ["pytest-runner"]}})
 
     with pytest.raises(RuntimeError, match="worker start boom"):
         supervisor.run_supervisor(once=True, interval_seconds=0.5)
+
+
+def test_supervisor_skips_ambiguous_multi_instance_project_without_crashing_failhard(monkeypatch, caplog):
+    from core import project_docs_supervisor as supervisor
+
+    merged: list[tuple[str, dict]] = []
+    monkeypatch.setenv("QUAID_SUPERVISOR_BOOT", "1")
+    monkeypatch.delenv("QUAID_INSTANCE", raising=False)
+    monkeypatch.setattr(supervisor.project_docs, "write_supervisor_pid", lambda _token: None)
+    monkeypatch.setattr(supervisor.project_docs, "clear_supervisor_pid_for_current_process", lambda: None)
+    monkeypatch.setattr(supervisor.project_docs, "reap_child_processes", lambda: 0)
+    monkeypatch.setattr(supervisor.project_docs, "worker_stale_after_seconds", lambda _interval: 30.0)
+    monkeypatch.setattr(supervisor.project_docs, "project_is_registered_for_worker", lambda _project: True)
+    monkeypatch.setattr(supervisor.project_docs, "reap_stale_worker", lambda _project, *, stale_after_seconds: False)
+    monkeypatch.setattr(supervisor.project_docs, "read_worker_pid", lambda _project: None)
+    monkeypatch.setattr(supervisor.project_docs, "read_update_request", lambda _project: None)
+    monkeypatch.setattr(
+        supervisor.project_docs,
+        "start_worker",
+        lambda _project: (_ for _ in ()).throw(AssertionError("ambiguous worker should not spawn")),
+    )
+    monkeypatch.setattr(supervisor.project_docs, "merge_state", lambda project, updates: merged.append((project, updates)) or {})
+    monkeypatch.setattr(supervisor, "_fail_hard_enabled", lambda: True)
+    monkeypatch.setattr(supervisor, "_maintain_instance_monitors", lambda _known: None)
+    monkeypatch.setattr(supervisor, "_maintain_on_demand_janitor_request", lambda *args: None)
+    monkeypatch.setattr(supervisor, "_maintain_janitor_workers", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        supervisor,
+        "_supervisor_projects",
+        lambda: {
+            "demo": {
+                "instances": [
+                    "claude-main",
+                    "codex-private-tmp-cdx-livetest",
+                ],
+            }
+        },
+    )
+
+    with caplog.at_level("WARNING"):
+        assert supervisor.run_supervisor(once=True, interval_seconds=0.5) == 0
+
+    assert "project docs worker start skipped for demo" in caplog.text
+    assert merged
+    assert merged[0][0] == "demo"
+    assert merged[0][1]["status"] == "error"
+    assert "valid_linked_instances=2" in merged[0][1]["last_error"]
 
 
 def test_supervisor_stops_removed_instance_monitor(monkeypatch):
@@ -335,15 +388,10 @@ def test_supervisor_stops_deleted_misc_instance_monitor(monkeypatch, tmp_path):
 
 def test_supervisor_preserves_configured_internal_path_derived_instance_monitor(monkeypatch, tmp_path):
     from core import project_docs_supervisor as supervisor
-    from lib.instance import internal_path_derived_instance_ids
 
     started = []
     stopped = []
-    internal_instance = next(
-        name
-        for name in internal_path_derived_instance_ids(tmp_path)
-        if name.startswith("claude-code-") and name.endswith("-plugins-quaid")
-    )
+    internal_instance = _internal_instance_for(tmp_path, "claude-code", "plugins", "quaid")
     (tmp_path / "instances" / internal_instance).mkdir(parents=True)
     (tmp_path / "instances" / internal_instance / "config.json").write_text("{}")
     known = {}
@@ -365,14 +413,9 @@ def test_supervisor_preserves_configured_internal_path_derived_instance_monitor(
 
 def test_supervisor_stops_stale_internal_path_derived_instance_monitor(monkeypatch, tmp_path):
     from core import project_docs_supervisor as supervisor
-    from lib.instance import internal_path_derived_instance_ids
 
     stopped = []
-    internal_instance = next(
-        name
-        for name in internal_path_derived_instance_ids(tmp_path)
-        if name.startswith("claude-code-") and name.endswith("-plugins-quaid")
-    )
+    internal_instance = _internal_instance_for(tmp_path, "claude-code", "plugins", "quaid")
     known = {internal_instance: 222}
 
     monkeypatch.setattr(supervisor, "quaid_home", lambda: tmp_path)
@@ -389,14 +432,9 @@ def test_supervisor_stops_stale_internal_path_derived_instance_monitor(monkeypat
 
 def test_supervisor_stops_disabled_configured_internal_path_derived_instance_monitor(monkeypatch, tmp_path):
     from core import project_docs_supervisor as supervisor
-    from lib.instance import internal_path_derived_instance_ids
 
     stopped = []
-    internal_instance = next(
-        name
-        for name in internal_path_derived_instance_ids(tmp_path)
-        if name.startswith("claude-code-") and name.endswith("-plugins-quaid")
-    )
+    internal_instance = _internal_instance_for(tmp_path, "claude-code", "plugins", "quaid")
     (tmp_path / "instances" / internal_instance).mkdir(parents=True)
     (tmp_path / "instances" / internal_instance / "config.json").write_text("{}")
     known = {internal_instance: 222}
@@ -1151,14 +1189,9 @@ def test_janitor_worker_throttles_per_instance(monkeypatch):
 
 def test_janitor_worker_includes_configured_internal_path_derived_instance(monkeypatch, tmp_path):
     from core import project_docs_supervisor as supervisor
-    from lib.instance import internal_path_derived_instance_ids
 
     starts = []
-    internal_instance = next(
-        name
-        for name in internal_path_derived_instance_ids(tmp_path)
-        if name.startswith("codex-") and name.endswith("-plugins-quaid")
-    )
+    internal_instance = _internal_instance_for(tmp_path, "codex", "plugins", "quaid")
     (tmp_path / "instances" / internal_instance).mkdir(parents=True)
     (tmp_path / "instances" / internal_instance / "config.json").write_text("{}")
 
