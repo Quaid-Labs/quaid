@@ -16,12 +16,35 @@ import pytest
 
 class TestInstanceSlug:
     def test_basic_slug(self, tmp_path):
-        from lib.instance import instance_slug_from_project_dir
+        from lib.instance import instance_slug_from_project_dir, validate_instance_id
         project = tmp_path / "my-project"
         project.mkdir()
         slug = instance_slug_from_project_dir(str(project))
         assert "my-project" in slug
         assert all(c in "abcdefghijklmnopqrstuvwxyz0123456789-" for c in slug)
+        validate_instance_id(f"claude-code-{slug}")
+
+    def test_slug_distinguishes_separator_variants(self, tmp_path):
+        from lib.instance import instance_slug_from_project_dir
+
+        projects = [tmp_path / name for name in ("my_project", "my-project", "my.project")]
+        for project in projects:
+            project.mkdir()
+
+        slugs = {instance_slug_from_project_dir(str(project)) for project in projects}
+        assert len(slugs) == len(projects)
+
+    def test_slug_keeps_prefixed_instance_id_within_limit(self, tmp_path):
+        from lib.instance import instance_slug_from_project_dir, validate_instance_id
+
+        project = tmp_path / "mycompany" / "app-frontend" / "src" / "components" / (
+            "very-long-project-directory-name-with-extra-words"
+        )
+        project.mkdir(parents=True)
+
+        instance = f"claude-code-{instance_slug_from_project_dir(str(project))}"
+        assert len(instance) <= 64
+        assert validate_instance_id(instance) == instance
 
     def test_resolves_symlinks(self, tmp_path):
         """Ensure .resolve() is called so symlinks produce consistent slugs."""

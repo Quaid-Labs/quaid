@@ -15,6 +15,7 @@ Environment:
 
 import os
 import json
+import hashlib
 import re
 import shutil
 from pathlib import Path
@@ -22,12 +23,24 @@ from typing import Any, List, Optional
 
 # Instance name: alphanumeric start, then alphanumeric/dot/underscore/hyphen, max 64 chars
 _INSTANCE_ID_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$")
+_PROJECT_INSTANCE_SLUG_MAX_LENGTH = 52
+_PROJECT_INSTANCE_SLUG_HASH_LENGTH = 12
 
 RESERVED_INSTANCE_NAMES = frozenset({
     "shared", "projects", "config", "data", "logs", "temp", "tmp",
     "quaid", "plugins", "lib", "core", "docs", "assets", "release",
     "scripts", "test", "tests", "benchmark", "node_modules",
 })
+
+
+def _resolved_project_dir(project_dir: str) -> Path:
+    return Path(project_dir).resolve() if project_dir else Path(os.getcwd()).resolve()
+
+
+def _legacy_instance_slug_from_project_dir(project_dir: str) -> str:
+    """Previous lossy project-dir slug, retained only for guarded migration reads."""
+    root = _resolved_project_dir(project_dir)
+    return re.sub(r"[^a-z0-9]+", "-", str(root).lower()).strip("-")
 
 
 def instance_slug_from_project_dir(project_dir: str) -> str:
@@ -38,9 +51,19 @@ def instance_slug_from_project_dir(project_dir: str) -> str:
     slug.  This is the single source of truth for project-dir-to-slug
     conversion — all callers (adapter, config search, auto-provision) must
     use this function, not inline regex.
+
+    The readable prefix is anchored by a hash of the resolved path so sibling
+    paths that differ only by punctuation (my_app vs my-app) cannot collapse
+    into the same memory silo. The slug is capped so the longest current
+    adapter prefix still produces a valid 64-character instance id.
     """
-    root = Path(project_dir).resolve() if project_dir else Path(os.getcwd()).resolve()
-    return re.sub(r"[^a-z0-9]+", "-", str(root).lower()).strip("-")
+    root = _resolved_project_dir(project_dir)
+    digest = hashlib.sha256(str(root).encode("utf-8", "surrogatepass")).hexdigest()
+    suffix = f"-{digest[:_PROJECT_INSTANCE_SLUG_HASH_LENGTH]}"
+    readable = re.sub(r"[^a-z0-9]+", "-", root.name.lower()).strip("-") or "project"
+    head_len = _PROJECT_INSTANCE_SLUG_MAX_LENGTH - len(suffix)
+    readable = readable[:head_len].strip("-") or "project"
+    return f"{readable}{suffix}"
 
 
 class InstanceError(Exception):

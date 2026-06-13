@@ -30,6 +30,12 @@ Defined in `lib/instance.py` (`validate_instance_id`):
 - May contain `[a-zA-Z0-9._-]`, max 64 characters.
 - Cannot be a reserved name (see below).
 
+For path-derived adapter instances, Quaid derives the slug from the resolved
+project directory basename plus a short hash of the resolved full path. The
+hash prevents similarly named paths such as `my_project`, `my-project`, and
+`my.project` from sharing a memory silo, and the generated slug is capped so
+the full prefixed instance ID still satisfies the 64-character limit.
+
 Reserved names that may not be used as instance IDs:
 
 ```
@@ -514,7 +520,7 @@ The adapter type is read from `config.json` at startup by
 Search path for adapter config (priority order):
 
 1. `QUAID_HOME/instances/<QUAID_INSTANCE>/config.json`
-2. `QUAID_HOME/instances/claude-code-<slug>/config.json` when `QUAID_INSTANCE` is unset and `CLAUDE_PROJECT_DIR` is set
+2. `QUAID_HOME/instances/<adapter>-<path-slug>-<path-hash>/config.json` when `QUAID_INSTANCE` is unset and a supported project-dir env var such as `CLAUDE_PROJECT_DIR` is set
 3. `QUAID_HOME/config/config.json` (legacy flat layout)
 4. `QUAID_WORKSPACE/config/config.json` or `CLAWDBOT_WORKSPACE/config/config.json` (legacy compatibility)
 5. `./config/config.json` (cwd legacy fallback)

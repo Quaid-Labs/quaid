@@ -1848,26 +1848,49 @@ def _project_instance_binding_path(home: str | Path, adapter_type: str, project_
     return Path(home) / "shared" / "instance-bindings" / adapter_id / f"{slug}.json"
 
 
+def _legacy_project_instance_binding_path(home: str | Path, adapter_type: str, project_dir: str) -> Optional[Path]:
+    """Return the pre-hash binding path for guarded alpha migration reads."""
+    adapter_id = _canonical_adapter_id(adapter_type)
+    if not adapter_id or not str(project_dir or "").strip():
+        return None
+    try:
+        from lib.instance import _legacy_instance_slug_from_project_dir
+
+        slug = _legacy_instance_slug_from_project_dir(project_dir)
+    except Exception:
+        return None
+    if not slug:
+        return None
+    return Path(home) / "shared" / "instance-bindings" / adapter_id / f"{slug}.json"
+
+
 def _read_project_instance_binding(home: str | Path, adapter_type: str, project_dir: str) -> str:
     """Read a project binding if it still points at an initialized instance."""
-    path = _project_instance_binding_path(home, adapter_type, project_dir)
-    if path is None or not path.is_file():
-        return ""
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return ""
-    instance = str(data.get("instance") or "").strip()
-    if not instance:
-        return ""
-    try:
-        stored_project = str(data.get("project_dir") or "").strip()
-        if stored_project and Path(stored_project).resolve() != Path(project_dir).resolve():
-            return ""
-    except Exception:
-        return ""
-    if (Path(home) / "instances" / instance / "config.json").is_file():
-        return instance
+    candidates: List[Path] = []
+    for path in (
+        _project_instance_binding_path(home, adapter_type, project_dir),
+        _legacy_project_instance_binding_path(home, adapter_type, project_dir),
+    ):
+        if path is not None and path not in candidates:
+            candidates.append(path)
+    for path in candidates:
+        if not path.is_file():
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        instance = str(data.get("instance") or "").strip()
+        if not instance:
+            continue
+        try:
+            stored_project = str(data.get("project_dir") or "").strip()
+            if stored_project and Path(stored_project).resolve() != Path(project_dir).resolve():
+                continue
+        except Exception:
+            continue
+        if (Path(home) / "instances" / instance / "config.json").is_file():
+            return instance
     return ""
 
 

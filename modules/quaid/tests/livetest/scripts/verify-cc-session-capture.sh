@@ -77,6 +77,7 @@ echo "  Fresh window: ${MAX_AGE_MIN}m"
 echo ""
 
 remote_python="$(cat <<'PY'
+import hashlib
 import json
 import re
 import sys
@@ -93,7 +94,10 @@ home = Path.home()
 global_settings_path = home / ".claude" / "settings.json"
 project_settings_path = Path(project_dir) / ".claude" / "settings.json"
 resolved_project_dir = str(Path(project_dir).resolve())
-derived_instance = "claude-code-" + re.sub(r"[^a-z0-9]+", "-", resolved_project_dir.lower()).strip("-")
+digest = hashlib.sha256(resolved_project_dir.encode("utf-8", "surrogatepass")).hexdigest()[:12]
+readable = re.sub(r"[^a-z0-9]+", "-", Path(resolved_project_dir).name.lower()).strip("-") or "project"
+readable = readable[:39].strip("-") or "project"
+derived_instance = f"claude-code-{readable}-{digest}"
 session_dir_name = resolved_project_dir.replace("/", "-")
 session_root = home / ".claude" / "projects" / session_dir_name
 hook_trace_path = home / ".quaid" / "instances" / instance_id / "logs" / "quaid-hook-trace.jsonl"

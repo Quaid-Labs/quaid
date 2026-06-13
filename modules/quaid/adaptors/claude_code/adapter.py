@@ -26,7 +26,7 @@ from lib.agent_notice import (
     should_persist_pending_notice,
 )
 from lib.fail_policy import is_fail_hard_enabled
-from lib.instance import instance_slug_from_project_dir
+from lib.instance import _legacy_instance_slug_from_project_dir, instance_slug_from_project_dir
 
 
 def _trace_m15(event: str, **fields) -> None:
@@ -470,7 +470,7 @@ class ClaudeCodeAdapter(QuaidAdapter):
     def _current_project_session_slug(self) -> str:
         project_dir = os.environ.get("CLAUDE_PROJECT_DIR", "").strip()
         if project_dir:
-            return instance_slug_from_project_dir(project_dir)
+            return _legacy_instance_slug_from_project_dir(project_dir)
         instance_id = ""
         try:
             instance_id = str(self.instance_id() or "").strip()

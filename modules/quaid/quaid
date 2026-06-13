@@ -203,7 +203,7 @@ import json
 import pathlib
 import sys
 
-from lib.instance import instance_slug_from_project_dir
+from lib.instance import _legacy_instance_slug_from_project_dir, instance_slug_from_project_dir
 
 cwd = pathlib.Path(sys.argv[1]).resolve()
 home = pathlib.Path(sys.argv[2]).expanduser().resolve()
@@ -264,23 +264,33 @@ def _bound_instance(adapter: str, project_dir: pathlib.Path) -> str:
         return ""
     if not slug:
         return ""
-    path = home / "shared" / "instance-bindings" / adapter / f"{slug}.json"
-    if not path.is_file():
-        return ""
+    candidate_slugs = [slug]
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        legacy_slug = _legacy_instance_slug_from_project_dir(str(project_dir))
+        if legacy_slug and legacy_slug not in candidate_slugs:
+            candidate_slugs.append(legacy_slug)
     except Exception:
-        return ""
-    instance = str(data.get("instance") or "").strip()
-    stored_project = str(data.get("project_dir") or "").strip()
-    if not instance:
-        return ""
-    try:
-        if stored_project and pathlib.Path(stored_project).expanduser().resolve() != project_dir:
+        pass
+    for candidate_slug in candidate_slugs:
+        path = home / "shared" / "instance-bindings" / adapter / f"{candidate_slug}.json"
+        if not path.is_file():
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        instance = str(data.get("instance") or "").strip()
+        stored_project = str(data.get("project_dir") or "").strip()
+        if not instance:
+            continue
+        try:
+            if stored_project and pathlib.Path(stored_project).expanduser().resolve() != project_dir:
+                continue
+        except Exception:
             return ""
-    except Exception:
-        return ""
-    return instance if _instance_config_exists(instance) else ""
+        if _instance_config_exists(instance):
+            return instance
+    return ""
 
 
 def _settings_instance(project_dir: pathlib.Path) -> str:

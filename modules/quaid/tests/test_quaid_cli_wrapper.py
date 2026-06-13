@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import shutil
 import subprocess
 import tempfile
@@ -12,7 +11,9 @@ from uuid import UUID
 
 
 def _instance_slug(project_dir: Path) -> str:
-    return re.sub(r"[^a-z0-9]+", "-", str(project_dir.resolve()).lower()).strip("-")
+    from lib.instance import instance_slug_from_project_dir
+
+    return instance_slug_from_project_dir(str(project_dir))
 
 
 def test_quaid_cli_derives_openclaw_instance_from_agent_workspace(tmp_path: Path) -> None:
