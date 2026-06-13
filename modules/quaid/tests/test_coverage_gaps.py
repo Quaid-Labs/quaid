@@ -688,8 +688,8 @@ class TestDecayMemoriesCli:
 
         assert result["decayed_count"] == 0
 
-    def test_decay_allows_values_below_point_one_when_starting_above_threshold(self, tmp_path):
-        """Decay threshold gates eligibility, not a hard post-decay confidence floor."""
+    def test_decay_clamps_values_to_point_one_when_starting_above_threshold(self, tmp_path):
+        """Decay threshold gates eligibility and 0.1 remains the post-decay floor."""
         from datastore.memorydb.memory_graph import decay_memories
         graph, _ = _make_graph(tmp_path)
         node = _make_node(graph, "Low confidence memory", confidence=0.12, status="active")
@@ -703,8 +703,7 @@ class TestDecayMemoriesCli:
 
         assert result["decayed_count"] == 1
         updated = graph.get_node(node.id)
-        # 0.12 - 0.10 = 0.02
-        assert updated.confidence == pytest.approx(0.02, abs=0.01)
+        assert updated.confidence == pytest.approx(0.1, abs=0.01)
 
 
 # ===========================================================================

@@ -24214,7 +24214,7 @@ def decay_memories() -> Dict[str, Any]:
     with graph._get_conn() as conn:
         result = conn.execute("""
             UPDATE nodes
-            SET confidence = confidence - 0.10,
+            SET confidence = MAX(confidence - 0.10, 0.1),
                 updated_at = ?
             WHERE pinned = 0
               AND verified = 0
