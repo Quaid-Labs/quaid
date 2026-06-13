@@ -957,6 +957,32 @@ class TestRenameProjectGuards:
         assert new_defn is not None
         assert new_defn.home_dir == "projects/renamed-proj/"
 
+    def test_rename_rolls_back_directory_when_db_update_fails(self, setup_env, monkeypatch):
+        """rename_project does not leave filesystem moved when DB rename fails."""
+        tmp_path = setup_env
+        r = _get_registry()
+        r.register("projects/test-project/PROJECT.md", project="test-project")
+
+        old_dir = tmp_path / "projects" / "test-project"
+        new_dir = tmp_path / "projects" / "renamed-proj"
+        assert old_dir.exists()
+
+        def _fail_project_definition_write(_conn, _name, _defn):
+            raise sqlite3.OperationalError("forced project definition failure")
+
+        monkeypatch.setattr(r, "_write_project_definition_row_on_conn", _fail_project_definition_write)
+
+        with pytest.raises(sqlite3.OperationalError, match="forced project definition failure"):
+            r.rename_project("test-project", "renamed-proj")
+
+        assert old_dir.exists()
+        assert not new_dir.exists()
+        assert r.get_project_definition("test-project") is not None
+        assert r.get_project_definition("renamed-proj") is None
+        entry = r.get("projects/test-project/PROJECT.md")
+        assert entry is not None
+        assert entry["project"] == "test-project"
+
     def test_rename_updates_source_roots_refreshes_project_md_and_global_registry(self, setup_env, monkeypatch):
         """rename_project keeps source_roots/global registry in sync and refreshes PROJECT.md."""
         tmp_path = setup_env
@@ -1042,6 +1068,23 @@ A test project.
             "src/",
             "projects/renamed-proj/docs",
         ]
+
+    def test_rename_global_registry_failure_raises_when_fail_hard(self, setup_env, monkeypatch):
+        from datastore.docsdb import registry as registry_mod
+
+        r = _get_registry()
+        r.register("projects/test-project/PROJECT.md", project="test-project")
+
+        def _fail_global_rename(*_args, **_kwargs):
+            raise RuntimeError("global registry unavailable")
+
+        monkeypatch.setattr("lib.project_registry.rename", _fail_global_rename)
+        monkeypatch.setattr(registry_mod, "_fail_hard_enabled", lambda: True)
+
+        with pytest.raises(RuntimeError, match="Failed to rename global project registry entry"):
+            r.rename_project("test-project", "renamed-proj")
+
+        assert r.get_project_definition("renamed-proj") is not None
 
     def test_delete_removes_global_registry_entry(self, setup_env, monkeypatch):
         """delete_project removes the matching global registry entry."""

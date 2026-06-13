@@ -691,36 +691,39 @@ class DocsRegistry:
                 )
             return result
 
-    def _write_project_definition_row(self, name: str, defn) -> None:
+    def _write_project_definition_row_on_conn(self, conn, name: str, defn) -> None:
         name = _validate_project_name(name)
+        self._ensure_project_definitions_table(conn)
+        conn.execute("""
+            INSERT INTO project_definitions
+                (name, label, home_dir, source_roots, auto_index, patterns, exclude, description, state, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+            ON CONFLICT(name) DO UPDATE SET
+                label = excluded.label,
+                home_dir = excluded.home_dir,
+                source_roots = excluded.source_roots,
+                auto_index = excluded.auto_index,
+                patterns = excluded.patterns,
+                exclude = excluded.exclude,
+                description = excluded.description,
+                state = excluded.state,
+                updated_at = datetime('now')
+        """, (
+            name,
+            defn.label,
+            defn.home_dir,
+            json.dumps(defn.source_roots) if defn.source_roots else "[]",
+            1 if defn.auto_index else 0,
+            json.dumps(defn.patterns) if defn.patterns else '["*.md"]',
+            json.dumps(defn.exclude) if defn.exclude else "[]",
+            defn.description or "",
+            getattr(defn, 'state', 'active'),
+        ))
+
+    def _write_project_definition_row(self, name: str, defn) -> None:
         def _write():
             with get_connection(self.db_path) as conn:
-                self._ensure_project_definitions_table(conn)
-                conn.execute("""
-                    INSERT INTO project_definitions
-                        (name, label, home_dir, source_roots, auto_index, patterns, exclude, description, state, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
-                    ON CONFLICT(name) DO UPDATE SET
-                        label = excluded.label,
-                        home_dir = excluded.home_dir,
-                        source_roots = excluded.source_roots,
-                        auto_index = excluded.auto_index,
-                        patterns = excluded.patterns,
-                        exclude = excluded.exclude,
-                        description = excluded.description,
-                        state = excluded.state,
-                        updated_at = datetime('now')
-                """, (
-                    name,
-                    defn.label,
-                    defn.home_dir,
-                    json.dumps(defn.source_roots) if defn.source_roots else "[]",
-                    1 if defn.auto_index else 0,
-                    json.dumps(defn.patterns) if defn.patterns else '["*.md"]',
-                    json.dumps(defn.exclude) if defn.exclude else "[]",
-                    defn.description or "",
-                    getattr(defn, 'state', 'active'),
-                ))
+                self._write_project_definition_row_on_conn(conn, name, defn)
 
         _run_locked_write_with_retry(_write, op_name=f"save_project_definition({name})")
 
@@ -1671,47 +1674,10 @@ class DocsRegistry:
                 "Use move-file to migrate docs individually."
             )
 
-        # 1. Bulk update registry + path updates in single transaction
         cfg = self._get_config()
         defn = cfg.projects.definitions.get(old_name)
         old_prefix = defn.home_dir.rstrip("/") if defn else None
         new_prefix = f"projects/{new_name}"
-
-        with get_connection(self.db_path) as conn:
-            # Get rows BEFORE renaming the project field
-            rows = conn.execute(
-                "SELECT id, file_path FROM doc_registry WHERE project = ? AND state = 'active'",
-                (old_name,),
-            ).fetchall()
-
-            # Update project name for all entries
-            cursor = conn.execute(
-                "UPDATE doc_registry SET project = ? WHERE project = ? AND state = 'active'",
-                (new_name, old_name),
-            )
-            renamed = cursor.rowcount
-
-            # Update in-directory file paths if dir will move
-            if old_prefix:
-                for row in rows:
-                    if row["file_path"].startswith(old_prefix):
-                        new_path = row["file_path"].replace(old_prefix, new_prefix, 1)
-                        conn.execute(
-                            "UPDATE doc_registry SET file_path = ? WHERE id = ?",
-                            (new_path, row["id"]),
-                        )
-
-        # 2. Move directory if it exists
-        dir_moved = False
-        if defn:
-            old_dir = self._resolve_path(defn.home_dir)
-            new_dir = _visible_home() / "projects" / new_name
-            _validate_inside_workspace(new_dir, "target directory")
-            if old_dir.exists() and not new_dir.exists():
-                old_dir.rename(new_dir)
-                dir_moved = True
-
-        # 3. Update project definition in DB
         db_defn = self.get_project_definition(old_name)
         if db_defn:
             db_defn.home_dir = f"projects/{new_name}/"
@@ -1723,8 +1689,63 @@ class DocsRegistry:
                     else:
                         updated_roots.append(root)
                 db_defn.source_roots = updated_roots
-            self.save_project_definition(new_name, db_defn)
-            self.delete_project_definition(old_name)
+
+        # Move directory before mutating DB paths. If this fails, registry state
+        # remains unchanged instead of pointing at a directory that never moved.
+        dir_moved = False
+        old_dir: Optional[Path] = None
+        new_dir: Optional[Path] = None
+        if defn:
+            old_dir = self._resolve_path(defn.home_dir)
+            new_dir = _visible_home() / "projects" / new_name
+            _validate_inside_workspace(new_dir, "target directory")
+            if old_dir.exists() and not new_dir.exists():
+                old_dir.rename(new_dir)
+                dir_moved = True
+
+        try:
+            with get_connection(self.db_path) as conn:
+                # Get rows BEFORE renaming the project field.
+                rows = conn.execute(
+                    "SELECT id, file_path FROM doc_registry WHERE project = ? AND state = 'active'",
+                    (old_name,),
+                ).fetchall()
+
+                # Update project name for all entries.
+                cursor = conn.execute(
+                    "UPDATE doc_registry SET project = ? WHERE project = ? AND state = 'active'",
+                    (new_name, old_name),
+                )
+                renamed = cursor.rowcount
+
+                # Update in-directory file paths only after the filesystem move succeeded.
+                if old_prefix:
+                    for row in rows:
+                        if row["file_path"].startswith(old_prefix):
+                            new_path = row["file_path"].replace(old_prefix, new_prefix, 1)
+                            conn.execute(
+                                "UPDATE doc_registry SET file_path = ? WHERE id = ?",
+                                (new_path, row["id"]),
+                            )
+
+                if db_defn:
+                    self._write_project_definition_row_on_conn(conn, new_name, db_defn)
+                    conn.execute(
+                        "UPDATE project_definitions SET state = 'deleted', updated_at = datetime('now') WHERE name = ?",
+                        (old_name,),
+                    )
+        except Exception:
+            if dir_moved and old_dir is not None and new_dir is not None and new_dir.exists() and not old_dir.exists():
+                try:
+                    new_dir.rename(old_dir)
+                except OSError as rollback_exc:
+                    logger.error(
+                        "Failed rolling back project directory rename %s -> %s after registry error: %s",
+                        new_dir,
+                        old_dir,
+                        rollback_exc,
+                    )
+            raise
 
         # Reload config
         try:
@@ -1738,7 +1759,19 @@ class DocsRegistry:
             from lib.project_registry import rename as rename_global_project
             rename_global_project(old_name, new_name, canonical_path=str(_visible_home() / "projects" / new_name))
         except Exception as e:
-            logger.debug("Global project registry rename skipped: %s", e)
+            if _fail_hard_enabled():
+                raise RuntimeError(
+                    f"Failed to rename global project registry entry {old_name!r} -> {new_name!r}"
+                ) from e
+            logger.warning("Global project registry rename skipped: %s", e)
+
+        if db_defn:
+            try:
+                self._ensure_global_project_entry(new_name, defn=db_defn)
+            except Exception as e:
+                if _fail_hard_enabled():
+                    raise RuntimeError(f"Failed to sync global project registry entry {new_name!r}") from e
+                logger.warning("Global project registry sync after rename skipped: %s", e)
 
         try:
             from datastore.docsdb.project_updater import refresh_project_md
