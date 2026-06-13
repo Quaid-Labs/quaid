@@ -3175,7 +3175,7 @@ JSON array only:"""
                         # Scale from node's extraction_confidence if available, otherwise 0.3
                         extend_conf = max(0.3, float(ext_conf) * 0.5) if ext_conf else 0.3
                         conn.execute(
-                            "UPDATE nodes SET confidence = ?, accessed_at = ? WHERE id = ?",
+                            "UPDATE nodes SET confidence = ?, accessed_at = ?, status = 'active' WHERE id = ?",
                             (extend_conf, _quaid_now().isoformat(), node_id)
                         )
                         conn.execute(
@@ -3206,7 +3206,7 @@ JSON array only:"""
                         # Use max of 0.7 and node's extraction_confidence so high-value facts keep their score
                         pin_conf = max(0.7, float(ext_conf)) if ext_conf else 0.7
                         conn.execute(
-                            "UPDATE nodes SET pinned = 1, confidence = ? WHERE id = ?",
+                            "UPDATE nodes SET pinned = 1, confidence = ?, status = 'active' WHERE id = ?",
                             (pin_conf, node_id)
                         )
                         conn.execute(

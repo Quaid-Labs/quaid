@@ -59,7 +59,7 @@ CREATE TABLE IF NOT EXISTS nodes (
     keywords TEXT,                          -- Space-separated derived search terms (generated at extraction)
 
     -- Lifecycle
-    status TEXT DEFAULT 'approved',         -- pending/active/approved
+    status TEXT DEFAULT 'approved',         -- pending/active/approved/queued_for_decay
     deleted_at TEXT DEFAULT NULL,           -- Unused placeholder column
     deletion_reason TEXT DEFAULT NULL,      -- Unused placeholder column
 

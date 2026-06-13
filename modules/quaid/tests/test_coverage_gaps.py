@@ -457,6 +457,41 @@ class TestApplyDecayOptimizedReal:
         assert result["queued"] == 1
         mock_queue.assert_called_once()
 
+    def test_queue_for_decay_marks_node_out_of_decay_discovery(self, tmp_path):
+        """Queued decay-review nodes should not be re-queued on every janitor run."""
+        from datastore.memorydb.maintenance_ops import (
+            apply_decay_optimized,
+            find_stale_memories_optimized,
+            JanitorMetrics,
+        )
+        graph, _ = _make_graph(tmp_path)
+        metrics = JanitorMetrics()
+
+        mem = self._make_stale_mem(graph, "Needs exactly one decay review", days_ago=365, confidence=0.15)
+
+        with patch("datastore.memorydb.maintenance_ops._cfg") as mock_cfg, \
+             patch("datastore.memorydb.memory_graph.get_graph", return_value=graph):
+            mock_cfg.decay.mode = "exponential"
+            mock_cfg.decay.base_half_life_days = 60.0
+            mock_cfg.decay.access_bonus_factor = 0.15
+            mock_cfg.decay.minimum_confidence = 0.1
+            mock_cfg.decay.review_queue_enabled = True
+
+            result = apply_decay_optimized([mem], graph, metrics, dry_run=False)
+            stale_after_queue = find_stale_memories_optimized(graph, JanitorMetrics())
+
+        with graph._get_conn() as conn:
+            node_row = conn.execute("SELECT status FROM nodes WHERE id = ?", (mem["id"],)).fetchone()
+            queue_count = conn.execute(
+                "SELECT COUNT(*) FROM decay_review_queue WHERE node_id = ? AND status = 'pending'",
+                (mem["id"],),
+            ).fetchone()[0]
+
+        assert result["queued"] == 1
+        assert node_row["status"] == "queued_for_decay"
+        assert queue_count == 1
+        assert mem["id"] not in {row["id"] for row in stale_after_queue}
+
     def test_linear_mode_subtracts_flat_rate(self, tmp_path):
         """Linear mode applies flat -RATE decay."""
         from datastore.memorydb.maintenance_ops import apply_decay_optimized, JanitorMetrics
@@ -1003,7 +1038,7 @@ class TestDecayReviewAtomicity:
                 (queue_entry["id"],),
             ).fetchone()
             node_row = conn.execute(
-                "SELECT confidence FROM nodes WHERE id = ?",
+                "SELECT confidence, status FROM nodes WHERE id = ?",
                 (node.id,),
             ).fetchone()
 
@@ -1011,6 +1046,7 @@ class TestDecayReviewAtomicity:
         assert resolve_spy.call_count == 0
         assert queue_row["status"] == "reviewed"
         assert queue_row["decision"] == "extend"
+        assert node_row["status"] == "active"
         assert float(node_row["confidence"]) > 0.1
 
 

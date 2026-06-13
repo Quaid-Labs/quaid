@@ -250,7 +250,7 @@ class Node:
     fact_type: str = "unknown"  # mutable, immutable, contextual
     knowledge_type: str = "fact"  # fact, belief, preference, experience
     extraction_confidence: float = 0.5  # How confident the classifier was
-    status: str = "pending"  # pending, approved, active
+    status: str = "pending"  # pending, approved, active, queued_for_decay
     speaker: Optional[str] = None  # Who stated this fact (e.g., "Alice", "Bob")
     speaker_entity_id: Optional[str] = None  # Canonical entity who produced the source utterance
     conversation_id: Optional[str] = None  # Canonical conversation/thread identifier
@@ -24023,6 +24023,15 @@ def queue_for_decay_review(mem: Dict[str, Any]) -> str:
             (mem["id"],)
         ).fetchone()
         if existing:
+            conn.execute(
+                """
+                UPDATE nodes
+                SET status = 'queued_for_decay', updated_at = datetime('now')
+                WHERE id = ?
+                  AND (status IS NULL OR status IN ('approved', 'active', 'queued_for_decay'))
+                """,
+                (mem["id"],),
+            )
             return existing["id"]
         conn.execute("""
             INSERT INTO decay_review_queue
@@ -24040,6 +24049,15 @@ def queue_for_decay_review(mem: Dict[str, Any]) -> str:
             1 if mem.get("verified") else 0,
             mem.get("created_at"),
         ))
+        conn.execute(
+            """
+            UPDATE nodes
+            SET status = 'queued_for_decay', updated_at = datetime('now')
+            WHERE id = ?
+              AND (status IS NULL OR status IN ('approved', 'active', 'queued_for_decay'))
+            """,
+            (mem["id"],),
+        )
     return queue_id
 
 
