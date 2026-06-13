@@ -2281,8 +2281,9 @@ def _save_deferred_extraction(
     The janitor's deferred_extraction task picks these up and retries
     extraction when the provider is back.
     """
+    session_id = _validate_session_id(session_id)
     ts = int(time.time())
-    filename = f"{session_id}_{ts}.json"
+    filename = f"{session_id}_{ts}_{os.getpid()}_{uuid.uuid4().hex}.json"
     path = _deferred_extraction_dir() / filename
     payload = {
         "session_id": session_id,
@@ -2293,12 +2294,14 @@ def _save_deferred_extraction(
         "transcript_text": transcript_text,
     }
     try:
-        path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        _atomic_write(path, json.dumps(payload, indent=2))
         logger.warning(
             "[daemon] saved deferred extraction for session %s: %s (%d chars)",
             session_id, path, len(transcript_text),
         )
     except Exception as e:
+        if _fail_hard_enabled():
+            raise
         logger.error(
             "[daemon] failed to save deferred extraction for session %s: %s",
             session_id, e,

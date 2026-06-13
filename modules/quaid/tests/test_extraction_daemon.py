@@ -815,6 +815,91 @@ def test_merge_source_chunk_descriptors_retains_multiple_unref_descriptors():
     ]
 
 
+def test_save_deferred_extraction_writes_unique_atomic_files(monkeypatch, tmp_path):
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
+    monkeypatch.setattr(extraction_daemon.time, "time", lambda: 1700000000.0)
+    monkeypatch.setattr(extraction_daemon.os, "getpid", lambda: 4242)
+    uuids = iter([
+        types.SimpleNamespace(hex="a" * 32),
+        types.SimpleNamespace(hex="b" * 32),
+    ])
+    monkeypatch.setattr(extraction_daemon.uuid, "uuid4", lambda: next(uuids))
+    atomic_writes = []
+    real_atomic_write = extraction_daemon._atomic_write
+
+    def _record_atomic_write(path, text):
+        atomic_writes.append((path, json.loads(text)))
+        real_atomic_write(path, text)
+
+    monkeypatch.setattr(extraction_daemon, "_atomic_write", _record_atomic_write)
+
+    for reason in ("first", "second"):
+        extraction_daemon._save_deferred_extraction(
+            session_id="sess-deferred",
+            transcript_text=f"User: deferred payload {reason}",
+            owner_id="owner-id",
+            label="daemon-rolling",
+            reason=reason,
+        )
+
+    deferred_dir = tmp_path / "instances" / "test-inst" / "data" / "deferred-extractions"
+    files = sorted(deferred_dir.glob("*.json"))
+    assert [path for path, _payload in atomic_writes] == files
+    assert [path.name for path in files] == [
+        f"sess-deferred_1700000000_4242_{'a' * 32}.json",
+        f"sess-deferred_1700000000_4242_{'b' * 32}.json",
+    ]
+    payloads = [json.loads(path.read_text(encoding="utf-8")) for path in files]
+    assert [payload["reason"] for payload in payloads] == ["first", "second"]
+    assert all(payload["session_id"] == "sess-deferred" for payload in payloads)
+    assert all(payload["saved_at"] == 1700000000 for payload in payloads)
+
+
+def test_save_deferred_extraction_sanitizes_session_id_filename(monkeypatch, tmp_path):
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
+    monkeypatch.setattr(extraction_daemon.time, "time", lambda: 1700000001.0)
+    monkeypatch.setattr(extraction_daemon.os, "getpid", lambda: 4343)
+    monkeypatch.setattr(extraction_daemon.uuid, "uuid4", lambda: types.SimpleNamespace(hex="c" * 32))
+
+    extraction_daemon._save_deferred_extraction(
+        session_id="../escaped",
+        transcript_text="User: path traversal should not shape the filename",
+        owner_id="owner-id",
+        label="daemon-rolling",
+        reason="invalid-session",
+    )
+
+    deferred_dir = tmp_path / "instances" / "test-inst" / "data" / "deferred-extractions"
+    [path] = list(deferred_dir.glob("*.json"))
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["session_id"].startswith("unknown-")
+    assert path.name.startswith(f"{payload['session_id']}_1700000001_4343_")
+    assert "/" not in path.name
+    assert ".." not in path.name
+
+
+def test_save_deferred_extraction_raises_write_failure_when_fail_hard(monkeypatch, tmp_path):
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
+    monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: True)
+
+    def _raise_atomic_write(_path, _text):
+        raise OSError("deferred write failed")
+
+    monkeypatch.setattr(extraction_daemon, "_atomic_write", _raise_atomic_write)
+
+    with pytest.raises(OSError, match="deferred write failed"):
+        extraction_daemon._save_deferred_extraction(
+            session_id="sess-deferred",
+            transcript_text="User: deferred payload",
+            owner_id="owner-id",
+            label="daemon-rolling",
+            reason="provider-timeout",
+        )
+
+
 def test_stage_semantic_buffer_payload_raises_on_partial_chunks_when_fail_hard(monkeypatch):
     import ingest.extract as extract_mod
 
