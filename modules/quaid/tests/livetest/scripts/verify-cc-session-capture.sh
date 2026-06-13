@@ -126,8 +126,11 @@ def bound_instance_for_project():
         if not bound_instance:
             print(f"binding_instance=(invalid empty instance from {path})")
             continue
+        if not stored_project:
+            print(f"binding_instance=(skipped missing project_dir from {path})")
+            continue
         try:
-            if stored_project and Path(stored_project).expanduser().resolve() != Path(resolved_project_dir):
+            if Path(stored_project).expanduser().resolve() != Path(resolved_project_dir):
                 print(f"binding_instance=(skipped project mismatch from {path})")
                 continue
         except Exception as exc:
