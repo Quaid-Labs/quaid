@@ -7444,9 +7444,6 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
                 internal=bool(data.get("internal", False)),
                 source_key=cursor_key_for_write,
             )
-            data = dict(data)
-            data["line_offset"] = buffered_line_offset
-            data["transcript_size_bytes"] = current_size_bytes
 
         semantic_tokens = int(state.get("semantic_buffer_tokens", 0) or 0)
         near_budget_threshold = _rolling_ready_threshold(chunk_budget)
