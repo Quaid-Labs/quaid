@@ -5967,19 +5967,29 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
         int(cursor_offset or 0),
     )
     staged_semantic_ready = rolling_mode and _semantic_buffer_has_content(staged_state)
+    staged_rolling_batches = int(staged_state.get("rolling_batches", 0) or 0)
+    continued_raw_tail_pending = bool(signal_meta.get("flush_staged_payload_only"))
     drain_unstaged_semantic_buffer_on_sweep = bool(
         staged_payload_sweep_signal
         and signal_type == "session_end"
         and _semantic_buffer_has_content(staged_state)
-        and int(staged_state.get("rolling_batches", 0) or 0) <= 0
+        and (staged_rolling_batches <= 0 or not continued_raw_tail_pending)
     )
     if drain_unstaged_semantic_buffer_on_sweep:
-        logger.info(
-            "[%s] session %s: rolling-stage flush has no completed rolling batch; "
-            "draining pending semantic buffer during lifecycle flush",
-            label,
-            session_id,
-        )
+        if staged_rolling_batches > 0:
+            logger.info(
+                "[%s] session %s: rolling-stage flush has residual semantic buffer and no continued raw tail; "
+                "draining before publish",
+                label,
+                session_id,
+            )
+        else:
+            logger.info(
+                "[%s] session %s: rolling-stage flush has no completed rolling batch; "
+                "draining pending semantic buffer during lifecycle flush",
+                label,
+                session_id,
+            )
     flush_staged_payload_only = bool(
         staged_payload_sweep_signal
         and signal_meta.get("flush_staged_payload_only")

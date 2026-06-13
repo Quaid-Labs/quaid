@@ -12766,7 +12766,7 @@ class TestRollingExtraction:
             else:
                 sys.modules.pop("core.runtime.notify", None)
 
-    def test_rolling_flush_preserves_threshold_crossing_tail_for_lifecycle(self, monkeypatch, tmp_path):
+    def test_rolling_flush_drains_threshold_crossing_tail_without_continued_raw_tail(self, monkeypatch, tmp_path):
         import sys
         import types
 
@@ -12931,39 +12931,13 @@ class TestRollingExtraction:
 
             parse_empty["value"] = True
             extraction_daemon.process_signal(extraction_daemon.read_pending_signals()[0])
-            state_after_synthetic_flush = extraction_daemon.read_rolling_state("sess-roll-residual")
+            assert seen_transcripts == [prior, tail]
             assert len(applied_payloads) == 1
             assert [fact["text"] for fact in applied_payloads[0]["raw_facts"]] == [
-                "Owner has stable prior memories"
-            ]
-            assert state_after_synthetic_flush["semantic_buffer"] == tail
-            assert state_after_synthetic_flush["raw_facts"] == []
-            assert extraction_daemon.read_pending_signals() == []
-
-            extraction_daemon.write_signal(
-                signal_type="rolling",
-                session_id="sess-roll-residual",
-                transcript_path=str(transcript_path),
-                meta={"reason": "continued_chunk_budget"},
-            )
-            extraction_daemon.process_signal(extraction_daemon.read_pending_signals()[0])
-            state_after_stale_rolling = extraction_daemon.read_rolling_state("sess-roll-residual")
-            assert seen_transcripts == [prior]
-            assert state_after_stale_rolling["semantic_buffer"] == tail
-            assert state_after_stale_rolling["raw_facts"] == []
-            assert extraction_daemon.read_pending_signals() == []
-
-            extraction_daemon.write_signal(
-                signal_type="session_end",
-                session_id="sess-roll-residual",
-                transcript_path=str(transcript_path),
-            )
-            extraction_daemon.process_signal(extraction_daemon.read_pending_signals()[0])
-            assert seen_transcripts == [prior, tail]
-            assert len(applied_payloads) == 2
-            assert [fact["text"] for fact in applied_payloads[1]["raw_facts"]] == [
+                "Owner has stable prior memories",
                 "Owner discussed Baxter"
             ]
+            assert extraction_daemon.read_pending_signals() == []
             assert not extraction_daemon._rolling_state_path("sess-roll-residual").exists()
         finally:
             if real_registry is not None:
