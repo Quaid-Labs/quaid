@@ -440,6 +440,38 @@ class TestStoreBasic:
         assert node is not None
         assert node.created_at == "2026-03-11T23:59:59"
 
+    def test_supersede_node_timestamps_honor_quaid_now(self, tmp_path, monkeypatch):
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _ = _make_graph(tmp_path)
+        old = mg.Node.create("Fact", "Maya's workshop was in the blue shed.", owner_id="quaid")
+        new = mg.Node.create("Fact", "Maya's workshop moved to the brick studio.", owner_id="quaid")
+        graph.add_node(old, embed=False)
+        graph.add_node(new, embed=False)
+        monkeypatch.setenv("QUAID_NOW", "2026-04-05T10:11:12")
+
+        assert graph.supersede_node(old.id, new.id) is True
+
+        updated = graph.get_node(old.id)
+        assert updated is not None
+        assert updated.valid_until == "2026-04-05T10:11:12"
+        assert updated.updated_at == "2026-04-05T10:11:12"
+
+    def test_update_access_honors_quaid_now(self, tmp_path, monkeypatch):
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _ = _make_graph(tmp_path)
+        node = mg.Node.create("Fact", "Maya keeps the brass key by the side door.", owner_id="quaid")
+        graph.add_node(node, embed=False)
+        monkeypatch.setenv("QUAID_NOW", "2026-05-06T07:08:09")
+
+        graph._update_access([(node, 1.0)])
+
+        updated = graph.get_node(node.id)
+        assert updated is not None
+        assert updated.accessed_at == "2026-05-06T07:08:09"
+        assert updated.access_count == 1
+
     def test_recall_preserves_structural_anchor_kind(self, tmp_path):
         from datastore.memorydb.memory_graph import _recall_once, store
 
@@ -13241,6 +13273,47 @@ class TestRecallFastHookInjectContract:
         )
 
         assert mult >= 1.05
+
+    def test_composite_score_honors_quaid_now_for_recency_and_validity(self, monkeypatch):
+        import datastore.memorydb.memory_graph as mg
+
+        cfg = SimpleNamespace(
+            boost_recent=True,
+            boost_frequent=False,
+            composite_relevance_weight=0.60,
+            composite_recency_weight=0.20,
+            composite_frequency_weight=0.0,
+            recency_decay_days=90,
+        )
+        accessed = mg.Node(
+            id="recent",
+            type="Fact",
+            name="Maya accessed the red notebook.",
+            attributes={},
+            accessed_at="2026-03-10T00:00:00",
+            confidence=0.5,
+        )
+        valid_until = mg.Node(
+            id="validity",
+            type="Fact",
+            name="Maya's permit is valid until March 12.",
+            attributes={},
+            valid_until="2026-03-12T00:00:00",
+            confidence=0.5,
+        )
+
+        monkeypatch.setenv("QUAID_NOW", "2026-03-11T00:00:00")
+        recent_score = mg._compute_composite_score(accessed, 0.8, cfg)
+        unexpired_score = mg._compute_composite_score(valid_until, 0.8, cfg)
+
+        monkeypatch.setenv("QUAID_NOW", "2026-06-09T00:00:00")
+        stale_score = mg._compute_composite_score(accessed, 0.8, cfg)
+
+        monkeypatch.setenv("QUAID_NOW", "2026-03-20T00:00:00")
+        expired_score = mg._compute_composite_score(valid_until, 0.8, cfg)
+
+        assert recent_score > stale_score
+        assert unexpired_score > expired_score
 
     def test_relative_temporal_freshness_rerank_prefers_newer_current_state_fact(self):
         import datastore.memorydb.memory_graph as mg

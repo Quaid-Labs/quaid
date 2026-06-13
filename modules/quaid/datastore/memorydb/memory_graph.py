@@ -153,6 +153,13 @@ def _now_iso() -> str:
     return _now().isoformat()
 
 
+def _now_for(reference: datetime) -> datetime:
+    current = _now()
+    if reference.tzinfo:
+        return current if current.tzinfo else current.replace(tzinfo=reference.tzinfo)
+    return current.replace(tzinfo=None) if current.tzinfo else current
+
+
 def _trace_m15(event: str, **fields: Any) -> None:
     try:
         from lib.m15_trace import trace_m15
@@ -2260,11 +2267,12 @@ class MemoryGraph:
         Its confidence is reduced to 0.1 and valid_until is set to now.
         """
         with self._get_conn() as conn:
+            now_iso = _now_iso()
             result = conn.execute("""
                 UPDATE nodes SET superseded_by = ?, confidence = 0.1,
                     valid_until = ?, updated_at = ?
                 WHERE id = ? AND superseded_by IS NULL
-            """, (new_id, datetime.now().isoformat(), datetime.now().isoformat(), old_id))
+            """, (new_id, now_iso, now_iso, old_id))
             return result.rowcount > 0
 
     def get_fact_history(self, node_id: str) -> List[Node]:
@@ -2827,7 +2835,7 @@ class MemoryGraph:
             difficulty_map: Optional mapping of node ID → retrieval difficulty [0.0, 1.0].
                 Hard retrievals increment storage_strength more (Bjork model).
         """
-        now = datetime.now().isoformat()
+        now = _now_iso()
         with self._get_conn() as conn:
             for node, _ in results:
                 difficulty = (difficulty_map or {}).get(node.id, 0.0)
@@ -6184,7 +6192,7 @@ def _compute_composite_score(
     if boost_recent and node.accessed_at:
         try:
             last_access = datetime.fromisoformat(node.accessed_at.replace('Z', '+00:00'))
-            days_ago = (datetime.now(last_access.tzinfo) - last_access).days if last_access.tzinfo else (datetime.now() - last_access).days
+            days_ago = (_now_for(last_access) - last_access).days
             recency = max(0.0, 1.0 - days_ago / max(1, recency_days))
         except (ValueError, TypeError):
             pass
@@ -6201,22 +6209,21 @@ def _compute_composite_score(
 
     # Temporal validity penalty
     temporal_penalty = 0.0
-    now = datetime.now()
     if node.valid_until:
         try:
             until = datetime.fromisoformat(node.valid_until.replace('Z', '+00:00'))
-            until_naive = until.replace(tzinfo=None) if until.tzinfo else until
-            if until_naive < now:
+            current = _now_for(until)
+            if until < current:
                 # Expired fact — penalize based on how long ago it expired
-                days_expired = (now - until_naive).days
+                days_expired = (current - until).days
                 temporal_penalty = min(0.3, days_expired * 0.01)  # Up to -0.3
         except (ValueError, TypeError):
             pass
     if node.valid_from:
         try:
             vfrom = datetime.fromisoformat(node.valid_from.replace('Z', '+00:00'))
-            vfrom_naive = vfrom.replace(tzinfo=None) if vfrom.tzinfo else vfrom
-            if vfrom_naive > now:
+            current = _now_for(vfrom)
+            if vfrom > current:
                 temporal_penalty = 0.5  # Future fact — heavy penalty
         except (ValueError, TypeError):
             pass
