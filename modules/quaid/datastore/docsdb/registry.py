@@ -20,6 +20,7 @@ Usage:
 """
 
 import argparse
+import contextlib
 import json
 import logging
 import os
@@ -95,7 +96,47 @@ def _dedupe_instances(instances: Any) -> List[str]:
     return ordered
 
 
-def _atomic_write_text(path: Path, content: str, *, encoding: str = "utf-8") -> None:
+def _project_md_lock_path(path: Path) -> Optional[Path]:
+    if path.name != "PROJECT.md":
+        return None
+    return path.with_name(".PROJECT.md.lock")
+
+
+@contextlib.contextmanager
+def _project_md_write_lock(path: Path):
+    lock_path = _project_md_lock_path(path)
+    if lock_path is None:
+        yield
+        return
+
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    handle = open(lock_path, "a+", encoding="utf-8")
+    locked = False
+    try:
+        try:
+            import fcntl  # type: ignore
+
+            fcntl.flock(handle, fcntl.LOCK_EX)
+            locked = True
+        except (ImportError, OSError) as exc:
+            logger.warning("PROJECT.md lock unavailable for %s; proceeding without lock: %s", path, exc)
+            if _fail_hard_enabled():
+                raise RuntimeError(f"Failed to acquire PROJECT.md lock: {path}") from exc
+        yield
+    finally:
+        if locked:
+            try:
+                import fcntl  # type: ignore
+
+                fcntl.flock(handle, fcntl.LOCK_UN)
+            except OSError as exc:
+                logger.warning("Failed to release PROJECT.md lock for %s: %s", path, exc)
+                if _fail_hard_enabled():
+                    raise RuntimeError(f"Failed to release PROJECT.md lock: {path}") from exc
+        handle.close()
+
+
+def _atomic_write_text_unlocked(path: Path, content: str, *, encoding: str = "utf-8") -> None:
     """Write text via a same-directory temp file and atomic replace."""
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_name = ""
@@ -120,6 +161,11 @@ def _atomic_write_text(path: Path, content: str, *, encoding: str = "utf-8") -> 
                 Path(tmp_name).unlink(missing_ok=True)
             except OSError:
                 pass
+
+
+def _atomic_write_text(path: Path, content: str, *, encoding: str = "utf-8") -> None:
+    with _project_md_write_lock(path):
+        _atomic_write_text_unlocked(path, content, encoding=encoding)
 
 
 def _docs_project_visible_to_current_instance(project: Optional[str]) -> bool:

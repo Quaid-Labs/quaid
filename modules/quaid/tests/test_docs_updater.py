@@ -73,6 +73,25 @@ def test_file_lock_raises_on_lock_failure_when_fail_hard(monkeypatch, tmp_path):
             pass
 
 
+def test_atomic_write_text_locks_project_md(monkeypatch, tmp_path):
+    from datastore.docsdb import updater
+
+    seen = []
+
+    @contextmanager
+    def _fake_lock(path):
+        seen.append(path)
+        yield
+
+    target = tmp_path / "projects" / "demo" / "PROJECT.md"
+    monkeypatch.setattr(updater, "_file_lock", _fake_lock)
+
+    updater._atomic_write_text(target, "# Demo\n")
+
+    assert seen == [target.with_name(".PROJECT.md.lock")]
+    assert target.read_text(encoding="utf-8") == "# Demo\n"
+
+
 def test_resolve_path_rejects_workspace_escape(tmp_path):
     with _adapter_patch(tmp_path):
         from datastore.docsdb import updater

@@ -195,7 +195,13 @@ def _index_doc_with_timeout(rag: Any, file_path: str, timeout_seconds: float) ->
     return int(result.get("chunks", 0) or 0)
 
 
-def _atomic_write_text(path: Path, content: str) -> None:
+def _project_md_lock_path(path: Path) -> Optional[Path]:
+    if path.name != "PROJECT.md":
+        return None
+    return path.with_name(".PROJECT.md.lock")
+
+
+def _atomic_write_text_unlocked(path: Path, content: str) -> None:
     """Atomically write UTF-8 text with temp file + replace."""
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_path = tempfile.mkstemp(
@@ -216,6 +222,15 @@ def _atomic_write_text(path: Path, content: str) -> None:
                 os.unlink(tmp_path)
             except OSError as exc:
                 logger.warning("Failed cleaning up temp file %s: %s", tmp_path, exc)
+
+
+def _atomic_write_text(path: Path, content: str) -> None:
+    lock_path = _project_md_lock_path(path)
+    if lock_path is not None:
+        with _file_lock(lock_path):
+            _atomic_write_text_unlocked(path, content)
+        return
+    _atomic_write_text_unlocked(path, content)
 
 
 # Cleanup thresholds

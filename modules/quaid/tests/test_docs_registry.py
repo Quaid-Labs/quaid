@@ -7,6 +7,7 @@ import sys
 import tempfile
 from contextlib import contextmanager
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -541,6 +542,36 @@ class TestCreateProject:
 
         assert project_md.read_text(encoding="utf-8") == "existing content"
         assert list(project_md.parent.glob(f".{project_md.name}.*.tmp")) == []
+
+    def test_project_md_lock_path_matches_updater(self, setup_env):
+        from datastore.docsdb import registry as registry_mod
+        from datastore.docsdb import updater
+
+        project_md = setup_env / "projects" / "test-project" / "PROJECT.md"
+
+        assert registry_mod._project_md_lock_path(project_md) == updater._project_md_lock_path(project_md)
+        assert registry_mod._project_md_lock_path(project_md).name == ".PROJECT.md.lock"
+
+    def test_project_md_lock_failure_raises_when_fail_hard(self, setup_env, monkeypatch):
+        from datastore.docsdb import registry as registry_mod
+
+        project_md = setup_env / "projects" / "test-project" / "PROJECT.md"
+        project_md.write_text("existing content", encoding="utf-8")
+
+        def _fail_flock(*_args):
+            raise OSError("flock unavailable")
+
+        monkeypatch.setitem(
+            sys.modules,
+            "fcntl",
+            SimpleNamespace(LOCK_EX=1, LOCK_UN=2, flock=_fail_flock),
+        )
+        monkeypatch.setattr(registry_mod, "_fail_hard_enabled", lambda: True)
+
+        with pytest.raises(RuntimeError, match="Failed to acquire PROJECT.md lock"):
+            registry_mod._atomic_write_text(project_md, "new content")
+
+        assert project_md.read_text(encoding="utf-8") == "existing content"
 
     def test_rejects_unsafe_project_name_before_scaffold(self, setup_env):
         r = _get_registry()
