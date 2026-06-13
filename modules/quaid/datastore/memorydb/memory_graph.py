@@ -2238,6 +2238,9 @@ class MemoryGraph:
     def delete_node(self, node_id: str) -> bool:
         """Delete a node and all its edges."""
         with self._get_conn() as conn:
+            # Keep the method invariant independent of per-connection FK settings.
+            conn.execute("DELETE FROM edges WHERE source_id = ? OR target_id = ?", (node_id, node_id))
+            conn.execute("UPDATE nodes SET superseded_by = NULL WHERE superseded_by = ?", (node_id,))
             result = conn.execute("DELETE FROM nodes WHERE id = ?", (node_id,))
             if result.rowcount > 0 and _lib_has_vec():
                 try:

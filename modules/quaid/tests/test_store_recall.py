@@ -56,6 +56,53 @@ def _make_graph(tmp_path):
     return graph, db_file
 
 
+def test_delete_node_cleans_edges_and_supersession_without_fk_cascade(tmp_path, monkeypatch):
+    from contextlib import contextmanager
+    import datastore.memorydb.memory_graph as mg
+
+    graph, db_file = _make_graph(tmp_path)
+    old = mg.Node.create("Fact", "Old workshop address was on Cedar Street.", owner_id="quaid")
+    new = mg.Node.create("Fact", "New workshop address is on Birch Avenue.", owner_id="quaid")
+    graph.add_node(old, embed=False)
+    graph.add_node(new, embed=False)
+    graph.add_edge(mg.Edge.create(old.id, new.id, "replaced_by"))
+    assert graph.supersede_node(old.id, new.id) is True
+
+    raw_conn = sqlite3.connect(str(db_file))
+    raw_conn.row_factory = sqlite3.Row
+    raw_conn.execute("PRAGMA foreign_keys = OFF")
+
+    @contextmanager
+    def _raw_connection_without_cascade():
+        try:
+            yield raw_conn
+            raw_conn.commit()
+        except Exception:
+            raw_conn.rollback()
+            raise
+
+    try:
+        monkeypatch.setattr(graph, "_get_conn", _raw_connection_without_cascade)
+        assert graph.delete_node(new.id) is True
+    finally:
+        raw_conn.close()
+
+    verify_conn = sqlite3.connect(str(db_file))
+    verify_conn.row_factory = sqlite3.Row
+    try:
+        old_row = verify_conn.execute("SELECT superseded_by FROM nodes WHERE id = ?", (old.id,)).fetchone()
+        edge_count = verify_conn.execute(
+            "SELECT COUNT(*) FROM edges WHERE source_id = ? OR target_id = ?",
+            (new.id, new.id),
+        ).fetchone()[0]
+    finally:
+        verify_conn.close()
+
+    assert old_row is not None
+    assert old_row["superseded_by"] is None
+    assert edge_count == 0
+
+
 def test_recall_command_date_bounds_accepts_canonical_and_camelcase_asof_aliases():
     import datastore.memorydb.memory_graph as mg
 
