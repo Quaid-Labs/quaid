@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
@@ -880,6 +881,26 @@ def test_project_log_queue_requires_lock_for_drain_mark_cleanup(project_env):
         project_log_queue.mark_project_log_queue_committed("demo", [items[0]["id"]])
 
     assert project_log_queue.pending_project_log_count("demo") == 0
+
+
+def test_project_log_queue_failed_flock_does_not_authorize_drain(project_env, monkeypatch):
+    _tmp_path, _src, _entry = project_env
+    from datastore.docsdb import project_log_queue
+
+    class BrokenFcntl:
+        LOCK_EX = 1
+        LOCK_UN = 2
+
+        @staticmethod
+        def flock(_handle, _flags):
+            raise OSError("flock unavailable")
+
+    monkeypatch.setitem(sys.modules, "fcntl", BrokenFcntl)
+    monkeypatch.setattr(project_log_queue, "is_fail_hard_enabled", lambda: False)
+
+    with project_log_queue.project_queue_lock("demo"):
+        with pytest.raises(RuntimeError, match="project-log queue lock is required"):
+            project_log_queue.drain_project_log_queue("demo")
 
 
 def test_execute_update_once_drains_project_log_queue_under_worker_lock(project_env):

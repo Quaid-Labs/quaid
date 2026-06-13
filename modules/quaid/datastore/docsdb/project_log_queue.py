@@ -64,30 +64,36 @@ def project_queue_lock(project: str, *, quaid_home: Optional[Path] = None):
     lock_path = project_queue_lock_path(project, quaid_home=quaid_home)
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     handle = lock_path.open("a+", encoding="utf-8")
+    locked = False
     try:
         try:
             import fcntl  # type: ignore
 
             fcntl.flock(handle, fcntl.LOCK_EX)
+            locked = True
         except Exception:
             if is_fail_hard_enabled():
                 raise
             logger.warning("Failed acquiring project-log queue lock for %s", project, exc_info=True)
-        held = getattr(_LOCK_STATE, "held_projects", set())
-        _LOCK_STATE.held_projects = {*held, name}
-        try:
+        if not locked:
             yield
-        finally:
-            _LOCK_STATE.held_projects = set(held)
+        else:
+            held = getattr(_LOCK_STATE, "held_projects", set())
+            _LOCK_STATE.held_projects = {*held, name}
+            try:
+                yield
+            finally:
+                _LOCK_STATE.held_projects = set(held)
     finally:
-        try:
-            import fcntl  # type: ignore
+        if locked:
+            try:
+                import fcntl  # type: ignore
 
-            fcntl.flock(handle, fcntl.LOCK_UN)
-        except Exception:
-            if is_fail_hard_enabled():
-                raise
-            logger.warning("Failed releasing project-log queue lock for %s", project, exc_info=True)
+                fcntl.flock(handle, fcntl.LOCK_UN)
+            except Exception:
+                if is_fail_hard_enabled():
+                    raise
+                logger.warning("Failed releasing project-log queue lock for %s", project, exc_info=True)
         handle.close()
 
 
