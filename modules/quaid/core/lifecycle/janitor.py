@@ -2193,6 +2193,37 @@ def _run_supervisor_janitor_request(*, instance: Optional[str] = None) -> int:
     return 0 if status == "completed" else 1
 
 
+def _print_supervisor_janitor_status() -> int:
+    """Print the current supervisor-owned janitor request without starting work."""
+    from core import project_docs
+
+    request = project_docs.read_janitor_request()
+    if not request:
+        print("[janitor] No supervisor-owned janitor request found")
+        return 0
+
+    status = str(request.get("status") or "unknown").strip() or "unknown"
+    print(f"[janitor] Request status: {status}")
+    for key in ("request_id", "scope", "instance", "requested_by", "reason", "requested_at", "started_at", "completed_at"):
+        value = request.get(key)
+        if value not in (None, "", []):
+            print(f"[janitor] {key}: {value}")
+    instances = request.get("instances")
+    if isinstance(instances, list) and instances:
+        print(f"[janitor] instances: {', '.join(str(item) for item in instances)}")
+    started_instances = request.get("started_instances")
+    if isinstance(started_instances, list) and started_instances:
+        print(f"[janitor] started_instances: {', '.join(str(item) for item in started_instances)}")
+    exit_codes = request.get("exit_codes")
+    if isinstance(exit_codes, dict) and exit_codes:
+        rendered = ", ".join(f"{name}={code}" for name, code in sorted(exit_codes.items()))
+        print(f"[janitor] exit_codes: {rendered}")
+    errors = list(request.get("errors") or [])
+    for error in errors:
+        print(f"[janitor] Error: {error}", file=sys.stderr)
+    return 1 if status == "failed" else 0
+
+
 @contextlib.contextmanager
 def _ambient_boot_guard(*, enabled: bool):
     if not enabled:
@@ -2301,6 +2332,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--task", choices=JANITOR_TASK_CHOICES,
                        default="all", help="Task to run")
     parser.add_argument("--apply", action="store_true", help="Apply changes (default: dry-run)")
+    parser.add_argument(
+        "--status",
+        action="store_true",
+        help="Show the current supervisor-owned janitor request status and exit.",
+    )
     parser.add_argument("--approve", action="store_true",
                         help="Confirm apply when janitor.applyMode is set to 'ask'")
     parser.add_argument(
@@ -2331,6 +2367,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
 
     args = parser.parse_args(argv)
+
+    if args.status:
+        return _print_supervisor_janitor_status()
 
     requested_instance = str(getattr(args, "instance", "") or "").strip()
     pre_dry_run, pre_apply_policy_warning = _resolve_apply_mode_lightweight(args.apply, args.approve)

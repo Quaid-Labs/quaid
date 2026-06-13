@@ -252,6 +252,65 @@ def test_janitor_main_all_apply_attaches_to_existing_request(monkeypatch, tmp_pa
     assert calls == [("wait", {"request_id": "req-active", "timeout_seconds": janitor._supervisor_janitor_wait_timeout_seconds()})]
 
 
+def test_janitor_status_reports_no_supervisor_request(monkeypatch, capsys):
+    from core import project_docs
+    from core.lifecycle import janitor
+
+    monkeypatch.setattr(project_docs, "read_janitor_request", lambda: None)
+
+    assert janitor.main(["--status"]) == 0
+    captured = capsys.readouterr()
+    assert "No supervisor-owned janitor request found" in captured.out
+
+
+def test_janitor_status_reports_running_supervisor_request(monkeypatch, capsys):
+    from core import project_docs
+    from core.lifecycle import janitor
+
+    monkeypatch.setattr(
+        project_docs,
+        "read_janitor_request",
+        lambda: {
+            "request_id": "req-status",
+            "status": "running",
+            "scope": "all",
+            "instances": ["alpha", "beta"],
+            "started_instances": ["alpha"],
+            "exit_codes": {"alpha": 0},
+            "errors": [],
+        },
+    )
+
+    assert janitor.main(["--status"]) == 0
+    captured = capsys.readouterr()
+    assert "Request status: running" in captured.out
+    assert "request_id: req-status" in captured.out
+    assert "instances: alpha, beta" in captured.out
+    assert "started_instances: alpha" in captured.out
+    assert "exit_codes: alpha=0" in captured.out
+
+
+def test_janitor_status_returns_nonzero_for_failed_supervisor_request(monkeypatch, capsys):
+    from core import project_docs
+    from core.lifecycle import janitor
+
+    monkeypatch.setattr(
+        project_docs,
+        "read_janitor_request",
+        lambda: {
+            "request_id": "req-failed",
+            "status": "failed",
+            "errors": ["instance alpha janitor exited rc=1"],
+        },
+    )
+
+    assert janitor.main(["--status"]) == 1
+    captured = capsys.readouterr()
+    assert "Request status: failed" in captured.out
+    assert "request_id: req-failed" in captured.out
+    assert "instance alpha janitor exited rc=1" in captured.err
+
+
 def test_janitor_main_all_dry_run_without_instance_uses_ambient_boot_guard(monkeypatch, tmp_path):
     monkeypatch.setenv("QUAID_HOME", str(tmp_path))
     monkeypatch.setenv("QUAID_VISIBLE_HOME", str(tmp_path))

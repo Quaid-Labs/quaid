@@ -136,6 +136,7 @@ quaid global-registry list    # cross-instance project list
 quaid janitor --task all --dry-run
 quaid janitor --task all --apply              # supervisor-owned across live instances; add --approve when applyMode=ask
 quaid janitor --task all --apply --instance <name>  # supervisor-owned single-instance maintenance
+quaid janitor --status                        # inspect current supervisor-owned janitor request
 quaid doctor
 quaid supervisor status                       # inspect root runtime supervisor
 quaid supervisor ensure                       # start runtime supervisor if needed

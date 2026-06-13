@@ -94,7 +94,13 @@ non-trivial plan.
    ```
 
    After launching, poll the per-instance janitor log for the `janitor_complete`
-   event instead of waiting on stdout:
+   event or poll the supervisor request status:
+
+   ```bash
+   ssh REMOTE_HOST "\$QCLI janitor --status"
+   ```
+
+   For log-based polling:
 
    ```bash
    ssh REMOTE_HOST "tail -f ~/.quaid/instances/*/logs/janitor.log 2>/dev/null \
