@@ -213,6 +213,7 @@ def enqueue_project_logs(
             _atomic_write_json(target, payload)
             metrics["projects_queued"] += 1
             metrics["entries_queued"] += len(entries)
+            metrics["entries_written"] += len(entries)
         except Exception as exc:
             metrics["queue_failures"] += 1
             logger.warning("Failed to enqueue PROJECT.log entries for %r: %s", raw_project, exc)

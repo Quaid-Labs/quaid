@@ -850,6 +850,7 @@ def test_project_status_reports_pending_project_log_queue(project_env):
     )
 
     assert metrics["entries_queued"] == 1
+    assert metrics["entries_written"] == 1
     status = project_docs.project_status("demo")
     assert status["status"] == "stale"
     assert status["fresh"] is False
