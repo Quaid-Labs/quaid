@@ -12,6 +12,7 @@ import logging
 import os
 import re
 import tempfile
+import threading
 import time
 import uuid
 from datetime import datetime, timezone
@@ -21,6 +22,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 from lib.fail_policy import is_fail_hard_enabled
 
 logger = logging.getLogger(__name__)
+_LOCK_STATE = threading.local()
 
 _PROJECT_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 _ENTRY_ID_RE = re.compile(r"^[0-9]+-[0-9]+-[a-f0-9-]+$")
@@ -54,6 +56,7 @@ def project_queue_lock_path(project: str, *, quaid_home: Optional[Path] = None) 
 @contextlib.contextmanager
 def project_queue_lock(project: str, *, quaid_home: Optional[Path] = None):
     """Serialize drain->visible-write->mark for one project's queue."""
+    name = _validate_project(project)
     lock_path = project_queue_lock_path(project, quaid_home=quaid_home)
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     handle = lock_path.open("a+", encoding="utf-8")
@@ -66,7 +69,12 @@ def project_queue_lock(project: str, *, quaid_home: Optional[Path] = None):
             if is_fail_hard_enabled():
                 raise
             logger.warning("Failed acquiring project-log queue lock for %s", project, exc_info=True)
-        yield
+        held = getattr(_LOCK_STATE, "held_projects", set())
+        _LOCK_STATE.held_projects = {*held, name}
+        try:
+            yield
+        finally:
+            _LOCK_STATE.held_projects = set(held)
     finally:
         try:
             import fcntl  # type: ignore
@@ -77,6 +85,14 @@ def project_queue_lock(project: str, *, quaid_home: Optional[Path] = None):
                 raise
             logger.warning("Failed releasing project-log queue lock for %s", project, exc_info=True)
         handle.close()
+
+
+def _assert_project_queue_lock_held(project: str) -> str:
+    name = _validate_project(project)
+    held = getattr(_LOCK_STATE, "held_projects", set())
+    if name not in held:
+        raise RuntimeError(f"project-log queue lock is required for {name}")
+    return name
 
 
 def _validate_project(project: str) -> str:
@@ -247,6 +263,7 @@ def drain_project_log_queue(
     This does not remove queue files. Call mark_project_log_queue_committed()
     after the visible PROJECT.log/PROJECT.md commit succeeds.
     """
+    project = _assert_project_queue_lock_held(project)
     directory = project_queue_dir(project, quaid_home=quaid_home)
     try:
         paths = sorted(path for path in directory.glob("*.json") if path.is_file())
@@ -290,6 +307,7 @@ def mark_project_log_queue_committed(
     quaid_home: Optional[Path] = None,
 ) -> None:
     """Remove queue items after the project-docs worker commits them."""
+    project = _assert_project_queue_lock_held(project)
     ids = {str(item_id or "").strip() for item_id in item_ids}
     ids = {item_id for item_id in ids if _ENTRY_ID_RE.fullmatch(item_id)}
     if not ids:
@@ -306,6 +324,7 @@ def mark_project_log_queue_committed(
 
 def cleanup_project_log_queue(project: str, *, quaid_home: Optional[Path] = None) -> Dict[str, int]:
     """Remove all queue files for a project."""
+    project = _assert_project_queue_lock_held(project)
     removed = 0
     directory = project_queue_dir(project, quaid_home=quaid_home)
     try:

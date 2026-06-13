@@ -857,6 +857,31 @@ def test_project_status_reports_pending_project_log_queue(project_env):
     assert status["project_log_queue_pending"] == 1
 
 
+def test_project_log_queue_requires_lock_for_drain_mark_cleanup(project_env):
+    _tmp_path, _src, _entry = project_env
+    from datastore.docsdb import project_log_queue
+
+    metrics = project_log_queue.enqueue_project_logs(
+        {"demo": ["Queued project log milestone"]},
+        trigger="Reset",
+    )
+    assert metrics["entries_written"] == 1
+
+    with pytest.raises(RuntimeError, match="project-log queue lock is required"):
+        project_log_queue.drain_project_log_queue("demo")
+    with pytest.raises(RuntimeError, match="project-log queue lock is required"):
+        project_log_queue.mark_project_log_queue_committed("demo", ["bad-id"])
+    with pytest.raises(RuntimeError, match="project-log queue lock is required"):
+        project_log_queue.cleanup_project_log_queue("demo")
+
+    with project_log_queue.project_queue_lock("demo"):
+        items = project_log_queue.drain_project_log_queue("demo")
+        assert len(items) == 1
+        project_log_queue.mark_project_log_queue_committed("demo", [items[0]["id"]])
+
+    assert project_log_queue.pending_project_log_count("demo") == 0
+
+
 def test_execute_update_once_drains_project_log_queue_under_worker_lock(project_env):
     _tmp_path, _src, entry = project_env
     from core import project_docs

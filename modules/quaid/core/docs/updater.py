@@ -118,7 +118,9 @@ def mark_project_log_queue_committed(project: str, item_ids: list[str]) -> dict[
 
 
 def cleanup_project_log_queue(project: str) -> dict[str, int]:
-    return _project_log_queue_module().cleanup_project_log_queue(project)
+    queue = _project_log_queue_module()
+    with queue.project_queue_lock(project):
+        return queue.cleanup_project_log_queue(project)
 
 
 def queued_project_log_projects(project: str | None = None) -> list[str]:
