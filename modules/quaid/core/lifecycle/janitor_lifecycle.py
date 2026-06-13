@@ -529,6 +529,8 @@ def _register_module_routines(
     try:
         module = importlib.import_module(module_name)
     except Exception as exc:
+        if is_fail_hard_enabled():
+            raise
         msg = f"Lifecycle module load failed: {module_name}: {exc}"
         for routine_name in expected_routines:
             _register_failure(routine_name, msg)
@@ -563,6 +565,8 @@ def _register_module_routines(
 
         registrar(_ScopedRegistry(registry, module_name), RoutineResult)
     except Exception as exc:
+        if is_fail_hard_enabled():
+            raise
         msg = f"Lifecycle registration failed: {module_name}: {exc}"
         for routine_name in expected_routines:
             if not registry.has(routine_name):

@@ -795,6 +795,7 @@ def test_lifecycle_registry_rejects_conflicting_reregister():
 def test_register_module_routines_replaces_prior_failure_stub(monkeypatch, tmp_path):
     module_name = "adaptors.fake.lifecycle"
     registry = LifecycleRegistry()
+    monkeypatch.setattr("core.lifecycle.janitor_lifecycle.is_fail_hard_enabled", lambda: False)
 
     calls = {"count": 0}
 
@@ -823,6 +824,39 @@ def test_register_module_routines_replaces_prior_failure_stub(monkeypatch, tmp_p
     second = registry.run("workspace", RoutineContext(cfg=_make_cfg(False), dry_run=True, workspace=tmp_path))
     assert second.errors == []
     assert second.metrics["ok"] == 1
+
+
+def test_register_module_routines_raises_import_failure_when_fail_hard(monkeypatch):
+    registry = LifecycleRegistry()
+    monkeypatch.setattr("core.lifecycle.janitor_lifecycle.is_fail_hard_enabled", lambda: True)
+    monkeypatch.setattr(
+        "core.lifecycle.janitor_lifecycle.importlib.import_module",
+        lambda _name: (_ for _ in ()).throw(ImportError("simulated import failure")),
+    )
+
+    with pytest.raises(ImportError, match="simulated import failure"):
+        _register_module_routines(registry, "adaptors.fake.lifecycle", ["workspace"])
+
+    assert not registry.has("workspace")
+
+
+def test_register_module_routines_raises_registration_failure_when_fail_hard(monkeypatch):
+    module_name = "adaptors.fake.lifecycle"
+    registry = LifecycleRegistry()
+    monkeypatch.setattr("core.lifecycle.janitor_lifecycle.is_fail_hard_enabled", lambda: True)
+
+    mod = ModuleType(module_name)
+
+    def _registrar(_scoped, _result_type):
+        raise RuntimeError("registration failed")
+
+    mod.register_lifecycle_routines = _registrar
+    monkeypatch.setattr("core.lifecycle.janitor_lifecycle.importlib.import_module", lambda _name: mod)
+
+    with pytest.raises(RuntimeError, match="registration failed"):
+        _register_module_routines(registry, module_name, ["workspace"])
+
+    assert not registry.has("workspace")
 
 
 def test_lifecycle_registry_register_and_has_use_registry_guard():
