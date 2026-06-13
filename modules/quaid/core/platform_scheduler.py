@@ -469,6 +469,7 @@ def ensure_scheduler_alive(quaid_home: Path, platform: str, total_slots: int = _
     # Use a lock file to avoid two instances racing to start the scheduler
     lock_path = _shared_run_dir(quaid_home) / f"{platform}-scheduler-start.lock"
     import fcntl
+    fd = None
     try:
         fd = open(lock_path, "w")
         fcntl.flock(fd, fcntl.LOCK_EX)
@@ -489,10 +490,11 @@ def ensure_scheduler_alive(quaid_home: Path, platform: str, total_slots: int = _
         return child_pid
     except Exception as e:
         logger.warning("ensure_scheduler_alive failed: %s", e)
-        try:
-            fd.close()
-        except Exception:
-            pass
+        if fd is not None:
+            try:
+                fd.close()
+            except Exception:
+                pass
         if _fail_hard_enabled():
             raise
         return -1

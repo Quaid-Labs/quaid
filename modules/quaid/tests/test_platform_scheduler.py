@@ -263,6 +263,26 @@ class TestPlatformSchedulerServer:
         with pytest.raises(RuntimeError, match="spawn failed"):
             platform_scheduler.ensure_scheduler_alive(base, "tp")
 
+    def test_ensure_scheduler_alive_handles_lock_open_failure_when_fail_open(self, monkeypatch):
+        from core import platform_scheduler
+        import builtins
+
+        base = _short_tmp()
+        self._bases.append(base)
+        monkeypatch.setattr(platform_scheduler, "_read_pid", lambda *_args: None)
+        monkeypatch.setattr(platform_scheduler, "_fail_hard_enabled", lambda: False)
+
+        real_open = builtins.open
+
+        def _open(path, *args, **kwargs):
+            if str(path).endswith("tp-scheduler-start.lock"):
+                raise OSError("lock open failed")
+            return real_open(path, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "open", _open)
+
+        assert platform_scheduler.ensure_scheduler_alive(base, "tp") == -1
+
     def test_start_scheduler_child_crash_uses_nonzero_exit_source_guard(self):
         source = Path(__file__).resolve().parents[1] / "core" / "platform_scheduler.py"
         text = source.read_text(encoding="utf-8")
