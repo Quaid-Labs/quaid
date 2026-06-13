@@ -6392,6 +6392,25 @@ class TestSignalRoundTrip:
         assert extraction_daemon._processing_lock_active("source-legacy-lock") is False
         assert not lock_path.exists()
 
+    def test_processing_lock_active_reaps_fresh_dead_pid_file(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
+        monkeypatch.setattr(extraction_daemon, "_pid_alive", lambda _pid: False)
+
+        lock_path = extraction_daemon._processing_lock_path("source-fresh-dead-lock")
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        lock_path.write_text(
+            json.dumps({
+                "session_id": "source-fresh-dead-lock",
+                "pid": 999999999,
+                "started_at": "2026-06-13T14:38:20Z",
+            }),
+            encoding="utf-8",
+        )
+
+        assert extraction_daemon._processing_lock_active("source-fresh-dead-lock") is False
+        assert not lock_path.exists()
+
     def test_processing_lock_active_reaps_old_unlocked_empty_file(self, monkeypatch, tmp_path):
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
         monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
@@ -14582,6 +14601,76 @@ class TestRollingExtraction:
             extraction_daemon._release_session_processing_lock(source_key, lock_fd)
 
         assert captured == []
+
+    def test_check_chunk_ready_sessions_recovers_missing_rolling_stage_flush_after_fresh_dead_lock(
+        self, monkeypatch, tmp_path
+    ):
+        """The explicit rolling scan driver must recover staged payloads without waiting for idle scan."""
+        instance_id = os.environ.get("QUAID_INSTANCE", "pytest-runner")
+        transcript = tmp_path / "driver-recovery.jsonl"
+        transcript.write_text(
+            '{"role":"user","content":"old"}\n{"role":"assistant","content":"done"}\n',
+            encoding="utf-8",
+        )
+        state_file = self._setup_rolling_state(
+            tmp_path,
+            instance_id,
+            "driver-recovery-sess",
+            [{"text": "staged fact", "category": "fact"}],
+            transcript,
+        )
+        state = json.loads(state_file.read_text(encoding="utf-8"))
+        state["rolling_batches"] = 1
+        state["buffered_line_offset"] = 2
+        state["staged_payload_pending_flush"] = True
+        state_file.write_text(json.dumps(state), encoding="utf-8")
+        source_key = extraction_daemon._signal_source_cursor_key(
+            "driver-recovery-sess",
+            str(transcript),
+            staged_state=state,
+        )
+        lock_path = tmp_path / "instances" / instance_id / "data" / "session-processing" / f"{source_key}.lock"
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        lock_path.write_text(
+            json.dumps({
+                "session_id": source_key,
+                "pid": 999999999,
+                "started_at": "2026-06-13T14:38:20Z",
+            }),
+            encoding="utf-8",
+        )
+
+        captured = []
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", instance_id)
+        monkeypatch.setattr(extraction_daemon, "_pid_alive", lambda _pid: False)
+        monkeypatch.setattr(extraction_daemon, "_load_runtime_adapter", lambda: object())
+        monkeypatch.setattr(extraction_daemon, "_ensure_discovered_session_cursors", lambda _adapter: 0)
+        monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
+        monkeypatch.setattr(
+            extraction_daemon,
+            "write_signal",
+            lambda signal_type, session_id, transcript_path, **kwargs: captured.append(
+                {
+                    "signal_type": signal_type,
+                    "session_id": session_id,
+                    "transcript_path": transcript_path,
+                    "meta": kwargs.get("meta", {}),
+                }
+            ),
+        )
+
+        extraction_daemon.check_chunk_ready_sessions(chunk_tokens=12000)
+
+        assert len(captured) == 1
+        assert captured[0]["signal_type"] == "session_end"
+        assert captured[0]["session_id"] == "driver-recovery-sess"
+        assert captured[0]["transcript_path"] == str(transcript)
+        assert captured[0]["meta"]["reason"] == "rolling_stage_flush"
+        assert captured[0]["meta"]["recovered_missing_flush"] is True
+        assert captured[0]["meta"]["recovered_from_rolling_state"] is True
+        assert captured[0]["meta"]["source_cursor_key"] == source_key
+        assert not lock_path.exists()
 
     def test_check_idle_sessions_retires_legacy_cursor_shadowed_by_source_cursor(
         self, monkeypatch, tmp_path

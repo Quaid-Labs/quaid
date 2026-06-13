@@ -553,8 +553,13 @@ def _pid_alive(pid: int) -> bool:
     try:
         os.kill(int(pid), 0)
         return True
-    except Exception:
+    except ProcessLookupError:
         return False
+    except PermissionError:
+        return True
+    except Exception:
+        # Unknown PID probe failures should not cause lock stealing.
+        return True
 
 
 def _all_process_commands_with_env() -> list[tuple[int, str]]:
@@ -2367,11 +2372,11 @@ def _processing_lock_holder_dead(lock_path: Path) -> bool:
         return False
     if pid == os.getpid():
         return False
-    if not _processing_lock_old_enough(lock_path):
-        return False
     if pid <= 0:
         # A daemon crash can leave an empty or partially-written lock file after
         # the OS releases flock. Treat only old, currently-unlocked files as stale.
+        if not _processing_lock_old_enough(lock_path):
+            return False
         return _processing_lock_unlocked(lock_path)
     return not _pid_alive(pid)
 
@@ -7301,12 +7306,24 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
     chunk_budget = int(chunk_tokens or _get_capture_chunk_tokens())
     chunk_line_budget = _get_capture_chunk_max_lines()
     pending = read_pending_signals()
+    pending_session_ids = {
+        str(s.get("session_id") or "").strip()
+        for s in pending
+    }
     pending_rolling_session_ids = {
         str(s.get("session_id") or "").strip()
         for s in pending
         if str(s.get("type") or s.get("signal_type") or "") == "rolling"
     }
+    pending_source_keys = _pending_signal_source_keys(pending)
+    pre_recovery_source_keys = set(pending_source_keys)
+    _queue_missing_staged_rolling_flushes_from_state(
+        pending_session_ids=pending_session_ids,
+        pending_source_keys=pending_source_keys,
+        scanner="rolling-state-recovery",
+    )
     pending_rolling_source_keys = _pending_signal_source_keys(pending, signal_type="rolling")
+    pending_rolling_source_keys.update(pending_source_keys - pre_recovery_source_keys)
     pending_session_end_session_ids = {
         str(s.get("session_id") or "").strip()
         for s in pending
