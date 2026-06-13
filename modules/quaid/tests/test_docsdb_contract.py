@@ -1,3 +1,4 @@
+import builtins
 import os
 
 from lib.adapter import TestAdapter, reset_adapter, set_adapter
@@ -57,6 +58,21 @@ def test_docsdb_contract_get_system_context_metadata(monkeypatch, tmp_path):
     payload = contract.get_system_context_metadata(_ctx(str(tmp_path)))
 
     assert payload == {"entries": [{"key": "ok", "label": "ok", "value": "delegated"}]}
+
+
+def test_docsdb_contract_fail_hard_wrapper_fails_closed_on_import_error(monkeypatch):
+    from core.plugins import docsdb_contract
+
+    original_import = __import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "lib.fail_policy":
+            raise ImportError("missing fail policy")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+
+    assert docsdb_contract._fail_hard_enabled() is True
 
 
 def test_project_docs_monitor_uses_supervisor_parent_without_reensure(monkeypatch):

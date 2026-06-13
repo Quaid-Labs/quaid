@@ -23,7 +23,7 @@ def _fail_hard_enabled() -> bool:
     try:
         from lib.fail_policy import is_fail_hard_enabled
     except Exception:
-        return False
+        return True
     return bool(is_fail_hard_enabled())
 
 
