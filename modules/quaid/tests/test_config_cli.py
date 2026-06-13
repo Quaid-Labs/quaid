@@ -233,6 +233,22 @@ def test_resolve_config_target_platform_shared_auto(monkeypatch):
     assert label == "shared platform 'claude-code'"
 
 
+def test_resolve_config_target_platform_shared_auto_uses_instance_adapter_type(monkeypatch, tmp_path):
+    home = tmp_path / ".quaid"
+    cfg = home / "instances" / "claude-main" / "config.json"
+    cfg.parent.mkdir(parents=True)
+    cfg.write_text(json.dumps({"adapter": {"type": "claude-code"}}), encoding="utf-8")
+
+    monkeypatch.setenv("QUAID_HOME", str(home))
+    monkeypatch.setenv("QUAID_INSTANCE", "claude-main")
+    args = type("Args", (), {"shared": False, "platform_shared": "auto", "instance": None})()
+
+    path, label = config_cli._resolve_config_target(args)
+
+    assert path == home / "shared" / "config" / "claude-code" / "config.json"
+    assert label == "shared platform 'claude-code'"
+
+
 def test_resolve_config_target_platform_shared_auto_codex(monkeypatch):
     monkeypatch.setenv("QUAID_HOME", "/tmp/quaid")
     monkeypatch.setenv("QUAID_INSTANCE", "codex-main")

@@ -87,8 +87,10 @@ def _workspace_root() -> Path:
 
 
 def _platform_from_instance_name(instance_name: str) -> str:
-    name = str(instance_name or "").strip().lower()
+    name = str(instance_name or "").strip().lower().replace("_", "-")
     if name.startswith("claude-code-") or name == "claude-code":
+        return "claude-code"
+    if name == "claudecode":
         return "claude-code"
     if name.startswith("codex-") or name == "codex":
         return "codex"
@@ -101,9 +103,20 @@ def _platform_from_instance_name(instance_name: str) -> str:
     return name or "standalone"
 
 
+def _adapter_type_from_instance_config(root: Path) -> str:
+    try:
+        payload = json.loads((root / "config.json").read_text(encoding="utf-8"))
+    except Exception:
+        return ""
+    adapter = payload.get("adapter") if isinstance(payload, dict) else None
+    if not isinstance(adapter, dict):
+        return ""
+    return str(adapter.get("type") or "").strip()
+
+
 def _platform_shared_config_path() -> Path:
     root = _workspace_root()
-    platform = _platform_from_instance_name(root.name)
+    platform = _platform_from_instance_name(_adapter_type_from_instance_config(root) or root.name)
     return _quaid_home() / "shared" / "config" / platform / "config.json"
 
 

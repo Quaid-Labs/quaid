@@ -27,8 +27,10 @@ def _workspace_root() -> Path:
 
 
 def _platform_from_instance_name(instance_name: str) -> str:
-    name = str(instance_name or "").strip().lower()
+    name = str(instance_name or "").strip().lower().replace("_", "-")
     if name.startswith("claude-code-") or name == "claude-code":
+        return "claude-code"
+    if name == "claudecode":
         return "claude-code"
     if name.startswith("codex-") or name == "codex":
         return "codex"
@@ -39,6 +41,20 @@ def _platform_from_instance_name(instance_name: str) -> str:
     if "-" in name:
         return name.split("-", 1)[0] or "standalone"
     return name or "standalone"
+
+
+def _adapter_type_from_instance_config(home: Path, instance_id: str) -> str:
+    instance = str(instance_id or "").strip()
+    if not instance:
+        return ""
+    try:
+        payload = _load_config(home / "instances" / instance / "config.json", allow_missing=True)
+    except Exception:
+        return ""
+    adapter = payload.get("adapter") if isinstance(payload, dict) else None
+    if not isinstance(adapter, dict):
+        return ""
+    return str(adapter.get("type") or "").strip()
 
 
 def _resolve_config_target(args: argparse.Namespace | None = None) -> tuple[Path, str]:
@@ -61,8 +77,9 @@ def _resolve_config_target(args: argparse.Namespace | None = None) -> tuple[Path
     if platform_shared is not None:
         platform = str(platform_shared or "").strip()
         if not platform or platform == "auto":
+            instance_id = instance_arg or os.getenv("QUAID_INSTANCE", "").strip()
             platform = _platform_from_instance_name(
-                instance_arg or os.getenv("QUAID_INSTANCE", "").strip()
+                _adapter_type_from_instance_config(home, instance_id) or instance_id
             )
         return home / "shared" / "config" / platform / "config.json", f"shared platform '{platform}'"
 

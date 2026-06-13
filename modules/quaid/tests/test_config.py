@@ -261,6 +261,25 @@ class TestConfigPathResolution:
         assert paths[1] == Path("/tmp/quaid/shared/config/claude-code/config.json")
         assert paths[2] == Path("/tmp/quaid/shared/config/global/config.json")
 
+    def test_config_paths_use_adapter_type_for_legacy_claude_code_instance(self, tmp_path):
+        import config
+
+        root = tmp_path / "instances" / "claude-main"
+        root.mkdir(parents=True)
+        (root / "config.json").write_text(
+            json.dumps({"adapter": {"type": "claude-code"}}),
+            encoding="utf-8",
+        )
+
+        with patch.object(config, "_workspace_root", lambda: root), \
+             patch.object(config, "_quaid_home", lambda: tmp_path):
+            paths = config._config_paths()
+
+        assert paths[0] == root / "config.json"
+        assert paths[1] == tmp_path / "shared" / "config" / "claude-code" / "config.json"
+        assert "shared/config/claude/config.json" not in str(paths[1])
+        assert paths[2] == tmp_path / "shared" / "config" / "global" / "config.json"
+
     def test_config_paths_include_platform_and_global_shared_layers_for_codex(self):
         import config
 
