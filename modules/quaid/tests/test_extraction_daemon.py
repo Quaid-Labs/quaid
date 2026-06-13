@@ -4810,6 +4810,33 @@ def test_session_has_harvestable_subagents_warns_and_uses_adapter_fallback(monke
     assert "registry down" in caplog.text
 
 
+def test_session_has_harvestable_subagents_raises_registry_failure_when_fail_hard(monkeypatch):
+    import sys as _sys
+
+    real_registry = _sys.modules.get("core.subagent_registry")
+    fake_registry = types.ModuleType("core.subagent_registry")
+    fake_registry.get_harvestable = lambda _sid: (_ for _ in ()).throw(RuntimeError("registry down"))
+    _sys.modules["core.subagent_registry"] = fake_registry
+
+    class _FallbackAdapter:
+        def discover_subagent_children(self, parent_session_id):
+            raise AssertionError("failHard registry failure must not fall back to adapter discovery")
+
+    monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: True)
+
+    try:
+        with pytest.raises(RuntimeError, match="registry down"):
+            extraction_daemon._session_has_harvestable_subagents(
+                "parent-1",
+                adapter=_FallbackAdapter(),
+            )
+    finally:
+        if real_registry is not None:
+            _sys.modules["core.subagent_registry"] = real_registry
+        else:
+            _sys.modules.pop("core.subagent_registry", None)
+
+
 def test_session_has_harvestable_subagents_raises_adapter_discovery_when_fail_hard(monkeypatch):
     import sys as _sys
 
@@ -15298,6 +15325,39 @@ class TestRollingExtraction:
         assert captured[0]["meta"]["recovered_from_rolling_state"] is True
         assert captured[0]["meta"]["source_cursor_key"] == source_key
         assert lock_path.exists()
+
+    def test_check_chunk_ready_sessions_raises_rolling_state_recovery_failure_when_fail_hard(
+        self, monkeypatch, tmp_path
+    ):
+        instance_id = os.environ.get("QUAID_INSTANCE", "pytest-runner")
+        state_dir = tmp_path / "instances" / instance_id / "data" / "rolling-extraction"
+        state_dir.mkdir(parents=True, exist_ok=True)
+        (state_dir / "driver-corrupt-sess.json").write_text("{not-json", encoding="utf-8")
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", instance_id)
+        monkeypatch.setattr(extraction_daemon, "_load_runtime_adapter", lambda: object())
+        monkeypatch.setattr(extraction_daemon, "_ensure_discovered_session_cursors", lambda _adapter: 0)
+        monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
+        monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: True)
+
+        with pytest.raises(json.JSONDecodeError):
+            extraction_daemon.check_chunk_ready_sessions(chunk_tokens=12000)
+
+    def test_write_staged_payload_flush_signals_raises_rolling_state_failure_when_fail_hard(
+        self, monkeypatch, tmp_path
+    ):
+        instance_id = os.environ.get("QUAID_INSTANCE", "pytest-runner")
+        state_dir = tmp_path / "instances" / instance_id / "data" / "rolling-extraction"
+        state_dir.mkdir(parents=True, exist_ok=True)
+        (state_dir / "flush-corrupt-sess.json").write_text("{not-json", encoding="utf-8")
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", instance_id)
+        monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: True)
+
+        with pytest.raises(json.JSONDecodeError):
+            extraction_daemon.write_staged_payload_flush_signals()
 
     def test_check_idle_sessions_retires_legacy_cursor_shadowed_by_source_cursor(
         self, monkeypatch, tmp_path

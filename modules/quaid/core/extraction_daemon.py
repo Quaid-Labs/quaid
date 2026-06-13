@@ -2202,7 +2202,10 @@ def _queue_missing_staged_rolling_flushes_from_state(
         try:
             session_id = _validate_session_id(state_file.stem)
             rolling = read_rolling_state(session_id)
-        except Exception:
+        except Exception as exc:
+            if _fail_hard_enabled():
+                raise
+            logger.warning("rolling state recovery scan failed for %s: %s", state_file, exc)
             continue
         if not staged_state_has_payload(rolling):
             continue
@@ -3174,6 +3177,8 @@ def write_staged_payload_flush_signals(
         try:
             state = read_rolling_state(session_id)
         except Exception as e:
+            if _fail_hard_enabled():
+                raise
             logger.warning("failed reading rolling state for staged flush sweep %s: %s", session_id, e)
             continue
         if not staged_state_has_payload(state):
