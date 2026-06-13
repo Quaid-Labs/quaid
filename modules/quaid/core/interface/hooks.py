@@ -785,12 +785,21 @@ def _extract_recall_provider_notice(memories: List[Dict], recall_meta: dict | No
 def _is_provider_failure(exc: Exception) -> bool:
     text = str(exc or "")
     lowered = text.lower()
+    model_config_markers = (
+        "invalid-model",
+        "model=",
+        "unknown model",
+        "invalid model",
+        "unsupported model",
+        "model not found",
+        "model does not exist",
+        "no such model",
+    )
     return isinstance(exc, RuntimeError) and (
-        "llm" in text
+        "llm" in lowered
         or "provider" in lowered
         or "language model" in lowered
-        or "invalid-model" in lowered
-        or "model" in lowered
+        or any(marker in lowered for marker in model_config_markers)
     )
 
 

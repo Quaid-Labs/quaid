@@ -1809,9 +1809,9 @@ class TestHookInjectRecallResilience:
         monkeypatch.setattr(extraction_daemon, "write_cursor", lambda *a: None)
         monkeypatch.setattr("lib.fail_policy.is_fail_hard_enabled", lambda: True)
 
-        with patch("core.interface.api.recall_fast", side_effect=RuntimeError("local recall invariant broke")), \
+        with patch("core.interface.api.recall_fast", side_effect=RuntimeError("model index invariant broke")), \
              patch("core.interface.api.projects_search_docs", return_value=None), \
-             pytest.raises(RuntimeError, match="local recall invariant broke"):
+             pytest.raises(RuntimeError, match="model index invariant broke"):
             _run_hook_inject(
                 {
                     "prompt": "trigger recall invariant",
