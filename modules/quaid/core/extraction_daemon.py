@@ -6167,6 +6167,79 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
 
         if rolling_mode:
             operation_phase = "rolling_stage_extract"
+            staged_processed_offset = int(staged_state.get("processed_line_offset", 0) or 0)
+            staged_buffered_offset = int(staged_state.get("buffered_line_offset", 0) or 0)
+            if (
+                staged_state_has_payload(staged_state)
+                and bool(staged_state.get(_STAGED_PAYLOAD_PENDING_FLUSH_KEY))
+                and staged_processed_offset > int(cursor_offset or 0)
+                and staged_processed_offset >= staged_buffered_offset
+            ):
+                logger.warning(
+                    "[%s] session %s: rolling signal cursor is behind an already-staged payload "
+                    "(cursor=%d staged_offset=%d); advancing cursor and requeueing staged flush",
+                    label,
+                    session_id,
+                    int(cursor_offset or 0),
+                    staged_processed_offset,
+                )
+                write_cursor(
+                    session_id,
+                    staged_processed_offset,
+                    transcript_path,
+                    source_key=lock_owner_key,
+                    processed_signal_type=signal_type,
+                )
+                mark_signal_processed(signal_data)
+                has_remaining_tail = total_lines > staged_processed_offset
+                if has_remaining_tail:
+                    continued_transcript_path = _stable_transcript_snapshot_for_continued_rolling(
+                        session_id,
+                        transcript_path,
+                    )
+                    remaining_tokens = estimate_unextracted_tokens(
+                        continued_transcript_path,
+                        staged_processed_offset,
+                        chunk_budget,
+                    )
+                    write_signal(
+                        signal_type="rolling",
+                        session_id=session_id,
+                        transcript_path=continued_transcript_path,
+                        meta={
+                            "reason": "continued_chunk_budget",
+                            "chunk_tokens": chunk_budget,
+                            "chunk_lines": chunk_line_budget,
+                            "buffered_line_offset": staged_processed_offset,
+                            "remaining_tokens_estimate": remaining_tokens,
+                            "remaining_lines": max(0, int(total_lines) - int(staged_processed_offset)),
+                            "source_cursor_key": lock_owner_key,
+                            "source_transcript_path": transcript_path,
+                            "source_transcript_size_bytes": _transcript_size_bytes(transcript_path),
+                        },
+                    )
+                flush_transcript_path = (
+                    str(signal_meta.get("source_transcript_path") or "").strip()
+                    if _is_daemon_owned_transcript_snapshot_path(transcript_path)
+                    else ""
+                ) or transcript_path
+                write_signal(
+                    signal_type="session_end",
+                    session_id=session_id,
+                    transcript_path=flush_transcript_path,
+                    meta={
+                        "reason": "rolling_stage_flush",
+                        "source_signal": "rolling",
+                        "staged_payload_sweep": True,
+                        "buffered_line_offset": staged_processed_offset,
+                        "flush_staged_payload_only": bool(has_remaining_tail),
+                        "source_cursor_key": lock_owner_key,
+                        "recovered_staged_payload_retry": True,
+                    },
+                )
+                if not has_remaining_tail:
+                    _cleanup_daemon_transcript_snapshot_path(transcript_path)
+                return
             if not transcript_text.strip():
                 logger.info("[%s] session %s: empty rolling transcript after parsing", label, session_id)
                 staged_state["semantic_buffer"] = ""

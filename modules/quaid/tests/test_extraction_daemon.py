@@ -11370,6 +11370,99 @@ class TestRollingExtraction:
             else:
                 sys.modules.pop("lib.adapter", None)
 
+    def test_process_signal_rolling_retries_already_staged_payload_without_reextracting(self, monkeypatch, tmp_path):
+        import sys
+        import types
+
+        transcript_path = tmp_path / "session.jsonl"
+        transcript_path.write_text(
+            '{"role":"user","content":"first rolling chunk message"}\n',
+            encoding="utf-8",
+        )
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "rolling-inst")
+        session_id = "sess-roll-stage-retry"
+        staged_state = {
+            "session_id": session_id,
+            "transcript_path": str(transcript_path),
+            "processed_line_offset": 1,
+            "buffered_line_offset": 1,
+            "semantic_buffer": "User: first rolling chunk message",
+            "semantic_buffer_tokens": 12,
+            "rolling_batches": 1,
+            "carry_facts": [{"text": "Owner has a staged rolling fact"}],
+            "raw_facts": [{"text": "Owner has a staged rolling fact", "category": "fact"}],
+            "raw_snippets": {},
+            "raw_journal": {},
+            "raw_project_logs": {},
+            extraction_daemon._STAGED_PAYLOAD_PENDING_FLUSH_KEY: True,
+        }
+        source_key = extraction_daemon._signal_source_cursor_key(
+            session_id,
+            str(transcript_path),
+            staged_state=staged_state,
+        )
+        # Simulate a crash after rolling state was written but before cursor advance.
+        extraction_daemon.write_cursor(session_id, 0, str(transcript_path), source_key=source_key)
+        extraction_daemon.write_rolling_state(session_id, staged_state)
+
+        real_adapter = sys.modules.get("lib.adapter")
+        fake_adapter_mod = types.ModuleType("lib.adapter")
+
+        class _FakeAdapter(_OwnedTestAdapterMixin):
+            def parse_session_jsonl(self, path):
+                return path.read_text(encoding="utf-8")
+
+        fake_adapter_mod.StandaloneAdapter = object
+        fake_adapter_mod.get_adapter = lambda: _FakeAdapter()
+        sys.modules["lib.adapter"] = fake_adapter_mod
+
+        real_extract = sys.modules.get("ingest.extract")
+        extract_mod = types.ModuleType("ingest.extract")
+        extract_calls = []
+
+        def _unexpected_extract(**kwargs):
+            extract_calls.append(kwargs)
+            raise AssertionError("already-staged rolling payload should not be extracted again")
+
+        extract_mod.extract_from_transcript = _unexpected_extract
+        extract_mod.apply_extracted_payloads = lambda payload, **kwargs: payload
+        sys.modules["ingest.extract"] = extract_mod
+        monkeypatch.setattr(extraction_daemon, "_get_owner_id", lambda: "Owner")
+
+        try:
+            extraction_daemon.write_signal(
+                signal_type="rolling",
+                session_id=session_id,
+                transcript_path=str(transcript_path),
+            )
+            extraction_daemon.process_signal(extraction_daemon.read_pending_signals()[0])
+
+            assert extract_calls == []
+            cursor = extraction_daemon.read_cursor(session_id, source_key=source_key)
+            assert cursor["line_offset"] == 1
+            pending = extraction_daemon.read_pending_signals()
+            assert len(pending) == 1
+            assert pending[0]["type"] == "session_end"
+            assert pending[0]["session_id"] == session_id
+            assert pending[0]["meta"]["reason"] == "rolling_stage_flush"
+            assert pending[0]["meta"]["source_signal"] == "rolling"
+            assert pending[0]["meta"]["staged_payload_sweep"] is True
+            assert pending[0]["meta"]["recovered_staged_payload_retry"] is True
+            state = extraction_daemon.read_rolling_state(session_id)
+            assert state["rolling_batches"] == 1
+            assert state["raw_facts"] == staged_state["raw_facts"]
+        finally:
+            if real_extract is not None:
+                sys.modules["ingest.extract"] = real_extract
+            else:
+                sys.modules.pop("ingest.extract", None)
+            if real_adapter is not None:
+                sys.modules["lib.adapter"] = real_adapter
+            else:
+                sys.modules.pop("lib.adapter", None)
+
     def test_process_signal_rolling_requeues_continuation_for_below_budget_tail_without_line_cap(self, monkeypatch, tmp_path):
         import sys
         import types
