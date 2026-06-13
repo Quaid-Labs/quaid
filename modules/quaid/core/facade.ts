@@ -1662,7 +1662,8 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
     for (const dirRaw of fallbackDirs) {
       const dir = String(dirRaw || "").trim();
       if (!dir) continue;
-      const candidate = path.join(dir, `${sessionId}.jsonl`);
+      const safeSessionId = sanitizePathSegment(sessionId, "unknown-session");
+      const candidate = path.join(dir, `${safeSessionId}.jsonl`);
       if (fs.existsSync(candidate)) return candidate;
     }
     return null;

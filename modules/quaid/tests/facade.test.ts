@@ -2123,6 +2123,33 @@ describe("QuaidFacade", () => {
     await rm(workspace, { recursive: true, force: true });
   });
 
+  it("sanitizes timeout session ids before fallback transcript lookup", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "quaid-facade-timeout-sanitize-"));
+    const sessionsDir = path.join(workspace, "sessions");
+    await mkdir(sessionsDir, { recursive: true });
+    await writeFile(
+      path.join(workspace, "escaped.jsonl"),
+      JSON.stringify({ role: "user", content: "escaped transcript" }) + "\n",
+      "utf8",
+    );
+    await writeFile(
+      path.join(sessionsDir, "escaped.jsonl"),
+      JSON.stringify({ role: "user", content: "sanitized transcript" }) + "\n",
+      "utf8",
+    );
+    const storePath = path.join(sessionsDir, "sessions.json");
+    await writeFile(storePath, "{}", "utf8");
+    const facade = createQuaidFacade(makeMockDeps({
+      timeoutSessionStorePath: () => storePath,
+      timeoutSessionTranscriptDirs: () => [sessionsDir],
+    }));
+
+    const rows = facade.readTimeoutSessionMessages("../escaped") as Array<Record<string, unknown>>;
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.content).toBe("sanitized transcript");
+    await rm(workspace, { recursive: true, force: true });
+  });
+
   it("listTimeoutSessionActivity prefers updatedAt and falls back to transcript mtime", async () => {
     const workspace = await mkdtemp(path.join(tmpdir(), "quaid-facade-timeout-activity-"));
     const sessionsDir = path.join(workspace, "sessions");
