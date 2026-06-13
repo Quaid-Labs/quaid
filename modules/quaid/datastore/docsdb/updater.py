@@ -233,6 +233,38 @@ def _atomic_write_text(path: Path, content: str) -> None:
     _atomic_write_text_unlocked(path, content)
 
 
+def _doc_update_lock_path(path: Path) -> Path:
+    return path.with_name(f".{path.name}.doc-update.lock")
+
+
+def _write_doc_update_if_unchanged(
+    path: Path,
+    expected_content: str,
+    new_content: str,
+    operation: str,
+) -> Tuple[bool, str]:
+    """Write only if the document has not changed since prompt construction."""
+    with _file_lock(_doc_update_lock_path(path)):
+        try:
+            current_content = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            message = f"Failed reading {path} before {operation} write"
+            logger.warning("%s: %s", message, exc)
+            if is_fail_hard_enabled():
+                raise RuntimeError(message) from exc
+            return False, message
+
+        if current_content != expected_content:
+            message = f"Skipped {operation} for {path}: document changed during update"
+            logger.warning("%s", message)
+            if is_fail_hard_enabled():
+                raise RuntimeError(message)
+            return False, message
+
+        _atomic_write_text(path, new_content)
+        return True, ""
+
+
 # Cleanup thresholds
 CLEANUP_UPDATE_THRESHOLD = 10  # Trigger cleanup after this many updates
 CLEANUP_GROWTH_THRESHOLD = 1.3  # Trigger cleanup if doc grew 30%+
@@ -495,7 +527,17 @@ def cleanup_doc(doc_path: str, purpose: str, dry_run: bool = True) -> bool:
                        dry_run, True, chars_before, chars_after)
         return True
 
-    _atomic_write_text(doc_abs, response)
+    written, skip_reason = _write_doc_update_if_unchanged(
+        doc_abs,
+        current_doc,
+        response,
+        "cleanup",
+    )
+    if not written:
+        print(f"  WARNING: {skip_reason}")
+        log_doc_update(doc_path, "cleanup", [], skip_reason,
+                       dry_run, False, chars_before, chars_after)
+        return False
     print(f"  Cleaned up {doc_path}")
     log_doc_update(doc_path, "cleanup", [], summary,
                    dry_run, True, chars_before, chars_after)
@@ -1274,7 +1316,17 @@ def update_doc_from_diffs(
                        dry_run, True, chars_before, chars_after)
         return False
 
-    _atomic_write_text(doc_abs, response)
+    written, skip_reason = _write_doc_update_if_unchanged(
+        doc_abs,
+        current_doc,
+        response,
+        trigger,
+    )
+    if not written:
+        print(f"  WARNING: {skip_reason}")
+        log_doc_update(doc_path, trigger, stale_sources, skip_reason,
+                       dry_run, False, chars_before, chars_after)
+        return False
     print(f"  Updated {doc_path} ({chars_before} -> {chars_after} chars)")
     log_doc_update(doc_path, trigger, stale_sources, summary,
                    dry_run, True, chars_before, chars_after)
@@ -1469,7 +1521,17 @@ def update_doc_from_transcript(
             print(f"  Applying full replacement ({len(response)} chars)")
             chars_after = len(response)
             if not dry_run:
-                _atomic_write_text(doc_abs, response)
+                written, skip_reason = _write_doc_update_if_unchanged(
+                    doc_abs,
+                    current_doc,
+                    response,
+                    trigger,
+                )
+                if not written:
+                    print(f"  WARNING: {skip_reason}")
+                    log_doc_update(doc_path, trigger, sources, skip_reason,
+                                   dry_run, False, chars_before, chars_after)
+                    return False
                 print(f"  Updated {doc_path}")
             log_doc_update(doc_path, trigger, sources, f"Full replacement: {summary}",
                            dry_run, True, chars_before, chars_after)
@@ -1495,7 +1557,17 @@ def update_doc_from_transcript(
         if dry_run:
             print(f"  [DRY RUN] Would apply {applied} edit(s) to {doc_path}")
         else:
-            _atomic_write_text(doc_abs, updated_doc)
+            written, skip_reason = _write_doc_update_if_unchanged(
+                doc_abs,
+                current_doc,
+                updated_doc,
+                trigger,
+            )
+            if not written:
+                print(f"  WARNING: {skip_reason}")
+                log_doc_update(doc_path, trigger, sources, skip_reason,
+                               dry_run, False, chars_before, chars_after)
+                return False
             print(f"  Applied {applied} edit(s) to {doc_path}")
             # Sync modified timestamp to registry
             try:

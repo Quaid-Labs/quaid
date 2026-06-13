@@ -1164,6 +1164,57 @@ class TestCmdUpdateStaleNeverIndexed:
             assert ok is False
             assert doc.read_text(encoding="utf-8") == "# Doc\n\nExisting details.\n"
 
+    def test_update_doc_from_diffs_skips_stale_write_when_doc_changes(self, tmp_path, monkeypatch):
+        with _adapter_patch(tmp_path) as iroot:
+            from datastore.docsdb import updater
+
+            doc = iroot / "docs" / "doc.md"
+            doc.parent.mkdir(parents=True, exist_ok=True)
+            doc.write_text("# Doc\n\nExisting details.\n", encoding="utf-8")
+
+            monkeypatch.setattr(updater, "get_git_diff", lambda *_args, **_kwargs: "+meaningful change\n")
+            monkeypatch.setattr(
+                updater,
+                "classify_doc_change",
+                lambda _diff: {
+                    "classification": "significant",
+                    "confidence": 0.95,
+                    "reasons": ["meaningful"],
+                    "lines_changed": 1,
+                    "trivial_signals": 0,
+                    "significant_signals": 1,
+                },
+            )
+            monkeypatch.setattr(
+                updater,
+                "call_deep_reasoning",
+                lambda **_kwargs: ("# Doc\n\nLLM update.\n<!-- CHANGE_SUMMARY: update -->", 0.1),
+            )
+            monkeypatch.setattr(updater, "is_fail_hard_enabled", lambda: False)
+
+            expected_lock = doc.with_name(f".{doc.name}.doc-update.lock")
+            lock_paths = []
+
+            @contextmanager
+            def _race_lock(path):
+                lock_paths.append(path)
+                if path == expected_lock:
+                    doc.write_text("# Doc\n\nConcurrent update.\n", encoding="utf-8")
+                yield
+
+            monkeypatch.setattr(updater, "_file_lock", _race_lock)
+
+            ok = updater.update_doc_from_diffs(
+                "docs/doc.md",
+                "test purpose",
+                ["src/meaningful.py"],
+                dry_run=False,
+            )
+
+            assert ok is False
+            assert expected_lock in lock_paths
+            assert doc.read_text(encoding="utf-8") == "# Doc\n\nConcurrent update.\n"
+
     def test_fast_gate_failure_raises_when_fail_hard(self, tmp_path, monkeypatch):
         with _adapter_patch(tmp_path) as iroot:
             from datastore.docsdb import updater
