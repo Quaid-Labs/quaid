@@ -905,7 +905,12 @@ class ClaudeCodeAdapter(QuaidAdapter):
     def installer_default_models(self, provider: str) -> Optional[dict]:
         if str(provider or "").strip().lower() != "anthropic":
             return None
-        return {"deep": "claude-sonnet-4-5", "fast": "claude-haiku-4-5"}
+        from adaptors.claude_code.instance_manager import ClaudeCodeInstanceManager
+
+        return {
+            "deep": ClaudeCodeInstanceManager.DEFAULT_DEEP_MODEL,
+            "fast": ClaudeCodeInstanceManager.DEFAULT_FAST_MODEL,
+        }
 
     def get_fast_provider_default(self) -> str:
         return "anthropic"

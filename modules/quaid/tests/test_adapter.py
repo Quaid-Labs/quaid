@@ -1558,11 +1558,13 @@ class TestOpenClawAdapter:
 
 class TestClaudeCodeAdapter:
     def test_installer_provider_surface_is_anthropic_only(self):
+        from adaptors.claude_code.instance_manager import ClaudeCodeInstanceManager
+
         adapter = ClaudeCodeAdapter()
         assert adapter.installer_supported_providers() == ["anthropic"]
         assert adapter.installer_default_models("anthropic") == {
-            "deep": "claude-sonnet-4-5",
-            "fast": "claude-haiku-4-5",
+            "deep": ClaudeCodeInstanceManager.DEFAULT_DEEP_MODEL,
+            "fast": ClaudeCodeInstanceManager.DEFAULT_FAST_MODEL,
         }
         assert adapter.get_deep_provider_default() == "anthropic"
         assert adapter.get_fast_provider_default() == "anthropic"
