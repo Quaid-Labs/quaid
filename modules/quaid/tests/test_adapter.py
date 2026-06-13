@@ -2383,6 +2383,42 @@ class TestCodexAdapter:
         assert signal["signal_type"] == "session_end"
         assert adapter._read_last_session_id() == "new-thread"
 
+    def test_write_last_session_id_raises_failure_when_failhard_enabled(self, tmp_path, monkeypatch):
+        adapter = CodexAdapter(home=tmp_path)
+        monkeypatch.setattr(adapter, "data_dir", lambda: tmp_path / "data")
+        original_write_text = Path.write_text
+
+        def failing_write_text(path, *args, **kwargs):
+            if path == adapter._last_session_path():
+                raise OSError("disk full")
+            return original_write_text(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "write_text", failing_write_text)
+        monkeypatch.setattr("adaptors.codex.adapter.is_fail_hard_enabled", lambda: True)
+
+        with pytest.raises(OSError, match="disk full"):
+            adapter._write_last_session_id("new-thread")
+
+    def test_write_last_session_id_warns_failure_when_failhard_disabled(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        adapter = CodexAdapter(home=tmp_path)
+        monkeypatch.setattr(adapter, "data_dir", lambda: tmp_path / "data")
+        original_write_text = Path.write_text
+
+        def failing_write_text(path, *args, **kwargs):
+            if path == adapter._last_session_path():
+                raise OSError("disk full")
+            return original_write_text(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "write_text", failing_write_text)
+        monkeypatch.setattr("adaptors.codex.adapter.is_fail_hard_enabled", lambda: False)
+
+        adapter._write_last_session_id("new-thread")
+
+        assert "Failed to write Codex last session id: disk full" in capsys.readouterr().err
+        assert adapter._read_last_session_id() == ""
+
     def test_check_session_transition_allows_unclassified_prior_rollout(self, tmp_path, monkeypatch):
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         monkeypatch.delenv("QUAID_INSTANCE", raising=False)

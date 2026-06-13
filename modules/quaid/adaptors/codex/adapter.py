@@ -439,8 +439,10 @@ class CodexAdapter(QuaidAdapter):
             path = self._last_session_path()
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(json.dumps({"session_id": session_id}), encoding="utf-8")
-        except OSError:
-            pass
+        except OSError as exc:
+            print(f"[adapter][WARN] Failed to write Codex last session id: {exc}", file=sys.stderr)
+            if is_fail_hard_enabled():
+                raise
 
     def _extract_hook_session_id(self, hook_input: dict) -> str:
         if not isinstance(hook_input, dict):
