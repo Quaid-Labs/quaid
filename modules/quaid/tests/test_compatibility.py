@@ -86,10 +86,13 @@ class TestCircuitBreaker:
         loaded = read_circuit_breaker(tmp_path)
         assert loaded.is_normal()
 
-    def test_corrupt_file_returns_normal(self, tmp_path):
+    def test_corrupt_file_returns_safe_mode_when_failhard_disabled(self, monkeypatch, tmp_path):
+        monkeypatch.setattr("lib.circuit_breaker._fail_hard_enabled", lambda: False)
         (tmp_path / "circuit-breaker.json").write_text("not json!")
         state = read_circuit_breaker(tmp_path)
-        assert state.is_normal()
+        assert state.status == SAFE_MODE
+        assert not state.allows_reads()
+        assert not state.allows_writes()
 
 
 class TestEvaluateCompatibility:

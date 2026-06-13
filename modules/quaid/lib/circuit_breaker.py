@@ -47,6 +47,15 @@ def _breaker_path(data_dir: Path) -> Path:
     return data_dir / CIRCUIT_BREAKER_FILE
 
 
+def _fail_hard_enabled() -> bool:
+    try:
+        from lib.fail_policy import is_fail_hard_enabled
+
+        return bool(is_fail_hard_enabled())
+    except Exception:
+        return True
+
+
 def read_circuit_breaker(data_dir: Path) -> CircuitBreakerState:
     """Read the current circuit breaker state. Returns NORMAL if no file."""
     p = _breaker_path(data_dir)
@@ -64,8 +73,14 @@ def read_circuit_breaker(data_dir: Path) -> CircuitBreakerState:
             untested=raw.get("untested", False),
         )
     except (json.JSONDecodeError, OSError) as e:
-        logger.warning("Failed to read circuit breaker: %s", e)
-        return CircuitBreakerState()
+        logger.warning("Failed to read circuit breaker; entering safe mode: %s", e)
+        if _fail_hard_enabled():
+            raise RuntimeError("Failed to read circuit breaker while failHard is enabled") from e
+        return CircuitBreakerState(
+            status=SAFE_MODE,
+            reason="circuit_breaker_read_failed",
+            message="Circuit breaker state could not be read; entering safe mode.",
+        )
 
 
 def check_write_allowed(data_dir: Path) -> CircuitBreakerState:

@@ -172,24 +172,36 @@ class TestReadCircuitBreakerNormalFile:
 
 
 class TestReadCircuitBreakerBadFile:
-    def test_invalid_json_returns_normal(self, tmp_path):
+    def test_invalid_json_returns_safe_mode_when_failhard_disabled(self, monkeypatch, tmp_path):
+        monkeypatch.setattr("lib.circuit_breaker._fail_hard_enabled", lambda: False)
         (tmp_path / CIRCUIT_BREAKER_FILE).write_text("not json {{{")
         state = read_circuit_breaker(tmp_path)
-        assert state.status == NORMAL
+        assert state.status == SAFE_MODE
+        assert not state.allows_reads()
+        assert not state.allows_writes()
+        assert state.reason == "circuit_breaker_read_failed"
 
-    def test_empty_file_returns_normal(self, tmp_path):
+    def test_invalid_json_raises_when_failhard_enabled(self, monkeypatch, tmp_path):
+        monkeypatch.setattr("lib.circuit_breaker._fail_hard_enabled", lambda: True)
+        (tmp_path / CIRCUIT_BREAKER_FILE).write_text("not json {{{")
+        with pytest.raises(RuntimeError, match="Failed to read circuit breaker"):
+            read_circuit_breaker(tmp_path)
+
+    def test_empty_file_returns_safe_mode_when_failhard_disabled(self, monkeypatch, tmp_path):
+        monkeypatch.setattr("lib.circuit_breaker._fail_hard_enabled", lambda: False)
         (tmp_path / CIRCUIT_BREAKER_FILE).write_text("")
         state = read_circuit_breaker(tmp_path)
-        assert state.status == NORMAL
+        assert state.status == SAFE_MODE
 
-    def test_unreadable_file_returns_normal(self, tmp_path):
+    def test_unreadable_file_returns_safe_mode_when_failhard_disabled(self, monkeypatch, tmp_path):
         """Simulate OSError by making the file unreadable."""
+        monkeypatch.setattr("lib.circuit_breaker._fail_hard_enabled", lambda: False)
         p = tmp_path / CIRCUIT_BREAKER_FILE
         p.write_text(json.dumps({"status": DEGRADED}))
         p.chmod(0o000)
         try:
             state = read_circuit_breaker(tmp_path)
-            assert state.status == NORMAL
+            assert state.status == SAFE_MODE
         finally:
             p.chmod(0o644)
 
