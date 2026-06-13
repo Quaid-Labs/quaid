@@ -480,14 +480,85 @@ class TestReviewDecisionApplyLocking:
              patch("core.lifecycle.workspace_audit.get_config", return_value=cfg), \
              patch("core.lifecycle.workspace_audit.save_mtimes"), \
              patch("core.lifecycle.workspace_audit.fcntl.flock") as mock_flock:
-            (iroot / "A.md").write_text("# A\n\n## Trim Me\n\nold content\n")
+            path = iroot / "A.md"
+            if path.exists() or path.is_symlink():
+                path.unlink()
+            path.write_text("# A\n\n## Trim Me\n\nold content\n")
             stats = apply_review_decisions(dry_run=False, decisions_data=decisions_data)
 
         lock_modes = [call.args[1] for call in mock_flock.call_args_list if len(call.args) >= 2]
         assert stats["trimmed"] == 1
         assert "old content" not in (iroot / "A.md").read_text()
-        assert lock_modes.count(fcntl.LOCK_EX) >= 1
+        assert sum(1 for mode in lock_modes if mode & fcntl.LOCK_EX) >= 1
         assert lock_modes.count(fcntl.LOCK_UN) >= 1
+
+    def test_apply_review_decisions_blocks_traversal_filename(self, tmp_path):
+        from core.lifecycle.workspace_audit import apply_review_decisions
+
+        outside = tmp_path / "outside.md"
+        outside.write_text("# A\n\n## Trim Me\n\noutside content\n", encoding="utf-8")
+        decisions_data = {
+            "decisions": [
+                {
+                    "file": "../outside.md",
+                    "section": "Trim Me",
+                    "action": "TRIM",
+                    "reason": "malicious path",
+                }
+            ]
+        }
+
+        with _adapter_patch(tmp_path), \
+             patch("core.lifecycle.workspace_audit.save_mtimes"):
+            stats = apply_review_decisions(dry_run=False, decisions_data=decisions_data)
+
+        assert stats["errors"] == 1
+        assert "outside content" in outside.read_text(encoding="utf-8")
+
+    def test_apply_review_decisions_blocks_symlink_escape(self, tmp_path):
+        from core.lifecycle.workspace_audit import apply_review_decisions
+
+        decisions_data = {
+            "decisions": [
+                {
+                    "file": "A.md",
+                    "section": "Trim Me",
+                    "action": "TRIM",
+                    "reason": "symlink escape",
+                }
+            ]
+        }
+
+        with _adapter_patch(tmp_path) as iroot, \
+             patch("core.lifecycle.workspace_audit.save_mtimes"):
+            outside = tmp_path / "outside.md"
+            outside.write_text("# A\n\n## Trim Me\n\noutside content\n", encoding="utf-8")
+            link = iroot / "A.md"
+            link.parent.mkdir(parents=True, exist_ok=True)
+            if link.exists() or link.is_symlink():
+                link.unlink()
+            link.symlink_to(outside)
+
+            stats = apply_review_decisions(dry_run=False, decisions_data=decisions_data)
+            if link.is_symlink():
+                link.unlink()
+
+        assert stats["errors"] == 1
+        assert "outside content" in outside.read_text(encoding="utf-8")
+
+    def test_workspace_file_lock_times_out(self, tmp_path):
+        from core.lifecycle.workspace_audit import _lock_file_exclusive
+
+        target = tmp_path / "A.md"
+        target.write_text("content\n", encoding="utf-8")
+        monotonic_values = iter([0.0, 1.0])
+
+        with target.open("r+", encoding="utf-8") as fh, \
+             patch("core.lifecycle.workspace_audit.fcntl.flock", side_effect=BlockingIOError), \
+             patch("core.lifecycle.workspace_audit.time.monotonic", side_effect=lambda: next(monotonic_values)), \
+             patch("core.lifecycle.workspace_audit.time.sleep"):
+            with pytest.raises(TimeoutError, match="workspace file lock"):
+                _lock_file_exclusive(fh, timeout_seconds=1.0)
 
 
 # ---------------------------------------------------------------------------

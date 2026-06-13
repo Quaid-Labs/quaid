@@ -192,6 +192,7 @@ def _write_janitor_log_entry(logs_dir: Path, event: str, level: str = "info", **
         print(f"[janitor] Failed to write {log_file}: {exc}", file=sys.stderr)
 
 _LIFECYCLE_REGISTRY = None
+_registry_init_lock = threading.Lock()
 
 # Thresholds - now loaded from config.json
 try:
@@ -237,15 +238,18 @@ def _refresh_runtime_state() -> None:
     global CONFIDENCE_DECAY_DAYS, CONFIDENCE_DECAY_RATE
     global MAX_EXECUTION_TIME
 
-    _cfg = get_config()
-    _LIFECYCLE_REGISTRY = build_default_registry()
-    DUPLICATE_MIN_SIM = _cfg.janitor.dedup.similarity_threshold
-    DUPLICATE_MAX_SIM = _cfg.janitor.dedup.high_similarity_threshold
-    CONTRADICTION_MIN_SIM = _cfg.janitor.contradiction.min_similarity
-    CONTRADICTION_MAX_SIM = _cfg.janitor.contradiction.max_similarity
-    CONFIDENCE_DECAY_DAYS = _cfg.decay.threshold_days
-    CONFIDENCE_DECAY_RATE = _cfg.decay.rate_percent / 100.0
-    MAX_EXECUTION_TIME = int(getattr(_cfg.janitor, "task_timeout_minutes", 120) or 120) * 60
+    latest_cfg = get_config()
+    with _registry_init_lock:
+        latest_registry = build_default_registry()
+        _cfg = latest_cfg
+        _LIFECYCLE_REGISTRY = latest_registry
+        DUPLICATE_MIN_SIM = _cfg.janitor.dedup.similarity_threshold
+        DUPLICATE_MAX_SIM = _cfg.janitor.dedup.high_similarity_threshold
+        CONTRADICTION_MIN_SIM = _cfg.janitor.contradiction.min_similarity
+        CONTRADICTION_MAX_SIM = _cfg.janitor.contradiction.max_similarity
+        CONFIDENCE_DECAY_DAYS = _cfg.decay.threshold_days
+        CONFIDENCE_DECAY_RATE = _cfg.decay.rate_percent / 100.0
+        MAX_EXECUTION_TIME = int(getattr(_cfg.janitor, "task_timeout_minutes", 120) or 120) * 60
 
 
 def _ensure_runtime_state() -> None:
@@ -263,7 +267,9 @@ def _lifecycle_registry():
     _ensure_runtime_state()
     global _LIFECYCLE_REGISTRY
     if _LIFECYCLE_REGISTRY is None:
-        _LIFECYCLE_REGISTRY = build_default_registry()
+        with _registry_init_lock:
+            if _LIFECYCLE_REGISTRY is None:
+                _LIFECYCLE_REGISTRY = build_default_registry()
     return _LIFECYCLE_REGISTRY
 
 

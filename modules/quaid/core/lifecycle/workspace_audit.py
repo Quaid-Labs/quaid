@@ -16,6 +16,7 @@ import os
 import re
 import shutil
 import fcntl
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Any, Optional
@@ -35,6 +36,7 @@ def _content_root() -> Path:
 
 logger = logging.getLogger(__name__)
 _MOVE_TO_DOCS_TARGET_RE = re.compile(r"^[A-Za-z0-9._/-]+$")
+_WORKSPACE_FILE_LOCK_TIMEOUT_SECONDS = 10.0
 
 
 def _workspace_review_timeout_seconds(cfg: Any, default_seconds: int = 120) -> float:
@@ -183,6 +185,45 @@ def _sanitize_move_to_docs_target(raw_target: Any) -> Optional[str]:
     if any((not part) or part in {".", ".."} or len(part) > 128 for part in parts):
         return None
     return target
+
+
+def _path_is_under(path: Path, parent: Path) -> bool:
+    try:
+        path.expanduser().resolve().relative_to(parent.expanduser().resolve())
+        return True
+    except (OSError, RuntimeError, ValueError):
+        return False
+
+
+def _resolve_content_file_path(filename: Any) -> Optional[Path]:
+    """Resolve an LLM-supplied workspace filename without allowing root escape."""
+    text = str(filename or "").strip()
+    if not text or len(text) > 512 or "\x00" in text or "\\" in text:
+        return None
+    raw_path = Path(text)
+    if raw_path.is_absolute() or text.startswith("~") or re.match(r"^[A-Za-z]:", text):
+        return None
+    if any((not part) or part in {".", ".."} or len(part) > 128 for part in raw_path.parts):
+        return None
+    try:
+        root = _content_root().resolve()
+        resolved = (root / raw_path).resolve()
+    except (OSError, RuntimeError):
+        return None
+    return resolved if _path_is_under(resolved, root) else None
+
+
+def _lock_file_exclusive(file_obj: Any, *, timeout_seconds: float = _WORKSPACE_FILE_LOCK_TIMEOUT_SECONDS) -> None:
+    """Acquire an exclusive flock without letting janitor hang indefinitely."""
+    deadline = time.monotonic() + max(float(timeout_seconds), 0.0)
+    while True:
+        try:
+            fcntl.flock(file_obj.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return
+        except BlockingIOError:
+            if time.monotonic() >= deadline:
+                raise TimeoutError("Timed out acquiring workspace file lock")
+            time.sleep(0.05)
 
 
 # Default maxLines for bootstrap files (project-level TOOLS.md, AGENTS.md, etc.)
@@ -376,10 +417,13 @@ def backup_workspace_files(files: Optional[List[str]] = None) -> Dict[str, str]:
     backups = {}
 
     for filename in files_to_backup:
-        source = _content_root() / filename
+        source = _resolve_content_file_path(filename)
+        if source is None:
+            logger.error("Invalid workspace audit backup path blocked: %r", filename)
+            continue
         if source.exists():
             # Flatten slashes for relative paths (e.g. projects/quaid/TOOLS.md → projects--quaid--TOOLS.md)
-            flat_name = filename.replace("/", "--")
+            flat_name = str(filename).replace("/", "--")
             backup_name = f"{flat_name}.{timestamp}.bak"
             backup_path = _backup_dir() / backup_name
             shutil.copy2(source, backup_path)
@@ -526,23 +570,29 @@ def apply_review_decisions(dry_run: bool = True,
 
     stats = {"moved_to_docs": 0, "moved_to_memory": 0, "trimmed": 0, "bloat_warnings": 0, "project_detected": 0, "kept": 0, "errors": 0}
 
-    # Backup before modifying
-    if not dry_run:
-        changed_files = list(set(d["file"] for d in decisions if "file" in d))
-        backup_workspace_files(changed_files)
-
     # Group by file for batch processing
     by_file = {}
+    file_paths: Dict[str, Path] = {}
     for d in decisions:
-        filename = d.get("file", "")
+        filename = str(d.get("file", "") or "").strip()
         if not filename:
+            continue
+        filepath = _resolve_content_file_path(filename)
+        if filepath is None:
+            logger.error("Invalid workspace audit decision path blocked: %r", filename)
+            stats["errors"] += 1
             continue
         if filename not in by_file:
             by_file[filename] = []
+            file_paths[filename] = filepath
         by_file[filename].append(d)
 
+    # Backup before modifying only the validated files that may be touched.
+    if not dry_run:
+        backup_workspace_files(list(by_file.keys()))
+
     for filename, file_decisions in by_file.items():
-        filepath = _content_root() / filename
+        filepath = file_paths[filename]
         if not filepath.exists():
             continue
 
@@ -552,7 +602,7 @@ def apply_review_decisions(dry_run: bool = True,
                 content = filepath.read_text(encoding="utf-8")
             else:
                 locked_file = open(filepath, "r+", encoding="utf-8")
-                fcntl.flock(locked_file.fileno(), fcntl.LOCK_EX)
+                _lock_file_exclusive(locked_file)
                 content = locked_file.read()
 
             # Detect protected regions so we can skip operations within them
@@ -657,9 +707,9 @@ def apply_review_decisions(dry_run: bool = True,
                             )
                             stats["errors"] = stats.get("errors", 0) + 1
                             continue
-                        target_path = (_content_root() / target).resolve()
+                        target_path = _resolve_content_file_path(target)
                         # Prevent path traversal from LLM-controlled target
-                        if not str(target_path).startswith(str(_content_root().resolve())):
+                        if target_path is None:
                             logger.error(f"Path traversal blocked: {target}")
                             stats["errors"] = stats.get("errors", 0) + 1
                             continue

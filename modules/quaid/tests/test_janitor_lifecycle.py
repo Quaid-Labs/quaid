@@ -2,6 +2,7 @@ import sys
 import sqlite3
 import time
 import importlib
+import threading
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
@@ -794,6 +795,43 @@ def test_lifecycle_registry_register_and_has_use_registry_guard():
     registry.register("writer", lambda _ctx: SimpleNamespace(metrics={}, logs=[], errors=[], data={}), owner="memorydb")
     assert registry.has("writer") is True
     assert counter.calls >= 2
+
+
+def test_janitor_lifecycle_registry_lazy_init_is_single_build(monkeypatch):
+    import core.lifecycle.janitor as janitor
+
+    registry = object()
+    calls: list[int] = []
+    errors: list[BaseException] = []
+    results: list[object] = []
+    start = threading.Barrier(8)
+
+    def _build_once():
+        time.sleep(0.02)
+        calls.append(1)
+        return registry
+
+    def _worker():
+        try:
+            start.wait()
+            results.append(janitor._lifecycle_registry())
+        except BaseException as exc:
+            errors.append(exc)
+
+    monkeypatch.setattr(janitor, "_ensure_runtime_state", lambda: None)
+    monkeypatch.setattr(janitor, "build_default_registry", _build_once)
+    monkeypatch.setattr(janitor, "_LIFECYCLE_REGISTRY", None)
+
+    threads = [threading.Thread(target=_worker) for _ in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=2)
+
+    assert errors == []
+    assert len(results) == 8
+    assert calls == [1]
+    assert all(result is registry for result in results)
 
 
 def test_lifecycle_registry_skips_lock_enforcement_when_disabled(tmp_path):
