@@ -3944,7 +3944,6 @@ def _stage_semantic_buffer_payload(
         llm_max_retries=_daemon_extract_llm_max_retries(),
         raise_on_llm_failure=True,
     )
-    stage_embedding_stats = _warm_payload_embeddings(stage_result.get("raw_facts", []) or [])
     chunks_processed = int(stage_result.get("chunks_processed", 0) or 0)
     chunks_total = int(stage_result.get("chunks_total", 0) or 0)
     unclassified_empty = int(stage_result.get("unclassified_empty_payloads", 0) or 0)
@@ -3966,14 +3965,19 @@ def _stage_semantic_buffer_payload(
             "(non-provider failure); saving transcript for janitor recovery",
             label, session_id, failed_chunks, chunks_total,
         )
+        # Deferred retry owns this failed window; staging partial facts here
+        # would publish them again when janitor later retries the same text.
         _save_deferred_extraction(
             session_id=session_id,
-            transcript_text=transcript_text,
+            transcript_text=stage_text,
             owner_id=owner,
             label=label,
             reason=f"non_provider_failure_{failed_chunks}_of_{chunks_total}_chunks",
         )
-    staged_state = merge_staged_payloads(staged_state, stage_result)
+        stage_embedding_stats = _warm_payload_embeddings([])
+    else:
+        stage_embedding_stats = _warm_payload_embeddings(stage_result.get("raw_facts", []) or [])
+        staged_state = merge_staged_payloads(staged_state, stage_result)
     _write_rolling_debug_dump(
         "rolling_stage_extract",
         session_id,

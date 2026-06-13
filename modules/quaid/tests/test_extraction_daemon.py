@@ -900,6 +900,78 @@ def test_save_deferred_extraction_raises_write_failure_when_fail_hard(monkeypatc
         )
 
 
+def test_stage_semantic_buffer_payload_defers_without_staging_partial_facts(monkeypatch):
+    import ingest.extract as extract_mod
+
+    deferred = []
+    writes = []
+    warmed = []
+
+    monkeypatch.setattr(
+        extract_mod,
+        "extract_from_transcript",
+        lambda **kwargs: {
+            "raw_facts": [{
+                "text": "Partial fact should not be staged because another chunk failed.",
+                "confidence": 0.9,
+            }],
+            "raw_snippets": {"partial.md": ["partial snippet"]},
+            "raw_journal": {},
+            "raw_project_logs": {},
+            "raw_source_chunks": [],
+            "carry_facts": [],
+            "facts_skipped": 0,
+            "chunks_processed": 1,
+            "chunks_total": 2,
+            "unclassified_empty_payloads": 0,
+        },
+    )
+    monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: False)
+    monkeypatch.setattr(extraction_daemon, "_save_deferred_extraction", lambda **kwargs: deferred.append(kwargs))
+    monkeypatch.setattr(extraction_daemon, "_warm_payload_embeddings", lambda facts: warmed.append(list(facts)) or {
+        "requested": 0,
+        "unique": 0,
+        "cache_hits": 0,
+        "warmed": 0,
+        "failed": 0,
+        "skipped_empty": 0,
+    })
+    monkeypatch.setattr(extraction_daemon, "write_rolling_state", lambda _sid, state: writes.append(dict(state)))
+    monkeypatch.setattr(extraction_daemon, "write_rolling_metric", lambda *args, **kwargs: None)
+    monkeypatch.setattr(extraction_daemon, "_write_rolling_debug_dump", lambda *args, **kwargs: None)
+    monkeypatch.setattr(extraction_daemon, "_write_extraction_buffer_log", lambda *args, **kwargs: None)
+
+    result = extraction_daemon._stage_semantic_buffer_payload(
+        session_id="sess-stage",
+        signal_type="rolling",
+        transcript_path="/tmp/sess-stage.jsonl",
+        label="daemon-rolling",
+        owner="Owner",
+        staged_state={"semantic_buffer": "User: OBD large transcript", "semantic_buffer_tokens": 10},
+        buffered_line_offset=1,
+        new_lines=["User: OBD large transcript"],
+        semantic_buffer_metrics={"raw_lines_added": 1, "semantic_chars_added": 26, "semantic_tokens_added": 10},
+        chunk_budget=1500,
+        chunk_line_budget=200,
+    )
+
+    assert deferred == [{
+        "session_id": "sess-stage",
+        "transcript_text": "User: OBD large transcript",
+        "owner_id": "Owner",
+        "label": "daemon-rolling",
+        "reason": "non_provider_failure_1_of_2_chunks",
+    }]
+    assert warmed == [[]]
+    assert result.get("raw_facts", []) == []
+    assert result.get("raw_snippets", {}) == {}
+    assert result["semantic_buffer"] == ""
+    assert result["processed_line_offset"] == 1
+    assert result["buffered_line_offset"] == 1
+    assert not result.get(extraction_daemon._STAGED_PAYLOAD_PENDING_FLUSH_KEY)
+    assert writes == [result]
+
+
 def test_stage_semantic_buffer_payload_raises_on_partial_chunks_when_fail_hard(monkeypatch):
     import ingest.extract as extract_mod
 
