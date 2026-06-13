@@ -2175,6 +2175,80 @@ def _source_signal_already_pending(
     return True
 
 
+def _queue_missing_staged_rolling_flushes_from_state(
+    *,
+    pending_session_ids: set[str],
+    pending_source_keys: set[str],
+    scanner: str,
+) -> None:
+    """Recover publish-ready rolling stages even when their cursor row disappeared."""
+    try:
+        state_files = sorted(_rolling_state_dir().glob("*.json"))
+    except OSError:
+        return
+    for state_file in state_files:
+        try:
+            session_id = _validate_session_id(state_file.stem)
+            rolling = read_rolling_state(session_id)
+        except Exception:
+            continue
+        if not staged_state_has_payload(rolling):
+            continue
+        if not bool(rolling.get(_STAGED_PAYLOAD_PENDING_FLUSH_KEY)):
+            continue
+        if session_id in pending_session_ids:
+            continue
+        transcript_path = str(rolling.get("transcript_path") or rolling.get("buffer_transcript_path") or "").strip()
+        if not transcript_path or not os.path.isfile(transcript_path):
+            continue
+        source_key = _signal_source_cursor_key(
+            session_id,
+            transcript_path,
+            staged_state=rolling,
+        )
+        if _source_signal_already_pending(
+            pending_source_keys=pending_source_keys,
+            source_key=source_key,
+            session_id=session_id,
+            scanner=scanner,
+        ):
+            continue
+        if _processing_lock_active(source_key):
+            logger.info(
+                "session %s has staged rolling payload but source lock %s is still active; "
+                "deferring missing-flush recovery",
+                session_id,
+                source_key,
+            )
+            continue
+        logger.warning(
+            "session %s has staged rolling payload without cursor-visible pending flush; "
+            "regenerating rolling_stage_flush",
+            session_id,
+        )
+        write_signal(
+            signal_type="session_end",
+            session_id=session_id,
+            transcript_path=transcript_path,
+            meta={
+                "reason": "rolling_stage_flush",
+                "source_signal": "rolling",
+                "staged_payload_sweep": True,
+                "recovered_missing_flush": True,
+                "recovered_from_rolling_state": True,
+                "source_cursor_key": source_key,
+                "buffered_line_offset": int(rolling.get("buffered_line_offset", 0) or 0),
+                "flush_staged_payload_only": True,
+            },
+        )
+        _remember_queued_source_signal(
+            pending_session_ids=pending_session_ids,
+            pending_source_keys=pending_source_keys,
+            session_id=session_id,
+            source_key=source_key,
+        )
+
+
 def _deferred_extraction_dir() -> Path:
     d = _instance_root() / "data" / "deferred-extractions"
     d.mkdir(parents=True, exist_ok=True)
@@ -6840,6 +6914,11 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
     pending = read_pending_signals()
     pending_session_ids = {s.get("session_id") for s in pending}
     pending_source_keys = _pending_signal_source_keys(pending)
+    _queue_missing_staged_rolling_flushes_from_state(
+        pending_session_ids=pending_session_ids,
+        pending_source_keys=pending_source_keys,
+        scanner="idle-state-recovery",
+    )
 
     cursor_rows: list[dict[str, Any]] = []
     for cursor_file in cursor_dir.glob("*.json"):

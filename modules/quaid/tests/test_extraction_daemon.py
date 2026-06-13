@@ -14451,6 +14451,138 @@ class TestRollingExtraction:
         assert captured[0]["meta"]["staged_payload_sweep"] is True
         assert captured[0]["meta"]["recovered_missing_flush"] is True
 
+    def test_recovers_missing_rolling_stage_flush_without_cursor_row(self, monkeypatch, tmp_path):
+        """A staged payload remains recoverable if the source cursor disappeared after a crash."""
+        instance_id = os.environ.get("QUAID_INSTANCE", "pytest-runner")
+        transcript = tmp_path / "lost-cursor-flush.jsonl"
+        transcript.write_text(
+            '{"role":"user","content":"old"}\n{"role":"assistant","content":"done"}\n',
+            encoding="utf-8",
+        )
+        state_file = self._setup_rolling_state(
+            tmp_path,
+            instance_id,
+            "lost-cursor-sess",
+            [{"text": "staged fact", "category": "fact"}],
+            transcript,
+        )
+        state = json.loads(state_file.read_text(encoding="utf-8"))
+        state["rolling_batches"] = 1
+        state["buffered_line_offset"] = 2
+        state["staged_payload_pending_flush"] = True
+        state_file.write_text(json.dumps(state), encoding="utf-8")
+        source_key = extraction_daemon._signal_source_cursor_key(
+            "lost-cursor-sess",
+            str(transcript),
+            staged_state=state,
+        )
+        lock_path = tmp_path / "instances" / instance_id / "data" / "session-processing" / f"{source_key}.lock"
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        lock_path.write_text(
+            json.dumps({
+                "session_id": source_key,
+                "pid": 999999999,
+                "started_at": "2026-06-13T13:14:27Z",
+            }),
+            encoding="utf-8",
+        )
+
+        now = 1_700_000_000.0
+        old_time = now - 60
+        os.utime(transcript, (old_time, old_time))
+        os.utime(lock_path, (old_time, old_time))
+
+        captured = []
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", instance_id)
+        monkeypatch.setattr(extraction_daemon.time, "time", lambda: now)
+        monkeypatch.setattr(extraction_daemon, "_read_installed_at", lambda: now - 7200)
+        monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
+        monkeypatch.setattr(
+            extraction_daemon,
+            "write_signal",
+            lambda signal_type, session_id, transcript_path, **kwargs: captured.append(
+                {
+                    "signal_type": signal_type,
+                    "session_id": session_id,
+                    "transcript_path": transcript_path,
+                    "meta": kwargs.get("meta", {}),
+                }
+            ),
+        )
+
+        extraction_daemon.check_idle_sessions(timeout_minutes=30)
+
+        assert len(captured) == 1
+        assert captured[0]["signal_type"] == "session_end"
+        assert captured[0]["session_id"] == "lost-cursor-sess"
+        assert captured[0]["transcript_path"] == str(transcript)
+        assert captured[0]["meta"]["reason"] == "rolling_stage_flush"
+        assert captured[0]["meta"]["recovered_missing_flush"] is True
+        assert captured[0]["meta"]["recovered_from_rolling_state"] is True
+        assert captured[0]["meta"]["source_cursor_key"] == source_key
+        assert captured[0]["meta"]["flush_staged_payload_only"] is True
+        assert not lock_path.exists()
+
+    def test_missing_rolling_stage_flush_recovery_waits_for_active_source_lock(self, monkeypatch, tmp_path):
+        """Durable-state recovery must not publish while a live rolling worker owns the source lock."""
+        instance_id = os.environ.get("QUAID_INSTANCE", "pytest-runner")
+        transcript = tmp_path / "active-lock-flush.jsonl"
+        transcript.write_text(
+            '{"role":"user","content":"old"}\n{"role":"assistant","content":"done"}\n',
+            encoding="utf-8",
+        )
+        state_file = self._setup_rolling_state(
+            tmp_path,
+            instance_id,
+            "active-lock-sess",
+            [{"text": "staged fact", "category": "fact"}],
+            transcript,
+        )
+        state = json.loads(state_file.read_text(encoding="utf-8"))
+        state["rolling_batches"] = 1
+        state["buffered_line_offset"] = 2
+        state["staged_payload_pending_flush"] = True
+        state_file.write_text(json.dumps(state), encoding="utf-8")
+        source_key = extraction_daemon._signal_source_cursor_key(
+            "active-lock-sess",
+            str(transcript),
+            staged_state=state,
+        )
+
+        now = 1_700_000_000.0
+        old_time = now - 60
+        os.utime(transcript, (old_time, old_time))
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", instance_id)
+        lock_fd = extraction_daemon._acquire_session_processing_lock(source_key)
+        assert lock_fd is not None
+
+        captured = []
+        monkeypatch.setattr(extraction_daemon.time, "time", lambda: now)
+        monkeypatch.setattr(extraction_daemon, "_read_installed_at", lambda: now - 7200)
+        monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
+        monkeypatch.setattr(
+            extraction_daemon,
+            "write_signal",
+            lambda signal_type, session_id, transcript_path, **kwargs: captured.append(
+                {
+                    "signal_type": signal_type,
+                    "session_id": session_id,
+                    "transcript_path": transcript_path,
+                    "meta": kwargs.get("meta", {}),
+                }
+            ),
+        )
+
+        try:
+            extraction_daemon.check_idle_sessions(timeout_minutes=30)
+        finally:
+            extraction_daemon._release_session_processing_lock(source_key, lock_fd)
+
+        assert captured == []
+
     def test_check_idle_sessions_retires_legacy_cursor_shadowed_by_source_cursor(
         self, monkeypatch, tmp_path
     ):
