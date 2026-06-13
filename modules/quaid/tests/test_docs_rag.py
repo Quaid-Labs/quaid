@@ -351,6 +351,46 @@ class TestIndexDocument:
              pytest.raises(RuntimeError, match="Failed embedding"):
             rag.index_document(str(test_file))
 
+    def test_registry_timestamp_sync_failure_raises_when_fail_hard(self, tmp_path):
+        rag = _make_rag(tmp_path)
+        test_file = tmp_path / "guide.md"
+        test_file.write_text("# Guide\nBody.")
+
+        class BrokenRegistry:
+            def __init__(self, _db_path):
+                pass
+
+            def update_timestamps(self, *_args, **_kwargs):
+                raise OSError("registry locked")
+
+        with patch.object(rag, "chunk_markdown", return_value=["# Guide\nChunk A"]), \
+             patch("datastore.docsdb.rag._lib_get_embeddings", return_value=[[0.1, 0.2, 0.3]]), \
+             patch("datastore.docsdb.registry.DocsRegistry", BrokenRegistry), \
+             patch("datastore.docsdb.rag.is_fail_hard_enabled", return_value=True), \
+             pytest.raises(RuntimeError, match="Failed to persist docs registry timestamp"):
+            rag.index_document(str(test_file))
+
+    def test_registry_timestamp_sync_failure_warns_when_fail_open(self, tmp_path, caplog):
+        rag = _make_rag(tmp_path)
+        test_file = tmp_path / "guide.md"
+        test_file.write_text("# Guide\nBody.")
+
+        class BrokenRegistry:
+            def __init__(self, _db_path):
+                pass
+
+            def update_timestamps(self, *_args, **_kwargs):
+                raise OSError("registry locked")
+
+        caplog.set_level("WARNING")
+        with patch.object(rag, "chunk_markdown", return_value=["# Guide\nChunk A"]), \
+             patch("datastore.docsdb.rag._lib_get_embeddings", return_value=[[0.1, 0.2, 0.3]]), \
+             patch("datastore.docsdb.registry.DocsRegistry", BrokenRegistry), \
+             patch("datastore.docsdb.rag.is_fail_hard_enabled", return_value=False):
+            assert rag.index_document(str(test_file)) == 1
+
+        assert "Failed to persist docs registry timestamp" in caplog.text
+
     def test_syncs_vec_doc_chunks_and_replaces_stale_vec_rows(self, tmp_path):
         from lib.database import get_connection, has_vec
         from lib.embeddings import pack_embedding

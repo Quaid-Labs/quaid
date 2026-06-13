@@ -1251,8 +1251,14 @@ class DocsRAG:
                     registry.update_timestamps(rel, indexed_at=now)
                 except ValueError:
                     pass
-            except Exception:
-                pass  # Registry sync is best-effort
+            except Exception as exc:
+                message = (
+                    "Failed to persist docs registry timestamp after indexing "
+                    f"{canonical_file_path}: {exc}"
+                )
+                if is_fail_hard_enabled():
+                    raise RuntimeError(message) from exc
+                logger.warning(message)
 
         return chunks_created
 
