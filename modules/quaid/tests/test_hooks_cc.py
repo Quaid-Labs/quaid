@@ -1358,6 +1358,28 @@ def test_store_context_refresh_state_uses_atomic_replace(tmp_path, monkeypatch):
     assert not list(state_path.parent.glob("context-refresh-state.tmp.*"))
 
 
+def test_store_context_refresh_state_does_not_unlink_replaced_temp(tmp_path, monkeypatch):
+    from core.interface import hooks
+
+    state_path = tmp_path / "data" / "context-refresh-state.json"
+    state_path.parent.mkdir(parents=True)
+    unlink_calls = []
+    real_unlink = Path.unlink
+
+    def fake_unlink(self, *args, **kwargs):
+        if self.name.startswith("context-refresh-state.tmp."):
+            unlink_calls.append(self)
+        return real_unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(hooks, "_context_refresh_state_path", lambda: state_path)
+    monkeypatch.setattr(Path, "unlink", fake_unlink)
+
+    hooks._store_context_refresh_state({"sessions": {"sess-1": {"turn_count": 2}}})
+
+    assert unlink_calls == []
+    assert json.loads(state_path.read_text(encoding="utf-8"))["sessions"]["sess-1"]["turn_count"] == 2
+
+
 def test_hook_extract_precompact_resolves_cc_transcript_and_flushes_staged_payload(
     tmp_path, sessions_dir, mock_adapter, monkeypatch
 ):

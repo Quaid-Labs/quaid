@@ -624,16 +624,18 @@ def _write_runtime_config_snapshot_state(snapshot: tuple[tuple[str, int], ...]) 
     path = _runtime_config_snapshot_state_path()
     if path is None:
         return
+    tmp_path: Path | None = None
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp_path = path.with_suffix(f".tmp.{os.getpid()}")
         tmp_path.write_text(json.dumps({"snapshot": list(snapshot)}), encoding="utf-8")
         os.replace(tmp_path, path)
     except Exception:
-        try:
-            tmp_path.unlink()  # type: ignore[name-defined]
-        except Exception:
-            pass
+        if tmp_path is not None:
+            try:
+                tmp_path.unlink()
+            except Exception:
+                pass
 
 
 def _reset_runtime_resolution_caches() -> None:
@@ -2538,6 +2540,7 @@ def _store_context_refresh_state(state: Dict[str, Any]) -> None:
         tmp_path = path.with_suffix(f".tmp.{os.getpid()}.{time.time_ns()}")
         tmp_path.write_text(json.dumps(state_to_write, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
         os.replace(tmp_path, path)
+        tmp_path = None
     except Exception:
         if _fail_hard_enabled():
             raise
