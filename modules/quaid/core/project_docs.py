@@ -397,14 +397,15 @@ def merge_state(project: str, updates: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def merge_progress(project: str, phase: str, message: str = "", **details: Any) -> Dict[str, Any]:
+    updated_at = utc_now()
     progress = {
         "phase": str(phase or "").strip() or "unknown",
         "message": str(message or "").strip(),
-        "updated_at": utc_now(),
+        "updated_at": updated_at,
     }
     for key, value in details.items():
         progress[str(key)] = value
-    return merge_state(project, {"phase": progress["phase"], "progress": progress})
+    return merge_state(project, {"phase": progress["phase"], "progress": progress, "last_progress_update": updated_at})
 
 
 @contextlib.contextmanager
@@ -875,6 +876,104 @@ def read_update_request(project: str) -> Optional[Dict[str, Any]]:
     return req if isinstance(req, dict) else None
 
 
+def _project_docs_request_max_retries() -> int:
+    raw = os.environ.get("QUAID_PROJECT_DOCS_REQUEST_MAX_RETRIES", "").strip()
+    if raw:
+        try:
+            parsed = int(raw)
+            if parsed > 0:
+                return parsed
+        except (TypeError, ValueError):
+            logger.warning("Invalid QUAID_PROJECT_DOCS_REQUEST_MAX_RETRIES=%r; using default", raw)
+            if _fail_hard_enabled():
+                raise
+    return 3
+
+
+def _project_docs_request_retry_base_seconds() -> float:
+    raw = os.environ.get("QUAID_PROJECT_DOCS_REQUEST_RETRY_BASE_SECONDS", "").strip()
+    if raw:
+        try:
+            parsed = float(raw)
+            if parsed >= 0:
+                return parsed
+        except (TypeError, ValueError):
+            logger.warning("Invalid QUAID_PROJECT_DOCS_REQUEST_RETRY_BASE_SECONDS=%r; using default", raw)
+            if _fail_hard_enabled():
+                raise
+    return 30.0
+
+
+def _project_docs_request_retry_delay_seconds(attempt_count: int) -> float:
+    base = _project_docs_request_retry_base_seconds()
+    return min(900.0, base * (2 ** max(0, int(attempt_count) - 1)))
+
+
+def update_request_ready_for_worker(request: Optional[Dict[str, Any]]) -> bool:
+    if not request:
+        return False
+    status = str(request.get("status") or "pending").strip().lower()
+    if status in {"failed", "completed", "cancelled"}:
+        return False
+    retry_at = _parse_iso_ts(request.get("next_retry_at"))
+    if retry_at is not None and time.time() < retry_at:
+        return False
+    return True
+
+
+def _record_update_request_failure(project: str, request: Dict[str, Any], exc: Exception) -> None:
+    name = validate_project_name(project)
+    request_id = str((request or {}).get("request_id") or "").strip()
+    if not request_id:
+        return
+    now = utc_now()
+    try:
+        attempt_count = int((request or {}).get("attempt_count") or 0) + 1
+    except (TypeError, ValueError):
+        attempt_count = 1
+    max_retries = _project_docs_request_max_retries()
+    payload = dict(request or {})
+    payload.update({
+        "attempt_count": attempt_count,
+        "last_attempt_at": now,
+        "last_failed_at": now,
+        "last_error": str(exc),
+    })
+    if attempt_count >= max_retries:
+        payload["status"] = "failed"
+        payload["completed_at"] = now
+        payload.pop("next_retry_at", None)
+        _atomic_write_json(request_path(name), payload)
+        merge_state(
+            name,
+            {
+                "status": "error",
+                "pending_request_id": None,
+                "last_error": f"project-docs update failed after {attempt_count} attempts: {exc}",
+                "last_failed_at": now,
+                "last_request_id": request_id,
+            },
+        )
+        return
+
+    delay = _project_docs_request_retry_delay_seconds(attempt_count)
+    next_retry_at = datetime.fromtimestamp(time.time() + delay, tz=timezone.utc).isoformat()
+    payload["status"] = "retrying"
+    payload["next_retry_at"] = next_retry_at
+    _atomic_write_json(request_path(name), payload)
+    merge_state(
+        name,
+        {
+            "status": "queued",
+            "pending_request_id": request_id,
+            "next_retry_at": next_retry_at,
+            "last_error": f"project-docs update failed; retry {attempt_count}/{max_retries} queued: {exc}",
+            "last_failed_at": now,
+            "last_request_id": request_id,
+        },
+    )
+
+
 def clear_update_request(project: str, request_id: Optional[str] = None) -> None:
     req = read_update_request(project)
     if request_id and req and req.get("request_id") != request_id:
@@ -1177,6 +1276,8 @@ def project_status(project: str) -> Dict[str, Any]:
     with _project_runtime_context(entry):
         state = read_state(name)
         req = read_update_request(name)
+        req_status = str((req or {}).get("status") or "pending").strip().lower()
+        request_active = bool(req) and req_status not in {"failed", "completed", "cancelled"}
         worker_pid = read_worker_pid(name)
         worker_heartbeat = read_worker_heartbeat(name)
         log_path = worker_log_path(name)
@@ -1199,7 +1300,7 @@ def project_status(project: str) -> Dict[str, Any]:
         log_size = _current_project_log_size(entry, project=name)
         log_queue_pending = _pending_project_log_queue_count(name)
         log_pending = max(0, log_size - min(log_offset, log_size))
-        stale = bool(req) or bool(changes) or shadow_cursor_pending or log_pending > 0 or log_queue_pending > 0
+        stale = request_active or bool(changes) or shadow_cursor_pending or log_pending > 0 or log_queue_pending > 0
         status_value = "stale" if stale else "fresh"
         if source_error and not stale:
             status_value = "error"
@@ -1531,7 +1632,9 @@ def execute_update_once(project: str, *, request: Optional[Dict[str, Any]] = Non
     """
     name = validate_project_name(project)
     entry = get_project_entry(name)
-    request = request or read_update_request(name)
+    if request is None:
+        current_request = read_update_request(name)
+        request = current_request if update_request_ready_for_worker(current_request) else None
     request_id = str((request or {}).get("request_id") or "") or None
     with project_update_lock(name, blocking=False) as acquired:
         if not acquired:
@@ -1602,6 +1705,7 @@ def execute_update_once(project: str, *, request: Optional[Dict[str, Any]] = Non
             next_state = {
                 "status": "fresh" if not metrics.get("errors") else "error",
                 "last_completed_at": completed,
+                "last_progress_update": completed,
                 "last_request_id": request_id,
                 "last_metrics": metrics,
                 "last_registry_sync": registry_sync,
@@ -1644,6 +1748,9 @@ def execute_update_once(project: str, *, request: Optional[Dict[str, Any]] = Non
                 _notify_project_docs_update(name, result, entry=entry, request=request)
             return result
         except Exception as exc:
+            if request_id and not dry_run and not _fail_hard_enabled():
+                _record_update_request_failure(name, request or {}, exc)
+                raise
             merge_state(
                 name,
                 {
@@ -1711,15 +1818,32 @@ def _worker_heartbeat_stale(project: str, *, stale_after_seconds: float) -> bool
     return (time.time() - ts) > stale_after_seconds
 
 
+def _worker_progress_stale(project: str, *, stale_after_seconds: float) -> bool:
+    state = read_state(project)
+    if str(state.get("status") or "").strip().lower() != "updating":
+        return False
+    progress = state.get("progress") if isinstance(state.get("progress"), dict) else {}
+    ts = (
+        _parse_iso_ts(state.get("last_progress_update"))
+        or _parse_iso_ts(progress.get("updated_at"))
+        or _parse_iso_ts(state.get("last_started_at"))
+    )
+    if ts is None:
+        return True
+    return (time.time() - ts) > stale_after_seconds
+
+
 def reap_stale_worker(project: str, *, stale_after_seconds: float) -> bool:
     name = validate_project_name(project)
-    state = read_state(name)
     pid = read_worker_pid(name)
-    stale = _worker_heartbeat_stale(name, stale_after_seconds=stale_after_seconds)
+    heartbeat_stale = _worker_heartbeat_stale(name, stale_after_seconds=stale_after_seconds)
+    progress_stale = _worker_progress_stale(name, stale_after_seconds=stale_after_seconds)
+    stale = heartbeat_stale or progress_stale
     if pid is not None and not stale:
         return False
     if pid is not None and stale:
-        logger.warning("Project docs worker heartbeat stale for %s; restarting pid=%s", name, pid)
+        stale_reason = "progress" if progress_stale and not heartbeat_stale else "heartbeat"
+        logger.warning("Project docs worker %s stale for %s; restarting pid=%s", stale_reason, name, pid)
         stop_worker(name)
     # stop_worker can race with a worker that completes normally while handling
     # SIGTERM. Re-read state before queuing a retry so a successful fresh cursor
@@ -1730,7 +1854,7 @@ def reap_stale_worker(project: str, *, stale_after_seconds: float) -> bool:
             name,
             {
                 "status": "queued",
-                "last_error": "worker stopped or heartbeat stale during update; retry queued",
+                "last_error": "worker stopped or stale during update; retry queued",
                 "last_failed_at": utc_now(),
             },
         )

@@ -35,6 +35,15 @@ logger = logging.getLogger("quaid.platform_scheduler")
 _DEFAULT_SLOTS = 8
 
 
+def _fail_hard_enabled() -> bool:
+    try:
+        from lib.fail_policy import is_fail_hard_enabled
+
+        return bool(is_fail_hard_enabled())
+    except ImportError:
+        return False
+
+
 def _shared_run_dir(quaid_home: Path) -> Path:
     d = quaid_home / "shared" / "run"
     d.mkdir(parents=True, exist_ok=True)
@@ -317,8 +326,8 @@ class PlatformSchedulerClient:
     def __init__(self, quaid_home: Path, platform: str):
         self._home = quaid_home
         self._platform = platform
-        self._sock: Optional[socket.socket] = None
-        self._lock = threading.Lock()
+        self._held_lock = threading.Lock()
+        self._held_sockets: List[Tuple[socket.socket, int]] = []
 
     def _connect(self) -> socket.socket:
         return _connect_scheduler_socket(self._home, self._platform)
@@ -335,28 +344,59 @@ class PlatformSchedulerClient:
         return json.loads(line)
 
     def acquire(self, n: int = 1) -> None:
-        with self._lock:
-            if self._sock is None:
-                self._sock = self._connect()
-            self._send(self._sock, {"op": "acquire", "n": n})
-
-    def release(self, n: int = 1) -> None:
-        with self._lock:
-            if self._sock is None:
-                return
+        requested = max(1, int(n))
+        sock = self._connect()
+        try:
+            resp = self._send(sock, {"op": "acquire", "n": requested})
+            if not resp.get("ok"):
+                raise RuntimeError(str(resp.get("error") or "scheduler acquire failed"))
+            with self._held_lock:
+                self._held_sockets.append((sock, requested))
+        except Exception:
             try:
-                self._send(self._sock, {"op": "release", "n": n})
+                sock.close()
             except OSError:
                 pass
+            raise
+
+    def release(self, n: int = 1) -> None:
+        remaining_to_release = max(1, int(n))
+        while remaining_to_release > 0:
+            with self._held_lock:
+                if not self._held_sockets:
+                    return
+                sock, held = self._held_sockets.pop()
+            released = min(remaining_to_release, held)
+            keep_socket = False
+            try:
+                resp = self._send(sock, {"op": "release", "n": released})
+                if not resp.get("ok"):
+                    raise RuntimeError(str(resp.get("error") or "scheduler release failed"))
+                remaining_held = held - released
+                remaining_to_release -= released
+                if remaining_held > 0:
+                    with self._held_lock:
+                        self._held_sockets.append((sock, remaining_held))
+                    keep_socket = True
+            except OSError:
+                # Closing the connection reclaims any slots still held by this socket.
+                remaining_to_release -= released
+            finally:
+                if not keep_socket:
+                    try:
+                        sock.close()
+                    except OSError:
+                        pass
 
     def close(self) -> None:
-        with self._lock:
-            if self._sock:
-                try:
-                    self._sock.close()
-                except OSError:
-                    pass
-                self._sock = None
+        with self._held_lock:
+            sockets = [sock for sock, _held in self._held_sockets]
+            self._held_sockets = []
+        for sock in sockets:
+            try:
+                sock.close()
+            except OSError:
+                pass
 
     class _SlotContext:
         def __init__(self, client: "PlatformSchedulerClient", n: int):
@@ -372,10 +412,14 @@ class PlatformSchedulerClient:
         return self._SlotContext(self, n)
 
     def status(self) -> dict:
-        with self._lock:
-            if self._sock is None:
-                self._sock = self._connect()
-            return self._send(self._sock, {"op": "status"})
+        sock = self._connect()
+        try:
+            return self._send(sock, {"op": "status"})
+        finally:
+            try:
+                sock.close()
+            except OSError:
+                pass
 
 
 # ---- Lifecycle -------------------------------------------------------------
@@ -410,6 +454,7 @@ def start_scheduler(quaid_home: Path, platform: str, total_slots: int = _DEFAULT
             server.run()
         except Exception as e:
             logger.error("platform scheduler crashed: %s", e)
+            os._exit(1)
         os._exit(0)
     return pid
 
@@ -446,6 +491,8 @@ def ensure_scheduler_alive(quaid_home: Path, platform: str, total_slots: int = _
             fd.close()
         except Exception:
             pass
+        if _fail_hard_enabled():
+            raise
         return -1
 
 
@@ -463,4 +510,6 @@ def get_platform_scheduler_client(quaid_home: Path, platform: str, total_slots: 
         return client
     except Exception as e:
         logger.warning("platform scheduler unavailable (%s): proceeding without slot gating", e)
+        if _fail_hard_enabled():
+            raise
         return None

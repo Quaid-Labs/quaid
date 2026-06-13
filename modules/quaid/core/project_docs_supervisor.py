@@ -49,7 +49,7 @@ def _interval_from_env(name: str, default: float) -> float:
 def _fail_hard_enabled() -> bool:
     try:
         from lib.fail_policy import is_fail_hard_enabled
-    except Exception:
+    except ImportError:
         return False
     return bool(is_fail_hard_enabled())
 
@@ -546,6 +546,8 @@ def _maintain_instance_monitors(known_instances: Dict[str, int]) -> None:
         try:
             _stop_instance_monitor(instance)
         except Exception:
+            if _fail_hard_enabled():
+                raise
             pass
         known_instances.pop(instance, None)
     for instance in sorted(live):
@@ -565,6 +567,8 @@ def _maintain_instance_monitors(known_instances: Dict[str, int]) -> None:
             try:
                 _stop_instance_monitor(instance)
             except Exception:
+                if _fail_hard_enabled():
+                    raise
                 pass
             known_instances.pop(instance, None)
             pid = None
@@ -577,6 +581,8 @@ def _maintain_instance_monitors(known_instances: Dict[str, int]) -> None:
         try:
             _stop_instance_monitor(instance)
         except Exception:
+            if _fail_hard_enabled():
+                raise
             pass
         known_instances.pop(instance, None)
 
@@ -624,6 +630,8 @@ def stop_all_instance_monitors() -> None:
         try:
             _stop_instance_monitor(instance)
         except Exception:
+            if _fail_hard_enabled():
+                raise
             pass
 
 
@@ -706,6 +714,8 @@ def run_supervisor(*, once: bool = False, interval_seconds: float | None = None)
                 else:
                     project_docs.cleanup_project_state(project)
                     known_workers.pop(project, None)
+                if _fail_hard_enabled():
+                    raise
         for project in list(known_workers.keys()):
             if project in live:
                 continue
@@ -714,6 +724,8 @@ def run_supervisor(*, once: bool = False, interval_seconds: float | None = None)
                 project_docs.reap_child_processes()
                 project_docs.cleanup_project_state(project)
             except Exception:
+                if _fail_hard_enabled():
+                    raise
                 pass
             known_workers.pop(project, None)
         auto_register_requested = False
@@ -739,12 +751,16 @@ def run_supervisor(*, once: bool = False, interval_seconds: float | None = None)
             project_docs.stop_worker(project)
             project_docs.reap_child_processes()
         except Exception:
+            if _fail_hard_enabled():
+                raise
             pass
     for instance in list(known_instances.keys()):
         try:
             _stop_instance_monitor(instance)
             project_docs.reap_child_processes()
         except Exception:
+            if _fail_hard_enabled():
+                raise
             pass
     for proc in list(janitor_workers.values()):
         project_docs._terminate_process(proc)

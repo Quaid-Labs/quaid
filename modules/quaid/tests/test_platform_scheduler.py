@@ -150,6 +150,57 @@ class TestPlatformSchedulerServer:
         c1.close()
         c3.close()
 
+    def test_client_release_unblocks_while_same_client_acquire_waits(self):
+        """A blocked acquire must not hold the lock needed by release."""
+        from core.platform_scheduler import PlatformSchedulerClient
+
+        base = _short_tmp()
+        self._start_server(base, slots=1)
+        client = PlatformSchedulerClient(base, "tp")
+        client.acquire(1)
+        acquired = []
+        released = []
+
+        def _second_acquire():
+            client.acquire(1)
+            acquired.append(True)
+
+        def _release_first():
+            client.release(1)
+            released.append(True)
+
+        acquire_thread = threading.Thread(target=_second_acquire, daemon=True)
+        acquire_thread.start()
+        time.sleep(0.1)
+        release_thread = threading.Thread(target=_release_first, daemon=True)
+        release_thread.start()
+
+        release_thread.join(timeout=1.0)
+        acquire_thread.join(timeout=1.0)
+        client.close()
+
+        assert released == [True]
+        assert acquired == [True]
+
+    def test_ensure_scheduler_alive_raises_start_failure_when_fail_hard(self, monkeypatch):
+        from core import platform_scheduler
+
+        base = _short_tmp()
+        self._bases.append(base)
+        monkeypatch.setattr(platform_scheduler, "_read_pid", lambda *_args: None)
+        monkeypatch.setattr(platform_scheduler, "start_scheduler", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("spawn failed")))
+        monkeypatch.setattr(platform_scheduler, "_fail_hard_enabled", lambda: True)
+
+        with pytest.raises(RuntimeError, match="spawn failed"):
+            platform_scheduler.ensure_scheduler_alive(base, "tp")
+
+    def test_start_scheduler_child_crash_uses_nonzero_exit_source_guard(self):
+        source = Path(__file__).resolve().parents[1] / "core" / "platform_scheduler.py"
+        text = source.read_text(encoding="utf-8")
+        crash_handler = text[text.index("logger.error(\"platform scheduler crashed"): text.index("return pid", text.index("logger.error(\"platform scheduler crashed"))]
+
+        assert "os._exit(1)" in crash_handler
+
 
 # ---- Shared project lock ----
 

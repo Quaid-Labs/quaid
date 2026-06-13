@@ -234,6 +234,45 @@ def test_supervisor_docs_listener_failure_raises_when_failhard(monkeypatch):
         supervisor.run_supervisor(once=True, interval_seconds=0.5)
 
 
+def test_supervisor_fail_hard_helper_only_suppresses_import_error(monkeypatch):
+    from core import project_docs_supervisor as supervisor
+
+    real_import = __import__
+
+    def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "lib.fail_policy":
+            raise RuntimeError("broken fail policy")
+        return real_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr("builtins.__import__", fake_import)
+
+    with pytest.raises(RuntimeError, match="broken fail policy"):
+        supervisor._fail_hard_enabled()
+
+
+def test_supervisor_worker_start_failure_raises_when_failhard(monkeypatch):
+    from core import project_docs_supervisor as supervisor
+
+    monkeypatch.setenv("QUAID_INSTANCE", "pytest-runner")
+    monkeypatch.delenv("QUAID_SUPERVISOR_BOOT", raising=False)
+    monkeypatch.setattr(supervisor.project_docs, "write_supervisor_pid", lambda _token: None)
+    monkeypatch.setattr(supervisor.project_docs, "clear_supervisor_pid_for_current_process", lambda: None)
+    monkeypatch.setattr(supervisor.project_docs, "reap_child_processes", lambda: 0)
+    monkeypatch.setattr(supervisor.project_docs, "worker_stale_after_seconds", lambda _interval: 30.0)
+    monkeypatch.setattr(supervisor.project_docs, "project_is_registered_for_worker", lambda _project: True)
+    monkeypatch.setattr(supervisor.project_docs, "reap_stale_worker", lambda _project, *, stale_after_seconds: False)
+    monkeypatch.setattr(supervisor.project_docs, "start_worker", lambda _project: (_ for _ in ()).throw(RuntimeError("worker start boom")))
+    monkeypatch.setattr(supervisor.project_docs, "merge_state", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(supervisor, "_fail_hard_enabled", lambda: True)
+    monkeypatch.setattr(supervisor, "_maintain_instance_monitors", lambda _known: None)
+    monkeypatch.setattr(supervisor, "_maintain_on_demand_janitor_request", lambda *args: None)
+    monkeypatch.setattr(supervisor, "_maintain_janitor_workers", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(supervisor, "_supervisor_projects", lambda: {"demo": {}})
+
+    with pytest.raises(RuntimeError, match="worker start boom"):
+        supervisor.run_supervisor(once=True, interval_seconds=0.5)
+
+
 def test_supervisor_stops_removed_instance_monitor(monkeypatch):
     from core import project_docs_supervisor as supervisor
 

@@ -116,3 +116,95 @@ def test_scheduler_cancels_pending_on_worker_error():
         assert started == [0]
     finally:
         scheduler.shutdown(wait=False)
+
+
+def test_scheduler_backoff_is_scoped_per_workload():
+    scheduler = GlobalLlmScheduler(max_workers=8)
+    try:
+        with pytest.raises(TimeoutError):
+            scheduler.run_map(
+                workload_key="test.slow_janitor",
+                items=[1, 2, 3, 4],
+                fn=lambda _x: time.sleep(0.05),
+                configured_workers=8,
+                requested_workers=8,
+                timeout_seconds=0.01,
+                timeout_retries=0,
+            )
+
+        out = scheduler.run_map(
+            workload_key="test.fast_recall",
+            items=[1, 2, 3, 4],
+            fn=lambda x: x,
+            configured_workers=8,
+            requested_workers=8,
+            timeout_seconds=1.0,
+            timeout_retries=0,
+        )
+
+        assert out == [1, 2, 3, 4]
+        assert scheduler._caps["test.slow_janitor"] == 2
+        assert scheduler._caps["test.fast_recall"] == 8
+    finally:
+        scheduler.shutdown(wait=False)
+
+
+def test_scheduler_platform_acquire_failure_raises_when_fail_hard(monkeypatch):
+    import core.llm.scheduler as scheduler_mod
+
+    class _FailAcquireClient:
+        def acquire(self, _n):
+            raise RuntimeError("acquire failed")
+
+    scheduler = GlobalLlmScheduler(max_workers=1)
+    monkeypatch.setattr(scheduler_mod, "get_platform_scheduler_client_for_current_instance", lambda: _FailAcquireClient())
+    monkeypatch.setattr(scheduler_mod, "_fail_hard_enabled", lambda: True)
+    try:
+        with pytest.raises(RuntimeError, match="acquire failed"):
+            scheduler.run_map(
+                workload_key="test.acquire_fail",
+                items=[1],
+                fn=lambda x: x,
+                configured_workers=1,
+                timeout_seconds=1.0,
+                timeout_retries=0,
+            )
+    finally:
+        scheduler.shutdown(wait=False)
+
+
+def test_scheduler_platform_release_failure_raises_when_fail_hard(monkeypatch):
+    import core.llm.scheduler as scheduler_mod
+
+    class _FailReleaseClient:
+        def acquire(self, _n):
+            return None
+
+        def release(self, _n):
+            raise RuntimeError("release failed")
+
+    scheduler = GlobalLlmScheduler(max_workers=1)
+    monkeypatch.setattr(scheduler_mod, "get_platform_scheduler_client_for_current_instance", lambda: _FailReleaseClient())
+    monkeypatch.setattr(scheduler_mod, "_fail_hard_enabled", lambda: True)
+    try:
+        with pytest.raises(RuntimeError, match="release failed"):
+            scheduler.run_map(
+                workload_key="test.release_fail",
+                items=[1],
+                fn=lambda x: x,
+                configured_workers=1,
+                timeout_seconds=1.0,
+                timeout_retries=0,
+            )
+    finally:
+        scheduler.shutdown(wait=False)
+
+
+def test_scheduler_invalid_worker_env_raises_when_fail_hard(monkeypatch):
+    import core.llm.scheduler as scheduler_mod
+
+    monkeypatch.setenv("QUAID_GLOBAL_LLM_MAX_WORKERS", "not-an-int")
+    monkeypatch.setattr(scheduler_mod, "_fail_hard_enabled", lambda: True)
+
+    with pytest.raises(ValueError):
+        scheduler_mod._scheduler_max_workers()

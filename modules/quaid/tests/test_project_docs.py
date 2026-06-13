@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -548,6 +549,7 @@ def test_execute_update_once_snapshots_applies_indexes_and_advances_cursors(proj
     assert state["status"] == "fresh"
     assert state["phase"] == "idle"
     assert state["progress"]["message"] == "project-docs update complete"
+    assert state["last_progress_update"] == state["progress"]["updated_at"]
     assert state["project_log_offset"] == project_log.stat().st_size
     assert state["last_indexed_docs"] == 2
     assert state["last_indexed_project_logs"] == 1
@@ -650,6 +652,80 @@ def test_execute_update_once_broker_failure_has_no_direct_fallback(project_env):
     state = project_docs.read_state("demo")
     assert state["status"] == "error"
     assert state["last_error"] == "synthetic broker failure"
+
+
+def test_project_docs_poison_request_exhausts_retries_without_tight_loop(project_env, monkeypatch):
+    _tmp_path, _src, _entry = project_env
+    from core import project_docs
+
+    request = project_docs.request_update("demo", reason="manual-test", requested_by="pytest")
+    monkeypatch.setenv("QUAID_PROJECT_DOCS_REQUEST_MAX_RETRIES", "2")
+    monkeypatch.setenv("QUAID_PROJECT_DOCS_REQUEST_RETRY_BASE_SECONDS", "0")
+
+    with patch("core.plugins.docsdb_contract.register_project_docs_update_request_handler"), \
+         patch("core.runtime.events.request_broker_event", return_value={"status": "failed", "error": "poison"}), \
+         patch("core.project_docs._fail_hard_enabled", return_value=False):
+        with pytest.raises(RuntimeError, match="poison"):
+            project_docs.execute_update_once("demo", request=request)
+
+        retrying = project_docs.read_update_request("demo")
+        assert retrying["status"] == "retrying"
+        assert retrying["attempt_count"] == 1
+        assert project_docs.update_request_ready_for_worker(retrying) is True
+
+        with pytest.raises(RuntimeError, match="poison"):
+            project_docs.execute_update_once("demo", request=retrying)
+
+    failed = project_docs.read_update_request("demo")
+    assert failed["status"] == "failed"
+    assert failed["attempt_count"] == 2
+    assert project_docs.update_request_ready_for_worker(failed) is False
+    state = project_docs.read_state("demo")
+    assert state["status"] == "error"
+    assert "failed after 2 attempts" in state["last_error"]
+    status = project_docs.project_status("demo")
+    assert status["pending_request"]["status"] == "failed"
+
+
+def test_project_docs_failhard_broker_failure_does_not_retry(project_env, monkeypatch):
+    _tmp_path, _src, _entry = project_env
+    from core import project_docs
+
+    request = project_docs.request_update("demo", reason="manual-test", requested_by="pytest")
+
+    with patch("core.plugins.docsdb_contract.register_project_docs_update_request_handler"), \
+         patch("core.runtime.events.request_broker_event", return_value={"status": "failed", "error": "poison"}), \
+         patch("core.project_docs._fail_hard_enabled", return_value=True):
+        with pytest.raises(RuntimeError, match="poison"):
+            project_docs.execute_update_once("demo", request=request)
+
+    retained = project_docs.read_update_request("demo")
+    assert retained["status"] == "pending"
+    assert "attempt_count" not in retained
+
+
+def test_project_docs_worker_respects_request_retry_backoff(monkeypatch):
+    from core import project_docs_worker
+
+    calls = []
+    future = (datetime.now(tz=timezone.utc) + timedelta(seconds=60)).isoformat()
+
+    monkeypatch.setattr(project_docs_worker.project_docs, "validate_project_name", lambda project: project)
+    monkeypatch.setattr(project_docs_worker, "_supervisor_alive", lambda: True)
+    monkeypatch.setattr(
+        project_docs_worker.project_docs,
+        "read_update_request",
+        lambda _project: {"request_id": "req-1", "status": "retrying", "next_retry_at": future},
+    )
+    monkeypatch.setattr(project_docs_worker.project_docs, "update_request_ready_for_worker", lambda request: False)
+    monkeypatch.setattr(project_docs_worker.project_docs, "project_status", lambda _project: {"status": "stale"})
+    monkeypatch.setattr(project_docs_worker.project_docs, "write_worker_heartbeat", lambda *args, **kwargs: calls.append(("heartbeat", args, kwargs)))
+    monkeypatch.setattr(project_docs_worker.project_docs, "execute_update_once", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("backoff request should not run")))
+    monkeypatch.setattr(project_docs_worker.project_docs, "clear_worker_pid_for_current_process", lambda project: calls.append(("clear", project)))
+
+    assert project_docs_worker.run_worker("demo", once=True, interval_seconds=0.5) == 0
+
+    assert ("clear", "demo") in calls
 
 
 def test_project_status_reports_pending_project_log_queue(project_env):
@@ -1569,6 +1645,33 @@ def test_reap_stale_worker_does_not_overwrite_racing_success(project_env, monkey
     state = project_docs.read_state("demo")
     assert state["status"] == "fresh"
     assert state["last_error"] is None
+
+
+def test_reap_stale_worker_uses_progress_age_even_with_fresh_heartbeat(project_env, monkeypatch):
+    _tmp_path, _src, _entry = project_env
+    from core import project_docs
+
+    old = (datetime.now(tz=timezone.utc) - timedelta(seconds=120)).isoformat()
+    project_docs.write_state(
+        "demo",
+        {
+            "status": "updating",
+            "last_started_at": old,
+            "last_progress_update": old,
+            "progress": {"phase": "update_docs", "updated_at": old},
+        },
+    )
+    project_docs.write_worker_heartbeat("demo", {"status": "updating"})
+    stopped = []
+    monkeypatch.setattr(project_docs, "read_worker_pid", lambda _name: 12345)
+    monkeypatch.setattr(project_docs, "stop_worker", lambda name: stopped.append(name) or True)
+
+    assert project_docs.reap_stale_worker("demo", stale_after_seconds=5.0) is True
+
+    assert stopped == ["demo"]
+    state = project_docs.read_state("demo")
+    assert state["status"] == "queued"
+    assert "stale during update" in state["last_error"]
 
 
 def test_cleanup_project_state_removes_all_project_artifacts(project_env):

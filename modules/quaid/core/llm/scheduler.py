@@ -18,6 +18,15 @@ from typing import Any, Callable, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 
+def _fail_hard_enabled() -> bool:
+    try:
+        from lib.fail_policy import is_fail_hard_enabled
+
+        return bool(is_fail_hard_enabled())
+    except ImportError:
+        return False
+
+
 class GlobalLlmScheduler:
     """Global bounded executor with per-workload adaptive concurrency caps."""
 
@@ -89,6 +98,8 @@ class GlobalLlmScheduler:
                 logger.warning(
                     "platform slot acquire failed (%s): proceeding without slot gating", exc
                 )
+                if _fail_hard_enabled():
+                    raise
                 _platform_client = None
 
         try:
@@ -107,6 +118,8 @@ class GlobalLlmScheduler:
                     _platform_client.release(1)
                 except Exception as exc:
                     logger.warning("platform slot release failed: %s", exc)
+                    if _fail_hard_enabled():
+                        raise
 
     def _run_map_inner(
         self,
@@ -249,6 +262,8 @@ def _scheduler_max_workers(default_max_workers: int = 32) -> int:
                 return parsed
         except (TypeError, ValueError):
             logger.warning("Invalid QUAID_GLOBAL_LLM_MAX_WORKERS=%r; using default", raw)
+            if _fail_hard_enabled():
+                raise
     return int(default_max_workers)
 
 
@@ -303,12 +318,16 @@ def get_platform_scheduler_client_for_current_instance():
                     if parsed > 0:
                         total_slots = parsed
             except Exception:
+                if _fail_hard_enabled():
+                    raise
                 pass
             _PLATFORM_CLIENT = get_platform_scheduler_client(quaid_home, platform, total_slots)
         except Exception as exc:
             logger.warning(
                 "platform scheduler client init failed (%s): proceeding without slot gating", exc
             )
+            if _fail_hard_enabled():
+                raise
             _PLATFORM_CLIENT = None
         _PLATFORM_CLIENT_INITIALIZED = True
         return _PLATFORM_CLIENT
@@ -325,4 +344,6 @@ def reset_platform_scheduler_client() -> None:
             try:
                 client.close()
             except Exception:
+                if _fail_hard_enabled():
+                    raise
                 pass

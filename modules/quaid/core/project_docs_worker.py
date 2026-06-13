@@ -102,9 +102,16 @@ def run_worker(project: str, *, once: bool = False, interval_seconds: Optional[f
             project_docs.clear_worker_pid_for_current_process(name)
             return 0
         try:
-            request = project_docs.read_update_request(name)
+            raw_request = project_docs.read_update_request(name)
+            request = raw_request if project_docs.update_request_ready_for_worker(raw_request) else None
+            raw_request_status = str((raw_request or {}).get("status") or "pending").strip().lower()
+            request_backing_off = bool(raw_request) and request is None and raw_request_status not in {
+                "failed",
+                "completed",
+                "cancelled",
+            }
             status = project_docs.project_status(name)
-            stale = status.get("status") == "stale"
+            stale = status.get("status") == "stale" and not request_backing_off
             if request or stale:
                 project_docs.write_worker_heartbeat(name, {"status": "updating"})
                 heartbeat_stop, heartbeat_thread = _start_update_heartbeat(name, interval)
@@ -128,7 +135,11 @@ def run_worker(project: str, *, once: bool = False, interval_seconds: Optional[f
         except Exception as exc:
             import logging
             logging.getLogger(__name__).exception("Project docs worker tick failed for %s", name)
-            project_docs.merge_state(name, {"status": "error", "last_error": str(exc), "last_failed_at": project_docs.utc_now()})
+            if project_docs._fail_hard_enabled():
+                raise
+            state = project_docs.read_state(name)
+            if str(state.get("status") or "").strip().lower() != "queued":
+                project_docs.merge_state(name, {"status": "error", "last_error": str(exc), "last_failed_at": project_docs.utc_now()})
             project_docs.write_worker_heartbeat(name, {"status": "error", "last_error": str(exc)})
         if once:
             project_docs.clear_worker_pid_for_current_process(name)
