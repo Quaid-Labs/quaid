@@ -14028,6 +14028,17 @@ def _prioritize_fast_anchor_direct_rows(query: str, rows: List[Dict[str, Any]]) 
                 return raw
         return ""
 
+    def _row_confidence_sort_key(row: Dict[str, Any]) -> float:
+        for key in ("extraction_confidence", "confidence"):
+            raw = (row or {}).get(key)
+            if raw is None or raw == "":
+                continue
+            try:
+                return float(raw)
+            except (TypeError, ValueError):
+                continue
+        return 0.0
+
     def _is_direct_memory_row(row: Dict[str, Any]) -> bool:
         if str((row or {}).get("category") or "").strip().lower() == "docs":
             return False
@@ -14064,8 +14075,9 @@ def _prioritize_fast_anchor_direct_rows(query: str, rows: List[Dict[str, Any]]) 
         ]
         priority_rows.sort(
             key=lambda row: (
-                _row_created_sort_key(row),
+                _row_confidence_sort_key(row),
                 float(row.get("similarity", 0.0) or 0.0),
+                _row_created_sort_key(row),
             ),
             reverse=True,
         )
@@ -14101,6 +14113,7 @@ def _prioritize_fast_anchor_direct_rows(query: str, rows: List[Dict[str, Any]]) 
         key=lambda row: (
             event_overlap_by_id.get(str(row.get("id")), 0),
             overlap_by_id.get(str(row.get("id")), 0),
+            _row_confidence_sort_key(row),
             _row_created_sort_key(row),
             float(row.get("similarity", 0.0) or 0.0),
         ),
@@ -14115,6 +14128,7 @@ def _prioritize_fast_anchor_direct_rows(query: str, rows: List[Dict[str, Any]]) 
         key=lambda row: (
             event_overlap_by_id.get(str(row.get("id")), 0),
             overlap_by_id.get(str(row.get("id")), 0),
+            _row_confidence_sort_key(row),
             _row_created_sort_key(row),
             float(row.get("similarity", 0.0) or 0.0),
         ),

@@ -2090,6 +2090,68 @@ class TestRecallBasic:
             "partial-same-topic",
         ]
 
+    def test_fast_direct_priority_prefers_confident_fact_over_entity_stub(self):
+        import datastore.memorydb.memory_graph as mg
+
+        query = "what is my travel marker"
+        assert mg._extract_explicit_query_anchor_terms(query) == []
+        rows = [
+            {
+                "id": "late-entity-stub",
+                "text": "Travel marker",
+                "category": "fact",
+                "similarity": 1.0,
+                "extraction_confidence": 0.50,
+                "created_at": "2026-05-30T23:31:20",
+            },
+            {
+                "id": "earlier-answer-fact",
+                "text": "Test Owner's travel marker is a green fountain pen with a fine nib.",
+                "category": "fact",
+                "similarity": 0.92,
+                "extraction_confidence": 0.93,
+                "created_at": "2026-05-30T22:31:11",
+            },
+        ]
+
+        ranked = mg._prioritize_fast_anchor_direct_rows(query, rows)
+
+        assert [row["id"] for row in ranked[:2]] == [
+            "earlier-answer-fact",
+            "late-entity-stub",
+        ]
+
+    def test_fast_anchor_priority_prefers_confident_fact_over_entity_stub(self):
+        import datastore.memorydb.memory_graph as mg
+
+        query = "Nimbus Marker 74"
+        assert mg._extract_explicit_query_anchor_terms(query) == ["nimbus", "marker"]
+        rows = [
+            {
+                "id": "late-entity-stub",
+                "text": "Nimbus Marker 74",
+                "category": "fact",
+                "similarity": 1.0,
+                "extraction_confidence": 0.50,
+                "created_at": "2026-05-30T23:31:20",
+            },
+            {
+                "id": "earlier-answer-fact",
+                "text": "Test Owner's daily-use marker is a Nimbus Marker 74 with a brass cap.",
+                "category": "fact",
+                "similarity": 0.92,
+                "extraction_confidence": 0.93,
+                "created_at": "2026-05-30T22:31:11",
+            },
+        ]
+
+        ranked = mg._prioritize_fast_anchor_direct_rows(query, rows)
+
+        assert [row["id"] for row in ranked[:2]] == [
+            "earlier-answer-fact",
+            "late-entity-stub",
+        ]
+
     def test_prioritize_date_relation_callback_rows_prefers_day_after_connection(self):
         import datastore.memorydb.memory_graph as mg
 
