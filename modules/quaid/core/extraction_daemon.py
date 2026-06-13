@@ -3577,6 +3577,8 @@ def _read_rolling_state_for_signal(session_id: str, transcript_path: str) -> Tup
         # signal UUID is the stronger ownership signal for residual buffers.
         if wanted_session_uuid and state_uuid and state_uuid != wanted_session_uuid:
             continue
+        # UUID match is authoritative here; canonical path may already point
+        # at the new /new session by the time the old lifecycle signal lands.
         if wanted_uuid and state_uuid and wanted_uuid == state_uuid:
             return state, _validate_session_id(str(state.get("session_id") or state_key))
         state_canonical_path = _canonicalize_transcript_source_path(state_transcript_path)

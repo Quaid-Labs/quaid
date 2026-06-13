@@ -12773,6 +12773,14 @@ class TestRollingExtraction:
         assert state_key == old_session_id
         assert "Baxter" in state["semantic_buffer"]
 
+        different_uuid = "019ebe58-aaaa-bbbb-cccc-49d1b5efb5bb"
+        state, state_key = extraction_daemon._read_rolling_state_for_signal(
+            different_uuid,
+            str(new_transcript_path),
+        )
+        assert state_key == different_uuid
+        assert not extraction_daemon._rolling_state_has_pending_content(state)
+
     def test_staged_flush_without_completed_rolling_batch_drains_semantic_buffer(self, monkeypatch, tmp_path):
         import sys
         import types
