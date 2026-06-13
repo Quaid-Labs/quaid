@@ -189,6 +189,36 @@ class TestPlatformSchedulerServer:
             left.close()
             right.close()
 
+    def test_registered_queued_acquire_is_woken_on_disconnect(self, tmp_path):
+        """Queued acquire threads must exit when their registered client disconnects."""
+        from core.platform_scheduler import PlatformSchedulerServer, _Connection
+
+        left, right = socket.socketpair()
+        try:
+            server = PlatformSchedulerServer(tmp_path, "tp", total_slots=1)
+            server._used = 1
+            conn = _Connection(left, None)
+            server._connections[id(left)] = conn
+
+            thread = threading.Thread(target=server._handle_acquire, args=(conn, 1), daemon=True)
+            thread.start()
+            for _ in range(50):
+                if server._queue:
+                    break
+                time.sleep(0.01)
+            assert len(server._queue) == 1
+
+            server._on_disconnect(conn)
+            thread.join(timeout=0.5)
+
+            assert not thread.is_alive()
+            assert server._queue == []
+            assert server._used == 1
+            assert conn.held == 0
+        finally:
+            left.close()
+            right.close()
+
     def test_client_release_unblocks_while_same_client_acquire_waits(self):
         """A blocked acquire must not hold the lock needed by release."""
         from core.platform_scheduler import PlatformSchedulerClient
