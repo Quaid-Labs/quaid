@@ -99,20 +99,6 @@ def test_janitor_main_routes_all_apply_through_supervisor_request(monkeypatch, t
     from core.lifecycle import janitor
 
     calls = []
-    instance_stats = tmp_path / "instances" / "pytest-runner" / "logs" / "janitor-stats.json"
-    instance_stats.parent.mkdir(parents=True, exist_ok=True)
-    instance_stats.write_text(
-        json.dumps(
-            {
-                "applied_changes": {
-                    "memories_reviewed": 3,
-                    "graduated_to_active": 2,
-                }
-            }
-        ),
-        encoding="utf-8",
-    )
-
     monkeypatch.setattr(project_docs, "ensure_supervisor_alive", lambda: 4321)
     monkeypatch.setattr(
         project_docs,
@@ -122,36 +108,20 @@ def test_janitor_main_routes_all_apply_through_supervisor_request(monkeypatch, t
     monkeypatch.setattr(
         project_docs,
         "wait_for_janitor_request",
-        lambda request_id, *, timeout_seconds: calls.append(
-            ("wait", {"request_id": request_id, "timeout_seconds": timeout_seconds})
-        )
-        or {
-            "request_id": request_id,
-            "status": "completed",
-            "completed_at": "2026-05-02T01:02:03",
-            "errors": [],
-            "exit_codes": {"pytest-runner": 0},
-        },
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("apply must return after queueing")),
     )
     monkeypatch.setattr(janitor, "run_task_optimized", lambda *_a, **_kw: (_ for _ in ()).throw(AssertionError()))
 
     assert janitor.main(["--task", "all", "--apply"]) == 0
     assert calls[0] == ("request", {"instance": None, "reason": "janitor-cli-apply", "requested_by": "janitor-cli"})
-    assert calls[1][0] == "wait"
-    assert calls[1][1]["request_id"] == "req-1"
     captured = capsys.readouterr()
-    assert "[janitor] Instances completed: 1; failed: 0" in captured.out
-    assert "memories_reviewed: 3" in captured.out
-    assert "graduated_to_active: 2" in captured.out
-    assert "Host stats:" in captured.out
+    assert "Queued supervisor-owned janitor request" in captured.out
+    assert "Request ID: req-1" in captured.out
+    assert "Request queued; poll with `quaid janitor --status`." in captured.out
     log_path = tmp_path / "logs" / "janitor.log"
     log_text = log_path.read_text(encoding="utf-8")
-    assert "janitor_supervisor_request_complete" in log_text
-    assert "janitor_complete" in log_text
-    stats = json.loads((tmp_path / "logs" / "janitor-stats.json").read_text(encoding="utf-8"))
-    assert stats["dry_run"] is False
-    assert stats["last_janitor_completed_at"] == "2026-05-02T01:02:03"
-    assert stats["applied_changes"]["instances_completed"] == 1
+    assert "janitor_supervisor_request_queued" in log_text
+    assert "janitor_supervisor_request_complete" not in log_text
 
 
 def test_janitor_audit_log_honors_fail_hard(monkeypatch, tmp_path):
@@ -339,16 +309,12 @@ def test_janitor_main_routes_all_apply_without_instance_bootstrap(monkeypatch, t
     monkeypatch.setattr(
         project_docs,
         "wait_for_janitor_request",
-        lambda request_id, *, timeout_seconds: calls.append(
-            ("wait", {"request_id": request_id, "timeout_seconds": timeout_seconds})
-        )
-        or {"request_id": request_id, "status": "completed", "errors": []},
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("apply must return after queueing")),
     )
 
     assert janitor.main(["--task", "all", "--apply"]) == 0
     assert calls[0] == ("request", {"instance": None, "reason": "janitor-cli-apply", "requested_by": "janitor-cli"})
-    assert calls[1][0] == "wait"
-    assert calls[1][1]["request_id"] == "req-2"
+    assert len(calls) == 1
 
 
 def test_janitor_main_all_apply_attaches_to_existing_request(monkeypatch, tmp_path, capsys):
@@ -364,8 +330,6 @@ def test_janitor_main_all_apply_attaches_to_existing_request(monkeypatch, tmp_pa
         "status": "running",
         "errors": [],
     }
-    calls = []
-
     monkeypatch.setattr(project_docs, "ensure_supervisor_alive", lambda: 4321)
     monkeypatch.setattr(
         project_docs,
@@ -376,10 +340,7 @@ def test_janitor_main_all_apply_attaches_to_existing_request(monkeypatch, tmp_pa
     monkeypatch.setattr(
         project_docs,
         "wait_for_janitor_request",
-        lambda request_id, *, timeout_seconds: calls.append(
-            ("wait", {"request_id": request_id, "timeout_seconds": timeout_seconds})
-        )
-        or {"request_id": request_id, "status": "completed", "errors": []},
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("apply must return after attaching")),
     )
     monkeypatch.setattr(janitor, "run_task_optimized", lambda *_a, **_kw: (_ for _ in ()).throw(AssertionError()))
 
@@ -387,7 +348,7 @@ def test_janitor_main_all_apply_attaches_to_existing_request(monkeypatch, tmp_pa
     captured = capsys.readouterr()
     assert "already in progress" in captured.out
     assert "Attached to existing supervisor request" in captured.out
-    assert calls == [("wait", {"request_id": "req-active", "timeout_seconds": janitor._supervisor_janitor_wait_timeout_seconds()})]
+    assert "Request queued; poll with `quaid janitor --status`." in captured.out
 
 
 def test_janitor_status_reports_no_supervisor_request(monkeypatch, capsys):

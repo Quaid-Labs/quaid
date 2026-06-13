@@ -64,27 +64,6 @@ from lib.database import get_connection as _lib_get_connection
 
 _DATASTORE_RUNTIME = None
 
-_SUPERVISOR_JANITOR_SUMMARY_KEYS = (
-    "memories_reviewed",
-    "graduated_to_active",
-    "memories_deleted",
-    "memories_fixed",
-    "duplicates_merged",
-    "dedup_reviewed",
-    "dedup_confirmed",
-    "dedup_reversed",
-    "edges_created",
-    "snippets_folded",
-    "snippets_rewritten",
-    "snippets_discarded",
-    "journal_entries_distilled",
-    "journal_additions",
-    "journal_edits",
-    "project_docs_update_requests",
-    "project_docs_update_request_errors",
-)
-
-
 def _datastore_runtime():
     """Import datastore runtime lazily so no-instance supervisor routing stays lightweight."""
     global _DATASTORE_RUNTIME
@@ -2058,10 +2037,6 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
     print(f"\n📊 Stats written to {stats_file}")
     return result
 
-def _supervisor_janitor_wait_timeout_seconds() -> float:
-    return float(max(300, int(MAX_EXECUTION_TIME) + 60))
-
-
 def _can_route_supervisor_janitor(args: argparse.Namespace, *, dry_run: bool) -> bool:
     return (
         str(getattr(args, "task", "") or "").strip() == "all"
@@ -2079,7 +2054,6 @@ def _run_supervisor_janitor_request(*, instance: Optional[str] = None) -> int:
     from core import project_docs
 
     logs_dir = _shared_logs_dir()
-    started_at = datetime.now().isoformat()
     _write_janitor_log_entry(
         logs_dir,
         "janitor_supervisor_request_start",
@@ -2121,120 +2095,10 @@ def _run_supervisor_janitor_request(*, instance: Optional[str] = None) -> int:
 
     print(f"[janitor] Request ID: {request['request_id']}")
     print(f"[janitor] Supervisor PID: {supervisor_pid}")
-    result = project_docs.wait_for_janitor_request(
-        request["request_id"],
-        timeout_seconds=_supervisor_janitor_wait_timeout_seconds(),
-    )
-    status = str(result.get("status") or "unknown").strip() or "unknown"
-    print(f"[janitor] Request status: {status}")
     if attached_to_existing:
         print("[janitor] Attached to existing supervisor request")
-    errors = list(result.get("errors") or [])
-    if errors:
-        for error in errors:
-            print(f"[janitor] Error: {error}", file=sys.stderr)
-    completed_at = str(result.get("completed_at") or datetime.now().isoformat())
-    exit_codes = {str(k): int(v) for k, v in dict(result.get("exit_codes") or {}).items()}
-    success = status == "completed" and not errors
-    per_instance_stats: Dict[str, Any] = {}
-    aggregate_changes: Dict[str, int] = {
-        "instances_completed": sum(1 for code in exit_codes.values() if int(code) == 0),
-        "instances_failed": sum(1 for code in exit_codes.values() if int(code) != 0),
-    }
-    raw_home = str(os.environ.get("QUAID_HOME", "") or "").strip()
-    if raw_home:
-        instances_root = Path(raw_home).expanduser().resolve() / "instances"
-        for instance_name in sorted(exit_codes):
-            stats_path = instances_root / instance_name / "logs" / "janitor-stats.json"
-            try:
-                stats = json.loads(stats_path.read_text(encoding="utf-8"))
-                if isinstance(stats, dict):
-                    per_instance_stats[instance_name] = stats
-                    for key, value in dict(stats.get("applied_changes") or {}).items():
-                        if isinstance(value, (int, float)) and not isinstance(value, bool):
-                            aggregate_changes[key] = int(aggregate_changes.get(key, 0)) + int(value)
-            except FileNotFoundError:
-                per_instance_stats[instance_name] = {"missing_stats": str(stats_path)}
-            except Exception as exc:
-                per_instance_stats[instance_name] = {"stats_error": str(exc), "path": str(stats_path)}
-            _write_janitor_log_entry(
-                logs_dir,
-                "janitor_supervisor_instance_result",
-                task="all",
-                dry_run=False,
-                instance=instance_name,
-                exit_code=exit_codes.get(instance_name),
-                stats=per_instance_stats.get(instance_name, {}),
-            )
-    audit_result = {
-        "success": success,
-        "applied_changes": aggregate_changes,
-        "metrics": {
-            "errors": len(errors),
-            "instances": len(exit_codes),
-            "started_at": started_at,
-            "completed_at": completed_at,
-            "status": status,
-            "exit_codes": exit_codes,
-            "per_instance_stats": per_instance_stats,
-        },
-    }
-    _write_janitor_log_entry(
-        logs_dir,
-        "janitor_supervisor_request_complete",
-        level="info" if success else "error",
-        task="all",
-        dry_run=False,
-        request_id=str(result.get("request_id") or request.get("request_id") or ""),
-        status=status,
-        success=success,
-        errors=errors,
-        exit_codes=exit_codes,
-    )
-    _write_janitor_log_entry(
-        logs_dir,
-        "janitor_complete",
-        level="info" if success else "error",
-        task="all",
-        # Supervisor-owned janitor requests are apply-only; dry-runs stay on the direct path.
-        dry_run=False,
-        supervisor_owned=True,
-        status=status,
-        success=success,
-        errors=len(errors),
-        **{
-            k: v
-            for k, v in aggregate_changes.items()
-            if isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0
-        },
-    )
-    stats_file = _write_janitor_stats(
-        task="all",
-        dry_run=False,
-        result=audit_result,
-        usage={"api_calls": 0, "input_tokens": 0, "output_tokens": 0},
-        estimated_cost_usd=0.0,
-        completed_at=completed_at,
-        logs_dir=logs_dir,
-    )
-    print(
-        "[janitor] Instances completed: "
-        f"{aggregate_changes.get('instances_completed', 0)}; "
-        f"failed: {aggregate_changes.get('instances_failed', 0)}"
-    )
-    summary_lines = [
-        (key, int(aggregate_changes.get(key) or 0))
-        for key in _SUPERVISOR_JANITOR_SUMMARY_KEYS
-        if int(aggregate_changes.get(key) or 0) > 0
-    ]
-    if summary_lines:
-        print("[janitor] Maintenance effects:")
-        for key, value in summary_lines:
-            print(f"  {key}: {value}")
-    if raw_home:
-        print(f"[janitor] Worker logs: {instances_root}/<instance>/logs/janitor/supervisor-worker.log")
-    print(f"[janitor] Host stats: {stats_file}")
-    return 0 if status == "completed" else 1
+    print("[janitor] Request queued; poll with `quaid janitor --status`.")
+    return 0
 
 
 def _print_supervisor_janitor_status() -> int:
