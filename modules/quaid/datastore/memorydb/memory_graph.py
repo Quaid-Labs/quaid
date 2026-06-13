@@ -106,6 +106,8 @@ from lib.runtime_context import get_workspace_dir, get_adapter_instance, get_log
 
 logger = logging.getLogger(__name__)
 
+_FAST_RECALL_DEFAULT_TIMEOUT_FLOOR_MS = 30_000
+
 _GRAPH_FACT_CLUSTER_DEFAULT_CAP = 8
 _GRAPH_FACT_CLUSTER_WIDE_POOL_THRESHOLD = 10
 _GRAPH_FACT_CLUSTER_WIDE_CAP = 12
@@ -10431,12 +10433,15 @@ def _recall_store_plan_timeout_s(timeout_ms: Optional[int], *, fast_mode: bool) 
             pass
     if fast_mode:
         try:
-            raw = _get_configured_injection_timeout_ms(3000)
-            return max(0.5, float(raw or 3000) / 1000.0)
+            raw = _get_configured_injection_timeout_ms(_FAST_RECALL_DEFAULT_TIMEOUT_FLOOR_MS)
+            return max(
+                0.5,
+                float(max(int(raw or 0), _FAST_RECALL_DEFAULT_TIMEOUT_FLOOR_MS)) / 1000.0,
+            )
         except Exception:
             if _is_fail_hard_mode():
                 raise
-            return 3.0
+            return float(_FAST_RECALL_DEFAULT_TIMEOUT_FLOOR_MS) / 1000.0
     return 30.0
 
 

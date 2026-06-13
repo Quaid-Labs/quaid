@@ -1962,17 +1962,21 @@ class TestRecallBasic:
         branches = (((meta.get("turn_details") or [{}])[0].get("fanout") or {}).get("branches") or [])
         assert branches
 
-    def test_fast_recall_default_store_plan_timeout_matches_injection_budget(self):
+    def test_fast_recall_default_store_plan_timeout_uses_preinject_floor(self):
         import datastore.memorydb.memory_graph as mg
 
-        # Pre-inject has a 3s hard cutoff by design. Confirm fast-mode default
-        # honors the configured injection budget and does not apply an 8s floor.
+        # CLI recall-fast has no hook wrapper to pass the normal 30s preinject
+        # budget, so omitted budgets use the same floor while explicit operator
+        # budgets remain authoritative.
         with patch("config.get_config", side_effect=AssertionError("full config should not load")), \
              patch.object(mg, "_get_configured_injection_timeout_ms", return_value=8000):
-            assert mg._recall_store_plan_timeout_s(None, fast_mode=True) == 8.0
+            assert mg._recall_store_plan_timeout_s(None, fast_mode=True) == 30.0
         with patch("config.get_config", side_effect=AssertionError("full config should not load")), \
-             patch.object(mg, "_get_configured_injection_timeout_ms", return_value=3000):
-            assert mg._recall_store_plan_timeout_s(None, fast_mode=True) == 3.0
+             patch.object(mg, "_get_configured_injection_timeout_ms", return_value=45000):
+            assert mg._recall_store_plan_timeout_s(None, fast_mode=True) == 45.0
+        with patch("config.get_config", side_effect=AssertionError("full config should not load")):
+            assert mg._recall_store_plan_timeout_s(3000, fast_mode=True) == 3.0
+            assert mg._recall_store_plan_timeout_s(None, fast_mode=False) == 30.0
 
     def test_recall_fast_uses_strong_lexical_preflight_before_semantic_timeout(self, tmp_path, monkeypatch):
         import datastore.memorydb.memory_graph as mg
@@ -12248,6 +12252,64 @@ class TestRecallFastHookInjectContract:
         assert docs_run["timed_out"] is True
         assert docs_run["error_type"] == "TimeoutError"
         assert "futures unfinished" in docs_run["error"]
+
+    def test_run_recall_store_plan_fast_default_timeout_uses_preinject_floor(self):
+        import datastore.memorydb.memory_graph as mg
+
+        captured = {}
+
+        def _fake_run_callables(callables, **kwargs):
+            captured["timeout_seconds"] = kwargs.get("timeout_seconds")
+            out = []
+            for fn in callables:
+                try:
+                    out.append(fn())
+                except Exception as exc:
+                    if kwargs.get("return_exceptions"):
+                        out.append(exc)
+                    else:
+                        raise
+            return out
+
+        def _fake_vector(*args, **kwargs):
+            return (
+                [{"id": "fact-frontend", "text": "Ledger dashboard frontend changed layout spacing", "category": "fact", "similarity": 0.86}],
+                {"selected_path": "vector", "counts": {"final_results": 1}, "phases_ms": {"total_ms": 8}},
+                None,
+            )
+
+        def _fake_docs(*args, **kwargs):
+            return (
+                [{"id": "doc-frontend", "text": "Frontend notes mention layout spacing", "category": "project_doc", "source_type": "project_doc", "similarity": 0.78}],
+                {"selected_path": "docs", "counts": {"final_results": 1}, "phases_ms": {"total_ms": 5}},
+                {"chunks": []},
+            )
+
+        registry = {
+            "vector": {"recall": _fake_vector, "recall_fast": _fake_vector},
+            "docs": {"recall": _fake_docs, "recall_fast": _fake_docs},
+            "graph": {"recall": lambda *a, **k: ([], {}, None), "recall_fast": lambda *a, **k: ([], {}, None)},
+        }
+
+        with patch.object(mg, "_get_recall_store_registry", return_value=self._registry_with_source_chunks(registry)), \
+             patch.object(mg, "_get_configured_injection_timeout_ms", return_value=3000), \
+             patch.object(mg, "run_callables", side_effect=_fake_run_callables):
+            rows, meta, _ = mg._run_recall_store_plan(
+                "ledger dashboard frontend changes",
+                stores=["vector", "docs"],
+                limit=5,
+                owner_id="owner",
+                min_similarity=0.6,
+                planner_profile="fast",
+                planned_queries=["ledger dashboard frontend changes"],
+                planner_meta={"planned_stores": ["vector", "docs"]},
+                fast_mode=True,
+                common_kwargs={},
+            )
+
+        assert captured["timeout_seconds"] == 30.0
+        assert [row["id"] for row in rows] == ["fact-frontend", "doc-frontend"]
+        assert meta["planned_stores"] == ["vector", "docs"]
 
     def test_run_recall_store_plan_timeout_names_failed_store_under_failhard(self):
         import datastore.memorydb.memory_graph as mg
