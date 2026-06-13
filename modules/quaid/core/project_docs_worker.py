@@ -49,6 +49,12 @@ def _start_update_heartbeat(project: str, interval_seconds: float) -> tuple[thre
     def _loop() -> None:
         while not stop_event.wait(heartbeat_interval):
             project_docs.write_worker_heartbeat(project, {"status": "updating"})
+            try:
+                project_docs.merge_state(project, {"last_progress_update": project_docs.utc_now()})
+            except Exception:
+                logging.getLogger(__name__).warning("Project docs update heartbeat progress touch failed for %s", project)
+                if project_docs._fail_hard_enabled():
+                    raise
 
     thread = threading.Thread(
         target=_loop,
@@ -105,13 +111,13 @@ def run_worker(project: str, *, once: bool = False, interval_seconds: Optional[f
             raw_request = project_docs.read_update_request(name)
             request = raw_request if project_docs.update_request_ready_for_worker(raw_request) else None
             raw_request_status = str((raw_request or {}).get("status") or "pending").strip().lower()
+            raw_request_id = str((raw_request or {}).get("request_id") or "") or "-"
             request_backing_off = bool(raw_request) and request is None and raw_request_status not in {
                 "failed",
                 "completed",
                 "cancelled",
             }
-            status = project_docs.project_status(name)
-            stale = status.get("status") == "stale" and not request_backing_off
+            stale = False if (request or request_backing_off) else project_docs.project_has_pending_update(name)
             if request or stale:
                 project_docs.write_worker_heartbeat(name, {"status": "updating"})
                 heartbeat_stop, heartbeat_thread = _start_update_heartbeat(name, interval)
@@ -134,7 +140,11 @@ def run_worker(project: str, *, once: bool = False, interval_seconds: Optional[f
             return 0
         except Exception as exc:
             import logging
-            logging.getLogger(__name__).exception("Project docs worker tick failed for %s", name)
+            logging.getLogger(__name__).exception(
+                "Project docs worker tick failed for %s request_id=%s",
+                name,
+                raw_request_id if "raw_request_id" in locals() else "-",
+            )
             if project_docs._fail_hard_enabled():
                 raise
             state = project_docs.read_state(name)

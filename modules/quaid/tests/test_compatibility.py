@@ -44,6 +44,10 @@ class TestSemver:
         assert _version_satisfies("0.2.15-alpha", ">=0.2.0")
         assert not _version_satisfies("0.1.0", ">=0.2.0")
 
+    def test_satisfies_pads_missing_patch_components(self):
+        assert _version_satisfies("2026.3", ">=2026.3.0")
+        assert _version_satisfies("2026.3.0", "=2026.3")
+
 
 class TestCircuitBreaker:
     def test_read_missing_file(self, tmp_path):
@@ -103,6 +107,13 @@ class TestEvaluateCompatibility:
         assert state.status == SAFE_MODE
         assert "Emergency" in state.message
 
+    def test_string_kill_switch_is_not_truthy(self):
+        info = HostInfo(platform="openclaw", version="2026.3.7")
+        matrix = self._matrix(kill_switch="false")
+        state = evaluate_compatibility(info, "0.2.15", matrix)
+        assert state.status == NORMAL
+        assert state.untested is True
+
     def test_compatible_entry(self):
         info = HostInfo(platform="openclaw", version="2026.3.7")
         matrix = self._matrix(entries=[{
@@ -142,8 +153,7 @@ class TestEvaluateCompatibility:
         state = evaluate_compatibility(info, "0.2.15", matrix)
         assert state.status == SAFE_MODE
 
-    def test_unknown_version_silent_by_default(self):
-        """With testing_online=False (hardcoded default), no warnings."""
+    def test_unknown_version_reports_untested_by_default(self):
         info = HostInfo(platform="openclaw", version="2099.1.0")
         matrix = self._matrix(entries=[{
             "host": "openclaw",
@@ -153,10 +163,10 @@ class TestEvaluateCompatibility:
         }])
         state = evaluate_compatibility(info, "0.2.15", matrix)
         assert state.is_normal()
-        assert state.untested is False
-        assert "No data" in state.reason
+        assert state.untested is True
+        assert "Untested" in state.reason
 
-    def test_wrong_platform_silent_by_default(self):
+    def test_wrong_platform_reports_untested_by_default(self):
         info = HostInfo(platform="claude-code", version="2.1.72")
         matrix = self._matrix(entries=[{
             "host": "openclaw",
@@ -166,11 +176,26 @@ class TestEvaluateCompatibility:
         }])
         state = evaluate_compatibility(info, "0.2.15", matrix)
         assert state.is_normal()
-        assert state.untested is False
+        assert state.untested is True
 
-    def test_empty_matrix_silent_by_default(self):
+    def test_empty_matrix_reports_untested_by_default(self):
         info = HostInfo(platform="openclaw", version="2026.3.7")
         matrix = self._matrix(entries=[])
+        state = evaluate_compatibility(info, "0.2.15", matrix)
+        assert state.is_normal()
+        assert state.untested is True
+
+    def test_malformed_matrix_entries_are_skipped(self):
+        info = HostInfo(platform="openclaw", version="2026.3.7")
+        matrix = self._matrix(entries=[
+            "not-a-dict",
+            {
+                "host": "openclaw",
+                "host_range": ">=2026.3",
+                "quaid_range": ">=0.2",
+                "status": "compatible",
+            },
+        ])
         state = evaluate_compatibility(info, "0.2.15", matrix)
         assert state.is_normal()
         assert state.untested is False
@@ -197,6 +222,11 @@ class TestVersionWatcher:
         mock_adapter.get_host_info.assert_called_once()
         # Version cache should be written
         assert (tmp_path / "host-version.json").exists()
+
+    def test_null_host_version_cache_is_ignored(self, tmp_path):
+        (tmp_path / "host-version.json").write_text("null", encoding="utf-8")
+        watcher = VersionWatcher(data_dir=tmp_path, quaid_version="0.2.15")
+        assert watcher._host_info is None
 
     def test_mtime_change_triggers_check(self, tmp_path):
         # Create a fake binary
@@ -263,12 +293,11 @@ class TestAdaptiveCheckInterval:
         loaded = read_circuit_breaker(tmp_path)
         assert loaded.untested is True
 
-    def test_evaluate_no_match_no_untested_flag_by_default(self):
-        """Default (testing_online=False) — no untested flag."""
+    def test_evaluate_no_match_sets_untested_flag_by_default(self):
         info = HostInfo(platform="openclaw", version="2099.1.0")
         matrix = {"matrix": []}
         state = evaluate_compatibility(info, "0.2.15", matrix)
-        assert state.untested is False
+        assert state.untested is True
         assert state.is_normal()
 
     def test_evaluate_compatible_no_untested_flag(self):
@@ -456,3 +485,9 @@ class TestNotifyOnUse:
         msg2 = notify_on_use_if_degraded(tmp_path)
         assert msg1 is not None
         assert msg2 is None  # Cooled down
+
+    def test_null_cooldown_file_does_not_crash(self, tmp_path):
+        from core.compatibility import notify_on_use_if_degraded
+        write_circuit_breaker(tmp_path, CircuitBreakerState(status=DEGRADED))
+        (tmp_path / "compat-last-notified.json").write_text("null", encoding="utf-8")
+        assert notify_on_use_if_degraded(tmp_path) is not None

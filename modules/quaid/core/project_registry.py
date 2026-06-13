@@ -27,6 +27,20 @@ _RULES_FILE_PREFIX = "quaid-"
 _PROJECT_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 
 
+def _empty_registry() -> Dict[str, Any]:
+    return {"projects": {}, "deleted_projects": {}}
+
+
+def _fail_hard_enabled() -> bool:
+    try:
+        from lib.fail_policy import is_fail_hard_enabled
+
+        return bool(is_fail_hard_enabled())
+    except Exception as exc:
+        logger.warning("Failed resolving fail-hard policy for project registry; defaulting to enabled: %s", exc)
+        return True
+
+
 def _normalize_project_name(name: str) -> str:
     return str(name or "").strip().lower()
 
@@ -351,29 +365,45 @@ def _load_registry(*, quaid_home: Optional[Path] = None) -> Dict[str, Any]:
     home = quaid_home.resolve() if quaid_home is not None else None
     path = (home / "project-registry.json") if home is not None else _registry_path()
     if not path.is_file():
-        return {"projects": {}, "deleted_projects": {}}
+        return _empty_registry()
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(data, dict) or "projects" not in data:
-            return {"projects": {}, "deleted_projects": {}}
-        if not isinstance(data.get("deleted_projects"), dict):
+            raise ValueError("project registry must contain a JSON object with projects")
+        if not isinstance(data.get("projects"), dict):
+            raise ValueError("project registry projects must be a JSON object")
+        if "deleted_projects" in data and not isinstance(data.get("deleted_projects"), dict):
+            raise ValueError("project registry deleted_projects must be a JSON object")
+        if "deleted_projects" not in data:
             data["deleted_projects"] = {}
         projects: Dict[str, Any] = {}
         for raw_name, entry in (data.get("projects") or {}).items():
-            name = _normalize_project_name(raw_name)
-            if name:
-                projects[name] = entry
+            try:
+                name = _validate_project_name(raw_name)
+            except ValueError as exc:
+                if _fail_hard_enabled():
+                    raise RuntimeError(f"Invalid project name in registry {path}: {raw_name!r}") from exc
+                logger.warning("Skipping invalid project registry key %r in %s: %s", raw_name, path, exc)
+                continue
+            projects[name] = entry
         data["projects"] = projects
         deleted: Dict[str, Any] = {}
         for raw_name, value in (data.get("deleted_projects") or {}).items():
-            name = _normalize_project_name(raw_name)
-            if name:
-                deleted[name] = value
+            try:
+                name = _validate_project_name(raw_name)
+            except ValueError as exc:
+                if _fail_hard_enabled():
+                    raise RuntimeError(f"Invalid deleted project name in registry {path}: {raw_name!r}") from exc
+                logger.warning("Skipping invalid deleted project registry key %r in %s: %s", raw_name, path, exc)
+                continue
+            deleted[name] = value
         data["deleted_projects"] = deleted
         return data
-    except (json.JSONDecodeError, OSError) as e:
+    except (json.JSONDecodeError, OSError, ValueError) as e:
         logger.warning("Failed to read project registry: %s", e)
-        return {"projects": {}, "deleted_projects": {}}
+        if _fail_hard_enabled():
+            raise RuntimeError(f"Failed to read project registry {path}: {e}") from e
+        return _empty_registry()
 
 
 def _save_registry(data: Dict[str, Any], *, quaid_home: Optional[Path] = None) -> None:
@@ -871,6 +901,8 @@ def delete_project(name: str) -> None:
     if canonical_path is not None:
         candidate_dirs.insert(0, canonical_path)
 
+    chunk_paths_for_rag: List[str] = []
+    rag_cleanup_clear = True
     seen_dirs: set[str] = set()
     for candidate in candidate_dirs:
         try:
@@ -906,6 +938,7 @@ def delete_project(name: str) -> None:
         if canonical:
             chunk_paths.append(str(Path(canonical) / "PROJECT.md"))
         if chunk_paths:
+            chunk_paths_for_rag = list(chunk_paths)
             rag = DocsRAG(db_path=get_docs_db_path())
             seen: set[str] = set()
             for file_path in chunk_paths:
@@ -915,12 +948,18 @@ def delete_project(name: str) -> None:
                 seen.add(key)
                 rag.remove_chunks_for_path(key)
     except Exception as e:
+        rag_cleanup_clear = False
         logger.warning("Failed to clean up DB entries for project %s: %s", name, e)
 
     # A live supervisor/list call can reconcile from project_definitions/doc_registry
     # in the small window between the first JSON removal and DB cleanup. A stale
     # supervisor tick can also try to start a worker from a pre-delete snapshot.
     # Settle those races before returning so `project delete` is authoritative.
+    converged = False
+    final_project_exists = True
+    final_worker_state = True
+    final_docs_db_rows = True
+    final_rag_clear = rag_cleanup_clear
     try:
         from core import project_docs
 
@@ -941,9 +980,28 @@ def delete_project(name: str) -> None:
                 logger.warning("Failed final project docs worker cleanup for %s: %s", name, e)
 
             try:
-                _delete_docs_db_project_rows(name)
+                extra_paths = _delete_docs_db_project_rows(name)
+                if extra_paths:
+                    chunk_paths_for_rag.extend(extra_paths)
             except Exception as e:
                 logger.warning("Failed final docs DB cleanup for project %s: %s", name, e)
+            if chunk_paths_for_rag:
+                try:
+                    from lib.config import get_docs_db_path
+                    from datastore.docsdb.rag import DocsRAG
+
+                    rag = DocsRAG(db_path=get_docs_db_path())
+                    seen_rag_paths: set[str] = set()
+                    for file_path in chunk_paths_for_rag:
+                        key = str(file_path or "").strip()
+                        if not key or key in seen_rag_paths:
+                            continue
+                        seen_rag_paths.add(key)
+                        rag.remove_chunks_for_path(key)
+                    final_rag_clear = True
+                except Exception as e:
+                    final_rag_clear = False
+                    logger.warning("Failed final RAG chunk cleanup for project %s: %s", name, e)
 
             try:
                 _safe_remove_tracking_dir(tracking_base / name, tracking_base)
@@ -962,7 +1020,11 @@ def delete_project(name: str) -> None:
                 docs_db_clear = not _docs_db_project_rows_exist(name)
             except Exception as e:
                 logger.warning("Failed checking docs DB cleanup for project %s: %s", name, e)
-            if not project_exists_raw(name) and not project_docs.has_project_state(name) and docs_db_clear:
+            final_project_exists = project_exists_raw(name)
+            final_worker_state = project_docs.has_project_state(name)
+            final_docs_db_rows = not docs_db_clear
+            if not final_project_exists and not final_worker_state and docs_db_clear and final_rag_clear:
+                converged = True
                 break
             if attempt < 7:
                 time.sleep(0.15)
@@ -992,7 +1054,17 @@ def delete_project(name: str) -> None:
     except Exception as e:
         logger.warning("Failed post-delete queue cleanup for project %s: %s", name, e)
 
-    logger.info("Deleted project: %s", name)
+    if converged:
+        logger.info("Deleted project: %s", name)
+    else:
+        message = (
+            f"Project delete for {name} did not fully converge "
+            f"(registry_present={final_project_exists}, worker_state_present={final_worker_state}, "
+            f"docs_db_rows_present={final_docs_db_rows}, rag_cleanup_clear={final_rag_clear})"
+        )
+        logger.warning(message)
+        if _fail_hard_enabled():
+            raise RuntimeError(message)
 
 
 def rename_project(old_name: str, new_name: str) -> Dict[str, Any]:

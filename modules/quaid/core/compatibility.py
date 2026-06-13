@@ -18,6 +18,7 @@ import json
 import logging
 import os
 import re
+import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -82,31 +83,37 @@ def _parse_version(v: str) -> Tuple[int, ...]:
     return tuple(int(p) for p in parts) if parts else (0,)
 
 
+def _version_cmp_tuple(v: str) -> Tuple[int, int, int, int]:
+    parsed = list(_parse_version(v))[:4]
+    parsed.extend([0] * (4 - len(parsed)))
+    return (parsed[0], parsed[1], parsed[2], parsed[3])
+
+
 def _version_satisfies(version: str, range_spec: str) -> bool:
     """Check if a version satisfies a range like '>=2026.3.0 <2026.5.0'."""
-    v = _parse_version(version)
+    v = _version_cmp_tuple(version)
     for constraint in range_spec.strip().split():
         constraint = constraint.strip()
         if not constraint:
             continue
         if constraint.startswith(">="):
-            if v < _parse_version(constraint[2:]):
+            if v < _version_cmp_tuple(constraint[2:]):
                 return False
         elif constraint.startswith("<="):
-            if v > _parse_version(constraint[2:]):
+            if v > _version_cmp_tuple(constraint[2:]):
                 return False
         elif constraint.startswith(">"):
-            if v <= _parse_version(constraint[1:]):
+            if v <= _version_cmp_tuple(constraint[1:]):
                 return False
         elif constraint.startswith("<"):
-            if v >= _parse_version(constraint[1:]):
+            if v >= _version_cmp_tuple(constraint[1:]):
                 return False
         elif constraint.startswith("="):
-            if v != _parse_version(constraint[1:]):
+            if v != _version_cmp_tuple(constraint[1:]):
                 return False
         else:
             # Exact match
-            if v != _parse_version(constraint):
+            if v != _version_cmp_tuple(constraint):
                 return False
     return True
 
@@ -121,10 +128,35 @@ def _breaker_path(data_dir: Path) -> Path:
     return data_dir / CIRCUIT_BREAKER_FILE
 
 
+def _atomic_write_text(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
+    tmp = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
+        tmp.replace(path)
+    except Exception:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+
+
+def _atomic_write_json(path: Path, payload: dict) -> None:
+    _atomic_write_text(path, json.dumps(payload, indent=2, sort_keys=True) + "\n")
+
+
 def write_circuit_breaker(data_dir: Path, state: CircuitBreakerState) -> None:
     """Write the circuit breaker state file."""
     p = _breaker_path(data_dir)
-    p.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "status": state.status,
         "reason": state.reason,
@@ -134,7 +166,7 @@ def write_circuit_breaker(data_dir: Path, state: CircuitBreakerState) -> None:
         "message": state.message,
         "untested": state.untested,
     }
-    p.write_text(json.dumps(payload, indent=2) + "\n")
+    _atomic_write_json(p, payload)
     logger.info("Circuit breaker set to %s: %s", state.status, state.reason or "")
 
 
@@ -175,20 +207,24 @@ def fetch_compatibility_matrix(data_dir: Path) -> Optional[dict]:
         with urllib.request.urlopen(req, timeout=10) as resp:
             raw = resp.read().decode("utf-8")
         matrix = json.loads(raw)
+        if not isinstance(matrix, dict):
+            raise ValueError("compatibility matrix must be a JSON object")
         # Cache it
-        cache_path.parent.mkdir(parents=True, exist_ok=True)
-        cache_path.write_text(raw)
+        _atomic_write_text(cache_path, raw)
         logger.debug("Fetched compatibility matrix (%d entries)", len(matrix.get("matrix", [])))
         return matrix
     except (urllib.error.URLError, OSError, json.JSONDecodeError, ValueError) as e:
-        logger.debug("Failed to fetch compatibility matrix: %s", e)
+        logger.warning("Failed to fetch compatibility matrix: %s", e)
 
     # Fall back to cache
     if cache_path.exists():
         try:
-            return json.loads(cache_path.read_text())
-        except (json.JSONDecodeError, OSError):
-            pass
+            cached = json.loads(cache_path.read_text())
+            if isinstance(cached, dict):
+                return cached
+            logger.warning("Cached compatibility matrix is not a JSON object: %s", cache_path)
+        except (json.JSONDecodeError, OSError) as exc:
+            logger.warning("Failed to read cached compatibility matrix %s: %s", cache_path, exc)
     return None
 
 
@@ -202,7 +238,7 @@ def evaluate_compatibility(
     Returns the appropriate circuit breaker state.
     """
     # Check global kill switch first
-    if matrix.get("kill_switch"):
+    if matrix.get("kill_switch") is True:
         return CircuitBreakerState(
             status=SAFE_MODE,
             reason="Global kill switch activated",
@@ -213,8 +249,14 @@ def evaluate_compatibility(
 
     # Find matching matrix entries
     entries = matrix.get("matrix", [])
+    if not isinstance(entries, list):
+        logger.warning("Compatibility matrix field 'matrix' is not a list; treating host as untested")
+        entries = []
     matched = None
     for entry in entries:
+        if not isinstance(entry, dict):
+            logger.warning("Skipping malformed compatibility matrix entry: %r", entry)
+            continue
         if entry.get("host", "").lower() != host_info.platform.lower():
             continue
         host_range = entry.get("host_range", "")
@@ -225,35 +267,19 @@ def evaluate_compatibility(
             break
 
     if matched is None:
-        # No matching entry — behavior depends on testing_online flag.
-        # When testing is online (we're actively maintaining the matrix),
-        # untested combos get warnings and accelerated rechecking.
-        # When testing is offline, silence — we just don't have data yet.
-        # When True, unmatched version combos get warnings and accelerated
-        # rechecking. Flip this when version-testing agents are operational.
-        testing_online = False
-        if testing_online:
-            return CircuitBreakerState(
-                status=NORMAL,
-                reason=f"Untested: {host_info.label()} with Quaid {quaid_version}",
-                set_by="version_watcher",
-                host_version=host_info.version,
-                message=(
-                    f"Quaid has not been tested with {host_info.label()}. "
-                    "Running in untested mode. If you hit issues, check for updates."
-                ),
-                untested=True,
-            )
-        else:
-            # Testing offline — no warning, no accelerated checking
-            return CircuitBreakerState(
-                status=NORMAL,
-                reason=f"No data: {host_info.label()} with Quaid {quaid_version}",
-                set_by="version_watcher",
-                host_version=host_info.version,
-            )
+        return CircuitBreakerState(
+            status=NORMAL,
+            reason=f"Untested: {host_info.label()} with Quaid {quaid_version}",
+            set_by="version_watcher",
+            host_version=host_info.version,
+            message=(
+                f"Quaid has not been tested with {host_info.label()}. "
+                "Running in untested mode. If you hit issues, check for updates."
+            ),
+            untested=True,
+        )
 
-    if matched["status"] == "compatible":
+    if str(matched.get("status") or "") == "compatible":
         return CircuitBreakerState(
             status=NORMAL,
             reason=f"Compatible: {host_info.label()}",
@@ -262,7 +288,7 @@ def evaluate_compatibility(
         )
 
     # Incompatible
-    data_risk = matched.get("data_risk", False)
+    data_risk = matched.get("data_risk") is True
     return CircuitBreakerState(
         status=SAFE_MODE if data_risk else DEGRADED,
         reason=f"Incompatible: {host_info.label()} — {matched.get('message', '')}",
@@ -318,7 +344,7 @@ def preflight_compatibility_check(
         }
 
     # Check global kill switch
-    if matrix.get("kill_switch"):
+    if matrix.get("kill_switch") is True:
         return {
             "ok": False,
             "status": "kill_switch",
@@ -332,6 +358,8 @@ def preflight_compatibility_check(
         # Find the matching entry to get the fix field
         fix = ""
         for entry in matrix.get("matrix", []):
+            if not isinstance(entry, dict):
+                continue
             if (entry.get("host", "").lower() == host_platform.lower() and
                     _version_satisfies(host_version, entry.get("host_range", "")) and
                     _version_satisfies(quaid_version, entry.get("quaid_range", ""))):
@@ -395,6 +423,8 @@ class VersionWatcher:
         if cache.exists():
             try:
                 raw = json.loads(cache.read_text())
+                if not isinstance(raw, dict):
+                    raise ValueError("host-version cache must be a JSON object")
                 self._last_binary_mtime = raw.get("binary_mtime")
                 self._last_full_check = raw.get("last_full_check", 0.0)
                 self._host_info = HostInfo(
@@ -402,8 +432,8 @@ class VersionWatcher:
                     version=raw.get("version", "unknown"),
                     binary_path=raw.get("binary_path"),
                 )
-            except (json.JSONDecodeError, OSError):
-                pass
+            except (json.JSONDecodeError, OSError, ValueError) as exc:
+                logger.warning("Failed to read host version cache %s: %s", cache, exc)
 
         # Seed last state from circuit breaker on disk
         self._last_state = read_circuit_breaker(data_dir)
@@ -483,7 +513,7 @@ class VersionWatcher:
         # Fetch and evaluate matrix
         matrix = fetch_compatibility_matrix(self._data_dir)
         if matrix is None:
-            logger.debug("No compatibility matrix available, skipping evaluation")
+            logger.warning("No compatibility matrix available; compatibility circuit breaker evaluation disabled")
             return
 
         state = evaluate_compatibility(info, self._quaid_version, matrix)
@@ -525,10 +555,12 @@ class VersionWatcher:
         try:
             if update_cache.exists():
                 raw = json.loads(update_cache.read_text())
+                if not isinstance(raw, dict):
+                    raise ValueError("update notification cache must be a JSON object")
                 if raw.get("version") == latest:
                     return  # Already notified for this version
-        except (json.JSONDecodeError, OSError):
-            pass
+        except (json.JSONDecodeError, OSError, ValueError) as exc:
+            logger.warning("Failed to read Quaid update notification cache %s: %s", update_cache, exc)
 
         update_msg = matrix.get("update_message") or (
             f"Quaid {latest} is available (you have {self._quaid_version}). "
@@ -545,8 +577,7 @@ class VersionWatcher:
 
         # Record that we notified
         try:
-            update_cache.parent.mkdir(parents=True, exist_ok=True)
-            update_cache.write_text(json.dumps({"version": latest, "notified_at": time.time()}))
+            _atomic_write_json(update_cache, {"version": latest, "notified_at": time.time()})
         except OSError:
             pass
 
@@ -554,8 +585,6 @@ class VersionWatcher:
         """Persist version info to disk."""
         if self._host_info is None:
             return
-        cache = _version_cache_path(self._data_dir)
-        cache.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "platform": self._host_info.platform,
             "version": self._host_info.version,
@@ -563,7 +592,7 @@ class VersionWatcher:
             "binary_mtime": self._last_binary_mtime,
             "last_full_check": self._last_full_check,
         }
-        cache.write_text(json.dumps(payload, indent=2) + "\n")
+        _atomic_write_json(_version_cache_path(self._data_dir), payload)
 
     def _notify_state_change(self, old_status: str, new_state: CircuitBreakerState) -> None:
         """Send a direct notification to user on circuit breaker state changes.
@@ -638,16 +667,17 @@ def notify_on_use_if_degraded(data_dir: Path) -> Optional[str]:
     try:
         if cooldown_path.exists():
             raw = json.loads(cooldown_path.read_text())
+            if not isinstance(raw, dict):
+                raise ValueError("compat notification cooldown must be a JSON object")
             last_notified = raw.get("timestamp", 0)
             if now - last_notified < 1800:  # 30 minutes
                 return None
-    except (json.JSONDecodeError, OSError):
-        pass
+    except (json.JSONDecodeError, OSError, ValueError) as exc:
+        logger.warning("Failed to read compatibility notification cooldown %s: %s", cooldown_path, exc)
 
     # Update cooldown
     try:
-        cooldown_path.parent.mkdir(parents=True, exist_ok=True)
-        cooldown_path.write_text(json.dumps({"timestamp": now}))
+        _atomic_write_json(cooldown_path, {"timestamp": now})
     except OSError:
         pass
 

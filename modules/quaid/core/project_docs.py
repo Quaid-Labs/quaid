@@ -52,10 +52,9 @@ def utc_now() -> str:
 
 
 def validate_project_name(project: str) -> str:
-    name = str(project or "").strip().lower()
-    if not name:
-        raise ValueError("Project name is required")
-    return name
+    from core.project_registry import _validate_project_name
+
+    return _validate_project_name(project)
 
 
 def get_quaid_home() -> Path:
@@ -156,6 +155,10 @@ def lock_path(project: str) -> Path:
     return _safe_path(_lock_dir(), project, ".lock")
 
 
+def state_lock_path(project: str) -> Path:
+    return _safe_path(_lock_dir(), project, ".state.lock")
+
+
 def worker_pid_path(project: str) -> Path:
     return _safe_path(_worker_dir(), project, ".pid")
 
@@ -233,6 +236,10 @@ def _atomic_write_json(path: Path, payload: Any) -> None:
         tmp.replace(path)
     except Exception:
         try:
+            os.close(fd)
+        except OSError:
+            pass
+        try:
             tmp.unlink(missing_ok=True)
         except Exception:
             pass
@@ -294,6 +301,7 @@ def cleanup_project_state(project: str) -> Dict[str, int]:
         request_path(name),
         state_path(name),
         lock_path(name),
+        state_lock_path(name),
         _spawn_lock_path("worker", name),
         worker_pid_path(name),
         worker_heartbeat_path(name),
@@ -339,6 +347,7 @@ def has_project_state(project: str) -> bool:
         request_path(name),
         state_path(name),
         lock_path(name),
+        state_lock_path(name),
         _spawn_lock_path("worker", name),
         worker_pid_path(name),
         worker_heartbeat_path(name),
@@ -382,18 +391,30 @@ def project_is_registered_for_worker(project: str) -> bool:
         return True
 
 
-def write_state(project: str, state: Dict[str, Any]) -> None:
+def _write_state_unlocked(project: str, state: Dict[str, Any]) -> None:
     payload = dict(state or {})
     payload["project"] = validate_project_name(project)
     payload["updated_at"] = utc_now()
     _atomic_write_json(state_path(project), payload)
 
 
-def merge_state(project: str, updates: Dict[str, Any]) -> Dict[str, Any]:
+def write_state(project: str, state: Dict[str, Any]) -> None:
+    name = validate_project_name(project)
+    with _exclusive_file_lock(state_lock_path(name)):
+        _write_state_unlocked(name, state)
+
+
+def _merge_state_unlocked(project: str, updates: Dict[str, Any]) -> Dict[str, Any]:
     state = read_state(project)
     state.update(updates)
-    write_state(project, state)
+    _write_state_unlocked(project, state)
     return state
+
+
+def merge_state(project: str, updates: Dict[str, Any]) -> Dict[str, Any]:
+    name = validate_project_name(project)
+    with _exclusive_file_lock(state_lock_path(name)):
+        return _merge_state_unlocked(name, updates)
 
 
 def merge_progress(project: str, phase: str, message: str = "", **details: Any) -> Dict[str, Any]:
@@ -858,16 +879,18 @@ def request_update(project: str, *, reason: str = "manual", requested_by: str = 
         "requested_instance": requested_instance,
         "requested_adapter_type": requested_adapter_type,
     }
-    _atomic_write_json(request_path(name), req)
-    merge_state(
-        name,
-        {
-            "status": "queued",
+    with _exclusive_file_lock(state_lock_path(name)):
+        _atomic_write_json(request_path(name), req)
+        state = read_state(name)
+        updates = {
             "pending_request_id": req["request_id"],
             "force_requested_at": req["requested_at"],
             "last_error": None,
-        },
-    )
+        }
+        if str(state.get("status") or "").strip().lower() != "updating":
+            updates["status"] = "queued"
+        state.update(updates)
+        _write_state_unlocked(name, state)
     return req
 
 
@@ -932,6 +955,7 @@ def _record_update_request_failure(project: str, request: Dict[str, Any], exc: E
     except (TypeError, ValueError):
         attempt_count = 1
     max_retries = _project_docs_request_max_retries()
+    permanent = _is_permanent_update_request_failure(exc)
     payload = dict(request or {})
     payload.update({
         "attempt_count": attempt_count,
@@ -939,17 +963,22 @@ def _record_update_request_failure(project: str, request: Dict[str, Any], exc: E
         "last_failed_at": now,
         "last_error": str(exc),
     })
-    if attempt_count >= max_retries:
+    if permanent or attempt_count >= max_retries:
         payload["status"] = "failed"
         payload["completed_at"] = now
         payload.pop("next_retry_at", None)
         _atomic_write_json(request_path(name), payload)
+        error_text = (
+            f"project-docs update failed permanently: {exc}"
+            if permanent
+            else f"project-docs update failed after {attempt_count} attempts: {exc}"
+        )
         merge_state(
             name,
             {
                 "status": "error",
                 "pending_request_id": None,
-                "last_error": f"project-docs update failed after {attempt_count} attempts: {exc}",
+                "last_error": error_text,
                 "last_failed_at": now,
                 "last_request_id": request_id,
             },
@@ -972,6 +1001,23 @@ def _record_update_request_failure(project: str, request: Dict[str, Any], exc: E
             "last_request_id": request_id,
         },
     )
+
+
+def _is_permanent_update_request_failure(exc: Exception) -> bool:
+    if isinstance(exc, (KeyError, ValueError)):
+        return True
+    if isinstance(exc, RuntimeError):
+        text = str(exc).lower()
+        permanent_markers = (
+            "cannot resolve quaid_instance",
+            "cannot resolve instance linkage",
+            "project not found",
+            "invalid project",
+            "integrityerror",
+            "constraint failed",
+        )
+        return any(marker in text for marker in permanent_markers)
+    return False
 
 
 def clear_update_request(project: str, request_id: Optional[str] = None) -> None:
@@ -1220,6 +1266,7 @@ def _commit_queued_project_logs(project: str, *, dry_run: bool = False) -> Dict[
 
         for item in items:
             item_id = str(item.get("id") or "").strip()
+            dropped_entries = int(item.get("_dropped_entries_count") or 0)
             entries = [
                 entry
                 for entry in (item.get("entries") or [])
@@ -1230,12 +1277,19 @@ def _commit_queued_project_logs(project: str, *, dry_run: bool = False) -> Dict[
                 )
             ]
             metrics["items_seen"] += 1
-            metrics["entries_seen"] += len(entries)
+            metrics["entries_seen"] += len(entries) + max(0, dropped_entries)
             if not item_id:
                 metrics["errors"] += 1
                 if _fail_hard_enabled():
                     raise RuntimeError(f"project-log queue item missing id for {name}")
                 logger.warning("Skipping project-log queue item without id for %s", name)
+                continue
+            if dropped_entries:
+                metrics["errors"] += 1
+                message = f"project-log queue item {item_id} for {name} dropped {dropped_entries} malformed entries"
+                logger.warning("%s; item left pending for inspection", message)
+                if _fail_hard_enabled():
+                    raise RuntimeError(message)
                 continue
             if not entries:
                 if not dry_run:
@@ -1347,6 +1401,40 @@ def project_status(project: str) -> Dict[str, Any]:
             "progress": state.get("progress") or {},
             "state": state,
         }
+
+
+def project_has_pending_update(project: str) -> bool:
+    """Lightweight worker tick predicate for pending docs work.
+
+    `project_status()` is display-oriented and reads log tails plus detailed
+    change lists. The worker loop only needs to know whether there is work.
+    """
+    name = validate_project_name(project)
+    entry = get_project_entry(name)
+    with _project_runtime_context(entry):
+        req = read_update_request(name)
+        req_status = str((req or {}).get("status") or "pending").strip().lower()
+        if bool(req) and req_status not in {"failed", "completed", "cancelled"}:
+            return True
+        state = read_state(name)
+        sg = _shadow_git(name, entry)
+        if sg is not None:
+            current_shadow_head = sg.current_head()
+            docs_cursor_head = state.get("last_shadow_commit")
+            if current_shadow_head and current_shadow_head != docs_cursor_head:
+                return True
+            try:
+                if pending_source_changes(name, entry):
+                    return True
+            except RuntimeError as exc:
+                logger.warning("Project docs worker source check failed for %s: %s", name, exc)
+                if _fail_hard_enabled():
+                    raise
+        log_offset = int(state.get("project_log_offset") or 0)
+        log_size = _current_project_log_size(entry, project=name)
+        if max(0, log_size - min(log_offset, log_size)) > 0:
+            return True
+        return _pending_project_log_queue_count(name) > 0
 
 
 def project_diff(project: str, *, full: bool = False) -> Dict[str, Any]:
@@ -1471,7 +1559,6 @@ def sync_project_docs_registry(project: str, entry: Optional[Dict[str, Any]] = N
 
 def auto_register_project_docs(project: Optional[str] = None) -> int:
     """Register visible project docs from the supervisor-owned docs daemon path."""
-    from core.project_registry import get_project as get_project_entry
     from core.project_registry import list_projects
 
     materialize_queued_projects(project)
@@ -1648,6 +1735,7 @@ def execute_update_once(project: str, *, request: Optional[Dict[str, Any]] = Non
     request_id = str((request or {}).get("request_id") or "") or None
     with project_update_lock(name, blocking=False) as acquired:
         if not acquired:
+            logger.info("Project docs update lock busy for %s request_id=%s", name, request_id or "-")
             if request_id:
                 merge_state(
                     name,
@@ -1659,6 +1747,7 @@ def execute_update_once(project: str, *, request: Optional[Dict[str, Any]] = Non
                 )
             return {"project": name, "status": "locked", "request_id": request_id, "request_retained": bool(request_id)}
         started = utc_now()
+        logger.info("Project docs update starting for %s request_id=%s", name, request_id or "-")
         merge_state(name, {"status": "updating", "last_started_at": started, "last_error": None})
         merge_progress(name, "starting", "project-docs update started")
         try:
@@ -1756,8 +1845,17 @@ def execute_update_once(project: str, *, request: Optional[Dict[str, Any]] = Non
             }
             if not dry_run and next_state["status"] == "fresh":
                 _notify_project_docs_update(name, result, entry=entry, request=request)
+            logger.info(
+                "Project docs update completed for %s request_id=%s status=%s docs_updated=%s errors=%s",
+                name,
+                request_id or "-",
+                next_state["status"],
+                int(metrics.get("docs_updated") or 0),
+                int(metrics.get("errors") or 0),
+            )
             return result
         except Exception as exc:
+            logger.warning("Project docs update failed for %s request_id=%s: %s", name, request_id or "-", exc)
             if request_id and not dry_run and not _fail_hard_enabled():
                 _record_update_request_failure(name, request or {}, exc)
                 raise
@@ -2159,7 +2257,8 @@ def format_status(status: Dict[str, Any]) -> str:
     if show_last_error and state.get("last_error"):
         lines.append(f"Last error: {state.get('last_error')}")
     tail = status.get("worker_log_tail") or []
-    if status_value == "fresh":
+    metrics = state.get("last_metrics") if isinstance(state.get("last_metrics"), dict) else {}
+    if status_value == "fresh" and int(metrics.get("docs_updated") or 0) > 0:
         tail = [
             line for line in tail
             if "QUAID_INSTANCE environment variable is not set" not in str(line)

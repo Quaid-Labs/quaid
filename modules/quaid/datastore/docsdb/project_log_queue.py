@@ -98,8 +98,9 @@ def _normalize_entry_timestamp(raw: Any) -> Optional[str]:
         return None
 
 
-def _normalize_entries(entries: Iterable[Any]) -> List[Dict[str, Any]]:
+def _normalize_entries_with_dropped_count(entries: Iterable[Any]) -> Tuple[List[Dict[str, Any]], int]:
     out: List[Dict[str, Any]] = []
+    dropped = 0
     seen: set[Tuple[str, str]] = set()
     for entry in entries or []:
         if isinstance(entry, dict):
@@ -114,6 +115,7 @@ def _normalize_entries(entries: Iterable[Any]) -> List[Dict[str, Any]]:
             created_at = None
         text = str(text or "").strip()
         if not text:
+            dropped += 1
             continue
         text = re.sub(r"\s+", " ", text)
         key = (text, str(created_at or ""))
@@ -124,7 +126,11 @@ def _normalize_entries(entries: Iterable[Any]) -> List[Dict[str, Any]]:
         if created_at:
             item["created_at"] = created_at
         out.append(item)
-    return out
+    return out, dropped
+
+
+def _normalize_entries(entries: Iterable[Any]) -> List[Dict[str, Any]]:
+    return _normalize_entries_with_dropped_count(entries)[0]
 
 
 def _utc_now() -> str:
@@ -263,7 +269,10 @@ def drain_project_log_queue(
             if item_project != expected_project:
                 raise ValueError(f"queue item project mismatch: {item_project!r} != {expected_project!r}")
             data["project"] = item_project
-            data["entries"] = _normalize_entries(data.get("entries") or [])
+            raw_entries = data.get("entries") or []
+            entries, dropped_entries = _normalize_entries_with_dropped_count(raw_entries)
+            data["entries"] = entries
+            data["_dropped_entries_count"] = dropped_entries
             data["_queue_path"] = str(path)
             items.append(data)
         except Exception as exc:

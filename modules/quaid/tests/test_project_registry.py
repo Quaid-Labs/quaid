@@ -1,6 +1,7 @@
 """Tests for core/project_registry.py — project registry CRUD."""
 
 import json
+import logging
 import os
 import shutil
 from pathlib import Path
@@ -64,8 +65,42 @@ class TestRegistryIO:
         reg = tmp_path / "project-registry.json"
         reg.parent.mkdir(parents=True, exist_ok=True)
         reg.write_text("not valid json{{{")
-        result = _load_registry()
+        with patch("core.project_registry._fail_hard_enabled", return_value=False):
+            result = _load_registry()
         assert result == {"projects": {}, "deleted_projects": {}}
+
+    def test_load_corrupt_file_raises_under_failhard(self, mock_adapter):
+        _, tmp_path = mock_adapter
+        reg = tmp_path / "project-registry.json"
+        reg.parent.mkdir(parents=True, exist_ok=True)
+        reg.write_text("not valid json{{{")
+
+        with patch("core.project_registry._fail_hard_enabled", return_value=True), \
+             pytest.raises(RuntimeError, match="Failed to read project registry"):
+            _load_registry()
+
+    def test_load_registry_skips_invalid_project_names_when_failsoft(self, mock_adapter):
+        _adapter, _tmp_path = mock_adapter
+        _save_registry(
+            {
+                "projects": {"demo": {"description": "ok"}, "../../escape": {"description": "bad"}},
+                "deleted_projects": {"old-demo": "2026-06-13", "*.json": "2026-06-13"},
+            }
+        )
+
+        with patch("core.project_registry._fail_hard_enabled", return_value=False):
+            loaded = _load_registry()
+
+        assert set(loaded["projects"]) == {"demo"}
+        assert set(loaded["deleted_projects"]) == {"old-demo"}
+
+    def test_load_registry_rejects_invalid_project_names_under_failhard(self, mock_adapter):
+        _adapter, _tmp_path = mock_adapter
+        _save_registry({"projects": {"../../escape": {"description": "bad"}}})
+
+        with patch("core.project_registry._fail_hard_enabled", return_value=True), \
+             pytest.raises(RuntimeError, match="Invalid project name in registry"):
+            _load_registry()
 
     def test_registry_lock_path_uses_stable_sidecar(self, mock_adapter):
         _, tmp_path = mock_adapter
@@ -721,9 +756,33 @@ class TestDeleteProjectPurgesDb:
         _, tmp_path = mock_adapter
         create_project("my-app")
 
-        with patch("lib.database.get_connection", side_effect=Exception("db unavailable")):
+        with patch("lib.database.get_connection", side_effect=Exception("db unavailable")), \
+             patch("core.project_registry._fail_hard_enabled", return_value=False):
             # Should complete without raising (error is logged as a warning)
             delete_project("my-app")
 
         # Project is removed from registry regardless
         assert get_project("my-app") is None
+
+    def test_delete_warns_when_cleanup_does_not_converge(self, mock_adapter, caplog):
+        create_project("my-app")
+
+        with patch("core.project_registry._delete_docs_db_project_rows", return_value=[]), \
+             patch("core.project_registry._docs_db_project_rows_exist", return_value=True), \
+             patch("core.project_registry._fail_hard_enabled", return_value=False), \
+             patch("core.project_registry.time.sleep"), \
+             caplog.at_level(logging.WARNING):
+            delete_project("my-app")
+
+        assert "did not fully converge" in caplog.text
+        assert get_project("my-app") is None
+
+    def test_delete_raises_under_failhard_when_cleanup_does_not_converge(self, mock_adapter):
+        create_project("my-app")
+
+        with patch("core.project_registry._delete_docs_db_project_rows", return_value=[]), \
+             patch("core.project_registry._docs_db_project_rows_exist", return_value=True), \
+             patch("core.project_registry._fail_hard_enabled", return_value=True), \
+             patch("core.project_registry.time.sleep"), \
+             pytest.raises(RuntimeError, match="did not fully converge"):
+            delete_project("my-app")

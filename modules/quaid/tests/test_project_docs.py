@@ -61,6 +61,38 @@ def test_request_update_records_runtime_context(project_env, monkeypatch):
     assert request["requested_adapter_type"] == "codex"
 
 
+def test_validate_project_name_rejects_path_and_glob_names(project_env):
+    _tmp_path, _src, _entry = project_env
+    from core import project_docs
+
+    assert project_docs.validate_project_name("Demo_Project") == "demo_project"
+    for raw in ("../../escape", "*.json", "demo/name"):
+        with pytest.raises(ValueError, match="Invalid project name"):
+            project_docs.validate_project_name(raw)
+
+
+def test_request_update_does_not_demote_active_update_state(project_env):
+    _tmp_path, _src, _entry = project_env
+    from core import project_docs
+
+    project_docs.write_state(
+        "demo",
+        {
+            "status": "updating",
+            "last_started_at": project_docs.utc_now(),
+            "phase": "update_docs",
+        },
+    )
+
+    request = project_docs.request_update("demo", reason="manual-test", requested_by="pytest")
+    state = project_docs.read_state("demo")
+
+    assert state["status"] == "updating"
+    assert state["phase"] == "update_docs"
+    assert state["pending_request_id"] == request["request_id"]
+    assert state["force_requested_at"] == request["requested_at"]
+
+
 def test_start_worker_env_uses_pending_request_runtime_context(project_env, monkeypatch):
     tmp_path, _src, _entry = project_env
     from core import project_docs
@@ -315,7 +347,12 @@ def test_project_docs_worker_refreshes_runtime_config_before_update(monkeypatch)
     monkeypatch.setattr(project_docs_worker.project_docs, "validate_project_name", lambda project: project)
     monkeypatch.setattr(project_docs_worker, "_supervisor_alive", lambda: True)
     monkeypatch.setattr(project_docs_worker.project_docs, "read_update_request", lambda _project: {"request_id": "req-1"})
-    monkeypatch.setattr(project_docs_worker.project_docs, "project_status", lambda _project: {"status": "fresh"})
+    monkeypatch.setattr(project_docs_worker.project_docs, "update_request_ready_for_worker", lambda request: True)
+    monkeypatch.setattr(
+        project_docs_worker.project_docs,
+        "project_has_pending_update",
+        lambda _project: (_ for _ in ()).throw(AssertionError("ready request should not need stale probe")),
+    )
     monkeypatch.setattr(
         project_docs_worker.project_docs,
         "write_worker_heartbeat",
@@ -477,13 +514,39 @@ def test_format_status_hides_benign_quaid_instance_worker_log_noise_when_project
                 "Project docs worker tick failed for demo",
                 "QUAID_INSTANCE environment variable is not set",
             ],
-            "state": {"last_completed_at": "2026-04-25T00:00:00Z"},
+            "state": {
+                "last_completed_at": "2026-04-25T00:00:00Z",
+                "last_metrics": {"docs_updated": 1},
+            },
         }
     )
 
     assert "QUAID_INSTANCE environment variable is not set" not in rendered
     assert "Recent worker log:" in rendered
     assert "Project docs worker tick failed for demo" in rendered
+
+
+def test_format_status_keeps_quaid_instance_warning_before_successful_docs_update():
+    from core import project_docs
+
+    rendered = project_docs.format_status(
+        {
+            "project": "demo",
+            "status": "fresh",
+            "pending_source_change_count": 0,
+            "project_log_bytes_pending": 0,
+            "project_log_queue_pending": 0,
+            "supervisor_pid": None,
+            "worker_pid": None,
+            "progress": {},
+            "worker_log_tail": [
+                "QUAID_INSTANCE environment variable is not set",
+            ],
+            "state": {"last_completed_at": "2026-04-25T00:00:00Z"},
+        }
+    )
+
+    assert "QUAID_INSTANCE environment variable is not set" in rendered
 
 
 def test_execute_update_once_snapshots_applies_indexes_and_advances_cursors(project_env):
@@ -687,6 +750,28 @@ def test_project_docs_poison_request_exhausts_retries_without_tight_loop(project
     assert status["pending_request"]["status"] == "failed"
 
 
+def test_project_docs_permanent_request_failure_does_not_retry(project_env):
+    _tmp_path, _src, _entry = project_env
+    from core import project_docs
+
+    request = project_docs.request_update("demo", reason="manual-test", requested_by="pytest")
+
+    project_docs._record_update_request_failure(
+        "demo",
+        request,
+        ValueError("invalid project docs payload"),
+    )
+
+    failed = project_docs.read_update_request("demo")
+    assert failed["status"] == "failed"
+    assert failed["attempt_count"] == 1
+    assert "next_retry_at" not in failed
+    assert project_docs.update_request_ready_for_worker(failed) is False
+    state = project_docs.read_state("demo")
+    assert state["status"] == "error"
+    assert "failed permanently" in state["last_error"]
+
+
 def test_project_docs_failhard_broker_failure_does_not_retry(project_env, monkeypatch):
     _tmp_path, _src, _entry = project_env
     from core import project_docs
@@ -718,9 +803,35 @@ def test_project_docs_worker_respects_request_retry_backoff(monkeypatch):
         lambda _project: {"request_id": "req-1", "status": "retrying", "next_retry_at": future},
     )
     monkeypatch.setattr(project_docs_worker.project_docs, "update_request_ready_for_worker", lambda request: False)
-    monkeypatch.setattr(project_docs_worker.project_docs, "project_status", lambda _project: {"status": "stale"})
+    monkeypatch.setattr(
+        project_docs_worker.project_docs,
+        "project_has_pending_update",
+        lambda _project: (_ for _ in ()).throw(AssertionError("backing-off request should skip stale probe")),
+    )
     monkeypatch.setattr(project_docs_worker.project_docs, "write_worker_heartbeat", lambda *args, **kwargs: calls.append(("heartbeat", args, kwargs)))
     monkeypatch.setattr(project_docs_worker.project_docs, "execute_update_once", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("backoff request should not run")))
+    monkeypatch.setattr(project_docs_worker.project_docs, "clear_worker_pid_for_current_process", lambda project: calls.append(("clear", project)))
+
+    assert project_docs_worker.run_worker("demo", once=True, interval_seconds=0.5) == 0
+
+    assert ("clear", "demo") in calls
+
+
+def test_project_docs_worker_uses_lightweight_pending_predicate(monkeypatch):
+    from core import project_docs_worker
+
+    calls = []
+    monkeypatch.setattr(project_docs_worker.project_docs, "validate_project_name", lambda project: project)
+    monkeypatch.setattr(project_docs_worker, "_supervisor_alive", lambda: True)
+    monkeypatch.setattr(project_docs_worker.project_docs, "read_update_request", lambda _project: None)
+    monkeypatch.setattr(project_docs_worker.project_docs, "update_request_ready_for_worker", lambda request: False)
+    monkeypatch.setattr(project_docs_worker.project_docs, "project_has_pending_update", lambda _project: False)
+    monkeypatch.setattr(
+        project_docs_worker.project_docs,
+        "project_status",
+        lambda _project: (_ for _ in ()).throw(AssertionError("worker tick should not call display status")),
+    )
+    monkeypatch.setattr(project_docs_worker.project_docs, "write_worker_heartbeat", lambda *args, **kwargs: calls.append(("heartbeat", args, kwargs)))
     monkeypatch.setattr(project_docs_worker.project_docs, "clear_worker_pid_for_current_process", lambda project: calls.append(("clear", project)))
 
     assert project_docs_worker.run_worker("demo", once=True, interval_seconds=0.5) == 0
@@ -823,6 +934,37 @@ def test_commit_queued_project_logs_holds_queue_lock_around_drain_and_mark(monke
     assert metrics["items_committed"] == 1
     assert metrics["history_entries_written"] == 1
     assert events == ["enter", "exit"]
+
+
+def test_commit_queued_project_logs_leaves_malformed_item_pending(project_env):
+    _tmp_path, _src, _entry = project_env
+    from core import project_docs
+    from datastore.docsdb import project_log_queue
+
+    item_id = "1-2-aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    queue_dir = project_log_queue.project_queue_dir("demo")
+    queue_dir.mkdir(parents=True)
+    (queue_dir / f"{item_id}.json").write_text(
+        json.dumps(
+            {
+                "id": item_id,
+                "project": "demo",
+                "entries": [{"text": "valid queued item"}, {"text": ""}],
+                "trigger": "Reset",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with patch("core.docs.updater.append_project_logs", side_effect=AssertionError("malformed item should not commit")), \
+         patch("core.project_docs._fail_hard_enabled", return_value=False):
+        metrics = project_docs._commit_queued_project_logs("demo")
+
+    assert metrics["errors"] == 1
+    assert metrics["entries_seen"] == 2
+    assert metrics["items_committed"] == 0
+    assert project_log_queue.pending_project_log_count("demo") == 1
 
 
 def test_execute_update_once_does_not_run_supervisor_docs_maintenance_tick(project_env):
@@ -936,6 +1078,14 @@ def test_auto_register_project_docs_skips_deleted_queued_projects(tmp_path, monk
         assert synced == []
     finally:
         reset_adapter()
+
+
+def test_auto_register_project_docs_explicit_missing_project_raises(project_env):
+    _tmp_path, _src, _entry = project_env
+    from core import project_docs
+
+    with pytest.raises(KeyError, match="Project not found"):
+        project_docs.auto_register_project_docs("missing-project")
 
 
 def test_cleanup_project_state_removes_project_log_queue(project_env):
