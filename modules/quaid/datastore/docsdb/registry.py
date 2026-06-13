@@ -95,6 +95,33 @@ def _dedupe_instances(instances: Any) -> List[str]:
     return ordered
 
 
+def _atomic_write_text(path: Path, content: str, *, encoding: str = "utf-8") -> None:
+    """Write text via a same-directory temp file and atomic replace."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_name = ""
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w",
+            encoding=encoding,
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            tmp_name = handle.name
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_name, path)
+        tmp_name = ""
+    finally:
+        if tmp_name:
+            try:
+                Path(tmp_name).unlink(missing_ok=True)
+            except OSError:
+                pass
+
+
 def _docs_project_visible_to_current_instance(project: Optional[str]) -> bool:
     name = str(project or "").strip()
     current = _current_quaid_instance_id()
@@ -728,7 +755,8 @@ class DocsRegistry:
         (canonical / "docs").mkdir(exist_ok=True)
         project_md = canonical / "PROJECT.md"
         if write_project_md and not project_md.exists():
-            project_md.write_text(
+            _atomic_write_text(
+                project_md,
                 render_project_md_template(
                     label=name.replace("-", " ").replace("_", " ").title(),
                     description=description or f"{name} project.",
@@ -736,7 +764,6 @@ class DocsRegistry:
                     source_roots=[source_root] if source_root else [],
                     exclude_patterns=[],
                 ),
-                encoding="utf-8",
             )
 
     def _home_dir_for_project_definition(self, canonical: Path) -> str:
@@ -1378,7 +1405,7 @@ class DocsRegistry:
 
         project_md_path = home_abs / "PROJECT.md"
         if not project_md_path.exists():
-            project_md_path.write_text(project_md, encoding="utf-8")
+            _atomic_write_text(project_md_path, project_md)
 
         # Save project definition to DB (source of truth)
         from config import ProjectDefinition, reload_config
@@ -2181,7 +2208,7 @@ def _generate_project_md(registry: DocsRegistry, project_name: str, cfg) -> None
         external_body=sections["external"],
         registered_docs_body=sections["registered_docs"],
     )
-    project_md_path.write_text(content, encoding="utf-8")
+    _atomic_write_text(project_md_path, content)
     print(f"  Generated PROJECT.md at {project_md_path}")
 
 

@@ -525,6 +525,23 @@ class TestCreateProject:
         assert "## Primary Artifacts" in content
         assert "## Where To Learn More" in content
 
+    def test_atomic_write_text_keeps_existing_file_when_replace_fails(self, setup_env, monkeypatch):
+        from datastore.docsdb import registry as registry_mod
+
+        project_md = setup_env / "projects" / "test-project" / "PROJECT.md"
+        project_md.write_text("existing content", encoding="utf-8")
+
+        def _fail_replace(_src, _dst):
+            raise OSError("replace failed")
+
+        monkeypatch.setattr(registry_mod.os, "replace", _fail_replace)
+
+        with pytest.raises(OSError, match="replace failed"):
+            registry_mod._atomic_write_text(project_md, "new content")
+
+        assert project_md.read_text(encoding="utf-8") == "existing content"
+        assert list(project_md.parent.glob(f".{project_md.name}.*.tmp")) == []
+
     def test_rejects_unsafe_project_name_before_scaffold(self, setup_env):
         r = _get_registry()
         visible_home = setup_env.parents[1]
