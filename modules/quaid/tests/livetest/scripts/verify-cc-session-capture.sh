@@ -12,8 +12,8 @@
 #
 # Checks:
 #   1. ~/.claude/settings.json contains Quaid CC hooks
-#   2. Instance identity is either explicitly pinned in
-#      <project-dir>/.claude/settings.json or matches CC's path-derived fallback
+#   2. Instance identity is explicitly pinned in project settings, bound via
+#      Quaid's instance-binding files, or matches CC's path-derived fallback
 #   3. ~/.claude/projects/<encoded-project-dir> has a fresh *.jsonl transcript
 #   4. The instance hook trace file exists (best-effort; absence is reported)
 #
@@ -97,10 +97,48 @@ resolved_project_dir = str(Path(project_dir).resolve())
 digest = hashlib.sha256(resolved_project_dir.encode("utf-8", "surrogatepass")).hexdigest()[:12]
 readable = re.sub(r"[^a-z0-9]+", "-", Path(resolved_project_dir).name.lower()).strip("-") or "project"
 readable = readable[:39].strip("-") or "project"
-derived_instance = f"claude-code-{readable}-{digest}"
+adapter_id = "claude-code"
+derived_slug = f"{readable}-{digest}"
+derived_instance = f"{adapter_id}-{derived_slug}"
+legacy_slug = re.sub(r"[^a-z0-9]+", "-", resolved_project_dir.lower()).strip("-")
 session_dir_name = resolved_project_dir.replace("/", "-")
 session_root = home / ".claude" / "projects" / session_dir_name
 hook_trace_path = home / ".quaid" / "instances" / instance_id / "logs" / "quaid-hook-trace.jsonl"
+
+
+def bound_instance_for_project():
+    binding_root = home / ".quaid" / "shared" / "instance-bindings" / adapter_id
+    candidate_slugs = [derived_slug]
+    if legacy_slug and legacy_slug not in candidate_slugs:
+        candidate_slugs.append(legacy_slug)
+
+    for candidate_slug in candidate_slugs:
+        path = binding_root / f"{candidate_slug}.json"
+        if not path.is_file():
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            print(f"binding_error={path}:{exc}")
+            continue
+        bound_instance = str(data.get("instance") or "").strip()
+        stored_project = str(data.get("project_dir") or "").strip()
+        if not bound_instance:
+            print(f"binding_instance=(invalid empty instance from {path})")
+            continue
+        try:
+            if stored_project and Path(stored_project).expanduser().resolve() != Path(resolved_project_dir):
+                print(f"binding_instance=(skipped project mismatch from {path})")
+                continue
+        except Exception as exc:
+            print(f"binding_instance=(skipped unresolved project from {path}: {exc})")
+            continue
+        config_path = home / ".quaid" / "instances" / bound_instance / "config.json"
+        if not config_path.is_file():
+            print(f"binding_instance=(skipped missing config for {bound_instance} from {path})")
+            continue
+        return bound_instance, path
+    return "", None
 
 print(f"global_settings={global_settings_path}")
 if not global_settings_path.is_file():
@@ -127,11 +165,19 @@ if project_settings_path.is_file():
         )
 else:
     print(f"project_instance=(path-derived fallback {derived_instance})")
-if derived_instance != instance_id and not project_settings_path.is_file():
+
+binding_instance, binding_path = bound_instance_for_project()
+if binding_instance:
+    print(f"binding_instance={binding_instance} ({binding_path})")
+else:
+    print("binding_instance=(none)")
+
+binding_matches_instance = binding_instance == instance_id
+if derived_instance != instance_id and not project_settings_path.is_file() and not binding_matches_instance:
     failures.append(
         f"missing project settings and path-derived instance mismatch: expected {instance_id} got {derived_instance}"
     )
-elif derived_instance != instance_id and project_settings_path.is_file():
+elif derived_instance != instance_id and project_settings_path.is_file() and not binding_matches_instance:
     data = json.loads(project_settings_path.read_text())
     actual_instance = str(((data.get("env") or {}).get("QUAID_INSTANCE")) or "").strip()
     if not actual_instance:
