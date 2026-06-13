@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import subprocess
 import types
@@ -234,7 +235,7 @@ def test_supervisor_docs_listener_failure_raises_when_failhard(monkeypatch):
         supervisor.run_supervisor(once=True, interval_seconds=0.5)
 
 
-def test_supervisor_fail_hard_helper_only_suppresses_import_error(monkeypatch):
+def test_supervisor_fail_hard_helper_does_not_suppress_runtime_import_failure(monkeypatch):
     from core import project_docs_supervisor as supervisor
 
     real_import = __import__
@@ -248,6 +249,24 @@ def test_supervisor_fail_hard_helper_only_suppresses_import_error(monkeypatch):
 
     with pytest.raises(RuntimeError, match="broken fail policy"):
         supervisor._fail_hard_enabled()
+
+
+def test_supervisor_fail_hard_helper_raises_missing_policy_import(monkeypatch, caplog):
+    from core import project_docs_supervisor as supervisor
+
+    real_import = __import__
+
+    def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "lib.fail_policy":
+            raise ImportError("missing fail policy")
+        return real_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr("builtins.__import__", fake_import)
+    caplog.set_level("CRITICAL", logger=supervisor.__name__)
+
+    with pytest.raises(RuntimeError, match="fail-hard policy unavailable"):
+        supervisor._fail_hard_enabled()
+    assert "fail-hard policy unavailable in project docs supervisor" in caplog.text
 
 
 def test_supervisor_worker_start_failure_raises_when_failhard(monkeypatch):
@@ -771,6 +790,67 @@ def test_start_requested_janitor_run_all_includes_configured_internal_path_deriv
     assert payload["request_id"] == request["request_id"]
     assert payload["instances"] == ["alpha", internal_instance]
     assert payload["started_instances"] == ["alpha", internal_instance]
+
+
+def test_on_demand_janitor_request_writes_under_shared_lock(monkeypatch, tmp_path):
+    from core import project_docs, project_docs_supervisor as supervisor
+
+    starts = []
+    lock_depth = 0
+    writes: list[str] = []
+
+    class _DoneProc:
+        def __init__(self, pid):
+            self.pid = pid
+
+        def poll(self):
+            return 0
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setattr(supervisor, "quaid_home", lambda: tmp_path)
+    monkeypatch.setattr(supervisor, "list_instances", lambda: ["alpha"])
+    monkeypatch.setattr(supervisor, "_instance_misc_project_deleted", lambda _name: False)
+    monkeypatch.setattr(supervisor.project_docs, "is_instance_monitor_disabled", lambda _name: False)
+    monkeypatch.setattr(supervisor.project_docs, "reap_child_processes", lambda: 0)
+    _write_janitor_checkpoint(tmp_path, "alpha")
+    monkeypatch.setattr(
+        supervisor,
+        "_spawn_janitor_worker",
+        lambda name, *, command: starts.append((name, command)) or _DoneProc(321),
+    )
+
+    request = project_docs.request_janitor_run(instance="alpha", reason="pytest", requested_by="pytest")
+    expected_lock_path = project_docs._spawn_lock_path("janitor-request")
+    original_write = project_docs.write_janitor_request
+
+    @contextlib.contextmanager
+    def checked_lock(path):
+        nonlocal lock_depth
+        assert path == expected_lock_path
+        lock_depth += 1
+        try:
+            yield
+        finally:
+            lock_depth -= 1
+
+    def checked_write(payload):
+        assert lock_depth > 0
+        writes.append(str(payload.get("status") or ""))
+        return original_write(payload)
+
+    monkeypatch.setattr(project_docs, "_exclusive_file_lock", checked_lock)
+    monkeypatch.setattr(project_docs, "write_janitor_request", checked_write)
+
+    workers: dict[str, subprocess.Popen] = {}
+    active = supervisor._maintain_on_demand_janitor_request(None, {}, workers)
+    active = supervisor._maintain_on_demand_janitor_request(active, {}, workers)
+
+    assert active is None
+    assert starts == [("alpha", "run-all-once")]
+    assert writes == ["running", "completed"]
+    payload = project_docs.read_janitor_request()
+    assert payload["request_id"] == request["request_id"]
+    assert payload["status"] == "completed"
 
 
 def test_requested_janitor_run_completes_single_instance(monkeypatch, tmp_path):

@@ -49,9 +49,14 @@ def _interval_from_env(name: str, default: float) -> float:
 def _fail_hard_enabled() -> bool:
     try:
         from lib.fail_policy import is_fail_hard_enabled
-    except ImportError:
-        return False
+    except ImportError as exc:
+        logging.getLogger(__name__).critical("fail-hard policy unavailable in project docs supervisor: %s", exc)
+        raise RuntimeError("fail-hard policy unavailable in project docs supervisor") from exc
     return bool(is_fail_hard_enabled())
+
+
+def _janitor_request_lock():
+    return project_docs._exclusive_file_lock(project_docs._spawn_lock_path("janitor-request"))
 
 
 def _emit_project_docs_maintenance_event(
@@ -454,7 +459,8 @@ def _start_requested_janitor_run(
     payload["exit_codes"] = {}
     if on_demand_workers:
         payload["status"] = "running"
-        project_docs.write_janitor_request(payload)
+        with _janitor_request_lock():
+            project_docs.write_janitor_request(payload)
         return {
             "request_id": payload.get("request_id"),
             "errors": list(request_errors),
@@ -463,7 +469,8 @@ def _start_requested_janitor_run(
         }
     payload["status"] = "failed" if request_errors else "completed"
     payload["completed_at"] = project_docs.utc_now()
-    project_docs.write_janitor_request(payload)
+    with _janitor_request_lock():
+        project_docs.write_janitor_request(payload)
     return None
 
 
@@ -473,21 +480,22 @@ def _maintain_on_demand_janitor_request(
     on_demand_workers: Dict[str, subprocess.Popen],
 ) -> Dict[str, object] | None:
     if active_request is None:
-        request = project_docs.read_janitor_request()
-        if not request:
-            return None
-        status = str(request.get("status") or "").strip().lower()
-        if status == "running":
-            payload = dict(request)
-            errors = list(payload.get("errors") or [])
-            errors.append("supervisor restarted before janitor request completed")
-            payload["errors"] = errors
-            payload["status"] = "failed"
-            payload["completed_at"] = project_docs.utc_now()
-            project_docs.write_janitor_request(payload)
-            return None
-        if status != "pending":
-            return None
+        with _janitor_request_lock():
+            request = project_docs.read_janitor_request()
+            if not request:
+                return None
+            status = str(request.get("status") or "").strip().lower()
+            if status == "running":
+                payload = dict(request)
+                errors = list(payload.get("errors") or [])
+                errors.append("supervisor restarted before janitor request completed")
+                payload["errors"] = errors
+                payload["status"] = "failed"
+                payload["completed_at"] = project_docs.utc_now()
+                project_docs.write_janitor_request(payload)
+                return None
+            if status != "pending":
+                return None
         return _start_requested_janitor_run(request, scheduled_workers, on_demand_workers)
 
     accumulated_exit_codes = {
@@ -508,33 +516,35 @@ def _maintain_on_demand_janitor_request(
     if not all_done:
         if exit_codes:
             request_id = str(active_request.get("request_id") or "").strip()
-            payload = project_docs.read_janitor_request() or {}
-            if str(payload.get("request_id") or "").strip() == request_id:
-                payload["exit_codes"] = {str(k): int(v) for k, v in sorted(accumulated_exit_codes.items())}
-                project_docs.write_janitor_request(payload)
+            with _janitor_request_lock():
+                payload = project_docs.read_janitor_request() or {}
+                if str(payload.get("request_id") or "").strip() == request_id:
+                    payload["exit_codes"] = {str(k): int(v) for k, v in sorted(accumulated_exit_codes.items())}
+                    project_docs.write_janitor_request(payload)
         active_request = dict(active_request)
         active_request["exit_codes"] = dict(accumulated_exit_codes)
         return active_request
 
     request_id = str(active_request.get("request_id") or "").strip()
-    payload = project_docs.read_janitor_request() or {}
-    if str(payload.get("request_id") or "").strip() != request_id:
-        payload = {"request_id": request_id}
-    errors = list(active_request.get("errors") or [])
-    for instance, code in accumulated_exit_codes.items():
-        if code != 0:
-            errors.append(f"instance {instance} janitor exited rc={code}")
-            continue
-        checkpoint_status, checkpoint_error = _janitor_checkpoint_status(instance)
-        if checkpoint_error:
-            errors.append(checkpoint_error)
-        elif checkpoint_status != "completed":
-            errors.append(f"instance {instance} janitor checkpoint status={checkpoint_status}")
-    payload["status"] = "failed" if errors else "completed"
-    payload["completed_at"] = project_docs.utc_now()
-    payload["errors"] = errors
-    payload["exit_codes"] = {str(k): int(v) for k, v in sorted(accumulated_exit_codes.items())}
-    project_docs.write_janitor_request(payload)
+    with _janitor_request_lock():
+        payload = project_docs.read_janitor_request() or {}
+        if str(payload.get("request_id") or "").strip() != request_id:
+            payload = {"request_id": request_id}
+        errors = list(active_request.get("errors") or [])
+        for instance, code in accumulated_exit_codes.items():
+            if code != 0:
+                errors.append(f"instance {instance} janitor exited rc={code}")
+                continue
+            checkpoint_status, checkpoint_error = _janitor_checkpoint_status(instance)
+            if checkpoint_error:
+                errors.append(checkpoint_error)
+            elif checkpoint_status != "completed":
+                errors.append(f"instance {instance} janitor checkpoint status={checkpoint_status}")
+        payload["status"] = "failed" if errors else "completed"
+        payload["completed_at"] = project_docs.utc_now()
+        payload["errors"] = errors
+        payload["exit_codes"] = {str(k): int(v) for k, v in sorted(accumulated_exit_codes.items())}
+        project_docs.write_janitor_request(payload)
     return None
 
 
@@ -769,14 +779,17 @@ def run_supervisor(*, once: bool = False, interval_seconds: float | None = None)
         project_docs._terminate_process(proc)
         project_docs.reap_child_processes()
     if active_janitor_request is not None:
-        payload = project_docs.read_janitor_request() or {}
-        if str(payload.get("request_id") or "").strip() == str(active_janitor_request.get("request_id") or "").strip():
-            errors = list(payload.get("errors") or [])
-            errors.append("supervisor stopped before janitor request completed")
-            payload["errors"] = errors
-            payload["status"] = "failed"
-            payload["completed_at"] = project_docs.utc_now()
-            project_docs.write_janitor_request(payload)
+        with _janitor_request_lock():
+            payload = project_docs.read_janitor_request() or {}
+            if str(payload.get("request_id") or "").strip() == str(
+                active_janitor_request.get("request_id") or ""
+            ).strip():
+                errors = list(payload.get("errors") or [])
+                errors.append("supervisor stopped before janitor request completed")
+                payload["errors"] = errors
+                payload["status"] = "failed"
+                payload["completed_at"] = project_docs.utc_now()
+                project_docs.write_janitor_request(payload)
     project_docs.clear_supervisor_pid_for_current_process()
     return 0
 
