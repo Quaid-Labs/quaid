@@ -93,6 +93,7 @@ _TRANSCRIPT_CLASS_MEANINGFUL_USER_CONTENT = "meaningful_user_content"
 
 # Session ID validation (B008)
 _SESSION_ID_RE = re.compile(r"^[a-zA-Z0-9_-]{1,128}$")
+_PLATFORM_CONFIG_SCOPE_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$")
 _SESSION_ID_UUID_RE = re.compile(
     r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
 )
@@ -140,18 +141,40 @@ def _instance_root() -> Path:
     return _quaid_home() / "instances" / _instance_id()
 
 
+def _validate_platform_config_scope(scope: str) -> str:
+    """Return a safe shared-config platform directory name."""
+    raw = str(scope or "").strip()
+    if not raw:
+        return ""
+    if _PLATFORM_CONFIG_SCOPE_RE.fullmatch(raw):
+        return raw
+    raise ValueError(f"invalid platform_config_scope: {raw!r}")
+
+
 def _config_file_paths() -> List[Path]:
     """Return config files that affect this instance, highest priority first."""
     instance = _instance_id()
     home = _quaid_home()
     platform = ""
+    adapter = None
     try:
         from lib.adapter import get_adapter
 
         adapter = get_adapter()
-        platform = str(adapter.get_capability("platform_config_scope", "") or "").strip()
     except Exception:
-        platform = ""
+        adapter = None
+    if adapter is not None:
+        try:
+            raw_platform = str(adapter.get_capability("platform_config_scope", "") or "").strip()
+        except Exception:
+            raw_platform = ""
+        try:
+            platform = _validate_platform_config_scope(raw_platform)
+        except ValueError as exc:
+            if _fail_hard_enabled():
+                raise
+            logger.warning("ignoring invalid adapter platform_config_scope %r: %s", raw_platform, exc)
+            platform = ""
 
     if not platform:
         config_root = home / "shared" / "config"
@@ -171,6 +194,7 @@ def _config_file_paths() -> List[Path]:
             platform = max(matches, key=len)
     if not platform:
         platform = instance.split("-", 1)[0] if "-" in instance else instance
+    platform = _validate_platform_config_scope(platform)
 
     return [
         _instance_root() / "config.json",

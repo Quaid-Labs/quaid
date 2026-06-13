@@ -6456,6 +6456,60 @@ class TestSignalDirIsolation:
 class TestSignalRoundTrip:
     """write_signal writes a well-formed file; read_pending_signals picks it up."""
 
+    def test_config_file_paths_rejects_invalid_adapter_scope_when_fail_hard(
+        self, monkeypatch, tmp_path
+    ):
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "openclaw-main")
+        monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: True)
+
+        class _Adapter:
+            def get_capability(self, key, default=None):
+                assert key == "platform_config_scope"
+                return "../../etc/passwd"
+
+        fake_adapter_mod = types.ModuleType("lib.adapter")
+        fake_adapter_mod.get_adapter = lambda: _Adapter()
+        real_adapter = sys.modules.get("lib.adapter")
+        sys.modules["lib.adapter"] = fake_adapter_mod
+        try:
+            with pytest.raises(ValueError, match="invalid platform_config_scope"):
+                extraction_daemon._config_file_paths()
+        finally:
+            if real_adapter is not None:
+                sys.modules["lib.adapter"] = real_adapter
+            else:
+                sys.modules.pop("lib.adapter", None)
+
+    def test_config_file_paths_ignores_invalid_adapter_scope_when_fail_open(
+        self, monkeypatch, tmp_path, caplog
+    ):
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "openclaw-main")
+        monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: False)
+        (tmp_path / "shared" / "config" / "openclaw").mkdir(parents=True)
+
+        class _Adapter:
+            def get_capability(self, key, default=None):
+                assert key == "platform_config_scope"
+                return "../../etc/passwd"
+
+        fake_adapter_mod = types.ModuleType("lib.adapter")
+        fake_adapter_mod.get_adapter = lambda: _Adapter()
+        real_adapter = sys.modules.get("lib.adapter")
+        sys.modules["lib.adapter"] = fake_adapter_mod
+        try:
+            with caplog.at_level("WARNING", logger="quaid.daemon"):
+                paths = extraction_daemon._config_file_paths()
+        finally:
+            if real_adapter is not None:
+                sys.modules["lib.adapter"] = real_adapter
+            else:
+                sys.modules.pop("lib.adapter", None)
+
+        assert paths[1] == tmp_path / "shared" / "config" / "openclaw" / "config.json"
+        assert "ignoring invalid adapter platform_config_scope" in caplog.text
+
     def test_write_and_read_signal_round_trip(self, monkeypatch, tmp_path):
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
         monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
