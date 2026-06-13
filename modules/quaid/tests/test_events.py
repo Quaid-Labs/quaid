@@ -142,6 +142,21 @@ def test_event_emit_list_and_capabilities(tmp_path):
     assert any(c.get("name") == "notification.delayed" and c.get("delivery_mode") == "passive" for c in caps)
 
 
+def test_event_timestamps_honor_quaid_now(monkeypatch, tmp_path):
+    monkeypatch.setenv("QUAID_NOW", "2026-03-11T00:00:00Z")
+    set_adapter(TestAdapter(tmp_path))
+
+    event = emit_event(
+        name="session.reset",
+        payload={"reason": "benchmark-clock"},
+        source="pytest",
+    )
+
+    assert event["created_at"] == "2026-03-11T00:00:00+00:00"
+    queued = list_events(status="pending", limit=1)
+    assert queued[0]["created_at"] == "2026-03-11T00:00:00+00:00"
+
+
 def test_broker_event_request_auto_correlation_and_tracing(tmp_path):
     adapter = TestAdapter(tmp_path); set_adapter(adapter); iroot = adapter.instance_root()
 

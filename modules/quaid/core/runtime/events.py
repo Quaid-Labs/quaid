@@ -361,6 +361,12 @@ def validate_declared_event_contract(
 
 
 def _now() -> str:
+    override = os.environ.get("QUAID_NOW", "").strip()
+    if override:
+        try:
+            return datetime.fromisoformat(override.replace("Z", "+00:00")).isoformat()
+        except ValueError:
+            logger.warning("Invalid QUAID_NOW=%r; using wall clock", override)
     return datetime.now(timezone.utc).isoformat()
 
 
