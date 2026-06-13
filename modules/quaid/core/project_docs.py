@@ -2219,14 +2219,20 @@ def stop_worker(project: str) -> bool:
             _unlink_pid_record_if_matches(worker_pid_path(name), pid=pid, token=record.get("token"))
             return False
         if pid != os.getpid():
-            os.kill(pid, signal.SIGTERM)
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
             deadline = time.time() + 2.0
             while time.time() < deadline:
                 if not _pid_alive(pid):
                     break
                 time.sleep(0.1)
             if _pid_alive(pid):
-                os.kill(pid, signal.SIGKILL)
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
             reap_child_processes()
         if not _pid_alive(pid):
             _unlink_pid_record_if_matches(worker_pid_path(name), pid=pid, token=record.get("token"))

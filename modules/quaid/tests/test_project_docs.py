@@ -1943,6 +1943,30 @@ def test_worker_update_heartbeat_interval_stays_inside_stale_window(project_env,
     assert project_docs_worker._update_heartbeat_interval(0.5) == 0.5
 
 
+def test_stop_worker_tolerates_process_exit_race(project_env, monkeypatch):
+    _tmp_path, _src, _entry = project_env
+    from core import project_docs
+
+    project_docs._write_pid_record(
+        project_docs.worker_pid_path("demo"),
+        role=project_docs.WORKER_ROLE,
+        pid=12345,
+        token="pytest",
+        project="demo",
+    )
+    monkeypatch.setattr(project_docs, "_pid_record_matches", lambda record, **_kwargs: True)
+    monkeypatch.setattr(project_docs, "_pid_alive", lambda pid: False)
+    monkeypatch.setattr(project_docs, "reap_child_processes", lambda: 0)
+
+    def exited_before_signal(pid, sig):
+        raise ProcessLookupError(pid)
+
+    monkeypatch.setattr(project_docs.os, "kill", exited_before_signal)
+
+    assert project_docs.stop_worker("demo") is True
+    assert not project_docs.worker_pid_path("demo").exists()
+
+
 def test_reap_stale_worker_does_not_overwrite_racing_success(project_env, monkeypatch):
     _tmp_path, _src, _entry = project_env
     from core import project_docs
