@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
@@ -92,6 +93,55 @@ def test_request_update_does_not_demote_active_update_state(project_env):
     assert state["phase"] == "update_docs"
     assert state["pending_request_id"] == request["request_id"]
     assert state["force_requested_at"] == request["requested_at"]
+
+
+def test_clear_update_request_rechecks_under_state_lock(project_env, monkeypatch):
+    _tmp_path, _src, _entry = project_env
+    from core import project_docs
+
+    request = project_docs.request_update("demo", reason="manual-test", requested_by="pytest")
+    replacement = dict(request)
+    replacement["request_id"] = "replacement-request"
+    replacement["requested_at"] = project_docs.utc_now()
+    lock_paths: list[Path] = []
+    real_lock = project_docs._exclusive_file_lock
+
+    @contextlib.contextmanager
+    def swapping_state_lock(path):
+        lock_paths.append(path)
+        with real_lock(path):
+            project_docs._atomic_write_json(project_docs.request_path("demo"), replacement)
+            yield
+
+    monkeypatch.setattr(project_docs, "_exclusive_file_lock", swapping_state_lock)
+
+    project_docs.clear_update_request("demo", request_id=request["request_id"])
+
+    assert lock_paths == [project_docs.state_lock_path("demo")]
+    assert project_docs.read_update_request("demo")["request_id"] == "replacement-request"
+
+
+def test_clear_update_request_honors_failhard_on_unlink_failure(project_env, monkeypatch, caplog):
+    _tmp_path, _src, _entry = project_env
+    from core import project_docs
+
+    request = project_docs.request_update("demo", reason="manual-test", requested_by="pytest")
+    target = project_docs.request_path("demo")
+    real_unlink = Path.unlink
+
+    def failing_unlink(self, *args, **kwargs):
+        if self == target:
+            raise OSError("unlink denied")
+        return real_unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", failing_unlink)
+    monkeypatch.setattr(project_docs, "_fail_hard_enabled", lambda: True)
+    caplog.set_level(logging.WARNING)
+
+    with pytest.raises(OSError, match="unlink denied"):
+        project_docs.clear_update_request("demo", request_id=request["request_id"])
+
+    assert "Failed clearing project-docs update request for demo" in caplog.text
 
 
 def test_start_worker_env_uses_pending_request_runtime_context(project_env, monkeypatch):
@@ -773,7 +823,7 @@ def test_project_docs_permanent_request_failure_does_not_retry(project_env):
     assert "failed permanently" in state["last_error"]
 
 
-def test_project_docs_failhard_broker_failure_does_not_retry(project_env, monkeypatch):
+def test_project_docs_failhard_broker_failure_records_retry_metadata(project_env, monkeypatch):
     _tmp_path, _src, _entry = project_env
     from core import project_docs
 
@@ -786,8 +836,11 @@ def test_project_docs_failhard_broker_failure_does_not_retry(project_env, monkey
             project_docs.execute_update_once("demo", request=request)
 
     retained = project_docs.read_update_request("demo")
-    assert retained["status"] == "pending"
-    assert "attempt_count" not in retained
+    assert retained["status"] == "retrying"
+    assert retained["attempt_count"] == 1
+    assert retained["last_error"] == "poison"
+    assert retained.get("next_retry_at")
+    assert project_docs.update_request_ready_for_worker(retained) is False
 
 
 def test_project_docs_worker_respects_request_retry_backoff(monkeypatch):

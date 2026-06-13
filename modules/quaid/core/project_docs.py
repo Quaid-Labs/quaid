@@ -1021,13 +1021,17 @@ def _is_permanent_update_request_failure(exc: Exception) -> bool:
 
 
 def clear_update_request(project: str, request_id: Optional[str] = None) -> None:
-    req = read_update_request(project)
-    if request_id and req and req.get("request_id") != request_id:
-        return
-    try:
-        request_path(project).unlink(missing_ok=True)
-    except OSError:
-        pass
+    name = validate_project_name(project)
+    with _exclusive_file_lock(state_lock_path(name)):
+        req = read_update_request(name)
+        if request_id and req and req.get("request_id") != request_id:
+            return
+        try:
+            request_path(name).unlink(missing_ok=True)
+        except OSError as exc:
+            logger.warning("Failed clearing project-docs update request for %s request_id=%s: %s", name, request_id or "-", exc)
+            if _fail_hard_enabled():
+                raise
 
 
 def wait_for_request(project: str, request_id: str, *, timeout_seconds: float = 300.0) -> Dict[str, Any]:
@@ -1857,7 +1861,7 @@ def execute_update_once(project: str, *, request: Optional[Dict[str, Any]] = Non
             return result
         except Exception as exc:
             logger.warning("Project docs update failed for %s request_id=%s: %s", name, request_id or "-", exc)
-            if request_id and not dry_run and not _fail_hard_enabled():
+            if request_id and not dry_run:
                 _record_update_request_failure(name, request or {}, exc)
                 raise
             merge_state(
