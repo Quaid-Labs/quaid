@@ -1696,3 +1696,21 @@ class TestLightweightLibConfig:
              patch("lib.adapter.get_adapter", side_effect=AssertionError("adapter should not be used")):
             assert get_db_path() == (tmp_path / "data" / "memory.db").resolve()
             assert get_archive_db_path() == (tmp_path / "data" / "memory_archive.db").resolve()
+
+    def test_docs_db_path_uses_memory_override_sibling(self, tmp_path, monkeypatch):
+        from lib.config import get_docs_db_path
+
+        memory_db = tmp_path / "isolated" / "memory.db"
+        monkeypatch.setenv("MEMORY_DB_PATH", str(memory_db))
+        monkeypatch.delenv("DOCS_DB_PATH", raising=False)
+
+        assert get_docs_db_path() == memory_db.with_name("docs.db")
+
+    def test_docs_db_path_env_overrides_memory_override(self, tmp_path, monkeypatch):
+        from lib.config import get_docs_db_path
+
+        docs_db = tmp_path / "explicit" / "custom-docs.db"
+        monkeypatch.setenv("MEMORY_DB_PATH", str(tmp_path / "isolated" / "memory.db"))
+        monkeypatch.setenv("DOCS_DB_PATH", str(docs_db))
+
+        assert get_docs_db_path() == docs_db

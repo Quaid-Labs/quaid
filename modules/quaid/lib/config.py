@@ -332,7 +332,7 @@ def get_docs_db_path() -> Path:
     # keep docs DB co-located unless DOCS_DB_PATH is also set.
     memory_override = _validated_memory_override("MEMORY_DB_PATH")
     if memory_override is not None:
-        return memory_override
+        return memory_override.with_name("docs.db")
 
     cfg = _get_cfg()
     raw = str(getattr(getattr(cfg, "database", None), "docs_path", "") or "").strip()
