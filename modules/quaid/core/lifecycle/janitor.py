@@ -116,6 +116,28 @@ def checkpoint_wal(*args, **kwargs):
     return _datastore_runtime().checkpoint_wal(*args, **kwargs)
 
 
+def _checkpoint_wal_after_run(graph: Any, *, task: str, dry_run: bool) -> None:
+    if task != "all" or dry_run:
+        return
+    try:
+        checkpoint_wal(graph)
+    except Exception as exc:
+        if is_fail_hard_enabled():
+            raise RuntimeError("WAL checkpoint failed after janitor run") from exc
+        print(f"[janitor] WARNING: WAL checkpoint failed: {exc}", file=sys.stderr)
+
+
+def _reset_global_llm_scheduler_after_main() -> None:
+    try:
+        from core.llm.scheduler import reset_global_llm_scheduler
+
+        reset_global_llm_scheduler(wait=False)
+    except Exception as exc:
+        if is_fail_hard_enabled():
+            raise RuntimeError("Failed to reset global LLM scheduler") from exc
+        print(f"[janitor] WARNING: Failed to reset global LLM scheduler: {exc}", file=sys.stderr)
+
+
 def count_nodes_by_status(*args, **kwargs):
     return _datastore_runtime().count_nodes_by_status(*args, **kwargs)
 
@@ -1988,11 +2010,7 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
 
     # Return metrics for programmatic use
     # WAL checkpoint at end of run to reclaim WAL file space
-    if task == "all" and not dry_run:
-        try:
-            checkpoint_wal(graph)
-        except Exception:
-            pass  # Checkpoint is best-effort
+    _checkpoint_wal_after_run(graph, task=task, dry_run=dry_run)
 
     completed_at = datetime.now().isoformat()
     _checkpoint_save(status="completed" if success else "failed")
@@ -2439,11 +2457,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     
         # Shut down the global LLM scheduler's thread pool before exiting.
         # Without this, non-daemon executor threads block Python from exiting cleanly.
-        try:
-            from core.llm.scheduler import reset_global_llm_scheduler
-            reset_global_llm_scheduler(wait=False)
-        except Exception:
-            pass
+        _reset_global_llm_scheduler_after_main()
 
         # Exit with error code if janitor failed
         return 0 if result["success"] else 1

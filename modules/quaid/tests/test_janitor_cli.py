@@ -154,6 +154,60 @@ def test_janitor_audit_log_honors_fail_hard(monkeypatch, tmp_path):
         janitor._write_janitor_log_entry(log_dir, "janitor_complete")
 
 
+def test_janitor_wal_checkpoint_raises_when_fail_hard(monkeypatch):
+    from core.lifecycle import janitor
+
+    monkeypatch.setattr(janitor, "checkpoint_wal", lambda _graph: (_ for _ in ()).throw(OSError("wal locked")))
+    monkeypatch.setattr(janitor, "is_fail_hard_enabled", lambda: True)
+
+    with pytest.raises(RuntimeError, match="WAL checkpoint failed"):
+        janitor._checkpoint_wal_after_run(object(), task="all", dry_run=False)
+
+
+def test_janitor_wal_checkpoint_warns_when_not_fail_hard(monkeypatch, capsys):
+    from core.lifecycle import janitor
+
+    monkeypatch.setattr(janitor, "checkpoint_wal", lambda _graph: (_ for _ in ()).throw(OSError("wal locked")))
+    monkeypatch.setattr(janitor, "is_fail_hard_enabled", lambda: False)
+
+    janitor._checkpoint_wal_after_run(object(), task="all", dry_run=False)
+
+    captured = capsys.readouterr()
+    assert "WAL checkpoint failed" in captured.err
+
+
+def test_janitor_scheduler_reset_raises_when_fail_hard(monkeypatch):
+    from core.lifecycle import janitor
+    from core.llm import scheduler
+
+    monkeypatch.setattr(
+        scheduler,
+        "reset_global_llm_scheduler",
+        lambda *, wait: (_ for _ in ()).throw(RuntimeError("pool down")),
+    )
+    monkeypatch.setattr(janitor, "is_fail_hard_enabled", lambda: True)
+
+    with pytest.raises(RuntimeError, match="Failed to reset global LLM scheduler"):
+        janitor._reset_global_llm_scheduler_after_main()
+
+
+def test_janitor_scheduler_reset_warns_when_not_fail_hard(monkeypatch, capsys):
+    from core.lifecycle import janitor
+    from core.llm import scheduler
+
+    monkeypatch.setattr(
+        scheduler,
+        "reset_global_llm_scheduler",
+        lambda *, wait: (_ for _ in ()).throw(RuntimeError("pool down")),
+    )
+    monkeypatch.setattr(janitor, "is_fail_hard_enabled", lambda: False)
+
+    janitor._reset_global_llm_scheduler_after_main()
+
+    captured = capsys.readouterr()
+    assert "Failed to reset global LLM scheduler" in captured.err
+
+
 def test_janitor_lock_attempt_does_not_truncate_held_lock(monkeypatch, tmp_path):
     import fcntl
 
