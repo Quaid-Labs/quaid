@@ -34,6 +34,21 @@ def test_docs_cli_dispatches_check_and_changelog_to_docs_updater(monkeypatch) ->
     assert calls == [["check", "--json"], ["changelog", "--limit", "3"]]
 
 
+def test_docs_cli_dispatches_registry_to_docs_registry(monkeypatch) -> None:
+    from datastore.docsdb import registry
+
+    calls = []
+
+    def fake_main(argv) -> int:
+        calls.append(list(argv))
+        return 0
+
+    monkeypatch.setattr(registry, "main", fake_main)
+
+    assert docs_cli.main(["registry", "register", "/tmp/COPPER_BASIN.md", "--project", "xp"]) == 0
+    assert calls == [["register", "/tmp/COPPER_BASIN.md", "--project", "xp"]]
+
+
 def test_docs_cli_update_without_project_routes_to_stale_updater(monkeypatch) -> None:
     from core.docs import updater
 
@@ -72,7 +87,7 @@ def test_docs_cli_unknown_command_prints_usage(capsys) -> None:
     assert docs_cli.main(["unknown"]) == 1
 
     captured = capsys.readouterr()
-    assert "Usage: quaid docs {list|check|update|changelog}" in captured.err
+    assert "Usage: quaid docs {list|check|update|changelog|registry}" in captured.err
 
 
 def test_docsdb_docs_cli_is_datastore_only(capsys) -> None:

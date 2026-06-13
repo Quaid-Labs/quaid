@@ -45,16 +45,23 @@ def cmd_changelog(argv: List[str]) -> int:
     return docsdb_docs_cli.main(["changelog", *argv])
 
 
+def cmd_registry(argv: List[str]) -> int:
+    from datastore.docsdb import registry
+
+    return registry.main(argv)
+
+
 commands: Dict[str, Command] = {
     "list": cmd_list,
     "check": cmd_check,
     "update": cmd_update,
     "changelog": cmd_changelog,
+    "registry": cmd_registry,
 }
 
 
 def _print_usage() -> None:
-    print("Usage: quaid docs {list|check|update|changelog} [args...]", file=sys.stderr)
+    print("Usage: quaid docs {list|check|update|changelog|registry} [args...]", file=sys.stderr)
 
 
 def main(argv: Optional[List[str]] = None) -> int:
