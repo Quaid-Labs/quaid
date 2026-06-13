@@ -1169,6 +1169,8 @@ def update_doc_from_diffs(
                 print(f"  Fast Reasoning gate: skip{doc_path} — {first_reason}")
                 return False
         except Exception as exc:
+            if is_fail_hard_enabled():
+                raise RuntimeError(f"Fast Reasoning gate failed for {doc_path}") from exc
             logger.warning("Fast Reasoning gate failed for %s: %s", doc_path, exc)
 
     # Check if this is a core markdown file (TOOLS.md, AGENTS.md, etc.)

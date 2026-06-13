@@ -1142,6 +1142,48 @@ class TestCmdUpdateStaleNeverIndexed:
             assert ok is False
             assert doc.read_text(encoding="utf-8") == "# Doc\n\nExisting details.\n"
 
+    def test_fast_gate_failure_raises_when_fail_hard(self, tmp_path, monkeypatch):
+        with _adapter_patch(tmp_path) as iroot:
+            from datastore.docsdb import updater
+
+            doc = iroot / "docs" / "doc.md"
+            doc.parent.mkdir(parents=True, exist_ok=True)
+            doc.write_text("# Doc\n\nExisting details.\n", encoding="utf-8")
+
+            monkeypatch.setattr(updater, "get_git_diff", lambda *_args, **_kwargs: "+meaningful change\n")
+            monkeypatch.setattr(
+                updater,
+                "classify_doc_change",
+                lambda _diff: {
+                    "classification": "significant",
+                    "confidence": 0.5,
+                    "reasons": ["borderline"],
+                    "lines_changed": 1,
+                    "trivial_signals": 0,
+                    "significant_signals": 1,
+                },
+            )
+
+            def _fail_fast_gate(**_kwargs):
+                raise TimeoutError("fast gate timed out")
+
+            def _unexpected_deep(**_kwargs):
+                raise AssertionError("Deep Reasoning should not run after Fast Reasoning failure")
+
+            monkeypatch.setattr("lib.llm_chunked_call.parallel_llm_call", _fail_fast_gate)
+            monkeypatch.setattr(updater, "call_deep_reasoning", _unexpected_deep)
+            monkeypatch.setattr(updater, "is_fail_hard_enabled", lambda: True)
+
+            with pytest.raises(RuntimeError, match="Fast Reasoning gate failed"):
+                updater.update_doc_from_diffs(
+                    "docs/doc.md",
+                    "test purpose",
+                    ["src/borderline.py"],
+                    dry_run=False,
+                )
+
+            assert doc.read_text(encoding="utf-8") == "# Doc\n\nExisting details.\n"
+
     def test_skips_protected_project_log_staleness_update(self, tmp_path, monkeypatch):
         with _adapter_patch(tmp_path):
             from datastore.docsdb import updater
