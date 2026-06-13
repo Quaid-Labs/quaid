@@ -144,8 +144,8 @@ def _visible_home() -> Path:
     return get_visible_quaid_home()
 
 
-# Keep underscores for installed alpha projects, but reject dots and separators.
-_PROJECT_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+# Keep underscores for installed alpha projects, but reject dots/separators and cap path length.
+_PROJECT_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,127}$")
 
 
 def _normalize_project_name(name: str) -> str:

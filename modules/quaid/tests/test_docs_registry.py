@@ -187,6 +187,11 @@ class TestRegisterAndGet:
 
         assert not (visible_home.parent / "escape").exists()
 
+    def test_register_rejects_overlong_project_name(self, setup_env):
+        r = _get_registry()
+        with pytest.raises(ValueError, match="Invalid project name"):
+            r.register("docs/test.md", project="a" * 129)
+
     def test_read_rejects_corrupt_outside_registry_path(self, setup_env):
         from lib.database import get_connection
 
