@@ -4590,7 +4590,7 @@ const quaidPlugin = {
       }
       const startAgentLabel = resolveHookAgentLabel(event, ctx);
       const startInstanceId = getInstanceId(startAgentLabel);
-      ensureAgentInstanceProvisioned(startAgentLabel, "before_agent_start");
+      ensureAgentInstanceProvisioned(startAgentLabel, "before_agent_start", { wakeDaemon: false });
       try {
         const messages = facade.collectJanitorNudges({
           statePath: JANITOR_NUDGE_STATE_PATH,
@@ -4609,18 +4609,24 @@ notify_user(${JSON.stringify(message)})
         }
         console.warn(`[quaid] Janitor nudge dispatch failed: ${String(err?.message || err)}`);
       }
-      void facade.maybeQueueJanitorHealthAlertAsync({ statePath: JANITOR_NUDGE_STATE_PATH }).catch((err) => {
-        const message = String(err?.message || err);
-        console.warn(`[quaid] Async janitor health alert dispatch failed: ${message}`);
-        writeHookTrace("hook.before_agent_start.janitor_health_failed", {
-          error: message.slice(0, 240)
-        });
-        if (isFailHardEnabled2()) {
-          setTimeout(() => {
-            throw err;
-          }, 0);
+      if (isFailHardEnabled2()) {
+        try {
+          await facade.maybeQueueJanitorHealthAlertAsync({ statePath: JANITOR_NUDGE_STATE_PATH });
+        } catch (err) {
+          writeHookTrace("hook.before_agent_start.janitor_health_failed", {
+            error: String(err?.message || err).slice(0, 240)
+          });
+          throw err;
         }
-      });
+      } else {
+        void facade.maybeQueueJanitorHealthAlertAsync({ statePath: JANITOR_NUDGE_STATE_PATH }).catch((err) => {
+          const message = String(err?.message || err);
+          console.warn(`[quaid] Async janitor health alert dispatch failed: ${message}`);
+          writeHookTrace("hook.before_agent_start.janitor_health_failed", {
+            error: message.slice(0, 240)
+          });
+        });
+      }
       writeHookTrace("hook.before_agent_start.janitor_health_queued", {
         reason: "async_stats",
         instance_id: startInstanceId
@@ -5038,7 +5044,7 @@ ${deferredNoticeRelayContext}` : deferredNoticeRelayContext;
             });
           }
         }
-        const eventMessages = Array.isArray(event.messages) ? event.messages : [];
+        const eventMessages = Array.isArray(event?.messages) ? event.messages : [];
         writeHookTrace("hook.before_prompt_build.query_extracted", {
           session_id: promptSessionId,
           hook_session_key: String(event?.sessionKey || ctx?.sessionKey || ""),
@@ -5053,7 +5059,7 @@ ${deferredNoticeRelayContext}` : deferredNoticeRelayContext;
             raw_prefix: rawPrompt.slice(0, 80),
             msg_count: eventMessages.length
           });
-          return withDocs({ prependContext: event.prependContext });
+          return withDocs({ prependContext: event?.prependContext });
         }
         if (PROMPT_RELAY_SKIP_RE.test(query)) {
           const rawRecovered = scrubAutoInjectQuery(rawPrompt);
@@ -5064,14 +5070,14 @@ ${deferredNoticeRelayContext}` : deferredNoticeRelayContext;
             writeHookTrace("hook.before_prompt_build.staleness_recovered", { query: query.slice(0, 80), source: recoveredSource });
           } else {
             writeHookTrace("hook.before_prompt_build.startup_skip", { query: query.slice(0, 80), recovered_len: rawRecovered.length });
-            return withDocs({ prependContext: event.prependContext });
+            return withDocs({ prependContext: event?.prependContext });
           }
         }
         if (query.startsWith("Extract memorable facts and journal entries from this conversation:")) {
-          return withDocs({ prependContext: event.prependContext });
+          return withDocs({ prependContext: event?.prependContext });
         }
         if (promptFacade.isInternalMaintenancePrompt(query)) {
-          return withDocs({ prependContext: event.prependContext });
+          return withDocs({ prependContext: event?.prependContext });
         }
         const lowQualityQuery = promptFacade.isLowQualityQuery(query);
         const autoInjectK = promptFacade.computeDynamicK();
@@ -5121,7 +5127,7 @@ ${deferredNoticeRelayContext}` : deferredNoticeRelayContext;
             active_turns: _beforePromptBuildInFlightByTurn.size,
             same_turn: false
           });
-          return withDocs({ prependContext: event.prependContext });
+          return withDocs({ prependContext: event?.prependContext });
         }
         if (turnPromise) {
           writeHookTrace("hook.before_prompt_build.duplicate_wait", {
@@ -5252,7 +5258,7 @@ ${deferredNoticeRelayContext}` : deferredNoticeRelayContext;
 ${appendSystemContext}` : providerNoticeContext || modelConfigNotice;
         }
         if (skipReason) {
-          return withDocs({ prependContext: event.prependContext });
+          return withDocs({ prependContext: event?.prependContext });
         }
         if (!Array.isArray(allMemories) || allMemories.length === 0) {
           writeHookTrace("hook.before_prompt_build.recall_empty", {
@@ -5280,7 +5286,7 @@ ${appendSystemContext}` : providerNoticeContext || modelConfigNotice;
             diagnostics: recallDiagnostics,
             top_results: summarizeRecallResults(allMemories)
           });
-          return withDocs({ prependContext: event.prependContext });
+          return withDocs({ prependContext: event?.prependContext });
         }
         const { toInject, prependContext: memoriesBlock } = injection;
         appendPreinjectEvidenceLog(buildPreinjectEvidenceEntry({
@@ -5338,8 +5344,15 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
         }
       } catch (error) {
         console.error("[quaid] Auto-injection error:", error);
+        writeHookTrace("hook.before_prompt_build.error", {
+          session_id: promptSessionId,
+          error: String(error?.message || error).slice(0, 240)
+        });
+        if (isFailHardEnabled2()) {
+          throw error;
+        }
       }
-      return withDocs({ prependContext: event.prependContext || void 0 });
+      return withDocs({ prependContext: event?.prependContext || void 0 });
     };
     console.log("[quaid] Registering before_agent_start hook for memory injection");
     onChecked("before_agent_start", beforeAgentStartHandler, {
@@ -5455,7 +5468,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
           );
           if (sessionId) {
             sessionIdToAgentId.set(sessionId, transcriptAgentLabel);
-            ensureAgentInstanceProvisioned(transcriptAgentLabel, "transcript_update");
+            ensureAgentInstanceProvisioned(transcriptAgentLabel, "transcript_update", { wakeDaemon: false });
           }
           const hasInternalTranscript = isInternalTranscriptMessages(messages);
           if (hasInternalTranscript) {
@@ -7114,7 +7127,7 @@ notify_memory_extraction(
         if (isInternalSessionContext(event, ctx)) {
           return;
         }
-        const messages = event.messages || [];
+        const messages = event?.messages || [];
         const sessionId = ctx?.sessionId;
         const conversationMessages = facade.filterConversationMessages(messages);
         const fallbackInteractiveSessionId = currentInteractiveSession?.sessionId || "";
@@ -7242,8 +7255,8 @@ notify_memory_extraction(
         if (isInternalSessionContext(event, ctx)) {
           return;
         }
-        const messages = event.messages || [];
-        const reason = event.reason || "unknown";
+        const messages = event?.messages || [];
+        const reason = event?.reason || "unknown";
         const sessionId = ctx?.sessionId;
         const conversationMessages = facade.filterConversationMessages(messages);
         const preferredTranscriptPath = resolveLifecycleTranscriptPath("reset", event, ctx);

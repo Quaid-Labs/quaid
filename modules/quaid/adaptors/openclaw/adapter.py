@@ -59,6 +59,9 @@ class OpenClawAdapter(QuaidAdapter):
         ],
     }
 
+    def __init__(self):
+        self._provider_fallback_notices_seen: set[str] = set()
+
     @classmethod
     def installer_adapter_id(cls) -> str:
         return "openclaw"
@@ -156,6 +159,8 @@ class OpenClawAdapter(QuaidAdapter):
                     if "/" in primary:
                         return str(primary.split("/", 1)[0] or "").strip().lower()
             except Exception:
+                if is_fail_hard_enabled():
+                    raise
                 pass
         profiles_path = self._get_agent_config_dir() / "auth-profiles.json"
         if profiles_path.exists():
@@ -172,6 +177,8 @@ class OpenClawAdapter(QuaidAdapter):
                     if normalized:
                         return normalized
             except Exception:
+                if is_fail_hard_enabled():
+                    raise
                 pass
         return ""
 
@@ -484,9 +491,13 @@ class OpenClawAdapter(QuaidAdapter):
             return False
         except subprocess.TimeoutExpired:
             print("[notify] Send timed out", file=sys.stderr)
+            if is_fail_hard_enabled():
+                raise
             return False
         except Exception as e:
             print(f"[notify] Error: {e}", file=sys.stderr)
+            if is_fail_hard_enabled():
+                raise
             return False
 
     def get_last_channel(self, session_key: str = "") -> Optional[ChannelInfo]:
@@ -843,6 +854,9 @@ class OpenClawAdapter(QuaidAdapter):
         cfg = get_config()
         deep_model = str(getattr(cfg.models, "deep_reasoning", "") or "").strip()
         fast_model = str(getattr(cfg.models, "fast_reasoning", "") or "").strip()
+        original_provider = str(getattr(cfg.models, "llm_provider", "") or "").strip()
+        original_deep_model = deep_model
+        original_fast_model = fast_model
         provider = str(getattr(cfg.models, "llm_provider", "") or "").strip()
         detected_provider = self._normalize_installer_provider(self._detect_gateway_primary_provider())
         provider_inferred = not provider or provider == "default"
@@ -880,6 +894,14 @@ class OpenClawAdapter(QuaidAdapter):
                 deep_model = str(defaults["deep"])
             if fast_model.startswith("claude-") and defaults.get("fast"):
                 fast_model = str(defaults["fast"])
+            self._notify_provider_fallback(
+                configured_provider=original_provider,
+                detected_provider=detected_provider,
+                deep_model_before=original_deep_model,
+                fast_model_before=original_fast_model,
+                deep_model_after=deep_model,
+                fast_model_after=fast_model,
+            )
         if provider == "openclaw-gateway":
             return OpenClawGatewayLLMProvider()
         if provider == "anthropic":
@@ -918,6 +940,46 @@ class OpenClawAdapter(QuaidAdapter):
             "Valid values: 'anthropic', 'openai', 'openclaw-gateway'."
         )
 
+    def _notify_provider_fallback(
+        self,
+        *,
+        configured_provider: str,
+        detected_provider: str,
+        deep_model_before: str,
+        fast_model_before: str,
+        deep_model_after: str,
+        fast_model_after: str,
+    ) -> None:
+        provider_label = str(configured_provider or "default").strip() or "default"
+        changes = []
+        if deep_model_before != deep_model_after:
+            changes.append(f"deep model {deep_model_before!r} -> {deep_model_after!r}")
+        if fast_model_before != fast_model_after:
+            changes.append(f"fast model {fast_model_before!r} -> {fast_model_after!r}")
+        model_part = f"; {', '.join(changes)}" if changes else ""
+        message = (
+            "OpenClaw gateway is routed to OpenAI/Codex but Quaid config selected "
+            f"{provider_label!r}. Quaid is using the OpenAI provider for this turn"
+            f"{model_part}."
+        )
+        dedupe = (
+            "openclaw-provider-fallback:"
+            f"{provider_label}:{detected_provider}:{deep_model_before}:{fast_model_before}:"
+            f"{deep_model_after}:{fast_model_after}"
+        )
+        if dedupe in self._provider_fallback_notices_seen:
+            return
+        try:
+            if self.notify(f"[Quaid warning] [provider] {message}", force=True):
+                self._provider_fallback_notices_seen.add(dedupe)
+        except Exception:
+            if is_fail_hard_enabled():
+                raise
+            print(
+                f"[notify] Provider fallback notice failed for {dedupe}",
+                file=sys.stderr,
+            )
+
     def installer_supported_providers(self) -> list:
         return ["anthropic", "openai"]
 
@@ -951,6 +1013,8 @@ class OpenClawAdapter(QuaidAdapter):
         try:
             port, token = self._get_gateway_auth()
         except Exception:
+            if is_fail_hard_enabled():
+                raise
             return None
         candidates = self._OPENAI_CODEX_FAST_CANDIDATES
         # Ensure all candidates are in the allowlist before pinging.
@@ -975,6 +1039,9 @@ class OpenClawAdapter(QuaidAdapter):
                 if str(getattr(response, "text", "") or "").strip():
                     return candidate
             except Exception:
+                if is_fail_hard_enabled():
+                    raise
+                print(f"[notify] Deprecated OpenClaw fast-model probe failed for {candidate}", file=sys.stderr)
                 continue
         return None
 

@@ -1242,6 +1242,9 @@ const TRANSCRIPT_TAIL_SETTLE_MS = Math.max(
   0,
   Math.min(_envTimeoutMs("QUAID_OC_TRANSCRIPT_TAIL_SETTLE_MS", 500), 2_000),
 );
+// OC can fire before_prompt_build before the current user prompt is durably
+// appended to the transcript. This waits only for platform transcript write
+// completion, not for daemon extraction/indexing.
 type LifecycleSlashAction = "new" | "reset" | "compact";
 
 function normalizeLifecycleSlashAction(text: string): LifecycleSlashAction | null {
@@ -5704,7 +5707,7 @@ const quaidPlugin = {
       }
       const startAgentLabel = resolveHookAgentLabel(event, ctx);
       const startInstanceId = getInstanceId(startAgentLabel);
-      ensureAgentInstanceProvisioned(startAgentLabel, "before_agent_start");
+      ensureAgentInstanceProvisioned(startAgentLabel, "before_agent_start", { wakeDaemon: false });
       try {
         const messages = facade.collectJanitorNudges({
           statePath: JANITOR_NUDGE_STATE_PATH,
@@ -5726,17 +5729,25 @@ notify_user(${JSON.stringify(message)})
       // before_agent_start is on OpenClaw's dispatch hot path. Queue janitor
       // health through the async bridge so datastore stats cannot freeze the
       // Node event loop before OC dispatches the agent.
-      void facade.maybeQueueJanitorHealthAlertAsync({ statePath: JANITOR_NUDGE_STATE_PATH })
-        .catch((err: unknown) => {
-          const message = String((err as Error)?.message || err);
-          console.warn(`[quaid] Async janitor health alert dispatch failed: ${message}`);
+      if (isFailHardEnabled()) {
+        try {
+          await facade.maybeQueueJanitorHealthAlertAsync({ statePath: JANITOR_NUDGE_STATE_PATH });
+        } catch (err: unknown) {
           writeHookTrace("hook.before_agent_start.janitor_health_failed", {
-            error: message.slice(0, 240),
+            error: String((err as Error)?.message || err).slice(0, 240),
           });
-          if (isFailHardEnabled()) {
-            setTimeout(() => { throw err; }, 0);
-          }
-        });
+          throw err;
+        }
+      } else {
+        void facade.maybeQueueJanitorHealthAlertAsync({ statePath: JANITOR_NUDGE_STATE_PATH })
+          .catch((err: unknown) => {
+            const message = String((err as Error)?.message || err);
+            console.warn(`[quaid] Async janitor health alert dispatch failed: ${message}`);
+            writeHookTrace("hook.before_agent_start.janitor_health_failed", {
+              error: message.slice(0, 240),
+            });
+          });
+      }
       writeHookTrace("hook.before_agent_start.janitor_health_queued", {
         reason: "async_stats",
         instance_id: startInstanceId,
@@ -6245,7 +6256,7 @@ notify_user(${JSON.stringify(message)})
             });
           }
         }
-        const eventMessages: any[] = Array.isArray(event.messages) ? event.messages : [];
+        const eventMessages: any[] = Array.isArray(event?.messages) ? event.messages : [];
 
         writeHookTrace("hook.before_prompt_build.query_extracted", {
           session_id: promptSessionId,
@@ -6262,7 +6273,7 @@ notify_user(${JSON.stringify(message)})
             raw_prefix: rawPrompt.slice(0, 80),
             msg_count: eventMessages.length,
           });
-          return withDocs({ prependContext: event.prependContext });
+          return withDocs({ prependContext: event?.prependContext });
         }
 
         // Skip system/internal prompts, slash commands, and OC gateway error messages.
@@ -6282,15 +6293,15 @@ notify_user(${JSON.stringify(message)})
             writeHookTrace("hook.before_prompt_build.staleness_recovered", { query: query.slice(0, 80), source: recoveredSource });
           } else {
             writeHookTrace("hook.before_prompt_build.startup_skip", { query: query.slice(0, 80), recovered_len: rawRecovered.length });
-            return withDocs({ prependContext: event.prependContext });
+            return withDocs({ prependContext: event?.prependContext });
           }
         }
         if (query.startsWith("Extract memorable facts and journal entries from this conversation:")) {
-          return withDocs({ prependContext: event.prependContext });
+          return withDocs({ prependContext: event?.prependContext });
         }
         // Skip janitor/reviewer internal prompts so maintenance flows never trigger auto-injection.
         if (promptFacade.isInternalMaintenancePrompt(query)) {
-          return withDocs({ prependContext: event.prependContext });
+          return withDocs({ prependContext: event?.prependContext });
         }
 
         const lowQualityQuery = promptFacade.isLowQualityQuery(query);
@@ -6357,7 +6368,7 @@ notify_user(${JSON.stringify(message)})
             active_turns: _beforePromptBuildInFlightByTurn.size,
             same_turn: false,
           });
-          return withDocs({ prependContext: event.prependContext });
+          return withDocs({ prependContext: event?.prependContext });
         }
         if (turnPromise) {
           writeHookTrace("hook.before_prompt_build.duplicate_wait", {
@@ -6495,7 +6506,7 @@ notify_user(${JSON.stringify(message)})
             : (providerNoticeContext || modelConfigNotice);
         }
         if (skipReason) {
-          return withDocs({ prependContext: event.prependContext });
+          return withDocs({ prependContext: event?.prependContext });
         }
 
         if (!Array.isArray(allMemories) || allMemories.length === 0) {
@@ -6525,7 +6536,7 @@ notify_user(${JSON.stringify(message)})
             diagnostics: recallDiagnostics,
             top_results: summarizeRecallResults(allMemories),
           });
-          return withDocs({ prependContext: event.prependContext });
+          return withDocs({ prependContext: event?.prependContext });
         }
         const { toInject, prependContext: memoriesBlock } = injection;
         appendPreinjectEvidenceLog(buildPreinjectEvidenceEntry({
@@ -6588,9 +6599,16 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
 
       } catch (error: unknown) {
         console.error("[quaid] Auto-injection error:", error);
+        writeHookTrace("hook.before_prompt_build.error", {
+          session_id: promptSessionId,
+          error: String((error as Error)?.message || error).slice(0, 240),
+        });
+        if (isFailHardEnabled()) {
+          throw error;
+        }
       }
 
-      return withDocs({ prependContext: event.prependContext || undefined });
+      return withDocs({ prependContext: event?.prependContext || undefined });
     };
 
     // Register lifecycle hooks via registerHook (api.on is for event bus signals).
@@ -6742,7 +6760,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
           );
           if (sessionId) {
             sessionIdToAgentId.set(sessionId, transcriptAgentLabel);
-            ensureAgentInstanceProvisioned(transcriptAgentLabel, "transcript_update");
+            ensureAgentInstanceProvisioned(transcriptAgentLabel, "transcript_update", { wakeDaemon: false });
           }
           const hasInternalTranscript = isInternalTranscriptMessages(messages);
           if (hasInternalTranscript) {
@@ -8705,7 +8723,7 @@ notify_memory_extraction(
         if (isInternalSessionContext(event, ctx)) {
           return;
         }
-        const messages: any[] = event.messages || [];
+        const messages: any[] = event?.messages || [];
         const sessionId = ctx?.sessionId;
         const conversationMessages = facade.filterConversationMessages(messages);
         const fallbackInteractiveSessionId = currentInteractiveSession?.sessionId || "";
@@ -8866,8 +8884,8 @@ notify_memory_extraction(
         if (isInternalSessionContext(event, ctx)) {
           return;
         }
-        const messages: any[] = event.messages || [];
-        const reason = event.reason || "unknown";
+        const messages: any[] = event?.messages || [];
+        const reason = event?.reason || "unknown";
         const sessionId = ctx?.sessionId;
         const conversationMessages = facade.filterConversationMessages(messages);
         const preferredTranscriptPath = resolveLifecycleTranscriptPath("reset", event, ctx);

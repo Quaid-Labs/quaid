@@ -22,6 +22,7 @@ from typing import Any, Callable, Dict, List, Optional, Protocol
 from core.llm.scheduler import get_global_llm_scheduler
 from core.runtime.paths import get_runtime_root
 from core.runtime.parallel_runtime import ResourceLockRegistry, get_parallel_config
+from lib.fail_policy import is_fail_hard_enabled
 logger = logging.getLogger(__name__)
 
 _LIFECYCLE_PARALLEL_TELEMETRY_ENABLED = (
@@ -133,6 +134,8 @@ class LifecycleRegistry:
                 parallel_cfg = get_parallel_config(first_cfg)
                 timeout_seconds = float(getattr(parallel_cfg, "lifecycle_prepass_timeout_seconds", 300) or 300)
             except Exception:
+                if is_fail_hard_enabled():
+                    raise
                 timeout_seconds = 300.0
         timeout_seconds = max(0.001, float(timeout_seconds))
         deadline = time.monotonic() + timeout_seconds
@@ -416,6 +419,8 @@ class LifecycleRegistry:
             if parsed_cfg > 0:
                 return parsed_cfg
         except Exception:
+            if is_fail_hard_enabled():
+                raise
             pass
         return float(default_seconds)
 
@@ -438,6 +443,8 @@ class LifecycleRegistry:
             if parsed_cfg >= 0:
                 return parsed_cfg
         except Exception:
+            if is_fail_hard_enabled():
+                raise
             pass
         return int(default_retries)
 
@@ -589,6 +596,8 @@ def _resolve_adapter_maintenance_module(default_module: str = "") -> str:
                     parts[-1] = "maintenance"
                     return ".".join(parts)
     except Exception:
+        if is_fail_hard_enabled():
+            raise
         pass
     # Fallback: discover adapter maintenance modules from local tree without
     # hardcoding any specific adapter identifier.
@@ -607,6 +616,8 @@ def _resolve_adapter_maintenance_module(default_module: str = "") -> str:
         if candidates:
             return sorted(candidates)[0]
     except Exception:
+        if is_fail_hard_enabled():
+            raise
         pass
     return default_module
 
@@ -661,6 +672,8 @@ def build_default_registry() -> LifecycleRegistry:
                 continue
             module_specs.append((name, []))
     except Exception:
+        if is_fail_hard_enabled():
+            raise
         logger.warning("Failed to parse lifecycle.modules config; using default lifecycle registry.", exc_info=True)
 
     # Preserve order, prevent duplicate module registrations in one build pass.

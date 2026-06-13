@@ -154,6 +154,32 @@ def test_janitor_audit_log_honors_fail_hard(monkeypatch, tmp_path):
         janitor._write_janitor_log_entry(log_dir, "janitor_complete")
 
 
+def test_janitor_lock_attempt_does_not_truncate_held_lock(monkeypatch, tmp_path):
+    import fcntl
+
+    from core.lifecycle import janitor
+
+    data_dir = tmp_path / "data"
+    lock_path = data_dir / ".janitor.lock"
+    data_dir.mkdir(parents=True)
+    lock_text = "12345\n2026-06-13T00:00:00"
+    lock_path.write_text(lock_text, encoding="utf-8")
+    monkeypatch.setattr(janitor, "_data_dir", lambda: data_dir)
+    janitor._lock_fd = None
+
+    holder = open(lock_path, "a+")
+    try:
+        fcntl.flock(holder, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+        assert janitor._acquire_lock() is False
+        assert lock_path.read_text(encoding="utf-8") == lock_text
+        assert janitor._lock_fd is None
+    finally:
+        fcntl.flock(holder, fcntl.LOCK_UN)
+        holder.close()
+        janitor._lock_fd = None
+
+
 def test_janitor_main_routes_all_apply_without_instance_bootstrap(monkeypatch, tmp_path):
     monkeypatch.setenv("QUAID_HOME", str(tmp_path))
     monkeypatch.setenv("QUAID_VISIBLE_HOME", str(tmp_path))

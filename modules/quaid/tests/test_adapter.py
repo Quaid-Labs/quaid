@@ -1015,6 +1015,35 @@ class TestOpenClawAdapter:
         assert adapter.get_deep_model_default("default") == "gpt-5.4"
         assert adapter.get_fast_model_default("default") == "gpt-5.4-mini"
 
+    def test_installer_provider_detection_raises_bad_config_when_fail_hard(self, monkeypatch, tmp_path):
+        home = tmp_path / "home"
+        cfg_dir = home / ".openclaw"
+        cfg_dir.mkdir(parents=True)
+        (cfg_dir / "openclaw.json").write_text("{bad json", encoding="utf-8")
+        monkeypatch.setattr(Path, "home", lambda: home)
+        adapter = OpenClawAdapter()
+
+        with patch("adaptors.openclaw.adapter.is_fail_hard_enabled", return_value=True):
+            with pytest.raises(json.JSONDecodeError):
+                adapter.get_deep_provider_default()
+
+    def test_openclaw_notify_reraises_transport_failure_when_fail_hard(self, monkeypatch):
+        adapter = OpenClawAdapter()
+        monkeypatch.setattr(adapter, "get_last_channel", lambda *_args, **_kwargs: SimpleNamespace(
+            channel="matrix",
+            target="!room:example",
+            account_id="default",
+        ))
+        monkeypatch.setattr(adapter, "_resolve_message_cli", lambda: "openclaw")
+        monkeypatch.setattr(
+            "adaptors.openclaw.adapter.subprocess.run",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("transport failed")),
+        )
+
+        with patch("adaptors.openclaw.adapter.is_fail_hard_enabled", return_value=True):
+            with pytest.raises(OSError, match="transport failed"):
+                adapter.notify("hello")
+
     def test_get_llm_provider_detects_agents_list_codex_oauth(self, monkeypatch, tmp_path):
         home = tmp_path / "home"
         cfg_dir = home / ".openclaw"
@@ -1152,6 +1181,8 @@ class TestOpenClawAdapter:
         monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
         adapter = OpenClawAdapter()
         monkeypatch.setattr(adapter, "_resolve_anthropic_credential", lambda: None)
+        notices = []
+        monkeypatch.setattr(adapter, "notify", lambda message, **_kwargs: notices.append(message) or True)
         cfg = SimpleNamespace(models=SimpleNamespace(
             llm_provider="anthropic",
             deep_reasoning="gpt-5.4",
@@ -1169,6 +1200,9 @@ class TestOpenClawAdapter:
         assert isinstance(llm, OpenAICodexOAuthLLMProvider)
         assert llm._deep_model == "gpt-5.4"
         assert llm._fast_model == "gpt-5.4-mini"
+        assert notices
+        assert "OpenClaw gateway is routed to OpenAI/Codex" in notices[0]
+        assert "'anthropic'" in notices[0]
 
     def test_get_llm_provider_keeps_openai_models_when_overriding_global_anthropic(self, monkeypatch, tmp_path):
         home = tmp_path / "home"
@@ -1317,6 +1351,8 @@ class TestOpenClawAdapter:
         monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
         adapter = OpenClawAdapter()
         monkeypatch.setattr(adapter, "_resolve_anthropic_credential", lambda: None)
+        notices = []
+        monkeypatch.setattr(adapter, "notify", lambda message, **_kwargs: notices.append(message) or True)
         cfg = SimpleNamespace(models=SimpleNamespace(
             llm_provider="anthropic",
             deep_reasoning="claude-sonnet-4-5",
@@ -1334,6 +1370,9 @@ class TestOpenClawAdapter:
         assert isinstance(llm, OpenAICodexOAuthLLMProvider)
         assert llm._deep_model == "gpt-5.4"
         assert llm._fast_model == "gpt-5.4-mini"
+        assert notices
+        assert "deep model 'claude-sonnet-4-5' -> 'gpt-5.4'" in notices[0]
+        assert "fast model 'claude-haiku-4-5' -> 'gpt-5.4-mini'" in notices[0]
 
     def test_installer_review_model_pair_flags_unknown_gateway_provider(self, monkeypatch, tmp_path):
         home = tmp_path / "home"

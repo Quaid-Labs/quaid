@@ -421,23 +421,16 @@ def _acquire_lock() -> bool:
     """Acquire janitor lock using fcntl.flock (atomic, auto-releases on crash)."""
     global _lock_fd
     import fcntl
-    # Clear stale lock left by a dead process before attempting to acquire.
-    lock_path = _lock_file_path()
-    if lock_path.exists():
-        try:
-            lines = lock_path.read_text().strip().split('\n')
-            stored_pid = int(lines[0])
-            try:
-                os.kill(stored_pid, 0)  # Signal 0: check process exists
-            except (OSError, ProcessLookupError):
-                lock_path.unlink(missing_ok=True)  # Process gone — stale lock
-        except Exception:
-            lock_path.unlink(missing_ok=True)  # Unreadable lock — remove it
     with _lock_guard:
         try:
-            _lock_file_path().parent.mkdir(parents=True, exist_ok=True)
-            _lock_fd = open(_lock_file_path(), 'w')
+            lock_path = _lock_file_path()
+            lock_path.parent.mkdir(parents=True, exist_ok=True)
+            # Do not truncate or unlink before flock succeeds: competing
+            # processes must keep contending for the same inode.
+            _lock_fd = open(lock_path, 'a+')
             fcntl.flock(_lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            _lock_fd.seek(0)
+            _lock_fd.truncate()
             _lock_fd.write(f"{os.getpid()}\n{datetime.now().isoformat()}")
             _lock_fd.flush()
             return True
@@ -458,7 +451,6 @@ def _release_lock():
                 fcntl.flock(_lock_fd, fcntl.LOCK_UN)
                 _lock_fd.close()
                 _lock_fd = None
-            _lock_file_path().unlink(missing_ok=True)
         except Exception as exc:
             janitor_logger.warn("janitor_lock_release_failed", error=str(exc))
 

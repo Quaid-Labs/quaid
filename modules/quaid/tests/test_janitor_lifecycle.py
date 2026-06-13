@@ -477,6 +477,25 @@ def test_lifecycle_registry_run_many_executes_in_parallel_shape(tmp_path):
     assert out["b"].metrics["b"] == 1
 
 
+def test_lifecycle_registry_run_many_raises_config_failure_when_fail_hard(monkeypatch, tmp_path):
+    import core.lifecycle.janitor_lifecycle as lifecycle_mod
+
+    registry = LifecycleRegistry()
+    registry.register("noop", lambda _ctx: RoutineResult(metrics={"ok": 1}))
+    monkeypatch.setattr(lifecycle_mod, "is_fail_hard_enabled", lambda: True)
+    monkeypatch.setattr(
+        lifecycle_mod,
+        "get_parallel_config",
+        lambda _cfg: (_ for _ in ()).throw(RuntimeError("bad parallel config")),
+    )
+
+    with pytest.raises(RuntimeError, match="bad parallel config"):
+        registry.run_many(
+            [("noop", RoutineContext(cfg=_make_cfg(False), dry_run=True, workspace=tmp_path))],
+            max_workers=1,
+        )
+
+
 def test_lifecycle_registry_run_many_times_out_pending_tasks(tmp_path):
     registry = build_default_registry()
 
@@ -871,6 +890,19 @@ def test_resolve_adapter_maintenance_module_from_active_manifest(monkeypatch):
 
     resolved = lifecycle_mod._resolve_adapter_maintenance_module()
     assert resolved == "adaptors.custom.maintenance"
+
+
+def test_resolve_adapter_maintenance_module_raises_config_failure_when_fail_hard(monkeypatch):
+    import core.lifecycle.janitor_lifecycle as lifecycle_mod
+
+    monkeypatch.setattr(lifecycle_mod, "is_fail_hard_enabled", lambda: True)
+    monkeypatch.setattr(
+        "config.get_config",
+        lambda: (_ for _ in ()).throw(RuntimeError("bad plugin config")),
+    )
+
+    with pytest.raises(RuntimeError, match="bad plugin config"):
+        lifecycle_mod._resolve_adapter_maintenance_module()
 
 
 def test_lifecycle_env_module_can_register_write_resources(monkeypatch, tmp_path):

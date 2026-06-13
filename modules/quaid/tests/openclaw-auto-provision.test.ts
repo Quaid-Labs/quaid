@@ -508,21 +508,17 @@ describe("openclaw auto-provision", () => {
     expect(targetConfig.capture).toBeUndefined();
     expect(targetConfig.plugins).toBeUndefined();
     expect(targetConfig.notifications).toBeUndefined();
-    expect(
-      childProcessState.daemonStartCalls.some(
-        (call) => String(call.env?.QUAID_INSTANCE || "") === "openclaw-m13test",
-      ),
-    ).toBe(true);
+    // before_agent_start provisions identity/config but must not wake the
+    // daemon on OC's dispatch hot path; prompt-build owns daemon liveness.
     const m13DaemonStarts = childProcessState.daemonStartCalls.filter(
       (call) => String(call.env?.QUAID_INSTANCE || "") === "openclaw-m13test",
     );
-    expect(m13DaemonStarts).toHaveLength(2);
-    expect(String(m13DaemonStarts[1]?.env?.QUAID_SUPERVISOR_DISABLE || "")).toBe("1");
+    expect(m13DaemonStarts).toHaveLength(0);
     expect(
       childProcessState.daemonStatusCalls.filter(
         (call) => String(call.env?.QUAID_INSTANCE || "") === "openclaw-m13test",
       ),
-    ).toHaveLength(2);
+    ).toHaveLength(0);
     expect(childProcessState.datastoreStatsSyncCalls).toHaveLength(0);
     await vi.waitFor(() => {
       expect(childProcessState.datastoreStatsSpawnCalls).toHaveLength(1);

@@ -2534,4 +2534,22 @@ describe("lifecycle signal detection", () => {
       vi.unstubAllEnvs();
     }
   });
+
+  it("documents transcript-tail settle as platform write latency, not daemon sweep latency", () => {
+    const source = fs.readFileSync(path.resolve("adaptors/openclaw/adapter.ts"), "utf8");
+
+    expect(source).toContain("platform transcript write");
+    expect(source).toContain("not for daemon extraction/indexing");
+  });
+
+  it("rethrows before_prompt_build auto-injection errors when failHard is enabled", () => {
+    const source = fs.readFileSync(path.resolve("adaptors/openclaw/adapter.ts"), "utf8");
+    const catchIndex = source.indexOf("console.error(\"[quaid] Auto-injection error:\", error);");
+
+    expect(catchIndex).toBeGreaterThan(0);
+    const catchBlock = source.slice(catchIndex, catchIndex + 500);
+    expect(catchBlock).toContain("writeHookTrace(\"hook.before_prompt_build.error\"");
+    expect(catchBlock).toContain("if (isFailHardEnabled())");
+    expect(catchBlock).toContain("throw error;");
+  });
 });
