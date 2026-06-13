@@ -4728,6 +4728,64 @@ def test_process_signal_merges_subagent_transcript_with_per_turn_labels(monkeypa
     assert captured["harvested"] == [("parent-1", "child-1")]
 
 
+def test_session_has_harvestable_subagents_warns_and_uses_adapter_fallback(monkeypatch, caplog):
+    import sys as _sys
+
+    real_registry = _sys.modules.get("core.subagent_registry")
+    fake_registry = types.ModuleType("core.subagent_registry")
+    fake_registry.get_harvestable = lambda _sid: (_ for _ in ()).throw(RuntimeError("registry down"))
+    _sys.modules["core.subagent_registry"] = fake_registry
+
+    class _FallbackAdapter:
+        def discover_subagent_children(self, parent_session_id):
+            assert parent_session_id == "parent-1"
+            return [{"child_id": "child-1", "transcript_path": "/tmp/child.jsonl"}]
+
+    monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: False)
+
+    try:
+        with caplog.at_level("WARNING", logger="quaid.daemon"):
+            assert extraction_daemon._session_has_harvestable_subagents(
+                "parent-1",
+                adapter=_FallbackAdapter(),
+            )
+    finally:
+        if real_registry is not None:
+            _sys.modules["core.subagent_registry"] = real_registry
+        else:
+            _sys.modules.pop("core.subagent_registry", None)
+
+    assert "subagent harvest registry lookup failed for parent-1" in caplog.text
+    assert "registry down" in caplog.text
+
+
+def test_session_has_harvestable_subagents_raises_adapter_discovery_when_fail_hard(monkeypatch):
+    import sys as _sys
+
+    real_registry = _sys.modules.get("core.subagent_registry")
+    fake_registry = types.ModuleType("core.subagent_registry")
+    fake_registry.get_harvestable = lambda _sid: []
+    _sys.modules["core.subagent_registry"] = fake_registry
+
+    class _FailingAdapter:
+        def discover_subagent_children(self, parent_session_id):
+            raise RuntimeError(f"discovery failed for {parent_session_id}")
+
+    monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: True)
+
+    try:
+        with pytest.raises(RuntimeError, match="discovery failed for parent-1"):
+            extraction_daemon._session_has_harvestable_subagents(
+                "parent-1",
+                adapter=_FailingAdapter(),
+            )
+    finally:
+        if real_registry is not None:
+            _sys.modules["core.subagent_registry"] = real_registry
+        else:
+            _sys.modules.pop("core.subagent_registry", None)
+
+
 def test_process_signal_harvests_subagent_when_parent_cursor_at_eof(monkeypatch, tmp_path):
     parent_path = tmp_path / "parent.jsonl"
     child_path = tmp_path / "child.jsonl"

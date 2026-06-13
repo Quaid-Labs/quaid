@@ -3130,8 +3130,10 @@ def _session_has_harvestable_subagents(session_id: str, adapter=None) -> bool:
         subagent_registry = importlib.import_module("core.subagent_registry")
         if subagent_registry.get_harvestable(session_id):
             return True
-    except Exception:
-        pass
+    except Exception as exc:
+        if _fail_hard_enabled():
+            raise
+        logger.warning("subagent harvest registry lookup failed for %s: %s", session_id, exc)
     try:
         discover_children_fn = getattr(adapter, "discover_subagent_children", None) if adapter is not None else None
         if not callable(discover_children_fn):
@@ -3139,8 +3141,10 @@ def _session_has_harvestable_subagents(session_id: str, adapter=None) -> bool:
         for child in discover_children_fn(session_id):
             if str(child.get("child_id") or "").strip() and str(child.get("transcript_path") or "").strip():
                 return True
-    except Exception:
-        pass
+    except Exception as exc:
+        if _fail_hard_enabled():
+            raise
+        logger.warning("subagent child discovery failed for %s: %s", session_id, exc)
     return False
 
 
