@@ -2196,6 +2196,61 @@ class TestRecallBasic:
 
         assert ranked[0]["id"] == "earlier-answer-fact"
 
+    def test_recall_once_fast_anchor_priority_runs_after_named_entity_anchor(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+
+        query = "What does Nimbus Marker 74 do?"
+        selected_rows = [
+            {
+                "id": "earlier-answer-fact",
+                "text": "Test Owner's daily-use marker is a Nimbus Marker 74 with a brass cap.",
+                "category": "fact",
+                "similarity": 0.77,
+                "extraction_confidence": 0.93,
+                "created_at": "2026-05-30T22:31:11",
+            },
+            {
+                "id": "late-entity-stub",
+                "text": "Nimbus Marker 74",
+                "category": "fact",
+                "similarity": 1.0,
+                "extraction_confidence": 0.50,
+                "created_at": "2026-05-30T23:31:20",
+                "via": "graph_attached_fact",
+                "source_name": "nimbus",
+            },
+        ]
+        graph, _ = _make_graph(tmp_path)
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch.object(graph, "search_hybrid", return_value=[]), \
+             patch.object(graph, "search_fts", return_value=[]), \
+             patch.object(mg, "_ollama_healthy", return_value=True), \
+             patch.object(mg, "_expand_high_confidence_entity_anchors", return_value=([], [])), \
+             patch.object(mg, "_select_final_recall_rows", return_value=list(selected_rows)), \
+             patch.object(mg, "_log_recall", lambda *args, **kwargs: None):
+            rows, meta = mg._recall_once(
+                query,
+                limit=2,
+                owner_id="quaid",
+                min_similarity=0.6,
+                use_routing=False,
+                include_graph_traversal=False,
+                include_co_session=False,
+                include_mmr=False,
+                include_lexical_anchor_shaping=True,
+                lexical_anchor_planner_mode="deterministic",
+                low_signal_retry=False,
+                track_access=False,
+                return_meta=True,
+            )
+
+        assert meta["counts"]["final_results"] == 2
+        assert [row["id"] for row in rows] == [
+            "earlier-answer-fact",
+            "late-entity-stub",
+        ]
+
     def test_recall_fast_uses_wider_candidate_pool_before_trim(self, monkeypatch):
         import datastore.memorydb.memory_graph as mg
 
