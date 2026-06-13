@@ -6019,6 +6019,37 @@ def test_effective_idle_timeout_clamps_disabled_or_excessive_values():
     assert extraction_daemon._effective_idle_timeout_minutes(999) == 120
 
 
+def test_get_idle_timeout_minutes_preserves_explicit_zero_over_legacy_alias(monkeypatch, tmp_path):
+    import config as config_mod
+
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps({
+            "capture": {
+                "inactivity_timeout_minutes": 0,
+                "inactivityTimeoutMinutes": 45,
+            }
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(config_mod, "_config_paths", lambda: [config_path])
+
+    assert extraction_daemon._get_idle_timeout_minutes(default=30) == 0
+
+
+def test_get_idle_timeout_minutes_uses_legacy_alias_when_modern_key_absent(monkeypatch, tmp_path):
+    import config as config_mod
+
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps({"capture": {"inactivityTimeoutMinutes": 45}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(config_mod, "_config_paths", lambda: [config_path])
+
+    assert extraction_daemon._get_idle_timeout_minutes(default=30) == 45
+
+
 def test_check_idle_sessions_timeout_signal_carries_compaction_metadata(monkeypatch, tmp_path):
     transcript_path = tmp_path / "session.jsonl"
     transcript_path.write_text('{"role":"user","content":"hello"}\n{"role":"assistant","content":"hi"}\n', encoding="utf-8")

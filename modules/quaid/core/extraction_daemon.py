@@ -6950,7 +6950,10 @@ def _get_idle_timeout_minutes(default: int = 30) -> int:
                 try:
                     _data = _json.loads(_cp.read_text(encoding="utf-8"))
                     _capture = _data.get("capture", {})
-                    _v = _capture.get("inactivity_timeout_minutes") or _capture.get("inactivityTimeoutMinutes")
+                    if "inactivity_timeout_minutes" in _capture:
+                        _v = _capture.get("inactivity_timeout_minutes")
+                    else:
+                        _v = _capture.get("inactivityTimeoutMinutes")
                     if _v is not None:
                         raw = _v
                 except Exception:
