@@ -20,7 +20,9 @@ def setup_env(tmp_path, monkeypatch):
     """Set up isolated test environment."""
     global _tmp_db
     from lib.adapter import set_adapter, reset_adapter, TestAdapter
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
     monkeypatch.setenv("QUAID_VISIBLE_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "pytest-runner")
     adapter = TestAdapter(tmp_path)
     set_adapter(adapter)
     iroot = adapter.instance_root()
@@ -67,6 +69,12 @@ def setup_env(tmp_path, monkeypatch):
     # Create project directory
     (shared_projects_dir / "test-project").mkdir(parents=True, exist_ok=True)
     (iroot / "src").mkdir(exist_ok=True)
+    from lib.project_registry import register as global_project_register
+    global_project_register(
+        name="test-project",
+        canonical_path=str(shared_projects_dir / "test-project"),
+        description="A test project",
+    )
 
     # Patch config paths to use test config and WORKSPACE in docs_registry
     sys.path.insert(0, str(Path(__file__).parent.parent))
