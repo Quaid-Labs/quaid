@@ -2760,7 +2760,6 @@ class TestExtractFromTranscript:
             if str(fact.get("speaker", "") or "").lower() == "agent"
         ]
         assert not any(text.startswith("I left a TODO comment in the resolver") for text in agent_texts)
-        assert not any(text.startswith("Environment-driven configuration.") for text in agent_texts)
         assert not any(text.startswith("The N+1 test is especially important") for text in agent_texts)
         assert not any(text.startswith("Concise README:") for text in agent_texts)
 
@@ -2838,7 +2837,6 @@ class TestExtractFromTranscript:
         assert not any(text.startswith("The share endpoint is already set up:") for text in agent_texts)
         assert not any(text.startswith("One share per recipe (unique index on recipe_id)") for text in agent_texts)
         assert not any(text.startswith("No, you're right — it IS a real problem. It's called the N+1 query issue") for text in agent_texts)
-        assert not any(text.startswith("For a personal app with maybe 20-30 recipes") for text in agent_texts)
         assert not any(text.startswith("nanoid: ^3.3.7") for text in agent_texts)
         assert not any(text.startswith("Committed! GraphQL is live alongside REST") for text in agent_texts)
 

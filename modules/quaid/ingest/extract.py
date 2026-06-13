@@ -1427,8 +1427,6 @@ _ASSISTANT_TECHNICAL_SUMMARY_RE = re.compile(
     r"\d+\s+lines\.\s+.*\b(?:[A-Za-z_][A-Za-z0-9_]*\(\)|[A-Z][A-Za-z0-9_]*[A-Z][A-Za-z0-9_]*)\b|"
     r".*\bN\+1\b.*\b(?:query|queries|test|tests|resolver|resolvers)\b|"
     r".*\b(?:query|queries|test|tests|resolver|resolvers)\b.*\bN\+1\b|"
-    r".*\b(?:CORS|JWT|PBKDF2|pagination|rate limiting)\b.*\d|"
-    r".*\bDataLoader\b.*\b(?:query|queries)\b|"
     r".*\bcommitted!?\s+.*\b(?:live|ready|queued)\b|"
     r".*\bfiles changed\b.*\blines added\b|"
     r".*\b(?:endpoint|route|middleware|resolver|schema|query|mutation|database|sqlite|cors|jwt|pbkdf2)\b.*`[^`]+`"
