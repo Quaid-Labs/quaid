@@ -576,12 +576,12 @@ def _merge_nodes_into(
         if not merged_id:
             return result
 
-        # Update confirmation_count and storage_strength on the merged node.
-        merged_node = graph.get_node(merged_id)
-        if merged_node:
-            merged_node.confirmation_count = total_confirms
-            merged_node.storage_strength = max_storage
-            graph.update_node(merged_node, conn=conn)
+        # Preserve signal fields without re-reading through a second connection
+        # before this transaction commits.
+        conn.execute(
+            "UPDATE nodes SET confirmation_count = ?, storage_strength = ? WHERE id = ?",
+            (total_confirms, max_storage, merged_id),
+        )
 
         # Migrate edges: repoint to merged node instead of deleting.
         source_fact_ids = [oid for oid in original_ids if oid]

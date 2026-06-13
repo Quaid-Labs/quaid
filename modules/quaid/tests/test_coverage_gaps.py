@@ -1124,6 +1124,33 @@ class TestDecayReviewAtomicity:
 
 
 class TestMergeAtomicity:
+    def test_merge_preserves_signal_fields_inside_transaction(self, tmp_path):
+        from datastore.memorydb.maintenance_ops import _merge_nodes_into
+
+        graph, _ = _make_graph(tmp_path, "merge_signals.db")
+        left = _make_node(graph, "Alex keeps a bonsai", confidence=0.7, storage_strength=2.0)
+        right = _make_node(graph, "Alex maintains a bonsai", confidence=0.8, storage_strength=5.0)
+        with graph._get_conn() as conn:
+            conn.execute("UPDATE nodes SET confirmation_count = 2 WHERE id = ?", (left.id,))
+            conn.execute("UPDATE nodes SET confirmation_count = 3 WHERE id = ?", (right.id,))
+
+        with patch("datastore.memorydb.maintenance_ops.get_graph", return_value=graph):
+            result = _merge_nodes_into(
+                graph,
+                "Alex keeps and maintains a bonsai",
+                [left.id, right.id],
+                source="dedup_merge",
+            )
+
+        with graph._get_conn() as conn:
+            merged = conn.execute(
+                "SELECT confirmation_count, storage_strength FROM nodes WHERE id = ?",
+                (result["id"],),
+            ).fetchone()
+
+        assert int(merged["confirmation_count"]) == 5
+        assert float(merged["storage_strength"]) == pytest.approx(5.0)
+
     def test_merge_rolls_back_created_node_when_cleanup_fails(self, tmp_path):
         from datastore.memorydb.maintenance_ops import _merge_nodes_into
 
