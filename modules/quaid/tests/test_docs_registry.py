@@ -742,6 +742,43 @@ class TestArchiveProject:
         assert (tmp_path / "projects" / "archive" / "test-project" / "notes.md").exists()
         assert not (tmp_path / "projects" / "test-project").exists()
 
+    def test_archive_project_clears_docs_rag_chunks(self, setup_env):
+        tmp_path = setup_env
+        r = _get_registry()
+        docs_dir = tmp_path / "docs"
+        docs_dir.mkdir(exist_ok=True)
+        target_doc = docs_dir / "archive-me.md"
+        target_doc.write_text("# Archive Me\ncontent", encoding="utf-8")
+        project_md = tmp_path / "projects" / "test-project" / "PROJECT.md"
+        project_md.write_text("# Test Project\n", encoding="utf-8")
+
+        r.register("docs/archive-me.md", project="test-project")
+
+        with patch("datastore.docsdb.rag.DocsRAG.remove_chunks_for_path", return_value=1) as mock_remove:
+            result = r.archive_project("test-project")
+
+        assert result["rag_chunks_deleted"] == 2
+        removed_paths = {args[0] for args, _kwargs in mock_remove.call_args_list}
+        assert "docs/archive-me.md" in removed_paths
+        assert str(project_md.resolve()) in removed_paths
+
+    def test_archive_project_rag_cleanup_failure_raises_when_fail_hard(self, setup_env, monkeypatch):
+        from datastore.docsdb import registry as registry_mod
+
+        r = _get_registry()
+        r.register("projects/test-project/PROJECT.md", project="test-project")
+
+        def _fail_remove(*_args, **_kwargs):
+            raise OSError("rag cleanup failed")
+
+        monkeypatch.setattr("datastore.docsdb.rag.DocsRAG.remove_chunks_for_path", _fail_remove)
+        monkeypatch.setattr(registry_mod, "_fail_hard_enabled", lambda: True)
+
+        with pytest.raises(RuntimeError, match="Docs RAG cleanup failed"):
+            r.archive_project("test-project")
+
+        assert len(r.list_docs(project="test-project", state="active")) == 1
+
 
 class TestDeleteProject:
     def test_deletes_entries(self, setup_env):

@@ -1783,6 +1783,48 @@ class DocsRegistry:
         print(f"Renamed project '{old_name}' -> '{new_name}': {renamed} docs updated, dir_moved={dir_moved}")
         return result
 
+    def _remove_project_rag_chunks(
+        self,
+        project_name: str,
+        cfg: Any,
+        *,
+        states: Tuple[str, ...],
+    ) -> int:
+        """Remove docs RAG chunks for project-owned document paths."""
+        rag_paths: list[str] = []
+        for state in states:
+            for row in self.list_docs(project=project_name, state=state):
+                path_val = str(row.get("file_path") or "").strip()
+                if path_val:
+                    rag_paths.append(path_val)
+        defn = cfg.projects.definitions.get(project_name)
+        if defn:
+            rag_paths.append(str(self._resolve_path(defn.home_dir) / "PROJECT.md"))
+
+        seen_paths: set[str] = set()
+        unique_rag_paths: list[str] = []
+        for candidate in rag_paths:
+            key = str(candidate).strip()
+            if not key or key in seen_paths:
+                continue
+            seen_paths.add(key)
+            unique_rag_paths.append(key)
+        if not unique_rag_paths:
+            return 0
+
+        rag_chunk_deleted = 0
+        try:
+            from datastore.docsdb.rag import DocsRAG
+
+            rag = DocsRAG(self.db_path)
+            for candidate in unique_rag_paths:
+                rag_chunk_deleted += int(rag.remove_chunks_for_path(candidate) or 0)
+        except Exception as e:
+            if _fail_hard_enabled():
+                raise RuntimeError(f"Docs RAG cleanup failed for project {project_name!r}") from e
+            logger.warning("Docs RAG cleanup skipped for project '%s': %s", project_name, e)
+        return rag_chunk_deleted
+
     def archive_project(self, project_name: str) -> Dict[str, Any]:
         """Archive a project: set all entries to archived state, move dir to archive/.
 
@@ -1795,6 +1837,9 @@ class DocsRegistry:
         has_docs = len(self.list_docs(project=project_name)) > 0
         if not has_config and not has_docs:
             raise ValueError(f"Project '{project_name}' does not exist.")
+
+        # Archived project content must stop participating in docs recall.
+        rag_chunk_deleted = self._remove_project_rag_chunks(project_name, cfg, states=("active",))
 
         # 1. Bulk archive registry entries
         with get_connection(self.db_path) as conn:
@@ -1830,8 +1875,11 @@ class DocsRegistry:
         except Exception:
             pass
 
-        result = {"archived": archived, "dir_moved": dir_moved}
-        print(f"Archived project '{project_name}': {archived} docs archived, dir_moved={dir_moved}")
+        result = {"archived": archived, "dir_moved": dir_moved, "rag_chunks_deleted": rag_chunk_deleted}
+        print(
+            f"Archived project '{project_name}': {archived} docs archived, "
+            f"rag_chunks_deleted={rag_chunk_deleted}, dir_moved={dir_moved}"
+        )
         return result
 
     def delete_project(self, project_name: str) -> Dict[str, Any]:
@@ -1852,32 +1900,11 @@ class DocsRegistry:
 
         # Clean docs RAG chunks for all project paths before registry state transition.
         # This prevents deleted project content from continuing to inject via recall.
-        rag_chunk_deleted = 0
-        rag_paths: list[str] = []
-        for state in ("active", "archived"):
-            for row in self.list_docs(project=project_name, state=state):
-                path_val = str(row.get("file_path") or "").strip()
-                if path_val:
-                    rag_paths.append(path_val)
-        defn = cfg.projects.definitions.get(project_name)
-        if defn:
-            rag_paths.append(str(self._resolve_path(defn.home_dir) / "PROJECT.md"))
-        seen_paths: set[str] = set()
-        unique_rag_paths: list[str] = []
-        for candidate in rag_paths:
-            key = str(candidate).strip()
-            if not key or key in seen_paths:
-                continue
-            seen_paths.add(key)
-            unique_rag_paths.append(key)
-        if unique_rag_paths:
-            try:
-                from datastore.docsdb.rag import DocsRAG
-                rag = DocsRAG(self.db_path)
-                for candidate in unique_rag_paths:
-                    rag_chunk_deleted += int(rag.remove_chunks_for_path(candidate) or 0)
-            except Exception as e:
-                logger.warning("Docs RAG cleanup skipped for project '%s': %s", project_name, e)
+        rag_chunk_deleted = self._remove_project_rag_chunks(
+            project_name,
+            cfg,
+            states=("active", "archived"),
+        )
 
         # 1. Bulk delete registry entries
         with get_connection(self.db_path) as conn:
