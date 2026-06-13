@@ -117,6 +117,10 @@ def mark_project_log_queue_committed(project: str, item_ids: list[str]) -> dict[
     return _project_log_queue_module().mark_project_log_queue_committed(project, item_ids)
 
 
+def dead_letter_project_log_queue_item(project: str, item_id: str, reason: str) -> bool:
+    return bool(_project_log_queue_module().dead_letter_project_log_queue_item(project, item_id, reason))
+
+
 def cleanup_project_log_queue(project: str) -> dict[str, int]:
     queue = _project_log_queue_module()
     with queue.project_queue_lock(project):
@@ -433,6 +437,7 @@ __all__ = [
     "drain_project_log_queue",
     "project_log_queue_lock",
     "mark_project_log_queue_committed",
+    "dead_letter_project_log_queue_item",
     "cleanup_project_log_queue",
     "queued_project_log_projects",
     "update_registered_docs",

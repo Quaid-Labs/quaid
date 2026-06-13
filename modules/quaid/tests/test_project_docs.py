@@ -962,7 +962,7 @@ def test_commit_queued_project_logs_holds_queue_lock_around_drain_and_mark(monke
     assert events == ["enter", "exit"]
 
 
-def test_commit_queued_project_logs_leaves_malformed_item_pending(project_env):
+def test_commit_queued_project_logs_dead_letters_malformed_item(project_env):
     _tmp_path, _src, _entry = project_env
     from core import project_docs
     from datastore.docsdb import project_log_queue
@@ -990,7 +990,30 @@ def test_commit_queued_project_logs_leaves_malformed_item_pending(project_env):
     assert metrics["errors"] == 1
     assert metrics["entries_seen"] == 2
     assert metrics["items_committed"] == 0
+    assert project_log_queue.pending_project_log_count("demo") == 0
+    dead_letters = list(project_log_queue.project_queue_dead_letter_dir("demo").glob("*.json"))
+    assert any(path.name.endswith(f"{item_id}.json") for path in dead_letters)
+
+
+def test_project_log_queue_dead_letters_invalid_json_during_drain(project_env):
+    _tmp_path, _src, _entry = project_env
+    from datastore.docsdb import project_log_queue
+
+    queue_dir = project_log_queue.project_queue_dir("demo")
+    queue_dir.mkdir(parents=True)
+    poison = queue_dir / "1-2-aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa.json"
+    poison.write_text("{not json", encoding="utf-8")
+    project_log_queue.enqueue_project_logs({"demo": ["valid queued item"]}, trigger="Reset")
+
+    with project_log_queue.project_queue_lock("demo"), \
+         patch("datastore.docsdb.project_log_queue.is_fail_hard_enabled", return_value=False):
+        items = project_log_queue.drain_project_log_queue("demo")
+
+    assert [item["entries"][0]["text"] for item in items] == ["valid queued item"]
     assert project_log_queue.pending_project_log_count("demo") == 1
+    assert not poison.exists()
+    dead_letters = list(project_log_queue.project_queue_dead_letter_dir("demo").glob("*.json"))
+    assert any(path.name.endswith(poison.name) for path in dead_letters)
 
 
 def test_execute_update_once_does_not_run_supervisor_docs_maintenance_tick(project_env):

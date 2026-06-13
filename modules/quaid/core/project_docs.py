@@ -1287,9 +1287,10 @@ def _commit_queued_project_logs(project: str, *, dry_run: bool = False) -> Dict[
             if dropped_entries:
                 metrics["errors"] += 1
                 message = f"project-log queue item {item_id} for {name} dropped {dropped_entries} malformed entries"
-                logger.warning("%s; item left pending for inspection", message)
                 if _fail_hard_enabled():
                     raise RuntimeError(message)
+                logger.critical("%s; dead-lettering item for inspection", message)
+                docs_updater.dead_letter_project_log_queue_item(name, item_id, message)
                 continue
             if not entries:
                 if not dry_run:

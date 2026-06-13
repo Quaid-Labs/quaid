@@ -53,6 +53,10 @@ def project_queue_lock_path(project: str, *, quaid_home: Optional[Path] = None) 
     return project_queue_dir(project, quaid_home=quaid_home) / ".drain.lock"
 
 
+def project_queue_dead_letter_dir(project: str, *, quaid_home: Optional[Path] = None) -> Path:
+    return project_queue_dir(project, quaid_home=quaid_home) / "dead-letter"
+
+
 @contextlib.contextmanager
 def project_queue_lock(project: str, *, quaid_home: Optional[Path] = None):
     """Serialize drain->visible-write->mark for one project's queue."""
@@ -252,6 +256,53 @@ def pending_project_log_count(project: str, *, quaid_home: Optional[Path] = None
         return 0
 
 
+def _dead_letter_queue_file(
+    project: str,
+    path: Path,
+    reason: str,
+    *,
+    quaid_home: Optional[Path] = None,
+) -> bool:
+    if not path.exists():
+        return False
+    dead_dir = project_queue_dead_letter_dir(project, quaid_home=quaid_home)
+    dead_dir.mkdir(parents=True, exist_ok=True)
+    target = dead_dir / f"{time.time_ns()}-{path.name}"
+    path.replace(target)
+    try:
+        _atomic_write_json(
+            target.with_name(f"{target.name}.metadata.json"),
+            {
+                "project": project,
+                "original_file": path.name,
+                "dead_lettered_at": _utc_now(),
+                "reason": str(reason or "").strip() or "invalid project-log queue item",
+            },
+        )
+    except Exception:
+        logger.warning("Failed writing project-log dead-letter metadata for %s", target, exc_info=True)
+        if is_fail_hard_enabled():
+            raise
+    logger.critical("Dead-lettered project-log queue item %s -> %s: %s", path, target, reason)
+    return True
+
+
+def dead_letter_project_log_queue_item(
+    project: str,
+    item_id: str,
+    reason: str,
+    *,
+    quaid_home: Optional[Path] = None,
+) -> bool:
+    """Move a poison queue item out of the pending drain path for inspection."""
+    project = _assert_project_queue_lock_held(project)
+    item_id = str(item_id or "").strip()
+    if not _ENTRY_ID_RE.fullmatch(item_id):
+        raise ValueError(f"invalid queue item id: {item_id!r}")
+    path = project_queue_dir(project, quaid_home=quaid_home) / f"{item_id}.json"
+    return _dead_letter_queue_file(project, path, reason, quaid_home=quaid_home)
+
+
 def drain_project_log_queue(
     project: str,
     *,
@@ -293,6 +344,11 @@ def drain_project_log_queue(
             data["_dropped_entries_count"] = dropped_entries
             data["_queue_path"] = str(path)
             items.append(data)
+        except (ValueError, json.JSONDecodeError, UnicodeError) as exc:
+            logger.warning("Failed reading project-log queue item %s: %s", path, exc)
+            if is_fail_hard_enabled():
+                raise
+            _dead_letter_queue_file(expected_project, path, str(exc), quaid_home=quaid_home)
         except Exception as exc:
             logger.warning("Failed reading project-log queue item %s: %s", path, exc)
             if is_fail_hard_enabled():
@@ -328,11 +384,15 @@ def cleanup_project_log_queue(project: str, *, quaid_home: Optional[Path] = None
     removed = 0
     directory = project_queue_dir(project, quaid_home=quaid_home)
     try:
-        for path in directory.glob("*"):
-            if not path.is_file():
-                continue
-            path.unlink(missing_ok=True)
-            removed += 1
+        for path in sorted(directory.rglob("*"), key=lambda p: len(p.parts), reverse=True):
+            if path.is_file():
+                path.unlink(missing_ok=True)
+                removed += 1
+            elif path.is_dir():
+                try:
+                    path.rmdir()
+                except OSError:
+                    pass
         try:
             directory.rmdir()
         except OSError:
