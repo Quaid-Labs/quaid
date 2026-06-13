@@ -88,8 +88,12 @@ def _deep_merge_dicts(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[st
 
 
 def _platform_from_instance_name(instance_name: str) -> str:
-    name = str(instance_name or "").strip().lower()
+    name = str(instance_name or "").strip().lower().replace("_", "-")
+    compact_name = name.replace("-", "")
     for adapter_id, prefix in _adapter_prefix_rows():
+        compact_adapter = adapter_id.replace("-", "")
+        if name == adapter_id or compact_name == compact_adapter:
+            return adapter_id
         if name == prefix or name.startswith(f"{prefix}-"):
             return adapter_id
     if name.startswith("standalone-") or name == "standalone":
@@ -123,10 +127,30 @@ def _adapter_prefix_rows() -> List[tuple[str, str]]:
     return rows
 
 
-def _lightweight_platform_id(instance: str) -> str:
+def _adapter_type_from_instance_config(home: Path, instance: str) -> str:
+    instance_id = str(instance or "").strip()
+    if not instance_id:
+        return ""
+    try:
+        payload = json.loads(
+            (home / "instances" / instance_id / "config.json").read_text(encoding="utf-8")
+        )
+    except Exception:
+        return ""
+    adapter = payload.get("adapter") if isinstance(payload, dict) else None
+    if not isinstance(adapter, dict):
+        return ""
+    return str(adapter.get("type") or "").strip()
+
+
+def _lightweight_platform_id(instance: str, home: Path | None = None) -> str:
     explicit = os.environ.get("QUAID_ADAPTER_TYPE", "").strip().lower()
     if explicit:
-        return explicit
+        return _platform_from_instance_name(explicit)
+    if home is not None:
+        adapter_type = _adapter_type_from_instance_config(home, instance)
+        if adapter_type:
+            return _platform_from_instance_name(adapter_type)
     return _platform_from_instance_name(instance)
 
 
@@ -141,7 +165,7 @@ def _lightweight_config_paths() -> List[Path]:
 
     home = quaid_home()
     instance = os.environ.get("QUAID_INSTANCE", "").strip()
-    platform = _lightweight_platform_id(instance)
+    platform = _lightweight_platform_id(instance, home)
     paths: List[Path] = []
     if instance:
         paths.append(home / "instances" / instance / "config.json")

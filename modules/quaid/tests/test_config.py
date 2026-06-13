@@ -1595,6 +1595,38 @@ class TestLightweightLibConfig:
             assert get_retrieval_rrf_k() == 42
             assert get_db_path_lightweight() == tmp_path / "instances" / "codex-main" / "data" / "custom-memory.db"
 
+    def test_lightweight_config_uses_adapter_type_for_legacy_claude_code_instance(self, tmp_path, monkeypatch):
+        from lib.config import get_embedding_model, get_injection_timeout_ms
+
+        wrong_platform_cfg = tmp_path / "shared" / "config" / "claude" / "config.json"
+        platform_cfg = tmp_path / "shared" / "config" / "claude-code" / "config.json"
+        instance_cfg = tmp_path / "instances" / "claude-main" / "config.json"
+        wrong_platform_cfg.parent.mkdir(parents=True, exist_ok=True)
+        platform_cfg.parent.mkdir(parents=True, exist_ok=True)
+        instance_cfg.parent.mkdir(parents=True, exist_ok=True)
+        wrong_platform_cfg.write_text(
+            json.dumps({
+                "ollama": {"embeddingModel": "wrong-legacy-claude-model"},
+                "retrieval": {"injectionTimeoutMs": 111},
+            }),
+            encoding="utf-8",
+        )
+        platform_cfg.write_text(
+            json.dumps({
+                "ollama": {"embeddingModel": "cc-platform-model"},
+                "retrieval": {"injectionTimeoutMs": 1500},
+            }),
+            encoding="utf-8",
+        )
+        instance_cfg.write_text(json.dumps({"adapter": {"type": "claude-code"}}), encoding="utf-8")
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "claude-main")
+        monkeypatch.delenv("QUAID_ADAPTER_TYPE", raising=False)
+        with patch("config.get_config", side_effect=AssertionError("full config should not load")):
+            assert get_embedding_model() == "cc-platform-model"
+            assert get_injection_timeout_ms() == 1500
+
     def test_lightweight_config_honors_ollama_url_env(self, tmp_path, monkeypatch):
         from lib.config import get_ollama_url
 
