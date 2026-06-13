@@ -71,19 +71,26 @@ def _cleanup_state_lock_path() -> Path:
 def _file_lock(path: Path):
     path.parent.mkdir(parents=True, exist_ok=True)
     handle = open(path, "a+", encoding="utf-8")
+    locked = False
     try:
         try:
             import fcntl  # type: ignore
             fcntl.flock(handle, fcntl.LOCK_EX)
-        except Exception:
-            pass
+            locked = True
+        except (ImportError, OSError) as exc:
+            logger.warning("File lock unavailable for %s; proceeding without lock: %s", path, exc)
+            if is_fail_hard_enabled():
+                raise RuntimeError(f"Failed to acquire file lock: {path}") from exc
         yield
     finally:
-        try:
-            import fcntl  # type: ignore
-            fcntl.flock(handle, fcntl.LOCK_UN)
-        except Exception:
-            pass
+        if locked:
+            try:
+                import fcntl  # type: ignore
+                fcntl.flock(handle, fcntl.LOCK_UN)
+            except OSError as exc:
+                logger.warning("Failed to release file lock for %s: %s", path, exc)
+                if is_fail_hard_enabled():
+                    raise RuntimeError(f"Failed to release file lock: {path}") from exc
         handle.close()
 
 
@@ -822,7 +829,13 @@ def classify_doc_change(diff_text: str) -> Dict[str, Any]:
 
 def _resolve_path(relative: str) -> Path:
     """Resolve a workspace-relative path to absolute."""
-    return _workspace() / relative
+    workspace = _workspace().resolve()
+    path = (_workspace() / relative).expanduser().resolve()
+    try:
+        path.relative_to(workspace)
+    except ValueError as exc:
+        raise ValueError(f"Resolved docs path escapes workspace: {relative!r}")
+    return path
 
 
 def check_staleness(project: Optional[str] = None) -> Dict[str, StalenessInfo]:

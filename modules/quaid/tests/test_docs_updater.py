@@ -54,6 +54,32 @@ def _make_test_config(source_mapping=None, doc_purposes=None, staleness_enabled=
     return MemoryConfig(docs=docs)
 
 
+def test_file_lock_raises_on_lock_failure_when_fail_hard(monkeypatch, tmp_path):
+    from datastore.docsdb import updater
+
+    def _fail_flock(*_args):
+        raise OSError("flock unavailable")
+
+    monkeypatch.setitem(
+        sys.modules,
+        "fcntl",
+        SimpleNamespace(LOCK_EX=1, LOCK_UN=2, flock=_fail_flock),
+    )
+    monkeypatch.setattr(updater, "is_fail_hard_enabled", lambda: True)
+
+    with pytest.raises(RuntimeError, match="Failed to acquire file lock"):
+        with updater._file_lock(tmp_path / "docs-update.lock"):
+            pass
+
+
+def test_resolve_path_rejects_workspace_escape(tmp_path):
+    with _adapter_patch(tmp_path):
+        from datastore.docsdb import updater
+
+        with pytest.raises(ValueError, match="escapes workspace"):
+            updater._resolve_path("../escaped.md")
+
+
 class TestCheckStaleness:
     """Tests for check_staleness()."""
 
