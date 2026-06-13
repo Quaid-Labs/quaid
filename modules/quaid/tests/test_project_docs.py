@@ -544,7 +544,6 @@ def test_execute_update_once_snapshots_applies_indexes_and_advances_cursors(proj
         index_project_logs_after=False,
     )
     index_project_logs.assert_called_once_with(project="demo")
-    index_project_logs.assert_called_once_with(project="demo")
     assert not project_docs.request_path("demo").exists()
     state = project_docs.read_state("demo")
     assert state["status"] == "fresh"
