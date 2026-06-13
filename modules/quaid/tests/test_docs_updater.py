@@ -268,6 +268,31 @@ class TestCheckStaleness:
         assert "docs/doc.md" in stale
         assert "src.py" in stale["docs/doc.md"].stale_sources
 
+    def test_malformed_registry_source_files_are_reported_stale(self, tmp_path, monkeypatch):
+        cfg = _make_test_config(source_mapping={})
+        with patch("datastore.docsdb.updater.get_config", return_value=cfg), \
+             _adapter_patch(tmp_path) as iroot:
+            from datastore.docsdb import updater
+            from datastore.docsdb.registry import MALFORMED_SOURCE_FILES_MARKER
+
+            doc_file = iroot / "docs" / "doc.md"
+            doc_file.parent.mkdir(parents=True)
+            doc_file.write_text("doc content")
+            marker = f"{MALFORMED_SOURCE_FILES_MARKER}:docs/doc.md"
+
+            class _Registry:
+                def get_source_mappings(self, project=None):
+                    return {"docs/doc.md": [marker]}
+
+            monkeypatch.setattr("datastore.docsdb.registry.DocsRegistry", lambda: _Registry())
+
+            stale = updater.check_staleness()
+
+        assert "docs/doc.md" in stale
+        assert stale["docs/doc.md"].stale_sources == [marker]
+        assert stale["docs/doc.md"].change_classification["classification"] == "significant"
+        assert "malformed source_files" in stale["docs/doc.md"].change_classification["reasons"][0]
+
 
 class TestMapSourcesToDocs:
     """Tests for map_sources_to_docs()."""

@@ -532,6 +532,45 @@ class TestGetSourceMappings:
         assert "docs/a.md" in mappings
         assert "docs/b.md" not in mappings
 
+    def test_malformed_source_files_are_marked_and_warned(self, setup_env, monkeypatch, caplog):
+        from datastore.docsdb import registry as registry_mod
+        from lib.database import get_connection
+
+        r = _get_registry()
+        r.register("docs/bad.md", project="test-project",
+                   auto_update=True, source_files=["src/a.py"])
+        with get_connection(r.db_path) as conn:
+            conn.execute(
+                "UPDATE doc_registry SET source_files = ? WHERE file_path = ?",
+                ('{"not":"a-list"}', "docs/bad.md"),
+            )
+        monkeypatch.setattr(registry_mod, "_fail_hard_enabled", lambda: False)
+
+        with caplog.at_level(logging.WARNING):
+            mappings = r.get_source_mappings()
+
+        assert mappings["docs/bad.md"] == [
+            f"{registry_mod.MALFORMED_SOURCE_FILES_MARKER}:docs/bad.md"
+        ]
+        assert "Malformed source_files metadata" in caplog.text
+
+    def test_malformed_source_files_raise_when_failhard(self, setup_env, monkeypatch):
+        from datastore.docsdb import registry as registry_mod
+        from lib.database import get_connection
+
+        r = _get_registry()
+        r.register("docs/bad.md", project="test-project",
+                   auto_update=True, source_files=["src/a.py"])
+        with get_connection(r.db_path) as conn:
+            conn.execute(
+                "UPDATE doc_registry SET source_files = ? WHERE file_path = ?",
+                ('{"not":"a-list"}', "docs/bad.md"),
+            )
+        monkeypatch.setattr(registry_mod, "_fail_hard_enabled", lambda: True)
+
+        with pytest.raises(RuntimeError, match="Malformed source_files metadata"):
+            r.get_source_mappings()
+
 
 class TestAutoDiscover:
     def test_finds_new_files(self, setup_env):

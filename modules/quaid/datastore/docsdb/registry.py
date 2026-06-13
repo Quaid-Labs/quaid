@@ -241,6 +241,7 @@ def _visible_home() -> Path:
 # Keep underscores for installed alpha projects, but reject dots/separators and cap path length.
 _PROJECT_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,127}$")
 _WINDOWS_ABSOLUTE_RE = re.compile(r"^[A-Za-z]:")
+MALFORMED_SOURCE_FILES_MARKER = "__quaid_docs_registry_malformed_source_files__"
 
 
 def _normalize_project_name(name: str) -> str:
@@ -254,6 +255,10 @@ def _validate_project_name(name: str) -> str:
     if not _PROJECT_NAME_RE.fullmatch(normalized):
         raise ValueError(f"Invalid project name: {name!r}")
     return normalized
+
+
+def _malformed_source_files_marker(file_path: str) -> str:
+    return f"{MALFORMED_SOURCE_FILES_MARKER}:{file_path}"
 
 
 def _path_is_under(path: Path, root: Path) -> bool:
@@ -1475,10 +1480,25 @@ class DocsRegistry:
                     continue
                 try:
                     sources = json.loads(row["source_files"] or "[]")
-                    if isinstance(sources, list) and sources:
-                        result[row["file_path"]] = sources
-                except (json.JSONDecodeError, KeyError):
+                except (json.JSONDecodeError, KeyError, TypeError) as exc:
+                    message = f"Malformed source_files metadata for docs registry row {row['file_path']!r}"
+                    logger.warning("%s: %s", message, exc)
+                    if _fail_hard_enabled():
+                        raise RuntimeError(message) from exc
+                    result[row["file_path"]] = [_malformed_source_files_marker(row["file_path"])]
                     continue
+                if not isinstance(sources, list):
+                    message = (
+                        f"Malformed source_files metadata for docs registry row {row['file_path']!r}: "
+                        f"expected list, got {type(sources).__name__}"
+                    )
+                    logger.warning("%s", message)
+                    if _fail_hard_enabled():
+                        raise RuntimeError(message)
+                    result[row["file_path"]] = [_malformed_source_files_marker(row["file_path"])]
+                    continue
+                if sources:
+                    result[row["file_path"]] = sources
         return result
 
     # ========================================================================

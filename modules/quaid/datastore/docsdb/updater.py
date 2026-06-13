@@ -920,10 +920,12 @@ def check_staleness(project: Optional[str] = None) -> Dict[str, StalenessInfo]:
 
     # Build doc_to_sources from both registry and config
     doc_to_sources: Dict[str, List[str]] = {}
+    malformed_source_prefix: Optional[str] = None
 
     # 1. Registry source mappings (takes precedence)
     try:
-        from datastore.docsdb.registry import DocsRegistry
+        from datastore.docsdb.registry import DocsRegistry, MALFORMED_SOURCE_FILES_MARKER
+        malformed_source_prefix = f"{MALFORMED_SOURCE_FILES_MARKER}:"
         registry = DocsRegistry()
         registry_mappings = registry.get_source_mappings(project=project)
         for doc_path, sources in registry_mappings.items():
@@ -957,6 +959,31 @@ def check_staleness(project: Optional[str] = None) -> Dict[str, StalenessInfo]:
 
         stale_sources = []
         latest_source_mtime = 0.0
+        source_paths = list(source_paths or [])
+        malformed_sources = []
+        if malformed_source_prefix:
+            malformed_sources = [
+                str(src)
+                for src in source_paths
+                if str(src or "").startswith(malformed_source_prefix)
+            ]
+        if malformed_sources:
+            stale[doc_path] = StalenessInfo(
+                doc_path=doc_path,
+                gap_hours=0.0,
+                stale_sources=malformed_sources,
+                doc_mtime=doc_mtime,
+                latest_source_mtime=doc_mtime,
+                change_classification={
+                    "classification": "significant",
+                    "confidence": 1.0,
+                    "reasons": ["malformed source_files metadata in docs registry"],
+                    "lines_changed": 0,
+                    "trivial_signals": 0,
+                    "significant_signals": 1,
+                },
+            )
+            continue
 
         for src_path in source_paths:
             src_abs = _resolve_path(src_path)
