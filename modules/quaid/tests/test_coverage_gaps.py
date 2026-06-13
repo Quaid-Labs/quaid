@@ -159,6 +159,36 @@ class TestHardDeleteNode:
         assert deleted_row is None
 
 
+def test_graph_traversal_filters_superseded_neighbor_nodes(tmp_path):
+    from datastore.memorydb.memory_graph import Edge
+    graph, _ = _make_graph(tmp_path, "superseded_traversal.db")
+    owner = _make_node(graph, "Solomon")
+    old_fact = _make_node(graph, "Solomon's workshop is on Cedar Street")
+    new_fact = _make_node(graph, "Solomon's workshop is on Birch Avenue")
+    parent = _make_node(graph, "Workshop notes")
+
+    graph.add_edge(Edge.create(owner.id, old_fact.id, "has_fact"))
+    graph.add_edge(Edge.create(owner.id, new_fact.id, "has_fact"))
+    graph.add_edge(Edge.create(old_fact.id, parent.id, "mentioned_in"))
+    assert graph.supersede_node(old_fact.id, new_fact.id) is True
+
+    related = graph.get_related(owner.id, relation="has_fact", depth=1)
+    bidirectional = graph.get_related_bidirectional(new_fact.id, relations=["has_fact"], depth=1)
+    beam = graph.beam_search_graph(
+        "Where is Solomon's workshop?",
+        owner.id,
+        beam_width=5,
+        max_depth=1,
+        allow_llm_rerank=False,
+        relations=["has_fact"],
+    )
+
+    assert [node.id for node, _relation, _depth in related] == [new_fact.id]
+    assert old_fact.id not in {node.id for node, *_rest in bidirectional}
+    assert old_fact.id not in {node.id for node, *_rest in beam}
+    assert new_fact.id in {node.id for node, *_rest in beam}
+
+
 def test_create_edge_rejects_placeholder_owner_entity_labels(tmp_path):
     from datastore.memorydb.memory_graph import create_edge
     graph, _ = _make_graph(tmp_path, "placeholder_edge.db")

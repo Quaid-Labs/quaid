@@ -2864,7 +2864,7 @@ class MemoryGraph:
                 visited.add(current_id)
 
                 sql = """SELECT n.*, e.relation, e.target_id
-                         FROM edges e JOIN nodes n ON n.id = e.target_id
+                         FROM edges e JOIN nodes n ON n.id = e.target_id AND n.superseded_by IS NULL
                          WHERE e.source_id = ?"""
                 params = [current_id]
                 if relation:
@@ -2936,7 +2936,7 @@ class MemoryGraph:
 
                 # Outbound edges: JOIN to get target node in one query
                 out_sql = """SELECT n.*, e.relation AS edge_relation
-                             FROM edges e JOIN nodes n ON n.id = e.target_id
+                             FROM edges e JOIN nodes n ON n.id = e.target_id AND n.superseded_by IS NULL
                              WHERE e.source_id = ?"""
                 out_params = [current_id]
                 if relations:
@@ -2962,7 +2962,7 @@ class MemoryGraph:
 
                 # Inbound edges: JOIN to get source node in one query
                 in_sql = """SELECT n.*, e.relation AS edge_relation
-                            FROM edges e JOIN nodes n ON n.id = e.source_id
+                            FROM edges e JOIN nodes n ON n.id = e.source_id AND n.superseded_by IS NULL
                             WHERE e.target_id = ?"""
                 in_params = [current_id]
                 if relations:
@@ -3073,7 +3073,7 @@ class MemoryGraph:
 
                     # Outbound edges
                     out_sql = """SELECT n.*, e.relation AS edge_relation, e.weight AS edge_weight
-                                 FROM edges e JOIN nodes n ON n.id = e.target_id
+                                 FROM edges e JOIN nodes n ON n.id = e.target_id AND n.superseded_by IS NULL
                                  WHERE e.source_id = ?"""
                     out_params = [current_id]
                     if relations:
@@ -3092,7 +3092,7 @@ class MemoryGraph:
 
                     # Inbound edges
                     in_sql = """SELECT n.*, e.relation AS edge_relation, e.weight AS edge_weight
-                                FROM edges e JOIN nodes n ON n.id = e.source_id
+                                FROM edges e JOIN nodes n ON n.id = e.source_id AND n.superseded_by IS NULL
                                 WHERE e.target_id = ?"""
                     in_params = [current_id]
                     if relations:
