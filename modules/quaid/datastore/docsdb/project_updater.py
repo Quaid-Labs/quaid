@@ -16,6 +16,7 @@ import logging
 import os
 import re
 import sys
+import tempfile
 
 logger = logging.getLogger(__name__)
 from datetime import datetime
@@ -73,6 +74,25 @@ def _resolve_project_home(home_dir: str) -> Path:
     return _resolve_path(home_dir)
 
 
+def _atomic_write_text(path: Path, content: str) -> None:
+    """Atomically write UTF-8 text using a unique temp file in the target dir."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent), text=True)
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as tmp:
+            tmp.write(content)
+            tmp.flush()
+            os.fsync(tmp.fileno())
+        os.replace(tmp_path, path)
+    finally:
+        if tmp_path.exists():
+            try:
+                tmp_path.unlink()
+            except OSError as exc:
+                logger.warning("Failed cleaning up temp file %s: %s", tmp_path, exc)
+
+
 # Legacy staged project event processing was removed prelaunch.
 # Project docs updates are now supervisor-owned and requested with
 # `quaid docs update <project>`. Append-only PROJECT.log support remains below.
@@ -111,11 +131,11 @@ def _refresh_file_list(registry, project_name: str, cfg) -> None:
     if has_markers:
         content = docs_registry._populate_project_md_sections(
             content,
-            project_home_body=sections["project_home"],
-            source_roots_body=sections["source_roots"],
-            in_dir_body=sections["in_dir"],
-            external_body=sections["external"],
-            registered_docs_body=sections["registered_docs"],
+            project_home_body=str(sections.get("project_home") or ""),
+            source_roots_body=str(sections.get("source_roots") or ""),
+            in_dir_body=str(sections.get("in_dir") or ""),
+            external_body=str(sections.get("external") or ""),
+            registered_docs_body=str(sections.get("registered_docs") or ""),
         )
     else:
         rebuilt = render_project_md_template(
@@ -127,11 +147,11 @@ def _refresh_file_list(registry, project_name: str, cfg) -> None:
         )
         rebuilt = docs_registry._populate_project_md_sections(
             rebuilt,
-            project_home_body=sections["project_home"],
-            source_roots_body=sections["source_roots"],
-            in_dir_body=sections["in_dir"],
-            external_body=sections["external"],
-            registered_docs_body=sections["registered_docs"],
+            project_home_body=str(sections.get("project_home") or ""),
+            source_roots_body=str(sections.get("source_roots") or ""),
+            in_dir_body=str(sections.get("in_dir") or ""),
+            external_body=str(sections.get("external") or ""),
+            registered_docs_body=str(sections.get("registered_docs") or ""),
         )
         if PROJECT_LOG_BEGIN in content and PROJECT_LOG_END in content:
             match = re.search(
@@ -144,18 +164,12 @@ def _refresh_file_list(registry, project_name: str, cfg) -> None:
         content = rebuilt
         print("  Rebuilt PROJECT.md with canonical navigation scaffold")
 
-    # Atomic write: write to temp file, then rename
-    tmp_path = project_md_path.with_suffix(".tmp")
     try:
-        tmp_path.write_text(content)
-        tmp_path.replace(project_md_path)
+        _atomic_write_text(project_md_path, content)
     except OSError as e:
         print(f"  Error writing PROJECT.md: {e}", file=sys.stderr)
-        if tmp_path.exists():
-            try:
-                tmp_path.unlink()
-            except OSError:
-                pass
+        if is_fail_hard_enabled():
+            raise
 
 
 def _project_md_recent_log_limit(default: int = 15) -> int:
@@ -314,13 +328,33 @@ def append_project_logs(
         return deduped
 
     def _append_project_history_log(project_md_path: Path, entries: List[object]) -> int:
-        """Append normalized project log entries to PROJECT.log (no dedupe/folding)."""
+        """Append normalized project log entries to PROJECT.log.
+
+        Existing exact lines are skipped so queue replays after a crash do not
+        duplicate already-committed visible history.
+        """
         normalized = [_normalize_log_record(x) for x in entries]
         normalized = [x for x in normalized if x]
         if not normalized:
             return 0
         log_path = project_md_path.with_name(PROJECT_HISTORY_FILENAME)
         lines = [f"- [{record['created_at']}] {record['text']}" for record in normalized]
+        existing_lines: set[str] = set()
+        try:
+            existing_lines = {
+                line.strip()
+                for line in log_path.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            }
+        except FileNotFoundError:
+            existing_lines = set()
+        except OSError as exc:
+            if is_fail_hard_enabled():
+                raise
+            logger.warning("append_project_logs: failed reading existing PROJECT.log %s: %s", log_path, exc)
+        lines = [line for line in lines if line not in existing_lines]
+        if not lines:
+            return 0
         with log_path.open("a", encoding="utf-8") as fh:
             fh.write("\n".join(lines) + "\n")
         return len(lines)
@@ -378,8 +412,14 @@ def append_project_logs(
                 defn = fresh_cfg.projects.definitions.get(project_name)
                 if not defn:
                     defn = docs_registry.DocsRegistry().get_project_definition(project_name)
-            except Exception:
-                pass
+            except Exception as exc:
+                if is_fail_hard_enabled():
+                    raise
+                logger.warning(
+                    "append_project_logs: config reload fallback failed for project=%s: %s",
+                    project_name,
+                    exc,
+                )
         if not defn:
             # Filesystem fallback: project may have been deleted from the
             # registry during the session but its directory still exists.
@@ -511,7 +551,7 @@ def append_project_logs(
             f"file={project_md} dry_run={dry_run}"
         )
         if not dry_run:
-            project_md.write_text(updated, encoding="utf-8")
+            _atomic_write_text(project_md, updated)
 
     return metrics
 

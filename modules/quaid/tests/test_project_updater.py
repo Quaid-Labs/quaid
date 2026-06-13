@@ -172,6 +172,21 @@ A test project.
         assert "### External Files" in content
         assert "- `notes.md`" in content
 
+    def test_refresh_tolerates_missing_managed_section_keys(self, setup_env, monkeypatch):
+        from datastore.docsdb import project_updater
+
+        project_md_path = setup_env / "projects" / "test-project" / "PROJECT.md"
+        monkeypatch.setattr(
+            project_updater.docs_registry,
+            "_managed_project_sections",
+            lambda *_args, **_kwargs: {
+                "project_home": "home only",
+            },
+        )
+
+        assert project_updater.refresh_project_md("test-project") is True
+        assert "home only" in project_md_path.read_text(encoding="utf-8")
+
     def test_preserves_markerized_custom_sections(self, setup_env):
         """Refresh should preserve custom scaffold content when markers already exist."""
         from datastore.docsdb.project_updater import refresh_project_md
@@ -290,6 +305,34 @@ class TestAppendProjectLogs:
         assert metrics["history_entries_written"] == 1
         assert metrics["history_logs_indexed"] == 0
         assert _INDEXED_DOC_PATHS == []
+
+    def test_project_log_replay_does_not_duplicate_existing_history_line(self, setup_env):
+        from datastore.docsdb.project_updater import append_project_logs
+
+        project_log = setup_env / "projects" / "test-project" / "PROJECT.log"
+        payload = {"test-project": ["Session 5: Replay-safe queue entry"]}
+
+        first = append_project_logs(
+            payload,
+            trigger="Reset",
+            date_str="2026-03-06",
+            dry_run=False,
+            index_history=False,
+            update_project_md=False,
+        )
+        second = append_project_logs(
+            payload,
+            trigger="Reset",
+            date_str="2026-03-06",
+            dry_run=False,
+            index_history=False,
+            update_project_md=False,
+        )
+
+        history = project_log.read_text(encoding="utf-8")
+        assert first["history_entries_written"] == 1
+        assert second["history_entries_written"] == 0
+        assert history.count("Replay-safe queue entry") == 1
 
     def test_can_append_project_log_without_updating_project_md(self, setup_env):
         from datastore.docsdb.project_updater import append_project_logs

@@ -1200,57 +1200,67 @@ def _commit_queued_project_logs(project: str, *, dry_run: bool = False) -> Dict[
     try:
         from core.docs import updater as docs_updater
 
-        items = docs_updater.drain_project_log_queue(name)
+        queue_lock = docs_updater.project_log_queue_lock(name)
     except Exception as exc:
         metrics["errors"] += 1
-        logger.warning("Failed draining project-log queue for %s: %s", name, exc)
+        logger.warning("Failed initializing project-log queue commit for %s: %s", name, exc)
         if _fail_hard_enabled():
             raise
         return metrics
 
-    for item in items:
-        item_id = str(item.get("id") or "").strip()
-        entries = [
-            entry
-            for entry in (item.get("entries") or [])
-            if (
-                str(entry.get("text", "")).strip()
-                if isinstance(entry, dict)
-                else str(entry).strip()
-            )
-        ]
-        metrics["items_seen"] += 1
-        metrics["entries_seen"] += len(entries)
-        if not item_id:
-            metrics["errors"] += 1
-            if _fail_hard_enabled():
-                raise RuntimeError(f"project-log queue item missing id for {name}")
-            logger.warning("Skipping project-log queue item without id for %s", name)
-            continue
-        if not entries:
-            if not dry_run:
-                docs_updater.mark_project_log_queue_committed(name, [item_id])
-            metrics["items_committed"] += 1
-            continue
+    with queue_lock:
         try:
-            commit_metrics = docs_updater.append_project_logs(
-                {name: entries},
-                trigger=str(item.get("trigger") or "CLI"),
-                date_str=str(item.get("date_str") or "") or None,
-                dry_run=dry_run,
-                index_history=False,
-                update_project_md=False,
-            )
-            metrics["history_entries_written"] += int(commit_metrics.get("history_entries_written", 0) or 0)
-            if not dry_run:
-                docs_updater.mark_project_log_queue_committed(name, [item_id])
-            metrics["items_committed"] += 1
+            items = docs_updater.drain_project_log_queue(name)
         except Exception as exc:
             metrics["errors"] += 1
-            logger.warning("Failed committing project-log queue item %s for %s: %s", item_id, name, exc)
+            logger.warning("Failed draining project-log queue for %s: %s", name, exc)
             if _fail_hard_enabled():
                 raise
-            continue
+            return metrics
+
+        for item in items:
+            item_id = str(item.get("id") or "").strip()
+            entries = [
+                entry
+                for entry in (item.get("entries") or [])
+                if (
+                    str(entry.get("text", "")).strip()
+                    if isinstance(entry, dict)
+                    else str(entry).strip()
+                )
+            ]
+            metrics["items_seen"] += 1
+            metrics["entries_seen"] += len(entries)
+            if not item_id:
+                metrics["errors"] += 1
+                if _fail_hard_enabled():
+                    raise RuntimeError(f"project-log queue item missing id for {name}")
+                logger.warning("Skipping project-log queue item without id for %s", name)
+                continue
+            if not entries:
+                if not dry_run:
+                    docs_updater.mark_project_log_queue_committed(name, [item_id])
+                metrics["items_committed"] += 1
+                continue
+            try:
+                commit_metrics = docs_updater.append_project_logs(
+                    {name: entries},
+                    trigger=str(item.get("trigger") or "CLI"),
+                    date_str=str(item.get("date_str") or "") or None,
+                    dry_run=dry_run,
+                    index_history=False,
+                    update_project_md=False,
+                )
+                metrics["history_entries_written"] += int(commit_metrics.get("history_entries_written", 0) or 0)
+                if not dry_run:
+                    docs_updater.mark_project_log_queue_committed(name, [item_id])
+                metrics["items_committed"] += 1
+            except Exception as exc:
+                metrics["errors"] += 1
+                logger.warning("Failed committing project-log queue item %s for %s: %s", item_id, name, exc)
+                if _fail_hard_enabled():
+                    raise
+                continue
     return metrics
 
 

@@ -109,6 +109,10 @@ def drain_project_log_queue(project: str):
     return _project_log_queue_module().drain_project_log_queue(project)
 
 
+def project_log_queue_lock(project: str):
+    return _project_log_queue_module().project_queue_lock(project)
+
+
 def mark_project_log_queue_committed(project: str, item_ids: list[str]) -> dict[str, int]:
     return _project_log_queue_module().mark_project_log_queue_committed(project, item_ids)
 
@@ -425,6 +429,7 @@ __all__ = [
     "enqueue_project_logs",
     "pending_project_log_count",
     "drain_project_log_queue",
+    "project_log_queue_lock",
     "mark_project_log_queue_committed",
     "cleanup_project_log_queue",
     "queued_project_log_projects",

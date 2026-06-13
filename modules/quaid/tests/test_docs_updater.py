@@ -5,6 +5,7 @@ import sys
 import os
 import json
 import tempfile
+import threading
 from pathlib import Path
 from contextlib import contextmanager
 from types import SimpleNamespace
@@ -667,6 +668,30 @@ class TestCleanupStateLocking:
             state = updater._load_cleanup_state()
             assert state["docs/test.md"]["updates_since_cleanup"] == 60
 
+    def test_log_doc_update_changelog_append_is_thread_safe(self, tmp_path):
+        with _adapter_patch(tmp_path):
+            import datastore.docsdb.updater as updater
+
+            def _write(i):
+                updater.log_doc_update(
+                    "docs/test.md",
+                    "janitor",
+                    [f"src/{i}.py"],
+                    f"entry {i}",
+                    dry_run=False,
+                    success=False,
+                    chars_before=10,
+                    chars_after=10,
+                    notify=False,
+                )
+
+            with ThreadPoolExecutor(max_workers=12) as executor:
+                list(executor.map(_write, range(60)))
+
+            entries = updater._load_changelog()
+            assert len(entries) == 60
+            assert {entry["summary"] for entry in entries} == {f"entry {i}" for i in range(60)}
+
 
 class TestAuditLogFallback:
     def test_get_update_log_warns_on_read_failure(self, tmp_path, caplog):
@@ -800,6 +825,28 @@ class TestDriftDetectionFallback:
         assert "Git subprocess budget exhausted while reading doc commit timestamp for docs/doc2.md" in caplog.text
 
 
+def test_bounded_diff_context_collects_source_diffs_in_parallel(monkeypatch):
+    from datastore.docsdb import updater
+
+    barrier = threading.Barrier(4)
+    thread_names: set[str] = set()
+
+    def _fake_diff(src, _mtime):
+        thread_names.add(threading.current_thread().name)
+        barrier.wait(timeout=2)
+        return f"diff for {src}"
+
+    monkeypatch.setattr(updater, "get_git_diff", _fake_diff)
+    monkeypatch.setattr(updater, "_max_diff_total_bytes", lambda: 100_000)
+    monkeypatch.setattr(updater, "is_fail_hard_enabled", lambda: True)
+
+    context = updater._bounded_diff_context(["a.py", "b.py", "c.py", "d.py"], 0)
+
+    assert "diff for a.py" in context.text
+    assert "diff for d.py" in context.text
+    assert len(thread_names) == 4
+
+
 def test_save_changelog_uses_atomic_replace(tmp_path):
     with _adapter_patch(tmp_path):
         from datastore.docsdb import updater
@@ -835,11 +882,43 @@ class TestCmdUpdateStaleNeverIndexed:
                 dry_run=True,
             )
 
-        assert ok is True
+        assert ok is False
         prompt = captured["prompt"]
         assert "QUAID DOCS SAFETY NOTE" in prompt
         assert "Project diff catalog limit reached" in prompt
         assert len(prompt.encode("utf-8")) < 7000
+
+    def test_update_doc_from_diffs_gate_skip_does_not_count_as_written(self, tmp_path, monkeypatch):
+        with _adapter_patch(tmp_path) as iroot:
+            from datastore.docsdb import updater
+
+            doc = iroot / "docs" / "doc.md"
+            doc.parent.mkdir(parents=True, exist_ok=True)
+            doc.write_text("# Doc\n\nExisting details.\n", encoding="utf-8")
+
+            monkeypatch.setattr(updater, "get_git_diff", lambda *_args, **_kwargs: "+# comment only\n")
+            monkeypatch.setattr(
+                updater,
+                "classify_doc_change",
+                lambda _diff: {
+                    "classification": "trivial",
+                    "confidence": 0.9,
+                    "reasons": ["comment-only"],
+                    "lines_changed": 1,
+                    "trivial_signals": 1,
+                    "significant_signals": 0,
+                },
+            )
+
+            ok = updater.update_doc_from_diffs(
+                "docs/doc.md",
+                "test purpose",
+                ["src/comment.py"],
+                dry_run=False,
+            )
+
+            assert ok is False
+            assert doc.read_text(encoding="utf-8") == "# Doc\n\nExisting details.\n"
 
     def test_skips_protected_project_log_staleness_update(self, tmp_path, monkeypatch):
         with _adapter_patch(tmp_path):

@@ -6,6 +6,7 @@ the only component that drains the queue and writes visible project files.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
@@ -44,6 +45,38 @@ def queue_root(quaid_home: Optional[Path] = None) -> Path:
 
 def project_queue_dir(project: str, *, quaid_home: Optional[Path] = None) -> Path:
     return queue_root(quaid_home) / _validate_project(project)
+
+
+def project_queue_lock_path(project: str, *, quaid_home: Optional[Path] = None) -> Path:
+    return project_queue_dir(project, quaid_home=quaid_home) / ".drain.lock"
+
+
+@contextlib.contextmanager
+def project_queue_lock(project: str, *, quaid_home: Optional[Path] = None):
+    """Serialize drain->visible-write->mark for one project's queue."""
+    lock_path = project_queue_lock_path(project, quaid_home=quaid_home)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    handle = lock_path.open("a+", encoding="utf-8")
+    try:
+        try:
+            import fcntl  # type: ignore
+
+            fcntl.flock(handle, fcntl.LOCK_EX)
+        except Exception:
+            if is_fail_hard_enabled():
+                raise
+            logger.warning("Failed acquiring project-log queue lock for %s", project, exc_info=True)
+        yield
+    finally:
+        try:
+            import fcntl  # type: ignore
+
+            fcntl.flock(handle, fcntl.LOCK_UN)
+        except Exception:
+            if is_fail_hard_enabled():
+                raise
+            logger.warning("Failed releasing project-log queue lock for %s", project, exc_info=True)
+        handle.close()
 
 
 def _validate_project(project: str) -> str:
@@ -112,8 +145,8 @@ def _atomic_write_json(path: Path, payload: Dict[str, Any]) -> None:
     except Exception:
         try:
             tmp.unlink(missing_ok=True)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Failed cleaning up temp file %s: %s", tmp, exc)
         raise
 
 

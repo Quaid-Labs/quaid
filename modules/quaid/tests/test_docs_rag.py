@@ -122,6 +122,25 @@ Content B.
         assert len(chunks) >= 2
         assert max(rag.estimate_tokens(chunk) for chunk in chunks) <= 55
 
+    def test_chunk_max_tokens_rejects_non_positive_failhard(self, monkeypatch):
+        import datastore.docsdb.rag as rag_mod
+
+        monkeypatch.setattr(rag_mod, "_rag_config", lambda: SimpleNamespace(chunk_max_tokens=0))
+        monkeypatch.setattr(rag_mod, "is_fail_hard_enabled", lambda: True)
+
+        with pytest.raises(RuntimeError, match="chunk_max_tokens"):
+            rag_mod._chunk_max_tokens()
+
+    def test_chunk_max_tokens_non_positive_falls_back_when_fail_open(self, monkeypatch, caplog):
+        import datastore.docsdb.rag as rag_mod
+
+        monkeypatch.setattr(rag_mod, "_rag_config", lambda: SimpleNamespace(chunk_max_tokens=-10))
+        monkeypatch.setattr(rag_mod, "is_fail_hard_enabled", lambda: False)
+
+        caplog.set_level("WARNING")
+        assert rag_mod._chunk_max_tokens() == 800
+        assert "Non-positive docs RAG chunk_max_tokens" in caplog.text
+
 
 # ---------------------------------------------------------------------------
 # needs_reindex
@@ -298,6 +317,28 @@ class TestIndexDocument:
             ).fetchall()
 
         assert rows == [("old:0", "old chunk", "# Old")]
+
+    def test_preserves_existing_chunks_when_reindex_generates_no_chunks(self, tmp_path):
+        rag = _make_rag(tmp_path)
+        test_file = tmp_path / "guide.md"
+        test_file.write_text("   \n\n   ", encoding="utf-8")
+
+        with sqlite3.connect(rag.db_path) as conn:
+            conn.execute(
+                "INSERT INTO doc_chunks (id, source_file, chunk_index, content, section_header, embedding) VALUES (?, ?, ?, ?, ?, ?)",
+                ("old:0", str(test_file), 0, "old chunk", "# Old", b"old"),
+            )
+            conn.commit()
+
+        assert rag.index_document(str(test_file)) == 0
+
+        with sqlite3.connect(rag.db_path) as conn:
+            rows = conn.execute(
+                "SELECT id, content FROM doc_chunks WHERE source_file = ?",
+                (str(test_file),),
+            ).fetchall()
+
+        assert rows == [("old:0", "old chunk")]
 
     def test_embedding_failure_raises_when_fail_hard(self, tmp_path):
         rag = _make_rag(tmp_path)
@@ -525,6 +566,23 @@ class TestDocsSearchFiltering:
         normalized = rag._normalize_docs_filter(raw)
         assert normalized == ["alpha.md", "beta.md"]
 
+    def test_diversify_suite_results_preserves_rows_without_content_key(self):
+        from datastore.docsdb.rag import _diversify_suite_results
+
+        rows = [
+            {"source": "/tmp/mixed-shape.md", "chunk_index": 0},
+            {
+                "source": "/tmp/projects/demo/PROJECT.log",
+                "chunk_index": 1,
+                "content": "Added tests/payment.test.js coverage",
+            },
+        ]
+
+        out = _diversify_suite_results(rows, limit=2)
+
+        assert out[0] is rows[0]
+        assert rows[1] in out
+
     @patch("datastore.docsdb.rag._lib_get_embedding", return_value=[0.1, 0.2, 0.3])
     @patch("datastore.docsdb.rag._lib_unpack_embedding", return_value=[0.1, 0.2, 0.3])
     @patch("datastore.docsdb.rag._lib_cosine_similarity", return_value=0.95)
@@ -547,6 +605,71 @@ class TestDocsSearchFiltering:
         results = rag.search_docs("alpha", limit=10, docs=["alpha.md"])
         assert len(results) == 1
         assert results[0]["source"].endswith("alpha.md")
+
+    def test_search_docs_empty_query_raises_under_failhard(self, tmp_path):
+        rag = _make_rag(tmp_path)
+
+        with patch("datastore.docsdb.rag.is_fail_hard_enabled", return_value=True), \
+             patch("datastore.docsdb.rag._lib_get_embedding") as embed:
+            with pytest.raises(ValueError, match="must not be empty"):
+                rag.search_docs("   ")
+
+        embed.assert_not_called()
+
+    def test_search_docs_row_scan_fallback_is_bounded(self, tmp_path):
+        rag = _make_rag(tmp_path)
+        with sqlite3.connect(rag.db_path) as db:
+            db.executemany(
+                "INSERT INTO doc_chunks (id, source_file, chunk_index, content, section_header, embedding) VALUES (?, ?, ?, ?, ?, ?)",
+                [
+                    (
+                        f"doc:{i}",
+                        f"/tmp/docs/doc{i}.md",
+                        0,
+                        f"content {i}",
+                        None,
+                        b"e",
+                    )
+                    for i in range(300)
+                ],
+            )
+            db.commit()
+
+        with patch("datastore.docsdb.rag._lib_has_vec", return_value=False), \
+             patch("datastore.docsdb.rag._lib_get_embedding", return_value=[1.0]), \
+             patch("datastore.docsdb.rag._lib_unpack_embedding", return_value=[1.0]) as unpack, \
+             patch("datastore.docsdb.rag._lib_cosine_similarity", return_value=0.95):
+            results = rag.search_docs("content", limit=1)
+
+        assert len(results) == 1
+        assert unpack.call_count == 256
+
+    def test_project_source_fallback_read_failure_raises_under_failhard(self, tmp_path, monkeypatch):
+        rag = _make_rag(tmp_path)
+        project_dir = tmp_path / "projects" / "demo"
+        project_dir.mkdir(parents=True, exist_ok=True)
+        md_path = project_dir / "PROJECT.md"
+        md_path.write_text("# Demo\n", encoding="utf-8")
+        real_read_text = Path.read_text
+
+        def _read_text(path, *args, **kwargs):
+            if Path(path) == md_path:
+                raise OSError("permission denied")
+            return real_read_text(path, *args, **kwargs)
+
+        monkeypatch.setattr(rag, "_get_project_paths", lambda _project: {"home_dir": str(project_dir), "source_roots": []})
+
+        with patch("datastore.docsdb.rag.is_fail_hard_enabled", return_value=True), \
+             patch.object(Path, "read_text", _read_text):
+            with pytest.raises(RuntimeError, match="PROJECT.md fallback"):
+                rag._project_source_fallback_chunks(
+                    query="demo",
+                    limit=1,
+                    project="demo",
+                    docs=None,
+                    date_from=None,
+                    date_to=None,
+                )
 
     @patch("datastore.docsdb.rag._lib_get_embedding", return_value=[0.1, 0.2, 0.3])
     @patch("datastore.docsdb.rag._lib_unpack_embedding", return_value=[0.1, 0.2, 0.3])
@@ -2144,9 +2267,23 @@ class TestRagMaintenanceThirdPass:
         fake_reg.list_docs.side_effect = Exception("db exploded")
 
         with patch("datastore.docsdb.rag.DocsRAG.reindex_all", return_value=_empty_reindex_result()), \
+             patch("datastore.docsdb.rag.is_fail_hard_enabled", return_value=False), \
              patch("datastore.docsdb.registry.DocsRegistry", return_value=fake_reg):
             # Must not raise — exception is swallowed and logged as a warning
             result = handler(ctx)
 
         # No unhandled errors in result (the warning goes to logger, not result.errors)
         assert result.errors == []
+
+    def test_list_docs_exception_raises_when_fail_hard(self, tmp_path):
+        handler = self._register_and_get_handler()
+        ctx = _make_rag_ctx(tmp_path)
+
+        fake_reg = MagicMock()
+        fake_reg.list_docs.side_effect = Exception("db exploded")
+
+        with patch("datastore.docsdb.rag.DocsRAG.reindex_all", return_value=_empty_reindex_result()), \
+             patch("datastore.docsdb.rag.is_fail_hard_enabled", return_value=True), \
+             patch("datastore.docsdb.registry.DocsRegistry", return_value=fake_reg), \
+             pytest.raises(RuntimeError, match="RAG maintenance failed"):
+            handler(ctx)

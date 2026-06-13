@@ -544,6 +544,7 @@ def test_execute_update_once_snapshots_applies_indexes_and_advances_cursors(proj
         index_project_logs_after=False,
     )
     index_project_logs.assert_called_once_with(project="demo")
+    index_project_logs.assert_called_once_with(project="demo")
     assert not project_docs.request_path("demo").exists()
     state = project_docs.read_state("demo")
     assert state["status"] == "fresh"
@@ -779,7 +780,50 @@ def test_execute_update_once_drains_project_log_queue_under_worker_lock(project_
         protected_names={"PROJECT.log"},
         index_project_logs_after=False,
     )
-    index_project_logs.assert_called_once_with(project="demo")
+
+
+def test_commit_queued_project_logs_holds_queue_lock_around_drain_and_mark(monkeypatch):
+    from core import project_docs
+
+    events: list[str] = []
+
+    class _Lock:
+        def __enter__(self):
+            events.append("enter")
+
+        def __exit__(self, exc_type, exc, tb):
+            events.append("exit")
+
+    def _drain(project):
+        assert project == "demo"
+        assert events == ["enter"]
+        return [
+            {
+                "id": "1-2-aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "entries": [{"text": "queued item"}],
+                "trigger": "Reset",
+            }
+        ]
+
+    def _append(*_args, **_kwargs):
+        assert events == ["enter"]
+        return {"history_entries_written": 1}
+
+    def _mark(project, item_ids):
+        assert project == "demo"
+        assert item_ids == ["1-2-aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"]
+        assert events == ["enter"]
+
+    monkeypatch.setattr("core.docs.updater.project_log_queue_lock", lambda project: _Lock())
+    monkeypatch.setattr("core.docs.updater.drain_project_log_queue", _drain)
+    monkeypatch.setattr("core.docs.updater.append_project_logs", _append)
+    monkeypatch.setattr("core.docs.updater.mark_project_log_queue_committed", _mark)
+
+    metrics = project_docs._commit_queued_project_logs("demo")
+
+    assert metrics["items_committed"] == 1
+    assert metrics["history_entries_written"] == 1
+    assert events == ["enter", "exit"]
 
 
 def test_execute_update_once_does_not_run_supervisor_docs_maintenance_tick(project_env):

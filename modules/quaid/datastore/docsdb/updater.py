@@ -38,6 +38,7 @@ import sys
 import tempfile
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -54,6 +55,9 @@ def _workspace() -> Path:
 
 def _changelog_path() -> Path:
     return _workspace() / "logs" / "docs-update-log.json"
+
+def _changelog_lock_path() -> Path:
+    return _changelog_path().with_suffix(".json.lock")
 
 def _cleanup_state_path() -> Path:
     return _workspace() / "logs" / "docs-cleanup-state.json"
@@ -202,8 +206,8 @@ def _atomic_write_text(path: Path, content: str) -> None:
         if os.path.exists(tmp_path):
             try:
                 os.unlink(tmp_path)
-            except OSError:
-                pass
+            except OSError as exc:
+                logger.warning("Failed cleaning up temp file %s: %s", tmp_path, exc)
 
 
 # Cleanup thresholds
@@ -264,9 +268,10 @@ def log_doc_update(
         "chars_before": chars_before,
         "chars_after": chars_after,
     }
-    entries = _load_changelog()
-    entries.append(entry)
-    _save_changelog(entries)
+    with _file_lock(_changelog_lock_path()):
+        entries = _load_changelog()
+        entries.append(entry)
+        _save_changelog(entries)
 
     # Track updates for cleanup heuristics (only for successful non-dry-run updates)
     if success and not dry_run and trigger != "cleanup":
@@ -665,9 +670,28 @@ def _bounded_diff_context(stale_sources: List[str], doc_mtime: float) -> Bounded
     total = 0
     capped = False
     reasons: List[str] = []
+    diff_by_source: Dict[str, str] = {}
 
-    for src in stale_sources:
-        diff = get_git_diff(src, doc_mtime)
+    def _collect(src: str) -> Tuple[str, str]:
+        return src, get_git_diff(src, doc_mtime)
+
+    if stale_sources:
+        workers = min(4, len(stale_sources))
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = {executor.submit(_collect, src): src for src in stale_sources}
+            for future in as_completed(futures):
+                src = futures[future]
+                try:
+                    result_src, diff_text = future.result()
+                except Exception as exc:
+                    if is_fail_hard_enabled():
+                        raise RuntimeError(f"Failed collecting git diff for {src}") from exc
+                    logger.warning("Failed collecting git diff for %s: %s", src, exc)
+                    continue
+                diff_by_source[result_src] = diff_text
+
+    for source_index, src in enumerate(stale_sources):
+        diff = diff_by_source.get(src, "")
         if not diff:
             continue
         diff_bytes = _utf8_len(diff)
@@ -678,7 +702,7 @@ def _bounded_diff_context(stale_sources: List[str], doc_mtime: float) -> Bounded
                 sections.append(clipped)
             capped = True
             reasons.append(f"total diff cap hit before/inside {src} ({max_total} bytes)")
-            skipped = len(stale_sources) - len(sections)
+            skipped = len(stale_sources) - source_index - 1
             sections.append(
                 "\n### Project diff catalog limit reached\n"
                 f"- safety_mode: catalog_only_tail\n"
@@ -1027,7 +1051,7 @@ def update_doc_from_diffs(
 
     Used by janitor (nightly) and on-demand updates.
     Detects core markdown targets and uses line-limit-aware prompts.
-    Returns True on success.
+    Returns True only when the document was actually written.
     """
     if Path(str(doc_path or "")).name == "PROJECT.log":
         print(f"  Skipping {doc_path} — PROJECT.log is append-only")
@@ -1072,7 +1096,7 @@ def update_doc_from_diffs(
         classification = classify_doc_change(all_diffs)
     if classification["classification"] == "trivial" and classification["confidence"] >= 0.7:
         print(f"  Skipping {doc_path} — trivial changes: {', '.join(classification['reasons'])}")
-        return True  # Success — no update needed
+        return False
 
     # For borderline cases (low-confidence "significant"), use Fast Reasoning as a cheap gate.
     # If the diff is large, chunk it and check each chunk — if ANY says YES, proceed.
@@ -1105,7 +1129,7 @@ def update_doc_from_diffs(
                     (r.output.strip() for r in gate_results if r.output), ""
                 )
                 print(f"  Fast Reasoning gate: skip{doc_path} — {first_reason}")
-                return True
+                return False
         except Exception as exc:
             logger.warning("Fast Reasoning gate failed for %s: %s", doc_path, exc)
 
@@ -1208,7 +1232,7 @@ def update_doc_from_diffs(
         print(f"  [DRY RUN] Would update {doc_path} ({chars_before} -> {chars_after} chars)")
         log_doc_update(doc_path, trigger, stale_sources, f"[DRY RUN] {summary}",
                        dry_run, True, chars_before, chars_after)
-        return True
+        return False
 
     _atomic_write_text(doc_abs, response)
     print(f"  Updated {doc_path} ({chars_before} -> {chars_after} chars)")
@@ -1220,8 +1244,10 @@ def update_doc_from_diffs(
         from datastore.docsdb.registry import DocsRegistry
         registry = DocsRegistry()
         registry.update_timestamps(doc_path, modified_at=datetime.now().isoformat())
-    except Exception:
-        pass
+    except Exception as exc:
+        if is_fail_hard_enabled():
+            raise RuntimeError(f"Failed syncing docs registry timestamp for {doc_path}") from exc
+        logger.warning("Failed syncing docs registry timestamp for %s: %s", doc_path, exc)
 
     return True
 

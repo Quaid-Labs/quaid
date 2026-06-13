@@ -82,13 +82,20 @@ def _canonical_source_path(raw_path: str) -> str:
         # Python versions without the strict kwarg.
         try:
             return str(path.resolve())
-        except Exception:
-            pass
-    except Exception:
-        pass
+        except Exception as exc:
+            if is_fail_hard_enabled():
+                raise RuntimeError(f"Failed resolving docs source path {raw_path!r}") from exc
+            logger.warning("Failed resolving docs source path %r: %s", raw_path, exc)
+    except Exception as exc:
+        if is_fail_hard_enabled():
+            raise RuntimeError(f"Failed resolving docs source path {raw_path!r}") from exc
+        logger.warning("Failed resolving docs source path %r: %s", raw_path, exc)
     try:
         return str(Path(os.path.realpath(str(path))))
-    except Exception:
+    except Exception as exc:
+        if is_fail_hard_enabled():
+            raise RuntimeError(f"Failed resolving docs source path {raw_path!r}") from exc
+        logger.warning("Failed resolving docs source path %r via realpath: %s", raw_path, exc)
         return str(path)
 
 
@@ -166,7 +173,20 @@ def _docs_recall_telemetry_enabled() -> bool:
 
 def _chunk_max_tokens() -> int:
     cfg = _rag_config()
-    return cfg.chunk_max_tokens if cfg else 800
+    raw = cfg.chunk_max_tokens if cfg else 800
+    try:
+        value = int(raw)
+    except (TypeError, ValueError) as exc:
+        if is_fail_hard_enabled():
+            raise RuntimeError(f"Invalid docs RAG chunk_max_tokens value: {raw!r}") from exc
+        logger.warning("Invalid docs RAG chunk_max_tokens=%r; using default 800", raw)
+        return 800
+    if value <= 0:
+        if is_fail_hard_enabled():
+            raise RuntimeError(f"Invalid docs RAG chunk_max_tokens value: {raw!r}")
+        logger.warning("Non-positive docs RAG chunk_max_tokens=%r; using default 800", raw)
+        return 800
+    return value
 
 
 def _chunk_overlap_tokens() -> int:
@@ -580,6 +600,12 @@ def _diversify_suite_results(results: List[Dict[str, Any]], limit: int) -> List[
     seen_suites: set[str] = set()
 
     for row in results:
+        if "content" not in row:
+            selected.append(row)
+            selected_ids.add((row.get("source"), row.get("chunk_index")))
+            if len(selected) >= limit:
+                return selected
+            continue
         suites = _extract_suite_filenames(row.get("content", ""))
         if not suites:
             continue
@@ -1094,6 +1120,8 @@ class DocsRAG:
             with open(canonical_file_path, 'r', encoding='utf-8') as f:
                 content = f.read()
         except Exception as e:
+            if is_fail_hard_enabled():
+                raise RuntimeError(f"Error reading docs source {canonical_file_path}") from e
             logger.warning("Error reading %s: %s", canonical_file_path, e)
             return 0
 
@@ -1185,20 +1213,20 @@ class DocsRAG:
                     "INSERT INTO vec_doc_chunks(chunk_id, embedding) VALUES (?, ?)",
                     [(chunk_id, packed_embedding) for chunk_id, _, _, _, _, packed_embedding in prepared_chunks],
                 )
-                # Verify the vec entry was actually created. The INSERT can partially
-                # succeed (creating the rowid shadow entry without updating the HNSW
-                # index) and leave the doc unfindable via vector search. If the entry
-                # is absent, clear chunks_created so last_indexed_at is NOT set and
-                # the doc will be re-indexed on the next run.
-                first_chunk_id = prepared_chunks[0][0]
-                vec_row = conn.execute(
-                    "SELECT COUNT(*) FROM vec_doc_chunks_rowids WHERE id = ?",
-                    (first_chunk_id,),
-                ).fetchone()
-                if not vec_row or vec_row[0] == 0:
+                # Verify all vec entries were actually created. The INSERT can partially
+                # succeed and leave some chunks unfindable via vector search. If any
+                # entry is absent, clear chunks_created so last_indexed_at is NOT set
+                # and the doc will be re-indexed on the next run.
+                vec_placeholders = ",".join("?" for _ in target_chunk_ids)
+                vec_rows = conn.execute(
+                    f"SELECT id FROM vec_doc_chunks_rowids WHERE id IN ({vec_placeholders})",
+                    tuple(target_chunk_ids),
+                ).fetchall()
+                missing_vec_ids = sorted(set(target_chunk_ids) - {str(row[0]) for row in vec_rows})
+                if missing_vec_ids:
                     message = (
                         "[docs] vec INSERT appeared to succeed but "
-                        f"{canonical_file_path} is absent from vec_doc_chunks_rowids; "
+                        f"{canonical_file_path} is missing {len(missing_vec_ids)} vec row(s); "
                         "last_indexed_at will NOT be set so the doc is re-indexed on "
                         "the next run"
                     )
@@ -1500,7 +1528,10 @@ class DocsRAG:
             if not raw_home_dir:
                 return []
             home_dir = Path(raw_home_dir)
-        except Exception:
+        except Exception as exc:
+            if is_fail_hard_enabled():
+                raise RuntimeError(f"Failed resolving fallback project source paths for {project_name}") from exc
+            logger.warning("Failed resolving fallback project source paths for %s: %s", project_name, exc)
             return []
         if not home_dir.is_dir():
             return []
@@ -1564,8 +1595,10 @@ class DocsRAG:
                         selected = sorted(scored_lines, key=lambda item: item[0], reverse=True)[: max(1, min(8, limit * 2))]
                         selected.sort(key=lambda item: item[1])
                         _append_chunk(log_path, "\n".join(line for _, _, line in selected), "PROJECT.log", 0)
-            except Exception:
-                pass
+            except Exception as exc:
+                if is_fail_hard_enabled():
+                    raise RuntimeError(f"Failed reading PROJECT.log fallback for {project_name}") from exc
+                logger.warning("Failed reading PROJECT.log fallback for %s: %s", project_name, exc)
 
         md_path = home_dir / "PROJECT.md"
         if not (date_from or date_to) and md_path.exists() and md_path.is_file() and _doc_allowed(md_path):
@@ -1573,8 +1606,10 @@ class DocsRAG:
                 content = md_path.read_text(encoding="utf-8")
                 for index, chunk in enumerate(self.chunk_markdown(content, max_tokens=_chunk_max_tokens())):
                     _append_chunk(md_path, chunk, None, index)
-            except Exception:
-                pass
+            except Exception as exc:
+                if is_fail_hard_enabled():
+                    raise RuntimeError(f"Failed reading PROJECT.md fallback for {project_name}") from exc
+                logger.warning("Failed reading PROJECT.md fallback for %s: %s", project_name, exc)
 
         candidates.sort(key=lambda row: float(row.get("_rank_score", row.get("similarity", 0.0))), reverse=True)
         out = candidates[:limit]
@@ -1603,6 +1638,11 @@ class DocsRAG:
         self._last_scope_hint = None
         date_from = _normalize_date_bound(date_from)
         date_to = _normalize_date_bound(date_to)
+        if not str(query or "").strip():
+            if is_fail_hard_enabled():
+                raise ValueError("Doc RAG query must not be empty while failHard is enabled.")
+            logger.warning("Empty docs RAG query; returning no results")
+            return []
         query_embedding = _lib_get_embedding(query)
         if not query_embedding:
             if is_fail_hard_enabled():
@@ -1789,6 +1829,7 @@ class DocsRAG:
                     use_vec = False
 
             if not use_vec:
+                row_scan_limit = max(256, limit * 64)
                 scan_where, scan_params, _ = self._build_doc_filter_sql(
                     project=project_scope_token,
                     project_paths=project_paths,
@@ -1798,9 +1839,15 @@ class DocsRAG:
                     source_expr="source_file",
                 )
                 if scan_where:
-                    rows = conn.execute(f"SELECT * FROM doc_chunks WHERE {scan_where}", tuple(scan_params)).fetchall()
+                    rows = conn.execute(
+                        f"SELECT * FROM doc_chunks WHERE {scan_where} ORDER BY updated_at DESC LIMIT ?",
+                        tuple(scan_params + [row_scan_limit]),
+                    ).fetchall()
                 else:
-                    rows = conn.execute("SELECT * FROM doc_chunks").fetchall()
+                    rows = conn.execute(
+                        "SELECT * FROM doc_chunks ORDER BY updated_at DESC LIMIT ?",
+                        (row_scan_limit,),
+                    ).fetchall()
 
             for row in rows:
                 source_file = str(row[1] or "")
@@ -1958,6 +2005,7 @@ class DocsRAG:
 
     def _get_project_paths(self, project: str) -> dict:
         """Get project path info for filtering."""
+        errors: List[BaseException] = []
         try:
             from datastore.docsdb.registry import DocsRegistry
 
@@ -1967,8 +2015,9 @@ class DocsRAG:
                     "home_dir": str(_resolve_project_root(defn.home_dir)),
                     "source_roots": [str(_resolve_project_root(r)) for r in (defn.source_roots or [])],
                 }
-        except Exception:
-            pass
+        except Exception as exc:
+            errors.append(exc)
+            logger.warning("docs project path lookup failed via docs registry for %r: %s", project, exc)
 
         try:
             from lib.project_registry import lookup as _get_project
@@ -1980,8 +2029,9 @@ class DocsRAG:
                     "home_dir": canonical_path,
                     "source_roots": [],
                 }
-        except Exception:
-            pass
+        except Exception as exc:
+            errors.append(exc)
+            logger.warning("docs project path lookup failed via project registry for %r: %s", project, exc)
 
         try:
             visible_project_dir = get_visible_quaid_home() / "projects" / str(project or "").strip()
@@ -1990,9 +2040,12 @@ class DocsRAG:
                     "home_dir": str(visible_project_dir),
                     "source_roots": [],
                 }
-        except Exception:
-            pass
+        except Exception as exc:
+            errors.append(exc)
+            logger.warning("docs project path lookup failed via visible projects dir for %r: %s", project, exc)
 
+        if errors and is_fail_hard_enabled():
+            raise RuntimeError(f"Failed resolving docs project paths for {project!r}") from errors[-1]
         return {"home_dir": "", "source_roots": []}
 
     def _row_value(self, row: Any, key: str, index: int) -> Any:
@@ -2073,7 +2126,10 @@ class DocsRAG:
                 use_vec = False
 
         if not use_vec:
-            rows = conn.execute("SELECT source_file, embedding FROM doc_chunks").fetchall()
+            rows = conn.execute(
+                "SELECT source_file, embedding FROM doc_chunks ORDER BY updated_at DESC LIMIT ?",
+                (1000,),
+            ).fetchall()
 
         for row in rows:
             source_file = str(self._row_value(row, "source_file", 0) or "").strip()
@@ -2329,6 +2385,8 @@ def register_lifecycle_routines(registry, result_factory) -> None:
                         total_files += 1
                         skipped += 1
             except Exception as exc:
+                if is_fail_hard_enabled():
+                    raise RuntimeError("doc_registry pass failed during RAG maintenance") from exc
                 logger.warning("doc_registry pass failed during RAG maintenance: %s", exc)
 
             result.metrics["rag_total_files"] = total_files
