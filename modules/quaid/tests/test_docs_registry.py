@@ -1,6 +1,7 @@
 """Tests for docs_registry.py — CRUD, path resolution, project operations."""
 
 import json
+import logging
 import os
 import sqlite3
 import sys
@@ -93,6 +94,26 @@ def setup_env(tmp_path, monkeypatch):
 def _get_registry(tmp_path=None):
     from datastore.docsdb.registry import DocsRegistry
     return DocsRegistry(db_path=_tmp_db)
+
+
+class TestFailHardPolicy:
+    def test_fail_hard_policy_import_failure_fails_closed(self, setup_env, monkeypatch, caplog):
+        from datastore.docsdb import registry as registry_mod
+
+        real_import = __import__
+
+        def blocked_import(name, globals=None, locals=None, fromlist=(), level=0):
+            if name == "lib.fail_policy":
+                raise ImportError("missing fail policy")
+            return real_import(name, globals, locals, fromlist, level)
+
+        monkeypatch.setattr("builtins.__import__", blocked_import)
+
+        with caplog.at_level(logging.CRITICAL):
+            with pytest.raises(RuntimeError, match="Failed to load fail-hard policy"):
+                registry_mod._fail_hard_enabled()
+
+        assert "Failed to load fail-hard policy" in caplog.text
 
 
 class TestEnsureTable:

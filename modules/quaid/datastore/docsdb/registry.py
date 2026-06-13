@@ -66,10 +66,10 @@ ASYNC_REGISTRATION_NOTICE = (
 def _fail_hard_enabled() -> bool:
     try:
         from lib.fail_policy import is_fail_hard_enabled
-
-        return bool(is_fail_hard_enabled())
-    except Exception:
-        return False
+    except Exception as exc:
+        logger.critical("Failed to load fail-hard policy; failing closed: %s", exc)
+        raise RuntimeError("Failed to load fail-hard policy") from exc
+    return bool(is_fail_hard_enabled())
 
 
 def _current_quaid_instance_id() -> str:
