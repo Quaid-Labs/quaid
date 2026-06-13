@@ -27,6 +27,7 @@ set -u -o pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TMUX_MSG="$SCRIPT_DIR/tmux-msg.sh"
+TARGETS_FILE="${TMUX_MSG_TARGETS_FILE:-$SCRIPT_DIR/.tmux-targets.json}"
 
 if [[ ! -x "$TMUX_MSG" ]]; then
     echo "Error: missing executable $TMUX_MSG" >&2
