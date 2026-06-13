@@ -116,6 +116,36 @@ class TestFailHardPolicy:
         assert "Failed to load fail-hard policy" in caplog.text
 
 
+class TestConfigReloadPolicy:
+    def test_reload_config_failure_warns_when_fail_open(self, setup_env, monkeypatch, caplog):
+        import config as config_mod
+        from datastore.docsdb import registry as registry_mod
+
+        def fail_reload():
+            raise OSError("reload failed")
+
+        monkeypatch.setattr(config_mod, "reload_config", fail_reload)
+        monkeypatch.setattr(registry_mod, "_fail_hard_enabled", lambda: False)
+
+        with caplog.at_level(logging.WARNING):
+            assert registry_mod._reload_config_after_project_change("create_project") is False
+
+        assert "Config reload skipped after create_project" in caplog.text
+
+    def test_reload_config_failure_raises_when_fail_hard(self, setup_env, monkeypatch):
+        import config as config_mod
+        from datastore.docsdb import registry as registry_mod
+
+        def fail_reload():
+            raise OSError("reload failed")
+
+        monkeypatch.setattr(config_mod, "reload_config", fail_reload)
+        monkeypatch.setattr(registry_mod, "_fail_hard_enabled", lambda: True)
+
+        with pytest.raises(RuntimeError, match="Failed to reload config after delete_project"):
+            registry_mod._reload_config_after_project_change("delete_project")
+
+
 class TestEnsureTable:
     def test_idempotent(self, setup_env):
         """Table creation is idempotent."""

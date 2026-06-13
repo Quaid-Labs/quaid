@@ -72,6 +72,19 @@ def _fail_hard_enabled() -> bool:
     return bool(is_fail_hard_enabled())
 
 
+def _reload_config_after_project_change(action: str) -> bool:
+    try:
+        from config import reload_config
+
+        reload_config()
+        return True
+    except Exception as exc:
+        if _fail_hard_enabled():
+            raise RuntimeError(f"Failed to reload config after {action}") from exc
+        logger.warning("Config reload skipped after %s: %s", action, exc)
+        return False
+
+
 def _current_quaid_instance_id() -> str:
     raw = os.environ.get("QUAID_INSTANCE", "").strip()
     if raw:
@@ -1464,7 +1477,7 @@ class DocsRegistry:
         _write_text_if_missing(project_md_path, project_md)
 
         # Save project definition to DB (source of truth)
-        from config import ProjectDefinition, reload_config
+        from config import ProjectDefinition
         defn = ProjectDefinition(
             label=label,
             home_dir=home,
@@ -1477,11 +1490,8 @@ class DocsRegistry:
         self.save_project_definition(name, defn)
 
         # Reload config so subsequent calls see the new project
-        try:
-            reload_config()
+        if _reload_config_after_project_change("create_project"):
             self._config = None
-        except Exception:
-            pass
 
         # Register PROJECT.md in the doc registry
         rel_path = _to_registry_path(project_md_path)
@@ -1748,12 +1758,8 @@ class DocsRegistry:
             raise
 
         # Reload config
-        try:
-            from config import reload_config
-            reload_config()
+        if _reload_config_after_project_change("rename_project"):
             self._config = None
-        except Exception:
-            pass
 
         try:
             from lib.project_registry import rename as rename_global_project
@@ -1868,12 +1874,8 @@ class DocsRegistry:
         self.delete_project_definition(project_name)
 
         # Reload config
-        try:
-            from config import reload_config
-            reload_config()
+        if _reload_config_after_project_change("archive_project"):
             self._config = None
-        except Exception:
-            pass
 
         result = {"archived": archived, "dir_moved": dir_moved, "rag_chunks_deleted": rag_chunk_deleted}
         print(
@@ -1938,12 +1940,8 @@ class DocsRegistry:
         self.delete_project_definition(project_name)
 
         # Reload config
-        try:
-            from config import reload_config
-            reload_config()
+        if _reload_config_after_project_change("delete_project"):
             self._config = None
-        except Exception:
-            pass
 
         try:
             from lib.project_registry import remove as remove_global_project
