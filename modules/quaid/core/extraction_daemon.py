@@ -2376,14 +2376,14 @@ def _queue_missing_staged_rolling_flushes_from_state(
             scanner=scanner,
         ):
             continue
-        if _processing_lock_active(source_key):
+        source_lock_active = _processing_lock_active(source_key)
+        if source_lock_active:
             logger.info(
                 "session %s has staged rolling payload but source lock %s is still active; "
-                "deferring missing-flush recovery",
+                "queueing missing-flush recovery for retry",
                 session_id,
                 source_key,
             )
-            continue
         logger.warning(
             "session %s has staged rolling payload without cursor-visible pending flush; "
             "regenerating rolling_stage_flush",
@@ -2399,6 +2399,7 @@ def _queue_missing_staged_rolling_flushes_from_state(
                 "staged_payload_sweep": True,
                 "recovered_missing_flush": True,
                 "recovered_from_rolling_state": True,
+                "source_lock_active_at_recovery": source_lock_active,
                 "source_cursor_key": source_key,
                 "buffered_line_offset": int(rolling.get("buffered_line_offset", 0) or 0),
                 "flush_staged_payload_only": True,

@@ -16213,8 +16213,8 @@ class TestRollingExtraction:
         assert captured[0]["transcript_path"] == str(original)
         assert captured[0]["meta"]["recovered_missing_flush"] is True
 
-    def test_missing_rolling_stage_flush_recovery_waits_for_active_source_lock(self, monkeypatch, tmp_path):
-        """Durable-state recovery must not publish while a live rolling worker owns the source lock."""
+    def test_missing_rolling_stage_flush_recovery_queues_retry_with_active_source_lock(self, monkeypatch, tmp_path):
+        """Durable-state recovery must leave a retry signal even while a source lock is active."""
         instance_id = os.environ.get("QUAID_INSTANCE", "pytest-runner")
         transcript = tmp_path / "active-lock-flush.jsonl"
         transcript.write_text(
@@ -16270,7 +16270,15 @@ class TestRollingExtraction:
         finally:
             extraction_daemon._release_session_processing_lock(source_key, lock_fd)
 
-        assert captured == []
+        assert len(captured) == 1
+        assert captured[0]["signal_type"] == "session_end"
+        assert captured[0]["session_id"] == "active-lock-sess"
+        assert captured[0]["transcript_path"] == str(transcript)
+        assert captured[0]["meta"]["reason"] == "rolling_stage_flush"
+        assert captured[0]["meta"]["recovered_missing_flush"] is True
+        assert captured[0]["meta"]["recovered_from_rolling_state"] is True
+        assert captured[0]["meta"]["source_lock_active_at_recovery"] is True
+        assert captured[0]["meta"]["source_cursor_key"] == source_key
 
     def test_check_chunk_ready_sessions_recovers_missing_rolling_stage_flush_after_fresh_dead_lock(
         self, monkeypatch, tmp_path
