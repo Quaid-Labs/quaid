@@ -4104,7 +4104,12 @@ def _rolling_state_has_pending_content(state: Dict[str, Any]) -> bool:
     return bool(staged_state_has_payload(state or {}) or _semantic_buffer_has_content(state or {}))
 
 
-def _read_rolling_state_for_signal(session_id: str, transcript_path: str) -> Tuple[Dict[str, Any], str]:
+def _read_rolling_state_for_signal(
+    session_id: str,
+    transcript_path: str,
+    *,
+    source_cursor_key: str = "",
+) -> Tuple[Dict[str, Any], str]:
     """Read rolling state, tolerating host session-id aliases for one transcript source.
 
     Codex can report lifecycle signals with the bare UUID while rolling scans use the
@@ -4118,10 +4123,11 @@ def _read_rolling_state_for_signal(session_id: str, transcript_path: str) -> Tup
         return direct_state, normalized_session_id
 
     raw_transcript_path = str(transcript_path or "").strip()
+    wanted_source_cursor_key = str(source_cursor_key or "").strip()
     wanted_session_uuid = _session_uuid_for_alias_match(normalized_session_id)
     wanted_path_uuid = _session_uuid_for_alias_match(raw_transcript_path)
     wanted_uuid = wanted_session_uuid or wanted_path_uuid
-    if not raw_transcript_path and not wanted_uuid:
+    if not raw_transcript_path and not wanted_uuid and not wanted_source_cursor_key:
         return direct_state, normalized_session_id
 
     wanted_canonical_path = (
@@ -4179,6 +4185,16 @@ def _read_rolling_state_for_signal(session_id: str, transcript_path: str) -> Tup
         except Exception:
             state_identity = ""
         if wanted_identity and state_identity == wanted_identity:
+            return state, _validate_session_id(str(state.get("session_id") or state_key))
+        try:
+            state_source_cursor_key = _signal_source_cursor_key(
+                str(state.get("session_id") or state_key),
+                state_transcript_path,
+                staged_state=state,
+            )
+        except Exception:
+            state_source_cursor_key = ""
+        if wanted_source_cursor_key and state_source_cursor_key == wanted_source_cursor_key:
             return state, _validate_session_id(str(state.get("session_id") or state_key))
 
     return direct_state, normalized_session_id
@@ -5357,7 +5373,13 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
     label = f"daemon-{signal_type}"
     rolling_mode = signal_type == "rolling"
     original_session_id = session_id
-    staged_state, rolling_state_session_id = _read_rolling_state_for_signal(session_id, transcript_path)
+    signal_meta = signal_data.get("meta") if isinstance(signal_data.get("meta"), dict) else {}
+    source_cursor_key = _signal_meta_cursor_key(session_id, signal_meta)
+    staged_state, rolling_state_session_id = _read_rolling_state_for_signal(
+        session_id,
+        transcript_path,
+        source_cursor_key=source_cursor_key,
+    )
     if rolling_state_session_id != session_id:
         session_id = rolling_state_session_id
         adopted_transcript_path = str(staged_state.get("transcript_path") or "").strip()
@@ -5369,7 +5391,6 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             original_session_id,
             session_id,
         )
-    signal_meta = signal_data.get("meta") if isinstance(signal_data.get("meta"), dict) else {}
     transcript_rebase_retry_count = _transcript_rebase_retry_count(signal_meta)
     staged_payload_sweep_signal = bool(signal_meta.get("staged_payload_sweep")) or (
         str(signal_meta.get("reason") or "") == "rolling_stage_flush"
@@ -5456,7 +5477,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
         )
         transcript_path = resolved_transcript_path
 
-    lock_owner_key = _signal_meta_cursor_key(session_id, signal_meta) or resolved_source_key or _signal_source_cursor_key(
+    lock_owner_key = source_cursor_key or resolved_source_key or _signal_source_cursor_key(
         session_id,
         transcript_path,
         staged_state=staged_state,

@@ -5882,9 +5882,91 @@ const quaidPlugin = {
       });
 
     let timeoutManager: SessionTimeoutManager | null = null;
+    type HookContextResult = {
+      prependContext?: string;
+      prependSystemContext?: string;
+      appendSystemContext?: string;
+    };
+    let beforePromptBuildHandler: (event: any, ctx: any) => Promise<HookContextResult | undefined> = async () => undefined;
+    const embeddedPromptBuildFallbackTurns = new Map<string, number>();
+    const EMBEDDED_PROMPT_BUILD_FALLBACK_TTL_MS = 30_000;
+    const readOptionalOpenClawDeviceJson = (filePath: string): Record<string, any> => {
+      if (!fs.existsSync(filePath)) return {};
+      try {
+        const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
+        return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+      } catch (err: unknown) {
+        console.warn(`[quaid] OpenClaw device state read failed: ${String((err as Error)?.message || err)}`);
+        if (isFailHardEnabled()) {
+          throw err;
+        }
+        return {};
+      }
+    };
+    const openClawScopeUpgradePending = (): boolean => {
+      const devicesDir = path.join(os.homedir(), ".openclaw", "devices");
+      const pending = readOptionalOpenClawDeviceJson(path.join(devicesDir, "pending.json"));
+      const requests = Object.values(pending);
+      if (requests.length === 0) return false;
+      const paired = readOptionalOpenClawDeviceJson(path.join(devicesDir, "paired.json"));
+      for (const request of requests) {
+        const scopes = Array.isArray(request?.scopes)
+          ? request.scopes.map((scope: unknown) => String(scope || "").trim())
+          : [];
+        const required = scopes.filter((scope: string) => scope === "operator.write" || scope === "operator.pairing");
+        if (required.length === 0) continue;
+        const deviceId = String(request?.deviceId || "").trim();
+        const pairedDevice = deviceId ? paired[deviceId] : null;
+        const approvedScopes = new Set(
+          [
+            ...(Array.isArray(pairedDevice?.scopes) ? pairedDevice.scopes : []),
+            ...(Array.isArray(pairedDevice?.approvedScopes) ? pairedDevice.approvedScopes : []),
+          ].map((scope: unknown) => String(scope || "").trim()),
+        );
+        if (!deviceId || !pairedDevice || required.some((scope: string) => !approvedScopes.has(scope))) {
+          writeHookTrace("hook.openclaw_scope_upgrade_pending", {
+            request_id: String(request?.requestId || ""),
+            device_id: deviceId,
+            required_scopes: required,
+            approved_scopes: Array.from(approvedScopes),
+          });
+          return true;
+        }
+      }
+      return false;
+    };
+    const embeddedPromptBuildFallbackTurnKey = (agentLabel: string, event: any, ctx: any): string => {
+      const sessionId = String(event?.sessionId || ctx?.sessionId || ctx?.session?.id || "").trim();
+      const sessionScope = firstNonEmptyString(
+        event?.sessionKey,
+        ctx?.sessionKey,
+        event?.targetSessionKey,
+        ctx?.targetSessionKey,
+        sessionId,
+      );
+      const selected = selectAutoInjectQuery(event, lastUserMessageQuery, Date.now(), sessionId);
+      return _autoInjectTurnKey(agentLabel, selected.query, sessionScope);
+    };
+    const markEmbeddedPromptBuildFallbackTurn = (turnKey: string): void => {
+      const key = String(turnKey || "").trim();
+      if (!key) return;
+      const nowMs = Date.now();
+      for (const [existingKey, expiresAtMs] of embeddedPromptBuildFallbackTurns.entries()) {
+        if (expiresAtMs <= nowMs) embeddedPromptBuildFallbackTurns.delete(existingKey);
+      }
+      embeddedPromptBuildFallbackTurns.set(key, nowMs + EMBEDDED_PROMPT_BUILD_FALLBACK_TTL_MS);
+    };
+    const consumeEmbeddedPromptBuildFallbackTurn = (turnKey: string): boolean => {
+      const key = String(turnKey || "").trim();
+      if (!key) return false;
+      const expiresAtMs = Number(embeddedPromptBuildFallbackTurns.get(key) || 0);
+      if (!expiresAtMs) return false;
+      embeddedPromptBuildFallbackTurns.delete(key);
+      return expiresAtMs > Date.now();
+    };
 
     // Register lifecycle hooks.
-    const beforeAgentStartHandler = async (event: any, ctx: any): Promise<{ prependContext?: string; prependSystemContext?: string; appendSystemContext?: string } | undefined> => {
+    const beforeAgentStartHandler = async (event: any, ctx: any): Promise<HookContextResult | undefined> => {
       if (isInternalSessionContext(event, ctx)) {
         return;
       }
@@ -5963,6 +6045,36 @@ notify_user(${JSON.stringify(message)})
         // Explicitly disabled: skip recall injection; lifecycle identity refresh
         // remains a system-context path and may have populated result above.
         return result;
+      }
+
+      const fallbackTurnKey = embeddedPromptBuildFallbackTurnKey(startAgentLabel, event, ctx);
+      if (openClawScopeUpgradePending()) {
+        writeHookTrace("hook.before_agent_start.embedded_prompt_build_fallback", {
+          session_id: String(event?.sessionId || ctx?.sessionId || ctx?.session?.id || ""),
+          session_key: String(event?.sessionKey || ctx?.sessionKey || ""),
+          reason: "openclaw_scope_upgrade_pending",
+        });
+        const fallbackEvent = {
+          ...(event && typeof event === "object" ? event : {}),
+          __quaidEmbeddedPromptBuildFallback: true,
+          prependContext: result.prependContext ?? event?.prependContext,
+          prependSystemContext: result.prependSystemContext ?? event?.prependSystemContext,
+          appendSystemContext: result.appendSystemContext ?? event?.appendSystemContext,
+        };
+        const promptResult = await beforePromptBuildHandler(fallbackEvent, ctx);
+        if (
+          promptResult?.prependContext
+          || promptResult?.prependSystemContext
+          || promptResult?.appendSystemContext
+        ) {
+          markEmbeddedPromptBuildFallbackTurn(fallbackTurnKey);
+        }
+        if (event && typeof event === "object" && promptResult) {
+          if (promptResult.prependContext) event.prependContext = promptResult.prependContext;
+          if (promptResult.prependSystemContext) event.prependSystemContext = promptResult.prependSystemContext;
+          if (promptResult.appendSystemContext) event.appendSystemContext = promptResult.appendSystemContext;
+        }
+        return promptResult || result;
       }
 
       return result;
@@ -6158,12 +6270,24 @@ notify_user(${JSON.stringify(message)})
       );
     };
 
-    const beforePromptBuildHandler = async (event: any, ctx: any): Promise<{ prependContext?: string; prependSystemContext?: string; appendSystemContext?: string } | undefined> => {
+    beforePromptBuildHandler = async (event: any, ctx: any): Promise<HookContextResult | undefined> => {
       if (isInternalSessionContext(event, ctx)) return;
       const promptAgentLabel = resolveHookAgentLabel(event, ctx);
       const promptInstanceId = getInstanceId(promptAgentLabel);
       const promptFacade = getAdapterFacadeForInstance(promptInstanceId);
       const promptSessionId = String(event?.sessionId || ctx?.sessionId || ctx?.session?.id || "").trim();
+      const embeddedFallbackTurnKey = embeddedPromptBuildFallbackTurnKey(promptAgentLabel, event, ctx);
+      if (!event?.__quaidEmbeddedPromptBuildFallback && consumeEmbeddedPromptBuildFallbackTurn(embeddedFallbackTurnKey)) {
+        writeHookTrace("hook.before_prompt_build.embedded_fallback_duplicate_skip", {
+          session_id: promptSessionId,
+          session_key: String(event?.sessionKey || ctx?.sessionKey || ""),
+        });
+        return {
+          prependContext: event?.prependContext ? String(event.prependContext) : undefined,
+          prependSystemContext: event?.prependSystemContext ? String(event.prependSystemContext) : undefined,
+          appendSystemContext: event?.appendSystemContext ? String(event.appendSystemContext) : undefined,
+        };
+      }
       if (promptSessionId) {
         sessionIdToAgentId.set(promptSessionId, promptAgentLabel);
       }
