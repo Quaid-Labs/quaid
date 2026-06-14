@@ -28,6 +28,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 # Helpers
 # ---------------------------------------------------------------------------
 
+@pytest.fixture(autouse=True)
+def _default_no_project_docs_search(monkeypatch):
+    """Keep hook tests that are not about docs from touching shared docs state."""
+    monkeypatch.setattr("core.interface.api.projects_search_docs", lambda **_kwargs: None)
+
+
 def _adapter_mock():
     adapter = MagicMock()
     adapter._extract_hook_session_id = None
@@ -231,6 +237,38 @@ def test_claude_code_inject_writes_session_end_signal_for_clear_command(monkeypa
     assert sig["meta"]["reason"] == "command:clear"
 
 
+def test_claude_code_inject_signal_write_failure_raises_when_fail_hard_enabled(
+    monkeypatch, tmp_path, cursor_dir
+):
+    from adaptors.claude_code.adapter import ClaudeCodeAdapter
+
+    transcript_path = tmp_path / "cc-clear-failhard.jsonl"
+    transcript_path.write_text(
+        json.dumps({"type": "user", "message": {"role": "user", "content": "My sister is Diana."}}) + "\n",
+        encoding="utf-8",
+    )
+
+    adapter = _adapter_mock()
+    cc_adapter = ClaudeCodeAdapter()
+    adapter.adapter_id.return_value = "claude-code"
+    adapter.resolve_prompt_submit_signal.side_effect = cc_adapter.resolve_prompt_submit_signal
+
+    monkeypatch.setattr("core.extraction_daemon.write_signal", lambda **_kwargs: (_ for _ in ()).throw(ValueError("signal write broke")))
+    monkeypatch.setattr("lib.adapter.get_adapter", lambda: adapter)
+    monkeypatch.setattr("lib.fail_policy.is_fail_hard_enabled", lambda: True)
+
+    with pytest.raises(ValueError, match="signal write broke"):
+        _run_hook_inject(
+            {
+                "session_id": "sess-cc-clear-failhard",
+                "transcript_path": str(transcript_path),
+                "cwd": str(tmp_path),
+                "prompt": "/clear",
+            },
+            monkeypatch=monkeypatch,
+        )
+
+
 def test_claude_code_inject_refreshes_rules_context_for_compact_command(monkeypatch, tmp_path, cursor_dir):
     from adaptors.claude_code.adapter import ClaudeCodeAdapter
 
@@ -301,6 +339,25 @@ def test_claude_code_inject_refreshes_rules_context_for_compact_command(monkeypa
     marker_payload = json.loads(marker_file.read_text(encoding="utf-8"))
     assert marker_payload["reason"] == "compact_command"
     assert marker_payload["source"] == "hook_inject"
+
+
+def test_hook_inject_compact_non_runtime_failure_raises_when_fail_hard_enabled(monkeypatch, tmp_path):
+    from core.interface import hooks
+
+    captured_out = io.StringIO()
+    captured_err = io.StringIO()
+    monkeypatch.setattr("lib.fail_policy.is_fail_hard_enabled", lambda: True)
+    monkeypatch.setattr(hooks, "_ensure_hook_instance_ready", lambda _hook_input: None)
+    monkeypatch.setattr(hooks, "_get_owner_id", lambda: "Owner")
+
+    with patch("core.interface.hooks._read_stdin_json", return_value={"cwd": str(tmp_path)}), \
+         patch("core.interface.hooks.sys.stdout", captured_out), \
+         patch("core.interface.hooks.sys.stderr", captured_err), \
+         patch("core.interface.api.recall", side_effect=ValueError("compact recall broke")), \
+         pytest.raises(ValueError, match="compact recall broke"):
+        hooks.hook_inject_compact(MagicMock())
+
+    assert "compact recall broke" in captured_err.getvalue()
 
 
 def test_claude_code_post_compact_turn_gets_identity_additional_context_under_cap(monkeypatch, tmp_path, cursor_dir):
@@ -3106,6 +3163,32 @@ class TestHookInjectRecallResilience:
                 {
                     "prompt": "Where does Maya live?",
                     "session_id": "sess-docs-failhard",
+                    "cwd": "/Users/x",
+                },
+                monkeypatch=monkeypatch,
+            )
+
+    def test_project_docs_non_runtime_failure_raises_when_fail_hard_enabled(
+        self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
+    ):
+        from core import extraction_daemon
+
+        monkeypatch.setattr(extraction_daemon, "write_cursor", lambda *a: None)
+        monkeypatch.setattr("lib.fail_policy.is_fail_hard_enabled", lambda: True)
+        monkeypatch.setattr("core.interface.hooks._get_deferred_notice_hint", lambda: "")
+        monkeypatch.setattr("core.interface.hooks._get_deferred_notice_relay_context", lambda: "")
+
+        with patch(
+            "core.interface.api.recall_fast",
+            return_value=[{"text": "Maya lives in South Austin", "similarity": 0.9, "category": "fact"}],
+        ), patch(
+            "core.interface.api.projects_search_docs",
+            side_effect=ValueError("docs parser invariant broke"),
+        ), pytest.raises(ValueError, match="docs parser invariant broke"):
+            _run_hook_inject(
+                {
+                    "prompt": "Where does Maya live?",
+                    "session_id": "sess-docs-valueerror-failhard",
                     "cwd": "/Users/x",
                 },
                 monkeypatch=monkeypatch,

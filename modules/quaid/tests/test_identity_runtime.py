@@ -248,6 +248,49 @@ def test_memory_service_search_passes_identity_scope_to_datastore(monkeypatch):
     assert captured["participant_entity_ids"] == ["user:a", "agent:bert"]
 
 
+def test_memory_service_recall_fast_return_meta_filters_rows_not_tuple(monkeypatch):
+    identity_runtime.clear_registrations()
+    monkeypatch.setattr(
+        "core.runtime.identity_runtime.get_config",
+        lambda: SimpleNamespace(
+            identity=SimpleNamespace(mode="multi_user"),
+            privacy=SimpleNamespace(enforce_strict_filters=True),
+        ),
+    )
+    monkeypatch.setattr(
+        "datastore.memorydb.identity_defaults.get_config",
+        lambda: SimpleNamespace(privacy=SimpleNamespace(enforce_strict_filters=True)),
+    )
+    identity_runtime.register_privacy_policy(
+        "memorydb",
+        lambda viewer, row, _ctx: row.get("owner_id") == viewer,
+    )
+    monkeypatch.setattr(
+        "core.services.memory_service.recall_memories_fast",
+        lambda **_kwargs: (
+            [
+                {"id": "1", "owner_id": "user:a", "visibility_scope": "global_shared"},
+                {"id": "2", "owner_id": "user:b", "visibility_scope": "global_shared"},
+            ],
+            {"mode": "fast"},
+        ),
+    )
+
+    import core.services.memory_service as mem_svc
+    mem_svc._IDENTITY_RUNTIME_BOOTSTRAPPED = True
+
+    svc = DatastoreMemoryService()
+    rows, meta = svc.recall_fast(
+        query="espresso routine",
+        owner_id="user:a",
+        viewer_entity_id="user:a",
+        return_meta=True,
+    )
+
+    assert [row["id"] for row in rows] == ["1"]
+    assert meta == {"mode": "fast"}
+
+
 def test_enrich_identity_payload_reports_resolver_return_type():
     identity_runtime.clear_registrations()
     identity_runtime.register_identity_resolver("memorydb", lambda payload: "not-a-dict")

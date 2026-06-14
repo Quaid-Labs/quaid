@@ -797,7 +797,8 @@ monitor request kickoff.
 | `MEMORY_DB_PATH` | Override database path |
 | `OLLAMA_URL` | Override Ollama endpoint |
 | `QUAID_DEV` | Enable dev-only features (e.g. test task in janitor) |
-| `QUAID_QUIET` | Suppress config loading messages |
+| `QUAID_CONFIG_VERBOSE` | Print routine config loading messages |
+| `QUAID_QUIET` | Suppress config warnings and verbose config messages |
 | `ANTHROPIC_API_KEY` | LLM API key (primary) |
 
 ### Config Loading

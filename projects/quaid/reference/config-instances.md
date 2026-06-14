@@ -480,7 +480,8 @@ Projects and memories are local to each machine.
 | `QUAID_INSTANCE` | Active instance identifier | (required, no default) |
 | `CLAWDBOT_WORKSPACE` | Alias for `QUAID_HOME` (backward compat) | — |
 | `PYTHONPATH` | Set automatically by the `quaid` shell script to include `SCRIPT_DIR` | — |
-| `QUAID_QUIET` | Suppress `[config]` log lines to stderr | unset |
+| `QUAID_CONFIG_VERBOSE` | Print routine `[config] Loaded from ...` lines to stderr | unset |
+| `QUAID_QUIET` | Suppress config warnings and verbose config messages | unset |
 | `QUAID_DISABLE_NOTIFICATIONS` | Suppress all notifications (except `force=True`) | unset |
 | `QUAID_OWNER` | Override default owner ID for memory ownership | — |
 | `MEMORY_DB_PATH` | Override `database.path` (testing) | — |

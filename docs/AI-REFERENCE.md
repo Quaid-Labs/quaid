@@ -375,7 +375,8 @@ Additional keys worth knowing:
 - Re-entrancy guard: `load_config()` -> `get_db_path()` -> `get_config()` cycle broken by `_config_loading` boolean
 - Env overrides: `MEMORY_DB_PATH`, `OLLAMA_URL`, `QUAID_HOME`, `CLAWDBOT_WORKSPACE` (path resolution via adapter layer)
 - `QUAID_DEV=1` enables dev features (unit tests in janitor)
-- `QUAID_QUIET=1` suppresses config info messages
+- `QUAID_CONFIG_VERBOSE=1` prints routine config load messages
+- `QUAID_QUIET=1` suppresses config warnings and verbose config messages
 
 ---
 
@@ -732,7 +733,8 @@ python3 -m pytest tests/test_invariants.py::test_name -v
 | `ANTHROPIC_API_KEY` | Anthropic API key for LLM calls | Loaded from env; `.env` file at `QUAID_HOME/.env` is a fallback only when `retrieval.fail_hard=false` |
 | `OPENAI_API_KEY` | OpenAI API key (for benchmark judging) | Must be set explicitly |
 | `QUAID_DEV` | Enable dev mode (unit tests in janitor, verbose output) | Not set |
-| `QUAID_QUIET` | Suppress informational config messages | Not set |
+| `QUAID_CONFIG_VERBOSE` | Print routine config load messages | Not set |
+| `QUAID_QUIET` | Suppress config warnings and verbose config messages | Not set |
 | `QUAID_DISABLE_NOTIFICATIONS` | Suppress all runtime notifications (bypassed when `force=True`) | Not set |
 | `QUAID_RULES_DIR` | Override `.claude/rules/` directory for CC `hook-session-init` output | Not set |
 | `MOCK_EMBEDDINGS` | Use deterministic fake embeddings (for testing) | Not set |

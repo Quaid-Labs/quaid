@@ -267,6 +267,7 @@ class DatastoreMemoryService(MemoryServicePort):
         _ensure_identity_runtime_bootstrap()
         assert_multi_user_runtime_ready(require_read=True)
         viewer_entity_id = kwargs.get("viewer_entity_id")
+        return_meta = bool(kwargs.get("return_meta"))
         results = recall_memories_fast(
             query=query,
             owner_id=owner_id,
@@ -274,9 +275,14 @@ class DatastoreMemoryService(MemoryServicePort):
             min_similarity=min_similarity,
             **kwargs,
         )
-        return filter_recall_results(
+        rows = results
+        meta = None
+        if return_meta and isinstance(results, tuple):
+            rows = results[0] if len(results) > 0 else []
+            meta = results[1] if len(results) > 1 else None
+        filtered_rows = filter_recall_results(
             viewer_entity_id=viewer_entity_id,
-            results=results,
+            results=rows,
             context={
                 "owner_id": owner_id,
                 "source_channel": kwargs.get("source_channel"),
@@ -286,6 +292,7 @@ class DatastoreMemoryService(MemoryServicePort):
                 "participant_entity_ids": kwargs.get("participant_entity_ids"),
             },
         )
+        return (filtered_rows, meta) if return_meta else filtered_rows
 
     def search(
         self,

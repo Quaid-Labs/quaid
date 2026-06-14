@@ -415,6 +415,29 @@ class TestConfigPathResolution:
             config._warned_unknown_config_keys.clear()
             config._warned_unknown_config_keys.update(old_warned)
 
+    def test_instance_metadata_section_is_not_unknown(self, tmp_path, capsys):
+        import config
+        old_config = config._config
+        old_warned = set(config._warned_unknown_config_keys)
+        config._config = None
+        config._warned_unknown_config_keys.clear()
+        try:
+            config_file = tmp_path / "config.json"
+            config_file.write_text(json.dumps({
+                "adapter": {"type": "standalone"},
+                "instance": {"id": "pytest-runner"},
+            }))
+            with patch.object(config, "_config_paths", lambda: [config_file]), \
+                 patch.dict(os.environ, {"QUAID_QUIET": ""}, clear=False):
+                _ = load_config()
+            err = capsys.readouterr().err
+            assert "[config] Loaded from" not in err
+            assert "Unknown config key ignored: instance" not in err
+        finally:
+            config._config = old_config
+            config._warned_unknown_config_keys.clear()
+            config._warned_unknown_config_keys.update(old_warned)
+
     def test_loads_identity_and_privacy_blocks(self, tmp_path):
         import config
         old_config = config._config

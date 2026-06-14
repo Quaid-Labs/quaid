@@ -66,6 +66,10 @@ def _truthy_env(name: str) -> bool:
     return value in {"1", "true", "yes", "on"}
 
 
+def _config_load_chatter_enabled() -> bool:
+    return _truthy_env("QUAID_CONFIG_VERBOSE") and not os.environ.get("QUAID_QUIET")
+
+
 def _config_bool(value: Any, default: bool) -> bool:
     if value is None:
         return bool(default)
@@ -631,6 +635,7 @@ _KNOWN_TOP_LEVEL_CONFIG_KEYS = {
     "decay",
     "docs",
     "identity",
+    "instance",
     "janitor",
     "livetest",
     "logging",
@@ -1024,12 +1029,12 @@ def _load_config_inner() -> MemoryConfig:
             except Exception as e:
                 print(f"[config] Failed to read {config_path}: {e}", file=sys.stderr)
 
-    if loaded_paths and not os.environ.get("QUAID_QUIET"):
+    if loaded_paths and _config_load_chatter_enabled():
         for config_path in loaded_paths:
             print(f"[config] Loaded from {config_path}", file=sys.stderr)
 
     if not raw_config:
-        if not os.environ.get("QUAID_QUIET"):
+        if _config_load_chatter_enabled():
             print("[config] Using defaults (no config file found)", file=sys.stderr)
     
     raw_plugin_config = _extract_raw_plugin_config(raw_config)

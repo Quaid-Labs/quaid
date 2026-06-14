@@ -1624,8 +1624,10 @@ def hook_inject(args):
             return
     except RuntimeError:
         raise
-    except Exception:
-        pass
+    except Exception as exc:
+        print(f"[quaid][hook-inject] signal write error: {exc}", file=sys.stderr)
+        if _fail_hard_enabled():
+            raise
 
     if not query:
         return
@@ -2078,7 +2080,7 @@ def hook_inject(args):
 
     except Exception as e:
         provider_failure = _is_provider_failure(e)
-        if isinstance(e, RuntimeError) and not provider_failure and _fail_hard_enabled():
+        if not provider_failure and _fail_hard_enabled():
             raise
         try:
             from lib.m15_trace import trace_m15
@@ -3484,6 +3486,8 @@ def hook_inject_compact(args):
         raise
     except Exception as e:
         print(f"[quaid][hook-inject-compact] error: {e}", file=sys.stderr)
+        if _fail_hard_enabled():
+            raise
 
 
 def hook_extract(args):
