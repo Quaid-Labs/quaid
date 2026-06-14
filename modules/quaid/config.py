@@ -291,7 +291,7 @@ class JanitorConfig:
         "workspace_file_moves_deletes": "ask",
         "destructive_memory_ops": "auto",
     })
-    task_timeout_minutes: int = 240
+    task_timeout_minutes: int = 240  # Critical runtime warning cap in minutes (0 = unlimited)
     scheduled_hour: int = 4   # Hour of day (0-23) for scheduled janitor run
     window_hours: int = 2     # Allowed window in hours after scheduled_hour
     run_tests: bool = False  # Only enable in dev (or set QUAID_DEV=1)

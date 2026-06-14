@@ -306,7 +306,7 @@ When new relation types are created during edge extraction, search keywords are 
 
 **Safeguards:**
 - Consecutive failure abort: 3 failed batches in a row stops the loop
-- Time limit: configurable per-task timeout (`janitor.task_timeout_minutes`)
+- Time limit: configurable per-task critical warning cap (`janitor.task_timeout_minutes`; `0` disables the cap)
 - Cost tracking: input/output tokens and estimated USD
 - Merged-ID tracking: prevents double-merging nodes within a single run (see Task 3)
 - FK constraint handling: foreign key violations during merges are caught and logged as warnings (see Task 3)

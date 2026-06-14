@@ -210,6 +210,14 @@ CONFIDENCE_DECAY_DAYS = 90
 CONFIDENCE_DECAY_RATE = 0.10
 MAX_EXECUTION_TIME = 120 * 60
 
+
+def _task_timeout_seconds(config_obj: Any) -> float:
+    raw = getattr(getattr(config_obj, "janitor", None), "task_timeout_minutes", None)
+    minutes = int(raw if raw is not None else 120)
+    if minutes <= 0:
+        return float("inf")
+    return minutes * 60
+
 # Fixed values (not in config)
 RECALL_CANDIDATES_PER_NODE = 30  # Max candidates to recall per new memory
 JANITOR_TASK_CHOICES = [
@@ -252,7 +260,7 @@ def _refresh_runtime_state() -> None:
         CONTRADICTION_MAX_SIM = _cfg.janitor.contradiction.max_similarity
         CONFIDENCE_DECAY_DAYS = _cfg.decay.threshold_days
         CONFIDENCE_DECAY_RATE = _cfg.decay.rate_percent / 100.0
-        MAX_EXECUTION_TIME = int(getattr(_cfg.janitor, "task_timeout_minutes", 120) or 120) * 60
+        MAX_EXECUTION_TIME = _task_timeout_seconds(_cfg)
 
 
 def _ensure_runtime_state() -> None:
@@ -534,7 +542,7 @@ def _check_for_updates() -> Optional[Dict[str, str]]:
     RELEASES_URL = f"https://api.github.com/repos/{REPO}/releases/latest"
 
     # Read current version
-    version_file = Path(__file__).parent / "VERSION"
+    version_file = _version_file()
     if not version_file.exists():
         return None
     current = version_file.read_text().strip()
@@ -632,6 +640,11 @@ def _check_for_updates() -> Optional[Dict[str, str]]:
             janitor_logger.warn("update_semver_compare_failed", error=str(exc))
         return result
     return None
+
+
+def _version_file() -> Path:
+    """Return the module-level VERSION file path."""
+    return Path(__file__).resolve().parents[2] / "VERSION"
 
 
 def run_task_optimized(task: str, dry_run: bool = True, incremental: bool = True,
@@ -1470,7 +1483,7 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
                         return result
             except Exception as exc:
                 strict_plugins = bool(getattr(_cfg.plugins, "strict", True))
-                if strict_plugins:
+                if strict_plugins or is_fail_hard_enabled():
                     janitor_logger.error("plugin_maintenance_dispatch_failed", error=str(exc), stage=stage)
                     raise
                 janitor_logger.warn("plugin_maintenance_dispatch_failed", error=str(exc), stage=stage)
@@ -1670,7 +1683,6 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
                 metrics.end_task("decay_review")
                 print(f"Task completed in {metrics.task_duration('decay_review'):.2f}s\n")
 
-        parallel_lifecycle_results = {}
         # Heavy project-docs work is monitor-owned. Janitor only queues the
         # DocsDB-published monitor callback near the start of the run.
 
@@ -1683,7 +1695,7 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
                 "snippets fold into root core markdown"
             )
             snippets_dry_run = dry_run or (not snippets_apply_allowed)
-            lifecycle_result = parallel_lifecycle_results.get("snippets") or _lifecycle_registry().run(
+            lifecycle_result = _lifecycle_registry().run(
                 "snippets",
                 RoutineContext(cfg=_cfg, dry_run=snippets_dry_run, workspace=_workspace()),
             )
@@ -1718,7 +1730,7 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
                 "journal distillation updates root core markdown"
             )
             journal_dry_run = dry_run or (not journal_apply_allowed)
-            lifecycle_result = parallel_lifecycle_results.get("journal") or _lifecycle_registry().run(
+            lifecycle_result = _lifecycle_registry().run(
                 "journal",
                 RoutineContext(
                     cfg=_cfg,
@@ -2038,6 +2050,8 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
                 },
             )
         except Exception as e:
+            if is_fail_hard_enabled():
+                raise
             print(f"  Warning: Failed to record janitor run: {e}")
 
     # Queue user notifications through lifecycle event bus (only for full runs, not dry-run).
@@ -2069,6 +2083,8 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
             print("[notify] Janitor completion event dispatched")
 
         except Exception as e:
+            if is_fail_hard_enabled():
+                raise
             print(f"[notify] Failed to dispatch janitor completion event: {e}")
     elif task == "all" and not dry_run and skip_notify:
         print("[notify] Skipping janitor completion event dispatch (QUAID_JANITOR_SKIP_NOTIFY=1)")

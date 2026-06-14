@@ -38,7 +38,7 @@ def test_janitor_worker_run_all_once_bypasses_schedule_gate(monkeypatch, tmp_pat
     monkeypatch.setenv("QUAID_INSTANCE", "pytest-runner")
 
     from core import janitor_worker
-    from core.lifecycle import janitor
+    janitor = importlib.import_module("core.lifecycle.janitor")
 
     calls = []
 
@@ -195,8 +195,9 @@ def test_janitor_update_check_network_failure_honors_fail_hard(monkeypatch, tmp_
 
     from core.lifecycle import janitor
 
-    (tmp_path / "VERSION").write_text("1.0.0", encoding="utf-8")
-    monkeypatch.setattr(janitor, "__file__", str(tmp_path / "janitor.py"))
+    version_file = tmp_path / "VERSION"
+    version_file.write_text("1.0.0", encoding="utf-8")
+    monkeypatch.setattr(janitor, "_version_file", lambda: version_file)
     monkeypatch.setattr(janitor, "get_repo_slug", lambda: "owner/repo")
     monkeypatch.setattr(janitor, "get_graph", lambda: object())
     monkeypatch.setattr(janitor, "get_update_check_cache", lambda *_args, **_kwargs: None)

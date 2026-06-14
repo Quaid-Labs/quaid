@@ -7,7 +7,7 @@ Do not edit manually. Regenerate with:
 python3 modules/quaid/scripts/generate-config-reference.py
 ```
 
-Source hash: `0b5f5bbe424e`
+Source hash: `a7c87e10348b`
 
 Notes:
 - Keys are documented in `snake_case` (loader also accepts camelCase aliases).
@@ -116,7 +116,7 @@ Notes:
 | `janitor.apply_mode` | `str` | `"auto"` | master mode: auto \| ask \| dry_run |
 | `janitor.token_budget` | `int` | `0` | Max total LLM tokens per janitor run (0 = unlimited) |
 | `janitor.approval_policies` | `dict[str, str]` | `<dict keys=4>` |  |
-| `janitor.task_timeout_minutes` | `int` | `240` |  |
+| `janitor.task_timeout_minutes` | `int` | `240` | Critical runtime warning cap in minutes (0 = unlimited) |
 | `janitor.scheduled_hour` | `int` | `4` | Hour of day (0-23) for scheduled janitor run |
 | `janitor.window_hours` | `int` | `2` | Allowed window in hours after scheduled_hour |
 | `janitor.run_tests` | `bool` | `false` | Only enable in dev (or set QUAID_DEV=1) |
