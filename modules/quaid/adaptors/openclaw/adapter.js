@@ -5185,7 +5185,10 @@ ${projectPlacementContext}` : projectPlacementContext;
             appendSystemContext
           ].map((value) => String(value || "")).join("\n\n");
           if (!existingContext.includes(deferredNoticeRelayContext)) {
-            prependContextParts.push(deferredNoticeRelayContext);
+            prependContextParts.unshift(deferredNoticeRelayContext);
+            prependSystemContext = prependSystemContext ? `${deferredNoticeRelayContext}
+
+${prependSystemContext}` : deferredNoticeRelayContext;
             appendSystemContext = appendSystemContext ? `${appendSystemContext}
 
 ${deferredNoticeRelayContext}` : deferredNoticeRelayContext;

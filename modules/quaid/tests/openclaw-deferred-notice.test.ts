@@ -400,8 +400,11 @@ describe("openclaw deferred notices", () => {
     const systemContext = combinedSystemContext(result);
     expect(systemContext).toContain("MANDATORY: Quaid has active notices for the human user.");
     expect(systemContext).toContain("silver lantern is ready");
+    expect(String(result?.prependContext || "")).toMatch(/^MANDATORY: Quaid has active notices for the human user\./);
     expect(String(result?.prependContext || "")).toContain("silver lantern is ready");
+    expect(String(result?.prependSystemContext || "")).toContain("silver lantern is ready");
     expect(String((event as any).prependContext || "")).toContain("silver lantern is ready");
+    expect(String((event as any).prependSystemContext || "")).toContain("silver lantern is ready");
     expect(String((event as any).appendSystemContext || "")).toContain("silver lantern is ready");
 
     const drained = JSON.parse(fs.readFileSync(fixture.noticeFile, "utf8"));
@@ -625,7 +628,9 @@ describe("openclaw deferred notices", () => {
       { prompt: "Hey, what is up?", sessionId, sessionKey },
       ctx,
     );
+    expect(String(firstResult?.prependContext || "")).toMatch(/^MANDATORY: Quaid has active notices for the human user\./);
     expect(String(firstResult?.prependContext || "")).toContain("scheduled review found 3 facts");
+    expect(String(firstResult?.prependSystemContext || "")).toContain("scheduled review found 3 facts");
 
     const afterFirst = JSON.parse(fs.readFileSync(fixture.noticeFile, "utf8"));
     expect(
@@ -637,7 +642,9 @@ describe("openclaw deferred notices", () => {
       { prompt: "Hey, what is up?", sessionId, sessionKey },
       ctx,
     );
+    expect(String(secondResult?.prependContext || "")).toMatch(/^MANDATORY: Quaid has active notices for the human user\./);
     expect(String(secondResult?.prependContext || "")).toContain("scheduled review found 3 facts");
+    expect(String(secondResult?.prependSystemContext || "")).toContain("scheduled review found 3 facts");
     expect(combinedSystemContext(secondResult)).toContain("MANDATORY: Quaid has active notices for the human user.");
 
     const afterSecond = JSON.parse(fs.readFileSync(fixture.noticeFile, "utf8"));

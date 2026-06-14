@@ -6391,7 +6391,10 @@ notify_user(${JSON.stringify(message)})
             appendSystemContext,
           ].map((value) => String(value || "")).join("\n\n");
           if (!existingContext.includes(deferredNoticeRelayContext)) {
-            prependContextParts.push(deferredNoticeRelayContext);
+            prependContextParts.unshift(deferredNoticeRelayContext);
+            prependSystemContext = prependSystemContext
+              ? `${deferredNoticeRelayContext}\n\n${prependSystemContext}`
+              : deferredNoticeRelayContext;
             appendSystemContext = appendSystemContext
               ? `${appendSystemContext}\n\n${deferredNoticeRelayContext}`
               : deferredNoticeRelayContext;
