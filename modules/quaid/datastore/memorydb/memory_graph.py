@@ -17275,10 +17275,13 @@ def _enforce_recall_rows_temporal_axis_validity(
         if not isinstance(row, dict):
             continue
         invalid: Optional[Tuple[str, Any]] = None
-        for field_name, value in _selected_temporal_values_for_dimension(
+        selected_values = _selected_temporal_values_for_dimension(
             row,
             temporal_dimension=dimension,
-        ):
+        )
+        if not selected_values:
+            continue
+        for field_name, value in selected_values:
             if not _date_part(value):
                 invalid = (field_name, value)
                 break

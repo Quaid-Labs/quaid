@@ -4092,6 +4092,40 @@ class TestTimestampOverride:
             temporal_dimension="occurred",
         ) == []
 
+    def test_temporal_occurred_validity_excludes_triple_null_rows(self):
+        import datastore.memorydb.memory_graph as mg
+
+        rows = [
+            {
+                "id": "legacy-triple-null",
+                "text": "Baratza Encore is a coffee grinder",
+                "occurred_start": None,
+                "occurred_end": None,
+                "mentioned_at": None,
+                "created_at": "2026-06-14T00:00:00",
+            },
+            {
+                "id": "occurred-match",
+                "text": "Renata visited in 2023",
+                "occurred_start": "2023-05-01T00:00:00",
+                "occurred_end": None,
+                "mentioned_at": None,
+                "created_at": "2026-06-14T00:00:00",
+            },
+        ]
+
+        occurred = mg._enforce_recall_rows_temporal_axis_validity(
+            rows,
+            temporal_dimension="occurred",
+        )
+        auto = mg._enforce_recall_rows_temporal_axis_validity(
+            rows,
+            temporal_dimension="auto",
+        )
+
+        assert [row["id"] for row in occurred] == ["occurred-match"]
+        assert [row["id"] for row in auto] == ["legacy-triple-null", "occurred-match"]
+
     def test_temporal_filter_can_keep_undated_rows(self):
         """Store-plan callers can keep undated fallback rows after bounded filters."""
         import datastore.memorydb.memory_graph as mg
