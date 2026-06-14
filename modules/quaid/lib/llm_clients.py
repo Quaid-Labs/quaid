@@ -170,8 +170,12 @@ def _load_model_config():
             _fast_reasoning_model = cfg.models.fast_reasoning
             _deep_reasoning_model = cfg.models.deep_reasoning
             _models_loaded = True  # Only after success — allows retry on transient failures
-        except ImportError:
-            pass  # Config not available (test environment) — defaults set by provider
+        except ImportError as e:
+            logger.warning("[llm_clients] Config unavailable while loading model names: %s", e)
+            if is_fail_hard_enabled():
+                raise RuntimeError("LLM model configuration unavailable while failHard is enabled") from e
+            # Config not available (test environment) — defaults set by provider.
+            _models_loaded = True
         except Exception as e:
             logger.error("[llm_clients] FATAL: Config loaded but model resolution failed: %s", e)
             raise

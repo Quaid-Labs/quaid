@@ -313,6 +313,48 @@ class TestTokenUsage:
             llm_clients._fast_reasoning_model = old_fast
             llm_clients._deep_reasoning_model = old_deep
 
+    def test_load_model_config_warns_and_uses_provider_defaults_when_config_import_fails_failopen(self):
+        import core.llm.clients as llm_clients
+        old_models_loaded = llm_clients._models_loaded
+        old_fast = llm_clients._fast_reasoning_model
+        old_deep = llm_clients._deep_reasoning_model
+        llm_clients._models_loaded = False
+        llm_clients._fast_reasoning_model = ""
+        llm_clients._deep_reasoning_model = ""
+        try:
+            with patch("config.get_config", side_effect=ImportError("config unavailable")), \
+                 patch("core.llm.clients.is_fail_hard_enabled", return_value=False), \
+                 patch("core.llm.clients.logger.warning") as log_warning:
+                llm_clients._load_model_config()
+
+            assert llm_clients._models_loaded is True
+            assert llm_clients._fast_reasoning_model == ""
+            assert llm_clients._deep_reasoning_model == ""
+            assert log_warning.call_count == 1
+        finally:
+            llm_clients._models_loaded = old_models_loaded
+            llm_clients._fast_reasoning_model = old_fast
+            llm_clients._deep_reasoning_model = old_deep
+
+    def test_load_model_config_raises_when_config_import_fails_failhard(self):
+        import core.llm.clients as llm_clients
+        old_models_loaded = llm_clients._models_loaded
+        old_fast = llm_clients._fast_reasoning_model
+        old_deep = llm_clients._deep_reasoning_model
+        llm_clients._models_loaded = False
+        llm_clients._fast_reasoning_model = ""
+        llm_clients._deep_reasoning_model = ""
+        try:
+            with patch("config.get_config", side_effect=ImportError("config unavailable")), \
+                 patch("core.llm.clients.is_fail_hard_enabled", return_value=True):
+                with pytest.raises(RuntimeError, match="model configuration unavailable"):
+                    llm_clients._load_model_config()
+            assert llm_clients._models_loaded is False
+        finally:
+            llm_clients._models_loaded = old_models_loaded
+            llm_clients._fast_reasoning_model = old_fast
+            llm_clients._deep_reasoning_model = old_deep
+
 
 # ---------------------------------------------------------------------------
 # call_fast_reasoning / call_deep_reasoning — provider delegation
