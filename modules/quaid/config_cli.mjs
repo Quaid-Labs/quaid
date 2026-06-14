@@ -163,10 +163,17 @@ function loadConfig() {
 }
 
 function saveConfig(p, data) {
-  const tmp = `${p}.tmp`;
+  const tmp = `${p}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`;
   fs.mkdirSync(path.dirname(p), { recursive: true });
-  fs.writeFileSync(tmp, `${JSON.stringify(data, null, 2)}\n`, "utf8");
-  fs.renameSync(tmp, p);
+  try {
+    fs.writeFileSync(tmp, `${JSON.stringify(data, null, 2)}\n`, "utf8");
+    fs.renameSync(tmp, p);
+  } catch (err) {
+    try {
+      fs.rmSync(tmp, { force: true });
+    } catch {}
+    throw err;
+  }
 }
 
 function runConfigCallbacksAfterSave() {
@@ -209,6 +216,16 @@ function setPath(obj, dotted, value) {
     cur = cur[seg];
   }
   cur[parts.at(-1)] = value;
+}
+
+function deletePath(obj, dotted) {
+  const parts = dotted.split(".");
+  let cur = obj;
+  for (const seg of parts.slice(0, -1)) {
+    if (!cur || typeof cur !== "object" || !(seg in cur)) return;
+    cur = cur[seg];
+  }
+  if (cur && typeof cur === "object") delete cur[parts.at(-1)];
 }
 
 function normalizeProvider(provider) {
@@ -781,7 +798,7 @@ async function runEdit() {
       }));
       const val = next === "on";
       setPath(cfg, "retrieval.fail_hard", val);
-      setPath(cfg, "retrieval.failHard", val);
+      deletePath(cfg, "retrieval.failHard");
     } else if (menu === "core_parallel_enabled") {
       const current = coreParallelEnabled(cfg);
       const next = handleCancel(await select({

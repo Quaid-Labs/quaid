@@ -298,6 +298,17 @@ def _set(data: dict[str, Any], dotted: str | list[str], value: Any) -> None:
     cur[parts[-1]] = value
 
 
+def _delete(data: dict[str, Any], dotted: str | list[str]) -> None:
+    parts = _segments(dotted)
+    cur: Any = data
+    for seg in parts[:-1]:
+        if not isinstance(cur, dict) or seg not in cur:
+            return
+        cur = cur[seg]
+    if isinstance(cur, dict):
+        cur.pop(parts[-1], None)
+
+
 def _print_summary(path: Path, data: dict[str, Any], label: str = "") -> None:
     header = f"Quaid Configuration — {label}" if label else "Quaid Configuration"
     print(header)
@@ -417,7 +428,7 @@ def interactive_edit(path: Path, data: dict[str, Any]) -> bool:
                 raw = _prompt_str("retrieval.fail_hard (true/false)", "true" if cur else "false").lower()
                 val = raw in {"1", "true", "yes", "on"}
                 _set(staged, "retrieval.fail_hard", val)
-                _set(staged, "retrieval.failHard", val)
+                _delete(staged, "retrieval.failHard")
             elif choice == "8":
                 cur = bool(_get(staged, "core.parallel.enabled", True))
                 raw = _prompt_str("core.parallel.enabled (true/false)", "true" if cur else "false").lower()

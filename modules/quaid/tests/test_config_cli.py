@@ -19,7 +19,7 @@ def test_parse_literal_handles_bool_number_json_and_string():
 def test_interactive_edit_updates_failhard_and_parallel_settings(monkeypatch, tmp_path):
     path = tmp_path / "config" / "config.json"
     data = {
-        "retrieval": {"failHard": True},
+        "retrieval": {"fail_hard": True, "failHard": True},
         "core": {"parallel": {"enabled": False, "llmWorkers": 4, "lifecyclePrepassWorkers": 3}},
     }
     answers = iter(
@@ -44,7 +44,8 @@ def test_interactive_edit_updates_failhard_and_parallel_settings(monkeypatch, tm
 
     assert changed is True
     assert saved["path"] == path
-    assert saved["data"]["retrieval"]["failHard"] is False
+    assert saved["data"]["retrieval"]["fail_hard"] is False
+    assert "failHard" not in saved["data"]["retrieval"]
     assert saved["data"]["core"]["parallel"]["enabled"] is True
     assert saved["data"]["core"]["parallel"]["llmWorkers"] == 6
     assert saved["data"]["core"]["parallel"]["lifecyclePrepassWorkers"] == 3

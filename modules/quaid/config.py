@@ -1270,19 +1270,6 @@ def _load_config_inner() -> MemoryConfig:
         scoring_mode=traversal_data.get('scoringMode', traversal_data.get('scoring_mode', 'heuristic')),
         hop_decay=traversal_data.get('hopDecay', traversal_data.get('hop_decay', 0.7)),
     )
-    _fail_hard_snake = retrieval_data.get('fail_hard', None)
-    _fail_hard_camel = retrieval_data.get('failHard', None)
-    if (
-        isinstance(_fail_hard_snake, bool)
-        and isinstance(_fail_hard_camel, bool)
-        and _fail_hard_snake != _fail_hard_camel
-    ):
-        print(
-            "[config] WARNING: retrieval.fail_hard and retrieval.failHard disagree; "
-            "using retrieval.fail_hard as canonical value.",
-            file=sys.stderr,
-        )
-
     domains_data = retrieval_data.get("domains", {})
     parsed_domains: Dict[str, str] = {}
     if isinstance(domains_data, dict):
@@ -1478,6 +1465,10 @@ def _load_config_inner() -> MemoryConfig:
         staging_dir=raw_projects.get('stagingDir', 'projects/staging/'),
         definitions=project_definitions,
         default_project=raw_projects.get('defaultProject', 'default'),
+        log_token_budget=_coerce_nonnegative_int(
+            raw_projects.get('log_token_budget', raw_projects.get('logTokenBudget', 0)),
+            0,
+        ),
     )
 
     # Parse users config
