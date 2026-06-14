@@ -97,7 +97,10 @@ class TestParallelLlmCall:
             mock_call.assert_called_once()
 
     def test_handles_llm_failure(self):
-        with patch(_FAST) as mock_call:
+        with patch(_FAST) as mock_call, patch(
+            "lib.llm_chunked_call._fail_hard_enabled",
+            return_value=False,
+        ):
             mock_call.return_value = (None, 1.0)
 
             results = parallel_llm_call(
@@ -108,6 +111,39 @@ class TestParallelLlmCall:
 
             assert len(results) == 1
             assert results[0].error is not None
+
+    def test_single_chunk_failure_raises_when_fail_hard_enabled(self):
+        with patch(_FAST, return_value=(None, 1.0)), patch(
+            "lib.llm_chunked_call._fail_hard_enabled",
+            return_value=True,
+        ):
+            with pytest.raises(RuntimeError, match="Empty LLM response"):
+                parallel_llm_call(
+                    system_prompt="Analyze",
+                    content="text",
+                    max_chunk_tokens=1000,
+                )
+
+    def test_parallel_chunk_failure_raises_when_fail_hard_enabled(self):
+        content = "\n".join([f"line {i} " + "x" * 200 for i in range(30)])
+        call_num = [0]
+
+        def mock_call(prompt, max_tokens=200, timeout=120, system_prompt=None):
+            call_num[0] += 1
+            if call_num[0] == 2:
+                raise RuntimeError("parallel LLM error")
+            return (f"ok-{call_num[0]}", 0.5)
+
+        with patch(_FAST, side_effect=mock_call), patch(
+            "lib.llm_chunked_call._fail_hard_enabled",
+            return_value=True,
+        ):
+            with pytest.raises(RuntimeError, match="parallel LLM error"):
+                parallel_llm_call(
+                    system_prompt="Analyze",
+                    content=content,
+                    max_chunk_tokens=500,
+                )
 
     def test_chunk_prompt_template(self):
         with patch(_FAST) as mock_call:

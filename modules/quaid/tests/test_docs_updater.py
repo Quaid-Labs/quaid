@@ -427,6 +427,7 @@ class TestDetectChangedSources:
             source_mapping={"core.lifecycle.janitor.py": {"docs": ["docs/ref.md"]}},
         )
         with patch("datastore.docsdb.updater.get_config", return_value=cfg), \
+             patch("lib.llm_chunked_call._fail_hard_enabled", return_value=False), \
              patch("lib.llm_clients.call_fast_reasoning", return_value=(None, 1.0)):
             from datastore.docsdb.updater import detect_changed_sources_from_transcript
             result = detect_changed_sources_from_transcript("some transcript")

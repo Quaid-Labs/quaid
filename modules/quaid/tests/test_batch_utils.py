@@ -63,8 +63,9 @@ class TestParallelBatch:
         assert all(r.error is None for r in results)
         assert all("processed" in r.output for r in results)
 
-    def test_handles_errors(self):
+    def test_handles_errors(self, monkeypatch):
         items = ["good", "bad", "good2"]
+        monkeypatch.setattr("lib.batch_utils._fail_hard_enabled", lambda: False)
 
         def process(text, idx):
             if "bad" in text:
@@ -74,6 +75,16 @@ class TestParallelBatch:
         results = parallel_batch(items, process, max_tokens=1000)
         assert len(results) == 1  # All in one chunk, fails entirely
         assert results[0].error is not None
+
+    def test_raises_chunk_error_when_fail_hard_enabled(self, monkeypatch):
+        items = ["good", "bad"]
+        monkeypatch.setattr("lib.batch_utils._fail_hard_enabled", lambda: True)
+
+        def process(text, idx):
+            raise ValueError("batch exploded")
+
+        with pytest.raises(ValueError, match="batch exploded"):
+            parallel_batch(items, process, max_tokens=1000)
 
     def test_single_chunk_skips_threadpool(self):
         items = ["hello"]
@@ -110,9 +121,10 @@ class TestWaterfallBatch:
         )
         assert result == "init|hello"
 
-    def test_error_preserves_carryover(self):
+    def test_error_preserves_carryover(self, monkeypatch):
         items = ["a" * 100, "b" * 100, "c" * 100]
         call_count = [0]
+        monkeypatch.setattr("lib.batch_utils._fail_hard_enabled", lambda: False)
 
         def process(chunk, carryover, idx):
             call_count[0] += 1
@@ -124,6 +136,16 @@ class TestWaterfallBatch:
         # Batch 1 fails — carryover from batch 0 should persist to batch 2
         assert "start+batch0" in result
         assert "batch2" in result
+
+    def test_error_raises_when_fail_hard_enabled(self, monkeypatch):
+        items = ["a" * 100, "b" * 100]
+        monkeypatch.setattr("lib.batch_utils._fail_hard_enabled", lambda: True)
+
+        def process(chunk, carryover, idx):
+            raise RuntimeError("waterfall exploded")
+
+        with pytest.raises(RuntimeError, match="waterfall exploded"):
+            waterfall_batch(items, process, max_tokens=30, initial_carryover="start")
 
     def test_empty_input_returns_initial(self):
         result = waterfall_batch([], lambda c, ca, i: "x", initial_carryover="init")

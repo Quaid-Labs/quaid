@@ -36,6 +36,14 @@ logger = logging.getLogger(__name__)
 _DEFAULT_LLM_CHUNK_TOKENS = 6000
 
 
+def _fail_hard_enabled() -> bool:
+    try:
+        from lib.fail_policy import is_fail_hard_enabled
+        return is_fail_hard_enabled()
+    except Exception:
+        return True
+
+
 def _get_configured_chunk_tokens() -> int:
     """Read chunk token budget from config, with fallback."""
     try:
@@ -144,6 +152,8 @@ def parallel_llm_call(
                 input_tokens=estimate_tokens(chunks[0]),
             ))
         except Exception as e:
+            if _fail_hard_enabled():
+                raise
             results.append(ChunkResult(
                 chunk_index=0, output=None,
                 input_tokens=estimate_tokens(chunks[0]),
@@ -167,6 +177,8 @@ def parallel_llm_call(
                     )
                 except Exception as e:
                     logger.error("[parallel-llm] Chunk %d failed: %s", idx, e)
+                    if _fail_hard_enabled():
+                        raise
                     ordered[idx] = ChunkResult(
                         chunk_index=idx, output=None,
                         input_tokens=estimate_tokens(chunks[idx]),
@@ -279,8 +291,7 @@ def waterfall_llm_call(
                 )
         except Exception as e:
             logger.error("[waterfall-llm] Chunk %d/%d failed: %s", i + 1, total, e)
-            from lib.fail_policy import is_fail_hard_enabled
-            if is_fail_hard_enabled():
+            if _fail_hard_enabled():
                 raise RuntimeError(f"waterfall LLM chunk {i + 1}/{total} failed") from e
             # Continue with existing carryover — don't lose previous work
 

@@ -29,6 +29,14 @@ T = TypeVar("T")
 DEFAULT_CHUNK_TOKENS = 8000
 
 
+def _fail_hard_enabled() -> bool:
+    try:
+        from lib.fail_policy import is_fail_hard_enabled
+        return is_fail_hard_enabled()
+    except Exception:
+        return True
+
+
 @dataclass
 class ChunkResult:
     """Result from processing a single chunk."""
@@ -135,6 +143,8 @@ def parallel_batch(
             )
         except Exception as e:
             logger.error("[batch] Chunk %d failed: %s", idx, e)
+            if _fail_hard_enabled():
+                raise
             return ChunkResult(
                 chunk_index=idx, output=None,
                 input_tokens=estimate_tokens(chunk_text),
@@ -195,6 +205,8 @@ def waterfall_batch(
             )
         except Exception as e:
             logger.error("[waterfall] Batch %d failed: %s", i, e)
+            if _fail_hard_enabled():
+                raise
             # Continue with existing carryover — don't lose previous work
             continue
 
