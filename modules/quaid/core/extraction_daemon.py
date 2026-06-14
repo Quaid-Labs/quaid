@@ -2547,7 +2547,20 @@ def _processing_lock_holder_dead(lock_path: Path) -> bool:
 def _remove_stale_processing_lock(lock_path: Path, *, holder_dead: bool) -> bool:
     if not holder_dead:
         return False
-    logger.warning("stale session processing lock has dead holder: %s", lock_path)
+    if not _processing_lock_unlocked(lock_path):
+        logger.warning(
+            "stale session processing lock holder appears dead but file is still locked: %s",
+            lock_path,
+        )
+        return False
+    try:
+        lock_path.unlink()
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        logger.warning("failed removing stale session processing lock %s: %s", lock_path, exc)
+        return False
+    logger.warning("removed stale session processing lock with dead holder: %s", lock_path)
     return True
 
 
@@ -2614,10 +2627,10 @@ def _processing_lock_active(session_id: str) -> bool:
     lock_path = _processing_lock_path(session_id)
     if not lock_path.is_file():
         return False
-    if _processing_lock_unlocked(lock_path):
-        return False
     holder_dead = _processing_lock_holder_dead(lock_path)
     if _remove_stale_processing_lock(lock_path, holder_dead=holder_dead):
+        return False
+    if _processing_lock_unlocked(lock_path):
         return False
     return True
 

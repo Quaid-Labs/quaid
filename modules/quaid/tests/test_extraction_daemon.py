@@ -7328,7 +7328,7 @@ class TestSignalRoundTrip:
         os.utime(lock_path, (old_time, old_time))
 
         assert extraction_daemon._processing_lock_active("source-legacy-lock") is False
-        assert lock_path.exists()
+        assert not lock_path.exists()
 
     def test_processing_lock_active_reaps_fresh_dead_pid_file(self, monkeypatch, tmp_path):
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
@@ -7347,7 +7347,7 @@ class TestSignalRoundTrip:
         )
 
         assert extraction_daemon._processing_lock_active("source-fresh-dead-lock") is False
-        assert lock_path.exists()
+        assert not lock_path.exists()
 
     def test_processing_lock_active_reaps_old_unlocked_empty_file(self, monkeypatch, tmp_path):
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
@@ -7360,7 +7360,21 @@ class TestSignalRoundTrip:
         os.utime(lock_path, (old_time, old_time))
 
         assert extraction_daemon._processing_lock_active("source-empty-lock") is False
-        assert lock_path.exists()
+        assert not lock_path.exists()
+
+    def test_processing_lock_active_preserves_locked_file_even_if_pid_dead(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
+        monkeypatch.setattr(extraction_daemon, "_pid_alive", lambda _pid: False)
+
+        lock_fd = extraction_daemon._acquire_session_processing_lock("source-locked-dead-pid")
+        assert lock_fd is not None
+        lock_path = extraction_daemon._processing_lock_path("source-locked-dead-pid")
+        try:
+            assert extraction_daemon._processing_lock_active("source-locked-dead-pid") is True
+            assert lock_path.exists()
+        finally:
+            extraction_daemon._release_session_processing_lock("source-locked-dead-pid", lock_fd)
 
     def test_process_signal_preserves_signal_when_session_lock_unavailable(self, monkeypatch, tmp_path):
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
@@ -15938,7 +15952,7 @@ class TestRollingExtraction:
         assert captured[0]["meta"]["recovered_from_rolling_state"] is True
         assert captured[0]["meta"]["source_cursor_key"] == source_key
         assert captured[0]["meta"]["flush_staged_payload_only"] is True
-        assert lock_path.exists()
+        assert not lock_path.exists()
 
     def test_recovers_missing_rolling_stage_flush_when_snapshot_was_cleaned(
         self, monkeypatch, tmp_path
@@ -16194,7 +16208,7 @@ class TestRollingExtraction:
         assert captured[0]["meta"]["recovered_missing_flush"] is True
         assert captured[0]["meta"]["recovered_from_rolling_state"] is True
         assert captured[0]["meta"]["source_cursor_key"] == source_key
-        assert lock_path.exists()
+        assert not lock_path.exists()
 
     def test_check_chunk_ready_sessions_raises_rolling_state_recovery_failure_when_fail_hard(
         self, monkeypatch, tmp_path
