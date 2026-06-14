@@ -2670,6 +2670,39 @@ def test_clear_rolling_state_removes_referenced_rolling_snapshot(monkeypatch, tm
     assert not snapshot.exists()
 
 
+def test_clear_rolling_state_raises_on_corrupt_state_when_failhard(monkeypatch, tmp_path):
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "snapshot-cleanup-inst")
+    monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: True)
+    state_path = extraction_daemon._rolling_state_path("sess-corrupt-cleanup")
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text("{bad json", encoding="utf-8")
+
+    with pytest.raises(json.JSONDecodeError):
+        extraction_daemon.clear_rolling_state("sess-corrupt-cleanup")
+
+    assert state_path.exists()
+
+
+def test_clear_rolling_state_warns_and_removes_corrupt_state_when_fail_open(
+    monkeypatch,
+    tmp_path,
+    caplog,
+):
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "snapshot-cleanup-inst")
+    monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: False)
+    state_path = extraction_daemon._rolling_state_path("sess-corrupt-cleanup")
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text("{bad json", encoding="utf-8")
+
+    with caplog.at_level("WARNING", logger="quaid.daemon"):
+        extraction_daemon.clear_rolling_state("sess-corrupt-cleanup")
+
+    assert not state_path.exists()
+    assert "rolling state read failed before cleanup" in caplog.text
+
+
 def test_write_rolling_state_clears_structurally_empty_payload_artifacts(monkeypatch, tmp_path):
     monkeypatch.setenv("QUAID_HOME", str(tmp_path))
     instance_id = os.environ.get("QUAID_INSTANCE", "pytest-runner")

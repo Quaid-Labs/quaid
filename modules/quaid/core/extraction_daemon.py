@@ -2774,7 +2774,10 @@ def clear_rolling_state(session_id: str) -> None:
             raw_payload = json.loads(target_path.read_text(encoding="utf-8"))
             if isinstance(raw_payload, dict):
                 target_payload = raw_payload
-    except Exception:
+    except Exception as exc:
+        if _fail_hard_enabled():
+            raise
+        logger.warning("rolling state read failed before cleanup for %s at %s: %s", session_id, target_path, exc)
         target_payload = {}
     removed = False
     try:
