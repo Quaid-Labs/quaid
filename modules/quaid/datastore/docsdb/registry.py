@@ -1513,6 +1513,7 @@ class DocsRegistry:
         source_roots: Optional[List[str]] = None,
         description: str = "",
         exclude: Optional[List[str]] = None,
+        reload_config: bool = True,
     ) -> Path:
         """Scaffold a new project directory with PROJECT.md template.
 
@@ -1564,7 +1565,7 @@ class DocsRegistry:
         self.save_project_definition(name, defn)
 
         # Reload config so subsequent calls see the new project
-        if _reload_config_after_project_change("create_project"):
+        if reload_config and _reload_config_after_project_change("create_project"):
             self._config = None
 
         # Register PROJECT.md in the doc registry

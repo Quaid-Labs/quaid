@@ -116,6 +116,39 @@ function upsertTomlBool(text, tableName, key, value) {
   return `${lines.join("\n").replace(/\n*$/, "\n")}`;
 }
 
+function removeTomlBool(text, tableName, key) {
+  const normalized = String(text || "").replace(/\r\n/g, "\n");
+  const lines = normalized ? normalized.split("\n") : [];
+  const tableLine = `[${tableName}]`;
+
+  let tableIndex = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i].trim() === tableLine) {
+      tableIndex = i;
+      break;
+    }
+  }
+  if (tableIndex === -1) {
+    return `${lines.join("\n").replace(/\n*$/, "\n")}`;
+  }
+
+  let sectionEnd = lines.length;
+  for (let i = tableIndex + 1; i < lines.length; i++) {
+    if (/^\s*\[[^\]]+\]\s*$/.test(lines[i])) {
+      sectionEnd = i;
+      break;
+    }
+  }
+
+  const re = new RegExp(`^\\s*${key}\\s*=`);
+  const kept = [
+    ...lines.slice(0, tableIndex + 1),
+    ...lines.slice(tableIndex + 1, sectionEnd).filter((line) => !re.test(line)),
+    ...lines.slice(sectionEnd),
+  ];
+  return `${kept.join("\n").replace(/\n*$/, "\n")}`;
+}
+
 function ensureTomlTable(text, tableName) {
   const normalized = String(text || "").replace(/\r\n/g, "\n");
   const lines = normalized ? normalized.split("\n") : [];
@@ -317,8 +350,9 @@ configJson.features = {
   ...(configJson.features && typeof configJson.features === "object" && !Array.isArray(configJson.features)
     ? configJson.features
     : {}),
-  codex_hooks: true,
+  hooks: true,
 };
+delete configJson.features.codex_hooks;
 configJson.projects = {
   ...(configJson.projects && typeof configJson.projects === "object" && !Array.isArray(configJson.projects)
     ? configJson.projects
@@ -338,8 +372,10 @@ let currentToml = fs.existsSync(configPath) ? fs.readFileSync(configPath, "utf8"
 // Codex 0.125+ expects inline HookEventsToml. Keep hooks.json for Quaid's own
 // introspection, but do not point config.toml at it with the legacy string key.
 let updatedToml = removeTomlTopLevelKey(currentToml, "hooks");
-// Enable the codex_hooks feature flag.
-updatedToml = upsertTomlBool(updatedToml, "features", "codex_hooks", true);
+// Enable the current Codex hooks feature flag. codex_hooks is deprecated and
+// ignored by Codex 0.139+.
+updatedToml = removeTomlBool(updatedToml, "features", "codex_hooks");
+updatedToml = upsertTomlBool(updatedToml, "features", "hooks", true);
 updatedToml = stripManagedHookTomlBlocks(updatedToml, managedCommands);
 updatedToml = ensureTomlTable(updatedToml, "hooks");
 updatedToml = `${updatedToml.replace(/\n*$/, "\n\n")}${managedHookTomlBlocks(desiredHooks)}`;

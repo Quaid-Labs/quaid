@@ -431,6 +431,7 @@ def _ensure_project_workspace_dirs(ctx: PluginHookContext) -> None:
                 name=misc_name,
                 home_dir=rel_home,
                 description=desc,
+                reload_config=False,
             )
         except ValueError:
             pass  # Already registered in SQLite — idempotent

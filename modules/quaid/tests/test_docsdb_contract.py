@@ -132,6 +132,34 @@ def test_docsdb_contract_misc_docs_registry_failure_warns_when_fail_open(
     assert "docs registry unavailable" in caplog.text
 
 
+def test_docsdb_contract_misc_project_registration_skips_config_reload(tmp_path, monkeypatch):
+    from datastore.docsdb import registry as registry_mod
+    import lib.config as config_mod
+    import lib.instance as instance_mod
+
+    misc_dir = tmp_path / "visible" / "projects" / "misc--pytest"
+    calls = []
+    monkeypatch.setenv("QUAID_VISIBLE_HOME", str(tmp_path / "visible"))
+    monkeypatch.setattr(instance_mod, "instance_misc_dir", lambda: misc_dir)
+    monkeypatch.setattr(config_mod, "get_docs_db_path", lambda: tmp_path / "docs.db")
+
+    class FakeRegistry:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def create_project(self, **kwargs):
+            calls.append(kwargs)
+            return None
+
+    monkeypatch.setattr(registry_mod, "DocsRegistry", FakeRegistry)
+
+    DocsDbPluginContract().on_init(_ctx(str(tmp_path)))
+
+    assert calls
+    assert calls[0]["name"] == "misc--pytest"
+    assert calls[0]["reload_config"] is False
+
+
 def test_docsdb_contract_misc_global_registry_failure_raises_under_failhard(tmp_path, monkeypatch):
     from core.plugins import docsdb_contract
     from datastore.docsdb import registry as registry_mod

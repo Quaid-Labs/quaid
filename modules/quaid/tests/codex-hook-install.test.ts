@@ -33,7 +33,7 @@ describe("codex postinstall hook registration", () => {
       ) + "\n",
       "utf8",
     );
-    fs.writeFileSync(path.join(codexDir, "config.toml"), 'model = "gpt-5.2"\n', "utf8");
+    fs.writeFileSync(path.join(codexDir, "config.toml"), 'model = "gpt-5.2"\n\n[features]\ncodex_hooks = true\n', "utf8");
 
     const script = new URL("../adaptors/manifests/codex/hooks/postinstall.mjs", import.meta.url);
     const env = {
@@ -77,7 +77,8 @@ describe("codex postinstall hook registration", () => {
     expect(allManaged.some((cmd) => cmd.includes("QUAID_INSTANCE"))).toBe(false);
     expect(allManaged.some((cmd) => cmd.includes("QUAID_ADAPTER_TYPE"))).toBe(false);
     expect(allManaged.every((cmd) => cmd.includes('CODEX_PROJECT_DIR="${CODEX_PROJECT_DIR:-$PWD}"'))).toBe(true);
-    expect(configJson.features.codex_hooks).toBe(true);
+    expect(configJson.features.hooks).toBe(true);
+    expect(configJson.features.codex_hooks).toBeUndefined();
     expect(configJson.hooks.SessionStart).toBeTruthy();
     expect(configJson.hooks.UserPromptSubmit).toBeTruthy();
     expect(configJson.hooks.Stop).toBeTruthy();
@@ -86,8 +87,9 @@ describe("codex postinstall hook registration", () => {
     ).toBe(true);
     expect(configToml).toContain('model = "gpt-5.2"');
     expect(configToml).toContain("[features]");
-    expect(configToml).toContain("codex_hooks = true");
-    expect(configToml).not.toMatch(/^hooks\s*=/m);
+    expect(configToml).toContain("hooks = true");
+    expect(configToml).not.toContain("codex_hooks");
+    expect(configToml.slice(0, configToml.indexOf("[features]"))).not.toMatch(/^hooks\s*=/m);
     expect(configToml).toContain("[hooks]");
     expect(configToml).toContain("[[hooks.SessionStart]]");
     expect(configToml).toContain("[[hooks.SessionStart.hooks]]");
