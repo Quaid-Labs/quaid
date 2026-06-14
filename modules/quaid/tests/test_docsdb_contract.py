@@ -1,6 +1,8 @@
 import builtins
+import io
 import logging
 import os
+from contextlib import redirect_stdout
 
 import pytest
 
@@ -158,6 +160,30 @@ def test_docsdb_contract_misc_project_registration_skips_config_reload(tmp_path,
     assert calls
     assert calls[0]["name"] == "misc--pytest"
     assert calls[0]["reload_config"] is False
+    assert calls[0]["quiet"] is True
+
+
+def test_docsdb_contract_misc_project_registration_is_stdout_silent(tmp_path, monkeypatch):
+    import lib.config as config_mod
+    import lib.instance as instance_mod
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("QUAID_VISIBLE_HOME", str(tmp_path / "visible"))
+    monkeypatch.setenv("QUAID_INSTANCE", "pytest")
+    monkeypatch.setenv("MEMORY_DB_PATH", str(tmp_path / "memory.db"))
+    monkeypatch.setattr(config_mod, "get_docs_db_path", lambda: tmp_path / "docs.db")
+    monkeypatch.setattr(
+        instance_mod,
+        "instance_misc_dir",
+        lambda: tmp_path / "visible" / "projects" / "misc--pytest",
+    )
+
+    stdout = io.StringIO()
+    with redirect_stdout(stdout):
+        DocsDbPluginContract().on_init(_ctx(str(tmp_path)))
+        DocsDbPluginContract().on_init(_ctx(str(tmp_path)))
+
+    assert stdout.getvalue() == ""
 
 
 def test_docsdb_contract_misc_global_registry_failure_raises_under_failhard(tmp_path, monkeypatch):

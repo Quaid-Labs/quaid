@@ -427,12 +427,14 @@ def _ensure_project_workspace_dirs(ctx: PluginHookContext) -> None:
         reg = DocsRegistry(get_docs_db_path())
         desc = "Scratch pad for ephemeral and temporary files."
         try:
-            reg.create_project(
-                name=misc_name,
-                home_dir=rel_home,
-                description=desc,
-                reload_config=False,
-            )
+            if not hasattr(reg, "get_project_definition") or reg.get_project_definition(misc_name) is None:
+                reg.create_project(
+                    name=misc_name,
+                    home_dir=rel_home,
+                    description=desc,
+                    reload_config=False,
+                    quiet=True,
+                )
         except ValueError:
             pass  # Already registered in SQLite — idempotent
     except Exception as exc:

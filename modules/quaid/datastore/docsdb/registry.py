@@ -1514,6 +1514,7 @@ class DocsRegistry:
         description: str = "",
         exclude: Optional[List[str]] = None,
         reload_config: bool = True,
+        quiet: bool = False,
     ) -> Path:
         """Scaffold a new project directory with PROJECT.md template.
 
@@ -1579,8 +1580,9 @@ class DocsRegistry:
         )
         _generate_project_md(self, name, self._get_config())
 
-        print(f"Created project '{name}' at {home_abs}")
-        print(f"  PROJECT.md: {project_md_path}")
+        if not quiet:
+            print(f"Created project '{name}' at {home_abs}")
+            print(f"  PROJECT.md: {project_md_path}")
 
         return project_md_path
 
