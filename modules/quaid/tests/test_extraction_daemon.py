@@ -583,6 +583,7 @@ def test_daemon_loop_preserves_signal_when_processing_raises(monkeypatch):
     signal_payload = {"session_id": "sess-1", "type": "reset"}
     marked = []
     read_calls = 0
+    process_calls = 0
 
     def fake_read_pending_signals():
         nonlocal read_calls
@@ -590,6 +591,8 @@ def test_daemon_loop_preserves_signal_when_processing_raises(monkeypatch):
         return [signal_payload] if read_calls == 1 else []
 
     def fake_process_signal(_sig):
+        nonlocal process_calls
+        process_calls += 1
         raise RuntimeError("boom")
 
     def fake_sleep(_seconds):
@@ -600,6 +603,19 @@ def test_daemon_loop_preserves_signal_when_processing_raises(monkeypatch):
     monkeypatch.setattr(extraction_daemon, "read_pending_signals", fake_read_pending_signals)
     monkeypatch.setattr(extraction_daemon, "process_signal", fake_process_signal)
     monkeypatch.setattr(extraction_daemon, "mark_signal_processed", lambda sig: marked.append(sig))
+    monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: False)
+    monkeypatch.setattr(extraction_daemon, "_supervisor_alive", lambda: True)
+    monkeypatch.setattr(extraction_daemon, "_reload_config_if_changed", lambda _reason: None)
+    monkeypatch.setattr(extraction_daemon, "_retry_missing_embeddings", lambda: 0)
+    monkeypatch.setattr(extraction_daemon, "check_chunk_ready_sessions", lambda: None)
+    monkeypatch.setattr(
+        "core.compatibility.read_circuit_breaker",
+        lambda _data_dir: types.SimpleNamespace(
+            allows_writes=lambda: True,
+            status="normal",
+            message="",
+        ),
+    )
     monkeypatch.setattr(extraction_daemon.time, "sleep", fake_sleep)
     monkeypatch.setattr(extraction_daemon.signal, "signal", lambda *_args, **_kwargs: None)
 
@@ -607,6 +623,85 @@ def test_daemon_loop_preserves_signal_when_processing_raises(monkeypatch):
         extraction_daemon.daemon_loop(poll_interval=0.0, idle_check_interval=999999.0)
 
     assert marked == []
+    assert read_calls >= 1
+    assert process_calls == 1
+
+
+def test_daemon_loop_raises_signal_processing_failure_under_failhard(monkeypatch):
+    signal_payload = {"session_id": "sess-1", "type": "reset"}
+    marked = []
+    read_calls = 0
+
+    def fake_read_pending_signals():
+        nonlocal read_calls
+        read_calls += 1
+        return [signal_payload] if read_calls == 1 else []
+
+    def fake_process_signal(_sig):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(extraction_daemon, "write_pid", lambda _pid: None)
+    monkeypatch.setattr(extraction_daemon, "remove_pid", lambda: None)
+    monkeypatch.setattr(extraction_daemon, "read_pending_signals", fake_read_pending_signals)
+    monkeypatch.setattr(extraction_daemon, "process_signal", fake_process_signal)
+    monkeypatch.setattr(extraction_daemon, "mark_signal_processed", lambda sig: marked.append(sig))
+    monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: True)
+    monkeypatch.setattr(extraction_daemon, "_supervisor_alive", lambda: True)
+    monkeypatch.setattr(extraction_daemon, "_reload_config_if_changed", lambda _reason: None)
+    monkeypatch.setattr(extraction_daemon, "_retry_missing_embeddings", lambda: 0)
+    monkeypatch.setattr(extraction_daemon, "check_chunk_ready_sessions", lambda: None)
+    monkeypatch.setattr(
+        "core.compatibility.read_circuit_breaker",
+        lambda _data_dir: types.SimpleNamespace(
+            allows_writes=lambda: True,
+            status="normal",
+            message="",
+        ),
+    )
+    monkeypatch.setattr(
+        extraction_daemon.time,
+        "sleep",
+        lambda _seconds: (_ for _ in ()).throw(AssertionError("daemon loop should not sleep")),
+    )
+    monkeypatch.setattr(extraction_daemon.signal, "signal", lambda *_args, **_kwargs: None)
+
+    with pytest.raises(RuntimeError, match="boom"):
+        extraction_daemon.daemon_loop(poll_interval=0.0, idle_check_interval=999999.0)
+
+    assert marked == []
+    assert read_calls == 1
+
+
+def test_load_runtime_adapter_for_signal_raises_under_failhard(monkeypatch):
+    fake_adapter_mod = types.ModuleType("lib.adapter")
+
+    def fake_get_adapter():
+        raise RuntimeError("adapter unavailable")
+
+    fake_adapter_mod.get_adapter = fake_get_adapter
+    monkeypatch.setitem(sys.modules, "lib.adapter", fake_adapter_mod)
+    monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: True)
+
+    with pytest.raises(RuntimeError, match="adapter unavailable"):
+        extraction_daemon._load_runtime_adapter_for_signal("daemon-reset", "sess-adapter")
+
+
+def test_load_runtime_adapter_for_signal_warns_and_degrades_when_fail_open(monkeypatch, caplog):
+    fake_adapter_mod = types.ModuleType("lib.adapter")
+
+    def fake_get_adapter():
+        raise RuntimeError("adapter unavailable")
+
+    fake_adapter_mod.get_adapter = fake_get_adapter
+    monkeypatch.setitem(sys.modules, "lib.adapter", fake_adapter_mod)
+    monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: False)
+
+    with caplog.at_level("WARNING", logger="quaid.daemon"):
+        adapter = extraction_daemon._load_runtime_adapter_for_signal("daemon-reset", "sess-adapter")
+
+    assert adapter is None
+    assert "adapter load failed" in caplog.text
+    assert "sess-adapter" in caplog.text
 
 
 @pytest.mark.parametrize("initial_daemon_env", [None, "caller"])
@@ -636,6 +731,55 @@ def test_flush_pending_signals_restores_daemon_env_when_pending_read_raises(
         assert "QUAID_DAEMON" not in os.environ
     else:
         assert os.environ["QUAID_DAEMON"] == initial_daemon_env
+
+
+def test_flush_pending_signals_preserves_processing_failure_when_fail_open(monkeypatch, tmp_path):
+    signal_path = tmp_path / "signal.json"
+    signal_path.write_text("{}", encoding="utf-8")
+    signal_payload = {"session_id": "sess-flush", "type": "reset", "_signal_path": str(signal_path)}
+
+    monkeypatch.setattr(extraction_daemon, "_instance_id", lambda: "pytest-runner")
+    monkeypatch.setattr(extraction_daemon, "_instance_root", lambda: tmp_path)
+    monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [signal_payload])
+    monkeypatch.setattr(extraction_daemon, "_pending_signal_count", lambda: 0)
+    monkeypatch.setattr(
+        extraction_daemon,
+        "process_signal",
+        lambda _sig: (_ for _ in ()).throw(RuntimeError("flush boom")),
+    )
+    monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: False)
+
+    summary = extraction_daemon.flush_pending_signals(timeout_seconds=0, poll_interval=0)
+
+    assert summary["status"] == "drained"
+    assert summary["attempted"] == 1
+    assert summary["errors"] == 1
+    assert summary["preserved"] == 1
+    assert summary["processed"] == 0
+
+
+def test_flush_pending_signals_raises_processing_failure_under_failhard(monkeypatch, tmp_path):
+    signal_path = tmp_path / "signal.json"
+    signal_path.write_text("{}", encoding="utf-8")
+    signal_payload = {"session_id": "sess-flush", "type": "reset", "_signal_path": str(signal_path)}
+
+    monkeypatch.delenv("QUAID_DAEMON", raising=False)
+    monkeypatch.setattr(extraction_daemon, "_instance_id", lambda: "pytest-runner")
+    monkeypatch.setattr(extraction_daemon, "_instance_root", lambda: tmp_path)
+    monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [signal_payload])
+    monkeypatch.setattr(extraction_daemon, "_pending_signal_count", lambda: 1)
+    monkeypatch.setattr(
+        extraction_daemon,
+        "process_signal",
+        lambda _sig: (_ for _ in ()).throw(RuntimeError("flush boom")),
+    )
+    monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: True)
+
+    with pytest.raises(RuntimeError, match="flush boom"):
+        extraction_daemon.flush_pending_signals(timeout_seconds=0, poll_interval=0)
+
+    assert "QUAID_DAEMON" not in os.environ
+    assert signal_path.exists()
 
 
 def test_stage_semantic_buffer_payload_uses_focused_extract_chunks(monkeypatch):

@@ -3204,6 +3204,24 @@ def _session_has_harvestable_subagents(session_id: str, adapter=None) -> bool:
     return False
 
 
+def _load_runtime_adapter_for_signal(label: str, session_id: str):
+    """Load the active adapter for signal ownership checks."""
+    try:
+        from lib.adapter import get_adapter
+
+        return get_adapter()
+    except Exception as exc:
+        logger.warning(
+            "[%s] session %s: adapter load failed; continuing without adapter ownership checks: %s",
+            label,
+            session_id,
+            exc,
+        )
+        if _fail_hard_enabled():
+            raise
+        return None
+
+
 def write_staged_payload_flush_signals(
     *,
     adapter: str = "",
@@ -5314,12 +5332,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
     except Exception:
         pass
 
-    adapter = None
-    try:
-        from lib.adapter import get_adapter
-        adapter = get_adapter()
-    except Exception:
-        adapter = None
+    adapter = _load_runtime_adapter_for_signal(label, session_id)
     cursor_data = _read_cursor_with_source_compat(session_id, lock_owner_key)
 
     if (
@@ -8404,6 +8417,8 @@ def daemon_loop(poll_interval: float = 5.0, idle_check_interval: float = 300.0) 
                         "(signal preserved): %s", pue,
                     )
                 except Exception as e:
+                    if _fail_hard_enabled():
+                        raise
                     logger.error("failed processing signal: %s", e, exc_info=True)
                     # Preserve the signal for a future retry. Outer-loop exceptions
                     # mean we do not know whether processing was durable.
@@ -8436,6 +8451,8 @@ def daemon_loop(poll_interval: float = 5.0, idle_check_interval: float = 300.0) 
             try:
                 process_signal(sig)
             except Exception as e:
+                if _fail_hard_enabled():
+                    raise
                 logger.error("shutdown signal processing failed: %s", e)
                 # Preserve the signal across shutdown so the next daemon instance
                 # can retry it instead of dropping extraction work.
@@ -8500,6 +8517,8 @@ def flush_pending_signals(
                     summary["errors"] = int(summary["errors"]) + 1
                     logger.error("flush signal provider unavailable; signal preserved: %s", exc)
                 except Exception as exc:
+                    if _fail_hard_enabled():
+                        raise
                     summary["errors"] = int(summary["errors"]) + 1
                     logger.error("flush signal processing failed; signal preserved: %s", exc, exc_info=True)
                 if sig_path is not None and sig_path.exists():
