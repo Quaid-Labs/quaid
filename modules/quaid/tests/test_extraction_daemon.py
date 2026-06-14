@@ -7349,6 +7349,35 @@ class TestSignalRoundTrip:
         assert extraction_daemon._processing_lock_active("source-fresh-dead-lock") is False
         assert not lock_path.exists()
 
+    def test_remove_stale_processing_lock_holds_flock_through_unlink(self, monkeypatch, tmp_path):
+        lock_path = tmp_path / "source-race.lock"
+        lock_path.write_text(json.dumps({"pid": 999999999}), encoding="utf-8")
+        real_flock = extraction_daemon.fcntl.flock
+        real_unlink = Path.unlink
+        lock_held = {"value": False}
+        events = []
+
+        def tracking_flock(fd, op):
+            if op & extraction_daemon.fcntl.LOCK_EX:
+                lock_held["value"] = True
+                events.append("lock")
+            elif op == extraction_daemon.fcntl.LOCK_UN:
+                events.append(("unlock", lock_held["value"]))
+                lock_held["value"] = False
+            return real_flock(fd, op)
+
+        def tracking_unlink(self, *args, **kwargs):
+            if self == lock_path:
+                events.append(("unlink", lock_held["value"]))
+            return real_unlink(self, *args, **kwargs)
+
+        monkeypatch.setattr(extraction_daemon.fcntl, "flock", tracking_flock)
+        monkeypatch.setattr(Path, "unlink", tracking_unlink)
+
+        assert extraction_daemon._remove_stale_processing_lock(lock_path, holder_dead=True) is True
+        assert not lock_path.exists()
+        assert events.index("lock") < events.index(("unlink", True)) < events.index(("unlock", True))
+
     def test_processing_lock_active_reaps_old_unlocked_empty_file(self, monkeypatch, tmp_path):
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
         monkeypatch.setenv("QUAID_INSTANCE", "test-inst")

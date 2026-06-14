@@ -2547,7 +2547,16 @@ def _processing_lock_holder_dead(lock_path: Path) -> bool:
 def _remove_stale_processing_lock(lock_path: Path, *, holder_dead: bool) -> bool:
     if not holder_dead:
         return False
-    if not _processing_lock_unlocked(lock_path):
+    fd: Optional[int] = None
+    try:
+        fd = os.open(str(lock_path), os.O_RDWR)
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except (OSError, IOError):
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
         logger.warning(
             "stale session processing lock holder appears dead but file is still locked: %s",
             lock_path,
@@ -2560,6 +2569,16 @@ def _remove_stale_processing_lock(lock_path: Path, *, holder_dead: bool) -> bool
     except OSError as exc:
         logger.warning("failed removing stale session processing lock %s: %s", lock_path, exc)
         return False
+    finally:
+        if fd is not None:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            except OSError:
+                pass
+            try:
+                os.close(fd)
+            except OSError:
+                pass
     logger.warning("removed stale session processing lock with dead holder: %s", lock_path)
     return True
 
