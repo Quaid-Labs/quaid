@@ -106,6 +106,49 @@ class TestRegistryIO:
         _, tmp_path = mock_adapter
         assert _registry_lock_path() == tmp_path / "project-registry.json.lock"
 
+    def test_registry_lock_releases_thread_mutex_while_waiting_for_flock(self, mock_adapter, monkeypatch):
+        from lib import project_registry_lock
+
+        events = []
+
+        class _FakeLock:
+            def acquire(self):
+                events.append("thread-acquire")
+
+            def release(self):
+                events.append("thread-release")
+
+        attempts = 0
+
+        def _flock(_fd, flags):
+            nonlocal attempts
+            if flags & project_registry_lock.fcntl.LOCK_UN:
+                events.append("flock-unlock")
+                return
+            attempts += 1
+            events.append(f"flock-{attempts}")
+            if attempts == 1:
+                raise BlockingIOError(project_registry_lock.errno.EAGAIN, "busy")
+
+        monkeypatch.setattr(project_registry_lock, "_registry_thread_lock", _FakeLock())
+        monkeypatch.setattr(project_registry_lock.fcntl, "flock", _flock)
+        monkeypatch.setattr(project_registry_lock.time, "sleep", lambda seconds: events.append(f"sleep-{seconds}"))
+
+        with project_registry_lock.registry_lock():
+            events.append("yield")
+
+        assert events == [
+            "thread-acquire",
+            "flock-1",
+            "thread-release",
+            "sleep-0.05",
+            "thread-acquire",
+            "flock-2",
+            "yield",
+            "flock-unlock",
+            "thread-release",
+        ]
+
 
 class TestCreateProject:
     def test_creates_project(self, mock_adapter):

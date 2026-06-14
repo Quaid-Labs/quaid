@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import contextlib
+import errno
 import fcntl
 import os
 import threading
+import time
 from pathlib import Path
 
 _registry_thread_lock = threading.Lock()
@@ -31,13 +33,34 @@ def registry_lock_path() -> Path:
 def registry_lock():
     path = registry_lock_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    with _registry_thread_lock:
-        lock_fd = os.open(str(path), os.O_CREAT | os.O_RDWR, 0o644)
+    lock_fd = None
+    while True:
+        _registry_thread_lock.acquire()
         try:
-            fcntl.flock(lock_fd, fcntl.LOCK_EX)
-            yield
-        finally:
+            lock_fd = os.open(str(path), os.O_CREAT | os.O_RDWR, 0o644)
             try:
-                fcntl.flock(lock_fd, fcntl.LOCK_UN)
-            finally:
+                fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError as exc:
+                if exc.errno not in (errno.EACCES, errno.EAGAIN):
+                    raise
                 os.close(lock_fd)
+                lock_fd = None
+        except Exception:
+            if lock_fd is not None:
+                os.close(lock_fd)
+            _registry_thread_lock.release()
+            raise
+        _registry_thread_lock.release()
+        time.sleep(0.05)
+
+    try:
+        yield
+    finally:
+        try:
+            if lock_fd is not None:
+                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        finally:
+            if lock_fd is not None:
+                os.close(lock_fd)
+            _registry_thread_lock.release()
