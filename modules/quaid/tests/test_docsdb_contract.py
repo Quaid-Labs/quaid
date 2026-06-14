@@ -1,5 +1,8 @@
 import builtins
+import logging
 import os
+
+import pytest
 
 from lib.adapter import TestAdapter, reset_adapter, set_adapter
 
@@ -24,9 +27,16 @@ def _ctx(workspace_root: str) -> PluginHookContext:
     )
 
 
+def _raise(exc: Exception):
+    raise exc
+
+
 def test_docsdb_contract_on_init_ensures_project_workspace_dirs(tmp_path, monkeypatch):
     visible_root = tmp_path / "visible"
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path / "home"))
     monkeypatch.setenv("QUAID_VISIBLE_HOME", str(visible_root))
+    monkeypatch.setenv("QUAID_INSTANCE", "pytest-runner")
+    monkeypatch.setenv("MEMORY_DB_PATH", str(tmp_path / "memory.db"))
     contract = DocsDbPluginContract()
     contract.on_init(_ctx(str(tmp_path)))
 
@@ -36,9 +46,100 @@ def test_docsdb_contract_on_init_ensures_project_workspace_dirs(tmp_path, monkey
     assert not (tmp_path / "scratch").exists()
 
 
+def test_docsdb_contract_misc_workspace_failure_raises_under_failhard(tmp_path, monkeypatch):
+    from core.plugins import docsdb_contract
+    import lib.instance as instance_mod
+
+    monkeypatch.setenv("QUAID_VISIBLE_HOME", str(tmp_path / "visible"))
+    monkeypatch.setattr(docsdb_contract, "_fail_hard_enabled", lambda: True)
+    monkeypatch.setattr(
+        instance_mod,
+        "instance_misc_dir",
+        lambda: _raise(RuntimeError("misc directory unavailable")),
+    )
+
+    with pytest.raises(RuntimeError, match="misc directory unavailable"):
+        DocsDbPluginContract().on_init(_ctx(str(tmp_path)))
+
+
+def test_docsdb_contract_misc_workspace_failure_warns_when_fail_open(tmp_path, monkeypatch, caplog):
+    from core.plugins import docsdb_contract
+    import lib.instance as instance_mod
+
+    monkeypatch.setenv("QUAID_VISIBLE_HOME", str(tmp_path / "visible"))
+    monkeypatch.setattr(docsdb_contract, "_fail_hard_enabled", lambda: False)
+    monkeypatch.setattr(
+        instance_mod,
+        "instance_misc_dir",
+        lambda: _raise(RuntimeError("misc directory unavailable")),
+    )
+
+    with caplog.at_level(logging.WARNING, logger="core.plugins.docsdb_contract"):
+        DocsDbPluginContract().on_init(_ctx(str(tmp_path)))
+
+    assert "docsdb misc workspace directory initialization failed" in caplog.text
+    assert "misc directory unavailable" in caplog.text
+
+
+def test_docsdb_contract_misc_docs_registry_failure_raises_under_failhard(tmp_path, monkeypatch):
+    from core.plugins import docsdb_contract
+    from datastore.docsdb import registry as registry_mod
+    import lib.config as config_mod
+    import lib.instance as instance_mod
+
+    misc_dir = tmp_path / "visible" / "projects" / "misc--pytest"
+    monkeypatch.setenv("QUAID_VISIBLE_HOME", str(tmp_path / "visible"))
+    monkeypatch.setattr(docsdb_contract, "_fail_hard_enabled", lambda: True)
+    monkeypatch.setattr(instance_mod, "instance_misc_dir", lambda: misc_dir)
+    monkeypatch.setattr(config_mod, "get_docs_db_path", lambda: tmp_path / "docs.db")
+
+    class BrokenRegistry:
+        def __init__(self, *_args, **_kwargs):
+            raise RuntimeError("docs registry unavailable")
+
+    monkeypatch.setattr(registry_mod, "DocsRegistry", BrokenRegistry)
+
+    with pytest.raises(RuntimeError, match="docs registry unavailable"):
+        DocsDbPluginContract().on_init(_ctx(str(tmp_path)))
+
+
+def test_docsdb_contract_misc_global_registry_failure_raises_under_failhard(tmp_path, monkeypatch):
+    from core.plugins import docsdb_contract
+    from datastore.docsdb import registry as registry_mod
+    import lib.config as config_mod
+    import lib.instance as instance_mod
+    import lib.project_registry as project_registry_mod
+
+    misc_dir = tmp_path / "visible" / "projects" / "misc--pytest"
+    monkeypatch.setenv("QUAID_VISIBLE_HOME", str(tmp_path / "visible"))
+    monkeypatch.setattr(docsdb_contract, "_fail_hard_enabled", lambda: True)
+    monkeypatch.setattr(instance_mod, "instance_misc_dir", lambda: misc_dir)
+    monkeypatch.setattr(config_mod, "get_docs_db_path", lambda: tmp_path / "docs.db")
+
+    class FakeRegistry:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def create_project(self, *_args, **_kwargs):
+            return None
+
+    monkeypatch.setattr(registry_mod, "DocsRegistry", FakeRegistry)
+    monkeypatch.setattr(
+        project_registry_mod,
+        "register",
+        lambda **_kwargs: _raise(RuntimeError("global registry unavailable")),
+    )
+
+    with pytest.raises(RuntimeError, match="global registry unavailable"):
+        DocsDbPluginContract().on_init(_ctx(str(tmp_path)))
+
+
 def test_docsdb_contract_on_config_ensures_project_workspace_dirs(tmp_path, monkeypatch):
     visible_root = tmp_path / "visible"
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path / "home"))
     monkeypatch.setenv("QUAID_VISIBLE_HOME", str(visible_root))
+    monkeypatch.setenv("QUAID_INSTANCE", "pytest-runner")
+    monkeypatch.setenv("MEMORY_DB_PATH", str(tmp_path / "memory.db"))
     contract = DocsDbPluginContract()
     contract.on_config(_ctx(str(tmp_path)))
 

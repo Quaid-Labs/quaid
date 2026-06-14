@@ -413,36 +413,46 @@ def _ensure_project_workspace_dirs(ctx: PluginHookContext) -> None:
         from lib.instance import instance_misc_dir
         misc_dir = instance_misc_dir()
         misc_dir.mkdir(parents=True, exist_ok=True)
+    except Exception as exc:
+        logger.warning("docsdb misc workspace directory initialization failed: %s", exc)
+        if _fail_hard_enabled():
+            raise
+        return
+
+    try:
+        from datastore.docsdb.registry import DocsRegistry
+        from lib.config import get_docs_db_path
+        misc_name = misc_dir.name  # e.g. "misc--openclaw-main"
+        rel_home = f"projects/{misc_name}/"
+        reg = DocsRegistry(get_docs_db_path())
+        desc = "Scratch pad for ephemeral and temporary files."
         try:
-            from datastore.docsdb.registry import ProjectRegistry
-            from lib.config import get_docs_db_path
-            misc_name = misc_dir.name  # e.g. "misc--openclaw-main"
-            rel_home = f"projects/{misc_name}/"
-            reg = ProjectRegistry(get_docs_db_path())
-            desc = "Scratch pad for ephemeral and temporary files."
-            try:
-                reg.create_project(
-                    name=misc_name,
-                    home_dir=rel_home,
-                    description=desc,
-                )
-            except ValueError:
-                pass  # Already registered in SQLite — idempotent
-            # Also register in global JSON registry so quaid global-registry
-            # list and quaid project show can find it. Idempotent.
-            try:
-                from lib.project_registry import register as global_register
-                global_register(
-                    name=misc_name,
-                    canonical_path=str(misc_dir),
-                    description=desc,
-                )
-            except Exception:
-                pass  # Global registry not available at this init stage
-        except Exception:
-            pass  # Registry not available at this init stage
-    except Exception:
-        pass  # Standalone/misconfigured — installer handles it
+            reg.create_project(
+                name=misc_name,
+                home_dir=rel_home,
+                description=desc,
+            )
+        except ValueError:
+            pass  # Already registered in SQLite — idempotent
+    except Exception as exc:
+        logger.warning("docsdb misc project registry initialization failed: %s", exc)
+        if _fail_hard_enabled():
+            raise
+        return
+
+    # Also register in global JSON registry so quaid global-registry
+    # list and quaid project show can find it. Idempotent.
+    try:
+        from lib.project_registry import register as global_register
+        global_register(
+            name=misc_name,
+            canonical_path=str(misc_dir),
+            description=desc,
+        )
+    except Exception as exc:
+        logger.warning("docsdb misc project global registry update failed: %s", exc)
+        if _fail_hard_enabled():
+            raise
 
 
 class DocsDbPluginContract(PluginContractBase):
