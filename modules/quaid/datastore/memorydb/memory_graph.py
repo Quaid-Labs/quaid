@@ -106,7 +106,7 @@ from lib.runtime_context import get_workspace_dir, get_adapter_instance, get_log
 
 logger = logging.getLogger(__name__)
 
-_FAST_RECALL_DEFAULT_TIMEOUT_FLOOR_MS = 30_000
+_CLI_RECALL_FAST_DEFAULT_TIMEOUT_MS = 30_000
 
 _GRAPH_FACT_CLUSTER_DEFAULT_CAP = 8
 _GRAPH_FACT_CLUSTER_WIDE_POOL_THRESHOLD = 10
@@ -10433,16 +10433,19 @@ def _recall_store_plan_timeout_s(timeout_ms: Optional[int], *, fast_mode: bool) 
             pass
     if fast_mode:
         try:
-            raw = _get_configured_injection_timeout_ms(_FAST_RECALL_DEFAULT_TIMEOUT_FLOOR_MS)
-            return max(
-                0.5,
-                float(max(int(raw or 0), _FAST_RECALL_DEFAULT_TIMEOUT_FLOOR_MS)) / 1000.0,
-            )
+            raw = _get_configured_injection_timeout_ms(3000)
+            return max(0.5, float(raw or 3000) / 1000.0)
         except Exception:
             if _is_fail_hard_mode():
                 raise
-            return float(_FAST_RECALL_DEFAULT_TIMEOUT_FLOOR_MS) / 1000.0
+            return 3.0
     return 30.0
+
+
+def _resolve_cli_recall_fast_timeout_ms(timeout_ms: Optional[int]) -> int:
+    if timeout_ms is None:
+        return _CLI_RECALL_FAST_DEFAULT_TIMEOUT_MS
+    return int(timeout_ms)
 
 
 def _handle_recall_branch_exception(
@@ -25203,6 +25206,7 @@ if __name__ == "__main__":
             query = " ".join(args.query)
             domain_filter = json.loads(getattr(args, "domain_filter", '{"all": true}') or '{"all": true}')
             domain_boost = json.loads(getattr(args, "domain_boost", "[]") or "[]")
+            timeout_ms = _resolve_cli_recall_fast_timeout_ms(getattr(args, "timeout_ms", None))
             results, meta = recall_fast(
                 query,
                 limit=args.limit,
@@ -25215,7 +25219,7 @@ if __name__ == "__main__":
                 domain=domain_filter,
                 domain_boost=domain_boost,
                 project=getattr(args, "project", None),
-                timeout_ms=getattr(args, "timeout_ms", None),
+                timeout_ms=timeout_ms,
                 planner_profile=getattr(args, "planner_profile", "fast"),
                 include_chunks=getattr(args, "include_chunks", False),
                 max_chunk_tokens=getattr(args, "max_chunk_tokens", None),
