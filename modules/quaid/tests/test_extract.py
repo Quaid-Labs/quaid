@@ -3298,6 +3298,42 @@ class TestExtractFromTranscript:
         assert snippet_payload["snippets"] == applied["snippets"]
         assert snippet_payload["journal"] == applied["journal"]
 
+    def test_materialized_cached_payload_counts_question_echo_drops_once(self):
+        import ingest.extract as extract_mod
+
+        payload = extract_mod.materialize_cached_extraction_payload(
+            transcript=(
+                "User: What receipt notebook do I use for my studio setup?\n\n"
+                "Assistant: You use the red linen receipt notebook for the studio setup."
+            ),
+            parsed_payload={
+                "facts": [
+                    {
+                        "text": "What receipt notebook do I use for my studio setup",
+                        "category": "fact",
+                        "speaker": "user",
+                        "domains": ["personal"],
+                    },
+                    {
+                        "text": "Miko uses the red linen receipt notebook for the studio setup",
+                        "category": "fact",
+                        "speaker": "agent",
+                        "domains": ["personal"],
+                    },
+                ],
+                "soul_snippets": {},
+                "journal_entries": {},
+                "project_logs": {},
+            },
+            owner_id="Miko",
+            label="rolling-cache",
+        )
+
+        texts = [fact["text"] for fact in payload["raw_facts"]]
+        assert texts == ["Miko uses the red linen receipt notebook for the studio setup"]
+        assert payload["question_echo_facts_dropped"] >= 1
+        assert payload["facts_skipped"] == payload["question_echo_facts_dropped"]
+
     @patch("ingest.extract.call_deep_reasoning")
     @patch("ingest.extract._session_bridge.list_session_chunks", return_value=[])
     @patch("ingest.extract._session_bridge.store_session_source_text")

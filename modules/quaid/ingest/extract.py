@@ -2075,7 +2075,6 @@ def materialize_cached_extraction_payload(
         ]
         question_echo_dropped = len(all_facts) - len(filtered_facts)
         if question_echo_dropped:
-            result["facts_skipped"] = int(result.get("facts_skipped", 0) or 0) + question_echo_dropped
             result["question_echo_facts_dropped"] = int(
                 result.get("question_echo_facts_dropped", 0) or 0
             ) + question_echo_dropped
