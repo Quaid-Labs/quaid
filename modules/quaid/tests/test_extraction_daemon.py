@@ -7194,6 +7194,30 @@ class TestSignalRoundTrip:
 
         assert kept is False
 
+    def test_preserve_missing_transcript_signal_honors_zero_first_seen(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
+        monkeypatch.setattr(extraction_daemon.time, "time", lambda: 200.0)
+
+        extraction_daemon.write_signal(
+            signal_type="reset",
+            session_id="sess-zero-first-seen",
+            transcript_path="",
+            meta={"missing_transcript_first_seen_at": 0.0},
+        )
+        signal_data = extraction_daemon.read_pending_signals()[0]
+
+        kept = extraction_daemon._preserve_missing_transcript_signal_for_retry(
+            signal_data,
+            session_id="sess-zero-first-seen",
+            signal_type="reset",
+            transcript_path="",
+            label="test",
+            max_wait_seconds=45.0,
+        )
+
+        assert kept is False
+
     def test_process_signal_preserves_missing_timeout_signal_for_retry(self, monkeypatch, tmp_path):
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
         monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
@@ -10730,6 +10754,50 @@ class TestRollingExtraction:
             transcript_path=str(transcript_path),
             cursor_data=cursor_data,
         ) is True
+
+    def test_cursor_shadow_check_raises_source_key_failure_when_failhard(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "rolling-inst")
+        monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: True)
+
+        def _boom(*_args, **_kwargs):
+            raise RuntimeError("source key failed")
+
+        monkeypatch.setattr(extraction_daemon, "_signal_source_cursor_key", _boom)
+
+        with pytest.raises(RuntimeError, match="source key failed"):
+            extraction_daemon._cursor_shadowed_by_source_cursor(
+                cursor_file=tmp_path / "cursor.json",
+                session_id="sess-shadow",
+                transcript_path="/tmp/session.jsonl",
+                cursor_data={},
+            )
+
+    def test_cursor_shadow_check_warns_and_falls_back_when_fail_open(
+        self,
+        monkeypatch,
+        tmp_path,
+        caplog,
+    ):
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "rolling-inst")
+        monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: False)
+
+        def _boom(*_args, **_kwargs):
+            raise RuntimeError("source key failed")
+
+        monkeypatch.setattr(extraction_daemon, "_signal_source_cursor_key", _boom)
+
+        with caplog.at_level("WARNING", logger="quaid.daemon"):
+            result = extraction_daemon._cursor_shadowed_by_source_cursor(
+                cursor_file=tmp_path / "cursor.json",
+                session_id="sess-shadow",
+                transcript_path="/tmp/session.jsonl",
+                cursor_data={},
+            )
+
+        assert result is False
+        assert "cursor shadow check failed" in caplog.text
 
     def test_check_chunk_ready_sessions_rescans_eof_cursor_for_byte_growth(
         self, monkeypatch, tmp_path

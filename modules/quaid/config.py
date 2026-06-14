@@ -1442,6 +1442,13 @@ def _load_config_inner() -> MemoryConfig:
                         )
     except Exception as exc:
         logger.warning("Failed to load project definitions from datastore; falling back to JSON config: %s", exc)
+        try:
+            from lib.fail_policy import is_fail_hard_enabled
+
+            if is_fail_hard_enabled():
+                raise
+        except ImportError:
+            raise
     if not project_definitions:
         # Fallback: load from JSON if DB not available (fresh install, tests)
         for proj_name, proj_data in raw_projects.get('definitions', {}).items():

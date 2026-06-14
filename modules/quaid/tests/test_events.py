@@ -4199,6 +4199,40 @@ def test_process_events_expires_stale_pending_events(monkeypatch, tmp_path):
     assert queued[0]["result"]["reason"] == "event_exceeded_max_age"
 
 
+def test_process_events_expiry_honors_quaid_now(monkeypatch, tmp_path):
+    adapter = TestAdapter(tmp_path)
+    set_adapter(adapter)
+
+    import core.runtime.events as events
+
+    monkeypatch.setenv("QUAID_NOW", "2026-03-11T00:00:00Z")
+    monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: True)
+    called = []
+
+    def _handler(_event):
+        called.append(True)
+        return {"status": "processed"}
+
+    original = EVENT_HANDLERS["session.reset"]
+    try:
+        register_event_handler("session.reset", _handler, force=True)
+        emitted = emit_event(name="session.reset", payload={"idx": 1}, source="pytest")
+        queue_path = get_runtime_root(adapter.instance_root()) / "events" / "queue.json"
+        payload = json.loads(queue_path.read_text(encoding="utf-8"))
+        payload["events"][0]["created_at"] = "2026-03-10T23:59:30+00:00"
+        queue_path.write_text(json.dumps(payload), encoding="utf-8")
+
+        out = process_events(limit=5, names=["session.reset"], max_age_seconds=60)
+    finally:
+        register_event_handler("session.reset", original, force=True)
+
+    assert called == [True]
+    assert out["processed"] == 1
+    assert out["expired"] == 0
+    queued = list_events(status="processed", limit=10)
+    assert queued[0]["id"] == emitted["id"]
+
+
 def test_process_events_recovers_stale_processing_events(monkeypatch, tmp_path):
     adapter = TestAdapter(tmp_path)
     set_adapter(adapter)

@@ -361,13 +361,20 @@ def validate_declared_event_contract(
 
 
 def _now() -> str:
+    return _now_datetime().isoformat()
+
+
+def _now_datetime() -> datetime:
     override = os.environ.get("QUAID_NOW", "").strip()
     if override:
         try:
-            return datetime.fromisoformat(override.replace("Z", "+00:00")).isoformat()
+            value = datetime.fromisoformat(override.replace("Z", "+00:00"))
+            if value.tzinfo is None:
+                return value.replace(tzinfo=timezone.utc)
+            return value.astimezone(timezone.utc)
         except ValueError:
             logger.warning("Invalid QUAID_NOW=%r; using wall clock", override)
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(timezone.utc)
 
 
 def _ensure_parent(path: Path) -> None:
@@ -1672,7 +1679,7 @@ def process_events(
         handler_snapshot = dict(EVENT_HANDLERS)
 
     max_age = int(max_age_seconds) if max_age_seconds is not None else 0
-    now_dt = datetime.now(timezone.utc)
+    now_dt = _now_datetime()
 
     def _claim(payload: Any) -> Any:
         nonlocal processed, skipped, touched, expired

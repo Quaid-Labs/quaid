@@ -805,6 +805,57 @@ class TestConfigPathResolution:
         finally:
             config._config = old_config
 
+    def test_project_definition_db_error_raises_when_failhard_enabled(self, tmp_path):
+        import config
+        old_config = config._config
+        config._config = None
+        try:
+            config_file = tmp_path / "config.json"
+            config_file.write_text(json.dumps({
+                "projects": {
+                    "definitions": {
+                        "json-proj": {"label": "JSON Project", "homeDir": "projects/json-proj/"}
+                    }
+                }
+            }))
+            docs_db = tmp_path / "docs.db"
+            docs_db.write_text("", encoding="utf-8")
+
+            with patch.object(config, "_config_paths", lambda: [config_file]), \
+                 patch("lib.config.get_docs_db_path", return_value=docs_db), \
+                 patch("lib.database.get_connection", side_effect=RuntimeError("db down")), \
+                 patch("lib.fail_policy.is_fail_hard_enabled", return_value=True):
+                with pytest.raises(RuntimeError, match="db down"):
+                    load_config()
+        finally:
+            config._config = old_config
+
+    def test_project_definition_db_error_uses_json_fallback_when_failhard_disabled(self, tmp_path):
+        import config
+        old_config = config._config
+        config._config = None
+        try:
+            config_file = tmp_path / "config.json"
+            config_file.write_text(json.dumps({
+                "projects": {
+                    "definitions": {
+                        "json-proj": {"label": "JSON Project", "homeDir": "projects/json-proj/"}
+                    }
+                }
+            }))
+            docs_db = tmp_path / "docs.db"
+            docs_db.write_text("", encoding="utf-8")
+
+            with patch.object(config, "_config_paths", lambda: [config_file]), \
+                 patch("lib.config.get_docs_db_path", return_value=docs_db), \
+                 patch("lib.database.get_connection", side_effect=RuntimeError("db down")), \
+                 patch("lib.fail_policy.is_fail_hard_enabled", return_value=False):
+                cfg = load_config()
+
+            assert set(cfg.projects.definitions) == {"json-proj"}
+        finally:
+            config._config = old_config
+
     def test_core_parallel_llm_workers_default_is_4(self, tmp_path):
         import config
         old_config = config._config

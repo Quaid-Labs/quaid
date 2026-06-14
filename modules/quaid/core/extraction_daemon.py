@@ -997,7 +997,10 @@ def _preserve_missing_transcript_signal_for_retry(
     try:
         first_seen_default = float(time.time())
         existing_meta = dict(signal_data.get("meta") or {})
-        first_seen = float(existing_meta.get("missing_transcript_first_seen_at") or 0.0) or first_seen_default
+        raw_first_seen = existing_meta.get("missing_transcript_first_seen_at")
+        if raw_first_seen is None or raw_first_seen == "":
+            raw_first_seen = first_seen_default
+        first_seen = float(raw_first_seen)
         attempts = int(existing_meta.get("missing_transcript_attempts", 0) or 0) + 1
         age_seconds = max(0.0, float(time.time()) - first_seen)
         if age_seconds > float(max_wait_seconds):
@@ -1696,7 +1699,10 @@ def _cursor_shadowed_by_source_cursor(
             transcript_path,
             cursor_data=cursor_data,
         )
-    except Exception:
+    except Exception as exc:
+        logger.warning("cursor shadow check failed for %s at %s: %s", session_id, transcript_path, exc)
+        if _fail_hard_enabled():
+            raise
         return False
     if cursor_file.stem == source_key:
         return False
