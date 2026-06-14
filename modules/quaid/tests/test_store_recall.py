@@ -6247,6 +6247,62 @@ class TestSourceChunkStorage:
         assert all(row["temporal_filter_basis"] == "occurred" for row in rows)
         assert meta["planned_stores"] == ["vector"]
 
+    def test_store_plan_reapplies_temporal_filter_after_source_expansion(self):
+        """Late store-plan row expansion must not bypass explicit temporal axes."""
+        import datastore.memorydb.memory_graph as mg
+
+        valid_seed = {
+            "id": "valid-mentioned-2023",
+            "text": "The 2023 workshop note mentions leatherworking.",
+            "category": "fact",
+            "similarity": 0.9,
+            "mentioned_at": "2023-07-02T08:00:00Z",
+            "source_chunk_id": "source-1",
+        }
+        invalid_expanded = {
+            "id": "invalid-mentioned-2026",
+            "text": "The leatherworking workshop note was stored in 2026.",
+            "category": "fact",
+            "similarity": 0.99,
+            "mentioned_at": "2026-06-14T08:00:00Z",
+            "source_chunk_id": "source-2",
+        }
+
+        def _payload(rows):
+            return rows, {"selected_path": "vector", "phases_ms": {"total_ms": 1}}, None
+
+        registry = {
+            "vector": {"recall": lambda *_a, **_k: _payload([valid_seed]), "recall_fast": lambda *_a, **_k: _payload([valid_seed])},
+            "graph": {"recall": lambda *_a, **_k: _payload([]), "recall_fast": lambda *_a, **_k: _payload([])},
+            "docs": {"recall": lambda *_a, **_k: _payload([]), "recall_fast": lambda *_a, **_k: _payload([])},
+            "session_chunks": {"recall": lambda *_a, **_k: _payload([]), "recall_fast": lambda *_a, **_k: _payload([])},
+        }
+
+        with patch.object(mg, "_get_recall_store_registry", return_value=registry), \
+             patch.object(
+                 mg,
+                 "_expand_selected_session_chunk_rows",
+                 return_value=([dict(invalid_expanded)], {"expanded": 1}),
+             ):
+            rows, _meta, _bundle = mg._run_recall_store_plan(
+                "leatherworking workshop",
+                stores=["vector"],
+                limit=5,
+                owner_id="quaid",
+                min_similarity=0.0,
+                planner_profile="full",
+                planned_queries=["leatherworking workshop"],
+                planner_meta={"planned_stores": ["vector"]},
+                fast_mode=False,
+                common_kwargs={
+                    "date_from": "2023-01-01",
+                    "date_to": "2023-12-31",
+                    "temporal_dimension": "mentioned",
+                },
+            )
+
+        assert rows == []
+
     def test_store_plan_passes_owner_context_to_vector_lane(self):
         """Nested vector recall must retain owner scope before it can auto-include session chunks."""
         import datastore.memorydb.memory_graph as mg
@@ -8813,12 +8869,24 @@ class TestRecallTelemetry:
             seen_dimensions.append((common_kwargs or {}).get("temporal_dimension"))
             if len(seen_dimensions) == 1:
                 return (
-                    [{"id": "first", "text": "Initial low-overlap row", "category": "fact", "similarity": 0.72}],
+                    [{
+                        "id": "first",
+                        "text": "Initial low-overlap row",
+                        "category": "fact",
+                        "similarity": 0.72,
+                        "occurred_start": "2023-01-01T00:00:00Z",
+                    }],
                     {"phases_ms": {"total_ms": 50, "store_plan_wall_ms": 50}, "turn_details": [{"turn": 1}]},
                     None,
                 )
             return (
-                [{"id": "second", "text": "Fast-drill validated row", "category": "fact", "similarity": 0.88}],
+                [{
+                    "id": "second",
+                    "text": "Fast-drill validated row",
+                    "category": "fact",
+                    "similarity": 0.88,
+                    "occurred_start": "2023-01-02T00:00:00Z",
+                }],
                 {"phases_ms": {"total_ms": 40, "store_plan_wall_ms": 40}, "store_runs": [{"store": "vector", "result_count": 1}]},
                 None,
             )

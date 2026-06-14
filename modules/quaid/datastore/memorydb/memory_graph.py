@@ -10940,6 +10940,20 @@ def _run_recall_store_plan(
         final_rows,
         limit=limit,
     )
+    if kwargs.get("date_from") or kwargs.get("date_to"):
+        final_rows = _filter_recall_rows_by_date_bounds(
+            final_rows,
+            date_from=kwargs.get("date_from"),
+            date_to=kwargs.get("date_to"),
+            temporal_dimension=kwargs.get("temporal_dimension"),
+            keep_undated=_keep_undated_rows_for_temporal_dimension(
+                kwargs.get("temporal_dimension"),
+            ),
+        )
+    final_rows = _enforce_recall_rows_temporal_axis_validity(
+        final_rows,
+        temporal_dimension=kwargs.get("temporal_dimension"),
+    )
     if rrf_fusion_meta.get("enabled"):
         rrf_shadow_meta = dict(rrf_shadow_meta)
         rrf_shadow_meta["comparison_suppressed_reason"] = "active_rrf_fusion"
@@ -20053,6 +20067,21 @@ def recall_fast(
         date_to=date_to,
     )
     temporal_dimension = _normalize_recall_temporal_dimension(temporal_dimension)
+    def _enforce_fast_temporal_filters(candidate_rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        filtered_rows = list(candidate_rows or [])
+        if date_from or date_to:
+            filtered_rows = _filter_recall_rows_by_date_bounds(
+                filtered_rows,
+                date_from=date_from,
+                date_to=date_to,
+                temporal_dimension=temporal_dimension,
+                keep_undated=_keep_undated_rows_for_temporal_dimension(temporal_dimension),
+            )
+        return _enforce_recall_rows_temporal_axis_validity(
+            filtered_rows,
+            temporal_dimension=temporal_dimension,
+        )
+
     effective_limit = min(limit, 6 if planner_profile == "aggressive" else 8)
     # Fast recall still returns the requested small hook payload, but stores
     # need a wider pool so compact answer facts can survive exact entity stubs
@@ -20211,7 +20240,8 @@ def recall_fast(
         query,
         rows,
         gate_eval=initial_gate_eval,
-    )[:effective_limit]
+    )
+    rows = _enforce_fast_temporal_filters(rows)[:effective_limit]
 
     should_fast_drill, gate_eval, fast_drill_reasons, gate_intent = _should_fast_drill_follow_up(
         query,
@@ -20291,6 +20321,7 @@ def recall_fast(
                     limit=effective_limit,
                     include_relation_keywords=False,
                 )
+                rows = _enforce_fast_temporal_filters(rows)
                 rows, meta = _prepare_recall_output_rows(
                     rows,
                     meta,
@@ -20512,6 +20543,7 @@ def recall_fast(
                     limit=effective_limit,
                     include_relation_keywords=False,
                 )
+                rows = _enforce_fast_temporal_filters(rows)
                 rows, meta = _prepare_recall_output_rows(
                     rows,
                     meta,
@@ -20563,7 +20595,8 @@ def recall_fast(
                 query,
                 rows,
                 gate_eval=gate_eval,
-            )[:effective_limit]
+            )
+            rows = _enforce_fast_temporal_filters(rows)[:effective_limit]
             if drill_docs_bundle:
                 docs_bundle = _merge_docs_bundles(docs_bundle, drill_docs_bundle)
             meta.setdefault("turn_details", [])
@@ -20607,6 +20640,7 @@ def recall_fast(
                 limit=effective_limit,
                 include_relation_keywords=False,
             )
+    rows = _enforce_fast_temporal_filters(rows)
     rows, meta = _prepare_recall_output_rows(
         rows,
         meta,
@@ -21754,6 +21788,18 @@ def recall(
         owner_id=owner_id,
         max_chunk_tokens=max_chunk_tokens,
         max_total_chunk_tokens=max_total_chunk_tokens,
+    )
+    if date_from or date_to:
+        final = _filter_recall_rows_by_date_bounds(
+            final,
+            date_from=date_from,
+            date_to=date_to,
+            temporal_dimension=temporal_dimension,
+            keep_undated=_keep_undated_rows_for_temporal_dimension(temporal_dimension),
+        )
+    final = _enforce_recall_rows_temporal_axis_validity(
+        final,
+        temporal_dimension=temporal_dimension,
     )
     total_elapsed = (_time.monotonic() - recall_start) * 1000
     if stop_reason == "max_turns" and len(drill_log) < max_turns:
