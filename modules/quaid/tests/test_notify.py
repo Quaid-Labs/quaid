@@ -21,7 +21,6 @@ from core.runtime.notify import (
     notify_user,
     get_last_channel,
     ChannelInfo,
-    _check_janitor_health,
     _notify_full_text,
     _resolve_channel,
 )
@@ -646,25 +645,18 @@ class TestNotifyFallbackVisibility:
             with pytest.raises(RuntimeError, match="fail-hard mode"):
                 notify_memory_extraction(1, 0, 0, always_notify=True)
 
-    def test_check_janitor_health_returns_warning_on_runtime_error(self, caplog):
+    def test_resolve_channel_config_error_warns_when_fail_hard_disabled(self, caplog):
         caplog.set_level("WARNING")
-        with patch(
-            "core.lifecycle.datastore_runtime.get_last_successful_janitor_completed_at",
-            side_effect=RuntimeError("db offline"),
-        ), patch(
-            "core.lifecycle.datastore_runtime.get_graph",
-            side_effect=RuntimeError("db offline"),
-        ):
-            warning = _check_janitor_health()
-        assert warning is not None
-        assert "Unable to verify janitor health" in warning
-        assert "Failed to evaluate janitor health status" in caplog.text
-
-    def test_resolve_channel_config_error_logs_debug(self, caplog):
-        caplog.set_level("DEBUG")
-        with patch("config.get_config", side_effect=RuntimeError("bad config")):
+        with patch("config.get_config", side_effect=RuntimeError("bad config")), \
+             patch("core.runtime.notify.is_fail_hard_enabled", return_value=False):
             assert _resolve_channel("memory_recall") is None
         assert "Failed to resolve notification channel override" in caplog.text
+
+    def test_resolve_channel_config_error_raises_when_fail_hard_enabled(self):
+        with patch("config.get_config", side_effect=RuntimeError("bad config")), \
+             patch("core.runtime.notify.is_fail_hard_enabled", return_value=True):
+            with pytest.raises(RuntimeError, match="Failed to resolve notification channel override"):
+                _resolve_channel("memory_recall")
 
     def test_dry_run_does_not_call_subprocess(self):
         """dry_run prints command but doesn't execute."""
@@ -737,7 +729,8 @@ class TestNotifyFallbackVisibility:
         set_adapter(adapter)
         try:
             with patch("adaptors.openclaw.adapter.subprocess.run",
-                       side_effect=_subprocess.TimeoutExpired("cmd", 30)):
+                       side_effect=_subprocess.TimeoutExpired("cmd", 30)), \
+                 patch("adaptors.openclaw.adapter.is_fail_hard_enabled", return_value=False):
                 result = notify_user("hello world")
                 assert result is False
         finally:

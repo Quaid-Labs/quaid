@@ -27,6 +27,19 @@ MAX_LOG_DAYS = 7
 LogLevel = Literal["debug", "info", "warn", "error"]
 
 
+def _now_datetime() -> datetime:
+    raw = os.environ.get("QUAID_NOW", "").strip()
+    if raw:
+        try:
+            value = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            if value.tzinfo is None:
+                return value.replace(tzinfo=timezone.utc)
+            return value.astimezone(timezone.utc)
+        except ValueError:
+            print(f"[logger] Invalid QUAID_NOW={raw!r}; using wall clock", file=sys.stderr)
+    return datetime.now(timezone.utc)
+
+
 def log(
     component: str,
     event: str,
@@ -35,7 +48,7 @@ def log(
 ) -> None:
     """Write a structured log entry."""
     entry = {
-        "ts": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "ts": _now_datetime().isoformat().replace("+00:00", "Z"),
         "level": level,
         "component": component,
         "event": event,
@@ -80,7 +93,7 @@ class Logger:
 
 def rotate_logs() -> None:
     """Rotate logs - moves current logs to archive with date suffix."""
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = _now_datetime().strftime("%Y-%m-%d")
     
     try:
         _archive_dir().mkdir(parents=True, exist_ok=True)
@@ -115,7 +128,7 @@ def rotate_logs() -> None:
 
 def clean_old_archives() -> None:
     """Delete archives older than MAX_LOG_DAYS."""
-    cutoff = datetime.now() - timedelta(days=MAX_LOG_DAYS)
+    cutoff = _now_datetime() - timedelta(days=MAX_LOG_DAYS)
     
     try:
         for archive_file in _archive_dir().glob("*.log"):
@@ -126,7 +139,7 @@ def clean_old_archives() -> None:
             
             date_str = parts[-1]
             try:
-                file_date = datetime.strptime(date_str, "%Y-%m-%d")
+                file_date = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
                 if file_date < cutoff:
                     archive_file.unlink()
                     print(f"[logger] Deleted old archive {archive_file.name}")

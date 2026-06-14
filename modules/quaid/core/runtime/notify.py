@@ -134,50 +134,6 @@ def _notify_full_text() -> bool:
         return False
 
 
-def _check_janitor_health() -> Optional[str]:
-    """Check if the janitor has run recently. Returns warning string or None.
-
-    This is a lightweight DB check (single query, no LLM calls).
-    Called during extraction notifications to alert the user if their
-    janitor isn't running — e.g. misconfigured heartbeat, missing API key, etc.
-    """
-    try:
-        from datetime import datetime, timedelta
-        from core.lifecycle.datastore_runtime import (
-            get_graph,
-            get_last_successful_janitor_completed_at,
-        )
-
-        last_completed_at = get_last_successful_janitor_completed_at(get_graph())
-        if not last_completed_at:
-            return (
-                "⚠️ **Janitor has never run.** New memories are pending review.\n"
-                "Make sure the janitor is scheduled in your HEARTBEAT.md.\n"
-                "It must be triggered by your bot."
-            )
-
-        last_run = datetime.fromisoformat(last_completed_at)
-        hours_ago = (datetime.now() - last_run).total_seconds() / 3600
-
-        if hours_ago > 72:
-            return (
-                f"⚠️ **Janitor hasn't run in {int(hours_ago)}h!** Memories are piling up.\n"
-                "Check your HEARTBEAT.md schedule and ensure the bot can reach the memory system."
-            )
-        elif hours_ago > 48:
-            return (
-                f"⚠️ **Janitor last ran {int(hours_ago)}h ago.** "
-                "Check your HEARTBEAT.md schedule if this is unexpected."
-            )
-
-        return None
-    except Exception as exc:
-        logger.warning("Failed to evaluate janitor health status: %s", exc)
-        return (
-            "⚠️ **Unable to verify janitor health.**\n"
-            "Please check database/runtime status and your HEARTBEAT.md schedule."
-        )
-
 def get_last_channel(session_key: str = "") -> Optional[ChannelInfo]:
     """Get the user's last active channel from session state (delegates to adapter)."""
     return _ctx_get_last_channel(session_key)
@@ -194,7 +150,11 @@ def _resolve_channel(feature: Optional[str] = None) -> Optional[str]:
         if channel and channel != "last_used":
             return channel
     except Exception as exc:
-        logger.debug("Failed to resolve notification channel override for feature '%s': %s", feature, exc)
+        if is_fail_hard_enabled():
+            raise RuntimeError(
+                f"Failed to resolve notification channel override for feature {feature!r}"
+            ) from exc
+        logger.warning("Failed to resolve notification channel override for feature '%s': %s", feature, exc)
     return None
 
 
