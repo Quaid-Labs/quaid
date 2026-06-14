@@ -16,6 +16,14 @@ from datastore.memorydb.memory_graph import (
 )
 
 
+def _fail_hard_enabled() -> bool:
+    try:
+        from lib.fail_policy import is_fail_hard_enabled
+    except Exception:
+        return True
+    return bool(is_fail_hard_enabled())
+
+
 def _append_result_log(result, message: str) -> None:
     logs = getattr(result, "logs", None)
     if isinstance(logs, list):
@@ -187,6 +195,8 @@ def run_memory_graph_maintenance(ctx, result_factory):
             )
             time.sleep(delay)
         except Exception as exc:
+            if _fail_hard_enabled():
+                raise
             return _record_memory_maintenance_error(result, exc)
     return result
 

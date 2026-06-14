@@ -4,6 +4,8 @@ import sys
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from datastore.memorydb.maintenance import register_lifecycle_routines
@@ -36,7 +38,8 @@ def test_maintenance_errors_include_exception_type():
         dry_run=True,
     )
 
-    with patch("datastore.memorydb.maintenance.ops.review_pending_memories", side_effect=ValueError("bad input")):
+    with patch("datastore.memorydb.maintenance.ops.review_pending_memories", side_effect=ValueError("bad input")), \
+         patch("datastore.memorydb.maintenance._fail_hard_enabled", return_value=False):
         result = handler(ctx)
 
     assert result.errors
@@ -54,11 +57,29 @@ def test_maintenance_runtime_errors_use_consistent_prefix():
         dry_run=True,
     )
 
-    with patch("datastore.memorydb.maintenance.ops.review_pending_memories", side_effect=RuntimeError("boom")):
+    with patch("datastore.memorydb.maintenance.ops.review_pending_memories", side_effect=RuntimeError("boom")), \
+         patch("datastore.memorydb.maintenance._fail_hard_enabled", return_value=False):
         result = handler(ctx)
 
     assert result.errors
     assert result.errors[0].startswith("Memory graph maintenance failed (RuntimeError):")
+
+
+def test_maintenance_reraises_task_failure_under_failhard():
+    registry = _Registry()
+    register_lifecycle_routines(registry, _Result)
+    handler = registry.handlers["memory_graph_maintenance"]
+
+    ctx = SimpleNamespace(
+        graph=object(),
+        options={"subtask": "review"},
+        dry_run=True,
+    )
+
+    with patch("datastore.memorydb.maintenance.ops.review_pending_memories", side_effect=RuntimeError("boom")), \
+         patch("datastore.memorydb.maintenance._fail_hard_enabled", return_value=True):
+        with pytest.raises(RuntimeError, match="boom"):
+            handler(ctx)
 
 
 def test_maintenance_passes_llm_timeout_to_dedup_review():
@@ -129,7 +150,9 @@ def test_maintenance_exhausts_locked_dedup_review_retry():
     with patch(
         "datastore.memorydb.maintenance.ops.review_dedup_rejections",
         side_effect=sqlite3.OperationalError("database is locked"),
-    ) as review_mock, patch("datastore.memorydb.maintenance.time.sleep", lambda delay: sleeps.append(delay)):
+    ) as review_mock, \
+         patch("datastore.memorydb.maintenance.time.sleep", lambda delay: sleeps.append(delay)), \
+         patch("datastore.memorydb.maintenance._fail_hard_enabled", return_value=False):
         result = handler(ctx)
 
     expected_delays = list(maintenance._DATASTORE_BUSY_RETRY_DELAYS_SECONDS)
@@ -153,7 +176,9 @@ def test_maintenance_does_not_retry_non_lock_sqlite_error():
     with patch(
         "datastore.memorydb.maintenance.ops.review_dedup_rejections",
         side_effect=sqlite3.OperationalError("no such table: dedup_log"),
-    ) as review_mock, patch("datastore.memorydb.maintenance.time.sleep", lambda delay: sleeps.append(delay)):
+    ) as review_mock, \
+         patch("datastore.memorydb.maintenance.time.sleep", lambda delay: sleeps.append(delay)), \
+         patch("datastore.memorydb.maintenance._fail_hard_enabled", return_value=False):
         result = handler(ctx)
 
     assert result.errors == ["Memory graph maintenance failed (OperationalError): no such table: dedup_log"]

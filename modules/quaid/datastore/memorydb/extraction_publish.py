@@ -685,7 +685,10 @@ def run_extraction_publish_payload(
             with memory_service.batch_write() as snapshot_conn:
                 row = snapshot_conn.execute("SELECT COALESCE(MAX(rowid), 0) FROM nodes").fetchone()
                 dedup_rowid_max = int(row[0] or 0) if row else 0
-        except Exception:
+        except Exception as exc:
+            log.warning("Failed snapshotting pre-publish dedup rowid for %s: %s", label, exc)
+            if fail_hard_enabled():
+                raise
             dedup_rowid_max = None
         _write_publish_trace(
             "publish_snapshot_rowid",
@@ -1055,7 +1058,15 @@ def run_extraction_publish_payload(
                             batch_index=batch_index,
                             external_rowid_seen=external_rowid_seen,
                         )
-                    except Exception:
+                    except Exception as exc:
+                        log.warning(
+                            "Failed snapshotting publish batch rowid for %s batch %d: %s",
+                            label,
+                            batch_index,
+                            exc,
+                        )
+                        if fail_hard_enabled():
+                            raise
                         delta_rowid_max = external_rowid_seen
                 _write_publish_trace(
                     "publish_batch_conn_opened",

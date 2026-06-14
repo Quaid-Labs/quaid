@@ -2,11 +2,22 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any
 
 from datastore.memorydb.domain_registry import load_active_domains
 from lib.config import get_db_path
+
+logger = logging.getLogger(__name__)
+
+
+def _fail_hard_enabled() -> bool:
+    try:
+        from lib.fail_policy import is_fail_hard_enabled
+    except Exception:
+        return True
+    return bool(is_fail_hard_enabled())
 
 
 def _resolve_db_path(db_path: Path | None = None) -> Path:
@@ -33,7 +44,10 @@ def build_system_context_metadata(*, db_path: Path | None = None) -> dict[str, A
     relation_types: list[str] = []
     try:
         relation_types = list_relation_types()
-    except Exception:
+    except Exception as exc:
+        logger.warning("Failed listing memory relation types for system context: %s", exc)
+        if _fail_hard_enabled():
+            raise
         relation_types = []
     if domains:
         entries.append(

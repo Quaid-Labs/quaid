@@ -395,6 +395,7 @@ def test_backfill_embeddings_vec_upsert_failure_warns_and_continues(monkeypatch)
 
     with patch("lib.embeddings.get_embedding", return_value=[0.1, 0.2]) as get_embedding, \
          patch("lib.embeddings.pack_embedding", return_value=b"emb"), \
+         patch.object(maintenance_ops, "is_fail_hard_enabled", return_value=False), \
          patch.object(maintenance_ops, "_upsert_vec_embedding", side_effect=RuntimeError("vec write failed")):
         out = maintenance_ops.backfill_embeddings(graph, metrics, dry_run=False)
 
@@ -402,6 +403,31 @@ def test_backfill_embeddings_vec_upsert_failure_warns_and_continues(monkeypatch)
     assert out["embedded"] == 1
     assert metrics.summary()["warnings"] >= 1
     get_embedding.assert_called_once_with("alpha node", timeout_s=120.0)
+
+
+def test_backfill_embeddings_vec_upsert_failure_raises_under_failhard(monkeypatch):
+    monkeypatch.delenv("QUAID_JANITOR_EMBED_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.delenv("OLLAMA_EMBED_TIMEOUT_S", raising=False)
+    monkeypatch.delenv("QUAID_JANITOR_EMBED_BACKFILL_LIMIT", raising=False)
+
+    class _Conn:
+        def execute(self, sql, params=()):
+            text = str(sql).strip().upper()
+            if text.startswith("SELECT ID, NAME FROM NODES WHERE EMBEDDING IS NULL"):
+                return _DummyResult(rows=[{"id": "n1", "name": "alpha node"}])
+            return _DummyResult(rowcount=1)
+
+    class _Graph:
+        @contextmanager
+        def _get_conn(self):
+            yield _Conn()
+
+    with patch("lib.embeddings.get_embedding", return_value=[0.1, 0.2]), \
+         patch("lib.embeddings.pack_embedding", return_value=b"emb"), \
+         patch.object(maintenance_ops, "is_fail_hard_enabled", return_value=True), \
+         patch.object(maintenance_ops, "_upsert_vec_embedding", side_effect=RuntimeError("vec write failed")):
+        with pytest.raises(RuntimeError, match="vec write failed"):
+            maintenance_ops.backfill_embeddings(_Graph(), maintenance_ops.JanitorMetrics(), dry_run=False)
 
 
 def test_backfill_embeddings_uses_global_timeout_when_janitor_override_unset(monkeypatch):

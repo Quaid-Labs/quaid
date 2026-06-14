@@ -16,6 +16,14 @@ from lib.domain_text import (
 logger = logging.getLogger(__name__)
 
 
+def _fail_hard_enabled() -> bool:
+    try:
+        from lib.fail_policy import is_fail_hard_enabled
+    except Exception:
+        return True
+    return bool(is_fail_hard_enabled())
+
+
 def normalize_domain_map(raw: Dict[str, str]) -> Dict[str, str]:
     out: Dict[str, str] = {}
     for key, value in (raw or {}).items():
@@ -106,6 +114,8 @@ def safe_load_active_domains(
         return load_active_domains(db_path, bootstrap_if_empty=bootstrap_if_empty)
     except Exception as exc:
         logger.warning("Failed loading active domains from %s: %s", db_path, exc)
+        if _fail_hard_enabled():
+            raise
         return {}
 
 

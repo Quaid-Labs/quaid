@@ -24,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 def workspace_dir(tmp_path, monkeypatch):
     """Create a temporary workspace for each test."""
     from lib.adapter import set_adapter, reset_adapter, TestAdapter
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
     adapter = TestAdapter(tmp_path)
     set_adapter(adapter)
     iroot = adapter.instance_root()
@@ -42,6 +43,7 @@ def workspace_dir(tmp_path, monkeypatch):
     config = {
         "models": {"deepReasoning": "claude-opus-4-6", "fastReasoning": "claude-haiku-4-5"},
         "users": {"defaultOwner": "test-user"},
+        "retrieval": {"failHard": False},
         "docs": {
             "journal": {
                 "enabled": True,
@@ -4913,6 +4915,215 @@ class TestExtractFromTranscript:
         assert "mentioned_at" in returned[0]
         assert result["facts_planned"] == 1
         assert result["facts"][0]["status"] == "would_store"
+
+    def _run_direct_extraction_publish(self, result, memory_service, *, fail_hard_enabled):
+        from datastore.memorydb.extraction_publish import run_extraction_publish_payload
+
+        return run_extraction_publish_payload(
+            result,
+            owner_id="test",
+            label="rolling-flush",
+            session_id="sess-rowid-snapshot",
+            actor_id=None,
+            speaker_entity_id=None,
+            subject_entity_id=None,
+            source_channel=None,
+            target_datastore=None,
+            source_conversation_id=None,
+            participant_entity_ids=None,
+            source_author_id=None,
+            dry_run=False,
+            snippet_files=0,
+            journal_files=0,
+            project_log_projects=0,
+            memory_service=memory_service,
+            session_bridge=object(),
+            fail_hard_enabled=fail_hard_enabled,
+        )
+
+    def _raw_fact_publish_payload(self):
+        return {
+            "raw_facts": [{
+                "text": "Maya keeps launch notes in the blue notebook",
+                "category": "fact",
+                "speaker": "user",
+                "domains": ["personal"],
+                "extraction_confidence": "high",
+            }],
+        }
+
+    def test_extraction_publish_raises_on_initial_rowid_snapshot_failure_under_failhard(
+        self,
+        monkeypatch,
+    ):
+        monkeypatch.setattr(
+            "datastore.memorydb.extraction_publish.get_config",
+            lambda: SimpleNamespace(retrieval=SimpleNamespace(domains={"personal": "Personal facts"})),
+        )
+
+        class _FailingContext:
+            def __enter__(self):
+                raise RuntimeError("snapshot failed")
+
+            def __exit__(self, *_args):
+                return False
+
+        class _MemoryService:
+            def __init__(self):
+                self.store_calls = []
+
+            def warm_embeddings(self, texts):
+                return {"requested": len(texts), "unique": len(set(texts)), "cache_hits": 0, "warmed": len(texts), "failed": 0}
+
+            def batch_write(self):
+                return _FailingContext()
+
+            def store(self, **kwargs):
+                self.store_calls.append(kwargs)
+                return {"id": "fact-1", "status": "created", "dedup_telemetry": {}}
+
+        svc = _MemoryService()
+
+        with pytest.raises(RuntimeError, match="snapshot failed"):
+            self._run_direct_extraction_publish(
+                self._raw_fact_publish_payload(),
+                svc,
+                fail_hard_enabled=lambda: True,
+            )
+        assert svc.store_calls == []
+
+    def test_extraction_publish_warns_and_continues_on_initial_rowid_snapshot_failure_when_fail_open(
+        self,
+        monkeypatch,
+        caplog,
+    ):
+        monkeypatch.setattr(
+            "datastore.memorydb.extraction_publish.get_config",
+            lambda: SimpleNamespace(retrieval=SimpleNamespace(domains={"personal": "Personal facts"})),
+        )
+        write_conn = MagicMock()
+        write_conn.execute.return_value.fetchone.return_value = (0,)
+
+        class _FailingContext:
+            def __enter__(self):
+                raise RuntimeError("snapshot failed")
+
+            def __exit__(self, *_args):
+                return False
+
+        class _MemoryService:
+            def __init__(self):
+                self._contexts = iter([_FailingContext(), nullcontext(write_conn)])
+                self.store_calls = []
+
+            def warm_embeddings(self, texts):
+                return {"requested": len(texts), "unique": len(set(texts)), "cache_hits": 0, "warmed": len(texts), "failed": 0}
+
+            def batch_write(self):
+                return next(self._contexts)
+
+            def store(self, **kwargs):
+                self.store_calls.append(kwargs)
+                return {"id": "fact-1", "status": "created", "dedup_telemetry": {}}
+
+        svc = _MemoryService()
+        caplog.set_level("WARNING")
+        payload = self._raw_fact_publish_payload()
+
+        self._run_direct_extraction_publish(payload, svc, fail_hard_enabled=lambda: False)
+
+        assert payload["facts_stored"] == 1
+        assert svc.store_calls[0]["_dedup_rowid_max"] is None
+        assert "Failed snapshotting pre-publish dedup rowid" in caplog.text
+
+    def test_extraction_publish_raises_on_batch_rowid_snapshot_failure_under_failhard(
+        self,
+        monkeypatch,
+    ):
+        monkeypatch.setattr(
+            "datastore.memorydb.extraction_publish.get_config",
+            lambda: SimpleNamespace(retrieval=SimpleNamespace(domains={"personal": "Personal facts"})),
+        )
+        initial_snapshot = MagicMock()
+        initial_snapshot.execute.return_value.fetchone.return_value = (7,)
+        write_conn = MagicMock()
+
+        def _write_execute(sql, *_args, **_kwargs):
+            if "MAX(rowid)" in sql:
+                raise RuntimeError("delta snapshot failed")
+            return MagicMock()
+
+        write_conn.execute.side_effect = _write_execute
+
+        class _MemoryService:
+            def __init__(self):
+                self._contexts = iter([nullcontext(initial_snapshot), nullcontext(write_conn)])
+                self.store_calls = []
+
+            def warm_embeddings(self, texts):
+                return {"requested": len(texts), "unique": len(set(texts)), "cache_hits": 0, "warmed": len(texts), "failed": 0}
+
+            def batch_write(self):
+                return next(self._contexts)
+
+            def store(self, **kwargs):
+                self.store_calls.append(kwargs)
+                return {"id": "fact-1", "status": "created", "dedup_telemetry": {}}
+
+        svc = _MemoryService()
+
+        with pytest.raises(RuntimeError, match="delta snapshot failed"):
+            self._run_direct_extraction_publish(
+                self._raw_fact_publish_payload(),
+                svc,
+                fail_hard_enabled=lambda: True,
+            )
+        assert svc.store_calls == []
+
+    def test_extraction_publish_warns_and_continues_on_batch_rowid_snapshot_failure_when_fail_open(
+        self,
+        monkeypatch,
+        caplog,
+    ):
+        monkeypatch.setattr(
+            "datastore.memorydb.extraction_publish.get_config",
+            lambda: SimpleNamespace(retrieval=SimpleNamespace(domains={"personal": "Personal facts"})),
+        )
+        initial_snapshot = MagicMock()
+        initial_snapshot.execute.return_value.fetchone.return_value = (7,)
+        write_conn = MagicMock()
+
+        def _write_execute(sql, *_args, **_kwargs):
+            if "MAX(rowid)" in sql:
+                raise RuntimeError("delta snapshot failed")
+            return MagicMock()
+
+        write_conn.execute.side_effect = _write_execute
+
+        class _MemoryService:
+            def __init__(self):
+                self._contexts = iter([nullcontext(initial_snapshot), nullcontext(write_conn)])
+                self.store_calls = []
+
+            def warm_embeddings(self, texts):
+                return {"requested": len(texts), "unique": len(set(texts)), "cache_hits": 0, "warmed": len(texts), "failed": 0}
+
+            def batch_write(self):
+                return next(self._contexts)
+
+            def store(self, **kwargs):
+                self.store_calls.append(kwargs)
+                return {"id": "fact-1", "status": "created", "dedup_telemetry": {}}
+
+        svc = _MemoryService()
+        caplog.set_level("WARNING")
+        payload = self._raw_fact_publish_payload()
+
+        self._run_direct_extraction_publish(payload, svc, fail_hard_enabled=lambda: False)
+
+        assert payload["facts_stored"] == 1
+        assert svc.store_calls[0]["_dedup_rowid_max"] == 7
+        assert "Failed snapshotting publish batch rowid" in caplog.text
 
     @patch("ingest.extract._memory.store")
     def test_apply_extracted_payloads_passes_temporal_provenance_to_store(self, mock_store):

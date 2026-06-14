@@ -1,5 +1,7 @@
 from types import SimpleNamespace
 
+import pytest
+
 from core.plugins.memorydb_contract import MemoryDbPluginContract
 from core.runtime.plugins import PluginHookContext, PluginManifest
 from datastore.memorydb.system_context import build_system_context_metadata
@@ -77,3 +79,50 @@ def test_build_memorydb_system_context_metadata(monkeypatch):
             },
         ]
     }
+
+
+def test_build_memorydb_system_context_metadata_warns_on_relation_type_failure_when_fail_open(
+    monkeypatch,
+    caplog,
+):
+    monkeypatch.setattr(
+        "datastore.memorydb.system_context.active_domains",
+        lambda *, db_path=None: ["personal"],
+    )
+    monkeypatch.setattr(
+        "datastore.memorydb.system_context.list_relation_types",
+        lambda: (_ for _ in ()).throw(RuntimeError("graph unavailable")),
+    )
+    monkeypatch.setattr("datastore.memorydb.system_context._fail_hard_enabled", lambda: False)
+    caplog.set_level("WARNING")
+
+    payload = build_system_context_metadata()
+
+    assert payload == {
+        "entries": [
+            {
+                "key": "domains",
+                "label": "active domains",
+                "value": "personal",
+                "order": 10,
+            },
+        ]
+    }
+    assert "Failed listing memory relation types for system context" in caplog.text
+
+
+def test_build_memorydb_system_context_metadata_raises_on_relation_type_failure_under_failhard(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        "datastore.memorydb.system_context.active_domains",
+        lambda *, db_path=None: [],
+    )
+    monkeypatch.setattr(
+        "datastore.memorydb.system_context.list_relation_types",
+        lambda: (_ for _ in ()).throw(RuntimeError("graph unavailable")),
+    )
+    monkeypatch.setattr("datastore.memorydb.system_context._fail_hard_enabled", lambda: True)
+
+    with pytest.raises(RuntimeError, match="graph unavailable"):
+        build_system_context_metadata()

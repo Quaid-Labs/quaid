@@ -1565,10 +1565,10 @@ def backfill_embeddings(graph: MemoryGraph, metrics: JanitorMetrics,
                             context="backfill",
                         )
                     except Exception as exc:
-                        # Backfill should not hard-fail janitor when vec table sync
-                        # is unavailable; node embedding has already been restored.
                         msg = f"vec_nodes sync skipped during backfill for node {node_id}: {exc}"
                         logger.warning(msg)
+                        if is_fail_hard_enabled():
+                            raise
                         metrics.add_warning(msg)
                 embedded += 1
             else:
