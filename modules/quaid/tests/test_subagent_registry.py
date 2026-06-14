@@ -269,14 +269,56 @@ class TestIsRegisteredSubagent:
         assert is_registered_subagent("child-A") is True
         assert is_registered_subagent("child-B") is True
 
-    def test_survives_malformed_json_file(self, tmp_path):
+    def test_survives_malformed_json_file(self, tmp_path, monkeypatch):
         """Malformed registry files are skipped without raising."""
+        import core.subagent_registry as registry
         from core.subagent_registry import register, is_registered_subagent
+
+        monkeypatch.setattr(registry, "_fail_hard_enabled", lambda: False)
         register("parent-1", "child-A")
         # Corrupt a registry file manually
         bad = tmp_path / "instances" / "pytest-runner" / "data" / "subagent-registry" / "bad-parent.json"
         bad.write_text("not json {{{", encoding="utf-8")
         assert is_registered_subagent("child-A") is True  # Still finds child-A
+
+    def test_malformed_json_file_raises_when_fail_hard(self, tmp_path, monkeypatch):
+        import core.subagent_registry as registry
+        from core.subagent_registry import is_registered_subagent
+
+        reg_dir = tmp_path / "instances" / "pytest-runner" / "data" / "subagent-registry"
+        reg_dir.mkdir(parents=True, exist_ok=True)
+        (reg_dir / "bad-parent.json").write_text("not json {{{", encoding="utf-8")
+        monkeypatch.setattr(registry, "_fail_hard_enabled", lambda: True)
+
+        with pytest.raises(json.JSONDecodeError):
+            is_registered_subagent("child-A")
+
+    def test_registry_scan_failure_raises_when_fail_hard(self, monkeypatch):
+        import core.subagent_registry as registry
+
+        class BadRegistryDir:
+            def glob(self, _pattern):
+                raise OSError("scan failed")
+
+        monkeypatch.setattr(registry, "_registry_dir", lambda: BadRegistryDir())
+        monkeypatch.setattr(registry, "_fail_hard_enabled", lambda: True)
+
+        with pytest.raises(OSError, match="scan failed"):
+            registry.is_registered_subagent("child-A")
+
+    def test_registry_scan_failure_returns_false_when_fail_open(self, monkeypatch, caplog):
+        import core.subagent_registry as registry
+
+        class BadRegistryDir:
+            def glob(self, _pattern):
+                raise OSError("scan failed")
+
+        monkeypatch.setattr(registry, "_registry_dir", lambda: BadRegistryDir())
+        monkeypatch.setattr(registry, "_fail_hard_enabled", lambda: False)
+        caplog.set_level("WARNING")
+
+        assert registry.is_registered_subagent("child-A") is False
+        assert "Failed scanning subagent registry directory" in caplog.text
 
 
 # ---------------------------------------------------------------------------
@@ -324,6 +366,33 @@ class TestCleanupOldRegistries:
     def test_returns_zero_when_empty(self, tmp_path):
         from core.subagent_registry import cleanup_old_registries
         assert cleanup_old_registries() == 0
+
+    def test_registry_cleanup_scan_failure_raises_when_fail_hard(self, monkeypatch):
+        import core.subagent_registry as registry
+
+        class BadRegistryDir:
+            def glob(self, _pattern):
+                raise OSError("cleanup scan failed")
+
+        monkeypatch.setattr(registry, "_registry_dir", lambda: BadRegistryDir())
+        monkeypatch.setattr(registry, "_fail_hard_enabled", lambda: True)
+
+        with pytest.raises(OSError, match="cleanup scan failed"):
+            registry.cleanup_old_registries()
+
+    def test_registry_cleanup_scan_failure_returns_zero_when_fail_open(self, monkeypatch, caplog):
+        import core.subagent_registry as registry
+
+        class BadRegistryDir:
+            def glob(self, _pattern):
+                raise OSError("cleanup scan failed")
+
+        monkeypatch.setattr(registry, "_registry_dir", lambda: BadRegistryDir())
+        monkeypatch.setattr(registry, "_fail_hard_enabled", lambda: False)
+        caplog.set_level("WARNING")
+
+        assert registry.cleanup_old_registries() == 0
+        assert "Failed listing subagent registry directory for cleanup" in caplog.text
 
 
 # ---------------------------------------------------------------------------

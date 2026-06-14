@@ -32,6 +32,16 @@ _PLACEHOLDER_CHILD_IDS = {
 }
 
 
+def _fail_hard_enabled() -> bool:
+    try:
+        from lib.fail_policy import is_fail_hard_enabled
+
+        return bool(is_fail_hard_enabled())
+    except Exception as exc:
+        logger.critical("fail-hard policy unavailable in subagent registry: %s", exc)
+        return True
+
+
 def _registry_dir() -> Path:
     """Resolve registry directory from the active hidden instance root."""
     try:
@@ -256,10 +266,15 @@ def is_registered_subagent(session_id: str) -> bool:
                 children = data.get("children", {})
                 if session_id in children:
                     return True
-            except (json.JSONDecodeError, OSError):
+            except (json.JSONDecodeError, OSError) as exc:
+                if _fail_hard_enabled():
+                    raise
+                logger.warning("Skipping unreadable subagent registry file %s: %s", p, exc)
                 continue
-    except OSError:
-        pass
+    except OSError as exc:
+        if _fail_hard_enabled():
+            raise
+        logger.warning("Failed scanning subagent registry directory: %s", exc)
     return False
 
 
@@ -273,8 +288,13 @@ def cleanup_old_registries(max_age_hours: float = 48.0) -> int:
                 if p.stat().st_mtime < cutoff:
                     p.unlink()
                     removed += 1
-            except OSError:
+            except OSError as exc:
+                if _fail_hard_enabled():
+                    raise
+                logger.warning("Failed checking/removing old subagent registry %s: %s", p, exc)
                 continue
-    except OSError:
-        pass
+    except OSError as exc:
+        if _fail_hard_enabled():
+            raise
+        logger.warning("Failed listing subagent registry directory for cleanup: %s", exc)
     return removed

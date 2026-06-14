@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import builtins
 import contextlib
 import json
 import logging
@@ -33,6 +34,23 @@ def project_env(tmp_path, monkeypatch):
         entry = create_project("demo", description="Demo", source_root=str(src))
     yield tmp_path, src, entry
     reset_adapter()
+
+
+def test_fail_hard_enabled_fails_closed_on_import_error(monkeypatch, caplog):
+    from core import project_docs
+
+    real_import = builtins.__import__
+
+    def failing_import(name, *args, **kwargs):
+        if name == "lib.fail_policy":
+            raise ImportError("missing fail policy")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", failing_import)
+    caplog.set_level(logging.CRITICAL)
+
+    assert project_docs._fail_hard_enabled() is True
+    assert "fail-hard policy unavailable in project docs" in caplog.text
 
 
 def test_request_update_writes_hidden_state(project_env):

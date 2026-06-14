@@ -202,8 +202,9 @@ def _fail_hard_enabled() -> bool:
         from lib.fail_policy import is_fail_hard_enabled
 
         return bool(is_fail_hard_enabled())
-    except Exception:
-        return False
+    except Exception as exc:
+        logger.critical("fail-hard policy unavailable in project docs: %s", exc)
+        return True
 
 
 def _read_json(path: Path, default: Any) -> Any:

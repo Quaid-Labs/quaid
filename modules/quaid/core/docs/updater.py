@@ -47,8 +47,9 @@ def _fail_hard_enabled() -> bool:
         from lib.fail_policy import is_fail_hard_enabled
 
         return bool(is_fail_hard_enabled())
-    except Exception:
-        return False
+    except Exception as exc:
+        logger.critical("fail-hard policy unavailable in docs updater: %s", exc)
+        return True
 
 
 def check_staleness():

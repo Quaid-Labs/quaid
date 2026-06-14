@@ -1,5 +1,6 @@
 """Unit tests for docs_updater.py — staleness checking, source mapping, git diffs."""
 
+import builtins
 from concurrent.futures import ThreadPoolExecutor
 import sys
 import os
@@ -53,6 +54,23 @@ def _make_test_config(source_mapping=None, doc_purposes=None, staleness_enabled=
     )
 
     return MemoryConfig(docs=docs)
+
+
+def test_core_docs_updater_fail_hard_enabled_fails_closed_on_import_error(monkeypatch, caplog):
+    from core.docs import updater
+
+    real_import = builtins.__import__
+
+    def failing_import(name, *args, **kwargs):
+        if name == "lib.fail_policy":
+            raise ImportError("missing fail policy")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", failing_import)
+    caplog.set_level("CRITICAL")
+
+    assert updater._fail_hard_enabled() is True
+    assert "fail-hard policy unavailable in docs updater" in caplog.text
 
 
 def test_file_lock_raises_on_lock_failure_when_fail_hard(monkeypatch, tmp_path):

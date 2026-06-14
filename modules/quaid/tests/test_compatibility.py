@@ -1,5 +1,6 @@
 """Tests for core/compatibility.py — version watcher, circuit breaker, matrix evaluation."""
 
+import builtins
 import json
 import os
 import time
@@ -17,6 +18,23 @@ from core.compatibility import (
     evaluate_compatibility,
     VersionWatcher, JanitorScheduler,
 )
+
+
+def test_fail_hard_enabled_fails_closed_on_import_error(monkeypatch, caplog):
+    import core.compatibility as compatibility
+
+    real_import = builtins.__import__
+
+    def failing_import(name, *args, **kwargs):
+        if name == "lib.fail_policy":
+            raise ImportError("missing fail policy")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", failing_import)
+    caplog.set_level("CRITICAL")
+
+    assert compatibility._fail_hard_enabled() is True
+    assert "fail-hard policy unavailable in compatibility checks" in caplog.text
 
 
 class TestSemver:
@@ -261,6 +279,25 @@ class TestVersionWatcher:
         # Full check should have been triggered
         mock_adapter.get_host_info.assert_called_once()
 
+    def test_host_info_failure_raises_when_fail_hard(self, tmp_path):
+        watcher = VersionWatcher(data_dir=tmp_path, quaid_version="0.2.15")
+
+        with patch("lib.adapter.get_adapter", side_effect=RuntimeError("adapter boom")), \
+             patch("core.compatibility._fail_hard_enabled", return_value=True):
+            with pytest.raises(RuntimeError, match="adapter boom"):
+                watcher._do_full_check()
+
+    def test_host_info_failure_returns_when_fail_open(self, tmp_path, caplog):
+        watcher = VersionWatcher(data_dir=tmp_path, quaid_version="0.2.15")
+        caplog.set_level("WARNING")
+
+        with patch("lib.adapter.get_adapter", side_effect=RuntimeError("adapter boom")), \
+             patch("core.compatibility._fail_hard_enabled", return_value=False):
+            watcher._do_full_check()
+
+        assert watcher._host_info is None
+        assert "Failed to get host info: adapter boom" in caplog.text
+
 
 class TestAdaptiveCheckInterval:
     def test_normal_state_uses_24h(self, tmp_path):
@@ -412,6 +449,34 @@ class TestJanitorScheduler:
         with patch("core.compatibility.JanitorScheduler._run_janitor") as mock_run:
             scheduler.tick()
             mock_run.assert_called_once()
+
+    def test_run_janitor_raises_when_fail_hard(self, tmp_path):
+        scheduler = JanitorScheduler(
+            data_dir=tmp_path,
+            quaid_home=tmp_path,
+            scheduled_hour=0,
+            window_hours=24,
+        )
+
+        with patch("core.lifecycle.janitor.run_task_optimized", side_effect=RuntimeError("janitor boom")), \
+             patch("core.compatibility._fail_hard_enabled", return_value=True):
+            with pytest.raises(RuntimeError, match="janitor boom"):
+                scheduler._run_janitor()
+
+    def test_run_janitor_logs_and_returns_when_fail_open(self, tmp_path, caplog):
+        scheduler = JanitorScheduler(
+            data_dir=tmp_path,
+            quaid_home=tmp_path,
+            scheduled_hour=0,
+            window_hours=24,
+        )
+        caplog.set_level("ERROR")
+
+        with patch("core.lifecycle.janitor.run_task_optimized", side_effect=RuntimeError("janitor boom")), \
+             patch("core.compatibility._fail_hard_enabled", return_value=False):
+            scheduler._run_janitor()
+
+        assert "Janitor maintenance failed: janitor boom" in caplog.text
 
 
 class TestPreflightCheck:

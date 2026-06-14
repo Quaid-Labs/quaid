@@ -53,6 +53,16 @@ MATRIX_URL = (
     "https://raw.githubusercontent.com/quaid-labs/quaid/main/compatibility.json"
 )
 
+
+def _fail_hard_enabled() -> bool:
+    try:
+        from lib.fail_policy import is_fail_hard_enabled
+
+        return bool(is_fail_hard_enabled())
+    except Exception as exc:
+        logger.critical("fail-hard policy unavailable in compatibility checks: %s", exc)
+        return True
+
 # Adaptive check intervals based on current state
 CHECK_INTERVAL_NORMAL = 86400       # 24h — known compatible, low urgency
 CHECK_INTERVAL_UNTESTED = 3600      # 1h  — new host version, matrix may update soon
@@ -496,6 +506,8 @@ class VersionWatcher:
             info = adapter.get_host_info()
         except Exception as e:
             logger.warning("Failed to get host info: %s", e)
+            if _fail_hard_enabled():
+                raise
             return
 
         self._host_info = info
@@ -829,3 +841,5 @@ class JanitorScheduler:
             logger.info("Janitor maintenance completed successfully")
         except Exception as e:
             logger.error("Janitor maintenance failed: %s", e, exc_info=True)
+            if _fail_hard_enabled():
+                raise

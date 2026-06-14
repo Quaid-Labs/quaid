@@ -40,8 +40,9 @@ def _fail_hard_enabled() -> bool:
         from lib.fail_policy import is_fail_hard_enabled
 
         return bool(is_fail_hard_enabled())
-    except ImportError:
-        return False
+    except ImportError as exc:
+        logger.critical("fail-hard policy unavailable in platform scheduler: %s", exc)
+        return True
 
 
 def _shared_run_dir(quaid_home: Path) -> Path:

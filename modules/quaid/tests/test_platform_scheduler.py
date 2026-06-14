@@ -1,4 +1,5 @@
 """Unit tests for PlatformSchedulerServer, client, and shared project lock."""
+import builtins
 import json
 import os
 import shutil
@@ -15,6 +16,23 @@ def _short_tmp() -> Path:
     """Return a short-path temp directory suitable for Unix socket paths (max ~104 chars)."""
     d = Path(tempfile.mkdtemp(prefix="qps", dir="/tmp"))
     return d
+
+
+def test_fail_hard_enabled_fails_closed_on_import_error(monkeypatch, caplog):
+    from core import platform_scheduler
+
+    real_import = builtins.__import__
+
+    def failing_import(name, *args, **kwargs):
+        if name == "lib.fail_policy":
+            raise ImportError("missing fail policy")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", failing_import)
+    caplog.set_level("CRITICAL")
+
+    assert platform_scheduler._fail_hard_enabled() is True
+    assert "fail-hard policy unavailable in platform scheduler" in caplog.text
 
 
 # ---- PlatformSchedulerServer ----
