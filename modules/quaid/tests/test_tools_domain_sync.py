@@ -179,3 +179,19 @@ class TestAtomicWrite:
         # No temp files should remain
         leftover = [f for f in tools_dir.iterdir() if f.name != "TOOLS.md"]
         assert leftover == []
+
+    def test_temp_file_removed_when_replace_fails(self, tmp_path, monkeypatch):
+        tools = _make_tools_md(tmp_path)
+        original = tools.read_text(encoding="utf-8")
+
+        def _fail_replace(self, target):
+            raise OSError("replace failed")
+
+        monkeypatch.setattr(Path, "replace", _fail_replace)
+
+        with pytest.raises(OSError, match="replace failed"):
+            sync_tools_domain_block({"technical": "code"}, workspace=tmp_path)
+
+        assert tools.read_text(encoding="utf-8") == original
+        leftover = [f for f in tools.parent.iterdir() if f.name != "TOOLS.md"]
+        assert leftover == []

@@ -60,8 +60,14 @@ def sync_tools_domain_block(domains: Dict[str, str], workspace: Path | None = No
     if updated == text:
         return False
 
-    with NamedTemporaryFile("w", encoding="utf-8", delete=False, dir=str(tools_path.parent)) as tmp:
-        tmp.write(updated)
-        tmp_path = Path(tmp.name)
-    tmp_path.replace(tools_path)
+    tmp_path: Path | None = None
+    try:
+        with NamedTemporaryFile("w", encoding="utf-8", delete=False, dir=str(tools_path.parent)) as tmp:
+            tmp_path = Path(tmp.name)
+            tmp.write(updated)
+        tmp_path.replace(tools_path)
+    except Exception:
+        if tmp_path is not None:
+            tmp_path.unlink(missing_ok=True)
+        raise
     return True
