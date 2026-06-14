@@ -130,6 +130,12 @@ def _transcript_timestamp_hints(transcript_text: str) -> List[str]:
 
 
 def _current_utc_timestamp() -> str:
+    quaid_now = os.environ.get("QUAID_NOW", "").strip()
+    if quaid_now:
+        normalized = _normalize_extracted_timestamp(quaid_now)
+        if normalized:
+            return normalized
+        logger.warning("[extract] invalid QUAID_NOW=%r; falling back to wall clock", quaid_now)
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
@@ -739,19 +745,21 @@ def _select_carry_facts(
     if not extracted_facts:
         return []
 
-    if max_items <= 6:
+    if max_items <= 4:
+        anchor_quota = 1 if max_items >= 3 else 0
+        sticky_quota = 1 if max_items >= 3 else 0
+        recent_quota = max(0, max_items - anchor_quota - sticky_quota)
+    elif max_items <= 6:
         anchor_quota = min(2, max_items)
         recent_quota = max(0, max_items - anchor_quota)
+        sticky_quota = max(0, max_items - anchor_quota - recent_quota)
     else:
         anchor_quota = min(8, max(4, int(max_items * 0.25)))
         recent_quota = min(max_items - anchor_quota - 2, max(4, int(max_items * 0.45)))
-    if recent_quota < 0:
-        recent_quota = 0
-    if max_items <= 4:
-        recent_quota = max_items
-    else:
+        if recent_quota < 0:
+            recent_quota = 0
         recent_quota = min(recent_quota, max_items - anchor_quota)
-    sticky_quota = max(0, max_items - anchor_quota - recent_quota)
+        sticky_quota = max(0, max_items - anchor_quota - recent_quota)
     anchor_facts: List[Dict[str, Any]] = []
     recent_facts: List[Dict[str, Any]] = []
     scored_facts: List[Tuple[int, int, Dict[str, Any]]] = []
@@ -1509,7 +1517,7 @@ _ASSISTANT_IMPLEMENTATION_BULLET_RE = re.compile(
     r"The app stores\b|"
     r"as the name with amount\b|"
     r"count how many\b|"
-    r"\d+\b"
+    r"\d+(?:/\d+)?\s+(?:cups?|tsp|tbsp|teaspoons?|tablespoons?)\b.*\b(?:Falls back|full text|parse|ingredient|string)\b"
     r")",
     re.IGNORECASE,
 )
@@ -2073,17 +2081,29 @@ def materialize_cached_extraction_payload(
             ) + question_echo_dropped
             all_facts = filtered_facts
 
+    result["facts_skipped"] = int(result.get("facts_skipped", 0) or 0) + int(
+        result.get("question_echo_facts_dropped", 0) or 0
+    )
     return {
+        "facts_stored": 0,
+        "edges_created": 0,
+        "facts_planned": len(all_facts),
         "facts": list(all_facts),
+        "snippets": {},
+        "journal": {},
         "raw_facts": list(all_facts),
         "soul_snippets": dict(all_snippets),
         "raw_snippets": dict(all_snippets),
         "journal_entries": dict(all_journal),
         "raw_journal": dict(all_journal),
         "project_logs": dict(all_project_logs),
+        "project_log_metrics": {},
         "raw_project_logs": dict(all_project_logs),
+        "raw_source_chunks": [],
+        "dry_run": False,
         "chunks_processed": int(result.get("chunks_processed", 0) or 0),
         "facts_skipped": int(result.get("facts_skipped", 0) or 0),
+        "question_echo_facts_dropped": int(result.get("question_echo_facts_dropped", 0) or 0),
         "explicit_structural_anchor_facts": len(explicit_anchor_facts),
     }
 
@@ -2481,7 +2501,6 @@ def _merge_parsed_payloads(
                     chunk_label,
                     question_echo_count,
                 )
-                result["facts_skipped"] += question_echo_count
                 result["question_echo_facts_dropped"] = int(
                     result.get("question_echo_facts_dropped", 0) or 0
                 ) + question_echo_count
@@ -3417,8 +3436,10 @@ def extract_from_transcript(
     # Circuit breaker guard — block extraction if writes are disabled
     try:
         from core.compatibility import check_write_allowed
-    except ImportError:
-        pass  # Compatibility module may be absent in older plugin layouts.
+    except ImportError as exc:
+        logger.warning("[extract] circuit breaker write guard unavailable; proceeding without write guard: %s", exc)
+        if is_fail_hard_enabled():
+            raise RuntimeError("Circuit breaker write guard is unavailable") from exc
     else:
         try:
             from lib.adapter import get_adapter
@@ -3697,7 +3718,18 @@ def extract_from_transcript(
                 future_map[future] = (ci, local_telemetry, source_chunk_ref)
             for future in concurrent.futures.as_completed(future_map):
                 ci, local_telemetry, source_chunk_ref = future_map[future]
-                root_results[ci] = (future.result(), local_telemetry, source_chunk_ref)
+                try:
+                    root_results[ci] = (future.result(), local_telemetry, source_chunk_ref)
+                except Exception as exc:
+                    logger.warning(
+                        "[extract] %s: parallel root chunk %d failed: %s",
+                        label,
+                        ci + 1,
+                        exc,
+                        exc_info=True,
+                    )
+                    if raise_on_llm_failure or is_fail_hard_enabled():
+                        raise
 
         for ci in sorted(root_results):
             parsed_payloads, local_telemetry, source_chunk_ref = root_results[ci]

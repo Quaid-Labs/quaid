@@ -524,6 +524,7 @@ class TestExtractFromTranscript:
             return real_import(name, globals, locals, fromlist, level)
 
         with patch("builtins.__import__", side_effect=fake_import), \
+             patch("ingest.extract.is_fail_hard_enabled", return_value=False), \
              patch("ingest.extract.call_deep_reasoning", return_value=(mock_opus_response, 1.0)):
             result = extract_from_transcript(
                 transcript="User: I keep a brass postal scale on the desk.",
@@ -534,6 +535,26 @@ class TestExtractFromTranscript:
             )
 
         assert result["facts_planned"] == 2
+
+    def test_circuit_breaker_import_unavailable_raises_under_failhard(self):
+        import builtins
+        from ingest.extract import extract_from_transcript
+
+        real_import = builtins.__import__
+
+        def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+            if name == "core.compatibility":
+                raise ImportError("compat unavailable")
+            return real_import(name, globals, locals, fromlist, level)
+
+        with patch("builtins.__import__", side_effect=fake_import), \
+             patch("ingest.extract.is_fail_hard_enabled", return_value=True):
+            with pytest.raises(RuntimeError, match="Circuit breaker write guard is unavailable"):
+                extract_from_transcript(
+                    transcript="User: I keep a brass postal scale on the desk.",
+                    owner_id="test",
+                    dry_run=True,
+                )
 
     def test_circuit_breaker_runtime_failure_raises_under_failhard(self, monkeypatch):
         from ingest.extract import extract_from_transcript
@@ -1155,6 +1176,13 @@ class TestExtractFromTranscript:
                 ]
             )
         ) == ["2026-05-02T14:29:21+00:00", "2026-05-03T09:10:11+00:00"]
+
+    def test_current_utc_timestamp_honors_quaid_now(self, monkeypatch):
+        from ingest import extract as extract_mod
+
+        monkeypatch.setenv("QUAID_NOW", "2026-03-11T00:00:00Z")
+
+        assert extract_mod._current_utc_timestamp() == "2026-03-11T00:00:00+00:00"
 
     @patch("ingest.extract._current_utc_timestamp", return_value="2026-05-02T14:30:00+00:00")
     @patch("ingest.extract.call_deep_reasoning")
@@ -2126,6 +2154,15 @@ class TestExtractFromTranscript:
         assert not any(text.startswith("2 cups flour") for text in agent_texts)
         assert not any(text.startswith("Generate a grocery list") for text in agent_texts)
 
+    def test_numeric_assistant_facts_are_not_implementation_bullets(self):
+        from ingest.extract import _is_implementation_style_assistant_bullet
+
+        assert not _is_implementation_style_assistant_bullet("42 items were shipped to the staging room")
+        assert not _is_implementation_style_assistant_bullet("3 meetings were scheduled for the launch review")
+        assert _is_implementation_style_assistant_bullet(
+            '2 cups flour" or "1/2 tsp salt". Falls back to the full text'
+        )
+
     @patch("ingest.extract.call_deep_reasoning")
     def test_assistant_recipe_test_harness_bullets_are_not_preserved_as_anchors(self, mock_llm):
         from ingest.extract import extract_from_transcript
@@ -3046,7 +3083,7 @@ class TestExtractFromTranscript:
         texts = [fact["text"] for fact in result["raw_facts"]]
         assert texts == ["Miko uses the red linen receipt notebook for the studio setup"]
         assert result["question_echo_facts_dropped"] >= 1
-        assert result["facts_skipped"] >= 1
+        assert result["facts_skipped"] == result["question_echo_facts_dropped"]
 
     @patch("ingest.extract.call_deep_reasoning")
     def test_extraction_keeps_statement_from_question_shaped_memory_request(self, mock_llm):
@@ -3177,6 +3214,89 @@ class TestExtractFromTranscript:
         assert persisted
         assert all("_carry_bucket" in fact for fact in selected)
         assert all("_carry_bucket" not in fact for fact in persisted)
+
+    def test_small_carry_selection_reserves_sticky_quota(self):
+        from ingest.extract import _select_carry_facts
+
+        facts = [
+            {"text": "Maya placed the brass key on the window shelf"},
+            {"text": "Maya moved the green folder beside the monitor"},
+            {
+                "text": "Maya chose the archive cabinet as the permanent storage plan",
+                "category": "decision",
+            },
+            {"text": "Maya placed the brass key on the window shelf"},
+            {"text": "Maya keeps a steady archive note for ordinary context"},
+        ]
+
+        selected = _select_carry_facts(facts, max_items=3, max_chars=4000)
+
+        assert len(selected) == 3
+        assert [fact["_carry_bucket"] for fact in selected] == ["anchor", "recent", "sticky"]
+
+    def test_materialized_cached_payload_can_be_applied_with_snippets_and_journal(self, monkeypatch):
+        import ingest.extract as extract_mod
+
+        payload = extract_mod.materialize_cached_extraction_payload(
+            transcript="User: I keep the brass postal scale on the desk.",
+            parsed_payload={
+                "facts": [
+                    {
+                        "text": "Maya keeps the brass postal scale on the desk",
+                        "category": "fact",
+                        "speaker": "user",
+                        "domains": ["personal"],
+                    }
+                ],
+                "soul_snippets": {"USER.md": ["Keeps a brass postal scale on the desk"]},
+                "journal_entries": {"USER.md": "Maya mentioned the brass postal scale."},
+                "project_logs": {},
+            },
+            owner_id="Maya",
+            label="rolling-cache",
+        )
+
+        assert payload["snippets"] == {}
+        assert payload["journal"] == {}
+
+        def fake_publish(result, **_kwargs):
+            raw_facts = list(result.get("raw_facts", []) or [])
+            result["facts_stored"] = len(raw_facts)
+            result["edges_created"] = 0
+            result["facts"] = [{"text": fact["text"], "status": "stored", "edges": []} for fact in raw_facts]
+            return raw_facts
+
+        snippet_payload = {}
+
+        def fake_snippet_journal_write(payload):
+            snippet_payload.update(payload)
+            return {"snippets_written": 1, "journal_entries_written": 1}
+
+        monkeypatch.setattr(
+            "core.plugins.memorydb_contract.run_extraction_publish_payload",
+            fake_publish,
+        )
+        monkeypatch.setattr(
+            "core.plugins.memorydb_contract.write_extraction_publish_trace",
+            lambda *_args, **_kwargs: None,
+        )
+        monkeypatch.setattr(
+            "core.plugins.insightdb_contract.run_snippet_journal_write_payload",
+            fake_snippet_journal_write,
+        )
+
+        applied = extract_mod.apply_extracted_payloads(
+            payload,
+            owner_id="Maya",
+            label="rolling-cache",
+            session_id="sess-cache",
+        )
+
+        assert applied["facts_stored"] == 1
+        assert applied["snippets"]["USER.md"] == ["Keeps a brass postal scale on the desk"]
+        assert applied["journal"]["USER.md"] == "Maya mentioned the brass postal scale."
+        assert snippet_payload["snippets"] == applied["snippets"]
+        assert snippet_payload["journal"] == applied["journal"]
 
     @patch("ingest.extract.call_deep_reasoning")
     @patch("ingest.extract._session_bridge.list_session_chunks", return_value=[])
@@ -6982,6 +7102,82 @@ class TestExtractFromTranscript:
         assert result["facts_stored"] == 3
         assert result["deep_calls"] == 3
         assert all("EARLIER CHUNK CONTEXT" not in prompt for prompt in prompts)
+
+    @patch("lib.batch_utils.chunk_text_by_tokens")
+    @patch("ingest.extract.call_deep_reasoning")
+    @patch("ingest.extract._memory.store")
+    def test_parallel_root_chunk_failure_keeps_completed_chunks_when_fail_open(
+        self,
+        mock_store,
+        mock_llm,
+        mock_chunk,
+        monkeypatch,
+    ):
+        from ingest.extract import extract_from_transcript
+
+        root_chunks = [
+            "User: Maya likes coffee.",
+            "User: Maya works at Stripe.",
+            "User: Maya lives in Austin.",
+        ]
+
+        def _fake_llm(*, prompt, **_kwargs):
+            if "works at Stripe" in prompt:
+                raise RuntimeError("worker chunk failed")
+            if "likes coffee" in prompt:
+                fact_text = "Maya likes coffee."
+            elif "lives in Austin" in prompt:
+                fact_text = "Maya lives in Austin."
+            else:
+                raise AssertionError(f"unexpected prompt: {prompt[:120]}")
+            return json.dumps({"facts": [{"text": fact_text, "speaker": "user", "domains": ["personal"]}]}), 0.1
+
+        mock_chunk.return_value = root_chunks
+        mock_llm.side_effect = _fake_llm
+        mock_store.return_value = {"id": "n1", "status": "created"}
+        monkeypatch.setenv("QUAID_EXTRACT_DISABLE_CARRY_CONTEXT", "1")
+        monkeypatch.setenv("QUAID_EXTRACT_PARALLEL_ROOT_WORKERS", "3")
+
+        with patch("ingest.extract.is_fail_hard_enabled", return_value=False):
+            result = extract_from_transcript(
+                transcript="dummy",
+                owner_id="test",
+                label="parallel-roots",
+            )
+
+        texts = [fact["text"] for fact in result["raw_facts"]]
+        assert result["parallel_root_workers"] == 3
+        assert result["chunks_processed"] == 2
+        assert result["facts_stored"] == 2
+        assert "Maya likes coffee." in texts
+        assert "Maya lives in Austin." in texts
+        assert "Maya works at Stripe." not in texts
+
+    @patch("lib.batch_utils.chunk_text_by_tokens")
+    @patch("ingest.extract.call_deep_reasoning")
+    def test_parallel_root_chunk_failure_raises_under_failhard(
+        self,
+        mock_llm,
+        mock_chunk,
+        monkeypatch,
+    ):
+        from ingest.extract import extract_from_transcript
+
+        mock_chunk.return_value = [
+            "User: Maya likes coffee.",
+            "User: Maya works at Stripe.",
+        ]
+        mock_llm.side_effect = RuntimeError("worker chunk failed")
+        monkeypatch.setenv("QUAID_EXTRACT_DISABLE_CARRY_CONTEXT", "1")
+        monkeypatch.setenv("QUAID_EXTRACT_PARALLEL_ROOT_WORKERS", "2")
+
+        with patch("ingest.extract.is_fail_hard_enabled", return_value=True):
+            with pytest.raises(RuntimeError, match="worker chunk failed"):
+                extract_from_transcript(
+                    transcript="dummy",
+                    owner_id="test",
+                    label="parallel-roots",
+                )
 
 
 class TestUnsupportedSpecificityFilters:
