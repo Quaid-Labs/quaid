@@ -110,7 +110,9 @@ def _stale_lock(path: str) -> bool:
         pid = int(Path(path).read_text(encoding="utf-8").strip())
         os.kill(pid, 0)
         return False
-    except (FileNotFoundError, ValueError, OSError):
+    except PermissionError:
+        return False
+    except (FileNotFoundError, ValueError, ProcessLookupError):
         return True
 
 
@@ -359,7 +361,10 @@ def list_lifecycle_observations(
         item = dict(row)
         try:
             item["metadata"] = json.loads(item.pop("metadata_json") or "{}")
-        except (TypeError, ValueError, json.JSONDecodeError):
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            if is_fail_hard_enabled():
+                raise RuntimeError("sessiondb lifecycle observation has invalid metadata_json") from exc
+            logger.warning("sessiondb lifecycle observation has invalid metadata_json; using {}: %s", exc)
             item["metadata"] = {}
         out.append(item)
     return out
@@ -594,7 +599,7 @@ def store_session_source_text(
                 dict(row)
                 for row in conn.execute(
                     "SELECT * FROM session_pairs WHERE owner_id = ? AND session_id = ? AND pair_id IN ({}) ORDER BY pair_index ASC".format(
-                        ",".join("?" for _ in pair_ids) or "''"
+                        ",".join("?" for _ in pair_ids)
                     ),
                     [owner, sid, *pair_ids] if pair_ids else [owner, sid],
                 ).fetchall()
