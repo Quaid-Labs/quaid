@@ -509,6 +509,34 @@ class TestOpenClawAdapter:
         assert "[2026-06-11T15:09:12.914Z] User: I started using a 14mm Sailor" in transcript
         assert "[2026-06-11T15:09:17.625Z] Assistant: Noted." in transcript
 
+    def test_parse_session_jsonl_accepts_role_rows_with_message_field(self, tmp_path):
+        session_file = tmp_path / "oc-session-message-field.jsonl"
+        session_file.write_text(
+            "\n".join(
+                [
+                    json.dumps(
+                        {
+                            "role": "user",
+                            "message": "My Friday pumpkin seed ritual uses smoked paprika.",
+                        }
+                    ),
+                    json.dumps(
+                        {
+                            "role": "assistant",
+                            "message": "Noted.",
+                        }
+                    ),
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        adapter = OpenClawAdapter()
+        transcript = adapter.parse_session_jsonl(session_file)
+
+        assert "User: My Friday pumpkin seed ritual uses smoked paprika." in transcript
+        assert "Assistant: Noted." in transcript
+
     def test_parse_session_jsonl_marks_subagent_turns_and_strips_oc_wrapper(self, tmp_path):
         session_file = tmp_path / "oc-subagent.jsonl"
         session_file.write_text(

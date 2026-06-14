@@ -921,6 +921,10 @@ class OpenClawAdapter(QuaidAdapter):
                     continue
 
                 content = record.get("content", "")
+                if content in (None, ""):
+                    content = record.get("text", "")
+                if content in (None, ""):
+                    content = record.get("message", "")
                 if isinstance(content, list):
                     content = " ".join(
                         str(c.get("text", "")).strip()

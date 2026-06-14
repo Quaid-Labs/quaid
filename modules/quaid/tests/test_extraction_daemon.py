@@ -3456,6 +3456,109 @@ def test_process_signal_reset_backup_extracts_after_scan_only_cursor(
     assert cursor["processed_signal_type"] == "reset"
 
 
+def test_process_signal_reset_extracts_short_openclaw_message_field_transcript(
+    monkeypatch,
+    tmp_path,
+):
+    from adaptors.openclaw.adapter import OpenClawAdapter
+    from lib.adapter import set_adapter, reset_adapter
+    from ingest import extract as extract_mod
+    from core import ingest_runtime
+    from core.runtime import notify as notify_mod
+
+    session_id = "af8d7017-0000-4000-8000-ocm5parta"
+    preserved_dir = tmp_path / ".quaid" / "instances" / "openclaw-main" / "logs" / "quaid" / "sessions"
+    preserved_dir.mkdir(parents=True)
+    preserved_path = preserved_dir / f"{session_id}.jsonl"
+    preserved_path.write_text(
+        "\n".join(
+            [
+                json.dumps({"type": "session", "id": session_id}),
+                json.dumps({"type": "custom", "customType": "model-snapshot"}),
+                json.dumps({"type": "custom_message", "customType": "openclaw.runtime-context", "content": "context"}),
+                json.dumps({"role": "user", "message": "My Friday pumpkin seed ritual uses smoked paprika."}),
+                json.dumps({"role": "assistant", "message": "Noted."}),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path / ".quaid"))
+    monkeypatch.setenv("QUAID_INSTANCE", "openclaw-main")
+
+    captured = {}
+
+    class _Adapter(_OwnedTestAdapterMixin, OpenClawAdapter):
+        def instance_root(self):
+            return tmp_path / ".quaid" / "instances" / "openclaw-main"
+
+        def is_subagent_session(self, session_id, transcript_path=None):
+            return False
+
+    set_adapter(_Adapter())
+    monkeypatch.setattr(extraction_daemon, "_get_owner_id", lambda: "owner-1")
+    monkeypatch.setattr(extraction_daemon, "_read_usage_totals", lambda: {})
+    monkeypatch.setattr(extraction_daemon, "_session_has_harvestable_subagents", lambda *args, **kwargs: False)
+    monkeypatch.setattr(extraction_daemon, "_warm_payload_embeddings", lambda _facts: {})
+    monkeypatch.setattr(notify_mod, "notify_memory_extraction", lambda **_kwargs: None)
+    monkeypatch.setattr(ingest_runtime, "run_session_logs_ingest", lambda **_kwargs: {"status": "indexed"})
+
+    def fake_extract_from_transcript(transcript, **kwargs):
+        captured["transcript"] = transcript
+        return {
+            "chunks_processed": 1,
+            "chunks_total": 1,
+            "unclassified_empty_payloads": 0,
+            "raw_facts": [{"text": "Owner's Friday pumpkin seed ritual uses smoked paprika.", "category": "preference"}],
+            "facts": [],
+            "soul_snippets": {},
+            "journal_entries": {},
+            "project_logs": {},
+            "raw_snippets": {},
+            "raw_journal": {},
+            "raw_project_logs": {},
+            "carry_facts": [],
+        }
+
+    monkeypatch.setattr(extract_mod, "extract_from_transcript", fake_extract_from_transcript)
+    monkeypatch.setattr(
+        extract_mod,
+        "apply_extracted_payloads",
+        lambda *_args, **_kwargs: {
+            "facts_stored": 1,
+            "facts_skipped": 0,
+            "edges_created": 0,
+            "facts": [],
+            "snippets": {},
+            "journal": {},
+            "project_log_metrics": {},
+        },
+    )
+
+    try:
+        signal_path = extraction_daemon.write_signal(
+            signal_type="reset",
+            session_id=session_id,
+            transcript_path=str(preserved_path),
+        )
+        signal_data = json.loads(signal_path.read_text(encoding="utf-8"))
+        signal_data["_signal_path"] = str(signal_path)
+
+        extraction_daemon.process_signal(signal_data)
+    finally:
+        reset_adapter()
+
+    assert "User: My Friday pumpkin seed ritual uses smoked paprika." in captured["transcript"]
+    cursor = extraction_daemon.read_cursor(
+        session_id,
+        source_key=extraction_daemon._signal_source_cursor_key(session_id, str(preserved_path)),
+    )
+    assert cursor["line_offset"] == 5
+    assert cursor["processed_signal_type"] == "reset"
+    assert not extraction_daemon._rolling_state_path(session_id).exists()
+
+
 def test_process_signal_smaller_preserved_relocation_extracts_after_scan_only_cursor(
     monkeypatch,
     tmp_path,
