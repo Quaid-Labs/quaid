@@ -919,7 +919,7 @@ function drainDeferredNoticeRelayContextForAgent(agentLabel: string, reason: str
     }
     let payload: { drained?: number; relay?: string; kinds?: string[] } = {};
     try {
-      payload = JSON.parse(String(result.stdout || "{}"));
+      payload = parseJsonObjectFromProcessStdout(String(result.stdout || "{}"));
     } catch (parseErr: unknown) {
       writeHookTrace("deferred_notice.relay_parse_error", {
         instance_id: instanceId,

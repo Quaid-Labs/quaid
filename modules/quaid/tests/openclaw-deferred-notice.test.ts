@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 
 const childProcessState = vi.hoisted(() => ({
   daemonStartCalls: [] as Array<{ file: string; args: readonly string[]; env: Record<string, string | undefined> }>,
+  deferredRelayStdout: "" as string,
 }));
 
 vi.mock("node:child_process", async () => {
@@ -24,6 +25,26 @@ vi.mock("node:child_process", async () => {
       }
       return actual.execFileSync(file, args as any, options);
     }) as typeof actual.execFileSync,
+    spawnSync: ((file: string, args?: readonly string[] | null, options?: any) => {
+      const normalizedArgs = Array.isArray(args) ? args.map((arg) => String(arg)) : [];
+      const inlineScript = normalizedArgs[0] === "-c" ? String(normalizedArgs[1] || "") : "";
+      if (
+        childProcessState.deferredRelayStdout
+        && inlineScript.includes("format_pending_notice_relay")
+        && inlineScript.includes("drain_deferred_notices")
+      ) {
+        return {
+          status: 0,
+          signal: null,
+          error: undefined,
+          stdout: childProcessState.deferredRelayStdout,
+          stderr: "",
+          output: [null, childProcessState.deferredRelayStdout, ""],
+          pid: 0,
+        } as any;
+      }
+      return actual.spawnSync(file, args as any, options);
+    }) as typeof actual.spawnSync,
   };
 });
 
@@ -157,6 +178,7 @@ function seedDeferredNoticeFixture(prefix: string, instanceId: string, message: 
 
 afterEach(() => {
   childProcessState.daemonStartCalls = [];
+  childProcessState.deferredRelayStdout = "";
   vi.clearAllTimers();
   vi.useRealTimers();
   vi.restoreAllMocks();
@@ -391,6 +413,94 @@ describe("openclaw deferred notices", () => {
       ? drained.requests.filter((item: any) => String(item?.status || "").trim().toLowerCase() === "delivered")
       : [];
     expect(delivered).toHaveLength(1);
+
+    warn.mockRestore();
+    log.mockRestore();
+    error.mockRestore();
+    removeTempDir(fixture.home);
+  });
+
+  it("relays deferred notices in before_prompt_build when the reset signal is too old", async () => {
+    vi.useFakeTimers();
+    vi.stubEnv("QUAID_DISABLE_NOTIFICATIONS", "1");
+    const fixture = seedDeferredNoticeFixture(
+      "quaid-oc-deferred-aged-reset-home-",
+      "openclaw-main",
+      "[Quaid] Aged reset notice should still reach the prompt.",
+    );
+    childProcessState.deferredRelayStdout = [
+      "[quaid] runtime warning before JSON",
+      JSON.stringify({
+        drained: 1,
+        relay: [
+          "MANDATORY: Quaid has active notices for the human user.",
+          "",
+          "<quaid_system_message>",
+          "• [Quaid] Aged reset notice should still reach the prompt.",
+          "</quaid_system_message>",
+        ].join("\n"),
+        kinds: ["janitor_summary"],
+      }),
+      "",
+    ].join("\n");
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const plugin = await loadAdapterWithHomes(
+      fixture.hiddenHome,
+      fixture.visibleHome,
+      fixture.openClawConfigPath,
+      "openclaw-main",
+    );
+    const adapterModule = await import("../adaptors/openclaw/adapter.js");
+    const api = makeFakeApi();
+    plugin.register(api as any);
+
+    const resetMs = Date.parse("2026-04-26T21:32:03.000Z");
+    const lateDecision = (adapterModule as any).__test.lateTranscriptUpdateSessionEndDecision(
+      "session-aged-reset",
+      [{ role: "user", content: "Please remember the aged-reset prompt notice canary." }],
+      2048,
+      {
+        nowMs: resetMs + (7 * 60 * 1000),
+        lastResetSignalMs: resetMs,
+        alreadySignaled: () => false,
+      },
+    );
+    expect(lateDecision.shouldQueue).toBe(false);
+    expect(lateDecision.reason).toBe("reset_signal_too_old");
+
+    const beforePromptBuildCall = api.on.mock.calls.find((call: any[]) =>
+      call?.[0] === "before_prompt_build" && call?.[2]?.name === "memory-injection-prompt-build"
+    );
+    expect(beforePromptBuildCall).toBeTruthy();
+
+    const result = await beforePromptBuildCall?.[1](
+      {
+        prompt: "Do I have any pending notices?",
+        messages: [{ role: "user", content: "Do I have any pending notices?" }],
+        sessionId: "session-aged-reset",
+        sessionKey: "agent:main:tui-main",
+      },
+      {
+        sessionId: "session-aged-reset",
+        sessionKey: "agent:main:tui-main",
+        agentId: "main",
+        trigger: "user",
+      },
+    );
+
+    const systemContext = combinedSystemContext(result);
+    expect(systemContext).toContain("MANDATORY: Quaid has active notices for the human user.");
+    expect(systemContext).toContain("Aged reset notice should still reach the prompt");
+    expect(String(result?.prependContext || "")).toContain("Aged reset notice should still reach the prompt");
+    expect(String((result as any)?.prependContext || "")).not.toContain("runtime warning before JSON");
+    expect(
+      readHookTraceEvents(fixture.hiddenHome, "openclaw-main")
+        .map((row) => String(row.event || "")),
+    ).toContain("deferred_notice.relay_context");
 
     warn.mockRestore();
     log.mockRestore();
