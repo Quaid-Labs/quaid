@@ -400,7 +400,8 @@ describe("openclaw deferred notices", () => {
     const systemContext = combinedSystemContext(result);
     expect(systemContext).toContain("MANDATORY: Quaid has active notices for the human user.");
     expect(systemContext).toContain("silver lantern is ready");
-    expect(String(result?.prependContext || "")).toMatch(/^MANDATORY: Quaid has active notices for the human user\./);
+    expect(String(result?.prependContext || "")).toMatch(/^QUAID NOTICE FOR THIS REPLY:/);
+    expect(String(result?.prependContext || "")).toContain("Quaid notice:");
     expect(String(result?.prependContext || "")).toContain("silver lantern is ready");
     expect(String(result?.prependSystemContext || "")).toContain("silver lantern is ready");
     expect(String((event as any).prependContext || "")).toContain("silver lantern is ready");
@@ -628,7 +629,8 @@ describe("openclaw deferred notices", () => {
       { prompt: "Hey, what is up?", sessionId, sessionKey },
       ctx,
     );
-    expect(String(firstResult?.prependContext || "")).toMatch(/^MANDATORY: Quaid has active notices for the human user\./);
+    expect(String(firstResult?.prependContext || "")).toMatch(/^QUAID NOTICE FOR THIS REPLY:/);
+    expect(String(firstResult?.prependContext || "")).toContain("Quaid notice:");
     expect(String(firstResult?.prependContext || "")).toContain("scheduled review found 3 facts");
     expect(String(firstResult?.prependSystemContext || "")).toContain("scheduled review found 3 facts");
 
@@ -642,7 +644,8 @@ describe("openclaw deferred notices", () => {
       { prompt: "Hey, what is up?", sessionId, sessionKey },
       ctx,
     );
-    expect(String(secondResult?.prependContext || "")).toMatch(/^MANDATORY: Quaid has active notices for the human user\./);
+    expect(String(secondResult?.prependContext || "")).toMatch(/^QUAID NOTICE FOR THIS REPLY:/);
+    expect(String(secondResult?.prependContext || "")).toContain("Quaid notice:");
     expect(String(secondResult?.prependContext || "")).toContain("scheduled review found 3 facts");
     expect(String(secondResult?.prependSystemContext || "")).toContain("scheduled review found 3 facts");
     expect(combinedSystemContext(secondResult)).toContain("MANDATORY: Quaid has active notices for the human user.");

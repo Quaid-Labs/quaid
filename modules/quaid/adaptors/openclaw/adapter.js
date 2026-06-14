@@ -689,6 +689,20 @@ function buildDeferredNoticeVisibleReply(messages) {
   return `Quaid notices:
 ${clean.map((message) => `- ${message}`).join("\n")}`;
 }
+function buildOpenClawDeferredNoticePromptPreamble(relayContext) {
+  const replyText = buildDeferredNoticeVisibleReply(
+    extractDeferredNoticeMessagesFromRelayContext(relayContext)
+  );
+  if (!replyText) {
+    return "";
+  }
+  return [
+    "QUAID NOTICE FOR THIS REPLY:",
+    "Start your next response by relaying this Quaid notice to the user before any other answer.",
+    replyText,
+    "After relaying the notice, answer the user's current message."
+  ].join("\n");
+}
 function drainDeferredNoticeRelayContextForAgent(agentLabel, reason) {
   const instanceId = getInstanceId(agentLabel);
   const script = [
@@ -5185,13 +5199,23 @@ ${projectPlacementContext}` : projectPlacementContext;
             appendSystemContext
           ].map((value) => String(value || "")).join("\n\n");
           if (!existingContext.includes(deferredNoticeRelayContext)) {
-            prependContextParts.unshift(deferredNoticeRelayContext);
-            prependSystemContext = prependSystemContext ? `${deferredNoticeRelayContext}
+            const deferredNoticePreamble = buildOpenClawDeferredNoticePromptPreamble(deferredNoticeRelayContext);
+            const deferredNoticePromptContext = deferredNoticePreamble ? `${deferredNoticePreamble}
 
-${prependSystemContext}` : deferredNoticeRelayContext;
+${deferredNoticeRelayContext}` : deferredNoticeRelayContext;
+            prependContextParts.unshift(deferredNoticePromptContext);
+            prependSystemContext = prependSystemContext ? `${deferredNoticePromptContext}
+
+${prependSystemContext}` : deferredNoticePromptContext;
             appendSystemContext = appendSystemContext ? `${appendSystemContext}
 
 ${deferredNoticeRelayContext}` : deferredNoticeRelayContext;
+            writeHookTrace("deferred_notice.prompt_visible_preamble", {
+              agent_label: promptAgentLabel,
+              session_id: promptSessionId,
+              has_preamble: Boolean(deferredNoticePreamble),
+              targets: ["prependContext", "prependSystemContext", "appendSystemContext"]
+            });
           }
         }
         let { query, source: querySource, rawPrompt } = selectAutoInjectQuery(

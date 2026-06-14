@@ -884,6 +884,21 @@ function buildDeferredNoticeVisibleReply(messages: string[]): string {
   return `Quaid notices:\n${clean.map((message) => `- ${message}`).join("\n")}`;
 }
 
+function buildOpenClawDeferredNoticePromptPreamble(relayContext: string): string {
+  const replyText = buildDeferredNoticeVisibleReply(
+    extractDeferredNoticeMessagesFromRelayContext(relayContext),
+  );
+  if (!replyText) {
+    return "";
+  }
+  return [
+    "QUAID NOTICE FOR THIS REPLY:",
+    "Start your next response by relaying this Quaid notice to the user before any other answer.",
+    replyText,
+    "After relaying the notice, answer the user's current message.",
+  ].join("\n");
+}
+
 function drainDeferredNoticeRelayContextForAgent(agentLabel: string, reason: string): string {
   const instanceId = getInstanceId(agentLabel);
   const script = [
@@ -6391,13 +6406,23 @@ notify_user(${JSON.stringify(message)})
             appendSystemContext,
           ].map((value) => String(value || "")).join("\n\n");
           if (!existingContext.includes(deferredNoticeRelayContext)) {
-            prependContextParts.unshift(deferredNoticeRelayContext);
-            prependSystemContext = prependSystemContext
-              ? `${deferredNoticeRelayContext}\n\n${prependSystemContext}`
+            const deferredNoticePreamble = buildOpenClawDeferredNoticePromptPreamble(deferredNoticeRelayContext);
+            const deferredNoticePromptContext = deferredNoticePreamble
+              ? `${deferredNoticePreamble}\n\n${deferredNoticeRelayContext}`
               : deferredNoticeRelayContext;
+            prependContextParts.unshift(deferredNoticePromptContext);
+            prependSystemContext = prependSystemContext
+              ? `${deferredNoticePromptContext}\n\n${prependSystemContext}`
+              : deferredNoticePromptContext;
             appendSystemContext = appendSystemContext
               ? `${appendSystemContext}\n\n${deferredNoticeRelayContext}`
               : deferredNoticeRelayContext;
+            writeHookTrace("deferred_notice.prompt_visible_preamble", {
+              agent_label: promptAgentLabel,
+              session_id: promptSessionId,
+              has_preamble: Boolean(deferredNoticePreamble),
+              targets: ["prependContext", "prependSystemContext", "appendSystemContext"],
+            });
           }
         }
 
