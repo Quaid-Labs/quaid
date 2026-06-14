@@ -420,6 +420,76 @@ describe("openclaw deferred notices", () => {
     removeTempDir(fixture.home);
   });
 
+  it("reuses prompt-build deferred notice cache for visible reply without redraining", async () => {
+    vi.useFakeTimers();
+    vi.stubEnv("QUAID_DISABLE_NOTIFICATIONS", "1");
+    const fixture = seedDeferredNoticeFixture(
+      "quaid-oc-deferred-reply-cache-home-",
+      "openclaw-main",
+      "[Quaid] Cached prompt-build notice must become a visible reply.",
+    );
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const plugin = await loadAdapterWithHomes(
+      fixture.hiddenHome,
+      fixture.visibleHome,
+      fixture.openClawConfigPath,
+      "openclaw-main",
+    );
+    const api = makeFakeApi();
+    plugin.register(api as any);
+
+    const beforePromptBuildCall = api.on.mock.calls.find((call: any[]) =>
+      call?.[0] === "before_prompt_build" && call?.[2]?.name === "memory-injection-prompt-build"
+    );
+    const deferredReplyCall = api.on.mock.calls.find((call: any[]) =>
+      call?.[0] === "before_agent_reply" && call?.[2]?.name === "deferred-notice-channel-relay"
+    );
+    expect(beforePromptBuildCall).toBeTruthy();
+    expect(deferredReplyCall).toBeTruthy();
+
+    const sessionId = "session-main-reply-cache";
+    const sessionKey = "agent:main:tui-main";
+    const promptResult = await beforePromptBuildCall?.[1](
+      {
+        prompt: "Hello",
+        messages: [{ role: "user", content: "Hello" }],
+        sessionId,
+        sessionKey,
+      },
+      { sessionId, sessionKey, agentId: "main", trigger: "user" },
+    );
+    expect(String(promptResult?.prependContext || "")).toContain("Cached prompt-build notice");
+
+    const afterPromptBuild = JSON.parse(fs.readFileSync(fixture.noticeFile, "utf8"));
+    expect(
+      (Array.isArray(afterPromptBuild?.requests) ? afterPromptBuild.requests : [])
+        .filter((item: any) => String(item?.status || "").trim().toLowerCase() === "pending"),
+    ).toHaveLength(0);
+
+    const replyResult = await deferredReplyCall?.[1](
+      { sessionId, sessionKey },
+      { sessionId, sessionKey, agentId: "main", trigger: "user" },
+    );
+    expect(replyResult?.handled).toBe(true);
+    expect(replyResult?.reason).toBe("deferred_notice_visible_relay");
+    expect(String(replyResult?.reply?.text || "")).toContain("Quaid notice:");
+    expect(String(replyResult?.reply?.text || "")).toContain("Cached prompt-build notice must become a visible reply");
+
+    const trace = readHookTraceEvents(fixture.hiddenHome, "openclaw-main");
+    const visibleReply = trace.find((row) => String(row.event || "") === "deferred_notice.reply_relay_visible_reply");
+    expect(visibleReply).toBeTruthy();
+    expect(visibleReply?.source).toBe("prompt_build_cache");
+
+    warn.mockRestore();
+    log.mockRestore();
+    error.mockRestore();
+    removeTempDir(fixture.home);
+  });
+
   it("relays deferred notices in before_prompt_build when the reset signal is too old", async () => {
     vi.useFakeTimers();
     vi.stubEnv("QUAID_DISABLE_NOTIFICATIONS", "1");

@@ -3395,6 +3395,35 @@ ${sessionScope}
 ${turnIdentity}
 ${promptText}`;
 }
+function deferredNoticeRelayStableTurnKey(agentLabel, event, ctx, promptSessionId) {
+  const sessionScope = firstNonEmptyString(
+    event?.sessionKey,
+    ctx?.sessionKey,
+    event?.targetSessionKey,
+    ctx?.targetSessionKey,
+    event?.session?.sessionKey,
+    ctx?.session?.sessionKey,
+    resolveSessionKeyForSessionId(promptSessionId),
+    promptSessionId,
+    event?.roomId,
+    ctx?.roomId
+  ).toLowerCase() || "unknown-session";
+  const turnIdentity = firstNonEmptyString(
+    event?.turnId,
+    ctx?.turnId,
+    event?.messageId,
+    ctx?.messageId,
+    event?.requestId,
+    ctx?.requestId,
+    event?.id,
+    ctx?.id,
+    event?.timestamp,
+    ctx?.timestamp
+  ).toLowerCase();
+  return `${providerNoticeAgentKey(agentLabel)}
+${sessionScope}
+${turnIdentity}`;
+}
 function pruneDeferredNoticeRelayContextCache(nowMs = Date.now()) {
   for (const [key, value] of deferredNoticeRelayContextByTurn.entries()) {
     if (value.expiresAtMs <= nowMs) {
@@ -3440,6 +3469,7 @@ function drainDeferredNoticeRelayContextForTurn(agentLabel, reason, turnKey) {
       agent_label: providerNoticeAgentKey(agentLabel),
       reason
     });
+    rememberDeferredNoticeRelayContext(turnKey, cached);
     return cached;
   }
   const context = drainDeferredNoticeRelayContextForAgent(agentLabel, reason);
@@ -3447,6 +3477,27 @@ function drainDeferredNoticeRelayContextForTurn(agentLabel, reason, turnKey) {
     rememberDeferredNoticeRelayContext(turnKey, context);
   }
   return context;
+}
+function consumeDeferredNoticeRelayContextForReply(turnKeys) {
+  let relay = "";
+  const seen = /* @__PURE__ */ new Set();
+  for (const rawKey of turnKeys) {
+    const key = String(rawKey || "").trim();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    const cached = consumeDeferredNoticeRelayContext(key);
+    if (cached && !relay) {
+      relay = cached;
+    }
+  }
+  return relay;
+}
+function extractDeferredNoticeMessagesFromRelayContext(context) {
+  const raw = String(context || "").trim();
+  if (!raw) return [];
+  const match = raw.match(/<quaid_system_message>\s*([\s\S]*?)\s*<\/quaid_system_message>/i);
+  const body = String(match?.[1] || raw);
+  return body.split(/\r?\n/).map((line) => line.replace(/^\s*[•*-]\s*/, "").trim()).filter(Boolean);
 }
 function clearImmediateProviderNoticeDispatch(agentLabel, reason) {
   const key = providerNoticeAgentKey(agentLabel);
@@ -5110,12 +5161,22 @@ ${projectPlacementContext}` : projectPlacementContext;
         if (autoInjectEnabled || hasProviderDeferredNoticesForAgent(promptAgentLabel)) {
           await validatePromptModelConfigForTurn();
         }
+        const deferredNoticeRelayPrimaryTurnKey = deferredNoticeRelayTurnKey(
+          promptAgentLabel,
+          event,
+          ctx,
+          promptSessionId
+        );
         const deferredNoticeRelayContext = drainDeferredNoticeRelayContextForTurn(
           promptAgentLabel,
           "before_prompt_build",
-          deferredNoticeRelayTurnKey(promptAgentLabel, event, ctx, promptSessionId)
+          deferredNoticeRelayPrimaryTurnKey
         );
         if (deferredNoticeRelayContext) {
+          rememberDeferredNoticeRelayContext(
+            deferredNoticeRelayStableTurnKey(promptAgentLabel, event, ctx, promptSessionId),
+            deferredNoticeRelayContext
+          );
           const existingContext = [
             event?.prependContext,
             event?.prependSystemContext,
@@ -5495,13 +5556,19 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
       }
       const trigger = String(ctx?.trigger || "user").trim().toLowerCase();
       if (trigger === "user") {
-        const messages = drainDeferredNoticeMessagesForAgent(promptAgentLabel, "before_agent_reply");
+        const promptSessionId = String(event?.sessionId || ctx?.sessionId || ctx?.session?.id || "").trim();
+        const cachedRelayContext = consumeDeferredNoticeRelayContextForReply([
+          deferredNoticeRelayTurnKey(promptAgentLabel, event, ctx, promptSessionId),
+          deferredNoticeRelayStableTurnKey(promptAgentLabel, event, ctx, promptSessionId)
+        ]);
+        const messages = cachedRelayContext ? extractDeferredNoticeMessagesFromRelayContext(cachedRelayContext) : drainDeferredNoticeMessagesForAgent(promptAgentLabel, "before_agent_reply");
         const replyText = buildDeferredNoticeVisibleReply(messages);
         if (!replyText) return;
         writeHookTrace("deferred_notice.reply_relay_visible_reply", {
           agent_label: promptAgentLabel,
           session_id: String(ctx?.sessionId || event?.sessionId || ""),
-          count: messages.length
+          count: messages.length,
+          source: cachedRelayContext ? "prompt_build_cache" : "fresh_drain"
         });
         return {
           handled: true,
