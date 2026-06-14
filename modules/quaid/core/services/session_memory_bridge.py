@@ -417,8 +417,11 @@ class DatastoreSessionMemoryBridge(SessionMemoryBridgePort):
         return self._load_session_log(session_id=_session_id(session_id), owner_id=_optional(owner_id))
 
 
-_SESSION_MEMORY_BRIDGE: SessionMemoryBridgePort = DatastoreSessionMemoryBridge()
+_SESSION_MEMORY_BRIDGE: Optional[SessionMemoryBridgePort] = None
 
 
 def get_session_memory_bridge() -> SessionMemoryBridgePort:
+    global _SESSION_MEMORY_BRIDGE
+    if _SESSION_MEMORY_BRIDGE is None:
+        _SESSION_MEMORY_BRIDGE = DatastoreSessionMemoryBridge()
     return _SESSION_MEMORY_BRIDGE

@@ -18,6 +18,15 @@ _OFFLINE_EXTRACTION_PROMPT_PREFIX = (
 )
 
 
+def _fail_hard_enabled() -> bool:
+    try:
+        from lib.fail_policy import is_fail_hard_enabled
+
+        return bool(is_fail_hard_enabled())
+    except ImportError:
+        return True
+
+
 def _try_notify(msg: str, **kwargs) -> None:
     """Call notify_agent, swallowing any error if no adapter is configured.
 
@@ -89,8 +98,12 @@ class GatewayLLMProvider(LLMProvider):
             token = str(auth.get("token", "")).strip()
             if mode == "token" and token:
                 return token
-        except Exception:
-            pass
+        except FileNotFoundError:
+            return ""
+        except Exception as exc:
+            logger.warning("failed to resolve OpenClaw gateway token from %s: %s", cfg_path, exc)
+            if _fail_hard_enabled():
+                raise RuntimeError("Failed to resolve OpenClaw gateway token") from exc
         return ""
 
     def _resolve_model_for_tier(self, model_tier: str) -> str:

@@ -6,6 +6,16 @@ runtime behavior/policies (for example, core-markdown workspace auditing).
 
 from __future__ import annotations
 
+
+def _fail_hard_enabled() -> bool:
+    try:
+        from lib.fail_policy import is_fail_hard_enabled
+
+        return bool(is_fail_hard_enabled())
+    except ImportError:
+        return True
+
+
 def register_lifecycle_routines(registry, result_factory) -> None:
     """Register OpenClaw-specific lifecycle routines."""
 
@@ -58,8 +68,12 @@ def register_lifecycle_routines(registry, result_factory) -> None:
             elif phase == "error":
                 result.errors.append(f"Workspace audit error: {audit_result.get('error', 'unknown')}")
         except RuntimeError as exc:
+            if _fail_hard_enabled():
+                raise
             result.errors.append(f"Workspace audit skipped (API error): {exc}")
         except Exception as exc:
+            if _fail_hard_enabled():
+                raise
             result.errors.append(f"Workspace audit failed: {exc}")
         return result
 

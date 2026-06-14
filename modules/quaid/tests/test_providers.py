@@ -2066,6 +2066,35 @@ class TestGatewayLLMProvider:
         p = GatewayLLMProvider(port=18789, token="")
         assert p._token == "cfg-token"
 
+    def test_gateway_provider_raises_on_bad_openclaw_config_when_fail_hard_enabled(self, tmp_path, monkeypatch):
+        home = tmp_path / "home"
+        cfg_dir = home / ".openclaw"
+        cfg_dir.mkdir(parents=True)
+        (cfg_dir / "openclaw.json").write_text("{bad json", encoding="utf-8")
+        monkeypatch.delenv("OPENCLAW_GATEWAY_TOKEN", raising=False)
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setattr("adaptors.openclaw.providers._fail_hard_enabled", lambda: True)
+
+        with pytest.raises(RuntimeError, match="Failed to resolve OpenClaw gateway token"):
+            GatewayLLMProvider(port=18789, token="")
+
+    def test_gateway_provider_warns_on_bad_openclaw_config_when_fail_open(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        home = tmp_path / "home"
+        cfg_dir = home / ".openclaw"
+        cfg_dir.mkdir(parents=True)
+        (cfg_dir / "openclaw.json").write_text("{bad json", encoding="utf-8")
+        monkeypatch.delenv("OPENCLAW_GATEWAY_TOKEN", raising=False)
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setattr("adaptors.openclaw.providers._fail_hard_enabled", lambda: False)
+
+        with caplog.at_level("WARNING", logger="adaptors.openclaw.providers"):
+            p = GatewayLLMProvider(port=18789, token="")
+
+        assert p._token == ""
+        assert "failed to resolve OpenClaw gateway token" in caplog.text
+
     def test_gateway_stub_provider_raises_immediately(self):
         provider = OpenClawGatewayLLMProvider()
         with pytest.raises(RuntimeError, match="must not be used for Quaid LLM calls"):

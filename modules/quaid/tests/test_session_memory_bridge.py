@@ -109,6 +109,29 @@ def test_datastore_bridge_registers_and_dispatches_callbacks():
         bridge.assert_route("sessiondb", "missing")
 
 
+def test_default_session_memory_bridge_is_initialized_lazily(monkeypatch):
+    import core.services.session_memory_bridge as bridge_mod
+
+    class FakeBridge:
+        pass
+
+    constructed = []
+
+    monkeypatch.setattr(bridge_mod, "_SESSION_MEMORY_BRIDGE", None)
+    monkeypatch.setattr(
+        bridge_mod,
+        "DatastoreSessionMemoryBridge",
+        lambda: constructed.append(FakeBridge()) or constructed[-1],
+    )
+
+    assert constructed == []
+    first = bridge_mod.get_session_memory_bridge()
+    second = bridge_mod.get_session_memory_bridge()
+
+    assert first is second
+    assert constructed == [first]
+
+
 def test_bridge_indexes_session_transcript_through_core_contract():
     from core.services.session_memory_bridge import DatastoreSessionMemoryBridge
 

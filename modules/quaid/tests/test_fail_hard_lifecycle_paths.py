@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from datastore.docsdb.rag import register_lifecycle_routines as register_rag_lifecycle_routines
 from datastore.memorydb import memory_graph
 from datastore.insightdb.soul_snippets import register_lifecycle_routines as register_snippets_lifecycle_routines
+from adaptors.openclaw.maintenance import register_lifecycle_routines as register_openclaw_lifecycle_routines
 
 
 class _Registry:
@@ -133,3 +134,49 @@ def test_rag_lifecycle_raises_on_external_sync_error_when_fail_hard_enabled(tmp_
             handler(ctx)
         assert exc.value.__cause__ is not None
         assert "Project auto-discover failed" in str(exc.value.__cause__)
+
+
+def test_openclaw_workspace_audit_raises_runtime_error_when_fail_hard_enabled():
+    registry = _Registry()
+    register_openclaw_lifecycle_routines(registry, _Result)
+    handler = registry.handlers["workspace"]
+
+    ctx = SimpleNamespace(
+        cfg=SimpleNamespace(adapter=SimpleNamespace(type="openclaw")),
+        dry_run=True,
+    )
+    with patch("core.lifecycle.workspace_audit.run_workspace_check", side_effect=RuntimeError("audit down")), \
+         patch("adaptors.openclaw.maintenance._fail_hard_enabled", return_value=True):
+        with pytest.raises(RuntimeError, match="audit down"):
+            handler(ctx)
+
+
+def test_openclaw_workspace_audit_raises_unexpected_error_when_fail_hard_enabled():
+    registry = _Registry()
+    register_openclaw_lifecycle_routines(registry, _Result)
+    handler = registry.handlers["workspace"]
+
+    ctx = SimpleNamespace(
+        cfg=SimpleNamespace(adapter=SimpleNamespace(type="openclaw")),
+        dry_run=True,
+    )
+    with patch("core.lifecycle.workspace_audit.run_workspace_check", side_effect=ValueError("bad audit")), \
+         patch("adaptors.openclaw.maintenance._fail_hard_enabled", return_value=True):
+        with pytest.raises(ValueError, match="bad audit"):
+            handler(ctx)
+
+
+def test_openclaw_workspace_audit_soft_mode_records_error():
+    registry = _Registry()
+    register_openclaw_lifecycle_routines(registry, _Result)
+    handler = registry.handlers["workspace"]
+
+    ctx = SimpleNamespace(
+        cfg=SimpleNamespace(adapter=SimpleNamespace(type="openclaw")),
+        dry_run=True,
+    )
+    with patch("core.lifecycle.workspace_audit.run_workspace_check", side_effect=RuntimeError("audit down")), \
+         patch("adaptors.openclaw.maintenance._fail_hard_enabled", return_value=False):
+        result = handler(ctx)
+
+    assert result.errors == ["Workspace audit skipped (API error): audit down"]
