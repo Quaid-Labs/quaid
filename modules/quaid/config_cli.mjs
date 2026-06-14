@@ -350,6 +350,7 @@ function compactSummary(cfgPath, cfg) {
   const janitorApplyMode = String(getPath(cfg, "janitor.applyMode", "auto"));
   const corePolicy = String(getPath(cfg, "janitor.approvalPolicies.coreMarkdownWrites", "auto"));
   const projectPolicy = String(getPath(cfg, "janitor.approvalPolicies.projectDocsWrites", "auto"));
+  const workspacePolicy = String(getPath(cfg, "janitor.approvalPolicies.workspaceFileMovesDeletes", "auto"));
   const destructivePolicy = String(getPath(cfg, "janitor.approvalPolicies.destructiveMemoryOps", "auto"));
   const routerFailOpen = !!getPath(cfg, "retrieval.router_fail_open", getPath(cfg, "retrieval.routerFailOpen", true));
   const failHard = retrievalFailHard(cfg);
