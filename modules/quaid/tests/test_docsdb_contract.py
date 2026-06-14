@@ -53,6 +53,7 @@ def test_docsdb_contract_misc_workspace_failure_raises_under_failhard(tmp_path, 
     import lib.instance as instance_mod
 
     monkeypatch.setenv("QUAID_VISIBLE_HOME", str(tmp_path / "visible"))
+    monkeypatch.setenv("QUAID_INSTANCE", "pytest-runner")
     monkeypatch.setattr(docsdb_contract, "_fail_hard_enabled", lambda: True)
     monkeypatch.setattr(
         instance_mod,
@@ -69,6 +70,7 @@ def test_docsdb_contract_misc_workspace_failure_warns_when_fail_open(tmp_path, m
     import lib.instance as instance_mod
 
     monkeypatch.setenv("QUAID_VISIBLE_HOME", str(tmp_path / "visible"))
+    monkeypatch.setenv("QUAID_INSTANCE", "pytest-runner")
     monkeypatch.setattr(docsdb_contract, "_fail_hard_enabled", lambda: False)
     monkeypatch.setattr(
         instance_mod,
@@ -81,6 +83,27 @@ def test_docsdb_contract_misc_workspace_failure_warns_when_fail_open(tmp_path, m
 
     assert "docsdb misc workspace directory initialization failed" in caplog.text
     assert "misc directory unavailable" in caplog.text
+
+
+def test_docsdb_contract_skips_misc_init_without_instance(tmp_path, monkeypatch, caplog):
+    from core.plugins import docsdb_contract
+    import lib.instance as instance_mod
+
+    visible_root = tmp_path / "visible"
+    monkeypatch.setenv("QUAID_VISIBLE_HOME", str(visible_root))
+    monkeypatch.delenv("QUAID_INSTANCE", raising=False)
+    monkeypatch.setattr(docsdb_contract, "_fail_hard_enabled", lambda: True)
+    monkeypatch.setattr(
+        instance_mod,
+        "instance_misc_dir",
+        lambda: _raise(RuntimeError("instance context required")),
+    )
+
+    with caplog.at_level(logging.DEBUG, logger="core.plugins.docsdb_contract"):
+        DocsDbPluginContract().on_init(_ctx(str(tmp_path)))
+
+    assert (visible_root / "projects").is_dir()
+    assert "docsdb misc init skipped: no QUAID_INSTANCE context" in caplog.text
 
 
 def test_docsdb_contract_misc_docs_registry_failure_raises_under_failhard(tmp_path, monkeypatch):

@@ -409,6 +409,10 @@ def _ensure_project_workspace_dirs(ctx: PluginHookContext) -> None:
     # misc lives as a tracked project in projects/misc--{instance}/
     # Create the directory and auto-register it in the docsdb project registry
     # so agents can use it immediately without a manual create-project step.
+    if not str(os.environ.get("QUAID_INSTANCE", "") or "").strip():
+        logger.debug("docsdb misc init skipped: no QUAID_INSTANCE context")
+        return
+
     try:
         from lib.instance import instance_misc_dir
         misc_dir = instance_misc_dir()
