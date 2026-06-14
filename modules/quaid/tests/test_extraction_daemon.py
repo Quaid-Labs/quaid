@@ -2638,6 +2638,38 @@ def test_clear_rolling_state_removes_payload_matched_stale_file(monkeypatch, tmp
     assert not stale_file.exists()
 
 
+def test_clear_rolling_state_removes_referenced_rolling_snapshot(monkeypatch, tmp_path):
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "snapshot-cleanup-inst")
+    instance_root = tmp_path / "instances" / "snapshot-cleanup-inst"
+    snapshot = (
+        instance_root
+        / "logs"
+        / "daemon"
+        / "rolling-transcript-snapshots"
+        / "sess-snapshot-cleanup"
+        / "20260614T010553Z-1dbe461839edb8ce"
+        / "day-010-2026-03-18.jsonl"
+    )
+    snapshot.parent.mkdir(parents=True, exist_ok=True)
+    snapshot.write_text('{"role":"user","content":"old"}\n', encoding="utf-8")
+    extraction_daemon.write_rolling_state(
+        "sess-snapshot-cleanup",
+        {
+            "session_id": "sess-snapshot-cleanup",
+            "transcript_path": str(snapshot),
+            "buffer_transcript_path": str(snapshot),
+            "raw_facts": [{"text": "staged fact"}],
+            "staged_payload_pending_flush": True,
+        },
+    )
+
+    extraction_daemon.clear_rolling_state("sess-snapshot-cleanup")
+
+    assert not extraction_daemon._rolling_state_path("sess-snapshot-cleanup").exists()
+    assert not snapshot.exists()
+
+
 def test_write_rolling_state_clears_structurally_empty_payload_artifacts(monkeypatch, tmp_path):
     monkeypatch.setenv("QUAID_HOME", str(tmp_path))
     instance_id = os.environ.get("QUAID_INSTANCE", "pytest-runner")
@@ -15806,6 +15838,133 @@ class TestRollingExtraction:
         assert captured[0]["meta"]["source_cursor_key"] == source_key
         assert captured[0]["meta"]["flush_staged_payload_only"] is True
         assert lock_path.exists()
+
+    def test_recovers_missing_rolling_stage_flush_when_snapshot_was_cleaned(
+        self, monkeypatch, tmp_path
+    ):
+        """A staged payload must remain recoverable after its daemon snapshot is gone."""
+        instance_id = os.environ.get("QUAID_INSTANCE", "pytest-runner")
+        original = tmp_path / "extraction_cache" / "day-010-2026-03-18.jsonl"
+        original.parent.mkdir(parents=True, exist_ok=True)
+        original.write_text(
+            '{"role":"user","content":"old"}\n{"role":"assistant","content":"done"}\n',
+            encoding="utf-8",
+        )
+        snapshot = (
+            tmp_path
+            / "instances"
+            / instance_id
+            / "logs"
+            / "daemon"
+            / "rolling-transcript-snapshots"
+            / "day-runtime-2026-03-18"
+            / "20260614T010553Z-1dbe461839edb8ce"
+            / original.name
+        )
+        state_file = self._setup_rolling_state(
+            tmp_path,
+            instance_id,
+            "day-runtime-2026-03-18",
+            [{"text": "staged fact", "category": "fact"}],
+            snapshot,
+        )
+        state = json.loads(state_file.read_text(encoding="utf-8"))
+        state["rolling_batches"] = 1
+        state["buffered_line_offset"] = 2
+        state["staged_payload_pending_flush"] = True
+        state["source_transcript_path"] = str(original)
+        state_file.write_text(json.dumps(state), encoding="utf-8")
+        cursor_dir = tmp_path / "instances" / instance_id / "data" / "session-cursors"
+        cursor_dir.mkdir(parents=True, exist_ok=True)
+
+        captured = []
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", instance_id)
+        monkeypatch.setattr(extraction_daemon, "_read_installed_at", lambda: 0.0)
+        monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
+        monkeypatch.setattr(
+            extraction_daemon,
+            "write_signal",
+            lambda signal_type, session_id, transcript_path, **kwargs: captured.append(
+                {
+                    "signal_type": signal_type,
+                    "session_id": session_id,
+                    "transcript_path": transcript_path,
+                    "meta": kwargs.get("meta", {}),
+                }
+            ),
+        )
+
+        extraction_daemon.check_idle_sessions(timeout_minutes=30)
+
+        assert len(captured) == 1
+        assert captured[0]["signal_type"] == "session_end"
+        assert captured[0]["session_id"] == "day-runtime-2026-03-18"
+        assert captured[0]["transcript_path"] == str(original)
+        assert captured[0]["meta"]["reason"] == "rolling_stage_flush"
+        assert captured[0]["meta"]["recovered_missing_flush"] is True
+        assert captured[0]["meta"]["recovered_from_rolling_state"] is True
+
+    def test_recovers_missing_snapshot_from_extraction_cache_when_source_path_absent(
+        self, monkeypatch, tmp_path
+    ):
+        """Existing stranded states from older daemons may lack source_transcript_path."""
+        instance_id = os.environ.get("QUAID_INSTANCE", "pytest-runner")
+        original = tmp_path / "extraction_cache" / "day-010-2026-03-18.jsonl"
+        original.parent.mkdir(parents=True, exist_ok=True)
+        original.write_text(
+            '{"role":"user","content":"old"}\n{"role":"assistant","content":"done"}\n',
+            encoding="utf-8",
+        )
+        snapshot = (
+            tmp_path
+            / "instances"
+            / instance_id
+            / "logs"
+            / "daemon"
+            / "rolling-transcript-snapshots"
+            / "day-runtime-2026-03-18"
+            / "20260614T010553Z-1dbe461839edb8ce"
+            / original.name
+        )
+        state_file = self._setup_rolling_state(
+            tmp_path,
+            instance_id,
+            "day-runtime-2026-03-18",
+            [{"text": "staged fact", "category": "fact"}],
+            snapshot,
+        )
+        state = json.loads(state_file.read_text(encoding="utf-8"))
+        state["rolling_batches"] = 1
+        state["buffered_line_offset"] = 2
+        state["staged_payload_pending_flush"] = True
+        state_file.write_text(json.dumps(state), encoding="utf-8")
+        cursor_dir = tmp_path / "instances" / instance_id / "data" / "session-cursors"
+        cursor_dir.mkdir(parents=True, exist_ok=True)
+
+        captured = []
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", instance_id)
+        monkeypatch.setattr(extraction_daemon, "_read_installed_at", lambda: 0.0)
+        monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
+        monkeypatch.setattr(
+            extraction_daemon,
+            "write_signal",
+            lambda signal_type, session_id, transcript_path, **kwargs: captured.append(
+                {
+                    "signal_type": signal_type,
+                    "session_id": session_id,
+                    "transcript_path": transcript_path,
+                    "meta": kwargs.get("meta", {}),
+                }
+            ),
+        )
+
+        extraction_daemon.check_idle_sessions(timeout_minutes=30)
+
+        assert len(captured) == 1
+        assert captured[0]["transcript_path"] == str(original)
+        assert captured[0]["meta"]["recovered_missing_flush"] is True
 
     def test_missing_rolling_stage_flush_recovery_waits_for_active_source_lock(self, monkeypatch, tmp_path):
         """Durable-state recovery must not publish while a live rolling worker owns the source lock."""

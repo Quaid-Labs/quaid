@@ -1371,18 +1371,25 @@ def _fail_hard_enabled() -> bool:
         return True
 
 
-def _is_daemon_rolling_transcript_snapshot_path(transcript_path: str) -> bool:
+def _is_daemon_rolling_transcript_snapshot_location(transcript_path: str) -> bool:
     raw = str(transcript_path or "").strip()
     if not raw:
         return False
     try:
-        path = Path(raw).expanduser().resolve()
+        path = Path(raw).expanduser().resolve(strict=False)
         root = (_instance_root() / "logs" / "daemon" / "rolling-transcript-snapshots").resolve()
-        return path.is_file() and path.is_relative_to(root)
+        return path.is_relative_to(root)
     except OSError as exc:
         if _should_raise_transcript_stat_error(raw, exc):
             raise
         return False
+
+
+def _is_daemon_rolling_transcript_snapshot_path(transcript_path: str) -> bool:
+    raw = str(transcript_path or "").strip()
+    if not raw:
+        return False
+    return Path(raw).expanduser().is_file() and _is_daemon_rolling_transcript_snapshot_location(raw)
 
 
 def _is_daemon_preserved_session_transcript_path(transcript_path: str) -> bool:
@@ -1479,6 +1486,18 @@ def _cleanup_daemon_transcript_snapshot_path(transcript_path: str) -> None:
             parent = parent.parent
     except OSError as exc:
         logger.debug("failed to clean rolling transcript snapshot %s: %s", raw, exc)
+
+
+def _cleanup_rolling_state_snapshot_paths(state: Any) -> None:
+    if not isinstance(state, dict):
+        return
+    seen: set[str] = set()
+    for key in ("transcript_path", "buffer_transcript_path"):
+        raw = str(state.get(key) or "").strip()
+        if not raw or raw in seen:
+            continue
+        seen.add(raw)
+        _cleanup_daemon_transcript_snapshot_path(raw)
 
 
 def write_cursor(
@@ -2238,6 +2257,78 @@ def _source_signal_already_pending(
     return True
 
 
+def _extraction_cache_source_for_missing_rolling_snapshot(transcript_path: str) -> str:
+    raw = str(transcript_path or "").strip()
+    if not raw or not _is_daemon_rolling_transcript_snapshot_location(raw):
+        return ""
+    try:
+        snapshot_path = Path(raw).expanduser()
+        basename = snapshot_path.name
+        if not basename:
+            return ""
+        for parent in snapshot_path.parents:
+            candidate = parent / "extraction_cache" / basename
+            if candidate.is_file():
+                return str(candidate)
+    except OSError as exc:
+        if _fail_hard_enabled():
+            raise
+    return ""
+
+
+def _rolling_state_flush_transcript_path(session_id: str, rolling: Dict[str, Any]) -> str:
+    """Return an existing transcript path that can drive a staged flush."""
+    primary = str(rolling.get("transcript_path") or rolling.get("buffer_transcript_path") or "").strip()
+    missing_basename = Path(primary).name if primary else ""
+    candidates: List[str] = []
+    for key in ("transcript_path", "buffer_transcript_path", "source_transcript_path"):
+        value = str(rolling.get(key) or "").strip()
+        if value:
+            candidates.append(value)
+
+    def _add_cursor_candidate(cursor: Dict[str, Any]) -> None:
+        if str(cursor.get("session_id") or "").strip() != str(session_id or "").strip():
+            return
+        value = str(cursor.get("transcript_path") or "").strip()
+        if value:
+            candidates.append(value)
+
+    try:
+        _add_cursor_candidate(read_cursor(session_id))
+    except Exception as exc:
+        if _fail_hard_enabled():
+            raise
+        logger.debug("failed reading cursor for staged rolling recovery %s: %s", session_id, exc)
+    try:
+        for cursor_file in _cursor_dir().glob("*.json"):
+            try:
+                raw_cursor = json.loads(cursor_file.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                continue
+            if isinstance(raw_cursor, dict):
+                _add_cursor_candidate(raw_cursor)
+    except OSError as exc:
+        if _fail_hard_enabled():
+            raise
+        logger.debug("failed scanning cursors for staged rolling recovery %s: %s", session_id, exc)
+
+    seen: set[str] = set()
+    for candidate in candidates:
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        if missing_basename and Path(candidate).name != missing_basename:
+            continue
+        if os.path.isfile(candidate):
+            return candidate
+
+    if primary:
+        cache_candidate = _extraction_cache_source_for_missing_rolling_snapshot(primary)
+        if cache_candidate:
+            return cache_candidate
+    return ""
+
+
 def _queue_missing_staged_rolling_flushes_from_state(
     *,
     pending_session_ids: set[str],
@@ -2264,8 +2355,8 @@ def _queue_missing_staged_rolling_flushes_from_state(
             continue
         if session_id in pending_session_ids:
             continue
-        transcript_path = str(rolling.get("transcript_path") or rolling.get("buffer_transcript_path") or "").strip()
-        if not transcript_path or not os.path.isfile(transcript_path):
+        transcript_path = _rolling_state_flush_transcript_path(session_id, rolling)
+        if not transcript_path:
             continue
         source_key = _signal_source_cursor_key(
             session_id,
@@ -2677,6 +2768,14 @@ def write_rolling_state(session_id: str, state: Dict[str, Any]) -> None:
 
 def clear_rolling_state(session_id: str) -> None:
     target_path = _rolling_state_path(session_id)
+    target_payload: Dict[str, Any] = {}
+    try:
+        if target_path.is_file():
+            raw_payload = json.loads(target_path.read_text(encoding="utf-8"))
+            if isinstance(raw_payload, dict):
+                target_payload = raw_payload
+    except Exception:
+        target_payload = {}
     removed = False
     try:
         target_path.unlink()
@@ -2687,6 +2786,7 @@ def clear_rolling_state(session_id: str) -> None:
         logger.warning("rolling state unlink failed for %s at %s: %s", session_id, target_path, exc)
 
     if removed:
+        _cleanup_rolling_state_snapshot_paths(target_payload)
         return
 
     # Reconcile stale files whose basename drifted from the logical session_id
@@ -2698,10 +2798,13 @@ def clear_rolling_state(session_id: str) -> None:
                 payload = json.loads(state_file.read_text(encoding="utf-8"))
             except Exception:
                 continue
+            if not isinstance(payload, dict):
+                continue
             if str(payload.get("session_id") or "").strip() != str(session_id or "").strip():
                 continue
             try:
                 state_file.unlink()
+                _cleanup_rolling_state_snapshot_paths(payload)
             except OSError as exc:
                 logger.warning("rolling state unlink failed for %s at %s: %s", session_id, state_file, exc)
     except OSError:
@@ -3921,6 +4024,38 @@ def _reset_semantic_buffer_for_source(state: Dict[str, Any], buffer_transcript_p
     reset["semantic_buffer_tail_tokens"] = 0
     reset.pop(_INTERNAL_CURSOR_UNFROZEN_PENDING_FLUSH_KEY, None)
     return reset
+
+
+def _record_staged_source_transcript_path(
+    session_id: str,
+    staged_state: Dict[str, Any],
+    transcript_path: str,
+    signal_meta: Dict[str, Any],
+) -> Dict[str, Any]:
+    if not staged_state_has_payload(staged_state):
+        return staged_state
+    if not _is_daemon_owned_transcript_snapshot_path(transcript_path):
+        return staged_state
+    source_path = str(signal_meta.get("source_transcript_path") or "").strip()
+    if not source_path:
+        return staged_state
+    updated = dict(staged_state or {})
+    if str(updated.get("source_transcript_path") or "").strip() == source_path:
+        return staged_state
+    updated["source_transcript_path"] = source_path
+    write_rolling_state(session_id, updated)
+    return updated
+
+
+def _processed_rolling_snapshot_can_be_cleaned(transcript_path: str, staged_state: Dict[str, Any]) -> bool:
+    if not staged_state_has_payload(staged_state):
+        return True
+    if not _is_daemon_rolling_transcript_snapshot_path(transcript_path):
+        return True
+    source_path = str((staged_state or {}).get("source_transcript_path") or "").strip()
+    if not source_path or source_path == str(transcript_path or "").strip():
+        return False
+    return os.path.isfile(source_path)
 
 
 def _rolling_state_has_pending_content(state: Dict[str, Any]) -> bool:
@@ -5477,8 +5612,11 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
 
     if not transcript_path or not os.path.isfile(transcript_path):
         for _fallback_source, _fallback_path in (
+            ("signal_meta_source", str(signal_meta.get("source_transcript_path") or "").strip()),
             ("cursor", str(cursor_data.get("transcript_path") or "").strip()),
             ("rolling_state", str(staged_state.get("transcript_path") or "").strip()),
+            ("rolling_state_source", str(staged_state.get("source_transcript_path") or "").strip()),
+            ("rolling_state_buffer", str(staged_state.get("buffer_transcript_path") or "").strip()),
         ):
             if _fallback_path and os.path.isfile(_fallback_path):
                 transcript_path = _fallback_path
@@ -6463,6 +6601,12 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                 and staged_processed_offset > int(cursor_offset or 0)
                 and staged_processed_offset >= staged_buffered_offset
             ):
+                staged_state = _record_staged_source_transcript_path(
+                    session_id,
+                    staged_state,
+                    transcript_path,
+                    signal_meta,
+                )
                 logger.warning(
                     "[%s] session %s: rolling signal cursor is behind an already-staged payload "
                     "(cursor=%d staged_offset=%d); advancing cursor and requeueing staged flush",
@@ -6526,7 +6670,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                     },
                 )
                 mark_signal_processed(signal_data)
-                if not has_remaining_tail:
+                if _processed_rolling_snapshot_can_be_cleaned(transcript_path, staged_state):
                     _cleanup_daemon_transcript_snapshot_path(transcript_path)
                 return
             if not transcript_text.strip():
@@ -6583,6 +6727,12 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                 chunk_budget=chunk_budget,
                 chunk_line_budget=chunk_line_budget,
             )
+            staged_state = _record_staged_source_transcript_path(
+                session_id,
+                staged_state,
+                transcript_path,
+                signal_meta,
+            )
             write_cursor(
                 session_id,
                 buffered_line_offset,
@@ -6638,7 +6788,8 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                     },
                 )
             mark_signal_processed(signal_data)
-            _cleanup_daemon_transcript_snapshot_path(transcript_path)
+            if _processed_rolling_snapshot_can_be_cleaned(transcript_path, staged_state):
+                _cleanup_daemon_transcript_snapshot_path(transcript_path)
             return
 
         tail_result = None
