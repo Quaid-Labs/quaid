@@ -609,7 +609,7 @@ describe("install daemon policy", () => {
     expect(postinstallText).toContain("configJson.features = {");
     expect(postinstallText).toContain('updatedToml = removeTomlTopLevelKey(currentToml, "hooks");');
     expect(postinstallText).toContain('updatedToml = stripManagedHookTomlBlocks(updatedToml, managedCommands);');
-    expect(postinstallText).toContain('updatedToml = `${updatedToml.replace(/\\n*$/, "\\n\\n")}${managedHookTomlBlocks(desiredHooks)}`;');
+    expect(postinstallText).not.toContain("managedHookTomlBlocks(desiredHooks)");
     expect(postinstallText).toContain("delete configJson.features.codex_hooks;");
     expect(postinstallText).toContain('updatedToml = removeTomlBool(updatedToml, "features", "codex_hooks");');
     expect(postinstallText).toContain('updatedToml = upsertTomlBool(updatedToml, "features", "hooks", true);');

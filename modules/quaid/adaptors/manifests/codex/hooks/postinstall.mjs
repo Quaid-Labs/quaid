@@ -369,16 +369,14 @@ for (const candidate of trustCandidates) {
 writeJson(configJsonPath, configJson);
 
 let currentToml = fs.existsSync(configPath) ? fs.readFileSync(configPath, "utf8") : "";
-// Codex 0.125+ expects inline HookEventsToml. Keep hooks.json for Quaid's own
-// introspection, but do not point config.toml at it with the legacy string key.
+// Keep Codex hooks in hooks.json only. Codex warns and executes duplicate hooks
+// when the same events are present in both hooks.json and inline config.toml.
 let updatedToml = removeTomlTopLevelKey(currentToml, "hooks");
 // Enable the current Codex hooks feature flag. codex_hooks is deprecated and
 // ignored by Codex 0.139+.
 updatedToml = removeTomlBool(updatedToml, "features", "codex_hooks");
 updatedToml = upsertTomlBool(updatedToml, "features", "hooks", true);
 updatedToml = stripManagedHookTomlBlocks(updatedToml, managedCommands);
-updatedToml = ensureTomlTable(updatedToml, "hooks");
-updatedToml = `${updatedToml.replace(/\n*$/, "\n\n")}${managedHookTomlBlocks(desiredHooks)}`;
 for (const candidate of trustCandidates) {
   updatedToml = upsertTomlStringInTable(
     updatedToml,
