@@ -11,7 +11,7 @@ from lib.tokens import estimate_tokens
 # older coarse transcript evidence chunks. Keep them small enough to inject as
 # "possible match" context and expand by pair_id only when needed.
 DEFAULT_MICROCHUNK_TOKENS = 40
-_ROLE_RE = re.compile(r"^\s*(?:\[[^\]]+\]\s*)?([A-Za-z][A-Za-z _-]{0,32})\s*:\s*(.*)$")
+_ROLE_RE = re.compile(r"^\s*(?:\[[^\]]+\]\s*)?([^\s:][^:\r\n]{0,80})\s*:\s*(.*)$")
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
 
 
@@ -20,11 +20,18 @@ def _clean(value: Any) -> str:
 
 
 def _normalize_role(role: str) -> Optional[str]:
-    text = _clean(role).lower().replace("_", " ").replace("-", " ")
-    if text in {"user", "human", "operator"}:
-        return "user"
-    if text in {"assistant", "agent", "bot"}:
-        return "assistant"
+    raw = _clean(role).casefold()
+    if not raw:
+        return None
+    candidates = [raw]
+    if "/" in raw:
+        candidates.append(raw.rsplit("/", 1)[-1].strip())
+    for candidate in candidates:
+        text = re.sub(r"[\s_-]+", " ", candidate).strip()
+        if text in {"user", "human", "operator"}:
+            return "user"
+        if text in {"assistant", "agent", "bot"}:
+            return "assistant"
     return None
 
 
