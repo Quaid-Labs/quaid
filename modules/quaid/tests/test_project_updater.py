@@ -384,10 +384,13 @@ class TestAppendProjectLogs:
         assert _project_log_now().tzinfo is timezone.utc
 
     def test_project_log_history_malformed_quaid_now_honors_failhard(self, setup_env, monkeypatch):
+        from datastore.docsdb.registry import DocsRegistry
         from datastore.docsdb import project_updater
 
         tmp_path = setup_env
         project_log = tmp_path / "projects" / "test-project" / "PROJECT.log"
+        # Isolate the project-log clock check from docs-registry first-run seed writes.
+        DocsRegistry()
         monkeypatch.setenv("QUAID_NOW", "not-a-clock")
 
         with patch("datastore.docsdb.project_updater.is_fail_hard_enabled", return_value=True):

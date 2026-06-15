@@ -29,8 +29,9 @@ def setup_env(tmp_path, monkeypatch):
     set_adapter(adapter)
     iroot = adapter.instance_root()
 
-    _tmp_db = iroot / "test_registry.db"
-    monkeypatch.setenv("MEMORY_DB_PATH", str(_tmp_db))
+    _tmp_db = iroot / "docs.db"
+    monkeypatch.setenv("DOCS_DB_PATH", str(_tmp_db))
+    monkeypatch.setenv("MEMORY_DB_PATH", str(iroot / "memory.db"))
     monkeypatch.setenv("OPENCLAW_WORKSPACE", str(iroot))  # kept for backward compat
 
     # Create minimal config
@@ -211,6 +212,44 @@ class TestEnsureTable:
         assert pd.patterns == ["*.md"]
         assert pd.exclude == ["*.db", "*.log", "*.pyc", "__pycache__/"]
 
+    def test_seeded_project_definition_honors_quaid_now(self, setup_env, monkeypatch):
+        """Initial project definition seed uses the runtime clock."""
+        from lib.database import get_connection
+
+        monkeypatch.setenv("QUAID_NOW", "2026-04-05T06:07:08Z")
+        r = _get_registry()
+
+        with get_connection(r.db_path) as conn:
+            row = conn.execute(
+                "SELECT created_at, updated_at FROM project_definitions WHERE name = ?",
+                ("test-project",),
+            ).fetchone()
+
+        assert row is not None
+        assert row["created_at"] == "2026-04-05T06:07:08+00:00"
+        assert row["updated_at"] == "2026-04-05T06:07:08+00:00"
+
+    def test_seeded_project_definition_bad_quaid_now_honors_failhard(self, setup_env, monkeypatch):
+        from datastore.docsdb import registry as registry_mod
+
+        monkeypatch.setenv("QUAID_NOW", "not-a-date")
+        monkeypatch.setattr(registry_mod, "_fail_hard_enabled", lambda: True)
+
+        with pytest.raises(RuntimeError, match="Invalid QUAID_NOW"):
+            registry_mod.DocsRegistry(db_path=setup_env / "bad-clock-docs.db")
+
+    def test_seeded_project_definition_bad_quaid_now_fails_open(self, setup_env, monkeypatch, caplog):
+        from datastore.docsdb import registry as registry_mod
+
+        monkeypatch.setenv("QUAID_NOW", "not-a-date")
+        monkeypatch.setattr(registry_mod, "_fail_hard_enabled", lambda: False)
+
+        with caplog.at_level(logging.WARNING):
+            registry = registry_mod.DocsRegistry(db_path=setup_env / "fallback-clock-docs.db")
+
+        assert registry.get_project_definition("test-project") is not None
+        assert "Invalid QUAID_NOW" in caplog.text
+
 
 class TestRegisterAndGet:
     def test_register_basic(self, setup_env):
@@ -224,6 +263,46 @@ class TestRegisterAndGet:
         assert entry["project"] == "test-project"
         assert entry["title"] == "Test Doc"
         assert entry["state"] == "active"
+
+    def test_register_honors_quaid_now_for_registered_at(self, setup_env, monkeypatch):
+        r = _get_registry()
+
+        monkeypatch.setenv("QUAID_NOW", "2026-01-02T03:04:05Z")
+        row_id = r.register("docs/clocked.md", project="test-project", title="Clocked")
+        assert row_id > 0
+        entry = r.get("docs/clocked.md")
+        assert entry is not None
+        assert entry["registered_at"] == "2026-01-02T03:04:05+00:00"
+
+        monkeypatch.setenv("QUAID_NOW", "2026-02-03T04:05:06Z")
+        assert r.register("docs/clocked.md", project="test-project", title="Clocked v2") == row_id
+        entry = r.get("docs/clocked.md")
+        assert entry["title"] == "Clocked v2"
+        assert entry["registered_at"] == "2026-01-02T03:04:05+00:00"
+
+    def test_register_bad_quaid_now_honors_failhard(self, setup_env, monkeypatch):
+        from datastore.docsdb import registry as registry_mod
+
+        r = _get_registry()
+        monkeypatch.setenv("QUAID_NOW", "not-a-date")
+        monkeypatch.setattr(registry_mod, "_fail_hard_enabled", lambda: True)
+
+        with pytest.raises(RuntimeError, match="Invalid QUAID_NOW"):
+            r.register("docs/bad-clock.md")
+
+    def test_register_bad_quaid_now_fails_open(self, setup_env, monkeypatch, caplog):
+        from datastore.docsdb import registry as registry_mod
+
+        r = _get_registry()
+        monkeypatch.setenv("QUAID_NOW", "not-a-date")
+        monkeypatch.setattr(registry_mod, "_fail_hard_enabled", lambda: False)
+
+        with caplog.at_level(logging.WARNING):
+            row_id = r.register("docs/fallback-clock.md")
+
+        assert row_id > 0
+        assert r.get("docs/fallback-clock.md") is not None
+        assert "Invalid QUAID_NOW" in caplog.text
 
     def test_register_rejects_path_escape(self, setup_env):
         r = _get_registry()
@@ -1531,6 +1610,91 @@ class TestProjectDefinitionsTable:
             ).fetchone()
             assert row is not None
             assert row["state"] == "deleted"
+
+    def test_project_definition_writes_honor_quaid_now(self, setup_env, monkeypatch):
+        """Definition create/update/delete timestamps use the runtime clock."""
+        from config import ProjectDefinition
+        from lib.database import get_connection
+
+        r = _get_registry()
+        monkeypatch.setenv("QUAID_NOW", "2026-03-04T05:06:07Z")
+        r.save_project_definition(
+            "clock-proj",
+            ProjectDefinition(label="Clock Project", home_dir="projects/clock-proj/"),
+            link_current_instance=False,
+        )
+
+        with get_connection(r.db_path) as conn:
+            row = conn.execute(
+                "SELECT created_at, updated_at FROM project_definitions WHERE name = ?",
+                ("clock-proj",),
+            ).fetchone()
+        assert row is not None
+        assert row["created_at"] == "2026-03-04T05:06:07+00:00"
+        assert row["updated_at"] == "2026-03-04T05:06:07+00:00"
+
+        monkeypatch.setenv("QUAID_NOW", "2026-03-05T05:06:07Z")
+        r.save_project_definition(
+            "clock-proj",
+            ProjectDefinition(label="Clock Project Updated", home_dir="projects/clock-proj/"),
+            link_current_instance=False,
+        )
+        with get_connection(r.db_path) as conn:
+            row = conn.execute(
+                "SELECT created_at, updated_at FROM project_definitions WHERE name = ?",
+                ("clock-proj",),
+            ).fetchone()
+        assert row["created_at"] == "2026-03-04T05:06:07+00:00"
+        assert row["updated_at"] == "2026-03-05T05:06:07+00:00"
+
+        monkeypatch.setenv("QUAID_NOW", "2026-03-06T05:06:07Z")
+        r.delete_project_definition("clock-proj")
+        with get_connection(r.db_path) as conn:
+            row = conn.execute(
+                "SELECT state, updated_at FROM project_definitions WHERE name = ?",
+                ("clock-proj",),
+            ).fetchone()
+        assert row["state"] == "deleted"
+        assert row["updated_at"] == "2026-03-06T05:06:07+00:00"
+
+    def test_project_definition_bad_quaid_now_honors_failhard(self, setup_env, monkeypatch):
+        from config import ProjectDefinition
+        from datastore.docsdb import registry as registry_mod
+
+        r = _get_registry()
+        monkeypatch.setenv("QUAID_NOW", "not-a-date")
+        monkeypatch.setattr(registry_mod, "_fail_hard_enabled", lambda: True)
+
+        with pytest.raises(RuntimeError, match="Invalid QUAID_NOW"):
+            r.save_project_definition(
+                "bad-clock-proj",
+                ProjectDefinition(label="Bad Clock", home_dir="projects/bad-clock-proj/"),
+                link_current_instance=False,
+            )
+
+    def test_rename_project_marks_old_definition_with_quaid_now(self, setup_env, monkeypatch):
+        """Renaming a DB-backed project timestamps the old deleted definition."""
+        from lib.database import get_connection
+
+        r = _get_registry()
+        monkeypatch.setenv("QUAID_NOW", "2026-03-07T05:06:07Z")
+
+        r.rename_project("test-project", "renamed-clock-proj")
+
+        with get_connection(r.db_path) as conn:
+            old_row = conn.execute(
+                "SELECT state, updated_at FROM project_definitions WHERE name = ?",
+                ("test-project",),
+            ).fetchone()
+            new_row = conn.execute(
+                "SELECT updated_at FROM project_definitions WHERE name = ?",
+                ("renamed-clock-proj",),
+            ).fetchone()
+        assert old_row is not None
+        assert old_row["state"] == "deleted"
+        assert old_row["updated_at"] == "2026-03-07T05:06:07+00:00"
+        assert new_row is not None
+        assert new_row["updated_at"] == "2026-03-07T05:06:07+00:00"
 
     def test_get_all_excludes_deleted(self, setup_env):
         """Only active definitions returned by get_all_project_definitions."""

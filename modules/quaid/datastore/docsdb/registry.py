@@ -361,6 +361,19 @@ def _get_default_db_path() -> Path:
     return get_docs_db_path()
 
 
+def _now_iso() -> str:
+    """Return the effective docs-registry write timestamp."""
+    raw = str(os.environ.get("QUAID_NOW", "") or "").strip()
+    if raw:
+        try:
+            return datetime.fromisoformat(raw.replace("Z", "+00:00")).isoformat()
+        except ValueError as exc:
+            if _fail_hard_enabled():
+                raise RuntimeError(f"Invalid QUAID_NOW={raw!r}") from exc
+            logger.warning("Invalid QUAID_NOW=%r; using wall clock", raw)
+    return datetime.now(timezone.utc).isoformat()
+
+
 def _format_bullets(items: List[str], *, empty: str) -> str:
     cleaned = [str(item).strip() for item in items if str(item).strip()]
     if not cleaned:
@@ -700,10 +713,11 @@ class DocsRegistry:
                 config_data = json.loads(config_path.read_text())
                 definitions = config_data.get("projects", {}).get("definitions", {})
                 for name, proj_data in definitions.items():
+                    now_iso = _now_iso()
                     conn.execute("""
                         INSERT OR IGNORE INTO project_definitions
-                        (name, label, home_dir, source_roots, auto_index, patterns, exclude, description)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        (name, label, home_dir, source_roots, auto_index, patterns, exclude, description, created_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, (
                         name,
                         proj_data.get("label", ""),
@@ -724,10 +738,14 @@ class DocsRegistry:
                             default=["*.db", "*.log", "*.pyc", "__pycache__/"],
                         )),
                         proj_data.get("description", ""),
+                        now_iso,
+                        now_iso,
                     ))
                 if definitions:
                     print(f"[docs_registry] Seeded {len(definitions)} project definitions from config/config.json", file=sys.stderr)
             except Exception as e:
+                if _fail_hard_enabled():
+                    raise
                 print(f"[docs_registry] Warning: failed to seed from JSON: {e}", file=sys.stderr)
 
     # ========================================================================
@@ -831,10 +849,11 @@ class DocsRegistry:
     def delete_project_definition(self, name: str):
         """Soft-delete a project definition (set state to 'deleted')."""
         name = _normalize_project_name(name)
+        now_iso = _now_iso()
         with get_connection(self.db_path) as conn:
             conn.execute(
                 "UPDATE project_definitions SET state = 'deleted', updated_at = ? WHERE name = ?",
-                (_now_iso(), name,)
+                (now_iso, name)
             )
 
     def _syncable_project_name(self, project: Optional[str]) -> Optional[str]:
@@ -1172,14 +1191,15 @@ class DocsRegistry:
                     f"File '{file_path}' is already registered to project '{existing[0]}'. "
                     "Use move-file to reassign ownership explicitly."
                 )
+            now_iso = _now_iso()
             conn.execute("""
                 INSERT INTO doc_registry
                     (file_path, project, asset_type, title, description, tags,
                      auto_update, source_files, source_channel, source_conversation_id,
                      source_author_id, speaker_entity_id, subject_entity_id, conversation_id,
                      visibility_scope, sensitivity, participant_entity_ids,
-                     provenance_confidence, registered_by)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     provenance_confidence, registered_at, registered_by)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(file_path) DO UPDATE SET
                     project = excluded.project,
                     asset_type = excluded.asset_type,
@@ -1222,6 +1242,7 @@ class DocsRegistry:
                 str(sensitivity or "").strip() or None,
                 json.dumps(participant_entity_ids or []) if participant_entity_ids is not None else None,
                 float(provenance_confidence) if provenance_confidence is not None else None,
+                now_iso,
                 registered_by,
             ))
             row = conn.execute(
@@ -1829,9 +1850,10 @@ class DocsRegistry:
 
                 if db_defn:
                     self._write_project_definition_row_on_conn(conn, new_name, db_defn)
+                    now_iso = _now_iso()
                     conn.execute(
                         "UPDATE project_definitions SET state = 'deleted', updated_at = ? WHERE name = ?",
-                        (_now_iso(), old_name,),
+                        (now_iso, old_name),
                     )
         except Exception:
             if dir_moved and old_dir is not None and new_dir is not None and new_dir.exists() and not old_dir.exists():
