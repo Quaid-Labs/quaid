@@ -4733,7 +4733,7 @@ def extract_entities_from_text(text: str) -> List[Node]:
                         """
                         SELECT n.*
                         FROM nodes n
-                        WHERE n.name LIKE ?
+                        WHERE n.name LIKE ? ESCAPE '\\'
                           AND n.type IN ('Person', 'Place', 'Pet', 'Organization')
                         ORDER BY
                             LENGTH(n.name),
@@ -4749,7 +4749,7 @@ def extract_entities_from_text(text: str) -> List[Node]:
                             n.rowid DESC
                         LIMIT 1
                         """,
-                        (word + "%",)
+                        (_escape_like_pattern(word) + "%",)
                     ).fetchone()
                 if row:
                     node = graph._row_to_node(row)
@@ -4853,6 +4853,11 @@ def _text_mentions_graph_anchor(text: str, anchor_text: str) -> bool:
     return anchor in haystack
 
 
+def _escape_like_pattern(value: str) -> str:
+    """Escape user-controlled text for literal SQL LIKE pattern matching."""
+    return str(value or "").replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 def _graph_mentioned_fact_nodes(
     graph: "MemoryGraph",
     *,
@@ -4877,13 +4882,13 @@ def _graph_mentioned_fact_nodes(
                 SELECT *
                 FROM nodes
                 WHERE LOWER(type) = 'fact'
-                  AND name LIKE ?
+                  AND name LIKE ? ESCAPE '\\'
                   AND superseded_by IS NULL
                   AND (status IS NULL OR status IN ('approved', 'pending', 'active'))
                 ORDER BY confirmation_count DESC, accessed_at DESC, created_at DESC
                 LIMIT ?
                 """,
-                (f"%{anchor}%", max(max(1, int(limit or 1)) * 16, 256)),
+                (f"%{_escape_like_pattern(anchor)}%", max(max(1, int(limit or 1)) * 16, 256)),
             ).fetchall()
     except Exception:
         return []
@@ -24511,9 +24516,9 @@ def generate_entity_summary(node_id: str, use_llm: bool = True) -> Optional[str]
 
     # Also search for facts that mention the entity name
     with graph._get_conn() as conn:
-        name_pattern = f"%{node.name}%"
+        name_pattern = f"%{_escape_like_pattern(node.name)}%"
         rows = conn.execute(
-            "SELECT name FROM nodes WHERE type IN ('Fact', 'Preference') AND name LIKE ? AND id != ? LIMIT 30",
+            "SELECT name FROM nodes WHERE type IN ('Fact', 'Preference') AND name LIKE ? ESCAPE '\\' AND id != ? LIMIT 30",
             (name_pattern, node_id)
         ).fetchall()
         for row in rows:

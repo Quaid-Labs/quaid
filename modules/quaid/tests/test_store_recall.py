@@ -19401,6 +19401,72 @@ class TestGraphFactClusterRecall:
         assert fake_conn.params[1] >= 256
         assert [fact.id for fact in facts] == ["ingredient", "recent-0"]
 
+    def test_graph_mentioned_fact_nodes_escapes_like_wildcards(self):
+        import datastore.memorydb.memory_graph as mg
+
+        class FakeConn:
+            def __init__(self):
+                self.sql = ""
+                self.params = None
+
+            def execute(self, sql, params, **_kwargs):
+                self.sql = sql
+                self.params = params
+
+                class Cursor:
+                    def fetchall(self_inner):
+                        return [{"id": "exact"}, {"id": "wildcard"}]
+
+                return Cursor()
+
+        fake_conn = FakeConn()
+
+        class FakeGraph:
+            def _get_conn(self):
+                class Ctx:
+                    def __enter__(self_inner):
+                        return fake_conn
+
+                    def __exit__(self_inner, *_exc):
+                        return False
+
+                return Ctx()
+
+            def _row_to_node(self, row):
+                if row["id"] == "exact":
+                    return mg.Node(id="exact", type="Fact", name="Ari_1 owns the blue notebook.")
+                return mg.Node(id="wildcard", type="Fact", name="AriX1 owns the red notebook.")
+
+        facts = mg._graph_mentioned_fact_nodes(
+            FakeGraph(),
+            anchor_text="Ari_1",
+            query="Which notebook belongs to Ari_1?",
+            seen_ids=set(),
+            limit=2,
+        )
+
+        assert "ESCAPE '\\'" in fake_conn.sql
+        assert fake_conn.params[0] == "%Ari\\_1%"
+        assert [fact.id for fact in facts] == ["exact"]
+
+    def test_generate_entity_summary_escapes_like_wildcards(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _ = _make_graph(tmp_path)
+        entity = mg.Node.create("Person", "A_B", owner_id="operator")
+        exact = mg.Node.create("Fact", "A_B keeps the blue notebook.", owner_id="operator")
+        wildcard = mg.Node.create("Fact", "A1B keeps the red notebook.", owner_id="operator")
+        graph.add_node(entity, embed=False)
+        graph.add_node(exact, embed=False)
+        graph.add_node(wildcard, embed=False)
+
+        with patch.object(mg, "get_graph", return_value=graph):
+            summary = mg.generate_entity_summary(entity.id, use_llm=False)
+
+        assert summary is not None
+        assert "blue notebook" in summary
+        assert "red notebook" not in summary
+
     def test_graph_attached_fact_rows_do_not_demote_query_matching_mentioned_facts(self, tmp_path):
         import datastore.memorydb.memory_graph as mg
 
