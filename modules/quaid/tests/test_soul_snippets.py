@@ -1111,15 +1111,15 @@ class TestDistillation:
 
 
 class TestWriteJournalEdgeCases:
-    def test_date_defaults_to_today(self, workspace_dir, mock_config):
-        """write_journal_entry with date_str=None defaults to today."""
+    def test_date_defaults_to_quaid_now(self, workspace_dir, mock_config, monkeypatch):
+        """write_journal_entry with date_str=None defaults to QUAID_NOW."""
+        monkeypatch.setenv("QUAID_NOW", "2026-03-11T05:06:07Z")
         with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
             from datastore.insightdb.soul_snippets import write_journal_entry
             result = write_journal_entry("SOUL.md", "Auto-dated entry.", "Compaction")
         assert result is True
         content = (workspace_dir / "journal" / "SOUL.journal.md").read_text()
-        today = datetime.now().strftime("%Y-%m-%d")
-        assert today in content
+        assert "2026-03-11" in content
 
     def test_whitespace_only_content_skipped(self, workspace_dir, mock_config):
         """write_journal_entry rejects whitespace-only content."""
@@ -1334,6 +1334,22 @@ class TestMigrationFromSnippets:
         assert "2026-02-10" in dates
         assert "2026-02-09" in dates
 
+    def test_migration_undated_header_defaults_to_quaid_now(self, workspace_dir, mock_config, monkeypatch):
+        monkeypatch.setenv("QUAID_NOW", "2026-03-11T05:06:07Z")
+        (workspace_dir / "SOUL.snippets.md").write_text(
+            "# SOUL — Pending Snippets\n\n"
+            "## Compaction\n"
+            "- I noticed the undated migration fallback.\n"
+        )
+
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import migrate_snippets_to_journal, read_journal_file
+            migrated = migrate_snippets_to_journal()
+            _, entries = read_journal_file("SOUL.md")
+
+        assert migrated == 1
+        assert entries[0]["date"] == "2026-03-11"
+
 
 # =============================================================================
 # Disabled config test
@@ -1375,6 +1391,22 @@ class TestLegacyReadSnippetsFile:
 
 
 class TestMemoryProjectionFromSnippets:
+    def test_memory_snippet_write_defaults_to_quaid_now(self, workspace_dir, mock_config, monkeypatch):
+        monkeypatch.setenv("QUAID_NOW", "2026-03-11T05:06:07Z")
+
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import write_snippet_entry
+
+            result = write_snippet_entry(
+                "ENVIRONMENT.md",
+                ["Selene Pike is Owner's test grandaunt."],
+                "Reset",
+            )
+
+        assert result is True
+        snippets_content = (workspace_dir / "ENVIRONMENT.snippets.md").read_text(encoding="utf-8")
+        assert "## Reset — 2026-03-11 05:06:07" in snippets_content
+
     def test_memory_snippet_write_keeps_pending_snippet_out_of_environment_md(self, workspace_dir, mock_config):
         with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
             from datastore.insightdb.soul_snippets import write_snippet_entry

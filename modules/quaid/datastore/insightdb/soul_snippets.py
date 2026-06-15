@@ -644,7 +644,7 @@ def write_journal_entry(filename: str, content: str, trigger: str = "Compaction"
     journal_path = journal_dir / f"{base_name}.journal.md"
 
     if date_str is None:
-        date_str = datetime.now().strftime("%Y-%m-%d")
+        date_str = _quaid_now().strftime("%Y-%m-%d")
 
     # Read existing content
     existing = ""
@@ -809,10 +809,12 @@ def write_snippet_entry(filename: str, snippets: List[str],
     base_name = filename.removesuffix('.md')
     snippets_path = _visible_instance_dir() / f"{base_name}.snippets.md"
 
-    if date_str is None:
-        date_str = datetime.now().strftime("%Y-%m-%d")
-    if time_str is None:
-        time_str = datetime.now().strftime("%H:%M:%S")
+    if date_str is None or time_str is None:
+        now = _quaid_now()
+        if date_str is None:
+            date_str = now.strftime("%Y-%m-%d")
+        if time_str is None:
+            time_str = now.strftime("%H:%M:%S")
 
     # Read existing content
     existing = ""
@@ -1249,7 +1251,7 @@ def migrate_snippets_to_journal() -> int:
 
             # Extract date and trigger from header: ## Compaction — 2026-02-10 14:30:22
             date_match = re.search(r'(\d{4}-\d{2}-\d{2})', header)
-            date_str = date_match.group(1) if date_match else datetime.now().strftime("%Y-%m-%d")
+            date_str = date_match.group(1) if date_match else _quaid_now().strftime("%Y-%m-%d")
             trigger = "Compaction" if "Compaction" in header else "Reset"
 
             # Convert bullets to paragraph
