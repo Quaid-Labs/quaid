@@ -21,6 +21,7 @@ import re
 import tempfile
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -62,6 +63,20 @@ def _fail_hard_enabled() -> bool:
     except Exception as exc:
         logger.critical("fail-hard policy unavailable in compatibility checks: %s", exc)
         return True
+
+
+def _now_datetime() -> datetime:
+    raw = os.environ.get("QUAID_NOW", "").strip()
+    if raw:
+        try:
+            value = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            raise ValueError(f"Invalid QUAID_NOW={raw!r}") from None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+    return datetime.now(timezone.utc)
+
 
 # Adaptive check intervals based on current state
 CHECK_INTERVAL_NORMAL = 86400       # 24h — known compatible, low urgency
@@ -768,8 +783,6 @@ class JanitorScheduler:
 
     def tick(self) -> None:
         """Called on every daemon tick. Checks if janitor is due."""
-        import datetime
-
         now = time.time()
 
         # Only evaluate every 15 minutes (no need to check more often)
@@ -778,7 +791,8 @@ class JanitorScheduler:
         self._last_tick = now
 
         # Reset daily tracking
-        today = datetime.date.today().isoformat()
+        schedule_now = _now_datetime()
+        today = schedule_now.date().isoformat()
         if self._today_date != today:
             self._today_date = today
             self._ran_today = False
@@ -793,7 +807,7 @@ class JanitorScheduler:
             return
 
         scheduled_hour, window = self._get_schedule()
-        current_hour = datetime.datetime.now().hour
+        current_hour = schedule_now.hour
 
         # Check if we're in the scheduled window (handles midnight wrap)
         window_start = scheduled_hour - (window // 2)

@@ -360,9 +360,8 @@ class TestJanitorSchedulerWindow:
             scheduled_hour=hour, window_hours=window,
         )
 
-    def test_window_wraps_around_midnight_high(self, tmp_path):
+    def test_window_wraps_around_midnight_high(self, tmp_path, monkeypatch):
         """scheduled_hour=23, window=4 → hours 21,22,23,0 should be in window."""
-        import datetime
         scheduler = self._make_scheduler(tmp_path, 23, 4)
         scheduler._last_tick = 0
 
@@ -375,14 +374,12 @@ class TestJanitorSchedulerWindow:
         os.utime(cp, (old_time, old_time))
 
         # Hour 0 should be in window (wrapped)
-        with patch("core.compatibility.JanitorScheduler._run_janitor") as mock_run, \
-             patch("datetime.datetime") as mock_dt:
-            mock_dt.now.return_value.hour = 0
-            mock_dt.date.today.return_value.isoformat.return_value = "2026-03-11"
+        monkeypatch.setenv("QUAID_NOW", "2026-03-11T00:00:00Z")
+        with patch("core.compatibility.JanitorScheduler._run_janitor") as mock_run:
             scheduler.tick()
             mock_run.assert_called_once()
 
-    def test_window_wraps_around_midnight_low(self, tmp_path):
+    def test_window_wraps_around_midnight_low(self, tmp_path, monkeypatch):
         """scheduled_hour=1, window=4 → hours 23,0,1,2 should be in window."""
         scheduler = self._make_scheduler(tmp_path, 1, 4)
         scheduler._last_tick = 0
@@ -395,12 +392,18 @@ class TestJanitorSchedulerWindow:
         os.utime(cp, (old_time, old_time))
 
         # Hour 23 should be in window (wrapped)
-        with patch("core.compatibility.JanitorScheduler._run_janitor") as mock_run, \
-             patch("datetime.datetime") as mock_dt:
-            mock_dt.now.return_value.hour = 23
-            mock_dt.date.today.return_value.isoformat.return_value = "2026-03-11"
+        monkeypatch.setenv("QUAID_NOW", "2026-03-11T23:00:00Z")
+        with patch("core.compatibility.JanitorScheduler._run_janitor") as mock_run:
             scheduler.tick()
             mock_run.assert_called_once()
+
+    def test_rejects_malformed_quaid_now(self, tmp_path, monkeypatch):
+        scheduler = self._make_scheduler(tmp_path, 0, 24)
+        scheduler._last_tick = 0
+        monkeypatch.setenv("QUAID_NOW", "not-a-date")
+
+        with pytest.raises(ValueError, match="Invalid QUAID_NOW"):
+            scheduler.tick()
 
 
 class TestJanitorScheduler:
