@@ -14,6 +14,7 @@ Usage:
 
 import logging
 import threading
+import unicodedata
 from typing import Optional, List, Dict, Any, Union
 
 from core.lifecycle.datastore_runtime import DocsRAG
@@ -31,6 +32,28 @@ def _memory() -> Any:
         if _memory_cache is None:
             _memory_cache = get_memory_service()
         return _memory_cache
+
+
+def _query_word_count(query: str) -> int:
+    return len(str(query or "").strip().split())
+
+
+def _has_compact_script_recall_signal(query: str) -> bool:
+    chars = (
+        ch
+        for ch in unicodedata.normalize("NFKC", str(query or ""))
+        if not ch.isascii() and (ch.isalpha() or unicodedata.category(ch).startswith("M"))
+    )
+    return sum(1 for _ch in chars) >= 2
+
+
+def _query_has_recall_signal(query: str) -> bool:
+    text = str(query or "").strip()
+    if not text:
+        return False
+    if _query_word_count(text) >= 3:
+        return True
+    return _has_compact_script_recall_signal(text)
 
 
 def store(
@@ -145,8 +168,8 @@ def recall(
         ...     print(f"{m['similarity']:.2f} {m['text']}")
     """
     # Short queries produce low-quality recall results — skip entirely.
-    if len(query.strip().split()) < 3:
-        logger.debug("[api.recall] query too short (%d words), returning empty", len(query.strip().split()))
+    if not _query_has_recall_signal(query):
+        logger.debug("[api.recall] query too short (%d words), returning empty", _query_word_count(query))
         return []
 
     return _memory().recall(
@@ -202,19 +225,19 @@ def recall_fast(
             owner_id=owner_id,
             limit=limit,
             return_meta=return_meta,
-            word_count=len(query.strip().split()),
+            word_count=_query_word_count(query),
         )
     except Exception:
         pass
-    if len(query.strip().split()) < 3:
-        logger.debug("[api.recall_fast] query too short (%d words), returning empty", len(query.strip().split()))
+    if not _query_has_recall_signal(query):
+        logger.debug("[api.recall_fast] query too short (%d words), returning empty", _query_word_count(query))
         try:
             from lib.m15_trace import trace_m15
 
             trace_m15(
                 "api.recall_fast.short_query_skip",
                 query=query,
-                word_count=len(query.strip().split()),
+                word_count=_query_word_count(query),
             )
         except Exception:
             pass
