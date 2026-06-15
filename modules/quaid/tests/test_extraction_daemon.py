@@ -16094,6 +16094,22 @@ class TestRollingExtraction:
             ]
         }
 
+    def test_semantic_fact_dedup_signal_accepts_compact_unicode_fact(self):
+        assert extraction_daemon._semantic_fact_has_dedup_signal("ok") is False
+        assert extraction_daemon._semantic_fact_has_dedup_signal("Maya birthday") is False
+        assert extraction_daemon._semantic_fact_has_dedup_signal("美玲は猫が好きです") is True
+
+    def test_semantic_candidate_overlaps_includes_compact_unicode_fact(self):
+        existing = [{"text": "美玲は猫が好きです"}]
+
+        assert extraction_daemon._semantic_candidate_overlaps("美玲は猫が好きです", existing) == [0]
+
+    def test_semantic_candidate_overlaps_uses_compact_unicode_grams(self):
+        existing = [{"text": "美玲は猫が好きです"}]
+
+        assert extraction_daemon._semantic_candidate_overlaps("美玲は猫好きです", existing) == [0]
+        assert extraction_daemon._semantic_candidate_overlaps("雲門の稽古は水曜です", existing) == []
+
     def test_merge_staged_payloads_collapses_semantic_duplicate_fact_across_batches(self, monkeypatch):
         import datastore.memorydb.memory_graph as memory_graph
         import lib.similarity as similarity
@@ -16157,6 +16173,69 @@ class TestRollingExtraction:
         fact = merged["raw_facts"][0]
         assert fact["text"] == "May 18 is when Maya's birthday dinner is planned"
         assert sorted(fact["domains"]) == ["personal", "schedule"]
+        assert fact["extraction_confidence"] == "high"
+
+    def test_merge_staged_payloads_collapses_compact_unicode_semantic_duplicate(self, monkeypatch):
+        import datastore.memorydb.memory_graph as memory_graph
+        import lib.similarity as similarity
+
+        class _FakeGraph:
+            def get_embedding(self, text):
+                return [1.0, 0.0] if text else None
+
+        state = {
+            "raw_facts": [
+                {
+                    "text": "美玲は猫が好きです",
+                    "category": "fact",
+                    "domains": ["personal"],
+                    "extraction_confidence": "medium",
+                }
+            ],
+            "rolling_batches": 1,
+            "payload_duplicate_facts_collapsed": 0,
+        }
+        payload = {
+            "raw_facts": [
+                {
+                    "text": "美玲は猫好きです",
+                    "category": "fact",
+                    "domains": ["personal", "pets"],
+                    "extraction_confidence": "high",
+                }
+            ],
+            "raw_snippets": {},
+            "raw_journal": {},
+            "raw_project_logs": {},
+            "carry_facts": [],
+            "facts_skipped": 0,
+            "carry_duplicate_facts_dropped": 0,
+        }
+
+        monkeypatch.setattr(extraction_daemon, "_stage_dedup_settings", lambda: (0.98, 0.88, True))
+        monkeypatch.setattr(memory_graph, "get_graph", lambda: _FakeGraph())
+        monkeypatch.setattr(similarity, "cosine_similarity", lambda *_args, **_kwargs: 0.92)
+        monkeypatch.setattr(
+            memory_graph,
+            "_llm_dedup_check_many",
+            lambda *_args, **_kwargs: {
+                1: {
+                    "is_same": True,
+                    "subsumes": "a_subsumes_b",
+                    "reasoning": "same fact",
+                }
+            },
+        )
+
+        merged = extraction_daemon.merge_staged_payloads(state, payload)
+
+        assert merged["rolling_batches"] == 2
+        assert len(merged["raw_facts"]) == 1
+        assert merged["staged_semantic_duplicate_facts_collapsed"] == 1
+        assert merged["staged_semantic_llm_checks"] == 1
+        fact = merged["raw_facts"][0]
+        assert fact["text"] == "美玲は猫好きです"
+        assert sorted(fact["domains"]) == ["personal", "pets"]
         assert fact["extraction_confidence"] == "high"
 
     def test_merge_staged_payloads_subset_overlap_triggers_llm_below_gray_zone(self, monkeypatch):

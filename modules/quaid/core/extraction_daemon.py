@@ -2989,7 +2989,7 @@ def _warm_payload_embeddings(facts: List[Dict[str, Any]]) -> Dict[str, int]:
         if not isinstance(fact, dict):
             continue
         text = str(fact.get("text", "") or "").strip()
-        if not text or len(text.split()) < 3:
+        if not _semantic_fact_has_dedup_signal(text):
             continue
         texts.append(text)
     if not texts:
@@ -3136,16 +3136,63 @@ def _semantic_candidate_overlaps(new_text: str, existing_facts: List[Dict[str, A
     scored: List[Tuple[int, int]] = []
     for idx, fact in enumerate(existing_facts):
         text = str((fact or {}).get("text", "") or "").strip()
-        if len(text.split()) < 3:
+        if not _semantic_fact_has_dedup_signal(text):
             continue
         existing_tokens = set(extract_key_tokens(text, max_tokens=10))
         overlap = len(new_tokens & existing_tokens)
         if overlap <= 0:
-            continue
+            overlap = _compact_unicode_overlap_score(new_text, text)
+            if overlap <= 0:
+                continue
         if overlap >= 2 or len(new_tokens) <= 3:
             scored.append((overlap, idx))
     scored.sort(key=lambda item: (-item[0], -item[1]))
     return [idx for _overlap, idx in scored[:max_candidates]]
+
+
+def _compact_unicode_overlap_score(first: str, second: str) -> int:
+    """Return a small overlap score for compact scripts without whitespace tokens."""
+    first_grams = _compact_unicode_char_grams(first)
+    second_grams = _compact_unicode_char_grams(second)
+    if not first_grams or not second_grams:
+        return 0
+    shared = len(first_grams & second_grams)
+    smaller = min(len(first_grams), len(second_grams))
+    union = len(first_grams | second_grams)
+    if shared < 3 or smaller <= 0 or union <= 0:
+        return 0
+    if (shared / smaller) < 0.55 or (shared / union) < 0.35:
+        return 0
+    return min(shared, 8)
+
+
+def _compact_unicode_char_grams(text: str) -> set[str]:
+    compact = "".join(
+        ch
+        for ch in unicodedata.normalize("NFKC", str(text or "")).casefold()
+        if ch.isalnum()
+    )
+    if not compact or compact.isascii() or len(compact) < 4:
+        return set()
+    return {compact[i:i + 2] for i in range(len(compact) - 1)}
+
+
+def _semantic_fact_has_dedup_signal(text: str) -> bool:
+    """Return true when a staged fact has enough lexical signal for dedup routing."""
+    clean = str(text or "").strip()
+    if not clean:
+        return False
+    if len(clean.split()) >= 3:
+        return True
+
+    from lib.tokens import extract_key_tokens
+
+    tokens = extract_key_tokens(clean, max_tokens=4)
+    if not tokens:
+        return False
+    # Compact scripts often do not use spaces; a single multi-char Unicode token
+    # can still be a complete fact anchor and should not bypass semantic dedup.
+    return len(clean) >= 4 and any(not token.isascii() and len(token) >= 2 for token in tokens)
 
 
 def _semantic_subset_overlap_candidate(new_text: str, existing_text: str) -> bool:
@@ -3174,7 +3221,7 @@ def _collapse_staged_semantic_duplicates(
         if not isinstance(incoming_fact, dict):
             continue
         new_text = str(incoming_fact.get("text", "") or "").strip()
-        if len(new_text.split()) < 3:
+        if not _semantic_fact_has_dedup_signal(new_text):
             accepted.append(dict(incoming_fact))
             continue
 
@@ -3193,7 +3240,7 @@ def _collapse_staged_semantic_duplicates(
         for idx in candidate_indexes:
             existing_fact = accepted[idx]
             existing_text = str(existing_fact.get("text", "") or "").strip()
-            if len(existing_text.split()) < 3:
+            if not _semantic_fact_has_dedup_signal(existing_text):
                 continue
             existing_embedding = graph.get_embedding(existing_text)
             if not existing_embedding:
