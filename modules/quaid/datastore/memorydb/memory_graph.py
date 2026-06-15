@@ -6965,7 +6965,11 @@ def _rerank_via_llm(query: str, candidates: List[tuple], instruction: str, confi
                 rerank_score = min(grade, 5) / 5.0  # Normalize to [0, 1]
                 _blend = 0.5
                 if config_retrieval:
-                    _blend = getattr(config_retrieval, 'reranker_blend', 0.5)
+                    try:
+                        _blend = float(getattr(config_retrieval, 'reranker_blend', 0.5))
+                    except (TypeError, ValueError):
+                        _blend = 0.5
+                _blend = max(0.0, min(1.0, _blend))
                 blended = _blend * rerank_score + (1 - _blend) * score
                 reranked.append((node, blended))
                 # Competitive inhibition: only inhibit when the item looked relevant

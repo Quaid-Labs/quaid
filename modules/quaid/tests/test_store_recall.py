@@ -734,6 +734,34 @@ def test_reranker_falls_back_on_llm_failure_when_failhard_disabled():
         ) == [(node, 0.9)]
 
 
+def test_reranker_blend_is_clamped_to_score_range():
+    import datastore.memorydb.memory_graph as mg
+
+    low = SimpleNamespace(id="low", name="Low blend candidate")
+    high = SimpleNamespace(id="high", name="High blend candidate")
+
+    def _fake_reasoning(*_args, **_kwargs):
+        return "1. 0\n2. 5", {}
+
+    with patch("lib.llm_clients.call_fast_reasoning", side_effect=_fake_reasoning), \
+         patch.object(mg, "_is_fail_hard_mode", return_value=False):
+        negative_blend = mg._rerank_via_llm(
+            "generic query",
+            [(low, 0.8)],
+            "Rank memories",
+            config_retrieval=SimpleNamespace(reranker_blend=-2.0),
+        )
+        excessive_blend = mg._rerank_via_llm(
+            "generic query",
+            [(low, 0.8), (high, 0.2)],
+            "Rank memories",
+            config_retrieval=SimpleNamespace(reranker_blend=3.0),
+        )
+
+    assert negative_blend == [(low, 0.8)]
+    assert excessive_blend == [(low, 0.0), (high, 1.0)]
+
+
 def test_recall_once_reranker_raises_when_failhard_enabled(tmp_path):
     import datastore.memorydb.memory_graph as mg
 
