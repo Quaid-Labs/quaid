@@ -1107,7 +1107,13 @@ class MemoryGraph:
     # Embeddings
     # ==========================================================================
 
-    def get_embedding(self, text: str, *, timeout_s: Optional[float] = None) -> Optional[List[float]]:
+    def get_embedding(
+        self,
+        text: str,
+        *,
+        timeout_s: Optional[float] = None,
+        conn: Optional[sqlite3.Connection] = None,
+    ) -> Optional[List[float]]:
         """Get embedding, checking cache first to avoid redundant Ollama calls."""
         text_hash = content_hash(text)
         model = "unknown"
@@ -1121,8 +1127,9 @@ class MemoryGraph:
         # Skip cache entirely when model is unknown — avoids cross-model cache pollution
         if model != "unknown":
             try:
-                with self._get_conn() as conn:
-                    conn.execute(
+                conn_cm = nullcontext(conn) if conn is not None else self._get_conn()
+                with conn_cm as active_conn:
+                    active_conn.execute(
                         """
                         CREATE TABLE IF NOT EXISTS embedding_cache (
                             text_hash TEXT NOT NULL,
@@ -1133,7 +1140,7 @@ class MemoryGraph:
                         )
                         """
                     )
-                    row = conn.execute(
+                    row = active_conn.execute(
                         "SELECT embedding FROM embedding_cache WHERE text_hash = ? AND model = ?",
                         (text_hash, model)
                     ).fetchone()
@@ -1146,8 +1153,9 @@ class MemoryGraph:
         embedding = _lib_get_embedding(text, timeout_s=timeout_s)
         if embedding:
             try:
-                with self._get_conn() as conn:
-                    conn.execute(
+                conn_cm = nullcontext(conn) if conn is not None else self._get_conn()
+                with conn_cm as active_conn:
+                    active_conn.execute(
                         "INSERT OR REPLACE INTO embedding_cache (text_hash, embedding, model) VALUES (?, ?, ?)",
                         (text_hash, self._pack_embedding(embedding), model)
                     )
@@ -23242,7 +23250,7 @@ def store(
                 })
 
     # Dedup check: three-zone logic with optional LLM verification
-    embedding = graph.get_embedding(text)
+    embedding = graph.get_embedding(text, conn=_conn)
     if not embedding and _is_fail_hard_mode():
         raise RuntimeError(
             "Embedding generation failed while failHard is enabled; refusing to store memory without an embedding"

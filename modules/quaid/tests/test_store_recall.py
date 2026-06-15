@@ -1591,6 +1591,43 @@ class TestStoreBasic:
             dedup_rows = conn.execute("SELECT COUNT(*) FROM dedup_log").fetchone()[0]
         assert dedup_rows == 1
 
+    def test_batch_write_store_reuses_shared_connection_for_embedding_cache(self, tmp_path):
+        from datastore.memorydb.memory_graph import batch_write, store
+
+        graph, _ = _make_graph(tmp_path)
+        seen_connections = []
+
+        def _recording_embedding(text, **kwargs):
+            seen_connections.append(kwargs.get("conn"))
+            return _fake_get_embedding(text)
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch.object(graph, "get_embedding", side_effect=_recording_embedding):
+            with batch_write() as conn:
+                result = store(
+                    "Maya stores batch-written memory embeddings atomically",
+                    owner_id="quaid",
+                    _conn=conn,
+                )
+
+        assert result["status"] == "created"
+        assert seen_connections == [conn]
+
+    def test_get_embedding_uses_supplied_connection_for_cache(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _ = _make_graph(tmp_path)
+        graph.get_embedding = mg.MemoryGraph.get_embedding.__get__(graph, type(graph))
+        with graph._get_conn() as conn:
+            with patch("lib.embeddings.get_embeddings_provider", return_value=SimpleNamespace(model_name="test-model")), \
+                 patch.object(graph, "_get_conn", side_effect=AssertionError("opened second connection")), \
+                 patch.object(mg, "_lib_get_embedding", side_effect=_fake_get_embedding) as embedded:
+                first = graph.get_embedding("Maya caches embeddings inside the caller transaction", conn=conn)
+                second = graph.get_embedding("Maya caches embeddings inside the caller transaction", conn=conn)
+
+        assert second == pytest.approx(first)
+        assert embedded.call_count == 1
+
     def test_log_dedup_decision_missing_node_fallback_preserves_audit_row(self, tmp_path, capsys):
         import datastore.memorydb.memory_graph as mg
 
