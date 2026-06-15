@@ -703,6 +703,14 @@ function buildOpenClawDeferredNoticePromptPreamble(relayContext) {
     "After relaying the notice, answer the user's current message."
   ].join("\n");
 }
+function buildOpenClawDeferredNoticePromptContext(relayContext) {
+  const relay = String(relayContext || "").trim();
+  if (!relay) return "";
+  const preamble = buildOpenClawDeferredNoticePromptPreamble(relay);
+  return preamble ? `${preamble}
+
+${relay}` : relay;
+}
 function drainDeferredNoticeRelayContextForAgent(agentLabel, reason) {
   const instanceId = getInstanceId(agentLabel);
   const script = [
@@ -5730,7 +5738,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
       name: "memory-injection-registerHook",
       priority: 10
     });
-    onChecked("before_agent_reply", async (event, ctx) => {
+    onChecked("before_prompt_build", async (event, ctx) => {
       if (isInternalSessionContext(event, ctx)) return;
       const promptAgentLabel = resolveHookAgentLabel(event, ctx);
       const promptModelConfigSessionKey = String(
@@ -5739,32 +5747,45 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
       if (hasProviderDeferredNoticesForAgent(promptAgentLabel)) {
         await validatePromptModelConfigIfChanged(promptAgentLabel, promptModelConfigSessionKey);
       }
-      const trigger = String(ctx?.trigger || "user").trim().toLowerCase();
-      if (trigger === "user") {
-        const promptSessionId = String(event?.sessionId || ctx?.sessionId || ctx?.session?.id || "").trim();
-        const cachedRelayContext = consumeDeferredNoticeRelayContextForReply([
-          deferredNoticeRelayTurnKey(promptAgentLabel, event, ctx, promptSessionId),
-          deferredNoticeRelayStableTurnKey(promptAgentLabel, event, ctx, promptSessionId)
-        ]);
-        const messages = cachedRelayContext ? extractDeferredNoticeMessagesFromRelayContext(cachedRelayContext) : drainDeferredNoticeMessagesForAgent(promptAgentLabel, "before_agent_reply");
-        const replyText = buildDeferredNoticeVisibleReply(messages);
-        if (!replyText) return;
-        writeHookTrace("deferred_notice.reply_relay_visible_reply", {
-          agent_label: promptAgentLabel,
-          session_id: String(ctx?.sessionId || event?.sessionId || ""),
-          count: messages.length,
-          source: cachedRelayContext ? "prompt_build_cache" : "fresh_drain"
-        });
-        return {
-          handled: true,
-          reason: "deferred_notice_visible_relay",
-          reply: { text: replyText }
-        };
+      const promptSessionId = String(event?.sessionId || ctx?.sessionId || ctx?.session?.id || "").trim();
+      const relayContext = drainDeferredNoticeRelayContextForTurn(
+        promptAgentLabel,
+        "before_prompt_build",
+        deferredNoticeRelayTurnKey(promptAgentLabel, event, ctx, promptSessionId)
+      );
+      if (!relayContext) return;
+      rememberDeferredNoticeRelayContext(
+        deferredNoticeRelayStableTurnKey(promptAgentLabel, event, ctx, promptSessionId),
+        relayContext
+      );
+      const deferredNoticePromptContext = buildOpenClawDeferredNoticePromptContext(relayContext);
+      if (!deferredNoticePromptContext) return;
+      const prependContext = event?.prependContext ? `${deferredNoticePromptContext}
+
+${String(event.prependContext)}` : deferredNoticePromptContext;
+      const prependSystemContext = event?.prependSystemContext ? `${deferredNoticePromptContext}
+
+${String(event.prependSystemContext)}` : deferredNoticePromptContext;
+      const appendSystemContext = event?.appendSystemContext ? `${String(event.appendSystemContext)}
+
+${relayContext}` : relayContext;
+      if (event && typeof event === "object") {
+        event.prependContext = prependContext;
+        event.prependSystemContext = prependSystemContext;
+        event.appendSystemContext = appendSystemContext;
       }
-      deliverDeferredNoticesViaChannel(promptAgentLabel, "before_agent_reply");
+      writeHookTrace("deferred_notice.prompt_visible_preamble", {
+        agent_label: promptAgentLabel,
+        session_id: promptSessionId,
+        has_preamble: Boolean(buildOpenClawDeferredNoticePromptPreamble(relayContext)),
+        targets: ["prependContext", "prependSystemContext", "appendSystemContext"],
+        source: "deferred-notice-channel-relay"
+      });
+      return { prependContext, prependSystemContext, appendSystemContext };
     }, {
       name: "deferred-notice-channel-relay",
-      priority: 110
+      priority: 5,
+      timeout: BEFORE_PROMPT_BUILD_HOOK_TIMEOUT_MS
     });
     onChecked("before_agent_reply", async (event, ctx) => {
       if (isInternalSessionContext(event, ctx)) return;

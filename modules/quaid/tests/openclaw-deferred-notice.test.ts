@@ -557,13 +557,13 @@ describe("openclaw deferred notices", () => {
     removeTempDir(fixture.home);
   });
 
-  it("reuses prompt-build deferred notice cache for visible reply without redraining", async () => {
+  it("registers deferred notice relay on before_prompt_build before memory injection", async () => {
     vi.useFakeTimers();
     vi.stubEnv("QUAID_DISABLE_NOTIFICATIONS", "1");
     const fixture = seedDeferredNoticeFixture(
       "quaid-oc-deferred-reply-cache-home-",
       "openclaw-main",
-      "[Quaid] Cached prompt-build notice must become a visible reply.",
+      "[Quaid] Cached prompt-build notice must reach the model before reply generation.",
     );
 
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -579,47 +579,45 @@ describe("openclaw deferred notices", () => {
     const api = makeFakeApi();
     plugin.register(api as any);
 
+    const deferredPromptCall = api.on.mock.calls.find((call: any[]) =>
+      call?.[0] === "before_prompt_build" && call?.[2]?.name === "deferred-notice-channel-relay"
+    );
     const beforePromptBuildCall = api.on.mock.calls.find((call: any[]) =>
       call?.[0] === "before_prompt_build" && call?.[2]?.name === "memory-injection-prompt-build"
     );
     const deferredReplyCall = api.on.mock.calls.find((call: any[]) =>
       call?.[0] === "before_agent_reply" && call?.[2]?.name === "deferred-notice-channel-relay"
     );
+    expect(deferredPromptCall).toBeTruthy();
     expect(beforePromptBuildCall).toBeTruthy();
-    expect(deferredReplyCall).toBeTruthy();
+    expect(deferredReplyCall).toBeUndefined();
+    expect(deferredPromptCall?.[2]?.priority).toBeLessThan(beforePromptBuildCall?.[2]?.priority);
 
     const sessionId = "session-main-reply-cache";
     const sessionKey = "agent:main:tui-main";
-    const promptResult = await beforePromptBuildCall?.[1](
-      {
-        prompt: "Hello",
-        messages: [{ role: "user", content: "Hello" }],
-        sessionId,
-        sessionKey,
-      },
-      { sessionId, sessionKey, agentId: "main", trigger: "user" },
-    );
-    expect(String(promptResult?.prependContext || "")).toContain("Cached prompt-build notice");
+    const event = {
+      prompt: "Hello",
+      messages: [{ role: "user", content: "Hello" }],
+      sessionId,
+      sessionKey,
+    };
+    const ctx = { sessionId, sessionKey, agentId: "main", trigger: "user" };
+    const relayResult = await deferredPromptCall?.[1](event, ctx);
+    expect(String(relayResult?.prependContext || "")).toMatch(/^QUAID NOTICE FOR THIS REPLY:/);
+    expect(String(relayResult?.prependContext || "")).toContain("Cached prompt-build notice must reach the model");
 
-    const afterPromptBuild = JSON.parse(fs.readFileSync(fixture.noticeFile, "utf8"));
+    const afterRelay = JSON.parse(fs.readFileSync(fixture.noticeFile, "utf8"));
     expect(
-      (Array.isArray(afterPromptBuild?.requests) ? afterPromptBuild.requests : [])
+      (Array.isArray(afterRelay?.requests) ? afterRelay.requests : [])
         .filter((item: any) => String(item?.status || "").trim().toLowerCase() === "pending"),
     ).toHaveLength(0);
 
-    const replyResult = await deferredReplyCall?.[1](
-      { sessionId, sessionKey },
-      { sessionId, sessionKey, agentId: "main", trigger: "user" },
-    );
-    expect(replyResult?.handled).toBe(true);
-    expect(replyResult?.reason).toBe("deferred_notice_visible_relay");
-    expect(String(replyResult?.reply?.text || "")).toContain("Quaid notice:");
-    expect(String(replyResult?.reply?.text || "")).toContain("Cached prompt-build notice must become a visible reply");
+    const promptResult = await beforePromptBuildCall?.[1](event, ctx);
+    expect(String(promptResult?.prependContext || "")).toContain("Cached prompt-build notice must reach the model");
 
     const trace = readHookTraceEvents(fixture.hiddenHome, "openclaw-main");
-    const visibleReply = trace.find((row) => String(row.event || "") === "deferred_notice.reply_relay_visible_reply");
-    expect(visibleReply).toBeTruthy();
-    expect(visibleReply?.source).toBe("prompt_build_cache");
+    expect(trace.map((row) => String(row.event || ""))).toContain("deferred_notice.relay_context_reused");
+    expect(trace.map((row) => String(row.event || ""))).not.toContain("deferred_notice.reply_relay_visible_reply");
 
     warn.mockRestore();
     log.mockRestore();
@@ -1212,7 +1210,7 @@ describe("openclaw deferred notices", () => {
     removeTempDir(home);
   });
 
-  it("delivers deferred notices from before_agent_reply even when trigger is non-user", async () => {
+  it("keeps deferred notice relay off before_agent_reply for non-user triggers", async () => {
     vi.useFakeTimers();
     vi.stubEnv("QUAID_DISABLE_NOTIFICATIONS", "1");
     const fixture = seedDeferredNoticeFixture(
@@ -1237,19 +1235,13 @@ describe("openclaw deferred notices", () => {
     const deferredReplyCall = api.on.mock.calls.find((call: any[]) =>
       call?.[0] === "before_agent_reply" && call?.[2]?.name === "deferred-notice-channel-relay"
     );
-    expect(deferredReplyCall).toBeTruthy();
+    expect(deferredReplyCall).toBeUndefined();
 
-    const relayResult = await deferredReplyCall?.[1](
-      { sessionId: "session-main-non-user", sessionKey: "agent:main:tui-main" },
-      { sessionId: "session-main-non-user", sessionKey: "agent:main:tui-main", agentId: "main", trigger: "assistant" },
-    );
-    expect(relayResult).toBeUndefined();
-
-    const drained = JSON.parse(fs.readFileSync(fixture.noticeFile, "utf8"));
-    const pending = Array.isArray(drained?.requests)
-      ? drained.requests.filter((item: any) => String(item?.status || "").trim().toLowerCase() === "pending")
+    const pendingState = JSON.parse(fs.readFileSync(fixture.noticeFile, "utf8"));
+    const pending = Array.isArray(pendingState?.requests)
+      ? pendingState.requests.filter((item: any) => String(item?.status || "").trim().toLowerCase() === "pending")
       : [];
-    expect(pending).toHaveLength(0);
+    expect(pending).toHaveLength(1);
 
     warn.mockRestore();
     log.mockRestore();
@@ -1257,7 +1249,7 @@ describe("openclaw deferred notices", () => {
     removeTempDir(fixture.home);
   });
 
-  it("relays deferred notices as visible replies from before_agent_reply user turns", async () => {
+  it("relays deferred notices as prompt context from before_prompt_build user turns", async () => {
     vi.useFakeTimers();
     const fixture = seedDeferredNoticeFixture(
       "quaid-oc-deferred-user-reply-home-",
@@ -1278,19 +1270,18 @@ describe("openclaw deferred notices", () => {
     const api = makeFakeApi();
     plugin.register(api as any);
 
-    const deferredReplyCall = api.on.mock.calls.find((call: any[]) =>
-      call?.[0] === "before_agent_reply" && call?.[2]?.name === "deferred-notice-channel-relay"
+    const deferredPromptCall = api.on.mock.calls.find((call: any[]) =>
+      call?.[0] === "before_prompt_build" && call?.[2]?.name === "deferred-notice-channel-relay"
     );
-    expect(deferredReplyCall).toBeTruthy();
+    expect(deferredPromptCall).toBeTruthy();
 
-    const relayResult = await deferredReplyCall?.[1](
-      { sessionId: "session-main-user", sessionKey: "agent:main:tui-main" },
+    const relayResult = await deferredPromptCall?.[1](
+      { prompt: "Hey", sessionId: "session-main-user", sessionKey: "agent:main:tui-main" },
       { sessionId: "session-main-user", sessionKey: "agent:main:tui-main", agentId: "main", trigger: "user" },
     );
-    expect(relayResult?.handled).toBe(true);
-    expect(relayResult?.reason).toBe("deferred_notice_visible_relay");
-    expect(String(relayResult?.reply?.text || "")).toContain("Quaid notice:");
-    expect(String(relayResult?.reply?.text || "")).toContain("Deferred notice on user reply trigger");
+    expect(String(relayResult?.prependContext || "")).toContain("Quaid notice:");
+    expect(String(relayResult?.prependContext || "")).toContain("Deferred notice on user reply trigger");
+    expect(String(relayResult?.prependSystemContext || "")).toContain("Deferred notice on user reply trigger");
 
     const drained = JSON.parse(fs.readFileSync(fixture.noticeFile, "utf8"));
     const pending = Array.isArray(drained?.requests)
@@ -2026,7 +2017,7 @@ describe("openclaw deferred notices", () => {
     removeTempDir(fixture.home);
   });
 
-  it("clears stale provider deferred notices before visible reply relay", async () => {
+  it("clears stale provider deferred notices before prompt-build relay", async () => {
     vi.stubEnv("QUAID_DISABLE_NOTIFICATIONS", "1");
     const fixture = seedDeferredNoticeFixture(
       "quaid-oc-provider-recovery-reply-relay-home-",
@@ -2068,13 +2059,13 @@ describe("openclaw deferred notices", () => {
     const api = makeFakeApi();
     plugin.register(api as any);
 
-    const beforeReplyCall = api.on.mock.calls.find((call: any[]) =>
-      call?.[0] === "before_agent_reply" && call?.[2]?.name === "deferred-notice-channel-relay"
+    const beforePromptCall = api.on.mock.calls.find((call: any[]) =>
+      call?.[0] === "before_prompt_build" && call?.[2]?.name === "deferred-notice-channel-relay"
     );
-    expect(beforeReplyCall).toBeTruthy();
+    expect(beforePromptCall).toBeTruthy();
 
-    const result = await beforeReplyCall?.[1](
-      { sessionId: "session-provider-recovery-reply", sessionKey: "agent:main:tui-main" },
+    const result = await beforePromptCall?.[1](
+      { prompt: "Hello", sessionId: "session-provider-recovery-reply", sessionKey: "agent:main:tui-main" },
       { sessionId: "session-provider-recovery-reply", sessionKey: "agent:main:tui-main", trigger: "user" },
     );
 
