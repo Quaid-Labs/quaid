@@ -5439,6 +5439,97 @@ class TestSourceChunkStorage:
                 privacy="secret",
             )
 
+    def test_store_source_chunk_validates_manual_next_links(self, tmp_path):
+        """Manual next_chunk_id links must stay inside one owner/session chain."""
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _db_file = _make_graph(tmp_path)
+        next_row = graph.store_source_chunk(
+            "User: next source chunk.",
+            owner_id="douglas",
+            source_id="source-next",
+            session_id="session-next",
+            chunk_index=1,
+            embed=False,
+        )
+        current = graph.store_source_chunk(
+            "User: current source chunk.",
+            owner_id="douglas",
+            source_id="source-next",
+            session_id="session-next",
+            chunk_index=0,
+            next_chunk_id=next_row["chunk_id"],
+            embed=False,
+        )
+        assert current["next_chunk_id"] == next_row["chunk_id"]
+
+        self_text = "User: self-linked source chunk."
+        self_chunk_id = mg._source_chunk_id(
+            source_id="source-self",
+            session_id="session-self",
+            chunk_index=0,
+            content_hash=mg._source_chunk_content_hash(self_text),
+            owner_id="douglas",
+        )
+        with pytest.raises(ValueError, match="itself"):
+            graph.store_source_chunk(
+                self_text,
+                owner_id="douglas",
+                source_id="source-self",
+                session_id="session-self",
+                chunk_index=0,
+                next_chunk_id=self_chunk_id,
+                embed=False,
+            )
+        with pytest.raises(ValueError, match="existing source chunk"):
+            graph.store_source_chunk(
+                "User: missing next target.",
+                owner_id="douglas",
+                source_id="source-next",
+                session_id="session-next",
+                chunk_index=2,
+                next_chunk_id="sch_missing",
+                embed=False,
+            )
+
+        other_owner = graph.store_source_chunk(
+            "User: another owner chunk.",
+            owner_id="ada",
+            source_id="source-next",
+            session_id="session-next",
+            chunk_index=3,
+            embed=False,
+        )
+        with pytest.raises(ValueError, match="same owner and session"):
+            graph.store_source_chunk(
+                "User: cross-owner link.",
+                owner_id="douglas",
+                source_id="source-next",
+                session_id="session-next",
+                chunk_index=3,
+                next_chunk_id=other_owner["chunk_id"],
+                embed=False,
+            )
+
+        other_session = graph.store_source_chunk(
+            "User: another session chunk.",
+            owner_id="douglas",
+            source_id="source-other-session",
+            session_id="session-other",
+            chunk_index=0,
+            embed=False,
+        )
+        with pytest.raises(ValueError, match="same owner and session"):
+            graph.store_source_chunk(
+                "User: cross-session link.",
+                owner_id="douglas",
+                source_id="source-next",
+                session_id="session-next",
+                chunk_index=4,
+                next_chunk_id=other_session["chunk_id"],
+                embed=False,
+            )
+
     def test_store_source_chunks_skips_empty_entries(self, tmp_path):
         """Batch chunk storage skips empty chunk entries and keeps ordering."""
         graph, _db_file = _make_graph(tmp_path)

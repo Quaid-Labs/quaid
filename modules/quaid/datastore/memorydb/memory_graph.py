@@ -1681,6 +1681,13 @@ class MemoryGraph:
         conn_cm = nullcontext(conn) if conn is not None else self._get_conn()
         with conn_cm as active_conn:
             self._ensure_source_chunks_table(active_conn)
+            self._validate_source_chunk_next_link(
+                active_conn,
+                chunk_id=chunk.chunk_id,
+                next_chunk_id=chunk.next_chunk_id,
+                owner_id=chunk.owner_id,
+                session_id=chunk.session_id,
+            )
             cursor = active_conn.execute(
                 """
                 INSERT OR IGNORE INTO source_chunks
@@ -1754,6 +1761,33 @@ class MemoryGraph:
         out = self._row_to_source_chunk(row) if row else asdict(chunk)
         out["status"] = "created" if cursor.rowcount > 0 else "existing"
         return out
+
+    def _validate_source_chunk_next_link(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        chunk_id: str,
+        next_chunk_id: Optional[str],
+        owner_id: Optional[str],
+        session_id: Optional[str],
+    ) -> None:
+        next_key = str(next_chunk_id or "").strip()
+        if not next_key:
+            return
+        if next_key == str(chunk_id or "").strip():
+            raise ValueError("next_chunk_id cannot reference the source chunk itself")
+        row = conn.execute(
+            "SELECT owner_id, session_id FROM source_chunks WHERE chunk_id = ? LIMIT 1",
+            (next_key,),
+        ).fetchone()
+        if row is None:
+            raise ValueError("next_chunk_id must reference an existing source chunk")
+        owner_key = str(owner_id or "").strip()
+        session_key = str(session_id or "").strip()
+        target_owner = str(row["owner_id"] or "").strip()
+        target_session = str(row["session_id"] or "").strip()
+        if target_owner != owner_key or target_session != session_key:
+            raise ValueError("next_chunk_id must reference a chunk from the same owner and session")
 
     def _select_source_chunk_link_id(
         self,
