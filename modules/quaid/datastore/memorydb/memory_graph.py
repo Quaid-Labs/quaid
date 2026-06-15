@@ -23243,6 +23243,10 @@ def store(
 
     # Dedup check: three-zone logic with optional LLM verification
     embedding = graph.get_embedding(text)
+    if not embedding and _is_fail_hard_mode():
+        raise RuntimeError(
+            "Embedding generation failed while failHard is enabled; refusing to store memory without an embedding"
+        )
     if not skip_dedup and embedding:
         # Load dedup thresholds from config (with fallbacks)
         if _HAS_CONFIG:

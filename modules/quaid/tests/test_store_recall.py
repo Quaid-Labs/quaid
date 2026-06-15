@@ -3424,10 +3424,26 @@ class TestStoreDedup:
         from datastore.memorydb.memory_graph import store
         graph, _ = _make_graph(tmp_path)
         with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
-             patch("datastore.memorydb.memory_graph._lib_get_embedding", return_value=None):
+             patch.object(graph, "get_embedding", return_value=None), \
+             patch("datastore.memorydb.memory_graph._is_fail_hard_mode", return_value=False):
             result = store("Quaid fact without embedding available",
                            owner_id="quaid")
             assert result["status"] == "created"
+
+    def test_no_embedding_raises_in_fail_hard_before_write(self, tmp_path):
+        """failHard must not store a degraded memory row without an embedding."""
+        from datastore.memorydb.memory_graph import store
+        graph, _ = _make_graph(tmp_path)
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch.object(graph, "get_embedding", return_value=None), \
+             patch("datastore.memorydb.memory_graph._is_fail_hard_mode", return_value=True):
+            with pytest.raises(RuntimeError, match="Embedding generation failed while failHard is enabled"):
+                store("Quaid fact without embedding available", owner_id="quaid")
+
+        with graph._get_conn() as conn:
+            count = conn.execute("SELECT COUNT(*) FROM nodes").fetchone()[0]
+        assert count == 0
 
     def test_vec_dedup_skips_cleanly_before_first_store(self, tmp_path):
         from datastore.memorydb.memory_graph import store, _lib_has_vec
