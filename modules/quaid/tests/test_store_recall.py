@@ -16604,6 +16604,18 @@ class TestRecallFastHookInjectContract:
             intent="WHO",
         ) is True
 
+    def test_low_information_unicode_entity_substring_requires_two_chars(self):
+        import datastore.memorydb.memory_graph as mg
+
+        single_char = {"text": "玲", "category": "person", "similarity": 0.944}
+
+        assert mg._is_low_information_entity_result(single_char) is True
+        assert mg._should_preserve_low_information_entity_result(
+            single_char,
+            "谁是美玲？",
+            intent="WHO",
+        ) is False
+
     def test_expand_anchor_rows_uses_beam_scoring_without_llm_in_cheap_mode(self):
         import datastore.memorydb.memory_graph as mg
 

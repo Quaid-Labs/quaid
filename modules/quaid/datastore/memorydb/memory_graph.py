@@ -22033,7 +22033,7 @@ def _should_preserve_low_information_entity_result(
     query_norm = _identifier_key(query_text)
     if not entity_norm or not query_norm:
         return False
-    if _has_non_ascii(entity_text) and entity_norm in query_norm:
+    if _has_non_ascii(entity_text) and len(entity_norm) >= 2 and entity_norm in query_norm:
         return True
     if not query_terms:
         return False

@@ -43,6 +43,7 @@ def _legacy_instance_slug_from_project_dir(project_dir: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", str(root).lower()).strip("-")
     if slug:
         return slug
+    # Legacy migration bindings still need a valid ASCII filename for non-ASCII-only paths.
     digest = hashlib.sha256(str(root).encode("utf-8", "surrogatepass")).hexdigest()
     return f"project-{digest[:_PROJECT_INSTANCE_SLUG_HASH_LENGTH]}"
 
