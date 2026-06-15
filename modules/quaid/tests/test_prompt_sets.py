@@ -48,6 +48,8 @@ def test_default_extraction_prompt_contains_expected_sections():
     assert "manager->employee" in text
     assert "ROLE/DIRECTION FIDELITY (MANDATORY)" in text
     assert "preserve direction exactly as stated" in text
+    assert "works_at: PERSON is subject, but only for professional employment or ongoing job affiliation" in text
+    assert "use trains_at unless the transcript explicitly says they work there professionally" in text
     assert "Preserve exact callable/config/test/schema details when present" in text
     assert "20 or fewer items" in text
     assert "Do not collapse an available exact list" in text

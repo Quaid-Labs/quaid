@@ -157,7 +157,8 @@ EDGE DIRECTION RULES (critical):
 - spouse_of: alphabetical order (symmetric). "Dave is Carol's husband" → Carol --spouse_of--> Dave
 - has_pet: OWNER is subject. "User has a dog named Rex" → User --has_pet--> Rex
 - friend_of: alphabetical order (symmetric)
-- works_at: PERSON is subject
+- works_at: PERSON is subject, but only for professional employment or ongoing job affiliation
+- trains_at: PERSON is subject for exercise/training at a gym, studio, dojo, pool, or similar venue
 - lives_at: PERSON is subject
 - owns: OWNER is subject
 - ROLE/DIRECTION FIDELITY (MANDATORY):
@@ -166,10 +167,12 @@ EDGE DIRECTION RULES (critical):
   - Use family_of for indirect kinship when no direct parent/child wording is explicitly stated.
   - For organizational structure terms (for example manager, report, lead), preserve direction exactly as stated.
   - Do not infer hidden intermediate hops from a single phrase unless the hop is explicitly stated.
+  - Do not use works_at for places a person attends for training, exercise classes, worship, errands, or similar attendance-based activity.
+  - If the transcript says someone trains or works out at a gym/fitness venue, use trains_at unless the transcript explicitly says they work there professionally.
 
 EDGE FORMAT:
 - subject: The source entity name as a MINIMAL entity label (e.g., "Carol Smith" or "Carol"), not a whole clause or sentence
-- relation: One of: parent_of, sibling_of, spouse_of, has_pet, friend_of, works_at, lives_at, owns, colleague_of, neighbor_of, knows, family_of, caused_by, led_to
+- relation: One of: parent_of, sibling_of, spouse_of, has_pet, friend_of, works_at, trains_at, lives_at, owns, colleague_of, neighbor_of, knows, family_of, caused_by, led_to
 - object: The target entity name as a MINIMAL entity label
 
 ENTITY NAME RULES (critical):

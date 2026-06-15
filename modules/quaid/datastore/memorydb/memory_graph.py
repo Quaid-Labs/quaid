@@ -7412,6 +7412,7 @@ def _infer_edge_entity_type(name: str, relation: str, is_subject: bool) -> str:
     rel_lower = str(relation or "").lower().replace("-", "_")
     relation_object_types = {
         "works_at": "Organization", "employed_by": "Organization",
+        "trains_at": "Organization",
         "member_of": "Organization", "founded": "Organization",
         "lives_in": "Place", "lives_at": "Place", "located_in": "Place",
         "born_in": "Place", "moved_to": "Place", "visited": "Place",
@@ -7424,6 +7425,7 @@ def _infer_edge_entity_type(name: str, relation: str, is_subject: bool) -> str:
         "subsidiary_of": "Organization", "part_of": "Organization",
         "feature_of": "Project", "component_of": "Project",
         "works_at": "Person", "employed_by": "Person",
+        "trains_at": "Person",
         "lives_in": "Person", "lives_at": "Person", "visited": "Person", "moved_to": "Person",
         "has_pet": "Person", "owns_pet": "Person", "owns": "Person",
         "works_on": "Person", "contributes_to": "Person", "manages": "Person",

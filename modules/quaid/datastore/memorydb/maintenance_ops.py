@@ -2308,7 +2308,7 @@ _SEED_RELATIONS = [
     "parent_of", "spouse_of", "partner_of", "sibling_of", "family_of",
     "friend_of", "neighbor_of", "colleague_of",
     "lives_in", "born_in", "from",
-    "works_at", "works_as",
+    "works_at", "works_as", "trains_at",
     "member_of", "attended",
     "owns", "manages", "founded",
     "prefers", "dislikes",
@@ -2594,6 +2594,9 @@ DIRECTION RULES — follow these strictly:
 - For family: the PARENT is always the subject. "Alice is Carol's child" → subject=Carol, relation=parent_of, object=Alice
 - For ownership/management: the OWNER/MANAGER is the subject. "The car is owned by Alice" → subject=Alice, relation=owns, object=car
 - For work: the PERSON is the subject, ORGANIZATION is the object. "Alice works at Acme" → subject=Alice, relation=works_at, object=Acme
+- Use works_at only for professional employment or ongoing job affiliation stated in the fact.
+- For exercise or training at a gym, studio, dojo, pool, or similar venue, use trains_at with PERSON as subject and venue as object.
+- Do not rewrite training/exercise attendance as works_at, and do not use member_of unless the fact explicitly states membership.
 - For symmetric relations (spouse_of, sibling_of, friend_of, etc.): put entity names in alphabetical order
 - NEVER use child_of, son_of, daughter_of, mother_of, father_of — use parent_of instead
 - NEVER use owned_by, managed_by — use owns, manages instead
@@ -2812,7 +2815,7 @@ def backfill_edges(
     relations_list = "\n".join(
         f"- {r}" for r in [
             "parent_of", "sibling_of", "spouse_of", "partner_of", "has_pet",
-            "friend_of", "neighbor_of", "colleague_of", "works_at", "lives_in",
+            "friend_of", "neighbor_of", "colleague_of", "works_at", "trains_at", "lives_in",
             "owns", "manages", "family_of", "knows",
         ]
     )

@@ -11,6 +11,8 @@ def test_edge_type_inference_for_work_and_place_relations():
 
     assert _infer_edge_entity_type("Jen", "works_at", is_subject=True) == "Person"
     assert _infer_edge_entity_type("TechFlow", "works_at", is_subject=False) == "Organization"
+    assert _infer_edge_entity_type("Jen", "trains_at", is_subject=True) == "Person"
+    assert _infer_edge_entity_type("Hale Hale Fitness", "trains_at", is_subject=False) == "Organization"
     assert _infer_edge_entity_type("Maya", "lives_in", is_subject=True) == "Person"
     assert _infer_edge_entity_type("Austin", "lives_in", is_subject=False) == "Place"
 
