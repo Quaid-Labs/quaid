@@ -105,22 +105,6 @@ class CodexAdapter(QuaidAdapter):
         r"^\s*(?:User|Assistant|Subagent/User|Subagent/Assistant):\s+",
         flags=re.IGNORECASE,
     )
-    _QUAID_NOTICE_COMMENTARY_RE = re.compile(
-        r"^\s*(?:You started a new interaction\..*?pending Quaid notice.*?|I(?:'|’)m checking .*?Quaid.*?notice.*?)\s*$",
-        flags=re.DOTALL | re.IGNORECASE,
-    )
-    _QUAID_NOTICE_BULLET_BLOCK_RE = re.compile(
-        r"\n\nQuaid notices?:\n(?:- .*(?:\n|$))+",
-        flags=re.IGNORECASE,
-    )
-    _QUAID_NOTICE_INLINE_RE = re.compile(
-        r"\n\nQuaid notice:\s*.*?(?=\n\n(?:[A-Z][a-z]+:|Subagent/)|\Z)",
-        flags=re.DOTALL | re.IGNORECASE,
-    )
-    _QUAID_EXTRACTION_RELAY_RE = re.compile(
-        r"^\s*Quaid extracted\s+\d+\s+memories?,\s+skipped\s+\d+",
-        flags=re.IGNORECASE,
-    )
     _ROLLOUT_SESSION_ID_RE = re.compile(
         r"([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})$",
         flags=re.IGNORECASE,
@@ -734,11 +718,6 @@ class CodexAdapter(QuaidAdapter):
         ]
         value = "\n".join(cleaned).strip()
         if not value:
-            return ""
-        value = self._QUAID_NOTICE_COMMENTARY_RE.sub("", value)
-        value = self._QUAID_NOTICE_BULLET_BLOCK_RE.sub("", value)
-        value = self._QUAID_NOTICE_INLINE_RE.sub("", value)
-        if self._QUAID_EXTRACTION_RELAY_RE.match(value):
             return ""
         value = re.sub(r"\n{3,}", "\n\n", value).strip()
         return value

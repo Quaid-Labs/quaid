@@ -3418,7 +3418,7 @@ class TestCodexAdapter:
         assert "Maya lives in South Austin" not in transcript
         assert "Nice! February is great for aurora season." in transcript
 
-    def test_parse_session_jsonl_strips_assistant_quaid_notice_bullet_block(self, tmp_path):
+    def test_parse_session_jsonl_preserves_assistant_quaid_notice_bullet_block(self, tmp_path):
         path = tmp_path / "rollout-quaid-notice-bullets.jsonl"
         path.write_text(
             "\n".join(
@@ -3444,12 +3444,12 @@ class TestCodexAdapter:
         )
         adapter = CodexAdapter()
         transcript = adapter.parse_session_jsonl(path)
-        assert "Quaid notices:" not in transcript
-        assert "fast LLM call failed" not in transcript
-        assert "Janitor has never completed successfully" not in transcript
+        assert "Quaid notices:" in transcript
+        assert "fast LLM call failed" in transcript
+        assert "Janitor has never completed successfully" in transcript
         assert "What do you want to work on in this repo?" in transcript
 
-    def test_parse_session_jsonl_strips_assistant_extraction_relay(self, tmp_path):
+    def test_parse_session_jsonl_preserves_assistant_extraction_relay_facts(self, tmp_path):
         path = tmp_path / "rollout-extraction-relay.jsonl"
         chunk_two = (
             "Chunk 2: Baxter keeps an orange linen notebook from Emília Rosa "
@@ -3497,12 +3497,13 @@ class TestCodexAdapter:
 
         transcript = CodexAdapter().parse_session_jsonl(path)
 
-        assert "Solomon Steadman lives in Singapore" not in transcript
-        assert "Flair 58" not in transcript
+        assert "Quaid extracted 5 memories" in transcript
+        assert "Solomon Steadman lives in Singapore" in transcript
+        assert "Flair 58" in transcript
         assert chunk_two in transcript
         assert "Assistant: ACK" in transcript
 
-    def test_parse_session_jsonl_strips_assistant_pending_notice_commentary(self, tmp_path):
+    def test_parse_session_jsonl_preserves_assistant_pending_notice_commentary(self, tmp_path):
         path = tmp_path / "rollout-quaid-notice-commentary.jsonl"
         path.write_text(
             "\n".join(
@@ -3531,7 +3532,7 @@ class TestCodexAdapter:
         )
         adapter = CodexAdapter()
         transcript = adapter.parse_session_jsonl(path)
-        assert "pending Quaid notice" not in transcript
+        assert "pending Quaid notice" in transcript
         assert "Tell me about Baxter." in transcript
 
     def test_parse_session_jsonl_preserves_assistant_recall_debug_commentary(self, tmp_path):
