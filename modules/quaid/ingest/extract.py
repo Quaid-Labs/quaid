@@ -1217,6 +1217,8 @@ def _clean_structural_anchor_turn_text(text: str) -> str:
 
 _QUESTION_TERMINATORS = ("?", "？", "؟")
 _COMPACT_SENTENCE_TERMINATORS = "。！？؟"
+_DANGLING_FRAGMENT_TERMINATORS = (",", ";", ":", "、", "，", "؛", "،")
+_STATEMENT_TERMINATORS = (".", "!", "?", "。", "！", "？", "؟")
 
 
 def _has_question_terminator(text: str) -> bool:
@@ -1236,6 +1238,78 @@ def _split_fact_sentences(text: str) -> List[str]:
         for part in re.split(rf"(?<=[.!?])\s+|(?<=[{_COMPACT_SENTENCE_TERMINATORS}])\s*(?=\S)", normalized)
         if part.strip(" \t\r\n\"'`")
     ]
+
+
+def _question_text_key(text: str) -> str:
+    normalized = " ".join(str(text or "").strip().split())
+    normalized = normalized.strip(" \t\r\n\"'`")
+    normalized = _rstrip_question_terminators(normalized)
+    normalized = normalized.rstrip(" .")
+    return " ".join(normalized.casefold().split())
+
+
+def _leading_question_fragment_parts(text: str) -> Optional[Tuple[str, str]]:
+    normalized = " ".join(str(text or "").strip().split())
+    if not normalized:
+        return None
+    question_indices = [
+        normalized.find(terminator)
+        for terminator in _QUESTION_TERMINATORS
+        if normalized.find(terminator) >= 0
+    ]
+    if not question_indices:
+        return None
+    index = min(question_indices)
+    if index >= len(normalized) - 1:
+        return None
+    leading = normalized[: index + 1].strip()
+    trailing = normalized[index + 1 :].strip(" \t\r\n\"'`")
+    if not leading or not trailing:
+        return None
+    return leading, trailing
+
+
+def _is_dangling_question_option_fragment(text: str) -> bool:
+    trailing = str(text or "").strip(" \t\r\n\"'`")
+    if not trailing:
+        return False
+    if trailing.endswith(_DANGLING_FRAGMENT_TERMINATORS):
+        return True
+    if trailing.endswith(_STATEMENT_TERMINATORS):
+        return False
+    sentences = _split_fact_sentences(trailing)
+    if len(sentences) > 1:
+        return False
+    word_count = len([part for part in re.split(r"\s+", trailing) if part])
+    compact_len = len(re.sub(r"\s+", "", trailing))
+    return compact_len <= 80 and (word_count <= 12 or word_count == 1)
+
+
+def _assistant_question_sentence_keys(transcript: str) -> set[str]:
+    keys: set[str] = set()
+    for role, turn in _iter_prefixed_turns(transcript):
+        if role not in {"assistant", "agent"}:
+            continue
+        for sentence in _split_fact_sentences(turn):
+            stripped = str(sentence or "").strip()
+            if not stripped.endswith(_QUESTION_TERMINATORS):
+                continue
+            key = _question_text_key(stripped)
+            if key:
+                keys.add(key)
+    return keys
+
+
+def _is_assistant_question_fragment_fact_text(text: str, assistant_question_keys: set[str]) -> bool:
+    if not assistant_question_keys:
+        return False
+    parts = _leading_question_fragment_parts(text)
+    if not parts:
+        return False
+    leading, trailing = parts
+    if _question_text_key(leading) not in assistant_question_keys:
+        return False
+    return _is_dangling_question_option_fragment(trailing)
 
 
 def _normalize_structural_anchor_sentence(sentence: str) -> str:
@@ -2084,8 +2158,11 @@ def materialize_cached_extraction_payload(
 
     parsed = dict(parsed_payload or {})
     parsed, artifact_dropped = _filter_extraction_artifact_facts(parsed)
+    parsed, assistant_question_dropped = _filter_assistant_question_fragment_facts(parsed, transcript)
+    artifact_dropped += assistant_question_dropped
     if artifact_dropped:
         result["facts_skipped"] = int(result.get("facts_skipped", 0) or 0) + artifact_dropped
+        result["artifact_facts_dropped"] = int(result.get("artifact_facts_dropped", 0) or 0) + artifact_dropped
 
     _merge_parsed_payloads(
         [parsed],
@@ -2147,6 +2224,7 @@ def materialize_cached_extraction_payload(
         "dry_run": False,
         "chunks_processed": int(result.get("chunks_processed", 0) or 0),
         "facts_skipped": int(result.get("facts_skipped", 0) or 0),
+        "artifact_facts_dropped": int(result.get("artifact_facts_dropped", 0) or 0),
         "question_echo_facts_dropped": int(result.get("question_echo_facts_dropped", 0) or 0),
         "explicit_structural_anchor_facts": len(explicit_anchor_facts),
     }
@@ -2183,12 +2261,41 @@ def _filter_extraction_artifact_facts(parsed: Dict[str, Any]) -> Tuple[Dict[str,
     return out, dropped
 
 
+def _filter_assistant_question_fragment_facts(
+    parsed: Dict[str, Any],
+    transcript: str,
+) -> Tuple[Dict[str, Any], int]:
+    facts = parsed.get("facts", []) or []
+    if not isinstance(facts, list) or not facts:
+        return parsed, 0
+    assistant_question_keys = _assistant_question_sentence_keys(transcript)
+    if not assistant_question_keys:
+        return parsed, 0
+
+    filtered: List[Any] = []
+    dropped = 0
+    for fact in facts:
+        if not isinstance(fact, dict):
+            filtered.append(fact)
+            continue
+        text = fact.get("text", "")
+        if isinstance(text, str) and _is_assistant_question_fragment_fact_text(text, assistant_question_keys):
+            dropped += 1
+            continue
+        filtered.append(fact)
+
+    if not dropped:
+        return parsed, 0
+
+    out = dict(parsed)
+    out["facts"] = filtered
+    if not _payload_has_signal(out) and _chunk_assessment(out) in {"", "usable"}:
+        out["chunk_assessment"] = "nothing_usable"
+    return out, dropped
+
+
 def _question_echo_key(text: str) -> str:
-    normalized = " ".join(str(text or "").strip().split())
-    normalized = normalized.strip(" \t\r\n\"'`")
-    normalized = _rstrip_question_terminators(normalized)
-    normalized = normalized.rstrip(" .")
-    return " ".join(normalized.lower().split())
+    return _question_text_key(text)
 
 
 def _user_question_echo_keys(transcript: str) -> set[str]:
@@ -2497,6 +2604,7 @@ def _merge_parsed_payloads(
         or mention_date_hint
     )
     question_echo_keys = _user_question_echo_keys(transcript_text)
+    assistant_question_keys = _assistant_question_sentence_keys(transcript_text)
     for parsed in payloads:
         result["chunks_processed"] = int(result.get("chunks_processed", 0) or 0) + 1
         parsed_facts = parsed.get("facts", []) or []
@@ -2504,12 +2612,16 @@ def _merge_parsed_payloads(
             valid_facts: List[Dict[str, Any]] = []
             invalid_fact_count = 0
             question_echo_count = 0
+            assistant_question_artifact_count = 0
             for raw_fact in parsed_facts:
                 if not isinstance(raw_fact, dict):
                     invalid_fact_count += 1
                     continue
                 if not isinstance(raw_fact.get("text"), str):
                     invalid_fact_count += 1
+                    continue
+                if _is_assistant_question_fragment_fact_text(raw_fact.get("text", ""), assistant_question_keys):
+                    assistant_question_artifact_count += 1
                     continue
                 if _is_user_question_echo_fact(raw_fact, question_echo_keys):
                     question_echo_count += 1
@@ -2545,6 +2657,16 @@ def _merge_parsed_payloads(
                 result["question_echo_facts_dropped"] = int(
                     result.get("question_echo_facts_dropped", 0) or 0
                 ) + question_echo_count
+            if assistant_question_artifact_count:
+                logger.warning(
+                    "[extract] %s chunk %s: dropped %d assistant question fragment fact payload(s)",
+                    label,
+                    chunk_label,
+                    assistant_question_artifact_count,
+                )
+                result["artifact_facts_dropped"] = int(
+                    result.get("artifact_facts_dropped", 0) or 0
+                ) + assistant_question_artifact_count
             valid_facts = _filter_unsupported_specificity_facts(
                 valid_facts,
                 transcript_text=transcript_text,
@@ -2748,6 +2870,18 @@ def _extract_chunk_payloads(
                 label,
                 chunk_label,
                 artifact_dropped,
+            )
+        parsed, assistant_question_dropped = _filter_assistant_question_fragment_facts(parsed, chunk)
+        if assistant_question_dropped:
+            if isinstance(telemetry, dict):
+                telemetry["artifact_facts_dropped"] = int(
+                    telemetry.get("artifact_facts_dropped", 0) or 0
+                ) + assistant_question_dropped
+            logger.warning(
+                "[extract] %s chunk %s: dropped %d assistant question fragment fact(s)",
+                label,
+                chunk_label,
+                assistant_question_dropped,
             )
         parsed, question_echo_dropped = _filter_user_question_echo_facts(parsed, chunk)
         if question_echo_dropped:

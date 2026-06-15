@@ -3178,6 +3178,49 @@ class TestExtractFromTranscript:
         assert result["question_echo_facts_dropped"] == 0
 
     @patch("ingest.extract.call_deep_reasoning")
+    def test_extraction_drops_assistant_question_option_fragments(self, mock_llm):
+        from ingest.extract import extract_from_transcript
+
+        mock_llm.return_value = (json.dumps({
+            "chunk_assessment": "usable",
+            "facts": [
+                {
+                    "text": "Setup path? The vendor pressure,",
+                    "category": "fact",
+                    "speaker": "user",
+                    "domains": ["work"],
+                    "extraction_confidence": "medium",
+                    "privacy": "shared",
+                },
+                {
+                    "text": "Alex uses marker slate-river-4821 for the pilot",
+                    "category": "fact",
+                    "speaker": "user",
+                    "domains": ["work"],
+                    "extraction_confidence": "high",
+                    "privacy": "shared",
+                },
+            ],
+            "soul_snippets": {},
+            "journal_entries": {},
+            "project_logs": {},
+        }), 0.1)
+
+        result = extract_from_transcript(
+            transcript=(
+                "Assistant: Setup path? The vendor pressure, or did a deadline come up?\n\n"
+                "User: Neither. I was curious, and I use marker slate-river-4821 for the pilot."
+            ),
+            owner_id="Alex",
+            dry_run=True,
+        )
+
+        texts = [fact["text"] for fact in result["raw_facts"]]
+        assert texts == ["Alex uses marker slate-river-4821 for the pilot"]
+        assert result["artifact_facts_dropped"] == 1
+        assert result["facts_skipped"] == 1
+
+    @patch("ingest.extract.call_deep_reasoning")
     def test_extraction_drops_injected_memory_and_session_artifact_facts(self, mock_llm):
         from ingest.extract import extract_from_transcript
 
@@ -3467,6 +3510,42 @@ class TestExtractFromTranscript:
         assert texts == ["Miko uses the red linen receipt notebook for the studio setup"]
         assert payload["question_echo_facts_dropped"] >= 1
         assert payload["facts_skipped"] == payload["question_echo_facts_dropped"]
+
+    def test_materialized_cached_payload_drops_assistant_question_option_fragments(self):
+        import ingest.extract as extract_mod
+
+        payload = extract_mod.materialize_cached_extraction_payload(
+            transcript=(
+                "Assistant: Setup path？ vendor pressure, or deadline?\n\n"
+                "User: Neither. Keep marker slate-river-4821 for the pilot."
+            ),
+            parsed_payload={
+                "facts": [
+                    {
+                        "text": "Setup path？ vendor pressure,",
+                        "category": "fact",
+                        "speaker": "user",
+                        "domains": ["work"],
+                    },
+                    {
+                        "text": "Alex keeps marker slate-river-4821 for the pilot",
+                        "category": "fact",
+                        "speaker": "user",
+                        "domains": ["work"],
+                    },
+                ],
+                "soul_snippets": {},
+                "journal_entries": {},
+                "project_logs": {},
+            },
+            owner_id="Alex",
+            label="rolling-cache",
+        )
+
+        texts = [fact["text"] for fact in payload["raw_facts"]]
+        assert texts == ["Alex keeps marker slate-river-4821 for the pilot"]
+        assert payload["artifact_facts_dropped"] == 1
+        assert payload["facts_skipped"] == 1
 
     @patch("ingest.extract.call_deep_reasoning")
     @patch("ingest.extract._session_bridge.list_session_chunks", return_value=[])
