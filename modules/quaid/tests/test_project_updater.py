@@ -4,6 +4,7 @@ import json
 import os
 import sys
 import tempfile
+from datetime import timezone
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
@@ -375,13 +376,14 @@ class TestAppendProjectLogs:
         assert "- [2026-03-07T15:30:00] Added migration notes" in project_log.read_text()
 
     def test_project_log_now_fallback_is_utc_aware(self, setup_env, monkeypatch):
-        from datetime import timezone
-
         from datastore.docsdb.project_updater import _project_log_now
 
         monkeypatch.delenv("QUAID_NOW", raising=False)
 
-        assert _project_log_now().tzinfo is timezone.utc
+        now = _project_log_now()
+
+        assert now.tzinfo is not None
+        assert now.utcoffset() == timezone.utc.utcoffset(now)
 
     def test_project_log_history_malformed_quaid_now_honors_failhard(self, setup_env, monkeypatch):
         from datastore.docsdb.registry import DocsRegistry
