@@ -5632,6 +5632,11 @@ def graph_aware_recall(
     # A terse relation chain such as "partner brother occupation" has no
     # named starting entity but still describes the owner's relationship graph.
     query_entities = extract_entities_from_text(query)
+    implicit_owner_relation_query = bool(
+        matched_relations
+        and not relation_chain_query
+        and not query_entities
+    )
     graph_query_embedding: Optional[List[float]] = None
 
     # 1. Pronoun resolution
@@ -5643,13 +5648,15 @@ def graph_aware_recall(
             owner_anchor_name = owner_person.name
             results["source_breakdown"]["pronoun_resolved"] = True
             results["source_breakdown"]["owner_person"] = owner_person.name
-    elif relation_chain_query and not query_entities:
+    elif (relation_chain_query or implicit_owner_relation_query) and not query_entities:
         owner_person = resolve_owner_person(owner_id)
         if owner_person:
             expand_from.append(owner_person.id)
             owner_anchor_id = owner_person.id
             owner_anchor_name = owner_person.name
-            results["source_breakdown"]["owner_relation_chain_inferred"] = True
+            results["source_breakdown"][
+                "owner_relation_chain_inferred" if relation_chain_query else "owner_relation_inferred"
+            ] = True
             results["source_breakdown"]["owner_person"] = owner_person.name
     owner_anchored_relation_chain = bool(
         relation_chain_query

@@ -16648,6 +16648,49 @@ class TestRecallFastHookInjectContract:
         assert attached[0]["graph_relation_sequence"] == ["spouse_of", "sibling_of", "has_fact"]
         assert "Yuni --sibling_of--> Kai" in attached[0]["graph_path"]
 
+    def test_graph_aware_recall_anchors_relation_only_unicode_query_to_owner(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _ = _make_graph(tmp_path)
+        owner = mg.Node.create("Person", "Test Owner")
+        sibling = mg.Node.create("Person", "Kai")
+        work = mg.Node.create("Fact", "Kai works at a small boatbuilding studio")
+        for node in (owner, sibling, work):
+            graph.add_node(node, embed=False)
+        graph.add_edge(mg.Edge.create(owner.id, sibling.id, "sibling_of"))
+        graph.add_edge(mg.Edge.create(sibling.id, work.id, "has_fact"))
+
+        fake_cfg = SimpleNamespace(
+            users=SimpleNamespace(
+                identities={"test-owner": SimpleNamespace(person_node_name="Test Owner")}
+            )
+        )
+
+        with patch.object(mg, "get_graph", return_value=graph), \
+             patch.object(mg, "_HAS_CONFIG", True), \
+             patch.object(mg, "_get_memory_config", return_value=fake_cfg), \
+             patch.object(mg, "get_edge_keywords", return_value={"sibling_of": ["兄"]}), \
+             patch.object(mg, "extract_entities_from_text", return_value=[]), \
+             patch.object(mg, "recall", return_value=([], {"selected_path": "vector"})), \
+             patch.object(graph, "get_embedding", return_value=None):
+            payload = mg.graph_aware_recall(
+                "兄は何をしていますか",
+                owner_id="test-owner",
+                limit=8,
+                graph_depth=1,
+            )
+
+        attached = [
+            row for row in payload["graph_results"]
+            if row.get("id") == work.id
+        ]
+        assert payload["source_breakdown"]["owner_relation_inferred"] is True
+        assert payload["source_breakdown"]["owner_person"] == "Test Owner"
+        assert attached
+        assert attached[0]["via"] == "graph_attached_fact"
+        assert attached[0]["graph_relation_sequence"] == ["sibling_of", "has_fact"]
+        assert "Test Owner --sibling_of--> Kai" in attached[0]["graph_path"]
+
     def test_relation_chain_step_edges_respect_directional_parent_child_semantics(self, tmp_path):
         import datastore.memorydb.memory_graph as mg
 
