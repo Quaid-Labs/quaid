@@ -14,6 +14,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from config import get_config
 from lib.domain_text import normalize_domain_id
+from lib.fail_policy import is_fail_hard_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -55,8 +56,9 @@ def _current_utc_timestamp() -> str:
         normalized = _normalize_extracted_timestamp(quaid_now)
         if normalized:
             return normalized
-        logger.warning("[datastore-memorydb] invalid QUAID_NOW=%r", quaid_now)
-        raise ValueError(f"Invalid QUAID_NOW={quaid_now!r}") from None
+        if is_fail_hard_enabled():
+            raise RuntimeError(f"Invalid QUAID_NOW={quaid_now!r}")
+        logger.warning("[datastore-memorydb] invalid QUAID_NOW=%r; falling back to wall clock", quaid_now)
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 def _normalize_fact_temporal_hint(

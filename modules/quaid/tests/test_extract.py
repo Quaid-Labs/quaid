@@ -1186,13 +1186,25 @@ class TestExtractFromTranscript:
 
         assert extract_mod._current_utc_timestamp() == "2026-03-11T00:00:00+00:00"
 
-    def test_current_utc_timestamp_rejects_malformed_quaid_now(self, monkeypatch):
+    def test_current_utc_timestamp_malformed_quaid_now_honors_failhard(self, monkeypatch):
         from ingest import extract as extract_mod
 
-        monkeypatch.setenv("QUAID_NOW", "not-a-date")
+        monkeypatch.setenv("QUAID_NOW", "not-a-clock")
 
-        with pytest.raises(ValueError, match="Invalid QUAID_NOW"):
-            extract_mod._current_utc_timestamp()
+        with patch("ingest.extract.is_fail_hard_enabled", return_value=True):
+            with pytest.raises(RuntimeError, match="Invalid QUAID_NOW"):
+                extract_mod._current_utc_timestamp()
+
+    def test_current_utc_timestamp_malformed_quaid_now_falls_back_when_fail_open(self, monkeypatch):
+        from ingest import extract as extract_mod
+
+        monkeypatch.setenv("QUAID_NOW", "not-a-clock")
+
+        with patch("ingest.extract.is_fail_hard_enabled", return_value=False):
+            timestamp = extract_mod._current_utc_timestamp()
+
+        assert timestamp != "not-a-clock"
+        assert timestamp.endswith("+00:00")
 
     @patch("ingest.extract._current_utc_timestamp", return_value="2026-05-02T14:30:00+00:00")
     @patch("ingest.extract.call_deep_reasoning")
@@ -4971,13 +4983,25 @@ class TestExtractFromTranscript:
 
         assert extraction_publish._current_utc_timestamp() == "2026-03-11T00:00:00+00:00"
 
-    def test_memorydb_extraction_publish_current_timestamp_rejects_malformed_quaid_now(self, monkeypatch):
+    def test_memorydb_extraction_publish_current_timestamp_malformed_quaid_now_honors_failhard(self, monkeypatch):
         from datastore.memorydb import extraction_publish
 
-        monkeypatch.setenv("QUAID_NOW", "not-a-date")
+        monkeypatch.setenv("QUAID_NOW", "not-a-clock")
 
-        with pytest.raises(ValueError, match="Invalid QUAID_NOW"):
-            extraction_publish._current_utc_timestamp()
+        with patch("datastore.memorydb.extraction_publish.is_fail_hard_enabled", return_value=True):
+            with pytest.raises(RuntimeError, match="Invalid QUAID_NOW"):
+                extraction_publish._current_utc_timestamp()
+
+    def test_memorydb_extraction_publish_current_timestamp_malformed_quaid_now_falls_back_when_fail_open(self, monkeypatch):
+        from datastore.memorydb import extraction_publish
+
+        monkeypatch.setenv("QUAID_NOW", "not-a-clock")
+
+        with patch("datastore.memorydb.extraction_publish.is_fail_hard_enabled", return_value=False):
+            timestamp = extraction_publish._current_utc_timestamp()
+
+        assert timestamp != "not-a-clock"
+        assert timestamp.endswith("+00:00")
 
     def _run_direct_extraction_publish(self, result, memory_service, *, fail_hard_enabled):
         from datastore.memorydb.extraction_publish import run_extraction_publish_payload
