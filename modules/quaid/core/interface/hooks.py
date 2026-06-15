@@ -1681,6 +1681,30 @@ def hook_inject(args):
             "deferred_relay_len": len(deferred_notice_relay_context or ""),
             "phase": "pre_probe",
         })
+        if bool(_adapter_capability("deferred_notice_relay_immediate", False)):
+            context_parts = [deferred_notice_relay_context]
+            if turn_refresh_context:
+                context_parts.append(turn_refresh_context)
+            project_list_hint = _project_list_cli_hint_context(
+                hook_input if isinstance(hook_input, dict) else {}
+            )
+            if project_list_hint:
+                context_parts.append(project_list_hint)
+            context = "\n\n".join(part for part in context_parts if part)
+            _write_hook_trace("hook.inject.deferred_relay_immediate", {
+                "query": query[:160],
+                "session_id": session_id,
+                "deferred_relay_len": len(deferred_notice_relay_context or ""),
+                "context_len": len(context),
+            })
+            if context:
+                print(json.dumps({
+                    "hookSpecificOutput": {
+                        "hookEventName": "UserPromptSubmit",
+                        "additionalContext": context,
+                    }
+                }))
+            return
 
     if not compaction_marker_pending:
         try:

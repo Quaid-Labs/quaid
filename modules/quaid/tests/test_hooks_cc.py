@@ -49,6 +49,7 @@ def _adapter_mock():
             },
             "codex": {
                 "deferred_notice_relay": True,
+                "deferred_notice_relay_immediate": True,
                 "session_lookup_glob_template": "rollout-*{session_id}.jsonl",
                 "session_pending_path_template": "{date_prefix}/rollout-pending-{session_id}.jsonl",
                 "session_pending_default_root": "~/.codex/sessions",
@@ -2773,6 +2774,47 @@ class TestHookInjectRecallResilience:
         assert "Do not call --deferred-drain; relay delivery is complete." in context
         assert "silver lantern" in context
         assert "quaid notify --deferred-drain" not in context
+
+    def test_codex_deferred_notice_relay_emits_before_recall_work(
+        self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
+    ):
+        from core import extraction_daemon
+        from lib import runtime_context
+
+        monkeypatch.setattr(extraction_daemon, "write_cursor", lambda *a: None)
+        mock_adapter.adapter_id.return_value = "codex"
+        monkeypatch.setattr(
+            runtime_context,
+            "drain_deferred_notices",
+            lambda limit=50: [
+                {
+                    "message": "M6 test notice: scheduled review found 3 facts that may be outdated.",
+                    "kind": "janitor_notice",
+                    "status": "resolved",
+                }
+            ],
+        )
+
+        with patch(
+            "core.interface.api.recall_fast",
+            side_effect=AssertionError("deferred relay should not wait on recall"),
+        ), patch(
+            "core.interface.api.projects_search_docs",
+            side_effect=AssertionError("deferred relay should not wait on docs"),
+        ):
+            out, _err = _run_hook_inject(
+                {
+                    "prompt": "Hey, what's up?",
+                    "session_id": "sess-codex-deferred-drain",
+                    "cwd": "/Users/x",
+                },
+                monkeypatch=monkeypatch,
+            )
+
+        payload = json.loads(out)
+        context = payload["hookSpecificOutput"]["additionalContext"]
+        assert "MANDATORY: Quaid just drained deferred notices" in context
+        assert "scheduled review found 3 facts" in context
 
     def test_prompt_model_config_recovery_notice_follows_prior_error(
         self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
