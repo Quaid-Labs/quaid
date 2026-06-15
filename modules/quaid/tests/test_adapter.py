@@ -277,6 +277,22 @@ class TestStandaloneAdapter:
         assert "Edges created" not in transcript
         assert transcript == "User: My Friday ritual uses marker marigold-anvil-5816."
 
+    def test_build_transcript_strips_oc_timestamp_with_unicode_day_label(self, standalone):
+        transcript = standalone.build_transcript([
+            {
+                "role": "user",
+                "content": "[月 2026-03-22 08:14 JST] Meeting notes start here.",
+            },
+            {
+                "role": "user",
+                "content": "[重要] Keep this bracketed user content.",
+            },
+        ])
+
+        assert "2026-03-22 08:14" not in transcript
+        assert "User: Meeting notes start here." in transcript
+        assert "User: [重要] Keep this bracketed user content." in transcript
+
     def test_parse_session_jsonl_uses_adapter_transcript_rules(self, standalone, tmp_path):
         import json
         jsonl_file = tmp_path / "session.jsonl"

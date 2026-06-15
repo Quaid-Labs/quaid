@@ -543,8 +543,12 @@ class QuaidAdapter(abc.ABC):
                 text,
                 flags=re.DOTALL,
             )
-            # Strip OC gateway timestamp prefix [Day Date Time TZ]
-            text = re.sub(r"^\[[A-Za-z]{3}\s+\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}[^\]]*\]\s*", "", text)
+            # Strip OC gateway timestamp prefix [day-label date time tz].
+            text = re.sub(
+                r"^\[[^\]\r\n\d]{1,32}\s+\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}[^\]\r\n]*\]\s*",
+                "",
+                text,
+            )
             # Strip Sender metadata blocks injected by OC gateway
             text = re.sub(
                 r"Sender \(untrusted metadata\):.*?(?=\n\n|\Z)",
