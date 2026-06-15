@@ -6662,6 +6662,8 @@ def _expand_low_signal_query(query: str, intent: str) -> str:
     q = (query or "").strip()
     if not q:
         return q
+    if _has_non_ascii(q):
+        return q
     intent = (intent or "GENERAL").upper()
     if intent == "WHEN":
         return f"{q} timeline latest current date before after changed"
