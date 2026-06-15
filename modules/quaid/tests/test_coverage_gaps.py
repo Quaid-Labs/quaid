@@ -1306,6 +1306,42 @@ class TestCreateEdgeAtomicity:
         assert [row["name"] for row in rows] == ["Ethan", "Rachel"]
         assert all(row["embedding"] is None for row in rows)
 
+    def test_create_edge_duplicate_relation_preserves_existing_edge_row(self, tmp_path):
+        from datastore.memorydb.memory_graph import create_edge
+
+        graph, _ = _make_graph(tmp_path, "create_edge_duplicate_preserve.db")
+        first_fact = _make_node(graph, "Alice first mentioned knowing Bob")
+        second_fact = _make_node(graph, "Alice later repeated knowing Bob")
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+            first = create_edge(
+                subject_name="Alice Example",
+                relation="friend_of",
+                object_name="Bob Example",
+                owner_id="quaid",
+                source_fact_id=first_fact.id,
+            )
+            second = create_edge(
+                subject_name="Alice Example",
+                relation="friend_of",
+                object_name="Bob Example",
+                owner_id="quaid",
+                source_fact_id=second_fact.id,
+            )
+
+        assert first["edge_id"] == second["edge_id"]
+        with graph._get_conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, source_fact_id FROM edges
+                WHERE relation = 'friend_of'
+                """
+            ).fetchall()
+        assert len(rows) == 1
+        assert rows[0]["id"] == first["edge_id"]
+        assert rows[0]["source_fact_id"] == first_fact.id
+
     def test_create_edge_rejects_sentence_like_entity_labels(self, tmp_path):
         from datastore.memorydb.memory_graph import create_edge
 

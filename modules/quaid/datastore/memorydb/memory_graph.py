@@ -23910,6 +23910,12 @@ def create_edge(
         rel: str,
         src_fact_id: Optional[str],
     ) -> str:
+        existing = conn.execute(
+            "SELECT id FROM edges WHERE source_id = ? AND target_id = ? AND relation = ? LIMIT 1",
+            (source_id, target_id, rel),
+        ).fetchone()
+        if existing:
+            return str(existing["id"] or existing[0] or "")
         edge = Edge.create(
             source_id=source_id,
             target_id=target_id,
@@ -23918,7 +23924,7 @@ def create_edge(
         )
         conn.execute(
             """
-            INSERT OR REPLACE INTO edges
+            INSERT INTO edges
             (id, source_id, target_id, relation, attributes, weight,
              valid_from, valid_until, created_at, source_fact_id)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
