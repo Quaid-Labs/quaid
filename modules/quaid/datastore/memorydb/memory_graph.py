@@ -2041,6 +2041,7 @@ class MemoryGraph:
         node ID already exists, triggering ON DELETE CASCADE on edges. Only use for
         genuinely new nodes. Use update_node() for modifying existing nodes.
         """
+        _validate_node_persistence_scores(node)
         if embed and not node.embedding:
             # Combine name and key attributes for embedding
             embed_text = node.name
@@ -2132,6 +2133,7 @@ class MemoryGraph:
         Uses UPDATE instead of INSERT OR REPLACE, preserving all edges.
         Returns True if the node was found and updated, False if not found.
         """
+        _validate_node_persistence_scores(node)
         if embed and not node.embedding:
             embed_text = node.name
             if node.attributes:
@@ -22462,6 +22464,31 @@ def _validate_confidence_unit_interval(value: Any, field_name: str) -> float:
     if parsed < 0.0 or parsed > 1.0:
         raise ValueError(f"{field_name} must be between 0.0 and 1.0 (got {parsed})")
     return parsed
+
+
+def _validate_storage_strength(value: Any) -> float:
+    """Normalize persisted storage strength and enforce the model's [0.0, 10.0] cap."""
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("storage_strength must be a number between 0.0 and 10.0") from exc
+    if parsed < 0.0 or parsed > 10.0:
+        raise ValueError(f"storage_strength must be between 0.0 and 10.0 (got {parsed})")
+    return parsed
+
+
+def _validate_node_persistence_scores(node: Node) -> None:
+    """Reject invalid score fields before they enter persisted graph state."""
+    node.confidence = _validate_confidence_unit_interval(node.confidence, "confidence")
+    node.extraction_confidence = _validate_confidence_unit_interval(
+        node.extraction_confidence,
+        "extraction_confidence",
+    )
+    node.provenance_confidence = _validate_confidence_unit_interval(
+        node.provenance_confidence,
+        "provenance_confidence",
+    )
+    node.storage_strength = _validate_storage_strength(node.storage_strength)
 
 
 def _load_dedup_candidates_vec(

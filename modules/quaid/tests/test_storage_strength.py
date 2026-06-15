@@ -313,6 +313,22 @@ class TestNodePersistence:
         loaded = graph.get_node(node.id)
         assert abs(loaded.storage_strength - 3.7) < 0.001
 
+    def test_add_node_rejects_invalid_storage_strength(self, tmp_path):
+        from datastore.memorydb.memory_graph import Node
+        graph = _make_graph(tmp_path)
+        node = Node.create(type="Fact", name="Bad strength", storage_strength=10.1)
+
+        with pytest.raises(ValueError, match="storage_strength must be between 0.0 and 10.0"):
+            graph.add_node(node, embed=False)
+
+    def test_update_node_rejects_invalid_confidence(self, tmp_path):
+        graph = _make_graph(tmp_path)
+        node = _make_node(graph, "Bad confidence update")
+        node.confidence = -0.1
+
+        with pytest.raises(ValueError, match="confidence must be between 0.0 and 1.0"):
+            graph.update_node(node, embed=False)
+
     def test_default_storage_strength_is_zero(self, tmp_path):
         graph = _make_graph(tmp_path)
         node = _make_node(graph, "Default strength")
