@@ -3173,6 +3173,15 @@ class MemoryGraph:
 
                 # Sort by heuristic score
                 next_candidates.sort(key=lambda x: x[5], reverse=True)
+                deduped_candidates = []
+                next_candidate_ids = set()
+                for candidate in next_candidates:
+                    candidate_id = candidate[0].id
+                    if candidate_id in next_candidate_ids:
+                        continue
+                    next_candidate_ids.add(candidate_id)
+                    deduped_candidates.append(candidate)
+                next_candidates = deduped_candidates
 
                 # Adaptive LLM reranking: only when candidates exceed beam slots
                 # (i.e., truncation would happen — the heuristic alone picks winners)

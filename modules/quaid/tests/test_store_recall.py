@@ -56,6 +56,34 @@ def _make_graph(tmp_path):
     return graph, db_file
 
 
+def test_beam_search_graph_deduplicates_nodes_reached_from_same_level(tmp_path):
+    import datastore.memorydb.memory_graph as mg
+
+    graph, _ = _make_graph(tmp_path)
+    start = mg.Node.create("Person", "Start person", owner_id="quaid")
+    left = mg.Node.create("Fact", "Left route to the shared note", owner_id="quaid")
+    right = mg.Node.create("Fact", "Right route to the shared note", owner_id="quaid")
+    shared = mg.Node.create("Fact", "Shared destination note", owner_id="quaid")
+    for node in (start, left, right, shared):
+        graph.add_node(node, embed=False)
+    graph.add_edge(mg.Edge.create(start.id, left.id, "mentions"))
+    graph.add_edge(mg.Edge.create(start.id, right.id, "mentions"))
+    graph.add_edge(mg.Edge.create(left.id, shared.id, "supports"))
+    graph.add_edge(mg.Edge.create(right.id, shared.id, "supports"))
+
+    rows = graph.beam_search_graph(
+        "shared destination",
+        start.id,
+        beam_width=2,
+        max_depth=2,
+        max_results=10,
+        allow_llm_rerank=False,
+    )
+
+    assert len({row[0].id for row in rows}) == len(rows)
+    assert [row[0].id for row in rows].count(shared.id) == 1
+
+
 def test_delete_node_cleans_edges_and_supersession_without_fk_cascade(tmp_path, monkeypatch):
     from contextlib import contextmanager
     import datastore.memorydb.memory_graph as mg
