@@ -19893,12 +19893,12 @@ def _registered_project_name_in_query(lowered_query: str) -> Optional[str]:
         # Registered project names are often short fixtures (for example
         # "other"). Treat them as slugs/tokens, not arbitrary substrings, so
         # "brother" does not route a kinship query to docs through "other".
-        pattern = rf"(?<![a-z0-9._-]){_re.escape(clean)}(?![a-z0-9._-])"
+        pattern = rf"(?<![\w.-]){_re.escape(clean)}(?![\w.-])"
         if _re.search(pattern, text):
             return True
         spaced = clean.replace("-", " ")
         if spaced != clean:
-            spaced_pattern = rf"(?<![a-z0-9._-]){_re.escape(spaced)}(?![a-z0-9._-])"
+            spaced_pattern = rf"(?<![\w.-]){_re.escape(spaced)}(?![\w.-])"
             return bool(_re.search(spaced_pattern, text))
         return False
 

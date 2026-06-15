@@ -15088,6 +15088,32 @@ class TestRecallFastHookInjectContract:
         assert stores == ["vector", "graph"]
         assert project is None
 
+    def test_infer_recall_store_defaults_uses_unicode_project_name_boundaries(self, tmp_path, monkeypatch):
+        import datastore.memorydb.memory_graph as mg
+
+        class _Graph:
+            def get_known_relations(self):
+                return []
+
+        registry = tmp_path / "project-registry.json"
+        registry.write_text(
+            '{"projects":{"研究-資料":{"description":"xp"},"資料":{"description":"short"}},"deleted_projects":{}}\n',
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=_Graph()), \
+             patch("datastore.memorydb.memory_graph.get_edge_keywords", return_value={}):
+            stores, project = mg._infer_recall_store_defaults("研究-資料 API 状態")
+            embedded_stores, embedded_project = mg._infer_recall_store_defaults("研究-資料支援")
+            suffix_stores, suffix_project = mg._infer_recall_store_defaults("研究資料 API 状態")
+
+        assert stores == ["vector", "docs"]
+        assert project == "研究-資料"
+        assert embedded_project is None
+        assert suffix_project is None
+        assert embedded_stores == ["vector"]
+        assert suffix_stores == ["vector", "docs"]
+
     def test_infer_recall_store_defaults_routes_docs_for_project_asof_exact_values(self):
         import datastore.memorydb.memory_graph as mg
 
