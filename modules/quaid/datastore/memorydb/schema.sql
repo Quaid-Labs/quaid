@@ -296,10 +296,11 @@ CREATE TABLE IF NOT EXISTS edge_keywords (
 
 -- Embedding cache - avoids re-computing embeddings for identical text
 CREATE TABLE IF NOT EXISTS embedding_cache (
-    text_hash TEXT PRIMARY KEY,             -- SHA256 of input text
+    text_hash TEXT NOT NULL,                -- SHA256 of input text
     embedding BLOB NOT NULL,                -- Packed float32 array
     model TEXT NOT NULL,                    -- Embedding model used (from config: ollama.embeddingModel)
-    created_at TEXT DEFAULT (datetime('now'))
+    created_at TEXT DEFAULT (datetime('now')),
+    PRIMARY KEY (text_hash, model)
 );
 
 -- Entity aliases for fuzzy name matching

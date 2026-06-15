@@ -14,6 +14,11 @@ def _index_names(conn, table: str) -> set[str]:
     return {str(r[1]) for r in rows}
 
 
+def _primary_key_columns(conn, table: str) -> list[str]:
+    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    return [str(r[1]) for r in sorted((r for r in rows if int(r[5] or 0)), key=lambda r: int(r[5]))]
+
+
 def test_memory_graph_initializes_multi_user_foundation_schema(tmp_path):
     db_path = Path(tmp_path) / "memory.db"
     graph = MemoryGraph(db_path=db_path)
@@ -47,6 +52,7 @@ def test_memory_graph_initializes_multi_user_foundation_schema(tmp_path):
 
         node_indexes = _index_names(conn, "nodes")
         assert "idx_nodes_superseded_by" in node_indexes
+        assert _primary_key_columns(conn, "embedding_cache") == ["text_hash", "model"]
 
         alias_cols = _table_columns(conn, "entity_aliases")
         assert "entity_id" in alias_cols
@@ -126,6 +132,52 @@ def test_memory_graph_migrates_superseded_by_index_on_existing_db(tmp_path):
         node_indexes = _index_names(conn, "nodes")
 
     assert "idx_nodes_superseded_by" in node_indexes
+
+
+def test_memory_graph_migrates_embedding_cache_to_model_scoped_primary_key(tmp_path):
+    db_path = Path(tmp_path) / "legacy-cache.db"
+    schema_path = (
+        Path(__file__).resolve().parent.parent / "datastore" / "memorydb" / "schema.sql"
+    )
+    legacy_schema = schema_path.read_text().replace(
+        """CREATE TABLE IF NOT EXISTS embedding_cache (
+    text_hash TEXT NOT NULL,                -- SHA256 of input text
+    embedding BLOB NOT NULL,                -- Packed float32 array
+    model TEXT NOT NULL,                    -- Embedding model used (from config: ollama.embeddingModel)
+    created_at TEXT DEFAULT (datetime('now')),
+    PRIMARY KEY (text_hash, model)
+);
+""",
+        """CREATE TABLE IF NOT EXISTS embedding_cache (
+    text_hash TEXT PRIMARY KEY,
+    embedding BLOB NOT NULL,
+    model TEXT NOT NULL,
+    created_at TEXT DEFAULT (datetime('now'))
+);
+""",
+    )
+
+    with sqlite3.connect(db_path) as conn:
+        conn.executescript(legacy_schema)
+        conn.execute(
+            "INSERT INTO embedding_cache (text_hash, embedding, model, created_at) VALUES (?, ?, ?, ?)",
+            ("hash-one", b"packed", "old-model", "2026-01-02T03:04:05"),
+        )
+        assert _primary_key_columns(conn, "embedding_cache") == ["text_hash"]
+
+    graph = MemoryGraph(db_path=db_path)
+    with graph._get_conn() as conn:
+        pk_columns = _primary_key_columns(conn, "embedding_cache")
+        rows = conn.execute(
+            "SELECT text_hash, embedding, model, created_at FROM embedding_cache"
+        ).fetchall()
+
+    assert pk_columns == ["text_hash", "model"]
+    assert len(rows) == 1
+    assert rows[0]["text_hash"] == "hash-one"
+    assert rows[0]["embedding"] == b"packed"
+    assert rows[0]["model"] == "old-model"
+    assert rows[0]["created_at"] == "2026-01-02T03:04:05"
 
 
 def test_memory_graph_repairs_partial_baseline_schema_when_nodes_exist(tmp_path):

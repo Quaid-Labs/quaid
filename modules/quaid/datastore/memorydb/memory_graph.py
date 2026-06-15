@@ -438,6 +438,60 @@ def _source_chunk_id(
     return "sch_" + hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
 
 
+_EMBEDDING_CACHE_SCHEMA = """
+CREATE TABLE IF NOT EXISTS embedding_cache (
+    text_hash TEXT NOT NULL,
+    embedding BLOB NOT NULL,
+    model TEXT NOT NULL,
+    created_at TEXT DEFAULT (datetime('now')),
+    PRIMARY KEY (text_hash, model)
+)
+"""
+
+
+def _ensure_embedding_cache_table(conn: sqlite3.Connection) -> None:
+    """Ensure embedding_cache can store independent rows per embedding model."""
+    conn.execute(_EMBEDDING_CACHE_SCHEMA)
+    columns = conn.execute("PRAGMA table_info(embedding_cache)").fetchall()
+    if not columns:
+        return
+
+    names: Set[str] = set()
+    pk_pairs: List[Tuple[int, str]] = []
+    for row in columns:
+        try:
+            name_value = row["name"]
+            pk_value = row["pk"]
+        except (IndexError, KeyError, TypeError):
+            name_value = row[1]
+            pk_value = row[5]
+        name = str(name_value)
+        pk_order = int(pk_value)
+        names.add(name)
+        if pk_order:
+            pk_pairs.append((pk_order, name))
+    pk_columns = [name for _order, name in sorted(pk_pairs)]
+    if pk_columns == ["text_hash", "model"] and {"text_hash", "embedding", "model", "created_at"}.issubset(names):
+        return
+
+    conn.execute("DROP TABLE IF EXISTS embedding_cache_legacy")
+    conn.execute("ALTER TABLE embedding_cache RENAME TO embedding_cache_legacy")
+    conn.execute(_EMBEDDING_CACHE_SCHEMA)
+    if {"text_hash", "embedding", "model"}.issubset(names):
+        created_expr = "created_at" if "created_at" in names else "datetime('now')"
+        conn.execute(
+            f"""
+            INSERT OR REPLACE INTO embedding_cache (text_hash, embedding, model, created_at)
+            SELECT text_hash, embedding, model, COALESCE({created_expr}, datetime('now'))
+            FROM embedding_cache_legacy
+            WHERE text_hash IS NOT NULL AND TRIM(text_hash) != ''
+              AND embedding IS NOT NULL
+              AND model IS NOT NULL AND TRIM(model) != ''
+            """
+        )
+    conn.execute("DROP TABLE embedding_cache_legacy")
+
+
 class MemoryGraph:
     """Local graph-based memory system."""
 
@@ -721,6 +775,8 @@ class MemoryGraph:
                     ",".join(missing_baseline_tables[:12]),
                 )
                 conn.executescript(schema)
+
+            _ensure_embedding_cache_table(conn)
 
             # Multi-user canonical identity/source tables for forward compatibility.
             conn.execute(
@@ -1129,17 +1185,7 @@ class MemoryGraph:
             try:
                 conn_cm = nullcontext(conn) if conn is not None else self._get_conn()
                 with conn_cm as active_conn:
-                    active_conn.execute(
-                        """
-                        CREATE TABLE IF NOT EXISTS embedding_cache (
-                            text_hash TEXT NOT NULL,
-                            embedding BLOB NOT NULL,
-                            model TEXT NOT NULL,
-                            created_at TEXT DEFAULT (datetime('now')),
-                            PRIMARY KEY (text_hash, model)
-                        )
-                        """
-                    )
+                    _ensure_embedding_cache_table(active_conn)
                     row = active_conn.execute(
                         "SELECT embedding FROM embedding_cache WHERE text_hash = ? AND model = ?",
                         (text_hash, model)
@@ -1155,6 +1201,7 @@ class MemoryGraph:
             try:
                 conn_cm = nullcontext(conn) if conn is not None else self._get_conn()
                 with conn_cm as active_conn:
+                    _ensure_embedding_cache_table(active_conn)
                     active_conn.execute(
                         "INSERT OR REPLACE INTO embedding_cache (text_hash, embedding, model) VALUES (?, ?, ?)",
                         (text_hash, self._pack_embedding(embedding), model)
@@ -1213,17 +1260,7 @@ class MemoryGraph:
         known_hashes: set[str] = set()
         hash_keys = list(unique_by_hash.keys())
         with self._get_conn() as conn:
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS embedding_cache (
-                    text_hash TEXT NOT NULL,
-                    embedding BLOB NOT NULL,
-                    model TEXT NOT NULL,
-                    created_at TEXT DEFAULT (datetime('now')),
-                    PRIMARY KEY (text_hash, model)
-                )
-                """
-            )
+            _ensure_embedding_cache_table(conn)
             for offset in range(0, len(hash_keys), 400):
                 batch = hash_keys[offset:offset + 400]
                 placeholders = ",".join("?" for _ in batch)
@@ -1256,17 +1293,7 @@ class MemoryGraph:
             return stats
 
         with self._get_conn() as conn:
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS embedding_cache (
-                    text_hash TEXT NOT NULL,
-                    embedding BLOB NOT NULL,
-                    model TEXT NOT NULL,
-                    created_at TEXT DEFAULT (datetime('now')),
-                    PRIMARY KEY (text_hash, model)
-                )
-                """
-            )
+            _ensure_embedding_cache_table(conn)
             conn.executemany(
                 "INSERT OR REPLACE INTO embedding_cache (text_hash, embedding, model) VALUES (?, ?, ?)",
                 [(text_hash, packed, model) for text_hash, packed in writes],
