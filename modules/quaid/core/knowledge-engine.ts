@@ -337,48 +337,6 @@ Return JSON only: {"datastores":["vector_basic","graph"]}`;
     return bestMatch?.name;
   }
 
-  function shouldAugmentProjectStore(query: string): boolean {
-    const normalized = normalizeProjectHintText(query);
-    if (!normalized) return false;
-    const detailCues = [
-      "version",
-      "architecture",
-      "api",
-      "schema",
-      "deploy",
-      "deployment",
-      "feature",
-      "features",
-      "bug",
-      "bugs",
-      "test",
-      "tests",
-      "readme",
-      "docs",
-      "documentation",
-      "project log",
-      "project logs",
-      "portfolio",
-      "site",
-      "projects",
-      "file",
-      "files",
-      "ui",
-      "frontend",
-      "backend",
-      "graphql",
-      "rest",
-      "database",
-      "model",
-      "migration",
-      "component",
-      "implementation",
-      "implemented",
-    ];
-    const temporalCues = ["as of", "latest", "current", "after", "before", "since", "until"];
-    return detailCues.some((cue) => normalized.includes(cue)) || temporalCues.some((cue) => normalized.includes(cue));
-  }
-
   async function routeRecallPlan(
     query: string,
     expandGraph: boolean,
@@ -480,12 +438,6 @@ ${projectHints}
           datastores,
           project: routedProject || inferredProject,
         };
-        if (
-          inferredProject
-          && shouldAugmentProjectStore(original)
-        ) {
-          plan.datastores = ["project", ...plan.datastores.filter((store) => store !== "project")];
-        }
         if (Object.keys(routedDomainBoost).length) {
           plan.domainBoost = routedDomainBoost;
         }

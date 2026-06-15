@@ -1316,7 +1316,7 @@ describe("knowledge orchestrator", () => {
     expect(plan.datastores).toEqual(["project"]);
   });
 
-  it("augments routed plans with project store for explicit known project detail queries", async () => {
+  it("does not override routed datastores for explicit known project detail queries", async () => {
     const engine = createKnowledgeEngine<Result>({
       workspace: "/tmp",
       getMemoryConfig: () => ({}),
@@ -1337,10 +1337,10 @@ describe("knowledge orchestrator", () => {
     );
 
     expect(plan.project).toBe("portfolio-site");
-    expect(plan.datastores).toEqual(["project", "vector_basic"]);
+    expect(plan.datastores).toEqual(["vector_basic"]);
   });
 
-  it("infers non-ASCII project names from routed recall queries", async () => {
+  it("infers non-ASCII project names without overriding routed datastores", async () => {
     const engine = createKnowledgeEngine<Result>({
       workspace: "/tmp",
       getMemoryConfig: () => ({}),
@@ -1361,7 +1361,7 @@ describe("knowledge orchestrator", () => {
     );
 
     expect(plan.project).toBe("東京プロジェクト");
-    expect(plan.datastores).toEqual(["project", "vector_basic"]);
+    expect(plan.datastores).toEqual(["vector_basic"]);
   });
 
   it("applies source-type boosts for agent_actions intent", async () => {
