@@ -158,6 +158,50 @@ class TestHardDeleteNode:
         assert old_row["superseded_by"] is None
         assert deleted_row is None
 
+    def test_vec_nodes_cleanup_error_logs_and_continues_without_fail_hard(self, caplog):
+        """Soft mode can complete node deletion but must not hide vector cleanup failure."""
+        from datastore.memorydb.memory_graph import hard_delete_node
+
+        class _Result:
+            rowcount = 1
+
+        class _Conn:
+            def __init__(self):
+                self.statements = []
+
+            def execute(self, sql, _params=()):
+                self.statements.append(str(sql))
+                if "DELETE FROM vec_nodes" in str(sql):
+                    raise sqlite3.OperationalError("vec index is corrupt")
+                return _Result()
+
+        conn = _Conn()
+        with patch("datastore.memorydb.memory_graph.get_graph"), \
+             patch("datastore.memorydb.memory_graph._is_fail_hard_mode", return_value=False), \
+             caplog.at_level("WARNING"):
+            assert hard_delete_node("node-vec-fail", conn=conn) is True
+
+        assert "failed vec_nodes cleanup" in caplog.text
+        assert any("DELETE FROM nodes" in statement for statement in conn.statements)
+
+    def test_vec_nodes_cleanup_error_raises_under_fail_hard(self):
+        """FailHard must stop hard deletion when vector cleanup fails unexpectedly."""
+        from datastore.memorydb.memory_graph import hard_delete_node
+
+        class _Result:
+            rowcount = 1
+
+        class _Conn:
+            def execute(self, sql, _params=()):
+                if "DELETE FROM vec_nodes" in str(sql):
+                    raise sqlite3.OperationalError("vec index is corrupt")
+                return _Result()
+
+        with patch("datastore.memorydb.memory_graph.get_graph"), \
+             patch("datastore.memorydb.memory_graph._is_fail_hard_mode", return_value=True), \
+             pytest.raises(RuntimeError, match="Vector index cleanup failed during hard delete"):
+            hard_delete_node("node-vec-fail", conn=_Conn())
+
 
 def test_graph_traversal_filters_superseded_neighbor_nodes(tmp_path):
     from datastore.memorydb.memory_graph import Edge

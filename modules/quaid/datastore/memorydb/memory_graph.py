@@ -24217,8 +24217,27 @@ def hard_delete_node(node_id: str, conn: Optional[sqlite3.Connection] = None) ->
         # Clean up vec_nodes index (virtual table, no CASCADE)
         try:
             active_conn.execute("DELETE FROM vec_nodes WHERE node_id = ?", (node_id,))
-        except Exception:
-            pass  # vec_nodes may not exist yet
+        except sqlite3.OperationalError as exc:
+            if "no such table: vec_nodes" not in str(exc).lower():
+                logger.warning(
+                    "hard_delete_node failed vec_nodes cleanup for %s: %s",
+                    node_id,
+                    exc,
+                )
+                if _is_fail_hard_mode():
+                    raise RuntimeError(
+                        "Vector index cleanup failed during hard delete while failHard is enabled"
+                    ) from exc
+        except Exception as exc:
+            logger.warning(
+                "hard_delete_node failed vec_nodes cleanup for %s: %s",
+                node_id,
+                exc,
+            )
+            if _is_fail_hard_mode():
+                raise RuntimeError(
+                    "Vector index cleanup failed during hard delete while failHard is enabled"
+                ) from exc
         # dedup_log.existing_node_id uses ON DELETE SET NULL — audit trail preserved automatically
         result = active_conn.execute("DELETE FROM nodes WHERE id = ?", (node_id,))
         return result.rowcount > 0
