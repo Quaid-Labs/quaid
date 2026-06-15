@@ -37,6 +37,22 @@ class _Graph:
         return _Conn(self._rows)
 
 
+class _FailingConn:
+    def execute(self, *_args, **_kwargs):
+        raise RuntimeError("edge keyword write failed")
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+
+class _FailingGraph:
+    def _get_conn(self):
+        return _FailingConn()
+
+
 def test_get_edge_keywords_logs_invalid_payload(monkeypatch, caplog):
     monkeypatch.setattr(
         memory_graph,
@@ -124,3 +140,23 @@ def test_get_edge_keywords_strips_whitespace_from_keywords(monkeypatch):
     out = memory_graph.get_edge_keywords()
     # "  home  " → "home"; "  " → "" → stripped → excluded
     assert out["lives_at"] == ["home"]
+
+
+def test_store_edge_keywords_logs_and_returns_false_when_fail_hard_disabled(monkeypatch, caplog):
+    monkeypatch.setattr(memory_graph, "get_graph", lambda: _FailingGraph())
+    monkeypatch.setattr(memory_graph, "_is_fail_hard_mode", lambda: False)
+
+    with caplog.at_level("WARNING"):
+        out = memory_graph.store_edge_keywords("parent_of", ["parent"])
+
+    assert out is False
+    assert "Failed to store keywords for parent_of" in caplog.text
+    assert "edge keyword write failed" in caplog.text
+
+
+def test_store_edge_keywords_raises_when_fail_hard_enabled(monkeypatch):
+    monkeypatch.setattr(memory_graph, "get_graph", lambda: _FailingGraph())
+    monkeypatch.setattr(memory_graph, "_is_fail_hard_mode", lambda: True)
+
+    with pytest.raises(RuntimeError, match="Failed to store graph edge keywords"):
+        memory_graph.store_edge_keywords("parent_of", ["parent"])

@@ -4351,18 +4351,22 @@ def store_edge_keywords(relation: str, keywords: List[str], description: str = "
     Returns:
         True if stored successfully.
     """
-    graph = get_graph()
-    with graph._get_conn() as conn:
-        try:
+    try:
+        graph = get_graph()
+        with graph._get_conn() as conn:
             conn.execute("""
                 INSERT OR REPLACE INTO edge_keywords (relation, keywords, description, updated_at)
                 VALUES (?, ?, ?, ?)
             """, (relation, json.dumps(keywords), description, _now_iso()))
             invalidate_edge_keywords_cache()
             return True
-        except Exception as e:
-            print(f"[edge_keywords] Failed to store keywords for {relation}: {e}", file=sys.stderr)
-            return False
+    except Exception as exc:
+        if _is_fail_hard_mode():
+            raise RuntimeError(
+                f"Failed to store graph edge keywords for relation {relation!r} while failHard is enabled"
+            ) from exc
+        logger.warning("[edge_keywords] Failed to store keywords for %s: %s", relation, exc)
+        return False
 
 
 def generate_keywords_for_relation(relation: str) -> Optional[List[str]]:
