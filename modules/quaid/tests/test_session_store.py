@@ -60,6 +60,43 @@ def test_lifecycle_observations_parse_valid_metadata(monkeypatch, tmp_path):
     assert rows[0]["metadata"] == {"ok": True}
 
 
+def test_store_session_source_text_honors_quaid_now(monkeypatch, tmp_path):
+    monkeypatch.setenv("SESSION_DB_PATH", str(tmp_path / "session.db"))
+    monkeypatch.setenv("QUAID_NOW", "2026-03-11T00:00:00Z")
+
+    out = session_store.store_session_source_text(
+        text="User: alpha fact\n\nAssistant: noted.",
+        owner_id="owner-clock",
+        session_id="sess-clock",
+    )
+
+    assert out["chunk"]["created_at"] == "2026-03-11T00:00:00+00:00"
+    assert out["pairs"][0]["created_at"] == "2026-03-11T00:00:00+00:00"
+    assert out["microchunks"][0]["created_at"] == "2026-03-11T00:00:00+00:00"
+
+
+def test_store_session_source_text_malformed_quaid_now_honors_failhard(monkeypatch, tmp_path):
+    monkeypatch.setenv("SESSION_DB_PATH", str(tmp_path / "session.db"))
+    monkeypatch.setenv("QUAID_NOW", "not-a-clock")
+
+    monkeypatch.setattr(session_store, "is_fail_hard_enabled", lambda: True)
+    with pytest.raises(RuntimeError, match="Invalid QUAID_NOW"):
+        session_store.store_session_source_text(
+            text="User: alpha fact\n\nAssistant: noted.",
+            owner_id="owner-clock",
+            session_id="sess-clock",
+        )
+
+    monkeypatch.setattr(session_store, "is_fail_hard_enabled", lambda: False)
+    out = session_store.store_session_source_text(
+        text="User: beta fact\n\nAssistant: noted.",
+        owner_id="owner-clock",
+        session_id="sess-clock-open",
+    )
+
+    assert out["chunk"]["created_at"] != "not-a-clock"
+
+
 def test_stale_lock_treats_permission_error_as_live_process(monkeypatch, tmp_path):
     lock_path = tmp_path / "session.lock"
     lock_path.write_text("12345", encoding="utf-8")

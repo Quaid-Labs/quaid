@@ -3,6 +3,9 @@ import json
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
+from unittest.mock import patch
+
+import pytest
 
 from datastore.memorydb import session_logs
 from lib.adapter import TestAdapter, reset_adapter, set_adapter
@@ -51,6 +54,48 @@ def test_session_log_index_list_load(monkeypatch, tmp_path):
     assert "Wendy" in loaded["transcript_text"]
     assert loaded["source_channel"] == "telegram"
     assert loaded["conversation_id"] == "chat-123"
+
+
+def test_session_log_index_honors_quaid_now(monkeypatch, tmp_path):
+    adapter = TestAdapter(tmp_path); set_adapter(adapter)
+    monkeypatch.setenv("MEMORY_DB_PATH", str(tmp_path / "memory.db"))
+    monkeypatch.setenv("QUAID_NOW", "2026-03-11T00:00:00Z")
+
+    out = session_logs.index_session_log(
+        session_id="sess-clock",
+        transcript="User: alpha\n\nAssistant: noted.",
+        owner_id="quaid",
+    )
+
+    assert out["status"] == "indexed"
+    loaded = session_logs.load_session("sess-clock", owner_id="quaid")
+    assert loaded["indexed_at"] == "2026-03-11T00:00:00+00:00"
+    assert loaded["updated_at"] == "2026-03-11T00:00:00+00:00"
+
+
+def test_session_log_index_malformed_quaid_now_honors_failhard(monkeypatch, tmp_path):
+    adapter = TestAdapter(tmp_path); set_adapter(adapter)
+    monkeypatch.setenv("MEMORY_DB_PATH", str(tmp_path / "memory.db"))
+    monkeypatch.setenv("QUAID_NOW", "not-a-clock")
+
+    with patch("datastore.memorydb.session_logs.is_fail_hard_enabled", return_value=True):
+        with pytest.raises(RuntimeError, match="Invalid QUAID_NOW"):
+            session_logs.index_session_log(
+                session_id="sess-clock",
+                transcript="User: alpha\n\nAssistant: noted.",
+                owner_id="quaid",
+            )
+
+    with patch("datastore.memorydb.session_logs.is_fail_hard_enabled", return_value=False):
+        out = session_logs.index_session_log(
+            session_id="sess-clock-open",
+            transcript="User: beta\n\nAssistant: noted.",
+            owner_id="quaid",
+        )
+
+    assert out["status"] == "indexed"
+    loaded = session_logs.load_session("sess-clock-open", owner_id="quaid")
+    assert loaded["indexed_at"] != "not-a-clock"
 
 
 def test_session_log_index_serializes_same_session(monkeypatch, tmp_path):
