@@ -46,12 +46,25 @@ def _safe_slug(value: str) -> str:
     return slug.strip("-._")[:96] or "unknown"
 
 
+def _now_datetime() -> datetime:
+    raw = os.environ.get("QUAID_NOW", "").strip()
+    if raw:
+        try:
+            value = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            raise ValueError(f"Invalid QUAID_NOW={raw!r}") from None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+    return datetime.now(timezone.utc)
+
+
 def m15_trace_path() -> str:
     explicit = str(os.environ.get("QUAID_M15_TRACE_FILE") or "").strip()
     if explicit:
         return explicit
     instance = _safe_slug(os.environ.get("QUAID_INSTANCE") or "unknown-instance")
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%d")
+    stamp = _now_datetime().strftime("%Y%m%d")
     return f"/tmp/m15-trace-{instance}-{stamp}.jsonl"
 
 
@@ -83,11 +96,12 @@ def trace_m15(event: str, **fields: Any) -> None:
     """Append one JSONL trace event if M15 tracing is active."""
     if not is_m15_trace_active():
         return
+    path = Path(m15_trace_path())
+    timestamp = _now_datetime().isoformat()
     try:
-        path = Path(m15_trace_path())
         path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
-            "ts": datetime.now(timezone.utc).isoformat(),
+            "ts": timestamp,
             "event": str(event or "unknown"),
             "pid": os.getpid(),
             "instance": os.environ.get("QUAID_INSTANCE", ""),
