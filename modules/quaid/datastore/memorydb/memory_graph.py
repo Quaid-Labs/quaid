@@ -24252,6 +24252,8 @@ def get_pending_contradictions(limit: int = 50) -> List[Dict[str, Any]]:
             JOIN nodes a ON c.node_a_id = a.id
             JOIN nodes b ON c.node_b_id = b.id
             WHERE c.status = 'pending'
+              AND a.superseded_by IS NULL
+              AND b.superseded_by IS NULL
             ORDER BY c.detected_at ASC
             LIMIT ?
         """, (limit,)).fetchall()

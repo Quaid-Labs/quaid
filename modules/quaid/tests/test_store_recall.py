@@ -1134,6 +1134,28 @@ class TestStoreBasic:
         assert second["resolved_at"] == "2026-08-03T04:05:06"
         assert second["status"] == "false_positive"
 
+    def test_pending_contradictions_exclude_superseded_nodes(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _ = _make_graph(tmp_path)
+        stale = mg.Node.create("Fact", "The archive box is red.", owner_id="quaid")
+        replacement = mg.Node.create("Fact", "The archive box is crimson.", owner_id="quaid")
+        stale_peer = mg.Node.create("Fact", "The archive box is blue.", owner_id="quaid")
+        active_left = mg.Node.create("Fact", "The north door is locked.", owner_id="quaid")
+        active_right = mg.Node.create("Fact", "The north door is open.", owner_id="quaid")
+        for node in (stale, replacement, stale_peer, active_left, active_right):
+            graph.add_node(node, embed=False)
+
+        with patch.object(mg, "get_graph", return_value=graph):
+            stale_contradiction_id = mg.store_contradiction(stale.id, stale_peer.id, "old color mismatch")
+            active_contradiction_id = mg.store_contradiction(active_left.id, active_right.id, "door mismatch")
+            assert graph.supersede_node(stale.id, replacement.id) is True
+            pending = mg.get_pending_contradictions()
+
+        pending_ids = {row["id"] for row in pending}
+        assert stale_contradiction_id not in pending_ids
+        assert active_contradiction_id in pending_ids
+
     def test_recall_preserves_structural_anchor_kind(self, tmp_path):
         from datastore.memorydb.memory_graph import _recall_once, store
 
