@@ -73,6 +73,60 @@ def test_validate_manifest_happy_path():
     assert manifest.display_name == "OpenClaw Adapter"
 
 
+def test_validate_manifest_accepts_unicode_plugin_id():
+    manifest = validate_manifest_dict(
+        {
+            "plugin_api_version": 1,
+            "plugin_id": "記憶.adapter",
+            "plugin_type": "adapter",
+            "module": "adaptors.unicode_adapter",
+            "capabilities": _contract_caps("Unicode Adapter"),
+        }
+    )
+
+    assert manifest.plugin_id == "記憶.adapter"
+
+
+def test_validate_manifest_accepts_combining_mark_plugin_id():
+    manifest = validate_manifest_dict(
+        {
+            "plugin_api_version": 1,
+            "plugin_id": "हिन्दी.adapter",
+            "plugin_type": "adapter",
+            "module": "adaptors.hindi_adapter",
+            "capabilities": _contract_caps("Hindi Adapter"),
+        }
+    )
+
+    assert manifest.plugin_id == "हिन्दी.adapter"
+
+
+def test_validate_manifest_rejects_plugin_id_path_separator():
+    with pytest.raises(ValueError, match="Invalid plugin_id"):
+        validate_manifest_dict(
+            {
+                "plugin_api_version": 1,
+                "plugin_id": "bad/plugin",
+                "plugin_type": "adapter",
+                "module": "adaptors.bad_plugin",
+                "capabilities": _contract_caps("Bad Plugin"),
+            }
+        )
+
+
+def test_validate_manifest_rejects_plugin_id_leading_separator():
+    with pytest.raises(ValueError, match="Invalid plugin_id"):
+        validate_manifest_dict(
+            {
+                "plugin_api_version": 1,
+                "plugin_id": "_plugin",
+                "plugin_type": "adapter",
+                "module": "adaptors.bad_plugin",
+                "capabilities": _contract_caps("Bad Plugin"),
+            }
+        )
+
+
 def test_plugin_contract_key_partition_matches_required_set():
     assert set(_PLUGIN_CONTRACT_REQUIRED) == (
         set(_PLUGIN_CONTRACT_EXECUTABLE) | set(_PLUGIN_CONTRACT_DECLARED)

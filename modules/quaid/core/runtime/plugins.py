@@ -6,12 +6,12 @@ import json
 import os
 import re
 import importlib
+import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 from threading import Lock
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-_PLUGIN_ID_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]*$")
 _PLUGIN_MODULE_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+$")
 _PLUGIN_TYPES = {"adapter", "ingest", "datastore"}
 _PLUGIN_API_VERSION = 1
@@ -97,6 +97,24 @@ class PluginHookContext:
     payload: Dict[str, Any] = field(default_factory=dict)
 
 
+def _is_plugin_id_start_char(ch: str) -> bool:
+    return ch.isalnum()
+
+
+def _is_plugin_id_body_char(ch: str) -> bool:
+    return (
+        ch in {"_", ".", "-"}
+        or ch.isalnum()
+        or unicodedata.category(ch).startswith("M")
+    )
+
+
+def _valid_plugin_id(value: str) -> bool:
+    return bool(value) and _is_plugin_id_start_char(value[0]) and all(
+        _is_plugin_id_body_char(ch) for ch in value[1:]
+    )
+
+
 class PluginRegistry:
     """Strict plugin registry with single-registration conflict protection."""
 
@@ -179,7 +197,7 @@ def validate_manifest_dict(payload: Dict[str, Any], *, source_path: str = "") ->
         raise ValueError("Manifest missing plugin_api_version")
     if not plugin_id:
         raise ValueError("Manifest missing plugin_id")
-    if not _PLUGIN_ID_RE.match(plugin_id):
+    if not _valid_plugin_id(plugin_id):
         raise ValueError(f"Invalid plugin_id '{plugin_id}'")
     if plugin_type not in _PLUGIN_TYPES:
         raise ValueError(
