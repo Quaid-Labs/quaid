@@ -24,6 +24,24 @@ STOPWORDS = frozenset({
 })
 
 
+def _has_compact_script_char(text: str) -> bool:
+    for ch in str(text or ""):
+        name = unicodedata.name(ch, "")
+        if name.startswith(("CJK ", "HIRAGANA", "KATAKANA", "HANGUL")):
+            return True
+    return False
+
+
+def _normalized_alnum_key(text: str) -> str:
+    normalized = unicodedata.normalize("NFKC", str(text or "")).casefold()
+    return "".join(ch for ch in normalized if ch.isalnum())
+
+
+def _normalized_words(text: str) -> List[str]:
+    normalized = unicodedata.normalize("NFKC", str(text or "")).casefold()
+    return re.sub(r"[^\w\s]", "", normalized, flags=re.UNICODE).split()
+
+
 def estimate_tokens(text: str) -> int:
     """Estimate token count for a text string.
 
@@ -112,10 +130,15 @@ def texts_are_near_identical(a: str, b: str) -> bool:
 
     Only returns True if both the word content AND word order are near-identical.
     """
+    if _has_compact_script_char(a) or _has_compact_script_char(b):
+        key_a = _normalized_alnum_key(a)
+        key_b = _normalized_alnum_key(b)
+        if key_a and key_a == key_b:
+            return True
+
     # Normalize: lowercase, strip punctuation, collapse whitespace
-    norm = lambda t: re.sub(r'[^\w\s]', '', t.lower()).split()
-    words_a = norm(a)
-    words_b = norm(b)
+    words_a = _normalized_words(a)
+    words_b = _normalized_words(b)
 
     # Check 1: word sets must match (catches different proper nouns)
     set_a = set(words_a)
@@ -141,8 +164,8 @@ def texts_are_near_identical(a: str, b: str) -> bool:
     if len(content_a) == len(content_b) and set(content_a) == set(content_b):
         # Same content words, different order -- check if proper nouns moved
         # (capitalized words in original text are likely entities)
-        orig_words_a = re.sub(r'[^\w\s]', '', a).split()
-        orig_words_b = re.sub(r'[^\w\s]', '', b).split()
+        orig_words_a = re.sub(r'[^\w\s]', '', unicodedata.normalize("NFKC", str(a or "")), flags=re.UNICODE).split()
+        orig_words_b = re.sub(r'[^\w\s]', '', unicodedata.normalize("NFKC", str(b or "")), flags=re.UNICODE).split()
         caps_a = [w.lower() for w in orig_words_a if w[0].isupper()]
         caps_b = [w.lower() for w in orig_words_b if w[0].isupper()]
         if caps_a != caps_b:

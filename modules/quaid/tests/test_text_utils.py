@@ -58,6 +58,22 @@ class TestTextsAreNearIdentical:
             "Quaid is 36"
         ) is False
 
+    def test_compact_script_spacing_and_width_variants_match(self):
+        assert texts_are_near_identical(
+            "美玲は青い窯で陶芸作品を焼いている",
+            "美玲 は 青い 窯 で 陶芸 作品 を 焼いている",
+        ) is True
+        assert texts_are_near_identical(
+            "ＡＰＰ設定は有効です",
+            "app 設定 は 有効 です",
+        ) is True
+
+    def test_compact_script_different_facts_do_not_match(self):
+        assert texts_are_near_identical(
+            "美玲は青い窯で陶芸作品を焼いている",
+            "美玲は赤い窯で陶芸作品を焼いている",
+        ) is False
+
 
 class TestExtractKeyTokens:
     """Basic tests for extract_key_tokens()."""
