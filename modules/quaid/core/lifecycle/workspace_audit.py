@@ -17,7 +17,7 @@ import re
 import shutil
 import fcntl
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 
@@ -37,6 +37,24 @@ def _content_root() -> Path:
 logger = logging.getLogger(__name__)
 _MOVE_TO_DOCS_TARGET_RE = re.compile(r"^[A-Za-z0-9._/-]+$")
 _WORKSPACE_FILE_LOCK_TIMEOUT_SECONDS = 10.0
+
+
+def _now_datetime() -> datetime:
+    raw = str(os.environ.get("QUAID_NOW", "") or "").strip()
+    if raw:
+        normalized = raw.replace("Z", "+00:00")
+        try:
+            parsed = datetime.fromisoformat(normalized)
+        except ValueError as exc:
+            raise ValueError(f"Invalid QUAID_NOW={raw!r}") from exc
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed
+    return datetime.now(timezone.utc)
+
+
+def _now_iso() -> str:
+    return _now_datetime().isoformat()
 
 
 def _workspace_review_timeout_seconds(cfg: Any, default_seconds: int = 120) -> float:
@@ -100,7 +118,7 @@ def _queue_project_review(
         "project_hint": project_hint,
         "content_preview": content_preview,
         "reason": reason,
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": _now_iso(),
     }
 
     with open(queue_path, "a+", encoding="utf-8") as f:
@@ -410,7 +428,7 @@ def backup_workspace_files(files: Optional[List[str]] = None) -> Dict[str, str]:
     Returns dict mapping original path to backup path.
     """
     _backup_dir().mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
+    timestamp = _now_datetime().strftime("%Y-%m-%dT%H-%M-%S")
 
     files_config = get_monitored_files()
     files_to_backup = files or list(files_config.keys())
@@ -469,7 +487,7 @@ def save_mtimes(mtimes: Dict[str, float]):
             f.truncate(0)
             json.dump({
                 "mtimes": mtimes,
-                "updated_at": datetime.now().isoformat()
+                "updated_at": _now_iso()
             }, f, indent=2)
             f.flush()
             os.fsync(f.fileno())
@@ -676,6 +694,9 @@ def apply_review_decisions(dry_run: bool = True,
                 action = decision.get("action", "KEEP")
                 section = decision.get("section", "")
                 reason = decision.get("reason", "")
+                migration_date = ""
+                if action == "MOVE_TO_DOCS" and not dry_run:
+                    migration_date = _now_datetime().strftime("%Y-%m-%d")
 
                 try:
                     if action == "MOVE_TO_PROJECT":
@@ -726,7 +747,7 @@ def apply_review_decisions(dry_run: bool = True,
                             target_path.parent.mkdir(parents=True, exist_ok=True)
 
                             doc_content = f"# {section}\n\n"
-                            doc_content += f"> Migrated from `{filename}` on {datetime.now().strftime('%Y-%m-%d')}\n"
+                            doc_content += f"> Migrated from `{filename}` on {migration_date}\n"
                             doc_content += f"> Reason: {reason}\n\n"
                             doc_content += section_content
 

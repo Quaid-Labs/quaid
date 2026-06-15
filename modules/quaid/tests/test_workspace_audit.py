@@ -483,6 +483,25 @@ class TestMtimePersistence:
 
         assert mock_flock.call_count >= 2
 
+    def test_save_mtimes_honors_quaid_now(self, tmp_path, monkeypatch):
+        from core.lifecycle.workspace_audit import save_mtimes
+
+        monkeypatch.setenv("QUAID_NOW", "2026-02-03T04:05:06Z")
+        with _hidden_adapter_patch(tmp_path) as iroot:
+            save_mtimes({"A.md": 123.0})
+
+            payload = json.loads((iroot / "logs" / "janitor" / "workspace-mtimes.json").read_text())
+
+        assert payload["updated_at"] == "2026-02-03T04:05:06+00:00"
+
+    def test_workspace_audit_now_rejects_malformed_quaid_now(self, monkeypatch):
+        from core.lifecycle import workspace_audit as wa
+
+        monkeypatch.setenv("QUAID_NOW", "not-a-date")
+
+        with pytest.raises(ValueError, match="Invalid QUAID_NOW"):
+            wa._now_iso()
+
     def test_save_mtimes_truncates_only_after_lock(self, tmp_path):
         import builtins
 
@@ -537,6 +556,22 @@ class TestMtimePersistence:
             save_mtimes({"A.md": 123.0})
 
         assert operations[:4] == ["open:a+", "lock", "seek", "truncate"]
+
+
+class TestWorkspaceBackups:
+    def test_backup_workspace_files_honors_quaid_now(self, tmp_path, monkeypatch):
+        from core.lifecycle.workspace_audit import backup_workspace_files
+
+        cfg = _make_config_with_core_md(files={"A.md": {"purpose": "A", "maxLines": 100}})
+        monkeypatch.setenv("QUAID_NOW", "2026-02-03T04:05:06Z")
+        with _adapter_patch(tmp_path) as iroot, \
+             patch("core.lifecycle.workspace_audit.get_config", return_value=cfg):
+            (iroot / "A.md").write_text("# A\n", encoding="utf-8")
+            backups = backup_workspace_files(["A.md"])
+
+        assert len(backups) == 1
+        backup_name = Path(next(iter(backups.values()))).name
+        assert backup_name == "A.md.2026-02-03T04-05-06.bak"
 
 
 class TestReviewDecisionApplyLocking:
@@ -602,6 +637,33 @@ class TestReviewDecisionApplyLocking:
         assert "old content" not in (iroot / "A.md").read_text()
         assert sum(1 for mode in lock_modes if mode & fcntl.LOCK_EX) >= 1
         assert lock_modes.count(fcntl.LOCK_UN) >= 1
+
+    def test_move_to_docs_migration_note_honors_quaid_now(self, tmp_path, monkeypatch):
+        from core.lifecycle.workspace_audit import apply_review_decisions
+
+        cfg = _make_config_with_core_md(files={"A.md": {"purpose": "A", "maxLines": 100}})
+        decisions_data = {
+            "decisions": [
+                {
+                    "file": "A.md",
+                    "section": "Move Me",
+                    "action": "MOVE_TO_DOCS",
+                    "target": "docs/move-me.md",
+                    "reason": "belongs in docs",
+                }
+            ]
+        }
+
+        monkeypatch.setenv("QUAID_NOW", "2026-02-03T04:05:06Z")
+        with _adapter_patch(tmp_path) as iroot, \
+             patch("core.lifecycle.workspace_audit.get_config", return_value=cfg), \
+             patch("core.lifecycle.workspace_audit.save_mtimes"):
+            (iroot / "A.md").write_text("# A\n\n## Move Me\n\ncontent\n", encoding="utf-8")
+            stats = apply_review_decisions(dry_run=False, decisions_data=decisions_data)
+            doc_text = (iroot / "docs" / "move-me.md").read_text(encoding="utf-8")
+
+        assert stats["moved_to_docs"] == 1
+        assert "> Migrated from `A.md` on 2026-02-03" in doc_text
 
     def test_apply_review_decisions_blocks_traversal_filename(self, tmp_path):
         from core.lifecycle.workspace_audit import apply_review_decisions
@@ -702,6 +764,19 @@ class TestProjectReviewQueue:
             assert data[0]["content_preview"] == "## My API\nEndpoints..."
             assert data[0]["reason"] == "Project-specific API docs"
             assert "timestamp" in data[0]
+
+    def test_queue_honors_quaid_now(self, tmp_path, monkeypatch):
+        from core.lifecycle.workspace_audit import _queue_project_review
+
+        monkeypatch.setenv("QUAID_NOW", "2026-02-03T04:05:06Z")
+        with _hidden_adapter_patch(tmp_path) as iroot:
+            (iroot / "logs" / "janitor").mkdir(parents=True, exist_ok=True)
+            _queue_project_review(section="Test", source_file="TOOLS.md")
+
+            pending_file = iroot / "logs" / "janitor" / "pending-project-review.json"
+            data = json.loads(pending_file.read_text())
+
+        assert data[0]["timestamp"] == "2026-02-03T04:05:06+00:00"
 
     def test_queue_appends_to_existing(self, tmp_path):
         """Multiple queues accumulate in the same file."""
