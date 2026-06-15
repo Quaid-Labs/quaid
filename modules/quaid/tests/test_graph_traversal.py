@@ -315,6 +315,63 @@ class TestVecUpsertFailures:
         assert refreshed.confirmation_count == 1
         assert refreshed.storage_strength == pytest.approx(0.03, abs=0.001)
 
+    def test_delete_node_vec_cleanup_warns_without_fail_hard(self, graph, caplog):
+        class _Result:
+            rowcount = 1
+
+        class _Conn:
+            def __init__(self):
+                self.statements = []
+
+            def execute(self, sql, _params=()):
+                self.statements.append(str(sql))
+                if "DELETE FROM vec_nodes" in str(sql):
+                    raise RuntimeError("vec delete unavailable")
+                return _Result()
+
+        class _ConnManager:
+            def __init__(self, conn):
+                self.conn = conn
+
+            def __enter__(self):
+                return self.conn
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        conn = _Conn()
+        with patch.object(graph, "_get_conn", return_value=_ConnManager(conn)), \
+             patch("datastore.memorydb.memory_graph._lib_has_vec", return_value=True), \
+             patch("datastore.memorydb.memory_graph._is_fail_hard_mode", return_value=False):
+            caplog.set_level("WARNING")
+            assert graph.delete_node("node-vec-delete") is True
+
+        assert "failed vec_nodes cleanup" in caplog.text
+        assert any("DELETE FROM nodes" in statement for statement in conn.statements)
+
+    def test_delete_node_vec_cleanup_raises_with_fail_hard(self, graph):
+        class _Result:
+            rowcount = 1
+
+        class _Conn:
+            def execute(self, sql, _params=()):
+                if "DELETE FROM vec_nodes" in str(sql):
+                    raise RuntimeError("vec delete unavailable")
+                return _Result()
+
+        class _ConnManager:
+            def __enter__(self):
+                return _Conn()
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        with patch.object(graph, "_get_conn", return_value=_ConnManager()), \
+             patch("datastore.memorydb.memory_graph._lib_has_vec", return_value=True), \
+             patch("datastore.memorydb.memory_graph._is_fail_hard_mode", return_value=True):
+            with pytest.raises(RuntimeError, match="Vector index cleanup failed during delete_node"):
+                graph.delete_node("node-vec-delete")
+
 
 class TestEntitySummaryJsonHardening:
     def test_summarize_all_entities_tolerates_malformed_attributes(self, graph, caplog):

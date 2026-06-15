@@ -2390,12 +2390,27 @@ class MemoryGraph:
             if result.rowcount > 0 and _lib_has_vec():
                 try:
                     conn.execute("DELETE FROM vec_nodes WHERE node_id = ?", (node_id,))
+                except sqlite3.OperationalError as exc:
+                    if "no such table: vec_nodes" not in str(exc).lower():
+                        logger.warning(
+                            "delete_node removed node %s but failed vec_nodes cleanup: %s",
+                            node_id,
+                            exc,
+                        )
+                        if _is_fail_hard_mode():
+                            raise RuntimeError(
+                                "Vector index cleanup failed during delete_node while failHard is enabled"
+                            ) from exc
                 except Exception as exc:
                     logger.warning(
                         "delete_node removed node %s but failed vec_nodes cleanup: %s",
                         node_id,
                         exc,
                     )
+                    if _is_fail_hard_mode():
+                        raise RuntimeError(
+                            "Vector index cleanup failed during delete_node while failHard is enabled"
+                        ) from exc
             return result.rowcount > 0
 
     def supersede_node(self, old_id: str, new_id: str) -> bool:
