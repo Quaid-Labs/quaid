@@ -11924,6 +11924,64 @@ class TestRecallTelemetry:
 
         assert out == results
 
+    def test_resolve_mmr_settings_preserves_explicit_zero_values(self):
+        import datastore.memorydb.memory_graph as mg
+
+        mmr_lambda, candidate_cap = mg._resolve_mmr_settings(
+            SimpleNamespace(mmr_lambda=0.0, mmr_candidate_cap=0),
+            limit=3,
+            default_candidate_cap=12,
+        )
+
+        assert mmr_lambda == 0.0
+        assert candidate_cap == 3
+
+    def test_post_merge_mmr_preserves_explicit_zero_config(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _ = _make_graph(tmp_path)
+        nodes = [
+            mg.Node.create("Fact", f"MMR candidate {idx}", owner_id="quaid")
+            for idx in range(4)
+        ]
+        for node in nodes:
+            graph.add_node(node, embed=False)
+        rows = [
+            {
+                "id": node.id,
+                "text": node.name,
+                "category": "fact",
+                "similarity": 0.9 - (idx * 0.05),
+            }
+            for idx, node in enumerate(nodes)
+        ]
+        captured = {}
+
+        def _capture_mmr(results, graph_arg, limit, mmr_lambda=0.7):
+            captured["candidate_count"] = len(results)
+            captured["limit"] = limit
+            captured["mmr_lambda"] = mmr_lambda
+            captured["graph"] = graph_arg
+            return results[:limit]
+
+        with patch.object(mg, "get_graph", return_value=graph), \
+             patch.object(mg, "_apply_mmr", side_effect=_capture_mmr):
+            refined, meta = mg._apply_post_merge_rank_refinement(
+                "generic memory lookup",
+                rows,
+                limit=2,
+                use_reranker=False,
+                include_mmr=True,
+                config_retrieval=SimpleNamespace(mmr_lambda=0.0, mmr_candidate_cap=0),
+            )
+
+        assert len(refined) == 2
+        assert captured["graph"] is graph
+        assert captured["limit"] == 2
+        assert captured["mmr_lambda"] == 0.0
+        assert captured["candidate_count"] == 2
+        assert meta["mmr_enabled"] is True
+
 
 # ---------------------------------------------------------------------------
 # recall_fast() hook_inject contract

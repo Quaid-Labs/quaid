@@ -6513,6 +6513,43 @@ def _apply_mmr(results: List[tuple], graph, limit: int, mmr_lambda: float = 0.7)
     return selected
 
 
+def _resolve_mmr_settings(
+    config_retrieval: Any,
+    *,
+    limit: int,
+    default_candidate_cap: int,
+) -> Tuple[float, int]:
+    """Resolve MMR config while treating only missing/None values as defaults."""
+    try:
+        safe_limit = max(1, int(limit or 1))
+    except (TypeError, ValueError):
+        safe_limit = 1
+    try:
+        candidate_cap = max(safe_limit, int(default_candidate_cap))
+    except (TypeError, ValueError):
+        candidate_cap = max(safe_limit, 12)
+
+    mmr_lambda = 0.7
+    if config_retrieval is None:
+        return mmr_lambda, candidate_cap
+
+    try:
+        raw_lambda = getattr(config_retrieval, "mmr_lambda", None)
+        if raw_lambda is not None:
+            mmr_lambda = float(raw_lambda)
+    except (TypeError, ValueError):
+        mmr_lambda = 0.7
+
+    try:
+        raw_candidate_cap = getattr(config_retrieval, "mmr_candidate_cap", None)
+        if raw_candidate_cap is not None:
+            candidate_cap = max(safe_limit, int(raw_candidate_cap))
+    except (TypeError, ValueError):
+        pass
+
+    return mmr_lambda, candidate_cap
+
+
 def _fast_term_rescue_score(
     *,
     overlap: int,
@@ -12490,14 +12527,11 @@ def _recall_once(
     )
 
     # Apply MMR diversity (select diverse top-N from candidates)
-    _mmr_lambda = 0.7
-    _mmr_candidate_cap = max(limit * 4, 12)
-    if config_retrieval:
-        _mmr_lambda = getattr(config_retrieval, 'mmr_lambda', 0.7)
-        _mmr_candidate_cap = max(
-            limit,
-            int(getattr(config_retrieval, 'mmr_candidate_cap', _mmr_candidate_cap) or _mmr_candidate_cap),
-        )
+    _mmr_lambda, _mmr_candidate_cap = _resolve_mmr_settings(
+        config_retrieval,
+        limit=limit,
+        default_candidate_cap=max(limit * 4, 12),
+    )
     _mmr_input_candidates = len(scored_results)
     if include_mmr:
         if len(scored_results) > _mmr_candidate_cap:
@@ -15404,20 +15438,11 @@ def _apply_post_merge_rank_refinement(
         reranker_ms = round((time.monotonic() - _t0) * 1000)
 
     if mmr_enabled:
-        _mmr_lambda = 0.7
-        _mmr_candidate_cap = max(limit, 12)
-        if config_retrieval is not None:
-            try:
-                _mmr_lambda = float(getattr(config_retrieval, "mmr_lambda", _mmr_lambda) or _mmr_lambda)
-            except Exception:
-                _mmr_lambda = 0.7
-            try:
-                _mmr_candidate_cap = max(
-                    limit,
-                    int(getattr(config_retrieval, "mmr_candidate_cap", _mmr_candidate_cap) or _mmr_candidate_cap),
-                )
-            except Exception:
-                _mmr_candidate_cap = max(limit, 12)
+        _mmr_lambda, _mmr_candidate_cap = _resolve_mmr_settings(
+            config_retrieval,
+            limit=limit,
+            default_candidate_cap=max(limit, 12),
+        )
         if len(ranked) > _mmr_candidate_cap:
             ranked = ranked[:_mmr_candidate_cap]
         _t0 = time.monotonic()
