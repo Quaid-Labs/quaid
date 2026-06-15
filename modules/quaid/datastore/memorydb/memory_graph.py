@@ -18290,7 +18290,15 @@ def _summarize_memory_quality(
         if surface_quality == "conflicted":
             note = "Retrieved memory for this topic looks conflicted. Another recall pass may help if exactness matters."
         elif surface_quality == "low":
-            note = "Retrieved memory for this topic looks low-confidence. Another recall pass may help if exactness matters."
+            if "low_query_term_coverage" in signals:
+                note = (
+                    "Retrieved memory for this topic looks low-confidence because retrieved evidence "
+                    "does not cover all important query terms. Do not assume presupposed events, "
+                    "relationships, or missing entities from partial matches; answer only from evidence "
+                    "or say you do not have information."
+                )
+            else:
+                note = "Retrieved memory for this topic looks low-confidence. Another recall pass may help if exactness matters."
         else:
             note = "Retrieved memory for this topic looks under-validated. Another recall pass may help if exactness matters."
 

@@ -14225,6 +14225,36 @@ class TestRecallFastHookInjectContract:
         assert gate["ready"] is False
         assert gate["needs_validation"] is True
 
+    def test_memory_quality_warns_against_presuppositions_on_low_query_coverage(self):
+        import datastore.memorydb.memory_graph as mg
+
+        rows = [
+            {
+                "text": "Atlas uses SQLite for local storage.",
+                "category": "fact",
+                "similarity": 0.96,
+            }
+        ]
+        gate = mg._evaluate_quality_gate_readiness(
+            "Which vendor did Atlas approve for the launch?",
+            rows,
+            intent="WHAT",
+            limit=1,
+        )
+
+        quality = mg._summarize_memory_quality(
+            "Which vendor did Atlas approve for the launch?",
+            rows,
+            gate_eval=gate,
+            intent="WHAT",
+            limit=1,
+        )
+
+        assert quality["surface_quality"] == "low"
+        assert "low_query_term_coverage" in quality["signals"]
+        assert "does not cover all important query terms" in quality["note"]
+        assert "Do not assume presupposed events" in quality["note"]
+
     def test_quality_gate_normalizes_mixed_naive_and_aware_temporal_markers(self):
         import datastore.memorydb.memory_graph as mg
 
