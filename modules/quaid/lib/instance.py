@@ -40,7 +40,11 @@ def _resolved_project_dir(project_dir: str) -> Path:
 def _legacy_instance_slug_from_project_dir(project_dir: str) -> str:
     """Previous lossy project-dir slug, retained only for guarded migration reads."""
     root = _resolved_project_dir(project_dir)
-    return re.sub(r"[^a-z0-9]+", "-", str(root).lower()).strip("-")
+    slug = re.sub(r"[^a-z0-9]+", "-", str(root).lower()).strip("-")
+    if slug:
+        return slug
+    digest = hashlib.sha256(str(root).encode("utf-8", "surrogatepass")).hexdigest()
+    return f"project-{digest[:_PROJECT_INSTANCE_SLUG_HASH_LENGTH]}"
 
 
 def instance_slug_from_project_dir(project_dir: str) -> str:

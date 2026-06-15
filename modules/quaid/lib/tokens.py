@@ -1,6 +1,7 @@
 """Shared token extraction and text comparison utilities."""
 
 import re
+import unicodedata
 from typing import List
 
 # Union of stopwords from janitor.py and memory_graph.py
@@ -39,11 +40,13 @@ def estimate_tokens(text: str) -> int:
 
 def extract_key_tokens(text: str, min_length: int = 3, max_tokens: int = 8) -> List[str]:
     """Extract significant tokens from text, filtering stopwords and short words."""
-    words = re.findall(r'\b[a-zA-Z][a-zA-Z0-9_-]*\b', text.lower())
+    normalized = unicodedata.normalize("NFKC", str(text or "")).casefold()
+    words = re.findall(r"[^\W\d_][\w_-]*", normalized, flags=re.UNICODE)
     seen = set()
     tokens = []
     for w in words:
-        if w not in STOPWORDS and len(w) >= min_length and w not in seen:
+        token_min_length = min(min_length, 2) if not w.isascii() else min_length
+        if w not in STOPWORDS and len(w) >= token_min_length and w not in seen:
             seen.add(w)
             tokens.append(w)
             if len(tokens) >= max_tokens:

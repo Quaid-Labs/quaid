@@ -50,6 +50,7 @@ import sqlite3
 import sys
 import threading
 import time
+import unicodedata
 import urllib.request
 import urllib.error
 import uuid
@@ -208,8 +209,17 @@ _INJECTION_PATTERNS = [
 ]
 
 _LOW_INFO_ENTITY_CATEGORIES = {"person", "place", "entity", "concept", "event", "organization", "pet"}
-_LOW_INFO_ENTITY_TEXT_RE = re.compile(r"[A-Za-z][A-Za-z0-9'_-]*(?:\s+[A-Za-z][A-Za-z0-9'_-]*)?")
+_LOW_INFO_ENTITY_TEXT_RE = re.compile(r"[^\W\d_][\w'_-]*(?:\s+[^\W\d_][\w'_-]*)?", re.UNICODE)
 _RECALL_PLANNER_TIMEOUT_CAP_S = 60.0
+
+
+def _identifier_key(value: str) -> str:
+    normalized = unicodedata.normalize("NFKC", str(value or "")).casefold()
+    return "".join(ch for ch in normalized if ch.isalnum())
+
+
+def _has_non_ascii(value: str) -> bool:
+    return any(ord(ch) > 127 for ch in str(value or ""))
 
 # Optional imports for LLM-verified dedup (graceful degradation if unavailable)
 try:
@@ -4585,17 +4595,26 @@ def extract_entities_from_text(text: str) -> List[Node]:
     # Also get single capitalized words
     single_caps = re.findall(r'\b[A-Z][a-z]{2,}\b', text)
     words.extend(single_caps)
+    # Non-ASCII names often do not have case markers or whitespace segmentation.
+    # Add exact Unicode token candidates, then supplement below with DB-backed
+    # substring matching for known entity names.
+    words.extend(
+        w for w in re.findall(r"[^\W\d_][\w'_-]*(?:\s+[^\W\d_][\w'_-]*)?", text, flags=re.UNICODE)
+        if _has_non_ascii(w)
+    )
 
     # Dedupe while preserving order
     seen = set()
     unique_words = []
     for w in words:
-        if w.lower() not in seen and w.lower() not in _LIB_STOPWORDS:
-            seen.add(w.lower())
+        key = _identifier_key(w) if _has_non_ascii(w) else w.lower()
+        if key not in seen and key not in _LIB_STOPWORDS:
+            seen.add(key)
             unique_words.append(w)
 
     # Look up each candidate — exact match first, then prefix match on entity types
     entities = []
+    entity_ids = set()
     for word in unique_words[:10]:  # Limit to prevent excessive lookups
         node = graph.find_node_by_name(word)
         if not node:
@@ -4647,8 +4666,52 @@ def extract_entities_from_text(text: str) -> List[Node]:
                     ).fetchone()
                 if row:
                     node = graph._row_to_node(row)
-        if node and node.type in ("Person", "Place", "Entity", "Pet", "Concept"):
+        if node and node.type in ("Person", "Place", "Entity", "Pet", "Concept") and node.id not in entity_ids:
+            entity_ids.add(node.id)
             entities.append(node)
+
+    if _has_non_ascii(text):
+        normalized_text = _identifier_key(text)
+        try:
+            with graph._get_conn() as conn:
+                rows = conn.execute(
+                    """
+                    SELECT n.*
+                    FROM nodes n
+                    WHERE n.type IN ('Person', 'Place', 'Pet', 'Entity', 'Concept')
+                    ORDER BY
+                        LENGTH(n.name) DESC,
+                        CASE WHEN n.deleted_at IS NULL THEN 0 ELSE 1 END,
+                        CASE WHEN n.superseded_by IS NULL THEN 0 ELSE 1 END,
+                        CASE WHEN n.status IS NULL OR n.status IN ('active', 'approved', 'pending') THEN 0 ELSE 1 END,
+                        (
+                            SELECT COUNT(*)
+                            FROM edges e
+                            WHERE e.source_id = n.id OR e.target_id = n.id
+                        ) DESC,
+                        COALESCE(n.updated_at, n.created_at, n.accessed_at, '') DESC,
+                        n.rowid DESC
+                    LIMIT 500
+                    """
+                ).fetchall()
+            for row in rows:
+                name = str(row["name"] or "").strip()
+                if not name or not _has_non_ascii(name):
+                    continue
+                name_key = _identifier_key(name)
+                if len(name_key) < 2 or name_key not in normalized_text:
+                    continue
+                node = graph._row_to_node(row)
+                if node.id in entity_ids:
+                    continue
+                entity_ids.add(node.id)
+                entities.append(node)
+                if len(entities) >= 10:
+                    break
+        except Exception as exc:
+            if _is_fail_hard_mode():
+                raise
+            logger.warning("Unicode entity scan failed during entity extraction: %s", exc)
 
     return entities
 
@@ -19673,14 +19736,7 @@ def _infer_recall_store_defaults(text: str) -> Tuple[List[str], Optional[str]]:
 
     lowered = str(text or "").lower()
     stores: List[str] = ["vector"]
-    project_name: Optional[str] = None
-
-    for needle, project in (
-        ("quaid", "quaid"),
-    ):
-        if needle in lowered:
-            project_name = project
-            break
+    project_name: Optional[str] = _registered_project_name_in_query(lowered)
 
     docs_like = bool(_re.search(
         r"\b(code|codebase|repo|repository|api|schema|database|db|frontend|backend|ui|layout|appearance|stack|test|tests|jest|middleware|resolver|graphql|rest|component|css|file|source|implementation|architecture)\b",
@@ -19690,9 +19746,6 @@ def _infer_recall_store_defaults(text: str) -> Tuple[List[str], Optional[str]]:
         r"(?<!\d)\d{4}-\d{2}-\d{2}(?!\d)",
         lowered,
     ))
-    if not project_name:
-        project_name = _registered_project_name_in_query(lowered)
-
     dated_project_like = bool(project_name) and has_iso_date
     project_docs_like = bool(project_name)
     generic_graph_signal = _has_generic_graph_signal(text)
@@ -21970,19 +22023,24 @@ def _should_preserve_low_information_entity_result(
         return False
 
     query_terms = {
-        re.sub(r"[^a-z0-9]+", "", term.lower())
+        key
         for term in _extract_distinctive_query_terms(query_text, limit=8)
-        if term
+        if (key := _identifier_key(term))
     }
-    entity_text = " ".join(str(result.get("text", "")).split()).strip().lower()
-    entity_norm = re.sub(r"[^a-z0-9]+", "", entity_text)
-    if not entity_norm or not query_terms:
+    entity_text = " ".join(str(result.get("text", "")).split()).strip()
+    entity_norm = _identifier_key(entity_text)
+    query_norm = _identifier_key(query_text)
+    if not entity_norm or not query_norm:
+        return False
+    if _has_non_ascii(entity_text) and entity_norm in query_norm:
+        return True
+    if not query_terms:
         return False
     if entity_norm in query_terms:
         return True
 
     entity_parts = [
-        re.sub(r"[^a-z0-9]+", "", token.lower())
+        _identifier_key(token)
         for token in entity_text.split()
         if token
     ]

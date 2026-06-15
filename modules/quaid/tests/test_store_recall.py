@@ -13820,6 +13820,24 @@ class TestRecallFastHookInjectContract:
         assert stores == ["vector"]
         assert project is None
 
+    def test_infer_recall_store_defaults_does_not_hardcode_quaid_project(self, tmp_path, monkeypatch):
+        import datastore.memorydb.memory_graph as mg
+
+        class _Graph:
+            def get_known_relations(self):
+                return []
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=_Graph()), \
+             patch("datastore.memorydb.memory_graph.get_edge_keywords", return_value={}), \
+             patch("core.project_registry.list_projects", side_effect=AssertionError("full registry should not load")):
+            stores, project = mg._infer_recall_store_defaults(
+                "What does quaid architecture say?",
+            )
+
+        assert stores == ["vector", "docs"]
+        assert project is None
+
     def test_infer_recall_store_defaults_skips_relation_db_for_plain_memory_query(self, tmp_path, monkeypatch):
         import datastore.memorydb.memory_graph as mg
 
@@ -14283,6 +14301,18 @@ class TestRecallFastHookInjectContract:
         assert any("云门合唱团" in row["text"] for row in rescued)
         assert meta["applied"] is True
         assert meta["anchor_terms"] == ["美玲"]
+
+    def test_extract_entities_from_text_matches_non_ascii_db_entity(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _ = _make_graph(tmp_path)
+        meiling = mg.Node.create("Person", "美玲", owner_id="quaid")
+        graph.add_node(meiling, embed=False)
+
+        with patch.object(mg, "get_graph", return_value=graph):
+            entities = mg.extract_entities_from_text("美玲喜欢什么现代音乐？")
+
+        assert [entity.name for entity in entities] == ["美玲"]
 
     def test_facet_rescue_uses_query_language_terms_not_english_only_triggers(self, tmp_path):
         import datastore.memorydb.memory_graph as mg
@@ -16556,6 +16586,23 @@ class TestRecallFastHookInjectContract:
             "Who is Mike?",
             intent="WHO",
         ) is False
+
+    def test_preserve_exact_low_information_unicode_entity_hits(self):
+        import datastore.memorydb.memory_graph as mg
+
+        meiling = {"text": "美玲", "category": "person", "similarity": 0.944}
+
+        assert mg._is_low_information_entity_result(meiling) is True
+        assert mg._should_preserve_low_information_entity_result(
+            meiling,
+            "Who is 美玲?",
+            intent="WHO",
+        ) is True
+        assert mg._should_preserve_low_information_entity_result(
+            meiling,
+            "谁是美玲？",
+            intent="WHO",
+        ) is True
 
     def test_expand_anchor_rows_uses_beam_scoring_without_llm_in_cheap_mode(self):
         import datastore.memorydb.memory_graph as mg

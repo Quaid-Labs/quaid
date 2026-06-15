@@ -63,6 +63,15 @@ class TestInstanceSlug:
         assert not slug.startswith("-")
         assert not slug.endswith("-")
 
+    def test_legacy_slug_falls_back_for_non_ascii_only_path(self):
+        from lib.instance import _legacy_instance_slug_from_project_dir, validate_instance_id
+
+        with patch("lib.instance._resolved_project_dir", return_value=Path("项目")):
+            slug = _legacy_instance_slug_from_project_dir("项目")
+
+        assert slug.startswith("project-")
+        validate_instance_id(f"codex-{slug}")
+
     def test_cc_adapter_reexports(self):
         """CC adapter should re-export the same function from lib.instance."""
         from lib.instance import instance_slug_from_project_dir as lib_fn

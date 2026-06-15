@@ -18,6 +18,16 @@ import pytest
 from datastore.docsdb.rag import DocsRAG
 
 
+def test_docs_lexical_terms_support_unicode_tokens():
+    from datastore.docsdb.rag import _docs_normalized_lexical_text, _docs_query_terms
+
+    terms = _docs_query_terms("美玲 云门 examples")
+    assert "美玲" in terms
+    assert "云门" in terms
+    assert "examples" in terms
+    assert _docs_normalized_lexical_text("PROJECT.md\n美玲 云门") == "project.md 美玲 云门"
+
+
 @pytest.mark.parametrize("bad_date", ["2023-13-01", "2023-99-99"])
 def test_docs_recall_date_bound_rejects_invalid_calendar_dates(bad_date):
     from datastore.docsdb.rag import _normalize_date_bound

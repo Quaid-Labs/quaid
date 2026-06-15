@@ -12,6 +12,7 @@ import os
 import re
 import sqlite3
 import sys
+import unicodedata
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, List, Dict, Optional, Tuple
@@ -299,9 +300,14 @@ def _path_suffix_candidates(path_value: str, workspace: Optional[Path] = None) -
     return out
 
 
+def _docs_lexical_tokens(value: str) -> List[str]:
+    normalized = unicodedata.normalize("NFKC", str(value or "")).casefold()
+    return re.findall(r"[\w./-]+", normalized, flags=re.UNICODE)
+
+
 def _docs_query_terms(query: str) -> List[str]:
     """Extract lightweight lexical terms for doc reranking."""
-    raw_terms = re.findall(r"[a-zA-Z0-9_./-]+", str(query or "").lower())
+    raw_terms = _docs_lexical_tokens(query)
     stop = {
         "the", "a", "an", "and", "or", "to", "for", "of", "in", "on", "at",
         "is", "are", "was", "were", "be", "do", "does", "did", "how", "what",
@@ -311,7 +317,8 @@ def _docs_query_terms(query: str) -> List[str]:
     out: List[str] = []
     for term in raw_terms:
         t = term.strip().strip("/.")
-        if len(t) < 3 or t in stop:
+        min_len = 2 if t and not t.isascii() else 3
+        if len(t) < min_len or t in stop:
             continue
         if t not in out:
             out.append(t)
@@ -365,7 +372,7 @@ def _docs_source_penalty(query_terms: List[str], source_file: str) -> float:
 
 
 def _docs_normalized_lexical_text(value: str) -> str:
-    return " ".join(re.findall(r"[a-zA-Z0-9_./-]+", str(value or "").lower()))
+    return " ".join(_docs_lexical_tokens(value))
 
 
 def _docs_exact_anchor_boost(

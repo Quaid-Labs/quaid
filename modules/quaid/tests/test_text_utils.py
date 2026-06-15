@@ -86,6 +86,11 @@ class TestExtractKeyTokens:
         tokens = extract_key_tokens("the is a an")
         assert tokens == []
 
+    def test_extracts_unicode_tokens(self):
+        tokens = extract_key_tokens("美玲 和 云门")
+        assert "美玲" in tokens
+        assert "云门" in tokens
+
 
 class TestSubsetOverlapCandidate:
     """Tests for is_subset_overlap_candidate()."""
