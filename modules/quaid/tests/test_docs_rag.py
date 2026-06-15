@@ -54,6 +54,28 @@ def test_docs_rank_score_uses_unicode_normalized_terms():
     assert full_match > partial_match
 
 
+def test_docs_scaffold_penalty_requires_managed_project_marker():
+    from datastore.docsdb.rag import _docs_query_terms, _docs_scaffold_penalty
+    from lib.project_templates import PROJECT_HOME_BEGIN
+
+    query_terms = _docs_query_terms("portfolio project")
+    managed_penalty = _docs_scaffold_penalty(
+        query_terms,
+        "/tmp/workspace/projects/portfolio-site/PROJECT.md",
+        f"### Project Home\n{PROJECT_HOME_BEGIN}\n- `/tmp/workspace/projects/portfolio-site`",
+        2,
+    )
+    ordinary_penalty = _docs_scaffold_penalty(
+        query_terms,
+        "/tmp/workspace/projects/portfolio-site/PROJECT.md",
+        "## Current State\nPortfolio project launch notes and decisions.",
+        2,
+    )
+
+    assert managed_penalty > 0.0
+    assert ordinary_penalty == 0.0
+
+
 def test_project_log_query_score_supports_short_unicode_terms():
     from datastore.docsdb.rag import _project_log_line_query_score, _project_log_query_terms
 
@@ -1720,6 +1742,8 @@ class TestDocsSearchFiltering:
     @patch("datastore.docsdb.rag._lib_unpack_embedding", return_value=[0.1, 0.2, 0.3])
     @patch("datastore.docsdb.rag._lib_cosine_similarity", return_value=0.95)
     def test_search_docs_prefers_project_log_answer_line_over_project_scaffold(self, _sim, _unpack, _embed, tmp_path):
+        from lib.project_templates import PROJECT_HOME_BEGIN, PROJECT_HOME_END
+
         rag = _make_rag(tmp_path)
         db = sqlite3.connect(rag.db_path)
         try:
@@ -1729,7 +1753,7 @@ class TestDocsSearchFiltering:
                     "project-home:0",
                     "/tmp/workspace/projects/portfolio-site/PROJECT.md",
                     0,
-                    "### Project Home\n- `/tmp/workspace/projects/portfolio-site`",
+                    f"### Project Home\n{PROJECT_HOME_BEGIN}\n- `/tmp/workspace/projects/portfolio-site`\n{PROJECT_HOME_END}",
                     "### Project Home",
                     b"e",
                 ),

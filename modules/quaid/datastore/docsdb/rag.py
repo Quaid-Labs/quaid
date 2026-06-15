@@ -27,6 +27,7 @@ from lib.embeddings import (
 )
 from lib.similarity import cosine_similarity as _lib_cosine_similarity
 from lib.fail_policy import is_fail_hard_enabled
+from lib.project_templates import REGISTRY_MANAGED_MARKERS
 from lib.runtime_context import get_visible_quaid_home, get_workspace_dir
 
 logger = logging.getLogger(__name__)
@@ -418,45 +419,22 @@ def _docs_exact_anchor_boost(
 def _docs_scaffold_penalty(
     query_terms: List[str],
     source_file: str,
-    section_header: Optional[str],
+    content: str,
     content_hits: int,
 ) -> float:
-    """Penalty for generic scaffold sections beating real content docs."""
+    """Penalty for generated registry sections beating real content docs."""
     file_name = Path(source_file or "").name.lower()
-    header_lower = str(section_header or "").strip().lower()
     query_specific = len(query_terms) >= 2
 
     if not query_specific:
         return 0.0
 
-    scaffold_headers = {
-        "### project home",
-        "### source roots",
-        "### in this project directory",
-        "### registered docs",
-        "### external files",
-    }
-    generic_project_headers = {
-        "## what this is",
-        "## current state",
-        "## start here",
-        "## primary artifacts",
-        "## recent major changes",
-    }
+    marker_text = str(content or "")
+    has_managed_marker = any(marker in marker_text for marker in REGISTRY_MANAGED_MARKERS)
 
     penalty = 0.0
-    if file_name == "project.md":
-        if header_lower in scaffold_headers:
-            penalty += 0.28
-        elif header_lower in generic_project_headers:
-            header_query_hits = sum(1 for term in query_terms if term in header_lower)
-            if header_query_hits <= 0:
-                # Root PROJECT.md overview/current-state sections often catalog
-                # where evidence lives. For concrete docs lookups, source files
-                # with the same exact terms should outrank that catalog mention.
-                penalty += 0.22 if content_hits >= 2 else 0.12
-            elif content_hits < 2:
-                penalty += 0.06
+    if file_name == "project.md" and has_managed_marker:
+        penalty += 0.28
     if file_name == "status.md" and content_hits < 2:
         penalty += 0.10
     return penalty
@@ -526,7 +504,7 @@ def _docs_rank_score(query_terms: List[str], query: str, source_file: str, secti
         score -= 0.06
     if wants_impl:
         score -= _docs_source_penalty(query_terms, source_file)
-    score -= _docs_scaffold_penalty(query_terms, source_file, section_header, content_hits)
+    score -= _docs_scaffold_penalty(query_terms, source_file, content, content_hits)
 
     return max(0.0, round(score, 4))
 
