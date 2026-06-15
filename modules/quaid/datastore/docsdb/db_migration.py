@@ -7,6 +7,7 @@ do not need to reindex after the shared-RAG rollout.
 from __future__ import annotations
 
 import logging
+import os
 import sqlite3
 import threading
 from datetime import datetime, timezone
@@ -29,6 +30,21 @@ CREATE TABLE IF NOT EXISTS docs_db_migration_state (
     PRIMARY KEY(source_db, table_name)
 )
 """
+
+
+def _now_iso() -> str:
+    raw = os.environ.get("QUAID_NOW", "").strip()
+    if raw:
+        try:
+            value = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            raise ValueError(f"Invalid QUAID_NOW={raw!r}") from None
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        else:
+            value = value.astimezone(timezone.utc)
+        return value.isoformat()
+    return datetime.now(timezone.utc).isoformat()
 
 
 def migrate_legacy_docs_tables(shared_db_path: Path, tables: Iterable[str]) -> None:
@@ -207,6 +223,6 @@ def _write_migration_state(
             source_db,
             table_name,
             source_sig,
-            datetime.now(timezone.utc).isoformat(),
+            _now_iso(),
         ),
     )
