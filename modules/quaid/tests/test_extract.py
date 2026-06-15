@@ -4884,6 +4884,7 @@ class TestExtractFromTranscript:
     def test_memorydb_extraction_publish_initializes_facts_planned_for_dry_run(self, monkeypatch):
         from datastore.memorydb.extraction_publish import run_extraction_publish_payload
 
+        monkeypatch.setenv("QUAID_NOW", "2026-03-11T00:00:00Z")
         monkeypatch.setattr(
             "datastore.memorydb.extraction_publish.get_config",
             lambda: SimpleNamespace(retrieval=SimpleNamespace(domains={"personal": "Personal facts"})),
@@ -4920,9 +4921,24 @@ class TestExtractFromTranscript:
         )
 
         assert returned[0]["text"] == result["raw_facts"][0]["text"]
-        assert "mentioned_at" in returned[0]
+        assert returned[0]["mentioned_at"] == "2026-03-11T00:00:00+00:00"
         assert result["facts_planned"] == 1
         assert result["facts"][0]["status"] == "would_store"
+
+    def test_memorydb_extraction_publish_current_timestamp_honors_quaid_now(self, monkeypatch):
+        from datastore.memorydb import extraction_publish
+
+        monkeypatch.setenv("QUAID_NOW", "2026-03-11T00:00:00Z")
+
+        assert extraction_publish._current_utc_timestamp() == "2026-03-11T00:00:00+00:00"
+
+    def test_memorydb_extraction_publish_current_timestamp_rejects_malformed_quaid_now(self, monkeypatch):
+        from datastore.memorydb import extraction_publish
+
+        monkeypatch.setenv("QUAID_NOW", "not-a-date")
+
+        with pytest.raises(ValueError, match="Invalid QUAID_NOW"):
+            extraction_publish._current_utc_timestamp()
 
     def _run_direct_extraction_publish(self, result, memory_service, *, fail_hard_enabled):
         from datastore.memorydb.extraction_publish import run_extraction_publish_payload
@@ -6534,6 +6550,7 @@ class TestExtractFromTranscript:
         mock_store.return_value = {"id": "fact-1", "status": "created", "dedup_telemetry": {}}
         monkeypatch.setenv("QUAID_PUBLISH_TRACE", "1")
         monkeypatch.setenv("QUAID_INSTANCE", "benchrunner")
+        monkeypatch.setenv("QUAID_NOW", "2026-03-11T00:00:00Z")
 
         payload = {
             "raw_facts": [
@@ -6586,6 +6603,7 @@ class TestExtractFromTranscript:
         assert "publish_facts_complete" in events
         assert "publish_complete" in events
         assert events.index("publish_facts_complete") < events.index("publish_complete")
+        assert {row["timestamp"] for row in rows} == {"2026-03-11T00:00:00+00:00"}
 
     def test_publish_complete_trace_waits_for_orchestration_side_effects(self, workspace_dir, monkeypatch):
         from ingest.extract import apply_extracted_payloads

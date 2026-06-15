@@ -50,6 +50,13 @@ def _normalize_extracted_timestamp(value: Any) -> Optional[str]:
     return parsed.isoformat(timespec="seconds")
 
 def _current_utc_timestamp() -> str:
+    quaid_now = os.environ.get("QUAID_NOW", "").strip()
+    if quaid_now:
+        normalized = _normalize_extracted_timestamp(quaid_now)
+        if normalized:
+            return normalized
+        logger.warning("[datastore-memorydb] invalid QUAID_NOW=%r", quaid_now)
+        raise ValueError(f"Invalid QUAID_NOW={quaid_now!r}") from None
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 def _normalize_fact_temporal_hint(
@@ -144,7 +151,7 @@ def _write_publish_trace(event: str, **data: Any) -> None:
     if path is None:
         return
     payload = {
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": _current_utc_timestamp(),
         "pid": os.getpid(),
         "event": event,
     }
