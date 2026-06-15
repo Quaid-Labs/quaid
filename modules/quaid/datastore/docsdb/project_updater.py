@@ -183,6 +183,7 @@ def _project_md_recent_log_limit(default: int = 15) -> int:
 
 def _project_log_now(date_str: Optional[str] = None) -> datetime:
     """Return the effective project-log timestamp."""
+    raw_source = "project log date override" if date_str is not None else "QUAID_NOW"
     raw = str(date_str or os.environ.get("QUAID_NOW", "") or "").strip()
     if raw:
         if re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw):
@@ -190,7 +191,7 @@ def _project_log_now(date_str: Optional[str] = None) -> datetime:
         try:
             return datetime.fromisoformat(raw.replace("Z", "+00:00"))
         except ValueError:
-            logger.warning("Invalid project log date override %r; using wall clock", raw)
+            raise ValueError(f"Invalid {raw_source} {raw!r}") from None
     return datetime.now()
 
 

@@ -30,6 +30,7 @@ def setup_env(tmp_path, monkeypatch):
     global _tmp_db
     _tmp_db = tmp_path / "test_registry.db"
     monkeypatch.setenv("MEMORY_DB_PATH", str(_tmp_db))
+    monkeypatch.setenv("DOCS_DB_PATH", str(_tmp_db))
     monkeypatch.setenv("QUAID_VISIBLE_HOME", str(tmp_path))
     from lib.adapter import set_adapter, reset_adapter, TestAdapter
     adapter = TestAdapter(tmp_path)
@@ -372,6 +373,18 @@ class TestAppendProjectLogs:
 
         assert "- 2026-03-07 [Reset] Added migration notes" in project_md.read_text()
         assert "- [2026-03-07T15:30:00] Added migration notes" in project_log.read_text()
+
+    def test_project_log_history_rejects_malformed_quaid_now(self, setup_env, monkeypatch):
+        from datastore.docsdb.project_updater import append_project_logs
+
+        monkeypatch.setenv("QUAID_NOW", "not-a-date")
+
+        with pytest.raises(ValueError, match="Invalid QUAID_NOW"):
+            append_project_logs(
+                {"test-project": ["Session 5: Added migration notes"]},
+                trigger="Reset",
+                dry_run=False,
+            )
 
     def test_structured_project_logs_preserve_per_entry_dates(self, setup_env):
         from datastore.docsdb.project_updater import append_project_logs
