@@ -159,8 +159,27 @@ def _normalize_entries(entries: Iterable[Any]) -> List[Dict[str, Any]]:
     return _normalize_entries_with_dropped_count(entries)[0]
 
 
+def _is_invalid_quaid_now_error(exc: BaseException) -> bool:
+    return isinstance(exc, ValueError) and str(exc).startswith("Invalid QUAID_NOW=")
+
+
 def _utc_now() -> str:
+    raw = os.environ.get("QUAID_NOW", "").strip()
+    if raw:
+        try:
+            value = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            raise ValueError(f"Invalid QUAID_NOW={raw!r}") from None
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        else:
+            value = value.astimezone(timezone.utc)
+        return value.isoformat()
     return datetime.now(tz=timezone.utc).isoformat()
+
+
+def _project_log_queue_id() -> str:
+    return f"{time.time_ns()}-{os.getpid()}-{uuid.uuid4().hex}"
 
 
 def _atomic_write_json(path: Path, payload: Dict[str, Any]) -> None:
@@ -221,8 +240,8 @@ def enqueue_project_logs(
             if dry_run:
                 continue
 
-            created_ns = time.time_ns()
-            item_id = f"{created_ns}-{os.getpid()}-{uuid.uuid4().hex}"
+            created_at = _utc_now()
+            item_id = _project_log_queue_id()
             payload: Dict[str, Any] = {
                 "id": item_id,
                 "project": project,
@@ -233,7 +252,7 @@ def enqueue_project_logs(
                 "owner_id": str(owner_id).strip() if owner_id else None,
                 "source_instance": str(source_instance).strip() if source_instance else None,
                 "source_adapter": str(source_adapter).strip() if source_adapter else None,
-                "created_at": _utc_now(),
+                "created_at": created_at,
             }
             target = project_queue_dir(project, quaid_home=quaid_home) / f"{item_id}.json"
             _atomic_write_json(target, payload)
@@ -241,6 +260,8 @@ def enqueue_project_logs(
             metrics["entries_queued"] += len(entries)
             metrics["entries_written"] += len(entries)
         except Exception as exc:
+            if _is_invalid_quaid_now_error(exc):
+                raise
             metrics["queue_failures"] += 1
             logger.warning("Failed to enqueue PROJECT.log entries for %r: %s", raw_project, exc)
             if is_fail_hard_enabled():
@@ -273,7 +294,7 @@ def _dead_letter_queue_file(
         return False
     dead_dir = project_queue_dead_letter_dir(project, quaid_home=quaid_home)
     dead_dir.mkdir(parents=True, exist_ok=True)
-    target = dead_dir / f"{time.time_ns()}-{path.name}"
+    target = dead_dir / f"{_project_log_queue_id()}-{path.name}"
     path.replace(target)
     try:
         _atomic_write_json(
@@ -285,7 +306,9 @@ def _dead_letter_queue_file(
                 "reason": str(reason or "").strip() or "invalid project-log queue item",
             },
         )
-    except Exception:
+    except Exception as exc:
+        if _is_invalid_quaid_now_error(exc):
+            raise
         logger.warning("Failed writing project-log dead-letter metadata for %s", target, exc_info=True)
         if is_fail_hard_enabled():
             raise
