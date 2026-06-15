@@ -18533,7 +18533,11 @@ def _recover_assistant_suggestion_cluster_rows(
     search_limit = max(160, min(400, max(1, int(limit)) * 50))
     try:
         raw_results = graph.search_hybrid(query, limit=search_limit, owner_id=owner_id)
-    except Exception:
+    except Exception as exc:
+        if _is_fail_hard_mode():
+            raise RuntimeError(
+                "Assistant suggestion cluster recovery search failed while failHard is enabled"
+            ) from exc
         logger.debug("assistant suggestion cluster recovery search failed", exc_info=True)
         return []
 
@@ -18595,7 +18599,11 @@ def _recover_assistant_suggestion_cluster_rows(
                 """,
                 params,
             ).fetchall()
-    except Exception:
+    except Exception as exc:
+        if _is_fail_hard_mode():
+            raise RuntimeError(
+                "Assistant suggestion cluster sibling fetch failed while failHard is enabled"
+            ) from exc
         logger.debug("assistant suggestion cluster sibling fetch failed", exc_info=True)
         return []
 
@@ -18721,7 +18729,11 @@ def _recover_assistant_memory_cluster_rows(
         search_limit = max(120, min(320, max(1, int(limit)) * 40))
         try:
             raw_results = graph.search_hybrid(query, limit=search_limit, owner_id=owner_id)
-        except Exception:
+        except Exception as exc:
+            if _is_fail_hard_mode():
+                raise RuntimeError(
+                    "Assistant memory cluster recovery search failed while failHard is enabled"
+                ) from exc
             logger.debug("assistant memory cluster recovery search failed", exc_info=True)
             return []
 
@@ -18777,7 +18789,11 @@ def _recover_assistant_memory_cluster_rows(
                     """,
                     seed_params,
                 ).fetchall()
-        except Exception:
+        except Exception as exc:
+            if _is_fail_hard_mode():
+                raise RuntimeError(
+                    "Assistant memory fallback seed fetch failed while failHard is enabled"
+                ) from exc
             logger.debug("assistant memory fallback seed fetch failed", exc_info=True)
             seed_rows = []
 
@@ -18839,7 +18855,11 @@ def _recover_assistant_memory_cluster_rows(
                 """,
                 params,
             ).fetchall()
-    except Exception:
+    except Exception as exc:
+        if _is_fail_hard_mode():
+            raise RuntimeError(
+                "Assistant memory cluster sibling fetch failed while failHard is enabled"
+            ) from exc
         logger.debug("assistant memory cluster sibling fetch failed", exc_info=True)
         return []
 

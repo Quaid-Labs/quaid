@@ -9288,6 +9288,79 @@ class TestRecallTelemetry:
             for row in rows
         )
 
+    def test_recover_assistant_suggestion_cluster_search_failure_respects_failhard(self, monkeypatch):
+        import datastore.memorydb.memory_graph as mg
+
+        graph = SimpleNamespace(
+            search_hybrid=MagicMock(side_effect=RuntimeError("search down")),
+        )
+        monkeypatch.setattr(mg, "get_graph", lambda: graph)
+        kwargs = {
+            "gate_eval": {"requirements": ["assistant_source", "enumeration"]},
+            "owner_id": "owner",
+            "limit": 5,
+        }
+
+        with patch.object(mg, "_is_fail_hard_mode", return_value=True):
+            with pytest.raises(
+                RuntimeError,
+                match="Assistant suggestion cluster recovery search failed while failHard is enabled",
+            ):
+                mg._recover_assistant_suggestion_cluster_rows(
+                    "Which options did the assistant suggest for rollout?",
+                    **kwargs,
+                )
+
+        with patch.object(mg, "_is_fail_hard_mode", return_value=False):
+            assert mg._recover_assistant_suggestion_cluster_rows(
+                "Which options did the assistant suggest for rollout?",
+                **kwargs,
+            ) == []
+
+    def test_recover_assistant_suggestion_cluster_sibling_failure_respects_failhard(self, monkeypatch):
+        import datastore.memorydb.memory_graph as mg
+
+        node = mg.Node.create(
+            "Fact",
+            "Assistant suggested option alpha for the rollout.",
+            attributes={
+                "source_type": "assistant",
+                "structural_anchor_kind": "assistant_option_bullet_anchor",
+            },
+            created_at="2026-01-02T03:04:05",
+            owner_id="owner",
+        )
+
+        def _raise_conn():
+            raise RuntimeError("db down")
+
+        graph = SimpleNamespace(
+            search_hybrid=MagicMock(return_value=[(node, 0.91)]),
+            _get_conn=_raise_conn,
+        )
+        monkeypatch.setattr(mg, "get_graph", lambda: graph)
+        kwargs = {
+            "gate_eval": {"requirements": ["assistant_source", "enumeration"]},
+            "owner_id": "owner",
+            "limit": 5,
+        }
+
+        with patch.object(mg, "_is_fail_hard_mode", return_value=True):
+            with pytest.raises(
+                RuntimeError,
+                match="Assistant suggestion cluster sibling fetch failed while failHard is enabled",
+            ):
+                mg._recover_assistant_suggestion_cluster_rows(
+                    "Which options did the assistant suggest for rollout?",
+                    **kwargs,
+                )
+
+        with patch.object(mg, "_is_fail_hard_mode", return_value=False):
+            assert mg._recover_assistant_suggestion_cluster_rows(
+                "Which options did the assistant suggest for rollout?",
+                **kwargs,
+            ) == []
+
     def test_priority_anchor_terms_for_fast_attribution_prefers_structural_anchor(self):
         import datastore.memorydb.memory_graph as mg
 
@@ -9634,6 +9707,115 @@ class TestRecallTelemetry:
             "assistant_callback_anchor",
             "assistant_option_list_anchor",
         ]
+
+    def test_recover_assistant_memory_cluster_search_failure_respects_failhard(self, monkeypatch):
+        import datastore.memorydb.memory_graph as mg
+
+        graph = SimpleNamespace(
+            search_hybrid=MagicMock(side_effect=RuntimeError("search down")),
+        )
+        monkeypatch.setattr(mg, "get_graph", lambda: graph)
+        kwargs = {
+            "gate_eval": {"requirements": ["assistant_source"]},
+            "owner_id": "owner",
+            "limit": 5,
+        }
+
+        with patch.object(mg, "_extract_explicit_query_anchor_terms", return_value=["rollout"]), \
+             patch.object(mg, "_is_fail_hard_mode", return_value=True):
+            with pytest.raises(
+                RuntimeError,
+                match="Assistant memory cluster recovery search failed while failHard is enabled",
+            ):
+                mg._recover_assistant_memory_cluster_rows(
+                    "What did the assistant recall about rollout?",
+                    **kwargs,
+                )
+
+        with patch.object(mg, "_extract_explicit_query_anchor_terms", return_value=["rollout"]), \
+             patch.object(mg, "_is_fail_hard_mode", return_value=False):
+            assert mg._recover_assistant_memory_cluster_rows(
+                "What did the assistant recall about rollout?",
+                **kwargs,
+            ) == []
+
+    def test_recover_assistant_memory_seed_fetch_failure_respects_failhard(self, monkeypatch):
+        import datastore.memorydb.memory_graph as mg
+
+        def _raise_conn():
+            raise RuntimeError("db down")
+
+        graph = SimpleNamespace(
+            search_hybrid=MagicMock(return_value=[]),
+            _get_conn=_raise_conn,
+        )
+        monkeypatch.setattr(mg, "get_graph", lambda: graph)
+        kwargs = {
+            "gate_eval": {"requirements": ["assistant_source"]},
+            "owner_id": "owner",
+            "limit": 5,
+        }
+
+        with patch.object(mg, "_extract_explicit_query_anchor_terms", return_value=["rollout"]), \
+             patch.object(mg, "_is_fail_hard_mode", return_value=True):
+            with pytest.raises(
+                RuntimeError,
+                match="Assistant memory fallback seed fetch failed while failHard is enabled",
+            ):
+                mg._recover_assistant_memory_cluster_rows(
+                    "What did the assistant recall about rollout?",
+                    **kwargs,
+                )
+
+        with patch.object(mg, "_extract_explicit_query_anchor_terms", return_value=["rollout"]), \
+             patch.object(mg, "_is_fail_hard_mode", return_value=False):
+            assert mg._recover_assistant_memory_cluster_rows(
+                "What did the assistant recall about rollout?",
+                **kwargs,
+            ) == []
+
+    def test_recover_assistant_memory_sibling_fetch_failure_respects_failhard(self, monkeypatch):
+        import datastore.memorydb.memory_graph as mg
+
+        def _raise_conn():
+            raise RuntimeError("db down")
+
+        graph = SimpleNamespace(_get_conn=_raise_conn)
+        monkeypatch.setattr(mg, "get_graph", lambda: graph)
+        kwargs = {
+            "gate_eval": {"requirements": ["assistant_source"]},
+            "owner_id": "owner",
+            "limit": 5,
+            "current_rows": [
+                {
+                    "id": "assistant-row",
+                    "text": "Assistant recalled rollout plan details.",
+                    "source_type": "assistant",
+                    "structural_anchor_kind": "assistant_callback_anchor",
+                    "created_at": "2026-01-02T03:04:05",
+                    "similarity": 0.84,
+                    "owner_id": "owner",
+                }
+            ],
+        }
+
+        with patch.object(mg, "_extract_explicit_query_anchor_terms", return_value=["rollout"]), \
+             patch.object(mg, "_is_fail_hard_mode", return_value=True):
+            with pytest.raises(
+                RuntimeError,
+                match="Assistant memory cluster sibling fetch failed while failHard is enabled",
+            ):
+                mg._recover_assistant_memory_cluster_rows(
+                    "What did the assistant recall about rollout?",
+                    **kwargs,
+                )
+
+        with patch.object(mg, "_extract_explicit_query_anchor_terms", return_value=["rollout"]), \
+             patch.object(mg, "_is_fail_hard_mode", return_value=False):
+            assert mg._recover_assistant_memory_cluster_rows(
+                "What did the assistant recall about rollout?",
+                **kwargs,
+            ) == []
 
     def test_recover_assistant_memory_cluster_rows_does_not_cross_fetch_by_incident_words(self, tmp_path):
         import datastore.memorydb.memory_graph as mg
