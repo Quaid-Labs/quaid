@@ -145,6 +145,39 @@ def test_project_log_query_score_supports_short_unicode_terms():
     assert _project_log_line_query_score("- [2026-03-05T23:59:59] 云门 rollout finished", terms) == 1
 
 
+def test_project_log_artifact_boost_uses_structural_overlap_not_english_gate():
+    from datastore.docsdb.rag import (
+        _project_log_code_artifact_rank_delta,
+        _project_log_query_terms,
+        _should_diversify_suite_results,
+    )
+
+    content = "- [2026-03-05T23:59:59] 云门 回归 suites/auth.test.js と suites/billing.test.js"
+    terms = _project_log_query_terms("云门 回归")
+    unrelated_terms = _project_log_query_terms("火星 支払い")
+    results = [{"content": content, "source": "/tmp/projects/demo/PROJECT.log", "chunk_index": 0}]
+
+    assert _project_log_code_artifact_rank_delta(content, terms) > 0.0
+    assert _should_diversify_suite_results("云门 回归", terms, results) is True
+    assert _project_log_code_artifact_rank_delta(content, unrelated_terms) == 0.0
+    assert _should_diversify_suite_results("火星 支払い", unrelated_terms, results) is False
+
+
+def test_project_log_artifact_diversity_skips_specific_suite_file_queries():
+    from datastore.docsdb.rag import _project_log_query_terms, _should_diversify_suite_results
+
+    query = "suites/auth.test.js"
+    results = [
+        {
+            "content": "- [2026-03-05T23:59:59] suites/auth.test.js covers login",
+            "source": "/tmp/projects/demo/PROJECT.log",
+            "chunk_index": 0,
+        }
+    ]
+
+    assert _should_diversify_suite_results(query, _project_log_query_terms(query), results) is False
+
+
 @pytest.mark.parametrize("bad_date", ["2023-13-01", "2023-99-99"])
 def test_docs_recall_date_bound_rejects_invalid_calendar_dates(bad_date):
     from datastore.docsdb.rag import _normalize_date_bound

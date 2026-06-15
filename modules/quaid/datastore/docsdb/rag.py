@@ -636,7 +636,6 @@ def _project_log_query_terms(query: str) -> List[str]:
     return out
 
 
-_TEST_QUERY_TERMS = frozenset({"test", "tests", "testing"})
 _SUITE_FILE_RE = re.compile(
     r"\b(?:[\w.-]+/)*([\w.-]+\.(?:test|spec)\.[A-Za-z0-9]+)\b",
     re.IGNORECASE,
@@ -651,22 +650,51 @@ _TEST_PATH_RE = re.compile(
 )
 
 
+def _non_date_query_terms(query_terms: List[str]) -> List[str]:
+    return [
+        str(term or "").lower()
+        for term in query_terms or []
+        if str(term or "").strip() and not re.fullmatch(r"20\d{2}-\d{2}-\d{2}", str(term or ""))
+    ]
+
+
+def _project_log_artifact_query_match(content: str, query_terms: List[str]) -> bool:
+    """Return true when suite-file structure is relevant to this query.
+
+    This deliberately avoids translated keyword lists. Suite artifact boosts are
+    allowed only when the query names a suite file or shares lexical anchors with
+    the artifact-bearing line itself.
+    """
+    content_text = str(content or "")
+    suite_files = set(_extract_suite_filenames(content_text))
+    if not suite_files:
+        return False
+
+    terms = _non_date_query_terms(query_terms)
+    if not terms:
+        return False
+
+    query_suites = set(_extract_suite_filenames(" ".join(terms)))
+    if query_suites:
+        return bool(query_suites & suite_files)
+
+    required_matches = 1 if len(terms) == 1 or any(not term.isascii() for term in terms) else min(2, len(terms))
+    return _project_log_line_query_score(content_text, terms) >= required_matches
+
+
 def _project_log_code_artifact_rank_delta(content: str, query_terms: List[str]) -> float:
     """Prefer explicit suite-file inventory rows for test-oriented queries.
 
     Dated PROJECT.log recall often needs to answer inventory-style questions
-    such as which test suites existed. Generic "tests" language can otherwise
-    outrank rows that name the actual suite files. Keep this structural:
+    such as which test suites existed. Generic language can otherwise outrank
+    rows that name the actual suite files. Keep this structural:
     reward chunks that contain explicit suite filenames and surrounding code
-    artifact paths, rather than relying on English cue phrases.
+    artifact paths when the query also overlaps the artifact-bearing line,
+    rather than relying on English cue phrases.
     """
-    term_set = {str(term or "").lower() for term in (query_terms or []) if str(term or "").strip()}
-    if not (term_set & _TEST_QUERY_TERMS):
-        return 0.0
-
     content_text = str(content or "")
     suite_files = {match.group(1).lower() for match in _SUITE_FILE_RE.finditer(content_text)}
-    if not suite_files:
+    if not suite_files or not _project_log_artifact_query_match(content_text, query_terms):
         return 0.0
 
     artifact_paths = {match.group(0).lower() for match in _CODE_ARTIFACT_RE.finditer(content_text)}
@@ -687,13 +715,20 @@ def _extract_suite_filenames(text: str) -> List[str]:
     return seen
 
 
-def _should_diversify_suite_results(query: str, query_terms: List[str]) -> bool:
-    term_set = {str(term or "").lower() for term in (query_terms or []) if str(term or "").strip()}
-    if not (term_set & _TEST_QUERY_TERMS):
-        return False
+def _should_diversify_suite_results(
+    query: str,
+    query_terms: List[str],
+    results: List[Dict[str, Any]],
+) -> bool:
     # If the user names a specific suite file, preserve normal ranking rather
     # than forcing inventory-style diversity.
-    return not _extract_suite_filenames(query)
+    if _extract_suite_filenames(query):
+        return False
+    return any(
+        _project_log_artifact_query_match(str(row.get("content") or ""), query_terms)
+        for row in results
+        if "content" in row
+    )
 
 
 def _diversify_suite_results(results: List[Dict[str, Any]], limit: int) -> List[Dict[str, Any]]:
@@ -2099,7 +2134,7 @@ class DocsRAG:
 
         # Sort by similarity and limit
         results.sort(key=lambda x: float(x.get("_rank_score", x["similarity"])), reverse=True)
-        if _should_diversify_suite_results(query, project_log_query_terms):
+        if _should_diversify_suite_results(query, project_log_query_terms, results):
             limited_results = _diversify_suite_results(results, limit)
         else:
             limited_results = results[:limit]
