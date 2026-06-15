@@ -973,6 +973,16 @@ def test_run_workspace_check_passes_configurable_llm_timeout(monkeypatch):
     assert captured["timeout"] == 33.0
 
 
+def test_workspace_review_timeout_warns_on_invalid_config(caplog):
+    from core.lifecycle import workspace_audit as wa
+
+    cfg = SimpleNamespace(docs=SimpleNamespace(update_timeout_seconds="bad-timeout"))
+    caplog.set_level("WARNING")
+
+    assert wa._workspace_review_timeout_seconds(cfg, default_seconds=120) == 120.0
+    assert "Invalid docs.update_timeout_seconds='bad-timeout'" in caplog.text
+
+
 class TestMoveToDocsTargetSanitization:
     def test_accepts_valid_docs_target(self):
         from core.lifecycle.workspace_audit import _sanitize_move_to_docs_target

@@ -5,6 +5,7 @@ import json
 import os
 import time
 import pytest
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -89,6 +90,14 @@ class TestCircuitBreaker:
         assert not loaded.allows_writes()
         assert loaded.allows_reads()
 
+    def test_write_uses_quaid_now_when_set_at_missing(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("QUAID_NOW", "2026-03-11T05:06:07Z")
+
+        write_circuit_breaker(tmp_path, CircuitBreakerState(status=DEGRADED))
+
+        raw = json.loads((tmp_path / "circuit-breaker.json").read_text(encoding="utf-8"))
+        assert raw["set_at"] == "2026-03-11T05:06:07+00:00"
+
     def test_safe_mode_blocks_everything(self, tmp_path):
         state = CircuitBreakerState(status=SAFE_MODE, reason="Emergency")
         write_circuit_breaker(tmp_path, state)
@@ -103,6 +112,14 @@ class TestCircuitBreaker:
 
         loaded = read_circuit_breaker(tmp_path)
         assert loaded.is_normal()
+
+    def test_clear_uses_quaid_now(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("QUAID_NOW", "2026-03-11T05:07:08Z")
+
+        clear_circuit_breaker(tmp_path)
+
+        raw = json.loads((tmp_path / "circuit-breaker.json").read_text(encoding="utf-8"))
+        assert raw["set_at"] == "2026-03-11T05:07:08+00:00"
 
     def test_corrupt_file_returns_safe_mode_when_failhard_disabled(self, monkeypatch, tmp_path):
         monkeypatch.setattr("lib.circuit_breaker._fail_hard_enabled", lambda: False)
@@ -297,6 +314,44 @@ class TestVersionWatcher:
 
         assert watcher._host_info is None
         assert "Failed to get host info: adapter boom" in caplog.text
+
+    def test_check_quaid_update_uses_quaid_now_for_notification_cache(self, tmp_path, monkeypatch):
+        watcher = VersionWatcher(data_dir=tmp_path, quaid_version="0.2.15")
+        monkeypatch.setenv("QUAID_NOW", "2026-03-11T05:06:07Z")
+        matrix = {
+            "latest_quaid": "999.0.0",
+            "update_message": "Update now",
+        }
+        mock_adapter = MagicMock()
+
+        with patch("lib.adapter.get_adapter", return_value=mock_adapter):
+            watcher._check_quaid_update(matrix)
+
+        raw = json.loads((tmp_path / "quaid-update-notified.json").read_text(encoding="utf-8"))
+        assert raw == {"version": "999.0.0", "notified_at": datetime(2026, 3, 11, 5, 6, 7, tzinfo=timezone.utc).timestamp()}
+
+    def test_notify_state_change_get_adapter_failure_raises_when_failhard(self, tmp_path, caplog):
+        watcher = VersionWatcher(data_dir=tmp_path, quaid_version="0.2.15")
+        caplog.set_level("WARNING")
+        state = CircuitBreakerState(status=DEGRADED, message="API changed")
+
+        with patch("lib.adapter.get_adapter", side_effect=RuntimeError("adapter boom")), \
+             patch("core.compatibility._fail_hard_enabled", return_value=True):
+            with pytest.raises(RuntimeError, match="adapter boom"):
+                watcher._notify_state_change(NORMAL, state)
+
+        assert "Failed to get adapter for compatibility state notification" in caplog.text
+
+    def test_notify_state_change_get_adapter_failure_warns_when_fail_open(self, tmp_path, caplog):
+        watcher = VersionWatcher(data_dir=tmp_path, quaid_version="0.2.15")
+        caplog.set_level("WARNING")
+        state = CircuitBreakerState(status=DEGRADED, message="API changed")
+
+        with patch("lib.adapter.get_adapter", side_effect=RuntimeError("adapter boom")), \
+             patch("core.compatibility._fail_hard_enabled", return_value=False):
+            watcher._notify_state_change(NORMAL, state)
+
+        assert "Failed to get adapter for compatibility state notification" in caplog.text
 
 
 class TestAdaptiveCheckInterval:
@@ -618,6 +673,21 @@ class TestNotifyOnUse:
         msg2 = notify_on_use_if_degraded(tmp_path)
         assert msg1 is not None
         assert msg2 is None  # Cooled down
+
+    def test_cooldown_uses_quaid_now(self, tmp_path, monkeypatch):
+        from core.compatibility import notify_on_use_if_degraded
+
+        write_circuit_breaker(tmp_path, CircuitBreakerState(status=DEGRADED))
+        monkeypatch.setenv("QUAID_NOW", "2026-03-11T05:00:00Z")
+        assert notify_on_use_if_degraded(tmp_path) is not None
+        raw = json.loads((tmp_path / "compat-last-notified.json").read_text(encoding="utf-8"))
+        assert raw["timestamp"] == datetime(2026, 3, 11, 5, 0, 0, tzinfo=timezone.utc).timestamp()
+
+        monkeypatch.setenv("QUAID_NOW", "2026-03-11T05:29:59Z")
+        assert notify_on_use_if_degraded(tmp_path) is None
+
+        monkeypatch.setenv("QUAID_NOW", "2026-03-11T05:30:01Z")
+        assert notify_on_use_if_degraded(tmp_path) is not None
 
     def test_null_cooldown_file_does_not_crash(self, tmp_path):
         from core.compatibility import notify_on_use_if_degraded

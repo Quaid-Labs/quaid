@@ -71,8 +71,12 @@ def _workspace_review_timeout_seconds(cfg: Any, default_seconds: int = 120) -> f
         cfg_seconds = float(getattr(getattr(cfg, "docs", object()), "update_timeout_seconds", default_seconds))
         if cfg_seconds > 0:
             return cfg_seconds
-    except (TypeError, ValueError):
-        pass
+    except (TypeError, ValueError) as exc:
+        logger.warning(
+            "Invalid docs.update_timeout_seconds=%r; using default: %s",
+            getattr(getattr(cfg, "docs", object()), "update_timeout_seconds", None),
+            exc,
+        )
     return float(default_seconds)
 
 def _backup_dir() -> Path:

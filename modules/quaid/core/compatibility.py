@@ -199,7 +199,7 @@ def write_circuit_breaker(data_dir: Path, state: CircuitBreakerState) -> None:
         "status": state.status,
         "reason": state.reason,
         "set_by": state.set_by,
-        "set_at": state.set_at or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "set_at": state.set_at or _now_datetime().isoformat(),
         "host_version": state.host_version,
         "message": state.message,
         "untested": state.untested,
@@ -214,7 +214,7 @@ def clear_circuit_breaker(data_dir: Path) -> None:
         status=NORMAL,
         reason="Compatibility check passed",
         set_by="version_watcher",
-        set_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        set_at=_now_datetime().isoformat(),
     ))
 
 
@@ -617,7 +617,7 @@ class VersionWatcher:
 
         # Record that we notified
         try:
-            _atomic_write_json(update_cache, {"version": latest, "notified_at": time.time()})
+            _atomic_write_json(update_cache, {"version": latest, "notified_at": _now_datetime().timestamp()})
         except OSError:
             pass
 
@@ -649,7 +649,10 @@ class VersionWatcher:
         try:
             from lib.adapter import get_adapter
             adapter = get_adapter()
-        except Exception:
+        except Exception as exc:
+            logger.warning("Failed to get adapter for compatibility state notification: %s", exc)
+            if _fail_hard_enabled():
+                raise
             return  # Can't notify if adapter is unavailable
 
         if new_state.status in (DEGRADED, SAFE_MODE):
@@ -703,7 +706,7 @@ def notify_on_use_if_degraded(data_dir: Path) -> Optional[str]:
 
     # Check cooldown — don't repeat within the same session (~30 min window)
     cooldown_path = data_dir / NOTIFICATION_COOLDOWN_FILE
-    now = time.time()
+    now = _now_datetime().timestamp()
     try:
         if cooldown_path.exists():
             raw = json.loads(cooldown_path.read_text())
