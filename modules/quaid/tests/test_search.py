@@ -175,6 +175,31 @@ class TestSearchFTS:
             assert out == fallback_result
             assert fallback_spy.call_count == 1
 
+    def test_fts_fallback_uses_script_aware_high_signal_terms(self, tmp_path):
+        with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+            graph = _make_graph_with_data(tmp_path)
+
+            class _BrokenConn:
+                def execute(self, *_args, **_kwargs):
+                    raise sqlite3.OperationalError("fts unavailable")
+
+            class _BrokenCtx:
+                def __enter__(self):
+                    return _BrokenConn()
+
+                def __exit__(self, exc_type, exc, tb):
+                    return False
+
+            with patch.object(graph, "_get_conn", return_value=_BrokenCtx()), \
+                 patch("datastore.memorydb.memory_graph._is_fail_hard_mode", return_value=False), \
+                 patch.object(graph, "_search_fts_fallback", return_value=[]) as fallback_spy:
+                graph.search_fts("美玲 玲 Noor archive", limit=5)
+
+            words, high_signal_words, common_words = fallback_spy.call_args.args[:3]
+            assert words == ["美玲", "Noor", "archive"]
+            assert high_signal_words == ["美玲", "Noor"]
+            assert common_words == ["archive"]
+
     def test_fts_query_error_raises_when_fail_hard_enabled(self, tmp_path):
         with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             graph = _make_graph_with_data(tmp_path)

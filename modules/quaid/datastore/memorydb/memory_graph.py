@@ -240,6 +240,15 @@ def _recall_query_term_min_len(term: str) -> int:
         return 2
     return 3
 
+
+def _is_fts_fallback_high_signal_token(term: str) -> bool:
+    clean = str(term or "").strip()
+    if not clean:
+        return False
+    if clean[:1].isupper() and not clean.isupper():
+        return True
+    return _has_compact_unicode_char(clean) and len(clean) >= _recall_query_term_min_len(clean)
+
 # Optional imports for LLM-verified dedup (graceful degradation if unavailable)
 try:
     from lib.llm_clients import call_fast_reasoning, parse_json_response
@@ -2704,8 +2713,11 @@ class MemoryGraph:
                     ) from e
                 # FTS5 index may not be rebuilt yet; fall back to LIKE
                 raw_words = re.sub(r'[^\w\s]', '', query).split()
-                words = [w for w in raw_words if len(w) >= 3 and w.lower() not in _LIB_STOPWORDS]
-                proper_nouns = [w for w in words if w[0].isupper() and not w.isupper()]
+                words = [
+                    w for w in raw_words
+                    if len(w) >= _recall_query_term_min_len(w) and w.lower() not in _LIB_STOPWORDS
+                ]
+                proper_nouns = [w for w in words if _is_fts_fallback_high_signal_token(w)]
                 common_words = [w for w in words if w not in proper_nouns]
                 return self._search_fts_fallback(words, proper_nouns, common_words, limit, owner_id=owner_id)
 
