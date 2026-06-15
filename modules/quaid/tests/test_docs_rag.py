@@ -899,7 +899,7 @@ class TestDocsSearchFiltering:
     @patch("datastore.docsdb.rag._lib_get_embedding", return_value=[0.1, 0.2, 0.3])
     @patch("datastore.docsdb.rag._lib_unpack_embedding", return_value=[0.1, 0.2, 0.3])
     @patch("datastore.docsdb.rag._lib_cosine_similarity", return_value=0.95)
-    def test_search_docs_filters_project_log_lines_by_date_and_preserves_regular_docs(
+    def test_search_docs_filters_project_log_lines_by_date_and_excludes_undated_docs(
         self,
         _sim,
         _unpack,
@@ -936,6 +936,17 @@ class TestDocsSearchFiltering:
                     b"e",
                 ),
             )
+            db.execute(
+                "INSERT INTO doc_chunks (id, source_file, chunk_index, content, section_header, embedding) VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    "examples:0",
+                    "/tmp/workspace/projects/quaid/examples.md",
+                    0,
+                    "Current recall examples should not answer dated docs recall.",
+                    "# Examples",
+                    b"e",
+                ),
+            )
             db.commit()
         finally:
             db.close()
@@ -943,18 +954,16 @@ class TestDocsSearchFiltering:
         results = rag.search_docs(
             "recall planner",
             limit=10,
-            docs=["PROJECT.log", "PROJECT.md"],
+            docs=["PROJECT.log", "PROJECT.md", "examples.md"],
             date_from="2026-03-01",
             date_to="2026-03-10",
         )
 
         by_source = {Path(result["source"]).name: result for result in results}
-        assert set(by_source) == {"PROJECT.log", "PROJECT.md"}
+        assert set(by_source) == {"PROJECT.log"}
         assert "Added legacy recall mode" in by_source["PROJECT.log"]["content"]
         assert "Switched recall planner to hybrid" not in by_source["PROJECT.log"]["content"]
         assert by_source["PROJECT.log"]["source_date"] == "2026-03-05"
-        assert "Current recall planner summary" in by_source["PROJECT.md"]["content"]
-        assert by_source["PROJECT.md"]["source_date"] is None
 
     @patch("datastore.docsdb.rag._lib_get_embedding", return_value=[0.1, 0.2, 0.3])
     @patch("datastore.docsdb.rag._lib_unpack_embedding", return_value=[0.1, 0.2, 0.3])
