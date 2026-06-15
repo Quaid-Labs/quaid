@@ -359,3 +359,34 @@ class TestSharedProjectLock:
         age = _read_checkpoint_age(tmp_path, "proj")
         assert age is not None
         assert age < 2.0
+
+    def test_checkpoint_age_honors_quaid_now(self, tmp_path, monkeypatch):
+        from lib.shared_project_lock import write_checkpoint, _read_checkpoint_age, _checkpoint_path
+
+        monkeypatch.setenv("QUAID_NOW", "2026-03-11T05:00:00Z")
+        write_checkpoint(tmp_path, "proj")
+        cp = _checkpoint_path(tmp_path, "proj")
+        assert cp.read_text(encoding="utf-8").strip() == "1773205200.0"
+
+        monkeypatch.setenv("QUAID_NOW", "2026-03-11T05:30:00Z")
+        age = _read_checkpoint_age(tmp_path, "proj")
+        assert age == 1800.0
+
+    def test_checkpoint_write_rejects_malformed_quaid_now(self, tmp_path, monkeypatch):
+        from lib.shared_project_lock import write_checkpoint, _checkpoint_path
+
+        monkeypatch.setenv("QUAID_NOW", "not-a-date")
+        with pytest.raises(ValueError, match="Invalid QUAID_NOW"):
+            write_checkpoint(tmp_path, "proj")
+        assert not _checkpoint_path(tmp_path, "proj").exists()
+
+    def test_checkpoint_age_rejects_malformed_quaid_now(self, tmp_path, monkeypatch):
+        from lib.shared_project_lock import _read_checkpoint_age, _checkpoint_path
+
+        cp = _checkpoint_path(tmp_path, "proj")
+        cp.parent.mkdir(parents=True, exist_ok=True)
+        cp.write_text("1773205200.0\n", encoding="utf-8")
+        monkeypatch.setenv("QUAID_NOW", "not-a-date")
+
+        with pytest.raises(ValueError, match="Invalid QUAID_NOW"):
+            _read_checkpoint_age(tmp_path, "proj")

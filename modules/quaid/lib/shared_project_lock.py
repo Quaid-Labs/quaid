@@ -18,8 +18,10 @@ Usage:
 
 import fcntl
 import logging
+import os
 import time
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Generator, Optional
 
@@ -34,6 +36,21 @@ def _checkpoint_path(quaid_home: Path, project_name: str) -> Path:
     return quaid_home / "shared" / "projects" / project_name / ".doc-update-checkpoint"
 
 
+def _now_time() -> float:
+    raw = os.environ.get("QUAID_NOW", "").strip()
+    if raw:
+        try:
+            value = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            raise ValueError(f"Invalid QUAID_NOW={raw!r}") from None
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        else:
+            value = value.astimezone(timezone.utc)
+        return value.timestamp()
+    return time.time()
+
+
 def _read_checkpoint_age(quaid_home: Path, project_name: str) -> Optional[float]:
     """Return seconds since last successful doc update, or None if never run."""
     cp = _checkpoint_path(quaid_home, project_name)
@@ -41,17 +58,18 @@ def _read_checkpoint_age(quaid_home: Path, project_name: str) -> Optional[float]
         return None
     try:
         ts = float(cp.read_text().strip())
-        return time.time() - ts
     except (ValueError, OSError):
         return None
+    return _now_time() - ts
 
 
 def write_checkpoint(quaid_home: Path, project_name: str) -> None:
     """Write a fresh checkpoint timestamp after a successful doc update."""
     cp = _checkpoint_path(quaid_home, project_name)
+    timestamp = _now_time()
     try:
         cp.parent.mkdir(parents=True, exist_ok=True)
-        cp.write_text(str(time.time()) + "\n")
+        cp.write_text(str(timestamp) + "\n")
     except OSError as e:
         logger.warning("write_checkpoint failed for %s: %s", project_name, e)
 
