@@ -30,6 +30,17 @@ def test_docs_lexical_terms_support_unicode_tokens():
     assert _docs_normalized_lexical_text("PROJECT.md\nＡＰＰ 美玲 云门") == "project.md app 美玲 云门"
 
 
+def test_docs_lexical_terms_keep_single_compact_unicode_anchor():
+    from datastore.docsdb.rag import _docs_query_terms, _project_log_line_query_score, _project_log_query_terms
+
+    terms = _docs_query_terms("猫 é")
+
+    assert "猫" in terms
+    assert "é" not in terms
+    assert _project_log_query_terms("猫") == ["猫"]
+    assert _project_log_line_query_score("- [2026-03-05T23:59:59] 猫 rollout finished", ["猫"]) == 1
+
+
 def test_docs_rank_score_uses_unicode_normalized_terms():
     from datastore.docsdb.rag import _docs_query_terms, _docs_rank_score
 
@@ -52,6 +63,30 @@ def test_docs_rank_score_uses_unicode_normalized_terms():
     )
 
     assert full_match > partial_match
+
+
+def test_docs_rank_score_uses_single_compact_unicode_term():
+    from datastore.docsdb.rag import _docs_query_terms, _docs_rank_score
+
+    query_terms = _docs_query_terms("猫")
+    matching = _docs_rank_score(
+        query_terms,
+        "猫",
+        "docs/pet.md",
+        "## 猫",
+        "猫 configuration notes",
+        0.40,
+    )
+    missing = _docs_rank_score(
+        query_terms,
+        "猫",
+        "docs/pet.md",
+        "## 犬",
+        "犬 configuration notes",
+        0.40,
+    )
+
+    assert matching > missing
 
 
 def test_docs_scaffold_penalty_requires_managed_project_marker():

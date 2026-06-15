@@ -316,6 +316,22 @@ def _docs_lexical_tokens(value: str) -> List[str]:
     return re.findall(r"[\w./-]+", normalized, flags=re.UNICODE)
 
 
+def _docs_has_compact_unicode_char(term: str) -> bool:
+    for ch in str(term or ""):
+        name = unicodedata.name(ch, "")
+        if name.startswith(("CJK ", "HIRAGANA", "KATAKANA", "HANGUL")):
+            return True
+    return False
+
+
+def _docs_term_min_len(term: str) -> int:
+    if not term:
+        return 3
+    if term.isascii():
+        return 3
+    return 1 if _docs_has_compact_unicode_char(term) else 2
+
+
 def _docs_query_terms(query: str) -> List[str]:
     """Extract lightweight lexical terms for doc reranking."""
     raw_terms = _docs_lexical_tokens(query)
@@ -327,8 +343,7 @@ def _docs_query_terms(query: str) -> List[str]:
     out: List[str] = []
     for term in raw_terms:
         t = term.strip().strip("/.")
-        min_len = 2 if t and not t.isascii() else 3
-        if len(t) < min_len or t in stop:
+        if len(t) < _docs_term_min_len(t) or t in stop:
             continue
         if t not in out:
             out.append(t)
@@ -476,7 +491,11 @@ def _docs_rank_score(query_terms: List[str], query: str, source_file: str, secti
     score += min(header_hits, 3) * 0.06
     score += min(content_hits, 4) * 0.025
 
-    informative_terms = [term for term in query_terms if len(term) >= (2 if term and not term.isascii() else 4)]
+    informative_terms = [
+        term
+        for term in query_terms
+        if len(term) >= max(_docs_term_min_len(term), 4 if term.isascii() else 1)
+    ]
     if informative_terms:
         matched_terms = sum(
             1 for term in informative_terms if term in content_text or term in header_text or term in path_text
@@ -583,8 +602,7 @@ def _project_log_query_terms(query: str) -> List[str]:
     out: List[str] = []
     for raw in _docs_lexical_tokens(query):
         term = raw.strip().strip("/.")
-        min_len = 2 if term and not term.isascii() else 3
-        if len(term) < min_len or term in out:
+        if len(term) < _docs_term_min_len(term) or term in out:
             continue
         out.append(term)
     return out
