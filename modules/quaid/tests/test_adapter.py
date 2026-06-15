@@ -27,6 +27,7 @@ from lib.adapter import (
     _project_instance_binding_path,
     _read_project_instance_binding,
     _read_env_file,
+    _bootstrap_instance_env,
 )
 from lib.instance import _legacy_instance_slug_from_project_dir, instance_slug_from_project_dir
 from lib.providers import (
@@ -317,6 +318,82 @@ class TestOwnerResolution:
         )
         reload_config()
         assert get_owner_id() == "owner-user"
+
+    def test_get_owner_id_logs_config_failure_before_default(self, caplog):
+        caplog.set_level("WARNING")
+
+        with patch("config.get_config", side_effect=RuntimeError("config boom")):
+            assert get_owner_id() == "default"
+
+        assert "Owner id config lookup failed; defaulting to 'default': config boom" in caplog.text
+
+
+class TestBaseAdapterConfig:
+    def test_get_capability_raises_config_failure_when_failhard(self):
+        adapter = CodexAdapter()
+
+        with patch("config.get_config", side_effect=RuntimeError("config boom")), \
+             patch("lib.adapter.is_fail_hard_enabled", return_value=True):
+            with pytest.raises(RuntimeError, match="config boom"):
+                adapter.get_capability("turn_scoped_provider_notices", False)
+
+    def test_get_capability_warns_and_uses_adapter_default_when_fail_open(self, caplog):
+        adapter = CodexAdapter()
+        caplog.set_level("WARNING")
+
+        with patch("config.get_config", side_effect=RuntimeError("config boom")), \
+             patch("lib.adapter.is_fail_hard_enabled", return_value=False):
+            assert adapter.get_capability("turn_scoped_provider_notices", False) is True
+
+        assert "Failed to read adapter capability 'turn_scoped_provider_notices' from config: config boom" in caplog.text
+
+    def test_installer_install_state_logs_instance_scan_failure(self, tmp_path, monkeypatch, caplog):
+        instances_dir = tmp_path / "instances"
+        instances_dir.mkdir()
+
+        def _raise_iterdir(self):
+            if self == instances_dir:
+                raise OSError("scan boom")
+            return iter(())
+
+        monkeypatch.setattr(Path, "iterdir", _raise_iterdir)
+        caplog.set_level("WARNING")
+
+        state = StandaloneAdapter.installer_install_state(str(tmp_path))
+
+        assert state["status"] == "can_install"
+        assert "Installer state scan failed for standalone" in caplog.text
+        assert "scan boom" in caplog.text
+
+    def test_bootstrap_instance_env_logs_bad_claude_settings_and_falls_back(self, tmp_path, monkeypatch, caplog):
+        project_dir = tmp_path / "project"
+        settings = project_dir / ".claude" / "settings.json"
+        settings.parent.mkdir(parents=True)
+        settings.write_text("{bad json", encoding="utf-8")
+
+        adapter = MagicMock()
+        adapter.get_instance_name.return_value = "main"
+        adapter.agent_id_prefix.return_value = "fake"
+        monkeypatch.delenv("QUAID_INSTANCE", raising=False)
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(project_dir))
+        caplog.set_level("DEBUG")
+
+        _bootstrap_instance_env(adapter)
+
+        assert os.environ["QUAID_INSTANCE"] == "fake-main"
+        assert "_bootstrap_instance_env: failed reading Claude settings.json" in caplog.text
+
+    def test_bootstrap_instance_env_logs_get_instance_name_failure(self, monkeypatch, caplog):
+        adapter = MagicMock()
+        adapter.get_instance_name.side_effect = RuntimeError("name boom")
+        monkeypatch.delenv("QUAID_INSTANCE", raising=False)
+        monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+        caplog.set_level("DEBUG")
+
+        _bootstrap_instance_env(adapter)
+
+        assert "QUAID_INSTANCE" not in os.environ
+        assert "_bootstrap_instance_env: adapter.get_instance_name failed: name boom" in caplog.text
 
 
 # ---------------------------------------------------------------------------

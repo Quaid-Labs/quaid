@@ -35,8 +35,8 @@ def _trace_m15(event: str, **fields) -> None:
         from lib.m15_trace import trace_m15
 
         trace_m15(event, **fields)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("_trace_m15 failed for %s: %s", event, exc, exc_info=True)
 
 
 def _env_quaid_home() -> Path | None:

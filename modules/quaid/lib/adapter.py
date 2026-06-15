@@ -676,8 +676,10 @@ class QuaidAdapter(abc.ABC):
             capabilities = getattr(adapter_cfg, "capabilities", None)
             if isinstance(capabilities, dict) and capability_key in capabilities:
                 return capabilities.get(capability_key)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Failed to read adapter capability %r from config: %s", capability_key, exc)
+            if is_fail_hard_enabled():
+                raise
         configured = self.get_adapter_config(capability_key)
         return default if configured is None else configured
 
@@ -860,8 +862,8 @@ class QuaidAdapter(abc.ABC):
                             "status": "already_installed",
                             "reason": f"{adapter_id} is already installed in this workspace.",
                         }
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Installer state scan failed for %s in %s: %s", adapter_id or cls.__name__, instances_dir, exc)
 
         candidates = [
             str(cmd).strip()
@@ -1306,7 +1308,8 @@ def get_owner_id(override: Optional[str] = None) -> str:
     try:
         from config import get_config
         return get_config().users.default_owner
-    except Exception:
+    except Exception as exc:
+        logger.warning("Owner id config lookup failed; defaulting to 'default': %s", exc)
         return "default"
 
 
@@ -2212,8 +2215,8 @@ def _bootstrap_instance_env(adapter: QuaidAdapter) -> None:
                 if _qi:
                     os.environ["QUAID_INSTANCE"] = _qi
                     return
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("_bootstrap_instance_env: failed reading Claude settings.json: %s", exc)
     try:
         name = adapter.get_instance_name()
         prefix = adapter.agent_id_prefix()
@@ -2221,8 +2224,9 @@ def _bootstrap_instance_env(adapter: QuaidAdapter) -> None:
         # Validate before setting — guard against empty/invalid slugs
         if instance_id and instance_id != prefix:
             os.environ["QUAID_INSTANCE"] = instance_id
-    except Exception:
-        pass  # Never block adapter init — instance_id() will raise later if needed
+    except Exception as exc:
+        logger.warning("_bootstrap_instance_env: adapter.get_instance_name failed: %s", exc)
+        # Never block adapter init — instance_id() will raise later if needed
 
 
 def set_adapter(adapter: QuaidAdapter) -> None:

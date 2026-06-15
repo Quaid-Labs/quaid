@@ -56,6 +56,17 @@ def test_get_llm_provider_preserves_original_error_when_notify_fails(caplog):
     assert "Failed queuing provider access error as deferred notice" in caplog.text
 
 
+def test_trace_m15_logs_diagnostic_failure(caplog):
+    from lib import runtime_context
+
+    caplog.set_level("DEBUG")
+
+    with patch("lib.m15_trace.trace_m15", side_effect=RuntimeError("trace boom")):
+        runtime_context._trace_m15("runtime.test")
+
+    assert "_trace_m15 failed for runtime.test: trace boom" in caplog.text
+
+
 def test_fail_policy_logs_when_config_load_fails(caplog, tmp_path, monkeypatch):
     from lib.fail_policy import is_fail_hard_enabled
 
