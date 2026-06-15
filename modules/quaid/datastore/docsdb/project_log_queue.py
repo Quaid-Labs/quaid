@@ -14,6 +14,7 @@ import re
 import tempfile
 import threading
 import time
+import unicodedata
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -24,7 +25,6 @@ from lib.fail_policy import is_fail_hard_enabled
 logger = logging.getLogger(__name__)
 _LOCK_STATE = threading.local()
 
-_PROJECT_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 _ENTRY_ID_RE = re.compile(r"^[0-9]+-[0-9]+-[a-f0-9-]+$")
 
 
@@ -106,8 +106,14 @@ def _assert_project_queue_lock_held(project: str) -> str:
 
 
 def _validate_project(project: str) -> str:
-    name = str(project or "").strip()
-    if not _PROJECT_RE.fullmatch(name):
+    name = unicodedata.normalize("NFKC", str(project or "")).casefold().strip()
+    if not name:
+        raise ValueError(f"Invalid project name for project-log queue: {project!r}")
+    first, rest = name[0], name[1:]
+    if not first.isalnum() or any(
+        not (ch.isalnum() or unicodedata.category(ch).startswith("M") or ch == "-")
+        for ch in rest
+    ):
         raise ValueError(f"Invalid project name for project-log queue: {project!r}")
     return name
 

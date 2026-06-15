@@ -1002,6 +1002,29 @@ def test_project_log_queue_requires_lock_for_drain_mark_cleanup(project_env):
     assert project_log_queue.pending_project_log_count("demo") == 0
 
 
+def test_project_log_queue_accepts_unicode_project_names(project_env):
+    _tmp_path, _src, _entry = project_env
+    from datastore.docsdb import project_log_queue
+
+    project = "mañana-app"
+    decomposed_project = "man\u0303ana-app"
+
+    metrics = project_log_queue.enqueue_project_logs(
+        {decomposed_project: ["Queued unicode project log milestone"]},
+        trigger="Reset",
+    )
+
+    assert metrics["entries_written"] == 1
+    assert project_log_queue.pending_project_log_count(project) == 1
+    with project_log_queue.project_queue_lock(project):
+        items = project_log_queue.drain_project_log_queue(project)
+        project_log_queue.mark_project_log_queue_committed(project, [items[0]["id"]])
+
+    assert items[0]["project"] == project
+    assert items[0]["entries"] == [{"text": "Queued unicode project log milestone"}]
+    assert project_log_queue.pending_project_log_count(project) == 0
+
+
 def test_project_log_queue_failed_flock_does_not_authorize_drain(project_env, monkeypatch):
     _tmp_path, _src, _entry = project_env
     from datastore.docsdb import project_log_queue
