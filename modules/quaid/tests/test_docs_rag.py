@@ -90,6 +90,30 @@ def test_docs_rank_score_uses_single_compact_unicode_term():
     assert matching > missing
 
 
+def test_docs_rank_score_penalizes_generic_overview_without_english_impl_terms():
+    from datastore.docsdb.rag import _docs_query_terms, _docs_rank_score
+
+    query_terms = _docs_query_terms("猫 実装")
+    overview = _docs_rank_score(
+        query_terms,
+        "猫 実装",
+        "/tmp/workspace/projects/demo/PROJECT.md",
+        "# Project: Demo",
+        "猫 実装",
+        0.60,
+    )
+    specific = _docs_rank_score(
+        query_terms,
+        "猫 実装",
+        "/tmp/workspace/projects/demo/src/details.md",
+        "# Notes",
+        "猫 実装",
+        0.60,
+    )
+
+    assert specific > overview
+
+
 def test_docs_scaffold_penalty_requires_managed_project_marker():
     from datastore.docsdb.rag import _docs_query_terms, _docs_scaffold_penalty
     from lib.project_templates import PROJECT_HOME_BEGIN

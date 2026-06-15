@@ -354,25 +354,16 @@ def _docs_source_penalty(query_terms: List[str], source_file: str) -> float:
     """Return a small path-based penalty for low-signal doc sources.
 
     Keep the penalty query-aware:
-    - fixture/sample/seed/example data should lose to real implementation/docs
-      unless the query explicitly asks about seeds/examples/etc.
-    - archived logs should lose to implementation/docs unless the query is
-      explicitly historical.
+    - fixture/sample/seed/example data should lose to real source docs unless
+      the query names that path/source marker.
     """
     path_lower = str(source_file or "").lower()
     path_parts = {part for part in Path(path_lower).parts if part}
     file_name = Path(path_lower).name
     penalty = 0.0
 
-    asks_for_fixture = any(
-        term in {"seed", "seeds", "fixture", "fixtures", "sample", "samples", "example", "examples", "mock", "mocks"}
-        for term in query_terms
-    )
-    asks_for_history = any(
-        term in {"history", "historical", "archive", "archived", "changelog", "timeline", "past"}
-        for term in query_terms
-    )
-
+    query_term_set = {str(term or "").strip().lower() for term in query_terms if str(term or "").strip()}
+    fixture_markers = {"seed", "seeds", "fixture", "fixtures", "sample", "samples", "example", "examples", "mock", "mocks"}
     fixture_signals = (
         "seed" in path_parts
         or "seeds" in path_parts
@@ -386,12 +377,15 @@ def _docs_source_penalty(query_terms: List[str], source_file: str) -> float:
         or "mock" in path_parts
         or file_name.startswith(("sample-", "seed-", "fixture-", "mock-", "example-"))
     )
-    if fixture_signals and not asks_for_fixture:
+    query_names_source_marker = bool(
+        query_term_set & path_parts & fixture_markers
+        or any(
+            marker in query_term_set and file_name.startswith(f"{marker.rstrip('s')}-")
+            for marker in fixture_markers
+        )
+    )
+    if fixture_signals and not query_names_source_marker:
         penalty += 0.24
-
-    is_history_log = "/log/" in path_lower or file_name.endswith(".log")
-    if is_history_log and not asks_for_history:
-        penalty += 0.10
 
     return penalty
 
@@ -466,8 +460,9 @@ def _docs_is_generic_overview_header(header_lower: str) -> bool:
 def _docs_rank_score(query_terms: List[str], query: str, source_file: str, section_header: Optional[str], content: str, similarity: float) -> float:
     """Blend semantic similarity with lightweight lexical/path features.
 
-    This keeps semantic search as the base signal, but prefers implementation
-    files/sections when the query contains concrete code or test vocabulary.
+    This keeps semantic search as the base signal, but prefers specific source
+    chunks over generic overview/scaffold chunks when the query has concrete
+    anchors.
     """
     path_text = _docs_normalized_lexical_text(source_file)
     file_name = Path(source_file or "").name.lower()
@@ -509,19 +504,16 @@ def _docs_rank_score(query_terms: List[str], query: str, source_file: str, secti
     # Cap positive evidence before penalties so low-quality source penalties survive.
     score = min(1.0, score)
 
-    implementation_terms = {
-        "test", "tests", "testing", "auth", "error", "errors", "validation",
-        "middleware", "schema", "graphql", "resolver", "resolvers", "deploy",
-        "deployment", "docker", "container", "database", "sql", "migration",
-        "endpoint", "endpoints", "api", "layout", "frontend", "backend",
-        "css", "rate", "limiting", "limit",
-    }
-    wants_impl = any(term in implementation_terms for term in query_terms)
-    if wants_impl and file_name in {"project.md", "readme.md", "tools.md", "agents.md"}:
+    wants_specific_source = len(informative_terms) >= 2
+    if (
+        wants_specific_source
+        and file_name in {"project.md", "readme.md", "tools.md", "agents.md"}
+        and _docs_is_generic_overview_header(header_lower)
+    ):
         score -= 0.12
-    if wants_impl and _docs_is_generic_overview_header(header_lower):
+    if wants_specific_source and _docs_is_generic_overview_header(header_lower):
         score -= 0.06
-    if wants_impl:
+    if wants_specific_source:
         score -= _docs_source_penalty(query_terms, source_file)
     score -= _docs_scaffold_penalty(query_terms, source_file, content, content_hits)
 
