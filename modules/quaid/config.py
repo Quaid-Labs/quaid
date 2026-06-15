@@ -378,6 +378,7 @@ class RagConfig:
     docs_dir: str = "docs"
     chunk_max_tokens: int = 800
     chunk_overlap_tokens: int = 100
+    max_chunks_per_document: int = 5000
     max_results: int = 5
     search_limit: int = 5
     min_similarity: float = 0.3
@@ -1531,6 +1532,7 @@ def _load_config_inner() -> MemoryConfig:
         docs_dir=rag_data.get('docs_dir', 'docs'),
         chunk_max_tokens=rag_data.get('chunk_max_tokens', 800),
         chunk_overlap_tokens=rag_data.get('chunk_overlap_tokens', 100),
+        max_chunks_per_document=rag_data.get('max_chunks_per_document', 5000),
         max_results=rag_data.get('max_results', 5),
         search_limit=rag_data.get('search_limit', 5),
         min_similarity=rag_data.get('min_similarity', 0.3)

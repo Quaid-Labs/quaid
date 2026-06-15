@@ -7,7 +7,7 @@ Do not edit manually. Regenerate with:
 python3 modules/quaid/scripts/generate-config-reference.py
 ```
 
-Source hash: `fbfe92f55152`
+Source hash: `6bc0b77f58aa`
 
 Notes:
 - Keys are documented in `snake_case` (loader also accepts camelCase aliases).
@@ -240,6 +240,7 @@ Notes:
 | `rag.docs_dir` | `str` | `"docs"` |  |
 | `rag.chunk_max_tokens` | `int` | `800` |  |
 | `rag.chunk_overlap_tokens` | `int` | `100` |  |
+| `rag.max_chunks_per_document` | `int` | `5000` |  |
 | `rag.max_results` | `int` | `5` |  |
 | `rag.search_limit` | `int` | `5` |  |
 | `rag.min_similarity` | `float` | `0.3` |  |

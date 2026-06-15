@@ -190,6 +190,7 @@ Returns the number of chunks created (0 on any failure).
 - **Header splits:** Any line matching `^(#{1,3})\s+(.+)` (H1, H2, H3) triggers a chunk boundary. The header line starts the new chunk.
 - **Token estimation:** `estimate_tokens(text)` uses `len(text) // 4` (4 chars ≈ 1 token). Not exact, but consistent.
 - **Max chunk size:** Configurable via `config.rag.chunk_max_tokens`. Default: **800 tokens** (3200 chars).
+- **Max chunks per document:** Configurable via `config.rag.max_chunks_per_document`. Default: **5000 chunks**. If exceeded, indexing aborts before embedding or replacing old chunks.
 - **Overflow splitting:** When a chunk exceeds `max_tokens`, `_find_paragraph_break()` searches backward for an empty line. If no empty line is found, splits at 75% of the way through. The remainder starts a new chunk with a small overlap.
 - **Overlap:** Configurable via `config.rag.chunk_overlap_tokens`. Default: **100 tokens**. Overlap is computed as `chunk_overlap_tokens // 10` lines.
 - **Section header extraction:** `_extract_section_header(chunk_text)` scans lines for the first `#{1,3}` header and stores it as `section_header` in `doc_chunks`. Used in search result display.
@@ -458,6 +459,7 @@ quaid docs changelog                                 # Recent doc update history
 | `rag.docs_dir` | Workspace-relative path to docs directory (Pass 1 scan root) |
 | `rag.chunk_max_tokens` | Max tokens per chunk (default: 800) |
 | `rag.chunk_overlap_tokens` | Overlap tokens at chunk splits (default: 100) |
+| `rag.max_chunks_per_document` | Max chunks indexed from one document (default: 5000) |
 | `rag.search_limit` | Default `--limit` for `docs search` (default: 5) |
 | `rag.min_similarity` | Default minimum similarity threshold (default: 0.3) |
 | `ollama.url` | Ollama server URL |

@@ -31,6 +31,7 @@ from lib.project_templates import REGISTRY_MANAGED_MARKERS
 from lib.runtime_context import get_visible_quaid_home, get_workspace_dir
 
 logger = logging.getLogger(__name__)
+_DEFAULT_MAX_CHUNKS_PER_DOCUMENT = 5000
 
 # Configuration — resolved from config system
 def _default_db_path() -> Path:
@@ -264,6 +265,36 @@ def _chunk_overlap_tokens() -> int:
             raise RuntimeError(f"Invalid docs RAG chunk_overlap_tokens value: {raw!r}")
         logger.warning("Negative docs RAG chunk_overlap_tokens=%r; using default 100", raw)
         return 100
+    return value
+
+
+def _max_chunks_per_document() -> int:
+    cfg = _rag_config()
+    raw = (
+        getattr(cfg, "max_chunks_per_document", _DEFAULT_MAX_CHUNKS_PER_DOCUMENT)
+        if cfg
+        else _DEFAULT_MAX_CHUNKS_PER_DOCUMENT
+    )
+    try:
+        value = int(raw)
+    except (TypeError, ValueError) as exc:
+        if is_fail_hard_enabled():
+            raise RuntimeError(f"Invalid docs RAG max_chunks_per_document value: {raw!r}") from exc
+        logger.warning(
+            "Invalid docs RAG max_chunks_per_document=%r; using default %s",
+            raw,
+            _DEFAULT_MAX_CHUNKS_PER_DOCUMENT,
+        )
+        return _DEFAULT_MAX_CHUNKS_PER_DOCUMENT
+    if value <= 0:
+        if is_fail_hard_enabled():
+            raise RuntimeError(f"Invalid docs RAG max_chunks_per_document value: {raw!r}")
+        logger.warning(
+            "Non-positive docs RAG max_chunks_per_document=%r; using default %s",
+            raw,
+            _DEFAULT_MAX_CHUNKS_PER_DOCUMENT,
+        )
+        return _DEFAULT_MAX_CHUNKS_PER_DOCUMENT
     return value
 
 
@@ -1217,6 +1248,17 @@ class DocsRAG:
             chunk_texts = self.chunk_markdown(content)
         if not chunk_texts:
             logger.info("No chunks generated for %s", file_path)
+            return 0
+        max_chunks = _max_chunks_per_document()
+        if len(chunk_texts) > max_chunks:
+            message = (
+                f"Docs RAG generated {len(chunk_texts)} chunks for {canonical_file_path}, "
+                f"exceeding max_chunks_per_document={max_chunks}; "
+                "aborting reindex to preserve old chunks"
+            )
+            if is_fail_hard_enabled():
+                raise RuntimeError(message)
+            logger.warning(message)
             return 0
 
         # Collect all embeddings BEFORE deleting old chunks.

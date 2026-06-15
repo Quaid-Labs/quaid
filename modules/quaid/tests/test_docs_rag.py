@@ -294,6 +294,25 @@ Content B.
         assert rag_mod._chunk_overlap_tokens() == 100
         assert "Invalid docs RAG chunk_overlap_tokens" in caplog.text
 
+    def test_max_chunks_per_document_rejects_invalid_failhard(self, monkeypatch):
+        import datastore.docsdb.rag as rag_mod
+
+        monkeypatch.setattr(rag_mod, "_rag_config", lambda: SimpleNamespace(max_chunks_per_document="bad"))
+        monkeypatch.setattr(rag_mod, "is_fail_hard_enabled", lambda: True)
+
+        with pytest.raises(RuntimeError, match="max_chunks_per_document"):
+            rag_mod._max_chunks_per_document()
+
+    def test_max_chunks_per_document_non_positive_falls_back_when_fail_open(self, monkeypatch, caplog):
+        import datastore.docsdb.rag as rag_mod
+
+        monkeypatch.setattr(rag_mod, "_rag_config", lambda: SimpleNamespace(max_chunks_per_document=0))
+        monkeypatch.setattr(rag_mod, "is_fail_hard_enabled", lambda: False)
+
+        caplog.set_level("WARNING")
+        assert rag_mod._max_chunks_per_document() == 5000
+        assert "Non-positive docs RAG max_chunks_per_document" in caplog.text
+
 
 # ---------------------------------------------------------------------------
 # needs_reindex
@@ -648,6 +667,50 @@ class TestIndexDocument:
             ).fetchall()
 
         assert rows == [("old:0", "old chunk")]
+
+    def test_preserves_existing_chunks_when_chunk_limit_exceeded(self, tmp_path, caplog):
+        rag = _make_rag(tmp_path)
+        test_file = tmp_path / "guide.md"
+        test_file.write_text("# Guide\nBody.", encoding="utf-8")
+
+        with sqlite3.connect(rag.db_path) as conn:
+            conn.execute(
+                "INSERT INTO doc_chunks (id, source_file, chunk_index, content, section_header, embedding) VALUES (?, ?, ?, ?, ?, ?)",
+                ("old:0", str(test_file), 0, "old chunk", "# Old", b"old"),
+            )
+            conn.commit()
+
+        caplog.set_level("WARNING")
+        with patch.object(rag, "chunk_markdown", return_value=["chunk 0", "chunk 1", "chunk 2"]), \
+             patch("datastore.docsdb.rag._max_chunks_per_document", return_value=2), \
+             patch("datastore.docsdb.rag._lib_get_embeddings") as mock_get_embeddings, \
+             patch("datastore.docsdb.rag.is_fail_hard_enabled", return_value=False):
+            assert rag.index_document(str(test_file)) == 0
+
+        mock_get_embeddings.assert_not_called()
+        assert "exceeding max_chunks_per_document=2" in caplog.text
+
+        with sqlite3.connect(rag.db_path) as conn:
+            rows = conn.execute(
+                "SELECT id, content FROM doc_chunks WHERE source_file = ?",
+                (str(test_file),),
+            ).fetchall()
+
+        assert rows == [("old:0", "old chunk")]
+
+    def test_chunk_limit_exceeded_raises_when_fail_hard(self, tmp_path):
+        rag = _make_rag(tmp_path)
+        test_file = tmp_path / "guide.md"
+        test_file.write_text("# Guide\nBody.", encoding="utf-8")
+
+        with patch.object(rag, "chunk_markdown", return_value=["chunk 0", "chunk 1"]), \
+             patch("datastore.docsdb.rag._max_chunks_per_document", return_value=1), \
+             patch("datastore.docsdb.rag._lib_get_embeddings") as mock_get_embeddings, \
+             patch("datastore.docsdb.rag.is_fail_hard_enabled", return_value=True), \
+             pytest.raises(RuntimeError, match="max_chunks_per_document=1"):
+            rag.index_document(str(test_file))
+
+        mock_get_embeddings.assert_not_called()
 
     def test_embedding_failure_raises_when_fail_hard(self, tmp_path):
         rag = _make_rag(tmp_path)
