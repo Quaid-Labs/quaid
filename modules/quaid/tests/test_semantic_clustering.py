@@ -75,18 +75,18 @@ def test_classify_event_type_returns_events():
 
 def test_classify_concept_with_tech_keyword_returns_technology():
     node = Node.create(type="Concept", name="uses Python database for storage")
-    with patch.object(semantic_clustering, "call_clustering_llm") as mock_llm:
+    with patch.object(semantic_clustering, "call_clustering_llm", return_value="technology") as mock_llm:
         cluster = semantic_clustering.classify_node_semantic_cluster(node)
-    mock_llm.assert_not_called()
+    mock_llm.assert_called_once()
     assert cluster == "technology"
 
 
-def test_classify_fact_with_keyword_match_skips_llm():
-    """Keyword match on Fact type without LLM (heuristic wins)."""
+def test_classify_fact_with_keyword_match_uses_llm():
+    """Fact semantics are classified by the LLM rather than English keywords."""
     node = Node.create(type="Fact", name="lives in Portland")
-    with patch.object(semantic_clustering, "call_clustering_llm") as mock_llm:
+    with patch.object(semantic_clustering, "call_clustering_llm", return_value="places") as mock_llm:
         cluster = semantic_clustering.classify_node_semantic_cluster(node)
-    mock_llm.assert_not_called()
+    mock_llm.assert_called_once()
     assert cluster == "places"
 
 

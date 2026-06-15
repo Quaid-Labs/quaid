@@ -16,27 +16,27 @@ logger = logging.getLogger(__name__)
 SEMANTIC_CLUSTERS = {
     "people": {
         "description": "People, family members, friends, colleagues, relationships",
-        "keywords": ["person", "family", "friend", "colleague", "mother", "father", "wife", "husband", "son", "daughter", "brother", "sister", "relationship", "contact", "acquaintance"],
+        "keywords": [],
         "types": ["Person"]
     },
     "places": {
         "description": "Locations, addresses, buildings, geographic places", 
-        "keywords": ["address", "location", "city", "country", "building", "house", "office", "restaurant", "hotel", "room", "place", "lives", "works", "located"],
+        "keywords": [],
         "types": ["Place"]
     },
     "preferences": {
         "description": "Likes, dislikes, preferences, tastes, opinions",
-        "keywords": ["likes", "dislikes", "prefers", "loves", "hates", "enjoys", "favorite", "taste", "opinion", "preference", "interested"],
+        "keywords": [],
         "types": ["Preference"]
     },
     "technology": {
         "description": "Software, hardware, technical decisions, tools, systems",
-        "keywords": ["software", "hardware", "technical", "system", "tool", "app", "program", "computer", "phone", "device", "technology", "AI", "model", "database"],
-        "types": ["Concept"]  # Many tech concepts stored as Concept type
+        "keywords": [],
+        "types": []
     },
     "events": {
         "description": "Events, activities, meetings, appointments, things that happened",
-        "keywords": ["meeting", "appointment", "event", "activity", "happened", "occurred", "schedule", "calendar", "plan", "trip", "visit"],
+        "keywords": [],
         "types": ["Event"]
     },
     "uncategorized": {
@@ -71,24 +71,14 @@ def call_clustering_llm(prompt: str, max_tokens: int = 50) -> str:
 
 def classify_node_semantic_cluster(node: Node) -> str:
     """Classify a node into a semantic cluster using heuristics + LLM."""
-    text_lower = node.name.lower()
-    
-    # Fast heuristic classification based on type and keywords
+    # Structural type mapping is language-neutral. Content semantics belong to
+    # the LLM classifier so multilingual facts are not gated by English tokens.
+    node_type = str(node.type or "").strip()
     for cluster_name, cluster_info in SEMANTIC_CLUSTERS.items():
-        # Check if node type matches cluster types
-        if node.type in cluster_info["types"]:
-            # Additional keyword check for Concept type (since it's broad)
-            if node.type == "Concept":
-                if any(keyword in text_lower for keyword in cluster_info["keywords"]):
-                    return cluster_name
-            else:
-                return cluster_name
-        
-        # Check keywords for any type
-        if any(keyword in text_lower for keyword in cluster_info["keywords"]):
+        if node_type in cluster_info["types"]:
             return cluster_name
     
-    # If heuristics fail, use LLM for edge cases
+    # If structural classification is insufficient, use the LLM for semantics.
     prompt = f"""Classify this memory into one of these categories:
 
 Memory: "{node.name}"
