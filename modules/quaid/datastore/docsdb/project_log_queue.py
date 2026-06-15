@@ -167,14 +167,16 @@ def _utc_now() -> str:
     raw = os.environ.get("QUAID_NOW", "").strip()
     if raw:
         try:
-            value = datetime.fromisoformat(raw.replace("Z", "+00:00"))
-        except ValueError:
-            raise ValueError(f"Invalid QUAID_NOW={raw!r}") from None
-        if value.tzinfo is None:
-            value = value.replace(tzinfo=timezone.utc)
-        else:
-            value = value.astimezone(timezone.utc)
-        return value.isoformat()
+            parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            else:
+                parsed = parsed.astimezone(timezone.utc)
+            return parsed.isoformat()
+        except ValueError as exc:
+            if is_fail_hard_enabled():
+                raise RuntimeError(f"Invalid QUAID_NOW={raw!r}") from exc
+            logger.warning("Invalid QUAID_NOW=%r; using wall clock", raw)
     return datetime.now(tz=timezone.utc).isoformat()
 
 

@@ -948,20 +948,33 @@ def test_project_log_queue_honors_quaid_now_for_created_at(project_env, monkeypa
     assert items[0]["created_at"] == "2026-03-11T05:06:07+00:00"
 
 
-def test_project_log_queue_rejects_malformed_quaid_now(project_env, monkeypatch):
+def test_project_log_queue_malformed_quaid_now_honors_failhard(project_env, monkeypatch):
     _tmp_path, _src, _entry = project_env
     from datastore.docsdb import project_log_queue
 
     monkeypatch.setenv("QUAID_NOW", "not-a-date")
 
-    with patch("datastore.docsdb.project_log_queue.is_fail_hard_enabled", return_value=False), \
-         pytest.raises(ValueError, match="Invalid QUAID_NOW"):
+    with patch("datastore.docsdb.project_log_queue.is_fail_hard_enabled", return_value=True), \
+         pytest.raises(RuntimeError, match="Invalid QUAID_NOW"):
         project_log_queue.enqueue_project_logs(
             {"demo": ["Queued project log milestone"]},
             trigger="Reset",
         )
 
     assert project_log_queue.pending_project_log_count("demo") == 0
+
+    with patch("datastore.docsdb.project_log_queue.is_fail_hard_enabled", return_value=False):
+        metrics = project_log_queue.enqueue_project_logs(
+            {"demo": ["Queued project log milestone"]},
+            trigger="Reset",
+        )
+
+    assert metrics["entries_written"] == 1
+    with project_log_queue.project_queue_lock("demo"):
+        items = project_log_queue.drain_project_log_queue("demo")
+
+    assert len(items) == 1
+    assert items[0]["created_at"] != "not-a-date"
 
 
 def test_project_log_queue_requires_lock_for_drain_mark_cleanup(project_env):
@@ -1148,7 +1161,7 @@ def test_project_log_queue_dead_letters_invalid_json_during_drain(project_env, m
     assert metadata["dead_lettered_at"] == "2026-03-11T05:06:07+00:00"
 
 
-def test_project_log_queue_dead_letter_rejects_malformed_quaid_now(project_env, monkeypatch):
+def test_project_log_queue_dead_letter_malformed_quaid_now_falls_back_when_fail_open(project_env, monkeypatch):
     _tmp_path, _src, _entry = project_env
     from datastore.docsdb import project_log_queue
 
@@ -1159,9 +1172,14 @@ def test_project_log_queue_dead_letter_rejects_malformed_quaid_now(project_env, 
     monkeypatch.setenv("QUAID_NOW", "not-a-date")
 
     with project_log_queue.project_queue_lock("demo"), \
-         patch("datastore.docsdb.project_log_queue.is_fail_hard_enabled", return_value=False), \
-         pytest.raises(ValueError, match="Invalid QUAID_NOW"):
+         patch("datastore.docsdb.project_log_queue.is_fail_hard_enabled", return_value=False):
         project_log_queue.drain_project_log_queue("demo")
+
+    assert not poison.exists()
+    metadata_files = list(project_log_queue.project_queue_dead_letter_dir("demo").glob("*.metadata.json"))
+    assert len(metadata_files) == 1
+    metadata = json.loads(metadata_files[0].read_text(encoding="utf-8"))
+    assert metadata["dead_lettered_at"] != "not-a-date"
 
 
 def test_execute_update_once_does_not_run_supervisor_docs_maintenance_tick(project_env):

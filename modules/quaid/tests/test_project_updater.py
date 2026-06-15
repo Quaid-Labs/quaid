@@ -28,8 +28,8 @@ class _FakeDocsRAG:
 def setup_env(tmp_path, monkeypatch):
     """Set up isolated test environment."""
     global _tmp_db
-    _tmp_db = tmp_path / "test_registry.db"
-    monkeypatch.setenv("MEMORY_DB_PATH", str(_tmp_db))
+    _tmp_db = tmp_path / "docs.db"
+    monkeypatch.setenv("MEMORY_DB_PATH", str(tmp_path / "memory.db"))
     monkeypatch.setenv("DOCS_DB_PATH", str(_tmp_db))
     monkeypatch.setenv("QUAID_VISIBLE_HOME", str(tmp_path))
     from lib.adapter import set_adapter, reset_adapter, TestAdapter
