@@ -850,8 +850,33 @@ def _runtime_config_fingerprint() -> str:
         return ""
     if not any(int(mtime_ns) >= 0 for _path, mtime_ns in snapshot):
         return ""
-    payload = json.dumps(list(snapshot), sort_keys=True, separators=(",", ":"))
+    payload = json.dumps({
+        "config": list(snapshot),
+        "daemon": _daemon_probe_generation(),
+    }, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _daemon_probe_generation() -> tuple[str, int, str]:
+    """Return a cheap daemon generation marker for prompt-model probe caching."""
+    try:
+        from lib.adapter import get_adapter
+
+        data_dir = Path(get_adapter().data_dir())
+        pid_path = data_dir / "extraction-daemon.pid"
+        if not pid_path.is_file():
+            return (str(pid_path), -1, "")
+        try:
+            mtime_ns = int(pid_path.stat().st_mtime_ns)
+        except OSError:
+            mtime_ns = -1
+        try:
+            pid_text = pid_path.read_text(encoding="utf-8").strip()
+        except OSError:
+            pid_text = ""
+        return (str(pid_path), mtime_ns, pid_text)
+    except Exception:
+        return ("", -1, "")
 
 
 def _read_prompt_model_probe_state() -> Dict[str, Any]:
@@ -3824,6 +3849,21 @@ def hook_session_init(args):
             )
     except Exception as e:
         print(f"[quaid][session-init] daemon startup error: {e}", file=sys.stderr)
+
+    # Probe prompt-model health at session start so the first user turn after a
+    # daemon/config bounce can reuse a fresh cached provider error instead of
+    # waiting for asynchronous daemon extraction to discover it.
+    try:
+        from lib.adapter import get_adapter as _get_adapter
+
+        _model_config_notice = _validate_prompt_model_config_for_hook(_get_adapter().adapter_id())
+        if _model_config_notice:
+            startup_notices.append(_model_config_notice)
+            print("[quaid][session-init] prompt model config notice prepared", file=sys.stderr)
+    except Exception as _e:
+        if _fail_hard_enabled():
+            raise
+        print(f"[quaid][session-init] prompt model config probe failed: {_e}", file=sys.stderr)
 
     # For adapters that track session transitions (e.g. Codex, where /new
     # creates a new thread in the same process without firing SessionStart),

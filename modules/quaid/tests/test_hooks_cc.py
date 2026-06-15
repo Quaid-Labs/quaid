@@ -2511,6 +2511,82 @@ class TestHookInjectRecallResilience:
         assert "[Quaid error] [provider]" in context
         assert "invalid-model-m6-probe" in context
 
+    def test_session_start_reprobes_after_daemon_bounce_for_first_prompt_notice(
+        self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
+    ):
+        from core import extraction_daemon
+        from core.interface import hooks
+
+        projects_dir = tmp_path / "projects"
+        projects_dir.mkdir()
+        identity_dir = tmp_path / "identity"
+        identity_dir.mkdir()
+        rules_dir = tmp_path / "rules"
+        rules_dir.mkdir()
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        pid_path = data_dir / "extraction-daemon.pid"
+        pid_path.write_text("111", encoding="utf-8")
+
+        mock_adapter.adapter_id.return_value = "claude-code"
+        mock_adapter.instance_root.return_value = tmp_path
+        mock_adapter.data_dir.return_value = data_dir
+        mock_adapter.projects_dir.return_value = projects_dir
+        mock_adapter.identity_dir.return_value = identity_dir
+        mock_adapter.store_auth_token.return_value = tmp_path / ".auth-token"
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "claude-code-test")
+        monkeypatch.setattr(hooks, "_get_projects_dir", lambda: projects_dir)
+        monkeypatch.setattr(hooks, "_get_identity_dir", lambda: identity_dir)
+        monkeypatch.setattr(hooks, "_check_janitor_health", lambda: "")
+        monkeypatch.setattr(extraction_daemon, "ensure_alive", lambda: None)
+        monkeypatch.setattr(extraction_daemon, "read_cursor", lambda _sid: {"transcript_path": ""})
+        monkeypatch.setattr(extraction_daemon, "write_cursor", lambda *a: None)
+        monkeypatch.setattr("core.compatibility.notify_on_use_if_degraded", lambda _data_dir: "")
+        monkeypatch.setattr("core.interface.hooks._get_deferred_notice_relay_context", lambda: "")
+        monkeypatch.setattr(
+            hooks,
+            "_runtime_config_snapshot",
+            lambda: ((str(tmp_path / "claude-code" / "config.json"), 123),),
+        )
+
+        with patch("lib.llm_clients.call_fast_reasoning", return_value="OK") as first_probe:
+            assert hooks._validate_prompt_model_config_for_hook("claude-code") == ""
+        first_probe.assert_called_once()
+
+        pid_path.write_text("222", encoding="utf-8")
+        with patch(
+            "lib.llm_clients.call_fast_reasoning",
+            side_effect=RuntimeError("model=invalid-model-m6-probe"),
+        ) as session_probe, patch("core.project_registry.list_projects", return_value={}):
+            _run_hook_session_init(
+                {"session_id": "sess-daemon-bounce", "cwd": str(tmp_path)},
+                monkeypatch=monkeypatch,
+                rules_dir=rules_dir,
+            )
+        session_probe.assert_called_once()
+
+        with patch(
+            "lib.llm_clients.call_fast_reasoning",
+            side_effect=AssertionError("first prompt should reuse session-start probe state"),
+        ), patch(
+            "core.interface.api.recall_fast",
+            side_effect=AssertionError("recall should not run after cached model-config notice"),
+        ):
+            out, _err = _run_hook_inject(
+                {
+                    "prompt": "Hello",
+                    "session_id": "sess-daemon-bounce",
+                    "cwd": str(tmp_path),
+                },
+                monkeypatch=monkeypatch,
+            )
+
+        payload = json.loads(out)
+        context = payload["hookSpecificOutput"]["additionalContext"]
+        assert "[Quaid error] [provider]" in context
+        assert "invalid-model-m6-probe" in context
+
     def test_model_config_provider_failure_preserves_predrained_relay(
         self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
     ):
