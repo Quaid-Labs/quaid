@@ -8,6 +8,7 @@ import json
 import os
 import sys
 import time
+from datetime import datetime, timezone
 
 import pytest
 
@@ -98,6 +99,15 @@ class TestRegister:
         assert "T" in entry["registered_at"]
         assert entry["registered_at"].endswith("Z")
 
+    def test_registered_at_honors_quaid_now(self, tmp_path, monkeypatch):
+        from core.subagent_registry import register
+
+        monkeypatch.setenv("QUAID_NOW", "2026-02-03T04:05:06Z")
+        register("parent-1", "child-A")
+
+        entry = _read_raw(tmp_path, "parent-1")["children"]["child-A"]
+        assert entry["registered_at"] == "2026-02-03T04:05:06Z"
+
     def test_re_register_overwrites_entry(self, tmp_path):
         from core.subagent_registry import register
         register("parent-1", "child-A", child_type="retrieval")
@@ -132,6 +142,16 @@ class TestMarkComplete:
         entry = _read_raw(tmp_path, "parent-1")["children"]["child-A"]
         assert entry["completed_at"] is not None
         assert "T" in entry["completed_at"]
+
+    def test_completed_at_honors_quaid_now(self, tmp_path, monkeypatch):
+        from core.subagent_registry import register, mark_complete
+
+        register("parent-1", "child-A")
+        monkeypatch.setenv("QUAID_NOW", "2026-02-03T04:05:06Z")
+        mark_complete("parent-1", "child-A")
+
+        entry = _read_raw(tmp_path, "parent-1")["children"]["child-A"]
+        assert entry["completed_at"] == "2026-02-03T04:05:06Z"
 
     def test_transcript_path_updated(self, tmp_path):
         from core.subagent_registry import register, mark_complete
@@ -234,6 +254,17 @@ class TestMarkHarvested:
         mark_harvested("parent-1", "child-A")
         entry = _read_raw(tmp_path, "parent-1")["children"]["child-A"]
         assert entry["harvested_at"] is not None
+
+    def test_harvested_at_honors_quaid_now(self, tmp_path, monkeypatch):
+        from core.subagent_registry import register, mark_complete, mark_harvested
+
+        register("parent-1", "child-A")
+        mark_complete("parent-1", "child-A", transcript_path="/t.jsonl")
+        monkeypatch.setenv("QUAID_NOW", "2026-02-03T04:05:06Z")
+        mark_harvested("parent-1", "child-A")
+
+        entry = _read_raw(tmp_path, "parent-1")["children"]["child-A"]
+        assert entry["harvested_at"] == "2026-02-03T04:05:06Z"
 
     def test_noop_for_unknown_child(self, tmp_path):
         """mark_harvested on unknown child should not raise."""
@@ -355,6 +386,23 @@ class TestCleanupOldRegistries:
         removed = cleanup_old_registries(max_age_hours=48.0)
         assert removed == 3
 
+    def test_cleanup_cutoff_honors_quaid_now(self, tmp_path, monkeypatch):
+        from core.subagent_registry import register, cleanup_old_registries
+
+        monkeypatch.setenv("QUAID_NOW", "2026-02-03T04:05:06Z")
+        register("parent-old", "child-A")
+        register("parent-new", "child-B")
+        old_time = datetime(2026, 1, 31, tzinfo=timezone.utc).timestamp()
+        new_time = datetime(2026, 2, 2, 12, tzinfo=timezone.utc).timestamp()
+        os.utime(_registry_file(tmp_path, "parent-old"), (old_time, old_time))
+        os.utime(_registry_file(tmp_path, "parent-new"), (new_time, new_time))
+
+        removed = cleanup_old_registries(max_age_hours=48.0)
+
+        assert removed == 1
+        assert not _registry_file(tmp_path, "parent-old").exists()
+        assert _registry_file(tmp_path, "parent-new").exists()
+
     def test_zero_age_removes_all(self, tmp_path):
         """max_age_hours=0 removes everything."""
         from core.subagent_registry import register, cleanup_old_registries
@@ -401,6 +449,14 @@ class TestCleanupOldRegistries:
 
 
 class TestAtomicWrite:
+    def test_now_rejects_malformed_quaid_now(self, monkeypatch):
+        import core.subagent_registry as registry
+
+        monkeypatch.setenv("QUAID_NOW", "not-a-date")
+
+        with pytest.raises(ValueError, match="Invalid QUAID_NOW"):
+            registry._now_iso_z()
+
     def test_no_tmp_files_after_register(self, tmp_path):
         from core.subagent_registry import register
         register("parent-1", "child-A")

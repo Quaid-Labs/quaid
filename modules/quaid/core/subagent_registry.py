@@ -17,8 +17,8 @@ import fcntl
 import json
 import logging
 import os
-import time
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -30,6 +30,28 @@ _PLACEHOLDER_CHILD_IDS = {
     "subagent",
     "unknown",
 }
+
+
+def _now_datetime() -> datetime:
+    raw = str(os.environ.get("QUAID_NOW", "") or "").strip()
+    if raw:
+        normalized = raw.replace("Z", "+00:00")
+        try:
+            parsed = datetime.fromisoformat(normalized)
+        except ValueError as exc:
+            raise ValueError(f"Invalid QUAID_NOW={raw!r}") from exc
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+    return datetime.now(timezone.utc)
+
+
+def _now_iso_z() -> str:
+    return _now_datetime().strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _now_epoch() -> float:
+    return _now_datetime().timestamp()
 
 
 def _fail_hard_enabled() -> bool:
@@ -165,7 +187,7 @@ def register(
             "transcript_path": child_transcript_path or existing_transcript,
             "status": existing_status if existing_status == "complete" else "running",
             "harvested": bool(existing.get("harvested", False)),
-            "registered_at": existing_registered_at or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "registered_at": existing_registered_at or _now_iso_z(),
             "completed_at": existing_completed_at if existing_status == "complete" else None,
             "harvested_at": existing.get("harvested_at"),
         })
@@ -199,7 +221,7 @@ def mark_complete(
                 "transcript_path": transcript_path or "",
                 "status": "running",
                 "harvested": False,
-                "registered_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "registered_at": _now_iso_z(),
                 "completed_at": None,
                 "harvested_at": None,
             }
@@ -207,7 +229,7 @@ def mark_complete(
 
         child = children.get(child_id, {})
         child["status"] = "complete"
-        child["completed_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        child["completed_at"] = _now_iso_z()
         if transcript_path:
             child["transcript_path"] = transcript_path
         children[child_id] = child
@@ -247,9 +269,7 @@ def mark_harvested(parent_session_id: str, child_id: str) -> None:
         children = data.get("children", {})
         if child_id in children:
             children[child_id]["harvested"] = True
-            children[child_id]["harvested_at"] = time.strftime(
-                "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
-            )
+            children[child_id]["harvested_at"] = _now_iso_z()
             _write_registry(parent_session_id, data)
 
 
@@ -280,7 +300,7 @@ def is_registered_subagent(session_id: str) -> bool:
 
 def cleanup_old_registries(max_age_hours: float = 48.0) -> int:
     """Remove registry files older than max_age_hours. Returns count removed."""
-    cutoff = time.time() - (max_age_hours * 3600)
+    cutoff = _now_epoch() - (max_age_hours * 3600)
     removed = 0
     try:
         for p in _registry_dir().glob("*.json"):
