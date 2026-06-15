@@ -10128,6 +10128,50 @@ class TestRecallTelemetry:
             for row in rows
         )
 
+    def test_assistant_suggestion_cluster_sibling_fallback_score_is_floored(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+
+        assert mg._cluster_sibling_fallback_score(0.03) == 0.0
+        assert mg._cluster_sibling_fallback_score(0.50) == pytest.approx(0.42)
+
+        graph, _ = _make_graph(tmp_path)
+        cluster_ts = "2026-01-02T03:04:05"
+        seed = mg.Node.create(
+            "Fact",
+            "Assistant suggested option alpha for the rollout.",
+            owner_id="owner",
+            created_at=cluster_ts,
+            attributes={
+                "source_type": "assistant",
+                "structural_anchor_kind": "assistant_plan_anchor",
+            },
+        )
+        sibling = mg.Node.create(
+            "Fact",
+            "Assistant suggested option beta for the rollout.",
+            owner_id="owner",
+            created_at=cluster_ts,
+            attributes={
+                "source_type": "assistant",
+                "structural_anchor_kind": "assistant_option_bullet_anchor",
+            },
+        )
+        graph.add_node(seed, embed=False)
+        graph.add_node(sibling, embed=False)
+
+        with patch.object(mg, "get_graph", return_value=graph), \
+             patch.object(graph, "search_hybrid", return_value=[(seed, -0.02)]):
+            rows = mg._recover_assistant_suggestion_cluster_rows(
+                "Which options did the assistant suggest?",
+                gate_eval={"requirements": ["assistant_source", "enumeration"]},
+                owner_id="owner",
+                limit=5,
+            )
+
+        by_id = {row["id"]: row for row in rows}
+        assert by_id[seed.id]["similarity"] == pytest.approx(0.01)
+        assert by_id[sibling.id]["similarity"] == 0.0
+
     def test_recover_assistant_suggestion_cluster_search_failure_respects_failhard(self, monkeypatch):
         import datastore.memorydb.memory_graph as mg
 

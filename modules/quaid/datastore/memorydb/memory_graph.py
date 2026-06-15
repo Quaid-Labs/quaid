@@ -18633,6 +18633,11 @@ def _build_recall_row_from_node(
     return row
 
 
+def _cluster_sibling_fallback_score(cluster_best_score: float) -> float:
+    """Default sibling cluster score, floored to the normalized score range."""
+    return max(0.0, float(cluster_best_score) - 0.08)
+
+
 def _recover_assistant_suggestion_cluster_rows(
     query: str,
     *,
@@ -18726,7 +18731,7 @@ def _recover_assistant_suggestion_cluster_rows(
         node = graph._row_to_node(sql_row)
         attrs = node.attributes if isinstance(node.attributes, dict) else {}
         kind = str(attrs.get("structural_anchor_kind") or "").strip().lower()
-        similarity = candidate_scores.get(node.id, cluster_best_score - 0.08)
+        similarity = candidate_scores.get(node.id, _cluster_sibling_fallback_score(cluster_best_score))
         recovered.append(
             _build_recall_row_from_node(
                 node,
@@ -18990,7 +18995,7 @@ def _recover_assistant_memory_cluster_rows(
                 continue
         if kind != "assistant_callback_anchor" and not _ASSISTANT_MEMORY_CALLBACK_CUE_RE.search(lower_text):
             continue
-        similarity = candidate_scores.get(node.id, cluster_best_score - 0.08)
+        similarity = candidate_scores.get(node.id, _cluster_sibling_fallback_score(cluster_best_score))
         recovered.append(
             _build_recall_row_from_node(
                 node,
