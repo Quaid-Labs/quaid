@@ -1196,6 +1196,7 @@ def _read_cursor_file(cursor_file: Path, fallback_session_id: str) -> Dict[str, 
         "transcript_guard_line_count": 0,
         "transcript_guard_digest": "",
         "processed_signal_type": "",
+        "last_flushed_line_offset": 0,
         "cursor_key": cursor_file.stem,
     }
     if not cursor_file.is_file():
@@ -1205,9 +1206,17 @@ def _read_cursor_file(cursor_file: Path, fallback_session_id: str) -> Dict[str, 
         cursor_key = str(data.get("cursor_key") or cursor_file.stem or "").strip()
         if not _SESSION_ID_RE.match(cursor_key):
             cursor_key = _cursor_storage_key(fallback_session_id, cursor_key)
+        line_offset = int(data.get("line_offset", 0))
+        processed_signal_type = str(data.get("processed_signal_type") or "")
+        if "last_flushed_line_offset" in data:
+            last_flushed_line_offset = int(data.get("last_flushed_line_offset", 0) or 0)
+        elif processed_signal_type or bool(data.get("internal", False)):
+            last_flushed_line_offset = line_offset
+        else:
+            last_flushed_line_offset = 0
         return {
             "session_id": str(data.get("session_id") or fallback_session_id),
-            "line_offset": int(data.get("line_offset", 0)),
+            "line_offset": line_offset,
             "transcript_path": data.get("transcript_path", ""),
             "internal": bool(data.get("internal", False)),
             "transcript_size_bytes": int(data.get("transcript_size_bytes", 0) or 0),
@@ -1217,7 +1226,8 @@ def _read_cursor_file(cursor_file: Path, fallback_session_id: str) -> Dict[str, 
             "transcript_guard_start_line": int(data.get("transcript_guard_start_line", 0) or 0),
             "transcript_guard_line_count": int(data.get("transcript_guard_line_count", 0) or 0),
             "transcript_guard_digest": str(data.get("transcript_guard_digest") or ""),
-            "processed_signal_type": str(data.get("processed_signal_type") or ""),
+            "processed_signal_type": processed_signal_type,
+            "last_flushed_line_offset": max(0, min(last_flushed_line_offset, line_offset)),
             "cursor_key": cursor_key or cursor_file.stem,
         }
     except (json.JSONDecodeError, ValueError, OSError):
@@ -1511,6 +1521,7 @@ def write_cursor(
     internal: bool = False,
     source_key: Optional[str] = None,
     processed_signal_type: str = "",
+    last_flushed_line_offset: Optional[int] = None,
 ) -> None:
     """Write extraction cursor after processing."""
     session_id = _validate_session_id(session_id)
@@ -1519,9 +1530,11 @@ def write_cursor(
     cursor_file = cursor_dir / f"{cursor_key}.json"
     current_stat = _transcript_stat_metadata(transcript_path)
     current_size_bytes = int(current_stat.get("size_bytes", 0) or 0)
+    existing_last_flushed_line_offset = 0
     if cursor_file.is_file():
         existing = _read_cursor_file(cursor_file, session_id)
         existing_offset = int(existing.get("line_offset", 0) or 0)
+        existing_last_flushed_line_offset = int(existing.get("last_flushed_line_offset", 0) or 0)
         existing_path = str(existing.get("transcript_path") or "").strip()
         same_source = bool(
             existing_path
@@ -1568,6 +1581,20 @@ def write_cursor(
                 transcript_path,
             )
             line_offset = existing_offset
+    processed_signal_type = str(processed_signal_type or "").strip()
+    if last_flushed_line_offset is None:
+        if processed_signal_type or internal:
+            resolved_last_flushed_line_offset = int(line_offset or 0)
+        elif cursor_file.is_file():
+            resolved_last_flushed_line_offset = existing_last_flushed_line_offset
+        else:
+            resolved_last_flushed_line_offset = int(line_offset or 0)
+    else:
+        resolved_last_flushed_line_offset = int(last_flushed_line_offset or 0)
+    resolved_last_flushed_line_offset = max(
+        0,
+        min(int(resolved_last_flushed_line_offset or 0), int(line_offset or 0)),
+    )
     guard_digest = _cursor_rebase_guard_digest(transcript_path, int(line_offset or 0))
     payload = {
         "session_id": session_id,
@@ -1582,9 +1609,9 @@ def write_cursor(
         "transcript_guard_start_line": int(guard_digest.get("start_line", 0) or 0),
         "transcript_guard_line_count": int(guard_digest.get("line_count", 0) or 0),
         "transcript_guard_digest": str(guard_digest.get("digest") or ""),
+        "last_flushed_line_offset": resolved_last_flushed_line_offset,
         "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
-    processed_signal_type = str(processed_signal_type or "").strip()
     if processed_signal_type:
         payload["processed_signal_type"] = processed_signal_type
     try:
@@ -5272,6 +5299,7 @@ def _advance_ignored_session_cursor_to_end(
         transcript_path,
         internal=False,
         source_key=cursor_key,
+        last_flushed_line_offset=total_lines,
     )
     clear_rolling_state(session_id)
     _cursor_end_timeout_fired.add(session_id)
@@ -6146,6 +6174,10 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             cursor_offset = 0
             reset_staged_state_for_full_reextract = True
 
+    cursor_last_flushed_line_offset = max(
+        0,
+        min(int(cursor_data.get("last_flushed_line_offset", 0) or 0), int(cursor_offset or 0)),
+    )
     transcript_read_guard_start = int(cursor_offset or 0)
     transcript_read_guard_count = max(0, int(total_lines or 0) - transcript_read_guard_start)
     transcript_read_guard_digest = _transcript_line_window_digest(
@@ -6180,6 +6212,23 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
         int(staged_state.get("buffered_line_offset", cursor_offset) or 0),
         int(cursor_offset or 0),
     )
+    recover_unflushed_scanned_window = bool(
+        not rolling_mode
+        and not staged_payload_sweep_signal
+        and signal_type in ("compaction", "reset", "session_end", "timeout")
+        and int(cursor_offset or 0) > int(cursor_last_flushed_line_offset or 0)
+        and not _rolling_state_has_pending_content(staged_state)
+    )
+    if recover_unflushed_scanned_window:
+        buffered_line_offset = min(buffered_line_offset, cursor_last_flushed_line_offset)
+        logger.info(
+            "[%s] session %s: lifecycle signal found unflushed rolling scan window "
+            "(last_flushed=%d cursor=%d); draining from last flushed line",
+            label,
+            session_id,
+            cursor_last_flushed_line_offset,
+            cursor_offset,
+        )
     staged_semantic_ready = rolling_mode and _semantic_buffer_has_content(staged_state)
     staged_rolling_batches = int(staged_state.get("rolling_batches", 0) or 0)
     continued_raw_tail_pending = bool(signal_meta.get("flush_staged_payload_only"))
@@ -6748,7 +6797,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                     buffered_line_offset,
                     transcript_path,
                     source_key=lock_owner_key,
-                    processed_signal_type=signal_type,
+                    last_flushed_line_offset=cursor_last_flushed_line_offset,
                 )
                 mark_signal_processed(signal_data)
                 _cleanup_daemon_transcript_snapshot_path(transcript_path)
@@ -6771,7 +6820,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                     buffered_line_offset,
                     transcript_path,
                     source_key=lock_owner_key,
-                    processed_signal_type=signal_type,
+                    last_flushed_line_offset=cursor_last_flushed_line_offset,
                 )
                 mark_signal_processed(signal_data)
                 # Keep the stable snapshot while the semantic tail is deferred;
@@ -8410,6 +8459,7 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
                 str(transcript_path),
                 internal=bool(data.get("internal", False)),
                 source_key=cursor_key_for_write,
+                last_flushed_line_offset=int(data.get("last_flushed_line_offset", 0) or 0),
             )
 
         semantic_tokens = int(state.get("semantic_buffer_tokens", 0) or 0)
@@ -8434,6 +8484,7 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
                     str(transcript_path),
                     internal=bool(data.get("internal", False)),
                     source_key=cursor_key_for_write,
+                    last_flushed_line_offset=int(data.get("last_flushed_line_offset", 0) or 0),
                 )
             pending_unfrozen_flush = bool(state.get(_INTERNAL_CURSOR_UNFROZEN_PENDING_FLUSH_KEY))
             if semantic_tokens > 0 and (unfroze_internal_cursor or pending_unfrozen_flush):

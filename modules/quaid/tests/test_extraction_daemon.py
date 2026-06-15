@@ -1456,7 +1456,11 @@ def test_process_signal_partial_stage_chunks_escape_when_fail_hard(monkeypatch, 
         },
     )
     monkeypatch.setattr(extraction_daemon, "_reload_config_if_changed", lambda reason: None)
-    monkeypatch.setattr(extraction_daemon, "_read_rolling_state_for_signal", lambda sid, path: (dict(staged_state), sid))
+    monkeypatch.setattr(
+        extraction_daemon,
+        "_read_rolling_state_for_signal",
+        lambda sid, path, **_kwargs: (dict(staged_state), sid),
+    )
     monkeypatch.setattr(extraction_daemon, "_signal_source_cursor_key", lambda *args, **kwargs: "source-key")
     monkeypatch.setattr(extraction_daemon, "_acquire_session_processing_lock", lambda key: 123)
     monkeypatch.setattr(extraction_daemon, "_release_session_processing_lock", lambda key, fd: released.append((key, fd)))
@@ -7330,7 +7334,11 @@ class TestSignalRoundTrip:
         marked = []
         released = []
 
-        monkeypatch.setattr(extraction_daemon, "_read_rolling_state_for_signal", lambda sid, _path: ({}, sid))
+        monkeypatch.setattr(
+            extraction_daemon,
+            "_read_rolling_state_for_signal",
+            lambda sid, _path, **_kwargs: ({}, sid),
+        )
         monkeypatch.setattr(extraction_daemon, "_acquire_session_processing_lock", lambda _key: object())
         monkeypatch.setattr(extraction_daemon, "_release_session_processing_lock", lambda key, _fd: released.append(key))
         monkeypatch.setattr(extraction_daemon, "_read_cursor_with_source_compat", lambda *_args, **_kwargs: {
@@ -7806,6 +7814,40 @@ class TestCursorRoundTrip:
 
         result = extraction_daemon.read_cursor("sess-advance")
         assert result["line_offset"] == 10
+
+    def test_write_cursor_tracks_scan_offset_separately_from_flushed_offset(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
+
+        transcript_path = tmp_path / "session.jsonl"
+        transcript_path.write_text(
+            '{"role":"user","content":"Niseko Kinesis Phoebe Bridgers"}\n'
+            '{"role":"assistant","content":"ACK"}\n',
+            encoding="utf-8",
+        )
+        source_key = extraction_daemon._signal_source_cursor_key("sess-scan-only", str(transcript_path))
+
+        extraction_daemon.write_cursor(
+            "sess-scan-only",
+            2,
+            str(transcript_path),
+            source_key=source_key,
+            last_flushed_line_offset=0,
+        )
+        scan_cursor = extraction_daemon.read_cursor("sess-scan-only", source_key=source_key)
+        assert scan_cursor["line_offset"] == 2
+        assert scan_cursor["last_flushed_line_offset"] == 0
+
+        extraction_daemon.write_cursor(
+            "sess-scan-only",
+            2,
+            str(transcript_path),
+            source_key=source_key,
+            processed_signal_type="session_end",
+        )
+        flushed_cursor = extraction_daemon.read_cursor("sess-scan-only", source_key=source_key)
+        assert flushed_cursor["line_offset"] == 2
+        assert flushed_cursor["last_flushed_line_offset"] == 2
 
     def test_write_cursor_refuses_same_source_rewind_without_shrink(self, monkeypatch, tmp_path):
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
@@ -14446,6 +14488,186 @@ class TestRollingExtraction:
             assert len(applied) == 1
             assert applied[0][1]["session_id"] == full_session_id
             assert not extraction_daemon._rolling_state_path(full_session_id).exists()
+        finally:
+            if real_registry is not None:
+                sys.modules["core.subagent_registry"] = real_registry
+            else:
+                sys.modules.pop("core.subagent_registry", None)
+            if real_adapter is not None:
+                sys.modules["lib.adapter"] = real_adapter
+            else:
+                sys.modules.pop("lib.adapter", None)
+            if real_notify is not None:
+                sys.modules["core.runtime.notify"] = real_notify
+            else:
+                sys.modules.pop("core.runtime.notify", None)
+
+    def test_session_end_drains_unflushed_scan_only_rolling_window(self, monkeypatch, tmp_path):
+        session_id = "rollout-2026-06-15T08-00-42-019ec894-cdx-m2"
+        transcript_path = tmp_path / f"{session_id}.jsonl"
+        transcript_lines = [
+            '{"role":"user","content":"Niseko Kinesis Phoebe Bridgers chunk one fact"}\n',
+            '{"role":"assistant","content":"ACK"}\n',
+        ]
+        transcript_lines.extend(
+            f'{{"role":"assistant","content":"rolling scanner filler {idx}"}}\n'
+            for idx in range(17)
+        )
+        transcript_lines.extend(
+            [
+                '{"role":"user","content":"/new"}\n',
+                '{"role":"assistant","content":"Hello"}\n',
+                '{"role":"user","content":"Hello"}\n',
+            ]
+        )
+        transcript_path.write_text("".join(transcript_lines), encoding="utf-8")
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "rolling-inst")
+        instance_root = tmp_path / "instances" / "rolling-inst"
+        instance_root.mkdir(parents=True, exist_ok=True)
+        source_key = extraction_daemon._signal_source_cursor_key(session_id, str(transcript_path))
+        # This is the CDX failure shape: the rolling scanner advanced to EOF
+        # below threshold, but no rolling flush consumed the scanned window.
+        extraction_daemon.write_cursor(
+            session_id,
+            len(transcript_lines),
+            str(transcript_path),
+            source_key=source_key,
+            last_flushed_line_offset=0,
+        )
+        assert extraction_daemon.read_cursor(session_id, source_key=source_key)["last_flushed_line_offset"] == 0
+        monkeypatch.setattr(extraction_daemon, "_get_owner_id", lambda: "Owner")
+
+        real_registry = sys.modules.get("core.subagent_registry")
+        real_adapter = sys.modules.get("lib.adapter")
+        real_notify = sys.modules.get("core.runtime.notify")
+        fake_registry = types.ModuleType("core.subagent_registry")
+        fake_registry.is_registered_subagent = lambda sid: False
+        fake_registry.get_harvestable = lambda sid: []
+        fake_registry.mark_harvested = lambda sid, cid: None
+        fake_registry._registry_dir = lambda: tmp_path / "registry"
+        sys.modules["core.subagent_registry"] = fake_registry
+
+        fake_adapter_mod = types.ModuleType("lib.adapter")
+        if real_adapter is not None:
+            fake_adapter_mod.StandaloneAdapter = getattr(real_adapter, "StandaloneAdapter", object)
+            fake_adapter_mod.quaid_projects_dir = getattr(
+                real_adapter,
+                "quaid_projects_dir",
+                lambda: tmp_path / "projects",
+            )
+            fake_adapter_mod.quaid_tracking_dir = getattr(
+                real_adapter,
+                "quaid_tracking_dir",
+                lambda: tmp_path / "tracking",
+            )
+
+        class _FakeAdapter(_OwnedTestAdapterMixin):
+            def quaid_home(self):
+                return tmp_path
+
+            def instance_root(self):
+                return instance_root
+
+            def data_dir(self):
+                return instance_root / "data"
+
+            def parse_session_jsonl(self, path):
+                rendered = []
+                for raw in Path(path).read_text(encoding="utf-8").splitlines():
+                    try:
+                        row = json.loads(raw)
+                    except json.JSONDecodeError:
+                        continue
+                    content = str(row.get("content") or "").strip()
+                    if content:
+                        rendered.append(f"{row.get('role', 'unknown').title()}: {content}")
+                return "\n".join(rendered)
+
+        fake_adapter_mod.get_adapter = lambda: _FakeAdapter()
+        sys.modules["lib.adapter"] = fake_adapter_mod
+        fake_notify = types.ModuleType("core.runtime.notify")
+        fake_notify.notify_memory_extraction = lambda **kwargs: None
+        sys.modules["core.runtime.notify"] = fake_notify
+
+        import core.docs_updater_hook as docs_updater_mod
+        import core.ingest_runtime as ingest_runtime_mod
+        import core.project_registry as project_registry_mod
+        import ingest.extract as extract_mod
+
+        seen_transcripts = []
+        applied = []
+
+        monkeypatch.setattr(
+            extract_mod,
+            "extract_from_transcript",
+            lambda **kwargs: seen_transcripts.append(kwargs["transcript"]) or {
+                "carry_facts": [{"text": "Owner discussed Niseko and Phoebe Bridgers"}],
+                "raw_facts": [{"text": "Owner discussed Niseko and Phoebe Bridgers", "status": "new"}],
+                "raw_snippets": {},
+                "raw_journal": {},
+                "raw_project_logs": {},
+                "facts_skipped": 0,
+                "payload_duplicate_facts_collapsed": 0,
+                "carry_duplicate_facts_dropped": 0,
+                "chunks_processed": 1,
+                "chunks_total": 1,
+                "root_chunks": 1,
+                "split_events": 0,
+                "split_child_chunks": 0,
+                "leaf_chunks": 1,
+                "max_split_depth": 0,
+                "deep_calls": 1,
+                "repair_calls": 0,
+                "assessment_usable": 1,
+                "assessment_nothing_usable": 0,
+                "assessment_needs_smaller_chunk": 0,
+                "unclassified_empty_payloads": 0,
+            },
+        )
+        monkeypatch.setattr(
+            extract_mod,
+            "apply_extracted_payloads",
+            lambda payload, **kwargs: applied.append((payload, kwargs)) or {
+                **payload,
+                "facts_stored": len(payload.get("raw_facts", []) or []),
+                "facts_skipped": 0,
+                "edges_created": 0,
+                "facts": [],
+                "snippets": {},
+                "journal": {},
+                "project_logs": {},
+                "project_log_metrics": {},
+            },
+        )
+        monkeypatch.setattr(ingest_runtime_mod, "run_session_logs_ingest", lambda **kwargs: {"status": "indexed"})
+        monkeypatch.setattr(project_registry_mod, "snapshot_all_projects", lambda: [])
+        monkeypatch.setattr(docs_updater_mod, "update_project_docs", lambda snapshots, extraction_result: {"docs_updated": 0})
+        monkeypatch.setattr(extraction_daemon, "_warm_payload_embeddings", lambda facts: {
+            "requested": len(facts),
+            "unique": len(facts),
+            "cache_hits": 0,
+            "warmed": len(facts),
+            "failed": 0,
+            "skipped_empty": 0,
+        })
+
+        try:
+            extraction_daemon.write_signal(
+                signal_type="session_end",
+                session_id=session_id,
+                transcript_path=str(transcript_path),
+                meta={"source_cursor_key": source_key},
+            )
+            extraction_daemon.process_signal(extraction_daemon.read_pending_signals()[0])
+
+            assert seen_transcripts
+            assert "Niseko Kinesis Phoebe Bridgers" in seen_transcripts[0]
+            assert len(applied) == 1
+            cursor = extraction_daemon.read_cursor(session_id, source_key=source_key)
+            assert cursor["line_offset"] == len(transcript_lines)
+            assert cursor["last_flushed_line_offset"] == len(transcript_lines)
         finally:
             if real_registry is not None:
                 sys.modules["core.subagent_registry"] = real_registry
