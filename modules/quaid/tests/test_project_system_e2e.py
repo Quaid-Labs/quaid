@@ -53,6 +53,7 @@ def project_env(tmp_path, monkeypatch):
     monkeypatch.setenv("QUAID_HOME", str(quaid_home))
     monkeypatch.setenv("QUAID_VISIBLE_HOME", str(quaid_home))
     monkeypatch.setenv("QUAID_INSTANCE", "test-instance")
+    monkeypatch.setenv("DOCS_DB_PATH", str(quaid_home / "data" / "docs.db"))
 
     with patch("lib.adapter.get_adapter", return_value=adapter):
         yield {
