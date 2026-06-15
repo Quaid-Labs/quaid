@@ -13151,6 +13151,66 @@ class TestRecallFastHookInjectContract:
         assert bundle["telemetry"]["date_to"] == "2026-04-20"
         assert meta["counts"]["final_results"] == 1
 
+    def test_docs_project_log_query_terms_keep_short_compact_unicode_anchors(self):
+        import datastore.memorydb.memory_graph as mg
+
+        assert mg._docs_project_log_query_terms("db 云门") == ["云门"]
+        assert mg._docs_project_log_query_terms("Baxter May 2026") == ["baxter", "may", "2026"]
+
+    def test_legacy_project_log_date_filter_scores_short_compact_unicode_terms(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+
+        db_path = tmp_path / "docs.db"
+        with sqlite3.connect(db_path) as conn:
+            conn.execute(
+                """
+                CREATE TABLE doc_chunks (
+                    source_file TEXT,
+                    chunk_index INTEGER,
+                    content TEXT,
+                    section_header TEXT
+                )
+                """
+            )
+            conn.executemany(
+                "INSERT INTO doc_chunks(source_file, chunk_index, content, section_header) VALUES (?, ?, ?, ?)",
+                [
+                    (
+                        "projects/aurora/archive/PROJECT.log",
+                        0,
+                        "- [2026-05-01T09:00:00] unrelated release marker",
+                        None,
+                    ),
+                    (
+                        "projects/aurora/current/PROJECT.log",
+                        0,
+                        "- [2026-05-01T09:00:00] 美玲记录云门编号",
+                        None,
+                    ),
+                ],
+            )
+
+        class LegacyDocsRAG:
+            def __init__(self):
+                self.db_path = db_path
+
+            def infer_project_for_source(self, source_file):
+                return "aurora" if "projects/aurora/" in str(source_file) else None
+
+        chunks = mg._legacy_search_dated_project_logs(
+            LegacyDocsRAG(),
+            query="云门",
+            limit=1,
+            project="aurora",
+            docs=None,
+            date_from=None,
+            date_to="2026-05-01",
+        )
+
+        assert len(chunks) == 1
+        assert "云门" in chunks[0]["content"]
+        assert chunks[0]["similarity"] > 0.70
+
     def test_docs_store_recall_falls_back_to_path_match_when_legacy_project_inference_is_empty(self, tmp_path):
         import datastore.memorydb.memory_graph as mg
 

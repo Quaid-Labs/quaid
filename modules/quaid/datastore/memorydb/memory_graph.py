@@ -8655,7 +8655,8 @@ def _docs_project_log_query_terms(query: str) -> List[str]:
     out: List[str] = []
     for raw in re.findall(r"[\w./-]+", str(query or "").lower()):
         term = raw.strip().strip("/.")
-        if len(term) < 3 or re.fullmatch(r"20\d{2}-\d{2}-\d{2}", term) or term in out:
+        min_len = 2 if _has_compact_unicode_char(term) else 3
+        if len(term) < min_len or re.fullmatch(r"20\d{2}-\d{2}-\d{2}", term) or term in out:
             continue
         out.append(term)
     return out
