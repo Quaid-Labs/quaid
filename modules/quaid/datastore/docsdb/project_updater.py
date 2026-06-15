@@ -190,8 +190,10 @@ def _project_log_now(date_str: Optional[str] = None) -> datetime:
             raw = f"{raw}T23:59:59"
         try:
             return datetime.fromisoformat(raw.replace("Z", "+00:00"))
-        except ValueError:
-            raise ValueError(f"Invalid {raw_source} {raw!r}") from None
+        except ValueError as exc:
+            if is_fail_hard_enabled():
+                raise RuntimeError(f"Invalid {raw_source} {raw!r}") from exc
+            logger.warning("Invalid %s %r; using wall clock", raw_source, raw)
     return datetime.now(timezone.utc)
 
 

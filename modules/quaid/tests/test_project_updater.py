@@ -383,17 +383,30 @@ class TestAppendProjectLogs:
 
         assert _project_log_now().tzinfo is timezone.utc
 
-    def test_project_log_history_rejects_malformed_quaid_now(self, setup_env, monkeypatch):
-        from datastore.docsdb.project_updater import append_project_logs
+    def test_project_log_history_malformed_quaid_now_honors_failhard(self, setup_env, monkeypatch):
+        from datastore.docsdb import project_updater
 
-        monkeypatch.setenv("QUAID_NOW", "not-a-date")
+        tmp_path = setup_env
+        project_log = tmp_path / "projects" / "test-project" / "PROJECT.log"
+        monkeypatch.setenv("QUAID_NOW", "not-a-clock")
 
-        with pytest.raises(ValueError, match="Invalid QUAID_NOW"):
-            append_project_logs(
-                {"test-project": ["Session 5: Added migration notes"]},
+        with patch("datastore.docsdb.project_updater.is_fail_hard_enabled", return_value=True):
+            with pytest.raises(RuntimeError, match="Invalid QUAID_NOW"):
+                project_updater.append_project_logs(
+                    {"test-project": ["Session 5: fail hard on bad clock"]},
+                    trigger="Reset",
+                    dry_run=False,
+                )
+
+        with patch("datastore.docsdb.project_updater.is_fail_hard_enabled", return_value=False):
+            metrics = project_updater.append_project_logs(
+                {"test-project": ["Session 6: fall open on bad clock"]},
                 trigger="Reset",
                 dry_run=False,
             )
+
+        assert metrics["entries_written"] == 1
+        assert "fall open on bad clock" in project_log.read_text()
 
     def test_structured_project_logs_preserve_per_entry_dates(self, setup_env):
         from datastore.docsdb.project_updater import append_project_logs
