@@ -455,6 +455,7 @@ class TestCallLlmProvider:
         monkeypatch.setenv("QUAID_LLM_USAGE_LOG_PATH", str(usage_log))
         monkeypatch.setenv("QUAID_LLM_USAGE_PHASE", "ingest")
         monkeypatch.setenv("QUAID_LLM_USAGE_SOURCE", "benchmark")
+        monkeypatch.setenv("QUAID_NOW", "2026-03-11T05:06:07Z")
 
         reset_token_usage()
         llm_clients.call_llm("system", "user", max_tokens=100)
@@ -462,6 +463,7 @@ class TestCallLlmProvider:
         rows = usage_log.read_text(encoding="utf-8").strip().splitlines()
         assert len(rows) == 1
         payload = json.loads(rows[0])
+        assert payload["ts"] == "2026-03-11T05:06:07+00:00"
         assert payload["phase"] == "ingest"
         assert payload["source"] == "benchmark"
         assert payload["provider"]
@@ -472,6 +474,52 @@ class TestCallLlmProvider:
         assert payload["api_calls"] == 1
         assert payload["duration_ms"] >= 0
         assert isinstance(payload["model_usage"], dict)
+
+    def test_usage_event_rejects_malformed_quaid_now(self, tmp_path, monkeypatch):
+        """Malformed benchmark clocks must not be swallowed by best-effort usage logging."""
+        import core.llm.clients as llm_clients
+        usage_log = tmp_path / "logs" / "llm-usage.jsonl"
+        monkeypatch.setenv("QUAID_LLM_USAGE_LOG_PATH", str(usage_log))
+        monkeypatch.setenv("QUAID_NOW", "not-a-date")
+        result = LLMResult("ok", 0.01, input_tokens=1, output_tokens=2, model="mock-model")
+
+        with pytest.raises(ValueError, match="Invalid QUAID_NOW"):
+            llm_clients._append_usage_event(
+                result,
+                tier="deep",
+                provider_name="TestProvider",
+                requested_model="mock-model",
+            )
+
+        assert not usage_log.exists()
+
+    def test_trace_event_honors_quaid_now(self, tmp_path, monkeypatch):
+        """LLM trace rows should be deterministic under benchmark clock overrides."""
+        import core.llm.clients as llm_clients
+        workspace = tmp_path / "runs" / "quaid-trace"
+        monkeypatch.setenv("BENCHMARK_LLM_TRACE", "1")
+        monkeypatch.setenv("QUAID_WORKSPACE", str(workspace))
+        monkeypatch.setenv("QUAID_NOW", "2026-03-11T05:06:07Z")
+
+        llm_clients._append_trace({"status": "ok", "provider": "test"})
+
+        trace_log = workspace / "logs" / "llm-call-trace.jsonl"
+        payload = json.loads(trace_log.read_text(encoding="utf-8").strip())
+        assert payload["ts"] == "2026-03-11T05:06:07+00:00"
+        assert payload["status"] == "ok"
+
+    def test_trace_event_rejects_malformed_quaid_now(self, tmp_path, monkeypatch):
+        """Malformed benchmark clocks must not be swallowed by best-effort tracing."""
+        import core.llm.clients as llm_clients
+        workspace = tmp_path / "runs" / "quaid-trace"
+        monkeypatch.setenv("BENCHMARK_LLM_TRACE", "1")
+        monkeypatch.setenv("QUAID_WORKSPACE", str(workspace))
+        monkeypatch.setenv("QUAID_NOW", "not-a-date")
+
+        with pytest.raises(ValueError, match="Invalid QUAID_NOW"):
+            llm_clients._append_trace({"status": "ok"})
+
+        assert not (workspace / "logs" / "llm-call-trace.jsonl").exists()
 
     def test_disabled_llm_returns_none_when_failhard_disabled(self, test_adapter, monkeypatch, caplog):
         """QUAID_DISABLE_LLM may degrade only when failHard is disabled."""

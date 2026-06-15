@@ -404,6 +404,23 @@ def _preview(text: Optional[str], limit: int = 30) -> str:
     return first[:limit]
 
 
+def _now_datetime() -> datetime:
+    raw = str(os.environ.get("QUAID_NOW", "")).strip()
+    if raw:
+        try:
+            value = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            raise ValueError(f"Invalid QUAID_NOW={raw!r}") from None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+    return datetime.now(timezone.utc)
+
+
+def _now_iso() -> str:
+    return _now_datetime().isoformat()
+
+
 def _error_code(exc: BaseException) -> str:
     code = getattr(exc, "code", None)
     if code is not None:
@@ -479,10 +496,11 @@ def _append_trace(payload: Dict[str, object]) -> None:
     path = _trace_path()
     if path is None:
         return
+    timestamp = _now_iso()
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         row = dict(payload or {})
-        row["ts"] = datetime.now(timezone.utc).isoformat()
+        row["ts"] = timestamp
         with _trace_lock:
             with path.open("a", encoding="utf-8") as f:
                 f.write(json.dumps(row, ensure_ascii=True) + "\n")
@@ -509,6 +527,7 @@ def _append_usage_event(
     path = _usage_log_path()
     if path is None:
         return
+    timestamp = _now_iso()
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         model_usage = {}
@@ -526,7 +545,7 @@ def _append_usage_event(
                 "total_tokens": int(result.input_tokens) + int(result.output_tokens),
             }
         row = {
-            "ts": datetime.now(timezone.utc).isoformat(),
+            "ts": timestamp,
             "phase": str(os.environ.get("QUAID_LLM_USAGE_PHASE", "")).strip() or "unknown",
             "source": str(os.environ.get("QUAID_LLM_USAGE_SOURCE", "")).strip() or "runtime",
             "provider": provider_name,
