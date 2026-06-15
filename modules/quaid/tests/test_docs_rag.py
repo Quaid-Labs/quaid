@@ -506,6 +506,18 @@ class TestIndexDocument:
 
         assert row == ("2026-03-22T08:14:15+00:00", expected_updated_at)
 
+    def test_malformed_quaid_now_honors_failhard(self, monkeypatch):
+        import datastore.docsdb.rag as rag_module
+
+        monkeypatch.setenv("QUAID_NOW", "not-a-date")
+
+        with patch.object(rag_module, "is_fail_hard_enabled", return_value=True):
+            with pytest.raises(RuntimeError, match="Invalid QUAID_NOW"):
+                rag_module._now_iso()
+
+        with patch.object(rag_module, "is_fail_hard_enabled", return_value=False):
+            assert rag_module._now_iso().startswith("20")
+
     def test_index_document_uses_open_file_mtime_for_staleness(self, tmp_path):
         rag = _make_rag(tmp_path)
         test_file = tmp_path / "guide.md"

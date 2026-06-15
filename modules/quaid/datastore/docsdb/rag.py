@@ -45,7 +45,9 @@ def _now_iso() -> str:
     if raw:
         try:
             return datetime.fromisoformat(raw.replace("Z", "+00:00")).isoformat()
-        except ValueError:
+        except ValueError as exc:
+            if is_fail_hard_enabled():
+                raise RuntimeError(f"Invalid QUAID_NOW={raw!r}") from exc
             logger.warning("Invalid QUAID_NOW=%r; using wall clock", raw)
     return datetime.now(timezone.utc).isoformat()
 
