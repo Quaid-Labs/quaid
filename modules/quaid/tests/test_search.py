@@ -500,6 +500,31 @@ class TestHasOwnerPronoun:
         from datastore.memorydb.memory_graph import has_owner_pronoun
         assert has_owner_pronoun("I like coffee") is True
 
+    def test_non_ascii_owner_name_matches_compact_query(self):
+        import datastore.memorydb.memory_graph as mg
+
+        fake_cfg = SimpleNamespace(
+            users=SimpleNamespace(
+                identities={"owner-alpha": SimpleNamespace(person_node_name="美玲")}
+            )
+        )
+        with patch.object(mg, "_HAS_CONFIG", True), \
+             patch.object(mg, "_get_memory_config", return_value=fake_cfg):
+            assert mg.has_owner_pronoun("美玲の予定を確認して") is True
+
+    def test_single_char_non_ascii_owner_name_requires_token_match(self):
+        import datastore.memorydb.memory_graph as mg
+
+        fake_cfg = SimpleNamespace(
+            users=SimpleNamespace(
+                identities={"owner-alpha": SimpleNamespace(person_node_name="玲")}
+            )
+        )
+        with patch.object(mg, "_HAS_CONFIG", True), \
+             patch.object(mg, "_get_memory_config", return_value=fake_cfg):
+            assert mg.has_owner_pronoun("美玲の予定を確認して") is False
+            assert mg.has_owner_pronoun("玲 と 美玲 の予定を確認して") is True
+
 
 class TestRowAttributeParsing:
     def test_malformed_node_attributes_dont_crash(self, tmp_path):

@@ -4784,7 +4784,7 @@ def _get_owner_names() -> set:
         for identity in cfg.users.identities.values():
             if identity.person_node_name:
                 # Add full name and each part: "Alice Smith" -> {"alice", "smith", "alice smith"}
-                full = identity.person_node_name.lower()
+                full = unicodedata.normalize("NFKC", str(identity.person_node_name)).casefold()
                 names.add(full)
                 names.update(full.split())
         return names
@@ -4795,13 +4795,20 @@ def _get_owner_names() -> set:
 def has_owner_pronoun(query: str) -> bool:
     """Check if query contains pronouns or the owner's name."""
     # Strip punctuation and possessives ('s)
-    cleaned = re.sub(r"'s\b", "", query.lower())
+    cleaned = re.sub(r"'s\b", "", unicodedata.normalize("NFKC", str(query or "")).casefold())
     words = set(re.sub(r'[^\w\s]', '', cleaned).split())
     if words & _OWNER_PRONOUNS:
         return True
     # Also check if the owner's name appears in the query
     owner_names = _get_owner_names()
-    return bool(words & owner_names)
+    if words & owner_names:
+        return True
+    query_key = _identifier_key(cleaned)
+    for owner_name in owner_names:
+        owner_key = _identifier_key(owner_name)
+        if _has_non_ascii(owner_name) and len(owner_key) >= 2 and owner_key in query_key:
+            return True
+    return False
 
 
 def extract_entities_from_text(text: str) -> List[Node]:
