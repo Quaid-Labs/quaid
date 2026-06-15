@@ -3253,6 +3253,36 @@ class TestExtractFromTranscript:
         assert not _has_exact_value_signal("Page 3.")
         assert not _has_exact_value_signal("The score was 5.")
 
+    @patch("ingest.extract.call_deep_reasoning")
+    def test_structural_anchor_questions_use_unicode_question_terminators(self, mock_llm):
+        from ingest.extract import extract_from_transcript
+
+        mock_llm.return_value = (json.dumps({
+            "chunk_assessment": "nothing_usable",
+            "facts": [],
+            "soul_snippets": {},
+            "journal_entries": {},
+            "project_logs": {},
+        }), 0.1)
+
+        result = extract_from_transcript(
+            transcript="User: marker alpha-beta-123 は必要？\n\nAssistant: no.",
+            owner_id="Maya Chen",
+            dry_run=True,
+        )
+
+        assert not any(
+            fact.get("structural_anchor_kind") == "explicit_user_structural_anchor"
+            for fact in result["raw_facts"]
+        )
+
+    def test_trailing_assistant_questions_strip_unicode_question_terminators(self):
+        from ingest.extract import _strip_trailing_question_lines
+
+        text = "Keep option alpha-beta-123.\n続けますか？\nهل نتابع؟"
+
+        assert _strip_trailing_question_lines(text) == "Keep option alpha-beta-123."
+
     def test_carry_selection_is_bounded_and_persistable(self):
         from ingest.extract import _select_carry_facts, _persistable_carry_facts
 

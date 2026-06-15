@@ -1215,13 +1215,24 @@ def _clean_structural_anchor_turn_text(text: str) -> str:
     return cleaned.strip()
 
 
+_QUESTION_TERMINATORS = ("?", "？", "؟")
+
+
+def _has_question_terminator(text: str) -> bool:
+    return str(text or "").rstrip().endswith(_QUESTION_TERMINATORS)
+
+
+def _rstrip_question_terminators(text: str) -> str:
+    return str(text or "").rstrip(" \t\r\n" + "".join(_QUESTION_TERMINATORS))
+
+
 def _split_fact_sentences(text: str) -> List[str]:
     normalized = _clean_structural_anchor_turn_text(text)
     if not normalized:
         return []
     return [
         part.strip(" \t\r\n\"'`")
-        for part in re.split(r"(?<=[.!?])\s+", normalized)
+        for part in re.split(r"(?<=[.!?？؟])\s+", normalized)
         if part.strip(" \t\r\n\"'`")
     ]
 
@@ -1265,7 +1276,7 @@ def _explicit_structural_anchor_facts(
 
     for turn in _iter_user_turn_texts(transcript):
         for sentence in _split_fact_sentences(turn):
-            if sentence.rstrip().endswith("?"):
+            if _has_question_terminator(sentence):
                 continue
             if len(sentence) > 240:
                 continue
@@ -1644,7 +1655,7 @@ def _strip_trailing_question_lines(text: str) -> str:
         if re.match(r"^[-*•]+\s+", raw_candidate):
             break
         candidate = re.sub(r"^\s*[-*•]+\s*", "", raw_candidate)
-        if not candidate.endswith("?"):
+        if not _has_question_terminator(candidate):
             break
         lines.pop()
         while lines and not lines[-1].strip():
@@ -1729,14 +1740,14 @@ def _explicit_user_mirrored_anchor_facts(
         candidate_sentences: List[Tuple[str, bool, bool]] = []
         for sentence_index, sentence in enumerate(raw_sentences):
             stripped_sentence = str(sentence or "").strip()
-            is_question_shaped = stripped_sentence.rstrip().endswith("?")
+            is_question_shaped = _has_question_terminator(stripped_sentence)
             if is_question_shaped and sentence_index + 1 < len(raw_sentences):
                 next_sentence = str(raw_sentences[sentence_index + 1] or "").strip()
                 if next_sentence and len(next_sentence.split()) <= 12:
                     next_sentence_tokens = next_sentence.split()
                     next_sentence = " ".join(next_sentence_tokens[:6])
                     candidate_sentences.append((
-                        f"{stripped_sentence.rstrip('?').rstrip()} {next_sentence}",
+                        f"{_rstrip_question_terminators(stripped_sentence).rstrip()} {next_sentence}",
                         True,
                         True,
                     ))
@@ -1888,7 +1899,7 @@ def _explicit_assistant_anchor_facts(
         prev_text = turns[index - 1][1] if index > 0 and turns[index - 1][0] == "user" else ""
         next_text = turns[index + 1][1] if index + 1 < len(turns) and turns[index + 1][0] == "user" else ""
         prev_is_question_shaped = any(
-            str(sentence or "").rstrip().endswith("?")
+            _has_question_terminator(str(sentence or ""))
             for sentence in _split_fact_sentences(prev_text)
         )
         prev_tokens = set(_structural_overlap_tokens(prev_text, min_len=4))
@@ -2171,13 +2182,10 @@ def _filter_extraction_artifact_facts(parsed: Dict[str, Any]) -> Tuple[Dict[str,
     return out, dropped
 
 
-_QUESTION_TERMINATORS = ("?", "？", "؟")
-
-
 def _question_echo_key(text: str) -> str:
     normalized = " ".join(str(text or "").strip().split())
     normalized = normalized.strip(" \t\r\n\"'`")
-    normalized = normalized.rstrip(" \t\r\n" + "".join(_QUESTION_TERMINATORS))
+    normalized = _rstrip_question_terminators(normalized)
     normalized = normalized.rstrip(" .")
     return " ".join(normalized.lower().split())
 
