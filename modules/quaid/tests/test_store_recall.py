@@ -56,6 +56,142 @@ def _make_graph(tmp_path):
     return graph, db_file
 
 
+def _mark_node_deleted(graph, node_id):
+    with graph._get_conn() as conn:
+        conn.execute(
+            "UPDATE nodes SET deleted_at = ? WHERE id = ?",
+            ("2026-01-01T00:00:00+00:00", node_id),
+        )
+
+
+def test_get_related_excludes_deleted_and_superseded_targets(tmp_path):
+    import datastore.memorydb.memory_graph as mg
+
+    graph, _ = _make_graph(tmp_path)
+    start = mg.Node.create("Person", "Traversal start", owner_id="quaid")
+    active = mg.Node.create("Fact", "Active traversal target", owner_id="quaid")
+    deleted = mg.Node.create("Fact", "Deleted traversal target", owner_id="quaid")
+    superseded = mg.Node.create("Fact", "Superseded traversal target", owner_id="quaid")
+    replacement = mg.Node.create("Fact", "Current traversal target replacement", owner_id="quaid")
+    for node in (start, active, deleted, superseded, replacement):
+        graph.add_node(node, embed=False)
+    graph.add_edge(mg.Edge.create(start.id, active.id, "mentions"))
+    graph.add_edge(mg.Edge.create(start.id, deleted.id, "mentions"))
+    graph.add_edge(mg.Edge.create(start.id, superseded.id, "mentions"))
+    _mark_node_deleted(graph, deleted.id)
+    assert graph.supersede_node(superseded.id, replacement.id) is True
+
+    rows = graph.get_related(start.id, depth=1)
+
+    ids = {row[0].id for row in rows}
+    assert active.id in ids
+    assert deleted.id not in ids
+    assert superseded.id not in ids
+
+
+def test_get_related_bidirectional_excludes_deleted_and_superseded_neighbors(tmp_path):
+    import datastore.memorydb.memory_graph as mg
+
+    graph, _ = _make_graph(tmp_path)
+    start = mg.Node.create("Person", "Bidirectional traversal start", owner_id="quaid")
+    active_out = mg.Node.create("Fact", "Active outbound neighbor", owner_id="quaid")
+    active_in = mg.Node.create("Fact", "Active inbound neighbor", owner_id="quaid")
+    deleted_out = mg.Node.create("Fact", "Deleted outbound neighbor", owner_id="quaid")
+    deleted_in = mg.Node.create("Fact", "Deleted inbound neighbor", owner_id="quaid")
+    superseded_out = mg.Node.create("Fact", "Superseded outbound neighbor", owner_id="quaid")
+    superseded_in = mg.Node.create("Fact", "Superseded inbound neighbor", owner_id="quaid")
+    replacement_out = mg.Node.create("Fact", "Current outbound replacement", owner_id="quaid")
+    replacement_in = mg.Node.create("Fact", "Current inbound replacement", owner_id="quaid")
+    nodes = (
+        start,
+        active_out,
+        active_in,
+        deleted_out,
+        deleted_in,
+        superseded_out,
+        superseded_in,
+        replacement_out,
+        replacement_in,
+    )
+    for node in nodes:
+        graph.add_node(node, embed=False)
+    graph.add_edge(mg.Edge.create(start.id, active_out.id, "mentions"))
+    graph.add_edge(mg.Edge.create(active_in.id, start.id, "mentions"))
+    graph.add_edge(mg.Edge.create(start.id, deleted_out.id, "mentions"))
+    graph.add_edge(mg.Edge.create(deleted_in.id, start.id, "mentions"))
+    graph.add_edge(mg.Edge.create(start.id, superseded_out.id, "mentions"))
+    graph.add_edge(mg.Edge.create(superseded_in.id, start.id, "mentions"))
+    _mark_node_deleted(graph, deleted_out.id)
+    _mark_node_deleted(graph, deleted_in.id)
+    assert graph.supersede_node(superseded_out.id, replacement_out.id) is True
+    assert graph.supersede_node(superseded_in.id, replacement_in.id) is True
+
+    rows = graph.get_related_bidirectional(start.id, depth=1, max_results=20)
+
+    ids = {row[0].id for row in rows}
+    assert active_out.id in ids
+    assert active_in.id in ids
+    assert deleted_out.id not in ids
+    assert deleted_in.id not in ids
+    assert superseded_out.id not in ids
+    assert superseded_in.id not in ids
+
+
+def test_beam_search_graph_excludes_deleted_and_superseded_neighbors(tmp_path):
+    import datastore.memorydb.memory_graph as mg
+
+    graph, _ = _make_graph(tmp_path)
+    start = mg.Node.create("Person", "Beam traversal start", owner_id="quaid")
+    active_out = mg.Node.create("Fact", "Active outbound beam neighbor", owner_id="quaid")
+    active_in = mg.Node.create("Fact", "Active inbound beam neighbor", owner_id="quaid")
+    deleted_out = mg.Node.create("Fact", "Deleted outbound beam neighbor", owner_id="quaid")
+    deleted_in = mg.Node.create("Fact", "Deleted inbound beam neighbor", owner_id="quaid")
+    superseded_out = mg.Node.create("Fact", "Superseded outbound beam neighbor", owner_id="quaid")
+    superseded_in = mg.Node.create("Fact", "Superseded inbound beam neighbor", owner_id="quaid")
+    replacement_out = mg.Node.create("Fact", "Current outbound beam replacement", owner_id="quaid")
+    replacement_in = mg.Node.create("Fact", "Current inbound beam replacement", owner_id="quaid")
+    nodes = (
+        start,
+        active_out,
+        active_in,
+        deleted_out,
+        deleted_in,
+        superseded_out,
+        superseded_in,
+        replacement_out,
+        replacement_in,
+    )
+    for node in nodes:
+        graph.add_node(node, embed=False)
+    graph.add_edge(mg.Edge.create(start.id, active_out.id, "mentions"))
+    graph.add_edge(mg.Edge.create(active_in.id, start.id, "mentions"))
+    graph.add_edge(mg.Edge.create(start.id, deleted_out.id, "mentions"))
+    graph.add_edge(mg.Edge.create(deleted_in.id, start.id, "mentions"))
+    graph.add_edge(mg.Edge.create(start.id, superseded_out.id, "mentions"))
+    graph.add_edge(mg.Edge.create(superseded_in.id, start.id, "mentions"))
+    _mark_node_deleted(graph, deleted_out.id)
+    _mark_node_deleted(graph, deleted_in.id)
+    assert graph.supersede_node(superseded_out.id, replacement_out.id) is True
+    assert graph.supersede_node(superseded_in.id, replacement_in.id) is True
+
+    rows = graph.beam_search_graph(
+        "active beam neighbor",
+        start.id,
+        beam_width=10,
+        max_depth=1,
+        max_results=20,
+        allow_llm_rerank=False,
+    )
+
+    ids = {row[0].id for row in rows}
+    assert active_out.id in ids
+    assert active_in.id in ids
+    assert deleted_out.id not in ids
+    assert deleted_in.id not in ids
+    assert superseded_out.id not in ids
+    assert superseded_in.id not in ids
+
+
 def test_beam_search_graph_deduplicates_nodes_reached_from_same_level(tmp_path):
     import datastore.memorydb.memory_graph as mg
 
