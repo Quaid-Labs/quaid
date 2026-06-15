@@ -67,10 +67,8 @@ def migrate_legacy_docs_tables(shared_db_path: Path, tables: Iterable[str]) -> N
     with _MIGRATION_LOCK:
         if cache_key in _PROCESS_DONE_KEYS:
             return
-        try:
-            _migrate_locked(target, wanted)
-        finally:
-            _PROCESS_DONE_KEYS.add(cache_key)
+        _migrate_locked(target, wanted)
+        _PROCESS_DONE_KEYS.add(cache_key)
 
 
 def _migrate_locked(target_db: Path, wanted_tables: tuple[str, ...]) -> None:
@@ -115,6 +113,8 @@ def _migrate_locked(target_db: Path, wanted_tables: tuple[str, ...]) -> None:
                     _write_migration_state(conn, str(source_db), table_name, source_sig)
                 conn.commit()
             except Exception as exc:
+                if isinstance(exc, ValueError) and str(exc).startswith("Invalid QUAID_NOW="):
+                    raise
                 logger.warning(
                     "Legacy docs DB merge skipped for %s: %s",
                     source_db,
