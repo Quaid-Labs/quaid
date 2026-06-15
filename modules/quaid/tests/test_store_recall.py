@@ -1520,6 +1520,141 @@ class TestStoreBasic:
         assert row["owner_id"] == "owner"
         assert "inserting with NULL reference" in capsys.readouterr().err
 
+    def test_dedup_audit_timestamps_honor_quaid_now(self, tmp_path, monkeypatch):
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _ = _make_graph(tmp_path)
+        monkeypatch.setenv("QUAID_NOW", "2030-06-01T08:09:10")
+
+        log_id = mg.log_dedup_decision(
+            graph,
+            "New archive note",
+            "missing-node-id",
+            "Existing archive note",
+            0.88,
+            "auto_reject",
+            owner_id="owner",
+            source="test",
+        )
+        with graph._get_conn() as conn:
+            conn.execute(
+                """
+                INSERT INTO dedup_log
+                (id, new_text, existing_node_id, existing_text, similarity,
+                 decision, owner_id, source, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "old-log",
+                    "Old note",
+                    None,
+                    "Old note",
+                    0.75,
+                    "auto_reject",
+                    "owner",
+                    "test",
+                    "2030-05-30T00:00:00",
+                ),
+            )
+
+        with patch.object(mg, "get_graph", return_value=graph):
+            recent = mg.get_recent_dedup_rejections(hours=24, limit=10)
+            assert mg.resolve_dedup_review(log_id, "confirmed", "same fact") is True
+
+        assert [row["id"] for row in recent] == [log_id]
+        with graph._get_conn() as conn:
+            row = conn.execute(
+                "SELECT created_at, reviewed_at FROM dedup_log WHERE id = ?",
+                (log_id,),
+            ).fetchone()
+
+        assert row["created_at"] == "2030-06-01T08:09:10"
+        assert row["reviewed_at"] == "2030-06-01T08:09:10"
+
+    def test_decay_review_timestamps_honor_quaid_now(self, tmp_path, monkeypatch):
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _ = _make_graph(tmp_path)
+        node = mg.Node.create(
+            "Fact",
+            "Maya keeps the archive card in drawer seven.",
+            owner_id="owner",
+            status="active",
+        )
+        graph.add_node(node, embed=False)
+        monkeypatch.setenv("QUAID_NOW", "2030-07-02T03:04:05")
+
+        with patch.object(mg, "get_graph", return_value=graph):
+            queue_id = mg.queue_for_decay_review(
+                {
+                    "id": node.id,
+                    "text": node.name,
+                    "type": node.type,
+                    "confidence": node.confidence,
+                    "access_count": 0,
+                    "last_accessed": node.accessed_at,
+                    "verified": node.verified,
+                    "created_at": node.created_at,
+                }
+            )
+            assert mg.resolve_decay_review(queue_id, "extend", "still relevant") is True
+
+        with graph._get_conn() as conn:
+            queue_row = conn.execute(
+                "SELECT queued_at, reviewed_at FROM decay_review_queue WHERE id = ?",
+                (queue_id,),
+            ).fetchone()
+            node_row = conn.execute(
+                "SELECT updated_at FROM nodes WHERE id = ?",
+                (node.id,),
+            ).fetchone()
+
+        assert queue_row["queued_at"] == "2030-07-02T03:04:05"
+        assert queue_row["reviewed_at"] == "2030-07-02T03:04:05"
+        assert node_row["updated_at"] == "2030-07-02T03:04:05"
+
+    def test_decay_memories_cutoff_and_updated_at_honor_quaid_now(self, tmp_path, monkeypatch):
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _ = _make_graph(tmp_path)
+        stale = mg.Node.create(
+            "Fact",
+            "The archive card is stale.",
+            owner_id="owner",
+            status="active",
+            confidence=0.9,
+            accessed_at="2030-04-20T00:00:00",
+        )
+        fresh = mg.Node.create(
+            "Fact",
+            "The archive card is fresh.",
+            owner_id="owner",
+            status="active",
+            confidence=0.9,
+            accessed_at="2030-05-20T00:00:00",
+        )
+        graph.add_node(stale, embed=False)
+        graph.add_node(fresh, embed=False)
+        monkeypatch.setenv("QUAID_NOW", "2030-06-01T00:00:00")
+
+        with patch.object(mg, "get_graph", return_value=graph):
+            result = mg.decay_memories()
+
+        assert result["decayed_count"] == 1
+        with graph._get_conn() as conn:
+            stale_row = conn.execute(
+                "SELECT confidence, updated_at FROM nodes WHERE id = ?",
+                (stale.id,),
+            ).fetchone()
+            fresh_row = conn.execute(
+                "SELECT confidence, updated_at FROM nodes WHERE id = ?",
+                (fresh.id,),
+            ).fetchone()
+
+        assert stale_row["confidence"] == pytest.approx(0.8)
+        assert stale_row["updated_at"] == "2030-06-01T00:00:00"
+        assert fresh_row["confidence"] == pytest.approx(0.9)
+
     def test_batch_write_dedup_rowid_max_ignores_same_batch_rows(self, tmp_path):
         from datastore.memorydb.memory_graph import batch_write, store
 

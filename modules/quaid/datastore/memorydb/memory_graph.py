@@ -24196,10 +24196,10 @@ def log_dedup_decision(
         active_conn.execute("""
             INSERT INTO dedup_log
             (id, new_text, existing_node_id, existing_text, similarity,
-             decision, llm_reasoning, owner_id, source)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+             decision, llm_reasoning, owner_id, source, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (log_id, new_text, existing_id, existing_text,
-              similarity, decision, llm_reasoning, owner_id, source))
+              similarity, decision, llm_reasoning, owner_id, source, _now_iso()))
 
     conn_cm = nullcontext(conn) if conn is not None else graph._get_conn()
     with conn_cm as active_conn:
@@ -24503,6 +24503,7 @@ def decay_memories() -> Dict[str, Any]:
     graph = get_graph()
 
     now = _now()
+    now_iso = now.isoformat()
     cutoff = (now - timedelta(days=30)).isoformat()
 
     with graph._get_conn() as conn:
@@ -24516,7 +24517,7 @@ def decay_memories() -> Dict[str, Any]:
               AND superseded_by IS NULL
               AND (status IS NULL OR status IN ('approved', 'active'))
               AND accessed_at < ?
-        """, (now.isoformat(), cutoff))
+        """, (now_iso, cutoff))
 
         return {"decayed_count": result.rowcount}
 
