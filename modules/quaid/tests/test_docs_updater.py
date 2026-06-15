@@ -864,6 +864,41 @@ class TestClassifyDocChange:
 
 
 class TestCleanupStateLocking:
+    def test_log_doc_update_db_honors_quaid_now(self, tmp_path, monkeypatch):
+        with _adapter_patch(tmp_path):
+            import datastore.docsdb.updater as updater
+
+            monkeypatch.setenv("DOCS_DB_PATH", str(tmp_path / "docs.db"))
+            monkeypatch.setenv("QUAID_NOW", "2026-03-11T05:06:07Z")
+
+            updater.log_doc_update_db(
+                "docs/test.md",
+                ["src/app.py"],
+                12.5,
+                "updated docs",
+                commit_hash="abc123",
+                agent_id="pytest",
+            )
+
+            assert updater.get_update_log(limit=1)[0]["timestamp"] == "2026-03-11T05:06:07+00:00"
+
+    def test_log_doc_update_db_rejects_malformed_quaid_now(self, tmp_path, monkeypatch):
+        with _adapter_patch(tmp_path):
+            import datastore.docsdb.updater as updater
+
+            monkeypatch.setenv("DOCS_DB_PATH", str(tmp_path / "docs.db"))
+            monkeypatch.setenv("QUAID_NOW", "not-a-date")
+
+            with pytest.raises(ValueError, match="Invalid QUAID_NOW"):
+                updater.log_doc_update_db(
+                    "docs/test.md",
+                    ["src/app.py"],
+                    12.5,
+                    "updated docs",
+                    commit_hash="abc123",
+                    agent_id="pytest",
+                )
+
     def test_log_doc_update_honors_quaid_now(self, tmp_path, monkeypatch):
         with _adapter_patch(tmp_path):
             import datastore.docsdb.updater as updater

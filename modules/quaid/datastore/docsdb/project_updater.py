@@ -19,7 +19,7 @@ import sys
 import tempfile
 
 logger = logging.getLogger(__name__)
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -192,7 +192,7 @@ def _project_log_now(date_str: Optional[str] = None) -> datetime:
             return datetime.fromisoformat(raw.replace("Z", "+00:00"))
         except ValueError:
             raise ValueError(f"Invalid {raw_source} {raw!r}") from None
-    return datetime.now()
+    return datetime.now(timezone.utc)
 
 
 def _index_project_history_log(log_path: Path, *, project_name: str, trigger: str) -> int:

@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from typing import Any
 
 from core.project_registry import list_projects
+
+logger = logging.getLogger(__name__)
 
 
 def current_instance_id() -> str:
@@ -15,8 +18,8 @@ def current_instance_id() -> str:
         instance = str(get_adapter().instance_id() or "").strip()
         if instance:
             return instance
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Failed resolving docsdb system-context adapter instance id: %s", exc)
     return str(os.environ.get("QUAID_INSTANCE", "") or "").strip()
 
 

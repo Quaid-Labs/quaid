@@ -91,8 +91,13 @@ def _migrate_locked(target_db: Path, wanted_tables: tuple[str, ...]) -> None:
         for source_db in source_dbs:
             try:
                 source_sig = _db_signature(source_db)
-            except Exception:
-                source_sig = ""
+            except Exception as exc:
+                logger.warning(
+                    "Legacy docs DB merge skipped for %s: failed reading DB signature: %s",
+                    source_db,
+                    exc,
+                )
+                continue
 
             alias = "src_docs"
             try:

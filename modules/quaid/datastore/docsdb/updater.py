@@ -2259,7 +2259,7 @@ def _ensure_audit_table():
                 change_summary TEXT,
                 commit_hash TEXT,
                 agent_id TEXT DEFAULT 'unknown',
-                timestamp TEXT DEFAULT (datetime('now'))
+                timestamp TEXT NOT NULL
             )
         """)
 
@@ -2273,14 +2273,24 @@ def log_doc_update_db(
     agent_id: str = "unknown"
 ) -> None:
     """Log a doc update to SQLite audit table (concurrent-safe via WAL mode)."""
+    timestamp = _now_iso()
     try:
         _ensure_audit_table()
         from lib.database import get_connection
         with get_connection(_get_audit_db_path()) as conn:
             conn.execute("""
-                INSERT INTO doc_update_log (doc_path, source_files, staleness_score, change_summary, commit_hash, agent_id)
-                VALUES (?, ?, ?, ?, ?, ?)
-            """, (doc_path, json.dumps(source_files), staleness_score, change_summary, commit_hash, agent_id))
+                INSERT INTO doc_update_log
+                    (doc_path, source_files, staleness_score, change_summary, commit_hash, agent_id, timestamp)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (
+                doc_path,
+                json.dumps(source_files),
+                staleness_score,
+                change_summary,
+                commit_hash,
+                agent_id,
+                timestamp,
+            ))
     except Exception as e:
         print(f"  Warning: audit log write failed: {e}", file=sys.stderr)
 

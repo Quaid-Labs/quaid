@@ -1,4 +1,5 @@
 import sqlite3
+import logging
 
 import pytest
 
@@ -80,3 +81,46 @@ def test_migrate_legacy_docs_tables_rejects_malformed_quaid_now_without_done_cac
 
     assert copied == ("docs/a.md",)
     assert state == ("2026-03-11T05:06:07+00:00",)
+
+
+def test_migrate_legacy_docs_tables_skips_signature_failures_with_warning(
+    tmp_path,
+    monkeypatch,
+    caplog,
+):
+    target = tmp_path / "target.db"
+    source = tmp_path / "source.db"
+    for path in (target, source):
+        conn = sqlite3.connect(str(path))
+        try:
+            conn.execute("CREATE TABLE doc_registry (id TEXT PRIMARY KEY, path TEXT)")
+        finally:
+            conn.close()
+    source_conn = sqlite3.connect(str(source))
+    try:
+        source_conn.execute(
+            "INSERT INTO doc_registry (id, path) VALUES (?, ?)",
+            ("d1", "docs/a.md"),
+        )
+        source_conn.commit()
+    finally:
+        source_conn.close()
+
+    monkeypatch.setattr(db_migration, "_legacy_instance_db_paths", lambda _target: [source])
+    monkeypatch.setattr(db_migration, "_db_signature", lambda _path: (_ for _ in ()).throw(OSError("stat failed")))
+    db_migration._PROCESS_DONE_KEYS.clear()
+
+    with caplog.at_level(logging.WARNING, logger="datastore.docsdb.db_migration"):
+        db_migration.migrate_legacy_docs_tables(target, ("doc_registry",))
+
+    target_conn = sqlite3.connect(str(target))
+    try:
+        copied = target_conn.execute("SELECT path FROM doc_registry WHERE id = ?", ("d1",)).fetchone()
+        state = target_conn.execute("SELECT source_sig FROM docs_db_migration_state").fetchall()
+    finally:
+        target_conn.close()
+
+    assert copied is None
+    assert state == []
+    assert "failed reading DB signature" in caplog.text
+    assert "stat failed" in caplog.text

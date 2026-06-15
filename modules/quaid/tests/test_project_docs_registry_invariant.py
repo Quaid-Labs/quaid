@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import logging
+from types import SimpleNamespace
 
 import pytest
 
@@ -158,6 +160,132 @@ def test_global_project_registry_rejects_malformed_quaid_now(project_registry_en
             canonical_path=str(project_dir),
             link_current_instance=False,
         )
+
+
+def test_docs_registry_project_definition_timestamps_honor_quaid_now(project_registry_env, monkeypatch):
+    from config import ProjectDefinition
+    from datastore.docsdb import registry as registry_mod
+    from datastore.docsdb.registry import DocsRegistry
+    from lib.database import get_connection
+
+    registry = DocsRegistry(seed_projects=False)
+    monkeypatch.setattr(registry_mod, "_reload_config_after_project_change", lambda _action: True)
+    monkeypatch.setattr(registry, "_ensure_global_project_entry", lambda *_args, **_kwargs: True)
+
+    def _definition(name: str, *, description: str = "clocked project"):
+        return ProjectDefinition(
+            label=name.replace("-", " ").title(),
+            home_dir=f"projects/{name}/",
+            source_roots=[],
+            auto_index=True,
+            patterns=["*.md"],
+            exclude=[],
+            description=description,
+            state="active",
+        )
+
+    monkeypatch.setenv("QUAID_NOW", "2026-03-11T05:06:00Z")
+    with get_connection(registry.db_path) as conn:
+        registry._write_project_definition_row_on_conn(conn, "clocked-docs", _definition("clocked-docs"))
+    with get_connection(registry.db_path) as conn:
+        row = conn.execute(
+            "SELECT created_at, updated_at FROM project_definitions WHERE name = ?",
+            ("clocked-docs",),
+        ).fetchone()
+        assert tuple(row) == ("2026-03-11T05:06:00+00:00", "2026-03-11T05:06:00+00:00")
+
+    monkeypatch.setenv("QUAID_NOW", "2026-03-11T05:07:00Z")
+    with get_connection(registry.db_path) as conn:
+        registry._write_project_definition_row_on_conn(
+            conn,
+            "clocked-docs",
+            _definition("clocked-docs", description="updated"),
+        )
+    with get_connection(registry.db_path) as conn:
+        row = conn.execute(
+            "SELECT description, created_at, updated_at FROM project_definitions WHERE name = ?",
+            ("clocked-docs",),
+        ).fetchone()
+        assert tuple(row) == ("updated", "2026-03-11T05:06:00+00:00", "2026-03-11T05:07:00+00:00")
+
+    monkeypatch.setenv("QUAID_NOW", "2026-03-11T05:08:00Z")
+    registry.delete_project_definition("clocked-docs")
+    with get_connection(registry.db_path) as conn:
+        row = conn.execute(
+            "SELECT state, updated_at FROM project_definitions WHERE name = ?",
+            ("clocked-docs",),
+        ).fetchone()
+        assert tuple(row) == ("deleted", "2026-03-11T05:08:00+00:00")
+
+    with get_connection(registry.db_path) as conn:
+        registry._write_project_definition_row_on_conn(conn, "rename-old", _definition("rename-old"))
+        conn.execute(
+            """
+            INSERT INTO doc_registry (file_path, project, asset_type, title, state, registered_by)
+            VALUES (?, ?, 'doc', ?, 'active', 'pytest')
+            """,
+            ("projects/rename-old/PROJECT.md", "rename-old", "Project: Rename Old"),
+        )
+
+    monkeypatch.setenv("QUAID_NOW", "2026-03-11T05:09:00Z")
+    monkeypatch.setattr(
+        registry,
+        "_get_config",
+        lambda: SimpleNamespace(projects=SimpleNamespace(definitions={"rename-old": _definition("rename-old")})),
+    )
+    monkeypatch.setattr("lib.project_registry.rename", lambda *_args, **_kwargs: {"name": "rename-new"})
+    monkeypatch.setattr("datastore.docsdb.project_updater.refresh_project_md", lambda _name: True)
+    registry.rename_project("rename-old", "rename-new")
+    with get_connection(registry.db_path) as conn:
+        row = conn.execute(
+            "SELECT state, updated_at FROM project_definitions WHERE name = ?",
+            ("rename-old",),
+        ).fetchone()
+        assert tuple(row) == ("deleted", "2026-03-11T05:09:00+00:00")
+        assert conn.execute(
+            "SELECT updated_at FROM project_definitions WHERE name = ?",
+            ("rename-new",),
+        ).fetchone()[0] == "2026-03-11T05:09:00+00:00"
+
+
+def test_docs_registry_project_definition_rejects_malformed_quaid_now(project_registry_env, monkeypatch):
+    from config import ProjectDefinition
+    from datastore.docsdb.registry import DocsRegistry
+    from lib.database import get_connection
+
+    registry = DocsRegistry(seed_projects=False)
+    monkeypatch.setenv("QUAID_NOW", "not-a-date")
+
+    with get_connection(registry.db_path) as conn:
+        with pytest.raises(ValueError, match="Invalid QUAID_NOW"):
+            registry._write_project_definition_row_on_conn(
+                conn,
+                "bad-clock",
+                ProjectDefinition(
+                    label="Bad Clock",
+                    home_dir="projects/bad-clock/",
+                    source_roots=[],
+                    auto_index=True,
+                    patterns=["*.md"],
+                    exclude=[],
+                    description="bad clock",
+                    state="active",
+                ),
+            )
+
+
+def test_docs_registry_current_instance_fallback_logs_failure(project_registry_env, monkeypatch, caplog):
+    import lib.instance as instance_mod
+    from datastore.docsdb import registry as registry_mod
+
+    monkeypatch.delenv("QUAID_INSTANCE", raising=False)
+    monkeypatch.setattr(instance_mod, "instance_id", lambda: (_ for _ in ()).throw(RuntimeError("instance unavailable")))
+
+    with caplog.at_level(logging.DEBUG, logger="datastore.docsdb.registry"):
+        assert registry_mod._current_quaid_instance_id() == ""
+
+    assert "Failed resolving current Quaid instance id" in caplog.text
+    assert "instance unavailable" in caplog.text
 
 
 def test_project_list_reconciles_existing_docs_registry_project_rows(project_registry_env):

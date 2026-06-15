@@ -30,7 +30,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from fnmatch import fnmatch
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Tuple
@@ -72,6 +72,21 @@ def _fail_hard_enabled() -> bool:
     return bool(is_fail_hard_enabled())
 
 
+def _now_iso() -> str:
+    raw = str(os.environ.get("QUAID_NOW", "") or "").strip()
+    if raw:
+        try:
+            value = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            raise ValueError(f"Invalid QUAID_NOW={raw!r}") from None
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        else:
+            value = value.astimezone(timezone.utc)
+        return value.isoformat()
+    return datetime.now(timezone.utc).isoformat()
+
+
 def _reload_config_after_project_change(action: str) -> bool:
     try:
         from config import reload_config
@@ -93,7 +108,8 @@ def _current_quaid_instance_id() -> str:
         from lib.instance import instance_id
 
         return str(instance_id() or "").strip()
-    except Exception:
+    except Exception as exc:
+        logger.debug("Failed resolving current Quaid instance id: %s", exc)
         return ""
 
 
@@ -766,10 +782,11 @@ class DocsRegistry:
     def _write_project_definition_row_on_conn(self, conn, name: str, defn) -> None:
         name = _validate_project_name(name)
         self._ensure_project_definitions_table(conn)
+        now_iso = _now_iso()
         conn.execute("""
             INSERT INTO project_definitions
-                (name, label, home_dir, source_roots, auto_index, patterns, exclude, description, state, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+                (name, label, home_dir, source_roots, auto_index, patterns, exclude, description, state, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(name) DO UPDATE SET
                 label = excluded.label,
                 home_dir = excluded.home_dir,
@@ -779,7 +796,7 @@ class DocsRegistry:
                 exclude = excluded.exclude,
                 description = excluded.description,
                 state = excluded.state,
-                updated_at = datetime('now')
+                updated_at = excluded.updated_at
         """, (
             name,
             defn.label,
@@ -790,6 +807,8 @@ class DocsRegistry:
             json.dumps(defn.exclude) if defn.exclude else "[]",
             defn.description or "",
             getattr(defn, 'state', 'active'),
+            now_iso,
+            now_iso,
         ))
 
     def _write_project_definition_row(self, name: str, defn) -> None:
@@ -814,8 +833,8 @@ class DocsRegistry:
         name = _normalize_project_name(name)
         with get_connection(self.db_path) as conn:
             conn.execute(
-                "UPDATE project_definitions SET state = 'deleted', updated_at = datetime('now') WHERE name = ?",
-                (name,)
+                "UPDATE project_definitions SET state = 'deleted', updated_at = ? WHERE name = ?",
+                (_now_iso(), name,)
             )
 
     def _syncable_project_name(self, project: Optional[str]) -> Optional[str]:
@@ -1811,8 +1830,8 @@ class DocsRegistry:
                 if db_defn:
                     self._write_project_definition_row_on_conn(conn, new_name, db_defn)
                     conn.execute(
-                        "UPDATE project_definitions SET state = 'deleted', updated_at = datetime('now') WHERE name = ?",
-                        (old_name,),
+                        "UPDATE project_definitions SET state = 'deleted', updated_at = ? WHERE name = ?",
+                        (_now_iso(), old_name,),
                     )
         except Exception:
             if dir_moved and old_dir is not None and new_dir is not None and new_dir.exists() and not old_dir.exists():
