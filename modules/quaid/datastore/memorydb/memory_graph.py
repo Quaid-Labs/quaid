@@ -19872,10 +19872,10 @@ def _normalize_planned_stores(value: Any) -> List[str]:
 def _sanitize_planned_project(value: Any) -> Optional[str]:
     import re as _re
 
-    text = str(value or "").strip().lower()
+    text = unicodedata.normalize("NFKC", str(value or "")).casefold().strip()
     if not text:
         return None
-    text = _re.sub(r"[^a-z0-9._-]+", "-", text).strip("-")
+    text = _re.sub(r"[^\w.-]+", "-", text, flags=_re.UNICODE).strip("-")
     if not text:
         return None
     return text[:64]

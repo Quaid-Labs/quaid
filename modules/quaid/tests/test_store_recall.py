@@ -11727,6 +11727,32 @@ class TestRecallTelemetry:
         assert "only classify stores/project" in captured["prompt"]
         assert captured["timeout"] == 60.0
 
+    def test_plan_fanout_queries_preserves_non_ascii_planned_project(self):
+        import datastore.memorydb.memory_graph as mg
+
+        def _fake_call_fast_reasoning(*, prompt, **kwargs):
+            return ('{"stores":["docs"],"project":"研究-資料","queries":["研究資料のAPIは？"]}', {})
+
+        with patch.object(
+            mg,
+            "parse_json_response",
+            return_value={
+                "stores": ["docs"],
+                "project": "研究-資料",
+                "queries": ["研究資料のAPIは？"],
+            },
+        ), patch("lib.llm_clients.call_fast_reasoning", side_effect=_fake_call_fast_reasoning):
+            queries, meta = mg._plan_fanout_queries(
+                "研究資料のAPIは？",
+                timeout_s=60.0,
+                return_meta=True,
+                planner_profile="fast",
+            )
+
+        assert queries == ["研究資料のAPIは？"]
+        assert meta["planned_stores"] == ["vector", "docs"]
+        assert meta["planned_project"] == "研究-資料"
+
     def test_plan_fanout_queries_fast_ignores_llm_project_for_structural_exact_codeword(self):
         import datastore.memorydb.memory_graph as mg
 
