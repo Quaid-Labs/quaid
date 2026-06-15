@@ -2007,6 +2007,29 @@ class DocsRAG:
                         "SELECT * FROM doc_chunks ORDER BY updated_at DESC LIMIT ?",
                         (row_scan_limit,),
                     ).fetchall()
+                rows_by_id = {str(row[0]): row for row in rows}
+                lexical_terms = query_terms[:6]
+                if lexical_terms:
+                    lexical_clauses: List[str] = []
+                    lexical_params: List[Any] = []
+                    for term in lexical_terms:
+                        like_term = f"%{_escape_like(term)}%"
+                        lexical_clauses.append(
+                            "(source_file LIKE ? ESCAPE '\\' OR section_header LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\')"
+                        )
+                        lexical_params.extend([like_term, like_term, like_term])
+                    lexical_where = f"({' OR '.join(lexical_clauses)})"
+                    if scan_where:
+                        lexical_where = f"({scan_where}) AND {lexical_where}"
+                        lexical_params = list(scan_params) + lexical_params
+                    lexical_limit = max(64, limit * 32)
+                    lexical_rows = conn.execute(
+                        f"SELECT * FROM doc_chunks WHERE {lexical_where} ORDER BY updated_at DESC LIMIT ?",
+                        tuple(lexical_params + [lexical_limit]),
+                    ).fetchall()
+                    for row in lexical_rows:
+                        rows_by_id.setdefault(str(row[0]), row)
+                    rows = list(rows_by_id.values())
 
             for row in rows:
                 source_file = str(row[1] or "")

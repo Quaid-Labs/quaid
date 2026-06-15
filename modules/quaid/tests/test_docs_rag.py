@@ -1127,7 +1127,49 @@ class TestDocsSearchFiltering:
             results = rag.search_docs("content", limit=1)
 
         assert len(results) == 1
-        assert unpack.call_count == 256
+        assert unpack.call_count <= 320
+
+    def test_search_docs_row_scan_fallback_rescues_old_exact_lexical_match(self, tmp_path):
+        rag = _make_rag(tmp_path)
+        with sqlite3.connect(rag.db_path) as db:
+            db.executemany(
+                "INSERT INTO doc_chunks (id, source_file, chunk_index, content, section_header, embedding, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                [
+                    (
+                        f"recent:{i}",
+                        f"/tmp/docs/recent{i}.md",
+                        0,
+                        f"noise only {i}",
+                        None,
+                        b"e",
+                        "2100-01-01T00:00:00+00:00",
+                    )
+                    for i in range(300)
+                ],
+            )
+            db.execute(
+                "INSERT INTO doc_chunks (id, source_file, chunk_index, content, section_header, embedding, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    "archive:0",
+                    "/tmp/docs/archive.md",
+                    0,
+                    "ravenphrase exact archive note",
+                    "# Archive",
+                    b"e",
+                    "2000-01-01T00:00:00+00:00",
+                ),
+            )
+            db.commit()
+
+        with patch("datastore.docsdb.rag._lib_has_vec", return_value=False), \
+             patch("datastore.docsdb.rag._lib_get_embedding", return_value=[1.0]), \
+             patch("datastore.docsdb.rag._lib_unpack_embedding", return_value=[1.0]), \
+             patch("datastore.docsdb.rag._lib_cosine_similarity", return_value=0.31), \
+             patch.object(rag, "infer_project_for_source", return_value=None):
+            results = rag.search_docs("ravenphrase", limit=3)
+
+        assert results
+        assert results[0]["source"].endswith("archive.md")
 
     def test_project_source_fallback_read_failure_raises_under_failhard(self, tmp_path, monkeypatch):
         rag = _make_rag(tmp_path)
