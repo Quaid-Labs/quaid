@@ -335,6 +335,7 @@ class TestCheckpointBehavior:
     def test_checkpoint_written_at_start_and_end_of_all_task(self, monkeypatch, tmp_path):
         """For task='all', checkpoint file is written at start (status=running) and end (status=completed/failed)."""
         _patch_janitor_base(monkeypatch, tmp_path)
+        monkeypatch.setenv("QUAID_NOW", "2026-02-03T04:05:06Z")
 
         checkpoint_writes = []
         orig_write = janitor._atomic_write_json
@@ -378,12 +379,14 @@ class TestCheckpointBehavior:
         first = checkpoint_writes[0]
         assert first["task"] == "all"
         assert first["status"] == "running"
+        assert first["started_at"] == "2026-02-03T04:05:06+00:00"
+        assert first["heartbeat_at"] == "2026-02-03T04:05:06+00:00"
 
         final = [payload for payload in checkpoint_writes if payload.get("task") == "all" and payload.get("status")][-1]
         assert final["task"] == "all"
         assert final["status"] in ("completed", "failed")
         assert final.get("terminal_status") == final["status"]
-        assert final.get("finished_at")
+        assert final.get("finished_at") == "2026-02-03T04:05:06+00:00"
 
     def test_checkpoint_memory_stages_use_completed_stages_tracking(self, monkeypatch, tmp_path):
         """Memory graph stages update current_stage/completed_stages in checkpoint.

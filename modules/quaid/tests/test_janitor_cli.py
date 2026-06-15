@@ -90,6 +90,26 @@ def test_write_janitor_stats_records_apply_completion_and_preserves_it(monkeypat
     assert stats["last_janitor_completed_at"] == "2026-05-01T01:02:03"
 
 
+def test_write_janitor_stats_fallback_honors_quaid_now(monkeypatch, tmp_path):
+    monkeypatch.setenv("QUAID_NOW", "2026-02-03T04:05:06Z")
+
+    from core.lifecycle import janitor
+
+    logs_dir = tmp_path / "logs"
+    monkeypatch.setattr(janitor, "_logs_dir", lambda: logs_dir)
+    monkeypatch.setattr(janitor, "get_token_usage", lambda: {"api_calls": 0, "input_tokens": 0, "output_tokens": 0})
+    monkeypatch.setattr(janitor, "estimate_cost", lambda: 0.0)
+
+    stats_path = janitor._write_janitor_stats(
+        task="cleanup",
+        dry_run=True,
+        result={"success": True, "applied_changes": {}, "metrics": {}},
+    )
+
+    stats = json.loads(stats_path.read_text(encoding="utf-8"))
+    assert stats["last_run"] == "2026-02-03T04:05:06+00:00"
+
+
 def test_janitor_main_routes_all_apply_through_supervisor_request(monkeypatch, tmp_path, capsys):
     monkeypatch.setenv("QUAID_HOME", str(tmp_path))
     monkeypatch.setenv("QUAID_VISIBLE_HOME", str(tmp_path))
@@ -133,6 +153,18 @@ def test_janitor_audit_log_honors_fail_hard(monkeypatch, tmp_path):
 
     with pytest.raises(RuntimeError, match="Failed to write janitor audit log"):
         janitor._write_janitor_log_entry(log_dir, "janitor_complete")
+
+
+def test_janitor_audit_log_honors_quaid_now(monkeypatch, tmp_path):
+    monkeypatch.setenv("QUAID_NOW", "2026-02-03T04:05:06Z")
+
+    from core.lifecycle import janitor
+
+    janitor._write_janitor_log_entry(tmp_path, "janitor_complete")
+
+    line = (tmp_path / "janitor.log").read_text(encoding="utf-8").splitlines()[0]
+    payload = json.loads(line)
+    assert payload["ts"] == "2026-02-03T04:05:06+00:00"
 
 
 def test_janitor_wal_checkpoint_raises_when_fail_hard(monkeypatch):
@@ -272,6 +304,23 @@ def test_janitor_lock_attempt_does_not_truncate_held_lock(monkeypatch, tmp_path)
     finally:
         fcntl.flock(holder, fcntl.LOCK_UN)
         holder.close()
+        janitor._lock_fd = None
+
+
+def test_janitor_lock_payload_honors_quaid_now(monkeypatch, tmp_path):
+    from core.lifecycle import janitor
+
+    monkeypatch.setenv("QUAID_NOW", "2026-02-03T04:05:06Z")
+    data_dir = tmp_path / "data"
+    monkeypatch.setattr(janitor, "_data_dir", lambda: data_dir)
+    janitor._lock_fd = None
+
+    try:
+        assert janitor._acquire_lock() is True
+        lines = (data_dir / ".janitor.lock").read_text(encoding="utf-8").splitlines()
+        assert lines[1] == "2026-02-03T04:05:06+00:00"
+    finally:
+        janitor._release_lock()
         janitor._lock_fd = None
 
 

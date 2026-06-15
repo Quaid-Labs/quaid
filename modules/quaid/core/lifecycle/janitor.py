@@ -167,6 +167,24 @@ def _logs_dir() -> Path:
     return get_logs_dir()
 
 
+def _now_datetime() -> datetime:
+    raw = str(os.environ.get("QUAID_NOW", "") or "").strip()
+    if raw:
+        normalized = raw.replace("Z", "+00:00")
+        try:
+            parsed = datetime.fromisoformat(normalized)
+        except ValueError as exc:
+            raise ValueError(f"Invalid QUAID_NOW={raw!r}") from exc
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed
+    return datetime.now(timezone.utc)
+
+
+def _now_iso() -> str:
+    return _now_datetime().isoformat()
+
+
 def _shared_logs_dir() -> Path:
     raw = str(os.environ.get("QUAID_HOME", "") or "").strip()
     if raw:
@@ -176,7 +194,7 @@ def _shared_logs_dir() -> Path:
 
 def _write_janitor_log_entry(logs_dir: Path, event: str, level: str = "info", **data: Any) -> None:
     entry = {
-        "ts": datetime.now().isoformat(),
+        "ts": _now_iso(),
         "level": level,
         "component": "janitor",
         "event": event,
@@ -488,6 +506,7 @@ def _acquire_lock() -> bool:
     """Acquire janitor lock using fcntl.flock (atomic, auto-releases on crash)."""
     global _lock_fd
     import fcntl
+    lock_started_at = _now_iso()
     with _lock_guard:
         try:
             lock_path = _lock_file_path()
@@ -498,7 +517,7 @@ def _acquire_lock() -> bool:
             fcntl.flock(_lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             _lock_fd.seek(0)
             _lock_fd.truncate()
-            _lock_fd.write(f"{os.getpid()}\n{datetime.now().isoformat()}")
+            _lock_fd.write(f"{os.getpid()}\n{lock_started_at}")
             _lock_fd.flush()
             return True
         except BlockingIOError:
@@ -783,9 +802,10 @@ def _trim_decision_log_tail(path: Path, max_lines: int) -> None:
 
 def _append_decision_log(kind: str, payload: Dict[str, Any]) -> None:
     """Append janitor decision events for audit/debug."""
+    ts = _now_iso()
     try:
         row = {
-            "ts": datetime.now().isoformat(),
+            "ts": ts,
             "kind": kind,
             **payload,
         }
@@ -855,7 +875,7 @@ def _write_janitor_stats(
         janitor_logger.warn("janitor_stats_read_failed", path=str(stats_file), error=str(exc))
         existing = {}
 
-    run_at = completed_at or datetime.now().isoformat()
+    run_at = completed_at or _now_iso()
     usage = usage or get_token_usage()
     stats_data = {
         "last_run": run_at,
@@ -919,7 +939,7 @@ def _queue_approval_request(scope: str, task_name: str, summary: str) -> None:
     """Queue a pending approval request for heartbeat + user follow-up."""
     entry = {
         "id": hashlib.sha256(f"{scope}|{task_name}|{summary}".encode()).hexdigest()[:12],
-        "created_at": datetime.now().isoformat(),
+        "created_at": _now_iso(),
         "scope": scope,
         "task": task_name,
         "summary": summary,
@@ -1024,6 +1044,7 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
 
     graph = get_graph()
     metrics = JanitorMetrics()
+    run_started_at_iso = _now_iso()
     ambient_graph_summary = (
         _ambient_instance_graph_summary()
         if dry_run and not bool(str(os.environ.get("QUAID_INSTANCE", "") or "").strip())
@@ -1120,8 +1141,8 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
     checkpoint_state: Dict[str, Any] = {
         "task": task,
         "dry_run": bool(dry_run),
-        "started_at": datetime.now().isoformat(),
-        "heartbeat_at": datetime.now().isoformat(),
+        "started_at": run_started_at_iso,
+        "heartbeat_at": run_started_at_iso,
         "status": "running",
         "current_stage": "",
         "completed_stages": [],
@@ -1145,7 +1166,7 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
         if task != "all" or dry_run:
             return
         with checkpoint_lock:
-            now_iso = datetime.now().isoformat()
+            now_iso = _now_iso()
             checkpoint_state["heartbeat_at"] = now_iso
             if stage:
                 checkpoint_state["current_stage"] = stage
@@ -2025,13 +2046,14 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
 
     # Record run in janitor_runs table (enables incremental mode)
     if not dry_run:
+        janitor_run_completed_at_iso = _now_iso()
         try:
             actions = sum(v for v in applied_changes.values() if isinstance(v, (int, float)) and v > 0)
             record_janitor_run(
                 graph=graph,
                 task_name=task,
-                started_at_iso=datetime.fromtimestamp(metrics.start_time).isoformat(),
-                completed_at_iso=datetime.now().isoformat(),
+                started_at_iso=run_started_at_iso,
+                completed_at_iso=janitor_run_completed_at_iso,
                 memories_processed=applied_changes.get("memories_reviewed", 0) + applied_changes.get("duplicates_merged", 0),
                 actions_taken=int(actions),
                 status="completed" if success else "failed",
@@ -2055,10 +2077,10 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
     # janitor maintenance validation.
     skip_notify = str(os.environ.get("QUAID_JANITOR_SKIP_NOTIFY", "")).strip().lower() in {"1", "true", "yes", "on"}
     if task == "all" and not dry_run and not skip_notify:
+        today_start = _now_datetime().replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
         try:
             from core.runtime.events import emit_event, process_events
 
-            today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
             today_memories = [
                 {"text": text, "category": "fact"}
                 for text in list_recent_fact_texts(graph, since_iso=today_start, limit=25)
@@ -2089,7 +2111,7 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
     # WAL checkpoint at end of run to reclaim WAL file space
     _checkpoint_wal_after_run(graph, task=task, dry_run=dry_run)
 
-    completed_at = datetime.now().isoformat()
+    completed_at = _now_iso()
     _checkpoint_save(status="completed" if success else "failed")
 
     result = {

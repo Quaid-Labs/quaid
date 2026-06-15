@@ -1,4 +1,5 @@
 import os
+import json
 import sys
 import time
 import urllib.request
@@ -251,6 +252,20 @@ def test_record_janitor_run_failure_raises_when_fail_hard_enabled(monkeypatch, t
         janitor._run_task_optimized_inner("cleanup", dry_run=False, incremental=False, resume_checkpoint=False)
 
 
+def test_record_janitor_run_timestamps_honor_quaid_now(monkeypatch, tmp_path):
+    monkeypatch.setenv("QUAID_NOW", "2026-02-03T04:05:06Z")
+    cfg = _minimal_janitor_cfg(memory=False, journal=False)
+    _patch_minimal_janitor_run(monkeypatch, tmp_path, cfg)
+    calls = []
+    monkeypatch.setattr(janitor, "record_janitor_run", lambda **kwargs: calls.append(kwargs), raising=False)
+
+    janitor._run_task_optimized_inner("cleanup", dry_run=False, incremental=False, resume_checkpoint=False)
+
+    assert calls
+    assert calls[0]["started_at_iso"] == "2026-02-03T04:05:06+00:00"
+    assert calls[0]["completed_at_iso"] == "2026-02-03T04:05:06+00:00"
+
+
 def test_completion_event_failure_raises_when_fail_hard_enabled(monkeypatch, tmp_path):
     cfg = _minimal_janitor_cfg(memory=False, journal=False)
     _patch_minimal_janitor_run(monkeypatch, tmp_path, cfg)
@@ -264,6 +279,31 @@ def test_completion_event_failure_raises_when_fail_hard_enabled(monkeypatch, tmp
 
     with pytest.raises(RuntimeError, match="event broke"):
         janitor._run_task_optimized_inner("all", dry_run=False, incremental=False, resume_checkpoint=False)
+
+
+def test_completion_event_today_window_honors_quaid_now(monkeypatch, tmp_path):
+    monkeypatch.setenv("QUAID_NOW", "2026-02-03T04:05:06Z")
+    cfg = _minimal_janitor_cfg(memory=False, journal=False)
+    _patch_minimal_janitor_run(monkeypatch, tmp_path, cfg)
+    monkeypatch.setattr(janitor, "record_janitor_run", lambda *_args, **_kwargs: None, raising=False)
+    seen = {}
+
+    def _list_recent_fact_texts(_graph, *, since_iso, limit):
+        seen["since_iso"] = since_iso
+        return []
+
+    monkeypatch.setattr(
+        janitor,
+        "list_recent_fact_texts",
+        _list_recent_fact_texts,
+        raising=False,
+    )
+    monkeypatch.setattr("core.runtime.events.emit_event", lambda **_kwargs: None)
+    monkeypatch.setattr("core.runtime.events.process_events", lambda **_kwargs: None)
+
+    janitor._run_task_optimized_inner("all", dry_run=False, incremental=False, resume_checkpoint=False)
+
+    assert seen["since_iso"] == "2026-02-03T00:00:00+00:00"
 
 
 def test_default_owner_raises_when_fail_hard_enabled(monkeypatch):
@@ -286,6 +326,21 @@ def test_queue_approval_request_invalid_json_raises_when_fail_hard_enabled(tmp_p
 
     with pytest.raises(RuntimeError, match="pending approval requests JSON"):
         janitor._queue_approval_request("memory", "review", "bad parse case")
+
+
+def test_queue_approval_request_honors_quaid_now(tmp_path, monkeypatch):
+    monkeypatch.setenv("QUAID_NOW", "2026-02-03T04:05:06Z")
+    json_path = tmp_path / "pending-approval-requests.json"
+    md_path = tmp_path / "pending-approval-requests.md"
+    monkeypatch.setattr(janitor, "_pending_approvals_json_path", lambda: json_path)
+    monkeypatch.setattr(janitor, "_pending_approvals_md_path", lambda: md_path)
+    monkeypatch.setattr(janitor, "_append_decision_log", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(janitor, "_queue_delayed_notification", lambda *_args, **_kwargs: None)
+
+    janitor._queue_approval_request("memory", "review", "check timestamp")
+
+    data = json.loads(json_path.read_text(encoding="utf-8"))
+    assert data["requests"][0]["created_at"] == "2026-02-03T04:05:06+00:00"
 
 
 def test_benchmark_gate_invalid_inputs_raise_when_fail_hard_enabled(monkeypatch):
@@ -386,6 +441,24 @@ def test_append_decision_log_archives_via_rotation(tmp_path, monkeypatch):
     for p in payloads:
         assert "ts" in p
         assert p["kind"] == "test"
+
+
+def test_append_decision_log_honors_quaid_now(tmp_path, monkeypatch):
+    monkeypatch.setenv("QUAID_NOW", "2026-02-03T04:05:06Z")
+    decision_path = tmp_path / "janitor" / "decision-log.jsonl"
+    monkeypatch.setattr(janitor, "_decision_log_path", lambda: decision_path)
+
+    janitor._append_decision_log("test", {"idx": 1})
+
+    payload = json.loads(decision_path.read_text(encoding="utf-8").splitlines()[0])
+    assert payload["ts"] == "2026-02-03T04:05:06+00:00"
+
+
+def test_janitor_now_rejects_malformed_quaid_now(monkeypatch):
+    monkeypatch.setenv("QUAID_NOW", "not-a-date")
+
+    with pytest.raises(ValueError, match="Invalid QUAID_NOW"):
+        janitor._now_iso()
 
 
 def test_check_for_updates_ignores_non_object_github_payload(tmp_path, monkeypatch):
