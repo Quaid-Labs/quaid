@@ -1513,6 +1513,45 @@ def _cleanup_rolling_state_snapshot_paths(state: Any) -> None:
         _cleanup_daemon_transcript_snapshot_path(raw)
 
 
+def _pending_signal_references_transcript_path(transcript_path: str) -> bool:
+    raw = str(transcript_path or "").strip()
+    if not raw:
+        return False
+    try:
+        target = str(Path(raw).expanduser().resolve(strict=False))
+    except OSError:
+        target = raw
+
+    def _same_path(candidate: Any) -> bool:
+        candidate_raw = str(candidate or "").strip()
+        if not candidate_raw:
+            return False
+        if candidate_raw == raw:
+            return True
+        try:
+            return str(Path(candidate_raw).expanduser().resolve(strict=False)) == target
+        except OSError:
+            return False
+
+    try:
+        for signal_file in _signal_dir().glob("*.json"):
+            try:
+                payload = json.loads(signal_file.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                continue
+            if not isinstance(payload, dict):
+                continue
+            if _same_path(payload.get("transcript_path")):
+                return True
+            meta = payload.get("meta") if isinstance(payload.get("meta"), dict) else {}
+            if _same_path(meta.get("source_transcript_path")) or _same_path(meta.get("buffer_transcript_path")):
+                return True
+    except OSError as exc:
+        logger.debug("failed scanning pending signals before snapshot cleanup %s: %s", raw, exc)
+        return True
+    return False
+
+
 def write_cursor(
     session_id: str,
     line_offset: int,
@@ -4121,6 +4160,8 @@ def _processed_rolling_snapshot_can_be_cleaned(transcript_path: str, staged_stat
         return True
     if not _is_daemon_rolling_transcript_snapshot_path(transcript_path):
         return True
+    if _pending_signal_references_transcript_path(transcript_path):
+        return False
     source_path = str((staged_state or {}).get("source_transcript_path") or "").strip()
     if not source_path or source_path == str(transcript_path or "").strip():
         return False

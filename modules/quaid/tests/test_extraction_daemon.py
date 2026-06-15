@@ -16609,6 +16609,61 @@ class TestRollingExtraction:
         assert captured[0]["transcript_path"] == str(original)
         assert captured[0]["meta"]["recovered_missing_flush"] is True
 
+    def test_processed_rolling_snapshot_kept_while_pending_flush_references_it(
+        self, monkeypatch, tmp_path
+    ):
+        """A pending staged flush must keep its daemon snapshot readable until it runs."""
+        instance_id = os.environ.get("QUAID_INSTANCE", "pytest-runner")
+        source = tmp_path / "extraction_cache" / "day-012-2026-03-22.jsonl"
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_text('{"role":"user","content":"source"}\n', encoding="utf-8")
+        snapshot = (
+            tmp_path
+            / "instances"
+            / instance_id
+            / "logs"
+            / "daemon"
+            / "rolling-transcript-snapshots"
+            / "day-runtime-2026-03-22"
+            / "20260615T121735Z-39ba373a3765cc2a"
+            / source.name
+        )
+        snapshot.parent.mkdir(parents=True, exist_ok=True)
+        snapshot.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", instance_id)
+        signal_path = extraction_daemon.write_signal(
+            signal_type="session_end",
+            session_id="day-runtime-2026-03-22",
+            transcript_path=str(snapshot),
+            meta={
+                "reason": "rolling_stage_flush",
+                "source_signal": "rolling",
+                "staged_payload_sweep": True,
+            },
+        )
+        staged_state = {
+            "raw_facts": [{"text": "staged fact", "category": "fact"}],
+            "rolling_batches": 1,
+            "staged_payload_pending_flush": True,
+            "source_transcript_path": str(source),
+        }
+
+        assert extraction_daemon._processed_rolling_snapshot_can_be_cleaned(
+            str(snapshot),
+            staged_state,
+        ) is False
+
+        signal_data = json.loads(signal_path.read_text(encoding="utf-8"))
+        signal_data["_signal_path"] = str(signal_path)
+        extraction_daemon.mark_signal_processed(signal_data)
+
+        assert extraction_daemon._processed_rolling_snapshot_can_be_cleaned(
+            str(snapshot),
+            staged_state,
+        ) is True
+
     def test_missing_rolling_stage_flush_recovery_queues_retry_with_active_source_lock(self, monkeypatch, tmp_path):
         """Durable-state recovery must leave a retry signal even while a source lock is active."""
         instance_id = os.environ.get("QUAID_INSTANCE", "pytest-runner")
