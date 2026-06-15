@@ -5095,6 +5095,48 @@ class TestSourceChunkStorage:
             ).fetchone()["embedding"] is not None
         assert "Failed to index retried embedding for node" in caplog.text
 
+    def test_health_metrics_staleness_distribution_uses_db_buckets(self, tmp_path, monkeypatch):
+        """Health metrics bucket accessed_at values without materializing every node row."""
+        import datastore.memorydb.memory_graph as mg
+
+        monkeypatch.setenv("QUAID_NOW", "2026-06-16T12:00:00+00:00")
+        graph, _db_file = _make_graph(tmp_path)
+        dates = {
+            "recent": "2026-06-11T12:00:00+00:00",
+            "month": "2026-06-01T12:00:00+00:00",
+            "quarter": "2026-05-01T12:00:00+00:00",
+            "old": "2026-01-01T12:00:00+00:00",
+            "never": None,
+            "bad": "not-a-date",
+        }
+        node_ids = {}
+        for label in dates:
+            node_ids[label] = graph.add_node(
+                mg.Node.create(
+                    "fact",
+                    f"Health metrics bucket candidate {label}",
+                    owner_id="operator",
+                    status="approved",
+                ),
+                embed=False,
+            )
+        with graph._get_conn() as conn:
+            for label, accessed_at in dates.items():
+                conn.execute(
+                    "UPDATE nodes SET accessed_at = ? WHERE id = ?",
+                    (accessed_at, node_ids[label]),
+                )
+
+        metrics = graph.get_health_metrics()
+
+        assert metrics["staleness_distribution"] == {
+            "0-7d": 1,
+            "7-30d": 1,
+            "30-90d": 1,
+            "90d+": 1,
+            "never": 2,
+        }
+
     def test_session_chunk_ann_query_remains_owner_scoped(self, tmp_path):
         """The shared chunk ANN index cannot return another owner's transcript chunks."""
         import datastore.memorydb.memory_graph as mg

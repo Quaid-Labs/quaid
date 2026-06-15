@@ -3491,19 +3491,32 @@ class MemoryGraph:
 
             # Staleness distribution (days since accessed)
             staleness = {"0-7d": 0, "7-30d": 0, "30-90d": 0, "90d+": 0, "never": 0}
-            for row in conn.execute("SELECT accessed_at FROM nodes").fetchall():
-                if not row["accessed_at"]:
-                    staleness["never"] += 1
-                    continue
-                try:
-                    accessed = datetime.fromisoformat(row["accessed_at"].replace('Z', '+00:00'))
-                    days = (datetime.now(accessed.tzinfo) - accessed).days if accessed.tzinfo else (datetime.now() - accessed).days
-                    if days <= 7: staleness["0-7d"] += 1
-                    elif days <= 30: staleness["7-30d"] += 1
-                    elif days <= 90: staleness["30-90d"] += 1
-                    else: staleness["90d+"] += 1
-                except (ValueError, TypeError):
-                    staleness["never"] += 1
+            for row in conn.execute(
+                """
+                WITH params(now_jd) AS (SELECT julianday(?)),
+                bucketed(bucket) AS (
+                    SELECT CASE
+                        WHEN n.accessed_at IS NULL
+                          OR n.accessed_at = ''
+                          OR julianday(n.accessed_at) IS NULL
+                            THEN 'never'
+                        WHEN params.now_jd - julianday(n.accessed_at) < 8
+                            THEN '0-7d'
+                        WHEN params.now_jd - julianday(n.accessed_at) < 31
+                            THEN '7-30d'
+                        WHEN params.now_jd - julianday(n.accessed_at) < 91
+                            THEN '30-90d'
+                        ELSE '90d+'
+                    END AS bucket
+                    FROM nodes n CROSS JOIN params
+                )
+                SELECT bucket, COUNT(*) AS cnt
+                FROM bucketed
+                GROUP BY bucket
+                """,
+                (_now_iso(),),
+            ).fetchall():
+                staleness[row["bucket"]] = row["cnt"]
 
             # Top edge types
             top_relations = dict(conn.execute("""
