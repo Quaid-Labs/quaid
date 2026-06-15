@@ -5261,6 +5261,28 @@ class TestTimestampOverride:
         payload = json.loads(result.stdout)
         texts = [row["text"] for row in payload["results"]]
         assert texts == ["The leatherworking awl lives in the brass toolkit."]
+        assert payload["results"][0]["extraction_confidence"] == 0.91
+
+        text_result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "datastore.memorydb.memory_graph",
+                "recall",
+                "leatherworking",
+                '{"session_id":"m9-session-filter","owner_id":"m9-test-owner","limit":5}',
+            ],
+            cwd=str(module_root),
+            env=env,
+            text=True,
+            capture_output=True,
+            timeout=20,
+            check=False,
+        )
+
+        assert text_result.returncode == 0, text_result.stderr
+        assert "[C:0.9]" in text_result.stdout
+        assert "[C:0.5]" not in text_result.stdout
 
 
 class TestSourceChunkStorage:

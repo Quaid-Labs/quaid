@@ -25522,6 +25522,7 @@ if __name__ == "__main__":
                         "similarity": 1.0,
                         "id": r["id"],
                         "created_at": r["created_at"] or "",
+                        "extraction_confidence": r["extraction_confidence"],
                         "valid_from": "",
                         "valid_until": "",
                         "privacy": r["privacy"] or "shared",
