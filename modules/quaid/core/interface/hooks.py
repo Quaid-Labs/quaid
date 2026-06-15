@@ -310,6 +310,8 @@ def _is_bare_question_memory_text(text: str) -> bool:
     raw = _primary_memory_assertion_text(text)
     if not raw:
         return False
+    if raw.rstrip().endswith(("?", "؟", "？")):
+        return True
     if _QUESTION_MEMORY_RE.match(raw):
         return True
     if "?" in raw:

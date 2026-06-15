@@ -93,6 +93,20 @@ def _run_hook_inject(hook_input: dict, *, monkeypatch, patches: dict | None = No
     return captured_out.getvalue(), captured_err.getvalue()
 
 
+def test_non_injectable_memory_filters_non_english_question_punctuation():
+    from core.interface import hooks
+
+    assert hooks._is_bare_question_memory_text("¿Qué contiene el registro?")
+    assert hooks._is_bare_question_memory_text("次の予定は何ですか？")
+    assert hooks._is_bare_question_memory_text("ما هو الموعد التالي؟")
+
+
+def test_non_injectable_memory_keeps_non_english_fact_sentence():
+    from core.interface import hooks
+
+    assert not hooks._is_bare_question_memory_text("旅行計画は金曜日に確定した。")
+
+
 def _run_hook_session_init(hook_input: dict, *, monkeypatch, rules_dir: Path):
     """Drive hook_session_init with fake stdin and captured stdout/stderr.
 
