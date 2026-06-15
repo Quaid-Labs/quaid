@@ -16307,6 +16307,97 @@ class TestRecallFastHookInjectContract:
         assert any("clarinet" in row["text"].lower() for row in rescued)
         assert meta["applied"] is True
 
+    def test_query_term_search_scans_keyword_surface(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _ = _make_graph(tmp_path)
+        comet = mg.Node.create(
+            "Fact",
+            "Comet is a golden retriever.",
+            owner_id="quaid",
+            keywords="pet dog breed canine",
+        )
+        graph.add_node(comet, embed=False)
+
+        rows = mg._search_nodes_by_query_terms(
+            graph,
+            ["dog"],
+            owner_id="quaid",
+            limit=5,
+        )
+
+        assert [node.id for node, _score in rows] == [comet.id]
+
+    def test_facet_rescue_uses_related_entity_anchor_for_attribute_rows(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _ = _make_graph(tmp_path)
+        person = mg.Node.create("Person", "Elena Park", owner_id="quaid")
+        companion = mg.Node.create("Pet", "Comet", owner_id="quaid")
+        attribute = mg.Node.create(
+            "Fact",
+            "Comet is a golden retriever.",
+            owner_id="quaid",
+            keywords="pet dog breed canine",
+            attributes={"domains": ["personal"]},
+        )
+        graph.add_node(person, embed=False)
+        graph.add_node(companion, embed=False)
+        graph.add_node(attribute, embed=False)
+        graph.add_edge(mg.Edge.create(person.id, companion.id, "cares_for"))
+
+        with patch.object(mg, "get_graph", return_value=graph):
+            rescued, meta = mg._recover_explicit_entity_facet_rows(
+                "What kind of dog does Elena Park have?",
+                [],
+                owner_id="quaid",
+                limit=5,
+                intent="GENERAL",
+            )
+
+        assert any(row["id"] == attribute.id for row in rescued)
+        rescued_attribute = next(row for row in rescued if row["id"] == attribute.id)
+        assert rescued_attribute["via"] == "facet_rescue_related_lexical"
+        assert "Elena Park --cares_for--> Comet" == rescued_attribute["graph_path"]
+        assert meta["applied"] is True
+
+    def test_related_entity_facet_rows_can_lead_with_one_facet_signal(self):
+        import datastore.memorydb.memory_graph as mg
+
+        rows = [
+            {
+                "id": "generic-1",
+                "text": "Elena Park lives near the river.",
+                "category": "fact",
+                "similarity": 0.96,
+            },
+            {
+                "id": "graph-edge",
+                "text": "Elena Park --cares_for--> Comet",
+                "category": "graph",
+                "via": "graph",
+                "similarity": 0.92,
+                "graph_path": "Elena Park --cares_for--> Comet",
+            },
+            {
+                "id": "related-attribute",
+                "text": "Comet is a golden retriever.",
+                "category": "fact",
+                "similarity": 0.86,
+                "via": "facet_rescue_related_lexical",
+                "_facet_rescue": True,
+                "keywords": "pet dog breed canine",
+                "graph_path": "Elena Park --cares_for--> Comet",
+            },
+        ]
+
+        prioritized = mg._prioritize_high_signal_facet_rescue_rows(
+            "What kind of dog does Elena Park have?",
+            rows,
+        )
+
+        assert prioritized[0]["id"] == "related-attribute"
+
     def test_final_selection_reserves_facet_rescue_rows_and_drops_bare_entity(self):
         import datastore.memorydb.memory_graph as mg
 

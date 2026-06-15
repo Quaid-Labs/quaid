@@ -16531,7 +16531,7 @@ def _search_nodes_by_query_terms(
     params: List[Any] = []
     for term in scan_terms:
         pattern = f"%{term}%"
-        clauses.append("LOWER(n.name) LIKE ?")
+        clauses.append("LOWER(COALESCE(n.name, '') || ' ' || COALESCE(n.keywords, '')) LIKE ?")
         params.append(pattern)
     def _fetch_rows(scoped_owner_id: Optional[str]) -> List[Any]:
         fetch_params = list(params)
@@ -16769,6 +16769,41 @@ _FACET_RESCUE_MEMORY_TYPES = {"fact", "preference", "decision", "relationship"}
 _FACET_RESCUE_LEADING_NON_ANCHOR_SIGNAL = 2
 
 
+def _is_related_entity_facet_rescue_row(row: Dict[str, Any]) -> bool:
+    """Return true for facts found through an explicit anchor's graph neighbor."""
+    if not isinstance(row, dict):
+        return False
+    return (
+        str(row.get("via") or "").strip() == "facet_rescue_related_lexical"
+        and bool(str(row.get("graph_path") or "").strip())
+    )
+
+
+def _facet_rescue_leading_signal_threshold(row: Dict[str, Any]) -> int:
+    # A related-entity row already has graph evidence connecting it to the
+    # explicit query anchor, so one non-anchor facet term is enough to reserve
+    # it. Generic lexical rescues still need two details to avoid broad drift.
+    return 1 if _is_related_entity_facet_rescue_row(row) else _FACET_RESCUE_LEADING_NON_ANCHOR_SIGNAL
+
+
+def _facet_rescue_signal_terms(query: str, *, limit: int = 12) -> List[str]:
+    """Return language-neutral facet terms plus configured short signal terms."""
+    out: List[str] = []
+    seen: Set[str] = set()
+    for term in (
+        list(_extract_vocabulary_free_query_terms(query, limit=limit))
+        + list(_extract_distinctive_query_terms(query, limit=limit))
+    ):
+        clean = " ".join(str(term or "").split()).strip().lower()
+        if not clean or clean in seen:
+            continue
+        seen.add(clean)
+        out.append(clean)
+        if len(out) >= limit:
+            break
+    return out
+
+
 def _facet_rescue_lexical_memory_rows(
     graph: "MemoryGraph",
     *,
@@ -16928,7 +16963,11 @@ def _recover_explicit_entity_facet_rows(
                 return bool(row_domains & included_domains)
             return bool(include_unscoped)
 
-        def _add_candidate(row: Dict[str, Any]) -> None:
+        def _add_candidate(
+            row: Dict[str, Any],
+            *,
+            score_anchor_terms: Optional[List[str]] = None,
+        ) -> None:
             rid = str((row or {}).get("id") or "").strip()
             if not rid:
                 return
@@ -16937,7 +16976,7 @@ def _recover_explicit_entity_facet_rows(
             score = _score_facet_rescue_row(
                 query,
                 row,
-                anchor_terms=anchor_terms,
+                anchor_terms=score_anchor_terms or anchor_terms,
                 facet_terms=facet_terms,
             )
             if score < 0.76:
@@ -16989,6 +17028,52 @@ def _recover_explicit_entity_facet_rows(
                 )
                 for row in attached_rows:
                     _add_candidate(row)
+
+                try:
+                    related_nodes = graph.get_related_bidirectional(
+                        anchor_node.id,
+                        depth=1,
+                        max_results=max(8, min(24, int(limit or 1) * 4)),
+                    )
+                except Exception as exc:
+                    if _is_fail_hard_mode():
+                        raise
+                    logger.warning(
+                        "Recall facet rescue failed to fetch related anchors for %s: %s",
+                        anchor_node.id,
+                        exc,
+                    )
+                    related_nodes = []
+
+                related_seen: Set[str] = set()
+                for related_node, relation, direction, _depth, _path in related_nodes:
+                    related_type = str(getattr(related_node, "type", "") or "").strip().lower()
+                    related_name = " ".join(str(getattr(related_node, "name", "") or "").split()).strip()
+                    related_key = related_name.casefold()
+                    if (
+                        related_type not in _LOW_INFO_ENTITY_CATEGORIES
+                        or not related_name
+                        or related_key == anchor_key
+                        or related_key in related_seen
+                    ):
+                        continue
+                    related_seen.add(related_key)
+                    relation_label = str(relation or "").strip() or "related_to"
+                    if direction == "in":
+                        graph_path = f"{related_name} --{relation_label}--> {anchor_node.name}"
+                    else:
+                        graph_path = f"{anchor_node.name} --{relation_label}--> {related_name}"
+                    for row in _facet_rescue_lexical_memory_rows(
+                        graph,
+                        anchor_terms=[related_name],
+                        facet_terms=facet_terms,
+                        owner_id=owner_id,
+                        limit=max(12, int(limit or 1) * 4),
+                    ):
+                        row["via"] = "facet_rescue_related_lexical"
+                        row["source_name"] = str(getattr(anchor_node, "name", "") or anchor)
+                        row["graph_path"] = graph_path
+                        _add_candidate(row, score_anchor_terms=[anchor, related_name])
 
             for row in _facet_rescue_lexical_memory_rows(
                 graph,
@@ -17111,7 +17196,7 @@ def _select_final_recall_rows_with_facet_rescue(
     if not facet_rows:
         return filtered[:limit]
 
-    query_terms = _extract_vocabulary_free_query_terms(query, limit=12)
+    query_terms = _facet_rescue_signal_terms(query, limit=12)
     anchor_tokens: Set[str] = set()
     for anchor in _extract_explicit_query_anchor_terms(query, limit=6):
         for token in re.findall(r"[\w][\w._'-]*", str(anchor or "").lower(), flags=re.UNICODE):
@@ -17166,7 +17251,7 @@ def _select_final_recall_rows_with_facet_rescue(
     reserved_keys = {_key(row) for row in reserved}
     leading_reserved = [
         row for row in reserved
-        if _facet_non_anchor_signal(row) >= _FACET_RESCUE_LEADING_NON_ANCHOR_SIGNAL
+        if _facet_non_anchor_signal(row) >= _facet_rescue_leading_signal_threshold(row)
         and _facet_non_anchor_signal(row) > source_dated_session_signal
     ]
     leading_reserved_keys = {_key(row) for row in leading_reserved}
@@ -17220,7 +17305,7 @@ def _prioritize_high_signal_facet_rescue_rows(
 ) -> List[Dict[str, Any]]:
     if not rows:
         return rows
-    query_terms = _extract_vocabulary_free_query_terms(query, limit=12)
+    query_terms = _facet_rescue_signal_terms(query, limit=12)
     if not query_terms:
         return rows
     anchor_tokens: Set[str] = set()
@@ -17261,7 +17346,7 @@ def _prioritize_high_signal_facet_rescue_rows(
     for index, row in enumerate(rows):
         signal = _non_anchor_signal(row) if isinstance(row, dict) and row.get("_facet_rescue") else 0
         if (
-            signal >= _FACET_RESCUE_LEADING_NON_ANCHOR_SIGNAL
+            signal >= _facet_rescue_leading_signal_threshold(row)
             and signal > source_dated_session_signal
         ):
             leading.append((signal, -index, row))
