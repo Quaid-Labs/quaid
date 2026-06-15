@@ -1240,6 +1240,16 @@ class TestDistillationStateEdgeCases:
             with patch.dict(os.environ, {"QUAID_NOW": "2026-03-10T00:00:00"}, clear=False):
                 assert _is_distillation_due("SOUL.md") is True
 
+    def test_distillation_due_rejects_malformed_quaid_now(self, workspace_dir, mock_config, monkeypatch):
+        """Malformed benchmark clocks should not be swallowed as corrupt state."""
+        monkeypatch.setenv("QUAID_NOW", "not-a-date")
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import _save_distillation_state, _is_distillation_due
+            _save_distillation_state({"SOUL.md": {"last_distilled": "2026-03-01"}})
+
+            with pytest.raises(ValueError, match="Invalid QUAID_NOW"):
+                _is_distillation_due("SOUL.md")
+
 
 class TestInsertIntoFileEdgeCases:
     def test_section_not_found_appends_to_end(self, workspace_dir):

@@ -916,9 +916,9 @@ def _is_distillation_due(filename: str) -> bool:
 
     try:
         last_date = datetime.strptime(last_distilled, "%Y-%m-%d")
-        return _quaid_now() - last_date >= timedelta(days=interval_days)
     except ValueError:
         return True
+    return _quaid_now() - last_date >= timedelta(days=interval_days)
 
 
 # =============================================================================
