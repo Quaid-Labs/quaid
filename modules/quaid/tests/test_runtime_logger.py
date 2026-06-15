@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 
 def test_runtime_logger_log_honors_quaid_now(tmp_path, monkeypatch):
     from lib.adapter import reset_adapter
@@ -16,6 +18,22 @@ def test_runtime_logger_log_honors_quaid_now(tmp_path, monkeypatch):
     row = json.loads((log_dir / "pytest.log").read_text(encoding="utf-8"))
     assert row["ts"] == "2026-03-18T05:06:07Z"
     assert row["event"] == "event"
+
+
+def test_runtime_logger_rejects_malformed_quaid_now(tmp_path, monkeypatch):
+    from lib.adapter import reset_adapter
+    from core.runtime import logger as runtime_logger
+
+    reset_adapter()
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "pytest-logger")
+    monkeypatch.setenv("QUAID_NOW", "not-a-date")
+
+    with pytest.raises(ValueError, match="Invalid QUAID_NOW"):
+        runtime_logger.log("pytest", "event")
+
+    log_dir = tmp_path / "instances" / "pytest-logger" / "logs"
+    assert not (log_dir / "pytest.log").exists()
 
 
 def test_runtime_logger_rotate_logs_uses_quaid_now_date(tmp_path, monkeypatch):

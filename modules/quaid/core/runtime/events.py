@@ -373,7 +373,8 @@ def _now_datetime() -> datetime:
                 return value.replace(tzinfo=timezone.utc)
             return value.astimezone(timezone.utc)
         except ValueError:
-            logger.warning("Invalid QUAID_NOW=%r; using wall clock", override)
+            logger.warning("Invalid QUAID_NOW=%r", override)
+            raise ValueError(f"Invalid QUAID_NOW={override!r}") from None
     return datetime.now(timezone.utc)
 
 

@@ -157,6 +157,20 @@ def test_event_timestamps_honor_quaid_now(monkeypatch, tmp_path):
     assert queued[0]["created_at"] == "2026-03-11T00:00:00+00:00"
 
 
+def test_event_timestamps_reject_malformed_quaid_now(monkeypatch, tmp_path):
+    monkeypatch.setenv("QUAID_NOW", "not-a-date")
+    set_adapter(TestAdapter(tmp_path))
+
+    with pytest.raises(ValueError, match="Invalid QUAID_NOW"):
+        emit_event(
+            name="session.reset",
+            payload={"reason": "benchmark-clock"},
+            source="pytest",
+        )
+
+    assert list_events(status="pending", limit=1) == []
+
+
 def test_broker_event_request_auto_correlation_and_tracing(tmp_path):
     adapter = TestAdapter(tmp_path); set_adapter(adapter); iroot = adapter.instance_root()
 
