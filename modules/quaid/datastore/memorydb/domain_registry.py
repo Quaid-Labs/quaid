@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import os
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict
 
@@ -22,6 +24,18 @@ def _fail_hard_enabled() -> bool:
     except Exception:
         return True
     return bool(is_fail_hard_enabled())
+
+
+def _now_iso() -> str:
+    raw = os.environ.get("QUAID_NOW", "").strip()
+    if raw:
+        try:
+            return datetime.fromisoformat(raw.replace("Z", "+00:00")).isoformat()
+        except ValueError as exc:
+            if _fail_hard_enabled():
+                raise
+            logger.warning("Invalid QUAID_NOW=%r; using wall clock: %s", raw, exc)
+    return datetime.now(timezone.utc).isoformat()
 
 
 def normalize_domain_map(raw: Dict[str, str]) -> Dict[str, str]:
@@ -75,17 +89,18 @@ def read_active_domains(conn) -> Dict[str, str]:
 
 def bootstrap_default_domains(conn) -> Dict[str, str]:
     defaults = default_domain_descriptions()
+    now_iso = _now_iso()
     for domain_id, description in defaults.items():
         conn.execute(
             """
-            INSERT INTO domain_registry(domain, description, active)
-            VALUES (?, ?, 1)
+            INSERT INTO domain_registry(domain, description, active, created_at, updated_at)
+            VALUES (?, ?, 1, ?, ?)
             ON CONFLICT(domain) DO UPDATE SET
               description = COALESCE(NULLIF(domain_registry.description, ''), excluded.description),
               active = 1,
-              updated_at = datetime('now')
+              updated_at = ?
             """,
-            (domain_id, description),
+            (domain_id, description, now_iso, now_iso, now_iso),
         )
     return read_active_domains(conn)
 
@@ -126,22 +141,23 @@ def apply_domain_set(
     deactivate_others: bool,
 ) -> Dict[str, str]:
     norm = normalize_domain_map(domains)
+    now_iso = _now_iso()
     for domain_id, description in norm.items():
         conn.execute(
             """
-            INSERT INTO domain_registry(domain, description, active)
-            VALUES (?, ?, 1)
+            INSERT INTO domain_registry(domain, description, active, created_at, updated_at)
+            VALUES (?, ?, 1, ?, ?)
             ON CONFLICT(domain) DO UPDATE SET
               description = excluded.description,
               active = 1,
-              updated_at = datetime('now')
+              updated_at = ?
             """,
-            (domain_id, description),
+            (domain_id, description, now_iso, now_iso, now_iso),
         )
     if deactivate_others and norm:
         placeholders = ",".join("?" for _ in norm)
         conn.execute(
-            f"UPDATE domain_registry SET active = 0, updated_at = datetime('now') WHERE domain NOT IN ({placeholders})",
-            tuple(norm.keys()),
+            f"UPDATE domain_registry SET active = 0, updated_at = ? WHERE domain NOT IN ({placeholders})",
+            (now_iso, *tuple(norm.keys())),
         )
     return norm
