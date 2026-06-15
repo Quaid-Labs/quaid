@@ -3,6 +3,7 @@
 import os
 import sys
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch, MagicMock, call
@@ -320,6 +321,28 @@ class TestIndexDocument:
             (str(test_file), 0, "# Guide\nChunk A", "# Guide"),
             (str(test_file), 1, "## Notes\nChunk B", "## Notes"),
         ]
+
+    def test_index_document_created_at_uses_pinned_runtime_clock(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("QUAID_NOW", "2026-03-22T08:14:15+00:00")
+        rag = _make_rag(tmp_path)
+        test_file = tmp_path / "guide.md"
+        test_file.write_text("# Guide\nBody.", encoding="utf-8")
+
+        with patch.object(rag, "chunk_markdown", return_value=["# Guide\nChunk A"]), \
+             patch("datastore.docsdb.rag._lib_get_embeddings", return_value=[[0.1, 0.2, 0.3]]):
+            assert rag.index_document(str(test_file)) == 1
+
+        expected_updated_at = datetime.fromtimestamp(
+            test_file.stat().st_mtime,
+            tz=timezone.utc,
+        ).isoformat()
+        with sqlite3.connect(rag.db_path) as conn:
+            row = conn.execute(
+                "SELECT created_at, updated_at FROM doc_chunks WHERE source_file = ?",
+                (str(test_file),),
+            ).fetchone()
+
+        assert row == ("2026-03-22T08:14:15+00:00", expected_updated_at)
 
     def test_index_document_uses_open_file_mtime_for_staleness(self, tmp_path):
         rag = _make_rag(tmp_path)

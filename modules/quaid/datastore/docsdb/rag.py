@@ -38,6 +38,16 @@ def _workspace() -> Path:
     return get_workspace_dir()
 
 
+def _now_iso() -> str:
+    raw = os.environ.get("QUAID_NOW", "").strip()
+    if raw:
+        try:
+            return datetime.fromisoformat(raw.replace("Z", "+00:00")).isoformat()
+        except ValueError:
+            logger.warning("Invalid QUAID_NOW=%r; using wall clock", raw)
+    return datetime.now(timezone.utc).isoformat()
+
+
 def _resolved_workspace() -> Path:
     """Best-effort workspace root for docs recall path matching.
 
@@ -1257,6 +1267,7 @@ class DocsRAG:
 
         # All embeddings succeeded — now safe to delete and replace
         chunks_created = 0
+        doc_created_at = _now_iso()
         with _lib_get_connection(self.db_path) as conn:
             placeholders = ",".join("?" for _ in source_variants)
             old_chunk_ids = [row[0] for row in conn.execute(
@@ -1271,9 +1282,9 @@ class DocsRAG:
                 """
                     INSERT INTO doc_chunks
                     (id, source_file, chunk_index, content, section_header, embedding, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, datetime('now'), ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                [(*chunk, source_indexed_at) for chunk in prepared_chunks],
+                [(*chunk, doc_created_at, source_indexed_at) for chunk in prepared_chunks],
             )
             chunks_created = len(prepared_chunks)
             if _lib_has_vec() and prepared_chunks:
