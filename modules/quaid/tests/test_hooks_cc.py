@@ -14,7 +14,6 @@ import os
 import sys
 import time
 import types
-from datetime import datetime
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -1110,6 +1109,85 @@ def mock_adapter(tmp_path, sessions_dir, monkeypatch):
     return adapter
 
 
+def test_hook_trace_honors_quaid_now(tmp_path, monkeypatch):
+    from core.interface import hooks
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "trace-test")
+    monkeypatch.setenv("QUAID_NOW", "2026-03-11T05:06:07Z")
+
+    hooks._write_hook_trace("test.event", {"value": "ok"})
+
+    trace_path = tmp_path / "instances" / "trace-test" / "logs" / "quaid-hook-trace.jsonl"
+    entry = json.loads(trace_path.read_text(encoding="utf-8").strip())
+    assert entry["ts"] == "2026-03-11T05:06:07Z"
+    assert entry["event"] == "test.event"
+    assert entry["value"] == "ok"
+
+
+def test_hook_trace_rejects_malformed_quaid_now(tmp_path, monkeypatch):
+    from core.interface import hooks
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "trace-test")
+    monkeypatch.setenv("QUAID_NOW", "not-a-date")
+
+    with pytest.raises(ValueError, match="Invalid QUAID_NOW"):
+        hooks._write_hook_trace("test.event")
+
+
+def test_preinject_evidence_rejects_malformed_quaid_now(tmp_path, monkeypatch):
+    from core.interface import hooks
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "preinject-test")
+    monkeypatch.setenv("QUAID_NOW", "not-a-date")
+
+    with pytest.raises(ValueError, match="Invalid QUAID_NOW"):
+        hooks._write_preinject_evidence(
+            session_id="sess-preinject-bad-clock",
+            query="what grinder?",
+            memories=[{"id": "m1", "text": "Baratza Encore grinder", "similarity": 0.9}],
+            recall_meta={"mode": "fast"},
+            docs_bundle=None,
+        )
+
+
+def test_janitor_health_honors_quaid_now(tmp_path, mock_adapter, monkeypatch):
+    from core.interface import hooks
+
+    logs_dir = tmp_path / "logs"
+    checkpoint = logs_dir / "janitor" / "checkpoint-all.json"
+    checkpoint.parent.mkdir(parents=True)
+    checkpoint.write_text(
+        json.dumps({"last_completed_at": "2026-03-10T04:00:00+00:00"}),
+        encoding="utf-8",
+    )
+    mock_adapter.logs_dir.return_value = logs_dir
+    monkeypatch.setenv("QUAID_NOW", "2026-03-11T05:00:00Z")
+
+    warning = hooks._check_janitor_health()
+
+    assert "Janitor last ran 25 hours ago" in warning
+
+
+def test_janitor_health_rejects_malformed_quaid_now(tmp_path, mock_adapter, monkeypatch):
+    from core.interface import hooks
+
+    logs_dir = tmp_path / "logs"
+    checkpoint = logs_dir / "janitor" / "checkpoint-all.json"
+    checkpoint.parent.mkdir(parents=True)
+    checkpoint.write_text(
+        json.dumps({"last_completed_at": "2026-03-10T04:00:00+00:00"}),
+        encoding="utf-8",
+    )
+    mock_adapter.logs_dir.return_value = logs_dir
+    monkeypatch.setenv("QUAID_NOW", "not-a-date")
+
+    with pytest.raises(ValueError, match="Invalid QUAID_NOW"):
+        hooks._check_janitor_health()
+
+
 # ===========================================================================
 # hook_inject — cursor seeding
 # ===========================================================================
@@ -1320,6 +1398,7 @@ class TestHookInjectCursorSeeding:
         monkeypatch.setattr(extraction_daemon, "write_cursor", fake_write_cursor)
 
         with patch("core.interface.api.recall_fast", return_value=[]):
+            monkeypatch.setenv("QUAID_NOW", "2026-03-11T05:06:07Z")
             _run_hook_inject(
                 {
                     "prompt": "seed codex cursor",
@@ -1331,7 +1410,7 @@ class TestHookInjectCursorSeeding:
 
         expected_path = (
             Path(str(sessions_dir))
-            / datetime.now().strftime("%Y/%m/%d")
+            / "2026/03/11"
             / f"rollout-pending-{session_id}.jsonl"
         )
         assert written == {
@@ -2042,6 +2121,7 @@ class TestHookInjectRecallResilience:
 
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
         monkeypatch.setenv("QUAID_INSTANCE", "claude-code-test")
+        monkeypatch.setenv("QUAID_NOW", "2026-03-11T05:06:07Z")
         monkeypatch.setattr(extraction_daemon, "write_cursor", lambda *a: None)
         monkeypatch.setattr("core.interface.hooks._get_pending_context", lambda: "")
         monkeypatch.setattr("core.interface.hooks._get_deferred_notice_hint", lambda: "")
@@ -2083,6 +2163,7 @@ class TestHookInjectRecallResilience:
         assert len(entries) == 1
         entry = entries[0]
         assert entry["sessionId"] == "sess-preinject-python"
+        assert entry["ts"] == "2026-03-11T05:06:07Z"
         assert entry["source"] == "hook_inject"
         assert entry["injectedCount"] == 1
         assert entry["injected"][0]["text"] == "Espresso setup uses a Baratza Encore grinder."

@@ -105,6 +105,14 @@ def _now_epoch() -> int:
     return int(_now_datetime().timestamp())
 
 
+def _now_utc_trace_ts() -> str:
+    return _now_datetime().strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _is_invalid_quaid_now_error(exc: BaseException) -> bool:
+    return isinstance(exc, ValueError) and str(exc).startswith("Invalid QUAID_NOW=")
+
+
 def _safe_session_id_for_path(session_id: str) -> str:
     sid = str(session_id or "").strip()
     return sid if _SAFE_SESSION_ID_RE.match(sid) else ""
@@ -1242,8 +1250,9 @@ def _visible_home_fallback() -> Path:
 
 def _write_hook_trace(event: str, payload: dict | None = None) -> None:
     trace_path = _hook_trace_path()
+    timestamp = _now_utc_trace_ts()
     entry = {
-        "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "ts": timestamp,
         "event": event,
         **(payload or {}),
     }
@@ -1304,8 +1313,9 @@ def _write_preinject_evidence(
     if not injected:
         return
 
+    timestamp = _now_utc_trace_ts()
     entry = {
-        "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "ts": timestamp,
         "sessionId": str(session_id or "unknown").strip() or "unknown",
         "query": str(query or "").strip(),
         "source": "hook_inject",
@@ -3490,11 +3500,9 @@ def _resolve_hook_transcript_path(session_id: str, hook_cwd: str = "", transcrip
     pending_template = _adapter_capability("session_pending_path_template", "")
     pending_relative = ""
     if pending_template:
-        from datetime import datetime
-
         # Construct path even when sessions_dir doesn't exist yet so cursor files
         # can be seeded for adapters that rotate into dated rollout paths.
-        date_prefix = datetime.now().strftime("%Y/%m/%d")
+        date_prefix = _now_datetime().strftime("%Y/%m/%d")
         pending_relative = _render_path_template(
             str(pending_template or ""),
             session_id,
@@ -3795,13 +3803,14 @@ def _check_janitor_health() -> str:
         if not last_ts:
             return "<quaid_system_message>\n[Quaid Warning] Janitor has never completed successfully.\n</quaid_system_message>"
 
-        from datetime import datetime, timezone
         last_dt = datetime.fromisoformat(last_ts.replace("Z", "+00:00"))
-        age_hours = (datetime.now(timezone.utc) - last_dt).total_seconds() / 3600
+        age_hours = (_now_datetime() - last_dt).total_seconds() / 3600
         if age_hours > 24:
             age_display = f"{age_hours / 24:.0f} days" if age_hours > 48 else f"{age_hours:.0f} hours"
             return f"<quaid_system_message>\n[Quaid Warning] Janitor last ran {age_display} ago. Stale janitor causes memory/doc drift. Run: quaid janitor --task all --apply\n</quaid_system_message>"
-    except Exception:
+    except Exception as exc:
+        if _is_invalid_quaid_now_error(exc):
+            raise
         pass
     return ""
 
