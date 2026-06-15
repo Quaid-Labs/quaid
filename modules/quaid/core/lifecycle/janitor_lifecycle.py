@@ -30,6 +30,20 @@ _LIFECYCLE_PARALLEL_TELEMETRY_ENABLED = (
 )
 
 
+def _now_datetime() -> datetime:
+    raw = str(os.environ.get("QUAID_NOW", "") or "").strip()
+    if raw:
+        normalized = raw.replace("Z", "+00:00")
+        try:
+            parsed = datetime.fromisoformat(normalized)
+        except ValueError as exc:
+            raise ValueError(f"Invalid QUAID_NOW={raw!r}") from exc
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed
+    return datetime.now(timezone.utc)
+
+
 @dataclass
 class RoutineContext:
     cfg: Any
@@ -300,10 +314,11 @@ class LifecycleRegistry:
     def _append_parallel_telemetry(self, workspace: Path, payload: Dict[str, Any]) -> None:
         if not _LIFECYCLE_PARALLEL_TELEMETRY_ENABLED:
             return
+        ts = _now_datetime().isoformat()
         try:
             logs_dir = Path(workspace).resolve() / "logs" / "janitor"
             logs_dir.mkdir(parents=True, exist_ok=True)
-            row = {"ts": datetime.now(timezone.utc).isoformat(), **dict(payload or {})}
+            row = {"ts": ts, **dict(payload or {})}
             with (logs_dir / "lifecycle-parallel-telemetry.jsonl").open("a", encoding="utf-8") as f:
                 f.write(json.dumps(row, ensure_ascii=True) + "\n")
         except Exception:

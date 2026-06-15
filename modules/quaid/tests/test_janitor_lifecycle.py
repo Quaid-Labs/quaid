@@ -1,8 +1,9 @@
-import sys
-import sqlite3
-import time
 import importlib
+import json
+import sqlite3
+import sys
 import threading
+import time
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
@@ -526,6 +527,45 @@ def test_lifecycle_registry_run_many_executes_in_parallel_shape(tmp_path):
     assert set(out.keys()) == {"a", "b"}
     assert out["a"].metrics["a"] == 1
     assert out["b"].metrics["b"] == 1
+
+
+def test_lifecycle_parallel_telemetry_honors_quaid_now(monkeypatch, tmp_path):
+    import core.lifecycle.janitor_lifecycle as lifecycle_mod
+
+    registry = LifecycleRegistry()
+    monkeypatch.setattr(lifecycle_mod, "_LIFECYCLE_PARALLEL_TELEMETRY_ENABLED", True)
+    monkeypatch.setenv("QUAID_NOW", "2026-03-11T05:06:07Z")
+
+    registry._append_parallel_telemetry(tmp_path, {"event": "probe"})
+
+    telemetry_path = tmp_path / "logs" / "janitor" / "lifecycle-parallel-telemetry.jsonl"
+    rows = [json.loads(line) for line in telemetry_path.read_text().splitlines()]
+    assert rows == [{"ts": "2026-03-11T05:06:07+00:00", "event": "probe"}]
+
+
+def test_lifecycle_parallel_telemetry_rejects_malformed_quaid_now(monkeypatch, tmp_path):
+    import core.lifecycle.janitor_lifecycle as lifecycle_mod
+
+    registry = LifecycleRegistry()
+    monkeypatch.setattr(lifecycle_mod, "_LIFECYCLE_PARALLEL_TELEMETRY_ENABLED", True)
+    monkeypatch.setenv("QUAID_NOW", "not-a-date")
+
+    with pytest.raises(ValueError, match="Invalid QUAID_NOW"):
+        registry._append_parallel_telemetry(tmp_path, {"event": "probe"})
+
+    assert not (tmp_path / "logs").exists()
+
+
+def test_lifecycle_parallel_telemetry_disabled_ignores_quaid_now(monkeypatch, tmp_path):
+    import core.lifecycle.janitor_lifecycle as lifecycle_mod
+
+    registry = LifecycleRegistry()
+    monkeypatch.setattr(lifecycle_mod, "_LIFECYCLE_PARALLEL_TELEMETRY_ENABLED", False)
+    monkeypatch.setenv("QUAID_NOW", "not-a-date")
+
+    registry._append_parallel_telemetry(tmp_path, {"event": "probe"})
+
+    assert not (tmp_path / "logs").exists()
 
 
 def test_lifecycle_registry_run_many_raises_config_failure_when_fail_hard(monkeypatch, tmp_path):
