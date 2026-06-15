@@ -13155,9 +13155,9 @@ def _is_low_information_message(query: str) -> bool:
     clean = " ".join((query or "").strip().lower().split())
     if not clean:
         return True
-    if len(clean) <= 3:
+    if not any(ch.isalnum() for ch in clean):
         return True
-    if re.fullmatch(r"[.!?\s]+", clean):
+    if clean.isascii() and len(clean) <= 3:
         return True
 
     exact = {

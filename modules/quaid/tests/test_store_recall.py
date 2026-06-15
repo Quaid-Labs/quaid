@@ -7568,14 +7568,29 @@ class TestRecallTelemetry:
     """Telemetry emitted by recall planning/orchestration."""
 
     def test_plan_fanout_queries_reports_low_information_bailout(self):
-        from datastore.memorydb.memory_graph import _plan_fanout_queries
+        from datastore.memorydb.memory_graph import _is_low_information_message, _plan_fanout_queries
 
         queries, meta = _plan_fanout_queries("ok", return_meta=True)
 
+        assert _is_low_information_message("ok") is True
         assert queries == []
         assert meta["bailout_reason"] == "low_information_message"
         assert meta["queries_count"] == 0
         assert meta["elapsed_ms"] >= 0
+
+    def test_plan_fanout_queries_preserves_short_unicode_anchor(self):
+        from datastore.memorydb.memory_graph import _is_low_information_message, _plan_fanout_queries
+
+        queries, meta = _plan_fanout_queries("美玲", return_meta=True)
+
+        assert _is_low_information_message("美玲") is False
+        assert queries == ["美玲"]
+        assert meta["bailout_reason"] != "low_information_message"
+
+    def test_low_information_message_treats_unicode_punctuation_as_empty_signal(self):
+        from datastore.memorydb.memory_graph import _is_low_information_message
+
+        assert _is_low_information_message("？？") is True
 
     def test_recall_fast_returns_meta_for_low_information_query(self):
         from datastore.memorydb.memory_graph import recall_fast
