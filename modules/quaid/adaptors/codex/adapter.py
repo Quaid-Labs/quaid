@@ -297,13 +297,34 @@ class CodexAdapter(QuaidAdapter):
         _ = session_key
         return None
 
+    def _read_codex_auth_token_file(self) -> Optional[str]:
+        path = self.auth_token_path()
+        if path is None or not path.is_file():
+            return None
+        try:
+            token = path.read_text(encoding="utf-8").strip()
+        except OSError as exc:
+            if is_fail_hard_enabled():
+                raise RuntimeError(f"Failed to read Codex auth token file {path}") from exc
+            print(f"[adapter][FALLBACK] Failed to read Codex auth token file {path}: {exc}", file=sys.stderr)
+            return None
+        return token or None
+
+    def _resolve_openai_api_key(self, api_key_env: str = "OPENAI_API_KEY") -> Optional[str]:
+        configured_env = str(api_key_env or "OPENAI_API_KEY").strip() or "OPENAI_API_KEY"
+        if configured_env != "OPENAI_API_KEY":
+            configured_key = os.environ.get(configured_env, "").strip()
+            if configured_key:
+                return configured_key
+        return self.get_api_key("OPENAI_API_KEY")
+
     def get_api_key(self, env_var_name: str) -> Optional[str]:
         if env_var_name == "ANTHROPIC_API_KEY":
             token = self.read_shared_auth_token(["anthropic_oauth", "anthropic_api"]) or self.read_auth_token()
             if token:
                 return token
         elif env_var_name == "OPENAI_API_KEY":
-            token = self.read_shared_auth_token(["codex_oauth", "openai_api"])
+            token = self.read_shared_auth_token(["codex_oauth", "openai_api"]) or self._read_codex_auth_token_file()
             if token:
                 return token
         else:
@@ -1017,7 +1038,7 @@ class CodexAdapter(QuaidAdapter):
             return "openai"
         return ""
 
-    def _has_provider_credential(self, provider: str) -> bool:
+    def _has_provider_credential(self, provider: str, api_key_env: str = "OPENAI_API_KEY") -> bool:
         normalized = str(provider or "").strip().lower()
         if normalized == "anthropic":
             return bool(
@@ -1025,17 +1046,26 @@ class CodexAdapter(QuaidAdapter):
                 or os.environ.get("ANTHROPIC_API_KEY", "").strip()
             )
         if normalized in ("openai", "openai-compatible"):
+            configured_env = str(api_key_env or "OPENAI_API_KEY").strip() or "OPENAI_API_KEY"
             return bool(
                 self.read_shared_auth_token(["codex_oauth", "openai_api"])
+                or self._read_codex_auth_token_file()
                 or os.environ.get("OPENAI_OAUTH_TOKEN", "").strip()
+                or os.environ.get(configured_env, "").strip()
                 or os.environ.get("OPENAI_API_KEY", "").strip()
             )
         return False
 
-    def _resolve_central_provider(self, configured: str, deep_model: str, fast_model: str) -> str:
+    def _resolve_central_provider(
+        self,
+        configured: str,
+        deep_model: str,
+        fast_model: str,
+        api_key_env: str = "OPENAI_API_KEY",
+    ) -> str:
         provider = str(configured or "").strip().lower()
         if provider and provider != "default":
-            if self._has_provider_credential(provider):
+            if self._has_provider_credential(provider, api_key_env=api_key_env):
                 return provider
             detected = self._detect_shared_primary_provider()
             if detected and detected != provider:
@@ -1096,6 +1126,7 @@ class CodexAdapter(QuaidAdapter):
         fast_model = getattr(cfg.models, "fast_reasoning", "claude-haiku-4-5")
         deep_effort = getattr(cfg.models, "deep_reasoning_effort", "high")
         fast_effort = getattr(cfg.models, "fast_reasoning_effort", "none")
+        api_key_env = str(getattr(cfg.models, "api_key_env", "") or "OPENAI_API_KEY")
         provider_id = getattr(cfg.models, "llm_provider", "") or "anthropic"
         if model_tier == "fast":
             fast_provider = getattr(cfg.models, "fast_reasoning_provider", "default")
@@ -1109,6 +1140,7 @@ class CodexAdapter(QuaidAdapter):
             provider_id,
             str(deep_model or ""),
             str(fast_model or ""),
+            api_key_env=api_key_env,
         )
         provider_id = str(provider_id or "").strip().lower()
         resolved_deep = self._resolve_model_for_provider(cfg, provider_id, str(deep_model or ""), "deep")
@@ -1130,14 +1162,15 @@ class CodexAdapter(QuaidAdapter):
             )
 
         if provider_id in ("openai", "openai-compatible"):
-            api_key = self.get_api_key("OPENAI_API_KEY")
+            api_key = self._resolve_openai_api_key(api_key_env)
             if not api_key:
                 raise RuntimeError(
                     "LLM provider is 'openai' but no Codex/OpenAI credential was found. "
                     "Write a Codex OAuth token or OpenAI API key to "
                     "QUAID_HOME/shared/auth/credentials.json via "
-                    "'quaid auth refresh --kind codex_oauth|openai_api', "
-                    "or set OPENAI_OAUTH_TOKEN / OPENAI_API_KEY."
+                    "'quaid auth refresh --kind codex_oauth|openai_api', write "
+                    "QUAID_HOME/adaptors/codex/.auth-token, or set "
+                    f"OPENAI_OAUTH_TOKEN / {api_key_env}."
                 )
             configured_base_url = str(getattr(cfg.models, "base_url", "") or "").strip()
             env_base_url = str(os.environ.get("OPENAI_COMPATIBLE_BASE_URL", "") or "").strip()

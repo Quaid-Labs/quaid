@@ -3791,6 +3791,59 @@ class TestCodexAdapter:
         assert isinstance(provider, OpenAICodexOAuthLLMProvider)
         assert provider._base_url == "https://chatgpt.com/backend-api"
 
+    def test_get_llm_provider_uses_configured_openai_api_key_env(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        monkeypatch.delenv("OPENAI_OAUTH_TOKEN", raising=False)
+        monkeypatch.setenv("BENCHMARK_CODEX_API_KEY", "tok.benchmark.jwt")
+        adapter = CodexAdapter()
+        adapter.store_shared_auth_token("anthropic_api", "sk-ant-shared")
+        cfg = SimpleNamespace(
+            models=SimpleNamespace(
+                llm_provider="openai-compatible",
+                fast_reasoning_provider="default",
+                deep_reasoning_provider="default",
+                deep_reasoning="gpt-5.4",
+                fast_reasoning="gpt-5.4-mini",
+                deep_reasoning_effort="high",
+                fast_reasoning_effort="none",
+                base_url="",
+                api_key_env="BENCHMARK_CODEX_API_KEY",
+            )
+        )
+        with patch("config.get_config", return_value=cfg):
+            provider = adapter.get_llm_provider()
+        assert isinstance(provider, OpenAICodexOAuthLLMProvider)
+        assert provider._api_key == "tok.benchmark.jwt"
+
+    def test_get_llm_provider_uses_legacy_codex_auth_token_file(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.delenv("BENCHMARK_CODEX_API_KEY", raising=False)
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        monkeypatch.delenv("OPENAI_OAUTH_TOKEN", raising=False)
+        adapter = CodexAdapter()
+        token_path = adapter.auth_token_path()
+        assert token_path is not None
+        token_path.parent.mkdir(parents=True, exist_ok=True)
+        token_path.write_text("tok.legacy.jwt\n", encoding="utf-8")
+        cfg = SimpleNamespace(
+            models=SimpleNamespace(
+                llm_provider="openai-compatible",
+                fast_reasoning_provider="default",
+                deep_reasoning_provider="default",
+                deep_reasoning="gpt-5.4",
+                fast_reasoning="gpt-5.4-mini",
+                deep_reasoning_effort="high",
+                fast_reasoning_effort="none",
+                base_url="",
+                api_key_env="BENCHMARK_CODEX_API_KEY",
+            )
+        )
+        with patch("config.get_config", return_value=cfg):
+            provider = adapter.get_llm_provider()
+        assert isinstance(provider, OpenAICodexOAuthLLMProvider)
+        assert provider._api_key == "tok.legacy.jwt"
+
     def test_get_llm_provider_returns_anthropic_provider(self, monkeypatch):
         adapter = CodexAdapter()
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
@@ -3912,6 +3965,18 @@ class TestCodexAdapter:
         assert token_path == tmp_path / "shared" / "auth" / "credentials.json"
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
         assert adapter.get_api_key("OPENAI_API_KEY") == "sk-codex-file-token"
+
+    def test_get_api_key_reads_legacy_codex_auth_token_file(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        monkeypatch.delenv("OPENAI_OAUTH_TOKEN", raising=False)
+        adapter = CodexAdapter()
+        token_path = adapter.auth_token_path()
+        assert token_path is not None
+        token_path.parent.mkdir(parents=True, exist_ok=True)
+        token_path.write_text("tok.legacy.jwt\n", encoding="utf-8")
+
+        assert adapter.get_api_key("OPENAI_API_KEY") == "tok.legacy.jwt"
 
     def test_get_api_key_reads_shared_registry_before_adapter_file(self, monkeypatch, tmp_path):
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
