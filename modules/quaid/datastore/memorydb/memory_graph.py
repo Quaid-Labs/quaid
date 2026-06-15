@@ -4318,8 +4318,8 @@ def store_edge_keywords(relation: str, keywords: List[str], description: str = "
         try:
             conn.execute("""
                 INSERT OR REPLACE INTO edge_keywords (relation, keywords, description, updated_at)
-                VALUES (?, ?, ?, datetime('now'))
-            """, (relation, json.dumps(keywords), description))
+                VALUES (?, ?, ?, ?)
+            """, (relation, json.dumps(keywords), description, _now_iso()))
             invalidate_edge_keywords_cache()
             return True
         except Exception as e:
@@ -5946,6 +5946,7 @@ def register_domain(domain: str, description: str = "", active: bool = True) -> 
     graph = get_graph()
     with graph._get_conn() as conn:
         _ensure_domain_tables(conn)
+        now_iso = _now_iso()
         conn.execute(
             """
             INSERT INTO domain_registry(domain, description, active)
@@ -5953,9 +5954,9 @@ def register_domain(domain: str, description: str = "", active: bool = True) -> 
             ON CONFLICT(domain) DO UPDATE SET
               description = excluded.description,
               active = excluded.active,
-              updated_at = datetime('now')
+              updated_at = ?
             """,
-            (did, desc, 1 if active else 0),
+            (did, desc, 1 if active else 0, now_iso),
         )
         active_domains = _active_domain_map(conn)
     if _HAS_CONFIG:
@@ -24118,9 +24119,9 @@ def store_contradiction(node_a_id: str, node_b_id: str, explanation: str) -> Opt
     try:
         with graph._get_conn() as conn:
             cursor = conn.execute("""
-                INSERT OR IGNORE INTO contradictions (id, node_a_id, node_b_id, explanation)
-                VALUES (?, ?, ?, ?)
-            """, (contradiction_id, a_id, b_id, explanation))
+                INSERT OR IGNORE INTO contradictions (id, node_a_id, node_b_id, explanation, detected_at)
+                VALUES (?, ?, ?, ?, ?)
+            """, (contradiction_id, a_id, b_id, explanation, _now_iso()))
             if cursor.rowcount > 0:
                 return contradiction_id
             existing = conn.execute(
@@ -25561,7 +25562,7 @@ if __name__ == "__main__":
             graph = get_graph()
             days = args.days
             with graph._get_conn() as conn:
-                cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+                cutoff = (_now() - timedelta(days=days)).isoformat()
                 rows = conn.execute("""
                     SELECT COUNT(*) as total,
                            ROUND(AVG(results_count), 1) as avg_results,

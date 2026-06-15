@@ -1028,6 +1028,84 @@ class TestStoreBasic:
         assert updated.accessed_at == "2026-05-06T07:08:09"
         assert updated.access_count == 1
 
+    def test_edge_keyword_updates_honor_quaid_now(self, tmp_path, monkeypatch):
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _ = _make_graph(tmp_path)
+        monkeypatch.setenv("QUAID_NOW", "2026-07-08T09:10:11")
+
+        with patch.object(mg, "get_graph", return_value=graph):
+            assert mg.store_edge_keywords("mentors", ["mentor"], "Mentorship relation") is True
+
+        with graph._get_conn() as conn:
+            row = conn.execute(
+                "SELECT updated_at FROM edge_keywords WHERE relation = ?",
+                ("mentors",),
+            ).fetchone()
+
+        assert row is not None
+        assert row["updated_at"] == "2026-07-08T09:10:11"
+
+    def test_domain_upsert_updated_at_honors_quaid_now(self, tmp_path, monkeypatch):
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _ = _make_graph(tmp_path)
+
+        with patch.object(mg, "get_graph", return_value=graph), \
+             patch.object(mg, "_HAS_CONFIG", False), \
+             patch("lib.tools_domain_sync.sync_tools_domain_block"):
+            monkeypatch.setenv("QUAID_NOW", "2026-07-01T00:00:00")
+            mg.register_domain("field-notes", "Initial notes", active=True)
+            monkeypatch.setenv("QUAID_NOW", "2026-07-09T10:11:12")
+            mg.register_domain("field-notes", "Updated notes", active=False)
+
+        with graph._get_conn() as conn:
+            row = conn.execute(
+                "SELECT description, active, updated_at FROM domain_registry WHERE domain = ?",
+                ("field_notes",),
+            ).fetchone()
+
+        assert row is not None
+        assert row["description"] == "Updated notes"
+        assert row["active"] == 0
+        assert row["updated_at"] == "2026-07-09T10:11:12"
+
+    def test_contradiction_timestamps_honor_quaid_now(self, tmp_path, monkeypatch):
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _ = _make_graph(tmp_path)
+        left = mg.Node.create("Fact", "The archive box is red.", owner_id="quaid")
+        right = mg.Node.create("Fact", "The archive box is blue.", owner_id="quaid")
+        other = mg.Node.create("Fact", "The archive box is green.", owner_id="quaid")
+        for node in (left, right, other):
+            graph.add_node(node, embed=False)
+
+        with patch.object(mg, "get_graph", return_value=graph):
+            monkeypatch.setenv("QUAID_NOW", "2026-08-01T02:03:04")
+            first_id = mg.store_contradiction(left.id, right.id, "color mismatch")
+            second_id = mg.store_contradiction(left.id, other.id, "alternate color mismatch")
+            monkeypatch.setenv("QUAID_NOW", "2026-08-02T03:04:05")
+            assert mg.resolve_contradiction(first_id, "keep_a", "left source wins") is True
+            monkeypatch.setenv("QUAID_NOW", "2026-08-03T04:05:06")
+            assert mg.mark_contradiction_false_positive(second_id, "not actually conflicting") is True
+
+        with graph._get_conn() as conn:
+            first = conn.execute(
+                "SELECT detected_at, resolved_at, status FROM contradictions WHERE id = ?",
+                (first_id,),
+            ).fetchone()
+            second = conn.execute(
+                "SELECT detected_at, resolved_at, status FROM contradictions WHERE id = ?",
+                (second_id,),
+            ).fetchone()
+
+        assert first["detected_at"] == "2026-08-01T02:03:04"
+        assert first["resolved_at"] == "2026-08-02T03:04:05"
+        assert first["status"] == "resolved"
+        assert second["detected_at"] == "2026-08-01T02:03:04"
+        assert second["resolved_at"] == "2026-08-03T04:05:06"
+        assert second["status"] == "false_positive"
+
     def test_recall_preserves_structural_anchor_kind(self, tmp_path):
         from datastore.memorydb.memory_graph import _recall_once, store
 
