@@ -86,7 +86,9 @@ def test_validate_project_name_rejects_path_and_glob_names(project_env):
     from core import project_docs
 
     assert project_docs.validate_project_name("Demo_Project") == "demo_project"
-    for raw in ("../../escape", "*.json", "demo/name"):
+    assert project_docs.validate_project_name("Man\u0303ana-App") == "mañana-app"
+    assert project_docs.validate_project_name("研究-資料") == "研究-資料"
+    for raw in ("../../escape", "*.json", "demo/name", "demo\\name", "demo.name", "demo[abc]"):
         with pytest.raises(ValueError, match="Invalid project name"):
             project_docs.validate_project_name(raw)
 
@@ -1008,21 +1010,32 @@ def test_project_log_queue_accepts_unicode_project_names(project_env):
 
     project = "mañana-app"
     decomposed_project = "man\u0303ana-app"
+    underscore_project = "demo_project"
 
     metrics = project_log_queue.enqueue_project_logs(
-        {decomposed_project: ["Queued unicode project log milestone"]},
+        {
+            decomposed_project: ["Queued unicode project log milestone"],
+            "Demo_Project": ["Queued underscore project log milestone"],
+        },
         trigger="Reset",
     )
 
-    assert metrics["entries_written"] == 1
+    assert metrics["entries_written"] == 2
     assert project_log_queue.pending_project_log_count(project) == 1
+    assert project_log_queue.pending_project_log_count(underscore_project) == 1
     with project_log_queue.project_queue_lock(project):
         items = project_log_queue.drain_project_log_queue(project)
         project_log_queue.mark_project_log_queue_committed(project, [items[0]["id"]])
+    with project_log_queue.project_queue_lock(underscore_project):
+        underscore_items = project_log_queue.drain_project_log_queue(underscore_project)
+        project_log_queue.mark_project_log_queue_committed(underscore_project, [underscore_items[0]["id"]])
 
     assert items[0]["project"] == project
     assert items[0]["entries"] == [{"text": "Queued unicode project log milestone"}]
+    assert underscore_items[0]["project"] == underscore_project
+    assert underscore_items[0]["entries"] == [{"text": "Queued underscore project log milestone"}]
     assert project_log_queue.pending_project_log_count(project) == 0
+    assert project_log_queue.pending_project_log_count(underscore_project) == 0
 
 
 def test_project_log_queue_failed_flock_does_not_authorize_drain(project_env, monkeypatch):

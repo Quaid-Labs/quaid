@@ -1164,6 +1164,16 @@ class TestCreateProjectConfig:
         assert r.get_project_definition("new-proj") is not None
         assert (setup_env / "projects" / "new-proj").is_dir()
 
+    def test_accepts_unicode_project_names(self, setup_env):
+        r = _get_registry()
+        r.create_project("Man\u0303ana-App")
+        r.create_project("研究-資料")
+
+        assert r.get_project_definition("mañana-app") is not None
+        assert (setup_env / "projects" / "mañana-app").is_dir()
+        assert r.get_project_definition("研究-資料") is not None
+        assert (setup_env / "projects" / "研究-資料").is_dir()
+
     def test_rejects_empty_name(self, setup_env):
         r = _get_registry()
         with pytest.raises(ValueError, match="Project name is required"):

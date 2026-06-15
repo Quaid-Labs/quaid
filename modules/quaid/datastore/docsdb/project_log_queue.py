@@ -111,7 +111,7 @@ def _validate_project(project: str) -> str:
         raise ValueError(f"Invalid project name for project-log queue: {project!r}")
     first, rest = name[0], name[1:]
     if not first.isalnum() or any(
-        not (ch.isalnum() or unicodedata.category(ch).startswith("M") or ch == "-")
+        not (ch.isalnum() or unicodedata.category(ch).startswith("M") or ch in {"-", "_"})
         for ch in rest
     ):
         raise ValueError(f"Invalid project name for project-log queue: {project!r}")

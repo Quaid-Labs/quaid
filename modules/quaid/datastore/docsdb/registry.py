@@ -30,6 +30,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import unicodedata
 from datetime import datetime, timezone
 from fnmatch import fnmatch
 from pathlib import Path
@@ -255,20 +256,28 @@ def _visible_home() -> Path:
 
 
 # Keep underscores for installed alpha projects, but reject dots/separators and cap path length.
-_PROJECT_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,127}$")
+_MAX_PROJECT_NAME_LEN = 128
 _WINDOWS_ABSOLUTE_RE = re.compile(r"^[A-Za-z]:")
 MALFORMED_SOURCE_FILES_MARKER = "__quaid_docs_registry_malformed_source_files__"
 
 
 def _normalize_project_name(name: str) -> str:
-    return str(name or "").strip().lower()
+    return unicodedata.normalize("NFKC", str(name or "")).casefold().strip()
+
+
+def _is_project_name_char_allowed(ch: str) -> bool:
+    return ch.isalnum() or unicodedata.category(ch).startswith("M") or ch in {"-", "_"}
 
 
 def _validate_project_name(name: str) -> str:
     normalized = _normalize_project_name(name)
     if not normalized:
         raise ValueError("Project name is required")
-    if not _PROJECT_NAME_RE.fullmatch(normalized):
+    if (
+        len(normalized) > _MAX_PROJECT_NAME_LEN
+        or not normalized[0].isalnum()
+        or any(not _is_project_name_char_allowed(ch) for ch in normalized[1:])
+    ):
         raise ValueError(f"Invalid project name: {name!r}")
     return normalized
 

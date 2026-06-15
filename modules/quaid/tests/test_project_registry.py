@@ -191,6 +191,17 @@ class TestCreateProject:
         assert (tmp_path / "projects" / "my-app").is_dir()
         assert get_project("MY-APP") is not None
 
+    def test_accepts_unicode_project_names(self, mock_adapter):
+        _, tmp_path = mock_adapter
+        with patch("core.project_registry._sync_docs_registry_project"):
+            create_project("Man\u0303ana-App")
+            create_project("研究-資料")
+
+        assert (tmp_path / "projects" / "mañana-app").is_dir()
+        assert get_project("MAÑANA-APP") is not None
+        assert (tmp_path / "projects" / "研究-資料").is_dir()
+        assert get_project("研究-資料") is not None
+
     def test_rejects_duplicate(self, mock_adapter):
         create_project("my-app")
         with pytest.raises(ValueError, match="already exists"):

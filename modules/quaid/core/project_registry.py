@@ -14,6 +14,7 @@ import tempfile
 import shutil
 import threading
 import time
+import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -24,7 +25,7 @@ from lib.project_registry_lock import registry_lock, registry_lock_path, registr
 
 logger = logging.getLogger(__name__)
 _RULES_FILE_PREFIX = "quaid-"
-_PROJECT_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+_MAX_PROJECT_NAME_LEN = 128
 
 
 def _empty_registry() -> Dict[str, Any]:
@@ -57,14 +58,22 @@ def _now_iso() -> str:
 
 
 def _normalize_project_name(name: str) -> str:
-    return str(name or "").strip().lower()
+    return unicodedata.normalize("NFKC", str(name or "")).casefold().strip()
+
+
+def _is_project_name_char_allowed(ch: str) -> bool:
+    return ch.isalnum() or unicodedata.category(ch).startswith("M") or ch in {"-", "_"}
 
 
 def _validate_project_name(name: str) -> str:
     normalized = _normalize_project_name(name)
     if not normalized:
         raise ValueError("Project name is required")
-    if not _PROJECT_NAME_RE.fullmatch(normalized):
+    if (
+        len(normalized) > _MAX_PROJECT_NAME_LEN
+        or not normalized[0].isalnum()
+        or any(not _is_project_name_char_allowed(ch) for ch in normalized[1:])
+    ):
         raise ValueError(f"Invalid project name: {name!r}")
     return normalized
 
