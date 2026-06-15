@@ -869,7 +869,6 @@ class OpenClawAdapter(QuaidAdapter):
     def parse_session_jsonl(self, path: Path) -> str:
         """Parse OC session JSONL with envelope compatibility."""
         messages = []
-        session_source_type = ""
         with open(path, "r", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
@@ -895,10 +894,11 @@ class OpenClawAdapter(QuaidAdapter):
                         if payload_type in ("user_message", "agent_message"):
                             role = "user" if payload_type == "user_message" else "assistant"
                             text = str(payload.get("message", "")).strip()
+                            source_type = ""
                             if self._is_host_memory_policy_reply(role, text):
                                 continue
                             if "[Subagent Context]" in text or "You are running as a subagent" in text:
-                                session_source_type = "subagent"
+                                source_type = "subagent"
                                 text = re.sub(
                                     r"^\[[^\]]+\]\s*\[Subagent Context\].*?(?:\n\n|\Z)",
                                     "",
@@ -910,7 +910,7 @@ class OpenClawAdapter(QuaidAdapter):
                                 messages.append({
                                     "role": role,
                                     "content": text,
-                                    "source_type": session_source_type,
+                                    "source_type": source_type,
                                     "timestamp": row_timestamp,
                                 })
                             continue
@@ -935,10 +935,11 @@ class OpenClawAdapter(QuaidAdapter):
                     continue
 
                 stripped = content.strip()
+                source_type = ""
                 if self._is_host_memory_policy_reply(role, stripped):
                     continue
                 if "[Subagent Context]" in stripped or "You are running as a subagent" in stripped:
-                    session_source_type = "subagent"
+                    source_type = "subagent"
                     stripped = re.sub(
                         r"^\[[^\]]+\]\s*\[Subagent Context\].*?(?:\n\n|\Z)",
                         "",
@@ -951,7 +952,7 @@ class OpenClawAdapter(QuaidAdapter):
                 messages.append({
                     "role": role,
                     "content": stripped,
-                    "source_type": session_source_type,
+                    "source_type": source_type,
                     "timestamp": row_timestamp,
                 })
 
@@ -1005,6 +1006,7 @@ class OpenClawAdapter(QuaidAdapter):
         fast_effort = str(getattr(cfg.models, "fast_reasoning_effort", "") or "").strip()
         deep_effort = str(getattr(cfg.models, "deep_reasoning_effort", "") or "").strip()
         provider_tier_overridden = False
+        notify_provider_fallback = False
         if model_tier == "fast":
             fast_provider = str(getattr(cfg.models, "fast_reasoning_provider", "") or "").strip()
             if fast_provider and fast_provider != "default":
@@ -1034,14 +1036,7 @@ class OpenClawAdapter(QuaidAdapter):
                 deep_model = str(defaults["deep"])
             if fast_model.startswith("claude-") and defaults.get("fast"):
                 fast_model = str(defaults["fast"])
-            self._notify_provider_fallback(
-                configured_provider=original_provider,
-                detected_provider=detected_provider,
-                deep_model_before=original_deep_model,
-                fast_model_before=original_fast_model,
-                deep_model_after=deep_model,
-                fast_model_after=fast_model,
-            )
+            notify_provider_fallback = True
         if provider == "openclaw-gateway":
             return OpenClawGatewayLLMProvider()
         if provider == "anthropic":
@@ -1063,6 +1058,15 @@ class OpenClawAdapter(QuaidAdapter):
                     "LLM provider is 'openai' but no OpenClaw OpenAI OAuth token was found. "
                     "Write the token produced by 'codex setup-token' to "
                     "QUAID_HOME/adaptors/openclaw/.auth-token or set OPENAI_OAUTH_TOKEN."
+                )
+            if notify_provider_fallback:
+                self._notify_provider_fallback(
+                    configured_provider=original_provider,
+                    detected_provider=detected_provider,
+                    deep_model_before=original_deep_model,
+                    fast_model_before=original_fast_model,
+                    deep_model_after=deep_model,
+                    fast_model_after=fast_model,
                 )
             configured_base_url = str(getattr(cfg.models, "base_url", "") or "").strip()
             env_base_url = str(os.environ.get("OPENAI_COMPATIBLE_BASE_URL", "") or "").strip()

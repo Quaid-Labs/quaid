@@ -576,9 +576,59 @@ class TestOpenClawAdapter:
         adapter = OpenClawAdapter()
         transcript = adapter.parse_session_jsonl(session_file)
         assert "Subagent/User: my uncle owns a vineyard in Mendoza that produces Malbec." in transcript
-        assert "Subagent/Assistant: Noted: your uncle owns a vineyard in Mendoza." in transcript
+        assert "Assistant: Noted: your uncle owns a vineyard in Mendoza." in transcript
         assert "[Subagent Context]" not in transcript
         assert "You are running as a subagent" not in transcript
+
+    def test_parse_session_jsonl_does_not_leak_subagent_source_type(self, tmp_path):
+        session_file = tmp_path / "oc-subagent-leak.jsonl"
+        session_file.write_text(
+            "\n".join(
+                [
+                    json.dumps(
+                        {
+                            "type": "event_msg",
+                            "payload": {
+                                "type": "user_message",
+                                "message": (
+                                    "[Thu 2026-04-09 17:19 UTC] [Subagent Context] "
+                                    "You are running as a subagent.\n\n"
+                                    "[Subagent Task]: My sister is Diana."
+                                ),
+                            },
+                        }
+                    ),
+                    json.dumps(
+                        {
+                            "type": "event_msg",
+                            "payload": {
+                                "type": "agent_message",
+                                "message": "Subagent task acknowledged.",
+                            },
+                        }
+                    ),
+                    json.dumps(
+                        {
+                            "type": "event_msg",
+                            "payload": {
+                                "type": "user_message",
+                                "message": "My normal follow-up is that I prefer rooibos.",
+                            },
+                        }
+                    ),
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        adapter = OpenClawAdapter()
+        transcript = adapter.parse_session_jsonl(session_file)
+
+        assert "Subagent/User: My sister is Diana." in transcript
+        assert "Assistant: Subagent task acknowledged." in transcript
+        assert "User: My normal follow-up is that I prefer rooibos." in transcript
+        assert "Subagent/Assistant: Subagent task acknowledged." not in transcript
+        assert "Subagent/User: My normal follow-up is that I prefer rooibos." not in transcript
 
 
 
@@ -1385,6 +1435,8 @@ class TestOpenClawAdapter:
         monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
         adapter = OpenClawAdapter()
         monkeypatch.setattr(adapter, "_resolve_anthropic_credential", lambda: None)
+        notices = []
+        monkeypatch.setattr(adapter, "notify", lambda message, **_kwargs: notices.append(message) or True)
         cfg = SimpleNamespace(models=SimpleNamespace(
             llm_provider="anthropic",
             deep_reasoning="gpt-5.4",
@@ -1422,6 +1474,8 @@ class TestOpenClawAdapter:
         monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
         adapter = OpenClawAdapter()
         monkeypatch.setattr(adapter, "_resolve_anthropic_credential", lambda: None)
+        notices = []
+        monkeypatch.setattr(adapter, "notify", lambda message, **_kwargs: notices.append(message) or True)
         cfg = SimpleNamespace(models=SimpleNamespace(
             llm_provider="anthropic",
             deep_reasoning="gpt-5.4",
@@ -1436,6 +1490,7 @@ class TestOpenClawAdapter:
         with patch("config.get_config", return_value=cfg):
             with pytest.raises(RuntimeError, match="no OpenClaw OpenAI OAuth token"):
                 adapter.get_llm_provider(model_tier="deep")
+        assert notices == []
 
     def test_get_llm_provider_preserves_tier_anthropic_override_when_oc_detects_codex(self, monkeypatch, tmp_path):
         home = tmp_path / "home"
