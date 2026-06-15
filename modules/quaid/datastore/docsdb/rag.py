@@ -399,6 +399,15 @@ def _docs_source_penalty(query_terms: List[str], source_file: str) -> float:
     penalty = 0.0
 
     query_term_set = {str(term or "").strip().lower() for term in query_terms if str(term or "").strip()}
+    source_identity_terms = {
+        str(term or "").strip().lower()
+        for term in _path_suffix_candidates(source_file)
+        if str(term or "").strip()
+    }
+    if file_name:
+        source_identity_terms.add(file_name)
+    if Path(file_name).stem:
+        source_identity_terms.add(Path(file_name).stem)
     fixture_markers = {"seed", "seeds", "fixture", "fixtures", "sample", "samples", "example", "examples", "mock", "mocks"}
     fixture_signals = (
         "seed" in path_parts
@@ -414,7 +423,8 @@ def _docs_source_penalty(query_terms: List[str], source_file: str) -> float:
         or file_name.startswith(("sample-", "seed-", "fixture-", "mock-", "example-"))
     )
     query_names_source_marker = bool(
-        query_term_set & path_parts & fixture_markers
+        query_term_set & source_identity_terms
+        or query_term_set & path_parts & fixture_markers
         or any(
             marker in query_term_set and file_name.startswith(f"{marker.rstrip('s')}-")
             for marker in fixture_markers
