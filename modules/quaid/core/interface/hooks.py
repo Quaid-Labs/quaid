@@ -31,6 +31,7 @@ import subprocess
 import sys
 import time
 from datetime import datetime, timezone
+import unicodedata
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, Dict, List
@@ -242,45 +243,21 @@ def _format_memories(
     return f"<quaid_system_message>\n{body}\n</quaid_system_message>"
 
 
-_NEGATIVE_MEMORY_CONTEXT_RE = re.compile(
-    r"\b(?:memory|record|records|previous\s+sessions|previous\s+conversation|conversation\s+history|"
-    r"context|stored|recorded|recall|remember|came\s+up|matches?|log\s+it|save\s+it|save\s+that)\b",
-    re.IGNORECASE,
-)
-_NEGATIVE_MEMORY_CLAIM_RE = re.compile(
-    r"\b(?:"
-    r"(?:do|does|did)\s+not\s+(?:know|have|remember)|"
-    r"(?:do|does|did)n['’]t\s+(?:know|have|remember)|"
-    r"(?:still\s+)?nothing\s+(?:in|from|for)|"
-    r"(?:no|nothing)\s+(?:in\s+)?(?:memory|record|records|previous\s+sessions|previous\s+conversation|"
-    r"conversation\s+history|context|information|info|data)|"
-    r"no\s+(?:plant\s+name|name|fact|record|records|information|info)\s+(?:was|were|is|are)\s+(?:previously\s+)?"
-    r"(?:recorded|stored|found|available)|"
-    r"(?:not|never)\s+(?:previously\s+)?(?:recorded|stored|found|available)|"
-    r"nothing\s+(?:came|comes)\s+up|"
-    r"no\s+matches?\s+(?:came|come|found)|"
-    r"(?:want|would\s+you\s+like)\s+(?:me\s+)?to\s+(?:log|save|record)\s+(?:one|it|that)"
-    r")\b",
-    re.IGNORECASE,
-)
 _MEMORY_PREFIX_RE = re.compile(r"^\s*\[memory\]\s*", re.IGNORECASE)
 _MEMORY_SUPPORT_LINE_RE = re.compile(
     r"^\s*\[(?:session_chunk|source_chunk|project_doc|doc)\]",
     re.IGNORECASE,
 )
-_QUESTION_MEMORY_RE = re.compile(
-    r"^\s*(?:who|what|when|where|why|how|which|whose|is|are|was|were|do|does|did|can|could|"
-    r"should|would|will|may|might|has|have|had)\b.*\?\s*$",
-    re.IGNORECASE,
-)
-_QUESTION_MEMORY_NO_MARK_RE = re.compile(
-    r"^\s*(?:"
-    r"(?:who|what|when|where|why|how)(?:['’]s|\s+(?:is|are|was|were|do|does|did|can|could|should|would|will|may|might|has|have|had))|"
-    r"(?:which|whose)\s+(?:is|are|was|were|do|does|did|can|could|should|would|will|may|might|has|have|had)|"
-    r"(?:is|are|was|were|do|does|did|can|could|should|would|will|may|might|has|have|had)\s+"
-    r")\b",
-    re.IGNORECASE,
-)
+
+
+def _strip_boundary_punctuation(text: str) -> str:
+    start = 0
+    end = len(text)
+    while start < end and unicodedata.category(text[start]).startswith("P"):
+        start += 1
+    while end > start and unicodedata.category(text[end - 1]).startswith("P"):
+        end -= 1
+    return text[start:end].strip()
 
 
 def _primary_memory_assertion_text(text: str) -> str:
@@ -296,52 +273,31 @@ def _primary_memory_assertion_text(text: str) -> str:
     return _MEMORY_PREFIX_RE.sub("", primary, count=1).strip() or primary
 
 
-def _is_negative_memory_claim_text(text: str) -> bool:
+def _memory_echo_key(text: str) -> str:
     raw = _primary_memory_assertion_text(text)
     if not raw:
-        return False
-    return bool(
-        _NEGATIVE_MEMORY_CLAIM_RE.search(raw)
-        and _NEGATIVE_MEMORY_CONTEXT_RE.search(raw)
-    )
+        return ""
+    normalized = unicodedata.normalize("NFKC", raw).casefold()
+    compact = re.sub(r"\s+", " ", normalized).strip()
+    return _strip_boundary_punctuation(compact)
 
 
 def _is_bare_question_memory_text(text: str) -> bool:
     raw = _primary_memory_assertion_text(text)
     if not raw:
         return False
-    if raw.rstrip().endswith(("?", "؟", "？")):
-        return True
-    if _QUESTION_MEMORY_RE.match(raw):
-        return True
-    if "?" in raw:
-        return False
-    if raw.endswith((".", "!", ":")):
-        return False
-    if len(raw.split()) > 24:
-        return False
-    tokens = re.findall(r"[a-z0-9]+", raw.lower())
-    if tokens and tokens[0] in {"who", "what", "when", "where", "why", "how", "which", "whose"}:
-        auxiliaries = {
-            "is", "are", "was", "were", "do", "does", "did", "can", "could",
-            "should", "would", "will", "may", "might", "has", "have", "had",
-        }
-        if any(token in auxiliaries for token in tokens[1:8]):
-            return True
-    return bool(_QUESTION_MEMORY_NO_MARK_RE.match(raw))
+    return raw.rstrip().endswith(("?", "؟", "？"))
 
 
 def _is_query_echo_memory_text(text: str, current_query: str | None) -> bool:
-    query = str(current_query or "").strip()
-    raw = str(text or "").strip()
-    if not query or not raw:
-        return False
-    if not _is_bare_question_memory_text(query):
-        return False
-    lhs = re.sub(r"\s+", " ", raw).strip().lower()
-    rhs = re.sub(r"\s+", " ", query).strip().lower()
+    lhs = _memory_echo_key(text)
+    rhs = _memory_echo_key(str(current_query or ""))
     if not lhs or not rhs:
         return False
+    if min(len(lhs), len(rhs)) < 4:
+        return False
+    if lhs == rhs:
+        return True
     return SequenceMatcher(None, lhs, rhs).ratio() >= 0.98
 
 
@@ -349,11 +305,9 @@ def _is_non_injectable_memory(mem: Dict, current_query: str | None = None) -> bo
     text = str((mem or {}).get("text") or "").strip()
     if not text:
         return False
-    if _is_negative_memory_claim_text(text):
+    if _is_query_echo_memory_text(text, current_query):
         return True
     if _is_bare_question_memory_text(text):
-        return True
-    if _is_query_echo_memory_text(text, current_query):
         return True
     return False
 
@@ -429,20 +383,15 @@ def _filter_injectable_memories(
     if filtered or not close_competitors_only:
         return filtered
     # Duplicate pending facts can be extracted in a question-shaped form. If the
-    # only quality concern is close competitors, inject the strongest non-negative
-    # row instead of erasing all relevant context from the hook turn.
+    # only quality concern is close competitors, inject the strongest structurally
+    # injectable row instead of erasing all relevant context from the hook turn.
     # TODO(recall): fix duplicate close-competitor rows at the recall_fast source
     # so non-hook consumers receive the same deduped evidence shape.
     for mem in list(memories or []):
         if not isinstance(mem, dict):
             continue
         text = str(mem.get("text") or "").strip()
-        if (
-            text
-            and not _is_negative_memory_claim_text(text)
-            and not _is_bare_question_memory_text(text)
-            and not _is_query_echo_memory_text(text, current_query)
-        ):
+        if text and not _is_non_injectable_memory(mem, current_query=current_query):
             return _dedupe_close_competitor_memories([mem])
     return filtered
 

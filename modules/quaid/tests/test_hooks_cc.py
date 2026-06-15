@@ -107,6 +107,16 @@ def test_non_injectable_memory_keeps_non_english_fact_sentence():
     assert not hooks._is_bare_question_memory_text("旅行計画は金曜日に確定した。")
 
 
+def test_non_injectable_memory_filters_current_query_echo_without_language_gate():
+    from core.interface import hooks
+
+    assert hooks._is_query_echo_memory_text("次の予定", "次の予定")
+    assert hooks._is_query_echo_memory_text(
+        "Widget Alpha kept ledger",
+        "Widget Alpha kept ledger.",
+    )
+
+
 def _run_hook_session_init(hook_input: dict, *, monkeypatch, rules_dir: Path):
     """Drive hook_session_init with fake stdin and captured stdout/stderr.
 
@@ -2337,7 +2347,7 @@ class TestHookInjectRecallResilience:
             },
         }
 
-        assert hooks._is_bare_question_memory_text(rows[0]["text"])
+        assert hooks._is_query_echo_memory_text(rows[0]["text"], query)
 
         with patch("core.interface.api.recall_fast", return_value=(rows, meta)), \
              patch("core.interface.api.projects_search_docs", return_value=None):
@@ -2416,9 +2426,13 @@ class TestHookInjectRecallResilience:
             },
         }
 
-        assert hooks._format_memories(rows, recall_meta=meta) == ""
+        assert hooks._format_memories(
+            rows,
+            recall_meta=meta,
+            current_query="What scanner do I use for receipts?",
+        ) == ""
 
-    def test_recall_fast_close_competitor_recovery_keeps_negative_claims_blocked(
+    def test_memory_injection_does_not_semantically_block_english_negative_claims(
         self
     ):
         from core.interface import hooks
@@ -2451,7 +2465,8 @@ class TestHookInjectRecallResilience:
             },
         }
 
-        assert hooks._format_memories(rows, recall_meta=meta) == ""
+        context = hooks._format_memories(rows, recall_meta=meta)
+        assert context.count("No record was previously stored in memory") == 1
 
     def test_recall_fast_close_competitor_recovery_keeps_pure_questions_blocked(
         self
