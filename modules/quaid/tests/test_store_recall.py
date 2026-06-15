@@ -16914,6 +16914,76 @@ class TestRecallFastHookInjectContract:
         assert attached
         assert any("ceramics practice" in row["text"] for row in attached)
 
+    def test_graph_aware_recall_infers_unicode_anchor_from_direct_fact_subject(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _ = _make_graph(tmp_path)
+        meiling = mg.Node.create("Person", "美玲")
+        kiln = mg.Node.create("Fact", "美玲 は 青い窯で陶芸作品を焼いている")
+        for node in (meiling, kiln):
+            graph.add_node(node, embed=False)
+        graph.add_edge(mg.Edge.create(meiling.id, kiln.id, "has_fact"))
+        candidate_pool = [
+            {
+                "id": "direct-seed",
+                "text": "美玲 は 陶芸 の窯を管理している",
+                "category": "fact",
+                "similarity": 0.91,
+            }
+        ]
+
+        with patch.object(mg, "get_graph", return_value=graph), \
+             patch.object(mg, "_HAS_CONFIG", True), \
+             patch.object(mg, "_get_memory_config", return_value=SimpleNamespace(users=SimpleNamespace(identities={}))):
+            payload = mg.graph_aware_recall(
+                "陶芸 について",
+                owner_id="test-owner-alpha",
+                limit=5,
+                graph_depth=1,
+                candidate_pool=candidate_pool,
+            )
+
+        attached = [
+            row for row in payload["graph_results"]
+            if row.get("id") == kiln.id and row.get("via") == "graph_attached_fact"
+        ]
+        assert attached
+        assert "青い窯" in attached[0]["text"]
+
+    def test_graph_aware_recall_does_not_infer_nonleading_unicode_anchor_from_direct_fact(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _ = _make_graph(tmp_path)
+        meiling = mg.Node.create("Person", "美玲")
+        kiln = mg.Node.create("Fact", "美玲 は 青い窯で陶芸作品を焼いている")
+        for node in (meiling, kiln):
+            graph.add_node(node, embed=False)
+        graph.add_edge(mg.Edge.create(meiling.id, kiln.id, "has_fact"))
+        candidate_pool = [
+            {
+                "id": "direct-seed",
+                "text": "陶芸 の窯を 美玲 が管理している",
+                "category": "fact",
+                "similarity": 0.91,
+            }
+        ]
+
+        with patch.object(mg, "get_graph", return_value=graph), \
+             patch.object(mg, "_HAS_CONFIG", True), \
+             patch.object(mg, "_get_memory_config", return_value=SimpleNamespace(users=SimpleNamespace(identities={}))):
+            payload = mg.graph_aware_recall(
+                "陶芸 について",
+                owner_id="test-owner-alpha",
+                limit=5,
+                graph_depth=1,
+                candidate_pool=candidate_pool,
+            )
+
+        assert not [
+            row for row in payload["graph_results"]
+            if row.get("id") == kiln.id and row.get("via") == "graph_attached_fact"
+        ]
+
     def test_graph_aware_recall_named_entity_prefers_informative_attached_fact(self, tmp_path):
         import datastore.memorydb.memory_graph as mg
 

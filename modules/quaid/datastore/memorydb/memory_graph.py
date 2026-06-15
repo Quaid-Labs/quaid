@@ -4511,16 +4511,35 @@ def should_expand_graph(query: str) -> bool:
     # 3. Check for pronouns + known person names
     # "I'm meeting Jane" - is Jane a Person node?
     if has_owner_pronoun(query):
-        try:
-            for entity in extract_entities_from_text(query)[:5]:
-                if str(getattr(entity, "type", "") or "").strip().lower() == "person":
-                    return True
-        except Exception:
-            if _is_fail_hard_mode():
-                raise
-            logger.warning("Graph expansion entity scan failed during owner/person check", exc_info=True)
+        if _person_entities_from_text(query, limit=5, context="graph expansion owner/person check"):
+            return True
 
     return False
+
+
+def _person_entities_from_text(text: str, *, limit: int = 5, context: str = "person entity scan") -> List[Node]:
+    try:
+        people: List[Node] = []
+        for entity in extract_entities_from_text(text):
+            if str(getattr(entity, "type", "") or "").strip().lower() != "person":
+                continue
+            people.append(entity)
+            if len(people) >= limit:
+                break
+        return people
+    except Exception as exc:
+        if _is_fail_hard_mode():
+            raise RuntimeError(f"{context} failed while failHard is enabled") from exc
+        logger.warning("%s failed: %s", context, exc)
+        return []
+
+
+def _leading_fact_subject_text(text: str, *, char_limit: int = 96) -> str:
+    clean = " ".join(str(text or "").split()).strip()
+    if not clean:
+        return ""
+    clause = re.split(r"[.!?。！？؟;；,，:：]", clean, maxsplit=1)[0].strip()
+    return (clause or clean)[:char_limit].strip()
 
 
 def seed_edge_keywords_from_db() -> int:
@@ -5805,16 +5824,16 @@ def graph_aware_recall(
     # If we still don't have an anchor node, infer one from direct fact subjects
     # (e.g., "Quaid has sisters..." -> anchor "Quaid").
     if not expand_from and not deferred_expand_from and direct:
-        inferred_names = []
         for fact in direct:
-            text = str(fact.get("text", "")).strip()
-            m = re.match(r"^([A-Z][A-Za-z0-9'_-]*(?:\s+[A-Z][A-Za-z0-9'_-]*){0,2})\b", text)
-            if m:
-                inferred_names.append(m.group(1))
-        for name in inferred_names:
-            node = graph.find_node_by_name(name, type="Person")
-            if node:
-                deferred_expand_from.append(node.id)
+            text = _leading_fact_subject_text(fact.get("text", ""))
+            text_key = _identifier_key(text)
+            for person in _person_entities_from_text(text, limit=1, context="direct fact subject anchor scan"):
+                person_key = _identifier_key(getattr(person, "name", ""))
+                if not person_key or not text_key.startswith(person_key):
+                    continue
+                deferred_expand_from.append(person.id)
+                break
+            if deferred_expand_from:
                 break
 
     expand_from.extend(deferred_expand_from)
