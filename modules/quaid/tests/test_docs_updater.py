@@ -864,6 +864,59 @@ class TestClassifyDocChange:
 
 
 class TestCleanupStateLocking:
+    def test_log_doc_update_honors_quaid_now(self, tmp_path, monkeypatch):
+        with _adapter_patch(tmp_path):
+            import datastore.docsdb.updater as updater
+
+            monkeypatch.setenv("QUAID_NOW", "2026-03-11T05:06:07Z")
+
+            updater.log_doc_update(
+                "docs/test.md",
+                "janitor",
+                ["src/app.py"],
+                "updated",
+                dry_run=False,
+                success=False,
+                chars_before=10,
+                chars_after=10,
+                notify=False,
+            )
+
+            entries = updater._load_changelog()
+            assert entries[0]["timestamp"] == "2026-03-11T05:06:07+00:00"
+
+    def test_log_doc_update_rejects_malformed_quaid_now(self, tmp_path, monkeypatch):
+        with _adapter_patch(tmp_path):
+            import datastore.docsdb.updater as updater
+
+            monkeypatch.setenv("QUAID_NOW", "not-a-date")
+
+            with pytest.raises(ValueError, match="Invalid QUAID_NOW"):
+                updater.log_doc_update(
+                    "docs/test.md",
+                    "janitor",
+                    ["src/app.py"],
+                    "updated",
+                    dry_run=False,
+                    success=False,
+                    chars_before=10,
+                    chars_after=10,
+                    notify=False,
+                )
+
+            assert not updater._changelog_path().exists()
+
+    def test_reset_cleanup_state_honors_quaid_now(self, tmp_path, monkeypatch):
+        with _adapter_patch(tmp_path):
+            import datastore.docsdb.updater as updater
+
+            monkeypatch.setenv("QUAID_NOW", "2026-03-11T05:06:07Z")
+
+            updater._reset_cleanup_state("docs/test.md", 123)
+
+            state = updater._load_cleanup_state()
+            assert state["docs/test.md"]["last_cleanup"] == "2026-03-11T05:06:07+00:00"
+
     def test_increment_update_count_is_thread_safe(self, tmp_path):
         with _adapter_patch(tmp_path):
             import datastore.docsdb.updater as updater
@@ -1143,6 +1196,43 @@ NEW: Should not be written.
     assert doc.read_text(encoding="utf-8") == "# Doc\n\nExisting line.\n"
 
 
+def test_update_doc_from_transcript_registry_timestamp_honors_quaid_now(tmp_path, monkeypatch):
+    with _adapter_patch(tmp_path) as iroot:
+        from datastore.docsdb import updater
+
+        doc = iroot / "docs" / "doc.md"
+        doc.parent.mkdir(parents=True, exist_ok=True)
+        doc.write_text("# Doc\n\nExisting line.\n", encoding="utf-8")
+
+        captured = []
+
+        class _FakeRegistry:
+            def update_timestamps(self, doc_path, **kwargs):
+                captured.append((doc_path, kwargs))
+
+        response = """<<<EDIT
+OLD: Existing line.
+NEW: Updated line.
+>>>
+<<<SUMMARY: update >>>"""
+
+        monkeypatch.setenv("QUAID_NOW", "2026-03-11T05:06:07Z")
+        monkeypatch.setattr(updater, "call_deep_reasoning", lambda **_kwargs: (response, 0.1))
+        monkeypatch.setattr("datastore.docsdb.registry.DocsRegistry", _FakeRegistry)
+
+        ok = updater.update_doc_from_transcript(
+            "docs/doc.md",
+            "test purpose",
+            "transcript",
+            dry_run=False,
+        )
+
+        assert ok is True
+        assert captured == [
+            ("docs/doc.md", {"modified_at": "2026-03-11T05:06:07+00:00"})
+        ]
+
+
 class TestCmdUpdateStaleNeverIndexed:
     def test_update_doc_from_diffs_caps_total_diff_prompt(self, tmp_path, monkeypatch):
         with _adapter_patch(tmp_path) as iroot:
@@ -1258,6 +1348,63 @@ class TestCmdUpdateStaleNeverIndexed:
             assert ok is False
             assert expected_lock in lock_paths
             assert doc.read_text(encoding="utf-8") == "# Doc\n\nConcurrent update.\n"
+
+    def test_update_doc_from_diffs_registry_timestamp_honors_quaid_now(self, tmp_path, monkeypatch):
+        with _adapter_patch(tmp_path) as iroot:
+            from datastore.docsdb import updater
+
+            doc = iroot / "docs" / "doc.md"
+            doc.parent.mkdir(parents=True, exist_ok=True)
+            doc.write_text("# Doc\n\nExisting details.\n", encoding="utf-8")
+
+            captured = []
+
+            class _FakeRegistry:
+                def update_timestamps(self, doc_path, **kwargs):
+                    captured.append((doc_path, kwargs))
+
+            monkeypatch.setenv("QUAID_NOW", "2026-03-11T05:06:07Z")
+            monkeypatch.setattr(
+                updater,
+                "get_config",
+                lambda: SimpleNamespace(
+                    docs=SimpleNamespace(
+                        core_markdown=SimpleNamespace(files={}),
+                        notify_on_update=False,
+                    )
+                ),
+            )
+            monkeypatch.setattr(updater, "get_git_diff", lambda *_args, **_kwargs: "+meaningful change\n")
+            monkeypatch.setattr(
+                updater,
+                "classify_doc_change",
+                lambda _diff: {
+                    "classification": "significant",
+                    "confidence": 0.95,
+                    "reasons": ["meaningful"],
+                    "lines_changed": 1,
+                    "trivial_signals": 0,
+                    "significant_signals": 1,
+                },
+            )
+            monkeypatch.setattr(
+                updater,
+                "call_deep_reasoning",
+                lambda **_kwargs: ("# Doc\n\nUpdated.\n<!-- CHANGE_SUMMARY: update -->", 0.1),
+            )
+            monkeypatch.setattr("datastore.docsdb.registry.DocsRegistry", _FakeRegistry)
+
+            ok = updater.update_doc_from_diffs(
+                "docs/doc.md",
+                "test purpose",
+                ["src/meaningful.py"],
+                dry_run=False,
+            )
+
+            assert ok is True
+            assert captured == [
+                ("docs/doc.md", {"modified_at": "2026-03-11T05:06:07+00:00"})
+            ]
 
     def test_fast_gate_failure_raises_when_fail_hard(self, tmp_path, monkeypatch):
         with _adapter_patch(tmp_path) as iroot:

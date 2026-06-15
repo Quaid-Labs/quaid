@@ -41,7 +41,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -66,6 +66,24 @@ def _cleanup_state_path() -> Path:
 
 def _cleanup_state_lock_path() -> Path:
     return _cleanup_state_path().with_suffix(".json.lock")
+
+
+def _now_datetime() -> datetime:
+    raw = str(os.environ.get("QUAID_NOW", "") or "").strip()
+    if raw:
+        normalized = raw.replace("Z", "+00:00")
+        try:
+            parsed = datetime.fromisoformat(normalized)
+        except ValueError as exc:
+            raise ValueError(f"Invalid QUAID_NOW={raw!r}") from exc
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed
+    return datetime.now(timezone.utc)
+
+
+def _now_iso() -> str:
+    return _now_datetime().isoformat()
 
 
 @contextlib.contextmanager
@@ -313,7 +331,7 @@ def log_doc_update(
 ) -> None:
     """Log a documentation update to the changelog."""
     entry = {
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": _now_iso(),
         "doc_path": doc_path,
         "trigger": trigger,
         "sources": sources,
@@ -397,7 +415,7 @@ def _reset_cleanup_state(doc_path: str, chars: int) -> None:
     with _file_lock(_cleanup_state_lock_path()):
         state = _load_cleanup_state()
         state[doc_path] = {
-            "last_cleanup": datetime.now().isoformat(),
+            "last_cleanup": _now_iso(),
             "chars_at_cleanup": chars,
             "updates_since_cleanup": 0,
         }
@@ -1359,10 +1377,11 @@ def update_doc_from_diffs(
                    dry_run, True, chars_before, chars_after)
 
     # Sync modified timestamp to registry
+    modified_at = _now_iso()
     try:
         from datastore.docsdb.registry import DocsRegistry
         registry = DocsRegistry()
-        registry.update_timestamps(doc_path, modified_at=datetime.now().isoformat())
+        registry.update_timestamps(doc_path, modified_at=modified_at)
     except Exception as exc:
         if is_fail_hard_enabled():
             raise RuntimeError(f"Failed syncing docs registry timestamp for {doc_path}") from exc
@@ -1597,10 +1616,11 @@ def update_doc_from_transcript(
                 return False
             print(f"  Applied {applied} edit(s) to {doc_path}")
             # Sync modified timestamp to registry
+            modified_at = _now_iso()
             try:
                 from datastore.docsdb.registry import DocsRegistry
                 registry = DocsRegistry()
-                registry.update_timestamps(doc_path, modified_at=datetime.now().isoformat())
+                registry.update_timestamps(doc_path, modified_at=modified_at)
             except Exception:
                 pass
         log_doc_update(doc_path, trigger, sources, f"{applied} edit(s): {summary}",
