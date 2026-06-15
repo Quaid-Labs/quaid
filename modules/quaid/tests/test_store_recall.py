@@ -5333,6 +5333,34 @@ class TestSourceChunkStorage:
         assert rows[0]["domains"] == ["personal"]
         assert rows[0]["project"] == "life-log"
 
+    def test_store_source_chunk_preserves_unicode_project_tags(self, tmp_path):
+        graph, _db_file = _make_graph(tmp_path)
+
+        row = graph.store_source_chunk(
+            "User: 美玲 keeps the deployment note in the project log.",
+            owner_id="mei",
+            source_id="session-file-unicode-project",
+            session_id="session-unicode-project",
+            chunk_index=0,
+            domains=["料理計画", "research"],
+            project="料理計画",
+            embed=False,
+        )
+
+        assert row["project"] == "料理計画"
+        assert row["domains"] == ["research"]
+        assert graph.list_source_chunks(owner_id="mei", project="別計画") == []
+        rows = graph.list_source_chunks(owner_id="mei", project="料理計画")
+        assert [chunk["chunk_id"] for chunk in rows] == [row["chunk_id"]]
+        assert rows[0]["project"] == "料理計画"
+
+    def test_normalize_project_tag_preserves_unicode_letters_and_separators(self):
+        import datastore.memorydb.memory_graph as mg
+
+        assert mg._normalize_project_tag("livetest-agentmsg-OC") == "livetest-agentmsg-oc"
+        assert mg._normalize_project_tag("mañana-app") == "mañana-app"
+        assert mg._normalize_project_tag("プロジェクトA") == "プロジェクトa"
+
     def test_store_source_chunk_backfills_links_on_existing_content(self, tmp_path):
         """SessionDB projection can attach microchunk ids to prior extracted chunks."""
         graph, _db_file = _make_graph(tmp_path)

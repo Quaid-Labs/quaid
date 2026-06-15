@@ -11626,11 +11626,14 @@ def _normalize_project_tag(value: Optional[str]) -> Optional[str]:
     """Normalize project label."""
     if value is None:
         return None
-    raw = str(value).strip().lower()
+    raw = unicodedata.normalize("NFKC", str(value)).strip().casefold()
     if not raw:
         return None
-    norm = re.sub(r"[^a-z0-9._/-]+", "-", raw)
-    norm = re.sub(r"-{2,}", "-", norm).strip("-")
+    chars = [
+        ch if ch in "._/-" or ch.isalnum() or unicodedata.category(ch).startswith("M") else "-"
+        for ch in raw
+    ]
+    norm = re.sub(r"-{2,}", "-", "".join(chars)).strip("-")
     return norm[:64] if norm else None
 
 
