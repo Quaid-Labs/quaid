@@ -27,7 +27,7 @@ Operations:
 
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -76,6 +76,21 @@ def _save(data: Dict[str, Any]) -> None:
     tmp.replace(p)
 
 
+def _now_iso() -> str:
+    raw = os.environ.get("QUAID_NOW", "").strip()
+    if raw:
+        try:
+            value = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            raise ValueError(f"Invalid QUAID_NOW={raw!r}") from None
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        else:
+            value = value.astimezone(timezone.utc)
+        return value.isoformat()
+    return datetime.now(timezone.utc).isoformat()
+
+
 def _normalize_project_name(name: str) -> str:
     return str(name or "").strip().lower()
 
@@ -108,7 +123,7 @@ def register(
         return {}
     with registry_lock():
         data = _load()
-        now = datetime.now().isoformat()
+        now = _now_iso()
         if name in data.get("deleted_projects", {}) and name not in data["projects"]:
             return {}
 
@@ -146,7 +161,7 @@ def mark_deleted(name: str) -> None:
         return
     with registry_lock():
         data = _load()
-        data.setdefault("deleted_projects", {})[name] = datetime.now().isoformat()
+        data.setdefault("deleted_projects", {})[name] = _now_iso()
         _save(data)
 
 
@@ -191,7 +206,7 @@ def link(name: str, instance: Optional[str] = None, create_symlink: bool = False
             return False
 
         entry.setdefault("instances", []).append(instance)
-        entry["updated_at"] = datetime.now().isoformat()
+        entry["updated_at"] = _now_iso()
         _save(data)
 
     if create_symlink:
@@ -252,7 +267,7 @@ def unlink(name: str, instance: Optional[str] = None) -> bool:
             return False
 
         instances.remove(instance)
-        entry["updated_at"] = datetime.now().isoformat()
+        entry["updated_at"] = _now_iso()
         _save(data)
         return True
 
@@ -318,7 +333,7 @@ def rename(name: str, new_name: str, canonical_path: Optional[str] = None) -> Di
 
         entry = dict(data["projects"][name])
         entry["canonical_path"] = canonical_path or entry.get("canonical_path", "")
-        entry["updated_at"] = datetime.now().isoformat()
+        entry["updated_at"] = _now_iso()
         del data["projects"][name]
         data["projects"][new_name] = entry
         _save(data)

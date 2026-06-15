@@ -102,6 +102,64 @@ def test_global_project_cleanup_paths_normalize_mixed_case_input(project_registr
     assert lookup("mixed-cleanup") is None
 
 
+def test_global_project_registry_timestamps_honor_quaid_now(project_registry_env, monkeypatch):
+    from lib.project_registry import link, lookup, mark_deleted, register, rename, unlink
+
+    project_dir = project_registry_env["visible_home"] / "projects" / "clocked"
+    project_dir.mkdir(parents=True)
+
+    monkeypatch.setenv("QUAID_NOW", "2026-03-11T05:00:00Z")
+    entry = register(
+        name="Clocked",
+        canonical_path=str(project_dir),
+        link_current_instance=False,
+    )
+    assert entry["created_at"] == "2026-03-11T05:00:00+00:00"
+
+    monkeypatch.setenv("QUAID_NOW", "2026-03-11T05:01:00Z")
+    assert link("CLOCKED", instance="benchrunner") is True
+    assert lookup("clocked")["updated_at"] == "2026-03-11T05:01:00+00:00"
+
+    monkeypatch.setenv("QUAID_NOW", "2026-03-11T05:02:00Z")
+    assert unlink("clocked", instance="benchrunner") is True
+    assert lookup("clocked")["updated_at"] == "2026-03-11T05:02:00+00:00"
+
+    monkeypatch.setenv("QUAID_NOW", "2026-03-11T05:03:00Z")
+    register(
+        name="clocked",
+        canonical_path=str(project_dir),
+        description="updated",
+        link_current_instance=False,
+    )
+    assert lookup("clocked")["updated_at"] == "2026-03-11T05:03:00+00:00"
+
+    monkeypatch.setenv("QUAID_NOW", "2026-03-11T05:04:00Z")
+    renamed = rename("clocked", "clocked-renamed")
+    assert renamed["updated_at"] == "2026-03-11T05:04:00+00:00"
+
+    monkeypatch.setenv("QUAID_NOW", "2026-03-11T05:05:00Z")
+    mark_deleted("old-project")
+    registry = json.loads(
+        (project_registry_env["quaid_home"] / "project-registry.json").read_text(encoding="utf-8")
+    )
+    assert registry["deleted_projects"]["old-project"] == "2026-03-11T05:05:00+00:00"
+
+
+def test_global_project_registry_rejects_malformed_quaid_now(project_registry_env, monkeypatch):
+    from lib.project_registry import register
+
+    project_dir = project_registry_env["visible_home"] / "projects" / "bad-clock"
+    project_dir.mkdir(parents=True)
+    monkeypatch.setenv("QUAID_NOW", "not-a-date")
+
+    with pytest.raises(ValueError, match="Invalid QUAID_NOW"):
+        register(
+            name="bad-clock",
+            canonical_path=str(project_dir),
+            link_current_instance=False,
+        )
+
+
 def test_project_list_reconciles_existing_docs_registry_project_rows(project_registry_env):
     from core.project_registry import list_projects
     from datastore.docsdb.registry import DocsRegistry
