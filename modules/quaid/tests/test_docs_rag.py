@@ -2426,6 +2426,14 @@ class TestDocsSearchFiltering:
         assert bundle["project_md"] == "# Project: Recipe App\n"
         assert bundle["chunks"] == chunks
 
+    def test_load_project_md_path_failure_raises_when_fail_hard(self, tmp_path):
+        rag = _make_rag(tmp_path)
+
+        with patch.object(rag, "_get_project_paths", side_effect=RuntimeError("registry unavailable")), \
+             patch("datastore.docsdb.rag.is_fail_hard_enabled", return_value=True), \
+             pytest.raises(RuntimeError, match="Failed loading PROJECT.md for recipe-app"):
+            rag.load_project_md("recipe-app")
+
     def test_search_docs_bundle_includes_telemetry_when_enabled(self, tmp_path, monkeypatch):
         rag = _make_rag(tmp_path)
         monkeypatch.setenv("QUAID_RECALL_TELEMETRY", "1")

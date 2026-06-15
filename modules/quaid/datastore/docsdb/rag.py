@@ -1585,8 +1585,10 @@ class DocsRAG:
                 md_path = Path(home_dir) / "PROJECT.md"
                 if md_path.exists():
                     return md_path.read_text(encoding="utf-8")
-        except Exception:
-            pass
+        except Exception as exc:
+            if is_fail_hard_enabled():
+                raise RuntimeError(f"Failed loading PROJECT.md for {project}") from exc
+            logger.warning("Failed loading PROJECT.md for %s: %s", project, exc)
         return None
 
     def _project_source_fallback_chunks(
