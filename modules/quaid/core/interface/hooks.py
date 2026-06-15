@@ -30,6 +30,7 @@ import shutil
 import subprocess
 import sys
 import time
+from datetime import datetime, timezone
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, Dict, List
@@ -84,6 +85,24 @@ def _fail_hard_enabled() -> bool:
         return bool(is_fail_hard_enabled())
     except Exception:
         return True
+
+
+def _now_datetime() -> datetime:
+    raw = os.environ.get("QUAID_NOW", "").strip()
+    if raw:
+        try:
+            value = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            logger.warning("Invalid QUAID_NOW=%r", raw)
+            raise ValueError(f"Invalid QUAID_NOW={raw!r}") from None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+    return datetime.now(timezone.utc)
+
+
+def _now_epoch() -> int:
+    return int(_now_datetime().timestamp())
 
 
 def _safe_session_id_for_path(session_id: str) -> str:
@@ -2437,7 +2456,7 @@ def _arm_compaction_refresh_marker(
     try:
         marker_payload = {
             "session_id": str(session_id or "").strip(),
-            "created_at": int(time.time()),
+            "created_at": _now_epoch(),
             "reason": reason,
             "source": source,
         }
@@ -2492,7 +2511,7 @@ def _consume_compaction_refresh_marker(session_id: str) -> bool:
     except Exception:
         marker_session_id = ""
         created_at = 0
-    if created_at and int(time.time()) - created_at > 10 * 60:
+    if created_at and _now_epoch() - created_at > 10 * 60:
         try:
             latest_path.unlink()
         except Exception:
@@ -2527,7 +2546,7 @@ def _has_compaction_refresh_marker(session_id: str) -> bool:
         created_at = int(payload.get("created_at") or 0)
     except Exception:
         created_at = 0
-    return bool(created_at and int(time.time()) - created_at <= 10 * 60)
+    return bool(created_at and _now_epoch() - created_at <= 10 * 60)
 
 
 def _consume_timeout_refresh_marker(session_id: str) -> bool:
@@ -2694,7 +2713,7 @@ def _seed_turn_based_refresh_state(session_id: str) -> None:
     # process and does not fire SessionStart. Do not mark a turn-based refresh as
     # completed until UserPromptSubmit actually emits refresh context.
     entry.setdefault("last_refresh_at", 0)
-    entry.setdefault("seeded_at", int(time.time()))
+    entry.setdefault("seeded_at", _now_epoch())
     _store_context_refresh_state(state)
 
 
@@ -2719,7 +2738,7 @@ def _should_emit_turn_based_refresh(session_id: str, *, prompt: str = "") -> boo
         entry = {}
         sessions[sid] = entry
 
-    now = int(time.time())
+    now = _now_epoch()
     turn_count = int(entry.get("turn_count", 0) or 0) + 1
     entry["turn_count"] = turn_count
 
@@ -3555,7 +3574,7 @@ def hook_extract(args):
         hook_input = {}
     _ensure_hook_instance_ready(hook_input)
 
-    session_id = hook_input.get("session_id", "") or f"unknown-{int(time.time())}-{os.getpid()}"
+    session_id = hook_input.get("session_id", "") or f"unknown-{_now_epoch()}-{os.getpid()}"
     transcript_path = _resolve_hook_transcript_path(
         session_id=session_id,
         hook_cwd=str(hook_input.get("cwd") or "").strip(),

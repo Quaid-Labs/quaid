@@ -1384,6 +1384,30 @@ def test_context_refresh_marker_paths_reject_unsafe_session_ids(tmp_path, mock_a
     )
 
 
+def test_compaction_refresh_marker_ttl_honors_quaid_now(tmp_path, mock_adapter, monkeypatch):
+    from core.interface import hooks
+
+    mock_adapter.data_dir.return_value = tmp_path / "data"
+    monkeypatch.setenv("QUAID_NOW", "2026-03-11T05:00:00Z")
+
+    hooks._arm_compaction_refresh_marker("old-session", reason="pytest", source="test")
+    marker_file = tmp_path / "data" / "context-refresh-compaction" / "old-session.json"
+    latest_file = tmp_path / "data" / "context-refresh-compaction" / "_latest.json"
+    marker_payload = json.loads(marker_file.read_text(encoding="utf-8"))
+    assert marker_payload["created_at"] == 1773205200
+
+    monkeypatch.setenv("QUAID_NOW", "2026-03-11T05:09:00Z")
+    assert hooks._consume_compaction_refresh_marker("new-session") is True
+    assert not marker_file.exists()
+    assert not latest_file.exists()
+
+    monkeypatch.setenv("QUAID_NOW", "2026-03-11T05:00:00Z")
+    hooks._arm_compaction_refresh_marker("old-session", reason="pytest", source="test")
+    monkeypatch.setenv("QUAID_NOW", "2026-03-11T05:11:00Z")
+    assert hooks._consume_compaction_refresh_marker("new-session") is False
+    assert not latest_file.exists()
+
+
 def test_store_context_refresh_state_uses_atomic_replace(tmp_path, monkeypatch):
     from core.interface import hooks
 

@@ -4,6 +4,7 @@ import base64
 import contextlib
 import json
 import logging
+import os
 import re
 import time
 from datetime import datetime, timezone
@@ -107,7 +108,25 @@ def _uses_turn_scoped_provider_notices(adapter: Any, *, severity: str, source: s
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return _now_datetime().isoformat()
+
+
+def _now_datetime() -> datetime:
+    raw = os.environ.get("QUAID_NOW", "").strip()
+    if raw:
+        try:
+            value = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            logger.warning("Invalid QUAID_NOW=%r", raw)
+            raise ValueError(f"Invalid QUAID_NOW={raw!r}") from None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+    return datetime.now(timezone.utc)
+
+
+def _now_epoch() -> float:
+    return _now_datetime().timestamp()
 
 
 def _ensure_parent(path: Path) -> None:
@@ -174,7 +193,7 @@ def _deferred_lock_path(path: Path) -> Path:
 
 def _load_state(path: Path) -> dict[str, float]:
     raw = _read_json(path, {})
-    now = time.time()
+    now = _now_epoch()
     state: dict[str, float] = {}
     for key, value in raw.items():
         try:
@@ -255,7 +274,7 @@ def notify_agent(
     dedupe_token = str(dedupe_key or "").strip()
     state_path: Optional[Path] = None
     state: dict[str, float] = {}
-    now = time.time()
+    now = _now_epoch()
 
     bypass_dedupe = _bypass_active_error_dedupe(severity=severity, source=source)
 

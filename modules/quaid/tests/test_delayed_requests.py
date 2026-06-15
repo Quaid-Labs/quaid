@@ -55,6 +55,21 @@ def test_queue_writes_runtime_note(clean_adapter):
     assert reqs[0]["source"] == "pytest"
 
 
+def test_queue_and_drain_timestamps_honor_quaid_now(clean_adapter, monkeypatch):
+    monkeypatch.setenv("QUAID_NOW", "2026-03-11T05:06:07Z")
+    assert queue_deferred_notice("clocked", kind="doc_update", priority="normal", source="pytest")
+
+    reqs = _read_requests(clean_adapter)
+    assert reqs[0]["created_at"] == "2026-03-11T05:06:07+00:00"
+
+    monkeypatch.setenv("QUAID_NOW", "2026-03-11T05:07:08Z")
+    drained = drain_deferred_notices(limit=1)
+    assert drained[0]["delivered_at"] == "2026-03-11T05:07:08+00:00"
+
+    reqs = _read_requests(clean_adapter)
+    assert reqs[0]["delivered_at"] == "2026-03-11T05:07:08+00:00"
+
+
 def test_queue_returns_true_on_success(clean_adapter):
     assert queue_deferred_notice("msg", kind="janitor") is True
 

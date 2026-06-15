@@ -397,6 +397,27 @@ class TestNotifyAgent:
         sent_message = adapter.notify.call_args.args[0]
         assert sent_message.startswith("[Quaid warning]")
 
+    def test_dedupe_state_honors_quaid_now(self, tmp_path, monkeypatch):
+        adapter = MagicMock()
+        adapter.data_dir.return_value = tmp_path
+        adapter.instance_root.return_value = tmp_path
+        adapter.notify.return_value = True
+
+        with patch("lib.agent_notice.get_adapter", return_value=adapter):
+            monkeypatch.setenv("QUAID_NOW", "2026-03-11T05:00:00Z")
+            assert notify_agent("provider down", dedupe_key="provider-down", ttl_seconds=3600) is True
+            state_path = tmp_path / "agent-notice-state.json"
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            assert state["provider-down"] == 1773205200.0
+
+            monkeypatch.setenv("QUAID_NOW", "2026-03-11T05:30:00Z")
+            assert notify_agent("provider down", dedupe_key="provider-down", ttl_seconds=3600) is True
+
+            monkeypatch.setenv("QUAID_NOW", "2026-03-11T06:01:00Z")
+            assert notify_agent("provider down", dedupe_key="provider-down", ttl_seconds=3600) is True
+
+        assert adapter.notify.call_count == 2
+
     @pytest.mark.parametrize("source", ["provider", "llm_config"])
     def test_does_not_dedupe_active_provider_errors(self, tmp_path, source):
         adapter = MagicMock()
