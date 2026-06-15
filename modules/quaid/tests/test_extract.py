@@ -1978,6 +1978,45 @@ class TestExtractFromTranscript:
         )
 
     @patch("ingest.extract.call_deep_reasoning")
+    def test_non_english_user_recall_reaction_anchor_uses_structural_overlap(self, mock_llm):
+        from ingest.extract import extract_from_transcript
+
+        mock_llm.return_value = (json.dumps({
+            "chunk_assessment": "usable",
+            "facts": [{
+                "text": "美玲 keeps 雲門合唱団 as a music anchor.",
+                "category": "fact",
+                "speaker": "user",
+                "domains": ["personal"],
+                "extraction_confidence": "high",
+                "privacy": "shared",
+            }],
+            "soul_snippets": {},
+            "journal_entries": {},
+            "project_logs": {},
+        }), 0.1)
+
+        transcript = (
+            "User: 美玲の音楽アンカーは雲門合唱団だったよね。\n\n"
+            "Assistant: I remembered that 美玲 keeps 雲門合唱団 as the music anchor from the older note.\n\n"
+            "User: 雲門合唱団の話を出してくれて本当にびっくりした。美玲のことまで覚えていたんだね。\n"
+        )
+
+        result = extract_from_transcript(
+            transcript=transcript,
+            owner_id="Maya Chen",
+            dry_run=True,
+        )
+
+        assert any(
+            fact.get("structural_anchor_kind") == "user_recall_reaction_anchor"
+            and "雲門合唱団" in str(fact.get("text", "") or "")
+            and "美玲" in str(fact.get("text", "") or "")
+            for fact in result["raw_facts"]
+            if str(fact.get("speaker", "") or "").lower() == "user"
+        )
+
+    @patch("ingest.extract.call_deep_reasoning")
     def test_assistant_meta_capability_chatter_is_not_preserved_as_anchor(self, mock_llm):
         from ingest.extract import extract_from_transcript
 

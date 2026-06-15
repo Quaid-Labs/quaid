@@ -1336,6 +1336,33 @@ def _structural_overlap_tokens(text: str, *, min_len: int = 6) -> List[str]:
     return _dedupe_casefold(tokens)
 
 
+def _has_non_ascii_text(value: str) -> bool:
+    return any(ord(ch) > 127 for ch in str(value or ""))
+
+
+def _anchor_sentence_has_min_content(text: str, *, min_words: int) -> bool:
+    clean = str(text or "").strip()
+    if len(clean.split()) >= min_words:
+        return True
+    if not _has_non_ascii_text(clean):
+        return False
+    letters = sum(1 for ch in clean if ch.isalpha())
+    return letters >= max(8, min_words * 2) and len(clean) >= max(12, min_words * 3)
+
+
+def _tokens_overlap_text(candidate_text: str, context_tokens: set[str]) -> bool:
+    candidate_norm = _normalize_anchor_search_text(candidate_text)
+    if not candidate_norm:
+        return False
+    for token in context_tokens:
+        token_norm = _normalize_anchor_search_text(token)
+        if not token_norm:
+            continue
+        if token_norm in candidate_norm:
+            return True
+    return False
+
+
 def _novel_structural_tokens(
     text: str,
     *,
@@ -1799,12 +1826,19 @@ def _explicit_user_recall_reaction_facts(
             candidate_sentences.append(stripped_sentence)
         for sentence in candidate_sentences:
             candidate = _normalize_structural_anchor_sentence(sentence)
-            if len(candidate.split()) < 5 or len(candidate) > 220:
-                continue
-            if not _user_turn_has_explicit_recall_reaction_anchor_signal(candidate):
+            if not _anchor_sentence_has_min_content(candidate, min_words=5) or len(candidate) > 220:
                 continue
             candidate_tokens = _structural_overlap_tokens(candidate, min_len=4)
-            if not any(token in assistant_context_tokens for token in candidate_tokens):
+            overlaps_assistant_context = (
+                any(token in assistant_context_tokens for token in candidate_tokens)
+                or (_has_non_ascii_text(candidate) and _tokens_overlap_text(candidate, assistant_context_tokens))
+            )
+            if not overlaps_assistant_context:
+                continue
+            if (
+                not _user_turn_has_explicit_recall_reaction_anchor_signal(candidate)
+                and not _has_non_ascii_text(candidate)
+            ):
                 continue
             fact_key = _fact_text_key(candidate)
             if not fact_key or fact_key in seen_fact_texts or candidate.lower() in existing_text:
