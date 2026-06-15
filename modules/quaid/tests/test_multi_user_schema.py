@@ -9,6 +9,11 @@ def _table_columns(conn, table: str) -> set[str]:
     return {str(r[1]) for r in rows}
 
 
+def _index_names(conn, table: str) -> set[str]:
+    rows = conn.execute(f"PRAGMA index_list({table})").fetchall()
+    return {str(r[1]) for r in rows}
+
+
 def test_memory_graph_initializes_multi_user_foundation_schema(tmp_path):
     db_path = Path(tmp_path) / "memory.db"
     graph = MemoryGraph(db_path=db_path)
@@ -39,6 +44,9 @@ def test_memory_graph_initializes_multi_user_foundation_schema(tmp_path):
         edge_cols = _table_columns(conn, "edges")
         assert "origin_package_id" in edge_cols
         assert "origin_version_id" in edge_cols
+
+        node_indexes = _index_names(conn, "nodes")
+        assert "idx_nodes_superseded_by" in node_indexes
 
         alias_cols = _table_columns(conn, "entity_aliases")
         assert "entity_id" in alias_cols
@@ -97,6 +105,27 @@ def test_memory_graph_migrates_origin_columns_on_existing_db(tmp_path):
     assert "origin_version_id" in node_cols
     assert "origin_package_id" in edge_cols
     assert "origin_version_id" in edge_cols
+
+
+def test_memory_graph_migrates_superseded_by_index_on_existing_db(tmp_path):
+    db_path = Path(tmp_path) / "legacy-memory.db"
+    schema_path = (
+        Path(__file__).resolve().parent.parent / "datastore" / "memorydb" / "schema.sql"
+    )
+    legacy_schema = schema_path.read_text().replace(
+        "CREATE INDEX IF NOT EXISTS idx_nodes_superseded_by ON nodes(superseded_by);\n",
+        "",
+    )
+
+    with sqlite3.connect(db_path) as conn:
+        conn.executescript(legacy_schema)
+        assert "idx_nodes_superseded_by" not in _index_names(conn, "nodes")
+
+    graph = MemoryGraph(db_path=db_path)
+    with graph._get_conn() as conn:
+        node_indexes = _index_names(conn, "nodes")
+
+    assert "idx_nodes_superseded_by" in node_indexes
 
 
 def test_memory_graph_repairs_partial_baseline_schema_when_nodes_exist(tmp_path):

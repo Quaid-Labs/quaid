@@ -143,6 +143,7 @@ CREATE INDEX IF NOT EXISTS idx_nodes_status ON nodes(status);
 CREATE INDEX IF NOT EXISTS idx_nodes_accessed ON nodes(accessed_at);
 CREATE INDEX IF NOT EXISTS idx_nodes_confidence ON nodes(confidence);
 CREATE INDEX IF NOT EXISTS idx_nodes_content_hash ON nodes(content_hash);
+CREATE INDEX IF NOT EXISTS idx_nodes_superseded_by ON nodes(superseded_by);
 CREATE INDEX IF NOT EXISTS idx_nodes_created ON nodes(created_at);
 CREATE INDEX IF NOT EXISTS idx_edges_source ON edges(source_id);
 CREATE INDEX IF NOT EXISTS idx_edges_target ON edges(target_id);
