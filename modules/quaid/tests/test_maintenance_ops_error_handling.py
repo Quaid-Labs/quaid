@@ -2,6 +2,7 @@ import os
 import sys
 import json
 from contextlib import contextmanager
+from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -393,11 +394,12 @@ def test_contradiction_resolution_uses_runtime_clock_for_timestamps(
     )
 
 
-def test_quaid_now_rejects_malformed_override(monkeypatch):
+def test_quaid_now_rejects_malformed_override_when_failhard_enabled(monkeypatch):
     monkeypatch.setenv("QUAID_NOW", "not-a-date")
 
-    with pytest.raises(ValueError, match="Invalid QUAID_NOW"):
-        maintenance_ops._quaid_now()
+    with patch.object(maintenance_ops, "is_fail_hard_enabled", return_value=True):
+        with pytest.raises(RuntimeError, match="Invalid QUAID_NOW"):
+            maintenance_ops._quaid_now()
 
 
 def test_update_check_cache_uses_quaid_now_for_freshness(monkeypatch):
@@ -784,6 +786,17 @@ def test_update_check_cache_uses_runtime_clock_for_freshness_and_writes(monkeypa
         json.dumps({"version": "2.0.0"}),
         "2030-01-02T00:00:00",
     )
+
+
+def test_quaid_now_malformed_clock_honors_failhard(monkeypatch):
+    monkeypatch.setenv("QUAID_NOW", "not-a-date")
+
+    with patch.object(maintenance_ops, "is_fail_hard_enabled", return_value=True):
+        with pytest.raises(RuntimeError, match="Invalid QUAID_NOW"):
+            maintenance_ops._quaid_now()
+
+    with patch.object(maintenance_ops, "is_fail_hard_enabled", return_value=False):
+        assert isinstance(maintenance_ops._quaid_now(), datetime)
 
 
 def test_backfill_embeddings_vec_upsert_failure_warns_and_continues(monkeypatch):
