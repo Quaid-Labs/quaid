@@ -15002,7 +15002,7 @@ class TestRecallFastHookInjectContract:
         assert "ceramics practice" in attached[0]["text"]
         assert attached[0]["via_relation"] == "has_fact"
 
-    def test_graph_aware_recall_owner_relation_chain_uses_reverse_symmetric_edge_without_seed_recall(self, tmp_path):
+    def test_graph_aware_recall_owner_relation_chain_uses_reverse_symmetric_edge_with_seed_recall(self, tmp_path):
         import datastore.memorydb.memory_graph as mg
 
         graph, _ = _make_graph(tmp_path)
@@ -15021,11 +15021,17 @@ class TestRecallFastHookInjectContract:
                 identities={"test-owner-alpha": SimpleNamespace(person_node_name="Solomon Steadman")}
             )
         )
+        seed_calls = []
+
+        def fake_seed_recall(_query, **kwargs):
+            seed_calls.append(kwargs)
+            return [], {"selected_path": "vector"}
+
         with patch.object(mg, "get_graph", return_value=graph), \
              patch.object(mg, "_HAS_CONFIG", True), \
              patch.object(mg, "_get_memory_config", return_value=fake_cfg), \
              patch.object(mg, "extract_entities_from_text", return_value=[]), \
-             patch.object(mg, "recall", side_effect=AssertionError("seed recall should not run")), \
+             patch.object(mg, "recall", side_effect=fake_seed_recall), \
              patch.object(graph, "get_embedding", side_effect=AssertionError("graph embedding should not run")):
             payload = mg.graph_aware_recall(
                 "what does my partner's brother do",
@@ -15038,7 +15044,10 @@ class TestRecallFastHookInjectContract:
             row for row in payload["graph_results"]
             if row.get("id") == boat.id
         ]
-        assert payload["meta"]["base_recall_skipped"] == "owner_relation_chain"
+        assert len(seed_calls) == 1
+        assert seed_calls[0]["include_graph_traversal"] is False
+        assert seed_calls[0]["planner_meta"]["suppress_graph_auto_include"] is True
+        assert payload["meta"].get("base_recall_skipped") is None
         assert attached
         assert attached[0]["via"] == "graph_attached_fact"
         assert attached[0]["graph_relation_sequence"] == ["spouse_of", "sibling_of", "has_fact"]
@@ -15093,11 +15102,17 @@ class TestRecallFastHookInjectContract:
                 identities={"test-owner": SimpleNamespace(person_node_name="Test Owner")}
             )
         )
+        seed_calls = []
+
+        def fake_seed_recall(_query, **kwargs):
+            seed_calls.append(kwargs)
+            return [], {"selected_path": "vector"}
+
         with patch.object(mg, "get_graph", return_value=graph), \
              patch.object(mg, "_HAS_CONFIG", True), \
              patch.object(mg, "_get_memory_config", return_value=fake_cfg), \
              patch.object(mg, "extract_entities_from_text", return_value=[]), \
-             patch.object(mg, "recall", side_effect=AssertionError("seed recall should not run")), \
+             patch.object(mg, "recall", side_effect=fake_seed_recall), \
              patch.object(graph, "get_embedding", side_effect=AssertionError("graph embedding should not run")):
             payload = mg.graph_aware_recall(
                 "what does my parent's sibling do",
@@ -15110,7 +15125,10 @@ class TestRecallFastHookInjectContract:
             row for row in payload["graph_results"]
             if row.get("id") == work.id
         ]
-        assert payload["meta"]["base_recall_skipped"] == "owner_relation_chain"
+        assert len(seed_calls) == 1
+        assert seed_calls[0]["include_graph_traversal"] is False
+        assert seed_calls[0]["planner_meta"]["suppress_graph_auto_include"] is True
+        assert payload["meta"].get("base_recall_skipped") is None
         assert attached
         assert attached[0]["graph_relation_sequence"] == ["parent_of", "sibling_of", "has_fact"]
         assert "Test Parent --sibling_of--> Test Aunt" in attached[0]["graph_path"]
@@ -15537,7 +15555,7 @@ class TestRecallFastHookInjectContract:
         assert boat_row["via"] == "graph_attached_fact"
         assert boat_row["graph_relation_sequence"] == ["spouse_of", "sibling_of", "has_fact"]
 
-    def test_mixed_store_relation_chain_uses_owner_anchored_graph_without_seed_recall(self, tmp_path):
+    def test_mixed_store_relation_chain_uses_owner_anchored_graph_with_seed_recall(self, tmp_path):
         import datastore.memorydb.memory_graph as mg
 
         graph, _ = _make_graph(tmp_path)
@@ -15614,7 +15632,9 @@ class TestRecallFastHookInjectContract:
         assert bundle is None
         assert meta["planned_stores"] == ["graph"]
         assert meta["store_runs"][0]["selected_path"] == "graph_aware"
-        assert seed_calls == []
+        assert len(seed_calls) == 1
+        assert seed_calls[0]["include_graph_traversal"] is False
+        assert seed_calls[0]["planner_meta"]["suppress_graph_auto_include"] is True
         assert rows
         assert rows[0]["id"] == boat.id
         assert rows[0]["via"] == "graph_attached_fact"
@@ -15943,6 +15963,59 @@ class TestRecallFastHookInjectContract:
         assert rows[0]["id"] == boat.id
         assert rows[0]["graph_relation_sequence"] == ["spouse_of", "sibling_of", "has_fact"]
         assert rows[0]["graph_path"].startswith("Solomon Steadman --spouse_of--> Yuni --sibling_of--> Kai --has_fact-->")
+
+    def test_graph_aware_relation_chain_keeps_base_vector_recall(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _ = _make_graph(tmp_path)
+        owner = mg.Node.create("Person", "Alice Rhodes")
+        partner = mg.Node.create("Person", "Jordan")
+        sibling = mg.Node.create("Person", "Casey")
+        graph_fact = mg.Node.create("Fact", "Casey repairs wooden boats")
+        for node in (owner, partner, sibling, graph_fact):
+            graph.add_node(node, embed=False)
+        graph.add_edge(mg.Edge.create(owner.id, partner.id, "spouse_of"))
+        graph.add_edge(mg.Edge.create(partner.id, sibling.id, "sibling_of"))
+        graph.add_edge(mg.Edge.create(sibling.id, graph_fact.id, "has_fact"))
+
+        vector_fact = {
+            "id": "vector-casey-source",
+            "text": "Casey described the repair shop in a March transcript.",
+            "category": "fact",
+            "similarity": 0.91,
+        }
+        fake_cfg = SimpleNamespace(
+            users=SimpleNamespace(
+                identities={"alice": SimpleNamespace(person_node_name="Alice Rhodes")}
+            )
+        )
+        query = "partner brother occupation"
+
+        def _fake_base_recall(query, **kwargs):
+            assert query == "partner brother occupation"
+            assert kwargs["include_graph_traversal"] is False
+            assert kwargs["include_co_session"] is False
+            return [dict(vector_fact)], {"selected_path": "vector"}
+
+        with patch.object(mg, "get_graph", return_value=graph), \
+             patch.object(mg, "_HAS_CONFIG", True), \
+             patch.object(mg, "_get_memory_config", return_value=fake_cfg), \
+             patch.object(mg, "extract_entities_from_text", return_value=[]), \
+             patch.object(mg, "get_edge_keywords", return_value={}), \
+             patch.object(mg, "recall", side_effect=_fake_base_recall):
+            result = mg.graph_aware_recall(
+                query,
+                owner_id="alice",
+                limit=5,
+                graph_depth=2,
+            )
+
+        assert result["source_breakdown"]["owner_relation_chain_inferred"] is True
+        assert result["source_breakdown"]["vector_count"] == 1
+        assert result["direct_results"] == [vector_fact]
+        assert result["meta"]["base_recall_meta"]["selected_path"] == "vector"
+        assert result["meta"].get("base_recall_skipped") is None
+        assert any(row.get("id") == graph_fact.id for row in result["graph_results"])
 
     def test_graph_store_relation_chain_prefers_guided_owner_path_over_shorter_ambiguous_sibling_path(self, tmp_path):
         import datastore.memorydb.memory_graph as mg

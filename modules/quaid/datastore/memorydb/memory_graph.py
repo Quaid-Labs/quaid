@@ -5438,9 +5438,6 @@ def graph_aware_recall(
     # combine with graph traversal discoveries in this graph-aware pathway.
     if candidate_pool is not None:
         direct_all = candidate_pool
-    elif owner_anchored_relation_chain:
-        direct_all = []
-        results["meta"]["base_recall_skipped"] = "owner_relation_chain"
     else:
         _base_started_at = time.monotonic()
         lexical_anchor_planner_mode = _seed_recall_lexical_anchor_planner_mode(
