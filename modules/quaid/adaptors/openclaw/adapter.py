@@ -48,6 +48,10 @@ class OpenClawAdapter(QuaidAdapter):
         "anthropic-claude-code": "anthropic",
     }
     _NON_ROUTABLE_NOTIFY_CHANNELS = {"webchat"}
+    _HOST_MEMORY_POLICY_PATH_RE = re.compile(
+        r"(?:^|[\s`\"'(<\[])(?:memory|openclaw-workspace)[/\\][^\s`\"')>\]]+",
+        re.IGNORECASE,
+    )
     _SAFE_SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
     _OTHER_ADAPTER_INSTANCE_PREFIXES = (
         "claude-",
@@ -83,28 +87,10 @@ class OpenClawAdapter(QuaidAdapter):
     @staticmethod
     def _is_host_memory_policy_reply(role: str, text: str) -> bool:
         normalized_role = str(role or "").strip().lower()
-        lowered = str(text or "").strip().lower()
-        if normalized_role != "assistant" or not lowered:
+        raw = str(text or "").strip()
+        if normalized_role != "assistant" or not raw:
             return False
-        if "i have remembered" in lowered and (
-            "saved in memory/" in lowered or "openclaw-workspace" in lowered
-        ):
-            return True
-        if "durable memory" in lowered and (
-            "won't store that" in lowered or "unless you want me to" in lowered
-        ):
-            return True
-        if (
-            "did not schedule a reminder" in lowered
-            and "this will not trigger automatically" in lowered
-            and (
-                "i’ll remember" in lowered
-                or "i'll remember" in lowered
-                or "i will remember" in lowered
-            )
-        ):
-            return True
-        return False
+        return bool(OpenClawAdapter._HOST_MEMORY_POLICY_PATH_RE.search(raw))
 
     def _openclaw_config_path_candidates(self) -> list[Path]:
         """OpenClaw config candidates, honoring OPENCLAW_CONFIG_PATH first."""

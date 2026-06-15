@@ -571,6 +571,52 @@ class TestOpenClawAdapter:
         assert "Assistant: First assistant event" in transcript
         assert adapter.filter_system_messages("What about HEARTBEAT mechanisms?") is False
 
+    def test_parse_session_jsonl_filters_host_memory_policy_paths_structurally(self, tmp_path):
+        session_file = tmp_path / "oc-memory-policy-path.jsonl"
+        session_file.write_text(
+            "\n".join(
+                [
+                    json.dumps(
+                        {
+                            "type": "event_msg",
+                            "payload": {"type": "user_message", "message": "このメモを覚えて"},
+                        }
+                    ),
+                    json.dumps(
+                        {
+                            "type": "event_msg",
+                            "payload": {
+                                "type": "agent_message",
+                                "message": "保存しました: memory/2026-06-15-user-note.md",
+                            },
+                        }
+                    ),
+                    json.dumps(
+                        {
+                            "type": "event_msg",
+                            "payload": {
+                                "type": "agent_message",
+                                "message": "Durable memory is a product feature, not a transcript fact.",
+                            },
+                        }
+                    ),
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        adapter = OpenClawAdapter()
+        transcript = adapter.parse_session_jsonl(session_file)
+
+        assert "memory/2026-06-15-user-note.md" not in transcript
+        assert "Durable memory is a product feature" in transcript
+
+    def test_host_memory_policy_reply_does_not_use_english_phrase_gate(self):
+        assert not OpenClawAdapter._is_host_memory_policy_reply(
+            "assistant",
+            "Durable memory won't store that unless you want me to.",
+        )
+
     def test_parse_session_jsonl_preserves_openclaw_row_timestamps(self, tmp_path):
         session_file = tmp_path / "oc-session-timestamps.jsonl"
         session_file.write_text(
@@ -3606,7 +3652,7 @@ class TestCodexAdapter:
         assert "saved it in memory/" not in transcript
         assert "I have remembered" not in transcript
 
-    def test_parse_session_jsonl_strips_openclaw_durable_memory_refusal(self, tmp_path):
+    def test_parse_session_jsonl_preserves_openclaw_durable_memory_refusal_without_path_marker(self, tmp_path):
         path = tmp_path / "rollout-openclaw-memory-refusal.jsonl"
         path.write_text(
             "\n".join(
@@ -3617,8 +3663,7 @@ class TestCodexAdapter:
                             "payload": {
                                 "type": "user_message",
                                 "message": (
-                                    "My Friday ritual is roasting pumpkin seeds with the codeword "
-                                    "walnut-umbrella-7142."
+                                    "The workshop shelf marker is walnut-umbrella-7142."
                                 ),
                             },
                         }
@@ -3641,10 +3686,10 @@ class TestCodexAdapter:
         adapter = OpenClawAdapter()
         transcript = adapter.parse_session_jsonl(path)
         assert "walnut-umbrella-7142" in transcript
-        assert "durable memory" not in transcript
-        assert "won't store that" not in transcript
+        assert "durable memory" in transcript
+        assert "won't store that" in transcript
 
-    def test_parse_session_jsonl_strips_openclaw_reminder_acknowledgement(self, tmp_path):
+    def test_parse_session_jsonl_preserves_openclaw_reminder_acknowledgement_without_path_marker(self, tmp_path):
         path = tmp_path / "rollout-openclaw-memory-reminder-ack.jsonl"
         path.write_text(
             "\n".join(
@@ -3655,8 +3700,7 @@ class TestCodexAdapter:
                             "payload": {
                                 "type": "user_message",
                                 "message": (
-                                    "My Friday ritual is roasting pumpkin seeds with the codeword "
-                                    "cedar-lantern-235854."
+                                    "The workshop shelf marker is cedar-lantern-235854."
                                 ),
                             },
                         }
@@ -3667,8 +3711,8 @@ class TestCodexAdapter:
                             "payload": {
                                 "type": "agent_message",
                                 "message": (
-                                    "Got it. I’ll remember that your Friday ritual includes roasting "
-                                    "pumpkin seeds, and the codeword is cedar-lantern-235854.\n\n"
+                                    "Got it. I’ll remember that the workshop shelf marker is "
+                                    "cedar-lantern-235854.\n\n"
                                     "Note: I did not schedule a reminder in this turn, so this will "
                                     "not trigger automatically."
                                 ),
@@ -3682,9 +3726,8 @@ class TestCodexAdapter:
         adapter = OpenClawAdapter()
         transcript = adapter.parse_session_jsonl(path)
         assert "cedar-lantern-235854" in transcript
-        assert "i’ll remember" not in transcript.lower()
-        assert "i'll remember" not in transcript.lower()
-        assert "did not schedule a reminder" not in transcript.lower()
+        assert "i’ll remember" in transcript.lower()
+        assert "did not schedule a reminder" in transcript.lower()
 
     def test_resolve_stop_hook_signal_returns_none_for_regular_turn(self, tmp_path):
         path = tmp_path / "rollout-regular-turn.jsonl"
