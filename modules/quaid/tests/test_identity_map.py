@@ -110,6 +110,36 @@ class TestUpsertIdentityHandleCreate:
         )
         assert result["notes"] == "mentioned in first message"
 
+    def test_created_timestamps_honor_quaid_now(self, monkeypatch):
+        from datastore.memorydb.identity_map import upsert_identity_handle, resolve_identity_handle
+
+        monkeypatch.setenv("QUAID_NOW", "2026-03-11T05:06:07Z")
+        upsert_identity_handle(
+            owner_id="user-1",
+            source_channel="telegram",
+            handle="Alice",
+            canonical_entity_id="entity-abc",
+        )
+
+        row = resolve_identity_handle(owner_id="user-1", source_channel="telegram", handle="Alice")
+        assert row["created_at"] == "2026-03-11T05:06:07+00:00"
+        assert row["updated_at"] == "2026-03-11T05:06:07+00:00"
+
+    def test_rejects_malformed_quaid_now(self, monkeypatch):
+        from datastore.memorydb.identity_map import list_identity_handles, upsert_identity_handle
+
+        monkeypatch.setenv("QUAID_NOW", "not-a-date")
+
+        with pytest.raises(ValueError, match="Invalid QUAID_NOW"):
+            upsert_identity_handle(
+                owner_id="user-1",
+                source_channel="telegram",
+                handle="Alice",
+                canonical_entity_id="entity-abc",
+            )
+
+        assert list_identity_handles() == []
+
     def test_raises_on_empty_channel(self):
         from datastore.memorydb.identity_map import upsert_identity_handle
         with pytest.raises(ValueError, match="source_channel"):
@@ -173,6 +203,26 @@ class TestUpsertIdentityHandleUpdate:
             owner_id="user-1", source_channel="telegram", handle="Alice",
         )
         assert resolved["canonical_entity_id"] == "entity-new"
+
+    def test_update_timestamp_honors_quaid_now(self, monkeypatch):
+        from datastore.memorydb.identity_map import upsert_identity_handle, resolve_identity_handle
+
+        monkeypatch.setenv("QUAID_NOW", "2026-03-11T05:00:00Z")
+        upsert_identity_handle(
+            owner_id="user-1", source_channel="telegram",
+            handle="Alice", canonical_entity_id="entity-old",
+        )
+        monkeypatch.setenv("QUAID_NOW", "2026-03-11T05:06:07Z")
+        upsert_identity_handle(
+            owner_id="user-1", source_channel="telegram",
+            handle="Alice", canonical_entity_id="entity-new",
+        )
+
+        resolved = resolve_identity_handle(
+            owner_id="user-1", source_channel="telegram", handle="Alice",
+        )
+        assert resolved["created_at"] == "2026-03-11T05:00:00+00:00"
+        assert resolved["updated_at"] == "2026-03-11T05:06:07+00:00"
 
     def test_different_owners_are_separate_rows(self):
         from datastore.memorydb.identity_map import upsert_identity_handle

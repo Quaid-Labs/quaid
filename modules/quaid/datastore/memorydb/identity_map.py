@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -12,6 +13,16 @@ from lib.database import get_connection as _lib_get_connection
 
 
 def _utcnow_iso() -> str:
+    raw = str(os.environ.get("QUAID_NOW", "") or "").strip()
+    if raw:
+        normalized = raw.replace("Z", "+00:00")
+        try:
+            parsed = datetime.fromisoformat(normalized)
+        except ValueError as exc:
+            raise ValueError(f"Invalid QUAID_NOW={raw!r}") from exc
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.isoformat()
     return datetime.now(timezone.utc).isoformat()
 
 
@@ -51,7 +62,6 @@ def upsert_identity_handle(
     confidence: float = 1.0,
     notes: Optional[str] = None,
 ) -> Dict[str, Any]:
-    now = _utcnow_iso()
     owner = str(owner_id or "").strip() or None
     channel = str(source_channel or "").strip().lower()
     conv = str(conversation_id or "").strip() or None
@@ -64,6 +74,7 @@ def upsert_identity_handle(
     if not canonical:
         raise ValueError("canonical_entity_id is required")
 
+    now = _utcnow_iso()
     with _lib_get_connection() as conn:
         ensure_schema(conn)
         row = conn.execute(
