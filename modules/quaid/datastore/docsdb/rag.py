@@ -1827,7 +1827,7 @@ class DocsRAG:
 
         scope_forced_empty = False
         if project:
-            if scope_resolved and project not in set(linked_projects):
+            if scope_resolved and project.lower() not in {p.lower() for p in linked_projects}:
                 scope_forced_empty = True
             project_scope_token = project
             project_paths = self._get_project_paths(project)

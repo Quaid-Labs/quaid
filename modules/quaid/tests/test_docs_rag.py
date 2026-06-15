@@ -2103,6 +2103,68 @@ class TestDocsSearchFiltering:
         assert [c["project"] for c in hint.get("candidates", [])] == ["cross-live-test"]
         assert hint["candidates"][0]["path"] == "/tmp/workspace/projects/cross-live-test"
 
+    @patch("datastore.docsdb.rag._lib_get_embedding", return_value=[1.0])
+    def test_search_docs_shared_scope_matches_explicit_project_case_insensitively(self, _embed, tmp_path):
+        rag = _make_rag(tmp_path)
+        rag._shared_scope_enabled = True
+
+        db = sqlite3.connect(rag.db_path)
+        try:
+            db.executemany(
+                "INSERT INTO doc_chunks (id, source_file, chunk_index, content, section_header, embedding) VALUES (?, ?, ?, ?, ?, ?)",
+                [
+                    (
+                        "examples:0",
+                        "/tmp/workspace/projects/livetest-agentmsg-OC/examples.md",
+                        0,
+                        "amber field example details",
+                        "Examples",
+                        b"1.0",
+                    ),
+                    (
+                        "project:0",
+                        "/tmp/workspace/projects/livetest-agentmsg-OC/PROJECT.md",
+                        0,
+                        "ambient project overview",
+                        "Project",
+                        b"0.52",
+                    ),
+                ],
+            )
+            db.commit()
+        finally:
+            db.close()
+
+        def _unpack(blob):
+            return [float(bytes(blob).decode("ascii"))]
+
+        def _sim(_query_embedding, chunk_embedding):
+            return float(chunk_embedding[0])
+
+        with patch(
+            "datastore.docsdb.rag._linked_projects_for_current_instance",
+            return_value=(["livetest-agentmsg-oc"], True),
+        ), patch("datastore.docsdb.rag._lib_unpack_embedding", side_effect=_unpack), patch(
+            "datastore.docsdb.rag._lib_cosine_similarity",
+            side_effect=_sim,
+        ), patch.object(
+            rag,
+            "_get_project_paths",
+            return_value={
+                "home_dir": "/tmp/workspace/projects/livetest-agentmsg-OC",
+                "source_roots": [],
+            },
+        ):
+            results = rag.search_docs(
+                "amber field example details",
+                limit=2,
+                project="livetest-agentmsg-OC",
+            )
+
+        assert len(results) == 2
+        assert results[0]["source"].endswith("examples.md")
+        assert results[0]["similarity"] == 1.0
+
     @patch("datastore.docsdb.rag._lib_get_embedding", return_value=[0.1, 0.2, 0.3])
     @patch("datastore.docsdb.rag.is_fail_hard_enabled", return_value=True)
     def test_search_docs_project_filter_raises_when_registry_paths_fail_under_failhard(self, _failhard, _embed, tmp_path):
