@@ -15,14 +15,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional, Tuple
 
+from lib.tokens import estimate_tokens as _shared_estimate_tokens
+
 logger = logging.getLogger(__name__)
 
 # Default token budget for the recent log window.
 # Overridable via config: projects.logTokenBudget
 DEFAULT_LOG_TOKEN_BUDGET = 4000
-
-# Rough token estimate: ~4 chars per token (conservative for English text)
-_CHARS_PER_TOKEN = 4
 
 # Matches ISO timestamps like [2026-03-11T10:00:00] at the start of log lines
 _TS_PATTERN = re.compile(r"^\s*-\s*\[(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})")
@@ -32,8 +31,8 @@ _DATE_PATTERN = re.compile(r"^\s*-\s*\[(\d{4}-\d{2}-\d{2})")
 
 
 def _estimate_tokens(text: str) -> int:
-    """Rough token estimate. Conservative (overestimates slightly)."""
-    return max(1, len(text) // _CHARS_PER_TOKEN)
+    """Rough token estimate shared with recall/log budget callers."""
+    return _shared_estimate_tokens(text)
 
 
 def _parse_line_timestamp(line: str) -> Optional[datetime]:

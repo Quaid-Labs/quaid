@@ -25,6 +25,9 @@ class TestEstimateTokens:
         assert _estimate_tokens("hello") >= 1
         assert _estimate_tokens("a" * 100) == 25  # 100 / 4
 
+    def test_cjk_estimate_is_not_ascii_char_based(self):
+        assert _estimate_tokens("記" * 100) > _estimate_tokens("a" * 100)
+
     def test_empty(self):
         assert _estimate_tokens("") == 1  # min 1
 
