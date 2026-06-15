@@ -595,6 +595,73 @@ describe("lifecycle signal detection", () => {
     }
   });
 
+  it("discovers and preserves OC-only filesystem transcripts after gateway restart", async () => {
+    const baseDir = fs.mkdtempSync(path.join("/tmp", "quaid-oc-filesystem-session-"));
+    const quaidHome = path.join(baseDir, ".quaid");
+    const visibleHome = path.join(baseDir, "quaid");
+    const openClawConfigPath = path.join(baseDir, ".openclaw", "openclaw.json");
+    const sessionsDir = path.join(baseDir, ".openclaw", "agents", "main", "sessions");
+    fs.mkdirSync(sessionsDir, { recursive: true });
+    fs.mkdirSync(path.dirname(openClawConfigPath), { recursive: true });
+    fs.writeFileSync(
+      openClawConfigPath,
+      JSON.stringify({ agents: { list: [{ id: "main", default: true }] } }),
+      "utf8",
+    );
+
+    try {
+      vi.stubEnv("HOME", baseDir);
+      vi.stubEnv("QUAID_HOME", quaidHome);
+      vi.stubEnv("QUAID_VISIBLE_HOME", visibleHome);
+      vi.stubEnv("OPENCLAW_CONFIG_PATH", openClawConfigPath);
+      vi.stubEnv("QUAID_INSTANCE", "openclaw-main");
+      vi.resetModules();
+      const isolatedAdapter = await import("../adaptors/openclaw/adapter.js");
+      const isolatedTest = isolatedAdapter.__test;
+      const sessionId = "058ea6a4-ae0c-4c30-a40c-de8df080f3a8";
+      const nativePath = path.join(sessionsDir, `${sessionId}.jsonl`);
+      fs.writeFileSync(
+        nativePath,
+        `${JSON.stringify({
+          type: "message",
+          message: {
+            role: "user",
+            content: "Remember that my Friday pumpkin seed ritual uses smoked paprika.",
+          },
+        })}\n${JSON.stringify({
+          type: "message",
+          message: { role: "assistant", content: "ACK" },
+        })}\n`,
+        "utf8",
+      );
+
+      const found = isolatedTest.findLatestMeaningfulUserSessionFromFilesystem({
+        agentLabel: "main",
+        excludeSessionIds: ["new-session-after-restart"],
+      });
+      expect(found).toMatchObject({
+        sessionId,
+        sessionFile: nativePath,
+      });
+
+      const preserved = isolatedTest.preserveSessionTranscript(
+        sessionId,
+        found?.sessionFile || "",
+        "before-agent-start-fallback",
+      );
+      expect(preserved).toBe(path.join(quaidHome, "instances", "openclaw-main", "logs", "quaid", "sessions", `${sessionId}.jsonl`));
+      expect(fs.readFileSync(String(preserved), "utf8")).toContain("pumpkin seed ritual");
+
+      const sigPath = isolatedTest.writeDaemonSignal(sessionId, "reset", { source: "before_agent_start_fallback" });
+      expect(sigPath).toBeTruthy();
+      const payload = JSON.parse(fs.readFileSync(String(sigPath), "utf8"));
+      expect(payload.transcript_path).toBe(preserved);
+    } finally {
+      vi.unstubAllEnvs();
+      try { fs.rmSync(baseDir, { recursive: true, force: true }); } catch {}
+    }
+  });
+
   it("preserves live transcript-update content instead of older reset backup", async () => {
     const baseDir = fs.mkdtempSync(path.join("/tmp", "quaid-oc-transcript-update-live-"));
     const quaidHome = path.join(baseDir, ".quaid");

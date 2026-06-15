@@ -2509,6 +2509,59 @@ function findLatestMeaningfulUserSessionFromIndex(opts: {
   return candidates[0] || null;
 }
 
+function findLatestMeaningfulUserSessionFromFilesystem(opts: {
+  agentLabel: string;
+  excludeSessionIds?: string[];
+  installedAtMs?: number;
+}): UserActiveSessionCandidate | null {
+  const agentLabel = String(opts.agentLabel || "main").trim().toLowerCase() || "main";
+  const excluded = new Set((opts.excludeSessionIds || []).map((sid) => String(sid || "").trim()).filter(Boolean));
+  const installedAtMs = Number(opts.installedAtMs || readInstalledAtMs() || 0);
+  const candidates: UserActiveSessionCandidate[] = [];
+  let names: string[] = [];
+  try {
+    names = fs.readdirSync(getOpenClawSessionsBaseDir());
+  } catch {
+    return null;
+  }
+
+  for (const name of names) {
+    if (!name.endsWith(".jsonl") || name.includes(".jsonl.")) continue;
+    const sessionId = parseSessionIdFromTranscriptFilePath(name);
+    if (!sessionId || excluded.has(sessionId)) continue;
+    const sessionFile = path.join(getOpenClawSessionsBaseDir(), name);
+    let stat: fs.Stats;
+    try {
+      stat = fs.statSync(sessionFile);
+    } catch {
+      continue;
+    }
+    if (installedAtMs > 0 && stat.mtimeMs <= installedAtMs) continue;
+    const messages = parseSessionMessagesJsonl(sessionFile);
+    if (!Array.isArray(messages) || messages.length === 0) continue;
+    if (isInternalTranscriptMessages(messages)) continue;
+    if (!isMeaningfulUserTranscriptActivity(messages)) continue;
+    rememberSessionTranscriptPath(sessionId, sessionFile, "filesystem-meaningful-session");
+    sessionIdToAgentId.set(sessionId, agentLabel);
+    candidates.push({
+      sessionId,
+      key: `agent:${agentLabel}:filesystem:${sessionId}`,
+      agentLabel,
+      lastActivityMs: stat.mtimeMs,
+      sessionFile,
+      mtimeMs: stat.mtimeMs,
+      updatedAt: stat.mtimeMs,
+    });
+  }
+
+  candidates.sort((a, b) => {
+    const activityDelta = Number(b.lastActivityMs || 0) - Number(a.lastActivityMs || 0);
+    if (activityDelta !== 0) return activityDelta;
+    return String(a.sessionId).localeCompare(String(b.sessionId));
+  });
+  return candidates[0] || null;
+}
+
 function findAgentMainSessionCandidate(agentLabel: string): UserActiveSessionCandidate | null {
   const label = String(agentLabel || "main").trim().toLowerCase() || "main";
   const key = `agent:${label}:main`;
@@ -8669,11 +8722,16 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
             excludeSessionIds: [newSessionId],
             installedAtMs: readInstalledAtMs(),
           });
-          if (scannedActive) {
-            bestPriorSessionId = scannedActive.sessionId;
-            detectionMethod = "index_user_activity";
-            sessionLastActivityMs.set(scannedActive.sessionId, scannedActive.lastActivityMs || Date.now());
-            lastTranscriptSessionHint = { sessionId: scannedActive.sessionId, seenAtMs: Date.now() };
+          const filesystemActive = scannedActive || findLatestMeaningfulUserSessionFromFilesystem({
+            agentLabel: newAgentLabel,
+            excludeSessionIds: [newSessionId],
+            installedAtMs: readInstalledAtMs(),
+          });
+          if (filesystemActive) {
+            bestPriorSessionId = filesystemActive.sessionId;
+            detectionMethod = scannedActive ? "index_user_activity" : "filesystem_user_activity";
+            sessionLastActivityMs.set(filesystemActive.sessionId, filesystemActive.lastActivityMs || Date.now());
+            lastTranscriptSessionHint = { sessionId: filesystemActive.sessionId, seenAtMs: Date.now() };
           }
         }
 
@@ -8742,6 +8800,11 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
               signature: `before_agent_start:fallback:${bestPriorSessionId}`,
             })
           ) {
+            preserveSessionTranscript(
+              bestPriorSessionId,
+              sessionTranscriptPaths.get(bestPriorSessionId) || getOpenClawSessionFile(bestPriorSessionId),
+              "before-agent-start-fallback",
+            );
             facade.markLifecycleSignalFromHook(bestPriorSessionId, "ResetSignal");
             writeDaemonSignal(bestPriorSessionId, "reset", {
               source: "before_agent_start_fallback",
@@ -9695,6 +9758,7 @@ export const __test = {
   shouldMirrorTranscriptUpdateToPreservedCopy,
   isMainInteractiveSessionKey,
   selectNewKeyFanoutTarget,
+  findLatestMeaningfulUserSessionFromFilesystem,
   resolveLifecycleFlushSessionCandidate,
   buildPreinjectEvidenceEntry,
   appendPreinjectEvidenceLog,
