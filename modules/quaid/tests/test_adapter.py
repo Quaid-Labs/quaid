@@ -5128,7 +5128,7 @@ class TestLogRotation:
     def test_rotate_moves_log_to_archive(self, standalone, tmp_path):
         """rotate_logs() actually moves logs into archive/."""
         from core.runtime.logger import rotate_logs
-        from datetime import datetime
+        from datetime import datetime, timezone
 
         log_dir = standalone.logs_dir()
         log_dir.mkdir(parents=True, exist_ok=True)
@@ -5138,7 +5138,7 @@ class TestLogRotation:
         rotate_logs()
 
         # Original log should be gone or empty
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         archive_file = log_dir / "archive" / f"test.{today}.log"
         assert archive_file.exists()
         assert "test entry" in archive_file.read_text()
