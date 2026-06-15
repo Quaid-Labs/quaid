@@ -4,25 +4,32 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from lib.database import get_connection as _lib_get_connection
+from lib.fail_policy import is_fail_hard_enabled
+
+logger = logging.getLogger(__name__)
 
 
 def _utcnow_iso() -> str:
-    raw = str(os.environ.get("QUAID_NOW", "") or "").strip()
+    raw = os.environ.get("QUAID_NOW", "").strip()
     if raw:
-        normalized = raw.replace("Z", "+00:00")
         try:
-            parsed = datetime.fromisoformat(normalized)
+            parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            else:
+                parsed = parsed.astimezone(timezone.utc)
+            return parsed.isoformat()
         except ValueError as exc:
-            raise ValueError(f"Invalid QUAID_NOW={raw!r}") from exc
-        if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=timezone.utc)
-        return parsed.isoformat()
+            if is_fail_hard_enabled():
+                raise RuntimeError(f"Invalid QUAID_NOW={raw!r}") from exc
+            logger.warning("Invalid QUAID_NOW=%r; using wall clock", raw)
     return datetime.now(timezone.utc).isoformat()
 
 
@@ -250,4 +257,3 @@ def _main() -> int:
 
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(_main())
-

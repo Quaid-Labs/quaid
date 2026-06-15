@@ -111,9 +111,10 @@ class TestUpsertIdentityHandleCreate:
         assert result["notes"] == "mentioned in first message"
 
     def test_created_timestamps_honor_quaid_now(self, monkeypatch):
-        from datastore.memorydb.identity_map import upsert_identity_handle, resolve_identity_handle
+        from datastore.memorydb.identity_map import resolve_identity_handle, upsert_identity_handle
 
         monkeypatch.setenv("QUAID_NOW", "2026-03-11T05:06:07Z")
+
         upsert_identity_handle(
             owner_id="user-1",
             source_channel="telegram",
@@ -125,20 +126,36 @@ class TestUpsertIdentityHandleCreate:
         assert row["created_at"] == "2026-03-11T05:06:07+00:00"
         assert row["updated_at"] == "2026-03-11T05:06:07+00:00"
 
-    def test_rejects_malformed_quaid_now(self, monkeypatch):
-        from datastore.memorydb.identity_map import list_identity_handles, upsert_identity_handle
+    def test_malformed_quaid_now_honors_failhard(self, monkeypatch):
+        from datastore.memorydb import identity_map
 
-        monkeypatch.setenv("QUAID_NOW", "not-a-date")
+        monkeypatch.setenv("QUAID_NOW", "not-a-clock")
 
-        with pytest.raises(ValueError, match="Invalid QUAID_NOW"):
-            upsert_identity_handle(
+        monkeypatch.setattr(identity_map, "is_fail_hard_enabled", lambda: True)
+        with pytest.raises(RuntimeError, match="Invalid QUAID_NOW"):
+            identity_map.upsert_identity_handle(
                 owner_id="user-1",
                 source_channel="telegram",
                 handle="Alice",
                 canonical_entity_id="entity-abc",
             )
 
-        assert list_identity_handles() == []
+        assert identity_map.list_identity_handles() == []
+
+        monkeypatch.setattr(identity_map, "is_fail_hard_enabled", lambda: False)
+        result = identity_map.upsert_identity_handle(
+            owner_id="user-1",
+            source_channel="telegram",
+            handle="Bob",
+            canonical_entity_id="entity-def",
+        )
+
+        resolved = identity_map.resolve_identity_handle(
+            owner_id="user-1",
+            source_channel="telegram",
+            handle=result["handle"],
+        )
+        assert resolved["created_at"] != "not-a-clock"
 
     def test_raises_on_empty_channel(self):
         from datastore.memorydb.identity_map import upsert_identity_handle
@@ -212,6 +229,7 @@ class TestUpsertIdentityHandleUpdate:
             owner_id="user-1", source_channel="telegram",
             handle="Alice", canonical_entity_id="entity-old",
         )
+
         monkeypatch.setenv("QUAID_NOW", "2026-03-11T05:06:07Z")
         upsert_identity_handle(
             owner_id="user-1", source_channel="telegram",
