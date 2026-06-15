@@ -15455,6 +15455,27 @@ class TestRecallFastHookInjectContract:
 
         assert matched == ["sibling_of"]
 
+    def test_relation_matches_normalize_unicode_edge_keywords(self):
+        import datastore.memorydb.memory_graph as mg
+
+        class _Graph:
+            def get_known_relations(self):
+                return []
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=_Graph()), \
+             patch(
+                 "datastore.memorydb.memory_graph.get_edge_keywords",
+                 return_value={
+                     "meets_at": ["man\u0303ana"],
+                     "visits": ["ｶﾌｪ"],
+                 },
+             ):
+            matched_accented = mg._relation_matches_for_query("mañana agenda")
+            matched_width = mg._relation_matches_for_query("カフェの予定")
+
+        assert "meets_at" in matched_accented
+        assert "visits" in matched_width
+
     def test_relation_matches_keep_ascii_edge_keywords_token_bound(self):
         import datastore.memorydb.memory_graph as mg
 

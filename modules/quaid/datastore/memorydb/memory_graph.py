@@ -224,6 +224,10 @@ def _has_non_ascii(value: str) -> bool:
     return any(ord(ch) > 127 for ch in str(value or ""))
 
 
+def _unicode_casefold(value: str) -> str:
+    return unicodedata.normalize("NFKC", str(value or "")).casefold()
+
+
 def _has_compact_unicode_char(value: str) -> bool:
     for ch in str(value or ""):
         name = unicodedata.name(ch, "")
@@ -3717,7 +3721,7 @@ def get_all_edge_keywords_flat() -> set:
     # Build in local var to avoid exposing partially-populated set to other threads
     result = set()
     for kw_list in keywords.values():
-        result.update(kw.lower() for kw in kw_list)
+        result.update(_unicode_casefold(kw) for kw in kw_list)
     _edge_keywords_all = result  # Single atomic assignment
     return _edge_keywords_all
 
@@ -3763,7 +3767,7 @@ def _relation_tokens_for_runtime() -> Dict[str, set[str]]:
     out: Dict[str, set[str]] = {}
     for relation in list_relation_types():
         tokens: set[str] = set()
-        for token in str(relation).lower().replace("-", "_").split("_"):
+        for token in _unicode_casefold(relation).replace("-", "_").split("_"):
             token = token.strip()
             if len(token) < 3 or token in _RELATION_TOKEN_STOPWORDS:
                 continue
@@ -3778,7 +3782,7 @@ def _relation_tokens_for_runtime() -> Dict[str, set[str]]:
                 tokens.add(token[:-1])
         canonical_group = _canonical_relation_group_for_relation(str(relation or ""))
         for token in _SCHEMA_RELATION_GROUP_TOKENS.get(canonical_group, set()):
-            clean = str(token or "").strip().lower()
+            clean = _unicode_casefold(token).strip()
             if clean:
                 tokens.add(clean)
         if tokens:
@@ -3788,7 +3792,7 @@ def _relation_tokens_for_runtime() -> Dict[str, set[str]]:
 
 def _normalize_relation_query_tokens(text: str) -> List[str]:
     tokens: List[str] = []
-    for raw in re.findall(r"[^\W_][\w'\-’]*", str(text or "").lower(), flags=re.UNICODE):
+    for raw in re.findall(r"[^\W_][\w'\-’]*", _unicode_casefold(text), flags=re.UNICODE):
         normalized = str(raw).strip().rstrip("'").rstrip("’")
         if normalized.endswith("'s") or normalized.endswith("’s"):
             normalized = normalized[:-2]
@@ -3806,7 +3810,7 @@ def _normalize_relation_query_tokens(text: str) -> List[str]:
 
 
 def _schema_group_for_relation_alias_tokens(tokens: List[str]) -> str:
-    token_key = tuple(str(token or "").strip().lower() for token in tokens if str(token or "").strip())
+    token_key = tuple(_unicode_casefold(token).strip() for token in tokens if str(token or "").strip())
     if not token_key:
         return ""
     for group, aliases in _SCHEMA_RELATION_GROUP_TOKENS.items():
@@ -3825,7 +3829,7 @@ def _relation_candidate_priority(tokens: List[str], relation: str) -> int:
 
 
 def _ordered_relation_matches_for_query(query: str) -> List[str]:
-    lowered = str(query or "").lower()
+    lowered = _unicode_casefold(query)
     tokens = _normalize_relation_query_tokens(query)
     if not lowered.strip():
         return []
@@ -3837,7 +3841,7 @@ def _ordered_relation_matches_for_query(query: str) -> List[str]:
         if not clean_relation:
             continue
         for keyword in keywords or []:
-            normalized_keyword = str(keyword or "").strip().lower()
+            normalized_keyword = _unicode_casefold(keyword).strip()
             if not normalized_keyword or normalized_keyword.isascii():
                 continue
             start = 0
@@ -4179,7 +4183,7 @@ def _count_graph_discovery_rows(rows: List[Dict[str, Any]]) -> int:
 
 
 def _relation_matches_for_query(query: str) -> List[str]:
-    lowered = str(query or "").lower()
+    lowered = _unicode_casefold(query)
     if not lowered.strip():
         return []
     words = set(_normalize_relation_query_tokens(query))
@@ -4187,7 +4191,7 @@ def _relation_matches_for_query(query: str) -> List[str]:
     keyword_map = get_edge_keywords()
     for relation, keywords in keyword_map.items():
         for keyword in keywords or []:
-            normalized = str(keyword or "").strip().lower()
+            normalized = _unicode_casefold(keyword).strip()
             if not normalized:
                 continue
             if " " in normalized:
@@ -4211,9 +4215,9 @@ def _relation_matches_for_query(query: str) -> List[str]:
 def _relation_descriptor_tokens() -> set[str]:
     tokens: set[str] = set()
     for relation_tokens in _relation_tokens_for_runtime().values():
-        tokens.update(str(token or "").strip().lower() for token in relation_tokens if str(token or "").strip())
+        tokens.update(_unicode_casefold(token).strip() for token in relation_tokens if str(token or "").strip())
     for schema_tokens in _SCHEMA_RELATION_GROUP_TOKENS.values():
-        tokens.update(str(token or "").strip().lower() for token in schema_tokens if str(token or "").strip())
+        tokens.update(_unicode_casefold(token).strip() for token in schema_tokens if str(token or "").strip())
     return tokens
 
 
