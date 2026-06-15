@@ -5585,6 +5585,22 @@ class TestSourceChunkStorage:
         assert expanded is not None
         assert [row["chunk_id"] for row in expanded["window"]] == [row["chunk_id"] for row in rows]
 
+    def test_store_source_chunks_rolls_back_when_relink_fails(self, tmp_path):
+        """Batch chunk inserts and linked-list refresh commit or roll back together."""
+        graph, _db_file = _make_graph(tmp_path)
+
+        with patch.object(graph, "_relink_session_chunks", side_effect=RuntimeError("relink failed")):
+            with pytest.raises(RuntimeError, match="relink failed"):
+                graph.store_source_chunks(
+                    ["User: first batch chunk.", "User: second batch chunk."],
+                    owner_id="douglas",
+                    session_id="session-atomic",
+                    source_id="source-atomic",
+                    embed=False,
+                )
+
+        assert graph.list_source_chunks(owner_id="douglas", session_id="session-atomic") == []
+
     def test_store_session_chunks_indexes_embeddings_for_chunk_ann(self, tmp_path):
         """Session chunk writes maintain their dedicated first-order ANN index."""
         import datastore.memorydb.memory_graph as mg
