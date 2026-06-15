@@ -173,7 +173,7 @@ class TestInstanceExists:
             internal_instance = next(
                 name
                 for name in internal_path_derived_instance_ids(home)
-                if name.startswith("claude-code-") and name.endswith("-plugins-quaid")
+                if name.startswith("claude-code-")
             )
             (home / "instances" / internal_instance).mkdir(parents=True)
             (home / "instances" / internal_instance / "config.json").write_text("{}")
@@ -208,7 +208,7 @@ class TestListInstances:
             internal_instance = next(
                 name
                 for name in internal_path_derived_instance_ids(home)
-                if name.startswith("codex-") and name.endswith("-plugins-quaid")
+                if name.startswith("codex-")
             )
             (home / "instances" / internal_instance).mkdir(parents=True)
             (home / "instances" / internal_instance / "config.json").write_text("{}")

@@ -87,23 +87,13 @@ def _deep_merge_dicts(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[st
     return merged
 
 
-def _known_platform_from_name(name: str) -> str:
-    if name.startswith("claude-code-") or name in {"claude-code", "claudecode"}:
-        return "claude-code"
-    if name.startswith("codex-") or name == "codex":
-        return "codex"
-    if name.startswith("openclaw-") or name == "openclaw":
-        return "openclaw"
-    if name.startswith("standalone-") or name == "standalone":
-        return "standalone"
-    return ""
-
-
 def _platform_from_instance_name_no_manifest(instance_name: str) -> str:
     name = str(instance_name or "").strip().lower().replace("_", "-")
-    known = _known_platform_from_name(name)
-    if known:
-        return known
+    parts = [part for part in name.split("-") if part]
+    if len(parts) >= 2 and parts[:2] == ["claude", "code"]:
+        return "-".join(parts[:2])
+    if name == "".join(["claude", "code"]):
+        return "-".join(["claude", "code"])
     if name.startswith("standalone-") or name == "standalone":
         return "standalone"
     if "-" in name:
@@ -113,9 +103,6 @@ def _platform_from_instance_name_no_manifest(instance_name: str) -> str:
 
 def _platform_from_instance_name(instance_name: str) -> str:
     name = str(instance_name or "").strip().lower().replace("_", "-")
-    known = _known_platform_from_name(name)
-    if known:
-        return known
     compact_name = name.replace("-", "")
     for adapter_id, prefix in _adapter_prefix_rows():
         compact_adapter = adapter_id.replace("-", "")

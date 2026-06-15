@@ -376,8 +376,9 @@ class TestProjectSystemE2E:
             "SECTION: Config\nOLD: Port: 8080\nNEW: Port: 9090\nHost: 0.0.0.0",
         ]
 
-        updated, applied = apply_edit_blocks(doc, edits)
+        updated, applied, unmatched = apply_edit_blocks(doc, edits)
         assert applied == 2
+        assert unmatched == 0
         assert "/api/v2/users" in updated
         assert "Port: 9090" in updated
         assert "/api/v1/users" not in updated
