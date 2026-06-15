@@ -14382,28 +14382,10 @@ def _prioritize_fast_anchor_direct_rows(query: str, rows: List[Dict[str, Any]]) 
         _extract_distinctive_query_terms(query, limit=8),
         explicit_anchor_terms,
     )
-    broad_outcome_terms = {
-        "bug",
-        "ended",
-        "ending",
-        "ever",
-        "happen",
-        "happened",
-        "intentional",
-        "issue",
-        "keep",
-        "keeping",
-        "kept",
-        "latest",
-        "left",
-        "recent",
-        "secret",
-        "still",
-    }
     event_focus_terms = [
         term
         for term in query_terms
-        if term not in explicit_anchor_terms and term not in broad_outcome_terms
+        if term not in explicit_anchor_terms
     ]
     def _row_text(row: Dict[str, Any]) -> str:
         return str((row or {}).get("text") or "")

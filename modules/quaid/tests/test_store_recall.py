@@ -3044,6 +3044,35 @@ class TestRecallBasic:
             "anchor-only",
         ]
 
+    def test_fast_anchor_priority_does_not_suppress_outcome_words(self):
+        import datastore.memorydb.memory_graph as mg
+
+        rows = [
+            {
+                "id": "ledger-only",
+                "text": "Widget Alpha appears in the red ledger audit note.",
+                "category": "fact",
+                "similarity": 0.95,
+                "extraction_confidence": 0.50,
+                "created_at": "2026-05-26T23:59:59",
+            },
+            {
+                "id": "kept-update",
+                "text": "Widget Alpha kept the archive copy during migration.",
+                "category": "fact",
+                "similarity": 0.80,
+                "extraction_confidence": 0.95,
+                "created_at": "2026-05-19T23:59:59",
+            },
+        ]
+
+        ranked = mg._prioritize_fast_anchor_direct_rows(
+            "Which Widget Alpha update kept the ledger?",
+            rows,
+        )
+
+        assert ranked[0]["id"] == "kept-update"
+
     def test_fast_direct_priority_uses_full_query_coverage_without_named_anchor(self):
         import datastore.memorydb.memory_graph as mg
 
