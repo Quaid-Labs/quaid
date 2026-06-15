@@ -36,6 +36,21 @@ def _read_json_object(path: Path) -> dict:
         return {}
 
 
+def _now_iso() -> str:
+    raw = os.environ.get("QUAID_NOW", "").strip()
+    if raw:
+        try:
+            value = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            raise ValueError(f"Invalid QUAID_NOW={raw!r}") from None
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        else:
+            value = value.astimezone(timezone.utc)
+        return value.isoformat().replace("+00:00", "Z")
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
 def _seed_janitor_checkpoint(logs_root: Path) -> None:
     """Seed janitor health checkpoint for fresh silos.
 
@@ -55,7 +70,7 @@ def _seed_janitor_checkpoint(logs_root: Path) -> None:
         return
     if str(state.get("last_completed_at") or "").strip():
         return
-    now_iso = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    now_iso = _now_iso()
     state["task"] = str(state.get("task") or "all")
     state["started_at"] = str(state.get("started_at") or now_iso)
     state["heartbeat_at"] = now_iso

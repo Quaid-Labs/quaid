@@ -59,8 +59,9 @@ class TestInstanceManagerBase:
         assert silo == tmp_path / "instances" / "claude-code-myapp"
         assert not silo.exists()
 
-    def test_create_makes_silo(self, tmp_path):
+    def test_create_makes_silo(self, tmp_path, monkeypatch):
         from lib.instance_manager import InstanceManager
+        monkeypatch.setenv("QUAID_NOW", "2026-03-11T05:00:00Z")
         adapter = MagicMock()
         adapter.agent_id_prefix.return_value = "claude-code"
         adapter.adapter_id.return_value = "claude-code"
@@ -87,10 +88,28 @@ class TestInstanceManagerBase:
         checkpoint_data = json.loads(checkpoint.read_text(encoding="utf-8"))
         assert checkpoint_data.get("task") == "all"
         assert checkpoint_data.get("status") == "completed"
-        assert checkpoint_data.get("last_completed_at")
+        assert checkpoint_data.get("started_at") == "2026-03-11T05:00:00Z"
+        assert checkpoint_data.get("heartbeat_at") == "2026-03-11T05:00:00Z"
+        assert checkpoint_data.get("last_completed_at") == "2026-03-11T05:00:00Z"
         config = json.loads((silo / "config.json").read_text())
         assert config["instance"]["id"] == "claude-code-proj"
         assert config["adapter"]["type"] == "claude-code"
+
+    def test_create_rejects_malformed_quaid_now_for_janitor_checkpoint(self, tmp_path, monkeypatch):
+        from lib.instance_manager import InstanceManager
+        monkeypatch.setenv("QUAID_NOW", "not-a-date")
+        adapter = MagicMock()
+        adapter.agent_id_prefix.return_value = "claude-code"
+        adapter.adapter_id.return_value = "claude-code"
+        adapter.quaid_home.return_value = tmp_path
+        adapter.visible_home.return_value = tmp_path / "visible"
+        adapter.instance_root.return_value = tmp_path / "instances" / "claude-code-main"
+        mgr = InstanceManager(adapter)
+
+        with patch("lib.instance.instance_exists", return_value=False), \
+             patch("lib.instance.validate_instance_id"), \
+             pytest.raises(ValueError, match="Invalid QUAID_NOW"):
+            mgr.create("proj")
 
     def test_create_keeps_instance_config_minimal_and_relies_on_layering(self, tmp_path):
         from lib.instance_manager import InstanceManager
