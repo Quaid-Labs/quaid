@@ -1757,7 +1757,7 @@ def _explicit_user_mirrored_anchor_facts(
         for sentence, question_shaped, combined_question_shape in candidate_sentences:
             if not question_shaped:
                 continue
-            fact_text = _normalize_structural_anchor_sentence(str(sentence or "").rstrip("?"))
+            fact_text = _normalize_structural_anchor_sentence(_rstrip_question_terminators(str(sentence or "")))
             if len(fact_text.split()) < 5 or len(fact_text) > 240:
                 continue
             candidate_tokens = _structural_overlap_tokens(fact_text, min_len=4)

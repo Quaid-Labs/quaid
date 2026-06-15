@@ -3305,6 +3305,20 @@ class TestExtractFromTranscript:
         ]
         assert structural_texts == ["それなら marker alpha-beta-123 は確定。"]
 
+    def test_mirrored_anchor_strips_unicode_question_terminator(self):
+        from ingest.extract import _explicit_user_mirrored_anchor_facts
+
+        facts = _explicit_user_mirrored_anchor_facts(
+            (
+                "User: use marker alpha-beta-123 for the launch plan？\n\n"
+                "Assistant: I will use marker alpha-beta-123 for the launch plan and keep it visible."
+            ),
+            [],
+        )
+
+        mirrored_texts = [fact["text"] for fact in facts]
+        assert mirrored_texts == ["use marker alpha-beta-123 for the launch plan"]
+
     def test_trailing_assistant_questions_strip_unicode_question_terminators(self):
         from ingest.extract import _strip_trailing_question_lines
 
