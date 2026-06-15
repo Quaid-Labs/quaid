@@ -1141,6 +1141,41 @@ class TestStoreBasic:
             dedup_rows = conn.execute("SELECT COUNT(*) FROM dedup_log").fetchone()[0]
         assert dedup_rows == 1
 
+    def test_log_dedup_decision_missing_node_fallback_preserves_audit_row(self, tmp_path, capsys):
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _ = _make_graph(tmp_path)
+        log_id = mg.log_dedup_decision(
+            graph,
+            "New deployment note",
+            "missing-node-id",
+            "Existing deployment note",
+            0.91,
+            "auto_reject",
+            llm_reasoning="same operational detail",
+            owner_id="owner",
+            source="test",
+        )
+
+        with graph._get_conn() as conn:
+            row = conn.execute(
+                """
+                SELECT id, new_text, existing_node_id, existing_text, similarity,
+                       decision, llm_reasoning, owner_id, source
+                FROM dedup_log
+                WHERE id = ?
+                """,
+                (log_id,),
+            ).fetchone()
+
+        assert row is not None
+        assert row["existing_node_id"] is None
+        assert row["new_text"] == "New deployment note"
+        assert row["existing_text"] == "Existing deployment note"
+        assert row["decision"] == "auto_reject"
+        assert row["owner_id"] == "owner"
+        assert "inserting with NULL reference" in capsys.readouterr().err
+
     def test_batch_write_dedup_rowid_max_ignores_same_batch_rows(self, tmp_path):
         from datastore.memorydb.memory_graph import batch_write, store
 

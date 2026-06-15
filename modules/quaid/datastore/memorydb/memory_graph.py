@@ -24107,29 +24107,26 @@ def log_dedup_decision(
 ) -> str:
     """Log a dedup decision to dedup_log table. Returns log entry ID."""
     log_id = str(uuid.uuid4())
+
+    def _insert(active_conn: sqlite3.Connection, existing_id: Optional[str]) -> None:
+        active_conn.execute("""
+            INSERT INTO dedup_log
+            (id, new_text, existing_node_id, existing_text, similarity,
+             decision, llm_reasoning, owner_id, source)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (log_id, new_text, existing_id, existing_text,
+              similarity, decision, llm_reasoning, owner_id, source))
+
     conn_cm = nullcontext(conn) if conn is not None else graph._get_conn()
-    try:
-        with conn_cm as active_conn:
-            active_conn.execute("""
-                INSERT INTO dedup_log
-                (id, new_text, existing_node_id, existing_text, similarity,
-                 decision, llm_reasoning, owner_id, source)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (log_id, new_text, existing_node_id, existing_text,
-                  similarity, decision, llm_reasoning, owner_id, source))
-    except sqlite3.IntegrityError:
-        # FK constraint can fail if the candidate node was hard-deleted between
-        # the FTS search and this insert (WAL snapshot mismatch). Fall back to
-        # NULL existing_node_id — the audit trail is preserved without the link.
-        print(f"[dedup_log] WARNING: FK constraint for node {existing_node_id}, inserting with NULL reference", file=sys.stderr)
-        with conn_cm as active_conn:
-            active_conn.execute("""
-                INSERT INTO dedup_log
-                (id, new_text, existing_node_id, existing_text, similarity,
-                 decision, llm_reasoning, owner_id, source)
-                VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?)
-            """, (log_id, new_text, existing_text,
-                  similarity, decision, llm_reasoning, owner_id, source))
+    with conn_cm as active_conn:
+        try:
+            _insert(active_conn, existing_node_id)
+        except sqlite3.IntegrityError:
+            # FK constraint can fail if the candidate node was hard-deleted between
+            # the FTS search and this insert (WAL snapshot mismatch). Fall back to
+            # NULL existing_node_id — the audit trail is preserved without the link.
+            print(f"[dedup_log] WARNING: FK constraint for node {existing_node_id}, inserting with NULL reference", file=sys.stderr)
+            _insert(active_conn, None)
     return log_id
 
 
