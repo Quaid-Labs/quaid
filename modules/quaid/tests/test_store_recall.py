@@ -19492,6 +19492,24 @@ class TestGraphFactClusterRecall:
         assert "blue notebook" in summary
         assert "red notebook" not in summary
 
+    def test_generate_entity_summary_timestamp_honors_quaid_now(self, tmp_path, monkeypatch):
+        import datastore.memorydb.memory_graph as mg
+
+        monkeypatch.setenv("QUAID_NOW", "2026-08-09T10:11:12")
+        graph, _ = _make_graph(tmp_path)
+        entity = mg.Node.create("Person", "Mira", owner_id="operator")
+        fact = mg.Node.create("Fact", "Mira keeps the archive index in drawer three.", owner_id="operator")
+        graph.add_node(entity, embed=False)
+        graph.add_node(fact, embed=False)
+        graph.add_edge(mg.Edge.create(entity.id, fact.id, "has_fact"))
+
+        with patch.object(mg, "get_graph", return_value=graph):
+            assert mg.generate_entity_summary(entity.id, use_llm=False) is not None
+
+        updated = graph.get_node(entity.id)
+        assert updated is not None
+        assert updated.attributes["summary_updated_at"] == "2026-08-09T10:11:12"
+
     def test_graph_attached_fact_rows_do_not_demote_query_matching_mentioned_facts(self, tmp_path):
         import datastore.memorydb.memory_graph as mg
 

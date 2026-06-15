@@ -24549,7 +24549,7 @@ Write a natural, flowing paragraph. Only include information from the facts abov
                 summary = response.strip()
                 # Store in node attributes
                 node.attributes["summary"] = summary
-                node.attributes["summary_updated_at"] = datetime.now().isoformat()
+                node.attributes["summary_updated_at"] = _now_iso()
                 node.attributes["summary_fact_count"] = len(facts)
                 graph.update_node(node)
                 return summary
@@ -24562,7 +24562,7 @@ Write a natural, flowing paragraph. Only include information from the facts abov
         summary += f" (and {len(facts) - 10} more facts)"
 
     node.attributes["summary"] = summary
-    node.attributes["summary_updated_at"] = datetime.now().isoformat()
+    node.attributes["summary_updated_at"] = _now_iso()
     node.attributes["summary_fact_count"] = len(facts)
     graph.update_node(node)
     return summary
