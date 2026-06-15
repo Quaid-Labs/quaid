@@ -1540,13 +1540,17 @@ class DocsRAG:
 
             best_match = None
             best_prefix_len = -1
-            for project_name in (_list_projects() or {}).keys():
-                path_info = self._get_project_paths(str(project_name))
+            for project_name, entry in (_list_projects() or {}).items():
                 candidate_roots: List[Path] = []
-                home_dir = str(path_info.get("home_dir") or "").strip()
-                if home_dir:
-                    candidate_roots.append(Path(home_dir))
-                for root in path_info.get("source_roots", []) or []:
+
+                def _add_candidate(raw: Any) -> None:
+                    root_str = str(raw or "").strip()
+                    if root_str:
+                        candidate_roots.append(Path(root_str))
+
+                _add_candidate(entry.get("canonical_path"))
+                _add_candidate(entry.get("source_root"))
+                for root in entry.get("source_roots", []) or []:
                     root_str = str(root or "").strip()
                     if root_str:
                         candidate_roots.append(Path(root_str))
@@ -1564,8 +1568,16 @@ class DocsRAG:
 
             if best_match:
                 return best_match
-        except Exception:
-            pass
+        except Exception as exc:
+            if is_fail_hard_enabled():
+                raise RuntimeError(
+                    f"Failed inferring docs project via project registry for {source_file!r}"
+                ) from exc
+            logger.warning(
+                "Failed inferring docs project via project registry for %r: %s",
+                source_file,
+                exc,
+            )
 
         try:
             from datastore.docsdb.registry import DocsRegistry
@@ -1590,8 +1602,16 @@ class DocsRAG:
                     project_name = str(doc.get("project") or "").strip()
                     if project_name:
                         return project_name
-        except Exception:
-            pass
+        except Exception as exc:
+            if is_fail_hard_enabled():
+                raise RuntimeError(
+                    f"Failed inferring docs project via docs registry for {source_file!r}"
+                ) from exc
+            logger.warning(
+                "Failed inferring docs project via docs registry for %r: %s",
+                source_file,
+                exc,
+            )
 
         return None
 

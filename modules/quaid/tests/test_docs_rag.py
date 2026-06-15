@@ -2599,6 +2599,66 @@ class TestDocsSearchFiltering:
              pytest.raises(RuntimeError, match="Failed resolving docs project paths via project registry"):
             rag._get_project_paths("portfolio-site")
 
+    def test_infer_project_for_source_project_registry_failure_raises_when_failhard(self, tmp_path):
+        rag = _make_rag(tmp_path)
+
+        with patch("lib.project_registry.list_all", side_effect=RuntimeError("registry locked")), \
+             patch("datastore.docsdb.rag.is_fail_hard_enabled", return_value=True), \
+             pytest.raises(RuntimeError, match="Failed inferring docs project via project registry"):
+            rag.infer_project_for_source(str(tmp_path / "projects" / "recipe-app" / "PROJECT.md"))
+
+    def test_infer_project_for_source_project_registry_failure_warns_when_fail_open(
+        self,
+        tmp_path,
+        caplog,
+    ):
+        rag = _make_rag(tmp_path)
+
+        caplog.set_level("WARNING")
+        with patch("lib.project_registry.list_all", side_effect=RuntimeError("registry locked")), \
+             patch("datastore.docsdb.rag.is_fail_hard_enabled", return_value=False):
+            assert rag.infer_project_for_source(str(tmp_path / "PROJECT.md")) is None
+
+        assert "Failed inferring docs project via project registry" in caplog.text
+
+    def test_infer_project_for_source_docs_registry_failure_raises_when_failhard(self, tmp_path):
+        rag = _make_rag(tmp_path)
+
+        class _BrokenRegistry:
+            def __init__(self, _db_path):
+                pass
+
+            def list_docs(self):
+                raise RuntimeError("docs registry locked")
+
+        with patch("lib.project_registry.list_all", return_value={}), \
+             patch("datastore.docsdb.registry.DocsRegistry", _BrokenRegistry), \
+             patch("datastore.docsdb.rag.is_fail_hard_enabled", return_value=True), \
+             pytest.raises(RuntimeError, match="Failed inferring docs project via docs registry"):
+            rag.infer_project_for_source(str(tmp_path / "PROJECT.md"))
+
+    def test_infer_project_for_source_docs_registry_failure_warns_when_fail_open(
+        self,
+        tmp_path,
+        caplog,
+    ):
+        rag = _make_rag(tmp_path)
+
+        class _BrokenRegistry:
+            def __init__(self, _db_path):
+                pass
+
+            def list_docs(self):
+                raise RuntimeError("docs registry locked")
+
+        caplog.set_level("WARNING")
+        with patch("lib.project_registry.list_all", return_value={}), \
+             patch("datastore.docsdb.registry.DocsRegistry", _BrokenRegistry), \
+             patch("datastore.docsdb.rag.is_fail_hard_enabled", return_value=False):
+            assert rag.infer_project_for_source(str(tmp_path / "PROJECT.md")) is None
+
+        assert "Failed inferring docs project via docs registry" in caplog.text
+
     @patch("datastore.docsdb.rag._lib_get_embedding", return_value=[0.1, 0.2, 0.3])
     def test_search_docs_bundle_reads_project_sources_when_index_empty(self, _embed, tmp_path, monkeypatch):
         rag = _make_rag(tmp_path)
