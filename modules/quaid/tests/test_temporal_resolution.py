@@ -29,6 +29,20 @@ class TestTomorrowResolution:
         assert "on 2026-01-16" in result
         assert "met" in result  # "is meeting" → "met"
 
+    def test_tomorrow_future_under_quaid_now_keeps_tense(self, monkeypatch):
+        """Synthetic benchmark time controls whether the fact is past tense."""
+        monkeypatch.setenv("QUAID_NOW", "2026-01-01T00:00:00Z")
+
+        result = _resolve_relative_date(
+            "Quaid is meeting Hauser tomorrow for tea",
+            "2026-01-15T10:00:00"
+        )
+
+        assert result is not None
+        assert "on 2026-01-16" in result
+        assert "is meeting" in result
+        assert "met" not in result
+
 
 class TestYesterdayResolution:
     def test_yesterday(self):

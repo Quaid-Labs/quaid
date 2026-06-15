@@ -376,6 +376,91 @@ def test_quaid_now_rejects_malformed_override(monkeypatch):
         maintenance_ops._quaid_now()
 
 
+def test_update_check_cache_uses_quaid_now_for_freshness(monkeypatch):
+    class _Conn:
+        def __init__(self, updated_at):
+            self.updated_at = updated_at
+
+        def execute(self, sql, params=()):
+            return _DummyResult(rows=[{
+                "value": json.dumps({"version": "1.2.3"}),
+                "updated_at": self.updated_at,
+            }])
+
+    class _Graph:
+        def __init__(self, updated_at):
+            self.updated_at = updated_at
+
+        @contextmanager
+        def _get_conn(self):
+            yield _Conn(self.updated_at)
+
+    graph = _Graph("2026-03-10T23:00:00")
+    monkeypatch.setenv("QUAID_NOW", "2026-03-11T00:00:00Z")
+    assert maintenance_ops.get_update_check_cache(graph, max_age_hours=24) == {"version": "1.2.3"}
+
+    monkeypatch.setenv("QUAID_NOW", "2026-03-12T00:00:01Z")
+    assert maintenance_ops.get_update_check_cache(graph, max_age_hours=24) is None
+
+
+def test_write_update_check_cache_uses_quaid_now(monkeypatch):
+    monkeypatch.setenv("QUAID_NOW", "2026-03-11T00:00:00Z")
+    captured = {}
+
+    class _Conn:
+        def execute(self, sql, params=()):
+            captured["sql"] = str(sql)
+            captured["params"] = params
+            return _DummyResult(rowcount=1)
+
+    class _Graph:
+        @contextmanager
+        def _get_conn(self):
+            yield _Conn()
+
+    maintenance_ops.write_update_check_cache(_Graph(), {"version": "1.2.3"})
+
+    assert "datetime('now')" not in captured["sql"]
+    assert captured["params"] == ("update_check", '{"version": "1.2.3"}', "2026-03-11T00:00:00")
+
+
+def test_review_fix_uses_quaid_now_for_updated_at(monkeypatch):
+    monkeypatch.setenv("QUAID_NOW", "2026-03-11T00:00:00Z")
+    captured = {}
+
+    class _Conn:
+        def execute(self, sql, params=()):
+            text = str(sql)
+            if "SELECT name, status, source, speaker, attributes FROM nodes" in text:
+                return _DummyResult(rows=[{
+                    "name": "old text",
+                    "status": "pending",
+                    "source": "unit-test",
+                    "speaker": "user",
+                    "attributes": "{}",
+                }])
+            if "UPDATE nodes SET name = ?, embedding = ?, content_hash = ?, updated_at = ?" in text:
+                captured["params"] = params
+            return _DummyResult(rowcount=1)
+
+    class _Graph:
+        @contextmanager
+        def _get_conn(self):
+            yield _Conn()
+
+    with patch("lib.embeddings.get_embedding", return_value=[0.1]), \
+         patch("lib.embeddings.pack_embedding", return_value=b"x"), \
+         patch.object(maintenance_ops, "_upsert_vec_embedding", return_value=None):
+        out = maintenance_ops.apply_review_decisions_from_list(
+            _Graph(),
+            [{"id": "n1", "action": "FIX", "new_text": "updated text", "edges": []}],
+            dry_run=False,
+        )
+
+    assert out["fixed"] == 1
+    assert captured["params"][3] == "2026-03-11T00:00:00"
+
+
 def test_review_dedup_rejections_uses_quaid_now_for_sql_timestamps(monkeypatch):
     monkeypatch.setenv("QUAID_NOW", "2026-03-11T00:00:00Z")
     metrics = maintenance_ops.JanitorMetrics()
@@ -463,6 +548,57 @@ def test_review_decayed_memories_uses_quaid_now_for_queue_review(monkeypatch):
     assert "datetime('now')" not in sql_text
     flat_params = [item for _sql, params in graph.conn.calls for item in params]
     assert flat_params.count("2026-03-11T00:00:00") == 2
+
+
+def test_get_completed_review_work_today_uses_quaid_now(monkeypatch):
+    monkeypatch.setenv("QUAID_NOW", "2026-03-11T15:30:00Z")
+    captured = {}
+
+    class _Conn:
+        def execute(self, sql, params=()):
+            captured["params"] = params
+            return _DummyResult(rows=[(7,)])
+
+    @contextmanager
+    def _fake_conn(_db_path):
+        yield _Conn()
+
+    with patch("lib.database.get_connection", _fake_conn):
+        out = maintenance_ops.get_completed_review_work_today()
+
+    assert out["reviewed"] == 7
+    assert captured["params"] == ("2026-03-11T00:00:00",)
+
+
+def test_resolve_temporal_references_uses_quaid_now_for_updated_at(monkeypatch):
+    monkeypatch.setenv("QUAID_NOW", "2026-03-11T00:00:00Z")
+    captured = {}
+
+    class _Conn:
+        def execute(self, sql, params=()):
+            text = str(sql)
+            if "SELECT id, name, created_at FROM nodes" in text:
+                return _DummyResult(rows=[{
+                    "id": "n1",
+                    "name": "Quaid is meeting Hauser tomorrow",
+                    "created_at": "2026-03-10T08:00:00",
+                }])
+            if "UPDATE nodes SET name = ?, embedding = ?, content_hash = ?, updated_at = ?" in text:
+                captured["params"] = params
+            return _DummyResult(rowcount=1)
+
+    class _Graph:
+        @contextmanager
+        def _get_conn(self):
+            yield _Conn()
+
+    with patch("lib.embeddings.get_embedding", return_value=[0.1]), \
+         patch("lib.embeddings.pack_embedding", return_value=b"x"), \
+         patch.object(maintenance_ops, "_upsert_vec_embedding", return_value=None):
+        out = maintenance_ops.resolve_temporal_references(_Graph(), dry_run=False)
+
+    assert out["fixed"] == 1
+    assert captured["params"][3] == "2026-03-11T00:00:00"
 
 
 def test_backfill_embeddings_vec_upsert_failure_warns_and_continues(monkeypatch):

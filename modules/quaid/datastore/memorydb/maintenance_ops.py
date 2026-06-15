@@ -1216,7 +1216,7 @@ def get_update_check_cache(graph: MemoryGraph, max_age_hours: int = 24) -> Optio
         updated_at = datetime.fromisoformat(str(row["updated_at"]))
     except (ValueError, TypeError, KeyError):
         return None
-    if datetime.now() - updated_at >= timedelta(hours=max_age_hours):
+    if _quaid_now() - updated_at >= timedelta(hours=max_age_hours):
         return None
     try:
         return json.loads(row["value"])
@@ -1226,10 +1226,11 @@ def get_update_check_cache(graph: MemoryGraph, max_age_hours: int = 24) -> Optio
 
 def write_update_check_cache(graph: MemoryGraph, payload: Dict[str, Any]) -> None:
     """Persist update-check payload in datastore metadata."""
+    updated_at = _quaid_now().isoformat()
     with graph._get_conn() as conn:
         conn.execute(
-            "INSERT OR REPLACE INTO janitor_metadata (key, value, updated_at) VALUES (?, ?, datetime('now'))",
-            ("update_check", json.dumps(payload)),
+            "INSERT OR REPLACE INTO janitor_metadata (key, value, updated_at) VALUES (?, ?, ?)",
+            ("update_check", json.dumps(payload), updated_at),
         )
 
 
@@ -4008,7 +4009,7 @@ def apply_review_decisions_from_list(graph: MemoryGraph, decisions: List[Dict[st
                     packed_emb = _pack_emb_fix(new_emb) if new_emb else None
                     conn.execute(
                         "UPDATE nodes SET name = ?, embedding = ?, content_hash = ?, updated_at = ?, status = 'approved' WHERE id = ?",
-                        (new_text, packed_emb, new_hash, datetime.now().isoformat(), memory_id)
+                        (new_text, packed_emb, new_hash, _quaid_now().isoformat(), memory_id)
                     )
                     # Best effort vec index refresh. Keep the core fix path resilient
                     # when embedding dims drift across providers/config.
@@ -4132,7 +4133,7 @@ def _resolve_relative_date(text: str, created_at: str) -> Optional[str]:
 
     # Fix tense: if the resolved date is in the past, adjust "is meeting" → "met" etc.
     # This is best-effort for common patterns
-    today = datetime.now().date()
+    today = _quaid_now().date()
     if base_date < today:
         # Simple tense fixes for common patterns
         new_text = re.sub(r'\bis meeting\b', 'met', new_text)
@@ -4206,7 +4207,7 @@ def resolve_temporal_references(graph: MemoryGraph, dry_run: bool = True,
             with graph._get_conn() as conn:
                 conn.execute(
                     "UPDATE nodes SET name = ?, embedding = ?, content_hash = ?, updated_at = ? WHERE id = ?",
-                    (new_text, packed_emb, new_hash, datetime.now().isoformat(), fact_id)
+                    (new_text, packed_emb, new_hash, _quaid_now().isoformat(), fact_id)
                 )
                 _upsert_vec_embedding(
                     conn,
@@ -4229,7 +4230,7 @@ def get_completed_review_work_today() -> Dict[str, int]:
     Note: With hard deletes, deleted rows are gone from nodes table.
     This now only counts approvals/fixes (deletions are tracked in janitor runs).
     """
-    today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    today_start = _quaid_now().replace(hour=0, minute=0, second=0, microsecond=0)
 
     from lib.database import get_connection as _get_db_conn
     with _get_db_conn(DB_PATH) as conn:
