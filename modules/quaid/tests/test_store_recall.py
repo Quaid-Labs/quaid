@@ -340,6 +340,82 @@ def test_reranker_falls_back_on_llm_failure_when_failhard_disabled():
         ) == [(node, 0.9)]
 
 
+def test_recall_once_reranker_raises_when_failhard_enabled(tmp_path):
+    import datastore.memorydb.memory_graph as mg
+
+    graph, _ = _make_graph(tmp_path)
+    with patch.object(mg, "get_graph", return_value=graph), \
+         patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+        mg.store(
+            "Maya keeps the cedar ledger near the workshop door.",
+            owner_id="quaid",
+            skip_dedup=True,
+        )
+
+        with patch.object(
+            mg,
+            "_rerank_with_cross_encoder",
+            side_effect=RuntimeError("reranker down"),
+        ), patch.object(mg, "_is_fail_hard_mode", return_value=True):
+            with pytest.raises(
+                RuntimeError,
+                match="Recall reranker failed during recall while failHard is enabled",
+            ):
+                mg._recall_once(
+                    "cedar ledger",
+                    owner_id="quaid",
+                    limit=5,
+                    min_similarity=0.0,
+                    use_routing=False,
+                    use_aliases=False,
+                    use_intent=False,
+                    use_multi_pass=False,
+                    use_reranker=True,
+                    include_graph_traversal=False,
+                    include_co_session=False,
+                    include_mmr=False,
+                    include_lexical_anchor_shaping=False,
+                    low_signal_retry=False,
+                )
+
+
+def test_recall_once_reranker_falls_back_when_failhard_disabled(tmp_path):
+    import datastore.memorydb.memory_graph as mg
+
+    graph, _ = _make_graph(tmp_path)
+    with patch.object(mg, "get_graph", return_value=graph), \
+         patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+        created = mg.store(
+            "Maya keeps the cedar ledger near the workshop door.",
+            owner_id="quaid",
+            skip_dedup=True,
+        )
+
+        with patch.object(
+            mg,
+            "_rerank_with_cross_encoder",
+            side_effect=RuntimeError("reranker down"),
+        ), patch.object(mg, "_is_fail_hard_mode", return_value=False):
+            rows = mg._recall_once(
+                "cedar ledger",
+                owner_id="quaid",
+                limit=5,
+                min_similarity=0.0,
+                use_routing=False,
+                use_aliases=False,
+                use_intent=False,
+                use_multi_pass=False,
+                use_reranker=True,
+                include_graph_traversal=False,
+                include_co_session=False,
+                include_mmr=False,
+                include_lexical_anchor_shaping=False,
+                low_signal_retry=False,
+            )
+
+    assert any(row["id"] == created["id"] for row in rows)
+
+
 def test_ollama_healthy_retries_before_marking_provider_unhealthy():
     import datastore.memorydb.memory_graph as mg
 
@@ -5496,6 +5572,7 @@ class TestSourceChunkStorage:
                     "Evelyn blue folder hallway cabinet",
                     owner_id="evelyn",
                     use_routing=False,
+                    use_reranker=False,
                     include_lexical_anchor_shaping=False,
                     min_similarity=0.0,
                     max_turns=1,

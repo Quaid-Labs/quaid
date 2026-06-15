@@ -11899,8 +11899,12 @@ def _recall_once(
                         displacements.append(abs(pre_i - post_index_map[nid]))
                 if displacements:
                     _reranker_avg_displacement = sum(displacements) / len(displacements)
-        except Exception:
-            pass  # Reranking is best-effort; fall back to original scoring
+        except Exception as exc:
+            if _is_fail_hard_mode():
+                raise RuntimeError(
+                    "Recall reranker failed during recall while failHard is enabled"
+                ) from exc
+            logger.debug("Recall reranker failed during recall; using original scoring", exc_info=True)
         _phase_ms["reranker_ms"] = round((_time.monotonic() - _phase_t0) * 1000)
 
     # Sort by composite score before thresholding so telemetry can see near-misses.
