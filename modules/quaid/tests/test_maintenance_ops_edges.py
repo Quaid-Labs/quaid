@@ -125,9 +125,11 @@ def test_batch_extract_edges_prompt_includes_domain_neutral_role_guardrails():
         captured["prompt"] = prompt
         return ('[{"fact": 1, "edges": []}]', 0.05)
 
-    with patch.object(maintenance_ops, "call_deep_reasoning", side_effect=_fake_call):
+    with patch.object(maintenance_ops, "call_deep_reasoning", side_effect=_fake_call), patch.object(
+        maintenance_ops, "resolve_owner_person", return_value=SimpleNamespace(name="Casey River")
+    ):
         maintenance_ops.batch_extract_edges(
-            facts=facts,
+            facts=[dict(facts[0], owner_id="casey")],
             graph=object(),
             metrics=metrics,
             relations_list="parent_of, sibling_of, spouse_of, family_of",
@@ -142,6 +144,9 @@ def test_batch_extract_edges_prompt_includes_domain_neutral_role_guardrails():
     assert "Use works_at only for professional employment or ongoing job affiliation stated in the fact" in prompt
     assert "For personal physical training or exercise at an attended venue, use trains_at" in prompt
     assert "gym, studio, dojo, pool" not in prompt
+    assert "in any language" in prompt
+    assert "first-person, self-reference, possessive owner reference" in prompt
+    assert '"the user", "me", "my", "I", or "the owner"' not in prompt
 
 
 def test_batch_extract_edges_accepts_trains_at_relation():

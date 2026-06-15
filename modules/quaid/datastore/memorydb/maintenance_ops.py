@@ -2596,7 +2596,9 @@ def batch_extract_edges(facts: List[Dict[str, Any]], graph: MemoryGraph,
     owner_full_prompt = _owner_full_name(prompt_owner_id) if prompt_owner_id else "the user"
     owner_clause = (
         f'The knowledge base belongs to {owner_full_prompt}. '
-        f'When facts reference "the user", "me", "my", "I", or "the owner", treat this as the named person "{owner_full_prompt}".'
+        f'When facts refer to the knowledge-base owner through a first-person, self-reference, '
+        f'possessive owner reference, or user/owner placeholder in any language, emit the named person '
+        f'"{owner_full_prompt}" as that edge endpoint instead of the placeholder text.'
         if owner_full_prompt and owner_full_prompt != "the user"
         else ""
     )
