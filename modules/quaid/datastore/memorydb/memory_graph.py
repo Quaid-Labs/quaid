@@ -4511,14 +4511,14 @@ def should_expand_graph(query: str) -> bool:
     # 3. Check for pronouns + known person names
     # "I'm meeting Jane" - is Jane a Person node?
     if has_owner_pronoun(query):
-        # Extract capitalized words (potential names)
-        names = re.findall(r'\b[A-Z][a-z]+\b', query)
-        if names:
-            graph = get_graph()
-            for name in names[:5]:  # Limit lookups
-                node = graph.find_node_by_name(name, type="Person")
-                if node:
+        try:
+            for entity in extract_entities_from_text(query)[:5]:
+                if str(getattr(entity, "type", "") or "").strip().lower() == "person":
                     return True
+        except Exception:
+            if _is_fail_hard_mode():
+                raise
+            logger.warning("Graph expansion entity scan failed during owner/person check", exc_info=True)
 
     return False
 

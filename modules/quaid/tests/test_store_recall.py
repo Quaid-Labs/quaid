@@ -15950,6 +15950,25 @@ class TestRecallFastHookInjectContract:
 
         assert [entity.name for entity in entities] == ["美玲"]
 
+    def test_should_expand_graph_uses_unicode_person_entities_with_owner_name(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _ = _make_graph(tmp_path)
+        meiling = mg.Node.create("Person", "美玲", owner_id="quaid")
+        graph.add_node(meiling, embed=False)
+        fake_cfg = SimpleNamespace(
+            users=SimpleNamespace(
+                identities={"owner-alpha": SimpleNamespace(person_node_name="玲")}
+            )
+        )
+
+        with patch.object(mg, "get_graph", return_value=graph), \
+             patch.object(mg, "_HAS_CONFIG", True), \
+             patch.object(mg, "_get_memory_config", return_value=fake_cfg), \
+             patch.object(mg, "get_edge_keywords", return_value={}), \
+             patch.object(mg, "_has_generic_graph_signal", return_value=False):
+            assert mg.should_expand_graph("玲 と 美玲 の関係") is True
+
     def test_facet_rescue_uses_query_language_terms_not_english_only_triggers(self, tmp_path):
         import datastore.memorydb.memory_graph as mg
 
