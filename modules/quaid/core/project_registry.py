@@ -41,6 +41,21 @@ def _fail_hard_enabled() -> bool:
         return True
 
 
+def _now_iso() -> str:
+    raw = os.environ.get("QUAID_NOW", "").strip()
+    if raw:
+        try:
+            value = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            raise ValueError(f"Invalid QUAID_NOW={raw!r}") from None
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        else:
+            value = value.astimezone(timezone.utc)
+        return value.isoformat()
+    return datetime.now(tz=timezone.utc).isoformat()
+
+
 def _normalize_project_name(name: str) -> str:
     return str(name or "").strip().lower()
 
@@ -580,7 +595,7 @@ def create_project(
             "canonical_path": str(canonical),
             "source_root": source_root,
             "instances": [current_instance] if current_instance else [],
-            "created_at": datetime.now(tz=timezone.utc).isoformat(),
+            "created_at": _now_iso(),
             "description": description,
         }
 
@@ -702,7 +717,7 @@ def link_project(name: str, *, instance_id: Optional[str] = None) -> Dict[str, A
         instances = registry["projects"][name].setdefault("instances", [])
         if instance not in instances:
             instances.append(instance)
-            registry["projects"][name]["updated_at"] = datetime.now(tz=timezone.utc).isoformat()
+            registry["projects"][name]["updated_at"] = _now_iso()
             _save_registry(registry)
             logger.info("Linked instance %s to project %s", instance, name)
         return registry["projects"][name]
@@ -788,7 +803,7 @@ def unlink_project(name: str) -> Dict[str, Any]:
         if instance in instances:
             instances.remove(instance)
             registry["projects"][name]["instances"] = instances
-            registry["projects"][name]["updated_at"] = datetime.now(tz=timezone.utc).isoformat()
+            registry["projects"][name]["updated_at"] = _now_iso()
             _save_registry(registry)
             logger.info("Unlinked instance %s from project %s", instance, name)
         entry = registry["projects"][name]
@@ -874,7 +889,7 @@ def delete_project(name: str) -> None:
         # returning a project once deletion has been accepted, even while a live
         # supervisor/monitor is still draining worker state.
         del registry["projects"][name]
-        registry.setdefault("deleted_projects", {})[name] = datetime.now(tz=timezone.utc).isoformat()
+        registry.setdefault("deleted_projects", {})[name] = _now_iso()
         _save_registry(registry)
 
     # Clean up shadow git tracking after the project is already hidden.

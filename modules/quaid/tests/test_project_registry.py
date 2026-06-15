@@ -151,13 +151,15 @@ class TestRegistryIO:
 
 
 class TestCreateProject:
-    def test_creates_project(self, mock_adapter):
+    def test_creates_project(self, mock_adapter, monkeypatch):
         adapter, tmp_path = mock_adapter
+        monkeypatch.setenv("QUAID_NOW", "2026-03-11T05:00:00Z")
         with patch("core.project_registry._sync_docs_registry_project") as sync_docs:
             entry = create_project("my-app", description="Test app")
 
         assert entry["description"] == "Test app"
         assert entry["source_root"] is None
+        assert entry["created_at"] == "2026-03-11T05:00:00+00:00"
         # instances contains instance_id() (from QUAID_INSTANCE env), not adapter_id()
         assert len(entry["instances"]) >= 1
 
@@ -172,8 +174,14 @@ class TestCreateProject:
         assert str(canonical) in project_md
 
         # In registry
-        assert get_project("my-app") is not None
+        assert get_project("my-app")["created_at"] == "2026-03-11T05:00:00+00:00"
         sync_docs.assert_called_once()
+
+    def test_create_rejects_malformed_quaid_now(self, mock_adapter, monkeypatch):
+        monkeypatch.setenv("QUAID_NOW", "not-a-date")
+
+        with pytest.raises(ValueError, match="Invalid QUAID_NOW"):
+            create_project("my-app")
 
     def test_normalizes_project_name_to_lowercase(self, mock_adapter):
         _, tmp_path = mock_adapter
@@ -239,14 +247,17 @@ class TestUpdateProject:
 
 
 class TestDeleteProject:
-    def test_deletes_project(self, mock_adapter):
+    def test_deletes_project(self, mock_adapter, monkeypatch):
         _, tmp_path = mock_adapter
         create_project("my-app")
         assert get_project("my-app") is not None
 
+        monkeypatch.setenv("QUAID_NOW", "2026-03-11T05:03:00Z")
         delete_project("my-app")
         assert get_project("my-app") is None
         assert not (tmp_path / "projects" / "my-app").exists()
+        data = _load_registry()
+        assert data["deleted_projects"]["my-app"] == "2026-03-11T05:03:00+00:00"
 
     def test_rejects_unknown(self, mock_adapter):
         with pytest.raises(KeyError):
@@ -456,16 +467,18 @@ class TestCreateProjectUsesInstanceId:
 
 
 class TestLinkProject:
-    def test_link_adds_current_instance(self, mock_adapter):
+    def test_link_adds_current_instance(self, mock_adapter, monkeypatch):
         """link_project() adds the current instance ID to the instances list."""
         _, tmp_path = mock_adapter
         with patch("lib.instance.instance_id", return_value="creator-instance"):
             create_project("my-app")
 
+        monkeypatch.setenv("QUAID_NOW", "2026-03-11T05:01:00Z")
         with patch("lib.instance.instance_id", return_value="second-instance"):
             entry = link_project("my-app")
 
         assert "second-instance" in entry["instances"]
+        assert entry["updated_at"] == "2026-03-11T05:01:00+00:00"
 
     def test_link_is_idempotent(self, mock_adapter):
         """Calling link_project() twice for the same instance does not duplicate it."""
@@ -507,7 +520,7 @@ class TestLinkProject:
 
 
 class TestUnlinkProject:
-    def test_unlink_removes_current_instance(self, mock_adapter):
+    def test_unlink_removes_current_instance(self, mock_adapter, monkeypatch):
         """unlink_project() removes the current instance from the instances list."""
         _, tmp_path = mock_adapter
         with patch("lib.instance.instance_id", return_value="creator-instance"):
@@ -516,10 +529,12 @@ class TestUnlinkProject:
         with patch("lib.instance.instance_id", return_value="second-instance"):
             link_project("my-app")
 
+        monkeypatch.setenv("QUAID_NOW", "2026-03-11T05:02:00Z")
         with patch("lib.instance.instance_id", return_value="second-instance"):
             entry = unlink_project("my-app")
 
         assert "second-instance" not in entry["instances"]
+        assert entry["updated_at"] == "2026-03-11T05:02:00+00:00"
         # creator should still be present
         assert "creator-instance" in entry["instances"]
 
