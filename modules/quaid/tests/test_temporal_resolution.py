@@ -165,6 +165,18 @@ class TestNoChange:
 class TestTenseAdjustment:
     """Past tense adjustment for facts with past created_at."""
 
+    def test_runtime_clock_controls_past_tense(self, monkeypatch):
+        monkeypatch.setenv("QUAID_NOW", "2026-01-01T00:00:00")
+
+        result = _resolve_relative_date(
+            "Ari is meeting Dana tomorrow for tea",
+            "2026-02-05T10:00:00"
+        )
+
+        assert "on 2026-02-06" in result
+        assert "is meeting" in result
+        assert "met" not in result
+
     def test_is_meeting_becomes_met(self):
         result = _resolve_relative_date(
             "Quaid is meeting Hauser tomorrow for tea",

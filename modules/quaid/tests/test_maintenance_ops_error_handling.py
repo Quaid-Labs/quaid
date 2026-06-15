@@ -788,6 +788,135 @@ def test_update_check_cache_uses_runtime_clock_for_freshness_and_writes(monkeypa
     )
 
 
+def test_review_fix_decision_uses_runtime_clock_for_updated_at(monkeypatch):
+    monkeypatch.setenv("QUAID_NOW", "2026-07-08T09:10:11")
+
+    class _Conn:
+        def __init__(self):
+            self.sql = []
+            self.params = []
+
+        def execute(self, sql, params=()):
+            self.sql.append(str(sql))
+            self.params.append(tuple(params or ()))
+            text = str(sql).strip().upper()
+            if text.startswith("SELECT NAME, STATUS"):
+                return _DummyResult(rows=[{
+                    "name": "old fact",
+                    "status": "pending",
+                    "source": "unit",
+                    "speaker": "user",
+                    "attributes": "{}",
+                }])
+            if text.startswith("DELETE FROM EDGES"):
+                return _DummyResult(rowcount=0)
+            if text.startswith("UPDATE NODES"):
+                return _DummyResult(rowcount=1)
+            raise AssertionError(f"unexpected SQL: {sql}")
+
+    class _Graph:
+        def __init__(self):
+            self.calls = []
+
+        @contextmanager
+        def _get_conn(self):
+            conn = _Conn()
+            self.calls.append(conn)
+            yield conn
+
+    graph = _Graph()
+    decisions = [{"id": "n1", "action": "FIX", "new_text": "updated fact", "edges": []}]
+
+    with patch("lib.embeddings.get_embedding", return_value=[0.1]), \
+         patch("lib.embeddings.pack_embedding", return_value=None):
+        out = maintenance_ops.apply_review_decisions_from_list(graph, decisions, dry_run=False)
+
+    assert out["fixed"] == 1
+    all_sql = "\n".join(sql for call in graph.calls for sql in call.sql)
+    assert "datetime('now')" not in all_sql
+    update_params = [
+        params for call in graph.calls for sql, params in zip(call.sql, call.params)
+        if str(sql).strip().upper().startswith("UPDATE NODES")
+    ][0]
+    assert update_params[3] == "2026-07-08T09:10:11"
+
+
+def test_resolve_temporal_references_uses_runtime_clock_for_updated_at(monkeypatch):
+    monkeypatch.setenv("QUAID_NOW", "2026-07-08T09:10:11")
+    metrics = maintenance_ops.JanitorMetrics()
+
+    class _Conn:
+        def __init__(self):
+            self.sql = []
+            self.params = []
+
+        def execute(self, sql, params=()):
+            self.sql.append(str(sql))
+            self.params.append(tuple(params or ()))
+            text = str(sql).strip().upper()
+            if text.startswith("SELECT ID, NAME, CREATED_AT FROM NODES"):
+                return _DummyResult(rows=[{
+                    "id": "n1",
+                    "name": "Maya is meeting Leo tomorrow",
+                    "created_at": "2026-07-08T09:10:11",
+                }])
+            if text.startswith("UPDATE NODES"):
+                return _DummyResult(rowcount=1)
+            raise AssertionError(f"unexpected SQL: {sql}")
+
+    class _Graph:
+        def __init__(self):
+            self.calls = []
+
+        @contextmanager
+        def _get_conn(self):
+            conn = _Conn()
+            self.calls.append(conn)
+            yield conn
+
+    graph = _Graph()
+
+    with patch("lib.embeddings.get_embedding", return_value=[0.1]), \
+         patch("lib.embeddings.pack_embedding", return_value=None):
+        out = maintenance_ops.resolve_temporal_references(graph, dry_run=False, metrics=metrics)
+
+    assert out == {"found": 1, "fixed": 1, "skipped": 0}
+    all_sql = "\n".join(sql for call in graph.calls for sql in call.sql)
+    assert "datetime('now')" not in all_sql
+    update_params = [
+        params for call in graph.calls for sql, params in zip(call.sql, call.params)
+        if str(sql).strip().upper().startswith("UPDATE NODES")
+    ][0]
+    assert update_params[0] == "Maya is meeting Leo on 2026-07-09"
+    assert update_params[3] == "2026-07-08T09:10:11"
+
+
+def test_completed_review_work_today_uses_runtime_clock_for_midnight(monkeypatch):
+    monkeypatch.setenv("QUAID_NOW", "2030-01-02T12:34:56")
+
+    class _Conn:
+        def __init__(self):
+            self.sql = []
+            self.params = []
+
+        def execute(self, sql, params=()):
+            self.sql.append(str(sql))
+            self.params.append(tuple(params or ()))
+            return _DummyResult(rows=[(7,)])
+
+    conn = _Conn()
+
+    @contextmanager
+    def _fake_get_connection(_db_path):
+        yield conn
+
+    with patch("lib.database.get_connection", side_effect=_fake_get_connection):
+        out = maintenance_ops.get_completed_review_work_today()
+
+    assert out["reviewed"] == 7
+    assert conn.params == [("2030-01-02T00:00:00",)]
+
+
 def test_quaid_now_malformed_clock_honors_failhard(monkeypatch):
     monkeypatch.setenv("QUAID_NOW", "not-a-date")
 
