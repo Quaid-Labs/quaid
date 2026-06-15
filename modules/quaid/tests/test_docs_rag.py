@@ -2309,7 +2309,7 @@ class TestDocsSearchFiltering:
     @patch("datastore.docsdb.rag._lib_get_embedding", return_value=[0.1, 0.2, 0.3])
     @patch("datastore.docsdb.rag._lib_unpack_embedding", return_value=[0.1, 0.2, 0.3])
     @patch("datastore.docsdb.rag._lib_cosine_similarity", return_value=0.95)
-    def test_search_docs_bundle_blocks_explicit_unlinked_project_and_returns_scope_hint(self, _sim, _unpack, _embed, tmp_path):
+    def test_search_docs_bundle_blocks_explicit_unlinked_project_and_returns_scope_hint(self, _sim, _unpack, _embed, tmp_path, caplog):
         rag = _make_rag(tmp_path)
         rag._shared_scope_enabled = True
 
@@ -2335,6 +2335,7 @@ class TestDocsSearchFiltering:
                 return {"home_dir": "/tmp/workspace/projects/cross-live-test", "source_roots": []}
             return {"home_dir": "/tmp/workspace/projects/quaid", "source_roots": []}
 
+        caplog.set_level("WARNING")
         with patch("datastore.docsdb.rag._linked_projects_for_current_instance", return_value=(["quaid"], True)), \
              patch(
                  "lib.project_registry.list_all",
@@ -2351,6 +2352,8 @@ class TestDocsSearchFiltering:
             bundle = rag.search_docs_bundle("north pier beacon", limit=5, project="cross-live-test")
 
         assert bundle["chunks"] == []
+        assert "docs recall suppressed by current instance scope" in caplog.text
+        assert "cross-live-test" in caplog.text
         hint = ((bundle.get("telemetry") or {}).get("scope_hint") or {})
         assert hint.get("type") == "unlinked_project_candidates"
         assert hint.get("requested_project") == "cross-live-test"

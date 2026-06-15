@@ -1899,6 +1899,11 @@ class DocsRAG:
         results = []
         with _lib_get_connection(self.db_path) as conn:
             if scope_forced_empty:
+                logger.warning(
+                    "docs recall suppressed by current instance scope: requested_project=%r linked_projects=%s",
+                    project,
+                    sorted(linked_projects),
+                )
                 self._set_scope_hint_for_unlinked_candidates(
                     conn=conn,
                     query=query,
