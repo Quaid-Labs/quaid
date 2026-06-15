@@ -740,6 +740,52 @@ def test_review_decayed_memories_uses_runtime_clock_for_inline_queue_updates(
     apply_call = graph.calls[-1]
     assert apply_call.params[-1] == expected_queue_params
 
+
+def test_update_check_cache_uses_runtime_clock_for_freshness_and_writes(monkeypatch):
+    monkeypatch.setenv("QUAID_NOW", "2030-01-02T00:00:00")
+
+    class _Conn:
+        def __init__(self):
+            self.sql = []
+            self.params = []
+
+        def execute(self, sql, params=()):
+            self.sql.append(str(sql))
+            self.params.append(tuple(params or ()))
+            text = str(sql).strip().upper()
+            if text.startswith("SELECT VALUE, UPDATED_AT FROM JANITOR_METADATA"):
+                return _DummyResult(rows=[{
+                    "value": json.dumps({"version": "1.2.3"}),
+                    "updated_at": "2030-01-01T00:00:00",
+                }])
+            if text.startswith("INSERT OR REPLACE INTO JANITOR_METADATA"):
+                return _DummyResult(rowcount=1)
+            raise AssertionError(f"unexpected SQL: {sql}")
+
+    class _Graph:
+        def __init__(self):
+            self.calls = []
+
+        @contextmanager
+        def _get_conn(self):
+            conn = _Conn()
+            self.calls.append(conn)
+            yield conn
+
+    graph = _Graph()
+
+    assert maintenance_ops.get_update_check_cache(graph, max_age_hours=12) is None
+    maintenance_ops.write_update_check_cache(graph, {"version": "2.0.0"})
+
+    all_sql = "\n".join(sql for call in graph.calls for sql in call.sql)
+    assert "datetime('now')" not in all_sql
+    assert graph.calls[-1].params[-1] == (
+        "update_check",
+        json.dumps({"version": "2.0.0"}),
+        "2030-01-02T00:00:00",
+    )
+
+
 def test_backfill_embeddings_vec_upsert_failure_warns_and_continues(monkeypatch):
     monkeypatch.delenv("QUAID_JANITOR_EMBED_TIMEOUT_SECONDS", raising=False)
     monkeypatch.delenv("OLLAMA_EMBED_TIMEOUT_S", raising=False)
