@@ -7903,6 +7903,8 @@ class TestLoadPrompt:
         assert "memory extraction system" in prompt.lower()
         assert "facts" in prompt
         assert "edges" in prompt
+        assert "partner_of" in prompt
+        assert "do not use family_of for spouse or partner relationships" in prompt
         assert "soul_snippets" in prompt
         assert "journal_entries" in prompt
 

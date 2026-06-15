@@ -2618,11 +2618,13 @@ DIRECTION RULES — follow these strictly:
 - For personal physical training or exercise at an attended venue, use trains_at with PERSON as subject and venue as object; do not use trains_at for professional employment.
 - Do not rewrite training/exercise attendance as works_at, and do not use member_of unless the fact explicitly states membership.
 - For symmetric relations (spouse_of, sibling_of, friend_of, etc.): put entity names in alphabetical order
+- For domestic or romantic partner relationships: use partner_of with alphabetical order; do not use family_of for spouse or partner relationships
 - NEVER use child_of, son_of, daughter_of, mother_of, father_of — use parent_of instead
 - NEVER use owned_by, managed_by — use owns, manages instead
 - RELATIONSHIP ROLE FIDELITY (MANDATORY):
   - Do not rewrite one relationship role into a different role family just to fit a common relation.
   - For indirect kinship terms (for example niece, nephew, aunt, uncle, cousin, in-law and equivalents in other languages), do NOT convert them to parent_of.
+  - Use family_of only for explicit kinship or relative relationships when no more specific relation such as parent_of, sibling_of, spouse_of, or partner_of applies.
   - For organizational structure terms (for example manager, report, lead), preserve direction exactly as stated.
   - Do not infer hidden intermediate hops unless the intermediate relationship is explicitly stated in the fact.
 - Extract only the MOST SPECIFIC relationship. "Carol is Alice's mother" = parent_of, NOT family_of
@@ -3555,10 +3557,12 @@ EDGE DIRECTION RULES:
 - parent_of: PARENT is subject. "X is {owner}'s mom" → X --parent_of--> {owner}
 - sibling_of: alphabetical order (symmetric)
 - spouse_of: alphabetical order (symmetric)
+- partner_of: alphabetical order (symmetric) for domestic or romantic partner relationships; do not use family_of for spouse or partner relationships
 - has_pet: OWNER is subject. "{owner} has a dog named Y" → {owner} --has_pet--> Y
 - RELATIONSHIP ROLE FIDELITY (MANDATORY):
   - Do not rewrite one relationship role into a different role family just to fit a common relation.
   - For indirect kinship terms (for example niece, nephew, aunt, uncle, cousin, in-law), do NOT emit parent_of.
+  - Use family_of only for explicit kinship or relative relationships when no more specific relation such as parent_of, sibling_of, spouse_of, or partner_of applies.
   - For organizational structure terms (for example manager, report, lead), preserve direction exactly as stated.
   - Do not infer hidden intermediate hops unless the intermediate relationship is explicitly stated in the fact.
 

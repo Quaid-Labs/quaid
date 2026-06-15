@@ -1386,6 +1386,62 @@ class TestCreateEdgeAtomicity:
         assert rows[0]["id"] == first["edge_id"]
         assert rows[0]["source_fact_id"] == first_fact.id
 
+    def test_create_edge_corrects_partner_source_family_edge(self, tmp_path):
+        from datastore.memorydb.memory_graph import create_edge
+
+        graph, _ = _make_graph(tmp_path, "create_edge_partner_source.db")
+        source_fact = _make_node(graph, "Jordan is Alex Rivera's partner.")
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+            result = create_edge(
+                subject_name="Alex Rivera",
+                relation="family_of",
+                object_name="Jordan",
+                owner_id="quaid",
+                source_fact_id=source_fact.id,
+            )
+
+        assert result["status"] == "created"
+        with graph._get_conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT relation FROM edges
+                WHERE source_fact_id = ?
+                """,
+                (source_fact.id,),
+            ).fetchall()
+
+        assert [row["relation"] for row in rows] == ["partner_of"]
+
+    def test_create_edge_corrects_business_partner_source_family_edge(self, tmp_path):
+        from datastore.memorydb.memory_graph import create_edge
+
+        graph, _ = _make_graph(tmp_path, "create_edge_business_partner_source.db")
+        source_fact = _make_node(graph, "Jordan is Alex Rivera's business partner.")
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+            result = create_edge(
+                subject_name="Alex Rivera",
+                relation="family_of",
+                object_name="Jordan",
+                owner_id="quaid",
+                source_fact_id=source_fact.id,
+            )
+
+        assert result["status"] == "created"
+        with graph._get_conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT relation FROM edges
+                WHERE source_fact_id = ?
+                """,
+                (source_fact.id,),
+            ).fetchall()
+
+        assert [row["relation"] for row in rows] == ["colleague_of"]
+
     def test_create_edge_rejects_sentence_like_entity_labels(self, tmp_path):
         from datastore.memorydb.memory_graph import create_edge
 

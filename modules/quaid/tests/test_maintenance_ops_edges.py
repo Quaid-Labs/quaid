@@ -141,6 +141,8 @@ def test_batch_extract_edges_prompt_includes_domain_neutral_role_guardrails():
     assert "organizational structure terms" in prompt
     assert "preserve direction exactly as stated" in prompt
     assert "Do not infer hidden intermediate hops unless the intermediate relationship is explicitly stated" in prompt
+    assert "use partner_of with alphabetical order" in prompt
+    assert "Use family_of only for explicit kinship or relative relationships" in prompt
     assert "Use works_at only for professional employment or ongoing job affiliation stated in the fact" in prompt
     assert "For personal physical training or exercise at an attended venue, use trains_at" in prompt
     assert "gym, studio, dojo, pool" not in prompt

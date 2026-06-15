@@ -7820,6 +7820,38 @@ def _infer_edge_entity_type(name: str, relation: str, is_subject: bool) -> str:
     return "Fact"
 
 
+_FAMILY_EDGE_SOURCE_SPOUSE_RE = re.compile(
+    r"\b(?:spouse|husband|wife|married)\b",
+    re.IGNORECASE,
+)
+_FAMILY_EDGE_SOURCE_PARTNER_RE = re.compile(
+    r"\b(?:domestic\s+partner|romantic\s+partner|partner|boyfriend|girlfriend|fianc[eé]e?|dating)\b",
+    re.IGNORECASE,
+)
+_FAMILY_EDGE_SOURCE_BUSINESS_PARTNER_RE = re.compile(
+    r"\b(?:business|work|professional|project|company|startup|firm|venture|legal|law|trading)\s+partners?\b"
+    r"|\bpartners?\s+(?:at|for|in|on)\s+(?:work|business|a\s+business|a\s+company|the\s+company|a\s+project|the\s+project|a\s+firm|the\s+firm|a\s+startup|the\s+startup)\b",
+    re.IGNORECASE,
+)
+
+
+def _canonicalize_family_edge_relation_from_source_text(relation: str, source_text: str) -> str:
+    """Keep spouse/partner evidence out of generic kinship edges."""
+    clean_relation = str(relation or "").strip().lower().replace(" ", "_").replace("-", "_")
+    if clean_relation != "family_of":
+        return clean_relation
+    text = str(source_text or "").strip()
+    if not text:
+        return clean_relation
+    if _FAMILY_EDGE_SOURCE_BUSINESS_PARTNER_RE.search(text):
+        return "colleague_of"
+    if _FAMILY_EDGE_SOURCE_SPOUSE_RE.search(text):
+        return "spouse_of"
+    if _FAMILY_EDGE_SOURCE_PARTNER_RE.search(text):
+        return "partner_of"
+    return clean_relation
+
+
 def _store_meta_result_count(meta: Optional[Dict[str, Any]]) -> int:
     if not isinstance(meta, dict):
         return 0
@@ -24229,6 +24261,18 @@ def create_edge(
 
     conn_ctx = nullcontext(_conn) if _conn is not None else graph._get_conn()
     with conn_ctx as conn:
+        if relation == "family_of" and source_fact_id:
+            source_row = conn.execute(
+                "SELECT name FROM nodes WHERE id = ? LIMIT 1",
+                (source_fact_id,),
+            ).fetchone()
+            if source_row:
+                source_text = source_row["name"] if "name" in source_row.keys() else source_row[0]
+                relation = _canonicalize_family_edge_relation_from_source_text(
+                    relation,
+                    str(source_text or ""),
+                )
+
         # Find or create subject entity
         p0 = time.perf_counter() if telemetry_enabled else 0.0
         subject = _find_entity(conn, subject_name)

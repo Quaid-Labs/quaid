@@ -155,6 +155,7 @@ EDGE DIRECTION RULES (critical):
 - parent_of: PARENT is subject. "Carol is User's mom" → Carol --parent_of--> User
 - sibling_of: alphabetical order (symmetric). "Beth is User's sister" → Beth --sibling_of--> User
 - spouse_of: alphabetical order (symmetric). "Dave is Carol's husband" → Carol --spouse_of--> Dave
+- partner_of: alphabetical order (symmetric) for domestic or romantic partner relationships; do not use family_of for spouse or partner relationships
 - has_pet: OWNER is subject. "User has a dog named Rex" → User --has_pet--> Rex
 - friend_of: alphabetical order (symmetric)
 - works_at: PERSON is subject, but only for professional employment or ongoing job affiliation
@@ -164,7 +165,7 @@ EDGE DIRECTION RULES (critical):
 - ROLE/DIRECTION FIDELITY (MANDATORY):
   - Do not rewrite one role into a different role family just to fit a common relation.
   - For indirect kinship terms (for example niece, nephew, aunt, uncle, cousin, in-law), do NOT convert them to parent_of.
-  - Use family_of for indirect kinship when no direct parent/child wording is explicitly stated.
+  - Use family_of only for explicit kinship or relative relationships when no more specific relation such as parent_of, sibling_of, spouse_of, or partner_of applies.
   - For organizational structure terms (for example manager, report, lead), preserve direction exactly as stated.
   - Do not infer hidden intermediate hops from a single phrase unless the hop is explicitly stated.
   - Do not use works_at for places a person attends for training, exercise classes, worship, errands, or similar attendance-based activity.
@@ -172,7 +173,7 @@ EDGE DIRECTION RULES (critical):
 
 EDGE FORMAT:
 - subject: The source entity name as a MINIMAL entity label (e.g., "Carol Smith" or "Carol"), not a whole clause or sentence
-- relation: One of: parent_of, sibling_of, spouse_of, has_pet, friend_of, works_at, trains_at, lives_at, owns, colleague_of, neighbor_of, knows, family_of, caused_by, led_to
+- relation: One of: parent_of, sibling_of, spouse_of, partner_of, has_pet, friend_of, works_at, trains_at, lives_at, owns, colleague_of, neighbor_of, knows, family_of, caused_by, led_to
 - object: The target entity name as a MINIMAL entity label
 
 ENTITY NAME RULES (critical):
