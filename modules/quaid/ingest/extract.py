@@ -1216,6 +1216,7 @@ def _clean_structural_anchor_turn_text(text: str) -> str:
 
 
 _QUESTION_TERMINATORS = ("?", "？", "؟")
+_COMPACT_SENTENCE_TERMINATORS = "。！？؟"
 
 
 def _has_question_terminator(text: str) -> bool:
@@ -1232,7 +1233,7 @@ def _split_fact_sentences(text: str) -> List[str]:
         return []
     return [
         part.strip(" \t\r\n\"'`")
-        for part in re.split(r"(?<=[.!?？؟])\s+", normalized)
+        for part in re.split(rf"(?<=[.!?])\s+|(?<=[{_COMPACT_SENTENCE_TERMINATORS}])\s*(?=\S)", normalized)
         if part.strip(" \t\r\n\"'`")
     ]
 

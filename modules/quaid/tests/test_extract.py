@@ -3276,6 +3276,35 @@ class TestExtractFromTranscript:
             for fact in result["raw_facts"]
         )
 
+    @patch("ingest.extract.call_deep_reasoning")
+    def test_structural_anchor_split_handles_compact_unicode_questions(self, mock_llm):
+        from ingest.extract import extract_from_transcript
+
+        mock_llm.return_value = (json.dumps({
+            "chunk_assessment": "nothing_usable",
+            "facts": [],
+            "soul_snippets": {},
+            "journal_entries": {},
+            "project_logs": {},
+        }), 0.1)
+
+        result = extract_from_transcript(
+            transcript=(
+                "User: marker alpha-beta-123 は必要？"
+                "それなら marker alpha-beta-123 は確定。\n\n"
+                "Assistant: noted."
+            ),
+            owner_id="Maya Chen",
+            dry_run=True,
+        )
+
+        structural_texts = [
+            fact["text"]
+            for fact in result["raw_facts"]
+            if fact.get("structural_anchor_kind") == "explicit_user_structural_anchor"
+        ]
+        assert structural_texts == ["それなら marker alpha-beta-123 は確定。"]
+
     def test_trailing_assistant_questions_strip_unicode_question_terminators(self):
         from ingest.extract import _strip_trailing_question_lines
 
