@@ -1508,17 +1508,15 @@ _ASSISTANT_IMPLEMENTATION_BULLET_RE = re.compile(
     r"//\s*BUG:\s*No authorization check\b|"
     r"//\s*Should verify args\.owner_id\b|"
     r"An auth middleware for protected routes\b|"
-    r"User profiles \(so each person can set their preferences\)(?:\s|$)|"
     r"Restrict access to users with a specific role\b|"
     r"Must be used after requireAuth\b|"
     r"[A-Za-z_][A-Za-z0-9_]*\(\)`?|"
     r"[a-z][A-Za-z0-9_]*(?: uses| filters)\b|"
     r"(?:Fetch|Parse|Guess|Generate|Filter|Filtering uses|Respects|Attaches)\b|"
     r"Attempts to extract\b|"
-    r"The app stores\b|"
-    r"as the name with amount\b|"
-    r"count how many\b|"
-    r"\d+(?:/\d+)?\s+(?:cups?|tsp|tbsp|teaspoons?|tablespoons?)\b.*\b(?:Falls back|full text|parse|ingredient|string)\b"
+    r".*\b(?:GROUP\s+BY|JOIN|SUM|COUNT|ORDER\s+BY|WHERE)\b.*|"
+    r".*\b(?:parse|parser)\b.*\b(?:strings?|structured\s+(?:objects?|rows?|records?))\b|"
+    r".*\b(?:falls?\s+back|fallback)\b.*\b(?:full|raw|original)\s+text\b"
     r")",
     re.IGNORECASE,
 )
@@ -1532,7 +1530,6 @@ _ASSISTANT_SCHEMA_FEATURE_BULLET_RE = re.compile(
     r"New\s+`?[^`\n]+`?\s+table\s+with\b|"
     r"[A-Z][A-Za-z0-9_]*(?:\s+Server)?\s+mounted\s+at\s+`?/[A-Za-z0-9_./:-]+`?\s+via\b|"
     r"Health check at\b|"
-    r"Nutrition stub\b|"
     r"[A-Za-z0-9_-]+\s+constant is now exported\b|"
     r"[A-Za-z0-9_-]+`?\s+column added\b|"
     r"docker-compose\.yml:|Dockerfile:|[A-Za-z0-9_ -]+ endpoints:"

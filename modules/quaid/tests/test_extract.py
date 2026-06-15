@@ -2137,12 +2137,12 @@ class TestExtractFromTranscript:
         transcript = (
             "User: ok show me the implementation notes.\n\n"
             "Assistant: The main pieces are:\n"
-            "  - A `meal_plans` table for weekly containers (week start date, name)\n"
+            "  - A `audit_events` table for event records (created date, severity)\n"
             "  - Express middleware that logs request completion\n"
             "  - setDb() for test injection — same pattern as the error handler\n"
-            "  - Parse a comma-separated ingredient string into structured objects\n"
-            "  - 2 cups flour\" or \"1/2 tsp salt\". Falls back to the full text\n"
-            "  - Generate a grocery list for a meal plan using GROUP BY aggregation\n\n"
+            "  - Parse a comma-separated event string into structured objects\n"
+            "  - \"A-17 urgent\" or \"B-42 deferred\". Falls back to the full text\n"
+            "  - Generate an audit rollup using GROUP BY aggregation\n\n"
             "User: ok.\n"
         )
 
@@ -2157,12 +2157,12 @@ class TestExtractFromTranscript:
             for fact in result["raw_facts"]
             if str(fact.get("speaker", "") or "").lower() == "agent"
         ]
-        assert not any(text.startswith("A `meal_plans` table") for text in agent_texts)
+        assert not any(text.startswith("A `audit_events` table") for text in agent_texts)
         assert not any(text.startswith("Express middleware") for text in agent_texts)
         assert not any(text.startswith("setDb() for test injection") for text in agent_texts)
-        assert not any(text.startswith("Parse a comma-separated ingredient string") for text in agent_texts)
-        assert not any(text.startswith("2 cups flour") for text in agent_texts)
-        assert not any(text.startswith("Generate a grocery list") for text in agent_texts)
+        assert not any(text.startswith("Parse a comma-separated event string") for text in agent_texts)
+        assert not any(text.startswith('"A-17 urgent"') for text in agent_texts)
+        assert not any(text.startswith("Generate an audit rollup") for text in agent_texts)
 
     def test_numeric_assistant_facts_are_not_implementation_bullets(self):
         from ingest.extract import _is_implementation_style_assistant_bullet
@@ -2170,7 +2170,7 @@ class TestExtractFromTranscript:
         assert not _is_implementation_style_assistant_bullet("42 items were shipped to the staging room")
         assert not _is_implementation_style_assistant_bullet("3 meetings were scheduled for the launch review")
         assert _is_implementation_style_assistant_bullet(
-            '2 cups flour" or "1/2 tsp salt". Falls back to the full text'
+            '"A-17 urgent" or "B-42 deferred". Falls back to the full text'
         )
 
     @patch("ingest.extract.call_deep_reasoning")
