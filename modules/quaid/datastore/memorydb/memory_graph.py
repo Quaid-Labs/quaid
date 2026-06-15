@@ -13338,7 +13338,7 @@ def _is_low_information_message(query: str) -> bool:
         "yep", "yeah", "yup", "alright", "all right", "lol", "lmao", "haha", "hmm",
         "bye", "cya",
     }
-    tokens = re.findall(r"[a-z0-9']+", clean)
+    tokens = re.findall(r"[^\W_][\w']*", clean, flags=re.UNICODE)
     normalized = " ".join(tok.replace("'", "") for tok in tokens)
 
     if clean in exact or normalized in exact:

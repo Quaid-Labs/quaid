@@ -8590,6 +8590,18 @@ class TestRecallTelemetry:
         assert queries == ["美玲"]
         assert meta["bailout_reason"] != "low_information_message"
 
+    def test_low_information_message_preserves_unicode_anchor_with_english_ack(self):
+        from datastore.memorydb.memory_graph import _is_low_information_message, _plan_fanout_queries
+
+        queries, meta = _plan_fanout_queries("ok 美玲", return_meta=True)
+
+        assert _is_low_information_message("ok") is True
+        assert _is_low_information_message("ok ok") is True
+        assert _is_low_information_message("ok 美玲") is False
+        assert _is_low_information_message("thanks 美玲") is False
+        assert queries == ["ok 美玲"]
+        assert meta["bailout_reason"] != "low_information_message"
+
     def test_low_information_message_treats_unicode_punctuation_as_empty_signal(self):
         from datastore.memorydb.memory_graph import _is_low_information_message
 
