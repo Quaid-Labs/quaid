@@ -352,6 +352,10 @@ def _docs_lexical_tokens(value: str) -> List[str]:
     return re.findall(r"[\w./-]+", normalized, flags=re.UNICODE)
 
 
+def _docs_project_scope_key(value: str) -> str:
+    return unicodedata.normalize("NFKC", str(value or "")).casefold().strip()
+
+
 def _docs_has_compact_unicode_char(term: str) -> bool:
     for ch in str(term or ""):
         name = unicodedata.name(ch, "")
@@ -1951,7 +1955,9 @@ class DocsRAG:
 
         scope_forced_empty = False
         if project:
-            if scope_resolved and project.lower() not in {p.lower() for p in linked_projects}:
+            if scope_resolved and _docs_project_scope_key(project) not in {
+                _docs_project_scope_key(p) for p in linked_projects
+            }:
                 scope_forced_empty = True
             project_scope_token = project
             project_paths = self._get_project_paths(project)
@@ -2305,7 +2311,11 @@ class DocsRAG:
         linked_projects: List[str],
         limit: int = 3,
     ) -> List[Dict[str, Any]]:
-        linked_set = {str(name or "").strip() for name in list(linked_projects or []) if str(name or "").strip()}
+        linked_set = {
+            _docs_project_scope_key(name)
+            for name in list(linked_projects or [])
+            if _docs_project_scope_key(name)
+        }
         registry_entries: Dict[str, Dict[str, Any]] = {}
         try:
             from lib.project_registry import list_all as _list_projects
@@ -2321,11 +2331,13 @@ class DocsRAG:
             # unlinked candidates for a scoped miss.
             registry_entries = {}
 
-        candidate_projects = [name for name in registry_entries.keys() if name not in linked_set]
-        query_lower = str(query or "").lower()
+        candidate_projects = [
+            name for name in registry_entries.keys() if _docs_project_scope_key(name) not in linked_set
+        ]
+        query_lower = _docs_project_scope_key(query)
         name_matches: set[str] = set()
         for name in candidate_projects:
-            lowered = name.lower()
+            lowered = _docs_project_scope_key(name)
             if lowered and lowered in query_lower:
                 name_matches.add(name)
                 continue

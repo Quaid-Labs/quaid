@@ -2606,6 +2606,52 @@ class TestDocsSearchFiltering:
         assert results[0]["source"].endswith("examples.md")
         assert results[0]["similarity"] == 1.0
 
+    @patch("datastore.docsdb.rag._lib_get_embedding", return_value=[1.0])
+    def test_search_docs_shared_scope_matches_unicode_normalized_project_names(self, _embed, tmp_path):
+        rag = _make_rag(tmp_path)
+        rag._shared_scope_enabled = True
+
+        project_name = "mañana-app"
+        decomposed_project_name = "man\u0303ana-app"
+        db = sqlite3.connect(rag.db_path)
+        try:
+            db.execute(
+                "INSERT INTO doc_chunks (id, source_file, chunk_index, content, section_header, embedding) VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    "unicode-project:0",
+                    f"/tmp/workspace/projects/{project_name}/examples.md",
+                    0,
+                    "canela archive details",
+                    "Examples",
+                    b"1.0",
+                ),
+            )
+            db.commit()
+        finally:
+            db.close()
+
+        def _unpack(blob):
+            return [float(bytes(blob).decode("ascii"))]
+
+        with patch(
+            "datastore.docsdb.rag._linked_projects_for_current_instance",
+            return_value=([decomposed_project_name], True),
+        ), patch("datastore.docsdb.rag._lib_unpack_embedding", side_effect=_unpack), patch(
+            "datastore.docsdb.rag._lib_cosine_similarity",
+            return_value=1.0,
+        ), patch.object(
+            rag,
+            "_get_project_paths",
+            return_value={
+                "home_dir": f"/tmp/workspace/projects/{project_name}",
+                "source_roots": [],
+            },
+        ):
+            results = rag.search_docs("canela archive details", limit=1, project=project_name)
+
+        assert len(results) == 1
+        assert results[0]["source"].endswith("examples.md")
+
     @patch("datastore.docsdb.rag._lib_get_embedding", return_value=[0.1, 0.2, 0.3])
     @patch("datastore.docsdb.rag.is_fail_hard_enabled", return_value=True)
     def test_search_docs_project_filter_raises_when_registry_paths_fail_under_failhard(self, _failhard, _embed, tmp_path):
