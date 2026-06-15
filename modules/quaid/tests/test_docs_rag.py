@@ -22,11 +22,45 @@ from datastore.docsdb.rag import DocsRAG
 def test_docs_lexical_terms_support_unicode_tokens():
     from datastore.docsdb.rag import _docs_normalized_lexical_text, _docs_query_terms
 
-    terms = _docs_query_terms("美玲 云门 examples")
+    terms = _docs_query_terms("美玲 云门 examples app")
     assert "美玲" in terms
     assert "云门" in terms
     assert "examples" in terms
-    assert _docs_normalized_lexical_text("PROJECT.md\n美玲 云门") == "project.md 美玲 云门"
+    assert "app" in terms
+    assert _docs_normalized_lexical_text("PROJECT.md\nＡＰＰ 美玲 云门") == "project.md app 美玲 云门"
+
+
+def test_docs_rank_score_uses_unicode_normalized_terms():
+    from datastore.docsdb.rag import _docs_query_terms, _docs_rank_score
+
+    query_terms = _docs_query_terms("app cache")
+    full_match = _docs_rank_score(
+        query_terms,
+        "app cache",
+        "docs/ＡＰＰ.md",
+        "## Cache",
+        "ＡＰＰ cache settings",
+        0.40,
+    )
+    partial_match = _docs_rank_score(
+        query_terms,
+        "app cache",
+        "docs/cache.md",
+        "## Cache",
+        "cache settings",
+        0.40,
+    )
+
+    assert full_match > partial_match
+
+
+def test_project_log_query_score_supports_short_unicode_terms():
+    from datastore.docsdb.rag import _project_log_line_query_score, _project_log_query_terms
+
+    terms = _project_log_query_terms("云门")
+
+    assert terms == ["云门"]
+    assert _project_log_line_query_score("- [2026-03-05T23:59:59] 云门 rollout finished", terms) == 1
 
 
 @pytest.mark.parametrize("bad_date", ["2023-13-01", "2023-99-99"])

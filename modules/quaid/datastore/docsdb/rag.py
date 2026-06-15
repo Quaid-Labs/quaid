@@ -322,7 +322,6 @@ def _docs_query_terms(query: str) -> List[str]:
         "the", "a", "an", "and", "or", "to", "for", "of", "in", "on", "at",
         "is", "are", "was", "were", "be", "do", "does", "did", "how", "what",
         "which", "who", "when", "where", "why", "current", "currently",
-        "app",
     }
     out: List[str] = []
     for term in raw_terms:
@@ -477,38 +476,41 @@ def _docs_rank_score(query_terms: List[str], query: str, source_file: str, secti
     This keeps semantic search as the base signal, but prefers implementation
     files/sections when the query contains concrete code or test vocabulary.
     """
-    path_lower = str(source_file or "").lower()
+    path_text = _docs_normalized_lexical_text(source_file)
     file_name = Path(source_file or "").name.lower()
+    header_text = _docs_normalized_lexical_text(section_header or "")
     header_lower = str(section_header or "").lower()
-    content_lower = str(content or "").lower()
+    content_text = _docs_normalized_lexical_text(content)
 
     score = float(similarity)
     path_hits = 0
     header_hits = 0
     content_hits = 0
     for term in query_terms:
-        if term in path_lower:
+        if term in path_text:
             path_hits += 1
-        if term in header_lower:
+        if term in header_text:
             header_hits += 1
-        if term in content_lower:
+        if term in content_text:
             content_hits += 1
 
     score += min(path_hits, 3) * 0.10
     score += min(header_hits, 3) * 0.06
     score += min(content_hits, 4) * 0.025
 
-    informative_terms = [term for term in query_terms if len(term) >= 4]
+    informative_terms = [term for term in query_terms if len(term) >= (2 if term and not term.isascii() else 4)]
     if informative_terms:
         matched_terms = sum(
-            1 for term in informative_terms if term in content_lower or term in header_lower or term in path_lower
+            1 for term in informative_terms if term in content_text or term in header_text or term in path_text
         )
         score += min(matched_terms, 4) * 0.035
         if matched_terms >= min(2, len(informative_terms)):
             score += 0.10
-        if all(term in content_lower for term in informative_terms[: min(4, len(informative_terms))]):
+        if all(term in content_text for term in informative_terms[: min(4, len(informative_terms))]):
             score += 0.18
     score += _docs_exact_anchor_boost(query_terms, query, source_file, section_header, content)
+    # Cap positive evidence before penalties so low-quality source penalties survive.
+    score = min(1.0, score)
 
     implementation_terms = {
         "test", "tests", "testing", "auth", "error", "errors", "validation",
@@ -588,22 +590,23 @@ def _project_log_asof_rank_delta(content: str, date_to: Optional[str]) -> float:
 
 
 def _project_log_line_query_score(line: str, query_terms: List[str]) -> int:
-    lower_line = str(line or "").lower()
+    normalized_line = _docs_normalized_lexical_text(line)
     score = 0
     for term in query_terms or []:
-        normalized = str(term or "").lower().strip()
+        normalized = unicodedata.normalize("NFKC", str(term or "")).casefold().strip()
         if not normalized or re.fullmatch(r"20\d{2}-\d{2}-\d{2}", normalized):
             continue
-        score += min(lower_line.count(normalized), 3)
+        score += min(normalized_line.count(normalized), 3)
     return score
 
 
 def _project_log_query_terms(query: str) -> List[str]:
     """Language-neutral terms for ordering dated PROJECT.log lines."""
     out: List[str] = []
-    for raw in re.findall(r"[\w./-]+", str(query or "").lower()):
+    for raw in _docs_lexical_tokens(query):
         term = raw.strip().strip("/.")
-        if len(term) < 3 or term in out:
+        min_len = 2 if term and not term.isascii() else 3
+        if len(term) < min_len or term in out:
             continue
         out.append(term)
     return out
