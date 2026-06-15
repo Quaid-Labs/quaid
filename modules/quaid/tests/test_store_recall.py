@@ -1024,6 +1024,18 @@ class TestStoreBasic:
         assert node is not None
         assert node.created_at == "2026-03-11T23:59:59"
 
+    def test_malformed_quaid_now_honors_failhard(self, monkeypatch):
+        import datastore.memorydb.memory_graph as mg
+
+        monkeypatch.setenv("QUAID_NOW", "not-a-date")
+
+        with patch.object(mg, "_is_fail_hard_mode", return_value=True):
+            with pytest.raises(RuntimeError, match="Invalid QUAID_NOW"):
+                mg._now()
+
+        with patch.object(mg, "_is_fail_hard_mode", return_value=False):
+            assert mg._now().isoformat().startswith("20")
+
     def test_supersede_node_timestamps_honor_quaid_now(self, tmp_path, monkeypatch):
         import datastore.memorydb.memory_graph as mg
 
