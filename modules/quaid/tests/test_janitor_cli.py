@@ -189,7 +189,7 @@ def test_janitor_scheduler_reset_warns_when_not_fail_hard(monkeypatch, capsys):
     assert "Failed to reset global LLM scheduler" in captured.err
 
 
-def test_janitor_update_check_network_failure_honors_fail_hard(monkeypatch, tmp_path):
+def test_janitor_update_check_network_failure_is_informational_under_fail_hard(monkeypatch, tmp_path):
     import urllib.error
     import urllib.request
 
@@ -208,8 +208,7 @@ def test_janitor_update_check_network_failure_honors_fail_hard(monkeypatch, tmp_
         lambda *_args, **_kwargs: (_ for _ in ()).throw(urllib.error.URLError("offline")),
     )
 
-    with pytest.raises(RuntimeError, match="Update check network request failed"):
-        janitor._check_for_updates()
+    assert janitor._check_for_updates() is None
 
 
 def test_janitor_update_check_task_failure_honors_fail_hard(monkeypatch, tmp_path):

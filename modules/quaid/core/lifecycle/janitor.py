@@ -605,13 +605,9 @@ def _check_for_updates() -> Optional[Dict[str, str]]:
         html_url = data.get("html_url", f"https://github.com/{REPO}/releases")
     except urllib.error.URLError as e:
         janitor_logger.warn("update_check_network_failed", error=str(e))
-        if is_fail_hard_enabled():
-            raise RuntimeError("Update check network request failed") from e
         return None
     except Exception as e:
         janitor_logger.warn("update_check_failed", error=str(e))
-        if is_fail_hard_enabled():
-            raise RuntimeError("Update check failed") from e
         return None
 
     # Cache the result via datastore helper
