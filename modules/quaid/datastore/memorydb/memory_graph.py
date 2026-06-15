@@ -19520,6 +19520,9 @@ def _plan_fanout_queries(
         )
 
 
+_FAST_RECALL_PLANNER_EXPLICIT_TIMEOUT_CAP_S = 8.0
+
+
 def _recall_planner_timeout_s(
     timeout_ms: Optional[int],
     *,
@@ -19537,6 +19540,9 @@ def _recall_planner_timeout_s(
         budget_s = max(0.1, float(timeout_ms) / 1000.0)
     except Exception:
         return default_cap
+    if fast_mode:
+        explicit_cap = max(default_cap, _FAST_RECALL_PLANNER_EXPLICIT_TIMEOUT_CAP_S)
+        return max(0.1, min(explicit_cap, budget_s * 0.5))
     return max(0.1, min(default_cap, budget_s * 0.5))
 
 

@@ -8257,6 +8257,31 @@ class TestRecallTelemetry:
         assert captured["planner_profile"] == "fast"
         assert captured["max_retries"] == 0
 
+    def test_recall_fast_honors_explicit_large_planner_budget(self):
+        import datastore.memorydb.memory_graph as mg
+
+        captured = {}
+
+        def _fake_plan(query, *, max_queries, timeout_s, return_meta, planner_profile, max_retries=0):
+            captured["timeout_s"] = timeout_s
+            return [query], {
+                "query": query,
+                "timeout_ms": round(timeout_s * 1000),
+                "used_llm": False,
+                "bailout_reason": "planner_disabled",
+                "queries_count": 1,
+                "elapsed_ms": 0,
+                "planner_profile": planner_profile,
+                "planned_stores": ["vector"],
+                "planned_project": None,
+            }
+
+        with patch.object(mg, "_plan_fanout_queries", side_effect=_fake_plan), \
+             patch.object(mg, "_run_recall_store_plan", return_value=([], {"phases_ms": {"total_ms": 0}}, None)):
+            mg.recall_fast("What new fields were added to the recipe database?", timeout_ms=30_000, return_meta=True)
+
+        assert captured["timeout_s"] == 8.0
+
     def test_recall_fast_uses_depth_two_graph_auto_inject_by_default(self):
         import datastore.memorydb.memory_graph as mg
 
