@@ -239,6 +239,31 @@ def test_delete_node_cleans_edges_and_supersession_without_fk_cascade(tmp_path, 
     assert edge_count == 0
 
 
+def test_get_fact_history_handles_long_supersession_chain(tmp_path):
+    """Long-running fact histories should not depend on Python recursion depth."""
+    import datastore.memorydb.memory_graph as mg
+
+    graph, _db_file = _make_graph(tmp_path)
+    nodes = [
+        mg.Node.create(
+            "Fact",
+            f"Project status version {idx}",
+            owner_id="operator",
+        )
+        for idx in range(1100)
+    ]
+    for node in nodes:
+        graph.add_node(node, embed=False)
+    for old, new in zip(nodes, nodes[1:]):
+        assert graph.supersede_node(old.id, new.id) is True
+
+    history = graph.get_fact_history(nodes[-1].id)
+
+    assert len(history) == len(nodes)
+    assert history[0].id == nodes[0].id
+    assert history[-1].id == nodes[-1].id
+
+
 def test_recall_command_date_bounds_accepts_canonical_and_camelcase_asof_aliases():
     import datastore.memorydb.memory_graph as mg
 

@@ -2350,19 +2350,22 @@ class MemoryGraph:
         visited = set()
         with self._get_conn() as conn:
             # Walk backwards: find nodes that were superseded to arrive at this one.
-            def _find_predecessors(nid: str) -> None:
-                if nid in visited:
-                    return
-                visited.add(nid)
+            stack: List[Tuple[str, Optional[Node]]] = [(node_id, None)]
+            while stack:
+                current_id, append_after_visit = stack.pop()
+                if append_after_visit is not None:
+                    history.append(append_after_visit)
+                    continue
+                if current_id in visited:
+                    continue
+                visited.add(current_id)
                 rows = conn.execute(
-                    "SELECT * FROM nodes WHERE superseded_by = ?", (nid,)
+                    "SELECT * FROM nodes WHERE superseded_by = ?", (current_id,)
                 ).fetchall()
-                for row in rows:
+                for row in reversed(rows):
                     pred = self._row_to_node(row)
-                    _find_predecessors(pred.id)
-                    history.append(pred)
-
-            _find_predecessors(node_id)
+                    stack.append((pred.id, pred))
+                    stack.append((pred.id, None))
 
             # Add the current node at the end.
             row = conn.execute("SELECT * FROM nodes WHERE id = ?", (node_id,)).fetchone()
