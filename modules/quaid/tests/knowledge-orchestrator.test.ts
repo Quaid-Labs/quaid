@@ -1340,6 +1340,30 @@ describe("knowledge orchestrator", () => {
     expect(plan.datastores).toEqual(["project", "vector_basic"]);
   });
 
+  it("infers non-ASCII project names from routed recall queries", async () => {
+    const engine = createKnowledgeEngine<Result>({
+      workspace: "/tmp",
+      getMemoryConfig: () => ({}),
+      isSystemEnabled: () => false,
+      callFastRouter: vi.fn(async () => JSON.stringify({
+        query: "latest architecture notes for 東京プロジェクト",
+        datastores: ["vector_basic"],
+        project: null,
+      })),
+      getProjectCatalog: () => [{ name: "東京プロジェクト", description: "Tokyo project docs" }],
+      recallMemory: vi.fn(async () => []),
+    });
+
+    const plan = await engine.routeRecallPlan(
+      "latest architecture notes for 東京プロジェクト",
+      false,
+      "fast",
+    );
+
+    expect(plan.project).toBe("東京プロジェクト");
+    expect(plan.datastores).toEqual(["project", "vector_basic"]);
+  });
+
   it("applies source-type boosts for agent_actions intent", async () => {
     const recallMemory = vi.fn(async () => [
       { text: "User mentioned snacks", category: "fact", similarity: 0.82, sourceType: "user", via: "vector" },

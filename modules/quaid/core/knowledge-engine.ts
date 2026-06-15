@@ -309,9 +309,10 @@ Return JSON only: {"datastores":["vector_basic","graph"]}`;
 
   function normalizeProjectHintText(value: string): string {
     return String(value || "")
-      .toLowerCase()
+      .normalize("NFKC")
+      .toLocaleLowerCase()
       .replace(/[-_]+/g, " ")
-      .replace(/[^a-z0-9\s]/g, " ")
+      .replace(/[^\p{L}\p{N}\s]/gu, " ")
       .replace(/\s+/g, " ")
       .trim();
   }

@@ -173,7 +173,7 @@ expandGraphAllowed: ${expandGraph ? "true" : "false"}`;
     );
   }
   function normalizeProjectHintText(value) {
-    return String(value || "").toLowerCase().replace(/[-_]+/g, " ").replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+    return String(value || "").normalize("NFKC").toLocaleLowerCase().replace(/[-_]+/g, " ").replace(/[^\p{L}\p{N}\s]/gu, " ").replace(/\s+/g, " ").trim();
   }
   function inferProjectFromQuery(query, projectCatalog) {
     const normalizedQuery = normalizeProjectHintText(query);
