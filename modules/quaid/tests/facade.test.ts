@@ -512,21 +512,29 @@ describe("QuaidFacade", () => {
     const workspace = await mkdtemp(path.join(tmpdir(), "quaid-facade-log-update-"));
     await mkdir(path.join(workspace, "data"), { recursive: true });
     await writeFile(path.join(workspace, "data", "extraction-log.json"), "{}", "utf8");
+    const priorQuaidNow = process.env.QUAID_NOW;
+    process.env.QUAID_NOW = "2026-03-11T05:06:07Z";
     const facade = createQuaidFacade(makeMockDeps({ workspace }));
-    facade.updateExtractionLog(
-      "sess-topic",
-      [
-        { role: "user", content: "GatewayRestart: heartbeat" },
-        { role: "assistant", content: "ack" },
-        { role: "user", content: "Need to fix adapter boundary and extract facade logic" },
-      ],
-      "CompactionSignal",
-    );
-    const payload = JSON.parse(await readFile(path.join(workspace, "data", "extraction-log.json"), "utf8"));
-    expect(payload["sess-topic"]).toBeTruthy();
-    expect(payload["sess-topic"].label).toBe("CompactionSignal");
-    expect(payload["sess-topic"].topic_hint).toContain("Need to fix adapter boundary");
-    await rm(workspace, { recursive: true, force: true });
+    try {
+      facade.updateExtractionLog(
+        "sess-topic",
+        [
+          { role: "user", content: "GatewayRestart: heartbeat" },
+          { role: "assistant", content: "ack" },
+          { role: "user", content: "Need to fix adapter boundary and extract facade logic" },
+        ],
+        "CompactionSignal",
+      );
+      const payload = JSON.parse(await readFile(path.join(workspace, "data", "extraction-log.json"), "utf8"));
+      expect(payload["sess-topic"]).toBeTruthy();
+      expect(payload["sess-topic"].last_extracted_at).toBe("2026-03-11T05:06:07.000Z");
+      expect(payload["sess-topic"].label).toBe("CompactionSignal");
+      expect(payload["sess-topic"].topic_hint).toContain("Need to fix adapter boundary");
+    } finally {
+      if (priorQuaidNow === undefined) delete process.env.QUAID_NOW;
+      else process.env.QUAID_NOW = priorQuaidNow;
+      await rm(workspace, { recursive: true, force: true });
+    }
   });
 
   it("getInjectionLogPath resolves under workspace runtime injection dir", async () => {

@@ -36,6 +36,24 @@ function sanitizePathSegment(value: unknown, fallback: string): string {
   return safe || fallback;
 }
 
+function nowIsoForPersistentRecord(): string {
+  const raw = String(process.env.QUAID_NOW || "").trim();
+  if (raw) {
+    const hasExplicitZone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(raw);
+    const candidate = /^\d{4}-\d{2}-\d{2}$/.test(raw)
+      ? `${raw}T00:00:00Z`
+      : hasExplicitZone
+        ? raw
+        : `${raw}Z`;
+    const parsed = new Date(candidate);
+    if (Number.isNaN(parsed.getTime())) {
+      throw new Error(`Invalid QUAID_NOW=${JSON.stringify(raw)}`);
+    }
+    return parsed.toISOString();
+  }
+  return new Date().toISOString();
+}
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -1018,7 +1036,7 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
     }
 
     extractionLog[String(sessionId || "unknown")] = {
-      last_extracted_at: new Date().toISOString(),
+      last_extracted_at: nowIsoForPersistentRecord(),
       message_count: Array.isArray(messages) ? messages.length : 0,
       label,
       topic_hint: topicHint,

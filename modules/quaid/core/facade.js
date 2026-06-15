@@ -17,6 +17,19 @@ function sanitizePathSegment(value, fallback) {
   const safe = raw.normalize("NFKC").replace(/[\\/:\0-\x1f\x7f]+/g, "_").replace(/\.\.+/g, "_").replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^[-_.]+|[-_.]+$/g, "").slice(0, 160);
   return safe || fallback;
 }
+function nowIsoForPersistentRecord() {
+  const raw = String(process.env.QUAID_NOW || "").trim();
+  if (raw) {
+    const hasExplicitZone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(raw);
+    const candidate = /^\d{4}-\d{2}-\d{2}$/.test(raw) ? `${raw}T00:00:00Z` : hasExplicitZone ? raw : `${raw}Z`;
+    const parsed = new Date(candidate);
+    if (Number.isNaN(parsed.getTime())) {
+      throw new Error(`Invalid QUAID_NOW=${JSON.stringify(raw)}`);
+    }
+    return parsed.toISOString();
+  }
+  return (/* @__PURE__ */ new Date()).toISOString();
+}
 function recallItemIdentity(item) {
   const id = typeof item?.id === "string" ? item.id.trim() : "";
   if (id) return `id:${id}`;
@@ -506,7 +519,7 @@ function createQuaidFacade(deps) {
       break;
     }
     extractionLog[String(sessionId || "unknown")] = {
-      last_extracted_at: (/* @__PURE__ */ new Date()).toISOString(),
+      last_extracted_at: nowIsoForPersistentRecord(),
       message_count: Array.isArray(messages) ? messages.length : 0,
       label,
       topic_hint: topicHint
