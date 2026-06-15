@@ -114,6 +114,30 @@ def test_docs_rank_score_penalizes_generic_overview_without_english_impl_terms()
     assert specific > overview
 
 
+def test_docs_rank_score_penalizes_non_english_root_overview_structurally():
+    from datastore.docsdb.rag import _docs_query_terms, _docs_rank_score
+
+    query_terms = _docs_query_terms("云门 配置")
+    overview = _docs_rank_score(
+        query_terms,
+        "云门 配置",
+        "/tmp/workspace/projects/demo/README.md",
+        "# 概要",
+        "云门 配置",
+        0.60,
+    )
+    specific = _docs_rank_score(
+        query_terms,
+        "云门 配置",
+        "/tmp/workspace/projects/demo/docs/云门.md",
+        "# 概要",
+        "云门 配置",
+        0.60,
+    )
+
+    assert specific > overview
+
+
 def test_docs_scaffold_penalty_requires_managed_project_marker():
     from datastore.docsdb.rag import _docs_query_terms, _docs_scaffold_penalty
     from lib.project_templates import PROJECT_HOME_BEGIN

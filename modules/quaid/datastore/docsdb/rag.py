@@ -485,12 +485,21 @@ def _docs_scaffold_penalty(
     return penalty
 
 
-def _docs_is_generic_overview_header(header_lower: str) -> bool:
-    """Return true for broad project overview headings, independent of project name."""
-    normalized = re.sub(r"^#+\s*", "", str(header_lower or "").strip()).strip()
-    if not normalized:
+_ROOT_OVERVIEW_FILES = {"project.md", "readme.md", "tools.md", "agents.md"}
+
+
+def _docs_is_root_overview_chunk(source_file: str, section_header: Optional[str]) -> bool:
+    """Return true for top-level chunks in root navigation docs.
+
+    This intentionally uses file role and Markdown heading depth instead of
+    English heading labels, so non-English project overviews receive the same
+    treatment as English ones.
+    """
+    if Path(source_file or "").name.lower() not in _ROOT_OVERVIEW_FILES:
         return False
-    return normalized in {"overview", "project overview"} or normalized.startswith("project:")
+    header = str(section_header or "").strip()
+    match = re.match(r"^(#{1,6})\s+\S", header)
+    return bool(match and len(match.group(1)) == 1)
 
 
 def _docs_rank_score(query_terms: List[str], query: str, source_file: str, section_header: Optional[str], content: str, similarity: float) -> float:
@@ -503,7 +512,6 @@ def _docs_rank_score(query_terms: List[str], query: str, source_file: str, secti
     path_text = _docs_normalized_lexical_text(source_file)
     file_name = Path(source_file or "").name.lower()
     header_text = _docs_normalized_lexical_text(section_header or "")
-    header_lower = str(section_header or "").lower()
     content_text = _docs_normalized_lexical_text(content)
 
     score = float(similarity)
@@ -541,14 +549,8 @@ def _docs_rank_score(query_terms: List[str], query: str, source_file: str, secti
     score = min(1.0, score)
 
     wants_specific_source = len(informative_terms) >= 2
-    if (
-        wants_specific_source
-        and file_name in {"project.md", "readme.md", "tools.md", "agents.md"}
-        and _docs_is_generic_overview_header(header_lower)
-    ):
-        score -= 0.12
-    if wants_specific_source and _docs_is_generic_overview_header(header_lower):
-        score -= 0.06
+    if wants_specific_source and _docs_is_root_overview_chunk(source_file, section_header):
+        score -= 0.18
     if wants_specific_source:
         score -= _docs_source_penalty(query_terms, source_file)
     score -= _docs_scaffold_penalty(query_terms, source_file, content, content_hits)
