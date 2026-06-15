@@ -69,6 +69,21 @@ class TestNormalizeDomainId:
     def test_underscore_in_name_allowed(self):
         assert normalize_domain_id("my_domain") == "my_domain"
 
+    def test_cjk_domain_id_preserved(self):
+        assert normalize_domain_id("健康") == "健康"
+
+    def test_unicode_spaces_converted_to_underscore(self):
+        assert normalize_domain_id("健康 計画") == "健康_計画"
+
+    def test_arabic_domain_id_preserved(self):
+        assert normalize_domain_id("فريق الأسرة") == "فريق_الأسرة"
+
+    def test_combining_mark_domain_id_preserved(self):
+        assert normalize_domain_id("हिन्दी नोट्स") == "हिन्दी_नोट्स"
+
+    def test_unicode_casefold_applied(self):
+        assert normalize_domain_id("Straße") == "strasse"
+
     # Empty / None inputs
     def test_empty_string_returns_none(self):
         assert normalize_domain_id("") is None
@@ -82,6 +97,9 @@ class TestNormalizeDomainId:
     def test_only_special_chars_returns_none(self):
         # All chars become underscores → stripped → empty → None
         assert normalize_domain_id("@@@") is None
+
+    def test_number_only_string_returns_none(self):
+        assert normalize_domain_id("123") is None
 
     # Length validation (>64 chars → None)
     def test_exactly_64_chars_valid(self):

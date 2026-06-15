@@ -6,7 +6,7 @@ import re
 import unicodedata
 from typing import Optional
 
-_DOMAIN_ID_RE = re.compile(r"^[a-z0-9_]{1,64}$")
+_MAX_DOMAIN_ID_CHARS = 64
 _DOMAIN_ALIASES = {
     "projects": "project",
     "family": "personal",
@@ -21,15 +21,27 @@ MAX_DOMAIN_DESCRIPTION_CHARS = 200
 
 
 def normalize_domain_id(value: object) -> Optional[str]:
-    raw = str(value or "").strip().lower()
+    if value is None:
+        return None
+    raw = unicodedata.normalize("NFKC", str(value)).strip().casefold()
     if not raw:
         return None
-    norm = re.sub(r"[^a-z0-9_]+", "_", raw)
-    norm = re.sub(r"_{2,}", "_", norm).strip("_")
+    chars = [ch if _is_domain_id_char(ch) else "_" for ch in raw]
+    norm = re.sub(r"_{2,}", "_", "".join(chars)).strip("_")
     norm = _DOMAIN_ALIASES.get(norm, norm)
-    if not norm or not _DOMAIN_ID_RE.match(norm):
+    if (
+        not norm
+        or len(norm) > _MAX_DOMAIN_ID_CHARS
+        or not any(ch.isalpha() for ch in norm)
+        or not all(_is_domain_id_char(ch) for ch in norm)
+    ):
         return None
     return norm
+
+
+def _is_domain_id_char(ch: str) -> bool:
+    """Return True for Unicode identifier body chars used in domain IDs."""
+    return ch == "_" or ch.isalnum() or unicodedata.category(ch).startswith("M")
 
 
 def sanitize_domain_description(
