@@ -201,7 +201,10 @@ def _rag_config():
     try:
         from config import get_config
         return get_config().rag
-    except Exception:
+    except Exception as exc:
+        if is_fail_hard_enabled():
+            raise RuntimeError("Failed to load docs RAG configuration") from exc
+        logger.warning("Failed to load docs RAG configuration; using defaults: %s", exc)
         return None
 
 

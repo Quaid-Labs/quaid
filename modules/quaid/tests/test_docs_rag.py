@@ -249,6 +249,33 @@ Content B.
         assert len(chunks) >= 2
         assert max(rag.estimate_tokens(chunk) for chunk in chunks) <= 55
 
+    def test_rag_config_failure_raises_when_failhard(self, monkeypatch):
+        import config as config_mod
+        import datastore.docsdb.rag as rag_mod
+
+        def _broken_get_config():
+            raise RuntimeError("config unavailable")
+
+        monkeypatch.setattr(config_mod, "get_config", _broken_get_config)
+        monkeypatch.setattr(rag_mod, "is_fail_hard_enabled", lambda: True)
+
+        with pytest.raises(RuntimeError, match="Failed to load docs RAG configuration"):
+            rag_mod._rag_config()
+
+    def test_rag_config_failure_warns_when_fail_open(self, monkeypatch, caplog):
+        import config as config_mod
+        import datastore.docsdb.rag as rag_mod
+
+        def _broken_get_config():
+            raise RuntimeError("config unavailable")
+
+        monkeypatch.setattr(config_mod, "get_config", _broken_get_config)
+        monkeypatch.setattr(rag_mod, "is_fail_hard_enabled", lambda: False)
+
+        caplog.set_level("WARNING")
+        assert rag_mod._rag_config() is None
+        assert "Failed to load docs RAG configuration; using defaults" in caplog.text
+
     def test_chunk_max_tokens_rejects_non_positive_failhard(self, monkeypatch):
         import datastore.docsdb.rag as rag_mod
 
