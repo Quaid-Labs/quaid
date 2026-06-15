@@ -1288,7 +1288,12 @@ class MemoryGraph:
                     """,
                     (limit,),
                 ).fetchall()
-        except Exception:
+        except Exception as exc:
+            if _is_fail_hard_mode():
+                raise RuntimeError(
+                    "Missing embedding retry scan failed while failHard is enabled"
+                ) from exc
+            logger.warning("Failed to scan nodes with missing embeddings", exc_info=True)
             return 0
 
         for row in rows:
@@ -1304,6 +1309,7 @@ class MemoryGraph:
                 ).strip()
             if not text.strip():
                 continue
+            vec_index_error = None
             try:
                 embedding = self.get_embedding(text)
                 if embedding is None:
@@ -1319,11 +1325,31 @@ class MemoryGraph:
                             "INSERT OR REPLACE INTO vec_nodes(node_id, embedding) VALUES (?, ?)",
                             (node_id, packed),
                         )
-                    except Exception:
-                        pass  # vec_nodes may not exist yet — will be backfilled at next init
-                updated += 1
-            except Exception:
+                    except Exception as exc:
+                        vec_index_error = exc
+            except Exception as exc:
+                if _is_fail_hard_mode():
+                    raise RuntimeError(
+                        "Missing embedding retry failed while failHard is enabled"
+                    ) from exc
+                logger.warning(
+                    "Failed to retry missing embedding for node %s",
+                    node_id,
+                    exc_info=True,
+                )
                 continue
+            if vec_index_error is not None:
+                if _is_fail_hard_mode():
+                    raise RuntimeError(
+                        "Missing embedding vector index update failed while failHard is enabled"
+                    ) from vec_index_error
+                logger.warning(
+                    "Failed to index retried embedding for node %s",
+                    node_id,
+                    exc_info=True,
+                )
+                # vec_nodes may not exist yet; primary rows remain repaired.
+            updated += 1
         return updated
 
     def _pack_embedding(self, embedding: List[float]) -> bytes:

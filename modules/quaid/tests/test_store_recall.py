@@ -4967,6 +4967,134 @@ class TestSourceChunkStorage:
                 ).fetchone()[0] == 1
         assert graph.get_embedding.call_count == 1
 
+    def test_retry_missing_embeddings_scan_failure_respects_failhard(self, tmp_path, caplog):
+        """Missing-embedding recovery cannot hide scan failures under failHard."""
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _db_file = _make_graph(tmp_path)
+
+        with patch.object(
+            graph,
+            "_get_conn",
+            side_effect=sqlite3.OperationalError("scan down"),
+        ), patch.object(mg, "_is_fail_hard_mode", return_value=True):
+            with pytest.raises(RuntimeError, match="Missing embedding retry scan failed"):
+                graph.retry_missing_embeddings(limit=5)
+
+        with patch.object(
+            graph,
+            "_get_conn",
+            side_effect=sqlite3.OperationalError("scan down"),
+        ), patch.object(mg, "_is_fail_hard_mode", return_value=False), caplog.at_level("WARNING"):
+            assert graph.retry_missing_embeddings(limit=5) == 0
+
+        assert "Failed to scan nodes with missing embeddings" in caplog.text
+
+    def test_retry_missing_embeddings_node_failure_respects_failhard(self, tmp_path, caplog):
+        """Per-node retry failures raise in failHard and log in soft mode."""
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _db_file = _make_graph(tmp_path)
+        graph.add_node(
+            mg.Node.create(
+                "fact",
+                "Missing embedding retry candidate",
+                owner_id="operator",
+                status="pending",
+            ),
+            embed=False,
+        )
+
+        graph.get_embedding = MagicMock(side_effect=RuntimeError("embedding down"))
+        with patch.object(mg, "_is_fail_hard_mode", return_value=True):
+            with pytest.raises(RuntimeError, match="Missing embedding retry failed"):
+                graph.retry_missing_embeddings(limit=5)
+
+        graph.get_embedding = MagicMock(side_effect=RuntimeError("embedding down"))
+        with patch.object(mg, "_is_fail_hard_mode", return_value=False), caplog.at_level("WARNING"):
+            assert graph.retry_missing_embeddings(limit=5) == 0
+
+        assert "Failed to retry missing embedding for node" in caplog.text
+
+    def test_retry_missing_embeddings_vec_failure_respects_failhard(self, tmp_path, caplog):
+        """Primary embedding repair may soft-degrade, but failHard raises vector index failures."""
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _db_file = _make_graph(tmp_path)
+        node_id = graph.add_node(
+            mg.Node.create(
+                "fact",
+                "Vector index retry candidate",
+                owner_id="operator",
+                status="pending",
+            ),
+            embed=False,
+        )
+        original_get_conn = graph._get_conn
+
+        class _VecFailingConnection:
+            def __init__(self, conn):
+                self._conn = conn
+
+            def execute(self, sql, *args, **kwargs):
+                if "INSERT OR REPLACE INTO vec_nodes" in sql:
+                    raise sqlite3.OperationalError("vec down")
+                return self._conn.execute(sql, *args, **kwargs)
+
+            def __getattr__(self, name):
+                return getattr(self._conn, name)
+
+        class _VecFailingContext:
+            def __init__(self, cm, fail_vec):
+                self._cm = cm
+                self._fail_vec = fail_vec
+
+            def __enter__(self):
+                self._conn = self._cm.__enter__()
+                if self._fail_vec:
+                    return _VecFailingConnection(self._conn)
+                return self._conn
+
+            def __exit__(self, exc_type, exc, tb):
+                return self._cm.__exit__(exc_type, exc, tb)
+
+        def _flaky_get_conn_factory():
+            calls = {"count": 0}
+
+            def _flaky_get_conn():
+                calls["count"] += 1
+                return _VecFailingContext(
+                    original_get_conn(),
+                    fail_vec=calls["count"] >= 2,
+                )
+
+            return _flaky_get_conn
+
+        with patch.object(
+            graph,
+            "_get_conn",
+            side_effect=_flaky_get_conn_factory(),
+        ), patch.object(mg, "_is_fail_hard_mode", return_value=True):
+            with pytest.raises(RuntimeError, match="Missing embedding vector index update failed"):
+                graph.retry_missing_embeddings(limit=5)
+
+        with graph._get_conn() as conn:
+            conn.execute("UPDATE nodes SET embedding = NULL WHERE id = ?", (node_id,))
+
+        with patch.object(
+            graph,
+            "_get_conn",
+            side_effect=_flaky_get_conn_factory(),
+        ), patch.object(mg, "_is_fail_hard_mode", return_value=False), caplog.at_level("WARNING"):
+            assert graph.retry_missing_embeddings(limit=5) == 1
+
+        with graph._get_conn() as conn:
+            assert conn.execute(
+                "SELECT embedding FROM nodes WHERE id = ?",
+                (node_id,),
+            ).fetchone()["embedding"] is not None
+        assert "Failed to index retried embedding for node" in caplog.text
+
     def test_session_chunk_ann_query_remains_owner_scoped(self, tmp_path):
         """The shared chunk ANN index cannot return another owner's transcript chunks."""
         import datastore.memorydb.memory_graph as mg
