@@ -3134,7 +3134,7 @@ class MemoryGraph:
                     for row in conn.execute(out_sql, out_params).fetchall():
                         target = self._row_to_node(row)
                         if target.id not in visited:
-                            edge_weight = row["edge_weight"] if row["edge_weight"] else 0.5
+                            edge_weight = row["edge_weight"] if row["edge_weight"] is not None else 0.5
                             target_path = current_path + [(current_name, row["edge_relation"])]
                             neighbors.append((
                                 target, row["edge_relation"], "out",
@@ -3153,7 +3153,7 @@ class MemoryGraph:
                     for row in conn.execute(in_sql, in_params).fetchall():
                         source = self._row_to_node(row)
                         if source.id not in visited:
-                            edge_weight = row["edge_weight"] if row["edge_weight"] else 0.5
+                            edge_weight = row["edge_weight"] if row["edge_weight"] is not None else 0.5
                             source_path = current_path + [(current_name, row["edge_relation"])]
                             neighbors.append((
                                 source, row["edge_relation"], "in",

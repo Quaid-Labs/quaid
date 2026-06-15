@@ -142,6 +142,56 @@ def test_beam_search_graph_reranker_falls_back_when_failhard_disabled(tmp_path):
     assert rows[0][0].id in {left.id, right.id}
 
 
+def test_beam_search_graph_preserves_zero_weight_outbound_edge(tmp_path):
+    import datastore.memorydb.memory_graph as mg
+
+    graph, _ = _make_graph(tmp_path)
+    start = mg.Node.create("Person", "Start person", owner_id="quaid")
+    suppressed = mg.Node.create("Fact", "Suppressed outbound candidate", owner_id="quaid")
+    weighted = mg.Node.create("Fact", "Weighted outbound candidate", owner_id="quaid")
+    for node in (start, suppressed, weighted):
+        graph.add_node(node, embed=False)
+    graph.add_edge(mg.Edge.create(start.id, suppressed.id, "supports", weight=0.0))
+    graph.add_edge(mg.Edge.create(start.id, weighted.id, "supports", weight=0.5))
+
+    rows = graph.beam_search_graph(
+        "outbound candidate",
+        start.id,
+        beam_width=2,
+        max_depth=1,
+        max_results=10,
+        allow_llm_rerank=False,
+    )
+
+    scores = {row[0].id: row[5] for row in rows}
+    assert scores[suppressed.id] < scores[weighted.id]
+
+
+def test_beam_search_graph_preserves_zero_weight_inbound_edge(tmp_path):
+    import datastore.memorydb.memory_graph as mg
+
+    graph, _ = _make_graph(tmp_path)
+    start = mg.Node.create("Person", "Start person", owner_id="quaid")
+    suppressed = mg.Node.create("Fact", "Suppressed inbound candidate", owner_id="quaid")
+    weighted = mg.Node.create("Fact", "Weighted inbound candidate", owner_id="quaid")
+    for node in (start, suppressed, weighted):
+        graph.add_node(node, embed=False)
+    graph.add_edge(mg.Edge.create(suppressed.id, start.id, "supports", weight=0.0))
+    graph.add_edge(mg.Edge.create(weighted.id, start.id, "supports", weight=0.5))
+
+    rows = graph.beam_search_graph(
+        "inbound candidate",
+        start.id,
+        beam_width=2,
+        max_depth=1,
+        max_results=10,
+        allow_llm_rerank=False,
+    )
+
+    scores = {row[0].id: row[5] for row in rows}
+    assert scores[suppressed.id] < scores[weighted.id]
+
+
 def test_delete_node_cleans_edges_and_supersession_without_fk_cascade(tmp_path, monkeypatch):
     from contextlib import contextmanager
     import datastore.memorydb.memory_graph as mg
