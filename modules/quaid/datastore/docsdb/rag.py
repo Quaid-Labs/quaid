@@ -1176,21 +1176,20 @@ class DocsRAG:
         return p.parent.name == "log" and p.suffix == ".log" and p.stem != "PROJECT"
 
     def _archive_temporal_header(self, file_path: str) -> str:
-        """Generate a temporal context header for archived log files.
-
-        This tells the LLM the content is historical, not current,
-        preventing confusion between past and present state.
-        """
+        """Generate structured temporal context for archived log files."""
         p = Path(file_path)
         month = p.stem  # e.g. "2026-01"
         # Walk up to find the project name (parent of log/)
         project_name = p.parent.parent.name
-        return (
-            f"# HISTORICAL LOG — {project_name} — {month}\n\n"
-            f"> These are ARCHIVED log entries from {month}. "
-            f"They reflect past state and may no longer be current. "
-            f"For current state, refer to PROJECT.log.\n\n"
-        )
+        metadata = {
+            "quaid_doc_context": {
+                "source_type": "archived_project_log",
+                "project": project_name,
+                "period": month,
+                "current_source": "PROJECT.log",
+            }
+        }
+        return f"{json.dumps(metadata, ensure_ascii=False, sort_keys=True)}\n\n"
 
     def index_document(self, file_path: str) -> int:
         """Index a single document, returning number of chunks created."""

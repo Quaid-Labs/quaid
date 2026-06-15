@@ -1,6 +1,7 @@
 """Tests for docs_rag.py — chunking, indexing, search, stats."""
 
 import os
+import json
 import sys
 import sqlite3
 from datetime import datetime, timezone
@@ -469,6 +470,37 @@ class TestIndexDocument:
             assert rag.index_document(str(test_file)) == 1
 
         assert rag.needs_reindex(str(test_file)) is True
+
+    def test_index_document_uses_structured_archive_log_context(self, tmp_path):
+        rag = _make_rag(tmp_path)
+        log_dir = tmp_path / "projects" / "demo" / "log"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        archive_file = log_dir / "2026-01.log"
+        archive_file.write_text("- [2026-01-03T00:00:00] 猫 deployment finished", encoding="utf-8")
+
+        with patch("datastore.docsdb.rag._lib_get_embeddings", return_value=[[0.1, 0.2, 0.3]]):
+            assert rag.index_document(str(archive_file)) == 1
+
+        with sqlite3.connect(rag.db_path) as conn:
+            row = conn.execute(
+                "SELECT content FROM doc_chunks WHERE source_file = ?",
+                (str(archive_file),),
+            ).fetchone()
+
+        content = row[0]
+        first_line = content.splitlines()[0]
+        metadata = json.loads(first_line)
+        assert metadata == {
+            "quaid_doc_context": {
+                "current_source": "PROJECT.log",
+                "period": "2026-01",
+                "project": "demo",
+                "source_type": "archived_project_log",
+            }
+        }
+        assert "# HISTORICAL LOG" not in content
+        assert "These are ARCHIVED" not in content
+        assert "猫 deployment finished" in content
 
     def test_index_document_chunks_project_log_into_focused_day_slices(self, tmp_path):
         rag = _make_rag(tmp_path)
