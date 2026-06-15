@@ -13174,6 +13174,15 @@ class TestRecallFastHookInjectContract:
         assert "diseñó" in terms
         assert "łukasz" in terms
 
+    def test_extract_distinctive_query_terms_keeps_compact_unicode_anchors(self):
+        import datastore.memorydb.memory_graph as mg
+
+        terms = mg._extract_distinctive_query_terms("美玲 合唱団 玲", limit=8)
+
+        assert "美玲" in terms
+        assert "合唱団" in terms
+        assert "玲" not in terms
+
     def test_resolve_lexical_anchor_limit_scales_for_long_name_lists(self):
         import datastore.memorydb.memory_graph as mg
         from types import SimpleNamespace
@@ -19802,5 +19811,32 @@ class TestGraphFactClusterRecall:
 
         assert mg._graph_fact_cluster_query_overlap(
             "Que hizo Ari con la bicicleta antigua?",
+            graph_cluster,
+        ) == 2
+
+    def test_graph_fact_cluster_query_overlap_keeps_initial_ascii_anchor(self):
+        import datastore.memorydb.memory_graph as mg
+
+        graph_cluster = {
+            "id": "graph_fact_cluster:noor:abc123",
+            "category": "graph_cluster",
+            "via": "graph_fact_cluster",
+            "text": "Related facts:\n- Noor repaired the archive index",
+        }
+
+        assert mg._graph_fact_cluster_query_overlap("Noor repaired?", graph_cluster) == 2
+
+    def test_graph_fact_cluster_query_overlap_keeps_compact_unicode_terms(self):
+        import datastore.memorydb.memory_graph as mg
+
+        graph_cluster = {
+            "id": "graph_fact_cluster:unicode:abc123",
+            "category": "graph_cluster",
+            "via": "graph_fact_cluster",
+            "text": "Related facts:\n- 美玲 rehearsed with the 雲門合唱団 ensemble",
+        }
+
+        assert mg._graph_fact_cluster_query_overlap(
+            "美玲 雲門合唱団 玲",
             graph_cluster,
         ) == 2

@@ -222,6 +222,24 @@ def _identifier_key(value: str) -> str:
 def _has_non_ascii(value: str) -> bool:
     return any(ord(ch) > 127 for ch in str(value or ""))
 
+
+def _has_compact_unicode_char(value: str) -> bool:
+    for ch in str(value or ""):
+        name = unicodedata.name(ch, "")
+        if name.startswith(("CJK ", "HIRAGANA", "KATAKANA", "HANGUL")):
+            return True
+    return False
+
+
+def _recall_query_term_min_len(term: str) -> int:
+    if not term:
+        return 4
+    if str(term).isascii():
+        return 4
+    if _has_compact_unicode_char(term):
+        return 2
+    return 3
+
 # Optional imports for LLM-verified dedup (graceful degradation if unavailable)
 try:
     from lib.llm_clients import call_fast_reasoning, parse_json_response
@@ -13840,7 +13858,7 @@ def _preserve_source_dated_session_rows_for_selected_facts(
     def _row_terms(row: Dict[str, Any]) -> Set[str]:
         return {
             term for term in _extract_vocabulary_free_query_terms(str(row.get("text") or ""), limit=24)
-            if len(term) >= 4
+            if len(term) >= _recall_query_term_min_len(term)
         }
 
     fact_term_sets: List[Set[str]] = []
@@ -14852,14 +14870,14 @@ def _graph_fact_cluster_query_overlap(query: str, row: Dict[str, Any]) -> int:
     query_tokens = {
         token.lower()
         for token in re.findall(r"\w+", str(query or ""), flags=re.UNICODE)
-        if len(token) >= 4
+        if len(token) >= _recall_query_term_min_len(token)
     }
     if not query_tokens:
         return 0
     row_tokens = {
         token.lower()
         for token in re.findall(r"\w+", str((row or {}).get("text") or ""), flags=re.UNICODE)
-        if len(token) >= 4
+        if len(token) >= _recall_query_term_min_len(token)
     }
     return len(query_tokens & row_tokens)
 
@@ -15460,7 +15478,8 @@ def _extract_distinctive_query_terms(query: str, *, limit: int = 8) -> List[str]
             continue
         if token in _QUERY_STOPWORDS:
             continue
-        if len(token) < 4 and token not in _SHORT_SIGNAL_TOKENS:
+        min_len = _recall_query_term_min_len(token)
+        if len(token) < min_len and token not in _SHORT_SIGNAL_TOKENS:
             continue
         seen.add(token)
         out.append(token)
@@ -15482,9 +15501,10 @@ def _extract_vocabulary_free_query_terms(query: str, *, limit: int = 8) -> List[
             continue
         # Length is a language-neutral noise floor; do not consult stopword
         # vocabularies here because deliberate recall already has LLM planning.
-        if len(token) < 4:
+        min_len = _recall_query_term_min_len(token)
+        if len(token) < min_len:
             continue
-        if idx == 0 and len(token) < 5:
+        if idx == 0 and token.isascii() and len(token) < 5:
             continue
         seen.add(token)
         out.append(token)
