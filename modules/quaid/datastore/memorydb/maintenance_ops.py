@@ -2904,7 +2904,7 @@ def review_dedup_rejections(
         batch_limit = max(1, min(int(max_items), 5000))
     pending = get_recent_dedup_rejections(hours=24, limit=batch_limit)
     if batch_limit:
-        cutoff = (now - timedelta(hours=24)).isoformat()
+        cutoff_iso = (now - timedelta(hours=24)).isoformat()
         with graph._get_conn() as conn:
             total_pending = int(
                 conn.execute(
@@ -2914,7 +2914,7 @@ def review_dedup_rejections(
                       AND decision != 'hash_exact'
                       AND created_at > ?
                     """,
-                    (cutoff,),
+                    (cutoff_iso,),
                 ).fetchone()[0]
             )
         results["carryover"] = max(total_pending - len(pending), 0)

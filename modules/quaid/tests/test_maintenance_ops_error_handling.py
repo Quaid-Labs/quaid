@@ -625,6 +625,121 @@ def test_resolve_temporal_references_uses_quaid_now_for_updated_at(monkeypatch):
     assert captured["params"][3] == "2026-03-11T00:00:00"
 
 
+def test_review_dedup_rejections_uses_runtime_clock_for_sql_paths(monkeypatch):
+    monkeypatch.setenv("QUAID_NOW", "2026-07-08T09:10:11")
+    metrics = maintenance_ops.JanitorMetrics()
+
+    class _Conn:
+        def __init__(self):
+            self.sql = []
+            self.params = []
+
+        def execute(self, sql, params=()):
+            self.sql.append(str(sql))
+            self.params.append(tuple(params or ()))
+            text = str(sql).strip().upper()
+            if text.startswith("UPDATE DEDUP_LOG"):
+                return _DummyResult(rowcount=2)
+            if text.startswith("SELECT COUNT(*) FROM DEDUP_LOG"):
+                return _DummyResult(rows=[(0,)])
+            raise AssertionError(f"unexpected SQL: {sql}")
+
+    class _Graph:
+        def __init__(self):
+            self.calls = []
+
+        @contextmanager
+        def _get_conn(self):
+            conn = _Conn()
+            self.calls.append(conn)
+            yield conn
+
+    graph = _Graph()
+
+    with patch.object(maintenance_ops, "get_recent_dedup_rejections", return_value=[]):
+        out = maintenance_ops.review_dedup_rejections(graph, metrics, dry_run=False, max_items=1)
+
+    assert out["confirmed"] == 2
+    assert out["reviewed"] == 2
+    all_sql = "\n".join(sql for call in graph.calls for sql in call.sql)
+    assert "datetime('now')" not in all_sql
+    assert graph.calls[0].params[0] == ("2026-07-08T09:10:11",)
+    assert graph.calls[1].params[0] == ("2026-07-07T09:10:11",)
+
+
+@pytest.mark.parametrize(
+    ("action", "expected_queue_params"),
+    [
+        ("EXTEND", ("extend", "still useful", "2026-07-08T09:10:11", "dq1")),
+        ("PIN", ("pin", "still useful", "2026-07-08T09:10:11", "dq1")),
+    ],
+)
+def test_review_decayed_memories_uses_runtime_clock_for_inline_queue_updates(
+    monkeypatch,
+    action,
+    expected_queue_params,
+):
+    monkeypatch.setenv("QUAID_NOW", "2026-07-08T09:10:11")
+    metrics = maintenance_ops.JanitorMetrics()
+    pending = [{
+        "id": "dq1",
+        "node_id": "n1",
+        "node_text": "durable personal fact",
+        "node_type": "fact",
+        "confidence_at_queue": 0.1,
+        "access_count": 2,
+        "last_accessed": "2026-06-01T00:00:00",
+        "created_at_node": "2026-01-01T00:00:00",
+        "verified": False,
+    }]
+
+    class _Conn:
+        def __init__(self):
+            self.sql = []
+            self.params = []
+
+        def execute(self, sql, params=()):
+            self.sql.append(str(sql))
+            self.params.append(tuple(params or ()))
+            text = str(sql).strip().upper()
+            if text.startswith("SELECT COUNT(*) FROM DECAY_REVIEW_QUEUE"):
+                return _DummyResult(rows=[(1,)])
+            if text.startswith("SELECT ATTRIBUTES FROM NODES"):
+                return _DummyResult(rows=[{"attributes": json.dumps({"extraction_confidence": 0.8})}])
+            if text.startswith("UPDATE NODES"):
+                return _DummyResult(rowcount=1)
+            if text.startswith("UPDATE DECAY_REVIEW_QUEUE"):
+                return _DummyResult(rowcount=1)
+            raise AssertionError(f"unexpected SQL: {sql}")
+
+    class _Graph:
+        def __init__(self):
+            self.calls = []
+
+        @contextmanager
+        def _get_conn(self):
+            conn = _Conn()
+            self.calls.append(conn)
+            yield conn
+
+    graph = _Graph()
+    llm_batches = [{
+        "batch_num": 1,
+        "batch": pending,
+        "prompt_tag": "",
+        "response_duration": (json.dumps([{"item": 1, "action": action, "reason": "still useful"}]), 0.0),
+    }]
+
+    with patch.object(maintenance_ops, "get_pending_decay_reviews", return_value=pending), \
+         patch.object(maintenance_ops, "_run_llm_batches_parallel", return_value=llm_batches):
+        out = maintenance_ops.review_decayed_memories(graph, metrics, dry_run=False, max_items=1)
+
+    assert out["reviewed"] == 1
+    all_sql = "\n".join(sql for call in graph.calls for sql in call.sql)
+    assert "datetime('now')" not in all_sql
+    apply_call = graph.calls[-1]
+    assert apply_call.params[-1] == expected_queue_params
+
 def test_backfill_embeddings_vec_upsert_failure_warns_and_continues(monkeypatch):
     monkeypatch.delenv("QUAID_JANITOR_EMBED_TIMEOUT_SECONDS", raising=False)
     monkeypatch.delenv("OLLAMA_EMBED_TIMEOUT_S", raising=False)
