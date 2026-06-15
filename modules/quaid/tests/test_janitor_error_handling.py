@@ -461,6 +461,27 @@ def test_janitor_now_rejects_malformed_quaid_now(monkeypatch):
         janitor._now_iso()
 
 
+def test_run_task_rejects_malformed_quaid_now_from_checkpoint_save(monkeypatch, tmp_path):
+    cfg = _minimal_janitor_cfg()
+    _patch_minimal_janitor_run(monkeypatch, tmp_path, cfg)
+    monkeypatch.setattr(janitor, "is_fail_hard_enabled", lambda: False)
+    monkeypatch.setenv("QUAID_NOW", "2026-02-03T04:05:06Z")
+
+    def _set_bad_clock(*_args, **_kwargs):
+        monkeypatch.setenv("QUAID_NOW", "not-a-date")
+        return janitor.RoutineResult()
+
+    monkeypatch.setattr(janitor, "_lifecycle_registry", lambda: SimpleNamespace(run=_set_bad_clock))
+
+    with pytest.raises(ValueError, match="Invalid QUAID_NOW"):
+        janitor._run_task_optimized_inner(
+            "review",
+            dry_run=False,
+            incremental=False,
+            resume_checkpoint=False,
+        )
+
+
 def test_check_for_updates_ignores_non_object_github_payload(tmp_path, monkeypatch):
     version_file = tmp_path / "VERSION"
     version_file.write_text("0.1.0", encoding="utf-8")

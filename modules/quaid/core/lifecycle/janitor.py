@@ -185,6 +185,10 @@ def _now_iso() -> str:
     return _now_datetime().isoformat()
 
 
+def _is_invalid_quaid_now_error(exc: BaseException) -> bool:
+    return isinstance(exc, ValueError) and str(exc).startswith("Invalid QUAID_NOW=")
+
+
 def _shared_logs_dir() -> Path:
     raw = str(os.environ.get("QUAID_HOME", "") or "").strip()
     if raw:
@@ -1948,6 +1952,8 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
                 print(f"  Graduated {graduated} memories from approved → active\n")
 
     except Exception as e:
+        if _is_invalid_quaid_now_error(e):
+            raise
         metrics.add_error(f"Critical error in task {task}: {str(e)}")
         memory_pipeline_ok = False
         print(f"ERROR: {e}")
