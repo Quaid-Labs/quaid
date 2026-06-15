@@ -301,9 +301,22 @@ def test_fix_vec_nodes_insert_error_respects_fail_hard():
             maintenance_ops.apply_review_decisions_from_list(_GraphAlwaysFail(), decisions, dry_run=False)
 
 
-def test_contradiction_keep_a_uses_atomic_sql_path(monkeypatch):
-    monkeypatch.setenv("QUAID_NOW", "2026-03-11T00:00:00Z")
+@pytest.mark.parametrize(
+    ("action", "expected_resolution", "superseding_id", "superseded_id"),
+    [
+        ("KEEP_A", "keep_a", "na", "nb"),
+        ("KEEP_B", "keep_b", "nb", "na"),
+    ],
+)
+def test_contradiction_resolution_uses_runtime_clock_for_timestamps(
+    monkeypatch,
+    action,
+    expected_resolution,
+    superseding_id,
+    superseded_id,
+):
     monkeypatch.setattr(maintenance_ops, "CONTRADICTION_ENABLED", True)
+    monkeypatch.setenv("QUAID_NOW", "2026-07-08T09:10:11")
     metrics = maintenance_ops.JanitorMetrics()
     pending = [{
         "id": "c1",
@@ -331,7 +344,7 @@ def test_contradiction_keep_a_uses_atomic_sql_path(monkeypatch):
 
         def execute(self, sql, params=()):
             self.sql.append(str(sql))
-            self.params.append(params)
+            self.params.append(tuple(params or ()))
             if "SELECT COUNT(*) FROM contradictions" in sql:
                 return _DummyResult(rows=[(1,)])
             return _DummyResult(rowcount=1)
@@ -351,7 +364,7 @@ def test_contradiction_keep_a_uses_atomic_sql_path(monkeypatch):
         "batch_num": 1,
         "batch": pending,
         "prompt_tag": "",
-        "response_duration": ('[{"pair": 1, "action": "KEEP_A", "reason": "latest"}]', 0.0),
+        "response_duration": (json.dumps([{"pair": 1, "action": action, "reason": "latest"}]), 0.0),
     }]
 
     with patch.object(maintenance_ops, "get_pending_contradictions", return_value=pending), \
@@ -361,12 +374,23 @@ def test_contradiction_keep_a_uses_atomic_sql_path(monkeypatch):
 
     assert out["resolved"] == 1
     assert len(graph.calls) >= 2  # count query + apply transaction
-    apply_sql = "\n".join(graph.calls[-1].sql)
+    apply_call = graph.calls[-1]
+    apply_sql = "\n".join(apply_call.sql)
     assert "UPDATE nodes SET superseded_by" in apply_sql
     assert "UPDATE contradictions" in apply_sql
     assert "datetime('now')" not in apply_sql
-    flat_params = [item for params in graph.calls[-1].params for item in params]
-    assert flat_params.count("2026-03-11T00:00:00") == 3
+    assert apply_call.params[0] == (
+        superseding_id,
+        "2026-07-08T09:10:11",
+        "2026-07-08T09:10:11",
+        superseded_id,
+    )
+    assert apply_call.params[1] == (
+        expected_resolution,
+        "latest",
+        "2026-07-08T09:10:11",
+        "c1",
+    )
 
 
 def test_quaid_now_rejects_malformed_override(monkeypatch):
