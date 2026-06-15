@@ -453,6 +453,68 @@ class TestJanitorScheduler:
             scheduler.tick()
             mock_run.assert_called_once()
 
+    def test_skips_when_checkpoint_completed_recently_under_quaid_now(self, tmp_path, monkeypatch):
+        checkpoint_dir = tmp_path / "logs" / "janitor"
+        checkpoint_dir.mkdir(parents=True)
+        cp = checkpoint_dir / "checkpoint-all.json"
+        cp.write_text(json.dumps({"last_completed_at": "2026-03-10T05:00:00Z"}))
+        old_time = time.time() - 172800
+        os.utime(cp, (old_time, old_time))
+
+        scheduler = JanitorScheduler(
+            data_dir=tmp_path,
+            quaid_home=tmp_path,
+            scheduled_hour=0,
+            window_hours=1,
+        )
+        scheduler._last_tick = 0
+        monkeypatch.setenv("QUAID_NOW", "2026-03-11T04:00:00Z")
+
+        with patch("core.compatibility.JanitorScheduler._run_janitor") as mock_run:
+            scheduler.tick()
+            mock_run.assert_not_called()
+
+    def test_triggers_when_checkpoint_completed_stale_under_quaid_now(self, tmp_path, monkeypatch):
+        checkpoint_dir = tmp_path / "logs" / "janitor"
+        checkpoint_dir.mkdir(parents=True)
+        cp = checkpoint_dir / "checkpoint-all.json"
+        cp.write_text(json.dumps({"last_completed_at": "2026-03-10T03:59:59Z"}))
+        now_time = time.time()
+        os.utime(cp, (now_time, now_time))
+
+        scheduler = JanitorScheduler(
+            data_dir=tmp_path,
+            quaid_home=tmp_path,
+            scheduled_hour=0,
+            window_hours=1,
+        )
+        scheduler._last_tick = 0
+        monkeypatch.setenv("QUAID_NOW", "2026-03-11T04:00:00Z")
+
+        with patch("core.compatibility.JanitorScheduler._run_janitor") as mock_run:
+            scheduler.tick()
+            mock_run.assert_called_once()
+
+    def test_invalid_checkpoint_json_falls_back_to_mtime(self, tmp_path):
+        checkpoint_dir = tmp_path / "logs" / "janitor"
+        checkpoint_dir.mkdir(parents=True)
+        cp = checkpoint_dir / "checkpoint-all.json"
+        cp.write_text("{not-json")
+        old_time = time.time() - 172800
+        os.utime(cp, (old_time, old_time))
+
+        scheduler = JanitorScheduler(
+            data_dir=tmp_path,
+            quaid_home=tmp_path,
+            scheduled_hour=0,
+            window_hours=24,
+        )
+        scheduler._last_tick = 0
+
+        with patch("core.compatibility.JanitorScheduler._run_janitor") as mock_run:
+            scheduler.tick()
+            mock_run.assert_called_once()
+
     def test_run_janitor_raises_when_fail_hard(self, tmp_path):
         scheduler = JanitorScheduler(
             data_dir=tmp_path,

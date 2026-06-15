@@ -78,6 +78,19 @@ def _now_datetime() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _parse_checkpoint_datetime(raw: object) -> Optional[datetime]:
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    try:
+        value = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
 # Adaptive check intervals based on current state
 CHECK_INTERVAL_NORMAL = 86400       # 24h — known compatible, low urgency
 CHECK_INTERVAL_UNTESTED = 3600      # 1h  — new host version, matrix may update soon
@@ -824,7 +837,17 @@ class JanitorScheduler:
         checkpoint = self._quaid_home / JANITOR_CHECKPOINT_FILE
         if checkpoint.exists():
             try:
-                age = now - checkpoint.stat().st_mtime
+                checkpoint_time = None
+                try:
+                    payload = json.loads(checkpoint.read_text(encoding="utf-8"))
+                    if isinstance(payload, dict):
+                        checkpoint_time = _parse_checkpoint_datetime(payload.get("last_completed_at"))
+                except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+                    checkpoint_time = None
+                if checkpoint_time is not None:
+                    age = (schedule_now - checkpoint_time).total_seconds()
+                else:
+                    age = now - checkpoint.stat().st_mtime
                 if age < 86400:
                     return  # Ran within 24h, no action needed
                 needs_catchup = True
