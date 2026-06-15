@@ -14469,6 +14469,35 @@ class TestRecallFastHookInjectContract:
         assert no_penalty == baseline
         assert with_penalty < no_penalty
 
+    def test_query_fit_multiplier_matches_compact_unicode_anchor_substrings(self):
+        import datastore.memorydb.memory_graph as mg
+
+        node = mg.Node(
+            id="n-unicode-anchor",
+            type="Fact",
+            name="美玲的云门代码是蓝石",
+            attributes={},
+        )
+
+        baseline = mg._compute_query_fit_multiplier(
+            "云门",
+            node,
+            node.attributes,
+            intent="GENERAL",
+            include_anchor_terms=False,
+        )
+        boosted = mg._compute_query_fit_multiplier(
+            "云门",
+            node,
+            node.attributes,
+            intent="GENERAL",
+            include_anchor_terms=True,
+            query_anchor_terms=["云门"],
+            allow_anchor_miss_penalty=True,
+        )
+
+        assert boosted > baseline
+
     def test_plan_query_anchor_terms_reports_timing(self):
         import datastore.memorydb.memory_graph as mg
 

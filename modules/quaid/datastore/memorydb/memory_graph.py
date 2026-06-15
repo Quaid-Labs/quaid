@@ -19224,7 +19224,7 @@ def _compute_query_fit_multiplier(
         lower_text = text.lower()
         matched_anchor_terms = [
             term for term in anchor_terms
-            if re.search(rf"\b{re.escape(term)}\b", lower_text)
+            if _text_contains_anchor_term(lower_text, term)
         ]
         if matched_anchor_terms:
             anchor_boost = 1.22 + min(0.16, 0.06 * (len(matched_anchor_terms) - 1))
