@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import deque
+from datetime import datetime, timezone
 import json
 import os
 import re
@@ -33,8 +34,20 @@ def _trace_m15(event: str, **fields) -> None:
 
 
 def _now_iso() -> str:
-    from datetime import datetime, timezone
-    return datetime.now(timezone.utc).isoformat()
+    return _now_datetime().isoformat()
+
+
+def _now_datetime() -> datetime:
+    raw = os.environ.get("QUAID_NOW", "").strip()
+    if raw:
+        try:
+            value = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            raise ValueError(f"Invalid QUAID_NOW={raw!r}") from None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+    return datetime.now(timezone.utc)
 
 
 class CodexAdapter(QuaidAdapter):
@@ -199,10 +212,11 @@ class CodexAdapter(QuaidAdapter):
         if dry_run:
             print(f"[notify] (dry-run) {message}", file=sys.stderr)
             return True
+        timestamp = _now_iso()
         try:
             pending = self._pending_notifications_path()
             pending.parent.mkdir(parents=True, exist_ok=True)
-            entry_payload = {"message": message, "ts": _now_iso()}
+            entry_payload = {"message": message, "ts": timestamp}
             source = pending_notice_source(message)
             if source:
                 entry_payload["source"] = source
@@ -226,10 +240,8 @@ class CodexAdapter(QuaidAdapter):
         if not pending.is_file():
             _trace_m15("adapter.codex.pending.missing", path=str(pending))
             return ""
+        now = _now_datetime()
         try:
-            from datetime import datetime, timezone
-
-            now = datetime.now(timezone.utc)
             messages = []
             sticky_entries = {}
             total_lines = 0

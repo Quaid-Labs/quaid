@@ -2285,6 +2285,34 @@ class TestCodexAdapter:
         assert "invalid-model-m6-probe" in second
         assert pending_path.is_file()
 
+    def test_pending_context_honors_quaid_now_for_timestamps_and_ttl(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("QUAID_INSTANCE", "codex-pending-clock")
+        monkeypatch.setenv("QUAID_NOW", "2026-03-11T05:00:00Z")
+        adapter = CodexAdapter(home=tmp_path)
+        pending_path = adapter.data_dir() / "codex-pending-notifications.jsonl"
+
+        assert adapter.notify("[Quaid error] [provider] invalid-model-pinned") is True
+        entry = json.loads(pending_path.read_text(encoding="utf-8"))
+        assert entry["ts"] == "2026-03-11T05:00:00+00:00"
+
+        monkeypatch.setenv("QUAID_NOW", "2026-03-11T05:04:00Z")
+        first = adapter.get_pending_context(max_age_seconds=300)
+        assert "invalid-model-pinned" in first
+        assert pending_path.is_file()
+
+        monkeypatch.setenv("QUAID_NOW", "2026-03-11T05:06:00Z")
+        second = adapter.get_pending_context(max_age_seconds=300)
+        assert second == ""
+        assert not pending_path.exists()
+
+    def test_pending_context_rejects_malformed_quaid_now(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("QUAID_INSTANCE", "codex-pending-bad-clock")
+        monkeypatch.setenv("QUAID_NOW", "not-a-date")
+        adapter = CodexAdapter(home=tmp_path)
+
+        with pytest.raises(ValueError, match="Invalid QUAID_NOW"):
+            adapter.notify("bad clock")
+
     def test_pending_context_drains_non_provider_notices(self, tmp_path, monkeypatch):
         monkeypatch.setenv("QUAID_INSTANCE", "codex-pending-normal")
         adapter = CodexAdapter(home=tmp_path)
