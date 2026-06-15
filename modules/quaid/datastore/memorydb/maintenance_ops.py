@@ -374,6 +374,18 @@ _EDGE_BACKFILL_ASSISTANT_SUMMARY_PREFIXES = (
     "assistant mentioned ",
 )
 
+_NON_ASCII_SQL_GLOB = "*[^ -~]*"
+
+
+def _contains_non_ascii_letter(value: str) -> bool:
+    """Permit multilingual candidates through to the LLM extractor.
+
+    This is deliberately broad: edge semantics stay LLM-owned, while the
+    deterministic filter only avoids an English-only hard block.
+    """
+    return any(ch.isalpha() and not ch.isascii() for ch in str(value or ""))
+
+
 def _canonicalize_owner_alias(name: str, owner_full: Optional[str] = None) -> str:
     """Normalize owner aliases in extracted edge entities to the canonical owner name."""
     text = str(name or "").strip()
@@ -438,6 +450,9 @@ def _looks_like_relationship_backfill_fact(text: str, attrs: Optional[Dict[str, 
 
     if any(lowered.startswith(prefix) for prefix in _EDGE_BACKFILL_ASSISTANT_SUMMARY_PREFIXES):
         return False
+
+    if _contains_non_ascii_letter(lowered):
+        return True
 
     return any(keyword in lowered for keyword in _EDGE_BACKFILL_KEYWORDS)
 
@@ -2290,7 +2305,7 @@ def find_edge_candidates_optimized(graph: MemoryGraph, metrics: JanitorMetrics,
                 "mother is", "father is", "sister is", "brother is",
                 "neighbor", "next door",
             ]
-            if not any(p in text_lower for p in patterns):
+            if not any(p in text_lower for p in patterns) and not _contains_non_ascii_letter(node.name):
                 continue
 
         candidates.append({
@@ -2779,11 +2794,11 @@ def backfill_edges(
               AND NOT EXISTS (
                   SELECT 1 FROM edges e WHERE e.source_fact_id = n.id
               )
-              AND ({kw_clauses})
+              AND ({kw_clauses} OR n.name GLOB ?)
             ORDER BY n.created_at DESC
             LIMIT ?
             """,
-            kw_params + [scan_limit],
+            kw_params + [_NON_ASCII_SQL_GLOB, scan_limit],
         ).fetchall()
 
     facts = []

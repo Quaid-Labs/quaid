@@ -361,6 +361,9 @@ def test_relationship_backfill_filter_rejects_media_title_noise_and_assistant_re
     assert maintenance_ops._looks_like_relationship_backfill_fact(
         "Maya lives with her partner David."
     ) is True
+    assert maintenance_ops._looks_like_relationship_backfill_fact(
+        "Sophie está casada con Marc."
+    ) is True
 
 
 def test_backfill_edges_skips_non_relationship_noise_before_llm_extraction():
@@ -383,6 +386,12 @@ def test_backfill_edges_skips_non_relationship_noise_before_llm_extraction():
             "owner_id": "default",
             "attributes": "{}",
         },
+        {
+            "id": "fact-2",
+            "name": "Sophie está casada con Marc.",
+            "owner_id": "default",
+            "attributes": "{}",
+        },
     ]
 
     class _DummyResult:
@@ -394,6 +403,8 @@ def test_backfill_edges_skips_non_relationship_noise_before_llm_extraction():
 
     class _Conn:
         def execute(self, sql, params=()):
+            captured["sql"] = sql
+            captured["params"] = params
             return _DummyResult(rows)
 
     class _Graph:
@@ -417,9 +428,45 @@ def test_backfill_edges_skips_non_relationship_noise_before_llm_extraction():
             owner_id="default",
         )
 
-    assert out == {"found": 1, "edges_created": 0, "errors": 0}
+    assert out == {"found": 2, "edges_created": 0, "errors": 0}
+    assert "GLOB" in captured["sql"]
+    assert maintenance_ops._NON_ASCII_SQL_GLOB in captured["params"]
     assert captured["facts"] == [
-        {"id": "fact-1", "text": "Maya lives with her partner David.", "owner_id": "default"}
+        {"id": "fact-1", "text": "Maya lives with her partner David.", "owner_id": "default"},
+        {"id": "fact-2", "text": "Sophie está casada con Marc.", "owner_id": "default"},
+    ]
+
+
+def test_find_edge_candidates_partial_scan_includes_non_ascii_facts():
+    rows = [
+        {"id": "noise-1", "name": "Conan O'Brien Needs a Friend", "type": "Fact", "owner_id": "default"},
+        {"id": "fact-1", "name": "Sophie está casada con Marc.", "type": "Fact", "owner_id": "default"},
+    ]
+
+    class _DummyResult:
+        def fetchall(self):
+            return rows
+
+    class _Conn:
+        def execute(self, *_args, **_kwargs):
+            return _DummyResult()
+
+    class _Graph:
+        @contextmanager
+        def _get_conn(self):
+            yield _Conn()
+
+        def _row_to_node(self, row):
+            return SimpleNamespace(**row)
+
+    out = maintenance_ops.find_edge_candidates_optimized(
+        graph=_Graph(),
+        metrics=maintenance_ops.JanitorMetrics(),
+        full_scan=False,
+    )
+
+    assert out == [
+        {"id": "fact-1", "text": "Sophie está casada con Marc.", "type": "Fact", "owner_id": "default"}
     ]
 
 
