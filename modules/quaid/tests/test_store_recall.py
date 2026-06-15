@@ -84,6 +84,64 @@ def test_beam_search_graph_deduplicates_nodes_reached_from_same_level(tmp_path):
     assert [row[0].id for row in rows].count(shared.id) == 1
 
 
+def test_beam_search_graph_reranker_raises_when_failhard_enabled(tmp_path):
+    import datastore.memorydb.memory_graph as mg
+
+    graph, _ = _make_graph(tmp_path)
+    start = mg.Node.create("Person", "Start person", owner_id="quaid")
+    left = mg.Node.create("Fact", "First candidate route", owner_id="quaid")
+    right = mg.Node.create("Fact", "Second candidate route", owner_id="quaid")
+    for node in (start, left, right):
+        graph.add_node(node, embed=False)
+    graph.add_edge(mg.Edge.create(start.id, left.id, "mentions"))
+    graph.add_edge(mg.Edge.create(start.id, right.id, "mentions"))
+
+    with patch.object(
+        mg,
+        "_rerank_with_cross_encoder",
+        side_effect=RuntimeError("reranker down"),
+    ), patch.object(mg, "_is_fail_hard_mode", return_value=True):
+        with pytest.raises(RuntimeError, match="BEAM graph reranker failed while failHard is enabled"):
+            graph.beam_search_graph(
+                "candidate route",
+                start.id,
+                beam_width=1,
+                max_depth=1,
+                max_results=10,
+                allow_llm_rerank=True,
+            )
+
+
+def test_beam_search_graph_reranker_falls_back_when_failhard_disabled(tmp_path):
+    import datastore.memorydb.memory_graph as mg
+
+    graph, _ = _make_graph(tmp_path)
+    start = mg.Node.create("Person", "Start person", owner_id="quaid")
+    left = mg.Node.create("Fact", "First candidate route", owner_id="quaid")
+    right = mg.Node.create("Fact", "Second candidate route", owner_id="quaid")
+    for node in (start, left, right):
+        graph.add_node(node, embed=False)
+    graph.add_edge(mg.Edge.create(start.id, left.id, "mentions"))
+    graph.add_edge(mg.Edge.create(start.id, right.id, "mentions"))
+
+    with patch.object(
+        mg,
+        "_rerank_with_cross_encoder",
+        side_effect=RuntimeError("reranker down"),
+    ), patch.object(mg, "_is_fail_hard_mode", return_value=False):
+        rows = graph.beam_search_graph(
+            "candidate route",
+            start.id,
+            beam_width=1,
+            max_depth=1,
+            max_results=10,
+            allow_llm_rerank=True,
+        )
+
+    assert len(rows) == 1
+    assert rows[0][0].id in {left.id, right.id}
+
+
 def test_delete_node_cleans_edges_and_supersession_without_fk_cascade(tmp_path, monkeypatch):
     from contextlib import contextmanager
     import datastore.memorydb.memory_graph as mg

@@ -3203,7 +3203,11 @@ class MemoryGraph:
                             rescored.append((*cand[:5], new_score))
                         rescored.sort(key=lambda x: x[5], reverse=True)
                         next_candidates = rescored + rest
-                    except Exception:
+                    except Exception as exc:
+                        if _is_fail_hard_mode():
+                            raise RuntimeError(
+                                "BEAM graph reranker failed while failHard is enabled"
+                            ) from exc
                         logger.debug("BEAM reranker failed; using heuristic-only ranking", exc_info=True)
 
                 beam = []
