@@ -3980,7 +3980,7 @@ def _relation_matches_for_query(query: str) -> List[str]:
     lowered = str(query or "").lower()
     if not lowered.strip():
         return []
-    words = set(re.findall(r"[a-z0-9_'-]+", lowered))
+    words = set(_normalize_relation_query_tokens(query))
     matches: set[str] = set()
     keyword_map = get_edge_keywords()
     for relation, keywords in keyword_map.items():
@@ -3992,7 +3992,11 @@ def _relation_matches_for_query(query: str) -> List[str]:
                 if normalized in lowered:
                     matches.add(relation)
                     break
-            elif normalized in words:
+            elif normalized.isascii():
+                if normalized in words:
+                    matches.add(relation)
+                    break
+            elif normalized in lowered:
                 matches.add(relation)
                 break
     relation_tokens = _relation_tokens_for_runtime()

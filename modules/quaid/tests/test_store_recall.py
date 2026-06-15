@@ -13626,6 +13626,38 @@ class TestRecallFastHookInjectContract:
 
         assert "depends_on" in matched
 
+    def test_relation_matches_use_non_ascii_edge_keywords(self):
+        import datastore.memorydb.memory_graph as mg
+
+        class _Graph:
+            def get_known_relations(self):
+                return []
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=_Graph()), \
+             patch(
+                 "datastore.memorydb.memory_graph.get_edge_keywords",
+                 return_value={"sibling_of": ["兄", "姉"]},
+             ):
+            matched = mg._relation_matches_for_query("兄の予定は何ですか")
+
+        assert matched == ["sibling_of"]
+
+    def test_relation_matches_keep_ascii_edge_keywords_token_bound(self):
+        import datastore.memorydb.memory_graph as mg
+
+        class _Graph:
+            def get_known_relations(self):
+                return []
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=_Graph()), \
+             patch(
+                 "datastore.memorydb.memory_graph.get_edge_keywords",
+                 return_value={"assigned_to": ["team"]},
+             ):
+            matched = mg._relation_matches_for_query("teammate schedule")
+
+        assert matched == []
+
     def test_infer_recall_store_defaults_routes_graph_from_live_relation_types(self):
         import datastore.memorydb.memory_graph as mg
 
