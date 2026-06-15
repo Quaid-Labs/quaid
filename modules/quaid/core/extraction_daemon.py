@@ -38,6 +38,7 @@ import sys
 import tempfile
 import time
 import traceback
+import unicodedata
 import uuid
 from io import StringIO
 from datetime import datetime, timezone
@@ -5221,7 +5222,19 @@ def _is_short_ignored_timeout_user_turn(text: str) -> bool:
     if not value:
         return True
     normalized = re.sub(r"\s+", " ", value).strip()
-    return len(normalized) <= _IGNORED_TIMEOUT_USER_TURN_MAX_CHARS
+    return (
+        len(normalized) <= _IGNORED_TIMEOUT_USER_TURN_MAX_CHARS
+        and not _has_non_ascii_letter_signal(normalized)
+    )
+
+
+def _has_non_ascii_letter_signal(text: str) -> bool:
+    normalized = unicodedata.normalize("NFKC", str(text or ""))
+    return any(ord(ch) > 127 and ch.isalpha() for ch in normalized)
+
+
+def _short_transcript_should_bypass_length_gate(transcript_text: str) -> bool:
+    return _has_non_ascii_letter_signal(transcript_text)
 
 
 def _transcript_has_meaningful_timeout_user_content(transcript_text: str) -> bool:
@@ -5252,10 +5265,15 @@ def _classify_timeout_transcript_content(transcript_text: str) -> str:
     saw_user = False
     saw_startup_wrapper = False
     saw_no_reply_assistant = False
+    saw_visible_assistant_content = False
     non_startup_user_turns: List[str] = []
     for role, content in turns:
-        if role == "assistant" and str(content or "").strip().upper() == "NO_REPLY":
-            saw_no_reply_assistant = True
+        if role == "assistant":
+            assistant_content = str(content or "").strip()
+            if assistant_content.upper() == "NO_REPLY":
+                saw_no_reply_assistant = True
+            elif assistant_content:
+                saw_visible_assistant_content = True
         if role != "user":
             continue
         saw_user = True
@@ -5264,6 +5282,8 @@ def _classify_timeout_transcript_content(transcript_text: str) -> str:
             continue
         non_startup_user_turns.append(content)
     if not saw_user:
+        if saw_visible_assistant_content:
+            return _TRANSCRIPT_CLASS_MEANINGFUL_USER_CONTENT
         return (
             _TRANSCRIPT_CLASS_IGNORE_CONTENT
             if saw_no_reply_assistant
@@ -6599,7 +6619,10 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             # silently dropping short but valid user messages.
             _MIN_EXTRACTABLE_CHARS = 50
             transcript_len = len(transcript_text.strip())
-            if transcript_len < _MIN_EXTRACTABLE_CHARS:
+            if (
+                transcript_len < _MIN_EXTRACTABLE_CHARS
+                and not _short_transcript_should_bypass_length_gate(transcript_text)
+            ):
                 if int(cursor_offset or 0) == 0:
                     try:
                         full_transcript_text = adapter.parse_session_jsonl(Path(transcript_path)) if adapter is not None else ""

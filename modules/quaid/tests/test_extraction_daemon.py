@@ -4201,6 +4201,115 @@ def test_process_signal_recovers_full_transcript_before_too_short_skip(
     assert cursor["line_offset"] == 7
 
 
+def test_process_signal_extracts_short_unicode_transcript(
+    monkeypatch,
+    tmp_path,
+):
+    from lib.adapter import set_adapter, reset_adapter
+    from ingest import extract as extract_mod
+    from core import ingest_runtime
+    from core.runtime import notify as notify_mod
+
+    session_id = "short-unicode-session"
+    transcript_path = tmp_path / "short-unicode.jsonl"
+    transcript_path.write_text(
+        '{"role":"user","content":"会議は三時"}\n',
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "unicode-inst")
+    monkeypatch.setattr(extraction_daemon, "_get_owner_id", lambda: "owner-1")
+    monkeypatch.setattr(extraction_daemon, "_read_usage_totals", lambda: {})
+    monkeypatch.setattr(extraction_daemon, "_session_has_harvestable_subagents", lambda *args, **kwargs: False)
+    monkeypatch.setattr(extraction_daemon, "_buffer_transcript_tail", lambda path, start, state, **kwargs: (dict(state or {}), {
+        "raw_lines_added": 0,
+        "semantic_chars_added": 0,
+        "semantic_tokens_added": 0,
+        "buffered_line_offset": int(start or 0),
+    }))
+    monkeypatch.setattr(extraction_daemon, "_warm_payload_embeddings", lambda _facts: {
+        "requested": 0,
+        "unique": 0,
+        "cache_hits": 0,
+        "warmed": 0,
+        "failed": 0,
+        "skipped_empty": 0,
+    })
+    monkeypatch.setattr(notify_mod, "notify_memory_extraction", lambda **_kwargs: None)
+    monkeypatch.setattr(ingest_runtime, "run_session_logs_ingest", lambda **_kwargs: {"status": "indexed"})
+
+    captured = {}
+
+    class _Adapter(_OwnedTestAdapterMixin):
+        def instance_root(self):
+            return tmp_path / "instances" / "unicode-inst"
+
+        def parse_session_jsonl(self, path):
+            _ = path
+            return "User: 会議は三時"
+
+        def is_subagent_session(self, session_id, transcript_path=None):
+            return False
+
+    def fake_extract_from_transcript(transcript, **kwargs):
+        captured["transcript"] = transcript
+        return {
+            "chunks_processed": 1,
+            "chunks_total": 1,
+            "unclassified_empty_payloads": 0,
+            "raw_facts": [
+                {
+                    "text": "会議は三時",
+                    "category": "fact",
+                    "domains": ["personal"],
+                    "extraction_confidence": "high",
+                }
+            ],
+            "facts": [],
+            "soul_snippets": {},
+            "journal_entries": {},
+            "project_logs": {},
+            "raw_snippets": {},
+            "raw_journal": {},
+            "raw_project_logs": {},
+            "carry_facts": [],
+        }
+
+    monkeypatch.setattr(extract_mod, "extract_from_transcript", fake_extract_from_transcript)
+    monkeypatch.setattr(
+        extract_mod,
+        "apply_extracted_payloads",
+        lambda *_args, **_kwargs: {
+            "facts_stored": 1,
+            "facts_skipped": 0,
+            "edges_created": 0,
+            "facts": [{"text": "会議は三時", "status": "stored", "edges": []}],
+            "snippets": {},
+            "journal": {},
+            "project_log_metrics": {},
+        },
+    )
+
+    set_adapter(_Adapter())
+    try:
+        signal_path = extraction_daemon.write_signal(
+            signal_type="timeout",
+            session_id=session_id,
+            transcript_path=str(transcript_path),
+        )
+        signal_data = json.loads(signal_path.read_text(encoding="utf-8"))
+        signal_data["_signal_path"] = str(signal_path)
+
+        extraction_daemon.process_signal(signal_data)
+    finally:
+        reset_adapter()
+
+    assert "会議は三時" in captured["transcript"]
+    cursor = extraction_daemon.read_cursor(session_id)
+    assert cursor["processed_signal_type"] == "timeout"
+
+
 def test_reset_reextract_clears_stale_rolling_buffer_offset(
     monkeypatch,
     tmp_path,
@@ -5089,7 +5198,7 @@ def test_check_idle_sessions_does_not_freeze_parse_empty_growth(monkeypatch, tmp
     assert not cursor.get("internal")
 
 
-@pytest.mark.parametrize("turn", ["Hello", "Hola", "こんにちは"])
+@pytest.mark.parametrize("turn", ["Hello", "Hola"])
 def test_timeout_classifier_treats_short_startup_turn_as_ignore_not_internal(turn):
     transcript = (
         "User: A new session was started via /new or /reset.\n"
@@ -5102,6 +5211,30 @@ def test_timeout_classifier_treats_short_startup_turn_as_ignore_not_internal(tur
         == extraction_daemon._TRANSCRIPT_CLASS_IGNORE_CONTENT
     )
     assert not extraction_daemon._transcript_has_meaningful_timeout_user_content(transcript)
+
+
+def test_timeout_classifier_keeps_short_unicode_startup_user_turn_meaningful():
+    transcript = (
+        "User: A new session was started via /new or /reset.\n"
+        "Assistant: NO_REPLY\n"
+        "User: 会議は三時"
+    )
+
+    assert (
+        extraction_daemon._classify_timeout_transcript_content(transcript)
+        == extraction_daemon._TRANSCRIPT_CLASS_MEANINGFUL_USER_CONTENT
+    )
+    assert extraction_daemon._transcript_has_meaningful_timeout_user_content(transcript)
+
+
+def test_timeout_classifier_keeps_visible_assistant_only_content_meaningful():
+    transcript = "Assistant: Visible assistant content should remain extractable."
+
+    assert (
+        extraction_daemon._classify_timeout_transcript_content(transcript)
+        == extraction_daemon._TRANSCRIPT_CLASS_MEANINGFUL_USER_CONTENT
+    )
+    assert extraction_daemon._transcript_has_meaningful_timeout_user_content(transcript)
 
 
 def test_timeout_classifier_ignores_structural_turn_timestamps():
