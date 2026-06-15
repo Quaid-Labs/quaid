@@ -13179,6 +13179,51 @@ class TestRecallFastHookInjectContract:
         assert bundle["telemetry"]["date_to"] == "2026-04-20"
         assert meta["counts"]["final_results"] == 1
 
+    def test_legacy_project_log_date_filter_matches_inferred_project_case_insensitively(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+
+        db_path = tmp_path / "docs.db"
+        with sqlite3.connect(db_path) as conn:
+            conn.execute(
+                """
+                CREATE TABLE doc_chunks (
+                    source_file TEXT,
+                    chunk_index INTEGER,
+                    content TEXT,
+                    section_header TEXT
+                )
+                """
+            )
+            conn.execute(
+                "INSERT INTO doc_chunks(source_file, chunk_index, content, section_header) VALUES (?, ?, ?, ?)",
+                (
+                    "/tmp/indexed/PROJECT.log",
+                    0,
+                    "- [2026-04-20T10:00:00] Mixed-case project milestone",
+                    None,
+                ),
+            )
+
+        class LegacyDocsRAG:
+            def __init__(self):
+                self.db_path = db_path
+
+            def infer_project_for_source(self, source_file):
+                return "livetest-agentmsg-oc"
+
+        chunks = mg._legacy_search_dated_project_logs(
+            LegacyDocsRAG(),
+            query="milestone",
+            limit=5,
+            project="livetest-agentmsg-OC",
+            docs=None,
+            date_from=None,
+            date_to="2026-04-20",
+        )
+
+        assert len(chunks) == 1
+        assert "Mixed-case project milestone" in chunks[0]["content"]
+
     def test_docs_project_log_query_terms_keep_short_compact_unicode_anchors(self):
         import datastore.memorydb.memory_graph as mg
 

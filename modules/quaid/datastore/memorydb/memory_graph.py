@@ -8710,6 +8710,10 @@ def _docs_source_matches_filters(source_file: str, docs: Optional[List[str]]) ->
 def _docs_source_matches_project(rag: Any, source_file: str, project: Optional[str]) -> bool:
     if not project:
         return True
+
+    def _project_key(value: Any) -> str:
+        return unicodedata.normalize("NFKC", str(value or "").strip()).casefold()
+
     inferred_project: Optional[str] = None
     infer_project = getattr(rag, "infer_project_for_source", None)
     if callable(infer_project):
@@ -8719,10 +8723,10 @@ def _docs_source_matches_project(rag: Any, source_file: str, project: Optional[s
                 inferred_project = inferred
         except Exception:
             pass
-    project_token = str(project or "").strip().lower()
+    project_token = _project_key(project)
     if not project_token:
         return True
-    normalized = str(source_file or "").replace("\\", "/").lower()
+    normalized = _project_key(str(source_file or "").replace("\\", "/"))
     path_match = (
         f"/{project_token}/" in normalized
         or normalized.startswith(f"{project_token}/")
@@ -8731,7 +8735,7 @@ def _docs_source_matches_project(rag: Any, source_file: str, project: Optional[s
     )
     if path_match:
         return True
-    return inferred_project == str(project)
+    return inferred_project is not None and _project_key(inferred_project) == project_token
 
 
 def _docs_infer_project_for_source(rag: Any, source_file: str) -> Optional[str]:
