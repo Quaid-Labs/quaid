@@ -1121,6 +1121,15 @@ class TestWriteJournalEdgeCases:
         content = (workspace_dir / "journal" / "SOUL.journal.md").read_text()
         assert "2026-03-11" in content
 
+    def test_date_default_rejects_malformed_quaid_now(self, workspace_dir, mock_config, monkeypatch):
+        monkeypatch.setenv("QUAID_NOW", "not-a-date")
+
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import write_journal_entry
+
+            with pytest.raises(ValueError, match="Invalid QUAID_NOW"):
+                write_journal_entry("SOUL.md", "Auto-dated entry.", "Compaction")
+
     def test_whitespace_only_content_skipped(self, workspace_dir, mock_config):
         """write_journal_entry rejects whitespace-only content."""
         with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):

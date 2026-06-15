@@ -135,7 +135,8 @@ def _current_utc_timestamp() -> str:
         normalized = _normalize_extracted_timestamp(quaid_now)
         if normalized:
             return normalized
-        logger.warning("[extract] invalid QUAID_NOW=%r; falling back to wall clock", quaid_now)
+        logger.warning("[extract] invalid QUAID_NOW=%r", quaid_now)
+        raise ValueError(f"Invalid QUAID_NOW={quaid_now!r}") from None
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 

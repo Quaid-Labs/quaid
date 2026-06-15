@@ -1,5 +1,7 @@
 from contextlib import contextmanager
 
+import pytest
+
 from datastore.memorydb import memory_graph
 
 
@@ -57,3 +59,10 @@ def test_memorydb_review_helpers_bind_quaid_now_instead_of_sql_now(monkeypatch):
     assert flat_params.count("2026-03-11T00:00:00+00:00") == 7
     assert "2026-03-10T00:00:00+00:00" in flat_params
     assert "2026-02-09T00:00:00+00:00" in flat_params
+
+
+def test_memorydb_now_rejects_malformed_quaid_now(monkeypatch):
+    monkeypatch.setenv("QUAID_NOW", "not-a-date")
+
+    with pytest.raises(ValueError, match="Invalid QUAID_NOW"):
+        memory_graph._now()

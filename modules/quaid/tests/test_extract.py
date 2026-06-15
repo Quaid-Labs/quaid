@@ -1186,6 +1186,14 @@ class TestExtractFromTranscript:
 
         assert extract_mod._current_utc_timestamp() == "2026-03-11T00:00:00+00:00"
 
+    def test_current_utc_timestamp_rejects_malformed_quaid_now(self, monkeypatch):
+        from ingest import extract as extract_mod
+
+        monkeypatch.setenv("QUAID_NOW", "not-a-date")
+
+        with pytest.raises(ValueError, match="Invalid QUAID_NOW"):
+            extract_mod._current_utc_timestamp()
+
     @patch("ingest.extract._current_utc_timestamp", return_value="2026-05-02T14:30:00+00:00")
     @patch("ingest.extract.call_deep_reasoning")
     def test_extraction_defaults_mentioned_at_to_transcript_timestamp(self, mock_llm, _mock_now):

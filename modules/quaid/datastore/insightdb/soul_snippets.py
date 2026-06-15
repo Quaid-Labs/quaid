@@ -161,7 +161,8 @@ def _quaid_now() -> datetime:
             try:
                 return datetime.strptime(raw, "%Y-%m-%d")
             except ValueError:
-                logger.warning("Invalid QUAID_NOW=%r; using wall clock", raw)
+                logger.warning("Invalid QUAID_NOW=%r", raw)
+                raise ValueError(f"Invalid QUAID_NOW={raw!r}") from None
     return datetime.now()
 
 

@@ -369,6 +369,13 @@ def test_contradiction_keep_a_uses_atomic_sql_path(monkeypatch):
     assert flat_params.count("2026-03-11T00:00:00") == 3
 
 
+def test_quaid_now_rejects_malformed_override(monkeypatch):
+    monkeypatch.setenv("QUAID_NOW", "not-a-date")
+
+    with pytest.raises(ValueError, match="Invalid QUAID_NOW"):
+        maintenance_ops._quaid_now()
+
+
 def test_review_dedup_rejections_uses_quaid_now_for_sql_timestamps(monkeypatch):
     monkeypatch.setenv("QUAID_NOW", "2026-03-11T00:00:00Z")
     metrics = maintenance_ops.JanitorMetrics()
