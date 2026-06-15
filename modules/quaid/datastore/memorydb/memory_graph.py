@@ -7110,8 +7110,13 @@ def _append_recall_telemetry_trace(payload: Dict[str, Any]) -> None:
     try:
         path = get_logs_dir() / "recall-telemetry.jsonl"
         path.parent.mkdir(parents=True, exist_ok=True)
+        now = _now()
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+        else:
+            now = now.astimezone(timezone.utc)
         event = {
-            "ts": datetime.now(timezone.utc).isoformat(),
+            "ts": now.isoformat(),
             **dict(payload or {}),
         }
         with path.open("a", encoding="utf-8") as f:

@@ -18783,6 +18783,7 @@ class TestRecallLimitEdgeCases:
         graph, _ = _make_graph(tmp_path)
         logs_dir = tmp_path / "logs"
         monkeypatch.setenv("QUAID_RECALL_TELEMETRY", "1")
+        monkeypatch.setenv("QUAID_NOW", "2031-04-05T06:07:08+00:00")
 
         with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
              patch("datastore.memorydb.memory_graph.get_logs_dir", return_value=logs_dir), \
@@ -18838,6 +18839,7 @@ class TestRecallLimitEdgeCases:
         trace_path = logs_dir / "recall-telemetry.jsonl"
         assert trace_path.exists()
         payload = json.loads(trace_path.read_text().splitlines()[-1])
+        assert payload["ts"] == "2031-04-05T06:07:08+00:00"
         assert payload["telemetry"]["filters"]["threshold_basis"] == "composite_score"
         assert len(payload["telemetry"]["samples"]["threshold_rejected"]) >= 1
 
