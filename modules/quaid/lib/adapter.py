@@ -134,6 +134,14 @@ class QuaidAdapter(abc.ABC):
         r"^\s*Quaid notices?:",
         flags=re.IGNORECASE,
     )
+    _GATEWAY_TIMESTAMP_PREFIX_RE = re.compile(
+        r"^\[[^\W\d_]{1,16}\s+"
+        r"\d{4}-\d{2}-\d{2}\s+"
+        r"\d{2}:\d{2}(?::\d{2})?\s+"
+        r"(?:[A-Z]{1,8}(?:[+-]\d{1,2}(?::?\d{2})?)?|[+-]\d{2}:?\d{2})"
+        r"\]\s*",
+        flags=re.IGNORECASE | re.MULTILINE,
+    )
 
     # ---- Paths ----
 
@@ -453,6 +461,11 @@ class QuaidAdapter(abc.ABC):
         value = cls._QUAID_SYSTEM_LEAD_IN_RE.sub("", value)
         return value.strip()
 
+    @classmethod
+    def strip_gateway_timestamp_prefixes(cls, text: str) -> str:
+        """Remove host gateway timestamps without stripping arbitrary bracketed user text."""
+        return cls._GATEWAY_TIMESTAMP_PREFIX_RE.sub("", str(text or ""))
+
     def sanitize_transcript_text(self, text: str) -> str:
         value = self.strip_quaid_system_messages(text)
         if not value:
@@ -543,12 +556,7 @@ class QuaidAdapter(abc.ABC):
                 text,
                 flags=re.DOTALL,
             )
-            # Strip OC gateway timestamp prefix [day-label date time tz].
-            text = re.sub(
-                r"^\[[^\]\r\n\d]{1,32}\s+\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}[^\]\r\n]*\]\s*",
-                "",
-                text,
-            )
+            text = self.strip_gateway_timestamp_prefixes(text)
             # Strip Sender metadata blocks injected by OC gateway
             text = re.sub(
                 r"Sender \(untrusted metadata\):.*?(?=\n\n|\Z)",

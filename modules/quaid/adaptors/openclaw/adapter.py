@@ -765,7 +765,6 @@ class OpenClawAdapter(QuaidAdapter):
 
     # OC gateway prepends "[Day Date HH:MM TZ]" to every user message.
     # Also strips OC-injected "(untrusted metadata)" code blocks.
-    _OC_TIMESTAMP_PREFIX_RE = re.compile(r"^\[.*?\]\s*", re.MULTILINE)
     _OC_UNTRUSTED_METADATA_RE = re.compile(
         r"\w[\w\s]*\s*\(untrusted metadata\):[\s\S]*?```[\s\S]*?```",
         re.IGNORECASE,
@@ -829,8 +828,7 @@ class OpenClawAdapter(QuaidAdapter):
         value = self._HOOK_CONTEXT_MEMORY_BLOCK_RE.sub("", value)
         value = self._HOOK_CONTEXT_LINE_RE.sub("", value)
         value = self._PLAIN_QUAID_MEMORY_CONTEXT_RE.sub("\n", value)
-        # Strip gateway timestamp prefix from the start of each line.
-        value = self._OC_TIMESTAMP_PREFIX_RE.sub("", value)
+        value = self.strip_gateway_timestamp_prefixes(value)
         value = re.sub(r"\n{3,}", "\n\n", value)
         return value.strip()
 

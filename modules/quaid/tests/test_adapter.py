@@ -287,11 +287,16 @@ class TestStandaloneAdapter:
                 "role": "user",
                 "content": "[重要] Keep this bracketed user content.",
             },
+            {
+                "role": "user",
+                "content": "[Action 2026-01-15 10:00] Keep this dated bracketed note.",
+            },
         ])
 
         assert "2026-03-22 08:14" not in transcript
         assert "User: Meeting notes start here." in transcript
         assert "User: [重要] Keep this bracketed user content." in transcript
+        assert "User: [Action 2026-01-15 10:00] Keep this dated bracketed note." in transcript
 
     def test_parse_session_jsonl_uses_adapter_transcript_rules(self, standalone, tmp_path):
         import json
@@ -954,6 +959,19 @@ class TestOpenClawAdapter:
             "the model should consider it before responding to the user."
         )
         assert adapter.sanitize_transcript_text(text) == text
+
+    def test_sanitize_transcript_text_strips_gateway_timestamp_not_user_brackets(self):
+        adapter = OpenClawAdapter()
+        text = (
+            "[Thu 2026-04-09 17:19 UTC] Gateway timestamp should go.\n"
+            "[Action 2026-01-15 10:00] Keep this dated bracketed note."
+        )
+
+        sanitized = adapter.sanitize_transcript_text(text)
+
+        assert "Gateway timestamp should go." in sanitized
+        assert "Thu 2026-04-09 17:19 UTC" not in sanitized
+        assert "[Action 2026-01-15 10:00] Keep this dated bracketed note." in sanitized
 
     def test_sanitize_transcript_text_collapses_newlines_after_startup_strip(self):
         adapter = OpenClawAdapter()
