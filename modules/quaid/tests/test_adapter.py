@@ -1096,6 +1096,24 @@ class TestOpenClawAdapter:
         adapter = OpenClawAdapter()
         assert adapter.get_instance_name() == "coding"
 
+    @pytest.mark.parametrize(
+        ("instance_id", "expected_label"),
+        [
+            ("openclaw-研究", "研究"),
+            ("openclaw-Élan", "élan"),
+            ("openclaw-فريق1", "فريق1"),
+        ],
+    )
+    def test_get_instance_name_accepts_unicode_openclaw_label(
+        self,
+        monkeypatch,
+        instance_id,
+        expected_label,
+    ):
+        monkeypatch.setenv("QUAID_INSTANCE", instance_id)
+        adapter = OpenClawAdapter()
+        assert adapter.get_instance_name() == expected_label
+
     def test_get_instance_name_rejects_unsafe_label_when_fail_hard(self, monkeypatch):
         monkeypatch.setenv("QUAID_INSTANCE", "openclaw-../evil")
         adapter = OpenClawAdapter()

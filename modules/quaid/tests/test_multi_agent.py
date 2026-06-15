@@ -245,6 +245,33 @@ class TestListAgentInstanceIds:
 
         assert ids[0] == "openclaw-main"
 
+    def test_oc_list_ids_preserves_unicode_agent_labels(self, tmp_path):
+        adapter = _make_oc_adapter(tmp_path)
+        oc_json_content = json.dumps(
+            {
+                "agents": {
+                    "list": [
+                        {"id": "main"},
+                        {"id": "研究"},
+                        {"id": "Élan"},
+                    ],
+                    "فريق1": {},
+                }
+            }
+        )
+        fake_cfg_path = tmp_path / "openclaw.json"
+        fake_cfg_path.write_text(oc_json_content, encoding="utf-8")
+
+        with patch.object(adapter, "get_gateway_config_path", return_value=fake_cfg_path):
+            ids = adapter.list_agent_instance_ids()
+
+        assert ids == [
+            "openclaw-main",
+            "openclaw-研究",
+            "openclaw-élan",
+            "openclaw-فريق1",
+        ]
+
     def test_oc_list_ids_skips_deleted_agent_silo_without_platform_state(self, monkeypatch, tmp_path):
         adapter = _make_oc_adapter(tmp_path)
         fake_cfg = tmp_path / "openclaw.json"

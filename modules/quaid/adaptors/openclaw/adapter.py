@@ -15,6 +15,7 @@ import re
 import shutil
 import subprocess
 import sys
+import unicodedata
 from pathlib import Path
 from typing import Optional
 
@@ -47,7 +48,6 @@ class OpenClawAdapter(QuaidAdapter):
         "anthropic-claude-code": "anthropic",
     }
     _NON_ROUTABLE_NOTIFY_CHANNELS = {"webchat"}
-    _SAFE_AGENT_LABEL_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
     _SAFE_SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
     _OTHER_ADAPTER_INSTANCE_PREFIXES = (
         "claude-",
@@ -155,16 +155,36 @@ class OpenClawAdapter(QuaidAdapter):
 
     @classmethod
     def _sanitize_agent_label(cls, label: str, *, default: str = "main") -> str:
-        clean = str(label or "").strip().lower()
+        clean = unicodedata.normalize("NFKC", str(label or "").strip()).lower()
         if not clean:
             return default
-        if cls._SAFE_AGENT_LABEL_RE.fullmatch(clean):
+        if cls._is_safe_agent_label(clean):
             return clean
         message = f"Unsafe OpenClaw agent label: {label!r}"
         print(f"[adapter] {message}", file=sys.stderr)
         if is_fail_hard_enabled():
             raise ValueError(message)
         return default
+
+    @staticmethod
+    def _is_safe_agent_label(label: str) -> bool:
+        if not label or len(label) > 64 or label in {".", ".."}:
+            return False
+        has_path_component = False
+        for char in label:
+            category = unicodedata.category(char)
+            if char in {"_", "-"}:
+                has_path_component = True
+                continue
+            if char.isspace() or category[0] == "C":
+                return False
+            if char.isalpha() or char.isdigit():
+                has_path_component = True
+                continue
+            if category[0] == "M":
+                continue
+            return False
+        return has_path_component
 
     @classmethod
     def _safe_session_id(cls, session_id: str) -> str:
@@ -1412,11 +1432,12 @@ class OpenClawAdapter(QuaidAdapter):
         silo_prefix = f"{prefix}-"
         try:
             home = self.quaid_home() / "instances"
-            for entry in home.iterdir():
-                if entry.is_dir() and entry.name.startswith(silo_prefix):
-                    label = self._sanitize_agent_label(entry.name[len(silo_prefix):], default="")
-                    if label and label not in labels and self._agent_label_has_platform_state(label):
-                        labels.append(label)
+            if home.exists():
+                for entry in home.iterdir():
+                    if entry.is_dir() and entry.name.startswith(silo_prefix):
+                        label = self._sanitize_agent_label(entry.name[len(silo_prefix):], default="")
+                        if label and label not in labels and self._agent_label_has_platform_state(label):
+                            labels.append(label)
         except (OSError, RuntimeError):
             if is_fail_hard_enabled():
                 raise
@@ -1446,9 +1467,15 @@ class OpenClawAdapter(QuaidAdapter):
                 agents = cfg.get("agents", {})
                 if isinstance(agents, dict):
                     for row in agents.get("list", []) or []:
-                        if isinstance(row, dict) and str(row.get("id") or "").strip().lower() == clean:
+                        if (
+                            isinstance(row, dict)
+                            and self._sanitize_agent_label(row.get("id", ""), default="") == clean
+                        ):
                             return True
-                    if clean in {str(key or "").strip().lower() for key in agents.keys()}:
+                    if clean in {
+                        self._sanitize_agent_label(str(key or ""), default="")
+                        for key in agents.keys()
+                    }:
                         return True
             except (json.JSONDecodeError, OSError, UnicodeDecodeError):
                 if is_fail_hard_enabled():
