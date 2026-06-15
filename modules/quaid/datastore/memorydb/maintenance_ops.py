@@ -2127,7 +2127,7 @@ JSON array only:"""
                 if dry_run:
                     print(f"    Would KEEP_A: supersede B ({c['text_b'][:40]}...) — {reason[:50]}")
                 else:
-                    now_iso = datetime.now().isoformat()
+                    now_iso = _quaid_now().isoformat()
                     with graph._get_conn() as conn:
                         conn.execute(
                             """
@@ -2141,10 +2141,10 @@ JSON array only:"""
                             """
                             UPDATE contradictions
                             SET status = 'resolved', resolution = ?, resolution_reason = ?,
-                                resolved_at = datetime('now')
+                                resolved_at = ?
                             WHERE id = ?
                             """,
-                            ("keep_a", reason, c["id"]),
+                            ("keep_a", reason, now_iso, c["id"]),
                         )
                 results["resolved"] += 1
                 batch_resolved += 1
@@ -2154,7 +2154,7 @@ JSON array only:"""
                 if dry_run:
                     print(f"    Would KEEP_B: supersede A ({c['text_a'][:40]}...) — {reason[:50]}")
                 else:
-                    now_iso = datetime.now().isoformat()
+                    now_iso = _quaid_now().isoformat()
                     with graph._get_conn() as conn:
                         conn.execute(
                             """
@@ -2168,10 +2168,10 @@ JSON array only:"""
                             """
                             UPDATE contradictions
                             SET status = 'resolved', resolution = ?, resolution_reason = ?,
-                                resolved_at = datetime('now')
+                                resolved_at = ?
                             WHERE id = ?
                             """,
-                            ("keep_b", reason, c["id"]),
+                            ("keep_b", reason, now_iso, c["id"]),
                         )
                 results["resolved"] += 1
                 batch_resolved += 1
@@ -2866,15 +2866,17 @@ def review_dedup_rejections(
     results = {"reviewed": 0, "confirmed": 0, "reversed": 0, "carryover": 0}
 
     # Auto-confirm hash_exact entries — they're identical text, no LLM needed
+    now = _quaid_now()
+    now_iso = now.isoformat()
     with graph._get_conn() as conn:
         auto_confirmed = conn.execute("""
             UPDATE dedup_log
             SET review_status = 'confirmed',
                 review_resolution = 'auto-confirmed: exact content hash match',
-                reviewed_at = datetime('now')
+                reviewed_at = ?
             WHERE review_status = 'unreviewed'
               AND decision = 'hash_exact'
-        """).rowcount
+        """, (now_iso,)).rowcount
     if auto_confirmed:
         print(f"  Auto-confirmed {auto_confirmed} hash-exact dedup entries")
         results["confirmed"] += auto_confirmed
@@ -2885,6 +2887,7 @@ def review_dedup_rejections(
         batch_limit = max(1, min(int(max_items), 5000))
     pending = get_recent_dedup_rejections(hours=24, limit=batch_limit)
     if batch_limit:
+        cutoff = (now - timedelta(hours=24)).isoformat()
         with graph._get_conn() as conn:
             total_pending = int(
                 conn.execute(
@@ -2892,8 +2895,9 @@ def review_dedup_rejections(
                     SELECT COUNT(*) FROM dedup_log
                     WHERE review_status = 'unreviewed'
                       AND decision != 'hash_exact'
-                      AND created_at > datetime('now', '-24 hours')
-                    """
+                      AND created_at > ?
+                    """,
+                    (cutoff,),
                 ).fetchone()[0]
             )
         results["carryover"] = max(total_pending - len(pending), 0)
@@ -3211,6 +3215,7 @@ JSON array only:"""
                 if not dry_run:
                     # Apply node update and queue resolution together to avoid partial commit.
                     ext_conf = 0.3
+                    now_iso = _quaid_now().isoformat()
                     with graph._get_conn() as conn:
                         row = conn.execute("SELECT attributes FROM nodes WHERE id = ?", (node_id,)).fetchone()
                         if row:
@@ -3225,16 +3230,16 @@ JSON array only:"""
                         extend_conf = max(0.3, float(ext_conf) * 0.5) if ext_conf else 0.3
                         conn.execute(
                             "UPDATE nodes SET confidence = ?, accessed_at = ?, status = 'active' WHERE id = ?",
-                            (extend_conf, _quaid_now().isoformat(), node_id)
+                            (extend_conf, now_iso, node_id)
                         )
                         conn.execute(
                             """
                             UPDATE decay_review_queue
                             SET decision = ?, decision_reason = ?, status = 'reviewed',
-                                reviewed_at = datetime('now')
+                                reviewed_at = ?
                             WHERE id = ?
                             """,
-                            ("extend", reason, entry["id"]),
+                            ("extend", reason, now_iso, entry["id"]),
                         )
                 print(f"    EXTEND: {entry['node_text'][:50]}...")
                 results["extended"] += 1
@@ -3242,6 +3247,7 @@ JSON array only:"""
                 if not dry_run:
                     # Apply node update and queue resolution together to avoid partial commit.
                     ext_conf = 0.7
+                    now_iso = _quaid_now().isoformat()
                     with graph._get_conn() as conn:
                         row = conn.execute("SELECT attributes FROM nodes WHERE id = ?", (node_id,)).fetchone()
                         if row:
@@ -3262,10 +3268,10 @@ JSON array only:"""
                             """
                             UPDATE decay_review_queue
                             SET decision = ?, decision_reason = ?, status = 'reviewed',
-                                reviewed_at = datetime('now')
+                                reviewed_at = ?
                             WHERE id = ?
                             """,
-                            ("pin", reason, entry["id"]),
+                            ("pin", reason, now_iso, entry["id"]),
                         )
                 print(f"    PIN: {entry['node_text'][:50]}...")
                 results["pinned"] += 1

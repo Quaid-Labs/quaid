@@ -302,6 +302,7 @@ def test_fix_vec_nodes_insert_error_respects_fail_hard():
 
 
 def test_contradiction_keep_a_uses_atomic_sql_path(monkeypatch):
+    monkeypatch.setenv("QUAID_NOW", "2026-03-11T00:00:00Z")
     monkeypatch.setattr(maintenance_ops, "CONTRADICTION_ENABLED", True)
     metrics = maintenance_ops.JanitorMetrics()
     pending = [{
@@ -326,9 +327,11 @@ def test_contradiction_keep_a_uses_atomic_sql_path(monkeypatch):
     class _Conn:
         def __init__(self):
             self.sql = []
+            self.params = []
 
         def execute(self, sql, params=()):
             self.sql.append(str(sql))
+            self.params.append(params)
             if "SELECT COUNT(*) FROM contradictions" in sql:
                 return _DummyResult(rows=[(1,)])
             return _DummyResult(rowcount=1)
@@ -361,6 +364,98 @@ def test_contradiction_keep_a_uses_atomic_sql_path(monkeypatch):
     apply_sql = "\n".join(graph.calls[-1].sql)
     assert "UPDATE nodes SET superseded_by" in apply_sql
     assert "UPDATE contradictions" in apply_sql
+    assert "datetime('now')" not in apply_sql
+    flat_params = [item for params in graph.calls[-1].params for item in params]
+    assert flat_params.count("2026-03-11T00:00:00") == 3
+
+
+def test_review_dedup_rejections_uses_quaid_now_for_sql_timestamps(monkeypatch):
+    monkeypatch.setenv("QUAID_NOW", "2026-03-11T00:00:00Z")
+    metrics = maintenance_ops.JanitorMetrics()
+
+    class _Conn:
+        def __init__(self):
+            self.calls = []
+
+        def execute(self, sql, params=()):
+            self.calls.append((str(sql), params))
+            if "SELECT COUNT(*) FROM dedup_log" in sql:
+                return _DummyResult(rows=[(0,)])
+            return _DummyResult(rowcount=2)
+
+    class _Graph:
+        def __init__(self):
+            self.conn = _Conn()
+
+        @contextmanager
+        def _get_conn(self):
+            yield self.conn
+
+    graph = _Graph()
+    with patch.object(maintenance_ops, "get_recent_dedup_rejections", return_value=[]):
+        out = maintenance_ops.review_dedup_rejections(graph, metrics, dry_run=False, max_items=1)
+
+    assert out["confirmed"] == 2
+    assert out["reviewed"] == 2
+    sql_text = "\n".join(sql for sql, _params in graph.conn.calls)
+    assert "datetime('now')" not in sql_text
+    assert "created_at > ?" in sql_text
+    assert ("2026-03-11T00:00:00",) in [params for _sql, params in graph.conn.calls]
+    assert ("2026-03-10T00:00:00",) in [params for _sql, params in graph.conn.calls]
+
+
+def test_review_decayed_memories_uses_quaid_now_for_queue_review(monkeypatch):
+    monkeypatch.setenv("QUAID_NOW", "2026-03-11T00:00:00Z")
+    metrics = maintenance_ops.JanitorMetrics()
+    pending = [{
+        "id": "q1",
+        "node_id": "n1",
+        "node_text": "Quaid still uses the archive shelf",
+        "node_type": "Fact",
+        "confidence_at_queue": 0.2,
+        "access_count": 0,
+        "last_accessed": "2026-01-01T00:00:00",
+        "created_at_node": "2025-01-01T00:00:00",
+        "verified": 0,
+    }]
+
+    class _Conn:
+        def __init__(self):
+            self.calls = []
+
+        def execute(self, sql, params=()):
+            self.calls.append((str(sql), params))
+            if "SELECT COUNT(*) FROM decay_review_queue" in sql:
+                return _DummyResult(rows=[(1,)])
+            if "SELECT attributes FROM nodes" in sql:
+                return _DummyResult(rows=[{"attributes": "{\"extraction_confidence\": 0.8}"}])
+            return _DummyResult(rowcount=1)
+
+    class _Graph:
+        def __init__(self):
+            self.conn = _Conn()
+
+        @contextmanager
+        def _get_conn(self):
+            yield self.conn
+
+    llm_batches = [{
+        "batch_num": 1,
+        "batch": pending,
+        "prompt_tag": "",
+        "response_duration": ('[{"item": 1, "action": "EXTEND", "reason": "still useful"}]', 0.0),
+    }]
+
+    graph = _Graph()
+    with patch.object(maintenance_ops, "get_pending_decay_reviews", return_value=pending), \
+         patch.object(maintenance_ops, "_run_llm_batches_parallel", return_value=llm_batches):
+        out = maintenance_ops.review_decayed_memories(graph, metrics, dry_run=False, max_items=1)
+
+    assert out["extended"] == 1
+    sql_text = "\n".join(sql for sql, _params in graph.conn.calls)
+    assert "datetime('now')" not in sql_text
+    flat_params = [item for _sql, params in graph.conn.calls for item in params]
+    assert flat_params.count("2026-03-11T00:00:00") == 2
 
 
 def test_backfill_embeddings_vec_upsert_failure_warns_and_continues(monkeypatch):

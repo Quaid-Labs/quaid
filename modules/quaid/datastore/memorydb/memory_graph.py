@@ -23933,26 +23933,28 @@ def get_pending_contradictions(limit: int = 50) -> List[Dict[str, Any]]:
 def resolve_contradiction(contradiction_id: str, resolution: str, reason: str) -> bool:
     """Mark a contradiction as resolved."""
     graph = get_graph()
+    now_iso = _now_iso()
     with graph._get_conn() as conn:
         result = conn.execute("""
             UPDATE contradictions
             SET status = 'resolved', resolution = ?, resolution_reason = ?,
-                resolved_at = datetime('now')
+                resolved_at = ?
             WHERE id = ?
-        """, (resolution, reason, contradiction_id))
+        """, (resolution, reason, now_iso, contradiction_id))
         return result.rowcount > 0
 
 
 def mark_contradiction_false_positive(contradiction_id: str, reason: str) -> bool:
     """Mark a contradiction as a false positive."""
     graph = get_graph()
+    now_iso = _now_iso()
     with graph._get_conn() as conn:
         result = conn.execute("""
             UPDATE contradictions
             SET status = 'false_positive', resolution = 'keep_both',
-                resolution_reason = ?, resolved_at = datetime('now')
+                resolution_reason = ?, resolved_at = ?
             WHERE id = ?
-        """, (reason, contradiction_id))
+        """, (reason, now_iso, contradiction_id))
         return result.rowcount > 0
 
 
@@ -24156,7 +24158,7 @@ def _resolve_node_identifier(graph: "MemoryGraph", identifier: str) -> Optional[
 def get_recent_dedup_rejections(hours: int = 24, limit: int = 50) -> List[Dict[str, Any]]:
     """Get recent dedup rejections for nightly review."""
     graph = get_graph()
-    cutoff = (datetime.now() - timedelta(hours=hours)).isoformat()
+    cutoff = (_now() - timedelta(hours=hours)).isoformat()
     with graph._get_conn() as conn:
         rows = conn.execute("""
             SELECT * FROM dedup_log
@@ -24172,13 +24174,14 @@ def get_recent_dedup_rejections(hours: int = 24, limit: int = 50) -> List[Dict[s
 def resolve_dedup_review(log_id: str, status: str, resolution: Optional[str] = None) -> bool:
     """Mark a dedup log entry as reviewed. status: 'confirmed' or 'reversed'."""
     graph = get_graph()
+    now_iso = _now_iso()
     with graph._get_conn() as conn:
         result = conn.execute("""
             UPDATE dedup_log
             SET review_status = ?, review_resolution = ?,
-                reviewed_at = datetime('now')
+                reviewed_at = ?
             WHERE id = ?
-        """, (status, resolution, log_id))
+        """, (status, resolution, now_iso, log_id))
         return result.rowcount > 0
 
 
@@ -24190,6 +24193,7 @@ def queue_for_decay_review(mem: Dict[str, Any]) -> str:
     """Queue a memory for decay review instead of silent deletion. Returns queue ID."""
     graph = get_graph()
     queue_id = str(uuid.uuid4())
+    now_iso = _now_iso()
     with graph._get_conn() as conn:
         # queued_for_decay intentionally leaves normal recall/search status
         # filters until a reviewer EXTENDs/PINs the memory or deletes it.
@@ -24202,18 +24206,18 @@ def queue_for_decay_review(mem: Dict[str, Any]) -> str:
             conn.execute(
                 """
                 UPDATE nodes
-                SET status = 'queued_for_decay', updated_at = datetime('now')
+                SET status = 'queued_for_decay', updated_at = ?
                 WHERE id = ?
                   AND (status IS NULL OR status IN ('approved', 'active', 'queued_for_decay'))
                 """,
-                (mem["id"],),
+                (now_iso, mem["id"]),
             )
             return existing["id"]
         conn.execute("""
             INSERT INTO decay_review_queue
             (id, node_id, node_text, node_type, confidence_at_queue,
-             access_count, last_accessed, verified, created_at_node)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+             access_count, last_accessed, verified, created_at_node, queued_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             queue_id,
             mem["id"],
@@ -24224,15 +24228,16 @@ def queue_for_decay_review(mem: Dict[str, Any]) -> str:
             mem.get("last_accessed"),
             1 if mem.get("verified") else 0,
             mem.get("created_at"),
+            now_iso,
         ))
         conn.execute(
             """
             UPDATE nodes
-            SET status = 'queued_for_decay', updated_at = datetime('now')
+            SET status = 'queued_for_decay', updated_at = ?
             WHERE id = ?
               AND (status IS NULL OR status IN ('approved', 'active', 'queued_for_decay'))
             """,
-            (mem["id"],),
+            (now_iso, mem["id"]),
         )
     return queue_id
 
@@ -24259,12 +24264,13 @@ def resolve_decay_review(
     graph = get_graph()
 
     def _resolve_with_conn(active_conn: sqlite3.Connection) -> bool:
+        now_iso = _now_iso()
         result = active_conn.execute("""
             UPDATE decay_review_queue
             SET decision = ?, decision_reason = ?, status = 'reviewed',
-                reviewed_at = datetime('now')
+                reviewed_at = ?
             WHERE id = ?
-        """, (decision, reason, queue_id))
+        """, (decision, reason, now_iso, queue_id))
         return result.rowcount > 0
 
     if conn is not None:
@@ -24284,7 +24290,8 @@ def decay_memories() -> Dict[str, Any]:
     """
     graph = get_graph()
 
-    cutoff = (datetime.now() - timedelta(days=30)).isoformat()
+    now = _now()
+    cutoff = (now - timedelta(days=30)).isoformat()
 
     with graph._get_conn() as conn:
         result = conn.execute("""
@@ -24297,7 +24304,7 @@ def decay_memories() -> Dict[str, Any]:
               AND superseded_by IS NULL
               AND (status IS NULL OR status IN ('approved', 'active'))
               AND accessed_at < ?
-        """, (datetime.now().isoformat(), cutoff))
+        """, (now.isoformat(), cutoff))
 
         return {"decayed_count": result.rowcount}
 
