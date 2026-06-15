@@ -192,6 +192,189 @@ def test_beam_search_graph_excludes_deleted_and_superseded_neighbors(tmp_path):
     assert superseded_in.id not in ids
 
 
+def test_get_edge_keywords_db_failure_respects_failhard(caplog):
+    import datastore.memorydb.memory_graph as mg
+
+    class _FailingConn:
+        def execute(self, *_args, **_kwargs):
+            raise sqlite3.OperationalError("edge keyword db down")
+
+    class _FailingGraph:
+        def _get_conn(self):
+            class _Ctx:
+                def __enter__(self):
+                    return _FailingConn()
+
+                def __exit__(self, *_exc):
+                    return False
+
+            return _Ctx()
+
+    with patch.object(mg, "get_graph", return_value=_FailingGraph()), \
+         patch.object(mg, "_is_fail_hard_mode", return_value=True):
+        with pytest.raises(RuntimeError, match="Failed to load graph edge keywords"):
+            mg.get_edge_keywords()
+
+    with patch.object(mg, "get_graph", return_value=_FailingGraph()), \
+         patch.object(mg, "_is_fail_hard_mode", return_value=False), \
+         caplog.at_level("WARNING"):
+        assert mg.get_edge_keywords() == {}
+
+    assert "Failed to load graph edge keywords" in caplog.text
+
+
+def test_get_edge_keywords_missing_optional_table_does_not_failhard():
+    import datastore.memorydb.memory_graph as mg
+
+    class _MissingTableConn:
+        def execute(self, *_args, **_kwargs):
+            raise sqlite3.OperationalError("no such table: edge_keywords")
+
+    class _MissingTableGraph:
+        def _get_conn(self):
+            class _Ctx:
+                def __enter__(self):
+                    return _MissingTableConn()
+
+                def __exit__(self, *_exc):
+                    return False
+
+            return _Ctx()
+
+    with patch.object(mg, "get_graph", return_value=_MissingTableGraph()), \
+         patch.object(mg, "_is_fail_hard_mode", return_value=True):
+        assert mg.get_edge_keywords() == {}
+
+
+def test_list_relation_types_failhard_for_edge_and_keyword_load_failures(caplog):
+    import datastore.memorydb.memory_graph as mg
+
+    graph = SimpleNamespace(
+        get_known_relations=MagicMock(side_effect=sqlite3.OperationalError("relations down"))
+    )
+    with patch.object(mg, "get_graph", return_value=graph), \
+         patch.object(mg, "get_edge_keywords", return_value={}), \
+         patch.object(mg, "_is_fail_hard_mode", return_value=True):
+        with pytest.raises(RuntimeError, match="Failed to load graph relation types"):
+            mg.list_relation_types()
+
+    graph = SimpleNamespace(get_known_relations=MagicMock(return_value=["knows"]))
+    with patch.object(mg, "get_graph", return_value=graph), \
+         patch.object(mg, "get_edge_keywords", side_effect=sqlite3.OperationalError("keywords down")), \
+         patch.object(mg, "_is_fail_hard_mode", return_value=True):
+        with pytest.raises(RuntimeError, match="keyword table"):
+            mg.list_relation_types()
+
+    graph = SimpleNamespace(get_known_relations=MagicMock(return_value=["knows"]))
+    with patch.object(mg, "get_graph", return_value=graph), \
+         patch.object(mg, "get_edge_keywords", side_effect=sqlite3.OperationalError("keywords down")), \
+         patch.object(mg, "_is_fail_hard_mode", return_value=False), \
+         caplog.at_level("WARNING"):
+        assert mg.list_relation_types() == ["knows"]
+
+    assert "Failed to load graph relation types from keyword table" in caplog.text
+
+
+def test_list_relation_types_missing_optional_tables_do_not_failhard():
+    import datastore.memorydb.memory_graph as mg
+
+    graph = SimpleNamespace(
+        get_known_relations=MagicMock(side_effect=sqlite3.OperationalError("no such table: edges"))
+    )
+    with patch.object(mg, "get_graph", return_value=graph), \
+         patch.object(mg, "get_edge_keywords", return_value={}), \
+         patch.object(mg, "_is_fail_hard_mode", return_value=True):
+        assert mg.list_relation_types() == []
+
+
+def test_relation_chain_edge_load_failure_respects_failhard(caplog):
+    import datastore.memorydb.memory_graph as mg
+
+    graph = SimpleNamespace(
+        get_edges=MagicMock(side_effect=sqlite3.OperationalError("edge scan down"))
+    )
+    with patch.object(mg, "_is_fail_hard_mode", return_value=True):
+        with pytest.raises(RuntimeError, match="Failed to load outbound relation-chain edges"):
+            mg._iter_relation_chain_step_edges(graph, "node-a", "parent")
+
+    with patch.object(mg, "_is_fail_hard_mode", return_value=False), caplog.at_level("WARNING"):
+        assert mg._iter_relation_chain_step_edges(graph, "node-a", "parent") == []
+
+    assert "Failed to load outbound relation-chain edges" in caplog.text
+
+
+def test_graph_mentioned_fact_nodes_failure_respects_failhard(caplog):
+    import datastore.memorydb.memory_graph as mg
+
+    class _FailingConn:
+        def execute(self, *_args, **_kwargs):
+            raise sqlite3.OperationalError("fact scan down")
+
+    class _FailingGraph:
+        def _get_conn(self):
+            class _Ctx:
+                def __enter__(self):
+                    return _FailingConn()
+
+                def __exit__(self, *_exc):
+                    return False
+
+            return _Ctx()
+
+    with patch.object(mg, "_is_fail_hard_mode", return_value=True):
+        with pytest.raises(RuntimeError, match="Failed to load facts mentioning graph anchor"):
+            mg._graph_mentioned_fact_nodes(
+                _FailingGraph(),
+                anchor_text="Ari",
+                query="Ari note",
+                seen_ids=set(),
+            )
+
+    with patch.object(mg, "_is_fail_hard_mode", return_value=False), caplog.at_level("WARNING"):
+        assert mg._graph_mentioned_fact_nodes(
+            _FailingGraph(),
+            anchor_text="Ari",
+            query="Ari note",
+            seen_ids=set(),
+        ) == []
+
+    assert "Failed to load facts mentioning graph anchor" in caplog.text
+
+
+def test_graph_attached_fact_rows_edge_load_failure_respects_failhard(caplog):
+    import datastore.memorydb.memory_graph as mg
+
+    anchor = mg.Node.create("Person", "Ari")
+    graph = SimpleNamespace(get_edges=MagicMock(side_effect=sqlite3.OperationalError("edge scan down")))
+
+    with patch.object(mg, "_is_fail_hard_mode", return_value=True):
+        with pytest.raises(RuntimeError, match="Failed to load graph edges for anchor"):
+            mg._graph_attached_fact_rows(
+                graph,
+                anchor_node=anchor,
+                anchor_text="Ari",
+                anchor_score=0.9,
+                graph_path="Ari",
+                relation_sequence=[],
+                hop_depth=0,
+                seen_ids=set(),
+            )
+
+    with patch.object(mg, "_is_fail_hard_mode", return_value=False), caplog.at_level("WARNING"):
+        assert mg._graph_attached_fact_rows(
+            graph,
+            anchor_node=anchor,
+            anchor_text="Ari",
+            anchor_score=0.9,
+            graph_path="Ari",
+            relation_sequence=[],
+            hop_depth=0,
+            seen_ids=set(),
+        ) == []
+
+    assert "Failed to load graph edges for anchor" in caplog.text
+
+
 def test_beam_search_graph_deduplicates_nodes_reached_from_same_level(tmp_path):
     import datastore.memorydb.memory_graph as mg
 

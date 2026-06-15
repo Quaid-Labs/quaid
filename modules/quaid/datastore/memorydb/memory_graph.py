@@ -3605,7 +3605,12 @@ def get_edge_keywords() -> Dict[str, List[str]]:
                     )
                     result[row["relation"]] = []
             return result
-        except Exception:
+        except Exception as exc:
+            if isinstance(exc, sqlite3.OperationalError) and "no such table: edge_keywords" in str(exc).lower():
+                return {}
+            if _is_fail_hard_mode():
+                raise RuntimeError("Failed to load graph edge keywords while failHard is enabled") from exc
+            logger.warning("Failed to load graph edge keywords: %s", exc)
             return {}
 
 
@@ -3645,15 +3650,22 @@ def list_relation_types(include_keyword_only: bool = True) -> List[str]:
     relations: set[str] = set()
     try:
         relations.update(str(rel or "").strip() for rel in get_graph().get_known_relations())
-    except Exception:
-        pass
+    except Exception as exc:
+        if isinstance(exc, sqlite3.OperationalError) and "no such table:" in str(exc).lower():
+            pass
+        elif _is_fail_hard_mode():
+            raise RuntimeError("Failed to load graph relation types while failHard is enabled") from exc
+        else:
+            logger.warning("Failed to load graph relation types from edges table: %s", exc)
     try:
         for rel in get_edge_keywords().keys():
             clean = str(rel or "").strip()
             if clean and (include_keyword_only or clean in relations):
                 relations.add(clean)
-    except Exception:
-        pass
+    except Exception as exc:
+        if _is_fail_hard_mode():
+            raise RuntimeError("Failed to load graph relation types from keyword table while failHard is enabled") from exc
+        logger.warning("Failed to load graph relation types from keyword table: %s", exc)
     return sorted(rel for rel in relations if rel)
 
 
@@ -3939,14 +3951,24 @@ def _iter_relation_chain_step_edges(
 
     try:
         forward_edges = list(graph.get_edges(current_id, direction="out"))
-    except Exception:
+    except Exception as exc:
+        if _is_fail_hard_mode():
+            raise RuntimeError(
+                f"Failed to load outbound relation-chain edges for node {current_id!r} while failHard is enabled"
+            ) from exc
+        logger.warning("Failed to load outbound relation-chain edges for node %s: %s", current_id, exc)
         forward_edges = []
     for edge in forward_edges:
         _append(edge, str(getattr(edge, "target_id", "") or ""), "out")
 
     try:
         reverse_edges = list(graph.get_edges(current_id, direction="in"))
-    except Exception:
+    except Exception as exc:
+        if _is_fail_hard_mode():
+            raise RuntimeError(
+                f"Failed to load inbound relation-chain edges for node {current_id!r} while failHard is enabled"
+            ) from exc
+        logger.warning("Failed to load inbound relation-chain edges for node %s: %s", current_id, exc)
         reverse_edges = []
     for edge in reverse_edges:
         _append(edge, str(getattr(edge, "source_id", "") or ""), "in")
@@ -4898,7 +4920,12 @@ def _graph_mentioned_fact_nodes(
                 """,
                 (f"%{_escape_like_pattern(anchor)}%", max(max(1, int(limit or 1)) * 16, 256)),
             ).fetchall()
-    except Exception:
+    except Exception as exc:
+        if _is_fail_hard_mode():
+            raise RuntimeError(
+                f"Failed to load facts mentioning graph anchor {anchor!r} while failHard is enabled"
+            ) from exc
+        logger.warning("Failed to load facts mentioning graph anchor %r: %s", anchor, exc)
         return []
 
     query_terms = {
@@ -4963,7 +4990,12 @@ def _graph_attached_fact_rows(
         return rows
     try:
         edges = list(graph.get_edges(anchor_node.id, direction="both"))
-    except Exception:
+    except Exception as exc:
+        if _is_fail_hard_mode():
+            raise RuntimeError(
+                f"Failed to load graph edges for anchor {anchor_node.id!r} while failHard is enabled"
+            ) from exc
+        logger.warning("Failed to load graph edges for anchor %s: %s", anchor_node.id, exc)
         return rows
     lower_anchor_text = str(anchor_text or "").strip().lower()
     query_terms = set(_extract_distinctive_query_terms(query, limit=8))
