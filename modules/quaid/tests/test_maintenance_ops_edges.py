@@ -140,27 +140,28 @@ def test_batch_extract_edges_prompt_includes_domain_neutral_role_guardrails():
     assert "preserve direction exactly as stated" in prompt
     assert "Do not infer hidden intermediate hops unless the intermediate relationship is explicitly stated" in prompt
     assert "Use works_at only for professional employment or ongoing job affiliation stated in the fact" in prompt
-    assert "use trains_at with PERSON as subject and venue as object" in prompt
+    assert "For personal physical training or exercise at an attended venue, use trains_at" in prompt
+    assert "gym, studio, dojo, pool" not in prompt
 
 
 def test_batch_extract_edges_accepts_trains_at_relation():
     facts = [
         {
             "id": "fact-6b",
-            "text": "Solomon Steadman does strength work Tuesday and Friday at Hale Hale Fitness near his apartment",
+            "text": "Alice Rivera does strength work Tuesday and Friday at Central Training House near her apartment",
             "owner_id": "default",
         }
     ]
     metrics = maintenance_ops.JanitorMetrics()
     response = (
         '[{"fact": 1, "edges": ['
-        '{"subject":"Solomon Steadman","subject_type":"Person","relation":"trains_at","object":"Hale Hale Fitness","object_type":"Organization"}'
+        '{"subject":"Alice Rivera","subject_type":"Person","relation":"trains_at","object":"Central Training House","object_type":"Organization"}'
         ']}]',
         0.05,
     )
 
     with patch.object(maintenance_ops, "call_deep_reasoning", return_value=response), patch.object(
-        maintenance_ops, "resolve_owner_person", return_value=SimpleNamespace(name="Solomon Steadman")
+        maintenance_ops, "resolve_owner_person", return_value=SimpleNamespace(name="Alice Rivera")
     ):
         results = maintenance_ops.batch_extract_edges(
             facts=facts,
@@ -171,7 +172,39 @@ def test_batch_extract_edges_accepts_trains_at_relation():
 
     assert len(results) == 1
     assert results[0][0]["relation"] == "trains_at"
-    assert results[0][0]["object"] == "Hale Hale Fitness"
+    assert results[0][0]["object"] == "Central Training House"
+
+
+def test_batch_extract_edges_preserves_professional_employment_as_works_at():
+    facts = [
+        {
+            "id": "fact-6c",
+            "text": "Alice Rivera works professionally at Central Training House as an operations manager",
+            "owner_id": "default",
+        }
+    ]
+    metrics = maintenance_ops.JanitorMetrics()
+    response = (
+        '[{"fact": 1, "edges": ['
+        '{"subject":"Alice Rivera","subject_type":"Person","relation":"works_at","object":"Central Training House","object_type":"Organization"}'
+        ']}]',
+        0.05,
+    )
+
+    with patch.object(maintenance_ops, "call_deep_reasoning", return_value=response), patch.object(
+        maintenance_ops, "resolve_owner_person", return_value=SimpleNamespace(name="Alice Rivera")
+    ):
+        results = maintenance_ops.batch_extract_edges(
+            facts=facts,
+            graph=object(),
+            metrics=metrics,
+            relations_list="works_at, trains_at, member_of",
+        )
+
+    assert len(results) == 1
+    assert results[0][0]["relation"] == "works_at"
+    assert results[0][0]["relation"] != "trains_at"
+    assert results[0][0]["object"] == "Central Training House"
 
 
 def test_batch_extract_edges_uses_expanded_output_budget_for_compound_edges():

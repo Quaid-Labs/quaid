@@ -49,7 +49,8 @@ def test_default_extraction_prompt_contains_expected_sections():
     assert "ROLE/DIRECTION FIDELITY (MANDATORY)" in text
     assert "preserve direction exactly as stated" in text
     assert "works_at: PERSON is subject, but only for professional employment or ongoing job affiliation" in text
-    assert "use trains_at unless the transcript explicitly says they work there professionally" in text
+    assert "trains_at: PERSON is subject when they attend a venue for personal physical training or exercise" in text
+    assert "trains or works out at a gym/fitness venue" not in text
     assert "Preserve exact callable/config/test/schema details when present" in text
     assert "20 or fewer items" in text
     assert "Do not collapse an available exact list" in text
