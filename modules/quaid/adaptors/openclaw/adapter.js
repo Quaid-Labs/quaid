@@ -4889,6 +4889,47 @@ const quaidPlugin = {
       embeddedPromptBuildFallbackTurns.delete(key);
       return expiresAtMs > Date.now();
     };
+    const preserveEmbeddedPromptBuildFallbackTranscript = (agentLabel, event, ctx) => {
+      const sessionId = String(event?.sessionId || ctx?.sessionId || ctx?.session?.id || "").trim();
+      if (!sessionId) return null;
+      const selected = selectAutoInjectQuery(event, lastUserMessageQuery, Date.now(), sessionId);
+      const userText = scrubAutoInjectQuery(selected.rawPrompt || selected.query || "").trim();
+      if (userText.length < 3 || PROMPT_RELAY_SKIP_RE.test(userText) || userText.startsWith("Extract memorable facts")) {
+        return null;
+      }
+      const preservedPath = appendPreservedTranscriptMessage(
+        sessionId,
+        "user",
+        userText,
+        "embedded_prompt_build_fallback"
+      );
+      if (!preservedPath) return null;
+      const sessionKey = firstNonEmptyString(
+        event?.sessionKey,
+        ctx?.sessionKey,
+        event?.targetSessionKey,
+        ctx?.targetSessionKey,
+        resolveSessionKeyForSessionId(sessionId)
+      );
+      const sessionContext = { sessionId, sessionKey };
+      if (isSystemEnabled2("memory") && !isInternalSessionContext(sessionContext, sessionContext)) {
+        seedRollingCursorForTranscript(
+          sessionId,
+          preservedPath,
+          resolveHookAgentLabel(sessionContext, sessionContext) || agentLabel,
+          "embedded_prompt_build_fallback_preserved_transcript",
+          { wakeDaemon: false }
+        );
+      }
+      writeHookTrace("hook.before_agent_start.embedded_fallback_transcript_preserved", {
+        session_id: sessionId,
+        session_key: sessionKey,
+        source: selected.source,
+        text_len: userText.length,
+        preserved_path: preservedPath
+      });
+      return preservedPath;
+    };
     const beforeAgentStartHandler = async (event, ctx) => {
       if (isInternalSessionContext(event, ctx)) {
         return;
@@ -4966,6 +5007,7 @@ notify_user(${JSON.stringify(message)})
           session_key: String(event?.sessionKey || ctx?.sessionKey || ""),
           reason: "openclaw_scope_upgrade_pending"
         });
+        preserveEmbeddedPromptBuildFallbackTranscript(startAgentLabel, event, ctx);
         const fallbackEvent = {
           ...event && typeof event === "object" ? event : {},
           __quaidEmbeddedPromptBuildFallback: true,

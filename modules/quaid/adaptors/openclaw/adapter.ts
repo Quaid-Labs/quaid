@@ -6024,6 +6024,51 @@ const quaidPlugin = {
       embeddedPromptBuildFallbackTurns.delete(key);
       return expiresAtMs > Date.now();
     };
+    const preserveEmbeddedPromptBuildFallbackTranscript = (agentLabel: string, event: any, ctx: any): string | null => {
+      const sessionId = String(event?.sessionId || ctx?.sessionId || ctx?.session?.id || "").trim();
+      if (!sessionId) return null;
+      const selected = selectAutoInjectQuery(event, lastUserMessageQuery, Date.now(), sessionId);
+      const userText = scrubAutoInjectQuery(selected.rawPrompt || selected.query || "").trim();
+      if (
+        userText.length < 3
+        || PROMPT_RELAY_SKIP_RE.test(userText)
+        || userText.startsWith("Extract memorable facts")
+      ) {
+        return null;
+      }
+      const preservedPath = appendPreservedTranscriptMessage(
+        sessionId,
+        "user",
+        userText,
+        "embedded_prompt_build_fallback",
+      );
+      if (!preservedPath) return null;
+      const sessionKey = firstNonEmptyString(
+        event?.sessionKey,
+        ctx?.sessionKey,
+        event?.targetSessionKey,
+        ctx?.targetSessionKey,
+        resolveSessionKeyForSessionId(sessionId),
+      );
+      const sessionContext = { sessionId, sessionKey };
+      if (isSystemEnabled("memory") && !isInternalSessionContext(sessionContext, sessionContext)) {
+        seedRollingCursorForTranscript(
+          sessionId,
+          preservedPath,
+          resolveHookAgentLabel(sessionContext, sessionContext) || agentLabel,
+          "embedded_prompt_build_fallback_preserved_transcript",
+          { wakeDaemon: false },
+        );
+      }
+      writeHookTrace("hook.before_agent_start.embedded_fallback_transcript_preserved", {
+        session_id: sessionId,
+        session_key: sessionKey,
+        source: selected.source,
+        text_len: userText.length,
+        preserved_path: preservedPath,
+      });
+      return preservedPath;
+    };
 
     // Register lifecycle hooks.
     const beforeAgentStartHandler = async (event: any, ctx: any): Promise<HookContextResult | undefined> => {
@@ -6114,6 +6159,7 @@ notify_user(${JSON.stringify(message)})
           session_key: String(event?.sessionKey || ctx?.sessionKey || ""),
           reason: "openclaw_scope_upgrade_pending",
         });
+        preserveEmbeddedPromptBuildFallbackTranscript(startAgentLabel, event, ctx);
         const fallbackEvent = {
           ...(event && typeof event === "object" ? event : {}),
           __quaidEmbeddedPromptBuildFallback: true,
