@@ -16136,6 +16136,9 @@ def _plan_query_anchor_terms(
                 for piece in pieces
             )
 
+        def _anchor_piece_min_len(term: str) -> int:
+            return 2 if _has_compact_unicode_char(term) else 3
+
         for raw in anchors_raw:
             term = " ".join(str(raw or "").split()).strip().strip("\"'")
             if not term:
@@ -16156,7 +16159,10 @@ def _plan_query_anchor_terms(
             elif not _appears_in_query(lower):
                 continue
             pieces = re.findall(r"[\w][\w._'-]*", lower, flags=re.UNICODE)
-            if pieces and all((piece in _QUERY_STOPWORDS or len(piece) < 3) for piece in pieces):
+            if pieces and all(
+                (piece in _QUERY_STOPWORDS or len(piece) < _anchor_piece_min_len(piece))
+                for piece in pieces
+            ):
                 continue
             seen.add(lower)
             anchors.append(lower)
@@ -16196,9 +16202,8 @@ def _plan_query_anchor_terms(
         final_seen = set()
 
         def _is_covered_by_existing(term: str, items: List[str]) -> bool:
-            pattern = rf"(?<!\w){re.escape(term)}(?!\w)"
             for item in items:
-                if re.search(pattern, item, flags=re.UNICODE):
+                if _text_contains_anchor_term(item, term):
                     return True
             return False
 
@@ -16217,12 +16222,15 @@ def _plan_query_anchor_terms(
                 continue
             if lower in {"i", "im", "i'm", "i’m", "ive", "i've", "i’ve", "id", "i'd", "i’d", "ill", "i'll", "i’ll"}:
                 continue
-            if len(lower) < 3:
+            if len(lower) < _anchor_piece_min_len(lower):
                 continue
             if lower in _QUERY_STOPWORDS:
                 continue
             pieces = re.findall(r"[\w][\w._'-]*", lower, flags=re.UNICODE)
-            if pieces and all((piece in _QUERY_STOPWORDS or len(piece) < 3) for piece in pieces):
+            if pieces and all(
+                (piece in _QUERY_STOPWORDS or len(piece) < _anchor_piece_min_len(piece))
+                for piece in pieces
+            ):
                 continue
             if _is_covered_by_existing(lower, anchors):
                 continue

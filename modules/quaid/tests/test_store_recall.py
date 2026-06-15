@@ -14689,6 +14689,57 @@ class TestRecallFastHookInjectContract:
         assert anchors == ["maya", "work"]
         assert meta["anchor_count"] == 2
 
+    def test_plan_query_anchor_terms_keeps_short_compact_unicode_llm_anchors(self):
+        import datastore.memorydb.memory_graph as mg
+
+        with patch.object(
+            mg,
+            "call_fast_reasoning",
+            return_value=('{"anchors": ["云门"]}', {}),
+        ):
+            anchors, meta = mg._plan_query_anchor_terms(
+                "云门",
+                timeout_s=0.5,
+                max_retries=0,
+            )
+
+        assert anchors == ["云门"]
+        assert meta["anchor_count"] == 1
+
+    def test_plan_query_anchor_terms_restores_short_compact_unicode_floor_terms(self):
+        import datastore.memorydb.memory_graph as mg
+
+        with patch.object(
+            mg,
+            "call_fast_reasoning",
+            return_value=('{"anchors": []}', {}),
+        ):
+            anchors, meta = mg._plan_query_anchor_terms(
+                "美玲 云门",
+                timeout_s=0.5,
+                max_retries=0,
+            )
+
+        assert anchors == ["美玲"]
+        assert meta["anchor_count"] == 1
+
+    def test_plan_query_anchor_terms_still_filters_short_ascii_floor_terms(self):
+        import datastore.memorydb.memory_graph as mg
+
+        with patch.object(
+            mg,
+            "call_fast_reasoning",
+            return_value=('{"anchors": []}', {}),
+        ):
+            anchors, meta = mg._plan_query_anchor_terms(
+                "db",
+                timeout_s=0.5,
+                max_retries=0,
+            )
+
+        assert anchors == []
+        assert meta["anchor_count"] == 0
+
     def test_plan_query_anchor_terms_drops_non_query_hallucinations(self):
         import datastore.memorydb.memory_graph as mg
 
