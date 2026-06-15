@@ -16361,6 +16361,90 @@ class TestRecallFastHookInjectContract:
         assert "Elena Park --cares_for--> Comet" == rescued_attribute["graph_path"]
         assert meta["applied"] is True
 
+    def test_related_entity_facet_rescue_keeps_compact_attribute_in_tight_slots(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _ = _make_graph(tmp_path)
+        person = mg.Node.create("Person", "Nadia Stone", owner_id="quaid")
+        device = mg.Node.create("Entity", "Aster Module", owner_id="quaid")
+        attribute = mg.Node.create(
+            "Fact",
+            "Aster Module is a solar charger.",
+            owner_id="quaid",
+            keywords="device category portable power",
+            attributes={"domains": ["household"]},
+        )
+        age = mg.Node.create(
+            "Fact",
+            "Aster Module is two years old.",
+            owner_id="quaid",
+            keywords="device age equipment",
+            attributes={"domains": ["household"]},
+        )
+        anecdote = mg.Node.create(
+            "Fact",
+            "Last month, Aster Module survived a rainstorm during a patio test.",
+            owner_id="quaid",
+            keywords="device anecdote weather equipment",
+            attributes={"domains": ["household"]},
+        )
+        ownership = mg.Node.create(
+            "Fact",
+            "Nadia Stone owns a device named Aster Module.",
+            owner_id="quaid",
+            keywords="device ownership equipment",
+            attributes={"domains": ["household"]},
+        )
+        for node in (person, device, attribute, age, anecdote, ownership):
+            graph.add_node(node, embed=False)
+        graph.add_edge(mg.Edge.create(person.id, device.id, "owns"))
+
+        query = "What kind of device does Nadia Stone have?"
+        with patch.object(mg, "get_graph", return_value=graph):
+            rescued, meta = mg._recover_explicit_entity_facet_rows(
+                query,
+                [],
+                owner_id="quaid",
+                limit=3,
+                intent="GENERAL",
+            )
+            selected = mg._select_final_recall_rows_with_facet_rescue(
+                query,
+                [
+                    {
+                        "id": "generic",
+                        "text": "Nadia Stone keeps equipment in the utility closet.",
+                        "category": "fact",
+                        "similarity": 0.97,
+                    },
+                    {
+                        "id": "graph-mentioned",
+                        "text": "Nadia Stone owns a device named Aster Module.",
+                        "category": "fact",
+                        "similarity": 1.0,
+                        "via": "graph_mentioned_fact",
+                        "_facet_rescue": True,
+                        "keywords": "device ownership equipment",
+                    },
+                    {
+                        "id": "graph-cluster",
+                        "text": "Related facts for Nadia Stone: Nadia Stone owns a device named Aster Module.",
+                        "category": "graph_cluster",
+                        "similarity": 0.93,
+                        "via": "graph_fact_cluster",
+                        "_facet_rescue": True,
+                    },
+                    *rescued,
+                ],
+                limit=3,
+                intent="GENERAL",
+            )
+
+        assert meta["applied"] is True
+        assert attribute.id in [row["id"] for row in rescued[:2]]
+        assert anecdote.id not in [row["id"] for row in rescued[:2]]
+        assert attribute.id in [row["id"] for row in selected]
+
     def test_related_entity_facet_rows_can_lead_with_one_facet_signal(self):
         import datastore.memorydb.memory_graph as mg
 

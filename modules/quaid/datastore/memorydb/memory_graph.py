@@ -16767,6 +16767,12 @@ _FACET_RESCUE_MEMORY_TYPES = {"fact", "preference", "decision", "relationship"}
 # A rescued row may outrank first-order session evidence only when it matches
 # multiple non-entity query details. One detail is too broad for generic recall.
 _FACET_RESCUE_LEADING_NON_ANCHOR_SIGNAL = 2
+_FACET_RESCUE_CLASSIFIER_QUERY_TERMS = {
+    "category", "class", "kind", "model", "sort", "species", "type", "variety",
+}
+_FACET_RESCUE_CLASSIFIER_ROW_TERMS = {
+    "breed", "category", "class", "kind", "model", "species", "type", "variety",
+}
 
 
 def _is_related_entity_facet_rescue_row(row: Dict[str, Any]) -> bool:
@@ -16802,6 +16808,20 @@ def _facet_rescue_signal_terms(query: str, *, limit: int = 12) -> List[str]:
         if len(out) >= limit:
             break
     return out
+
+
+def _facet_rescue_classifier_signal(row: Dict[str, Any], query_terms: List[str]) -> int:
+    """Prefer direct classification facts when the query asks for a kind/type."""
+    if not any(term in _FACET_RESCUE_CLASSIFIER_QUERY_TERMS for term in query_terms or []):
+        return 0
+    search_text = " ".join([
+        str((row or {}).get("text") or ""),
+        str((row or {}).get("keywords") or ""),
+    ]).lower()
+    return 1 if any(
+        _text_contains_anchor_term(search_text, term)
+        for term in _FACET_RESCUE_CLASSIFIER_ROW_TERMS
+    ) else 0
 
 
 def _facet_rescue_lexical_memory_rows(
@@ -17109,18 +17129,23 @@ def _recover_explicit_entity_facet_rows(
                     )
                     _add_candidate(row)
 
-        def _facet_sort_key(row: Dict[str, Any]) -> Tuple[int, float, int]:
+        def _facet_sort_key(row: Dict[str, Any]) -> Tuple[int, float, int, int, int, int]:
+            text = str((row or {}).get("text") or "")
             search_text = " ".join([
-                str((row or {}).get("text") or ""),
+                text,
                 str((row or {}).get("keywords") or ""),
             ]).lower()
             overlap = sum(
                 1 for term in facet_terms
                 if term and (term in search_text or _text_contains_anchor_term(search_text, term))
             )
+            related_compactness = -len(text) if _is_related_entity_facet_rescue_row(row) else 0
             return (
                 overlap,
                 float((row or {}).get("similarity", 0.0) or 0.0),
+                1 if _is_related_entity_facet_rescue_row(row) else 0,
+                _facet_rescue_classifier_signal(row, facet_terms),
+                related_compactness,
                 len(str((row or {}).get("keywords") or "")),
             )
 
@@ -17207,6 +17232,10 @@ def _select_final_recall_rows_with_facet_rescue(
         term for term in query_terms
         if term and term not in anchor_tokens
     ]
+    scoring_query_terms = [
+        term for term in non_anchor_query_terms
+        if term not in _QUERY_STOPWORDS
+    ] or non_anchor_query_terms or query_terms
 
     def _facet_signal(row: Dict[str, Any]) -> int:
         search_text = " ".join([
@@ -17214,7 +17243,7 @@ def _select_final_recall_rows_with_facet_rescue(
             str((row or {}).get("keywords") or ""),
         ]).lower()
         return sum(
-            1 for term in query_terms
+            1 for term in scoring_query_terms
             if term and (term in search_text or _text_contains_anchor_term(search_text, term))
         )
 
@@ -17224,7 +17253,7 @@ def _select_final_recall_rows_with_facet_rescue(
             str((row or {}).get("keywords") or ""),
         ]).lower()
         return sum(
-            1 for term in non_anchor_query_terms
+            1 for term in scoring_query_terms
             if term and (term in search_text or _text_contains_anchor_term(search_text, term))
         )
 
@@ -17241,6 +17270,9 @@ def _select_final_recall_rows_with_facet_rescue(
     facet_rows.sort(
         key=lambda row: (
             _facet_signal(row),
+            1 if _is_related_entity_facet_rescue_row(row) else 0,
+            _facet_rescue_classifier_signal(row, scoring_query_terms),
+            -len(str((row or {}).get("text") or "")) if _is_related_entity_facet_rescue_row(row) else 0,
             float(row.get("similarity", 0.0) or 0.0),
             len(str(row.get("keywords") or "")),
         ),
@@ -17318,7 +17350,11 @@ def _prioritize_high_signal_facet_rescue_rows(
         term for term in query_terms
         if term and term not in anchor_tokens
     ]
-    if not non_anchor_query_terms:
+    scoring_query_terms = [
+        term for term in non_anchor_query_terms
+        if term not in _QUERY_STOPWORDS
+    ] or non_anchor_query_terms
+    if not scoring_query_terms:
         return rows
 
     def _non_anchor_signal(row: Dict[str, Any]) -> int:
@@ -17327,7 +17363,7 @@ def _prioritize_high_signal_facet_rescue_rows(
             str((row or {}).get("keywords") or ""),
         ]).lower()
         return sum(
-            1 for term in non_anchor_query_terms
+            1 for term in scoring_query_terms
             if term and (term in search_text or _text_contains_anchor_term(search_text, term))
         )
 
@@ -17341,7 +17377,7 @@ def _prioritize_high_signal_facet_rescue_rows(
         ),
         default=0,
     )
-    leading: List[Tuple[int, int, Dict[str, Any]]] = []
+    leading: List[Tuple[int, int, int, int, int, Dict[str, Any]]] = []
     trailing: List[Dict[str, Any]] = []
     for index, row in enumerate(rows):
         signal = _non_anchor_signal(row) if isinstance(row, dict) and row.get("_facet_rescue") else 0
@@ -17349,13 +17385,23 @@ def _prioritize_high_signal_facet_rescue_rows(
             signal >= _facet_rescue_leading_signal_threshold(row)
             and signal > source_dated_session_signal
         ):
-            leading.append((signal, -index, row))
+            leading.append((
+                signal,
+                1 if _is_related_entity_facet_rescue_row(row) else 0,
+                _facet_rescue_classifier_signal(row, scoring_query_terms),
+                -len(str((row or {}).get("text") or "")) if _is_related_entity_facet_rescue_row(row) else 0,
+                -index,
+                row,
+            ))
         else:
             trailing.append(row)
     if not leading:
         return rows
-    leading.sort(key=lambda item: item[:2], reverse=True)
-    return [row for _signal, _negative_index, row in leading] + trailing
+    leading.sort(key=lambda item: item[:5], reverse=True)
+    return [
+        row
+        for _signal, _related, _classifier, _compactness, _negative_index, row in leading
+    ] + trailing
 
 
 def _parse_recall_timestamp(value: Any) -> Optional[datetime]:
