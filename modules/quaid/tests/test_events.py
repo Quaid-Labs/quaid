@@ -4527,6 +4527,30 @@ def test_event_file_lock_release_failure_respects_fail_hard(monkeypatch, tmp_pat
     assert "unlock unavailable" in str(excinfo.value.__cause__)
 
 
+def test_event_file_lock_release_failure_does_not_mask_body_exception(
+    monkeypatch,
+    tmp_path,
+    caplog,
+):
+    import core.runtime.events as events
+
+    def _flock(_handle, operation):
+        if operation == fake_fcntl.LOCK_UN:
+            raise OSError("unlock unavailable")
+
+    fake_fcntl = types.SimpleNamespace(LOCK_EX=1, LOCK_UN=2, flock=_flock)
+    monkeypatch.setitem(sys.modules, "fcntl", fake_fcntl)
+    monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: True)
+
+    with caplog.at_level("WARNING", logger="core.runtime.events"):
+        with pytest.raises(ValueError, match="body failed"):
+            with events._file_lock(tmp_path / "events.lock"):
+                raise ValueError("body failed")
+
+    assert "Failed to release event file lock" in caplog.text
+    assert "unlock unavailable" in caplog.text
+
+
 def test_register_event_handler_does_not_overwrite_without_force(caplog):
     original = EVENT_HANDLERS["session.reset"]
 

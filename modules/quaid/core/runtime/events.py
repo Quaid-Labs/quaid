@@ -15,6 +15,7 @@ import contextlib
 import json
 import logging
 import os
+import sys
 import tempfile
 import uuid
 from datetime import datetime, timezone
@@ -578,12 +579,13 @@ def _file_lock(path: Path):
         yield
     finally:
         if lock_acquired:
+            body_exc_type = sys.exc_info()[0]
             try:
                 import fcntl  # type: ignore
                 fcntl.flock(lock_handle, fcntl.LOCK_UN)
             except Exception as exc:
                 logger.warning("Failed to release event file lock %s: %s", path, exc)
-                if _is_fail_hard_enabled():
+                if _is_fail_hard_enabled() and body_exc_type is None:
                     lock_handle.close()
                     raise RuntimeError(f"Failed to release event file lock while fail-hard mode is enabled: {path}") from exc
         lock_handle.close()
