@@ -306,6 +306,80 @@ def test_completion_event_today_window_honors_quaid_now(monkeypatch, tmp_path):
     assert seen["since_iso"] == "2026-02-03T00:00:00+00:00"
 
 
+def test_health_snapshot_failure_raises_when_fail_hard_enabled(monkeypatch, tmp_path):
+    cfg = _minimal_janitor_cfg(memory=False, journal=False)
+    _patch_minimal_janitor_run(monkeypatch, tmp_path, cfg)
+    monkeypatch.setattr(janitor, "is_fail_hard_enabled", lambda: True)
+    monkeypatch.setattr(
+        janitor,
+        "record_health_snapshot",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("health db down")),
+        raising=False,
+    )
+
+    with pytest.raises(RuntimeError, match="Critical error in task all") as exc:
+        janitor._run_task_optimized_inner("all", dry_run=False, incremental=False, resume_checkpoint=False)
+
+    assert "Health snapshot recording failed" in str(exc.value.__cause__)
+
+
+def test_pre_graduate_count_failure_raises_when_fail_hard_enabled(monkeypatch, tmp_path):
+    cfg = _minimal_janitor_cfg(memory=True, journal=False)
+    _patch_minimal_janitor_run(monkeypatch, tmp_path, cfg)
+    monkeypatch.setattr(janitor, "is_fail_hard_enabled", lambda: True)
+    monkeypatch.setattr(
+        janitor,
+        "count_nodes_by_status",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("status count failed")),
+        raising=False,
+    )
+
+    with pytest.raises(RuntimeError, match="Critical error in task graduate") as exc:
+        janitor._run_task_optimized_inner("graduate", dry_run=False, incremental=False, resume_checkpoint=False)
+
+    assert "Pre-graduate status count failed" in str(exc.value.__cause__)
+
+
+def test_benchmark_validation_count_failure_raises_when_fail_hard_enabled(monkeypatch, tmp_path):
+    cfg = _minimal_janitor_cfg(memory=True, journal=False)
+    _patch_minimal_janitor_run(monkeypatch, tmp_path, cfg)
+    monkeypatch.setattr(janitor, "is_fail_hard_enabled", lambda: True)
+    monkeypatch.setattr(janitor, "is_benchmark_mode", lambda: True)
+    calls = 0
+
+    def _count_nodes_by_status(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return {"pending": 0, "approved": 0}
+        raise RuntimeError("benchmark count failed")
+
+    monkeypatch.setattr(janitor, "count_nodes_by_status", _count_nodes_by_status, raising=False)
+
+    with pytest.raises(RuntimeError, match="Benchmark mode DB validation failed"):
+        janitor._run_task_optimized_inner("graduate", dry_run=False, incremental=False, resume_checkpoint=False)
+
+
+def test_journal_log_rotation_failure_raises_when_fail_hard_enabled(monkeypatch, tmp_path):
+    from core import log_rotation
+
+    cfg = _minimal_janitor_cfg(memory=False, journal=True)
+    _patch_minimal_janitor_run(monkeypatch, tmp_path, cfg)
+    monkeypatch.setattr(janitor, "is_fail_hard_enabled", lambda: True)
+    monkeypatch.setattr(janitor, "get_visible_workspace_dir", lambda: tmp_path)
+    monkeypatch.setattr(
+        log_rotation,
+        "rotate_project_logs",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("rotation failed")),
+    )
+    monkeypatch.setattr(log_rotation, "rotate_journal_logs", lambda *_args, **_kwargs: 0)
+
+    with pytest.raises(RuntimeError, match="Critical error in task journal") as exc:
+        janitor._run_task_optimized_inner("journal", dry_run=False, incremental=False, resume_checkpoint=False)
+
+    assert "Log rotation failed" in str(exc.value.__cause__)
+
+
 def test_default_owner_raises_when_fail_hard_enabled(monkeypatch):
     cfg = SimpleNamespace()
     monkeypatch.setattr(janitor, "_cfg", cfg)

@@ -1792,6 +1792,8 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
                     print(f"  Log rotation: {proj_archived} project entries, {journal_archived} journal entries archived")
                     applied_changes["log_entries_archived"] = proj_archived + journal_archived
             except Exception as e:
+                if is_fail_hard_enabled():
+                    raise RuntimeError("Log rotation failed") from e
                 print(f"  Log rotation error: {e}", file=sys.stderr)
 
         # --- Task 8: Unit Tests (subprocess) ---
@@ -1867,6 +1869,8 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
                         f"{summary['total_edges']} edges, avg conf {summary['avg_confidence']:.3f}"
                     )
             except Exception as e:
+                if is_fail_hard_enabled():
+                    raise RuntimeError("Health snapshot recording failed") from e
                 print(f"[Health Snapshot] Failed: {e}")
 
         # --- Final Step: Graduate approved → active ---
@@ -1878,6 +1882,8 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
                 pre_counts = count_nodes_by_status(graph, ["pending", "approved"])
                 pending_before = int(pre_counts.get("pending", 0) or 0)
             except Exception as e:
+                if is_fail_hard_enabled():
+                    raise RuntimeError("Pre-graduate status count failed") from e
                 pending_before = 0
                 metrics.add_error(f"Pre-graduate status count failed: {e}")
 
@@ -1976,6 +1982,8 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
                 metrics.add_error(msg)
                 memory_pipeline_ok = False
         except Exception as e:
+            if is_fail_hard_enabled():
+                raise RuntimeError("Benchmark mode DB validation failed") from e
             metrics.add_error(f"Benchmark mode validation failed: {e}")
             memory_pipeline_ok = False
 
