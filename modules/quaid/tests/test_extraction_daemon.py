@@ -17520,7 +17520,7 @@ class TestRollingExtraction:
         assert sorted(fact["domains"]) == ["personal", "pets"]
         assert fact["extraction_confidence"] == "high"
 
-    def test_merge_staged_payloads_subset_overlap_ignores_negation_mismatch(self, monkeypatch):
+    def test_merge_staged_payloads_subset_overlap_routes_negation_to_llm(self, monkeypatch):
         import datastore.memorydb.memory_graph as memory_graph
         import lib.similarity as similarity
 
@@ -17566,8 +17566,8 @@ class TestRollingExtraction:
         merged = extraction_daemon.merge_staged_payloads(state, payload)
 
         assert len(merged["raw_facts"]) == 2
-        assert merged["staged_semantic_subset_rows"] == 0
-        assert merged["staged_semantic_llm_checks"] == 0
+        assert merged["staged_semantic_subset_rows"] == 1
+        assert merged["staged_semantic_llm_checks"] == 1
         assert merged["staged_semantic_duplicate_facts_collapsed"] == 0
 
     def test_skips_session_where_transcript_not_grown_past_cursor(self, monkeypatch, tmp_path):

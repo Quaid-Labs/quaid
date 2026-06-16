@@ -378,6 +378,46 @@ def test_contradiction_elapsed_budget_uses_monotonic(monkeypatch):
 
     assert out == []
     assert captured["timeout"] == pytest.approx(19.0)
+def test_recall_similar_pairs_routes_negated_subset_overlap_to_review(monkeypatch):
+    new_node = SimpleNamespace(
+        id="new",
+        name="Alex keeps blue notebooks near the desk",
+        embedding=[1.0, 0.0],
+        type="Fact",
+        created_at="2024-02-01T00:00:00",
+        valid_from=None,
+        valid_until=None,
+        occurred_start=None,
+        occurred_end=None,
+        mentioned_at="2024-02-02T00:00:00",
+    )
+    old_node = SimpleNamespace(
+        id="old",
+        name="Alex does not keep blue notebooks near the desk",
+        embedding=[1.0, 0.0],
+        type="Fact",
+        created_at="2024-01-01T00:00:00",
+        valid_from=None,
+        valid_until=None,
+        occurred_start=None,
+        occurred_end=None,
+        mentioned_at="2024-01-02T00:00:00",
+    )
+
+    class _Graph:
+        def cosine_similarity(self, emb_a, emb_b):
+            return float(maintenance_ops.DUPLICATE_MIN_SIM) - 0.12
+
+    monkeypatch.setattr(maintenance_ops, "get_nodes_since", lambda graph, since=None, limit=0: [new_node])
+    monkeypatch.setattr(maintenance_ops, "recall_candidates", lambda graph, text, node_id: [old_node])
+
+    out = maintenance_ops.recall_similar_pairs(_Graph(), maintenance_ops.JanitorMetrics())
+
+    assert len(out["duplicates"]) == 1
+    dup = out["duplicates"][0]
+    assert dup["id_a"] == "new"
+    assert dup["id_b"] == "old"
+    assert dup["dedup_reason"] == "subset_overlap"
 
 
 def test_batch_duplicate_check_includes_temporal_context_in_prompt(monkeypatch):

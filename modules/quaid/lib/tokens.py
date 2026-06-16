@@ -4,24 +4,9 @@ import re
 import unicodedata
 from typing import List
 
-# Union of stopwords from janitor.py and memory_graph.py
-STOPWORDS = frozenset({
-    "a", "an", "the", "and", "or", "but", "in", "on", "at", "to", "for",
-    "of", "with", "by", "from", "is", "are", "was", "were", "be", "been",
-    "being", "have", "has", "had", "do", "does", "did", "will", "would",
-    "could", "should", "may", "might", "can", "shall", "it", "its",
-    "this", "that", "these", "those", "he", "she", "they", "them", "his",
-    "her", "their", "my", "your", "our", "i", "me", "we", "you", "us",
-    "not", "no", "very", "just", "also", "about", "up", "so", "if",
-    "than", "too", "when", "what", "which", "who", "how", "all", "each",
-    "any", "some", "such", "more", "other", "into", "over", "after",
-    "before", "between", "out", "through", "during", "without", "again",
-    "like", "likes", "using", "uses", "used", "want", "wants", "wanted",
-    "prefer", "prefers", "preferred", "really", "much", "many", "often",
-    # From memory_graph.py search_fts stopwords
-    "tell", "know", "get", "going", "need", "think", "said", "make", "take",
-    "must",
-})
+# Kept as a compatibility export for older callers. Shared memory tokenization
+# must not apply language-specific stopword policy.
+STOPWORDS = frozenset()
 
 
 def _has_compact_script_char(text: str) -> bool:
@@ -57,14 +42,14 @@ def estimate_tokens(text: str) -> int:
 
 
 def extract_key_tokens(text: str, min_length: int = 3, max_tokens: int = 8) -> List[str]:
-    """Extract significant tokens from text, filtering stopwords and short words."""
+    """Extract structurally significant tokens from text."""
     normalized = unicodedata.normalize("NFKC", str(text or "")).casefold()
     words = re.findall(r"[^\W\d_][\w_-]*", normalized, flags=re.UNICODE)
     seen = set()
     tokens = []
     for w in words:
         token_min_length = min(min_length, 2) if not w.isascii() else min_length
-        if w not in STOPWORDS and len(w) >= token_min_length and w not in seen:
+        if len(w) >= token_min_length and w not in seen:
             seen.add(w)
             tokens.append(w)
             if len(tokens) >= max_tokens:
@@ -83,21 +68,6 @@ def is_subset_overlap_candidate(text_a: str, text_b: str) -> bool:
     if not a or not b or a == b:
         return False
     if len(a.split()) < 3 or len(b.split()) < 3:
-        return False
-
-    negation_tokens = {"not", "no", "never", "without", "none", "cannot", "cant", "don't", "dont"}
-
-    def _has_negation_token(text_lower: str) -> bool:
-        for tok in negation_tokens:
-            if re.search(rf"\b{re.escape(tok)}\b", text_lower):
-                return True
-        return False
-
-    a_lower = a.lower()
-    b_lower = b.lower()
-    a_neg = _has_negation_token(a_lower)
-    b_neg = _has_negation_token(b_lower)
-    if a_neg != b_neg:
         return False
 
     tokens_a = set(extract_key_tokens(a, max_tokens=24))

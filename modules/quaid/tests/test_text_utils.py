@@ -84,11 +84,13 @@ class TestExtractKeyTokens:
         assert "coffee" in tokens
         assert "morning" in tokens
 
-    def test_filters_stopwords(self):
+    def test_filters_only_short_ascii_noise(self):
         tokens = extract_key_tokens("the cat is in the hat")
-        assert "the" not in tokens
+        assert "the" in tokens
         assert "cat" in tokens
         assert "hat" in tokens
+        assert "is" not in tokens
+        assert "in" not in tokens
 
     def test_respects_max_tokens(self):
         tokens = extract_key_tokens("one two three four five six seven eight nine ten", max_tokens=3)
@@ -98,8 +100,8 @@ class TestExtractKeyTokens:
         tokens = extract_key_tokens("")
         assert tokens == []
 
-    def test_all_stopwords(self):
-        tokens = extract_key_tokens("the is a an")
+    def test_short_ascii_tokens_only(self):
+        tokens = extract_key_tokens("is a an")
         assert tokens == []
 
     def test_extracts_unicode_tokens(self):
@@ -128,8 +130,8 @@ class TestSubsetOverlapCandidate:
             "Solomon has a notorious dog named Baxter",
         ) is True
 
-    def test_negation_mismatch_blocks_subset_overlap(self):
+    def test_negation_words_do_not_language_gate_subset_overlap(self):
         assert is_subset_overlap_candidate(
-            "Solomon has a dog named Baxter who loves tennis balls",
-            "Solomon does not have a dog named Baxter",
-        ) is False
+            "Solomon does not keep blue notes near desk",
+            "Solomon keep blue notes near desk",
+        ) is True

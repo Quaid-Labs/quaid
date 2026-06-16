@@ -399,11 +399,9 @@ class TestExtractKeyTokens:
         tokens = extract_key_tokens("Quaid is 35 years old")
         assert "35" not in tokens
 
-    def test_stopwords_in_frozenset(self):
-        """Verify key stopwords are present."""
-        assert "the" in STOPWORDS
-        assert "and" in STOPWORDS
-        assert "is" in STOPWORDS
+    def test_stopwords_export_is_language_neutral(self):
+        """Compatibility export must not apply English stopword policy."""
+        assert STOPWORDS == frozenset()
 
     def test_hyphenated_words(self):
         """Hyphenated words are preserved."""
