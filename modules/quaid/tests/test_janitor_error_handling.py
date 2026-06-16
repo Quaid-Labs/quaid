@@ -462,6 +462,37 @@ def test_run_tests_uses_configurable_timeout(monkeypatch):
     assert out["success"] is True
 
 
+def test_pid_alive_logs_unknown_probe_failure(monkeypatch):
+    warnings = []
+    monkeypatch.setattr(janitor.os, "kill", lambda *_args: (_ for _ in ()).throw(OSError("probe failed")))
+    monkeypatch.setattr(janitor.janitor_logger, "warn", lambda event, **fields: warnings.append((event, fields)))
+
+    assert janitor._pid_alive(12345) is True
+    assert warnings == [("janitor_pid_probe_failed", {"pid": 12345, "error": "probe failed"})]
+
+
+def test_lock_owner_summary_logs_read_failure(monkeypatch, tmp_path):
+    warnings = []
+    missing = tmp_path / ".janitor.lock"
+    monkeypatch.setattr(janitor, "_lock_file_path", lambda: missing)
+    monkeypatch.setattr(janitor.janitor_logger, "warn", lambda event, **fields: warnings.append((event, fields)))
+
+    assert janitor._lock_owner_summary() == ""
+    assert warnings
+    assert warnings[0][0] == "janitor_lock_owner_summary_failed"
+
+
+def test_dry_run_pending_count_failure_raises_when_fail_hard(monkeypatch, tmp_path):
+    cfg = _minimal_janitor_cfg(memory=True, journal=False)
+    _patch_minimal_janitor_run(monkeypatch, tmp_path, cfg)
+    monkeypatch.setattr(janitor, "is_fail_hard_enabled", lambda: True)
+
+    with pytest.raises(RuntimeError, match="Critical error in task temporal") as exc:
+        janitor._run_task_optimized_inner("temporal", dry_run=True, incremental=False, resume_checkpoint=False)
+
+    assert "Dry-run pending node count failed" in str(exc.value.__cause__)
+
+
 def test_checkpoint_heartbeat_updates_during_long_stage(monkeypatch):
     writes = []
 

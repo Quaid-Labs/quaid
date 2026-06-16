@@ -482,8 +482,9 @@ def _pid_alive(pid: int) -> bool:
         return False
     except PermissionError:
         return True
-    except Exception:
+    except Exception as exc:
         # Unknown PID probe failures should not cause lock stealing.
+        janitor_logger.warn("janitor_pid_probe_failed", pid=pid, error=str(exc))
         return True
 
 
@@ -491,7 +492,8 @@ def _lock_owner_summary() -> str:
     """Best-effort lock metadata for wait diagnostics; flock remains authoritative."""
     try:
         lines = _lock_file_path().read_text(encoding="utf-8").splitlines()
-    except Exception:
+    except Exception as exc:
+        janitor_logger.warn("janitor_lock_owner_summary_failed", error=str(exc))
         return ""
     if not lines:
         return ""
@@ -1196,7 +1198,7 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
         return stage in set(checkpoint_state.get("completed_stages", []) or [])
 
     def _record_stage_budget(stage: str, started_at: float) -> None:
-        elapsed = round(time.time() - started_at, 3)
+        elapsed = round(time.monotonic() - started_at, 3)
         cap = _stage_budget_cap(stage)
         over = bool(cap and elapsed > cap)
         stage_budget_report[stage] = {
@@ -1453,7 +1455,10 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
                             ).fetchone()[0]
                         result.metrics["pending_nodes"] = pending
                         print(f"  [dry-run] {stage}: {pending} pending nodes would be processed")
-                    except Exception:
+                    except Exception as exc:
+                        if is_fail_hard_enabled():
+                            raise RuntimeError("Dry-run pending node count failed") from exc
+                        janitor_logger.warn("janitor_dry_run_pending_count_failed", stage=stage, error=str(exc))
                         print(f"  [dry-run] {stage}: (could not count pending nodes)")
                 return result
 
@@ -1528,7 +1533,7 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
                 print(f"[Task: {stage}] SKIPPED — already completed in checkpoint")
                 return RoutineResult()
             _checkpoint_save(stage=stage, status="running", completed=False)
-            stage_started = time.time()
+            stage_started = time.monotonic()
             result = _run_memory_graph_stage(stage, stage_dry_run)
             _record_stage_budget(stage, stage_started)
             for key, value in (result.metrics or {}).items():
@@ -1898,7 +1903,7 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
                         "running catch-up review pass."
                     )
                     metrics.start_task("review_catchup")
-                    catchup_started = time.time()
+                    catchup_started = time.monotonic()
                     catchup_result = _run_memory_graph_stage("review", False)
                     _record_stage_budget("review_catchup", catchup_started)
                     for line in catchup_result.logs:
