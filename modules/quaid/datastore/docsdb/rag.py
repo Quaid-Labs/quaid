@@ -232,6 +232,7 @@ def _docs_embedding_timeout_seconds() -> float:
     try:
         global_timeout = float(os.environ.get("OLLAMA_EMBED_TIMEOUT_S", "120") or 120)
     except Exception:
+        logger.warning("Invalid OLLAMA_EMBED_TIMEOUT_S=%r; using default 120s", os.environ.get("OLLAMA_EMBED_TIMEOUT_S"))
         global_timeout = 120.0
     if global_timeout <= 0:
         global_timeout = 120.0

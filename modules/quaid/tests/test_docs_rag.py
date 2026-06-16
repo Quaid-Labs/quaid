@@ -31,6 +31,17 @@ def test_docs_lexical_terms_support_unicode_tokens():
     assert _docs_normalized_lexical_text("PROJECT.md\nＡＰＰ 美玲 云门") == "project.md app 美玲 云门"
 
 
+def test_docs_embedding_timeout_logs_invalid_global_timeout(monkeypatch, caplog):
+    from datastore.docsdb.rag import _docs_embedding_timeout_seconds
+
+    monkeypatch.delenv("QUAID_DOCS_EMBED_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.setenv("OLLAMA_EMBED_TIMEOUT_S", "not-a-number")
+    caplog.set_level("WARNING", logger="datastore.docsdb.rag")
+
+    assert _docs_embedding_timeout_seconds() == 60.0
+    assert "Invalid OLLAMA_EMBED_TIMEOUT_S='not-a-number'; using default 120s" in caplog.text
+
+
 def test_docs_lexical_terms_keep_single_compact_unicode_anchor():
     from datastore.docsdb.rag import _docs_query_terms, _project_log_line_query_score, _project_log_query_terms
 
