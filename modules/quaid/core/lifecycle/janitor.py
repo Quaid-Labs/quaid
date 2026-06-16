@@ -27,6 +27,7 @@ import argparse
 import contextlib
 import hashlib
 import json
+import logging
 import math
 import os
 import re
@@ -60,6 +61,8 @@ from lib.runtime_context import (
 )
 from lib.fail_policy import is_fail_hard_enabled
 from lib.database import get_connection as _lib_get_connection
+
+logger = logging.getLogger(__name__)
 
 
 _DATASTORE_RUNTIME = None
@@ -221,6 +224,7 @@ _registry_init_lock = threading.Lock()
 try:
     _cfg = get_config()
 except Exception as exc:
+    logger.warning("Failed to load janitor config: %s", exc, exc_info=True)
     if is_fail_hard_enabled():
         raise RuntimeError("Failed to load janitor config") from exc
     _cfg = None
@@ -441,6 +445,8 @@ def run_tests(metrics: JanitorMetrics) -> Dict[str, Any]:
     except Exception as e:
         print(f"  Test execution error: {e}")
         metrics.add_error(f"Unit test error: {e}")
+        if is_fail_hard_enabled():
+            raise RuntimeError("Unit test runner failed unexpectedly") from e
 
     metrics.end_task("tests")
     return result
@@ -760,7 +766,8 @@ def _resolve_apply_mode_lightweight(args_apply: bool, args_approve: bool) -> tup
         from lib.config import _load_lightweight_config  # type: ignore[attr-defined]
 
         raw = _load_lightweight_config()
-    except Exception:
+    except Exception as exc:
+        logger.warning("Lightweight config load failed; defaulting apply_mode to auto: %s", exc, exc_info=True)
         if is_fail_hard_enabled():
             raise
         raw = {}

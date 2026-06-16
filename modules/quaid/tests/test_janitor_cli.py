@@ -32,6 +32,26 @@ def test_janitor_import_config_failure_honors_fail_hard(monkeypatch):
         _fresh_import_janitor()
 
 
+def test_janitor_import_config_failure_warns_when_fail_open(monkeypatch, tmp_path, caplog):
+    import config
+    import lib.fail_policy
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setattr(config, "get_config", lambda: (_ for _ in ()).throw(RuntimeError("bad config")))
+    monkeypatch.setattr(lib.fail_policy, "is_fail_hard_enabled", lambda: False)
+
+    with caplog.at_level("WARNING", logger="core.lifecycle.janitor"):
+        janitor = _fresh_import_janitor()
+
+    assert janitor._cfg is None
+    assert "Failed to load janitor config: bad config" in caplog.text
+    sys.modules.pop("core.lifecycle.janitor", None)
+    import core.lifecycle as lifecycle_pkg
+
+    if getattr(lifecycle_pkg, "janitor", None) is janitor:
+        delattr(lifecycle_pkg, "janitor")
+
+
 def test_janitor_worker_run_all_once_bypasses_schedule_gate(monkeypatch, tmp_path):
     monkeypatch.setenv("QUAID_HOME", str(tmp_path))
     monkeypatch.setenv("QUAID_VISIBLE_HOME", str(tmp_path))

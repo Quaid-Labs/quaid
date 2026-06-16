@@ -462,6 +462,18 @@ def test_run_tests_uses_configurable_timeout(monkeypatch):
     assert out["success"] is True
 
 
+def test_run_tests_unexpected_error_raises_when_fail_hard(monkeypatch):
+    monkeypatch.setattr(janitor.subprocess, "run", lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("spawn failed")))
+    monkeypatch.setattr(janitor, "is_fail_hard_enabled", lambda: True)
+
+    metrics = JanitorMetrics()
+    with pytest.raises(RuntimeError, match="Unit test runner failed unexpectedly") as excinfo:
+        janitor.run_tests(metrics)
+
+    assert isinstance(excinfo.value.__cause__, OSError)
+    assert metrics.has_errors
+
+
 def test_pid_alive_logs_unknown_probe_failure(monkeypatch):
     warnings = []
     monkeypatch.setattr(janitor.os, "kill", lambda *_args: (_ for _ in ()).throw(OSError("probe failed")))
