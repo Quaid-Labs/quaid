@@ -76,6 +76,48 @@ def test_effective_llm_timeout_invalid_value_raises_when_failhard(caplog):
     assert "Invalid memorydb maintenance LLM timeout 'not-a-number'; using default 42.0s" in caplog.text
 
 
+def test_maintenance_diagnostic_fallbacks_log(monkeypatch, caplog):
+    class _BrokenUsers:
+        identities = {}
+
+        @property
+        def default_owner(self):
+            raise RuntimeError("owner cfg failed")
+
+    monkeypatch.delenv("QUAID_JANITOR_EMBED_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.setenv("OLLAMA_EMBED_TIMEOUT_S", "not-a-number")
+    monkeypatch.setenv("QUAID_JANITOR_DEBUG_DIAGNOSTICS", "1")
+
+    with caplog.at_level("DEBUG", logger=maintenance_ops.__name__):
+        assert maintenance_ops._janitor_embedding_timeout_seconds() == 120.0
+
+        with patch.object(maintenance_ops, "_cfg", SimpleNamespace(users=_BrokenUsers())), \
+             patch.object(maintenance_ops, "resolve_owner_person", return_value=SimpleNamespace(name="")):
+            assert maintenance_ops._owner_display_name() == "the user"
+            assert maintenance_ops._owner_full_name("solomon-steadman") == "the user"
+
+        assert maintenance_ops._load_node_attributes_blob("{bad json") == {}
+
+        with patch.object(maintenance_ops.logger, "info", side_effect=RuntimeError("diag sink failed")):
+            maintenance_ops._diag_log_decision("unit", payload="value")
+
+        parallel_cfg = SimpleNamespace(
+            enabled=True,
+            llm_workers=3,
+            task_workers={"unit_task": "not-an-int"},
+        )
+        cfg = SimpleNamespace(core=SimpleNamespace(parallel=parallel_cfg))
+        with patch.object(maintenance_ops, "_cfg", cfg):
+            assert maintenance_ops._llm_parallel_workers("unit_task") == 3
+
+    assert "Invalid OLLAMA_EMBED_TIMEOUT_S" in caplog.text
+    assert "Failed resolving owner display name" in caplog.text
+    assert "Failed loading configured owner ids" in caplog.text
+    assert "Failed parsing node attributes blob" in caplog.text
+    assert "_diag_log_decision failed" in caplog.text
+    assert "Failed parsing LLM parallel workers config" in caplog.text
+
+
 def test_get_last_successful_janitor_completed_at_fail_hard_behavior():
     class _BrokenGraph:
         @contextmanager
@@ -434,6 +476,74 @@ def test_contradiction_resolution_uses_runtime_clock_for_timestamps(
     )
 
 
+def test_contradiction_resolution_summary_failure_logs(monkeypatch, caplog):
+    monkeypatch.setattr(maintenance_ops, "CONTRADICTION_ENABLED", True)
+    metrics = maintenance_ops.JanitorMetrics()
+    pending = [{
+        "id": "c1",
+        "node_a_id": "na",
+        "node_b_id": "nb",
+        "text_a": "A",
+        "text_b": "B",
+        "conf_a": 0.9,
+        "conf_b": 0.8,
+        "created_a": "2026-01-01",
+        "created_b": "2026-01-02",
+        "source_a": "user",
+        "source_b": "user",
+        "speaker_a": "alice",
+        "speaker_b": "alice",
+        "access_a": 1,
+        "access_b": 1,
+        "explanation": "conflict",
+    }]
+
+    class _Conn:
+        def execute(self, sql, params=()):
+            if "SELECT COUNT(*) FROM contradictions" in sql:
+                return _DummyResult(rows=[(1,)])
+            return _DummyResult(rowcount=1)
+
+    class _Graph:
+        @contextmanager
+        def _get_conn(self):
+            yield _Conn()
+
+        def add_node(self, *_args, **_kwargs):
+            raise RuntimeError("summary write failed")
+
+        def add_edge(self, *_args, **_kwargs):
+            raise AssertionError("add_edge should not run after summary add failure")
+
+    llm_batches = [{
+        "batch_num": 1,
+        "batch": pending,
+        "prompt_tag": "",
+        "response_duration": (json.dumps([{
+            "pair": 1,
+            "action": "MERGE",
+            "merged_text": "merged fact text",
+            "reason": "latest",
+        }]), 0.0),
+    }]
+
+    with patch.object(maintenance_ops, "get_pending_contradictions", return_value=pending), \
+         patch.object(maintenance_ops, "_run_llm_batches_parallel", return_value=llm_batches), \
+         patch.object(maintenance_ops, "resolve_contradiction", return_value=None), \
+         patch.object(maintenance_ops, "_merge_nodes_into", return_value={"id": "merged"}), \
+         patch.object(maintenance_ops, "_default_owner_id", return_value="default"), \
+         caplog.at_level("WARNING", logger=maintenance_ops.__name__):
+        out = maintenance_ops.resolve_contradictions_with_opus(
+            _Graph(),
+            metrics,
+            dry_run=False,
+            max_items=1,
+        )
+
+    assert out["merged"] == 1
+    assert "Failed creating contradiction resolution summary node: summary write failed" in caplog.text
+
+
 def test_quaid_now_rejects_malformed_override_when_failhard_enabled(monkeypatch):
     monkeypatch.setenv("QUAID_NOW", "not-a-date")
 
@@ -527,6 +637,110 @@ def test_review_fix_uses_quaid_now_for_updated_at(monkeypatch):
     assert captured["params"][3] == "2026-03-11T00:00:00"
 
 
+def test_review_decision_merge_failure_logs(caplog):
+    decisions = [{
+        "action": "MERGE",
+        "merge_ids": ["n1", "n2"],
+        "merged_text": "merged fact text",
+        "reason": "duplicate",
+    }]
+
+    with patch.object(maintenance_ops, "_merge_nodes_into", side_effect=ValueError("merge failed")), \
+         caplog.at_level("WARNING", logger=maintenance_ops.__name__):
+        out = maintenance_ops.apply_review_decisions_from_list(object(), decisions, dry_run=False)
+
+    assert out["merged"] == 0
+    assert "MERGE failed for ['n1', 'n2']: merge failed" in caplog.text
+
+
+def test_review_decision_malformed_attributes_logs(caplog):
+    class _Conn:
+        def execute(self, sql, params=()):
+            text = str(sql).strip().upper()
+            if text.startswith("SELECT NAME, STATUS, SOURCE, SPEAKER, ATTRIBUTES FROM NODES"):
+                return _DummyResult(rows=[{
+                    "name": "old fact",
+                    "status": "pending",
+                    "source": "unit",
+                    "speaker": "user",
+                    "attributes": "{bad json",
+                }])
+            if text.startswith("UPDATE NODES SET STATUS = 'APPROVED'"):
+                return _DummyResult(rowcount=1)
+            raise AssertionError(f"unexpected SQL: {sql}")
+
+    class _Graph:
+        @contextmanager
+        def _get_conn(self):
+            yield _Conn()
+
+    decisions = [{"id": "n1", "action": "KEEP", "reason": "valid"}]
+
+    with caplog.at_level("WARNING", logger=maintenance_ops.__name__):
+        out = maintenance_ops.apply_review_decisions_from_list(_Graph(), decisions, dry_run=False)
+
+    assert out["kept"] == 1
+    assert "Failed parsing node attributes for review decision on n1" in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("fail_hard", "raises", "node_deleted"),
+    [
+        (False, False, True),
+        (True, True, False),
+    ],
+)
+def test_review_delete_vec_node_failure_logs_and_respects_failhard(
+    fail_hard,
+    raises,
+    node_deleted,
+    caplog,
+):
+    class _Conn:
+        def __init__(self):
+            self.node_deleted = False
+
+        def execute(self, sql, params=()):
+            text = str(sql).strip().upper()
+            if text.startswith("SELECT NAME, STATUS, SOURCE, SPEAKER, ATTRIBUTES FROM NODES"):
+                return _DummyResult(rows=[{
+                    "name": "old fact",
+                    "status": "pending",
+                    "source": "unit",
+                    "speaker": "user",
+                    "attributes": "{}",
+                }])
+            if text.startswith("DELETE FROM VEC_NODES"):
+                raise RuntimeError("vec delete failed")
+            if text.startswith("DELETE FROM NODES"):
+                self.node_deleted = True
+            return _DummyResult(rowcount=1)
+
+    class _Graph:
+        def __init__(self):
+            self.conn = _Conn()
+
+        @contextmanager
+        def _get_conn(self):
+            yield self.conn
+
+    graph = _Graph()
+    decisions = [{"id": "n1", "action": "DELETE", "reason": "obsolete"}]
+
+    with patch.object(maintenance_ops, "is_fail_hard_enabled", return_value=fail_hard), \
+         caplog.at_level("WARNING", logger=maintenance_ops.__name__):
+        if raises:
+            with pytest.raises(RuntimeError, match="Failed deleting vec_node for n1") as excinfo:
+                maintenance_ops.apply_review_decisions_from_list(graph, decisions, dry_run=False)
+            assert isinstance(excinfo.value.__cause__, RuntimeError)
+        else:
+            out = maintenance_ops.apply_review_decisions_from_list(graph, decisions, dry_run=False)
+            assert out["deleted"] == 1
+
+    assert graph.conn.node_deleted is node_deleted
+    assert "Failed deleting vec_node for n1: vec delete failed" in caplog.text
+
+
 def test_review_dedup_rejections_uses_quaid_now_for_sql_timestamps(monkeypatch):
     monkeypatch.setenv("QUAID_NOW", "2026-03-11T00:00:00Z")
     metrics = maintenance_ops.JanitorMetrics()
@@ -614,6 +828,59 @@ def test_review_decayed_memories_uses_quaid_now_for_queue_review(monkeypatch):
     assert "datetime('now')" not in sql_text
     flat_params = [item for _sql, params in graph.conn.calls for item in params]
     assert flat_params.count("2026-03-11T00:00:00") == 2
+
+
+@pytest.mark.parametrize(
+    ("action", "expected_key"),
+    [
+        ("EXTEND", "extended"),
+        ("PIN", "pinned"),
+    ],
+)
+def test_review_decayed_memories_logs_malformed_attributes(monkeypatch, caplog, action, expected_key):
+    metrics = maintenance_ops.JanitorMetrics()
+    pending = [{
+        "id": "q1",
+        "node_id": "n1",
+        "node_text": "Quaid still uses the archive shelf",
+        "node_type": "Fact",
+        "confidence_at_queue": 0.2,
+        "access_count": 0,
+        "last_accessed": "2026-01-01T00:00:00",
+        "created_at_node": "2025-01-01T00:00:00",
+        "verified": 0,
+    }]
+
+    class _Conn:
+        def execute(self, sql, params=()):
+            if "SELECT COUNT(*) FROM decay_review_queue" in sql:
+                return _DummyResult(rows=[(1,)])
+            if "SELECT attributes FROM nodes" in sql:
+                return _DummyResult(rows=[{"attributes": "{bad json"}])
+            return _DummyResult(rowcount=1)
+
+    class _Graph:
+        @contextmanager
+        def _get_conn(self):
+            yield _Conn()
+
+    llm_batches = [{
+        "batch_num": 1,
+        "batch": pending,
+        "prompt_tag": "",
+        "response_duration": (
+            json.dumps([{"item": 1, "action": action, "reason": "still useful"}]),
+            0.0,
+        ),
+    }]
+
+    with patch.object(maintenance_ops, "get_pending_decay_reviews", return_value=pending), \
+         patch.object(maintenance_ops, "_run_llm_batches_parallel", return_value=llm_batches), \
+         caplog.at_level("WARNING", logger=maintenance_ops.__name__):
+        out = maintenance_ops.review_decayed_memories(_Graph(), metrics, dry_run=False, max_items=1)
+
+    assert out[expected_key] == 1
+    assert "Skipping malformed decay review attributes for node n1" in caplog.text
 
 
 def test_get_completed_review_work_today_uses_quaid_now(monkeypatch):

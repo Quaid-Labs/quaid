@@ -156,7 +156,8 @@ def _janitor_embedding_timeout_seconds() -> float:
             )
     try:
         global_timeout = float(os.environ.get("OLLAMA_EMBED_TIMEOUT_S", "120") or 120)
-    except Exception:
+    except Exception as exc:
+        logger.warning("Invalid OLLAMA_EMBED_TIMEOUT_S; using default janitor embedding timeout: %s", exc)
         global_timeout = 120.0
     return max(5.0, global_timeout)
 
@@ -189,8 +190,8 @@ def _owner_display_name() -> str:
         identity = _cfg.users.identities.get(default)
         if identity and identity.person_node_name:
             return identity.person_node_name.split()[0]  # First name only
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Failed resolving owner display name: %s", exc)
     return "the user"
 
 
@@ -252,7 +253,8 @@ def _owner_full_name(owner_id: Optional[str] = None) -> str:
             configured_ids = {str(_cfg.users.default_owner or "").strip()}
             configured_ids.update(str(k).strip() for k in _cfg.users.identities.keys())
             is_configured_owner = owner_id_text in configured_ids
-        except Exception:
+        except Exception as exc:
+            logger.debug("Failed loading configured owner ids: %s", exc)
             is_configured_owner = False
         if is_configured_owner and re.fullmatch(r"[A-Za-z][A-Za-z_-]*", owner_id_text):
             parts = [p for p in re.split(r"[-_]+", owner_id_text) if p]
@@ -331,7 +333,8 @@ def _load_node_attributes_blob(raw: Any) -> Dict[str, Any]:
         return {}
     try:
         parsed = json.loads(raw)
-    except Exception:
+    except Exception as exc:
+        logger.debug("Failed parsing node attributes blob: %s", exc)
         return {}
     return parsed if isinstance(parsed, dict) else {}
 
@@ -659,7 +662,7 @@ def _diag_log_decision(event: str, **payload: Any) -> None:
     try:
         logger.info("[janitor:%s] %s", event, json.dumps(safe_payload, default=str))
     except Exception:
-        pass
+        logger.debug("_diag_log_decision failed", exc_info=True)
 
 
 def _record_llm_batch_issue(metrics: "JanitorMetrics", message: str) -> None:
@@ -775,7 +778,8 @@ def _llm_parallel_workers(task_name: str) -> int:
     raw = override if override is not None else default_workers
     try:
         value = int(raw)
-    except Exception:
+    except Exception as exc:
+        logger.warning("Failed parsing LLM parallel workers config; defaulting to %s: %s", default_workers, exc)
         value = default_workers
     return max(1, min(value, MAX_PARALLEL_WORKERS))
 
@@ -2156,8 +2160,8 @@ JSON array only:"""
                                     target_id=surviving_id,
                                     relation="resolved_from"
                                 ))
-                        except Exception:
-                            pass  # Resolution summary is best-effort
+                        except Exception as exc:
+                            logger.warning("Failed creating contradiction resolution summary node: %s", exc)
                     results["merged"] += 1
                     batch_resolved += 1
                     results["decisions"].append(decision_row)
@@ -3131,7 +3135,12 @@ JSON array only:"""
                                 try:
                                     attrs = json.loads(attrs_raw)
                                     ext_conf = float(attrs.get("extraction_confidence", 0.3) or 0.3)
-                                except Exception:
+                                except Exception as exc:
+                                    logger.warning(
+                                        "Skipping malformed decay review attributes for node %s: %s",
+                                        node_id,
+                                        exc,
+                                    )
                                     ext_conf = 0.3
                         # Scale from node's extraction_confidence if available, otherwise 0.3
                         extend_conf = max(0.3, float(ext_conf) * 0.5) if ext_conf else 0.3
@@ -3163,7 +3172,12 @@ JSON array only:"""
                                 try:
                                     attrs = json.loads(attrs_raw)
                                     ext_conf = float(attrs.get("extraction_confidence", 0.7) or 0.7)
-                                except Exception:
+                                except Exception as exc:
+                                    logger.warning(
+                                        "Skipping malformed decay review attributes for node %s: %s",
+                                        node_id,
+                                        exc,
+                                    )
                                     ext_conf = 0.7
                         # Use max of 0.7 and node's extraction_confidence so high-value facts keep their score
                         pin_conf = max(0.7, float(ext_conf)) if ext_conf else 0.7
@@ -3815,6 +3829,7 @@ def apply_review_decisions_from_list(graph: MemoryGraph, decisions: List[Dict[st
                     new_id = result.get("id", "unknown")[:8] if result else "unknown"
                     print(f"    MERGED {len(merge_ids)} memories -> {new_id}... ({merged_text[:40]}...)")
                 except (ValueError, Exception) as e:
+                    logger.warning("MERGE failed for %s: %s", merge_ids, e)
                     print(f"    MERGE failed for {merge_ids}: {e}")
                     continue
             merged += 1
@@ -3851,7 +3866,12 @@ def apply_review_decisions_from_list(graph: MemoryGraph, decisions: List[Dict[st
                     attrs = json.loads(row["attributes"] or "{}")
                     if isinstance(attrs, dict):
                         source_type = attrs.get("source_type")
-                except Exception:
+                except Exception as exc:
+                    logger.warning(
+                        "Failed parsing node attributes for review decision on %s: %s",
+                        memory_id,
+                        exc,
+                    )
                     source_type = None
             if action == "DELETE":
                 _diag_log_decision(
@@ -3878,8 +3898,10 @@ def apply_review_decisions_from_list(graph: MemoryGraph, decisions: List[Dict[st
                     conn.execute("DELETE FROM decay_review_queue WHERE node_id = ?", (memory_id,))
                     try:
                         conn.execute("DELETE FROM vec_nodes WHERE node_id = ?", (memory_id,))
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        logger.warning("Failed deleting vec_node for %s: %s", memory_id, exc)
+                        if is_fail_hard_enabled():
+                            raise RuntimeError(f"Failed deleting vec_node for {memory_id}") from exc
                     conn.execute("DELETE FROM nodes WHERE id = ?", (memory_id,))
                     if edges_deleted > 0:
                         print(f"    DELETED {edges_deleted} edges from fact")
