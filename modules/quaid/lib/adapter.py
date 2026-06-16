@@ -130,10 +130,6 @@ class QuaidAdapter(abc.ABC):
         r"^\s*(?:•\s*)?(?:\*{1,2}\s*)?\[Quaid(?:[^\]]*)\](?:\*{1,2})?\s*(?:[:—-]\s*)?",
         flags=re.IGNORECASE,
     )
-    _QUAID_NOTICE_LINE_RE = re.compile(
-        r"^\s*Quaid notices?:",
-        flags=re.IGNORECASE,
-    )
     _GATEWAY_TIMESTAMP_PREFIX_RE = re.compile(
         r"^\[[^\W\d_]{1,16}\s+"
         r"\d{4}-\d{2}-\d{2}\s+"
@@ -319,7 +315,10 @@ class QuaidAdapter(abc.ABC):
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
             return data if isinstance(data, dict) else {}
-        except (IOError, OSError, json.JSONDecodeError):
+        except (IOError, OSError, json.JSONDecodeError) as exc:
+            logger.warning("Failed to read shared auth registry at %s: %s", path, exc)
+            if is_fail_hard_enabled():
+                raise
             return {}
 
     def read_shared_auth_token(self, kinds: List[str]) -> Optional[str]:
@@ -428,8 +427,6 @@ class QuaidAdapter(abc.ABC):
         if not value:
             return True
         if self._QUAID_META_PREFIX_RE.match(value):
-            return True
-        if self._QUAID_NOTICE_LINE_RE.match(value):
             return True
         return self.filter_system_messages(text)
 
@@ -1244,7 +1241,10 @@ def quaid_identity_dir(quaid_home: Path, adapter_id: str) -> Path:
     try:
         iid = _instance_id()
         return _visible_root_from_hidden(quaid_home) / "instances" / iid
-    except Exception:
+    except Exception as exc:
+        logger.warning("Failed to resolve Quaid identity instance; using legacy adapter path: %s", exc)
+        if is_fail_hard_enabled():
+            raise
         visible_root = _visible_root_from_hidden(quaid_home)
         if not adapter_id or adapter_id == "standalone":
             return visible_root
@@ -1292,8 +1292,8 @@ def read_env_file(env_file: Path, var_name: str) -> Optional[str]:
                     value = value[:value.index(" #")].rstrip()
             if value:
                 return value
-    except (IOError, OSError):
-        pass
+    except (IOError, OSError) as exc:
+        logger.debug("Failed to read env file %s for %s: %s", env_file, var_name, exc)
     return None
 
 
@@ -1322,6 +1322,8 @@ def get_owner_id(override: Optional[str] = None) -> str:
         return get_config().users.default_owner
     except Exception as exc:
         logger.warning("Owner id config lookup failed; defaulting to 'default': %s", exc)
+        if is_fail_hard_enabled():
+            raise
         return "default"
 
 
@@ -1704,8 +1706,8 @@ def _adapter_instance_prefix(adapter_type: str) -> str:
             prefix = str(runtime.get("instancePrefix") or "").strip().lower()
             if prefix:
                 return prefix[:-1] if prefix.endswith("-") else prefix
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Failed to resolve adapter instance prefix for %s: %s", normalized, exc)
     return normalized
 
 
@@ -1720,8 +1722,8 @@ def _manifest_adapter_ids() -> List[str]:
             if adapter_id and adapter_id not in seen:
                 seen.add(adapter_id)
                 ids.append(adapter_id)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Failed to scan repo adapter manifests at %s: %s", repo_manifests, exc)
     installed_adaptors = _registry_quaid_home() / "adaptors"
     try:
         for manifest_path in installed_adaptors.glob("*/adapter.json"):
@@ -1729,8 +1731,8 @@ def _manifest_adapter_ids() -> List[str]:
             if adapter_id and adapter_id not in seen:
                 seen.add(adapter_id)
                 ids.append(adapter_id)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Failed to scan installed adapter manifests at %s: %s", installed_adaptors, exc)
     return ids
 
 
@@ -1749,7 +1751,8 @@ def _canonical_adapter_id(value: str) -> str:
 def _adapter_runtime_config(adapter_id: str) -> Dict[str, Any]:
     try:
         runtime = _load_adapter_manifest(adapter_id).get("runtime")
-    except Exception:
+    except Exception as exc:
+        logger.debug("Failed to load adapter runtime config for %s: %s", adapter_id, exc)
         return {}
     return runtime if isinstance(runtime, dict) else {}
 
@@ -1944,6 +1947,8 @@ def _write_project_instance_binding(
             instance_id,
             exc_info=True,
         )
+        if is_fail_hard_enabled():
+            raise
 
 
 def _auto_provision_from_env_if_needed() -> None:
@@ -2122,6 +2127,8 @@ def _auto_provision_from_env_if_needed() -> None:
         _logging.getLogger(__name__).exception(
             "Auto-provision failed for instance %s", instance
         )
+        if is_fail_hard_enabled():
+            raise
 
 
 def _ensure_instance_projects_bootstrapped(adapter: QuaidAdapter) -> None:

@@ -26,8 +26,11 @@ from lib.adapter import (
     reset_adapter,
     _project_instance_binding_path,
     _read_project_instance_binding,
+    _write_project_instance_binding,
     _read_env_file,
     _bootstrap_instance_env,
+    _auto_provision_from_env_if_needed,
+    quaid_identity_dir,
 )
 from lib.instance import _legacy_instance_slug_from_project_dir, instance_slug_from_project_dir
 from lib.providers import (
@@ -309,6 +312,20 @@ class TestStandaloneAdapter:
         assert "GatewayRestart" in transcript
         assert "Assistant: Real content" in transcript
 
+    def test_parse_session_jsonl_preserves_user_visible_quaid_notice_text(self, standalone, tmp_path):
+        jsonl_file = tmp_path / "session.jsonl"
+        jsonl_file.write_text(
+            json.dumps({
+                "role": "assistant",
+                "content": "Quaid notices: scheduled review found 3 facts.",
+            }) + "\n",
+            encoding="utf-8",
+        )
+
+        transcript = standalone.parse_session_jsonl(jsonl_file)
+
+        assert "Assistant: Quaid notices: scheduled review found 3 facts." in transcript
+
     def test_gateway_config_returns_none(self, standalone):
         assert standalone.get_gateway_config_path() is None
 
@@ -343,13 +360,55 @@ class TestOwnerResolution:
     def test_get_owner_id_logs_config_failure_before_default(self, caplog):
         caplog.set_level("WARNING")
 
-        with patch("config.get_config", side_effect=RuntimeError("config boom")):
+        with patch("config.get_config", side_effect=RuntimeError("config boom")), \
+             patch("lib.adapter.is_fail_hard_enabled", return_value=False):
             assert get_owner_id() == "default"
 
         assert "Owner id config lookup failed; defaulting to 'default': config boom" in caplog.text
 
+    def test_get_owner_id_raises_config_failure_when_failhard(self):
+        with patch("config.get_config", side_effect=RuntimeError("config boom")), \
+             patch("lib.adapter.is_fail_hard_enabled", return_value=True):
+            with pytest.raises(RuntimeError, match="config boom"):
+                get_owner_id()
+
 
 class TestBaseAdapterConfig:
+    def test_shared_auth_registry_raises_corrupt_json_when_failhard(self, standalone):
+        path = standalone.shared_auth_registry_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{not json", encoding="utf-8")
+
+        with patch("lib.adapter.is_fail_hard_enabled", return_value=True):
+            with pytest.raises(json.JSONDecodeError):
+                standalone._read_shared_auth_registry()
+
+    def test_shared_auth_registry_warns_and_returns_empty_when_fail_open(self, standalone, caplog):
+        path = standalone.shared_auth_registry_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{not json", encoding="utf-8")
+        caplog.set_level("WARNING")
+
+        with patch("lib.adapter.is_fail_hard_enabled", return_value=False):
+            assert standalone._read_shared_auth_registry() == {}
+
+        assert "Failed to read shared auth registry" in caplog.text
+
+    def test_quaid_identity_dir_raises_instance_resolution_failure_when_failhard(self, tmp_path):
+        with patch("lib.instance.instance_id", side_effect=RuntimeError("no instance")), \
+             patch("lib.adapter.is_fail_hard_enabled", return_value=True):
+            with pytest.raises(RuntimeError, match="no instance"):
+                quaid_identity_dir(tmp_path, "codex")
+
+    def test_quaid_identity_dir_warns_and_uses_legacy_path_when_fail_open(self, tmp_path, caplog):
+        caplog.set_level("WARNING")
+
+        with patch("lib.instance.instance_id", side_effect=RuntimeError("no instance")), \
+             patch("lib.adapter.is_fail_hard_enabled", return_value=False):
+            assert quaid_identity_dir(tmp_path / ".quaid", "codex") == tmp_path / "quaid" / "instances" / "codex"
+
+        assert "Failed to resolve Quaid identity instance" in caplog.text
+
     def test_get_capability_raises_config_failure_when_failhard(self):
         adapter = CodexAdapter()
 
@@ -367,6 +426,28 @@ class TestBaseAdapterConfig:
             assert adapter.get_capability("turn_scoped_provider_notices", False) is True
 
         assert "Failed to read adapter capability 'turn_scoped_provider_notices' from config: config boom" in caplog.text
+
+    def test_write_project_instance_binding_raises_failure_when_failhard(self, tmp_path):
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+
+        with patch("lib.instance.validate_instance_id", side_effect=RuntimeError("bad instance")), \
+             patch("lib.adapter.is_fail_hard_enabled", return_value=True):
+            with pytest.raises(RuntimeError, match="bad instance"):
+                _write_project_instance_binding(tmp_path, "codex", str(project_dir), "codex-bad")
+
+    def test_auto_provision_raises_init_failure_when_failhard(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "codex-test")
+        monkeypatch.setenv("QUAID_ADAPTER_TYPE", "codex")
+        monkeypatch.setattr(
+            "lib.instance_manager.InstanceManager._init_silo",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("init failed")),
+        )
+
+        with patch("lib.adapter.is_fail_hard_enabled", return_value=True):
+            with pytest.raises(RuntimeError, match="init failed"):
+                _auto_provision_from_env_if_needed()
 
     def test_installer_install_state_logs_instance_scan_failure(self, tmp_path, monkeypatch, caplog):
         instances_dir = tmp_path / "instances"
