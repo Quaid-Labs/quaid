@@ -968,6 +968,18 @@ def test_quaid_now_malformed_clock_honors_failhard(monkeypatch):
         assert isinstance(maintenance_ops._quaid_now(), datetime)
 
 
+def test_janitor_metrics_events_use_quaid_now(monkeypatch):
+    monkeypatch.setenv("QUAID_NOW", "2030-01-02T03:04:05")
+
+    metrics = maintenance_ops.JanitorMetrics()
+    metrics.add_error("broken")
+    metrics.add_warning("soft")
+    summary = metrics.summary()
+
+    assert summary["error_details"] == [{"time": "2030-01-02T03:04:05", "error": "broken"}]
+    assert summary["warning_details"] == [{"time": "2030-01-02T03:04:05", "warning": "soft"}]
+
+
 def test_backfill_embeddings_vec_upsert_failure_warns_and_continues(monkeypatch):
     monkeypatch.delenv("QUAID_JANITOR_EMBED_TIMEOUT_SECONDS", raising=False)
     monkeypatch.delenv("OLLAMA_EMBED_TIMEOUT_S", raising=False)

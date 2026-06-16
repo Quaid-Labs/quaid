@@ -946,7 +946,7 @@ class JanitorMetrics:
     def add_error(self, error: str):
         with self._lock:
             self._prune_thread_tasks_locked()
-            self.errors.append({"time": datetime.now().isoformat(), "error": error})
+            self.errors.append({"time": _quaid_now().isoformat(), "error": error})
             if len(self.errors) > self._max_event_entries:
                 self.errors = self.errors[-self._max_event_entries:]
             task = self._thread_task.get(threading.get_ident()) or self.current_task
@@ -956,7 +956,7 @@ class JanitorMetrics:
     def add_warning(self, warning: str):
         with self._lock:
             self._prune_thread_tasks_locked()
-            self.warnings.append({"time": datetime.now().isoformat(), "warning": warning})
+            self.warnings.append({"time": _quaid_now().isoformat(), "warning": warning})
             if len(self.warnings) > self._max_event_entries:
                 self.warnings = self.warnings[-self._max_event_entries:]
             task = self._thread_task.get(threading.get_ident()) or self.current_task
