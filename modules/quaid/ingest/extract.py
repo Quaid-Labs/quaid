@@ -3779,16 +3779,32 @@ def extract_from_transcript(
     capture_skip_patterns: List[str] = []
     try:
         capture_cfg = get_config().capture
-        if not bool(getattr(capture_cfg, "enabled", True)):
-            logger.info(f"[extract] {label}: capture disabled, skipping extraction")
-            return result
+    except Exception as exc:
+        if is_fail_hard_enabled():
+            raise RuntimeError("Failed to load capture config") from exc
+        logger.warning(
+            "[extract] capture config read failed; skipping extraction because capture state is unknown: %s",
+            exc,
+        )
+        return result
+    try:
+        capture_enabled = bool(getattr(capture_cfg, "enabled", True))
+    except Exception as exc:
+        if is_fail_hard_enabled():
+            raise RuntimeError("Failed to read capture enabled state") from exc
+        logger.warning("[extract] capture enabled state read failed; skipping extraction: %s", exc)
+        return result
+    if not capture_enabled:
+        logger.info(f"[extract] {label}: capture disabled, skipping extraction")
+        return result
+    try:
         raw_skip = getattr(capture_cfg, "skip_patterns", []) or []
         if isinstance(raw_skip, list):
             capture_skip_patterns = [str(p) for p in raw_skip if str(p).strip()]
     except Exception as exc:
         if is_fail_hard_enabled():
             raise RuntimeError("Failed to load capture skip patterns") from exc
-        logger.warning("[extract] capture config read failed; proceeding without skip patterns: %s", exc)
+        logger.warning("[extract] capture skip-pattern read failed; proceeding without skip patterns: %s", exc)
 
     transcript = _apply_capture_skip_patterns(transcript, capture_skip_patterns)
     if not transcript.strip():
@@ -3825,9 +3841,10 @@ def extract_from_transcript(
 
     # Chunk transcript for extraction (split at turn boundaries)
     chunk_tokens = 0
+    chunking_disabled_by_override = False
     if chunk_tokens_override is not None:
         try:
-            chunk_tokens = int(chunk_tokens_override or 0)
+            chunk_tokens = int(chunk_tokens_override)
         except Exception as exc:
             if is_fail_hard_enabled():
                 raise ValueError(f"Invalid chunk_tokens_override: {chunk_tokens_override!r}") from exc
@@ -3839,11 +3856,20 @@ def extract_from_transcript(
             chunk_tokens = 0
         if chunk_tokens > 0:
             logger.debug("[extract] %s: using caller chunk token override=%d", label, chunk_tokens)
-    if chunk_tokens <= 0:
+        elif chunk_tokens == 0:
+            chunking_disabled_by_override = True
+            logger.debug("[extract] %s: caller chunk token override=0; processing transcript as one root chunk", label)
+    if chunk_tokens <= 0 and not chunking_disabled_by_override:
         try:
             capture_cfg = get_config().capture
-            chunk_tokens = int(getattr(capture_cfg, "chunk_tokens", 0) or 0)
+            raw_chunk_tokens = getattr(capture_cfg, "chunk_tokens", None)
+            chunk_tokens = int(raw_chunk_tokens) if raw_chunk_tokens is not None else 0
             if chunk_tokens <= 0:
+                if raw_chunk_tokens is not None:
+                    logger.warning(
+                        "[extract] non-positive capture.chunk_tokens=%r; defaulting to 8000 tokens",
+                        raw_chunk_tokens,
+                    )
                 chunk_tokens = 8_000
         except Exception as exc:
             logger.warning("[extract] capture chunk budget config read failed; defaulting to 8000 tokens: %s", exc)
@@ -3853,8 +3879,11 @@ def extract_from_transcript(
     # Use batch_utils for consistent chunking across the codebase.
     # chunk_text_by_tokens splits on \n\n (turn boundaries) and uses
     # token estimation instead of raw char count.
-    from lib.batch_utils import chunk_text_by_tokens
-    transcript_chunks = chunk_text_by_tokens(transcript, max_tokens=chunk_tokens, split_on="\n\n")
+    if chunking_disabled_by_override:
+        transcript_chunks = [transcript]
+    else:
+        from lib.batch_utils import chunk_text_by_tokens
+        transcript_chunks = chunk_text_by_tokens(transcript, max_tokens=chunk_tokens, split_on="\n\n")
 
     result["chunks_total"] = len(transcript_chunks)
     result["root_chunks"] = len(transcript_chunks)

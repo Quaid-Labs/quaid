@@ -7668,6 +7668,57 @@ class TestExtractFromTranscript:
         assert result["chunks_total"] == 1
         assert mock_llm.call_count == 1
 
+    @patch("lib.batch_utils.chunk_text_by_tokens")
+    @patch("ingest.extract.call_deep_reasoning")
+    def test_chunk_tokens_override_zero_processes_single_root_chunk(self, mock_llm, mock_chunk):
+        from ingest.extract import extract_from_transcript
+
+        mock_chunk.side_effect = AssertionError("explicit zero override should bypass chunk splitter")
+        mock_llm.return_value = (json.dumps({"facts": []}), 0.4)
+
+        result = extract_from_transcript(
+            transcript="User: The orange notebook stays in the cabinet.\n\nAssistant: noted",
+            owner_id="test",
+            label="chunk-override-zero-test",
+            dry_run=True,
+            chunk_tokens_override=0,
+        )
+
+        assert result["chunks_total"] == 1
+        assert mock_llm.call_count == 1
+
+    @patch("lib.batch_utils.chunk_text_by_tokens")
+    @patch("ingest.extract.call_deep_reasoning")
+    def test_configured_zero_chunk_tokens_warns_before_defaulting(self, mock_llm, mock_chunk, caplog):
+        from ingest.extract import extract_from_transcript
+
+        seen_budgets = []
+
+        def _chunk_side_effect(text, max_tokens, split_on):
+            seen_budgets.append((max_tokens, split_on))
+            return [text]
+
+        cfg = SimpleNamespace(
+            capture=SimpleNamespace(enabled=True, skip_patterns=[], chunk_tokens=0),
+            retrieval=SimpleNamespace(domains={"personal": "Personal facts"}),
+            projects=SimpleNamespace(definitions={}),
+        )
+        mock_chunk.side_effect = _chunk_side_effect
+        mock_llm.return_value = (json.dumps({"facts": []}), 0.4)
+
+        with patch("ingest.extract.get_config", return_value=cfg), caplog.at_level("WARNING"):
+            result = extract_from_transcript(
+                transcript="User: The orange notebook stays in the cabinet.",
+                owner_id="test",
+                label="chunk-config-zero-test",
+                dry_run=True,
+            )
+
+        assert seen_budgets == [(8000, "\n\n")]
+        assert result["chunks_total"] == 1
+        assert mock_llm.call_count == 1
+        assert "non-positive capture.chunk_tokens=0" in caplog.text
+
     def test_invalid_chunk_tokens_override_raises_under_failhard(self):
         from ingest.extract import extract_from_transcript
 
@@ -7678,6 +7729,54 @@ class TestExtractFromTranscript:
                     owner_id="test",
                     chunk_tokens_override="bogus",
                 )
+
+    @patch("ingest.extract.call_deep_reasoning")
+    def test_capture_enabled_read_failure_skips_when_not_failhard(self, mock_llm, caplog):
+        from ingest.extract import extract_from_transcript
+
+        class _Capture:
+            @property
+            def enabled(self):
+                raise RuntimeError("enabled down")
+
+        cfg = SimpleNamespace(capture=_Capture())
+
+        with patch("ingest.extract.get_config", return_value=cfg), \
+             patch("ingest.extract.is_fail_hard_enabled", return_value=False), \
+             caplog.at_level("WARNING"):
+            result = extract_from_transcript(
+                transcript="User: should not extract",
+                owner_id="test",
+                label="capture-enabled-failure",
+                dry_run=True,
+            )
+
+        assert result["chunks_total"] == 0
+        assert mock_llm.call_count == 0
+        assert "capture enabled state read failed" in caplog.text
+
+    def test_capture_enabled_read_failure_raises_when_failhard(self):
+        from ingest.extract import extract_from_transcript
+
+        class _Capture:
+            @property
+            def enabled(self):
+                raise RuntimeError("enabled down")
+
+        cfg = SimpleNamespace(capture=_Capture())
+
+        with patch("ingest.extract.get_config", return_value=cfg), \
+             patch("ingest.extract.is_fail_hard_enabled", return_value=True):
+            with pytest.raises(RuntimeError, match="Failed to read capture enabled state") as excinfo:
+                extract_from_transcript(
+                    transcript="User: should not extract",
+                    owner_id="test",
+                    label="capture-enabled-failure",
+                    dry_run=True,
+                )
+
+        assert isinstance(excinfo.value.__cause__, RuntimeError)
+        assert "enabled down" in str(excinfo.value.__cause__)
 
     @patch("lib.batch_utils.chunk_text_by_tokens")
     @patch("ingest.extract.call_deep_reasoning")
