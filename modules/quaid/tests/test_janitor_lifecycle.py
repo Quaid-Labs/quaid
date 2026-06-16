@@ -833,6 +833,28 @@ def test_lifecycle_registry_uses_prepass_workers_from_config(monkeypatch, tmp_pa
     assert called["configured_workers"] == 2
 
 
+def test_lifecycle_registry_preserves_explicit_zero_prepass_workers(monkeypatch, tmp_path):
+    from core.lifecycle.janitor_lifecycle import LifecycleRegistry
+
+    registry = LifecycleRegistry()
+    cfg = _make_cfg(False)
+    cfg.core.parallel.llm_workers = 9
+    cfg.core.parallel.lifecycle_prepass_workers = 0
+    ctx = RoutineContext(cfg=cfg, dry_run=True, workspace=tmp_path)
+
+    called = {}
+
+    class _FakeScheduler:
+        def run_map(self, **kwargs):
+            called.update(kwargs)
+            return [1]
+
+    monkeypatch.setattr("core.lifecycle.janitor_lifecycle.get_global_llm_scheduler", lambda: _FakeScheduler())
+    out = registry._core_parallel_map(ctx, [1], lambda x: x, max_workers=None)
+    assert out == [1]
+    assert called["configured_workers"] == 1
+
+
 def test_lifecycle_registry_requires_write_registration_when_enabled(tmp_path):
     from core.lifecycle.janitor_lifecycle import LifecycleRegistry
 

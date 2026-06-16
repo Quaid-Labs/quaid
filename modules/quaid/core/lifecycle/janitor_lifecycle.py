@@ -335,14 +335,12 @@ class LifecycleRegistry:
 
     def _llm_workers(self, ctx: RoutineContext) -> int:
         parallel = get_parallel_config(ctx.cfg)
-        workers = int(
-            getattr(
-                parallel,
-                "lifecycle_prepass_workers",
-                getattr(parallel, "llm_workers", 4),
-            )
-            or 4
+        raw_workers = getattr(
+            parallel,
+            "lifecycle_prepass_workers",
+            getattr(parallel, "llm_workers", 4),
         )
+        workers = int(raw_workers) if raw_workers is not None else 4
         return max(1, workers)
 
     def _core_parallel_map(
