@@ -26,6 +26,7 @@ import os
 import re
 import sys
 import time
+import unicodedata
 from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -102,40 +103,94 @@ def _parse_extracted_datetime(value: Any) -> Optional[datetime]:
         return None
 
 
-_STALE_WEEK_CLASSIFICATION_VALUES = {"current_week", "previous_week", "other"}
+def _relative_week_text_key(value: Any) -> str:
+    normalized = unicodedata.normalize("NFKC", str(value or "")).casefold()
+    chars: List[str] = []
+    last_was_space = True
+    for ch in normalized:
+        category = unicodedata.category(ch)
+        if ch.isalnum() or category.startswith("M"):
+            chars.append(ch)
+            last_was_space = False
+            continue
+        if not last_was_space:
+            chars.append(" ")
+            last_was_space = True
+    return " ".join("".join(chars).split())
+
+
+def _relative_week_marker_keys(*markers: str) -> Tuple[str, ...]:
+    return tuple(
+        key
+        for marker in markers
+        if (key := _relative_week_text_key(marker))
+    )
+
+
+_CURRENT_WEEK_MARKERS = _relative_week_marker_keys(
+    "this week",
+    "current week",
+    "esta semana",
+    "cette semaine",
+    "diese Woche",
+    "questa settimana",
+    "semana atual",
+    "今週",
+    "本周",
+    "本週",
+    "这周",
+    "這週",
+    "这一周",
+    "這一週",
+    "이번 주",
+    "이번주",
+    "на этой неделе",
+    "هذا الأسبوع",
+)
+_PREVIOUS_WEEK_MARKERS = _relative_week_marker_keys(
+    "last week",
+    "previous week",
+    "la semana pasada",
+    "semana pasada",
+    "la semaine dernière",
+    "semaine dernière",
+    "letzte Woche",
+    "semana passada",
+    "settimana scorsa",
+    "先週",
+    "上周",
+    "上週",
+    "지난 주",
+    "지난주",
+    "на прошлой неделе",
+    "الأسبوع الماضي",
+)
+
+
+def _text_has_relative_week_marker(text_key: str, marker_key: str) -> bool:
+    if not text_key or not marker_key:
+        return False
+    if " " in marker_key or marker_key.isascii():
+        return f" {marker_key} " in f" {text_key} "
+    return marker_key in text_key
 
 
 def _classify_stale_week_reference(text: str, *, mentioned_at: str) -> str:
-    """Disambiguate stale one-week ranges without hardcoded language phrases."""
-    prompt = (
-        "Classify the event-time phrase in FACT_TEXT relative to MENTIONED_AT.\n"
-        "Return strict JSON only: {\"classification\":\"current_week|previous_week|other\"}.\n"
-        "Use current_week only when the text says the event happened during the calendar week "
-        "that contains MENTIONED_AT, in any language.\n"
-        "Use previous_week only when the text says the event happened during the immediately "
-        "preceding week, in any language.\n"
-        "Use other when the text is ambiguous, has no week-relative event-time phrase, or refers "
-        "to another range.\n\n"
-        f"MENTIONED_AT: {mentioned_at}\n"
-        f"FACT_TEXT: {str(text or '').strip()}"
+    """Disambiguate stale one-week ranges without adding a provider dependency."""
+    del mentioned_at
+    text_key = _relative_week_text_key(text)
+    has_current = any(
+        _text_has_relative_week_marker(text_key, marker)
+        for marker in _CURRENT_WEEK_MARKERS
     )
-    try:
-        response_text, _duration = call_deep_reasoning(
-            prompt=prompt,
-            system_prompt="Return valid JSON only. No markdown. No prose.",
-            max_tokens=80,
-            timeout=60.0,
-        )
-        parsed = parse_json_response(response_text)
-        if isinstance(parsed, dict):
-            value = str(parsed.get("classification") or "").strip().lower()
-            if value in _STALE_WEEK_CLASSIFICATION_VALUES:
-                return value
-        logger.warning("[extract] stale-week classifier returned invalid output: %r", response_text)
-    except Exception as exc:
-        if is_fail_hard_enabled():
-            raise RuntimeError("[extract] stale-week temporal classifier failed") from exc
-        logger.warning("[extract] stale-week temporal classifier failed: %s", exc)
+    has_previous = any(
+        _text_has_relative_week_marker(text_key, marker)
+        for marker in _PREVIOUS_WEEK_MARKERS
+    )
+    if has_current and not has_previous:
+        return "current_week"
+    if has_previous and not has_current:
+        return "previous_week"
     return "other"
 
 

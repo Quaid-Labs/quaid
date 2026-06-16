@@ -1468,12 +1468,10 @@ class TestExtractFromTranscript:
         assert call["occurred_start"] == "2026-05-25T00:00:00+00:00"
         assert call["occurred_end"] == "2026-05-31T23:59:59+00:00"
 
-    @patch("ingest.extract._classify_stale_week_reference", return_value="current_week")
     @patch("ingest.extract.call_deep_reasoning")
     def test_extraction_shifts_stale_current_week_bounds_to_include_mention_date(
         self,
         mock_llm,
-        mock_week_classifier,
     ):
         from ingest.extract import extract_from_transcript
 
@@ -1508,10 +1506,8 @@ class TestExtractFromTranscript:
         assert fact["mentioned_at"] == "2026-06-16T20:04:26+00:00"
         assert fact["occurred_start"] == "2026-06-16T23:59:59"
         assert fact["occurred_end"] == "2026-06-22T23:59:59"
-        mock_week_classifier.assert_called_once()
 
-    @patch("ingest.extract._classify_stale_week_reference", return_value="previous_week")
-    def test_extraction_keeps_last_week_bounds_before_mention_date(self, mock_week_classifier):
+    def test_extraction_keeps_last_week_bounds_before_mention_date(self):
         from ingest.extract import _normalize_fact_temporal_hint
 
         fact = _normalize_fact_temporal_hint(
@@ -1529,12 +1525,9 @@ class TestExtractFromTranscript:
         assert fact["mentioned_at"] == "2026-06-16T20:04:26+00:00"
         assert fact["occurred_start"] == "2026-06-09T23:59:59"
         assert fact["occurred_end"] == "2026-06-15T23:59:59"
-        mock_week_classifier.assert_called_once()
 
-    @patch("ingest.extract._classify_stale_week_reference", return_value="current_week")
     def test_extraction_shifts_semantic_current_week_bounds_for_non_english_text(
         self,
-        mock_week_classifier,
     ):
         from ingest.extract import _normalize_fact_temporal_hint
 
@@ -1553,21 +1546,51 @@ class TestExtractFromTranscript:
         assert fact["mentioned_at"] == "2026-06-16T20:04:26+00:00"
         assert fact["occurred_start"] == "2026-06-16T23:59:59"
         assert fact["occurred_end"] == "2026-06-22T23:59:59"
-        mock_week_classifier.assert_called_once()
 
     @patch("ingest.extract.call_deep_reasoning")
-    def test_stale_week_classifier_asks_for_language_neutral_classification(self, mock_llm):
+    def test_stale_week_classifier_uses_temporal_markers_without_llm(self, mock_llm):
         from ingest.extract import _classify_stale_week_reference
 
-        mock_llm.return_value = (json.dumps({"classification": "current_week"}), 0.1)
+        mock_llm.side_effect = RuntimeError("provider should not be called")
 
         assert _classify_stale_week_reference(
             "La lampe est arrivée cette semaine",
             mentioned_at="2026-06-16T20:04:26+00:00",
         ) == "current_week"
-        prompt = mock_llm.call_args.kwargs["prompt"]
-        assert "in any language" in prompt
-        assert "FACT_TEXT: La lampe est arrivée cette semaine" in prompt
+        assert _classify_stale_week_reference(
+            "La lampe est arrivée la semaine dernière",
+            mentioned_at="2026-06-16T20:04:26+00:00",
+        ) == "previous_week"
+        assert _classify_stale_week_reference(
+            "La lampe est arrivée cette semaine, pas la semaine dernière",
+            mentioned_at="2026-06-16T20:04:26+00:00",
+        ) == "other"
+        mock_llm.assert_not_called()
+
+    @patch("ingest.extract.call_deep_reasoning", side_effect=RuntimeError("provider missing"))
+    @patch("ingest.extract.is_fail_hard_enabled", return_value=True)
+    def test_stale_week_normalization_does_not_call_llm_under_failhard(
+        self,
+        _mock_fail_hard,
+        mock_llm,
+    ):
+        from ingest.extract import _normalize_fact_temporal_hint
+
+        fact = _normalize_fact_temporal_hint(
+            {
+                "text": "Test Owner's brass desk lamp arrived last week",
+                "category": "event",
+                "speaker": "user",
+                "occurred_start": "2026-06-09",
+                "occurred_end": "2026-06-15",
+            },
+            default_mentioned_at="2026-06-16T20:04:26+00:00",
+            prefer_default_mentioned_at=True,
+        )
+
+        assert fact["occurred_start"] == "2026-06-09T23:59:59"
+        assert fact["occurred_end"] == "2026-06-15T23:59:59"
+        mock_llm.assert_not_called()
 
     @patch("ingest.extract.call_deep_reasoning")
     def test_extraction_prefers_source_mention_time_over_llm_mentioned_at(self, mock_llm):
