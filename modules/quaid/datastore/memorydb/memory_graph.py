@@ -13602,36 +13602,6 @@ def _is_low_information_message(query: str) -> bool:
         return True
     if clean.isascii() and len(clean) <= 3:
         return True
-
-    exact = {
-        "ok", "okay", "k", "kk", "hi", "hey", "hello", "yo", "thanks", "thank you",
-        "thx", "cool", "nice", "great", "awesome", "sounds good", "got it", "sure",
-        "yep", "yeah", "yup", "alright", "all right", "lol", "lmao", "haha", "hmm",
-        "bye", "cya",
-    }
-    tokens = re.findall(r"[^\W_][\w']*", clean, flags=re.UNICODE)
-    normalized = " ".join(tok.replace("'", "") for tok in tokens)
-
-    if clean in exact or normalized in exact:
-        return True
-
-    if len(tokens) <= 2 and tokens and all(tok in exact for tok in tokens):
-        return True
-
-    conversational_exact = {
-        "how are you",
-        "how are you today",
-        "whats up",
-        "hey whats up",
-        "let me think about it",
-        "ill figure it out later",
-        "hmm interesting",
-        "yeah that makes sense",
-        "ok lets go with that",
-        "okay lets go with that",
-    }
-    if normalized in conversational_exact:
-        return True
     return False
 
 

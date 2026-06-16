@@ -2392,17 +2392,15 @@ class TestStoreBasic:
             assert call["include_mmr"] is True
             assert call["low_signal_retry"] is True
 
-    def test_plan_fanout_queries_bails_for_low_information_message(self):
+    def test_plan_fanout_queries_bails_for_structural_low_information_message(self):
         import datastore.memorydb.memory_graph as mg
 
         assert mg._plan_fanout_queries("ok") == []
         assert mg._plan_fanout_queries("hi") == []
-        assert mg._plan_fanout_queries("sounds good") == []
-        assert mg._plan_fanout_queries("How are you today?") == []
-        assert mg._plan_fanout_queries("Hey what's up") == []
-        assert mg._plan_fanout_queries("Let me think about it") == []
-        assert mg._plan_fanout_queries("Yeah that makes sense") == []
-        assert mg._plan_fanout_queries("I'll figure it out later") == []
+        assert mg._plan_fanout_queries("？？") == []
+        assert mg._plan_fanout_queries("ok ok") == ["ok ok"]
+        assert mg._is_low_information_message("sounds good") is False
+        assert mg._is_low_information_message("How are you today?") is False
 
     def test_plan_fanout_queries_keeps_broad_summary_requests(self):
         import datastore.memorydb.memory_graph as mg
@@ -2417,8 +2415,12 @@ class TestStoreBasic:
         import datastore.memorydb.memory_graph as mg
 
         with patch.object(mg, "_HAS_LLM_CLIENTS", True), \
-             patch.object(mg, "call_fast_reasoning", return_value=('{"queries": []}', 0.01)):
-            out = mg._plan_fanout_queries("thanks", max_queries=5, timeout_s=1.0)
+             patch("lib.llm_clients.call_fast_reasoning", return_value=('{"queries": []}', 0.01)):
+            out = mg._plan_fanout_queries(
+                "what what what what what what what what what what what what what",
+                max_queries=5,
+                timeout_s=1.0,
+            )
 
         assert out == []
 
@@ -9686,7 +9688,8 @@ class TestRecallTelemetry:
         queries, meta = _plan_fanout_queries("ok 美玲", return_meta=True)
 
         assert _is_low_information_message("ok") is True
-        assert _is_low_information_message("ok ok") is True
+        assert _is_low_information_message("ok ok") is False
+        assert _is_low_information_message("thanks") is False
         assert _is_low_information_message("ok 美玲") is False
         assert _is_low_information_message("thanks 美玲") is False
         assert queries == ["ok 美玲"]
