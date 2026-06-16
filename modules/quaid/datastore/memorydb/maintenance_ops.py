@@ -4041,22 +4041,6 @@ def _resolve_relative_date(text: str, created_at: str) -> Optional[str]:
     if not changed:
         return None
 
-    # Fix tense: if the resolved date is in the past, adjust "is meeting" → "met" etc.
-    # This is best-effort for common patterns
-    today = _quaid_now().date()
-    if base_date < today:
-        # Simple tense fixes for common patterns
-        new_text = re.sub(r'\bis meeting\b', 'met', new_text)
-        new_text = re.sub(r'\bis having\b', 'had', new_text)
-        new_text = re.sub(r'\bis going to\b', 'went to', new_text)
-        new_text = re.sub(r'\bis visiting\b', 'visited', new_text)
-        new_text = re.sub(r'\bwill meet\b', 'met', new_text)
-        new_text = re.sub(r'\bwill have\b', 'had', new_text)
-        new_text = re.sub(r'\bwill visit\b', 'visited', new_text)
-        # "shows the next run as on 2026-02-03" → clean up awkward phrasing
-        new_text = re.sub(r'\bas on (\d{4}-\d{2}-\d{2})\b', r'as \1', new_text)
-        new_text = re.sub(r'\bnow shows\b', 'showed', new_text)
-
     return new_text
 
 

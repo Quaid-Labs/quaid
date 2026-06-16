@@ -19,18 +19,19 @@ class TestTomorrowResolution:
         assert "on 2026-02-06" in result
         assert "tomorrow" not in result
 
-    def test_tomorrow_past_tense(self):
-        """If created_at is in the past, tense should be adjusted."""
+    def test_tomorrow_preserves_fact_text_around_date(self):
+        """Maintenance resolves dates but must not rewrite stored fact wording."""
         result = _resolve_relative_date(
             "Quaid is meeting Hauser tomorrow for tea",
             "2026-01-15T10:00:00"
         )
         assert result is not None
         assert "on 2026-01-16" in result
-        assert "met" in result  # "is meeting" → "met"
+        assert "is meeting" in result
+        assert "met" not in result
 
-    def test_tomorrow_future_under_quaid_now_keeps_tense(self, monkeypatch):
-        """Synthetic benchmark time controls whether the fact is past tense."""
+    def test_tomorrow_future_under_quaid_now_preserves_text(self, monkeypatch):
+        """Synthetic benchmark time must not trigger maintenance-side tense rewrites."""
         monkeypatch.setenv("QUAID_NOW", "2026-01-01T00:00:00Z")
 
         result = _resolve_relative_date(
@@ -162,10 +163,10 @@ class TestNoChange:
         assert result is None
 
 
-class TestTenseAdjustment:
-    """Past tense adjustment for facts with past created_at."""
+class TestRelativeDateTextPreservation:
+    """Relative-date maintenance should not perform English tense rewriting."""
 
-    def test_runtime_clock_controls_past_tense(self, monkeypatch):
+    def test_runtime_clock_does_not_drive_tense_rewrites(self, monkeypatch):
         monkeypatch.setenv("QUAID_NOW", "2026-01-01T00:00:00")
 
         result = _resolve_relative_date(
@@ -177,29 +178,31 @@ class TestTenseAdjustment:
         assert "is meeting" in result
         assert "met" not in result
 
-    def test_is_meeting_becomes_met(self):
+    def test_preserves_is_meeting_phrase(self):
         result = _resolve_relative_date(
             "Quaid is meeting Hauser tomorrow for tea",
             "2026-01-01T10:00:00"
         )
-        assert "met" in result
-        assert "is meeting" not in result
+        assert "on 2026-01-02" in result
+        assert "is meeting" in result
+        assert "met" not in result
 
-    def test_is_having_becomes_had(self):
+    def test_preserves_is_having_phrase(self):
         result = _resolve_relative_date(
             "Quaid is having dinner tonight",
             "2026-01-01T18:00:00"
         )
-        assert "had" in result
-        assert "is having" not in result
+        assert "on 2026-01-01" in result
+        assert "is having" in result
 
-    def test_will_meet_becomes_met(self):
+    def test_preserves_will_meet_phrase(self):
         result = _resolve_relative_date(
             "Quaid will meet Hauser tomorrow",
             "2026-01-01T10:00:00"
         )
-        assert "met" in result
-        assert "will meet" not in result
+        assert "on 2026-01-02" in result
+        assert "will meet" in result
+        assert "met" not in result
 
 
 class TestRealFactsFromDB:
@@ -213,6 +216,7 @@ class TestRealFactsFromDB:
         assert result is not None
         assert "2026-02-03" in result
         assert "tomorrow" not in result
+        assert "now shows" in result
 
     def test_log_file_created_today(self):
         result = _resolve_relative_date(
