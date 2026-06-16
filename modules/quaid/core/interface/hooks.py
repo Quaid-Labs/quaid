@@ -355,7 +355,7 @@ def _dedupe_close_competitor_memories(memories: List[Dict]) -> List[Dict]:
             if key in seen:
                 continue
             seen.add(key)
-        tokens = set(re.findall(r"[a-z0-9]+", text.lower()))
+        tokens = _close_competitor_memory_tokens(text)
         if len(tokens) >= 4:
             is_near_duplicate = False
             for prior in seen_token_sets:
@@ -368,6 +368,30 @@ def _dedupe_close_competitor_memories(memories: List[Dict]) -> List[Dict]:
             seen_token_sets.append(tokens)
         deduped.append(mem)
     return deduped
+
+
+def _close_competitor_memory_tokens(text: str) -> set[str]:
+    normalized = unicodedata.normalize("NFKC", str(text or "")).casefold()
+    tokens: set[str] = set()
+    current: List[str] = []
+
+    def flush() -> None:
+        if not current:
+            return
+        token = "".join(current)
+        tokens.add(token)
+        if any(ord(ch) > 127 for ch in token) and len(token) >= 2:
+            for idx in range(len(token) - 1):
+                tokens.add(f"bg:{token[idx:idx + 2]}")
+        current.clear()
+
+    for ch in normalized:
+        if ch.isalnum() or unicodedata.category(ch).startswith("M"):
+            current.append(ch)
+        else:
+            flush()
+    flush()
+    return tokens
 
 
 def _filter_injectable_memories(

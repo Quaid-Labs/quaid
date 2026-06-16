@@ -2236,6 +2236,41 @@ class TestHookInjectRecallResilience:
         assert "ScanSnap iX1600" in context
         assert context.count("ScanSnap iX1600") == 1
 
+    def test_recall_fast_close_competitor_unicode_duplicates_dedupe(self):
+        from core.interface import hooks
+
+        rows = [
+            {
+                "text": "美玲は青い万年筆を毎朝使う。",
+                "similarity": 1.0,
+                "category": "fact",
+            },
+            {
+                "text": "美玲は青い万年筆を毎朝使う",
+                "similarity": 0.99,
+                "category": "fact",
+            },
+        ]
+        meta = {
+            "quality_gate": {
+                "evaluation": {
+                    "ready": True,
+                    "needs_validation": False,
+                    "top_similarity": 1.0,
+                    "close_competitor_count": 2,
+                }
+            },
+            "memory_quality": {
+                "surface_quality": "good",
+                "signals": ["close_competitors"],
+                "top_similarity": 1.0,
+            },
+        }
+
+        context = hooks._format_memories(rows, recall_meta=meta)
+        assert "美玲は青い万年筆を毎朝使う" in context
+        assert context.count("万年筆") == 1
+
     def test_hook_inject_writes_preinject_evidence_for_memory_context(
         self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
     ):
