@@ -4580,6 +4580,89 @@ class TestStoreKeywords:
             ).fetchall()
             assert rows
 
+    @pytest.mark.parametrize(
+        ("fail_marker", "message"),
+        [
+            ("porter-table-scan", "FTS porter-tokenizer migration failed"),
+            ("stale-trigger-scan", "FTS stale-trigger migration failed"),
+            ("update-trigger-scan", "FTS update-trigger migration failed"),
+        ],
+    )
+    def test_init_fts_migration_failure_respects_failhard(
+        self,
+        tmp_path,
+        caplog,
+        fail_marker,
+        message,
+    ):
+        """FTS migration diagnostics cannot be silently swallowed under failHard."""
+        import datastore.memorydb.memory_graph as mg
+
+        class _Cursor:
+            def __init__(self, rows=None):
+                self._rows = list(rows or [])
+
+            def fetchone(self):
+                return self._rows[0] if self._rows else None
+
+            def fetchall(self):
+                return list(self._rows)
+
+        class _Conn:
+            def execute(self, sql, params=()):
+                text = " ".join(str(sql).split())
+                if "SELECT 1 FROM sqlite_master WHERE type='table' AND name='nodes'" in text:
+                    return _Cursor([(1,)])
+                if "SELECT sql FROM sqlite_master WHERE type='table' AND name='nodes_fts'" in text:
+                    if fail_marker == "porter-table-scan":
+                        raise RuntimeError("porter scan down")
+                    return _Cursor([("CREATE VIRTUAL TABLE nodes_fts USING fts5(name, keywords, tokenize='porter unicode61')",)])
+                if "WHERE type='trigger' AND name IN ('nodes_ai', 'nodes_ad', 'nodes_au')" in text:
+                    if fail_marker == "stale-trigger-scan":
+                        raise RuntimeError("stale trigger scan down")
+                    return _Cursor([])
+                if "WHERE type='trigger' AND name='nodes_au'" in text:
+                    if fail_marker == "update-trigger-scan":
+                        raise RuntimeError("update trigger scan down")
+                    return _Cursor([])
+                if "PRAGMA table_info(dedup_log)" in text:
+                    return _Cursor([])
+                if "SELECT COUNT(*) FROM nodes_fts" in text or "SELECT COUNT(*) FROM nodes" in text:
+                    return _Cursor([(0,)])
+                if "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?" in text:
+                    return _Cursor([(1,)])
+                return _Cursor([])
+
+            def executescript(self, _schema):
+                return None
+
+        class _ConnCtx:
+            def __enter__(self):
+                return _Conn()
+
+            def __exit__(self, *_exc):
+                return False
+
+        graph = mg.MemoryGraph.__new__(mg.MemoryGraph)
+        graph.db_path = tmp_path / "fake.db"
+        graph._get_conn = lambda: _ConnCtx()
+
+        with patch.object(mg, "_is_fail_hard_mode", return_value=True), \
+             patch.object(mg, "_lib_has_vec", return_value=False), \
+             caplog.at_level("WARNING", logger=mg.__name__):
+            with pytest.raises(RuntimeError, match=message):
+                graph._init_db()
+
+        assert message in caplog.text
+
+        caplog.clear()
+        with patch.object(mg, "_is_fail_hard_mode", return_value=False), \
+             patch.object(mg, "_lib_has_vec", return_value=False), \
+             caplog.at_level("WARNING", logger=mg.__name__):
+            graph._init_db()
+
+        assert message in caplog.text
+
 
 # ---------------------------------------------------------------------------
 # Feature 10: Gateway Restart Recovery Scan

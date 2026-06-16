@@ -689,8 +689,12 @@ class MemoryGraph:
                     # Recreate with porter tokenizer (from schema.sql).
                     conn.executescript(schema)
                     conn.execute("INSERT INTO nodes_fts(nodes_fts) VALUES('rebuild')")
-            except Exception:
-                pass  # Fresh DB or FTS not yet created
+            except Exception as exc:
+                logger.warning("memory DB FTS porter-tokenizer migration failed: %s", exc)
+                if _is_fail_hard_mode():
+                    raise RuntimeError(
+                        "Memory graph FTS porter-tokenizer migration failed while failHard is enabled"
+                    ) from exc
 
             # Older keyword migrations could leave current FTS table shape with
             # stale triggers that still write nodes_fts(content). SQLite accepts
@@ -716,8 +720,12 @@ class MemoryGraph:
                     conn.execute("DROP TRIGGER IF EXISTS nodes_au")
                     conn.executescript(schema)
                     conn.execute("INSERT INTO nodes_fts(nodes_fts) VALUES('rebuild')")
-            except Exception:
-                pass  # Fresh DB or FTS triggers not yet created
+            except Exception as exc:
+                logger.warning("memory DB FTS stale-trigger migration failed: %s", exc)
+                if _is_fail_hard_mode():
+                    raise RuntimeError(
+                        "Memory graph FTS stale-trigger migration failed while failHard is enabled"
+                    ) from exc
 
             # External-content FTS maintenance only depends on name/keywords.
             # Older installs used a broad UPDATE trigger, which made direct
@@ -744,8 +752,12 @@ class MemoryGraph:
                 if broad_update_trigger:
                     conn.execute("DROP TRIGGER IF EXISTS nodes_au")
                     conn.executescript(schema)
-            except Exception:
-                pass  # Fresh DB or FTS triggers not yet created
+            except Exception as exc:
+                logger.warning("memory DB FTS update-trigger migration failed: %s", exc)
+                if _is_fail_hard_mode():
+                    raise RuntimeError(
+                        "Memory graph FTS update-trigger migration failed while failHard is enabled"
+                    ) from exc
 
             # Migrate recall_log: add reranker delta tracking columns
             for col, typedef in [
