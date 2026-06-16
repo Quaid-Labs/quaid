@@ -2605,7 +2605,10 @@ def _read_processing_lock_payload(lock_path: Path) -> Dict[str, Any]:
             return {"pid": int(str(loaded).strip()), "legacy_pid_lock": True}
         except (TypeError, ValueError):
             return {}
-    except Exception:
+    except Exception as exc:
+        if _fail_hard_enabled():
+            raise
+        logger.debug("[daemon] failed reading processing lock payload %s: %s", lock_path, exc)
         return {}
 
 
@@ -3167,7 +3170,10 @@ def _stage_dedup_settings() -> Tuple[float, float, bool]:
         gray_zone_low = float(cfg.janitor.dedup.gray_zone_low)
         llm_verify_enabled = bool(cfg.janitor.dedup.llm_verify_enabled)
         return auto_reject_thresh, gray_zone_low, llm_verify_enabled
-    except Exception:
+    except Exception as exc:
+        if _fail_hard_enabled():
+            raise
+        logger.warning("[daemon] failed reading stage dedup settings; using defaults: %s", exc)
         return 0.98, 0.88, False
 
 
@@ -5696,8 +5702,11 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                             break
                 except (json.JSONDecodeError, OSError):
                     pass
-        except Exception:
-            pass
+        except Exception as exc:
+            if _fail_hard_enabled():
+                _release_session_processing_lock(lock_owner_key, lock_fd)
+                raise
+            logger.debug("[%s] rolling signal dedup while locked failed: %s", label, exc)
         return
 
     try:
@@ -5707,8 +5716,11 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             mark_signal_processed(signal_data)
             _release_session_processing_lock(lock_owner_key, lock_fd)
             return
-    except Exception:
-        pass
+    except Exception as exc:
+        if _fail_hard_enabled():
+            _release_session_processing_lock(lock_owner_key, lock_fd)
+            raise
+        logger.debug("[%s] registered subagent lookup failed for %s: %s", label, session_id, exc)
 
     adapter = _load_runtime_adapter_for_signal(label, session_id)
     cursor_data = _read_cursor_with_source_compat(session_id, lock_owner_key)
@@ -5774,8 +5786,11 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             mark_signal_processed(signal_data)
             _release_session_processing_lock(lock_owner_key, lock_fd)
             return
-    except Exception:
-        pass
+    except Exception as exc:
+        if _fail_hard_enabled():
+            _release_session_processing_lock(lock_owner_key, lock_fd)
+            raise
+        logger.debug("[%s] adapter subagent lookup failed for %s: %s", label, session_id, exc)
 
     # FIFO ordering: if a lifecycle/timeout signal arrives while a rolling
     # signal for the same session is still pending, defer this signal so rolling
@@ -5850,8 +5865,11 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                     mark_signal_processed(_dup)
             except (json.JSONDecodeError, OSError):
                 pass
-    except Exception:
-        pass
+    except Exception as exc:
+        if _fail_hard_enabled():
+            _release_session_processing_lock(lock_owner_key, lock_fd)
+            raise
+        logger.warning("[%s] duplicate signal sweep failed for session %s: %s", label, session_id, exc)
 
     if not transcript_path or not os.path.isfile(transcript_path):
         for _fallback_source, _fallback_path in (
@@ -5965,8 +5983,16 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                 transcript_path,
                 source_key=lock_owner_key,
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            if _fail_hard_enabled():
+                _release_session_processing_lock(lock_owner_key, lock_fd)
+                raise
+            logger.warning(
+                "[%s] failed writing preliminary cursor for session %s: %s",
+                label,
+                session_id,
+                exc,
+            )
 
     if cursor_transcript and cursor_transcript != transcript_path:
         # A .jsonl → .jsonl.reset.<ts> rename is OC's /reset backup mechanism.
