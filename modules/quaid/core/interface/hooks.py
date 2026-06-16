@@ -649,14 +649,14 @@ def _clear_provider_notice_state() -> dict:
         from lib.agent_notice import clear_pending_notices_by_source
 
         cleared["pending"] = int(clear_pending_notices_by_source(sources=sources) or 0)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("Failed clearing pending provider notices: %s", exc)
     try:
         from lib.agent_notice import clear_deferred_notices_by_source
 
         cleared["deferred"] = int(clear_deferred_notices_by_source(sources=sources) or 0)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("Failed clearing deferred provider notices: %s", exc)
     return cleared
 
 
@@ -1761,6 +1761,8 @@ def hook_inject(args):
         ensure_alive()
     except Exception as e:
         print(f"[quaid][hook-inject] daemon ensure_alive failed: {e}", file=sys.stderr)
+        if _fail_hard_enabled():
+            raise
         direct_notices.append(
             "Quaid's background extraction daemon failed to start. "
             "New memories may not be processed until Quaid recovers. "
@@ -1918,19 +1920,15 @@ def hook_inject(args):
                 if _is_provider_failure(mem_exc):
                     raise
                 if _is_recall_budget_timeout(mem_exc):
-                    # Preinject recall is best-effort context enrichment. The
-                    # absorbed RuntimeError may include "while failHard is
-                    # enabled" from the recall-store layer, but at the hook
-                    # boundary a budget timeout means "inject no memories" so
-                    # the user prompt is not dropped. Provider/model failures
-                    # above and non-timeout local recall errors below still
-                    # surface under failHard.
+                    # Preinject recall is best-effort only when failHard is off.
                     _write_hook_trace("hook.inject.recall_timeout", {
                         "query": query[:160],
                         "session_id": session_id,
                         "error_type": type(mem_exc).__name__,
                         "error": str(mem_exc)[:500],
                     })
+                    if _fail_hard_enabled():
+                        raise
                     memories = []
                     recall_meta = None
                 else:
@@ -2113,8 +2111,6 @@ def hook_inject(args):
 
     except Exception as e:
         provider_failure = _is_provider_failure(e)
-        if not provider_failure and _fail_hard_enabled():
-            raise
         try:
             from lib.m15_trace import trace_m15
 
@@ -2137,6 +2133,8 @@ def hook_inject(args):
                 logger.error(
                     "[hook-inject] provider failure surfaced inline while failHard is enabled"
                 )
+        if _fail_hard_enabled():
+            raise
         pending_context = _get_pending_context()
         if provider_failure:
             # Keep provider failures literal and immediate on failing turns.
@@ -2260,7 +2258,10 @@ def _get_deferred_notice_relay_context() -> str:
             if isinstance(item, dict) and str(item.get("message") or "").strip()
         ]
         return _format_deferred_notice_relay(messages)
-    except Exception:
+    except Exception as exc:
+        logger.warning("Failed draining deferred notice relay context: %s", exc)
+        if _fail_hard_enabled():
+            raise
         return ""
 
 
@@ -2328,10 +2329,7 @@ def _adapter_capability(key: str, default: Any = None) -> Any:
     try:
         from lib.adapter import get_adapter
 
-        value = get_adapter().get_capability(key, default)
-        if type(value).__module__.startswith("unittest.mock"):
-            return default
-        return value
+        return get_adapter().get_capability(key, default)
     except Exception:
         return default
 
@@ -2921,8 +2919,6 @@ def _identity_context_content(filename: str, content: str) -> str:
 def _add_candidate_identity_dir(candidates: List[Path], raw_path: Any) -> None:
     if raw_path is None:
         return
-    if type(raw_path).__module__.startswith("unittest.mock"):
-        return
     try:
         path = Path(raw_path).expanduser()
     except Exception:
@@ -3264,8 +3260,6 @@ def _resolve_rules_context_dir(hook_input: dict) -> Path:
         adapter = get_adapter()
         getter = getattr(adapter, "cached_rules_dir", None)
         raw = getter() if callable(getter) else None
-        if type(raw).__module__.startswith("unittest.mock"):
-            raw = None
         if isinstance(raw, (str, os.PathLike)) and str(raw).strip():
             return Path(raw)
     except Exception:
@@ -3855,6 +3849,8 @@ def hook_session_init(args):
             ensure_alive()
         except Exception as e:
             print(f"[quaid][session-init] daemon ensure_alive failed: {e}", file=sys.stderr)
+            if _fail_hard_enabled():
+                raise
             startup_notices.append(
                 "Quaid's background extraction daemon failed to start. "
                 "New memories may not be processed until Quaid recovers. "

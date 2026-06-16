@@ -267,6 +267,29 @@ describe("QuaidFacade", () => {
     await rm(workspace, { recursive: true, force: true });
   });
 
+  it("injectProjectContext logs adapter compatibility read failures", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "quaid-facade-compat-fail-"));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const pluginRoot = path.join(workspace, "modules", "quaid");
+    const compatPath = path.join(pluginRoot, "adaptors", "openclaw", "COMPATIBILITY.md");
+    await mkdir(compatPath, { recursive: true });
+
+    const facade = createQuaidFacade(makeMockDeps({
+      workspace,
+      pluginRoot,
+      adapterName: "openclaw_adapter",
+      execPython: vi.fn(async () => ""),
+    }));
+
+    try {
+      await facade.injectProjectContext(undefined, { identityOnly: true });
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("adapter compatibility read failed"));
+    } finally {
+      warn.mockRestore();
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   it("injectProjectContext warns and skips visible-home root files when instance is unknown", async () => {
     const workspace = await mkdtemp(path.join(tmpdir(), "quaid-facade-project-context-no-instance-"));
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -1113,6 +1136,23 @@ describe("QuaidFacade", () => {
     await rm(workspace, { recursive: true, force: true });
   });
 
+  it("loadProjectMarkdown raises config failures when failHard is enabled", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const facade = createQuaidFacade(makeMockDeps({
+      isFailHardEnabled: vi.fn(() => true),
+      getMemoryConfig: vi.fn(() => {
+        throw new Error("config broken");
+      }),
+    }));
+
+    try {
+      expect(() => facade.loadProjectMarkdown("alpha")).toThrow(/loadProjectMarkdown failed/);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("config broken"));
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   // -----------------------------------------------------------------------
   // Recall (routes through knowledgeEngine)
   // -----------------------------------------------------------------------
@@ -1196,6 +1236,65 @@ describe("QuaidFacade", () => {
     expect(cfg.domain_filter).toMatchObject({ personal: true });
     expect(recallArgs).not.toContain("--domain-filter");
     expect(recallArgs).not.toContain("--domain");
+  });
+
+  it("recall logs and parses legacy text bridge output when failHard is off", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const execPython = vi.fn(async (command: string) => {
+      if (command === "recall") {
+        return "[direct] [0.92] [fact] legacy parser row";
+      }
+      return "{}";
+    });
+    const facade = createQuaidFacade(makeMockDeps({
+      execPython,
+      isFailHardEnabled: vi.fn(() => false),
+      getMemoryConfig: vi.fn(() => ({ retrieval: { failHard: false } })),
+    }));
+
+    try {
+      const { results } = await facade.recallWithDiagnostics({
+        query: "legacy bridge output",
+        limit: 5,
+        routeStores: false,
+        datastores: ["vector_basic"],
+        expandGraph: false,
+      });
+
+      expect(results).toHaveLength(1);
+      expect(results[0].text).toBe("legacy parser row");
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("memory bridge JSON parse failed"));
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("recall raises malformed bridge output when failHard is enabled", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const execPython = vi.fn(async (command: string) => {
+      if (command === "recall") {
+        return "[direct] [0.92] [fact] legacy parser row";
+      }
+      return "{}";
+    });
+    const facade = createQuaidFacade(makeMockDeps({
+      execPython,
+      isFailHardEnabled: vi.fn(() => true),
+      getMemoryConfig: vi.fn(() => ({ retrieval: { failHard: true } })),
+    }));
+
+    try {
+      await expect(facade.recallWithDiagnostics({
+        query: "legacy bridge output",
+        limit: 5,
+        routeStores: false,
+        datastores: ["vector_basic"],
+        expandGraph: false,
+      })).rejects.toThrow(/memory bridge JSON parse failed/);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("memory bridge JSON parse failed"));
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("recallWithDiagnostics maps as_of alias to datastore date_to", async () => {
@@ -2298,6 +2397,34 @@ describe("QuaidFacade", () => {
     await rm(workspace, { recursive: true, force: true });
   });
 
+  it("injection dedup state timestamps honor QUAID_NOW", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "quaid-facade-injection-quaid-now-"));
+    await mkdir(path.join(workspace, "runtime", "injection"), { recursive: true });
+    const priorQuaidNow = process.env.QUAID_NOW;
+    const facade = createQuaidFacade(makeMockDeps({ workspace }));
+    try {
+      process.env.QUAID_NOW = "2026-03-11T05:06:07Z";
+      facade.saveInjectedMemoryKeys(
+        "sess-quaid-now",
+        [],
+        [{ text: "alpha", category: "fact", similarity: 0.9 }],
+        100,
+      );
+      let injectionLog = JSON.parse(await readFile(facade.getInjectionLogPath("sess-quaid-now"), "utf8"));
+      expect(injectionLog.timestamp).toBe("2026-03-11T05:06:07.000Z");
+      expect(injectionLog.lastInjectedAt).toBe("2026-03-11T05:06:07.000Z");
+
+      process.env.QUAID_NOW = "2026-03-12T06:07:08Z";
+      facade.resetInjectionDedupAfterCompaction("sess-quaid-now");
+      injectionLog = JSON.parse(await readFile(facade.getInjectionLogPath("sess-quaid-now"), "utf8"));
+      expect(injectionLog.lastCompactionAt).toBe("2026-03-12T06:07:08.000Z");
+    } finally {
+      if (priorQuaidNow === undefined) delete process.env.QUAID_NOW;
+      else process.env.QUAID_NOW = priorQuaidNow;
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   it("sanitizes injection log session ids before building paths", async () => {
     const workspace = await mkdtemp(path.join(tmpdir(), "quaid-facade-injection-safe-"));
     await mkdir(path.join(workspace, "runtime", "injection"), { recursive: true });
@@ -2953,6 +3080,29 @@ describe("QuaidFacade", () => {
     await rm(workspace, { recursive: true, force: true });
   });
 
+  it("queueDelayedRequest uses QUAID_NOW for created_at", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "quaid-facade-delayed-req-quaid-now-"));
+    const priorQuaidNow = process.env.QUAID_NOW;
+    const facade = createQuaidFacade(makeMockDeps({ workspace }));
+    try {
+      process.env.QUAID_NOW = "2026-03-11T05:06:07Z";
+      expect(facade.queueDelayedRequest({
+        message: "janitor needs deterministic time",
+        kind: "janitor_health",
+        priority: "high",
+        source: "test",
+      })).toBe(true);
+
+      const delayedPath = path.join(workspace, ".runtime", "notes", "delayed-llm-requests.json");
+      const payload = JSON.parse(await readFile(delayedPath, "utf8"));
+      expect(payload.requests[0].created_at).toBe("2026-03-11T05:06:07.000Z");
+    } finally {
+      if (priorQuaidNow === undefined) delete process.env.QUAID_NOW;
+      else process.env.QUAID_NOW = priorQuaidNow;
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   it("queueDelayedRequest recovers a stale delayed-requests lock", async () => {
     const workspace = await mkdtemp(path.join(tmpdir(), "quaid-facade-delayed-req-stale-"));
     const facade = createQuaidFacade(makeMockDeps({ workspace }));
@@ -3034,6 +3184,46 @@ describe("QuaidFacade", () => {
     expect(typeof state.lastJanitorHealthIssue).toBe("string");
     expect(Number(state.lastJanitorHealthAlertAt)).toBe(1_700_000_000_000);
     await rm(workspace, { recursive: true, force: true });
+  });
+
+  it("collectJanitorNudges raises malformed state when failHard is enabled", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "quaid-facade-state-read-failhard-"));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const facade = createQuaidFacade(makeMockDeps({
+      workspace,
+      isFailHardEnabled: vi.fn(() => true),
+    }));
+    const statePath = path.join(workspace, "runtime", "notes", "janitor-nudge-state.json");
+    await mkdir(path.dirname(statePath), { recursive: true });
+    await writeFile(statePath, "{not json", "utf8");
+
+    try {
+      expect(() => facade.collectJanitorNudges({ statePath, nowMs: 1 })).toThrow(/failed reading JSON state/);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("failed reading JSON state"));
+    } finally {
+      warn.mockRestore();
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  it("maybeQueueJanitorHealthAlert raises state write failures when failHard is enabled", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "quaid-facade-state-write-failhard-"));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const facade = createQuaidFacade(makeMockDeps({
+      workspace,
+      isFailHardEnabled: vi.fn(() => true),
+    }));
+    const notDir = path.join(workspace, "runtime-not-dir");
+    await writeFile(notDir, "not a directory", "utf8");
+    const statePath = path.join(notDir, "janitor-health.json");
+
+    try {
+      expect(() => facade.maybeQueueJanitorHealthAlert({ statePath, nowMs: 1 })).toThrow(/failed writing JSON state/);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("failed writing JSON state"));
+    } finally {
+      warn.mockRestore();
+      await rm(workspace, { recursive: true, force: true });
+    }
   });
 
   it("maybeQueueJanitorHealthAlertAsync queues through async stats", async () => {

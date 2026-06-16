@@ -1099,6 +1099,10 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
       return JSON.parse(fs.readFileSync(pathname, "utf8"));
     } catch (err: unknown) {
       console.warn(`[quaid][facade] delayed requests read failed path=${pathname}: ${String((err as Error)?.message || err)}`);
+      if (deps.isFailHardEnabled()) {
+        const cause = err instanceof Error ? err : new Error(String(err));
+        throw new Error(`delayed requests read failed path=${pathname}`, { cause });
+      }
       return null;
     }
   }
@@ -1187,7 +1191,7 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
         }
         requests.push({
           id,
-          created_at: new Date().toISOString(),
+          created_at: nowIsoForPersistentRecord(),
           source,
           kind,
           priority,
@@ -1201,11 +1205,11 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
       });
     } catch (err: unknown) {
       const detail = `[quaid][facade] delayed requests queue failed path=${requestsPath}: ${String((err as Error)?.message || err)}`;
+      console.warn(detail);
       if (deps.isFailHardEnabled()) {
         const cause = err instanceof Error ? err : new Error(String(err));
         throw new Error(detail, { cause });
       }
-      console.warn(detail);
       return false;
     }
   }
@@ -1221,7 +1225,12 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
       }
       return parsed as Record<string, any>;
     } catch (err: unknown) {
-      console.warn(`[quaid][facade] failed reading JSON state ${filePath}: ${String((err as Error)?.message || err)}`);
+      const detail = `[quaid][facade] failed reading JSON state ${filePath}: ${String((err as Error)?.message || err)}`;
+      console.warn(detail);
+      if (deps.isFailHardEnabled()) {
+        const cause = err instanceof Error ? err : new Error(String(err));
+        throw new Error(detail, { cause });
+      }
       return {};
     }
   }
@@ -1231,7 +1240,12 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
       fs.mkdirSync(path.dirname(filePath), { recursive: true });
       fs.writeFileSync(filePath, JSON.stringify(state, null, 2), { mode: 0o600 });
     } catch (err: unknown) {
-      console.warn(`[quaid][facade] failed writing JSON state ${filePath}: ${String((err as Error)?.message || err)}`);
+      const detail = `[quaid][facade] failed writing JSON state ${filePath}: ${String((err as Error)?.message || err)}`;
+      console.warn(detail);
+      if (deps.isFailHardEnabled()) {
+        const cause = err instanceof Error ? err : new Error(String(err));
+        throw new Error(detail, { cause });
+      }
     }
   }
 
@@ -2511,7 +2525,7 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
           .filter(Boolean)
           .slice(-Math.max(1, Number(maxEntries) || 1))
       : normalizedPrevious;
-    const timestamp = String(options.timestamp || new Date().toISOString());
+    const timestamp = String(options.timestamp || nowIsoForPersistentRecord());
     const injectedMemoriesDetail = buildInjectionLogMemoryDetails(memories);
     const payload: Record<string, unknown> = {
       uniqueSessionId: sessionId,
@@ -2539,7 +2553,7 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
     const current = readInjectionLog(sessionId);
     writeInjectionLog(sessionId, {
       ...current,
-      lastCompactionAt: new Date().toISOString(),
+      lastCompactionAt: nowIsoForPersistentRecord(),
       dedupInjected: [],
       injected: [],
       injectedTexts: [],
@@ -2719,7 +2733,13 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
       const mdPath = path.join(resolveProjectHome(homeDir), "PROJECT.md");
       if (!fs.existsSync(mdPath)) return "";
       return fs.readFileSync(mdPath, "utf-8");
-    } catch {
+    } catch (err: unknown) {
+      const detail = `[quaid][facade] loadProjectMarkdown failed project=${projectName}: ${String((err as Error)?.message || err)}`;
+      console.warn(detail);
+      if (deps.isFailHardEnabled()) {
+        const cause = err instanceof Error ? err : new Error(String(err));
+        throw new Error(detail, { cause });
+      }
       return "";
     }
   }
@@ -2862,7 +2882,13 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
           });
         }
       }
-    } catch {
+    } catch (err: unknown) {
+      const detail = `[quaid][facade] memory bridge JSON parse failed; falling back to text parser: ${String((err as Error)?.message || err)}`;
+      console.warn(detail);
+      if (deps.isFailHardEnabled()) {
+        const cause = err instanceof Error ? err : new Error(String(err));
+        throw new Error(detail, { cause });
+      }
       for (const line of output.split("\n")) {
         if (line.startsWith("[direct]")) {
           const match = line.match(/\[direct\]\s+\[(\d+\.\d+)\]\s+\[(\w+)\]\s+(.+)/);
@@ -3474,7 +3500,14 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
       if (defs && typeof defs === "object" && !Array.isArray(defs)) {
         return Object.keys(defs).map((k) => String(k).trim()).filter(Boolean).sort();
       }
-    } catch {}
+    } catch (err: unknown) {
+      const detail = `[quaid][facade] failed reading configured domain ids: ${String((err as Error)?.message || err)}`;
+      console.warn(detail);
+      if (deps.isFailHardEnabled()) {
+        const cause = err instanceof Error ? err : new Error(String(err));
+        throw new Error(detail, { cause });
+      }
+    }
     return [];
   }
 
@@ -4246,7 +4279,8 @@ ${lines.join("\n")}
       const baseResolved = path.resolve(base);
       const candidateResolved = path.resolve(rawCandidate);
       return candidateResolved === baseResolved || candidateResolved.startsWith(baseResolved + path.sep);
-    } catch {
+    } catch (err: unknown) {
+      console.warn(`[quaid][facade] path containment check failed: ${String((err as Error)?.message || err)}`);
       return false;
     }
   }
@@ -4319,7 +4353,8 @@ ${lines.join("\n")}
         .join("\n")
         .trim();
       return content ? `--- adapter-compatibility/COMPATIBILITY.md ---\n${content}` : "";
-    } catch {
+    } catch (err: unknown) {
+      console.warn(`[quaid][facade] adapter compatibility read failed path=${compatPath}: ${String((err as Error)?.message || err)}`);
       return "";
     }
   }

@@ -66,6 +66,7 @@ def _adapter_mock():
         return capabilities.get(adapter_id, {}).get(key, default)
 
     adapter.get_capability.side_effect = _get_capability
+    adapter.cached_rules_dir.return_value = None
     return adapter
 
 def _run_hook_inject(hook_input: dict, *, monkeypatch, patches: dict | None = None):
@@ -1995,7 +1996,7 @@ class TestHookInjectRecallResilience:
         # Error should appear on stderr, not propagate
         assert "LLM down" in err or True  # hook silences errors internally
 
-    def test_recall_fast_store_timeout_returns_empty_when_fail_hard_enabled(
+    def test_recall_fast_store_timeout_raises_when_fail_hard_enabled(
         self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
     ):
         from core import extraction_daemon
@@ -2013,8 +2014,9 @@ class TestHookInjectRecallResilience:
             "cause=TimeoutError: Parallel call timed out after 3.0s (callable_index=0))"
         )
         with patch("core.interface.api.recall_fast", side_effect=RuntimeError(timeout_error)), \
-             patch("core.interface.api.projects_search_docs", return_value=None):
-            out, err = _run_hook_inject(
+             patch("core.interface.api.projects_search_docs", return_value=None), \
+             pytest.raises(RuntimeError, match="Recall store 'vector' failed"):
+            _run_hook_inject(
                 {
                     "prompt": "trigger recall timeout",
                     "session_id": "sess-timeout-failhard",
@@ -2022,9 +2024,6 @@ class TestHookInjectRecallResilience:
                 },
                 monkeypatch=monkeypatch,
             )
-
-        assert out.strip() == ""
-        assert "Recall store 'vector' failed while failHard is enabled" not in err
 
     def test_hook_inject_passes_explicit_recall_timeout_budget(
         self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
@@ -2109,7 +2108,28 @@ class TestHookInjectRecallResilience:
                 monkeypatch=monkeypatch,
             )
 
-    def test_recall_fast_bare_timeout_returns_empty_when_fail_hard_enabled(
+    def test_hook_inject_daemon_ensure_alive_raises_when_failhard_enabled(
+        self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
+    ):
+        from core import extraction_daemon
+
+        monkeypatch.setattr("lib.fail_policy.is_fail_hard_enabled", lambda: True)
+        monkeypatch.setattr(extraction_daemon, "ensure_alive", lambda: (_ for _ in ()).throw(RuntimeError("daemon offline")))
+        monkeypatch.setattr(extraction_daemon, "write_cursor", lambda *a: None)
+
+        with patch("core.interface.api.recall_fast", return_value=([], None)), \
+             patch("core.interface.api.projects_search_docs", return_value=None), \
+             pytest.raises(RuntimeError, match="daemon offline"):
+            _run_hook_inject(
+                {
+                    "prompt": "trigger daemon ensure",
+                    "session_id": "sess-daemon-failhard",
+                    "cwd": "/Users/x",
+                },
+                monkeypatch=monkeypatch,
+            )
+
+    def test_recall_fast_bare_timeout_raises_when_fail_hard_enabled(
         self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
     ):
         from core import extraction_daemon
@@ -2122,8 +2142,9 @@ class TestHookInjectRecallResilience:
         monkeypatch.setattr("core.interface.hooks._get_quaid_agents_baseline_context", lambda: "")
 
         with patch("core.interface.api.recall_fast", side_effect=TimeoutError("recall branch timed out")), \
-             patch("core.interface.api.projects_search_docs", return_value=None):
-            out, err = _run_hook_inject(
+             patch("core.interface.api.projects_search_docs", return_value=None), \
+             pytest.raises(TimeoutError, match="recall branch timed out"):
+            _run_hook_inject(
                 {
                     "prompt": "trigger bare recall timeout",
                     "session_id": "sess-bare-timeout-failhard",
@@ -2131,10 +2152,6 @@ class TestHookInjectRecallResilience:
                 },
                 monkeypatch=monkeypatch,
             )
-
-        assert out.strip() == ""
-        assert "recall branch timed out" not in err
-        assert "[Quaid error] [provider]" not in out
 
     def test_recall_fast_empty_list_no_output(
         self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
@@ -2646,7 +2663,7 @@ class TestHookInjectRecallResilience:
         assert "invalid-model-xyzzy" in context
         assert "hook-inject" in err
 
-    def test_recall_fast_provider_exception_still_surfaces_notice_when_fail_hard_enabled(
+    def test_recall_fast_provider_exception_raises_when_fail_hard_enabled(
         self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
     ):
         from core import extraction_daemon
@@ -2661,8 +2678,8 @@ class TestHookInjectRecallResilience:
             side_effect=RuntimeError(
                 "Quaid could not access its fast language model provider: claude-code-oauth HTTP 404 model=invalid-model-xyzzy"
             ),
-        ):
-            out, _err = _run_hook_inject(
+        ), pytest.raises(RuntimeError, match="invalid-model-xyzzy"):
+            _run_hook_inject(
                 {
                     "prompt": "What do you know about Maya?",
                     "session_id": "sess-provider-failhard",
@@ -2672,10 +2689,6 @@ class TestHookInjectRecallResilience:
             )
 
         assert queued == []
-        payload = json.loads(out)
-        context = payload["hookSpecificOutput"]["additionalContext"]
-        assert "[Quaid error] [provider]" in context
-        assert "invalid-model-xyzzy" in context
 
     def test_hook_inject_probes_prompt_model_config_when_recall_succeeds(
         self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
@@ -2689,7 +2702,7 @@ class TestHookInjectRecallResilience:
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
         monkeypatch.setenv("QUAID_INSTANCE", "claude-code-test")
         monkeypatch.setattr(extraction_daemon, "write_cursor", lambda *a: None)
-        monkeypatch.setattr("lib.fail_policy.is_fail_hard_enabled", lambda: True)
+        monkeypatch.setattr("lib.fail_policy.is_fail_hard_enabled", lambda: False)
         monkeypatch.setattr("core.interface.hooks._get_deferred_notice_relay_context", lambda: "")
         monkeypatch.setattr(
             hooks,
@@ -2815,7 +2828,7 @@ class TestHookInjectRecallResilience:
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
         monkeypatch.setenv("QUAID_INSTANCE", "claude-code-test")
         monkeypatch.setattr(extraction_daemon, "write_cursor", lambda *a: None)
-        monkeypatch.setattr("lib.fail_policy.is_fail_hard_enabled", lambda: True)
+        monkeypatch.setattr("lib.fail_policy.is_fail_hard_enabled", lambda: False)
         monkeypatch.setattr(
             hooks,
             "_runtime_config_snapshot",
@@ -2863,7 +2876,7 @@ class TestHookInjectRecallResilience:
         monkeypatch.setenv("QUAID_INSTANCE", "claude-code-test")
 
         monkeypatch.setattr(extraction_daemon, "write_cursor", lambda *a: None)
-        monkeypatch.setattr("lib.fail_policy.is_fail_hard_enabled", lambda: True)
+        monkeypatch.setattr("lib.fail_policy.is_fail_hard_enabled", lambda: False)
         monkeypatch.setattr("core.interface.hooks._get_deferred_notice_hint", lambda: "")
         pending_notices = []
 
@@ -3570,6 +3583,26 @@ def test_session_init_daemon_import_failure_raises_when_failhard_enabled(
     with pytest.raises(ImportError, match="ensure_alive"):
         _run_hook_session_init(
             {"session_id": "sess-daemon-import-fail", "cwd": str(tmp_path)},
+            monkeypatch=monkeypatch,
+            rules_dir=tmp_path / "rules",
+        )
+
+
+def test_session_init_daemon_ensure_alive_failure_raises_when_failhard_enabled(
+    tmp_path, monkeypatch
+):
+    from core import extraction_daemon
+    from core.interface import hooks
+
+    monkeypatch.setattr(extraction_daemon, "ensure_alive", lambda: (_ for _ in ()).throw(RuntimeError("daemon offline")))
+    monkeypatch.setattr(hooks, "_ensure_hook_instance_ready", lambda _hook_input: None)
+    monkeypatch.setattr(hooks, "_refresh_runtime_config_if_changed", lambda _reason: False)
+    monkeypatch.setattr(hooks, "_seed_turn_based_refresh_state", lambda _session_id: None)
+    monkeypatch.setattr(hooks, "_fail_hard_enabled", lambda: True)
+
+    with pytest.raises(RuntimeError, match="daemon offline"):
+        _run_hook_session_init(
+            {"session_id": "sess-daemon-runtime-fail", "cwd": str(tmp_path)},
             monkeypatch=monkeypatch,
             rules_dir=tmp_path / "rules",
         )

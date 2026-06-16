@@ -7,6 +7,7 @@ modules still own table schema, persistence, indexing, and search mechanics.
 
 from __future__ import annotations
 
+from threading import Lock
 from typing import Any, Callable, Dict, List, Optional
 
 from core.contracts.session_memory_bridge import SessionMemoryBridgePort
@@ -418,10 +419,13 @@ class DatastoreSessionMemoryBridge(SessionMemoryBridgePort):
 
 
 _SESSION_MEMORY_BRIDGE: Optional[SessionMemoryBridgePort] = None
+_SESSION_MEMORY_BRIDGE_LOCK = Lock()
 
 
 def get_session_memory_bridge() -> SessionMemoryBridgePort:
     global _SESSION_MEMORY_BRIDGE
     if _SESSION_MEMORY_BRIDGE is None:
-        _SESSION_MEMORY_BRIDGE = DatastoreSessionMemoryBridge()
+        with _SESSION_MEMORY_BRIDGE_LOCK:
+            if _SESSION_MEMORY_BRIDGE is None:
+                _SESSION_MEMORY_BRIDGE = DatastoreSessionMemoryBridge()
     return _SESSION_MEMORY_BRIDGE

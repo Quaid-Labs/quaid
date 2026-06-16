@@ -36,6 +36,7 @@ def _adapter_mock():
         return codex_capabilities.get(key, default)
 
     adapter.get_capability.side_effect = _get_capability
+    adapter.cached_rules_dir.return_value = None
     return adapter
 
 
@@ -187,6 +188,7 @@ def test_codex_session_init_emits_additional_context(monkeypatch, tmp_path):
     monkeypatch.setattr(hooks, "_get_deferred_notice_hint", lambda: "")
     monkeypatch.setattr(hooks, "_build_runtime_context_block", lambda: "[Quaid runtime]")
     monkeypatch.setattr(hooks, "_current_adapter_id", lambda: "codex")
+    monkeypatch.setattr(hooks, "_fail_hard_enabled", lambda: False)
     monkeypatch.setenv("QUAID_HOME", str(tmp_path))
     monkeypatch.setenv("QUAID_INSTANCE", "codex-test")
     monkeypatch.setattr("lib.adapter.get_adapter", lambda: adapter)
@@ -752,6 +754,7 @@ def test_codex_session_init_surfaces_startup_notices_and_pending_queue(monkeypat
     )
     monkeypatch.setattr(hooks, "_build_runtime_context_block", lambda: "[Quaid runtime]")
     monkeypatch.setattr(hooks, "_current_adapter_id", lambda: "codex")
+    monkeypatch.setattr(hooks, "_fail_hard_enabled", lambda: False)
     monkeypatch.setenv("QUAID_HOME", str(tmp_path))
     monkeypatch.setenv("QUAID_INSTANCE", "codex-test")
     monkeypatch.setattr("lib.adapter.get_adapter", lambda: adapter)
@@ -817,7 +820,7 @@ def test_codex_hook_inject_surfaces_provider_error_notice(monkeypatch, tmp_path)
     assert "hook-inject" in err
 
 
-def test_codex_hook_inject_still_surfaces_provider_error_when_fail_hard_enabled(monkeypatch, tmp_path):
+def test_codex_hook_inject_provider_error_raises_when_fail_hard_enabled(monkeypatch, tmp_path):
     from core.interface import hooks
 
     adapter = _adapter_mock()
@@ -843,8 +846,9 @@ def test_codex_hook_inject_still_surfaces_provider_error_when_fail_hard_enabled(
         side_effect=RuntimeError(
             "Quaid could not access its fast language model provider: codex gateway HTTP 404 model=invalid-model-xyzzy"
         ),
-    ), patch("core.interface.api.projects_search_docs", return_value=None):
-        out, _err = _run_hook_inject(
+    ), patch("core.interface.api.projects_search_docs", return_value=None), \
+         pytest.raises(RuntimeError, match="invalid-model-xyzzy"):
+        _run_hook_inject(
             {
                 "prompt": "What do you know about Maya?",
                 "session_id": "sess-codex-provider-failhard",
@@ -854,10 +858,6 @@ def test_codex_hook_inject_still_surfaces_provider_error_when_fail_hard_enabled(
         )
 
     assert queued == []
-    payload = json.loads(out)
-    context = payload["hookSpecificOutput"]["additionalContext"]
-    assert "[Quaid error] [provider]" in context
-    assert "invalid-model-xyzzy" in context
 
 
 def test_codex_hook_inject_probes_prompt_model_config(monkeypatch, tmp_path):
@@ -1024,7 +1024,7 @@ def test_codex_provider_failure_does_not_relay_after_next_successful_turn(monkey
     monkeypatch.setattr("lib.adapter._ensure_instance_projects_bootstrapped", lambda _adapter: None)
     monkeypatch.setattr("core.extraction_daemon.read_cursor", lambda sid: {"line_offset": 0, "transcript_path": ""})
     monkeypatch.setattr("core.extraction_daemon.write_cursor", lambda *args: None)
-    monkeypatch.setattr("lib.fail_policy.is_fail_hard_enabled", lambda: True)
+    monkeypatch.setattr("lib.fail_policy.is_fail_hard_enabled", lambda: False)
     monkeypatch.setattr(hooks, "_get_deferred_notice_hint", lambda: "")
     monkeypatch.setattr(hooks, "_get_owner_id", lambda: "codex-owner")
     monkeypatch.setenv("QUAID_HOME", str(tmp_path))
@@ -1544,6 +1544,52 @@ def test_codex_deferred_notice_relay_context_is_enabled(monkeypatch):
 
     assert "Deferred relay test" in context
     assert "must" in context.lower() or "relay" in context.lower()
+
+
+def test_codex_deferred_notice_relay_context_logs_drain_failure(monkeypatch, caplog):
+    from core.interface import hooks
+
+    monkeypatch.setattr(hooks, "_adapter_capability", lambda key, default=None: True if key == "deferred_notice_relay" else default)
+    monkeypatch.setattr(hooks, "_fail_hard_enabled", lambda: False)
+    with caplog.at_level("WARNING", logger="core.interface.hooks"), \
+         patch("lib.runtime_context.drain_deferred_notices", side_effect=RuntimeError("drain broken")):
+        context = hooks._get_deferred_notice_relay_context()
+
+    assert context == ""
+    assert "Failed draining deferred notice relay context: drain broken" in caplog.text
+
+
+def test_codex_deferred_notice_relay_context_raises_drain_failure_when_failhard(monkeypatch, caplog):
+    from core.interface import hooks
+
+    monkeypatch.setattr(hooks, "_adapter_capability", lambda key, default=None: True if key == "deferred_notice_relay" else default)
+    monkeypatch.setattr(hooks, "_fail_hard_enabled", lambda: True)
+    with caplog.at_level("WARNING", logger="core.interface.hooks"), \
+         patch("lib.runtime_context.drain_deferred_notices", side_effect=RuntimeError("drain broken")), \
+         pytest.raises(RuntimeError, match="drain broken"):
+        hooks._get_deferred_notice_relay_context()
+
+    assert "Failed draining deferred notice relay context: drain broken" in caplog.text
+
+
+def test_clear_provider_notice_state_logs_failures(monkeypatch, caplog):
+    from core.interface import hooks
+
+    def fail_pending(**_kwargs):
+        raise RuntimeError("pending broken")
+
+    def fail_deferred(**_kwargs):
+        raise RuntimeError("deferred broken")
+
+    monkeypatch.setattr("lib.agent_notice.clear_pending_notices_by_source", fail_pending)
+    monkeypatch.setattr("lib.agent_notice.clear_deferred_notices_by_source", fail_deferred)
+
+    with caplog.at_level("WARNING", logger="core.interface.hooks"):
+        cleared = hooks._clear_provider_notice_state()
+
+    assert cleared == {"pending": 0, "deferred": 0}
+    assert "Failed clearing pending provider notices: pending broken" in caplog.text
+    assert "Failed clearing deferred provider notices: deferred broken" in caplog.text
 
 
 def test_codex_hook_inject_relays_deferred_notice_before_recall_work(monkeypatch, tmp_path):

@@ -70,6 +70,15 @@ class MemoryServicePort(Protocol):
         **kwargs: Any,
     ) -> List[Dict[str, Any]]: ...
 
+    def recall_fast(
+        self,
+        query: str,
+        owner_id: str,
+        limit: int = 10,
+        min_similarity: Optional[float] = None,
+        **kwargs: Any,
+    ) -> List[Dict[str, Any]]: ...
+
     def search(
         self,
         query: str,

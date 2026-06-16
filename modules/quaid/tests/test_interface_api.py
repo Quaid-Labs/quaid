@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from core.contracts.memory import MemoryServicePort
 from core.interface import api
 
 
@@ -14,6 +15,10 @@ class _FakeMemoryService:
     def recall_fast(self, **kwargs):
         self.calls.append(("recall_fast", kwargs))
         return ([{"text": "matched"}], {"mode": "fast"}) if kwargs.get("return_meta") else [{"text": "matched"}]
+
+
+def test_memory_service_contract_declares_recall_fast():
+    assert "recall_fast" in MemoryServicePort.__dict__
 
 
 def test_recall_skips_short_ascii_query(monkeypatch):

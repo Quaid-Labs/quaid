@@ -1,5 +1,7 @@
 import os
 import sys
+import threading
+import time
 from unittest.mock import MagicMock
 
 import pytest
@@ -130,6 +132,41 @@ def test_default_session_memory_bridge_is_initialized_lazily(monkeypatch):
 
     assert first is second
     assert constructed == [first]
+
+
+def test_default_session_memory_bridge_singleton_is_locked(monkeypatch):
+    import core.services.session_memory_bridge as bridge_mod
+
+    class FakeBridge:
+        pass
+
+    gate = threading.Barrier(2)
+    constructed = []
+
+    def build_bridge():
+        time.sleep(0.05)
+        bridge = FakeBridge()
+        constructed.append(bridge)
+        return bridge
+
+    monkeypatch.setattr(bridge_mod, "_SESSION_MEMORY_BRIDGE", None)
+    monkeypatch.setattr(bridge_mod, "DatastoreSessionMemoryBridge", build_bridge)
+
+    results = []
+
+    def call_bridge():
+        gate.wait(timeout=5)
+        results.append(bridge_mod.get_session_memory_bridge())
+
+    threads = [threading.Thread(target=call_bridge) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=5)
+
+    assert len(results) == 2
+    assert results[0] is results[1]
+    assert constructed == [results[0]]
 
 
 def test_bridge_indexes_session_transcript_through_core_contract():

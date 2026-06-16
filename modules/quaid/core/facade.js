@@ -557,6 +557,10 @@ function createQuaidFacade(deps) {
       return JSON.parse(fs.readFileSync(pathname, "utf8"));
     } catch (err) {
       console.warn(`[quaid][facade] delayed requests read failed path=${pathname}: ${String(err?.message || err)}`);
+      if (deps.isFailHardEnabled()) {
+        const cause = err instanceof Error ? err : new Error(String(err));
+        throw new Error(`delayed requests read failed path=${pathname}`, { cause });
+      }
       return null;
     }
   }
@@ -641,7 +645,7 @@ function createQuaidFacade(deps) {
         }
         requests.push({
           id,
-          created_at: (/* @__PURE__ */ new Date()).toISOString(),
+          created_at: nowIsoForPersistentRecord(),
           source,
           kind,
           priority,
@@ -655,11 +659,11 @@ function createQuaidFacade(deps) {
       });
     } catch (err) {
       const detail = `[quaid][facade] delayed requests queue failed path=${requestsPath}: ${String(err?.message || err)}`;
+      console.warn(detail);
       if (deps.isFailHardEnabled()) {
         const cause = err instanceof Error ? err : new Error(String(err));
         throw new Error(detail, { cause });
       }
-      console.warn(detail);
       return false;
     }
   }
@@ -674,7 +678,12 @@ function createQuaidFacade(deps) {
       }
       return parsed;
     } catch (err) {
-      console.warn(`[quaid][facade] failed reading JSON state ${filePath}: ${String(err?.message || err)}`);
+      const detail = `[quaid][facade] failed reading JSON state ${filePath}: ${String(err?.message || err)}`;
+      console.warn(detail);
+      if (deps.isFailHardEnabled()) {
+        const cause = err instanceof Error ? err : new Error(String(err));
+        throw new Error(detail, { cause });
+      }
       return {};
     }
   }
@@ -683,7 +692,12 @@ function createQuaidFacade(deps) {
       fs.mkdirSync(path.dirname(filePath), { recursive: true });
       fs.writeFileSync(filePath, JSON.stringify(state, null, 2), { mode: 384 });
     } catch (err) {
-      console.warn(`[quaid][facade] failed writing JSON state ${filePath}: ${String(err?.message || err)}`);
+      const detail = `[quaid][facade] failed writing JSON state ${filePath}: ${String(err?.message || err)}`;
+      console.warn(detail);
+      if (deps.isFailHardEnabled()) {
+        const cause = err instanceof Error ? err : new Error(String(err));
+        throw new Error(detail, { cause });
+      }
     }
   }
   function getDatastoreStatsSync(maxAgeMs = NODE_COUNT_CACHE_MS) {
@@ -1778,7 +1792,7 @@ function createQuaidFacade(deps) {
     const newKeys = memories.map((m) => m.id || m.text);
     const normalizedPrevious = previousKeys.map((k) => String(k || "").trim()).filter(Boolean).slice(-Math.max(1, Number(maxEntries) || 1));
     const merged = persistDedup ? [...normalizedPrevious, ...newKeys].map((k) => String(k || "").trim()).filter(Boolean).slice(-Math.max(1, Number(maxEntries) || 1)) : normalizedPrevious;
-    const timestamp = String(options.timestamp || (/* @__PURE__ */ new Date()).toISOString());
+    const timestamp = String(options.timestamp || nowIsoForPersistentRecord());
     const injectedMemoriesDetail = buildInjectionLogMemoryDetails(memories);
     const payload = {
       uniqueSessionId: sessionId,
@@ -1805,7 +1819,7 @@ function createQuaidFacade(deps) {
     const current = readInjectionLog(sessionId);
     writeInjectionLog(sessionId, {
       ...current,
-      lastCompactionAt: (/* @__PURE__ */ new Date()).toISOString(),
+      lastCompactionAt: nowIsoForPersistentRecord(),
       dedupInjected: [],
       injected: [],
       injectedTexts: [],
@@ -1963,7 +1977,13 @@ Consider running: docs staleness updater (update-stale --apply)`;
       const mdPath = path.join(resolveProjectHome(homeDir), "PROJECT.md");
       if (!fs.existsSync(mdPath)) return "";
       return fs.readFileSync(mdPath, "utf-8");
-    } catch {
+    } catch (err) {
+      const detail = `[quaid][facade] loadProjectMarkdown failed project=${projectName}: ${String(err?.message || err)}`;
+      console.warn(detail);
+      if (deps.isFailHardEnabled()) {
+        const cause = err instanceof Error ? err : new Error(String(err));
+        throw new Error(detail, { cause });
+      }
       return "";
     }
   }
@@ -2086,7 +2106,13 @@ Consider running: docs staleness updater (update-stale --apply)`;
           });
         }
       }
-    } catch {
+    } catch (err) {
+      const detail = `[quaid][facade] memory bridge JSON parse failed; falling back to text parser: ${String(err?.message || err)}`;
+      console.warn(detail);
+      if (deps.isFailHardEnabled()) {
+        const cause = err instanceof Error ? err : new Error(String(err));
+        throw new Error(detail, { cause });
+      }
       for (const line of output.split("\n")) {
         if (line.startsWith("[direct]")) {
           const match = line.match(/\[direct\]\s+\[(\d+\.\d+)\]\s+\[(\w+)\]\s+(.+)/);
@@ -2658,7 +2684,13 @@ ${allNotes.map((n) => `- ${n}`).join("\n")}
       if (defs && typeof defs === "object" && !Array.isArray(defs)) {
         return Object.keys(defs).map((k) => String(k).trim()).filter(Boolean).sort();
       }
-    } catch {
+    } catch (err) {
+      const detail = `[quaid][facade] failed reading configured domain ids: ${String(err?.message || err)}`;
+      console.warn(detail);
+      if (deps.isFailHardEnabled()) {
+        const cause = err instanceof Error ? err : new Error(String(err));
+        throw new Error(detail, { cause });
+      }
     }
     return [];
   }
@@ -3259,7 +3291,8 @@ ${header}${journalContent}` : `${header}${journalContent}`;
       const baseResolved = path.resolve(base);
       const candidateResolved = path.resolve(rawCandidate);
       return candidateResolved === baseResolved || candidateResolved.startsWith(baseResolved + path.sep);
-    } catch {
+    } catch (err) {
+      console.warn(`[quaid][facade] path containment check failed: ${String(err?.message || err)}`);
       return false;
     }
   }
@@ -3324,7 +3357,8 @@ ${header}${journalContent}` : `${header}${journalContent}`;
       const content = fs.readFileSync(compatPath, "utf8").split(/\r?\n/).slice(0, 120).join("\n").trim();
       return content ? `--- adapter-compatibility/COMPATIBILITY.md ---
 ${content}` : "";
-    } catch {
+    } catch (err) {
+      console.warn(`[quaid][facade] adapter compatibility read failed path=${compatPath}: ${String(err?.message || err)}`);
       return "";
     }
   }
