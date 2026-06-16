@@ -3,10 +3,12 @@
 import builtins
 import json
 import os
+import sys
 import time
 import pytest
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from core.compatibility import (
@@ -36,6 +38,19 @@ def test_fail_hard_enabled_fails_closed_on_import_error(monkeypatch, caplog):
 
     assert compatibility._fail_hard_enabled() is True
     assert "fail-hard policy unavailable in compatibility checks" in caplog.text
+
+
+def test_fail_hard_enabled_propagates_policy_runtime_errors(monkeypatch):
+    import core.compatibility as compatibility
+
+    monkeypatch.setitem(
+        sys.modules,
+        "lib.fail_policy",
+        SimpleNamespace(is_fail_hard_enabled=lambda: (_ for _ in ()).throw(RuntimeError("policy bug"))),
+    )
+
+    with pytest.raises(RuntimeError, match="policy bug"):
+        compatibility._fail_hard_enabled()
 
 
 class TestSemver:

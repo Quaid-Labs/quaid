@@ -10,6 +10,7 @@ import os
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -51,6 +52,19 @@ def test_fail_hard_enabled_fails_closed_on_import_error(monkeypatch, caplog):
 
     assert project_docs._fail_hard_enabled() is True
     assert "fail-hard policy unavailable in project docs" in caplog.text
+
+
+def test_fail_hard_enabled_propagates_policy_runtime_errors(monkeypatch):
+    from core import project_docs
+
+    monkeypatch.setitem(
+        sys.modules,
+        "lib.fail_policy",
+        SimpleNamespace(is_fail_hard_enabled=lambda: (_ for _ in ()).throw(RuntimeError("policy bug"))),
+    )
+
+    with pytest.raises(RuntimeError, match="policy bug"):
+        project_docs._fail_hard_enabled()
 
 
 def test_project_docs_utc_now_honors_quaid_now(monkeypatch):

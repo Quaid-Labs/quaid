@@ -2,7 +2,9 @@ import builtins
 import io
 import logging
 import os
+import sys
 from contextlib import redirect_stdout
+from types import SimpleNamespace
 
 import pytest
 
@@ -318,6 +320,19 @@ def test_docsdb_contract_fail_hard_wrapper_fails_closed_on_import_error(monkeypa
     monkeypatch.setattr(builtins, "__import__", fake_import)
 
     assert docsdb_contract._fail_hard_enabled() is True
+
+
+def test_docsdb_contract_fail_hard_wrapper_propagates_policy_runtime_errors(monkeypatch):
+    from core.plugins import docsdb_contract
+
+    monkeypatch.setitem(
+        sys.modules,
+        "lib.fail_policy",
+        SimpleNamespace(is_fail_hard_enabled=lambda: (_ for _ in ()).throw(RuntimeError("policy bug"))),
+    )
+
+    with pytest.raises(RuntimeError, match="policy bug"):
+        docsdb_contract._fail_hard_enabled()
 
 
 def test_project_docs_monitor_uses_supervisor_parent_without_reensure(monkeypatch):

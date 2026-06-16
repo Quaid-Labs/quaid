@@ -565,20 +565,27 @@ def _lock_path(path: Path) -> Path:
 def _file_lock(path: Path):
     _ensure_parent(path)
     lock_handle = open(path, "a+", encoding="utf-8")
+    lock_acquired = False
     try:
         try:
             import fcntl  # type: ignore
             fcntl.flock(lock_handle, fcntl.LOCK_EX)
-        except Exception:
-            # Best-effort on non-POSIX environments.
-            pass
+            lock_acquired = True
+        except Exception as exc:
+            logger.warning("Failed to acquire event file lock %s: %s", path, exc)
+            if _is_fail_hard_enabled():
+                raise RuntimeError(f"Failed to acquire event file lock while fail-hard mode is enabled: {path}") from exc
         yield
     finally:
-        try:
-            import fcntl  # type: ignore
-            fcntl.flock(lock_handle, fcntl.LOCK_UN)
-        except Exception:
-            pass
+        if lock_acquired:
+            try:
+                import fcntl  # type: ignore
+                fcntl.flock(lock_handle, fcntl.LOCK_UN)
+            except Exception as exc:
+                logger.warning("Failed to release event file lock %s: %s", path, exc)
+                if _is_fail_hard_enabled():
+                    lock_handle.close()
+                    raise RuntimeError(f"Failed to release event file lock while fail-hard mode is enabled: {path}") from exc
         lock_handle.close()
 
 

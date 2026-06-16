@@ -9,6 +9,7 @@ import os
 import sys
 import time
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 import pytest
 
@@ -34,6 +35,19 @@ def _registry_file(tmp_path, parent_id):
 
 def _read_raw(tmp_path, parent_id):
     return json.loads(_registry_file(tmp_path, parent_id).read_text())
+
+
+def test_fail_hard_enabled_propagates_policy_runtime_errors(monkeypatch):
+    import core.subagent_registry as registry
+
+    monkeypatch.setitem(
+        sys.modules,
+        "lib.fail_policy",
+        SimpleNamespace(is_fail_hard_enabled=lambda: (_ for _ in ()).throw(RuntimeError("policy bug"))),
+    )
+
+    with pytest.raises(RuntimeError, match="policy bug"):
+        registry._fail_hard_enabled()
 
 
 # ---------------------------------------------------------------------------

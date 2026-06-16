@@ -58,11 +58,10 @@ MATRIX_URL = (
 def _fail_hard_enabled() -> bool:
     try:
         from lib.fail_policy import is_fail_hard_enabled
-
-        return bool(is_fail_hard_enabled())
-    except Exception as exc:
+    except ImportError as exc:
         logger.critical("fail-hard policy unavailable in compatibility checks: %s", exc)
         return True
+    return bool(is_fail_hard_enabled())
 
 
 def _now_datetime() -> datetime:

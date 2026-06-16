@@ -22,7 +22,7 @@ def build_docsdb_system_context_metadata(*args: Any, **kwargs: Any) -> dict[str,
 def _fail_hard_enabled() -> bool:
     try:
         from lib.fail_policy import is_fail_hard_enabled
-    except Exception:
+    except ImportError:
         return True
     return bool(is_fail_hard_enabled())
 

@@ -1,5 +1,6 @@
 import json
 import inspect
+import sys
 import types
 from pathlib import Path
 
@@ -4459,6 +4460,71 @@ def test_emit_event_raises_on_chmod_failure_when_fail_hard(monkeypatch, tmp_path
 
     with pytest.raises(RuntimeError, match="fail-hard mode"):
         emit_event(name="session.reset", payload={"reason": "chmod-fail"}, source="pytest")
+
+
+def test_event_file_lock_warns_and_continues_on_lock_failure_when_not_fail_hard(
+    monkeypatch,
+    tmp_path,
+    caplog,
+):
+    import core.runtime.events as events
+
+    fake_fcntl = types.SimpleNamespace(
+        LOCK_EX=1,
+        LOCK_UN=2,
+        flock=lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("lock unavailable")),
+    )
+    monkeypatch.setitem(sys.modules, "fcntl", fake_fcntl)
+    monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: False)
+
+    with caplog.at_level("WARNING", logger="core.runtime.events"):
+        with events._file_lock(tmp_path / "events.lock"):
+            pass
+
+    assert "Failed to acquire event file lock" in caplog.text
+    assert "lock unavailable" in caplog.text
+
+
+def test_event_file_lock_raises_on_lock_failure_when_fail_hard(monkeypatch, tmp_path):
+    import core.runtime.events as events
+
+    fake_fcntl = types.SimpleNamespace(
+        LOCK_EX=1,
+        LOCK_UN=2,
+        flock=lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("lock unavailable")),
+    )
+    monkeypatch.setitem(sys.modules, "fcntl", fake_fcntl)
+    monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: True)
+
+    with pytest.raises(RuntimeError, match="Failed to acquire event file lock") as excinfo:
+        with events._file_lock(tmp_path / "events.lock"):
+            pass
+
+    assert isinstance(excinfo.value.__cause__, OSError)
+    assert "lock unavailable" in str(excinfo.value.__cause__)
+
+
+def test_event_file_lock_release_failure_respects_fail_hard(monkeypatch, tmp_path):
+    import core.runtime.events as events
+
+    calls = []
+
+    def _flock(_handle, operation):
+        calls.append(operation)
+        if operation == fake_fcntl.LOCK_UN:
+            raise OSError("unlock unavailable")
+
+    fake_fcntl = types.SimpleNamespace(LOCK_EX=1, LOCK_UN=2, flock=_flock)
+    monkeypatch.setitem(sys.modules, "fcntl", fake_fcntl)
+    monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: True)
+
+    with pytest.raises(RuntimeError, match="Failed to release event file lock") as excinfo:
+        with events._file_lock(tmp_path / "events.lock"):
+            pass
+
+    assert calls == [fake_fcntl.LOCK_EX, fake_fcntl.LOCK_UN]
+    assert isinstance(excinfo.value.__cause__, OSError)
+    assert "unlock unavailable" in str(excinfo.value.__cause__)
 
 
 def test_register_event_handler_does_not_overwrite_without_force(caplog):

@@ -57,11 +57,10 @@ def _now_epoch() -> float:
 def _fail_hard_enabled() -> bool:
     try:
         from lib.fail_policy import is_fail_hard_enabled
-
-        return bool(is_fail_hard_enabled())
-    except Exception as exc:
+    except ImportError as exc:
         logger.critical("fail-hard policy unavailable in subagent registry: %s", exc)
         return True
+    return bool(is_fail_hard_enabled())
 
 
 def _registry_dir() -> Path:
