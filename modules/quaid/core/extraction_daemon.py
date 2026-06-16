@@ -605,6 +605,8 @@ def _validate_session_logs_ingest_broker_response(response: Dict[str, Any]) -> D
 def _session_logs_ingest_transcript_path_for_signal(
     transcript_path: Optional[str],
     *,
+    session_id: str = "",
+    adapter: Any = None,
     signal_meta: Optional[Dict[str, Any]] = None,
     cursor_data: Optional[Dict[str, Any]] = None,
     staged_state: Optional[Dict[str, Any]] = None,
@@ -631,6 +633,7 @@ def _session_logs_ingest_transcript_path_for_signal(
         ("current", current),
     )
     seen = set()
+    missing_candidates: list[str] = []
     for source, raw_path in candidates:
         path = str(raw_path or "").strip()
         if not path or path in seen:
@@ -639,10 +642,16 @@ def _session_logs_ingest_transcript_path_for_signal(
         try:
             if os.path.isfile(path):
                 return path
+            missing_candidates.append(path)
         except OSError as exc:
             logger.warning("session_logs ingest candidate path stat failed from %s: %s", source, exc)
             if _fail_hard_enabled():
                 raise RuntimeError(f"session_logs ingest candidate path stat failed from {source}") from exc
+    if session_id:
+        for path in missing_candidates:
+            mirror_path = _preserved_mirror_for_missing_transcript_cursor(session_id, path, adapter=adapter)
+            if mirror_path:
+                return mirror_path
     return current
 
 
@@ -6791,6 +6800,8 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                 try:
                     session_logs_transcript_path = _session_logs_ingest_transcript_path_for_signal(
                         str(transcript_path),
+                        session_id=session_id,
+                        adapter=adapter,
                         signal_meta=signal_meta,
                         cursor_data=cursor_data,
                         staged_state=staged_state,
@@ -7571,6 +7582,8 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
         try:
             session_logs_transcript_path = _session_logs_ingest_transcript_path_for_signal(
                 str(transcript_path),
+                session_id=session_id,
+                adapter=adapter,
                 signal_meta=signal_meta,
                 cursor_data=cursor_data,
                 staged_state=staged_state,

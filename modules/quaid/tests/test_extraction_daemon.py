@@ -153,6 +153,44 @@ def test_session_logs_ingest_transcript_path_prefers_current_rolling_source(tmp_
     assert chosen == str(live_source)
 
 
+def test_session_logs_ingest_transcript_path_uses_preserved_mirror_for_missing_live_source(
+    monkeypatch,
+    tmp_path,
+):
+    session_id = "d0609f04-b63b-4a9b-a343-541b1246f064"
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "openclaw-main")
+    live_source = (
+        tmp_path
+        / ".openclaw"
+        / "agents"
+        / "main"
+        / "sessions"
+        / f"{session_id}.jsonl"
+    )
+    mirror = (
+        tmp_path
+        / "instances"
+        / "openclaw-main"
+        / "logs"
+        / "quaid"
+        / "sessions"
+        / f"{session_id}.jsonl"
+    )
+    mirror.parent.mkdir(parents=True, exist_ok=True)
+    mirror.write_text('{"role":"user","content":"post reset canary"}\n', encoding="utf-8")
+
+    chosen = extraction_daemon._session_logs_ingest_transcript_path_for_signal(
+        str(live_source),
+        session_id=session_id,
+        signal_meta={},
+        cursor_data={"transcript_path": str(live_source)},
+        staged_state={},
+    )
+
+    assert chosen == str(mirror)
+
+
 def test_daemon_lifecycle_signal_mapping_excludes_rolling():
     assert extraction_daemon.DAEMON_SIGNAL_TO_LIFECYCLE_EVENT == {
         "reset": "session.reset",
