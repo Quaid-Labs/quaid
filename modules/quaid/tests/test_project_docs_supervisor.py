@@ -1441,3 +1441,15 @@ def test_supervisor_stops_deleted_misc_janitor_worker(monkeypatch, tmp_path):
     assert "claude-code-dead" not in checks
     assert "claude-code-live" in workers
     assert reaped
+
+
+def test_supervisor_global_reaper_skips_tracked_janitor_processes():
+    from core import project_docs_supervisor as supervisor
+
+    class _Proc:
+        def poll(self):
+            return None
+
+    assert supervisor._has_tracked_janitor_processes({}, {}) is False
+    assert supervisor._has_tracked_janitor_processes({"alpha": _Proc()}, {}) is True
+    assert supervisor._has_tracked_janitor_processes({}, {"beta": _Proc()}) is True

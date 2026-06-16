@@ -8,12 +8,14 @@ schedule check and exits after one scheduler tick.
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import json
 import os
 import signal
 import sys
-import threading
 import time
+import threading
+from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -83,8 +85,8 @@ def run_all_once() -> int:
 def _write_run_all_failure_markers(exc: Exception, janitor_module) -> None:
     """Write standard terminal janitor markers before preserving failHard exit."""
     try:
-        completed_at = janitor_module._now_iso()
-        logs_dir = janitor_module._logs_dir()
+        completed_at = _worker_now_iso()
+        logs_dir = _worker_logs_dir(janitor_module)
         error_message = f"{type(exc).__name__}: {exc}"
         metrics = {
             "total_duration_seconds": 0.0,
@@ -105,9 +107,10 @@ def _write_run_all_failure_markers(exc: Exception, janitor_module) -> None:
             "metrics": metrics,
             "applied_changes": {},
         }
-        janitor_module.janitor_logger.info(
-            "janitor_complete",
+        _append_janitor_log_event(
+            logs_dir,
             task="all",
+            event="janitor_complete",
             success=False,
             duration_seconds=0.0,
             llm_calls=0,
@@ -140,7 +143,7 @@ def _write_run_all_failure_markers(exc: Exception, janitor_module) -> None:
         )
         checkpoint.setdefault("current_stage", "worker-fatal")
         checkpoint.setdefault("completed_stages", [])
-        janitor_module._atomic_write_json(checkpoint_path, checkpoint)
+        _atomic_write_json(checkpoint_path, checkpoint)
         try:
             usage = janitor_module.get_token_usage()
         except Exception:
@@ -149,21 +152,92 @@ def _write_run_all_failure_markers(exc: Exception, janitor_module) -> None:
             estimated_cost = janitor_module.estimate_cost()
         except Exception:
             estimated_cost = 0.0
-        janitor_module._write_janitor_stats(
-            task="all",
-            dry_run=False,
-            result=result,
-            usage=usage,
-            estimated_cost_usd=estimated_cost,
-            completed_at=completed_at,
-            logs_dir=logs_dir,
-        )
+        _write_failure_stats(logs_dir, result=result, usage=usage, estimated_cost_usd=estimated_cost, completed_at=completed_at)
     except Exception as marker_exc:
         print(
             f"[janitor-worker] failed to write terminal failure markers: {marker_exc}",
             file=sys.stderr,
             flush=True,
         )
+
+
+def _worker_now_iso() -> str:
+    raw = str(os.environ.get("QUAID_NOW", "") or "").strip()
+    if raw:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc).isoformat()
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _worker_logs_dir(janitor_module) -> Path:
+    logs_dir_fn = getattr(janitor_module, "_logs_dir", None)
+    if callable(logs_dir_fn):
+        return Path(logs_dir_fn())
+    from lib.runtime_context import get_logs_dir
+
+    return get_logs_dir()
+
+
+def _atomic_write_json(path: Path, payload: dict[str, object]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_name(f".{path.name}.{os.getpid()}.{time.time_ns()}.tmp")
+    tmp_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    os.replace(tmp_path, path)
+
+
+def _append_janitor_log_event(logs_dir: Path, event: str, **data: object) -> None:
+    log_path = logs_dir / "janitor.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "ts": _worker_now_iso().replace("+00:00", "Z"),
+        "level": "info",
+        "component": "janitor",
+        "event": event,
+        **data,
+    }
+    with log_path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(payload, default=str) + "\n")
+        fh.flush()
+        os.fsync(fh.fileno())
+
+
+def _write_failure_stats(
+    logs_dir: Path,
+    *,
+    result: dict[str, object],
+    usage: dict[str, object],
+    estimated_cost_usd: float,
+    completed_at: str,
+) -> None:
+    stats_file = logs_dir / "janitor-stats.json"
+    existing: dict[str, object] = {}
+    try:
+        loaded = json.loads(stats_file.read_text(encoding="utf-8"))
+        if isinstance(loaded, dict):
+            existing = loaded
+    except Exception:
+        existing = {}
+    previous_completed_at = str(existing.get("last_janitor_completed_at") or "").strip()
+    stats_data: dict[str, object] = {
+        "last_run": completed_at,
+        "task": "all",
+        "dry_run": False,
+        "success": False,
+        "applied_changes": result.get("applied_changes", {}),
+        "metrics": result.get("metrics", {}),
+        "api_usage": {
+            "calls": usage.get("api_calls", 0),
+            "input_tokens": usage.get("input_tokens", 0),
+            "output_tokens": usage.get("output_tokens", 0),
+            "estimated_cost_usd": estimated_cost_usd,
+        },
+        "last_janitor_failed_at": completed_at,
+    }
+    if previous_completed_at:
+        stats_data["last_janitor_completed_at"] = previous_completed_at
+    _atomic_write_json(stats_file, stats_data)
 
 
 def main() -> None:

@@ -872,6 +872,13 @@ def _maintain_janitor_workers(
         last_janitor_checks.pop(instance, None)
 
 
+def _has_tracked_janitor_processes(
+    janitor_workers: Dict[str, subprocess.Popen],
+    on_demand_janitor_workers: Dict[str, subprocess.Popen],
+) -> bool:
+    return bool(janitor_workers or on_demand_janitor_workers)
+
+
 def stop_all_instance_monitors() -> None:
     for instance in sorted(set(list_instances()) | _internal_path_derived_instances_on_disk()):
         try:
@@ -904,7 +911,8 @@ def run_supervisor(*, once: bool = False, interval_seconds: float | None = None)
     auto_register_interval = _interval_from_env("QUAID_PROJECT_DOCS_AUTO_REGISTER_INTERVAL_SECONDS", 300.0)
     janitor_check_interval = _janitor_check_interval_seconds()
     while not _STOP:
-        project_docs.reap_child_processes()
+        if not _has_tracked_janitor_processes(janitor_workers, on_demand_janitor_workers):
+            project_docs.reap_child_processes()
         now = time.time()
         try:
             _maintain_instance_monitors(known_instances)

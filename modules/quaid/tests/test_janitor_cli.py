@@ -66,6 +66,7 @@ def test_janitor_worker_run_all_once_writes_terminal_markers_on_uncaught_error(m
         raise RuntimeError("Anthropic API HTTPError code=429")
 
     monkeypatch.setattr(janitor, "run_task_optimized", fail_run)
+    monkeypatch.delattr(janitor, "_now_iso", raising=False)
     monkeypatch.setattr(janitor, "get_token_usage", lambda: {"api_calls": 0, "input_tokens": 0, "output_tokens": 0})
     monkeypatch.setattr(janitor, "estimate_cost", lambda: 0.0)
 
