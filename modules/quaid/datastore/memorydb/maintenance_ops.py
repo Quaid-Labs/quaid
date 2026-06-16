@@ -882,7 +882,7 @@ class JanitorMetrics:
     
     def __init__(self):
         self._lock = threading.Lock()
-        self.start_time = time.time()
+        self.start_time = time.monotonic()
         self.task_times = {}
         self.task_meta = {}
         self.current_task = None
@@ -909,7 +909,7 @@ class JanitorMetrics:
     def start_task(self, task_name: str):
         with self._lock:
             self._prune_thread_tasks_locked()
-            self.task_times[task_name] = {"start": time.time(), "end": None}
+            self.task_times[task_name] = {"start": time.monotonic(), "end": None}
             self.task_meta[task_name] = {
                 "llm_calls": 0,
                 "llm_time_seconds": 0.0,
@@ -922,7 +922,7 @@ class JanitorMetrics:
     def end_task(self, task_name: str):
         with self._lock:
             if task_name in self.task_times:
-                self.task_times[task_name]["end"] = time.time()
+                self.task_times[task_name]["end"] = time.monotonic()
             if self.current_task == task_name:
                 self.current_task = None
             tid = threading.get_ident()
@@ -935,7 +935,7 @@ class JanitorMetrics:
         return 0.0
     
     def total_duration(self) -> float:
-        return time.time() - self.start_time
+        return time.monotonic() - self.start_time
     
     def add_llm_call(self, duration: float):
         with self._lock:
@@ -984,7 +984,7 @@ class JanitorMetrics:
         task_durations = {
             name: round(
                 (
-                    (meta.get("end") or time.time()) - float(meta.get("start") or 0.0)
+                    (meta.get("end") or time.monotonic()) - float(meta.get("start") or 0.0)
                 ) if meta.get("start") else 0.0,
                 2,
             )
@@ -1678,12 +1678,12 @@ def find_duplicates_from_pairs(dup_candidates: List[Dict[str, Any]],
     print(f"  LLM analysis: {len(dup_candidates)} candidates in {total_batches} batches")
 
     def _invoke_batch(batch_num: int, batch: List[Dict[str, Any]]) -> Dict[str, Any]:
-        batch_start_time = time.time()
+        batch_start_time = time.monotonic()
         return {
             "batch_num": batch_num,
             "batch": batch,
             "results": batch_duplicate_check(batch, metrics),
-            "duration": time.time() - batch_start_time,
+            "duration": time.monotonic() - batch_start_time,
         }
 
     llm_results = _run_llm_batches_parallel(batches, "duplicates", _invoke_batch)
@@ -1792,7 +1792,7 @@ def find_contradictions_from_pairs(contradiction_candidates: List[Dict[str, Any]
         return []
     metrics.start_task("contradictions")
     contradictions = []
-    task_start_time = time.time()
+    task_start_time = time.monotonic()
 
     confirmed_contradictions = 0
     builder = TokenBatchBuilder(
@@ -1806,16 +1806,16 @@ def find_contradictions_from_pairs(contradiction_candidates: List[Dict[str, Any]
     print(f"  LLM verification: {len(contradiction_candidates)} candidates in {total_batches} batches")
 
     def _invoke_batch(batch_num: int, batch: List[Dict[str, Any]]) -> Dict[str, Any]:
-        batch_start_time = time.time()
+        batch_start_time = time.monotonic()
         return {
             "batch_num": batch_num,
             "batch": batch,
             "results": batch_contradiction_check(batch, metrics),
-            "duration": time.time() - batch_start_time,
+            "duration": time.monotonic() - batch_start_time,
         }
 
     overall_timeout = None
-    remaining_budget = MAX_EXECUTION_TIME - (time.time() - task_start_time)
+    remaining_budget = MAX_EXECUTION_TIME - (time.monotonic() - task_start_time)
     if remaining_budget > 0:
         overall_timeout = remaining_budget
     llm_results = _run_llm_batches_parallel(
@@ -1825,7 +1825,7 @@ def find_contradictions_from_pairs(contradiction_candidates: List[Dict[str, Any]
         overall_timeout_seconds=overall_timeout,
     )
     for result in llm_results:
-        elapsed = time.time() - task_start_time
+        elapsed = time.monotonic() - task_start_time
         if elapsed > MAX_EXECUTION_TIME:
             print(f"  Time limit reached ({elapsed:.1f}s), stopping result processing")
             metrics.add_error(f"Contradiction check stopped: {elapsed:.1f}s > {MAX_EXECUTION_TIME}s")

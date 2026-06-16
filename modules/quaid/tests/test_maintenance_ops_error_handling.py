@@ -76,6 +76,25 @@ def test_effective_llm_timeout_invalid_value_raises_when_failhard(caplog):
     assert "Invalid memorydb maintenance LLM timeout 'not-a-number'; using default 42.0s" in caplog.text
 
 
+def test_janitor_metrics_elapsed_time_uses_monotonic(monkeypatch):
+    monotonic_values = iter([100.0, 101.0, 104.5, 108.0])
+    monkeypatch.setattr(maintenance_ops.time, "monotonic", lambda: next(monotonic_values))
+    monkeypatch.setattr(
+        maintenance_ops.time,
+        "time",
+        lambda: (_ for _ in ()).throw(AssertionError("wall clock used")),
+    )
+
+    metrics = maintenance_ops.JanitorMetrics()
+    metrics.start_task("demo")
+    metrics.end_task("demo")
+
+    assert metrics.task_duration("demo") == pytest.approx(3.5)
+    summary = metrics.summary()
+    assert summary["total_duration_seconds"] == pytest.approx(8.0)
+    assert summary["task_durations"]["demo"] == pytest.approx(3.5)
+
+
 def test_maintenance_diagnostic_fallbacks_log(monkeypatch, caplog):
     class _BrokenUsers:
         identities = {}
@@ -307,6 +326,43 @@ def test_recall_similar_pairs_includes_temporal_metadata_for_dedup(monkeypatch):
     assert dup["mentioned_at_a"] == "2024-02-02T00:00:00"
     assert dup["occurred_start_b"] == "2025-03-01"
     assert dup["mentioned_at_b"] == "2025-03-02T00:00:00"
+
+
+def test_contradiction_elapsed_budget_uses_monotonic(monkeypatch):
+    monotonic_values = iter([100.0, 101.0, 105.0, 106.0, 107.0, 108.0])
+    monkeypatch.setattr(maintenance_ops.time, "monotonic", lambda: next(monotonic_values))
+    monkeypatch.setattr(
+        maintenance_ops.time,
+        "time",
+        lambda: (_ for _ in ()).throw(AssertionError("wall clock used")),
+    )
+    monkeypatch.setattr(maintenance_ops, "CONTRADICTION_ENABLED", True)
+    monkeypatch.setattr(maintenance_ops, "MAX_EXECUTION_TIME", 20.0)
+    captured = {}
+
+    def fake_run_batches(batches, task_name, runner, overall_timeout_seconds=None):
+        captured["timeout"] = overall_timeout_seconds
+        return [{"batch_num": 1, "batch": batches[0], "results": [None], "duration": 0.0}]
+
+    monkeypatch.setattr(maintenance_ops, "_run_llm_batches_parallel", fake_run_batches)
+    metrics = maintenance_ops.JanitorMetrics()
+
+    out = maintenance_ops.find_contradictions_from_pairs(
+        [
+            {
+                "id_a": "a",
+                "id_b": "b",
+                "text_a": "Ari lives in Porto.",
+                "text_b": "Ari lives in Lisbon.",
+                "similarity": 0.91,
+            }
+        ],
+        metrics,
+        dry_run=True,
+    )
+
+    assert out == []
+    assert captured["timeout"] == pytest.approx(19.0)
 
 
 def test_batch_duplicate_check_includes_temporal_context_in_prompt(monkeypatch):
