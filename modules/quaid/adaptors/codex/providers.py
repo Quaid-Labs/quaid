@@ -33,12 +33,23 @@ from lib.providers import LLMProvider, LLMResult
 logger = logging.getLogger(__name__)
 
 
+def _fail_hard_enabled() -> bool:
+    try:
+        from lib.fail_policy import is_fail_hard_enabled
+
+        return bool(is_fail_hard_enabled())
+    except ImportError:
+        return True
+
+
 def _try_notify(msg: str, **kwargs) -> None:
     """Call notify_agent, swallowing any error if no adapter is configured."""
     try:
         notify_agent(msg, **kwargs)
     except Exception:
-        logger.debug("notify_agent unavailable; logging provider error locally: %s", msg)
+        if _fail_hard_enabled():
+            raise
+        logger.debug("notify_agent unavailable; logging provider error locally: %s", msg, exc_info=True)
 
 
 def _coerce_text(value) -> str:

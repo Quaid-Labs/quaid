@@ -29,6 +29,7 @@ from lib.providers import (
     _read_response_body_with_deadline,
 )
 from adaptors.openclaw.providers import GatewayLLMProvider, OpenClawGatewayLLMProvider, _try_notify
+from adaptors.codex import providers as codex_providers
 from adaptors.codex.providers import CodexLLMProvider, _CodexAppServerManager
 
 
@@ -1824,6 +1825,30 @@ class TestGatewayLLMProvider:
 
         with caplog.at_level("DEBUG", logger="adaptors.openclaw.providers"):
             _try_notify("provider down", severity="error", source="provider")
+
+        assert "notify_agent unavailable" in caplog.text
+
+    def test_codex_try_notify_reraises_when_fail_hard_enabled(self, monkeypatch):
+        monkeypatch.setattr(
+            codex_providers,
+            "notify_agent",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("notify broken")),
+        )
+        monkeypatch.setattr(codex_providers, "_fail_hard_enabled", lambda: True)
+
+        with pytest.raises(RuntimeError, match="notify broken"):
+            codex_providers._try_notify("provider down", severity="error", source="provider")
+
+    def test_codex_try_notify_logs_when_fail_open(self, monkeypatch, caplog):
+        monkeypatch.setattr(
+            codex_providers,
+            "notify_agent",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("notify broken")),
+        )
+        monkeypatch.setattr(codex_providers, "_fail_hard_enabled", lambda: False)
+
+        with caplog.at_level("DEBUG", logger="adaptors.codex.providers"):
+            codex_providers._try_notify("provider down", severity="error", source="provider")
 
         assert "notify_agent unavailable" in caplog.text
 
