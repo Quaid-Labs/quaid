@@ -831,6 +831,17 @@ class OpenClawAdapter(QuaidAdapter):
         r")\s*$",
         flags=re.IGNORECASE | re.MULTILINE,
     )
+    _OPENCLAW_QUEUED_SESSION_START_RE = re.compile(
+        r"\n*(?:\[Queued messages while agent was busy\]\s*\n+)?---\s*\n?"
+        r"Queued\s*#\d+\s*(?:\([^)]+\))?\s*\n"
+        r"A new session was started via /new or /reset\.[\s\S]*$",
+        flags=re.IGNORECASE,
+    )
+    _OPENCLAW_SESSION_START_BOILERPLATE_RE = re.compile(
+        r"(?:^|\n)\s*A new session was started via /new or /reset\.[\s\S]*$",
+        flags=re.IGNORECASE,
+    )
+    _OPENCLAW_QUEUED_BUSY_RE = re.compile(r"\[Queued messages while agent was busy\]", flags=re.IGNORECASE)
 
     def sanitize_transcript_text(self, text: str) -> str:
         value = super().sanitize_transcript_text(text)
@@ -860,6 +871,20 @@ class OpenClawAdapter(QuaidAdapter):
         if re.sub(r"[*_<>/b\s]", "", text).startswith("HEARTBEAT_OK"):
             return True
         return False
+
+    def is_startup_wrapper_turn(self, text: str) -> bool:
+        """Return True for OpenClaw-generated /new or /reset startup wrappers."""
+        value = str(text or "")
+        if not value.strip():
+            return False
+        if self._OPENCLAW_QUEUED_SESSION_START_RE.search(value):
+            return True
+        if self._OPENCLAW_SESSION_START_BOILERPLATE_RE.search(value):
+            return True
+        return bool(
+            self._OPENCLAW_QUEUED_BUSY_RE.search(value)
+            and "A new session was started via /new or /reset." in value
+        )
 
     @classmethod
     def _row_timestamp(cls, row: dict) -> str:

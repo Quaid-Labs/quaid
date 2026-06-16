@@ -5853,6 +5853,43 @@ def test_check_idle_sessions_does_not_freeze_parse_empty_growth(monkeypatch, tmp
     assert not cursor.get("internal")
 
 
+def _adapter_startup_wrapper_turn(text: str) -> bool:
+    return (
+        "A new session was started via /new or /reset." in str(text or "")
+        or "ADAPTER_LOCALIZED_STARTUP_WRAPPER" in str(text or "")
+    )
+
+
+def test_timeout_startup_turn_requires_adapter_predicate():
+    assert not extraction_daemon._is_timeout_startup_user_turn(
+        "A new session was started via /new or /reset."
+    )
+    assert extraction_daemon._is_timeout_startup_user_turn(
+        "A new session was started via /new or /reset.",
+        startup_wrapper_predicate=_adapter_startup_wrapper_turn,
+    )
+
+
+def test_timeout_classifier_uses_adapter_startup_predicate_without_daemon_prose():
+    transcript = (
+        "User: ADAPTER_LOCALIZED_STARTUP_WRAPPER\n"
+        "Assistant: NO_REPLY\n"
+        "User: Hello"
+    )
+
+    assert (
+        extraction_daemon._classify_timeout_transcript_content(
+            transcript,
+            startup_wrapper_predicate=_adapter_startup_wrapper_turn,
+        )
+        == extraction_daemon._TRANSCRIPT_CLASS_IGNORE_CONTENT
+    )
+    assert not extraction_daemon._transcript_has_meaningful_timeout_user_content(
+        transcript,
+        startup_wrapper_predicate=_adapter_startup_wrapper_turn,
+    )
+
+
 @pytest.mark.parametrize("turn", ["Hello", "Hola"])
 def test_timeout_classifier_treats_short_startup_turn_as_ignore_not_internal(turn):
     transcript = (
@@ -5862,10 +5899,16 @@ def test_timeout_classifier_treats_short_startup_turn_as_ignore_not_internal(tur
     )
 
     assert (
-        extraction_daemon._classify_timeout_transcript_content(transcript)
+        extraction_daemon._classify_timeout_transcript_content(
+            transcript,
+            startup_wrapper_predicate=_adapter_startup_wrapper_turn,
+        )
         == extraction_daemon._TRANSCRIPT_CLASS_IGNORE_CONTENT
     )
-    assert not extraction_daemon._transcript_has_meaningful_timeout_user_content(transcript)
+    assert not extraction_daemon._transcript_has_meaningful_timeout_user_content(
+        transcript,
+        startup_wrapper_predicate=_adapter_startup_wrapper_turn,
+    )
 
 
 def test_timeout_classifier_keeps_short_unicode_startup_user_turn_meaningful():
@@ -5876,10 +5919,16 @@ def test_timeout_classifier_keeps_short_unicode_startup_user_turn_meaningful():
     )
 
     assert (
-        extraction_daemon._classify_timeout_transcript_content(transcript)
+        extraction_daemon._classify_timeout_transcript_content(
+            transcript,
+            startup_wrapper_predicate=_adapter_startup_wrapper_turn,
+        )
         == extraction_daemon._TRANSCRIPT_CLASS_MEANINGFUL_USER_CONTENT
     )
-    assert extraction_daemon._transcript_has_meaningful_timeout_user_content(transcript)
+    assert extraction_daemon._transcript_has_meaningful_timeout_user_content(
+        transcript,
+        startup_wrapper_predicate=_adapter_startup_wrapper_turn,
+    )
 
 
 def test_timeout_classifier_parses_translated_protocol_roles():
@@ -5895,10 +5944,16 @@ def test_timeout_classifier_parses_translated_protocol_roles():
         ("user", "La reunión es a las tres."),
     ]
     assert (
-        extraction_daemon._classify_timeout_transcript_content(transcript)
+        extraction_daemon._classify_timeout_transcript_content(
+            transcript,
+            startup_wrapper_predicate=_adapter_startup_wrapper_turn,
+        )
         == extraction_daemon._TRANSCRIPT_CLASS_MEANINGFUL_USER_CONTENT
     )
-    assert extraction_daemon._transcript_has_meaningful_timeout_user_content(transcript)
+    assert extraction_daemon._transcript_has_meaningful_timeout_user_content(
+        transcript,
+        startup_wrapper_predicate=_adapter_startup_wrapper_turn,
+    )
 
 
 def test_timeout_classifier_keeps_non_english_role_user_content_meaningful():
@@ -5909,10 +5964,16 @@ def test_timeout_classifier_keeps_non_english_role_user_content_meaningful():
     )
 
     assert (
-        extraction_daemon._classify_timeout_transcript_content(transcript)
+        extraction_daemon._classify_timeout_transcript_content(
+            transcript,
+            startup_wrapper_predicate=_adapter_startup_wrapper_turn,
+        )
         == extraction_daemon._TRANSCRIPT_CLASS_MEANINGFUL_USER_CONTENT
     )
-    assert extraction_daemon._transcript_has_meaningful_timeout_user_content(transcript)
+    assert extraction_daemon._transcript_has_meaningful_timeout_user_content(
+        transcript,
+        startup_wrapper_predicate=_adapter_startup_wrapper_turn,
+    )
 
 
 def test_timeout_classifier_keeps_visible_assistant_only_content_meaningful():
@@ -5933,10 +5994,16 @@ def test_timeout_classifier_ignores_structural_turn_timestamps():
     )
 
     assert (
-        extraction_daemon._classify_timeout_transcript_content(transcript)
+        extraction_daemon._classify_timeout_transcript_content(
+            transcript,
+            startup_wrapper_predicate=_adapter_startup_wrapper_turn,
+        )
         == extraction_daemon._TRANSCRIPT_CLASS_IGNORE_CONTENT
     )
-    assert not extraction_daemon._transcript_has_meaningful_timeout_user_content(transcript)
+    assert not extraction_daemon._transcript_has_meaningful_timeout_user_content(
+        transcript,
+        startup_wrapper_predicate=_adapter_startup_wrapper_turn,
+    )
 
 
 def test_reconcile_consumes_short_startup_turn_without_internal_cursor(monkeypatch, tmp_path):
@@ -5959,6 +6026,9 @@ def test_reconcile_consumes_short_startup_turn_without_internal_cursor(monkeypat
     fake_adapter_mod = types.ModuleType("lib.adapter")
 
     class _FakeAdapter(_OwnedTestAdapterMixin):
+        def is_startup_wrapper_turn(self, text):
+            return _adapter_startup_wrapper_turn(text)
+
         def parse_session_jsonl(self, path):
             assert path == transcript_path
             return (

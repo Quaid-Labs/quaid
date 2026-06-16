@@ -759,6 +759,17 @@ class TestOpenClawAdapter:
             "Durable memory won't store that unless you want me to.",
         )
 
+    def test_openclaw_startup_wrapper_predicate_is_adapter_owned(self):
+        adapter = OpenClawAdapter()
+
+        assert adapter.is_startup_wrapper_turn(
+            "\n[Queued messages while agent was busy]\n\n---\nQueued #1\n"
+            "A new session was started via /new or /reset. Run your Session Startup sequence."
+        )
+        assert not adapter.is_startup_wrapper_turn(
+            "Can you explain what /new and /reset do in OpenClaw?"
+        )
+
     def test_parse_session_jsonl_preserves_openclaw_row_timestamps(self, tmp_path):
         session_file = tmp_path / "oc-session-timestamps.jsonl"
         session_file.write_text(

@@ -5479,7 +5479,11 @@ def _classify_transcript_session(
         stripped = (transcript_text or "").strip()
         if not stripped:
             return _TRANSCRIPT_CLASS_INTERNAL_MAINTENANCE
-        return _classify_timeout_transcript_content(stripped)
+        startup_wrapper_predicate = getattr(active_adapter, "is_startup_wrapper_turn", None)
+        return _classify_timeout_transcript_content(
+            stripped,
+            startup_wrapper_predicate=startup_wrapper_predicate if callable(startup_wrapper_predicate) else None,
+        )
     except Exception as exc:
         if _fail_hard_enabled():
             raise
@@ -5516,16 +5520,22 @@ def _iter_parsed_transcript_turns(transcript_text: str) -> List[Tuple[str, str]]
     return turns
 
 
-def _is_timeout_startup_user_turn(text: str) -> bool:
+def _is_timeout_startup_user_turn(
+    text: str,
+    startup_wrapper_predicate: Optional[Callable[[str], bool]] = None,
+) -> bool:
     value = str(text or "").strip()
     if not value:
         return True
-    lowered = value.lower()
-    if "a new session was started via /new or /reset" in lowered:
-        return True
-    if "[queued messages while agent was busy]" in lowered:
-        return True
-    return False
+    if startup_wrapper_predicate is None:
+        return False
+    try:
+        return bool(startup_wrapper_predicate(value))
+    except Exception as exc:
+        if _fail_hard_enabled():
+            raise
+        logger.warning("startup wrapper predicate failed; treating turn as user content: %s", exc)
+        return False
 
 
 def _transcript_role_key(value: str) -> str:
@@ -5569,15 +5579,24 @@ def _short_transcript_should_bypass_length_gate(transcript_text: str) -> bool:
     return _has_non_ascii_letter_signal(transcript_text)
 
 
-def _transcript_has_meaningful_timeout_user_content(transcript_text: str) -> bool:
+def _transcript_has_meaningful_timeout_user_content(
+    transcript_text: str,
+    startup_wrapper_predicate: Optional[Callable[[str], bool]] = None,
+) -> bool:
     """Return True when parsed transcript text has user content worth timing out."""
     return (
-        _classify_timeout_transcript_content(transcript_text)
+        _classify_timeout_transcript_content(
+            transcript_text,
+            startup_wrapper_predicate=startup_wrapper_predicate,
+        )
         == _TRANSCRIPT_CLASS_MEANINGFUL_USER_CONTENT
     )
 
 
-def _classify_timeout_transcript_content(transcript_text: str) -> str:
+def _classify_timeout_transcript_content(
+    transcript_text: str,
+    startup_wrapper_predicate: Optional[Callable[[str], bool]] = None,
+) -> str:
     """Split true maintenance wrappers from user content that should be ignored.
 
     OpenClaw can leave a post-/new session in a startup/handshake-only state for
@@ -5591,7 +5610,10 @@ def _classify_timeout_transcript_content(transcript_text: str) -> str:
     if not turns:
         return (
             _TRANSCRIPT_CLASS_INTERNAL_MAINTENANCE
-            if _is_timeout_startup_user_turn(transcript_text)
+            if _is_timeout_startup_user_turn(
+                transcript_text,
+                startup_wrapper_predicate=startup_wrapper_predicate,
+            )
             else _TRANSCRIPT_CLASS_MEANINGFUL_USER_CONTENT
         )
     saw_user = False
@@ -5609,7 +5631,10 @@ def _classify_timeout_transcript_content(transcript_text: str) -> str:
         if role != "user":
             continue
         saw_user = True
-        if _is_timeout_startup_user_turn(content):
+        if _is_timeout_startup_user_turn(
+            content,
+            startup_wrapper_predicate=startup_wrapper_predicate,
+        ):
             saw_startup_wrapper = True
             continue
         non_startup_user_turns.append(content)
@@ -6906,8 +6931,12 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             else:
                 transcript_text = f"{buffered_text}\n\n{tail_text}" if buffered_text and tail_text else (buffered_text or tail_text)
 
+        startup_wrapper_predicate = getattr(adapter, "is_startup_wrapper_turn", None) if adapter is not None else None
         timeout_transcript_class = (
-            _classify_timeout_transcript_content(transcript_text)
+            _classify_timeout_transcript_content(
+                transcript_text,
+                startup_wrapper_predicate=startup_wrapper_predicate if callable(startup_wrapper_predicate) else None,
+            )
             if (
                 signal_type == "timeout"
                 and not rolling_mode
