@@ -5522,6 +5522,32 @@ class TestSourceChunkStorage:
 
         assert graph.get_embedding.call_args.kwargs["timeout_s"] == 12.5
 
+    def test_store_source_chunks_reuses_batch_connection_for_embedding_cache(self, tmp_path):
+        """Batched source chunk writes must not self-contend on embedding cache writes."""
+        graph, _db_file = _make_graph(tmp_path)
+        seen_connections = []
+
+        def _recording_embedding(text, **kwargs):
+            seen_connections.append(kwargs.get("conn"))
+            return _fake_get_embedding(text)
+
+        graph.get_embedding.side_effect = _recording_embedding
+
+        rows = graph.store_source_chunks(
+            [
+                "User: Rowan archived the workshop notes in the field binder.",
+                "Agent: Rowan also tagged the field binder with the project code.",
+            ],
+            owner_id="rowan",
+            source_id="session-batch",
+            session_id="session-batch",
+        )
+
+        assert len(rows) == 2
+        assert len(seen_connections) == 2
+        assert all(conn is not None for conn in seen_connections)
+        assert len({id(conn) for conn in seen_connections}) == 1
+
     def test_memory_graph_embedding_default_uses_configured_timeout(self, tmp_path, monkeypatch):
         """Generic MemoryDB writes should share the bounded embedding default."""
         import datastore.memorydb.memory_graph as mg

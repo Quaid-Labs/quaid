@@ -1656,7 +1656,7 @@ class MemoryGraph:
                     if embedding_timeout_s is not None
                     else _memorydb_embedding_timeout_s()
                 )
-                embedding = self.get_embedding(normalized_text, timeout_s=timeout_s)
+                embedding = self.get_embedding(normalized_text, timeout_s=timeout_s, conn=conn)
                 if embedding:
                     packed_embedding = self._pack_embedding(embedding)
                 elif _is_fail_hard_mode():
