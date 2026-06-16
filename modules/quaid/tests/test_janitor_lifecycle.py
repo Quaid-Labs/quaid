@@ -557,6 +557,19 @@ def test_lifecycle_parallel_telemetry_rejects_malformed_quaid_now(monkeypatch, t
     assert not (tmp_path / "logs").exists()
 
 
+def test_lifecycle_parallel_telemetry_logs_write_failure(monkeypatch, tmp_path, caplog):
+    import core.lifecycle.janitor_lifecycle as lifecycle_mod
+
+    registry = LifecycleRegistry()
+    monkeypatch.setattr(lifecycle_mod, "_LIFECYCLE_PARALLEL_TELEMETRY_ENABLED", True)
+    monkeypatch.setattr(Path, "open", lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("disk full")))
+
+    with caplog.at_level(logging.WARNING, logger="core.lifecycle.janitor_lifecycle"):
+        registry._append_parallel_telemetry(tmp_path, {"event": "probe"})
+
+    assert "Failed to append lifecycle parallel telemetry: disk full" in caplog.text
+
+
 def test_lifecycle_parallel_telemetry_disabled_ignores_quaid_now(monkeypatch, tmp_path):
     import core.lifecycle.janitor_lifecycle as lifecycle_mod
 

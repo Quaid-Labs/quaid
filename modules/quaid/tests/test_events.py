@@ -2679,9 +2679,11 @@ def test_event_project_docs_listener_auto_register_failure_respects_fail_hard(mo
     monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: True)
 
     _emit_docs_project_maintenance_observed_event()
-    with pytest.raises(RuntimeError, match="register boom"):
+    with pytest.raises(RuntimeError, match="project docs auto-register listener failed") as excinfo:
         dispatch_broker_events(limit=5, names=[DOCS_PROJECT_MAINTENANCE_OBSERVED_EVENT])
 
+    assert str(excinfo.value.__cause__) == "project docs auto-register listener failed"
+    assert str(excinfo.value.__cause__.__cause__) == "register boom"
     assert calls == ["sync"]
 
 
@@ -2755,9 +2757,11 @@ def test_event_project_docs_listener_stale_index_failure_respects_fail_hard(monk
     monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: True)
 
     _emit_docs_project_maintenance_observed_event()
-    with pytest.raises(RuntimeError, match="index boom"):
+    with pytest.raises(RuntimeError, match="project docs stale-index listener failed") as excinfo:
         dispatch_broker_events(limit=5, names=[DOCS_PROJECT_MAINTENANCE_OBSERVED_EVENT])
 
+    assert str(excinfo.value.__cause__) == "project docs stale-index listener failed"
+    assert str(excinfo.value.__cause__.__cause__) == "index boom"
     assert calls == ["sync", "index"]
 
 
@@ -4393,29 +4397,30 @@ def test_process_events_handler_error_raises_in_fail_hard(monkeypatch, tmp_path)
         process_events(limit=5, names=["docs.ingest_transcript"])
 
 
-def test_process_events_handler_error_marks_failed_when_not_fail_hard(monkeypatch, tmp_path):
+def test_process_events_handler_error_marks_failed_when_not_fail_hard(monkeypatch, tmp_path, caplog):
     set_adapter(TestAdapter(tmp_path))
 
     import core.runtime.events as events
 
-    transcript = tmp_path / "transcript.txt"
-    transcript.write_text("session transcript", encoding="utf-8")
-
     def _boom(*_args, **_kwargs):
-        raise RuntimeError("ingest failed")
+        raise RuntimeError("handler exploded")
 
-    monkeypatch.setattr(events, "run_docs_ingest", _boom)
+    register_event_handler("session.reset", _boom, force=True)
     monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: False)
 
     emit_event(
-        name="docs.ingest_transcript",
-        payload={"transcript_path": str(transcript), "label": "Compaction"},
+        name="session.reset",
+        payload={"session_id": "event-handler-soft-failure"},
         source="pytest",
     )
 
-    out = process_events(limit=5, names=["docs.ingest_transcript"])
+    with caplog.at_level("ERROR", logger="core.runtime.events"):
+        out = process_events(limit=5, names=["session.reset"])
+
     assert out["processed"] == 0
     assert out["failed"] >= 1
+    assert "Event handler session.reset failed" in caplog.text
+    assert "handler exploded" in caplog.text
 
 
 def test_emit_event_raises_on_malformed_queue_when_fail_hard(monkeypatch, tmp_path):

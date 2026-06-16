@@ -442,6 +442,19 @@ def test_benchmark_gate_invalid_inputs_degrade_when_fail_hard_disabled(monkeypat
     assert metrics.has_errors
 
 
+def test_benchmark_gate_none_coverage_does_not_trigger(monkeypatch):
+    monkeypatch.setenv("QUAID_BENCHMARK_MODE", "1")
+    metrics = JanitorMetrics()
+
+    out = janitor._benchmark_review_gate_triggered(
+        {"review_coverage_ratio_pct": None, "review_carryover": 0},
+        metrics,
+    )
+
+    assert out is False
+    assert not metrics.has_errors
+
+
 def test_run_tests_uses_configurable_timeout(monkeypatch):
     captured = {}
 

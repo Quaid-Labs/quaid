@@ -314,8 +314,9 @@ class LifecycleRegistry:
             row = {"ts": ts, **dict(payload or {})}
             with (logs_dir / "lifecycle-parallel-telemetry.jsonl").open("a", encoding="utf-8") as f:
                 f.write(json.dumps(row, ensure_ascii=True) + "\n")
-        except Exception:
+        except Exception as exc:
             # Telemetry must never break janitor execution.
+            logger.warning("Failed to append lifecycle parallel telemetry: %s", exc)
             return
 
     def _lock_registry_for_workspace(self, workspace: Path) -> ResourceLockRegistry:

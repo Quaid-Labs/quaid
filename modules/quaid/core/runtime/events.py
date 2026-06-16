@@ -1802,6 +1802,7 @@ def process_events(
                 outcomes[claim_key] = outcome
                 details.append({"id": event.get("id"), "name": event.get("name"), "status": "processed", "result": result})
         except Exception as e:  # pragma: no cover
+            logger.error("Event handler %s failed for event %s: %s", event_name, event.get("id"), e, exc_info=True)
             if first_fail_hard_exception is None:
                 first_fail_hard_exception = e
             failed += 1

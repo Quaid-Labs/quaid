@@ -53,6 +53,20 @@ def test_fail_hard_enabled_propagates_policy_runtime_errors(monkeypatch):
         compatibility._fail_hard_enabled()
 
 
+def test_fail_policy_defaults_enabled_when_lightweight_config_probe_fails(monkeypatch, caplog):
+    from lib import fail_policy
+
+    monkeypatch.setattr(
+        "lib.config._lightweight_config_paths",
+        lambda: (_ for _ in ()).throw(RuntimeError("config paths unavailable")),
+    )
+
+    with caplog.at_level("WARNING", logger="lib.fail_policy"):
+        assert fail_policy.is_fail_hard_enabled() is True
+
+    assert "defaulting to enabled" in caplog.text
+
+
 class TestSemver:
     def test_parse_version(self):
         assert _parse_version("2026.3.7") == (2026, 3, 7)
@@ -612,6 +626,31 @@ class TestJanitorScheduler:
             scheduler._run_janitor()
 
         assert "Janitor maintenance failed: janitor boom" in caplog.text
+
+    def test_get_schedule_warns_and_raises_config_failure_when_fail_hard(self, tmp_path, monkeypatch, caplog):
+        scheduler = JanitorScheduler(data_dir=tmp_path, quaid_home=tmp_path)
+        fake_config = SimpleNamespace(get_config=lambda: (_ for _ in ()).throw(RuntimeError("schedule config failed")))
+
+        monkeypatch.setitem(sys.modules, "config", fake_config)
+        monkeypatch.setattr("core.compatibility._fail_hard_enabled", lambda: True)
+
+        with caplog.at_level("WARNING", logger="core.compatibility"):
+            with pytest.raises(RuntimeError, match="schedule config failed"):
+                scheduler._get_schedule()
+
+        assert "Failed to load janitor schedule config" in caplog.text
+
+    def test_get_schedule_warns_and_defaults_config_failure_when_fail_open(self, tmp_path, monkeypatch, caplog):
+        scheduler = JanitorScheduler(data_dir=tmp_path, quaid_home=tmp_path)
+        fake_config = SimpleNamespace(get_config=lambda: (_ for _ in ()).throw(RuntimeError("schedule config failed")))
+
+        monkeypatch.setitem(sys.modules, "config", fake_config)
+        monkeypatch.setattr("core.compatibility._fail_hard_enabled", lambda: False)
+
+        with caplog.at_level("WARNING", logger="core.compatibility"):
+            assert scheduler._get_schedule() == (4, 2)
+
+        assert "Failed to load janitor schedule config" in caplog.text
 
 
 class TestPreflightCheck:

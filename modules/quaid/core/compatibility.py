@@ -788,8 +788,10 @@ class JanitorScheduler:
                         hour = getattr(janitor_cfg, "scheduled_hour", JANITOR_DEFAULT_HOUR)
                     if window is None:
                         window = getattr(janitor_cfg, "window_hours", JANITOR_WINDOW_HOURS)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Failed to load janitor schedule config; using defaults: %s", exc)
+                if _fail_hard_enabled():
+                    raise
 
         return (
             hour if hour is not None else JANITOR_DEFAULT_HOUR,

@@ -1013,7 +1013,8 @@ def _benchmark_review_gate_triggered(applied_changes: Dict[str, Any], metrics: J
     if not is_benchmark_mode():
         return False
     try:
-        coverage_pct = float(applied_changes.get("review_coverage_ratio_pct", 100) or 0)
+        raw_coverage_pct = applied_changes.get("review_coverage_ratio_pct", 100)
+        coverage_pct = 100.0 if raw_coverage_pct is None else float(raw_coverage_pct)
     except Exception as exc:
         if is_fail_hard_enabled():
             raise RuntimeError("Invalid review_coverage_ratio_pct in benchmark gate input") from exc
