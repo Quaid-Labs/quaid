@@ -14324,6 +14324,41 @@ class TestRecallFastHookInjectContract:
         assert "vendor, approve, launch" in quality["note"]
         assert "no record or evidence" in quality["note"]
 
+    def test_memory_quality_marks_partial_unsupported_anchors_low(self):
+        import datastore.memorydb.memory_graph as mg
+
+        rows = [
+            {
+                "text": "Atlas launch notes were archived after the planning meeting.",
+                "category": "fact",
+                "similarity": 0.96,
+            }
+        ]
+        gate = mg._evaluate_quality_gate_readiness(
+            "Which vendor did Atlas approve for the launch?",
+            rows,
+            intent="WHAT",
+            limit=1,
+        )
+
+        assert gate["ready"] is True
+        assert gate["needs_validation"] is True
+        assert gate["covered_query_terms"] == ["atlas", "launch"]
+        assert gate["unsupported_query_terms"] == ["vendor", "approve"]
+
+        quality = mg._summarize_memory_quality(
+            "Which vendor did Atlas approve for the launch?",
+            rows,
+            gate_eval=gate,
+            intent="WHAT",
+            limit=1,
+        )
+
+        assert quality["surface_quality"] == "low"
+        assert quality["unsupported_query_terms"] == ["vendor", "approve"]
+        assert "unsupported by retrieved memory" in quality["note"]
+        assert "no record or evidence" in quality["note"]
+
     def test_quality_gate_normalizes_mixed_naive_and_aware_temporal_markers(self):
         import datastore.memorydb.memory_graph as mg
 

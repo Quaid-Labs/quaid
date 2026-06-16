@@ -18301,6 +18301,12 @@ def _summarize_memory_quality(
     ]
     has_docs_evidence = any(_is_docs_recall_row(row) for row in sample if isinstance(row, dict))
     docs_evidence_ready = has_docs_evidence and ready
+    unsupported_anchor_gap = (
+        bool(sample)
+        and len(unsupported_query_terms) >= 2
+        and overlap_ratio < 0.67
+        and not docs_evidence_ready
+    )
 
     low_similarity = bool(sample) and top_similarity < 0.60
     ambiguity_risk = (
@@ -18328,6 +18334,8 @@ def _summarize_memory_quality(
     signals: List[str] = []
     if not ready:
         signals.append("low_query_term_coverage")
+    if unsupported_anchor_gap:
+        signals.append("unsupported_query_terms")
     if needs_validation and not docs_evidence_ready:
         signals.append("needs_validation")
     if close_competitor_count >= 2 and not docs_evidence_ready:
@@ -18342,7 +18350,7 @@ def _summarize_memory_quality(
     surface_quality = "good"
     if not sample:
         surface_quality = "empty"
-    elif not ready or low_similarity:
+    elif not ready or low_similarity or unsupported_anchor_gap:
         surface_quality = "low"
     elif assistant_memory_cluster_ready:
         surface_quality = "good"
@@ -18357,12 +18365,15 @@ def _summarize_memory_quality(
         if surface_quality == "conflicted":
             note = "Retrieved memory for this topic looks conflicted. Another recall pass may help if exactness matters."
         elif surface_quality == "low":
-            if "low_query_term_coverage" in signals:
+            if "low_query_term_coverage" in signals or "unsupported_query_terms" in signals:
                 unsupported_note = ""
                 if unsupported_query_terms:
                     unsupported_note = (
                         " No retrieved evidence covers these requested terms: "
-                        f"{', '.join(unsupported_query_terms[:6])}."
+                        f"{', '.join(unsupported_query_terms[:6])}. Treat the requested event, "
+                        "relationship, participant, or object that depends on those terms as "
+                        "unsupported by retrieved memory; state that there is no record or evidence "
+                        "for it."
                     )
                 note = (
                     "Retrieved memory for this topic looks low-confidence because retrieved evidence "
