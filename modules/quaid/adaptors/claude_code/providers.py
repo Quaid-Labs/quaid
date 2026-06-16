@@ -398,7 +398,10 @@ class ClaudeCodeOAuthLLMProvider(LLMProvider):
         )
 
     def get_profiles(self):
+        def profile(model: Optional[str]) -> dict:
+            return {"model": model, "available": model not in self._MODEL_SENTINELS}
+
         return {
-            "deep": {"model": self._deep_model, "available": True},
-            "fast": {"model": self._fast_model, "available": True},
+            "deep": profile(self._deep_model),
+            "fast": profile(self._fast_model),
         }

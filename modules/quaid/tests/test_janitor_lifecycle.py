@@ -875,6 +875,17 @@ def test_parallel_map_timeout_config_failures_warn_when_fail_open(monkeypatch, t
     assert "parallel config unavailable" in caplog.text
 
 
+def test_lock_config_preserves_explicit_zero_timeout(tmp_path):
+    registry = LifecycleRegistry()
+    cfg = _make_cfg()
+    cfg.core.parallel.lock_wait_seconds = 0
+    ctx = RoutineContext(cfg=cfg, dry_run=False, workspace=tmp_path)
+
+    lock_cfg = registry._lock_config(ctx)
+
+    assert lock_cfg["timeout_seconds"] == 1
+
+
 def test_lifecycle_registry_uses_prepass_workers_from_config(monkeypatch, tmp_path):
     from core.lifecycle.janitor_lifecycle import LifecycleRegistry
 

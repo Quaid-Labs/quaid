@@ -2454,7 +2454,7 @@ class TestClaudeCodeAdapter:
         assert second == ""
         assert not pending_path.exists()
 
-    def test_pending_context_does_not_emit_when_cleanup_fails_failopen(
+    def test_pending_context_relays_when_cleanup_fails_failopen(
         self, tmp_path, monkeypatch, capsys
     ):
         from adaptors.claude_code import adapter as adapter_mod
@@ -2474,9 +2474,9 @@ class TestClaudeCodeAdapter:
 
         monkeypatch.setattr(Path, "unlink", fail_unlink)
 
-        assert adapter.get_pending_context() == ""
+        context = adapter.get_pending_context()
         captured = capsys.readouterr()
-        assert "deliver-once" not in captured.out
+        assert "deliver-once" in context
         assert "Failed to clean up pending notifications: unlink failed" in captured.err
         assert pending_path.exists()
 

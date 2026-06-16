@@ -243,3 +243,24 @@ def test_api_call_preserves_multi_turn_messages(monkeypatch) -> None:
         {"role": "assistant", "content": "first assistant"},
         {"role": "user", "content": "second user"},
     ]
+
+
+def test_get_profiles_marks_sentinel_models_unavailable() -> None:
+    provider = ClaudeCodeOAuthLLMProvider(deep_model="default", fast_model=None)
+
+    profiles = provider.get_profiles()
+
+    assert profiles["deep"] == {"model": "default", "available": False}
+    assert profiles["fast"] == {"model": None, "available": False}
+
+
+def test_get_profiles_marks_configured_models_available() -> None:
+    provider = ClaudeCodeOAuthLLMProvider(
+        deep_model="claude-sonnet-4-6",
+        fast_model="claude-haiku-4-5",
+    )
+
+    profiles = provider.get_profiles()
+
+    assert profiles["deep"] == {"model": "claude-sonnet-4-6", "available": True}
+    assert profiles["fast"] == {"model": "claude-haiku-4-5", "available": True}

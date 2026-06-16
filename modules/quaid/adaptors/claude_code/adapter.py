@@ -215,6 +215,8 @@ class ClaudeCodeAdapter(QuaidAdapter):
                 raise
             return ""
 
+        notes = dedupe_pending_notice_messages(messages)
+
         try:
             if sticky_entries:
                 with open(pending, "w", encoding="utf-8") as f:
@@ -240,9 +242,8 @@ class ClaudeCodeAdapter(QuaidAdapter):
             print(f"[notify] Failed to clean up pending notifications: {e}", file=sys.stderr)
             if is_fail_hard_enabled():
                 raise
-            return ""
+            return format_pending_notice_relay(notes) if notes else ""
 
-        notes = dedupe_pending_notice_messages(messages)
         if not notes:
             _trace_m15("adapter.claude_code.pending.empty_after_filter", path=str(pending))
             return ""

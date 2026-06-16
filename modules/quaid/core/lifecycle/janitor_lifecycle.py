@@ -397,7 +397,8 @@ class LifecycleRegistry:
             return {"enabled": False, "timeout_seconds": 0, "require_registration": False}
         obj = get_parallel_config(ctx.cfg)
         enabled = bool(getattr(obj, "enabled", True) and getattr(obj, "lock_enforcement_enabled", True))
-        timeout_seconds = int(getattr(obj, "lock_wait_seconds", 120) or 120)
+        raw_timeout_seconds = getattr(obj, "lock_wait_seconds", 120)
+        timeout_seconds = int(raw_timeout_seconds) if raw_timeout_seconds is not None else 120
         require_registration = bool(getattr(obj, "lock_require_registration", True))
         return {
             "enabled": enabled,
