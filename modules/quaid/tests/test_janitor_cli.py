@@ -52,6 +52,52 @@ def test_janitor_worker_run_all_once_bypasses_schedule_gate(monkeypatch, tmp_pat
     assert calls == [("all", False)]
 
 
+def test_janitor_worker_run_all_once_writes_terminal_markers_on_uncaught_error(monkeypatch, tmp_path):
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_VISIBLE_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "pytest-runner")
+    monkeypatch.setenv("QUAID_NOW", "2026-06-16T08:15:42Z")
+
+    from core import janitor_worker
+    janitor = importlib.import_module("core.lifecycle.janitor")
+
+    def fail_run(*, task, dry_run):
+        assert (task, dry_run) == ("all", False)
+        raise RuntimeError("Anthropic API HTTPError code=429")
+
+    monkeypatch.setattr(janitor, "run_task_optimized", fail_run)
+    monkeypatch.setattr(janitor, "get_token_usage", lambda: {"api_calls": 0, "input_tokens": 0, "output_tokens": 0})
+    monkeypatch.setattr(janitor, "estimate_cost", lambda: 0.0)
+
+    with pytest.raises(RuntimeError, match="HTTPError code=429"):
+        janitor_worker.run_all_once()
+
+    logs_dir = tmp_path / "instances" / "pytest-runner" / "logs"
+    log_lines = (logs_dir / "janitor.log").read_text(encoding="utf-8").splitlines()
+    complete_events = [
+        json.loads(line)
+        for line in log_lines
+        if json.loads(line).get("event") == "janitor_complete"
+    ]
+    assert complete_events
+    assert complete_events[-1]["success"] is False
+    assert complete_events[-1]["errors"] == 1
+    assert "HTTPError code=429" in complete_events[-1]["error"]
+
+    checkpoint = json.loads((logs_dir / "janitor" / "checkpoint-all.json").read_text(encoding="utf-8"))
+    assert checkpoint["status"] == "failed"
+    assert checkpoint["terminal_status"] == "failed"
+    assert checkpoint["last_failed_at"] == "2026-06-16T08:15:42+00:00"
+    assert "HTTPError code=429" in checkpoint["worker_exit_error"]
+
+    stats = json.loads((logs_dir / "janitor-stats.json").read_text(encoding="utf-8"))
+    assert stats["task"] == "all"
+    assert stats["dry_run"] is False
+    assert stats["success"] is False
+    assert stats["last_janitor_failed_at"] == "2026-06-16T08:15:42+00:00"
+    assert stats["metrics"]["errors"] == 1
+
+
 def test_write_janitor_stats_records_apply_completion_and_preserves_it(monkeypatch, tmp_path):
     monkeypatch.setenv("QUAID_HOME", str(tmp_path))
     monkeypatch.setenv("QUAID_VISIBLE_HOME", str(tmp_path))
