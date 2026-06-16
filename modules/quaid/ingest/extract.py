@@ -45,7 +45,6 @@ from lib.runtime_context import (
 from lib.fail_policy import is_fail_hard_enabled
 from lib.tokens import estimate_tokens
 from prompt_sets import get_prompt
-from lib.domain_text import normalize_domain_id
 
 logger = logging.getLogger(__name__)
 
@@ -714,13 +713,15 @@ def _model_max_output_tokens(tier: str, default: int) -> int:
     """Read the configured model output cap without hiding failHard errors."""
     try:
         return max(1, int(get_config().models.max_output(tier)))
-    except Exception:
+    except Exception as exc:
         if is_fail_hard_enabled():
             raise
         logger.warning(
-            "[extract] failed to resolve %s max_output; defaulting to %d",
+            "[extract] failed to resolve %s max_output; defaulting to %d: %s",
             tier,
             default,
+            exc,
+            exc_info=True,
         )
         return int(default)
 
@@ -2276,11 +2277,11 @@ def materialize_cached_extraction_payload(
             result["question_echo_facts_dropped"] = int(
                 result.get("question_echo_facts_dropped", 0) or 0
             ) + question_echo_dropped
+            result["facts_skipped"] = (
+                int(result.get("facts_skipped", 0) or 0) + question_echo_dropped
+            )
             all_facts = filtered_facts
 
-    result["facts_skipped"] = int(result.get("facts_skipped", 0) or 0) + int(
-        result.get("question_echo_facts_dropped", 0) or 0
-    )
     return {
         "facts_stored": 0,
         "edges_created": 0,
@@ -2645,6 +2646,7 @@ def _merge_extract_telemetry(target: Dict[str, Any], source: Dict[str, Any]) -> 
         "assessment_needs_smaller_chunk",
         "unclassified_empty_payloads",
         "carry_duplicate_facts_dropped",
+        "facts_skipped",
         "artifact_facts_dropped",
         "question_echo_facts_dropped",
     ):
@@ -2730,6 +2732,9 @@ def _merge_parsed_payloads(
                     chunk_label,
                     question_echo_count,
                 )
+                result["facts_skipped"] = (
+                    int(result.get("facts_skipped", 0) or 0) + question_echo_count
+                )
                 result["question_echo_facts_dropped"] = int(
                     result.get("question_echo_facts_dropped", 0) or 0
                 ) + question_echo_count
@@ -2739,6 +2744,10 @@ def _merge_parsed_payloads(
                     label,
                     chunk_label,
                     assistant_question_artifact_count,
+                )
+                result["facts_skipped"] = (
+                    int(result.get("facts_skipped", 0) or 0)
+                    + assistant_question_artifact_count
                 )
                 result["artifact_facts_dropped"] = int(
                     result.get("artifact_facts_dropped", 0) or 0
@@ -2938,6 +2947,9 @@ def _extract_chunk_payloads(
         parsed, artifact_dropped = _filter_extraction_artifact_facts(parsed)
         if artifact_dropped:
             if isinstance(telemetry, dict):
+                telemetry["facts_skipped"] = int(
+                    telemetry.get("facts_skipped", 0) or 0
+                ) + artifact_dropped
                 telemetry["artifact_facts_dropped"] = int(
                     telemetry.get("artifact_facts_dropped", 0) or 0
                 ) + artifact_dropped
@@ -2950,6 +2962,9 @@ def _extract_chunk_payloads(
         parsed, assistant_question_dropped = _filter_assistant_question_fragment_facts(parsed, chunk)
         if assistant_question_dropped:
             if isinstance(telemetry, dict):
+                telemetry["facts_skipped"] = int(
+                    telemetry.get("facts_skipped", 0) or 0
+                ) + assistant_question_dropped
                 telemetry["artifact_facts_dropped"] = int(
                     telemetry.get("artifact_facts_dropped", 0) or 0
                 ) + assistant_question_dropped
@@ -2962,6 +2977,9 @@ def _extract_chunk_payloads(
         parsed, question_echo_dropped = _filter_user_question_echo_facts(parsed, chunk)
         if question_echo_dropped:
             if isinstance(telemetry, dict):
+                telemetry["facts_skipped"] = int(
+                    telemetry.get("facts_skipped", 0) or 0
+                ) + question_echo_dropped
                 telemetry["question_echo_facts_dropped"] = int(
                     telemetry.get("question_echo_facts_dropped", 0) or 0
                 ) + question_echo_dropped
@@ -3833,11 +3851,6 @@ def extract_from_transcript(
 
     # Resolve active domains once, before any LLM calls, and use this same snapshot
     # for both prompt injection and output validation.
-    DEFAULT_EXTRACTION_DOMAINS = {
-        "personal": "identity, preferences, relationships, life events",
-        "technical": "code, infra, APIs, architecture",
-        "project": "project status, tasks, files, milestones",
-    }
     retrieval_cfg = get_config().retrieval
     domain_defs = getattr(retrieval_cfg, "domains", {}) or {}
     if not isinstance(domain_defs, dict):
@@ -3993,6 +4006,7 @@ def extract_from_transcript(
                     "assessment_needs_smaller_chunk": 0,
                     "unclassified_empty_payloads": 0,
                     "carry_duplicate_facts_dropped": 0,
+                    "facts_skipped": 0,
                     "artifact_facts_dropped": 0,
                     "question_echo_facts_dropped": 0,
                 }
@@ -4110,9 +4124,10 @@ def extract_from_transcript(
             result["question_echo_facts_dropped"] = int(
                 result.get("question_echo_facts_dropped", 0) or 0
             ) + question_echo_dropped
+            result["facts_skipped"] = (
+                int(result.get("facts_skipped", 0) or 0) + question_echo_dropped
+            )
             all_facts = filtered_facts
-    result["facts_skipped"] += int(result.get("artifact_facts_dropped", 0) or 0)
-    result["facts_skipped"] += int(result.get("question_echo_facts_dropped", 0) or 0)
 
     result["raw_facts"] = list(all_facts)
     result["raw_snippets"] = dict(all_snippets)

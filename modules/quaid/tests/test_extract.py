@@ -3,6 +3,7 @@
 import argparse
 import importlib
 import json
+import logging
 import os
 import sys
 import tempfile
@@ -376,6 +377,24 @@ class TestExtractFromTranscript:
         with patch("ingest.extract.is_fail_hard_enabled", return_value=True):
             with pytest.raises(ValueError, match="invalid QUAID_EXTRACT_PARALLEL_ROOT_WORKERS"):
                 _get_extract_parallel_root_workers()
+
+    def test_model_max_output_tokens_logs_config_failure(self, caplog):
+        from ingest.extract import _model_max_output_tokens
+
+        class BrokenModels:
+            def max_output(self, _tier):
+                raise RuntimeError("max output unavailable")
+
+        with (
+            patch("ingest.extract.get_config", return_value=SimpleNamespace(models=BrokenModels())),
+            patch("ingest.extract.is_fail_hard_enabled", return_value=False),
+            caplog.at_level(logging.WARNING, logger="ingest.extract"),
+        ):
+            assert _model_max_output_tokens("deep", 1234) == 1234
+
+        assert "failed to resolve deep max_output" in caplog.text
+        assert "max output unavailable" in caplog.text
+        assert any(record.exc_info for record in caplog.records)
 
     def test_invalid_bare_date_timestamp_is_rejected(self):
         from ingest.extract import _normalize_extracted_timestamp
@@ -3227,8 +3246,9 @@ class TestExtractFromTranscript:
         assert result["explicit_structural_anchor_facts"] == 0
         assert result["raw_facts"] == []
 
+    @patch("core.plugins.memorydb_contract.write_extraction_publish_trace")
     @patch("ingest.extract.call_deep_reasoning")
-    def test_extraction_drops_user_question_echo_facts(self, mock_llm):
+    def test_extraction_drops_user_question_echo_facts(self, mock_llm, mock_trace):
         from ingest.extract import extract_from_transcript
 
         mock_llm.return_value = (json.dumps({
@@ -3269,6 +3289,12 @@ class TestExtractFromTranscript:
         assert texts == ["Miko uses the red linen receipt notebook for the studio setup"]
         assert result["question_echo_facts_dropped"] >= 1
         assert result["facts_skipped"] == result["question_echo_facts_dropped"]
+        publish_complete = [
+            call
+            for call in mock_trace.call_args_list
+            if call.args and call.args[0] == "publish_complete"
+        ]
+        assert publish_complete[-1].kwargs["facts_skipped"] == result["question_echo_facts_dropped"]
 
     @patch("ingest.extract.call_deep_reasoning")
     def test_extraction_keeps_statement_from_question_shaped_memory_request(self, mock_llm):
