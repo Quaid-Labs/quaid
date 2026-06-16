@@ -8767,6 +8767,8 @@ def daemon_loop(poll_interval: float = 5.0, idle_check_interval: float = 300.0) 
             try:
                 check_chunk_ready_sessions()
             except Exception as e:
+                if _fail_hard_enabled():
+                    raise RuntimeError("rolling chunk readiness check failed while failHard is enabled") from e
                 logger.error("rolling chunk readiness check failed: %s", e)
 
             # Process pending signals
@@ -8819,6 +8821,8 @@ def daemon_loop(poll_interval: float = 5.0, idle_check_interval: float = 300.0) 
                 try:
                     check_idle_sessions(effective_timeout_minutes)
                 except Exception as e:
+                    if _fail_hard_enabled():
+                        raise RuntimeError("idle check failed while failHard is enabled") from e
                     logger.error("idle check failed: %s", e)
                 last_idle_check = now
 

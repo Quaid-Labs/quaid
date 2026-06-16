@@ -720,6 +720,74 @@ def test_daemon_loop_reraises_embedding_retry_failure_under_failhard(monkeypatch
         extraction_daemon.daemon_loop(poll_interval=0.0, idle_check_interval=999999.0)
 
 
+def test_daemon_loop_reraises_chunk_readiness_failure_under_failhard(monkeypatch):
+    def fake_sleep(_seconds):
+        raise AssertionError("daemon loop should not sleep after failHard chunk readiness failure")
+
+    monkeypatch.setattr(extraction_daemon, "write_pid", lambda _pid: None)
+    monkeypatch.setattr(extraction_daemon, "remove_pid", lambda: None)
+    monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: True)
+    monkeypatch.setattr(extraction_daemon, "_supervisor_alive", lambda: True)
+    monkeypatch.setattr(extraction_daemon, "_reload_config_if_changed", lambda _reason: None)
+    monkeypatch.setattr(extraction_daemon, "_retry_missing_embeddings", lambda: 0)
+    monkeypatch.setattr(
+        extraction_daemon,
+        "check_chunk_ready_sessions",
+        lambda: (_ for _ in ()).throw(RuntimeError("chunk scan down")),
+    )
+    monkeypatch.setattr(extraction_daemon, "check_idle_sessions", lambda _mins: None)
+    monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
+    monkeypatch.setattr(extraction_daemon, "process_signal", lambda _sig: None)
+    monkeypatch.setattr(
+        "core.compatibility.read_circuit_breaker",
+        lambda _data_dir: types.SimpleNamespace(
+            allows_writes=lambda: True,
+            status="normal",
+            message="",
+        ),
+    )
+    monkeypatch.setattr(extraction_daemon.time, "time", lambda: 1_700_000_000.0)
+    monkeypatch.setattr(extraction_daemon.time, "sleep", fake_sleep)
+    monkeypatch.setattr(extraction_daemon.signal, "signal", lambda *_args, **_kwargs: None)
+
+    with pytest.raises(RuntimeError, match="rolling chunk readiness check failed while failHard is enabled"):
+        extraction_daemon.daemon_loop(poll_interval=0.0, idle_check_interval=999999.0)
+
+
+def test_daemon_loop_reraises_idle_check_failure_under_failhard(monkeypatch):
+    def fake_sleep(_seconds):
+        raise AssertionError("daemon loop should not sleep after failHard idle check failure")
+
+    monkeypatch.setattr(extraction_daemon, "write_pid", lambda _pid: None)
+    monkeypatch.setattr(extraction_daemon, "remove_pid", lambda: None)
+    monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: True)
+    monkeypatch.setattr(extraction_daemon, "_supervisor_alive", lambda: True)
+    monkeypatch.setattr(extraction_daemon, "_reload_config_if_changed", lambda _reason: None)
+    monkeypatch.setattr(extraction_daemon, "_retry_missing_embeddings", lambda: 0)
+    monkeypatch.setattr(extraction_daemon, "check_chunk_ready_sessions", lambda: None)
+    monkeypatch.setattr(
+        extraction_daemon,
+        "check_idle_sessions",
+        lambda _mins: (_ for _ in ()).throw(RuntimeError("idle scan down")),
+    )
+    monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
+    monkeypatch.setattr(extraction_daemon, "process_signal", lambda _sig: None)
+    monkeypatch.setattr(
+        "core.compatibility.read_circuit_breaker",
+        lambda _data_dir: types.SimpleNamespace(
+            allows_writes=lambda: True,
+            status="normal",
+            message="",
+        ),
+    )
+    monkeypatch.setattr(extraction_daemon.time, "time", lambda: 1_700_000_000.0)
+    monkeypatch.setattr(extraction_daemon.time, "sleep", fake_sleep)
+    monkeypatch.setattr(extraction_daemon.signal, "signal", lambda *_args, **_kwargs: None)
+
+    with pytest.raises(RuntimeError, match="idle check failed while failHard is enabled"):
+        extraction_daemon.daemon_loop(poll_interval=0.0, idle_check_interval=0.0)
+
+
 def test_load_runtime_adapter_for_signal_raises_under_failhard(monkeypatch):
     fake_adapter_mod = types.ModuleType("lib.adapter")
 
