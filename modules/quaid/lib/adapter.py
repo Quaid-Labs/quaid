@@ -1941,7 +1941,7 @@ def _write_project_instance_binding(
     except Exception:
         import logging as _logging
 
-        _logging.getLogger(__name__).debug(
+        _logging.getLogger(__name__).warning(
             "failed writing %s project instance binding for %s",
             adapter_id,
             instance_id,

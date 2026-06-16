@@ -436,6 +436,17 @@ class TestBaseAdapterConfig:
             with pytest.raises(RuntimeError, match="bad instance"):
                 _write_project_instance_binding(tmp_path, "codex", str(project_dir), "codex-bad")
 
+    def test_write_project_instance_binding_warns_failure_when_fail_open(self, tmp_path, caplog):
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        caplog.set_level("WARNING")
+
+        with patch("lib.instance.validate_instance_id", side_effect=RuntimeError("bad instance")), \
+             patch("lib.adapter.is_fail_hard_enabled", return_value=False):
+            _write_project_instance_binding(tmp_path, "codex", str(project_dir), "codex-bad")
+
+        assert "failed writing codex project instance binding for codex-bad" in caplog.text
+
     def test_auto_provision_raises_init_failure_when_failhard(self, tmp_path, monkeypatch):
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
         monkeypatch.setenv("QUAID_INSTANCE", "codex-test")
