@@ -8,12 +8,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 from pathlib import Path
 from typing import Any, Dict
 
 from config import get_config
 from core.docs.updater import check_staleness, cmd_update_from_transcript
 from lib.fail_policy import is_fail_hard_enabled
+
+logger = logging.getLogger(__name__)
 
 
 def _run(transcript_path: Path, label: str, session_id: str | None = None) -> Dict[str, Any]:
@@ -28,13 +31,30 @@ def _run(transcript_path: Path, label: str, session_id: str | None = None) -> Di
             raise RuntimeError(f"docs ingest transcript file not found: {transcript_path}")
         return {"status": "error", "message": "transcript file not found"}
 
-    stale = check_staleness()
-    stale_docs = len(stale or {})
+    try:
+        stale = check_staleness()
+    except Exception as exc:
+        logger.warning("docs ingest staleness check failed: %s", exc)
+        if is_fail_hard_enabled():
+            raise RuntimeError("docs ingest staleness check failed") from exc
+        return {"status": "error", "message": "staleness check failed"}
+
+    stale_docs = len(stale) if stale is not None else 0
     if stale_docs == 0:
         return {"status": "up_to_date", "staleDocs": 0, "updatedDocs": 0}
 
     max_docs = int(getattr(docs_cfg, "max_docs_per_update", 3))
-    updated = int(cmd_update_from_transcript(str(transcript_path), dry_run=False, max_docs=max_docs))
+    try:
+        updated = int(cmd_update_from_transcript(str(transcript_path), dry_run=False, max_docs=max_docs))
+    except Exception as exc:
+        logger.warning("docs ingest transcript update failed: %s", exc)
+        if is_fail_hard_enabled():
+            raise RuntimeError("docs ingest transcript update failed") from exc
+        return {
+            "status": "error",
+            "message": "transcript update failed",
+            "staleDocs": stale_docs,
+        }
     return {
         "status": "updated",
         "label": label,

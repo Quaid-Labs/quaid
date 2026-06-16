@@ -57,6 +57,37 @@ def test_docs_ingest_up_to_date(monkeypatch, tmp_path):
     assert result["staleDocs"] == 0
 
 
+def test_docs_ingest_staleness_failure_returns_error_when_not_fail_hard(monkeypatch, tmp_path, caplog):
+    t = tmp_path / "t.txt"
+    t.write_text("hello")
+    monkeypatch.setattr(docs_ingest, "get_config", lambda: _cfg())
+    monkeypatch.setattr(docs_ingest, "check_staleness", lambda: (_ for _ in ()).throw(RuntimeError("stale down")))
+    monkeypatch.setattr(docs_ingest, "is_fail_hard_enabled", lambda: False)
+
+    with caplog.at_level("WARNING"):
+        result = docs_ingest._run(t, "Compaction", "s1")
+
+    assert result["status"] == "error"
+    assert result["message"] == "staleness check failed"
+    assert "docs ingest staleness check failed" in caplog.text
+
+
+def test_docs_ingest_staleness_failure_raises_when_fail_hard(monkeypatch, tmp_path, caplog):
+    t = tmp_path / "t.txt"
+    t.write_text("hello")
+    monkeypatch.setattr(docs_ingest, "get_config", lambda: _cfg())
+    monkeypatch.setattr(docs_ingest, "check_staleness", lambda: (_ for _ in ()).throw(RuntimeError("stale down")))
+    monkeypatch.setattr(docs_ingest, "is_fail_hard_enabled", lambda: True)
+
+    with caplog.at_level("WARNING"):
+        with pytest.raises(RuntimeError, match="docs ingest staleness check failed") as excinfo:
+            docs_ingest._run(t, "Compaction", "s1")
+
+    assert isinstance(excinfo.value.__cause__, RuntimeError)
+    assert "stale down" in str(excinfo.value.__cause__)
+    assert "docs ingest staleness check failed" in caplog.text
+
+
 def test_docs_ingest_updates_docs(monkeypatch, tmp_path):
     t = tmp_path / "t.txt"
     t.write_text("hello")
@@ -79,6 +110,48 @@ def test_docs_ingest_updates_docs(monkeypatch, tmp_path):
     assert calls["path"] == str(t)
     assert calls["dry_run"] is False
     assert calls["max_docs"] == 5
+
+
+def test_docs_ingest_update_failure_returns_error_when_not_fail_hard(monkeypatch, tmp_path, caplog):
+    t = tmp_path / "t.txt"
+    t.write_text("hello")
+    monkeypatch.setattr(docs_ingest, "get_config", lambda: _cfg(max_docs=5))
+    monkeypatch.setattr(docs_ingest, "check_staleness", lambda: {"docs/a.md": object(), "docs/b.md": object()})
+    monkeypatch.setattr(
+        docs_ingest,
+        "cmd_update_from_transcript",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("update down")),
+    )
+    monkeypatch.setattr(docs_ingest, "is_fail_hard_enabled", lambda: False)
+
+    with caplog.at_level("WARNING"):
+        result = docs_ingest._run(t, "Compaction", "s1")
+
+    assert result["status"] == "error"
+    assert result["message"] == "transcript update failed"
+    assert result["staleDocs"] == 2
+    assert "docs ingest transcript update failed" in caplog.text
+
+
+def test_docs_ingest_update_failure_raises_when_fail_hard(monkeypatch, tmp_path, caplog):
+    t = tmp_path / "t.txt"
+    t.write_text("hello")
+    monkeypatch.setattr(docs_ingest, "get_config", lambda: _cfg(max_docs=5))
+    monkeypatch.setattr(docs_ingest, "check_staleness", lambda: {"docs/a.md": object()})
+    monkeypatch.setattr(
+        docs_ingest,
+        "cmd_update_from_transcript",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("update down")),
+    )
+    monkeypatch.setattr(docs_ingest, "is_fail_hard_enabled", lambda: True)
+
+    with caplog.at_level("WARNING"):
+        with pytest.raises(RuntimeError, match="docs ingest transcript update failed") as excinfo:
+            docs_ingest._run(t, "Compaction", "s1")
+
+    assert isinstance(excinfo.value.__cause__, RuntimeError)
+    assert "update down" in str(excinfo.value.__cause__)
+    assert "docs ingest transcript update failed" in caplog.text
 
 
 def test_docs_ingest_preserves_explicit_zero_max_docs(monkeypatch, tmp_path):
