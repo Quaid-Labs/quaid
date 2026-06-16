@@ -6,7 +6,7 @@ import json
 import logging
 import os
 import re
-import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -170,7 +170,7 @@ def _read_json(path: Path, default: dict[str, Any]) -> dict[str, Any]:
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
     _ensure_parent(path)
-    tmp_path = path.with_name(f"{path.name}.tmp-{int(time.time() * 1000)}")
+    tmp_path = path.with_name(f"{path.name}.tmp-{os.getpid()}-{uuid.uuid4().hex}")
     tmp_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     tmp_path.replace(path)
     try:
@@ -650,7 +650,7 @@ def drain_deferred_notices(*, limit: int = 50) -> list[dict[str, Any]]:
             item for item in requests
             if isinstance(item, dict) and str(item.get("status") or "pending").strip().lower() == "pending"
         ]
-        _sort_deferred_notices(pending)
+        pending = _sort_deferred_notices(pending)
         target_ids = {
             str(item.get("id") or "")
             for item in pending[: max(1, min(int(limit), 500))]

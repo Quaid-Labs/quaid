@@ -87,6 +87,20 @@ class TestShadowGit:
         assert result.is_initial
         assert any(c.path == "hello.py" for c in result.changes)
 
+    def test_snapshot_commit_message_honors_quaid_now(self, tmp_path, monkeypatch):
+        project = tmp_path / "project"
+        project.mkdir()
+        monkeypatch.setenv("QUAID_NOW", "2026-03-11T05:06:07Z")
+
+        sg = ShadowGit("test", project, tracking_base=tmp_path / "tracking")
+        sg.init()
+        (project / "hello.py").write_text("print('hello')", encoding="utf-8")
+
+        sg.snapshot()
+
+        log = sg._git("log", "-1", "--format=%s")
+        assert log.stdout.strip() == "snapshot 2026-03-11T05:06:07Z"
+
     def test_snapshot_detects_modification(self, tmp_path):
         project = tmp_path / "project"
         project.mkdir()

@@ -11,6 +11,7 @@ See docs/PROJECT-SYSTEM-SPEC.md#shadow-git-tracking.
 """
 
 import logging
+import os
 import subprocess
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -21,6 +22,20 @@ logger = logging.getLogger(__name__)
 
 _SHADOW_GIT_USER_NAME = "Quaid Shadow Git"
 _SHADOW_GIT_USER_EMAIL = "quaid-shadow-git@localhost"
+
+
+def _now_datetime() -> datetime:
+    raw = str(os.environ.get("QUAID_NOW", "") or "").strip()
+    if raw:
+        try:
+            value = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            logger.warning("Invalid QUAID_NOW=%r", raw)
+            raise ValueError(f"Invalid QUAID_NOW={raw!r}") from None
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+    return datetime.now(tz=timezone.utc)
 
 # Default ignore patterns — defensive, cannot be removed by LLM.
 # LLM can add project-specific patterns on top of these.
@@ -322,7 +337,7 @@ class ShadowGit:
         self._git("add", "-A")
 
         # Commit
-        ts = datetime.now(tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        ts = _now_datetime().strftime("%Y-%m-%dT%H:%M:%SZ")
         commit = self._git(
             "commit", "-m", f"snapshot {ts}",
             "--allow-empty-message",

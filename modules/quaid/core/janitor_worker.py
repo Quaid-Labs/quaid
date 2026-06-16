@@ -126,6 +126,7 @@ def _write_run_all_failure_markers(exc: Exception, janitor_module) -> None:
         except FileNotFoundError:
             pass
         except Exception as checkpoint_exc:
+            _print_marker_warning(f"failed to read existing checkpoint {checkpoint_path}: {checkpoint_exc}")
             checkpoint["checkpoint_read_error"] = str(checkpoint_exc)
         checkpoint.update(
             {
@@ -146,11 +147,13 @@ def _write_run_all_failure_markers(exc: Exception, janitor_module) -> None:
         _atomic_write_json(checkpoint_path, checkpoint)
         try:
             usage = janitor_module.get_token_usage()
-        except Exception:
+        except Exception as usage_exc:
+            _print_marker_warning(f"failed to collect token usage for terminal failure marker: {usage_exc}")
             usage = {"api_calls": 0, "input_tokens": 0, "output_tokens": 0}
         try:
             estimated_cost = janitor_module.estimate_cost()
-        except Exception:
+        except Exception as cost_exc:
+            _print_marker_warning(f"failed to estimate cost for terminal failure marker: {cost_exc}")
             estimated_cost = 0.0
         _write_failure_stats(logs_dir, result=result, usage=usage, estimated_cost_usd=estimated_cost, completed_at=completed_at)
     except Exception as marker_exc:
@@ -161,10 +164,17 @@ def _write_run_all_failure_markers(exc: Exception, janitor_module) -> None:
         )
 
 
+def _print_marker_warning(message: str) -> None:
+    print(f"[janitor-worker] {message}", file=sys.stderr, flush=True)
+
+
 def _worker_now_iso() -> str:
     raw = str(os.environ.get("QUAID_NOW", "") or "").strip()
     if raw:
-        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        try:
+            parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            raise ValueError(f"Invalid QUAID_NOW={raw!r}") from None
         if parsed.tzinfo is None:
             parsed = parsed.replace(tzinfo=timezone.utc)
         return parsed.astimezone(timezone.utc).isoformat()
@@ -217,7 +227,10 @@ def _write_failure_stats(
         loaded = json.loads(stats_file.read_text(encoding="utf-8"))
         if isinstance(loaded, dict):
             existing = loaded
-    except Exception:
+    except FileNotFoundError:
+        existing = {}
+    except Exception as stats_exc:
+        _print_marker_warning(f"failed to read existing janitor stats {stats_file}: {stats_exc}")
         existing = {}
     previous_completed_at = str(existing.get("last_janitor_completed_at") or "").strip()
     stats_data: dict[str, object] = {

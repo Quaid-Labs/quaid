@@ -99,6 +99,50 @@ def test_janitor_worker_run_all_once_writes_terminal_markers_on_uncaught_error(m
     assert stats["metrics"]["errors"] == 1
 
 
+def test_janitor_worker_failure_marker_reports_diagnostic_fallbacks(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_VISIBLE_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "pytest-runner")
+    monkeypatch.setenv("QUAID_NOW", "2026-06-16T08:15:42Z")
+
+    from core import janitor_worker
+    janitor = importlib.import_module("core.lifecycle.janitor")
+
+    logs_dir = tmp_path / "instances" / "pytest-runner" / "logs"
+    stats_path = logs_dir / "janitor-stats.json"
+    stats_path.parent.mkdir(parents=True)
+    stats_path.write_text("{not json", encoding="utf-8")
+
+    monkeypatch.setattr(
+        janitor,
+        "run_task_optimized",
+        lambda *, task, dry_run: (_ for _ in ()).throw(RuntimeError("primary maintenance failure")),
+    )
+    monkeypatch.setattr(janitor, "get_token_usage", lambda: (_ for _ in ()).throw(RuntimeError("usage unavailable")))
+    monkeypatch.setattr(janitor, "estimate_cost", lambda: (_ for _ in ()).throw(RuntimeError("cost unavailable")))
+
+    with pytest.raises(RuntimeError, match="primary maintenance failure"):
+        janitor_worker.run_all_once()
+
+    err = capsys.readouterr().err
+    assert "failed to collect token usage" in err
+    assert "failed to estimate cost" in err
+    assert "failed to read existing janitor stats" in err
+    stats = json.loads(stats_path.read_text(encoding="utf-8"))
+    assert stats["api_usage"]["calls"] == 0
+    assert stats["api_usage"]["estimated_cost_usd"] == 0.0
+    assert stats["last_janitor_failed_at"] == "2026-06-16T08:15:42+00:00"
+
+
+def test_janitor_worker_clock_rejects_malformed_quaid_now(monkeypatch):
+    from core import janitor_worker
+
+    monkeypatch.setenv("QUAID_NOW", "not-a-date")
+
+    with pytest.raises(ValueError, match="Invalid QUAID_NOW"):
+        janitor_worker._worker_now_iso()
+
+
 def test_write_janitor_stats_records_apply_completion_and_preserves_it(monkeypatch, tmp_path):
     monkeypatch.setenv("QUAID_HOME", str(tmp_path))
     monkeypatch.setenv("QUAID_VISIBLE_HOME", str(tmp_path))

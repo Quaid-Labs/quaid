@@ -18,7 +18,7 @@ import sys
 import tempfile
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
@@ -47,8 +47,26 @@ _BACKGROUND_PROCESS_SCRUB_ENV_KEYS = (
 logger = logging.getLogger(__name__)
 
 
+def _now_datetime() -> datetime:
+    raw = str(os.environ.get("QUAID_NOW", "") or "").strip()
+    if raw:
+        try:
+            value = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            logger.warning("Invalid QUAID_NOW=%r", raw)
+            raise ValueError(f"Invalid QUAID_NOW={raw!r}") from None
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+    return datetime.now(tz=timezone.utc)
+
+
 def utc_now() -> str:
-    return datetime.now(tz=timezone.utc).isoformat()
+    return _now_datetime().isoformat()
+
+
+def _now_epoch() -> float:
+    return _now_datetime().timestamp()
 
 
 def validate_project_name(project: str) -> str:
@@ -577,7 +595,7 @@ def _pid_record_started_recently(record: Dict[str, Any], *, max_age_seconds: flo
     ts = _parse_iso_ts(record.get("started_at"))
     if ts is None:
         return False
-    age = time.time() - ts
+    age = _now_epoch() - ts
     return -5.0 <= age <= max_age_seconds
 
 
@@ -940,7 +958,7 @@ def update_request_ready_for_worker(request: Optional[Dict[str, Any]]) -> bool:
     if status in {"failed", "completed", "cancelled"}:
         return False
     retry_at = _parse_iso_ts(request.get("next_retry_at"))
-    if retry_at is not None and time.time() < retry_at:
+    if retry_at is not None and _now_epoch() < retry_at:
         return False
     return True
 
@@ -987,7 +1005,7 @@ def _record_update_request_failure(project: str, request: Dict[str, Any], exc: E
         return
 
     delay = _project_docs_request_retry_delay_seconds(attempt_count)
-    next_retry_at = datetime.fromtimestamp(time.time() + delay, tz=timezone.utc).isoformat()
+    next_retry_at = (_now_datetime() + timedelta(seconds=delay)).isoformat()
     payload["status"] = "retrying"
     payload["next_retry_at"] = next_retry_at
     _atomic_write_json(request_path(name), payload)
@@ -1929,7 +1947,7 @@ def _worker_heartbeat_stale(project: str, *, stale_after_seconds: float) -> bool
     ts = _parse_iso_ts(heartbeat.get("heartbeat_at"))
     if ts is None:
         return True
-    return (time.time() - ts) > stale_after_seconds
+    return (_now_epoch() - ts) > stale_after_seconds
 
 
 def _worker_progress_stale(project: str, *, stale_after_seconds: float) -> bool:
@@ -1944,7 +1962,7 @@ def _worker_progress_stale(project: str, *, stale_after_seconds: float) -> bool:
     )
     if ts is None:
         return True
-    return (time.time() - ts) > stale_after_seconds
+    return (_now_epoch() - ts) > stale_after_seconds
 
 
 def reap_stale_worker(project: str, *, stale_after_seconds: float) -> bool:

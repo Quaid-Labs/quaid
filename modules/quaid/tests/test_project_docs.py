@@ -53,6 +53,24 @@ def test_fail_hard_enabled_fails_closed_on_import_error(monkeypatch, caplog):
     assert "fail-hard policy unavailable in project docs" in caplog.text
 
 
+def test_project_docs_utc_now_honors_quaid_now(monkeypatch):
+    from core import project_docs
+
+    monkeypatch.setenv("QUAID_NOW", "2026-03-11T05:06:07")
+
+    assert project_docs.utc_now() == "2026-03-11T05:06:07+00:00"
+    assert project_docs._now_epoch() == pytest.approx(datetime(2026, 3, 11, 5, 6, 7, tzinfo=timezone.utc).timestamp())
+
+
+def test_project_docs_utc_now_rejects_malformed_quaid_now(monkeypatch):
+    from core import project_docs
+
+    monkeypatch.setenv("QUAID_NOW", "not-a-date")
+
+    with pytest.raises(ValueError, match="Invalid QUAID_NOW"):
+        project_docs.utc_now()
+
+
 def test_request_update_writes_hidden_state(project_env):
     tmp_path, _src, _entry = project_env
     from core import project_docs
@@ -170,6 +188,7 @@ def test_start_worker_env_uses_pending_request_runtime_context(project_env, monk
 
     monkeypatch.setenv("QUAID_INSTANCE", "codex-private-tmp-cdx-livetest")
     monkeypatch.setenv("QUAID_ADAPTER_TYPE", "codex")
+    monkeypatch.setenv("QUAID_NOW", "2026-03-11T05:06:07Z")
     project_docs.request_update("demo", reason="manual-test", requested_by="pytest")
     monkeypatch.setenv("QUAID_INSTANCE", "openclaw-main")
     monkeypatch.setenv("QUAID_ADAPTER_TYPE", "openclaw")
@@ -193,6 +212,7 @@ def test_start_worker_env_uses_pending_request_runtime_context(project_env, monk
     assert env["QUAID_HOME"] == str(tmp_path)
     assert env["QUAID_INSTANCE"] == "codex-private-tmp-cdx-livetest"
     assert env["QUAID_ADAPTER_TYPE"] == "codex"
+    assert env["QUAID_NOW"] == "2026-03-11T05:06:07Z"
     assert "MEMORY_DB_PATH" not in env
 
 
@@ -861,6 +881,24 @@ def test_project_docs_failhard_broker_failure_records_retry_metadata(project_env
     assert retained["last_error"] == "poison"
     assert retained.get("next_retry_at")
     assert project_docs.update_request_ready_for_worker(retained) is False
+
+
+def test_project_docs_request_retry_backoff_honors_quaid_now(project_env, monkeypatch):
+    _tmp_path, _src, _entry = project_env
+    from core import project_docs
+
+    monkeypatch.setenv("QUAID_NOW", "2026-03-11T05:06:07Z")
+    monkeypatch.setenv("QUAID_PROJECT_DOCS_REQUEST_RETRY_BASE_SECONDS", "60")
+    request = project_docs.request_update("demo", reason="manual-test", requested_by="pytest")
+
+    project_docs._record_update_request_failure("demo", request, RuntimeError("transient broker failure"))
+
+    retrying = project_docs.read_update_request("demo")
+    assert retrying["next_retry_at"] == "2026-03-11T05:07:07+00:00"
+    assert project_docs.update_request_ready_for_worker(retrying) is False
+
+    monkeypatch.setenv("QUAID_NOW", "2026-03-11T05:07:08Z")
+    assert project_docs.update_request_ready_for_worker(retrying) is True
 
 
 def test_project_docs_worker_respects_request_retry_backoff(monkeypatch):
@@ -1837,6 +1875,7 @@ def test_start_supervisor_reaps_matching_orphans_before_spawn(project_env, monke
             return None
 
     monkeypatch.setenv("QUAID_INSTANCE", "claude-code-private-tmp-cc-livetest")
+    monkeypatch.setenv("QUAID_NOW", "2026-03-11T05:06:07Z")
     monkeypatch.setenv("INSTANCE", "claude-code-private-tmp-cc-livetest")
     monkeypatch.setenv("SILO", str(_tmp_path / "instances" / "claude-code-private-tmp-cc-livetest"))
     monkeypatch.setenv("LANE", "cc")
@@ -1861,6 +1900,7 @@ def test_start_supervisor_reaps_matching_orphans_before_spawn(project_env, monke
     assert "SILO" not in captured["env"]
     assert "LANE" not in captured["env"]
     assert "QUAID_ADAPTER_TYPE" not in captured["env"]
+    assert captured["env"]["QUAID_NOW"] == "2026-03-11T05:06:07Z"
     assert "CLAUDE_PROJECT_DIR" not in captured["env"]
     assert "MEMORY_DB_PATH" not in captured["env"]
     assert "MEMORY_ARCHIVE_DB_PATH" not in captured["env"]
