@@ -1197,6 +1197,42 @@ class TestExtractFromTranscript:
             "User: Also store walnut-compass-7142."
         )
 
+    def test_explicit_anchor_does_not_infer_multilingual_system_label_as_assistant_turn(self):
+        from ingest.extract import _canonicalize_explicit_anchor_transcript
+
+        result = _canonicalize_explicit_anchor_transcript(
+            (
+                "Usuario: Mi marcador de estante es cedro-plantilla-4821.\n"
+                "Sistema: error 404\n"
+                "Usuario: También uso nogal-brujula-7142."
+            ),
+            owner_id="Solomon Steadman",
+        )
+
+        assert result == (
+            "User: Mi marcador de estante es cedro-plantilla-4821.\n"
+            "Sistema: error 404\n"
+            "User: También uso nogal-brujula-7142."
+        )
+
+    def test_explicit_anchor_does_not_infer_repeating_metadata_label_as_assistant_turn(self):
+        from ingest.extract import _canonicalize_explicit_anchor_transcript
+
+        result = _canonicalize_explicit_anchor_transcript(
+            (
+                "Estado: activo\n"
+                "Usuario: Mi marcador de estante es cedro-plantilla-4821.\n"
+                "Estado: pendiente"
+            ),
+            owner_id="Solomon Steadman",
+        )
+
+        assert result == (
+            "Estado: activo\n"
+            "User: Mi marcador de estante es cedro-plantilla-4821.\n"
+            "Estado: pendiente"
+        )
+
     @patch("ingest.extract.call_deep_reasoning")
     def test_explicit_structural_anchor_preserves_non_english_role_prefixes(self, mock_llm):
         from ingest.extract import extract_from_transcript

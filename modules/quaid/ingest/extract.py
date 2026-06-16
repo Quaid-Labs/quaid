@@ -1756,20 +1756,81 @@ _EXPLICIT_ANCHOR_ASSISTANT_SPEAKER_KEYS = {
     "सहायक",
     "asistan",
 }
-_EXPLICIT_ANCHOR_NON_DIALOGUE_SPEAKER_KEYS = {
-    "system",
-    "tool",
-    "developer",
-    "function",
-    "memory",
-    "context",
-}
-
-
 def _speaker_label_key(value: str) -> str:
     text = unicodedata.normalize("NFKC", str(value or "")).casefold()
     text = text.replace("_", " ").replace("-", " ")
     return re.sub(r"\s+", " ", text.strip())
+
+
+_EXPLICIT_ANCHOR_NON_DIALOGUE_SPEAKER_KEYS = frozenset(
+    _speaker_label_key(value)
+    for value in (
+        "system",
+        "sistema",
+        "système",
+        "sistem",
+        "systém",
+        "система",
+        "システム",
+        "系统",
+        "系統",
+        "시스템",
+        "النظام",
+        "tool",
+        "herramienta",
+        "outil",
+        "werkzeug",
+        "инструмент",
+        "ツール",
+        "工具",
+        "도구",
+        "أداة",
+        "developer",
+        "desarrollador",
+        "développeur",
+        "entwickler",
+        "разработчик",
+        "開発者",
+        "开发者",
+        "개발자",
+        "function",
+        "función",
+        "fonction",
+        "funktion",
+        "функция",
+        "関数",
+        "函数",
+        "함수",
+        "memory",
+        "memoria",
+        "mémoire",
+        "speicher",
+        "память",
+        "メモリ",
+        "記憶",
+        "内存",
+        "메모리",
+        "context",
+        "contexto",
+        "contexte",
+        "kontext",
+        "контекст",
+        "コンテキスト",
+        "上下文",
+        "맥락",
+        "status",
+        "state",
+        "estado",
+        "état",
+        "estatus",
+        "zustand",
+        "статус",
+        "状態",
+        "状态",
+        "狀態",
+        "상태",
+    )
+)
 
 
 def _explicit_anchor_role_for_speaker_key(speaker_key: str, owner_aliases: set[str]) -> Optional[str]:
