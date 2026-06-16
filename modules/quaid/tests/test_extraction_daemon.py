@@ -5882,6 +5882,39 @@ def test_timeout_classifier_keeps_short_unicode_startup_user_turn_meaningful():
     assert extraction_daemon._transcript_has_meaningful_timeout_user_content(transcript)
 
 
+def test_timeout_classifier_parses_translated_protocol_roles():
+    transcript = (
+        "Usuario: A new session was started via /new or /reset.\n"
+        "Asistente: NO_REPLY\n"
+        "Usuario: La reunión es a las tres."
+    )
+
+    assert extraction_daemon._iter_parsed_transcript_turns(transcript) == [
+        ("user", "A new session was started via /new or /reset."),
+        ("assistant", "NO_REPLY"),
+        ("user", "La reunión es a las tres."),
+    ]
+    assert (
+        extraction_daemon._classify_timeout_transcript_content(transcript)
+        == extraction_daemon._TRANSCRIPT_CLASS_MEANINGFUL_USER_CONTENT
+    )
+    assert extraction_daemon._transcript_has_meaningful_timeout_user_content(transcript)
+
+
+def test_timeout_classifier_keeps_non_english_role_user_content_meaningful():
+    transcript = (
+        "用户: A new session was started via /new or /reset.\n"
+        "助手: NO_REPLY\n"
+        "用户: 会議は三時"
+    )
+
+    assert (
+        extraction_daemon._classify_timeout_transcript_content(transcript)
+        == extraction_daemon._TRANSCRIPT_CLASS_MEANINGFUL_USER_CONTENT
+    )
+    assert extraction_daemon._transcript_has_meaningful_timeout_user_content(transcript)
+
+
 def test_timeout_classifier_keeps_visible_assistant_only_content_meaningful():
     transcript = "Assistant: Visible assistant content should remain extractable."
 

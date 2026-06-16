@@ -86,9 +86,70 @@ _DISCOVERY_STALE_ORPHAN_GRACE_SECONDS = 10 * 60
 _ORPHANED_CURSOR_RETENTION_SECONDS = 7 * 24 * 60 * 60
 _IGNORED_TIMEOUT_USER_TURN_MAX_CHARS = 12
 _TRANSCRIPT_ROLE_RE = re.compile(
-    r"^\s*(?:\[\d{4}-\d{2}-\d{2}[T ][^\]]+\]\s*)?(User|Assistant|System):\s*(.*)$",
-    re.IGNORECASE,
+    r"^\s*(?:\[\d{4}-\d{2}-\d{2}[T ][^\]]+\]\s*)?([^:\r\n]{1,80}):\s*(.*)$",
+    re.UNICODE,
 )
+_TRANSCRIPT_USER_ROLE_KEYS = {
+    "user",
+    "human",
+    "owner",
+    "operator",
+    "usuario",
+    "usuaria",
+    "usuário",
+    "utilizador",
+    "utilisateur",
+    "utilisatrice",
+    "benutzer",
+    "nutzer",
+    "utente",
+    "gebruiker",
+    "пользователь",
+    "користувач",
+    "użytkownik",
+    "用户",
+    "用戶",
+    "使用者",
+    "ユーザー",
+    "利用者",
+    "사용자",
+    "مستخدم",
+    "المستخدم",
+    "उपयोगकर्ता",
+    "kullanıcı",
+}
+_TRANSCRIPT_ASSISTANT_ROLE_KEYS = {
+    "assistant",
+    "agent",
+    "bot",
+    "ai",
+    "ai assistant",
+    "aiアシスタント",
+    "asistente",
+    "assistente",
+    "assistante",
+    "assistent",
+    "assistentin",
+    "помощник",
+    "ассистент",
+    "助手",
+    "助理",
+    "ai助手",
+    "智能助手",
+    "アシスタント",
+    "어시스턴트",
+    "도우미",
+    "مساعد",
+    "المساعد",
+    "सहायक",
+    "asistan",
+}
+_TRANSCRIPT_SYSTEM_ROLE_KEYS = {
+    "system",
+    "developer",
+    "tool",
+    "function",
+}
 _TRANSCRIPT_CLASS_INTERNAL_MAINTENANCE = "internal_maintenance"
 _TRANSCRIPT_CLASS_IGNORE_CONTENT = "ignore_content"
 _TRANSCRIPT_CLASS_MEANINGFUL_USER_CONTENT = "meaningful_user_content"
@@ -5438,9 +5499,14 @@ def _iter_parsed_transcript_turns(transcript_text: str) -> List[Tuple[str, str]]
     for raw_line in str(transcript_text or "").splitlines():
         match = _TRANSCRIPT_ROLE_RE.match(raw_line)
         if match:
+            role = _canonical_transcript_role(match.group(1))
+            if role is None:
+                if current_role:
+                    current_lines.append(raw_line)
+                continue
             if current_role:
                 turns.append((current_role, "\n".join(current_lines).strip()))
-            current_role = match.group(1).strip().lower()
+            current_role = role
             current_lines = [match.group(2).strip()]
             continue
         if current_role:
@@ -5460,6 +5526,27 @@ def _is_timeout_startup_user_turn(text: str) -> bool:
     if "[queued messages while agent was busy]" in lowered:
         return True
     return False
+
+
+def _transcript_role_key(value: str) -> str:
+    text = unicodedata.normalize("NFKC", str(value or "")).casefold()
+    text = text.replace("_", " ").replace("-", " ")
+    return re.sub(r"\s+", " ", text.strip())
+
+
+def _canonical_transcript_role(value: str) -> Optional[str]:
+    key = _transcript_role_key(value)
+    candidates = [key]
+    if "/" in key:
+        candidates.append(key.rsplit("/", 1)[-1].strip())
+    for candidate in candidates:
+        if candidate in _TRANSCRIPT_USER_ROLE_KEYS:
+            return "user"
+        if candidate in _TRANSCRIPT_ASSISTANT_ROLE_KEYS:
+            return "assistant"
+        if candidate in _TRANSCRIPT_SYSTEM_ROLE_KEYS:
+            return "system"
+    return None
 
 
 def _is_short_ignored_timeout_user_turn(text: str) -> bool:
