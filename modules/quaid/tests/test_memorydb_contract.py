@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+import sqlite3
 
 import pytest
 
@@ -45,6 +46,34 @@ def test_memorydb_contract_get_system_context_metadata(monkeypatch):
 
     assert payload == {"entries": [{"key": "ok", "label": "ok", "value": "delegated"}]}
     assert seen["db_path"].endswith("/data/memory.db")
+
+
+def test_memorydb_contract_status_logs_domain_load_failure_when_fail_open(monkeypatch, caplog):
+    contract = MemoryDbPluginContract()
+    monkeypatch.setattr(
+        "core.plugins.memorydb_contract.load_active_domains",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(sqlite3.OperationalError("db locked")),
+    )
+    monkeypatch.setattr("core.plugins.memorydb_contract._fail_hard_enabled", lambda: False)
+
+    with caplog.at_level("WARNING", logger="core.plugins.memorydb_contract"):
+        payload = contract.on_status(_ctx())
+
+    assert payload == {"active_domains": 0}
+    assert "memorydb status domain load failed" in caplog.text
+    assert "db locked" in caplog.text
+
+
+def test_memorydb_contract_status_raises_domain_load_failure_when_failhard(monkeypatch):
+    contract = MemoryDbPluginContract()
+    monkeypatch.setattr(
+        "core.plugins.memorydb_contract.load_active_domains",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(sqlite3.OperationalError("db locked")),
+    )
+    monkeypatch.setattr("core.plugins.memorydb_contract._fail_hard_enabled", lambda: True)
+
+    with pytest.raises(sqlite3.OperationalError, match="db locked"):
+        contract.on_status(_ctx())
 
 
 def test_build_memorydb_system_context_metadata(monkeypatch):

@@ -41,9 +41,9 @@ def _supervisor_parent_pid() -> int | None:
         os.kill(pid, 0)
         return pid
     except Exception as exc:
+        logger.warning("Ignoring invalid supervisor parent pid %r: %s", raw, exc)
         if _fail_hard_enabled():
             raise RuntimeError(f"invalid supervisor parent pid: {raw!r}") from exc
-        logger.warning("Ignoring invalid supervisor parent pid %r: %s", raw, exc)
         return None
 
 
@@ -56,9 +56,9 @@ def _queue_project_docs_monitor_requests(*, reason: str, requested_by: str) -> D
     """
     if _supervisor_disabled():
         msg = "project-docs supervisor is disabled; cannot queue monitor maintenance"
+        logger.warning(msg)
         if _fail_hard_enabled():
             raise RuntimeError(msg)
-        logger.warning(msg)
         return {
             "requested": 0,
             "projects": [],
@@ -126,6 +126,7 @@ def run_project_docs_monitor_maintenance(ctx: Any, result_factory: Any) -> Any:
     except RuntimeError:
         raise
     except Exception as exc:
+        logger.warning("Project-docs monitor maintenance failed: %s", exc)
         if _fail_hard_enabled():
             raise RuntimeError("Project-docs monitor maintenance failed") from exc
         result.errors.append(f"Project-docs monitor maintenance failed: {exc}")
@@ -384,7 +385,7 @@ def handle_project_docs_maintenance_event(event: Dict[str, Any]) -> Dict[str, An
         logger.warning("project docs auto-register listener failed: %s", exc)
         direct_result["errors"].append({"tick": "auto_register", "error": str(exc)})
         if _fail_hard_enabled():
-            return {"status": "failed", "error": str(exc), "listener_result": _listener_result()}
+            raise RuntimeError("project docs auto-register listener failed") from exc
 
     try:
         if stale_index_requested:
@@ -393,7 +394,7 @@ def handle_project_docs_maintenance_event(event: Dict[str, Any]) -> Dict[str, An
         logger.warning("project docs stale-index listener failed: %s", exc)
         direct_result["errors"].append({"tick": "stale_index", "error": str(exc)})
         if _fail_hard_enabled():
-            return {"status": "failed", "error": str(exc), "listener_result": _listener_result()}
+            raise RuntimeError("project docs stale-index listener failed") from exc
 
     listener_result = _listener_result()
     if direct_result["errors"]:
@@ -439,8 +440,8 @@ def _ensure_project_workspace_dirs(ctx: PluginHookContext) -> None:
                     reload_config=False,
                     quiet=True,
                 )
-        except ValueError:
-            pass  # Already registered in SQLite — idempotent
+        except ValueError as exc:
+            logger.debug("docsdb misc project create raised ValueError; assuming already registered: %s", exc)
     except Exception as exc:
         logger.warning("docsdb misc project registry initialization failed: %s", exc)
         if _fail_hard_enabled():

@@ -107,6 +107,22 @@ def test_insightdb_contract_uses_canonical_module(monkeypatch):
     assert calls == [{"source": "extraction-apply-payloads"}]
 
 
+def test_insightdb_contract_fail_hard_wrapper_fails_closed_on_import_error(monkeypatch):
+    import builtins
+    import core.plugins.insightdb_contract as contract
+
+    original_import = __import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "lib.fail_policy":
+            raise ImportError("missing fail policy")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+
+    assert contract._fail_hard_enabled() is True
+
+
 @pytest.fixture
 def mock_config():
     """Mock config with journal enabled."""

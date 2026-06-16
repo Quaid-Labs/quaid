@@ -188,6 +188,38 @@ def test_docsdb_contract_misc_project_registration_skips_config_reload(tmp_path,
     assert calls[0]["quiet"] is True
 
 
+def test_docsdb_contract_misc_project_create_value_error_logs_debug(tmp_path, monkeypatch, caplog):
+    from datastore.docsdb import registry as registry_mod
+    import lib.config as config_mod
+    import lib.instance as instance_mod
+    import lib.project_registry as project_registry_mod
+
+    misc_dir = tmp_path / "visible" / "projects" / "misc--pytest"
+    monkeypatch.setenv("QUAID_VISIBLE_HOME", str(tmp_path / "visible"))
+    monkeypatch.setenv("QUAID_INSTANCE", "pytest")
+    monkeypatch.setattr(config_mod, "get_docs_db_path", lambda: tmp_path / "docs.db")
+    monkeypatch.setattr(instance_mod, "instance_misc_dir", lambda: misc_dir)
+    monkeypatch.setattr(project_registry_mod, "register", lambda **_kwargs: None)
+
+    class FakeRegistry:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def get_project_definition(self, _name):
+            return None
+
+        def create_project(self, *_args, **_kwargs):
+            raise ValueError("already exists")
+
+    monkeypatch.setattr(registry_mod, "DocsRegistry", FakeRegistry)
+
+    with caplog.at_level(logging.DEBUG, logger="core.plugins.docsdb_contract"):
+        DocsDbPluginContract().on_init(_ctx(str(tmp_path)))
+
+    assert "docsdb misc project create raised ValueError; assuming already registered" in caplog.text
+    assert "already exists" in caplog.text
+
+
 def test_docsdb_contract_misc_project_registration_is_stdout_silent(tmp_path, monkeypatch):
     import lib.config as config_mod
     import lib.instance as instance_mod
@@ -335,6 +367,74 @@ def test_docsdb_contract_fail_hard_wrapper_propagates_policy_runtime_errors(monk
         docsdb_contract._fail_hard_enabled()
 
 
+def test_supervisor_parent_pid_logs_before_fail_hard_raise(monkeypatch, caplog):
+    from core.plugins import docsdb_contract
+
+    monkeypatch.setenv("QUAID_SUPERVISOR_PID", "not-a-pid")
+    monkeypatch.setattr(docsdb_contract, "_fail_hard_enabled", lambda: True)
+
+    with caplog.at_level(logging.WARNING, logger="core.plugins.docsdb_contract"):
+        with pytest.raises(RuntimeError, match="invalid supervisor parent pid"):
+            docsdb_contract._supervisor_parent_pid()
+
+    assert "Ignoring invalid supervisor parent pid" in caplog.text
+
+
+def test_project_docs_monitor_disabled_logs_before_fail_hard_raise(monkeypatch, caplog):
+    from core.plugins import docsdb_contract
+
+    monkeypatch.setenv("QUAID_SUPERVISOR_DISABLE", "1")
+    monkeypatch.setattr(docsdb_contract, "_fail_hard_enabled", lambda: True)
+
+    with caplog.at_level(logging.WARNING, logger="core.plugins.docsdb_contract"):
+        with pytest.raises(RuntimeError, match="project-docs supervisor is disabled"):
+            docsdb_contract._queue_project_docs_monitor_requests(reason="janitor", requested_by="pytest")
+
+    assert "project-docs supervisor is disabled" in caplog.text
+
+
+def test_project_docs_monitor_maintenance_logs_fail_soft(monkeypatch, caplog):
+    from core.plugins import docsdb_contract
+
+    result = SimpleNamespace(metrics={}, logs=[], errors=[], data={})
+    ctx = SimpleNamespace(dry_run=False, options={})
+    monkeypatch.setattr(docsdb_contract, "_fail_hard_enabled", lambda: False)
+    monkeypatch.setattr(
+        docsdb_contract,
+        "_queue_project_docs_monitor_requests",
+        lambda **_kwargs: _raise(ValueError("queue failed")),
+    )
+
+    with caplog.at_level(logging.WARNING, logger="core.plugins.docsdb_contract"):
+        out = docsdb_contract.run_project_docs_monitor_maintenance(ctx, lambda: result)
+
+    assert out is result
+    assert result.errors == ["Project-docs monitor maintenance failed: queue failed"]
+    assert "Project-docs monitor maintenance failed: queue failed" in caplog.text
+
+
+def test_project_docs_monitor_maintenance_logs_before_fail_hard_raise(monkeypatch, caplog):
+    from core.plugins import docsdb_contract
+
+    ctx = SimpleNamespace(dry_run=False, options={})
+    monkeypatch.setattr(docsdb_contract, "_fail_hard_enabled", lambda: True)
+    monkeypatch.setattr(
+        docsdb_contract,
+        "_queue_project_docs_monitor_requests",
+        lambda **_kwargs: _raise(ValueError("queue failed")),
+    )
+
+    with caplog.at_level(logging.WARNING, logger="core.plugins.docsdb_contract"):
+        with pytest.raises(RuntimeError, match="Project-docs monitor maintenance failed") as excinfo:
+            docsdb_contract.run_project_docs_monitor_maintenance(
+                ctx,
+                lambda: SimpleNamespace(metrics={}, logs=[], errors=[], data={}),
+            )
+
+    assert isinstance(excinfo.value.__cause__, ValueError)
+    assert "Project-docs monitor maintenance failed: queue failed" in caplog.text
+
+
 def test_project_docs_monitor_uses_supervisor_parent_without_reensure(monkeypatch):
     from core.plugins import docsdb_contract
 
@@ -390,6 +490,63 @@ def test_project_docs_monitor_materializes_queued_projects(tmp_path, monkeypatch
         assert project_exists_raw("recipe-app") is True
     finally:
         reset_adapter()
+
+
+def test_project_docs_maintenance_event_auto_register_failure_raises_under_failhard(monkeypatch):
+    from core.plugins import docsdb_contract
+
+    monkeypatch.setattr(docsdb_contract, "_fail_hard_enabled", lambda: True)
+    monkeypatch.setattr(
+        docsdb_contract,
+        "_auto_register_project_docs_via_docsdb",
+        lambda _project=None: _raise(RuntimeError("register failed")),
+    )
+
+    with pytest.raises(RuntimeError, match="project docs auto-register listener failed") as excinfo:
+        docsdb_contract.handle_project_docs_maintenance_event(
+            {
+                "payload": {
+                    "source": "project-docs-supervisor",
+                    "tick_kind": "auto_register_and_stale_index",
+                    "observed_at": "2026-03-11T00:00:00Z",
+                    "requested_operations": {"auto_register": True},
+                }
+            }
+        )
+
+    assert isinstance(excinfo.value.__cause__, RuntimeError)
+    assert "register failed" in str(excinfo.value.__cause__)
+
+
+def test_project_docs_maintenance_event_stale_index_failure_raises_under_failhard(monkeypatch):
+    from core.plugins import docsdb_contract
+
+    monkeypatch.setattr(docsdb_contract, "_fail_hard_enabled", lambda: True)
+    monkeypatch.setattr(
+        docsdb_contract,
+        "_auto_register_project_docs_via_docsdb",
+        lambda _project=None: (0, []),
+    )
+    monkeypatch.setattr(
+        docsdb_contract,
+        "_index_one_stale_registered_doc_via_docsdb",
+        lambda _project=None: _raise(RuntimeError("index failed")),
+    )
+
+    with pytest.raises(RuntimeError, match="project docs stale-index listener failed") as excinfo:
+        docsdb_contract.handle_project_docs_maintenance_event(
+            {
+                "payload": {
+                    "source": "project-docs-supervisor",
+                    "tick_kind": "auto_register_and_stale_index",
+                    "observed_at": "2026-03-11T00:00:00Z",
+                    "requested_operations": {"stale_index": True},
+                }
+            }
+        )
+
+    assert isinstance(excinfo.value.__cause__, RuntimeError)
+    assert "index failed" in str(excinfo.value.__cause__)
 
 
 def test_build_docsdb_system_context_metadata(monkeypatch, tmp_path):

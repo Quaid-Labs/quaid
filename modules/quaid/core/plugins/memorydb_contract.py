@@ -20,6 +20,14 @@ from lib.tools_domain_sync import sync_tools_domain_block
 logger = logging.getLogger(__name__)
 
 
+def _fail_hard_enabled() -> bool:
+    try:
+        from lib.fail_policy import is_fail_hard_enabled
+    except ImportError:
+        return True
+    return bool(is_fail_hard_enabled())
+
+
 def build_memorydb_system_context_metadata(*args: Any, **kwargs: Any) -> dict[str, object]:
     from datastore.memorydb.system_context import build_system_context_metadata
 
@@ -204,7 +212,10 @@ class MemoryDbPluginContract(PluginContractBase):
         try:
             domains = load_active_domains(db_path, bootstrap_if_empty=False)
             return {"active_domains": len(domains)}
-        except sqlite3.OperationalError:
+        except sqlite3.OperationalError as exc:
+            logger.warning("memorydb status domain load failed for %s: %s", db_path, exc)
+            if _fail_hard_enabled():
+                raise
             return {"active_domains": 0}
 
     def on_dashboard(self, ctx: PluginHookContext) -> dict:

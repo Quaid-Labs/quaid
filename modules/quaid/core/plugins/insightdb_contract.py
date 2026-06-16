@@ -12,9 +12,11 @@ logger = logging.getLogger(__name__)
 
 
 def _fail_hard_enabled() -> bool:
-    from lib.fail_policy import is_fail_hard_enabled
-
-    return is_fail_hard_enabled()
+    try:
+        from lib.fail_policy import is_fail_hard_enabled
+    except ImportError:
+        return True
+    return bool(is_fail_hard_enabled())
 
 
 def _logical_snippet_target(filename: str) -> str:
