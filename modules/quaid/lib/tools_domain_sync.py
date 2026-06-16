@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import logging
 import re
 from pathlib import Path
 from tempfile import NamedTemporaryFile
@@ -12,6 +13,8 @@ from lib.domain_text import (
     normalize_domain_id,
     sanitize_domain_description,
 )
+
+logger = logging.getLogger(__name__)
 
 START_MARKER = "<!-- AUTO-GENERATED:DOMAIN-LIST:START -->"
 END_MARKER = "<!-- AUTO-GENERATED:DOMAIN-LIST:END -->"
@@ -47,7 +50,11 @@ def sync_tools_domain_block(domains: Dict[str, str], workspace: Path | None = No
         domain_id = normalize_domain_id(key)
         if not domain_id:
             continue
-        cleaned[domain_id] = sanitize_domain_description(desc)
+        try:
+            cleaned[domain_id] = sanitize_domain_description(desc)
+        except ValueError as exc:
+            logger.warning("Skipping domain %r with invalid description: %s", domain_id, exc)
+            continue
     for key in sorted(cleaned.keys()):
         body_lines.append(f"- `{key}`: {cleaned[key]}")
     replacement = f"{START_MARKER}\n" + "\n".join(body_lines) + f"\n{END_MARKER}"

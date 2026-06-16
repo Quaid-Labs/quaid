@@ -10,6 +10,7 @@ import threading
 import sys
 import errno
 import fcntl
+import logging
 import os
 import time
 from contextlib import contextmanager
@@ -17,6 +18,7 @@ from pathlib import Path
 from typing import Iterator, Optional
 
 
+logger = logging.getLogger(__name__)
 _POOL_LOCK = threading.Lock()
 _POOL: Optional[threading.BoundedSemaphore] = None
 _DEEP_POOL: Optional[threading.BoundedSemaphore] = None
@@ -27,6 +29,15 @@ _DEFAULT_PROCESS_LOCK_SLOTS = 4
 _DEFAULT_FAST_RESERVED_SLOTS = 1
 
 
+def _fail_hard_enabled() -> bool:
+    try:
+        from lib.fail_policy import is_fail_hard_enabled
+
+        return bool(is_fail_hard_enabled())
+    except ImportError:
+        return True
+
+
 def _configured_slots() -> int:
     from config import get_config
 
@@ -35,7 +46,8 @@ def _configured_slots() -> int:
     parallel = getattr(core, "parallel", None) if core else None
     if parallel is None:
         raise RuntimeError("Missing required config: core.parallel")
-    slots = int(getattr(parallel, "llm_workers", 4) or 4)
+    raw_workers = getattr(parallel, "llm_workers", None)
+    slots = int(raw_workers) if raw_workers is not None else 4
     return max(1, slots)
 
 
@@ -44,11 +56,29 @@ def _configured_fast_reserved_slots(total_slots: Optional[int] = None) -> int:
     if raw:
         try:
             reserve = max(0, int(raw))
-        except Exception:
+        except Exception as exc:
+            logger.warning(
+                "Invalid QUAID_LLM_FAST_RESERVED_SLOTS=%r; using default %s: %s",
+                raw,
+                _DEFAULT_FAST_RESERVED_SLOTS,
+                exc,
+            )
+            if _fail_hard_enabled():
+                raise RuntimeError("LLM fast reserved slot config invalid") from exc
             reserve = _DEFAULT_FAST_RESERVED_SLOTS
     else:
         reserve = _DEFAULT_FAST_RESERVED_SLOTS
-    total = _configured_slots() if total_slots is None else max(1, int(total_slots))
+    try:
+        total = _configured_slots() if total_slots is None else max(1, int(total_slots))
+    except Exception as exc:
+        logger.warning(
+            "Failed reading LLM worker slot config; using default %s: %s",
+            _DEFAULT_PROCESS_LOCK_SLOTS,
+            exc,
+        )
+        if _fail_hard_enabled():
+            raise RuntimeError("LLM worker slot config unavailable") from exc
+        total = _DEFAULT_PROCESS_LOCK_SLOTS
     if total <= 1:
         return 0
     return max(0, min(total - 1, reserve))
@@ -97,11 +127,26 @@ def _process_lock_slot_count() -> int:
     if not raw:
         try:
             return max(1, _configured_slots())
-        except Exception:
+        except Exception as exc:
+            logger.warning(
+                "Failed reading LLM process lock slot config; using default %s: %s",
+                _DEFAULT_PROCESS_LOCK_SLOTS,
+                exc,
+            )
+            if _fail_hard_enabled():
+                raise RuntimeError("LLM process lock slot config unavailable") from exc
             return _DEFAULT_PROCESS_LOCK_SLOTS
     try:
         return max(1, min(64, int(raw)))
-    except Exception:
+    except Exception as exc:
+        logger.warning(
+            "Invalid QUAID_LLM_PROCESS_LOCK_SLOTS=%r; using default %s: %s",
+            raw,
+            _DEFAULT_PROCESS_LOCK_SLOTS,
+            exc,
+        )
+        if _fail_hard_enabled():
+            raise RuntimeError("LLM process lock slot config invalid") from exc
         return _DEFAULT_PROCESS_LOCK_SLOTS
 
 

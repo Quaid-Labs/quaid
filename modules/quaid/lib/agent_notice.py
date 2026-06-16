@@ -142,16 +142,16 @@ def _file_lock(path: Path):
             import fcntl  # type: ignore
 
             fcntl.flock(handle, fcntl.LOCK_EX)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Deferred-notices file lock acquisition failed for %s: %s", path, exc)
         yield
     finally:
         try:
             import fcntl  # type: ignore
 
             fcntl.flock(handle, fcntl.LOCK_UN)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Deferred-notices file lock release failed for %s: %s", path, exc)
         handle.close()
 
 

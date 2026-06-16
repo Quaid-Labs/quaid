@@ -111,6 +111,45 @@ class TestInstanceManagerBase:
              pytest.raises(ValueError, match="Invalid QUAID_NOW"):
             mgr.create("proj")
 
+    def test_read_json_object_logs_existing_bad_json(self, tmp_path, caplog):
+        from lib.instance_manager import _read_json_object
+
+        path = tmp_path / "config.json"
+        path.write_text("{not-json", encoding="utf-8")
+
+        with caplog.at_level("WARNING", logger="lib.instance_manager"):
+            assert _read_json_object(path) == {}
+
+        assert "Failed reading JSON object" in caplog.text
+        assert str(path) in caplog.text
+
+    def test_init_silo_logs_template_lookup_failure(self, tmp_path, caplog):
+        from lib.instance_manager import InstanceManager
+
+        adapter = MagicMock()
+        visible_calls = {"count": 0}
+
+        def visible_home():
+            visible_calls["count"] += 1
+            if visible_calls["count"] == 1:
+                return tmp_path / "visible"
+            raise RuntimeError("template lookup failed")
+
+        adapter.visible_home.side_effect = visible_home
+        adapter.adapter_id.return_value = "test"
+        mgr = InstanceManager(adapter)
+
+        with caplog.at_level("WARNING", logger="lib.instance_manager"):
+            mgr._init_silo(
+                tmp_path / "instances" / "test-main",
+                "test-main",
+                register_misc_project=False,
+            )
+
+        assert (tmp_path / "visible" / "instances" / "test-main" / "SOUL.md").is_file()
+        assert "Shared project template lookup failed" in caplog.text
+        assert "template lookup failed" in caplog.text
+
     def test_create_keeps_instance_config_minimal_and_relies_on_layering(self, tmp_path):
         from lib.instance_manager import InstanceManager
         adapter = MagicMock()

@@ -16,10 +16,13 @@ Environment:
 import os
 import json
 import hashlib
+import logging
 import re
 import shutil
 from pathlib import Path
 from typing import Any, List, Optional
+
+logger = logging.getLogger(__name__)
 
 # Instance name: alphanumeric start, then alphanumeric/dot/underscore/hyphen, max 64 chars
 _INSTANCE_ID_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$")
@@ -309,7 +312,8 @@ def _adapter_id_with_runtime_flag(flag: str) -> str:
         for manifest_path in sorted(manifests_dir.glob("*.json")):
             try:
                 data: Any = json.loads(manifest_path.read_text(encoding="utf-8"))
-            except Exception:
+            except Exception as exc:
+                logger.debug("Failed reading adapter manifest %s: %s", manifest_path, exc)
                 continue
             runtime = data.get("runtime")
             if not isinstance(runtime, dict) or not runtime.get(flag):
@@ -317,7 +321,8 @@ def _adapter_id_with_runtime_flag(flag: str) -> str:
             adapter_id = str(data.get("id") or manifest_path.stem).strip().lower()
             if adapter_id:
                 return adapter_id
-    except Exception:
+    except Exception as exc:
+        logger.warning("Failed enumerating adapter manifests for runtime flag %s: %s", flag, exc)
         return ""
     return ""
 

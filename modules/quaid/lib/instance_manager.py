@@ -29,10 +29,13 @@ if TYPE_CHECKING:
 
 
 def _read_json_object(path: Path) -> dict:
+    if not path.exists():
+        return {}
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
         return data if isinstance(data, dict) else {}
-    except Exception:
+    except Exception as exc:
+        logger.warning("Failed reading JSON object from %s: %s", path, exc)
         return {}
 
 
@@ -206,7 +209,8 @@ class InstanceManager:
         # fall back to minimal stubs so the visible instance is always self-consistent.
         try:
             _template_dir = self.adapter.visible_home() / "projects" / "quaid"
-        except Exception:
+        except Exception as exc:
+            logger.warning("Shared project template lookup failed for %s: %s", instance_id, exc)
             _template_dir = None
         for fname in ("SOUL.md", "USER.md", "ENVIRONMENT.md"):
             fpath = visible_root / fname

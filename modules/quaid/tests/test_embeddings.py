@@ -58,3 +58,18 @@ def test_get_embeddings_parallel_fallback_logs_notice_cleanup_failure(monkeypatc
 
     assert "Failed clearing pending embedding notices" in caplog.text
     assert "notice lock failed" in caplog.text
+
+
+def test_embedding_parallel_workers_preserves_explicit_zero(monkeypatch):
+    cfg = SimpleNamespace(
+        core=SimpleNamespace(
+            parallel=SimpleNamespace(
+                enabled=True,
+                embedding_workers=0,
+                task_workers={},
+            )
+        )
+    )
+    monkeypatch.setattr("config.get_config", lambda: cfg)
+
+    assert embeddings._embedding_parallel_workers() == 1

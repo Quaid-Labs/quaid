@@ -52,7 +52,8 @@ def _fail_hard_enabled() -> bool:
         from lib.fail_policy import is_fail_hard_enabled
 
         return bool(is_fail_hard_enabled())
-    except Exception:
+    except Exception as exc:
+        logger.debug("FailHard policy lookup failed; failing closed: %s", exc)
         return True
 
 

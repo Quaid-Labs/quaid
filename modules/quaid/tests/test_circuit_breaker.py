@@ -7,6 +7,7 @@ and check_read_allowed() across all three states: NORMAL, DEGRADED, SAFE_MODE.
 import json
 import os
 import sys
+from types import ModuleType
 
 import pytest
 
@@ -22,6 +23,24 @@ from lib.circuit_breaker import (
     check_write_allowed,
     read_circuit_breaker,
 )
+
+
+def test_fail_hard_policy_failure_logs_and_fails_closed(monkeypatch, caplog):
+    import lib.circuit_breaker as circuit_breaker
+
+    fail_policy = ModuleType("lib.fail_policy")
+
+    def broken_policy():
+        raise RuntimeError("policy unavailable")
+
+    fail_policy.is_fail_hard_enabled = broken_policy
+    monkeypatch.setitem(sys.modules, "lib.fail_policy", fail_policy)
+
+    with caplog.at_level("DEBUG", logger="lib.circuit_breaker"):
+        assert circuit_breaker._fail_hard_enabled() is True
+
+    assert "FailHard policy lookup failed" in caplog.text
+    assert "policy unavailable" in caplog.text
 
 
 # ---------------------------------------------------------------------------

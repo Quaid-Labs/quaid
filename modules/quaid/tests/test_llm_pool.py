@@ -270,8 +270,8 @@ class TestPoolInit:
             with acquire_llm_slot():
                 assert m._POOL_SIZE == 5
 
-    def test_zero_workers_falls_back_to_default_four(self):
-        """llm_workers=0 is falsy — `int(0) or 4` evaluates to 4."""
+    def test_zero_workers_preserved_then_bounded_to_one(self):
+        """Explicit llm_workers=0 should not fall back to the default worker count."""
         import lib.llm_pool as m
         from lib.llm_pool import acquire_llm_slot
         cfg = SimpleNamespace(
@@ -279,7 +279,28 @@ class TestPoolInit:
         )
         with patch("config.get_config", return_value=cfg):
             with acquire_llm_slot():
-                assert m._POOL_SIZE == 4
+                assert m._POOL_SIZE == 1
+
+    def test_fast_reserved_slots_invalid_env_warns_and_falls_back_when_fail_open(self, monkeypatch, caplog):
+        import lib.llm_pool as m
+
+        monkeypatch.setenv("QUAID_LLM_FAST_RESERVED_SLOTS", "bogus")
+        monkeypatch.setattr(m, "_fail_hard_enabled", lambda: False)
+
+        with caplog.at_level("WARNING", logger="lib.llm_pool"):
+            assert m._configured_fast_reserved_slots(total_slots=4) == 1
+
+        assert "Invalid QUAID_LLM_FAST_RESERVED_SLOTS" in caplog.text
+        assert "bogus" in caplog.text
+
+    def test_fast_reserved_slots_invalid_env_raises_when_failhard(self, monkeypatch):
+        import lib.llm_pool as m
+
+        monkeypatch.setenv("QUAID_LLM_FAST_RESERVED_SLOTS", "bogus")
+        monkeypatch.setattr(m, "_fail_hard_enabled", lambda: True)
+
+        with pytest.raises(RuntimeError, match="LLM fast reserved slot config invalid"):
+            m._configured_fast_reserved_slots(total_slots=4)
 
 
 class TestProcessLock:
@@ -317,6 +338,30 @@ class TestProcessLock:
                 tmp_path / "shared" / "run" / "llm" / "slot-0.lock",
                 tmp_path / "shared" / "run" / "llm" / "slot-1.lock",
             ]
+
+    def test_process_lock_slot_count_config_failure_warns_and_falls_back_when_fail_open(
+        self, monkeypatch, caplog
+    ):
+        import lib.llm_pool as m
+
+        monkeypatch.delenv("QUAID_LLM_PROCESS_LOCK_SLOTS", raising=False)
+        monkeypatch.setattr(m, "_fail_hard_enabled", lambda: False)
+
+        with patch("config.get_config", side_effect=RuntimeError("config down")), \
+             caplog.at_level("WARNING", logger="lib.llm_pool"):
+            assert m._process_lock_slot_count() == 4
+
+        assert "Failed reading LLM process lock slot config" in caplog.text
+        assert "config down" in caplog.text
+
+    def test_process_lock_slot_count_invalid_env_raises_when_failhard(self, monkeypatch):
+        import lib.llm_pool as m
+
+        monkeypatch.setenv("QUAID_LLM_PROCESS_LOCK_SLOTS", "bogus")
+        monkeypatch.setattr(m, "_fail_hard_enabled", lambda: True)
+
+        with pytest.raises(RuntimeError, match="LLM process lock slot config invalid"):
+            m._process_lock_slot_count()
 
     def test_fast_lane_keeps_reserved_slot_when_deep_is_busy(self, monkeypatch, tmp_path):
         import lib.llm_pool as m

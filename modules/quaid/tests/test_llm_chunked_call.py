@@ -4,6 +4,7 @@ import pytest
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
+import lib.llm_chunked_call as chunked_call
 from lib.llm_chunked_call import (
     parallel_llm_call,
     waterfall_llm_call,
@@ -46,6 +47,27 @@ class TestConfiguredChunkTokens:
 
 
 class TestParallelLlmCall:
+    def test_explicit_zero_chunk_tokens_does_not_fall_back_to_config(self, monkeypatch):
+        seen = []
+
+        def fake_chunk_text(text, *, max_tokens):
+            seen.append(max_tokens)
+            return []
+
+        monkeypatch.setattr(
+            chunked_call,
+            "_get_configured_chunk_tokens",
+            lambda: (_ for _ in ()).throw(AssertionError("config fallback used")),
+        )
+        monkeypatch.setattr(chunked_call, "chunk_text_by_tokens", fake_chunk_text)
+
+        assert parallel_llm_call(
+            system_prompt="sys",
+            content="text",
+            max_chunk_tokens=0,
+        ) == []
+        assert seen == [0]
+
     def test_single_chunk_no_threadpool(self):
         """Small content should process in a single chunk without threading."""
         with patch(_FAST) as mock_call:
@@ -191,6 +213,28 @@ class TestParallelLlmCall:
 
 
 class TestWaterfallLlmCall:
+    def test_explicit_zero_chunk_tokens_does_not_fall_back_to_config(self, monkeypatch):
+        seen = []
+
+        def fake_chunk_text(text, *, max_tokens):
+            seen.append(max_tokens)
+            return []
+
+        monkeypatch.setattr(
+            chunked_call,
+            "_get_configured_chunk_tokens",
+            lambda: (_ for _ in ()).throw(AssertionError("config fallback used")),
+        )
+        monkeypatch.setattr(chunked_call, "chunk_text_by_tokens", fake_chunk_text)
+
+        assert waterfall_llm_call(
+            system_prompt="sys",
+            content="text",
+            initial_carryover="carry",
+            max_chunk_tokens=0,
+        ) == "carry"
+        assert seen == [0]
+
     def test_single_chunk(self):
         with patch(_DEEP) as mock_call:
             mock_call.return_value = ("analysis result", 2.0)

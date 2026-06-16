@@ -242,7 +242,8 @@ def _embedding_parallel_workers(task_name: str = "embeddings", default: int = 4)
         parallel = getattr(getattr(cfg, "core", None), "parallel", None)
         if parallel is None or not getattr(parallel, "enabled", True):
             return 1
-        workers = int(getattr(parallel, "embedding_workers", default) or default)
+        raw_workers = getattr(parallel, "embedding_workers", None)
+        workers = int(raw_workers) if raw_workers is not None else int(default)
         task_workers = getattr(parallel, "task_workers", {}) or {}
         override = None
         if isinstance(task_workers, dict):

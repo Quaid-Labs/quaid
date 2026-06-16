@@ -105,7 +105,7 @@ def parallel_llm_call(
     from lib.llm_clients import call_fast_reasoning, call_deep_reasoning
 
     text = _load_content(content)
-    chunk_tokens = max_chunk_tokens or _get_configured_chunk_tokens()
+    chunk_tokens = max_chunk_tokens if max_chunk_tokens is not None else _get_configured_chunk_tokens()
     chunks = chunk_text_by_tokens(text, max_tokens=chunk_tokens)
 
     if not chunks:
@@ -238,7 +238,7 @@ def waterfall_llm_call(
     from lib.llm_clients import call_fast_reasoning, call_deep_reasoning
 
     text = _load_content(content)
-    chunk_tokens = max_chunk_tokens or _get_configured_chunk_tokens()
+    chunk_tokens = max_chunk_tokens if max_chunk_tokens is not None else _get_configured_chunk_tokens()
     chunks = chunk_text_by_tokens(text, max_tokens=chunk_tokens)
 
     if not chunks:

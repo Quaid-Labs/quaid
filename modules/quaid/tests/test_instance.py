@@ -375,3 +375,32 @@ class TestRequireInstanceExists:
         (tmp_path / "instances" / "work").mkdir(parents=True)
         (tmp_path / "instances" / "work" / "config.json").write_text("{}")
         assert require_instance_exists("work") == "work"
+
+
+def test_adapter_runtime_flag_logs_malformed_manifest(monkeypatch, tmp_path, caplog):
+    import lib.instance as instance_mod
+
+    manifest = tmp_path / "broken.json"
+    manifest.write_text("{not-json", encoding="utf-8")
+    monkeypatch.setattr(Path, "glob", lambda self, pattern: [manifest])
+
+    with caplog.at_level("DEBUG", logger="lib.instance"):
+        assert instance_mod._adapter_id_with_runtime_flag("staleAgentSiloPrune") == ""
+
+    assert "Failed reading adapter manifest" in caplog.text
+    assert str(manifest) in caplog.text
+
+
+def test_adapter_runtime_flag_logs_manifest_enumeration_failure(monkeypatch, caplog):
+    import lib.instance as instance_mod
+
+    def fail_glob(self, pattern):
+        raise OSError("manifest dir unavailable")
+
+    monkeypatch.setattr(Path, "glob", fail_glob)
+
+    with caplog.at_level("WARNING", logger="lib.instance"):
+        assert instance_mod._adapter_id_with_runtime_flag("staleAgentSiloPrune") == ""
+
+    assert "Failed enumerating adapter manifests" in caplog.text
+    assert "manifest dir unavailable" in caplog.text
