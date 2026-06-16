@@ -331,6 +331,22 @@ class TestStandaloneAdapter:
         assert "User: [重要] Keep this bracketed user content." in transcript
         assert "User: [Action 2026-01-15 10:00] Keep this dated bracketed note." in transcript
 
+    def test_build_transcript_strips_gateway_timestamp_without_platform_allowlist(self, standalone):
+        transcript = standalone.build_transcript([
+            {
+                "role": "user",
+                "content": "[Matrix 2026-03-22 08:14 UTC] Gateway timestamped message.",
+            },
+            {
+                "role": "user",
+                "content": "[Telegram Support] Keep non-timestamp bracketed user content.",
+            },
+        ])
+
+        assert "2026-03-22 08:14" not in transcript
+        assert "User: Gateway timestamped message." in transcript
+        assert "User: [Telegram Support] Keep non-timestamp bracketed user content." in transcript
+
     def test_parse_session_jsonl_uses_adapter_transcript_rules(self, standalone, tmp_path):
         import json
         jsonl_file = tmp_path / "session.jsonl"

@@ -530,12 +530,6 @@ class QuaidAdapter(abc.ABC):
                 logger.debug("Filtered assistant provider response metadata from transcript")
                 continue
 
-            text = re.sub(
-                r"^\[(?:Telegram|WhatsApp|Discord|Signal|Slack)\s+[^\]]+\]\s*",
-                "",
-                text,
-                flags=re.IGNORECASE,
-            )
             text = re.sub(r"\n?\[message_id:\s*\d+\]", "", text, flags=re.IGNORECASE)
             # Strip system-injected context blocks that are prepended to user messages
             # by the memory hook (injected_memories) or OC timestamp prefix. These appear
