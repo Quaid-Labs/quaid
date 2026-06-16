@@ -23,6 +23,7 @@ def test_first_party_datastore_registry_lists_canonical_manifests() -> None:
     ids = [manifest["id"] for manifest in manifests]
 
     assert ids == ["docsdb", "insightdb", "memorydb", "sessiondb"]
+    assert all(manifest["runtime_aliases"] == [] for manifest in manifests)
     assert get_datastore_manifest("insightdb")["runtime_aliases"] == []
     assert get_datastore_manifest("insightdb")["module"] == "datastore.insightdb.soul_snippets"
     sessiondb = get_datastore_manifest("sessiondb")
@@ -132,6 +133,24 @@ def test_datastore_registry_rejects_unsupported_fail_hard_policy() -> None:
 
     with pytest.raises(RuntimeError, match="unsupported fail_hard_policy: sometimes"):
         build_datastore_registry([manifest], fail_hard=True)
+
+
+def test_datastore_manifest_validation_rejects_invalid_runtime_aliases() -> None:
+    manifest = get_datastore_manifest("memorydb")
+    manifest["runtime_aliases"] = "memory"
+
+    errors = validate_datastore_manifest(manifest)
+
+    assert "runtime_aliases must be a list" in errors
+
+
+def test_datastore_manifest_validation_rejects_blank_runtime_alias() -> None:
+    manifest = get_datastore_manifest("memorydb")
+    manifest["runtime_aliases"] = [""]
+
+    errors = validate_datastore_manifest(manifest)
+
+    assert "runtime_aliases must contain only non-empty strings" in errors
 
 
 def test_datastore_fail_hard_policy_resolves_manifest_modes(monkeypatch) -> None:

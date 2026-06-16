@@ -106,6 +106,22 @@ class TestRegistryIO:
         _, tmp_path = mock_adapter
         assert _registry_lock_path() == tmp_path / "project-registry.json.lock"
 
+    def test_temp_canonical_path_resolution_failure_logs(self, caplog):
+        from core import project_registry as registry_mod
+
+        class _BadPath:
+            def expanduser(self):
+                raise RuntimeError("path broken")
+
+            def __str__(self):
+                return "<bad-path>"
+
+        with caplog.at_level(logging.DEBUG, logger="core.project_registry"):
+            assert registry_mod._is_temp_canonical_path(_BadPath()) is False
+
+        assert "Failed to classify temp project path" in caplog.text
+        assert "path broken" in caplog.text
+
     def test_registry_lock_releases_thread_mutex_while_waiting_for_flock(self, mock_adapter, monkeypatch):
         from lib import project_registry_lock
 
@@ -643,6 +659,38 @@ class TestUnlinkProject:
         assert other_project_rules.is_file()
         assert legacy_combined.is_file()
 
+    def test_cached_rules_adapter_failure_warns_when_fail_open(self, mock_adapter, monkeypatch, caplog):
+        from core import project_registry as registry_mod
+
+        _, tmp_path = mock_adapter
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("QUAID_RULES_DIR", raising=False)
+        monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+        monkeypatch.delenv("CODEX_PROJECT_DIR", raising=False)
+
+        with patch("lib.adapter.get_adapter", side_effect=RuntimeError("adapter broken")), \
+             patch("core.project_registry._fail_hard_enabled", return_value=False), \
+             caplog.at_level(logging.WARNING, logger="core.project_registry"):
+            dirs = registry_mod._current_cached_rules_dirs()
+
+        assert dirs == [tmp_path / ".claude" / "rules"]
+        assert "Failed to resolve cached rules directory from adapter" in caplog.text
+        assert "adapter broken" in caplog.text
+
+    def test_cached_rules_adapter_failure_raises_when_failhard(self, mock_adapter, monkeypatch):
+        from core import project_registry as registry_mod
+
+        _, tmp_path = mock_adapter
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("QUAID_RULES_DIR", raising=False)
+        monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+        monkeypatch.delenv("CODEX_PROJECT_DIR", raising=False)
+
+        with patch("lib.adapter.get_adapter", side_effect=RuntimeError("adapter broken")), \
+             patch("core.project_registry._fail_hard_enabled", return_value=True), \
+             pytest.raises(RuntimeError, match="Failed to resolve cached rules directory"):
+            registry_mod._current_cached_rules_dirs()
+
     @pytest.mark.parametrize(
         ("project_name", "instance_name"),
         [
@@ -870,6 +918,67 @@ class TestDeleteProjectPurgesDb:
 
         # Project is removed from registry regardless
         assert get_project("my-app") is None
+
+    def test_cleanup_staged_project_event_parse_failure_warns_when_fail_open(self, mock_adapter, caplog):
+        from core import project_registry as registry_mod
+
+        _adapter, tmp_path = mock_adapter
+        visible_home = tmp_path.with_name(tmp_path.name.lstrip("."))
+        staging_dir = visible_home / "projects" / "staging"
+        staging_dir.mkdir(parents=True)
+        event_file = staging_dir / "bad.json"
+        event_file.write_text("{not json", encoding="utf-8")
+
+        with patch("core.project_registry._fail_hard_enabled", return_value=False), \
+             caplog.at_level(logging.WARNING, logger="core.project_registry"):
+            removed = registry_mod._cleanup_staged_project_events(
+                quaid_home=tmp_path,
+                visible_home=visible_home,
+                project_name="my-app",
+                canonical=tmp_path / "projects" / "my-app",
+            )
+
+        assert removed == 0
+        assert event_file.exists()
+        assert "Failed to read staged project event" in caplog.text
+
+    def test_cleanup_staged_project_event_parse_failure_raises_when_failhard(self, mock_adapter):
+        from core import project_registry as registry_mod
+
+        _adapter, tmp_path = mock_adapter
+        visible_home = tmp_path.with_name(tmp_path.name.lstrip("."))
+        staging_dir = visible_home / "projects" / "staging"
+        staging_dir.mkdir(parents=True)
+        (staging_dir / "bad.json").write_text("{not json", encoding="utf-8")
+
+        with patch("core.project_registry._fail_hard_enabled", return_value=True), \
+             pytest.raises(RuntimeError, match="Failed to read staged project event"):
+            registry_mod._cleanup_staged_project_events(
+                quaid_home=tmp_path,
+                visible_home=visible_home,
+                project_name="my-app",
+                canonical=tmp_path / "projects" / "my-app",
+            )
+
+    def test_reconcile_docs_registry_failure_uses_failhard_helper(self, mock_adapter, monkeypatch, caplog):
+        from core import project_registry as registry_mod
+        from datastore.docsdb import registry as docs_registry_mod
+
+        class _FailingDocsRegistry:
+            def __init__(self, **_kwargs):
+                pass
+
+            def reconcile_global_project_registry(self):
+                raise RuntimeError("reconcile broken")
+
+        monkeypatch.setattr(docs_registry_mod, "DocsRegistry", _FailingDocsRegistry)
+
+        with patch("core.project_registry._fail_hard_enabled", return_value=True), \
+             caplog.at_level(logging.WARNING, logger="core.project_registry"), \
+             pytest.raises(RuntimeError, match="reconcile broken"):
+            registry_mod._reconcile_docs_registry_projects()
+
+        assert "Docs/project registry reconciliation skipped" in caplog.text
 
     def test_delete_warns_when_cleanup_does_not_converge(self, mock_adapter, caplog):
         create_project("my-app")

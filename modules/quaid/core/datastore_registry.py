@@ -50,6 +50,7 @@ _LIST_FIELDS = (
     "migrations",
     "worker_specs",
 )
+_OPTIONAL_LIST_FIELDS = ("runtime_aliases",)
 _OBJECT_FIELDS = (
     "capabilities",
     "resource_budgets",
@@ -90,6 +91,7 @@ FIRST_PARTY_DATASTORE_MANIFESTS: List[Dict[str, Any]] = [
         "resource_budgets": {"llm": "normal", "io": "sqlite"},
         "fail_hard_policy": "inherit_global",
         "contracts": {"validate": 1, "explain": 1, "export": 0, "import": 0},
+        "runtime_aliases": [],
     },
     {
         "id": "docsdb",
@@ -124,6 +126,7 @@ FIRST_PARTY_DATASTORE_MANIFESTS: List[Dict[str, Any]] = [
         "resource_budgets": {"llm": "normal", "io": "sqlite+files"},
         "fail_hard_policy": "inherit_global",
         "contracts": {"validate": 1, "explain": 1, "export": 0, "import": 0},
+        "runtime_aliases": [],
     },
     {
         "id": "insightdb",
@@ -254,6 +257,16 @@ def validate_datastore_manifest(manifest: Dict[str, Any]) -> List[str]:
 
     for field in _LIST_FIELDS:
         value = manifest.get(field)
+        if not isinstance(value, list):
+            errors.append(f"{field} must be a list")
+            continue
+        if any(not isinstance(item, str) or not item.strip() for item in value):
+            errors.append(f"{field} must contain only non-empty strings")
+
+    for field in _OPTIONAL_LIST_FIELDS:
+        value = manifest.get(field)
+        if value is None:
+            continue
         if not isinstance(value, list):
             errors.append(f"{field} must be a list")
             continue

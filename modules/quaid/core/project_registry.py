@@ -83,7 +83,8 @@ def _is_temp_canonical_path(path: Path) -> bool:
         resolved = Path(os.path.realpath(path.expanduser().resolve()))
         tmp_root = Path(os.path.realpath(tempfile.gettempdir()))
         return resolved == tmp_root or str(resolved).startswith(f"{tmp_root}{os.sep}")
-    except Exception:
+    except Exception as exc:
+        logger.debug("Failed to classify temp project path %s: %s", path, exc)
         return False
 
 
@@ -362,7 +363,10 @@ def _cleanup_staged_project_events(
         for event_file in sorted(staging_dir.glob("*.json")):
             try:
                 event = json.loads(event_file.read_text(encoding="utf-8"))
-            except Exception:
+            except Exception as exc:
+                logger.warning("Failed to read staged project event %s: %s", event_file, exc)
+                if _fail_hard_enabled():
+                    raise RuntimeError(f"Failed to read staged project event {event_file}") from exc
                 continue
             if not isinstance(event, dict):
                 continue
@@ -474,13 +478,7 @@ def _reconcile_docs_registry_projects() -> None:
             DocsRegistry(seed_projects=False).reconcile_global_project_registry()
         except Exception as exc:
             logger.warning("Docs/project registry reconciliation skipped: %s", exc)
-            try:
-                from lib.fail_policy import is_fail_hard_enabled
-            except Exception:
-                fail_hard = False
-            else:
-                fail_hard = bool(is_fail_hard_enabled())
-            if fail_hard:
+            if _fail_hard_enabled():
                 raise
         finally:
             _DOCS_REGISTRY_RECONCILING = False
@@ -751,8 +749,10 @@ def _current_cached_rules_dirs() -> List[Path]:
             raw = None
         if isinstance(raw, (str, os.PathLike)) and str(raw).strip():
             dirs.append(Path(raw))
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("Failed to resolve cached rules directory from adapter: %s", exc)
+        if _fail_hard_enabled():
+            raise RuntimeError("Failed to resolve cached rules directory from adapter") from exc
     for raw_root in (
         os.environ.get("CLAUDE_PROJECT_DIR", "").strip(),
         os.environ.get("CODEX_PROJECT_DIR", "").strip(),
