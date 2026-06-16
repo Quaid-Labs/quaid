@@ -1858,6 +1858,46 @@ class TestProjectDefinitionsTable:
         r.reconcile_global_project_registry()
         assert global_project_lookup("test-project")["description"] == "updated livetest fixture"
 
+    def test_global_project_entry_sync_failure_returns_false_when_not_failhard(
+        self, setup_env, monkeypatch, caplog
+    ):
+        """Fail-open global registry sync failures should be loud and non-fatal."""
+        from datastore.docsdb import registry as registry_mod
+        from lib import project_registry as global_project_registry
+
+        r = _get_registry()
+        err = RuntimeError("global registry unavailable")
+        monkeypatch.setattr(global_project_registry, "register", lambda **_kwargs: (_ for _ in ()).throw(err))
+        monkeypatch.setattr(registry_mod, "_fail_hard_enabled", lambda: False)
+
+        with caplog.at_level(logging.WARNING):
+            assert r._ensure_global_project_entry(
+                "sync-fail-proj",
+                file_path=str(Path(setup_env) / "docs" / "sync-fail.md"),
+                source_files=[],
+            ) is False
+
+        assert "Failed to sync docs project 'sync-fail-proj' into project registry" in caplog.text
+        assert "global registry unavailable" in caplog.text
+
+    def test_global_project_entry_sync_failure_raises_under_failhard(self, setup_env, monkeypatch):
+        """failHard should not hide canonical project-registry sync failures."""
+        from datastore.docsdb import registry as registry_mod
+        from lib import project_registry as global_project_registry
+
+        r = _get_registry()
+        err = RuntimeError("global registry unavailable")
+        monkeypatch.setattr(global_project_registry, "register", lambda **_kwargs: (_ for _ in ()).throw(err))
+        monkeypatch.setattr(registry_mod, "_fail_hard_enabled", lambda: True)
+
+        with pytest.raises(RuntimeError, match="Failed to sync docs project 'sync-fail-proj'") as excinfo:
+            r._ensure_global_project_entry(
+                "sync-fail-proj",
+                file_path=str(Path(setup_env) / "docs" / "sync-fail.md"),
+                source_files=[],
+            )
+        assert excinfo.value.__cause__ is err
+
     def test_global_reconcile_path_resolution_failure_raises_under_failhard(self, setup_env, monkeypatch):
         """failHard should not hide path-resolution failures during global sync."""
         from config import ProjectDefinition

@@ -1065,7 +1065,11 @@ class DocsRegistry:
             )
             return True
         except Exception as exc:
-            raise RuntimeError(f"Failed to sync docs project {name!r} into project registry: {exc}") from exc
+            message = f"Failed to sync docs project {name!r} into project registry: {exc}"
+            logger.warning(message, exc_info=True)
+            if _fail_hard_enabled():
+                raise RuntimeError(message) from exc
+            return False
 
     def reconcile_global_project_registry(self) -> Dict[str, Any]:
         """Promote active docs-registry project metadata into the canonical registry.
