@@ -41,8 +41,8 @@ def _trace_m15(event: str, **fields) -> None:
         from lib.m15_trace import trace_m15
 
         trace_m15(event, **fields)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("M15 trace write failed: %s", exc, exc_info=True)
 
 
 class ProviderUnavailableError(Exception):
@@ -504,8 +504,9 @@ def _append_trace(payload: Dict[str, object]) -> None:
         with _trace_lock:
             with path.open("a", encoding="utf-8") as f:
                 f.write(json.dumps(row, ensure_ascii=True) + "\n")
-    except Exception:
+    except Exception as exc:
         # Never let tracing alter runtime behavior.
+        logger.warning("LLM trace append failed for %s: %s", path, exc)
         return
 
 
@@ -564,7 +565,8 @@ def _append_usage_event(
         with _usage_log_lock:
             with path.open("a", encoding="utf-8") as f:
                 f.write(json.dumps(row, ensure_ascii=True) + "\n")
-    except Exception:
+    except Exception as exc:
+        logger.warning("LLM usage event append failed for %s: %s", path, exc)
         return
 
 
@@ -794,8 +796,8 @@ def call_llm(system_prompt: str, user_message: str,
                 from lib.agent_notice import clear_pending_notices_by_source
 
                 clear_pending_notices_by_source(sources={"provider", "llm_config"})
-            except Exception:
-                pass
+            except Exception as notice_exc:
+                logger.warning("Failed clearing provider pending notices after successful LLM call: %s", notice_exc)
             return result.text, result.duration
         except Exception as e:
             last_error = e

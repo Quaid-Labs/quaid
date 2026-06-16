@@ -493,6 +493,24 @@ class TestCallLlmProvider:
 
         assert not usage_log.exists()
 
+    def test_usage_event_logs_write_failure(self, tmp_path, monkeypatch, caplog):
+        """Usage append failures should be visible without changing call behavior."""
+        import core.llm.clients as llm_clients
+        usage_log = tmp_path / "logs" / "llm-usage.jsonl"
+        monkeypatch.setenv("QUAID_LLM_USAGE_LOG_PATH", str(usage_log))
+        result = LLMResult("ok", 0.01, input_tokens=1, output_tokens=2, model="mock-model")
+
+        with patch.object(Path, "open", side_effect=OSError("disk full")), caplog.at_level("WARNING"):
+            llm_clients._append_usage_event(
+                result,
+                tier="deep",
+                provider_name="TestProvider",
+                requested_model="mock-model",
+            )
+
+        assert "LLM usage event append failed" in caplog.text
+        assert "disk full" in caplog.text
+
     def test_trace_event_honors_quaid_now(self, tmp_path, monkeypatch):
         """LLM trace rows should be deterministic under benchmark clock overrides."""
         import core.llm.clients as llm_clients
@@ -520,6 +538,30 @@ class TestCallLlmProvider:
             llm_clients._append_trace({"status": "ok"})
 
         assert not (workspace / "logs" / "llm-call-trace.jsonl").exists()
+
+    def test_trace_event_logs_write_failure(self, tmp_path, monkeypatch, caplog):
+        """Trace append failures should be visible without changing call behavior."""
+        import core.llm.clients as llm_clients
+        workspace = tmp_path / "runs" / "quaid-trace"
+        monkeypatch.setenv("BENCHMARK_LLM_TRACE", "1")
+        monkeypatch.setenv("QUAID_WORKSPACE", str(workspace))
+
+        with patch.object(Path, "open", side_effect=OSError("trace locked")), caplog.at_level("WARNING"):
+            llm_clients._append_trace({"status": "ok"})
+
+        assert "LLM trace append failed" in caplog.text
+        assert "trace locked" in caplog.text
+
+    def test_m15_trace_failure_is_diagnostic_only(self, caplog):
+        """Optional M15 tracing failures should be logged but not raised."""
+        import core.llm.clients as llm_clients
+
+        with patch("lib.m15_trace.trace_m15", side_effect=RuntimeError("trace unavailable")), \
+             caplog.at_level("DEBUG"):
+            llm_clients._trace_m15("llm.test")
+
+        assert "M15 trace write failed" in caplog.text
+        assert "trace unavailable" in caplog.text
 
     def test_disabled_llm_returns_none_when_failhard_disabled(self, test_adapter, monkeypatch, caplog):
         """QUAID_DISABLE_LLM may degrade only when failHard is disabled."""
@@ -766,6 +808,21 @@ class TestCallLlmProvider:
         with patch("core.llm.clients.is_fail_hard_enabled", return_value=False):
             with pytest.raises(RuntimeError, match="could not access its fast language model provider"):
                 llm_clients.call_llm("system", "user", max_retries=0, model_tier="fast")
+
+    def test_successful_call_logs_pending_notice_cleanup_failure(self, test_adapter, caplog):
+        """Stale provider notice cleanup failures should be visible."""
+        import core.llm.clients as llm_clients
+
+        with patch(
+            "lib.agent_notice.clear_pending_notices_by_source",
+            side_effect=RuntimeError("notice store locked"),
+        ), caplog.at_level("WARNING"):
+            result, duration = llm_clients.call_llm("system", "user", max_retries=0)
+
+        assert result is not None
+        assert duration > 0
+        assert "Failed clearing provider pending notices" in caplog.text
+        assert "notice store locked" in caplog.text
 
     def test_config_error_notifies_agent_before_failhard_raise(self, test_adapter):
         import core.llm.clients as llm_clients
