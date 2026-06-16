@@ -6,6 +6,7 @@ import os
 import sys
 import json
 import threading
+import urllib.error
 from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch, MagicMock
@@ -586,6 +587,63 @@ class TestCallLlmProvider:
                 llm_clients.call_llm("system", "user")
 
         assert test_adapter.llm_calls == []
+
+    def test_max_output_config_failure_warns_and_uses_api_fallback_when_fail_open(self, test_adapter, caplog):
+        import core.llm.clients as llm_clients
+
+        llm_clients._models_loaded = True
+        llm_clients._deep_reasoning_model = "claude-opus-4-6"
+
+        def _max_output(_tier):
+            raise RuntimeError("max output config broken")
+
+        from config import get_config
+        cfg = get_config()
+        with patch.object(cfg.models, "max_output", side_effect=_max_output), \
+             patch("core.llm.clients.is_fail_hard_enabled", return_value=False), \
+             caplog.at_level("WARNING", logger="lib.llm_clients"):
+            result, duration = llm_clients.call_llm("system", "user", max_tokens=20000, max_retries=0)
+
+        assert result is not None
+        assert duration > 0
+        assert test_adapter.llm_calls[0]["max_tokens"] == 16384
+        assert "failed to resolve max output tokens for tier deep" in caplog.text
+
+    def test_max_output_config_failure_raises_when_failhard_enabled(self, test_adapter, caplog):
+        import core.llm.clients as llm_clients
+
+        llm_clients._models_loaded = True
+        llm_clients._deep_reasoning_model = "claude-opus-4-6"
+
+        def _max_output(_tier):
+            raise RuntimeError("max output config broken")
+
+        from config import get_config
+        cfg = get_config()
+        with patch.object(cfg.models, "max_output", side_effect=_max_output), \
+             patch("core.llm.clients.is_fail_hard_enabled", return_value=True), \
+             caplog.at_level("WARNING", logger="lib.llm_clients"):
+            with pytest.raises(RuntimeError, match="max output token config") as excinfo:
+                llm_clients.call_llm("system", "user", max_tokens=20000, max_retries=0)
+
+        assert isinstance(excinfo.value.__cause__, RuntimeError)
+        assert "max output config broken" in str(excinfo.value.__cause__)
+        assert test_adapter.llm_calls == []
+        assert "failed to resolve max output tokens for tier deep" in caplog.text
+
+    def test_rate_limit_header_parse_failure_logs_debug(self, caplog):
+        import core.llm.clients as llm_clients
+
+        class _BadHeaders:
+            def items(self):
+                raise RuntimeError("headers broken")
+
+        exc = urllib.error.HTTPError("https://example.test", 429, "rate limited", _BadHeaders(), None)
+
+        with caplog.at_level("DEBUG", logger="lib.llm_clients"):
+            assert llm_clients._rate_limit_headers(exc) == {}
+
+        assert "Failed parsing rate-limit headers: headers broken" in caplog.text
 
     def test_cost_cap_abort(self, test_adapter, monkeypatch):
         """call_llm should abort when cost cap is exceeded."""

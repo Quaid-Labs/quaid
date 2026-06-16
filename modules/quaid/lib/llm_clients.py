@@ -443,7 +443,8 @@ def _rate_limit_headers(exc: BaseException) -> Dict[str, str]:
             if key == "retry-after" or key.startswith("anthropic-ratelimit-"):
                 out[key] = str(v)
         return out
-    except Exception:
+    except Exception as exc:
+        logger.debug("Failed parsing rate-limit headers: %s", exc)
         return {}
 
 
@@ -659,7 +660,10 @@ def call_llm(system_prompt: str, user_message: str,
     try:
         from config import get_config as _get_cfg
         api_max = _get_cfg().models.max_output(resolved_tier)
-    except Exception:
+    except Exception as exc:
+        logger.warning("[llm_clients] failed to resolve max output tokens for tier %s; using API fallback: %s", resolved_tier, exc)
+        if is_fail_hard_enabled():
+            raise RuntimeError("LLM max output token config resolution failed while failHard is enabled") from exc
         api_max = 16384
     max_tokens = min(max_tokens, api_max)
 
