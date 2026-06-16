@@ -54,60 +54,27 @@ def _make_graph(tmp_path):
 # ---------------------------------------------------------------------------
 
 class TestClassifyIntent:
-    """Tests for classify_intent() query classification."""
+    """Tests for classify_intent() neutral routing contract."""
 
-    def test_who_query(self):
+    def test_queries_return_neutral_intent_without_english_lexical_gates(self):
         from datastore.memorydb.memory_graph import classify_intent
-        intent, boosts = classify_intent("who is Quaid's wife?")
-        assert intent == "WHO"
-        assert "Person" in boosts
-        assert boosts["Person"] > 1.0
 
-    def test_when_query(self):
-        from datastore.memorydb.memory_graph import classify_intent
-        intent, boosts = classify_intent("when is Quaid's birthday?")
-        assert intent == "WHEN"
-        assert "Event" in boosts
-
-    def test_recent_plans_query_is_temporal(self):
-        from datastore.memorydb.memory_graph import classify_intent
-        intent, boosts = classify_intent("exercise habits recent plans")
-        assert intent == "WHEN"
-        assert "Event" in boosts
-
-    def test_where_query(self):
-        from datastore.memorydb.memory_graph import classify_intent
-        intent, boosts = classify_intent("where does Quaid live?")
-        assert intent == "WHERE"
-        assert "Place" in boosts
-
-    def test_preference_query(self):
-        from datastore.memorydb.memory_graph import classify_intent
-        intent, boosts = classify_intent("Quaid's favorite food preferences")
-        assert intent == "PREFERENCE"
-        assert "Preference" in boosts
-
-    def test_relation_query(self):
-        from datastore.memorydb.memory_graph import classify_intent
-        intent, boosts = classify_intent("how is Levi related to Hauser as siblings")
-        assert intent == "RELATION"
-
-    def test_family_query_prefers_relation_intent(self):
-        from datastore.memorydb.memory_graph import classify_intent
-        intent, boosts = classify_intent("What do you know about my family?")
-        assert intent == "RELATION"
-        assert "Person" in boosts
-
-    def test_general_query(self):
-        from datastore.memorydb.memory_graph import classify_intent
-        intent, boosts = classify_intent("coffee espresso beans")
-        assert intent == "GENERAL"
-        assert boosts == {}
-
-    def test_what_query(self):
-        from datastore.memorydb.memory_graph import classify_intent
-        intent, boosts = classify_intent("what is Quaid working on?")
-        assert intent == "WHAT"
+        queries = [
+            "who is Quaid's wife?",
+            "when is Quaid's birthday?",
+            "exercise habits recent plans",
+            "where does Quaid live?",
+            "Quaid's favorite food preferences",
+            "how is Levi related to Hauser as siblings",
+            "What do you know about my family?",
+            "coffee espresso beans",
+            "what is Quaid working on?",
+            "美玲の家族について何を覚えている？",
+        ]
+        for query in queries:
+            intent, boosts = classify_intent(query)
+            assert intent == "GENERAL"
+            assert boosts == {}
 
     def test_returns_tuple(self):
         from datastore.memorydb.memory_graph import classify_intent
