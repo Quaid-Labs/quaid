@@ -151,12 +151,14 @@ def _extract_publish_embedding_timeout_s(default: float = 30.0) -> float:
         return float(default)
     try:
         value = float(raw)
-    except Exception:
+    except Exception as exc:
         logger.warning(
             "[datastore-memorydb] invalid extraction publish embedding timeout %r; defaulting to %.1fs",
             raw,
             float(default),
         )
+        if is_fail_hard_enabled():
+            raise RuntimeError(f"Invalid extraction publish embedding timeout={raw!r}") from exc
         return float(default)
     if value <= 0:
         return float(default)

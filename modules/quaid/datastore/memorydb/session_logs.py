@@ -11,6 +11,7 @@ import hashlib
 import json
 import logging
 import os
+import sqlite3
 import time
 import unicodedata
 from datetime import datetime, timezone
@@ -156,8 +157,16 @@ def ensure_schema(conn) -> None:
     ]:
         try:
             conn.execute(f"ALTER TABLE session_logs ADD COLUMN {col} {ddl}")
+        except sqlite3.OperationalError as exc:
+            if "duplicate column name" in str(exc).lower():
+                continue
+            logger.warning("session_logs migration skipped for column=%s: %s", col, exc)
+            if is_fail_hard_enabled():
+                raise
         except Exception as exc:
             logger.warning("session_logs migration skipped for column=%s: %s", col, exc)
+            if is_fail_hard_enabled():
+                raise
     conn.execute("CREATE INDEX IF NOT EXISTS idx_session_logs_owner_updated ON session_logs(owner_id, updated_at DESC)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_session_logs_updated ON session_logs(updated_at DESC)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_session_logs_conversation ON session_logs(conversation_id, updated_at DESC)")

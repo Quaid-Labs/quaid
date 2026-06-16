@@ -1,5 +1,6 @@
 import hashlib
 import json
+import sqlite3
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -123,6 +124,31 @@ def test_session_log_index_malformed_quaid_now_honors_failhard(monkeypatch, tmp_
     assert out["status"] == "indexed"
     loaded = session_logs.load_session("sess-clock-open", owner_id="quaid")
     assert loaded["indexed_at"] != "not-a-clock"
+
+
+def test_session_logs_schema_migration_raises_unexpected_failure_when_failhard(monkeypatch):
+    class FakeConn:
+        def execute(self, sql):
+            if sql.startswith("ALTER TABLE session_logs ADD COLUMN source_channel"):
+                raise RuntimeError("migration failed")
+            return None
+
+    monkeypatch.setattr(session_logs, "is_fail_hard_enabled", lambda: True)
+
+    with pytest.raises(RuntimeError, match="migration failed"):
+        session_logs.ensure_schema(FakeConn())
+
+
+def test_session_logs_schema_migration_tolerates_duplicate_columns_when_failhard(monkeypatch):
+    class FakeConn:
+        def execute(self, sql):
+            if sql.startswith("ALTER TABLE session_logs ADD COLUMN"):
+                raise sqlite3.OperationalError("duplicate column name: source_channel")
+            return None
+
+    monkeypatch.setattr(session_logs, "is_fail_hard_enabled", lambda: True)
+
+    session_logs.ensure_schema(FakeConn())
 
 
 def test_session_log_index_serializes_same_session(monkeypatch, tmp_path):

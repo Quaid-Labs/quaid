@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -13,6 +15,24 @@ from lib.fail_policy import is_fail_hard_enabled
 
 
 logger = logging.getLogger(__name__)
+
+
+def _now_iso() -> str:
+    raw = os.environ.get("QUAID_NOW", "").strip()
+    if raw:
+        try:
+            value = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError as exc:
+            if is_fail_hard_enabled():
+                raise RuntimeError(f"Invalid QUAID_NOW={raw!r}") from exc
+            logger.warning("Invalid QUAID_NOW=%r; using wall clock", raw)
+        else:
+            if value.tzinfo is None:
+                value = value.replace(tzinfo=timezone.utc)
+            else:
+                value = value.astimezone(timezone.utc)
+            return value.isoformat()
+    return datetime.now(timezone.utc).isoformat()
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS archived_nodes (
@@ -66,8 +86,8 @@ def archive_node(node_dict: Dict[str, Any], reason: str, db_path: Path | None = 
                 """
                 INSERT OR REPLACE INTO archived_nodes
                 (id, type, name, attributes, confidence, speaker, owner_id,
-                 created_at, accessed_at, access_count, archive_reason)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 created_at, accessed_at, access_count, archived_at, archive_reason)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     node_dict.get("id"),
@@ -82,6 +102,7 @@ def archive_node(node_dict: Dict[str, Any], reason: str, db_path: Path | None = 
                     node_dict.get("created_at"),
                     node_dict.get("accessed_at"),
                     node_dict.get("access_count", 0),
+                    _now_iso(),
                     reason,
                 ),
             )

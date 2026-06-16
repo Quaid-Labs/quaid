@@ -5244,6 +5244,15 @@ class TestExtractFromTranscript:
         with pytest.raises(RuntimeError, match="Invalid QUAID_EXTRACT_PUBLISH_BATCH_SIZE"):
             extraction_publish._get_extract_publish_batch_size()
 
+    def test_extract_publish_embedding_timeout_invalid_env_raises_under_failhard(self, monkeypatch):
+        from datastore.memorydb import extraction_publish
+
+        monkeypatch.setenv("QUAID_EXTRACT_PUBLISH_EMBED_TIMEOUT_S", "not-a-float")
+        monkeypatch.setattr("datastore.memorydb.extraction_publish.is_fail_hard_enabled", lambda: True)
+
+        with pytest.raises(RuntimeError, match="Invalid extraction publish embedding timeout"):
+            extraction_publish._extract_publish_embedding_timeout_s()
+
     def _run_direct_extraction_publish(self, result, memory_service, *, fail_hard_enabled):
         from datastore.memorydb.extraction_publish import run_extraction_publish_payload
 
