@@ -1045,3 +1045,51 @@ class TestRunSoulSnippetsReview:
         assert result.metrics.get("snippets_invalid_index") == 1
         assert result.errors
         assert "out-of-range" in result.errors[0]
+
+    def test_lifecycle_snippets_preserves_explicit_zero_llm_workers_as_floor(self, monkeypatch):
+        handlers = {}
+        seen = {}
+
+        class _Registry:
+            def register(self, name, handler):
+                handlers[name] = handler
+
+        def _result_factory():
+            return SimpleNamespace(metrics={}, logs=[], errors=[], data={})
+
+        def _run_soul_snippets_review(**kwargs):
+            seen["llm_workers"] = kwargs["llm_workers"]
+            return {"folded": 0, "rewritten": 0, "discarded": 0, "skipped_at_limit": 0, "errors": []}
+
+        monkeypatch.setattr(soul_snippets, "run_soul_snippets_review", _run_soul_snippets_review)
+        soul_snippets.register_lifecycle_routines(_Registry(), _result_factory)
+
+        result = handlers["snippets"](SimpleNamespace(dry_run=False, parallel_map=None, options={"llm_workers": 0}))
+
+        assert result.errors == []
+        assert seen["llm_workers"] == 1
+
+    def test_lifecycle_journal_preserves_explicit_zero_llm_workers_as_floor(self, monkeypatch):
+        handlers = {}
+        seen = {}
+
+        class _Registry:
+            def register(self, name, handler):
+                handlers[name] = handler
+
+        def _result_factory():
+            return SimpleNamespace(metrics={}, logs=[], errors=[], data={})
+
+        def _run_journal_distillation(**kwargs):
+            seen["llm_workers"] = kwargs["llm_workers"]
+            return {"additions": 0, "edits": 0, "recovered_edits": 0, "total_entries": 0, "errors": []}
+
+        monkeypatch.setattr(soul_snippets, "run_journal_distillation", _run_journal_distillation)
+        soul_snippets.register_lifecycle_routines(_Registry(), _result_factory)
+
+        result = handlers["journal"](
+            SimpleNamespace(dry_run=False, force_distill=False, parallel_map=None, options={"llm_workers": 0})
+        )
+
+        assert result.errors == []
+        assert seen["llm_workers"] == 1

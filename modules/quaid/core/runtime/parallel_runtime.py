@@ -104,7 +104,7 @@ class ResourceLockRegistry:
             yield
             return
 
-        deadline = time.monotonic() + max(1, int(timeout_seconds or 120))
+        deadline = time.monotonic() + max(1, int(timeout_seconds))
         acquired_thread: List[threading.RLock] = []
         acquired_fds: List[int] = []
         try:
@@ -130,8 +130,12 @@ class ResourceLockRegistry:
                     except Exception:
                         try:
                             os.close(fd)
-                        except Exception:
-                            pass
+                        except Exception as close_exc:
+                            logger.warning(
+                                "Failed to close lock fd=%s during lock error cleanup: %s",
+                                fd,
+                                close_exc,
+                            )
                         raise
                 acquired_fds.append(fd)
 

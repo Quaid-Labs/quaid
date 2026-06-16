@@ -123,6 +123,74 @@ def test_insightdb_contract_fail_hard_wrapper_fails_closed_on_import_error(monke
     assert contract._fail_hard_enabled() is True
 
 
+def test_identity_dir_failure_warns_and_falls_back_when_fail_open(monkeypatch, caplog):
+    import datastore.insightdb.soul_snippets as soul_snippets
+
+    monkeypatch.setattr(
+        soul_snippets,
+        "_runtime_identity_dir",
+        lambda: (_ for _ in ()).throw(RuntimeError("identity dir broken")),
+    )
+    monkeypatch.setattr(soul_snippets, "is_fail_hard_enabled", lambda: False)
+
+    with caplog.at_level(logging.WARNING, logger="datastore.insightdb.soul_snippets"):
+        assert soul_snippets._identity_dir() == soul_snippets._visible_instance_dir()
+
+    assert "Failed to resolve runtime identity dir" in caplog.text
+    assert "identity dir broken" in caplog.text
+
+
+def test_identity_dir_failure_raises_when_failhard(monkeypatch):
+    import datastore.insightdb.soul_snippets as soul_snippets
+
+    monkeypatch.setattr(
+        soul_snippets,
+        "_runtime_identity_dir",
+        lambda: (_ for _ in ()).throw(RuntimeError("identity dir broken")),
+    )
+    monkeypatch.setattr(soul_snippets, "is_fail_hard_enabled", lambda: True)
+
+    with pytest.raises(RuntimeError, match="Failed to resolve runtime identity dir") as excinfo:
+        soul_snippets._identity_dir()
+
+    assert isinstance(excinfo.value.__cause__, RuntimeError)
+    assert "identity dir broken" in str(excinfo.value.__cause__)
+
+
+def test_journal_config_failure_warns_when_fail_open(monkeypatch, caplog):
+    import datastore.insightdb.soul_snippets as soul_snippets
+
+    monkeypatch.setattr(
+        soul_snippets,
+        "get_config",
+        lambda: (_ for _ in ()).throw(RuntimeError("config broken")),
+    )
+    monkeypatch.setattr(soul_snippets, "is_fail_hard_enabled", lambda: False)
+
+    with caplog.at_level(logging.WARNING, logger="datastore.insightdb.soul_snippets"):
+        assert soul_snippets._get_journal_config() is None
+
+    assert "Failed loading journal config from memory config" in caplog.text
+    assert "config broken" in caplog.text
+
+
+def test_journal_config_failure_raises_when_failhard(monkeypatch):
+    import datastore.insightdb.soul_snippets as soul_snippets
+
+    monkeypatch.setattr(
+        soul_snippets,
+        "get_config",
+        lambda: (_ for _ in ()).throw(RuntimeError("config broken")),
+    )
+    monkeypatch.setattr(soul_snippets, "is_fail_hard_enabled", lambda: True)
+
+    with pytest.raises(RuntimeError, match="Journal config read failed") as excinfo:
+        soul_snippets._get_journal_config()
+
+    assert isinstance(excinfo.value.__cause__, RuntimeError)
+    assert "config broken" in str(excinfo.value.__cause__)
+
+
 @pytest.fixture
 def mock_config():
     """Mock config with journal enabled."""
@@ -1424,6 +1492,25 @@ class TestLegacyReadSnippetsFile:
         assert len(sections) == 1
         assert len(sections[0]["snippets"]) == 2
 
+    def test_logs_malformed_nonempty_lines(self, workspace_dir, caplog):
+        from datastore.insightdb.soul_snippets import read_snippets_file
+
+        (workspace_dir / "SOUL.snippets.md").write_text(
+            "# SOUL — Pending Snippets\n\n"
+            "## Compaction — 2026-02-10 14:30:22\n"
+            "This malformed legacy line should not disappear silently.\n"
+            "- I noticed something about trust.\n",
+            encoding="utf-8",
+        )
+
+        with caplog.at_level(logging.DEBUG, logger="datastore.insightdb.soul_snippets"):
+            _content, sections = read_snippets_file("SOUL.md")
+
+        assert len(sections) == 1
+        assert sections[0]["snippets"] == ["I noticed something about trust."]
+        assert "Ignoring malformed snippets line" in caplog.text
+        assert "malformed legacy line" in caplog.text
+
 
 class TestMemoryProjectionFromSnippets:
     def test_memory_snippet_write_defaults_to_quaid_now(self, workspace_dir, mock_config, monkeypatch):
@@ -2051,6 +2138,33 @@ class TestBackupFile:
         from datastore.insightdb.soul_snippets import backup_file
         result = backup_file("NONEXISTENT.md")
         assert result is None
+
+    def test_backup_filename_honors_quaid_now(self, workspace_dir, monkeypatch):
+        from datastore.insightdb.soul_snippets import backup_file
+
+        monkeypatch.setenv("QUAID_NOW", "2026-03-11T05:06:07Z")
+        src = workspace_dir / "identity" / "SOUL.md"
+        src.write_text("# SOUL\nOriginal content.", encoding="utf-8")
+
+        result = backup_file("SOUL.md")
+
+        assert result is not None
+        assert Path(result).name == "SOUL.md.20260311_050607.bak"
+
+
+def test_append_review_telemetry_honors_quaid_now(monkeypatch):
+    import datastore.insightdb.soul_snippets as soul_snippets
+
+    monkeypatch.setenv("QUAID_NOW", "2026-03-11T05:06:07Z")
+
+    soul_snippets._append_review_telemetry({"event": "probe"})
+
+    rows = [
+        json.loads(line)
+        for line in soul_snippets._review_telemetry_path().read_text(encoding="utf-8").splitlines()
+    ]
+    assert rows[-1]["ts"] == "2026-03-11T05:06:07Z"
+    assert rows[-1]["event"] == "probe"
 
 
 # =============================================================================

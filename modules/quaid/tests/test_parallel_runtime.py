@@ -4,6 +4,8 @@ import fcntl
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from core.runtime.parallel_runtime import MAX_THREAD_LOCK_CACHE, ResourceLockRegistry
@@ -116,3 +118,36 @@ def test_acquire_many_closes_fd_on_nonblocking_flock_error(tmp_path: Path):
             assert "flock boom" in str(exc)
 
     assert close_calls["count"] >= 1
+
+
+def test_acquire_many_logs_close_failure_during_flock_error_cleanup(tmp_path: Path):
+    reg = ResourceLockRegistry(tmp_path / "locks")
+
+    with patch("core.runtime.parallel_runtime.os.open", return_value=123), \
+         patch("core.runtime.parallel_runtime.fcntl.flock", side_effect=OSError("flock boom")), \
+         patch("core.runtime.parallel_runtime.os.close", side_effect=OSError("close boom")), \
+         patch("core.runtime.parallel_runtime.logger.warning") as log_warning:
+        with pytest.raises(OSError, match="flock boom"):
+            with reg.acquire_many(["resource-e"], timeout_seconds=1):
+                pass
+
+    assert any("Failed to close lock fd=" in str(call.args[0]) for call in log_warning.call_args_list)
+    assert any("close boom" in str(call.args) for call in log_warning.call_args_list)
+
+
+def test_acquire_many_zero_timeout_uses_one_second_floor(tmp_path: Path):
+    reg = ResourceLockRegistry(tmp_path / "locks")
+    acquire_timeouts = []
+
+    class _FakeLock:
+        def acquire(self, timeout=None):
+            acquire_timeouts.append(timeout)
+            return False
+
+    with patch.object(reg, "_thread_lock", return_value=_FakeLock()), \
+         patch("core.runtime.parallel_runtime.time.monotonic", side_effect=[10.0, 10.0]):
+        with pytest.raises(TimeoutError, match="thread lock timeout"):
+            with reg.acquire_many(["resource-zero"], timeout_seconds=0):
+                pass
+
+    assert acquire_timeouts == [1.0]

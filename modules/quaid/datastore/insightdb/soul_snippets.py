@@ -61,7 +61,14 @@ def _identity_dir() -> Path:
         d = _runtime_identity_dir()
         d.mkdir(parents=True, exist_ok=True)
         return d
-    except Exception:
+    except Exception as exc:
+        logger.warning(
+            "Failed to resolve runtime identity dir; falling back to visible instance dir: %s",
+            exc,
+            exc_info=True,
+        )
+        if is_fail_hard_enabled():
+            raise RuntimeError("Failed to resolve runtime identity dir") from exc
         return _visible_instance_dir()
 
 def _backup_dir() -> Path:
@@ -395,6 +402,8 @@ def _get_journal_config():
         return get_config().docs.journal
     except Exception as exc:
         logger.warning("Failed loading journal config from memory config: %s", exc)
+        if is_fail_hard_enabled():
+            raise RuntimeError("Journal config read failed") from exc
         return None
 
 
@@ -480,7 +489,7 @@ def _text_snapshot_stats(text: str) -> Dict[str, int]:
 def _append_review_telemetry(event: Dict[str, Any]) -> None:
     path = _review_telemetry_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {"ts": datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")}
+    payload = {"ts": _quaid_now().replace(tzinfo=UTC).isoformat(timespec="seconds").replace("+00:00", "Z")}
     payload["adapter"] = _runtime_adapter_label()
     payload["instance"] = str(os.environ.get("QUAID_INSTANCE", "") or "").strip()
     payload.update(event)
@@ -1306,6 +1315,8 @@ def read_snippets_file(filename: str) -> Tuple[str, List[Dict[str, Any]]]:
             current_snippets = []
         elif line.startswith('- ') and current_header:
             current_snippets.append(line[2:].strip())
+        elif line.strip() and not line.lstrip().startswith("# "):
+            logger.debug("Ignoring malformed snippets line in %s: %r", snippets_path, line)
 
     if current_header and current_snippets:
         sections.append({"header": current_header, "snippets": current_snippets})
@@ -1385,7 +1396,7 @@ def backup_file(filename: str) -> Optional[str]:
             return None
 
     _backup_dir().mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamp = _quaid_now().strftime("%Y%m%d_%H%M%S")
     backup_name = f"{filename}.{timestamp}.bak"
     dst = _backup_dir() / backup_name
     shutil.copy2(src, dst)
@@ -2578,7 +2589,7 @@ def register_lifecycle_routines(registry, result_factory) -> None:
             snippets_result = run_soul_snippets_review(
                 dry_run=ctx.dry_run,
                 parallel_map=ctx.parallel_map,
-                llm_workers=int((ctx.options or {}).get("llm_workers", 1) or 1),
+                llm_workers=max(1, int((ctx.options or {}).get("llm_workers", 1))),
             )
             result.metrics["snippets_folded"] = int(snippets_result.get("folded", 0))
             result.metrics["snippets_rewritten"] = int(snippets_result.get("rewritten", 0))
@@ -2621,7 +2632,7 @@ def register_lifecycle_routines(registry, result_factory) -> None:
                 dry_run=ctx.dry_run,
                 force_distill=ctx.force_distill,
                 parallel_map=ctx.parallel_map,
-                llm_workers=int((ctx.options or {}).get("llm_workers", 1) or 1),
+                llm_workers=max(1, int((ctx.options or {}).get("llm_workers", 1))),
             )
             result.metrics["journal_additions"] = int(journal_result.get("additions", 0))
             result.metrics["journal_edits"] = int(journal_result.get("edits", 0))
