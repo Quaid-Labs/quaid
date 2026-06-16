@@ -39,7 +39,8 @@ def _live_instance_ids() -> set[str]:
     try:
         from lib.instance import list_instances
         return set(str(name or "").strip() for name in list_instances() if str(name or "").strip())
-    except Exception:
+    except Exception as exc:
+        print(f"Warning: could not enumerate live instance ids: {exc}", file=sys.stderr)
         return set()
 
 
@@ -71,7 +72,8 @@ def _current_instance_id() -> str:
     try:
         from lib.instance import instance_id
         return str(instance_id() or "").strip()
-    except Exception:
+    except Exception as exc:
+        print(f"Warning: could not resolve current instance id: {exc}", file=sys.stderr)
         return ""
 
 
@@ -214,6 +216,8 @@ def cmd_update(args):
         current = _current_instance_id()
         if current and current not in _dedupe_instances(entry.get("instances", [])):
             entry = link_project(args.name, instance_id=current)
+        elif not current:
+            print("Warning: current instance id unavailable; skipping project auto-link", file=sys.stderr)
         print(f"Updated project: {args.name}")
         if args.json:
             print(json.dumps(entry, indent=2))

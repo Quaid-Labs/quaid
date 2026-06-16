@@ -49,7 +49,8 @@ def _adapter_type_from_instance_config(home: Path, instance_id: str) -> str:
         return ""
     try:
         payload = _load_config(home / "instances" / instance / "config.json", allow_missing=True)
-    except Exception:
+    except Exception as exc:
+        print(f"Warning: could not read instance config for {instance!r}: {exc}", file=sys.stderr)
         return ""
     adapter = payload.get("adapter") if isinstance(payload, dict) else None
     if not isinstance(adapter, dict):
@@ -146,7 +147,8 @@ def _active_plugin_ids(data: dict[str, Any]) -> list[str]:
 def _discover_plugin_manifests(path: Path, data: dict[str, Any]) -> dict[str, dict[str, Any]]:
     try:
         from core.runtime.plugins import discover_plugin_manifests
-    except Exception:
+    except Exception as exc:
+        print(f"Warning: plugin discovery unavailable: {exc}", file=sys.stderr)
         return {}
     plugin_paths = _get(data, "plugins.paths", [])
     if not isinstance(plugin_paths, list):
@@ -164,9 +166,10 @@ def _discover_plugin_manifests(path: Path, data: dict[str, Any]) -> dict[str, di
             strict=strict,
             workspace_root=path.parent.parent,
         )
-    except Exception:
+    except Exception as exc:
         if strict:
             raise
+        print(f"Warning: plugin manifest discovery failed: {exc}", file=sys.stderr)
         return {}
     return {
         m.plugin_id: {

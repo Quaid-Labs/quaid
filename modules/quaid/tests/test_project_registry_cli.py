@@ -6,6 +6,7 @@ Tests: output formatting, --json flag, error paths (sys.exit(1)).
 """
 
 import json
+import importlib
 import os
 import sys
 from types import SimpleNamespace
@@ -137,6 +138,24 @@ class TestCmdList:
         parsed = json.loads(capsys.readouterr().out)
         assert list(parsed) == ["cdx-proj"]
 
+    def test_live_instance_ids_warns_on_enumeration_failure(self, capsys):
+        with patch("lib.instance.list_instances", side_effect=RuntimeError("instance scan failed")):
+            assert cli._live_instance_ids() == set()
+
+        err = capsys.readouterr().err
+        assert "Warning: could not enumerate live instance ids: instance scan failed" in err
+
+
+def test_current_instance_id_warns_on_resolution_failure(monkeypatch, capsys):
+    monkeypatch.delenv("QUAID_INSTANCE", raising=False)
+    reloaded = importlib.reload(cli)
+
+    with patch("lib.instance.instance_id", side_effect=RuntimeError("instance lookup failed")):
+        assert reloaded._current_instance_id() == ""
+
+    err = capsys.readouterr().err
+    assert "Warning: could not resolve current instance id: instance lookup failed" in err
+
 
 # ---------------------------------------------------------------------------
 # cmd_create
@@ -255,6 +274,18 @@ class TestCmdUpdate:
             cli.cmd_update(_args(name="proj", description="New", source_root=None))
         out = capsys.readouterr().out
         assert "Updated project: proj" in out
+
+    def test_update_warns_when_current_instance_unavailable_for_auto_link(self, capsys):
+        entry = {"description": "New", "instances": []}
+        with patch("core.project_registry.get_project", return_value={"instances": []}), \
+             patch("core.project_registry.update_project", return_value=entry), \
+             patch("core.project_registry.link_project") as link_project, \
+             patch("core.project_registry_cli._current_instance_id", return_value=""):
+            cli.cmd_update(_args(name="proj", description="New", source_root=None))
+
+        link_project.assert_not_called()
+        err = capsys.readouterr().err
+        assert "Warning: current instance id unavailable; skipping project auto-link" in err
 
     def test_update_relinks_current_instance_if_sync_drops_it(self, capsys):
         linked = {"description": "New", "instances": ["cdx-livetest"]}

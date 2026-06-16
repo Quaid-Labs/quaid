@@ -1,4 +1,5 @@
 from pathlib import Path
+import builtins
 import json
 
 import config_cli
@@ -188,7 +189,35 @@ def test_main_set_is_deprecated_before_loading_or_writing(monkeypatch, tmp_path,
     assert json.loads(path.read_text()) == {}
 
 
-def test_discover_plugin_manifests_suppresses_errors_in_non_strict_mode(monkeypatch, tmp_path):
+def test_adapter_type_from_instance_config_warns_on_read_failure(tmp_path, capsys):
+    home = tmp_path / ".quaid"
+    cfg = home / "instances" / "broken" / "config.json"
+    cfg.parent.mkdir(parents=True)
+    cfg.write_text("{not json", encoding="utf-8")
+
+    assert config_cli._adapter_type_from_instance_config(home, "broken") == ""
+    err = capsys.readouterr().err
+    assert "Warning: could not read instance config for 'broken'" in err
+
+
+def test_discover_plugin_manifests_warns_when_plugin_runtime_unavailable(monkeypatch, tmp_path, capsys):
+    path = tmp_path / "config" / "config.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    real_import = builtins.__import__
+
+    def failing_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "core.runtime.plugins":
+            raise ImportError("runtime plugin module missing")
+        return real_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", failing_import)
+
+    assert config_cli._discover_plugin_manifests(path, {}) == {}
+    err = capsys.readouterr().err
+    assert "Warning: plugin discovery unavailable: runtime plugin module missing" in err
+
+
+def test_discover_plugin_manifests_suppresses_errors_in_non_strict_mode(monkeypatch, tmp_path, capsys):
     path = tmp_path / "config" / "config.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     data = {"plugins": {"paths": ["plugins"], "strict": False}}
@@ -200,6 +229,7 @@ def test_discover_plugin_manifests_suppresses_errors_in_non_strict_mode(monkeypa
     monkeypatch.setattr(plugin_runtime, "discover_plugin_manifests", _boom)
     out = config_cli._discover_plugin_manifests(path, data)
     assert out == {}
+    assert "Warning: plugin manifest discovery failed: manifest parse failure" in capsys.readouterr().err
 
 
 def test_discover_plugin_manifests_raises_errors_in_strict_mode(monkeypatch, tmp_path):
