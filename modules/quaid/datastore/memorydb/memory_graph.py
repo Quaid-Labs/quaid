@@ -19887,67 +19887,17 @@ def _registered_project_name_in_query(lowered_query: str) -> Optional[str]:
 
 
 def _infer_recall_store_defaults(text: str) -> Tuple[List[str], Optional[str]]:
-    import re as _re
-
     lowered = str(text or "").lower()
     stores: List[str] = ["vector"]
     project_name: Optional[str] = _registered_project_name_in_query(lowered)
 
-    docs_like = bool(_re.search(
-        r"\b(code|codebase|repo|repository|api|schema|database|db|frontend|backend|ui|layout|appearance|stack|test|tests|jest|middleware|resolver|graphql|rest|component|css|file|source|implementation|architecture)\b",
-        lowered,
-    ))
-    has_iso_date = bool(_re.search(
-        r"(?<!\d)\d{4}-\d{2}-\d{2}(?!\d)",
-        lowered,
-    ))
-    dated_project_like = bool(project_name) and has_iso_date
     project_docs_like = bool(project_name)
-    generic_graph_signal = _has_generic_graph_signal(text)
-    relation_matches = _relation_matches_for_query(text) if generic_graph_signal else []
-    graph_like = bool(relation_matches) or generic_graph_signal
-    named_person_activity_like = False
-    if _NAMED_ENTITY_ACTIVITY_QUERY_RE.search(lowered):
-        try:
-            named_person_activity_like = any(
-                str(getattr(entity, "type", "") or "").strip().lower() == "person"
-                for entity in extract_entities_from_text(text)
-            )
-        except Exception:
-            named_person_activity_like = False
-    dated_feature_state_like = has_iso_date and bool(_re.search(
-        r"\b(support(?:ed|s)?|available|allowed|configured|defined|enabled|options?|labels?|presets?|features?|fields?|settings?|constants?)\b",
-        lowered,
-    ))
-    dated_app_or_project_like = has_iso_date and bool(_re.search(
-        r"\b(app|application|project|repo|repository|service|system|tool|product)\b|"
-        r"(?:项目|專案|应用|應用|系统|系統|服务|服務|工具|产品|產品|プロジェクト|アプリ|サービス)",
-        lowered,
-    ))
-    mixed_memory_docs = docs_like and bool(_re.search(
-        r"\b(current|currently|changed|history|motivat|why|decided|still|bug|issue|safe|security)\b",
-        lowered,
-    ))
 
-    if dated_project_like:
+    if project_docs_like:
         stores = ["vector", "docs"]
-    elif project_docs_like:
-        stores = ["vector", "docs"]
-    elif dated_feature_state_like:
-        stores = ["vector", "docs"]
-    elif dated_app_or_project_like:
-        stores = ["vector", "docs"]
-    elif mixed_memory_docs:
-        stores = ["vector", "docs"]
-    elif docs_like:
-        stores = ["vector", "docs"]
-    elif named_person_activity_like:
-        stores = ["vector", "graph"]
     elif _is_multi_entity_shared_source_query(text):
         stores = ["vector", "session_chunks"]
     elif _is_named_entity_graph_fact_lookup(text):
-        stores = ["vector", "graph"]
-    elif graph_like:
         stores = ["vector", "graph"]
 
     return _planner_store_plan(stores), project_name

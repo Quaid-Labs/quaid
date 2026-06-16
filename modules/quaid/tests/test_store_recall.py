@@ -9882,7 +9882,7 @@ class TestRecallTelemetry:
 
         assert queries == ["Who is Linda in relation to Maya?"]
         assert meta["bailout_reason"] == "preserve_short_exact_query"
-        assert meta["planned_stores"] == ["vector", "graph"]
+        assert meta["planned_stores"] == ["vector"]
 
     def test_plan_fanout_queries_fast_preserves_short_anchored_multiclause_without_llm(self):
         import datastore.memorydb.memory_graph as mg
@@ -10022,7 +10022,7 @@ class TestRecallTelemetry:
         assert meta["used_llm"] is True
         assert meta["named_entity_tokens"] == 0
 
-    def test_plan_fanout_queries_fast_profiles_preserve_kinship_chain_as_graph_without_llm(self):
+    def test_plan_fanout_queries_fast_profiles_preserve_kinship_chain_vector_without_llm(self):
         import datastore.memorydb.memory_graph as mg
 
         with patch("lib.llm_clients.call_fast_reasoning", side_effect=AssertionError("planner should not be called")):
@@ -10034,7 +10034,7 @@ class TestRecallTelemetry:
 
         assert queries == ["what does my partner's brother's wife do"]
         assert meta["bailout_reason"] == "preserve_short_exact_query"
-        assert meta["planned_stores"] == ["vector", "graph"]
+        assert meta["planned_stores"] == ["vector"]
 
     def test_plan_fanout_queries_full_uses_llm_to_classify_short_exact_stores(self):
         import datastore.memorydb.memory_graph as mg
@@ -10100,7 +10100,7 @@ class TestRecallTelemetry:
         assert "session_chunks" in captured["prompt"]
         assert mg._normalize_store_plan(None) == ["vector"]
 
-    def test_plan_fanout_queries_full_preserves_relation_chain_graph_when_llm_downgrades(self):
+    def test_plan_fanout_queries_full_allows_relation_chain_vector_without_structural_anchor(self):
         import datastore.memorydb.memory_graph as mg
 
         class _Graph:
@@ -10108,7 +10108,7 @@ class TestRecallTelemetry:
                 return ["spouse_of", "sibling_of"]
 
         def _fake_call_fast_reasoning(*, prompt, **kwargs):
-            assert "Add 'graph'" in prompt
+            assert "only classify stores/project" in prompt
             return ('{"stores":["vector"],"queries":["positional family relationship"]}', {})
 
         with patch.object(mg, "get_graph", return_value=_Graph()), \
@@ -10127,7 +10127,7 @@ class TestRecallTelemetry:
 
         assert queries == ["what does my partner's brother's wife do"]
         assert meta["bailout_reason"] == "preserve_short_exact_query"
-        assert meta["planned_stores"] == ["vector", "graph"]
+        assert meta["planned_stores"] == ["vector"]
 
     def test_plan_fanout_queries_keeps_default_graph_when_llm_downgrades_named_lookup(self):
         import datastore.memorydb.memory_graph as mg
@@ -10254,8 +10254,15 @@ class TestRecallTelemetry:
         assert meta["turn_details"][0]["planner"]["planned_stores"] == ["vector"]
         assert meta["turn_details"][0]["planner"]["planner_profile"] == "fast"
 
-    def test_plan_fanout_queries_keeps_default_docs_when_llm_downgrades_project_asof(self):
+    def test_plan_fanout_queries_keeps_registered_project_docs_when_llm_downgrades(self, tmp_path, monkeypatch):
         import datastore.memorydb.memory_graph as mg
+
+        registry = tmp_path / "project-registry.json"
+        registry.write_text(
+            '{"projects":{"recipe-app":{"description":"recipes"}},"deleted_projects":{}}\n',
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
 
         def _fake_call_fast_reasoning(*, prompt, **kwargs):
             return ('{"stores":["vector"],"queries":["recipe app dietary labels"]}', {})
@@ -10273,7 +10280,7 @@ class TestRecallTelemetry:
 
         assert queries[0] == "As of 2026-03-08, what dietary labels did the recipe app support?"
         assert meta["planned_stores"] == ["vector", "docs"]
-        assert meta["planned_project"] is None
+        assert meta["planned_project"] == "recipe-app"
 
     def test_recall_fast_infers_date_to_from_iso_project_query(self):
         import datastore.memorydb.memory_graph as mg
@@ -10371,7 +10378,7 @@ class TestRecallTelemetry:
         assert captured["timeout_s"] == 60.0
         assert captured["max_retries"] == 1
 
-    def test_plan_fanout_queries_off_profile_skips_llm_and_keeps_defaults(self):
+    def test_plan_fanout_queries_off_profile_skips_llm_and_keeps_vector_defaults(self):
         import datastore.memorydb.memory_graph as mg
 
         with patch("lib.llm_clients.call_fast_reasoning", side_effect=AssertionError("planner should not be called")):
@@ -10384,7 +10391,7 @@ class TestRecallTelemetry:
         assert queries == ["What tables exist in the recipe app database?"]
         assert meta["used_llm"] is False
         assert meta["bailout_reason"] == "planner_disabled"
-        assert meta["planned_stores"] == ["vector", "docs"]
+        assert meta["planned_stores"] == ["vector"]
         assert meta["planned_project"] is None
 
     def test_recall_fast_uses_two_second_planner_budget(self):
@@ -10747,7 +10754,7 @@ class TestRecallTelemetry:
         assert captured["planner_meta"]["planner_profile"] == "off"
         assert captured["planner_meta"]["bailout_reason"] == "planner_timeout_fallback_off"
         assert captured["planner_meta"]["used_llm"] is True
-        assert captured["stores"] == ["vector", "docs"]
+        assert captured["stores"] == ["vector"]
         assert captured["planner_meta"]["planned_project"] is None
 
     def test_should_fast_drill_follow_up_skips_planner_timeout_fallback(self):
@@ -16452,35 +16459,31 @@ class TestRecallFastHookInjectContract:
 
         assert matched == []
 
-    def test_infer_recall_store_defaults_routes_graph_from_live_relation_types(self):
+    def test_infer_recall_store_defaults_keeps_live_relation_words_vector_without_entity_anchor(self):
         import datastore.memorydb.memory_graph as mg
 
-        class _Graph:
-            def get_known_relations(self):
-                return ["depends_on"]
-
-        with patch("datastore.memorydb.memory_graph.get_graph", return_value=_Graph()), \
-             patch("datastore.memorydb.memory_graph.get_edge_keywords", return_value={}):
+        with patch(
+            "datastore.memorydb.memory_graph._relation_matches_for_query",
+            side_effect=AssertionError("relation DB should not load"),
+        ):
             stores, _ = mg._infer_recall_store_defaults(
                 "What does the billing engine depend on?",
             )
 
-        assert stores == ["vector", "graph"]
+        assert stores == ["vector"]
 
-    def test_infer_recall_store_defaults_routes_graph_for_broad_family_query(self):
+    def test_infer_recall_store_defaults_keeps_broad_family_query_vector_without_entity_anchor(self):
         import datastore.memorydb.memory_graph as mg
 
-        class _Graph:
-            def get_known_relations(self):
-                return []
-
-        with patch("datastore.memorydb.memory_graph.get_graph", return_value=_Graph()), \
-             patch("datastore.memorydb.memory_graph.get_edge_keywords", return_value={}):
+        with patch(
+            "datastore.memorydb.memory_graph._relation_matches_for_query",
+            side_effect=AssertionError("relation DB should not load"),
+        ):
             stores, _ = mg._infer_recall_store_defaults(
                 "What do you know about my family?",
             )
 
-        assert stores == ["vector", "graph"]
+        assert stores == ["vector"]
 
     def test_infer_recall_store_defaults_routes_docs_for_project_says_query(self, tmp_path, monkeypatch):
         import datastore.memorydb.memory_graph as mg
@@ -16524,7 +16527,7 @@ class TestRecallFastHookInjectContract:
                 "what does my partner's brother's wife do",
             )
 
-        assert stores == ["vector", "graph"]
+        assert stores == ["vector"]
         assert project is None
 
     def test_infer_recall_store_defaults_uses_unicode_project_name_boundaries(self, tmp_path, monkeypatch):
@@ -16551,9 +16554,9 @@ class TestRecallFastHookInjectContract:
         assert embedded_project is None
         assert suffix_project is None
         assert embedded_stores == ["vector"]
-        assert suffix_stores == ["vector", "docs"]
+        assert suffix_stores == ["vector"]
 
-    def test_infer_recall_store_defaults_routes_docs_for_project_asof_exact_values(self):
+    def test_infer_recall_store_defaults_keeps_unregistered_dated_feature_query_vector(self):
         import datastore.memorydb.memory_graph as mg
 
         class _Graph:
@@ -16566,10 +16569,10 @@ class TestRecallFastHookInjectContract:
                 "As of 2026-03-08, what dietary labels did the recipe app support?",
         )
 
-        assert stores == ["vector", "docs"]
+        assert stores == ["vector"]
         assert project is None
 
-    def test_infer_recall_store_defaults_routes_dated_project_query_without_english_terms(self):
+    def test_infer_recall_store_defaults_keeps_unregistered_dated_project_query_vector(self):
         import datastore.memorydb.memory_graph as mg
 
         class _Graph:
@@ -16582,7 +16585,7 @@ class TestRecallFastHookInjectContract:
                 "截至 2026-03-08，recipe app 支持哪些饮食标签？",
             )
 
-        assert stores == ["vector", "docs"]
+        assert stores == ["vector"]
         assert project is None
 
     def test_infer_recall_store_defaults_does_not_route_non_project_labels_to_docs(self):
@@ -16687,7 +16690,7 @@ class TestRecallFastHookInjectContract:
                 "What does quaid architecture say?",
             )
 
-        assert stores == ["vector", "docs"]
+        assert stores == ["vector"]
         assert project is None
 
     def test_infer_recall_store_defaults_skips_relation_db_for_plain_memory_query(self, tmp_path, monkeypatch):
