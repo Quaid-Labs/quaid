@@ -362,6 +362,10 @@ _PLATFORM_CLIENT_INITIALIZED = False
 _PLATFORM_CLIENT_CACHE_TAG: Optional[Tuple[str, str]] = None
 
 
+class _PlatformClientContextSwitchError(RuntimeError):
+    """Raised when replacing a cached platform scheduler client fails."""
+
+
 def _platform_client_cache_tag(quaid_home: Any, platform: Any) -> Tuple[str, str]:
     return (os.path.abspath(os.path.expanduser(os.fspath(quaid_home))), str(platform or "").strip())
 
@@ -438,16 +442,19 @@ def get_platform_scheduler_client_for_current_instance():
             cache_tag = _platform_client_cache_tag(quaid_home, platform)
             if _PLATFORM_CLIENT_INITIALIZED and _PLATFORM_CLIENT_CACHE_TAG == cache_tag:
                 return _PLATFORM_CLIENT
-            if _PLATFORM_CLIENT_INITIALIZED and _PLATFORM_CLIENT is not None:
-                try:
-                    _PLATFORM_CLIENT.close()
-                except Exception as exc:
-                    logger.warning("platform scheduler client close failed during context switch: %s", exc)
-                    if _fail_hard_enabled():
-                        raise
+            old_client = _PLATFORM_CLIENT if _PLATFORM_CLIENT_INITIALIZED else None
             _PLATFORM_CLIENT = None
             _PLATFORM_CLIENT_INITIALIZED = False
             _PLATFORM_CLIENT_CACHE_TAG = None
+            if old_client is not None:
+                try:
+                    old_client.close()
+                except Exception as exc:
+                    logger.warning("platform scheduler client close failed during context switch: %s", exc)
+                    if _fail_hard_enabled():
+                        raise _PlatformClientContextSwitchError(
+                            "platform scheduler client close failed during context switch"
+                        ) from exc
             total_slots = 8
             try:
                 from config import get_config
@@ -465,6 +472,8 @@ def get_platform_scheduler_client_for_current_instance():
             _PLATFORM_CLIENT = get_platform_scheduler_client(quaid_home, platform, total_slots)
             _PLATFORM_CLIENT_INITIALIZED = True
             _PLATFORM_CLIENT_CACHE_TAG = cache_tag
+        except _PlatformClientContextSwitchError:
+            raise
         except Exception as exc:
             logger.warning(
                 "platform scheduler client init failed (%s): proceeding without slot gating", exc

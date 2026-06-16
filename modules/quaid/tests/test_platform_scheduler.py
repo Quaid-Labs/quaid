@@ -201,6 +201,76 @@ def test_llm_scheduler_rebuilds_platform_client_when_adapter_context_changes(mon
     assert second.tag == (tmp_path / "b", "pytest-b", 3)
 
 
+def test_llm_scheduler_context_switch_close_failure_clears_cache_when_fail_hard(
+    monkeypatch, tmp_path, caplog
+):
+    from core.llm import scheduler as scheduler_mod
+    import config as config_mod
+    import core.platform_scheduler as platform_scheduler_mod
+    import core.runtime.parallel_runtime as parallel_runtime_mod
+    import lib.adapter as adapter_mod
+
+    class _Adapter:
+        def __init__(self, home, platform):
+            self._home = home
+            self._platform = platform
+
+        def quaid_home(self):
+            return self._home
+
+        def agent_id_prefix(self):
+            return self._platform
+
+    class _Client:
+        def __init__(self, tag):
+            self.tag = tag
+            self.close_calls = 0
+            self.fail_close = False
+
+        def close(self):
+            self.close_calls += 1
+            if self.fail_close:
+                raise RuntimeError("close failed")
+
+    cfg = SimpleNamespace(core=SimpleNamespace(parallel=SimpleNamespace(platform_scheduler_slots=3)))
+    state = {"adapter": _Adapter(tmp_path / "a", "pytest-a")}
+    clients = []
+
+    def _client_factory(quaid_home, platform, total_slots):
+        client = _Client((quaid_home, platform, total_slots))
+        clients.append(client)
+        return client
+
+    scheduler_mod._PLATFORM_CLIENT = None
+    scheduler_mod._PLATFORM_CLIENT_INITIALIZED = False
+    scheduler_mod._PLATFORM_CLIENT_CACHE_TAG = None
+    monkeypatch.setattr(adapter_mod, "get_adapter", lambda: state["adapter"])
+    monkeypatch.setattr(config_mod, "get_config", lambda: cfg)
+    monkeypatch.setattr(parallel_runtime_mod, "get_parallel_config", lambda cfg_obj: cfg_obj.core.parallel)
+    monkeypatch.setattr(platform_scheduler_mod, "get_platform_scheduler_client", _client_factory)
+
+    first = scheduler_mod.get_platform_scheduler_client_for_current_instance()
+    assert len(clients) == 1
+
+    first.fail_close = True
+    state["adapter"] = _Adapter(tmp_path / "b", "pytest-b")
+    monkeypatch.setattr(scheduler_mod, "_fail_hard_enabled", lambda: True)
+
+    caplog.set_level("WARNING")
+    with pytest.raises(RuntimeError, match="platform scheduler client close failed during context switch") as exc:
+        scheduler_mod.get_platform_scheduler_client_for_current_instance()
+
+    assert isinstance(exc.value.__cause__, RuntimeError)
+    assert str(exc.value.__cause__) == "close failed"
+    assert first.close_calls == 1
+    assert len(clients) == 1
+    assert scheduler_mod._PLATFORM_CLIENT is None
+    assert scheduler_mod._PLATFORM_CLIENT_INITIALIZED is False
+    assert scheduler_mod._PLATFORM_CLIENT_CACHE_TAG is None
+    assert "platform scheduler client close failed during context switch" in caplog.text
+    assert "platform scheduler client init failed" not in caplog.text
+
+
 def test_llm_scheduler_platform_client_close_failure_logs_when_fail_open(monkeypatch, caplog):
     from core.llm import scheduler as scheduler_mod
 
