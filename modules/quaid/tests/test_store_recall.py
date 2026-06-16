@@ -3845,20 +3845,20 @@ class TestRecallBasic:
         assert len(rows) == 5
         assert rows[0]["id"] == "earlier-answer-fact"
 
-    def test_prioritize_date_relation_callback_rows_prefers_day_after_connection(self):
+    def test_prioritize_date_relation_callback_rows_prefers_matching_date_callback(self):
         import datastore.memorydb.memory_graph as mg
 
         rows = [
             {
                 "id": "same-day",
-                "text": "Maya started her first day at Stripe on the same day she finished the half marathon.",
+                "text": "Maya started at Stripe on May 19 after finishing the half marathon.",
                 "category": "fact",
                 "similarity": 0.97,
                 "created_at": "2026-05-19T23:59:59",
             },
             {
                 "id": "day-after",
-                "text": "Oh wait — May 19th? That's the day after your half marathon. Talk about a big week",
+                "text": "May 19 callback anchored to the half marathon boundary.",
                 "category": "fact",
                 "source_type": "assistant",
                 "structural_anchor_kind": "assistant_callback_anchor",
@@ -3877,7 +3877,7 @@ class TestRecallBasic:
         ]
 
         ranked = mg._prioritize_date_relation_callback_rows(
-            "What cross-session connection did the agent make about May 18-19?",
+            "May 18-19",
             rows,
         )
 

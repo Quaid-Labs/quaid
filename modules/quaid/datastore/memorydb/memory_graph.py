@@ -14716,11 +14716,6 @@ _DATE_RANGE_CONNECTION_QUERY_RE = re.compile(
     r"jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|"
     r"nov(?:ember)?|dec(?:ember)?)\s+\d{1,2}\s*[-/]\s*\d{1,2}\b"
 )
-_DATE_RELATION_ROW_CUE_RE = re.compile(
-    r"\b(day after|the day after|next day|following day|day before|the day before|"
-    r"back[- ]to[- ]back|back to back)\b"
-)
-_SAME_DAY_ROW_CUE_RE = re.compile(r"\bsame day\b")
 _MONTH_NAME_TOKENS = {
     "january", "february", "march", "april", "may", "june",
     "july", "august", "september", "october", "november", "december",
@@ -14732,12 +14727,7 @@ def _is_date_relation_callback_query(query: str) -> bool:
     lower = str(query or "").lower()
     if not lower:
         return False
-    if not _DATE_RANGE_CONNECTION_QUERY_RE.search(lower):
-        return False
-    return any(
-        cue in lower
-        for cue in ("cross-session", "connection", "connect", "linked", "agent make", "agent made")
-    )
+    return bool(_DATE_RANGE_CONNECTION_QUERY_RE.search(lower))
 
 
 def _prioritize_date_relation_callback_rows(query: str, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -14774,10 +14764,6 @@ def _prioritize_date_relation_callback_rows(query: str, rows: List[Dict[str, Any
             return 0
         lower_text = _row_text(row).lower()
         score = 0
-        if _DATE_RELATION_ROW_CUE_RE.search(lower_text):
-            score += 5
-        elif _SAME_DAY_ROW_CUE_RE.search(lower_text):
-            score += 1
         row_months = {
             token
             for token in re.findall(r"[a-z]+", lower_text)
