@@ -11845,9 +11845,10 @@ def _recall_once(
             config_retrieval = get_config().retrieval
         if min_similarity is None:
             min_similarity = getattr(config_retrieval, "min_similarity", 0.60)
-    except Exception:
-        if use_lightweight_config and _is_fail_hard_mode():
-            raise
+    except Exception as exc:
+        logger.warning("recall_once config load failed; using default: %s", exc)
+        if _is_fail_hard_mode():
+            raise RuntimeError("recall_once config load failed") from exc
         if min_similarity is None:
             min_similarity = 0.60
     if privacy is None:

@@ -877,6 +877,34 @@ def test_recall_once_reranker_raises_when_failhard_enabled(tmp_path):
                 )
 
 
+def test_recall_once_full_config_failure_respects_failhard():
+    import datastore.memorydb.memory_graph as mg
+
+    with patch("config.get_config", side_effect=RuntimeError("config down")), \
+         patch.object(mg, "_is_fail_hard_mode", return_value=True):
+        with pytest.raises(RuntimeError, match="recall_once config load failed") as excinfo:
+            mg._recall_once(
+                "cedar ledger",
+                owner_id="quaid",
+                limit=5,
+                min_similarity=None,
+                use_routing=False,
+                use_aliases=False,
+                use_intent=False,
+                use_multi_pass=False,
+                use_reranker=False,
+                include_graph_traversal=False,
+                include_co_session=False,
+                include_mmr=False,
+                include_lexical_anchor_shaping=False,
+                low_signal_retry=False,
+                use_lightweight_config=False,
+            )
+
+    assert isinstance(excinfo.value.__cause__, RuntimeError)
+    assert "config down" in str(excinfo.value.__cause__)
+
+
 def test_recall_once_reranker_falls_back_when_failhard_disabled(tmp_path):
     import datastore.memorydb.memory_graph as mg
 
