@@ -5486,6 +5486,103 @@ class TestExtractFromTranscript:
         with pytest.raises(RuntimeError, match="Invalid extraction publish embedding timeout"):
             extraction_publish._extract_publish_embedding_timeout_s()
 
+    @pytest.mark.parametrize(
+        ("helper_name", "facts", "warning_text"),
+        [
+            (
+                "_prewarm_payload_embeddings",
+                [{
+                    "text": "Maya tracks release milestones in the launch notebook",
+                    "speaker": "user",
+                }],
+                "embedding prewarm failed",
+            ),
+            (
+                "_prewarm_edge_entity_embeddings",
+                [{
+                    "text": "Maya works with River Labs",
+                    "speaker": "user",
+                    "edges": [{"subject": "Maya", "relation": "works_at", "object": "River Labs"}],
+                }],
+                "edge entity embedding prewarm failed",
+            ),
+        ],
+    )
+    def test_extraction_publish_prewarm_failure_returns_empty_stats_when_fail_open(
+        self,
+        helper_name,
+        facts,
+        warning_text,
+        monkeypatch,
+        caplog,
+    ):
+        from datastore.memorydb import extraction_publish
+
+        class _MemoryService:
+            def warm_embeddings(self, texts, *, timeout_s=None):
+                raise RuntimeError("ollama unavailable")
+
+        monkeypatch.setattr("datastore.memorydb.extraction_publish.is_fail_hard_enabled", lambda: False)
+        helper = getattr(extraction_publish, helper_name)
+        log = logging.getLogger("test.extraction_publish.prewarm")
+
+        with caplog.at_level("WARNING", logger=log.name):
+            stats = helper(facts, label="unit", memory_service=_MemoryService(), log=log)
+
+        assert stats == {
+            "requested": 0,
+            "unique": 0,
+            "cache_hits": 0,
+            "warmed": 0,
+            "failed": 0,
+            "skipped_empty": 0,
+        }
+        assert warning_text in caplog.text
+        assert "ollama unavailable" in caplog.text
+
+    @pytest.mark.parametrize(
+        ("helper_name", "facts"),
+        [
+            (
+                "_prewarm_payload_embeddings",
+                [{
+                    "text": "Maya tracks release milestones in the launch notebook",
+                    "speaker": "user",
+                }],
+            ),
+            (
+                "_prewarm_edge_entity_embeddings",
+                [{
+                    "text": "Maya works with River Labs",
+                    "speaker": "user",
+                    "edges": [{"subject": "Maya", "relation": "works_at", "object": "River Labs"}],
+                }],
+            ),
+        ],
+    )
+    def test_extraction_publish_prewarm_failure_raises_when_failhard(
+        self,
+        helper_name,
+        facts,
+        monkeypatch,
+        caplog,
+    ):
+        from datastore.memorydb import extraction_publish
+
+        class _MemoryService:
+            def warm_embeddings(self, texts, *, timeout_s=None):
+                raise RuntimeError("ollama unavailable")
+
+        monkeypatch.setattr("datastore.memorydb.extraction_publish.is_fail_hard_enabled", lambda: True)
+        helper = getattr(extraction_publish, helper_name)
+        log = logging.getLogger("test.extraction_publish.prewarm")
+
+        with caplog.at_level("WARNING", logger=log.name):
+            with pytest.raises(RuntimeError, match="ollama unavailable"):
+                helper(facts, label="unit", memory_service=_MemoryService(), log=log)
+
+        assert "prewarm failed" in caplog.text
+
     def _run_direct_extraction_publish(self, result, memory_service, *, fail_hard_enabled):
         from datastore.memorydb.extraction_publish import run_extraction_publish_payload
 

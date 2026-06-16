@@ -30,11 +30,17 @@ def _now_iso() -> str:
     raw = os.environ.get("QUAID_NOW", "").strip()
     if raw:
         try:
-            return datetime.fromisoformat(raw.replace("Z", "+00:00")).isoformat()
+            value = datetime.fromisoformat(raw.replace("Z", "+00:00"))
         except ValueError as exc:
             if _fail_hard_enabled():
                 raise
             logger.warning("Invalid QUAID_NOW=%r; using wall clock: %s", raw, exc)
+        else:
+            if value.tzinfo is None:
+                value = value.replace(tzinfo=timezone.utc)
+            else:
+                value = value.astimezone(timezone.utc)
+            return value.isoformat()
     return datetime.now(timezone.utc).isoformat()
 
 

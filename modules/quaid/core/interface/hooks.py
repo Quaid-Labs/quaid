@@ -84,7 +84,8 @@ def _fail_hard_enabled() -> bool:
         from lib.fail_policy import is_fail_hard_enabled
 
         return bool(is_fail_hard_enabled())
-    except Exception:
+    except Exception as exc:
+        logger.critical("fail-hard policy unavailable in hooks; failing closed: %s", exc)
         return True
 
 
@@ -126,8 +127,8 @@ def _wake_daemon_after_signal() -> None:
 
         if read_pid() is not None:
             return
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Failed checking daemon PID after signal write: %s", exc)
 
     try:
         _daemon_script = Path(__file__).parent.parent / "extraction_daemon.py"
@@ -139,8 +140,8 @@ def _wake_daemon_after_signal() -> None:
             stderr=subprocess.DEVNULL,
             env=_daemon_start_env(),
         )
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Failed waking extraction daemon after signal write: %s", exc)
 
 _CODEX_TOOL_OUTPUT_KEYS = (
     "tool_output",
@@ -2250,8 +2251,10 @@ def _get_pending_context() -> str:
         adapter = get_adapter()
         if hasattr(adapter, "get_pending_context"):
             return adapter.get_pending_context() or ""
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("Failed reading pending hook context: %s", exc)
+        if _fail_hard_enabled():
+            raise
     return ""
 
 

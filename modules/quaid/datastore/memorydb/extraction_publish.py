@@ -439,7 +439,16 @@ def _prewarm_payload_embeddings(
             return stats
     except Exception:
         log.warning("[extract] %s: embedding prewarm failed", label, exc_info=True)
-        raise
+        if is_fail_hard_enabled():
+            raise
+        return {
+            "requested": 0,
+            "unique": 0,
+            "cache_hits": 0,
+            "warmed": 0,
+            "failed": 0,
+            "skipped_empty": 0,
+        }
     return {
         "requested": 0,
         "unique": 0,
@@ -496,7 +505,16 @@ def _prewarm_edge_entity_embeddings(
             return stats
     except Exception:
         log.warning("[extract] %s: edge entity embedding prewarm failed", label, exc_info=True)
-        raise
+        if is_fail_hard_enabled():
+            raise
+        return {
+            "requested": 0,
+            "unique": 0,
+            "cache_hits": 0,
+            "warmed": 0,
+            "failed": 0,
+            "skipped_empty": 0,
+        }
     return {
         "requested": 0,
         "unique": 0,

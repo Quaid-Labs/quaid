@@ -71,3 +71,9 @@ def test_apply_domain_set_timestamps_honor_quaid_now(tmp_path, monkeypatch):
         assert work["updated_at"] == "2026-09-02T04:05:06+00:00"
     finally:
         conn.close()
+
+
+def test_quaid_now_without_timezone_is_normalized_to_utc(monkeypatch):
+    monkeypatch.setenv("QUAID_NOW", "2026-09-01T01:02:03")
+
+    assert domain_registry._now_iso() == "2026-09-01T01:02:03+00:00"

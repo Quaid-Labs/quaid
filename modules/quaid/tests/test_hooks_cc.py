@@ -227,6 +227,76 @@ def test_wake_daemon_after_signal_starts_when_daemon_is_missing(monkeypatch):
     assert kwargs["env"] == {"QUAID_HOME": "/tmp/quaid"}
 
 
+def test_fail_hard_enabled_logs_when_policy_import_fails(monkeypatch, caplog):
+    from core.interface import hooks
+
+    real_import = __import__
+
+    def fail_policy_import(name, *args, **kwargs):
+        if name == "lib.fail_policy":
+            raise ImportError("policy missing")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.__import__", fail_policy_import)
+
+    with caplog.at_level("CRITICAL", logger="core.interface.hooks"):
+        assert hooks._fail_hard_enabled() is True
+
+    assert "fail-hard policy unavailable in hooks" in caplog.text
+    assert "policy missing" in caplog.text
+
+
+def test_wake_daemon_after_signal_logs_pid_probe_failure(monkeypatch, caplog):
+    from core import extraction_daemon
+    from core.interface import hooks
+
+    monkeypatch.setattr(extraction_daemon, "read_pid", lambda: (_ for _ in ()).throw(RuntimeError("pid broken")))
+    monkeypatch.setattr(hooks.subprocess, "Popen", lambda *args, **kwargs: None)
+
+    with caplog.at_level("DEBUG", logger="core.interface.hooks"):
+        hooks._wake_daemon_after_signal()
+
+    assert "Failed checking daemon PID after signal write: pid broken" in caplog.text
+
+
+def test_wake_daemon_after_signal_logs_start_failure(monkeypatch, caplog):
+    from core import extraction_daemon
+    from core.interface import hooks
+
+    monkeypatch.setattr(extraction_daemon, "read_pid", lambda: None)
+    monkeypatch.setattr(hooks.subprocess, "Popen", lambda *args, **kwargs: (_ for _ in ()).throw(OSError("spawn failed")))
+
+    with caplog.at_level("DEBUG", logger="core.interface.hooks"):
+        hooks._wake_daemon_after_signal()
+
+    assert "Failed waking extraction daemon after signal write: spawn failed" in caplog.text
+
+
+def test_get_pending_context_logs_and_returns_empty_when_fail_open(monkeypatch, caplog):
+    from core.interface import hooks
+
+    monkeypatch.setattr("lib.adapter.get_adapter", lambda: (_ for _ in ()).throw(RuntimeError("adapter broken")))
+    monkeypatch.setattr(hooks, "_fail_hard_enabled", lambda: False)
+
+    with caplog.at_level("WARNING", logger="core.interface.hooks"):
+        assert hooks._get_pending_context() == ""
+
+    assert "Failed reading pending hook context: adapter broken" in caplog.text
+
+
+def test_get_pending_context_raises_when_fail_hard(monkeypatch, caplog):
+    from core.interface import hooks
+
+    monkeypatch.setattr("lib.adapter.get_adapter", lambda: (_ for _ in ()).throw(RuntimeError("adapter broken")))
+    monkeypatch.setattr(hooks, "_fail_hard_enabled", lambda: True)
+
+    with caplog.at_level("WARNING", logger="core.interface.hooks"):
+        with pytest.raises(RuntimeError, match="adapter broken"):
+            hooks._get_pending_context()
+
+    assert "Failed reading pending hook context: adapter broken" in caplog.text
+
+
 def test_claude_code_inject_writes_session_end_signal_for_clear_command(monkeypatch, tmp_path, cursor_dir):
     from adaptors.claude_code.adapter import ClaudeCodeAdapter
 
