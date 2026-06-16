@@ -231,6 +231,23 @@ def _make_rag(tmp_path):
     return DocsRAG(db_path=db_path)
 
 
+def test_docs_rag_legacy_migration_failure_raises_under_failhard(tmp_path, monkeypatch, caplog):
+    import datastore.docsdb.rag as rag_module
+    from datastore.docsdb import db_migration
+
+    monkeypatch.delenv("MEMORY_DB_PATH", raising=False)
+    monkeypatch.setattr(rag_module, "_default_db_path", lambda: tmp_path / "docs.db")
+    monkeypatch.setattr(db_migration, "migrate_legacy_docs_tables", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("migration failed")))
+    monkeypatch.setattr(rag_module, "is_fail_hard_enabled", lambda: True)
+
+    with caplog.at_level("WARNING", logger="datastore.docsdb.rag"):
+        with pytest.raises(RuntimeError, match="DocsRAG legacy docs-table merge failed") as excinfo:
+            DocsRAG()
+
+    assert isinstance(excinfo.value.__cause__, RuntimeError)
+    assert "DocsRAG legacy docs-table merge skipped: migration failed" in caplog.text
+
+
 def test_resolved_workspace_raises_when_failhard_and_roots_unavailable(monkeypatch):
     import datastore.docsdb.rag as rag_module
 
@@ -452,10 +469,22 @@ class TestNeedsReindex:
         assert rag.needs_reindex(str(test_file)) is True
 
     def test_nonexistent_file_returns_true(self, tmp_path):
+        import datastore.docsdb.rag as rag_module
+
+        rag = _make_rag(tmp_path)
+        with patch.object(rag_module, "is_fail_hard_enabled", return_value=False):
+            # needs_reindex returns True on error (reindex when in doubt)
+            result = rag.needs_reindex("/nonexistent/path.md")
+        assert result is True
+
+    def test_indexed_at_staleness_failure_raises_under_failhard(self, tmp_path):
+        import datastore.docsdb.rag as rag_module
+
         rag = _make_rag(tmp_path)
         # needs_reindex returns True on error (reindex when in doubt)
-        result = rag.needs_reindex("/nonexistent/path.md")
-        assert result is True
+        with patch.object(rag_module, "is_fail_hard_enabled", return_value=True):
+            with pytest.raises(RuntimeError, match="Failed checking docs reindex staleness"):
+                rag._needs_reindex_from_indexed_at("/nonexistent/path.md", None)
 
     def test_needs_reindex_many_returns_true_when_doc_chunks_missing(self, tmp_path):
         rag = _make_rag(tmp_path)

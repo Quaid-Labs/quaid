@@ -994,7 +994,10 @@ class DocsRegistry:
         if defn is None:
             try:
                 defn = self.get_project_definition(name)
-            except Exception:
+            except Exception as exc:
+                logger.warning("Failed loading project definition for %s during global sync: %s", name, exc)
+                if _fail_hard_enabled():
+                    raise RuntimeError(f"Failed loading project definition for {name!r}") from exc
                 defn = None
 
         canonical: Optional[Path] = None
@@ -1716,8 +1719,15 @@ class DocsRegistry:
                         # Absolute path — make relative to workspace
                         try:
                             file_path = _to_registry_path(Path(file_path))
-                        except ValueError:
-                            pass  # Keep as-is if outside workspace
+                        except ValueError as exc:
+                            logger.warning(
+                                "External file path %s is outside registry roots; keeping absolute path: %s",
+                                file_path,
+                                exc,
+                            )
+                            if _fail_hard_enabled():
+                                raise RuntimeError(f"External file path is outside registry roots: {file_path}") from exc
+                            # Keep as-is in fail-open mode for existing external-doc workflows.
                     purpose = parts[1] if len(parts) > 1 else None
 
                     existing = self.get(file_path)

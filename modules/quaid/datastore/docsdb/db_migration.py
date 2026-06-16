@@ -134,6 +134,8 @@ def _migrate_locked(target_db: Path, wanted_tables: tuple[str, ...]) -> None:
                     source_db,
                     exc,
                 )
+                if is_fail_hard_enabled():
+                    raise RuntimeError(f"Legacy docs DB merge failed for {source_db}") from exc
             finally:
                 try:
                     conn.execute(f"DETACH DATABASE {alias}")

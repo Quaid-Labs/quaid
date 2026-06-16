@@ -902,6 +902,8 @@ class DocsRAG:
                 migrate_legacy_docs_tables(self.db_path, tables=("doc_chunks",))
             except Exception as exc:
                 logger.warning("DocsRAG legacy docs-table merge skipped: %s", exc)
+                if is_fail_hard_enabled():
+                    raise RuntimeError("DocsRAG legacy docs-table merge failed") from exc
 
     def _ensure_schema(self):
         """Ensure the doc_chunks table exists."""
@@ -1191,6 +1193,8 @@ class DocsRAG:
             return file_time > indexed_time
         except Exception as e:
             logger.warning("Error checking if %s needs reindex: %s", file_path, e)
+            if is_fail_hard_enabled():
+                raise RuntimeError(f"Failed checking docs reindex staleness for {file_path}") from e
             return True  # When in doubt, reindex
 
     def needs_reindex_many(self, file_paths: List[str]) -> Dict[str, bool]:

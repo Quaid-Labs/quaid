@@ -126,6 +126,33 @@ def test_migrate_legacy_docs_tables_skips_signature_failures_with_warning(
     assert "stat failed" in caplog.text
 
 
+def test_migrate_legacy_docs_tables_inner_merge_failure_raises_under_failhard(
+    tmp_path,
+    monkeypatch,
+    caplog,
+):
+    target = tmp_path / "target.db"
+    source = tmp_path / "source.db"
+    for path in (target, source):
+        conn = sqlite3.connect(str(path))
+        try:
+            conn.execute("CREATE TABLE doc_registry (id TEXT PRIMARY KEY, path TEXT)")
+        finally:
+            conn.close()
+
+    monkeypatch.setattr(db_migration, "_legacy_instance_db_paths", lambda _target: [source])
+    monkeypatch.setattr(db_migration, "_copy_table_rows", lambda *_args: (_ for _ in ()).throw(RuntimeError("copy failed")))
+    monkeypatch.setattr(db_migration, "is_fail_hard_enabled", lambda: True)
+    db_migration._PROCESS_DONE_KEYS.clear()
+
+    with caplog.at_level(logging.WARNING, logger="datastore.docsdb.db_migration"):
+        with pytest.raises(RuntimeError, match="Legacy docs DB merge failed") as excinfo:
+            db_migration.migrate_legacy_docs_tables(target, ("doc_registry",))
+
+    assert isinstance(excinfo.value.__cause__, RuntimeError)
+    assert "copy failed" in caplog.text
+
+
 def test_migrate_legacy_docs_tables_logs_target_resolution_failure(
     monkeypatch,
     caplog,

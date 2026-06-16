@@ -1551,6 +1551,67 @@ Test project.
         assert len(found1) == 1
         assert len(found2) == 0  # Already registered
 
+    def test_external_absolute_path_resolution_failure_logs_when_fail_open(
+        self, setup_env, monkeypatch, caplog
+    ):
+        from datastore.docsdb import registry as registry_mod
+
+        r = _get_registry()
+        proj_dir = setup_env / "projects" / "test-project"
+        project_md = proj_dir / "PROJECT.md"
+        external = setup_env.parent / "outside.md"
+        project_md.write_text(f"""# Project: Test
+
+## Files & Assets
+
+### External Files
+| File | Purpose | Auto-Update |
+|------|---------|-------------|
+| {external} | External docs | No |
+
+## Documents
+""")
+        registered = []
+        monkeypatch.setattr(registry_mod, "_to_registry_path", lambda _path: (_ for _ in ()).throw(ValueError("outside workspace")))
+        monkeypatch.setattr(registry_mod, "_fail_hard_enabled", lambda: False)
+        monkeypatch.setattr(r, "get", lambda _path: None)
+        monkeypatch.setattr(r, "register", lambda file_path, **_kwargs: registered.append(file_path))
+
+        with caplog.at_level(logging.WARNING):
+            found = r.sync_external_files("test-project")
+
+        assert found == [str(external)]
+        assert registered == [str(external)]
+        assert "External file path" in caplog.text
+        assert "outside workspace" in caplog.text
+
+    def test_external_absolute_path_resolution_failure_raises_under_failhard(
+        self, setup_env, monkeypatch
+    ):
+        from datastore.docsdb import registry as registry_mod
+
+        r = _get_registry()
+        proj_dir = setup_env / "projects" / "test-project"
+        project_md = proj_dir / "PROJECT.md"
+        external = setup_env.parent / "outside.md"
+        project_md.write_text(f"""# Project: Test
+
+## Files & Assets
+
+### External Files
+| File | Purpose | Auto-Update |
+|------|---------|-------------|
+| {external} | External docs | No |
+
+## Documents
+""")
+        monkeypatch.setattr(registry_mod, "_to_registry_path", lambda _path: (_ for _ in ()).throw(ValueError("outside workspace")))
+        monkeypatch.setattr(registry_mod, "_fail_hard_enabled", lambda: True)
+
+        with pytest.raises(RuntimeError, match="External file path is outside registry roots") as excinfo:
+            r.sync_external_files("test-project")
+        assert isinstance(excinfo.value.__cause__, ValueError)
+
 
 # ============================================================================
 # Project definitions DB tests
@@ -1896,6 +1957,39 @@ class TestProjectDefinitionsTable:
                 file_path=str(Path(setup_env) / "docs" / "sync-fail.md"),
                 source_files=[],
             )
+        assert excinfo.value.__cause__ is err
+
+    def test_global_project_entry_definition_failure_logs_when_fail_open(
+        self, setup_env, monkeypatch, caplog
+    ):
+        from datastore.docsdb import registry as registry_mod
+
+        r = _get_registry()
+        err = RuntimeError("definition unavailable")
+        monkeypatch.setattr(r, "get_project_definition", lambda _name: (_ for _ in ()).throw(err))
+        monkeypatch.setattr(registry_mod, "_fail_hard_enabled", lambda: False)
+
+        with caplog.at_level(logging.WARNING):
+            assert r._ensure_global_project_entry(
+                "missing-defn-proj",
+                create_scaffold=False,
+            ) is False
+
+        assert "Failed loading project definition for missing-defn-proj" in caplog.text
+        assert "definition unavailable" in caplog.text
+
+    def test_global_project_entry_definition_failure_raises_under_failhard(
+        self, setup_env, monkeypatch
+    ):
+        from datastore.docsdb import registry as registry_mod
+
+        r = _get_registry()
+        err = RuntimeError("definition unavailable")
+        monkeypatch.setattr(r, "get_project_definition", lambda _name: (_ for _ in ()).throw(err))
+        monkeypatch.setattr(registry_mod, "_fail_hard_enabled", lambda: True)
+
+        with pytest.raises(RuntimeError, match="Failed loading project definition") as excinfo:
+            r._ensure_global_project_entry("missing-defn-proj")
         assert excinfo.value.__cause__ is err
 
     def test_global_reconcile_path_resolution_failure_raises_under_failhard(self, setup_env, monkeypatch):
