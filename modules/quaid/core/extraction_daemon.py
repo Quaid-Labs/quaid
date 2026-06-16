@@ -6520,8 +6520,8 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                         )
                     if not session_logs_transcript_path or not os.path.isfile(session_logs_transcript_path):
                         logger.info(
-                            "[%s] session %s: session_logs ingest skipped for empty session; "
-                            "transcript path is unavailable: %s",
+                            "[%s] session %s: session_logs ingest skipped: "
+                            "resolved transcript path is unavailable: %s",
                             label,
                             session_id,
                             session_logs_transcript_path,
