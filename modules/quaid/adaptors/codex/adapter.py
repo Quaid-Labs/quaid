@@ -222,7 +222,7 @@ class CodexAdapter(QuaidAdapter):
             )
             return True
         except Exception as exc:
-            if _is_invalid_quaid_now_error(exc):
+            if _is_invalid_quaid_now_error(exc) or is_fail_hard_enabled():
                 raise
             _trace_m15("adapter.codex.notify.error", message=message, error=str(exc))
             print(f"[notify] Failed to queue Codex notification: {exc}", file=sys.stderr)

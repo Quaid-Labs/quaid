@@ -2619,6 +2619,19 @@ class TestCodexAdapter:
         with pytest.raises(ValueError, match="Invalid QUAID_NOW"):
             adapter.notify("bad clock")
 
+    def test_notify_raises_queue_failure_when_failhard_enabled(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("QUAID_INSTANCE", "codex-notify-failhard")
+        adapter = CodexAdapter(home=tmp_path)
+        monkeypatch.setattr("adaptors.codex.adapter.is_fail_hard_enabled", lambda: True)
+
+        def fail_open(*_args, **_kwargs):
+            raise OSError("queue write failed")
+
+        monkeypatch.setattr(builtins, "open", fail_open)
+
+        with pytest.raises(OSError, match="queue write failed"):
+            adapter.notify("hello")
+
     def test_pending_context_drains_non_provider_notices(self, tmp_path, monkeypatch):
         monkeypatch.setenv("QUAID_INSTANCE", "codex-pending-normal")
         adapter = CodexAdapter(home=tmp_path)
