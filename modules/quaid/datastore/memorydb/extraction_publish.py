@@ -138,6 +138,29 @@ def _publish_trace_enabled() -> bool:
     raw = str(os.environ.get("QUAID_PUBLISH_TRACE", "") or "").strip().lower()
     return raw in {"1", "true", "yes", "on"}
 
+
+def _extract_publish_embedding_timeout_s(default: float = 30.0) -> float:
+    raw = str(
+        os.environ.get("QUAID_EXTRACT_PUBLISH_EMBED_TIMEOUT_S")
+        or os.environ.get("QUAID_MEMORYDB_EMBED_TIMEOUT_S")
+        or ""
+    ).strip()
+    if not raw:
+        return float(default)
+    try:
+        value = float(raw)
+    except Exception:
+        logger.warning(
+            "[datastore-memorydb] invalid extraction publish embedding timeout %r; defaulting to %.1fs",
+            raw,
+            float(default),
+        )
+        return float(default)
+    if value <= 0:
+        return float(default)
+    return value
+
+
 def _publish_trace_path() -> Optional[Path]:
     if not _publish_trace_enabled():
         return None
@@ -230,6 +253,7 @@ def _store_payload_source_chunks(
     fail_hard_enabled: FailHardEnabled,
     log: logging.Logger,
     max_microchunk_tokens: int,
+    embedding_timeout_s: float,
 ) -> Dict[str, List[Dict[str, Any]]]:
     """Materialize staged source chunk descriptors at publish time."""
     ref_to_chunks: Dict[str, List[Dict[str, Any]]] = {}
@@ -304,6 +328,7 @@ def _store_payload_source_chunks(
                 conversation_id=raw.get("conversation_id") or chunk_source_conversation_id,
                 source_author_id=raw.get("source_author_id") or source_author_id,
                 max_microchunk_tokens=max_microchunk_tokens,
+                embedding_timeout_s=embedding_timeout_s,
             )
         except Exception as exc:
             log.warning(
@@ -396,7 +421,7 @@ def _prewarm_payload_embeddings(
             "skipped_empty": 0,
         }
     try:
-        stats = memory_service.warm_embeddings(texts)
+        stats = memory_service.warm_embeddings(texts, timeout_s=_extract_publish_embedding_timeout_s())
         if isinstance(stats, dict):
             log.info(
                 "[extract] %s: embedding prewarm requested=%d unique=%d hits=%d warmed=%d failed=%d",
@@ -453,7 +478,7 @@ def _prewarm_edge_entity_embeddings(
             "skipped_empty": 0,
         }
     try:
-        stats = memory_service.warm_embeddings(texts)
+        stats = memory_service.warm_embeddings(texts, timeout_s=_extract_publish_embedding_timeout_s())
         if isinstance(stats, dict):
             log.info(
                 "[extract] %s: edge entity embedding prewarm requested=%d unique=%d hits=%d warmed=%d failed=%d",
@@ -590,6 +615,7 @@ def run_extraction_publish_payload(
             fail_hard_enabled=fail_hard_enabled,
             log=log,
             max_microchunk_tokens=DEFAULT_SESSION_MICROCHUNK_TOKENS,
+            embedding_timeout_s=_extract_publish_embedding_timeout_s(),
         )
         raw_facts = _attach_materialized_source_chunk_ids(raw_facts, ref_to_chunk_id)
         result["raw_facts"] = raw_facts

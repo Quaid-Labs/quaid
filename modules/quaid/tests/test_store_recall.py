@@ -5507,6 +5507,49 @@ class TestSourceChunkStorage:
             graph.get_session_chunk(private["chunk_id"], owner_id="ada", fail_hard=True)
         assert graph.get_source_chunk(private["chunk_id"], owner_id="douglas")["text"].startswith("Private session")
 
+    def test_store_source_chunk_uses_configured_embedding_timeout(self, tmp_path, monkeypatch):
+        """Source chunk embedding should not inherit the provider's unbounded default."""
+        graph, _db_file = _make_graph(tmp_path)
+        monkeypatch.setenv("QUAID_MEMORYDB_EMBED_TIMEOUT_S", "12.5")
+
+        graph.store_source_chunk(
+            "User: Rowan archived the workshop notes in the field binder.",
+            owner_id="rowan",
+            source_id="session-timeout",
+            session_id="session-timeout",
+            chunk_index=0,
+        )
+
+        assert graph.get_embedding.call_args.kwargs["timeout_s"] == 12.5
+
+    def test_memory_graph_embedding_default_uses_configured_timeout(self, tmp_path, monkeypatch):
+        """Generic MemoryDB writes should share the bounded embedding default."""
+        import datastore.memorydb.memory_graph as mg
+
+        graph = mg.MemoryGraph(db_path=tmp_path / "test.db")
+        monkeypatch.setenv("QUAID_MEMORYDB_EMBED_TIMEOUT_S", "9.5")
+
+        with patch("lib.embeddings.get_embeddings_provider", return_value=SimpleNamespace(model_name="test-model")), \
+             patch.object(mg, "_lib_get_embedding", return_value=_FAKE_EMBEDDING) as mock_get_embedding:
+            embedding = graph.get_embedding("Rowan archived the workshop notes")
+
+        assert embedding == _FAKE_EMBEDDING
+        assert mock_get_embedding.call_args.kwargs["timeout_s"] == 9.5
+
+    def test_warm_embedding_cache_uses_configured_embedding_timeout(self, tmp_path, monkeypatch):
+        """Batch embedding prewarm should pass the bounded MemoryDB timeout."""
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _db_file = _make_graph(tmp_path)
+        monkeypatch.setenv("QUAID_MEMORYDB_EMBED_TIMEOUT_S", "11.5")
+
+        with patch.object(mg, "_lib_get_embeddings_provider", return_value=SimpleNamespace(model_name="test-model")), \
+             patch.object(mg, "_lib_get_embeddings", return_value=[_FAKE_EMBEDDING]) as mock_get_embeddings:
+            stats = graph.warm_embedding_cache(["Rowan archived the workshop notes"], max_workers=1)
+
+        assert mock_get_embeddings.call_args.kwargs["timeout_s"] == 11.5
+        assert stats["warmed"] == 1
+
     def test_source_chunk_rejects_invalid_inputs(self, tmp_path):
         """Source chunk storage fails loudly on malformed input."""
         graph, _db_file = _make_graph(tmp_path)

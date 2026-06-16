@@ -94,8 +94,8 @@ class DatastoreMemoryService(MemoryServicePort):
     def batch_write(self) -> Any:
         return batch_memory_write()
 
-    def warm_embeddings(self, texts: List[str]) -> Dict[str, Any]:
-        return warm_memory_embeddings(texts=texts)
+    def warm_embeddings(self, texts: List[str], *, timeout_s: Optional[float] = None) -> Dict[str, Any]:
+        return warm_memory_embeddings(texts=texts, timeout_s=timeout_s)
 
     def store(
         self,

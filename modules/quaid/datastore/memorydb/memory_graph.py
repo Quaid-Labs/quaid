@@ -1200,8 +1200,10 @@ class MemoryGraph:
             except Exception:
                 pass  # Cache miss or table doesn't exist
 
-        # Cache miss — compute fresh
-        embedding = _lib_get_embedding(text, timeout_s=timeout_s)
+        # Cache miss — compute fresh with a MemoryDB-level bound unless the caller
+        # supplied a tighter operation-specific budget.
+        effective_timeout_s = timeout_s if timeout_s is not None else _memorydb_embedding_timeout_s()
+        embedding = _lib_get_embedding(text, timeout_s=effective_timeout_s)
         if embedding:
             try:
                 conn_cm = nullcontext(conn) if conn is not None else self._get_conn()
@@ -1222,6 +1224,7 @@ class MemoryGraph:
         max_workers: Optional[int] = None,
         pool_name: str = "embeddings",
         task_name: str = "embedding_cache",
+        timeout_s: Optional[float] = None,
     ) -> Dict[str, int]:
         """Precompute and persist embeddings for a batch of texts.
 
@@ -1286,6 +1289,7 @@ class MemoryGraph:
             max_workers=max_workers,
             pool_name=pool_name,
             task_name=task_name,
+            timeout_s=timeout_s if timeout_s is not None else _memorydb_embedding_timeout_s(),
         )
 
         writes: List[Tuple[str, bytes]] = []
@@ -1574,6 +1578,7 @@ class MemoryGraph:
         source_date: Optional[str] = None,
         token_count: Optional[int] = None,
         created_at: Optional[str] = None,
+        embedding_timeout_s: Optional[float] = None,
         embed: bool = True,
         conn: Optional[sqlite3.Connection] = None,
     ) -> Dict[str, Any]:
@@ -1646,7 +1651,12 @@ class MemoryGraph:
         packed_embedding: Optional[bytes] = None
         if embed:
             try:
-                embedding = self.get_embedding(normalized_text)
+                timeout_s = (
+                    float(embedding_timeout_s)
+                    if embedding_timeout_s is not None
+                    else _memorydb_embedding_timeout_s()
+                )
+                embedding = self.get_embedding(normalized_text, timeout_s=timeout_s)
                 if embedding:
                     packed_embedding = self._pack_embedding(embedding)
                 elif _is_fail_hard_mode():
@@ -6238,6 +6248,25 @@ def search(
 # Janitor and normal product adapters can touch the same SQLite DB concurrently.
 # Treat WAL write contention as transient, but keep a hard bound.
 _DATASTORE_BUSY_RETRY_DELAYS_SECONDS = (0.1, 0.25, 0.5, 1.0, 2.0)
+_DEFAULT_MEMORYDB_EMBED_TIMEOUT_S = 30.0
+
+
+def _memorydb_embedding_timeout_s(default: float = _DEFAULT_MEMORYDB_EMBED_TIMEOUT_S) -> float:
+    raw = str(os.environ.get("QUAID_MEMORYDB_EMBED_TIMEOUT_S", "") or "").strip()
+    if not raw:
+        return float(default)
+    try:
+        value = float(raw)
+    except Exception:
+        logger.warning(
+            "Invalid QUAID_MEMORYDB_EMBED_TIMEOUT_S=%r; using %.1fs",
+            raw,
+            float(default),
+        )
+        return float(default)
+    if value <= 0:
+        return float(default)
+    return value
 
 
 def _is_sqlite_busy_or_locked(exc: BaseException) -> bool:
@@ -25166,6 +25195,7 @@ def warm_embedding_cache(
     max_workers: Optional[int] = None,
     pool_name: str = "embeddings",
     task_name: str = "embedding_cache",
+    timeout_s: Optional[float] = None,
 ) -> Dict[str, int]:
     """Precompute embeddings for a batch of texts into the shared cache."""
     return get_graph().warm_embedding_cache(
@@ -25173,6 +25203,7 @@ def warm_embedding_cache(
         max_workers=max_workers,
         pool_name=pool_name,
         task_name=task_name,
+        timeout_s=timeout_s,
     )
 
 

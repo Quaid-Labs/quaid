@@ -5236,7 +5236,7 @@ class TestExtractFromTranscript:
             def __init__(self):
                 self.store_calls = []
 
-            def warm_embeddings(self, texts):
+            def warm_embeddings(self, texts, *, timeout_s=None):
                 return {"requested": len(texts), "unique": len(set(texts)), "cache_hits": 0, "warmed": len(texts), "failed": 0}
 
             def batch_write(self):
@@ -5280,7 +5280,7 @@ class TestExtractFromTranscript:
                 self._contexts = iter([_FailingContext(), nullcontext(write_conn)])
                 self.store_calls = []
 
-            def warm_embeddings(self, texts):
+            def warm_embeddings(self, texts, *, timeout_s=None):
                 return {"requested": len(texts), "unique": len(set(texts)), "cache_hits": 0, "warmed": len(texts), "failed": 0}
 
             def batch_write(self):
@@ -5324,7 +5324,7 @@ class TestExtractFromTranscript:
                 self._contexts = iter([nullcontext(initial_snapshot), nullcontext(write_conn)])
                 self.store_calls = []
 
-            def warm_embeddings(self, texts):
+            def warm_embeddings(self, texts, *, timeout_s=None):
                 return {"requested": len(texts), "unique": len(set(texts)), "cache_hits": 0, "warmed": len(texts), "failed": 0}
 
             def batch_write(self):
@@ -5369,7 +5369,7 @@ class TestExtractFromTranscript:
                 self._contexts = iter([nullcontext(initial_snapshot), nullcontext(write_conn)])
                 self.store_calls = []
 
-            def warm_embeddings(self, texts):
+            def warm_embeddings(self, texts, *, timeout_s=None):
                 return {"requested": len(texts), "unique": len(set(texts)), "cache_hits": 0, "warmed": len(texts), "failed": 0}
 
             def batch_write(self):
@@ -5555,6 +5555,7 @@ class TestExtractFromTranscript:
         assert mock_store_source_chunks.call_args.kwargs["session_id"] == "sess-chunklink"
         assert mock_store_source_chunks.call_args.kwargs["start_index"] == 0
         assert mock_store_source_chunks.call_args.kwargs["chunk_kind"] == "micro"
+        assert mock_store_source_chunks.call_args.kwargs["embedding_timeout_s"] == 30.0
         assert mock_store.call_count == 2
         assert {call.kwargs["source_chunk_id"] for call in mock_store.call_args_list} == {"sch_extract_1"}
 
@@ -6395,7 +6396,7 @@ class TestExtractFromTranscript:
 
         with patch(
             "ingest.extract._memory.warm_embeddings",
-            side_effect=lambda texts: warmed.append(list(texts)) or {
+            side_effect=lambda texts, timeout_s=None: warmed.append((list(texts), timeout_s)) or {
                 "requested": len(texts),
                 "unique": len(set(texts)),
                 "cache_hits": 0,
@@ -6411,10 +6412,10 @@ class TestExtractFromTranscript:
                 dry_run=False,
             )
 
-        assert warmed == [[
+        assert warmed == [([
             "Maya mentioned dietary tagging for the recipe app",
             "Maya's birthday dinner is planned for May 18",
-        ]]
+        ], 30.0)]
         assert applied["embedding_cache_requested"] == 2
         assert applied["embedding_cache_unique"] == 2
         assert applied["embedding_cache_warmed"] == 2
@@ -6460,7 +6461,7 @@ class TestExtractFromTranscript:
 
         with patch(
             "ingest.extract._memory.warm_embeddings",
-            side_effect=lambda texts: warmed.append(list(texts)) or {
+            side_effect=lambda texts, timeout_s=None: warmed.append((list(texts), timeout_s)) or {
                 "requested": len(texts),
                 "unique": len(set(texts)),
                 "cache_hits": 0,
@@ -6477,16 +6478,16 @@ class TestExtractFromTranscript:
             )
 
         assert warmed == [
-            [
+            ([
                 "maya currently lives in South Austin",
                 "maya works as a product manager at a company called TechFlow",
-            ],
-            [
+            ], 30.0),
+            ([
                 "maya",
                 "Austin",
                 "maya",
                 "TechFlow",
-            ],
+            ], 30.0),
         ]
         assert applied["embedding_cache_requested"] == 2
         assert applied["embedding_cache_unique"] == 2
@@ -6667,7 +6668,7 @@ class TestExtractFromTranscript:
             calls["count"] += 1
 
             class _Svc:
-                def warm_embeddings(self, texts):
+                def warm_embeddings(self, texts, *, timeout_s=None):
                     return {
                         "requested": len(texts),
                         "unique": len(texts),
