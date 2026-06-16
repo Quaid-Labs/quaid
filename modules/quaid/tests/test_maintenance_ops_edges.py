@@ -148,7 +148,31 @@ def test_batch_extract_edges_prompt_includes_domain_neutral_role_guardrails():
     assert "gym, studio, dojo, pool" not in prompt
     assert "in any language" in prompt
     assert "first-person, self-reference, possessive owner reference" in prompt
+    assert 'owner endpoint is "Casey River"' in prompt
+    assert 'emit "Casey River" as that edge endpoint' in prompt
     assert '"the user", "me", "my", "I", or "the owner"' not in prompt
+
+
+def test_batch_extract_edges_prompt_includes_generic_owner_alias_guidance_without_named_owner():
+    metrics = maintenance_ops.JanitorMetrics()
+    captured = {}
+
+    def _fake_call(prompt: str, max_tokens: int, timeout: float):
+        captured["prompt"] = prompt
+        return ('[{"fact": 1, "edges": []}]', 0.05)
+
+    with patch.object(maintenance_ops, "call_deep_reasoning", side_effect=_fake_call):
+        maintenance_ops.batch_extract_edges(
+            facts=[{"id": "fact-generic-owner", "text": "Leila said my cousin manages the workshop."}],
+            graph=object(),
+            metrics=metrics,
+            relations_list="family_of, manages",
+        )
+
+    prompt = captured.get("prompt", "")
+    assert 'owner endpoint is "the user"' in prompt
+    assert 'emit "the user" as that edge endpoint' in prompt
+    assert "in any language" in prompt
 
 
 def test_batch_extract_edges_accepts_trains_at_relation():
