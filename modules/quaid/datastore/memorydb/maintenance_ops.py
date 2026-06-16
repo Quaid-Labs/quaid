@@ -2985,6 +2985,11 @@ JSON array only:"""
 # Task 5b: Review Decayed Memories (Deep Reasoning)
 # =============================================================================
 
+def _decay_review_extraction_confidence(attrs: Dict[str, Any], default: float) -> float:
+    raw_conf = attrs.get("extraction_confidence")
+    return float(raw_conf) if raw_conf is not None else default
+
+
 def review_decayed_memories(
     graph: MemoryGraph,
     metrics: JanitorMetrics,
@@ -3134,7 +3139,7 @@ JSON array only:"""
                             if attrs_raw:
                                 try:
                                     attrs = json.loads(attrs_raw)
-                                    ext_conf = float(attrs.get("extraction_confidence", 0.3) or 0.3)
+                                    ext_conf = _decay_review_extraction_confidence(attrs, 0.3)
                                 except Exception as exc:
                                     logger.warning(
                                         "Skipping malformed decay review attributes for node %s: %s",
@@ -3143,7 +3148,7 @@ JSON array only:"""
                                     )
                                     ext_conf = 0.3
                         # Scale from node's extraction_confidence if available, otherwise 0.3
-                        extend_conf = max(0.3, float(ext_conf) * 0.5) if ext_conf else 0.3
+                        extend_conf = max(0.3, float(ext_conf) * 0.5)
                         conn.execute(
                             "UPDATE nodes SET confidence = ?, accessed_at = ?, status = 'active' WHERE id = ?",
                             (extend_conf, now_iso, node_id)
@@ -3171,7 +3176,7 @@ JSON array only:"""
                             if attrs_raw:
                                 try:
                                     attrs = json.loads(attrs_raw)
-                                    ext_conf = float(attrs.get("extraction_confidence", 0.7) or 0.7)
+                                    ext_conf = _decay_review_extraction_confidence(attrs, 0.7)
                                 except Exception as exc:
                                     logger.warning(
                                         "Skipping malformed decay review attributes for node %s: %s",
@@ -3180,7 +3185,7 @@ JSON array only:"""
                                     )
                                     ext_conf = 0.7
                         # Use max of 0.7 and node's extraction_confidence so high-value facts keep their score
-                        pin_conf = max(0.7, float(ext_conf)) if ext_conf else 0.7
+                        pin_conf = max(0.7, float(ext_conf))
                         conn.execute(
                             "UPDATE nodes SET pinned = 1, confidence = ?, status = 'active' WHERE id = ?",
                             (pin_conf, node_id)

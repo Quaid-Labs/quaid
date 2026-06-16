@@ -994,6 +994,19 @@ def test_review_decayed_memories_logs_malformed_attributes(monkeypatch, caplog, 
     assert "Skipping malformed decay review attributes for node n1" in caplog.text
 
 
+@pytest.mark.parametrize(
+    ("attrs", "default", "expected"),
+    [
+        ({"extraction_confidence": 0.0}, 0.3, 0.0),
+        ({"extraction_confidence": "0"}, 0.7, 0.0),
+        ({}, 0.3, 0.3),
+        ({"extraction_confidence": None}, 0.7, 0.7),
+    ],
+)
+def test_decay_review_extraction_confidence_preserves_explicit_zero(attrs, default, expected):
+    assert maintenance_ops._decay_review_extraction_confidence(attrs, default) == expected
+
+
 def test_get_completed_review_work_today_uses_quaid_now(monkeypatch):
     monkeypatch.setenv("QUAID_NOW", "2026-03-11T15:30:00Z")
     captured = {}
