@@ -6006,7 +6006,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
         _release_session_processing_lock(lock_owner_key, lock_fd)
         return
 
-    if (staged_payload_sweep_signal and staged_state_has_payload(staged_state)) or _semantic_buffer_has_content(staged_state):
+    if staged_state_has_payload(staged_state) or _semantic_buffer_has_content(staged_state):
         internal_state = "not_internal"
     else:
         internal_state = _reconcile_internal_cursor_state(
