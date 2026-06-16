@@ -191,6 +191,89 @@ def test_journal_config_failure_raises_when_failhard(monkeypatch):
     assert "config broken" in str(excinfo.value.__cause__)
 
 
+def test_core_markdown_config_failure_warns_when_fail_open(monkeypatch, caplog):
+    import datastore.insightdb.soul_snippets as soul_snippets
+
+    monkeypatch.setattr(
+        soul_snippets,
+        "get_config",
+        lambda: (_ for _ in ()).throw(RuntimeError("config broken")),
+    )
+    monkeypatch.setattr(soul_snippets, "is_fail_hard_enabled", lambda: False)
+
+    with caplog.at_level(logging.WARNING, logger="datastore.insightdb.soul_snippets"):
+        assert soul_snippets._get_core_markdown_config("SOUL.md") == {}
+
+    assert "Failed reading core markdown config for SOUL.md" in caplog.text
+    assert "config broken" in caplog.text
+
+
+def test_core_markdown_config_failure_raises_when_failhard(monkeypatch):
+    import datastore.insightdb.soul_snippets as soul_snippets
+
+    monkeypatch.setattr(
+        soul_snippets,
+        "get_config",
+        lambda: (_ for _ in ()).throw(RuntimeError("config broken")),
+    )
+    monkeypatch.setattr(soul_snippets, "is_fail_hard_enabled", lambda: True)
+
+    with pytest.raises(RuntimeError, match="Core markdown config read failed") as excinfo:
+        soul_snippets._get_core_markdown_config("SOUL.md")
+
+    assert isinstance(excinfo.value.__cause__, RuntimeError)
+    assert "config broken" in str(excinfo.value.__cause__)
+
+
+def test_apply_decisions_logs_readability_failure_during_cap_check(monkeypatch, caplog):
+    import datastore.insightdb.soul_snippets as soul_snippets
+
+    class FlakyPath:
+        def __init__(self):
+            self.reads = 0
+
+        def exists(self):
+            return True
+
+        def read_text(self, encoding="utf-8"):
+            self.reads += 1
+            if self.reads == 1:
+                return "existing durable content"
+            raise OSError("file unreadable")
+
+        def __str__(self):
+            return "/tmp/SOUL.md"
+
+    file_path = FlakyPath()
+    monkeypatch.setattr(soul_snippets, "_resolve_writable_file_path", lambda _filename: file_path)
+    monkeypatch.setattr(soul_snippets, "_insert_into_file", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(soul_snippets, "_refresh_generated_projection_hygiene", lambda: None)
+
+    with caplog.at_level(logging.WARNING, logger="datastore.insightdb.soul_snippets"):
+        stats = soul_snippets.apply_decisions(
+            [
+                {
+                    "file": "SOUL.md",
+                    "snippet_index": 1,
+                    "action": "FOLD",
+                    "insert_after": "END",
+                }
+            ],
+            {
+                "SOUL.md": {
+                    "snippets": ["new durable fact"],
+                    "config": {"maxLines": 1},
+                    "parent_content": "",
+                }
+            },
+            dry_run=False,
+        )
+
+    assert stats["errors"] == ["Skipped SOUL.md[1]: insert returned false"]
+    assert "Failed reading /tmp/SOUL.md to enforce maxLines cap" in caplog.text
+    assert "file unreadable" in caplog.text
+
+
 @pytest.fixture
 def mock_config():
     """Mock config with journal enabled."""

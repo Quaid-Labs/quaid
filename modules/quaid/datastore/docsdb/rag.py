@@ -2314,10 +2314,17 @@ class DocsRAG:
     def _row_value(self, row: Any, key: str, index: int) -> Any:
         try:
             return row[key]
-        except Exception:
+        except Exception as key_exc:
             try:
                 return row[index]
-            except Exception:
+            except Exception as index_exc:
+                logger.debug(
+                    "Unable to read docs row value key=%r index=%s: key_error=%s index_error=%s",
+                    key,
+                    index,
+                    key_exc,
+                    index_exc,
+                )
                 return None
 
     def _suggest_unlinked_projects(
@@ -2343,10 +2350,13 @@ class DocsRAG:
                 for name, entry in (_list_projects() or {}).items()
                 if str(name or "").strip() and isinstance(entry, dict)
             }
-        except Exception:
+        except Exception as exc:
             # Keep scope-hint behavior available even when registry metadata is
             # unavailable; inferred source-project labels can still surface likely
             # unlinked candidates for a scoped miss.
+            logger.warning("Failed reading project registry for unlinked docs suggestions: %s", exc)
+            if is_fail_hard_enabled():
+                raise RuntimeError("Failed reading project registry for unlinked docs suggestions") from exc
             registry_entries = {}
 
         candidate_projects = [

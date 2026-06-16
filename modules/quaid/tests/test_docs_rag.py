@@ -231,6 +231,58 @@ def _make_rag(tmp_path):
     return DocsRAG(db_path=db_path)
 
 
+def test_docs_row_value_logs_unreadable_row(tmp_path, caplog):
+    rag = _make_rag(tmp_path)
+
+    class BadRow:
+        def __getitem__(self, _key):
+            raise TypeError("bad row")
+
+    with caplog.at_level("DEBUG", logger="datastore.docsdb.rag"):
+        assert rag._row_value(BadRow(), "source_file", 0) is None
+
+    assert "Unable to read docs row value" in caplog.text
+    assert "bad row" in caplog.text
+
+
+def test_suggest_unlinked_projects_registry_failure_warns_when_fail_open(tmp_path, caplog):
+    rag = _make_rag(tmp_path)
+
+    with sqlite3.connect(rag.db_path) as conn, \
+         patch("lib.project_registry.list_all", side_effect=RuntimeError("registry locked")), \
+         patch("datastore.docsdb.rag.is_fail_hard_enabled", return_value=False), \
+         caplog.at_level("WARNING", logger="datastore.docsdb.rag"):
+        assert rag._suggest_unlinked_projects(
+            conn=conn,
+            query="north pier",
+            query_embedding=[0.1, 0.2],
+            linked_projects=[],
+        ) == []
+
+    assert "Failed reading project registry for unlinked docs suggestions" in caplog.text
+    assert "registry locked" in caplog.text
+
+
+def test_suggest_unlinked_projects_registry_failure_raises_when_failhard(tmp_path, caplog):
+    rag = _make_rag(tmp_path)
+
+    with sqlite3.connect(rag.db_path) as conn, \
+         patch("lib.project_registry.list_all", side_effect=RuntimeError("registry locked")), \
+         patch("datastore.docsdb.rag.is_fail_hard_enabled", return_value=True), \
+         caplog.at_level("WARNING", logger="datastore.docsdb.rag"):
+        with pytest.raises(RuntimeError, match="Failed reading project registry for unlinked docs suggestions") as excinfo:
+            rag._suggest_unlinked_projects(
+                conn=conn,
+                query="north pier",
+                query_embedding=[0.1, 0.2],
+                linked_projects=[],
+            )
+
+    assert isinstance(excinfo.value.__cause__, RuntimeError)
+    assert "registry locked" in str(excinfo.value.__cause__)
+    assert "Failed reading project registry for unlinked docs suggestions" in caplog.text
+
+
 def test_docs_rag_legacy_migration_failure_raises_under_failhard(tmp_path, monkeypatch, caplog):
     import datastore.docsdb.rag as rag_module
     from datastore.docsdb import db_migration

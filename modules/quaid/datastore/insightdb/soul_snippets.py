@@ -580,6 +580,8 @@ def _get_core_markdown_config(filename: str) -> Dict[str, Any]:
         return cfg.docs.core_markdown.files.get(filename, {})
     except Exception as exc:
         logger.warning("Failed reading core markdown config for %s: %s", filename, exc)
+        if is_fail_hard_enabled():
+            raise RuntimeError("Core markdown config read failed") from exc
         return {}
 
 
@@ -1892,7 +1894,8 @@ def apply_decisions(
                     else:
                         try:
                             current_lines = len(file_path.read_text(encoding='utf-8').split('\n'))
-                        except Exception:
+                        except Exception as exc:
+                            logger.warning("Failed reading %s to enforce maxLines cap: %s", file_path, exc)
                             current_lines = -1
                         if max_lines > 0 and current_lines >= max_lines:
                             # At-limit is expected and should not fail janitor.
