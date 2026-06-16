@@ -184,6 +184,22 @@ def _project_md_recent_log_limit(default: int = 15) -> int:
     return max(1, limit)
 
 
+def _project_log_fallback_now(*, skip_quaid_now: bool = False) -> datetime:
+    raw = str(os.environ.get("QUAID_NOW", "") or "").strip()
+    if raw and not skip_quaid_now:
+        try:
+            value = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError as exc:
+            if is_fail_hard_enabled():
+                raise RuntimeError(f"Invalid QUAID_NOW {raw!r}") from exc
+            logger.warning("Invalid QUAID_NOW %r; using wall clock", raw)
+        else:
+            if value.tzinfo is None:
+                value = value.replace(tzinfo=timezone.utc)
+            return value.astimezone(timezone.utc)
+    return datetime.now(timezone.utc)
+
+
 def _parse_project_log_datetime(
     raw: str,
     *,
@@ -199,8 +215,8 @@ def _parse_project_log_datetime(
         if is_fail_hard_enabled():
             raise RuntimeError(f"Invalid {raw_source} {raw!r}") from exc
         if fallback_to_wall_clock:
-            logger.warning("Invalid %s %r; using wall clock", raw_source, raw)
-            return datetime.now(timezone.utc)
+            logger.warning("Invalid %s %r; using fallback clock", raw_source, raw)
+            return _project_log_fallback_now(skip_quaid_now=raw_source == "QUAID_NOW")
         logger.warning("Invalid %s %r; ignoring timestamp", raw_source, raw)
         return None
     if value.tzinfo is None:
@@ -214,7 +230,7 @@ def _project_log_now(date_str: Optional[str] = None) -> datetime:
     raw = str(date_str or os.environ.get("QUAID_NOW", "") or "").strip()
     if raw:
         return _parse_project_log_datetime(raw, raw_source=raw_source)
-    return datetime.now(timezone.utc)
+    return _project_log_fallback_now(skip_quaid_now=True)
 
 
 def _index_project_history_log(log_path: Path, *, project_name: str, trigger: str) -> int:

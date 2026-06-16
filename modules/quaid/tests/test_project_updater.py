@@ -393,6 +393,16 @@ class TestAppendProjectLogs:
         assert _project_log_now().isoformat(timespec="seconds") == "2026-03-07T15:30:00+00:00"
         assert _project_log_now("2026-03-08").isoformat(timespec="seconds") == "2026-03-08T23:59:59+00:00"
 
+    def test_project_log_invalid_date_override_falls_back_to_quaid_now(self, setup_env, monkeypatch):
+        from datastore.docsdb import project_updater
+
+        monkeypatch.setenv("QUAID_NOW", "2026-04-05T06:07:08Z")
+        monkeypatch.setattr(project_updater, "is_fail_hard_enabled", lambda: False)
+
+        now = project_updater._project_log_now("not-a-clock")
+
+        assert now.isoformat(timespec="seconds") == "2026-04-05T06:07:08+00:00"
+
     def test_project_md_recent_log_limit_raises_when_fail_hard(self, setup_env, monkeypatch):
         from datastore.docsdb import project_updater
 
