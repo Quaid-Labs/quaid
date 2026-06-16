@@ -50,6 +50,10 @@ def _now_datetime() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _is_invalid_quaid_now_error(exc: BaseException) -> bool:
+    return isinstance(exc, ValueError) and str(exc).startswith("Invalid QUAID_NOW=")
+
+
 class CodexAdapter(QuaidAdapter):
     """Adapter for Codex CLI/app sessions."""
 
@@ -163,7 +167,10 @@ class CodexAdapter(QuaidAdapter):
         try:
             home = self.quaid_home() / "instances"
             candidates = list(home.iterdir())
-        except Exception:
+        except Exception as exc:
+            if is_fail_hard_enabled():
+                raise
+            print(f"[adapter][WARN] Could not list Codex instances: {exc}", file=sys.stderr)
             candidates = []
         for d in candidates:
             if d.is_dir() and d.name.startswith(prefix) and not _is_deleted_misc_instance(d.name):
@@ -196,8 +203,8 @@ class CodexAdapter(QuaidAdapter):
         if dry_run:
             print(f"[notify] (dry-run) {message}", file=sys.stderr)
             return True
-        timestamp = _now_iso()
         try:
+            timestamp = _now_iso()
             pending = self._pending_notifications_path()
             pending.parent.mkdir(parents=True, exist_ok=True)
             entry_payload = {"message": message, "ts": timestamp}
@@ -215,6 +222,8 @@ class CodexAdapter(QuaidAdapter):
             )
             return True
         except Exception as exc:
+            if _is_invalid_quaid_now_error(exc):
+                raise
             _trace_m15("adapter.codex.notify.error", message=message, error=str(exc))
             print(f"[notify] Failed to queue Codex notification: {exc}", file=sys.stderr)
             return False
@@ -278,6 +287,8 @@ class CodexAdapter(QuaidAdapter):
                 messages=messages,
             )
         except Exception as exc:
+            if _is_invalid_quaid_now_error(exc) or is_fail_hard_enabled():
+                raise
             _trace_m15("adapter.codex.pending.error", path=str(pending), error=str(exc))
             print(f"[notify] Failed to drain Codex notifications: {exc}", file=sys.stderr)
             return ""
@@ -632,9 +643,14 @@ class CodexAdapter(QuaidAdapter):
     def _current_instance_id_for_sessions(self) -> str:
         try:
             return str(self.instance_id() or "").strip()
-        except Exception:
+        except Exception as exc:
             name = self.get_instance_name()
-            return f"{self.agent_id_prefix()}-{name}" if name else self.agent_id_prefix()
+            if name:
+                return f"{self.agent_id_prefix()}-{name}"
+            if is_fail_hard_enabled():
+                raise
+            print(f"[adapter][WARN] Could not resolve Codex instance id for sessions: {exc}", file=sys.stderr)
+            return self.agent_id_prefix()
 
     def _session_meta_payload(self, path: Path) -> dict:
         try:
@@ -850,6 +866,7 @@ class CodexAdapter(QuaidAdapter):
                     payload = obj.get("payload") if isinstance(obj.get("payload"), dict) else {}
                     source = payload.get("source") if isinstance(payload.get("source"), dict) else {}
                     subagent = source.get("subagent") if isinstance(source, dict) else {}
+                    session_source_type = ""
                     if isinstance(subagent, dict) and isinstance(subagent.get("thread_spawn"), dict):
                         session_source_type = "subagent"
                     continue

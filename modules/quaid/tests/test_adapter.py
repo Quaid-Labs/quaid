@@ -2636,6 +2636,37 @@ class TestCodexAdapter:
         assert second == ""
         assert not pending_path.exists()
 
+    def test_pending_context_raises_on_drain_failure_when_failhard(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("QUAID_INSTANCE", "codex-pending-failhard")
+        adapter = CodexAdapter(home=tmp_path)
+        pending_path = adapter.data_dir() / "codex-pending-notifications.jsonl"
+        pending_path.parent.mkdir(parents=True, exist_ok=True)
+        pending_path.write_text(json.dumps({"message": "deliver-once"}) + "\n", encoding="utf-8")
+        monkeypatch.setattr("adaptors.codex.adapter.is_fail_hard_enabled", lambda: True)
+
+        def fail_unlink(*_args, **_kwargs):
+            raise OSError("unlink failed")
+
+        monkeypatch.setattr(Path, "unlink", fail_unlink)
+
+        with pytest.raises(OSError, match="unlink failed"):
+            adapter.get_pending_context()
+
+    def test_list_agent_instance_ids_raises_on_instance_scan_failure_when_failhard(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv("QUAID_INSTANCE", "codex-current")
+        adapter = CodexAdapter(home=tmp_path)
+        monkeypatch.setattr("adaptors.codex.adapter.is_fail_hard_enabled", lambda: True)
+
+        def fail_iterdir(_path):
+            raise OSError("scan failed")
+
+        monkeypatch.setattr(Path, "iterdir", fail_iterdir)
+
+        with pytest.raises(OSError, match="scan failed"):
+            adapter.list_agent_instance_ids()
+
     def test_get_sessions_dir(self, tmp_path, monkeypatch):
         sessions_dir = tmp_path / ".codex" / "sessions"
         sessions_dir.mkdir(parents=True)
@@ -3023,6 +3054,15 @@ class TestCodexAdapter:
 
         assert signal is None
 
+    def test_current_instance_id_for_sessions_raises_when_failhard(self, tmp_path, monkeypatch):
+        adapter = CodexAdapter(home=tmp_path)
+        monkeypatch.setattr(adapter, "instance_id", lambda: (_ for _ in ()).throw(RuntimeError("id failed")))
+        monkeypatch.setattr(adapter, "get_instance_name", lambda: "")
+        monkeypatch.setattr("adaptors.codex.adapter.is_fail_hard_enabled", lambda: True)
+
+        with pytest.raises(RuntimeError, match="id failed"):
+            adapter._current_instance_id_for_sessions()
+
     def test_parse_session_jsonl_prefers_event_messages(self, tmp_path):
         path = tmp_path / "rollout.jsonl"
         path.write_text(
@@ -3159,6 +3199,40 @@ class TestCodexAdapter:
         transcript = adapter.parse_session_jsonl(path)
         assert "Subagent/User: My uncle owns a vineyard in Mendoza." in transcript
         assert "Subagent/Assistant: Noted." in transcript
+
+    def test_parse_session_jsonl_resets_codex_subagent_source_on_next_session_meta(self, tmp_path):
+        path = tmp_path / "rollout-subagent-reset.jsonl"
+        path.write_text(
+            "\n".join(
+                [
+                    json.dumps(
+                        {
+                            "type": "session_meta",
+                            "payload": {
+                                "source": {
+                                    "subagent": {
+                                        "thread_spawn": {
+                                            "parent_thread_id": "parent-1",
+                                            "depth": 1,
+                                        }
+                                    }
+                                }
+                            },
+                        }
+                    ),
+                    json.dumps({"type": "event_msg", "payload": {"type": "user_message", "message": "Subagent-only fact."}}),
+                    json.dumps({"type": "session_meta", "payload": {"id": "main-session"}}),
+                    json.dumps({"type": "event_msg", "payload": {"type": "user_message", "message": "Top-level fact."}}),
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        transcript = CodexAdapter().parse_session_jsonl(path)
+
+        assert "Subagent/User: Subagent-only fact." in transcript
+        assert "User: Top-level fact." in transcript
+        assert "Subagent/User: Top-level fact." not in transcript
 
     def test_codex_adapter_detects_subagent_session_from_session_meta(self, tmp_path, monkeypatch):
         session_id = "019d734c-2904-7d32-9f06-52011c9d1adb"
