@@ -256,7 +256,7 @@ def _owner_full_name(owner_id: Optional[str] = None) -> str:
         except Exception as exc:
             logger.debug("Failed loading configured owner ids: %s", exc)
             is_configured_owner = False
-        if is_configured_owner and re.fullmatch(r"[A-Za-z][A-Za-z_-]*", owner_id_text):
+        if is_configured_owner:
             parts = [p for p in re.split(r"[-_]+", owner_id_text) if p]
             if len(parts) >= 2 and all(part.isalpha() and len(part) > 1 for part in parts):
                 return " ".join(part.capitalize() for part in parts)

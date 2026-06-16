@@ -137,6 +137,21 @@ def test_maintenance_diagnostic_fallbacks_log(monkeypatch, caplog):
     assert "Failed parsing LLM parallel workers config" in caplog.text
 
 
+def test_owner_full_name_fallback_accepts_unicode_slug(monkeypatch):
+    cfg = SimpleNamespace(
+        owner_name="",
+        users=SimpleNamespace(
+            default_owner="émile-zola",
+            identities={"émile-zola": SimpleNamespace(person_node_name="", speakers=[])},
+        ),
+    )
+
+    monkeypatch.setattr(maintenance_ops, "_cfg", cfg)
+    monkeypatch.setattr(maintenance_ops, "resolve_owner_person", lambda _owner: None)
+
+    assert maintenance_ops._owner_full_name("émile-zola") == "Émile Zola"
+
+
 def test_get_last_successful_janitor_completed_at_fail_hard_behavior():
     class _BrokenGraph:
         @contextmanager
