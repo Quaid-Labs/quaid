@@ -987,9 +987,9 @@ class DocsRegistry:
             if global_project_deleted(name):
                 return False
         except Exception as exc:
+            logger.warning("Project delete marker check failed for %s: %s", name, exc)
             if _fail_hard_enabled():
                 raise RuntimeError(f"Failed checking project delete marker for {name!r}: {exc}") from exc
-            logger.warning("Project delete marker check failed for %s: %s", name, exc)
 
         if defn is None:
             try:

@@ -1919,6 +1919,56 @@ class TestProjectDefinitionsTable:
         r.reconcile_global_project_registry()
         assert global_project_lookup("test-project")["description"] == "updated livetest fixture"
 
+    def test_global_project_delete_marker_failure_logs_when_fail_open(
+        self, setup_env, monkeypatch, caplog
+    ):
+        from datastore.docsdb import registry as registry_mod
+        from lib import project_registry as global_project_registry
+
+        r = _get_registry()
+        err = RuntimeError("delete marker unavailable")
+        monkeypatch.setattr(
+            global_project_registry,
+            "is_deleted",
+            lambda _name: (_ for _ in ()).throw(err),
+        )
+        monkeypatch.setattr(registry_mod, "_fail_hard_enabled", lambda: False)
+
+        with caplog.at_level(logging.WARNING):
+            assert r._ensure_global_project_entry(
+                "delete-marker-proj",
+                create_scaffold=False,
+            ) is False
+
+        assert "Project delete marker check failed for delete-marker-proj" in caplog.text
+        assert "delete marker unavailable" in caplog.text
+
+    def test_global_project_delete_marker_failure_logs_before_failhard_raise(
+        self, setup_env, monkeypatch, caplog
+    ):
+        from datastore.docsdb import registry as registry_mod
+        from lib import project_registry as global_project_registry
+
+        r = _get_registry()
+        err = RuntimeError("delete marker unavailable")
+        monkeypatch.setattr(
+            global_project_registry,
+            "is_deleted",
+            lambda _name: (_ for _ in ()).throw(err),
+        )
+        monkeypatch.setattr(registry_mod, "_fail_hard_enabled", lambda: True)
+
+        with caplog.at_level(logging.WARNING):
+            with pytest.raises(RuntimeError, match="Failed checking project delete marker") as excinfo:
+                r._ensure_global_project_entry(
+                    "delete-marker-proj",
+                    create_scaffold=False,
+                )
+
+        assert excinfo.value.__cause__ is err
+        assert "Project delete marker check failed for delete-marker-proj" in caplog.text
+        assert "delete marker unavailable" in caplog.text
+
     def test_global_project_entry_sync_failure_returns_false_when_not_failhard(
         self, setup_env, monkeypatch, caplog
     ):
