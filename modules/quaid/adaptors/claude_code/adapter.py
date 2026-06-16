@@ -489,7 +489,11 @@ class ClaudeCodeAdapter(QuaidAdapter):
 
     @staticmethod
     def _normalize_claude_project_dir_name(value: str) -> str:
-        return re.sub(r"[^a-z0-9]+", "-", str(value or "").lower()).strip("-")
+        raw = str(value or "")
+        normalized = re.sub(r"[^a-z0-9]+", "-", raw.lower()).strip("-")
+        if normalized != raw.lower().strip("-") and any(ord(ch) > 127 for ch in raw):
+            logger.debug("non-ASCII characters stripped from Claude Code project dir slug: %r", raw)
+        return normalized
 
     def _bound_project_dir_for_current_instance(self) -> str:
         try:

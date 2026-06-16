@@ -2079,6 +2079,12 @@ class TestClaudeCodeAdapter:
         with pytest.raises(RuntimeError, match="instance unavailable"):
             adapter._bound_project_dir_for_current_instance()
 
+    def test_normalize_claude_project_dir_name_logs_non_ascii_stripping(self, caplog):
+        with caplog.at_level("DEBUG", logger="adaptors.claude_code.adapter"):
+            assert ClaudeCodeAdapter._normalize_claude_project_dir_name("mañana-app") == "ma-ana-app"
+
+        assert "non-ASCII characters stripped from Claude Code project dir slug" in caplog.text
+
     def test_get_discovery_sessions_dir_scopes_path_derived_instance_to_own_project(self, tmp_path, monkeypatch):
         sessions_root = tmp_path / ".claude" / "projects"
         original_dir = sessions_root / "-private-tmp-cc-livetest"
