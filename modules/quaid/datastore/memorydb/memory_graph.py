@@ -7857,38 +7857,6 @@ def _infer_edge_entity_type(name: str, relation: str, is_subject: bool) -> str:
     return "Fact"
 
 
-_FAMILY_EDGE_SOURCE_SPOUSE_RE = re.compile(
-    r"\b(?:spouse|husband|wife|married)\b",
-    re.IGNORECASE,
-)
-_FAMILY_EDGE_SOURCE_PARTNER_RE = re.compile(
-    r"\b(?:domestic\s+partner|romantic\s+partner|partner|boyfriend|girlfriend|fianc[eé]e?|dating)\b",
-    re.IGNORECASE,
-)
-_FAMILY_EDGE_SOURCE_BUSINESS_PARTNER_RE = re.compile(
-    r"\b(?:business|work|professional|project|company|startup|firm|venture|legal|law|trading)\s+partners?\b"
-    r"|\bpartners?\s+(?:at|for|in|on)\s+(?:work|business|a\s+business|a\s+company|the\s+company|a\s+project|the\s+project|a\s+firm|the\s+firm|a\s+startup|the\s+startup)\b",
-    re.IGNORECASE,
-)
-
-
-def _canonicalize_family_edge_relation_from_source_text(relation: str, source_text: str) -> str:
-    """Keep spouse/partner evidence out of generic kinship edges."""
-    clean_relation = str(relation or "").strip().lower().replace(" ", "_").replace("-", "_")
-    if clean_relation != "family_of":
-        return clean_relation
-    text = str(source_text or "").strip()
-    if not text:
-        return clean_relation
-    if _FAMILY_EDGE_SOURCE_BUSINESS_PARTNER_RE.search(text):
-        return "colleague_of"
-    if _FAMILY_EDGE_SOURCE_SPOUSE_RE.search(text):
-        return "spouse_of"
-    if _FAMILY_EDGE_SOURCE_PARTNER_RE.search(text):
-        return "partner_of"
-    return clean_relation
-
-
 def _store_meta_result_count(meta: Optional[Dict[str, Any]]) -> int:
     if not isinstance(meta, dict):
         return 0
@@ -16890,12 +16858,6 @@ _FACET_RESCUE_MEMORY_TYPES = {"fact", "preference", "decision", "relationship"}
 # A rescued row may outrank first-order session evidence only when it matches
 # multiple non-entity query details. One detail is too broad for generic recall.
 _FACET_RESCUE_LEADING_NON_ANCHOR_SIGNAL = 2
-_FACET_RESCUE_CLASSIFIER_QUERY_TERMS = {
-    "category", "class", "kind", "model", "sort", "species", "type", "variety",
-}
-_FACET_RESCUE_CLASSIFIER_ROW_TERMS = {
-    "breed", "category", "class", "kind", "model", "species", "type", "variety",
-}
 
 
 def _is_related_entity_facet_rescue_row(row: Dict[str, Any]) -> bool:
@@ -16931,20 +16893,6 @@ def _facet_rescue_signal_terms(query: str, *, limit: int = 12) -> List[str]:
         if len(out) >= limit:
             break
     return out
-
-
-def _facet_rescue_classifier_signal(row: Dict[str, Any], query_terms: List[str]) -> int:
-    """Prefer direct classification facts when the query asks for a kind/type."""
-    if not any(term in _FACET_RESCUE_CLASSIFIER_QUERY_TERMS for term in query_terms or []):
-        return 0
-    search_text = " ".join([
-        str((row or {}).get("text") or ""),
-        str((row or {}).get("keywords") or ""),
-    ]).lower()
-    return 1 if any(
-        _text_contains_anchor_term(search_text, term)
-        for term in _FACET_RESCUE_CLASSIFIER_ROW_TERMS
-    ) else 0
 
 
 def _facet_rescue_lexical_memory_rows(
@@ -17252,7 +17200,7 @@ def _recover_explicit_entity_facet_rows(
                     )
                     _add_candidate(row)
 
-        def _facet_sort_key(row: Dict[str, Any]) -> Tuple[int, float, int, int, int, int]:
+        def _facet_sort_key(row: Dict[str, Any]) -> Tuple[int, float, int, int]:
             text = str((row or {}).get("text") or "")
             search_text = " ".join([
                 text,
@@ -17262,13 +17210,10 @@ def _recover_explicit_entity_facet_rows(
                 1 for term in facet_terms
                 if term and (term in search_text or _text_contains_anchor_term(search_text, term))
             )
-            related_compactness = -len(text) if _is_related_entity_facet_rescue_row(row) else 0
             return (
                 overlap,
                 float((row or {}).get("similarity", 0.0) or 0.0),
                 1 if _is_related_entity_facet_rescue_row(row) else 0,
-                _facet_rescue_classifier_signal(row, facet_terms),
-                related_compactness,
                 len(str((row or {}).get("keywords") or "")),
             )
 
@@ -17394,8 +17339,6 @@ def _select_final_recall_rows_with_facet_rescue(
         key=lambda row: (
             _facet_signal(row),
             1 if _is_related_entity_facet_rescue_row(row) else 0,
-            _facet_rescue_classifier_signal(row, scoring_query_terms),
-            -len(str((row or {}).get("text") or "")) if _is_related_entity_facet_rescue_row(row) else 0,
             float(row.get("similarity", 0.0) or 0.0),
             len(str(row.get("keywords") or "")),
         ),
@@ -17511,8 +17454,6 @@ def _prioritize_high_signal_facet_rescue_rows(
             leading.append((
                 signal,
                 1 if _is_related_entity_facet_rescue_row(row) else 0,
-                _facet_rescue_classifier_signal(row, scoring_query_terms),
-                -len(str((row or {}).get("text") or "")) if _is_related_entity_facet_rescue_row(row) else 0,
                 -index,
                 row,
             ))
@@ -17523,7 +17464,7 @@ def _prioritize_high_signal_facet_rescue_rows(
     leading.sort(key=lambda item: item[:5], reverse=True)
     return [
         row
-        for _signal, _related, _classifier, _compactness, _negative_index, row in leading
+        for _signal, _related, _negative_index, row in leading
     ] + trailing
 
 
@@ -24394,18 +24335,6 @@ def create_edge(
 
     conn_ctx = nullcontext(_conn) if _conn is not None else graph._get_conn()
     with conn_ctx as conn:
-        if relation == "family_of" and source_fact_id:
-            source_row = conn.execute(
-                "SELECT name FROM nodes WHERE id = ? LIMIT 1",
-                (source_fact_id,),
-            ).fetchone()
-            if source_row:
-                source_text = source_row["name"] if "name" in source_row.keys() else source_row[0]
-                relation = _canonicalize_family_edge_relation_from_source_text(
-                    relation,
-                    str(source_text or ""),
-                )
-
         # Find or create subject entity
         p0 = time.perf_counter() if telemetry_enabled else 0.0
         subject = _find_entity(conn, subject_name)
