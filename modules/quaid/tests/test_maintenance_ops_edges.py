@@ -357,23 +357,35 @@ def test_batch_extract_edges_retries_smaller_batches_when_batch_raises_retryable
     assert any("transport failed" in item["warning"] for item in metrics.warnings)
 
 
-def test_relationship_backfill_filter_rejects_media_title_noise_and_assistant_recommendations():
+def test_relationship_backfill_filter_is_structural_not_english_keyword_gated():
     assert maintenance_ops._looks_like_relationship_backfill_fact(
         "Conan O'Brien Needs a Friend — funny, light, great for runs."
-    ) is False
+    ) is True
     assert maintenance_ops._looks_like_relationship_backfill_fact(
         "The assistant suggested Conan O'Brien Needs a Friend, Heavyweight, Smartless, Radiolab, and This American Life as running podcasts.",
         {"source_type": "assistant"},
-    ) is False
-    assert maintenance_ops._looks_like_relationship_backfill_fact(
-        "Maya lives with her partner David."
     ) is True
+    assert maintenance_ops._looks_like_relationship_backfill_fact(
+        "Sophie est mariee avec Marc."
+    ) is True
+    assert maintenance_ops._looks_like_relationship_backfill_fact(
+        "Implementation option A",
+        {"structural_anchor_kind": "assistant_plan_anchor"},
+    ) is False
+
+
+def test_parallel_key_preserves_unicode_task_names():
+    assert maintenance_ops._parallel_key("レビュー 処理") == "レビュー_処理"
+    assert maintenance_ops._parallel_key("レビュー/処理") == "レビュー_処理"
+
+
+def test_backfill_edges_sends_broad_candidates_to_llm_extraction():
     assert maintenance_ops._looks_like_relationship_backfill_fact(
         "Sophie está casada con Marc."
     ) is True
 
 
-def test_backfill_edges_skips_non_relationship_noise_before_llm_extraction():
+def test_backfill_edges_does_not_filter_candidates_by_english_phrases():
     rows = [
         {
             "id": "noise-1",
@@ -385,7 +397,7 @@ def test_backfill_edges_skips_non_relationship_noise_before_llm_extraction():
             "id": "noise-2",
             "name": "The assistant suggested Conan O'Brien Needs a Friend, Heavyweight, Smartless, Radiolab, and This American Life as running podcasts.",
             "owner_id": "default",
-            "attributes": '{"source_type":"assistant"}',
+            "attributes": '{"structural_anchor_kind":"assistant_plan_anchor"}',
         },
         {
             "id": "fact-1",
@@ -435,19 +447,22 @@ def test_backfill_edges_skips_non_relationship_noise_before_llm_extraction():
             owner_id="default",
         )
 
-    assert out == {"found": 2, "edges_created": 0, "errors": 0}
-    assert "GLOB" in captured["sql"]
-    assert maintenance_ops._NON_ASCII_SQL_GLOB in captured["params"]
+    assert out == {"found": 3, "edges_created": 0, "errors": 0}
+    assert "LOWER(n.name) LIKE" not in captured["sql"]
+    assert "GLOB" not in captured["sql"]
+    assert captured["params"] == (200,)
     assert captured["facts"] == [
+        {"id": "noise-1", "text": "Conan O'Brien Needs a Friend — funny, light, great for runs.", "owner_id": "default"},
         {"id": "fact-1", "text": "Maya lives with her partner David.", "owner_id": "default"},
         {"id": "fact-2", "text": "Sophie está casada con Marc.", "owner_id": "default"},
     ]
 
 
-def test_find_edge_candidates_partial_scan_includes_non_ascii_facts():
+def test_find_edge_candidates_partial_scan_is_not_english_keyword_gated():
     rows = [
         {"id": "noise-1", "name": "Conan O'Brien Needs a Friend", "type": "Fact", "owner_id": "default"},
         {"id": "fact-1", "name": "Sophie está casada con Marc.", "type": "Fact", "owner_id": "default"},
+        {"id": "fact-2", "name": "Sophie est mariee avec Marc.", "type": "Fact", "owner_id": "default"},
     ]
 
     class _DummyResult:
@@ -473,7 +488,9 @@ def test_find_edge_candidates_partial_scan_includes_non_ascii_facts():
     )
 
     assert out == [
-        {"id": "fact-1", "text": "Sophie está casada con Marc.", "type": "Fact", "owner_id": "default"}
+        {"id": "noise-1", "text": "Conan O'Brien Needs a Friend", "type": "Fact", "owner_id": "default"},
+        {"id": "fact-1", "text": "Sophie está casada con Marc.", "type": "Fact", "owner_id": "default"},
+        {"id": "fact-2", "text": "Sophie est mariee avec Marc.", "type": "Fact", "owner_id": "default"},
     ]
 
 

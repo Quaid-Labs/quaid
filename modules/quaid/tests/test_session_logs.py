@@ -73,6 +73,33 @@ def test_session_log_index_honors_quaid_now(monkeypatch, tmp_path):
     assert loaded["updated_at"] == "2026-03-11T00:00:00+00:00"
 
 
+def test_session_log_index_accepts_unicode_session_id(monkeypatch, tmp_path):
+    adapter = TestAdapter(tmp_path); set_adapter(adapter)
+    monkeypatch.setenv("MEMORY_DB_PATH", str(tmp_path / "memory.db"))
+
+    out = session_logs.index_session_log(
+        session_id="セッション-東京_01",
+        transcript="User: alpha\n\nAssistant: noted.",
+        owner_id="quaid",
+    )
+
+    assert out["status"] == "indexed"
+    loaded = session_logs.load_session("セッション-東京_01", owner_id="quaid")
+    assert loaded["session_id"] == "セッション-東京_01"
+
+
+def test_session_log_index_rejects_path_like_unicode_session_id(monkeypatch, tmp_path):
+    adapter = TestAdapter(tmp_path); set_adapter(adapter)
+    monkeypatch.setenv("MEMORY_DB_PATH", str(tmp_path / "memory.db"))
+
+    with pytest.raises(ValueError, match="invalid session_id"):
+        session_logs.index_session_log(
+            session_id="../セッション",
+            transcript="User: alpha\n\nAssistant: noted.",
+            owner_id="quaid",
+        )
+
+
 def test_session_log_index_malformed_quaid_now_honors_failhard(monkeypatch, tmp_path):
     adapter = TestAdapter(tmp_path); set_adapter(adapter)
     monkeypatch.setenv("MEMORY_DB_PATH", str(tmp_path / "memory.db"))

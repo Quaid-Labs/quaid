@@ -11,8 +11,8 @@ import hashlib
 import json
 import logging
 import os
-import re
 import time
+import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -42,10 +42,16 @@ def _utcnow_iso() -> str:
 
 
 def _normalize_session_id(session_id: str) -> str:
-    sid = str(session_id or "").strip()
+    sid = unicodedata.normalize("NFKC", str(session_id or "").strip())
     if not sid:
         raise ValueError("session_id is required")
-    if not re.fullmatch(r"[a-zA-Z0-9_-]{1,128}", sid):
+    if len(sid) > 128:
+        raise ValueError("invalid session_id")
+    for ch in sid:
+        if ch in {"/", "\\"} or ch.isspace() or unicodedata.category(ch).startswith("C"):
+            raise ValueError("invalid session_id")
+        if ch in {"_", "-"} or ch.isalnum() or unicodedata.category(ch).startswith("M"):
+            continue
         raise ValueError("invalid session_id")
     return sid
 

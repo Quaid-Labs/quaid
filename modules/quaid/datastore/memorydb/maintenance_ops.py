@@ -13,6 +13,7 @@ import subprocess
 import sys
 import threading
 import time
+import unicodedata
 import urllib.error
 import uuid
 from datetime import datetime, timedelta
@@ -288,105 +289,6 @@ _ASSISTANT_STRUCTURAL_EDGE_SKIP_KINDS = frozenset({
     "assistant_callback_anchor",
 })
 
-_EDGE_BACKFILL_KEYWORDS = (
-    "married",
-    "married to",
-    "spouse",
-    "husband",
-    "wife",
-    "parent",
-    "mother",
-    "father",
-    "son",
-    "daughter",
-    "child",
-    "sibling",
-    "sister",
-    "brother",
-    "lives with",
-    "engaged to",
-    "dating",
-    "'s partner",
-    " partner is",
-    "her partner",
-    "his partner",
-    "their partner",
-    "my partner",
-    "our partner",
-    "'s friend",
-    " friend is",
-    "her friend",
-    "his friend",
-    "their friend",
-    "my friend",
-    "our friend",
-    "'s colleague",
-    " colleague is",
-    "her colleague",
-    "his colleague",
-    "their colleague",
-    "my colleague",
-    "our colleague",
-    "'s neighbour",
-    "'s neighbor",
-    " neighbour is",
-    " neighbor is",
-    "her neighbour",
-    "his neighbour",
-    "their neighbour",
-    "my neighbour",
-    "our neighbour",
-    "her neighbor",
-    "his neighbor",
-    "their neighbor",
-    "my neighbor",
-    "our neighbor",
-    "works at",
-    "works for",
-    "works as",
-    "works on",
-    "employed",
-    "lives in",
-    "lives at",
-    "lives near",
-    "lives next to",
-    "born in",
-    "born on",
-    "grew up in",
-    "moved to",
-    "from ",
-    "has a dog",
-    "has a cat",
-    "has a pet",
-)
-
-_EDGE_BACKFILL_ASSISTANT_SUMMARY_PREFIXES = (
-    "the assistant suggested ",
-    "the assistant recommended ",
-    "the assistant offered ",
-    "the assistant listed ",
-    "the assistant shared ",
-    "the assistant mentioned ",
-    "assistant suggested ",
-    "assistant recommended ",
-    "assistant offered ",
-    "assistant listed ",
-    "assistant shared ",
-    "assistant mentioned ",
-)
-
-_NON_ASCII_SQL_GLOB = "*[^ -~]*"
-
-
-def _contains_non_ascii_letter(value: str) -> bool:
-    """Permit multilingual candidates through to the LLM extractor.
-
-    This is deliberately broad: edge semantics stay LLM-owned, while the
-    deterministic filter only avoids an English-only hard block.
-    """
-    return any(ch.isalpha() and not ch.isascii() for ch in str(value or ""))
-
-
 def _canonicalize_owner_alias(name: str, owner_full: Optional[str] = None) -> str:
     """Normalize owner aliases in extracted edge entities to the canonical owner name."""
     text = str(name or "").strip()
@@ -436,12 +338,12 @@ def _is_protected_structural_anchor(attrs: Dict[str, Any]) -> bool:
 def _looks_like_relationship_backfill_fact(text: str, attrs: Optional[Dict[str, Any]] = None) -> bool:
     """Return True when a fact is specific enough to justify relationship edge backfill.
 
-    This is a candidate-discovery filter, not a lexical edge extractor. The goal is
-    to keep janitor from sending clearly non-relationship rows like podcast titles or
-    assistant recommendation summaries into the relationship extractor.
+    This is a structural candidate-discovery filter, not a lexical edge extractor.
+    Relationship semantics stay with the LLM extractor so edge backfill works across
+    languages instead of depending on English keyword gates.
     """
-    lowered = str(text or "").strip().lower()
-    if not lowered:
+    value = str(text or "").strip()
+    if not value:
         return False
 
     attrs = attrs or {}
@@ -449,13 +351,7 @@ def _looks_like_relationship_backfill_fact(text: str, attrs: Optional[Dict[str, 
     if kind in _ASSISTANT_STRUCTURAL_EDGE_SKIP_KINDS:
         return False
 
-    if any(lowered.startswith(prefix) for prefix in _EDGE_BACKFILL_ASSISTANT_SUMMARY_PREFIXES):
-        return False
-
-    if _contains_non_ascii_letter(lowered):
-        return True
-
-    return any(keyword in lowered for keyword in _EDGE_BACKFILL_KEYWORDS)
+    return True
 
 def _default_owner_id() -> str:
     """Get the default owner ID from config."""
@@ -769,7 +665,8 @@ def _lr_batch_timeout() -> int:
 
 
 def _parallel_key(task_name: str) -> str:
-    clean = re.sub(r"[^A-Za-z0-9]+", "_", (task_name or "").strip().upper())
+    normalized = unicodedata.normalize("NFKC", (task_name or "").strip()).upper()
+    clean = re.sub(r"[^\w]+", "_", normalized, flags=re.UNICODE)
     return clean.strip("_")
 
 
@@ -2263,7 +2160,7 @@ def find_edge_candidates_optimized(graph: MemoryGraph, metrics: JanitorMetrics,
                                     full_scan: bool = False) -> List[Dict[str, Any]]:
     """Find facts that could become edges (with timing).
 
-    full_scan=True skips pattern pre-filter and returns all Fact nodes without edges.
+    full_scan=True returns all Fact nodes without edges regardless of status.
     """
     metrics.start_task("edges_discovery")
 
@@ -2283,31 +2180,6 @@ def find_edge_candidates_optimized(graph: MemoryGraph, metrics: JanitorMetrics,
     candidates = []
     for row in rows:
         node = graph._row_to_node(row)
-
-        if not full_scan:
-            # Pattern pre-filter for nightly runs
-            text_lower = node.name.lower()
-            patterns = [
-                "'s mother", "'s father", "'s wife", "'s husband", "'s girlfriend",
-                "'s boyfriend", "'s partner", "'s fiancé", "'s fiancée",
-                "'s brother", "'s sister", "'s son", "'s daughter",
-                "'s uncle", "'s aunt", "'s cousin", "'s grandma", "'s grandfather",
-                "'s neighbor", "'s friend", "'s boss", "'s colleague",
-                "lives at", "lives in", "lives near", "lives next to",
-                "works at", "works for", "works as", "works on",
-                "born in", "born on", "grew up in", "moved to", "from ",
-                "owns", "manages", "founded", "created",
-                "is a member of", "member of", "part of", "belongs to",
-                "prefers", "likes", "loves", "hates", "enjoys", "dislikes",
-                "allergic to", "favorite", "favourite",
-                "married to", "engaged to", "dating",
-                "studies at", "graduated from", "attended",
-                "speaks ", "fluent in",
-                "mother is", "father is", "sister is", "brother is",
-                "neighbor", "next door",
-            ]
-            if not any(p in text_lower for p in patterns) and not _contains_non_ascii_letter(node.name):
-                continue
 
         candidates.append({
             "id": node.id,
@@ -2782,11 +2654,9 @@ def backfill_edges(
     if not hasattr(graph, "_get_conn"):
         return result
 
-    # Find fact nodes that have no edge linked via source_fact_id. Use a broad SQL
-    # prefilter first, then a stricter Python filter so generic title fragments like
-    # "Needs a Friend" do not enter relationship extraction.
-    kw_clauses = " OR ".join(f"LOWER(n.name) LIKE ?" for _ in _EDGE_BACKFILL_KEYWORDS)
-    kw_params = [f"%{kw}%" for kw in _EDGE_BACKFILL_KEYWORDS]
+    # Find fact nodes that have no edge linked via source_fact_id. Do not add
+    # language-specific keyword filters here; the LLM extractor owns relationship
+    # semantics and can return no edges for non-relationship facts.
     scan_limit = max(max_facts * 8, 200)
 
     with graph._get_conn() as conn:
@@ -2799,11 +2669,10 @@ def backfill_edges(
               AND NOT EXISTS (
                   SELECT 1 FROM edges e WHERE e.source_fact_id = n.id
               )
-              AND ({kw_clauses} OR n.name GLOB ?)
             ORDER BY n.created_at DESC
             LIMIT ?
             """,
-            kw_params + [_NON_ASCII_SQL_GLOB, scan_limit],
+            (scan_limit,),
         ).fetchall()
 
     facts = []

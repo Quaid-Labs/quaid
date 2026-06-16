@@ -5,7 +5,7 @@ Memory Janitor (Optimized) - Scalable LLM-powered maintenance for the memory gra
 Key optimizations:
 1. Temporal filtering - only check new memories vs existing (not old-vs-old)
 2. Vector similarity pre-filtering - cosine similarity >0.8 before LLM
-3. Semantic clustering - group by domain, check within clusters
+3. Contradiction detection - review conflicting facts
 4. Robust timing and progress reporting
 5. Incremental processing with metadata tracking
 
