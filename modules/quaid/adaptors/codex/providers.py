@@ -175,11 +175,12 @@ class _CodexAppServerManager:
             try:
                 proc.terminate()
                 proc.wait(timeout=3)
-            except Exception:
+            except Exception as exc:
+                logger.debug("Codex app-server terminate failed; forcing kill: %s", exc, exc_info=True)
                 try:
                     proc.kill()
-                except Exception:
-                    pass
+                except Exception as kill_exc:
+                    logger.debug("Codex app-server kill failed during close: %s", kill_exc, exc_info=True)
 
     def _stderr_loop(self) -> None:
         proc = self._proc
@@ -197,7 +198,8 @@ class _CodexAppServerManager:
         for listener in listeners:
             try:
                 listener.put_nowait(payload)
-            except Exception:
+            except Exception as exc:
+                logger.debug("Codex app-server listener broadcast failed: %s", exc, exc_info=True)
                 continue
 
     def _fail_pending(self, message: str) -> None:
@@ -208,8 +210,8 @@ class _CodexAppServerManager:
         for waiter in waiters:
             try:
                 waiter.put_nowait(error_payload)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Codex app-server pending waiter failure notification failed: %s", exc, exc_info=True)
         self._broadcast({"method": "__quaid/process_closed__", "params": {"message": message}})
 
     def _read_loop(self) -> None:
@@ -639,8 +641,8 @@ def ensure_codex_broker_alive() -> int:
     finally:
         try:
             fcntl.flock(fd, fcntl.LOCK_UN)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Codex app-server broker lock release failed: %s", exc, exc_info=True)
         fd.close()
         lock_path.unlink(missing_ok=True)
 
@@ -825,7 +827,10 @@ class CodexLLMProvider(LLMProvider):
         available = True
         try:
             _CodexAppServerManager._resolve_binary()
-        except Exception:
+        except Exception as exc:
+            logger.warning("Codex binary availability check failed: %s", exc)
+            if _fail_hard_enabled():
+                raise
             available = False
         return {
             "deep": {"model": self._deep_model, "available": available},

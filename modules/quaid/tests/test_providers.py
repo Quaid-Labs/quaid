@@ -1435,6 +1435,70 @@ class TestCodexAppServerManager:
 
         assert result["text"] == "real answer"
 
+    def test_close_logs_force_kill_failure(self, caplog):
+        class _FakeProc:
+            def terminate(self):
+                raise RuntimeError("terminate failed")
+
+            def kill(self):
+                raise RuntimeError("kill failed")
+
+        manager = _CodexAppServerManager(binary="/tmp/fake-codex")
+        manager._proc = _FakeProc()
+
+        with caplog.at_level("DEBUG", logger="adaptors.codex.providers"):
+            manager.close()
+
+        assert "Codex app-server terminate failed; forcing kill" in caplog.text
+        assert "Codex app-server kill failed during close" in caplog.text
+
+    def test_broadcast_logs_listener_failure(self, caplog):
+        class _BrokenListener:
+            def put_nowait(self, _payload):
+                raise RuntimeError("listener full")
+
+        manager = _CodexAppServerManager(binary="/tmp/fake-codex")
+        manager._listeners.append(_BrokenListener())
+
+        with caplog.at_level("DEBUG", logger="adaptors.codex.providers"):
+            manager._broadcast({"method": "notice"})
+
+        assert "Codex app-server listener broadcast failed" in caplog.text
+
+    def test_fail_pending_logs_waiter_failure(self, caplog):
+        class _BrokenWaiter:
+            def put_nowait(self, _payload):
+                raise RuntimeError("waiter closed")
+
+        manager = _CodexAppServerManager(binary="/tmp/fake-codex")
+        manager._pending[1] = _BrokenWaiter()
+        manager._broadcast = lambda _payload: None
+
+        with caplog.at_level("DEBUG", logger="adaptors.codex.providers"):
+            manager._fail_pending("closed")
+
+        assert "Codex app-server pending waiter failure notification failed" in caplog.text
+
+    def test_ensure_broker_alive_logs_unlock_failure(self, tmp_path, monkeypatch, caplog):
+        class _FakeFcntl:
+            LOCK_EX = 1
+            LOCK_UN = 2
+
+            @staticmethod
+            def flock(_fd, mode):
+                if mode == _FakeFcntl.LOCK_UN:
+                    raise OSError("unlock failed")
+
+        pids = iter([None, 12345])
+        monkeypatch.setitem(sys.modules, "fcntl", _FakeFcntl)
+        monkeypatch.setattr(codex_providers, "_broker_run_dir", lambda: tmp_path)
+        monkeypatch.setattr(codex_providers, "_read_broker_pid", lambda: next(pids))
+
+        with caplog.at_level("DEBUG", logger="adaptors.codex.providers"):
+            assert codex_providers.ensure_codex_broker_alive() == 12345
+
+        assert "Codex app-server broker lock release failed" in caplog.text
+
 
 # ---------------------------------------------------------------------------
 # OllamaEmbeddingsProvider
@@ -1851,6 +1915,34 @@ class TestGatewayLLMProvider:
             codex_providers._try_notify("provider down", severity="error", source="provider")
 
         assert "notify_agent unavailable" in caplog.text
+
+    def test_codex_get_profiles_warns_when_binary_check_fails_open(self, monkeypatch, caplog):
+        monkeypatch.setattr(
+            codex_providers._CodexAppServerManager,
+            "_resolve_binary",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("codex missing")),
+        )
+        monkeypatch.setattr(codex_providers, "_fail_hard_enabled", lambda: False)
+        provider = codex_providers.CodexLLMProvider()
+
+        with caplog.at_level("WARNING", logger="adaptors.codex.providers"):
+            profiles = provider.get_profiles()
+
+        assert profiles["deep"]["available"] is False
+        assert profiles["fast"]["available"] is False
+        assert "Codex binary availability check failed: codex missing" in caplog.text
+
+    def test_codex_get_profiles_raises_when_binary_check_fails_under_failhard(self, monkeypatch):
+        monkeypatch.setattr(
+            codex_providers._CodexAppServerManager,
+            "_resolve_binary",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("codex missing")),
+        )
+        monkeypatch.setattr(codex_providers, "_fail_hard_enabled", lambda: True)
+        provider = codex_providers.CodexLLMProvider()
+
+        with pytest.raises(RuntimeError, match="codex missing"):
+            provider.get_profiles()
 
     def test_init_defaults(self, monkeypatch):
         monkeypatch.delenv("OPENCLAW_GATEWAY_TOKEN", raising=False)
