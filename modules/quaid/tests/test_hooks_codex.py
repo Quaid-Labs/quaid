@@ -104,6 +104,46 @@ def test_read_stdin_json_reads_pipe_payload(monkeypatch):
         stdin_handle.close()
 
 
+def test_read_stdin_json_logs_malformed_payload_when_fail_open(monkeypatch, caplog):
+    from core.interface import hooks
+
+    read_fd, write_fd = os.pipe()
+    try:
+        os.write(write_fd, b"{not-json")
+    finally:
+        os.close(write_fd)
+
+    stdin_handle = os.fdopen(read_fd, "r", encoding="utf-8", closefd=True)
+    try:
+        monkeypatch.setattr(hooks.sys, "stdin", stdin_handle)
+        monkeypatch.setattr(hooks, "_fail_hard_enabled", lambda: False)
+        with caplog.at_level("WARNING", logger="core.interface.hooks"):
+            assert hooks._read_stdin_json() == {}
+    finally:
+        stdin_handle.close()
+
+    assert "Failed reading hook stdin JSON; treating payload as empty" in caplog.text
+
+
+def test_read_stdin_json_raises_malformed_payload_when_fail_hard(monkeypatch):
+    from core.interface import hooks
+
+    read_fd, write_fd = os.pipe()
+    try:
+        os.write(write_fd, b"{not-json")
+    finally:
+        os.close(write_fd)
+
+    stdin_handle = os.fdopen(read_fd, "r", encoding="utf-8", closefd=True)
+    try:
+        monkeypatch.setattr(hooks.sys, "stdin", stdin_handle)
+        monkeypatch.setattr(hooks, "_fail_hard_enabled", lambda: True)
+        with pytest.raises(json.JSONDecodeError):
+            hooks._read_stdin_json()
+    finally:
+        stdin_handle.close()
+
+
 @pytest.fixture()
 def cursor_dir(tmp_path, monkeypatch):
     from core import extraction_daemon

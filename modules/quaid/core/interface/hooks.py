@@ -182,7 +182,10 @@ def _read_stdin_json() -> dict:
         fcntl.fcntl(fd, fcntl.F_SETFL, flags)
         buf = b"".join(chunks).decode("utf-8", errors="replace")
         return json.loads(buf.strip()) if buf.strip() else {}
-    except Exception:
+    except Exception as exc:
+        logger.warning("Failed reading hook stdin JSON; treating payload as empty: %s", exc)
+        if _fail_hard_enabled():
+            raise
         return {}
 
 # Ensure plugin root is importable
@@ -1212,7 +1215,7 @@ def _write_hook_trace(event: str, payload: dict | None = None) -> None:
         with trace_path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
     except Exception:
-        pass
+        logger.debug("Failed writing hook trace event %s to %s", event, trace_path, exc_info=True)
 
 
 def _preinject_evidence_details(rows: List[Dict], limit: int = 10) -> List[Dict]:
@@ -1954,7 +1957,8 @@ def hook_inject(args):
                 else:
                     docs_bundle = docs_result
                     docs_project_hint = None
-            except Exception:
+            except Exception as docs_exc:
+                logger.warning("Project docs search future failed during hook injection: %s", docs_exc)
                 if _fail_hard_enabled():
                     raise
                 docs_bundle = None
@@ -2565,7 +2569,8 @@ def _store_context_refresh_state(state: Dict[str, Any]) -> None:
                             sessions.update(incoming_sessions)
                         merged["sessions"] = sessions
                     state_to_write = merged
-        except Exception:
+        except Exception as merge_exc:
+            logger.warning("Failed merging context refresh state before write: %s", merge_exc)
             if _fail_hard_enabled():
                 raise
         tmp_path = path.with_suffix(f".tmp.{os.getpid()}.{time.time_ns()}")

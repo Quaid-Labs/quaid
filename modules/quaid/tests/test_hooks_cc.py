@@ -1171,6 +1171,22 @@ def test_hook_trace_rejects_malformed_quaid_now(tmp_path, monkeypatch):
         hooks._write_hook_trace("test.event")
 
 
+def test_hook_trace_logs_write_failures(tmp_path, monkeypatch, caplog):
+    from core.interface import hooks
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "trace-test")
+
+    logs_path = tmp_path / "instances" / "trace-test" / "logs"
+    logs_path.parent.mkdir(parents=True)
+    logs_path.write_text("not a directory", encoding="utf-8")
+
+    with caplog.at_level("DEBUG", logger="core.interface.hooks"):
+        hooks._write_hook_trace("test.event", {"value": "ok"})
+
+    assert "Failed writing hook trace event test.event" in caplog.text
+
+
 def test_preinject_evidence_rejects_malformed_quaid_now(tmp_path, monkeypatch):
     from core.interface import hooks
 
@@ -1573,6 +1589,23 @@ def test_store_context_refresh_state_does_not_unlink_replaced_temp(tmp_path, mon
     hooks._store_context_refresh_state({"sessions": {"sess-1": {"turn_count": 2}}})
 
     assert unlink_calls == []
+    assert json.loads(state_path.read_text(encoding="utf-8"))["sessions"]["sess-1"]["turn_count"] == 2
+
+
+def test_store_context_refresh_state_logs_merge_failures_when_fail_open(tmp_path, monkeypatch, caplog):
+    from core.interface import hooks
+
+    state_path = tmp_path / "data" / "context-refresh-state.json"
+    state_path.parent.mkdir(parents=True)
+    state_path.write_text("{not-json", encoding="utf-8")
+
+    monkeypatch.setattr(hooks, "_context_refresh_state_path", lambda: state_path)
+    monkeypatch.setattr(hooks, "_fail_hard_enabled", lambda: False)
+
+    with caplog.at_level("WARNING", logger="core.interface.hooks"):
+        hooks._store_context_refresh_state({"sessions": {"sess-1": {"turn_count": 2}}})
+
+    assert "Failed merging context refresh state before write" in caplog.text
     assert json.loads(state_path.read_text(encoding="utf-8"))["sessions"]["sess-1"]["turn_count"] == 2
 
 
@@ -3415,13 +3448,13 @@ class TestHookInjectRecallResilience:
         )
 
     def test_project_docs_failure_does_not_drop_memory_context(
-        self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
+        self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch, caplog
     ):
         from core import extraction_daemon
         monkeypatch.setattr(extraction_daemon, "write_cursor", lambda *a: None)
         monkeypatch.setattr("lib.fail_policy.is_fail_hard_enabled", lambda: False)
 
-        with patch(
+        with caplog.at_level("WARNING", logger="core.interface.hooks"), patch(
             "core.interface.api.recall_fast",
             return_value=[{"text": "Maya lives in South Austin", "similarity": 0.9, "category": "fact"}],
         ), patch(
@@ -3441,6 +3474,7 @@ class TestHookInjectRecallResilience:
         context = payload["hookSpecificOutput"]["additionalContext"]
         assert "South Austin" in context
         assert "[Quaid Project Docs" not in context
+        assert "Project docs search future failed during hook injection: docs down" in caplog.text
 
     def test_project_docs_failure_raises_when_fail_hard_enabled(
         self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
