@@ -212,6 +212,16 @@ def _call_embed_many(
     return list(embed_many(texts))
 
 
+def _clear_embedding_pending_notices() -> None:
+    """Best-effort cleanup for stale embedding notices after successful embedding calls."""
+    try:
+        from lib.agent_notice import clear_pending_notices_by_source
+
+        clear_pending_notices_by_source(sources={"embeddings"})
+    except Exception as exc:
+        logger.warning("Failed clearing pending embedding notices after successful embedding call: %s", exc)
+
+
 def get_embedding(text: str, *, timeout_s: Optional[float] = None) -> Optional[List[float]]:
     """Get embedding for text using the current provider.
 
@@ -219,12 +229,7 @@ def get_embedding(text: str, *, timeout_s: Optional[float] = None) -> Optional[L
     """
     result = _call_embed(get_embeddings_provider(), text, timeout_s)
     if result is not None:
-        try:
-            from lib.agent_notice import clear_pending_notices_by_source
-
-            clear_pending_notices_by_source(sources={"embeddings"})
-        except Exception:
-            pass
+        _clear_embedding_pending_notices()
     return result
 
 
@@ -298,12 +303,7 @@ def get_embeddings(
                 raise
             return [None] * len(items)
         if len(out) == len(unique_items):
-            try:
-                from lib.agent_notice import clear_pending_notices_by_source
-
-                clear_pending_notices_by_source(sources={"embeddings"})
-            except Exception:
-                pass
+            _clear_embedding_pending_notices()
             return _fan_out(out)
         message = (
             f"embedding provider returned {len(out)} result(s) for "
@@ -326,12 +326,7 @@ def get_embeddings(
         return_exceptions=return_exceptions,
     )
     if any(result is not None and not isinstance(result, Exception) for result in unique_results):
-        try:
-            from lib.agent_notice import clear_pending_notices_by_source
-
-            clear_pending_notices_by_source(sources={"embeddings"})
-        except Exception:
-            pass
+        _clear_embedding_pending_notices()
     return _fan_out(unique_results)
 
 
