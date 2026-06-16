@@ -2987,6 +2987,28 @@ class TestCodexAdapter:
         assert "Failed to write Codex last session id: disk full" in capsys.readouterr().err
         assert adapter._read_last_session_id() == ""
 
+    def test_read_last_session_id_raises_corrupt_state_when_failhard_enabled(self, tmp_path, monkeypatch):
+        adapter = CodexAdapter(home=tmp_path)
+        monkeypatch.setattr(adapter, "data_dir", lambda: tmp_path / "data")
+        adapter._last_session_path().parent.mkdir(parents=True)
+        adapter._last_session_path().write_text("{not-json", encoding="utf-8")
+        monkeypatch.setattr("adaptors.codex.adapter.is_fail_hard_enabled", lambda: True)
+
+        with pytest.raises(json.JSONDecodeError):
+            adapter._read_last_session_id()
+
+    def test_read_last_session_id_warns_corrupt_state_when_failhard_disabled(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        adapter = CodexAdapter(home=tmp_path)
+        monkeypatch.setattr(adapter, "data_dir", lambda: tmp_path / "data")
+        adapter._last_session_path().parent.mkdir(parents=True)
+        adapter._last_session_path().write_text("{not-json", encoding="utf-8")
+        monkeypatch.setattr("adaptors.codex.adapter.is_fail_hard_enabled", lambda: False)
+
+        assert adapter._read_last_session_id() == ""
+        assert "Failed to read Codex last session id state" in capsys.readouterr().err
+
     def test_check_session_transition_allows_unclassified_prior_rollout(self, tmp_path, monkeypatch):
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         monkeypatch.delenv("QUAID_INSTANCE", raising=False)
@@ -4289,6 +4311,32 @@ class TestCodexAdapter:
         assert "quaid project update <name> --description" in snippet
         assert "Do not treat edits to `PROJECT.md`" in snippet
         assert "quaid registry register <absolute-file-path> --project misc--codex-livetest" in snippet
+
+    def test_get_cli_tools_snippet_raises_instance_id_failure_when_failhard_enabled(self, monkeypatch):
+        adapter = CodexAdapter()
+        monkeypatch.delenv("QUAID_INSTANCE", raising=False)
+        monkeypatch.setattr(
+            "adaptors.codex.adapter.instance_id",
+            lambda: (_ for _ in ()).throw(RuntimeError("instance id unavailable")),
+        )
+        monkeypatch.setattr("adaptors.codex.adapter.is_fail_hard_enabled", lambda: True)
+
+        with pytest.raises(RuntimeError, match="instance id unavailable"):
+            adapter.get_cli_tools_snippet()
+
+    def test_get_cli_tools_snippet_warns_instance_id_failure_when_failhard_disabled(
+        self, monkeypatch, capsys
+    ):
+        adapter = CodexAdapter()
+        monkeypatch.delenv("QUAID_INSTANCE", raising=False)
+        monkeypatch.setattr(
+            "adaptors.codex.adapter.instance_id",
+            lambda: (_ for _ in ()).throw(RuntimeError("instance id unavailable")),
+        )
+        monkeypatch.setattr("adaptors.codex.adapter.is_fail_hard_enabled", lambda: False)
+
+        assert adapter.get_cli_tools_snippet() == ""
+        assert "Could not resolve Codex instance id for CLI tools snippet" in capsys.readouterr().err
 
     def test_get_api_key_raises_when_fail_hard_enabled(self, monkeypatch):
         adapter = CodexAdapter()

@@ -431,7 +431,10 @@ class CodexAdapter(QuaidAdapter):
         if not instance_name:
             try:
                 instance_name = instance_id()
-            except Exception:
+            except Exception as exc:
+                if is_fail_hard_enabled():
+                    raise
+                print(f"[adapter][WARN] Could not resolve Codex instance id for CLI tools snippet: {exc}", file=sys.stderr)
                 instance_name = ""
         home = self.visible_home()
         misc_path = home / "projects" / f"misc--{instance_name}" if instance_name else None
@@ -460,7 +463,12 @@ class CodexAdapter(QuaidAdapter):
         try:
             data = json.loads(self._last_session_path().read_text(encoding="utf-8"))
             return str(data.get("session_id") or "").strip()
-        except (OSError, json.JSONDecodeError):
+        except OSError:
+            return ""
+        except json.JSONDecodeError as exc:
+            if is_fail_hard_enabled():
+                raise
+            print(f"[adapter][WARN] Failed to read Codex last session id state: {exc}", file=sys.stderr)
             return ""
 
     def _write_last_session_id(self, session_id: str) -> None:
