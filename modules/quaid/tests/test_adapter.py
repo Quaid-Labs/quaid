@@ -2149,6 +2149,74 @@ class TestClaudeCodeAdapter:
 
         assert adapter.get_discovery_sessions_dir() == claude_session_dir
 
+    def test_bound_project_dir_logs_bad_binding_when_fail_open(self, tmp_path, monkeypatch, caplog):
+        from adaptors.claude_code import adapter as adapter_mod
+
+        project_dir = tmp_path / "my_project"
+        project_dir.mkdir()
+        hashed_instance = f"claude-code-{instance_slug_from_project_dir(str(project_dir))}"
+        binding_path = _project_instance_binding_path(tmp_path, "claude-code", str(project_dir))
+        assert binding_path is not None
+        binding_path.parent.mkdir(parents=True)
+        binding_path.write_text("{not-json", encoding="utf-8")
+
+        monkeypatch.setenv("QUAID_INSTANCE", hashed_instance)
+        monkeypatch.setattr(adapter_mod, "is_fail_hard_enabled", lambda: False)
+        adapter = ClaudeCodeAdapter(home=tmp_path)
+
+        with caplog.at_level("WARNING", logger="adaptors.claude_code.adapter"):
+            assert adapter._bound_project_dir_for_current_instance() == ""
+
+        assert "failed resolving Claude Code project binding" in caplog.text
+        assert str(binding_path) in caplog.text
+
+    def test_bound_project_dir_raises_bad_binding_when_failhard(self, tmp_path, monkeypatch):
+        from adaptors.claude_code import adapter as adapter_mod
+
+        project_dir = tmp_path / "my_project"
+        project_dir.mkdir()
+        hashed_instance = f"claude-code-{instance_slug_from_project_dir(str(project_dir))}"
+        binding_path = _project_instance_binding_path(tmp_path, "claude-code", str(project_dir))
+        assert binding_path is not None
+        binding_path.parent.mkdir(parents=True)
+        binding_path.write_text("{not-json", encoding="utf-8")
+
+        monkeypatch.setenv("QUAID_INSTANCE", hashed_instance)
+        monkeypatch.setattr(adapter_mod, "is_fail_hard_enabled", lambda: True)
+        adapter = ClaudeCodeAdapter(home=tmp_path)
+
+        with pytest.raises(json.JSONDecodeError):
+            adapter._bound_project_dir_for_current_instance()
+
+    def test_current_project_session_slug_logs_instance_failure_when_fail_open(self, monkeypatch, caplog):
+        from adaptors.claude_code import adapter as adapter_mod
+
+        monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+        monkeypatch.setenv("QUAID_INSTANCE", "claude-code-fallback")
+        monkeypatch.setattr(adapter_mod, "is_fail_hard_enabled", lambda: False)
+        adapter = ClaudeCodeAdapter()
+        monkeypatch.setattr(adapter, "_bound_project_dir_for_current_instance", lambda: "")
+        monkeypatch.setattr(adapter, "instance_id", lambda: (_ for _ in ()).throw(RuntimeError("instance failed")))
+
+        with caplog.at_level("WARNING", logger="adaptors.claude_code.adapter"):
+            assert adapter._current_project_session_slug() == "fallback"
+
+        assert "failed resolving Claude Code instance for session slug" in caplog.text
+        assert "instance failed" in caplog.text
+
+    def test_current_project_session_slug_raises_instance_failure_when_failhard(self, monkeypatch):
+        from adaptors.claude_code import adapter as adapter_mod
+
+        monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+        monkeypatch.setenv("QUAID_INSTANCE", "claude-code-fallback")
+        monkeypatch.setattr(adapter_mod, "is_fail_hard_enabled", lambda: True)
+        adapter = ClaudeCodeAdapter()
+        monkeypatch.setattr(adapter, "_bound_project_dir_for_current_instance", lambda: "")
+        monkeypatch.setattr(adapter, "instance_id", lambda: (_ for _ in ()).throw(RuntimeError("instance failed")))
+
+        with pytest.raises(RuntimeError, match="instance failed"):
+            adapter._current_project_session_slug()
+
     def test_owns_session_path_rejects_sibling_claude_project_transcript(self, tmp_path, monkeypatch):
         sessions_root = tmp_path / ".claude" / "projects"
         original_dir = sessions_root / "-private-tmp-cc-livetest"

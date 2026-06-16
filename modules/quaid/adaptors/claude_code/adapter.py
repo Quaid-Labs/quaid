@@ -536,7 +536,10 @@ class ClaudeCodeAdapter(QuaidAdapter):
                 if instance_id in {f"{prefix}{new_slug}", f"{prefix}{legacy_slug}"}:
                     return str(resolved_project)
                 explicit_matches.append(str(resolved_project))
-            except Exception:
+            except Exception as exc:
+                logger.warning("failed resolving Claude Code project binding %s: %s", binding_path, exc)
+                if is_fail_hard_enabled():
+                    raise
                 continue
 
         unique_matches = list(dict.fromkeys(explicit_matches))
@@ -552,7 +555,10 @@ class ClaudeCodeAdapter(QuaidAdapter):
         instance_id = ""
         try:
             instance_id = str(self.instance_id() or "").strip()
-        except Exception:
+        except Exception as exc:
+            logger.warning("failed resolving Claude Code instance for session slug: %s", exc)
+            if is_fail_hard_enabled():
+                raise
             instance_id = os.environ.get("QUAID_INSTANCE", "").strip()
         prefix = f"{self.agent_id_prefix()}-"
         if instance_id.startswith(prefix):
