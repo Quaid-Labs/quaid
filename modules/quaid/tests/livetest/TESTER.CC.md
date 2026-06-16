@@ -11,9 +11,9 @@ Milestone files reference these; export them once at session start:
 ```bash
 export LANE=cc
 export LANE_UPPER=CC
-export INSTANCE=claude-code-private-tmp-cc-livetest
+export INSTANCE=claude-code-cc-livetest-51aa91834f73
 export QCLI=~/.quaid/plugins/quaid/quaid
-export SILO=~/.quaid/instances/claude-code-private-tmp-cc-livetest
+export SILO=~/.quaid/instances/claude-code-cc-livetest-51aa91834f73
 export LIFECYCLE="/clear"   # M2 Part A also uses /compact where supported
 ```
 
@@ -84,7 +84,7 @@ coordinator — Quaid will have nothing to extract and every downstream DB check
 will be false signal.
 
 ```bash
-ssh REMOTE_HOST 'cd ~/quaidcode/dev && bash modules/quaid/tests/livetest/scripts/verify-cc-session-capture.sh --remote localhost --project-dir /tmp/cc-livetest --instance claude-code-private-tmp-cc-livetest --max-age-min 5'
+ssh REMOTE_HOST 'cd ~/quaidcode/dev && bash modules/quaid/tests/livetest/scripts/verify-cc-session-capture.sh --remote localhost --project-dir /tmp/cc-livetest --instance claude-code-cc-livetest-51aa91834f73 --max-age-min 5'
 ```
 
 Expected: `PASS`, including at least one fresh `*.jsonl` path. If it fails:
@@ -270,11 +270,11 @@ More than 3 concurrent hooks.py processes = hook storm. Report to coordinator im
 explicitly pinned in `/tmp/cc-livetest/.claude/settings.json`, or derived by
 Quaid from the resolved `CLAUDE_PROJECT_DIR` path (`/tmp` resolves to
 `/private/tmp` on macOS, so this lane derives
-`claude-code-private-tmp-cc-livetest`).
+`claude-code-cc-livetest-51aa91834f73`).
 
 Verify:
 ```bash
-ssh REMOTE_HOST 'cd ~/quaidcode/dev && bash modules/quaid/tests/livetest/scripts/verify-cc-session-capture.sh --remote localhost --project-dir /tmp/cc-livetest --instance claude-code-private-tmp-cc-livetest --max-age-min 5'
+ssh REMOTE_HOST 'cd ~/quaidcode/dev && bash modules/quaid/tests/livetest/scripts/verify-cc-session-capture.sh --remote localhost --project-dir /tmp/cc-livetest --instance claude-code-cc-livetest-51aa91834f73 --max-age-min 5'
 # Expected: PASS with either explicit project_instance=CC_INSTANCE or path-derived fallback
 ssh REMOTE_HOST 'python3 -c "import json; d=json.load(open(\"$HOME/.claude/settings.json\")); print(d.get(\"env\",{}).get(\"QUAID_INSTANCE\",\"(absent — correct)\"))"'
 # Expected: absent
@@ -314,8 +314,8 @@ the first real user turn, which freezes the cursor and silently skips extraction
 Sonnet is already active from launch; no model switch needed for M8.
 
 ### M5 Part A — Multi-Agent Silo Verification
-CC uses `claude-code-private-tmp-cc-livetest` as the instance ID. Runtime silo is at
-`~/.quaid/instances/claude-code-private-tmp-cc-livetest/` (hidden). Follow the CC
+CC uses `claude-code-cc-livetest-51aa91834f73` as the instance ID. Runtime silo is at
+`~/.quaid/instances/claude-code-cc-livetest-51aa91834f73/` (hidden). Follow the CC
 Part A procedure in `livetest-guide/M5.md`. Never SKIP — all three platforms run M5.
 
 ### M5 Part B — Multi-Instance Verification

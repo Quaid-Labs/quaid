@@ -468,6 +468,34 @@ class TestClaudeCodeInstanceManager:
         assert "QUAID_INSTANCE='" not in session_start_cmd
         assert 'CLAUDE_PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$PWD}"' in session_start_cmd
 
+    def test_make_instance_canonicalizes_legacy_project_path_label(self, tmp_path):
+        from adaptors.claude_code.instance_manager import ClaudeCodeInstanceManager
+        from lib.instance import _legacy_instance_slug_from_project_dir, instance_slug_from_project_dir
+
+        adapter = MagicMock()
+        adapter.agent_id_prefix.return_value = "claude-code"
+        adapter.adapter_id.return_value = "claude-code"
+        adapter.quaid_home.return_value = tmp_path / "quaid"
+        adapter.visible_home.return_value = tmp_path / "visible"
+        adapter.instance_root.return_value = tmp_path / "quaid" / "instances" / "claude-code-main"
+        (tmp_path / "quaid").mkdir()
+        mgr = ClaudeCodeInstanceManager(adapter)
+
+        project_dir = tmp_path / "cc-livetest"
+        project_dir.mkdir()
+        legacy_label = _legacy_instance_slug_from_project_dir(str(project_dir))
+        expected_label = instance_slug_from_project_dir(str(project_dir))
+        expected_instance = f"claude-code-{expected_label}"
+
+        with patch("lib.instance.instance_exists", return_value=False), \
+             patch("lib.instance.validate_instance_id"):
+            silo = mgr.make_instance(str(project_dir), legacy_label)
+
+        assert silo == tmp_path / "quaid" / "instances" / expected_instance
+        assert not (tmp_path / "quaid" / "instances" / f"claude-code-{legacy_label}").exists()
+        data = json.loads((project_dir / ".claude" / "settings.json").read_text())
+        assert data["env"]["QUAID_INSTANCE"] == expected_instance
+
     def test_make_instance_overwrites_existing_instance(self, tmp_path):
         from adaptors.claude_code.instance_manager import ClaudeCodeInstanceManager
         adapter = MagicMock()
@@ -584,6 +612,21 @@ class TestAdapterCLIRegistration:
         assert "make_instance" in snippet
         assert "claudecode" in snippet
         assert "QUAID_INSTANCE" in snippet
+
+    def test_cc_adapter_make_instance_dry_run_canonicalizes_legacy_label(self, tmp_path, capsys):
+        from lib.instance import _legacy_instance_slug_from_project_dir, instance_slug_from_project_dir
+
+        adapter = _make_cc_adapter(tmp_path)
+        project_dir = tmp_path / "cc-livetest"
+        project_dir.mkdir()
+        legacy_label = _legacy_instance_slug_from_project_dir(str(project_dir))
+        expected_instance = f"claude-code-{instance_slug_from_project_dir(str(project_dir))}"
+
+        adapter._cli_make_instance([str(project_dir), legacy_label, "--dry-run"])
+
+        out = capsys.readouterr().out
+        assert f"QUAID_INSTANCE={expected_instance}" in out
+        assert f"claude-code-{legacy_label}" not in out
 
     def test_cc_adapter_get_instance_manager(self, tmp_path):
         from adaptors.claude_code.instance_manager import ClaudeCodeInstanceManager

@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from lib.fail_policy import is_fail_hard_enabled
+from lib.instance import _legacy_instance_slug_from_project_dir, instance_slug_from_project_dir
 from lib.instance_manager import InstanceManager
 
 if TYPE_CHECKING:
@@ -73,8 +74,9 @@ class ClaudeCodeInstanceManager(InstanceManager):
         if not project_dir.is_dir():
             raise ValueError(f"Project path does not exist: {project_dir}")
 
-        silo_root = self.create(name, dry_run=dry_run)
-        instance_id = self.resolve_instance_id(name)
+        label = self.canonical_project_label(project_dir, name)
+        silo_root = self.create(label, dry_run=dry_run)
+        instance_id = self.resolve_instance_id(label)
 
         if not dry_run:
             project_settings_path = settings_path or (project_dir / ".claude" / "settings.json")
@@ -88,6 +90,19 @@ class ClaudeCodeInstanceManager(InstanceManager):
             )
 
         return silo_root
+
+    def canonical_project_label(self, project_dir: Path, name: str) -> str:
+        """Normalize stale path-derived labels to the runtime slug for this project."""
+        label = str(name or "").strip()
+        prefix = f"{self.adapter.agent_id_prefix()}-"
+        if prefix and label.startswith(prefix):
+            label = label[len(prefix):]
+
+        current_slug = instance_slug_from_project_dir(str(project_dir))
+        legacy_slug = _legacy_instance_slug_from_project_dir(str(project_dir))
+        if label == legacy_slug:
+            return current_slug
+        return label
 
     def _store_auth_token(self, explicit_token: str = "") -> None:
         """Write an API-scoped OAuth token to the silo's .auth-token file.

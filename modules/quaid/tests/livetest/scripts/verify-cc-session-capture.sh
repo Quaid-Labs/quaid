@@ -7,7 +7,7 @@
 # Defaults:
 #   --config      tests/livetest/livetest-config.json
 #   --project-dir /tmp/cc-livetest
-#   --instance    claude-code-private-tmp-cc-livetest
+#   --instance    claude-code-cc-livetest-51aa91834f73
 #   --max-age-min 5
 #
 # Checks:
@@ -29,7 +29,7 @@ CONFIG_DEFAULT="$(dirname "$SCRIPT_DIR")/livetest-config.json"
 REMOTE_HOST=""
 CONFIG_PATH="$CONFIG_DEFAULT"
 PROJECT_DIR="/tmp/cc-livetest"
-INSTANCE_ID="claude-code-private-tmp-cc-livetest"
+INSTANCE_ID="claude-code-cc-livetest-51aa91834f73"
 MAX_AGE_MIN=5
 
 usage() {

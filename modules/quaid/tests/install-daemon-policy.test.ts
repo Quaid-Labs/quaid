@@ -640,4 +640,18 @@ describe("install daemon policy", () => {
     expect(setupText).toContain('for (const f of ["SOUL.md", "USER.md", "ENVIRONMENT.md"])');
     expect(setupText).toContain("for (const f of ensureVisibleIdentityStubs(visibleRoot))");
   });
+
+  it("Claude Code install defers instance silos to project-derived hook runtime", () => {
+    const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+    const setupText = fs.readFileSync(path.join(repoRoot, "setup-quaid.mjs"), "utf8");
+
+    const platformBranch = setupText.indexOf('if (platform === "claude-code") return "";');
+    const overrideBranch = setupText.indexOf("if (_instanceIdOverride) return _instanceIdOverride;");
+
+    expect(platformBranch).toBeGreaterThan(-1);
+    expect(overrideBranch).toBeGreaterThan(platformBranch);
+    expect(setupText).toContain(
+      "Claude Code instances are derived from the active project path on first hook use."
+    );
+  });
 });

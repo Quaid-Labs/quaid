@@ -1185,9 +1185,12 @@ function resolvedInstallerPlatform() {
 }
 
 function resolvedInstallerInstanceId(adapterType = "") {
-  if (_instanceIdOverride) return _instanceIdOverride;
   const platform = String(adapterType || resolvedInstallerPlatform()).trim();
   if (platform === "standalone") return "standalone";
+  // CC hook runtime derives the silo from CLAUDE_PROJECT_DIR. Seeding an
+  // install-time QUAID_INSTANCE creates a second, empty silo for the same run.
+  if (platform === "claude-code") return "";
+  if (_instanceIdOverride) return _instanceIdOverride;
   return "";
 }
 

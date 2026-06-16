@@ -383,7 +383,8 @@ class ClaudeCodeAdapter(QuaidAdapter):
                 fast_model = args[i + 1]
 
         mgr = self.get_instance_manager()
-        instance_id = mgr.resolve_instance_id(name)
+        label = mgr.canonical_project_label(Path(project_path).resolve(), name)
+        instance_id = mgr.resolve_instance_id(label)
         _deep = deep_model or mgr.DEFAULT_DEEP_MODEL
         _fast = fast_model or mgr.DEFAULT_FAST_MODEL
 
@@ -395,7 +396,7 @@ class ClaudeCodeAdapter(QuaidAdapter):
                 print(f"[dry-run] Would write auth token to adapter config dir")
             return
 
-        silo_root = mgr.make_instance(project_path, name, token=token,
+        silo_root = mgr.make_instance(project_path, label, token=token,
                                       deep_model=deep_model, fast_model=fast_model)
         print(f"Created silo: {silo_root}")
         print(f"Instance ID:  {instance_id}")

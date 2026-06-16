@@ -657,9 +657,9 @@ to each tester pane specifying only its own platform and instance name.
 
 **CC instance caveat:** Do NOT tell the CC tester to set `QUAID_INSTANCE` in their
 shell. CC derives the instance from the transcript path — `/tmp/cc-livetest` →
-`claude-code-private-tmp-cc-livetest`. Setting `QUAID_INSTANCE` in the shell has
+`claude-code-cc-livetest-51aa91834f73`. Setting `QUAID_INSTANCE` in the shell has
 no effect on where facts are stored. For coordinator verification: always use
-`QUAID_INSTANCE=claude-code-private-tmp-cc-livetest quaid recall <query>`.
+`QUAID_INSTANCE=claude-code-cc-livetest-51aa91834f73 quaid recall <query>`.
 
 **CC async extraction:** CC extraction fires asynchronously after `/exit` (not
 inline like OC). Tell CC testers to wait **at least 2 minutes** after exiting a
@@ -874,7 +874,8 @@ Examine the Quaid install on REMOTE_HOST for platform PLATFORM.
 6. Platform-specific checks:
    - OC: verify ~/.openclaw/extensions/quaid/ is a real directory copy containing the Quaid plugin files (not a symlink)
    - CC: verify ~/.claude/settings.json has Quaid hooks registered
-     AND `/tmp/cc-livetest/.claude/settings.json` contains the expected `QUAID_INSTANCE`
+     AND `verify-cc-session-capture.sh` passes for `/tmp/cc-livetest`; project
+     settings may omit `QUAID_INSTANCE` when the path-derived instance matches
    - CDX: verify ~/.codex/hooks.json has Quaid hooks registered
 
 7. Verify NO stale flat or misplaced paths:
