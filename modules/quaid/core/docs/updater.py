@@ -261,7 +261,8 @@ def _linked_projects_for_current_instance() -> tuple[set[str], bool]:
 
         linked, resolved = _linked()
         return {str(name) for name in linked}, bool(resolved)
-    except Exception:
+    except Exception as exc:
+        logger.warning("[project-docs] failed to resolve linked projects for current instance: %s", exc)
         return set(), False
 
 
@@ -307,7 +308,8 @@ def _resolve_registered_doc_path(registry: Any, file_path: str) -> Path:
         from config import _workspace_root
 
         return (_workspace_root() / path).resolve()
-    except Exception:
+    except Exception as exc:
+        logger.debug("[project-docs] workspace root resolution failed, falling back to cwd: %s", exc)
         return (Path.cwd() / path).resolve()
 
 
@@ -406,7 +408,8 @@ def sync_project_visible_docs(project: str, canonical_path: str, *, root_docs: s
             continue
         try:
             resolved = registry._resolve_path(file_path).resolve()  # registry-owned path semantics
-        except Exception:
+        except Exception as exc:
+            logger.warning("[project-docs] failed to resolve path %r for unregistration check: %s", file_path, exc)
             continue
         if canonical is None:
             continue

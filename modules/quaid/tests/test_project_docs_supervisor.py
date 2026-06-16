@@ -339,7 +339,115 @@ def test_supervisor_fail_hard_helper_raises_missing_policy_import(monkeypatch, c
     assert "fail-hard policy unavailable in project docs supervisor" in caplog.text
 
 
-def test_supervisor_worker_start_failure_raises_when_failhard(monkeypatch):
+def test_instance_misc_deleted_failure_logs_before_failhard(monkeypatch, caplog):
+    from core import project_docs_supervisor as supervisor
+
+    monkeypatch.setattr(
+        supervisor,
+        "is_misc_project_deleted",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("registry broken")),
+    )
+    monkeypatch.setattr(supervisor, "_fail_hard_enabled", lambda: True)
+
+    with caplog.at_level("WARNING", logger=supervisor.__name__):
+        with pytest.raises(RuntimeError, match="registry broken"):
+            supervisor._instance_misc_project_deleted("alpha")
+
+    assert "failed to check misc project deletion state for alpha" in caplog.text
+
+
+def test_process_command_failure_logs_debug(monkeypatch, caplog):
+    from core import project_docs_supervisor as supervisor
+
+    monkeypatch.setattr(supervisor.subprocess, "run", lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("ps down")))
+
+    with caplog.at_level("DEBUG", logger=supervisor.__name__):
+        assert supervisor._process_command(123) is None
+
+    assert "ps command inspection failed for pid=123" in caplog.text
+    assert "ps down" in caplog.text
+
+
+def test_read_instance_daemon_pid_parse_failure_logs(monkeypatch, tmp_path, caplog):
+    from core import project_docs_supervisor as supervisor
+
+    monkeypatch.setattr(supervisor, "quaid_home", lambda: tmp_path)
+    pid_path = tmp_path / "instances" / "alpha" / "data" / "extraction-daemon.pid"
+    pid_path.parent.mkdir(parents=True)
+    pid_path.write_text("not-a-pid", encoding="utf-8")
+
+    with caplog.at_level("WARNING", logger=supervisor.__name__):
+        assert supervisor._read_instance_daemon_pid("alpha") is None
+
+    assert "failed to read daemon pid for alpha" in caplog.text
+
+
+def test_daemon_pid_supervisor_token_inspection_failure_logs(monkeypatch, caplog):
+    from core import project_docs_supervisor as supervisor
+
+    monkeypatch.setattr(supervisor.subprocess, "run", lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("ps down")))
+
+    with caplog.at_level("WARNING", logger=supervisor.__name__):
+        assert supervisor._daemon_pid_has_supervisor_token(123) is False
+
+    assert "ps supervisor token check failed for pid=123" in caplog.text
+
+
+def test_invalid_linked_project_instance_logs_debug(caplog):
+    from core import project_docs_supervisor as supervisor
+
+    with caplog.at_level("DEBUG", logger=supervisor.__name__):
+        assert supervisor._valid_linked_project_instances({"instances": ["bad/instance", "alpha"]}) == ["alpha"]
+
+    assert "skipping invalid linked project instance" in caplog.text
+
+
+def test_janitor_request_malformed_instances_log(caplog):
+    from core import project_docs_supervisor as supervisor
+
+    request = {
+        "started_instances": ["alpha", "bad/instance"],
+        "worker_pids": {"beta": 123, "also/bad": 456, "gamma": "not-a-pid"},
+    }
+
+    with caplog.at_level("WARNING", logger=supervisor.__name__):
+        assert supervisor._janitor_request_started_instances(request) == ["alpha", "beta", "gamma"]
+        assert supervisor._janitor_request_worker_pids(request) == {"beta": 123}
+
+    assert "skipping invalid instance name" in caplog.text
+    assert "skipping invalid worker_pids entry" in caplog.text
+
+
+def test_maintain_instance_monitors_logs_stop_failure_when_fail_open(monkeypatch, caplog):
+    from core import project_docs_supervisor as supervisor
+
+    monkeypatch.setattr(supervisor, "_live_instances_for_supervisor", lambda: (set(), {"alpha"}))
+    monkeypatch.setattr(supervisor, "_stop_instance_monitor", lambda _name: (_ for _ in ()).throw(RuntimeError("stop broken")))
+    monkeypatch.setattr(supervisor, "_fail_hard_enabled", lambda: False)
+    known = {"alpha": 123}
+
+    with caplog.at_level("WARNING", logger=supervisor.__name__):
+        supervisor._maintain_instance_monitors(known)
+
+    assert known == {}
+    assert "failed to stop inactive instance monitor for alpha" in caplog.text
+
+
+def test_stop_all_instance_monitors_logs_failure_when_fail_open(monkeypatch, caplog):
+    from core import project_docs_supervisor as supervisor
+
+    monkeypatch.setattr(supervisor, "list_instances", lambda: ["alpha"])
+    monkeypatch.setattr(supervisor, "_internal_path_derived_instances_on_disk", lambda: set())
+    monkeypatch.setattr(supervisor, "_stop_instance_monitor", lambda _name: (_ for _ in ()).throw(RuntimeError("stop broken")))
+    monkeypatch.setattr(supervisor, "_fail_hard_enabled", lambda: False)
+
+    with caplog.at_level("WARNING", logger=supervisor.__name__):
+        supervisor.stop_all_instance_monitors()
+
+    assert "failed to stop instance monitor for alpha" in caplog.text
+
+
+def test_supervisor_worker_start_failure_raises_when_failhard(monkeypatch, caplog):
     from core import project_docs_supervisor as supervisor
 
     monkeypatch.setenv("QUAID_INSTANCE", "pytest-runner")
@@ -358,8 +466,11 @@ def test_supervisor_worker_start_failure_raises_when_failhard(monkeypatch):
     monkeypatch.setattr(supervisor, "_maintain_janitor_workers", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(supervisor, "_supervisor_projects", lambda: {"demo": {"instances": ["pytest-runner"]}})
 
-    with pytest.raises(RuntimeError, match="worker start boom"):
-        supervisor.run_supervisor(once=True, interval_seconds=0.5)
+    with caplog.at_level("WARNING", logger=supervisor.__name__):
+        with pytest.raises(RuntimeError, match="worker start boom"):
+            supervisor.run_supervisor(once=True, interval_seconds=0.5)
+
+    assert "project docs worker start failed for demo" in caplog.text
 
 
 def test_supervisor_skips_ambiguous_multi_instance_project_without_crashing_failhard(monkeypatch, caplog):
@@ -1293,14 +1404,17 @@ def test_running_janitor_request_tracks_live_worker_pid_after_supervisor_restart
     assert payload["status"] == "running"
 
 
-def test_janitor_checkpoint_status_raises_missing_checkpoint_when_failhard(monkeypatch, tmp_path):
+def test_janitor_checkpoint_status_raises_missing_checkpoint_when_failhard(monkeypatch, tmp_path, caplog):
     from core import project_docs_supervisor as supervisor
 
     monkeypatch.setattr(supervisor, "quaid_home", lambda: tmp_path)
     monkeypatch.setattr(supervisor, "_fail_hard_enabled", lambda: True)
 
-    with pytest.raises(RuntimeError, match="instance alpha janitor checkpoint missing"):
-        supervisor._janitor_checkpoint_status("alpha")
+    with caplog.at_level("WARNING", logger=supervisor.__name__):
+        with pytest.raises(RuntimeError, match="instance alpha janitor checkpoint missing"):
+            supervisor._janitor_checkpoint_status("alpha")
+
+    assert "instance alpha janitor checkpoint missing" in caplog.text
 
 
 def test_requested_janitor_run_writes_failed_status_before_failhard_reraise(monkeypatch, tmp_path):

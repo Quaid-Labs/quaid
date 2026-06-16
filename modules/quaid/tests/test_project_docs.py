@@ -503,6 +503,37 @@ def test_project_docs_worker_refresh_resets_model_caches(monkeypatch):
     assert calls == ["reload_config", "reset_llm", "reset_embeddings"]
 
 
+def test_project_docs_worker_supervisor_pid_parse_failure_logs(monkeypatch, caplog):
+    from core import project_docs_worker
+
+    monkeypatch.setenv("QUAID_SUPERVISOR_PID", "not-a-pid")
+
+    with caplog.at_level(logging.WARNING, logger="core.project_docs_worker"):
+        assert project_docs_worker._supervisor_alive() is False
+
+    assert "QUAID_SUPERVISOR_PID='not-a-pid' is invalid" in caplog.text
+
+
+def test_project_docs_worker_config_refresh_logs_fail_policy_failure(monkeypatch, caplog):
+    from core import project_docs_worker
+
+    real_import = builtins.__import__
+
+    def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "lib.fail_policy":
+            raise ImportError("fail policy missing")
+        return real_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr("config.reload_config", lambda: (_ for _ in ()).throw(RuntimeError("reload broken")))
+    monkeypatch.setattr("builtins.__import__", fake_import)
+
+    with caplog.at_level(logging.WARNING, logger="core.project_docs_worker"):
+        with pytest.raises(RuntimeError, match="reload broken"):
+            project_docs_worker._refresh_runtime_config_for_update("demo")
+
+    assert "Project docs worker fail-hard policy check failed during config refresh for demo" in caplog.text
+
+
 def test_request_janitor_run_writes_hidden_state_and_blocks_parallel_requests(tmp_path, monkeypatch):
     monkeypatch.setenv("QUAID_HOME", str(tmp_path))
     from core import project_docs
@@ -1657,6 +1688,67 @@ def test_index_project_logs_skips_when_instance_scope_unresolved(project_env, mo
     assert updater.index_project_logs(project="demo") == 1
     assert indexed == [str(project_log.resolve())]
     assert "cross-instance contamination" in caplog.text
+
+
+def test_linked_projects_resolution_failure_logs(monkeypatch, caplog):
+    from core.docs import updater
+
+    monkeypatch.setattr(
+        "datastore.docsdb.rag._linked_projects_for_current_instance",
+        lambda: (_ for _ in ()).throw(RuntimeError("linkage broken")),
+    )
+
+    with caplog.at_level(logging.WARNING, logger="core.docs.updater"):
+        assert updater._linked_projects_for_current_instance() == (set(), False)
+
+    assert "failed to resolve linked projects for current instance" in caplog.text
+
+
+def test_resolve_registered_doc_path_workspace_failure_logs(monkeypatch, tmp_path, caplog):
+    from core.docs import updater
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("config._workspace_root", lambda: (_ for _ in ()).throw(RuntimeError("workspace broken")))
+
+    with caplog.at_level(logging.DEBUG, logger="core.docs.updater"):
+        resolved = updater._resolve_registered_doc_path(object(), "docs/example.md")
+
+    assert resolved == (tmp_path / "docs" / "example.md").resolve()
+    assert "workspace root resolution failed" in caplog.text
+
+
+def test_sync_project_visible_docs_logs_unresolvable_registered_path(project_env, monkeypatch, caplog):
+    _tmp_path, _src, entry = project_env
+    from core.docs import updater
+
+    class _BadRegistry:
+        def list_docs(self, project=None):
+            return [{"file_path": "broken.md"}]
+
+        def get(self, _path):
+            return {}
+
+        def register(self, *_args, **_kwargs):
+            return {}
+
+        def unregister(self, _path):
+            raise AssertionError("unregister should not run for unresolvable path")
+
+        def _resolve_path(self, _path):
+            raise RuntimeError("path broken")
+
+    monkeypatch.setattr("datastore.docsdb.registry.DocsRegistry", lambda: _BadRegistry())
+
+    with caplog.at_level(logging.WARNING, logger="core.docs.updater"):
+        result = updater.sync_project_visible_docs(
+            "demo",
+            entry["canonical_path"],
+            root_docs=set(),
+            protected_names=set(),
+        )
+
+    assert result["unregistered"] == 0
+    assert "failed to resolve path 'broken.md' for unregistration check" in caplog.text
 
 
 def test_index_project_logs_raises_when_instance_scope_unresolved_fail_hard(project_env, monkeypatch):

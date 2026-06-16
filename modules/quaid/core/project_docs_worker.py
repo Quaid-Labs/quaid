@@ -32,7 +32,12 @@ def _supervisor_alive() -> bool:
         return True
     try:
         pid = int(raw)
-    except Exception:
+    except Exception as exc:
+        logging.getLogger(__name__).warning(
+            "QUAID_SUPERVISOR_PID=%r is invalid; treating supervisor as dead: %s",
+            raw,
+            exc,
+        )
         return False
     return project_docs.read_supervisor_pid() == pid
 
@@ -85,7 +90,12 @@ def _refresh_runtime_config_for_update(project: str) -> None:
             from lib.fail_policy import is_fail_hard_enabled
 
             fail_hard = is_fail_hard_enabled()
-        except Exception:
+        except Exception as inner_exc:
+            logging.getLogger(__name__).warning(
+                "Project docs worker fail-hard policy check failed during config refresh for %s: %s",
+                project,
+                inner_exc,
+            )
             fail_hard = True
         if fail_hard:
             raise

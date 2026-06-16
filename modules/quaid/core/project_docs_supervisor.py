@@ -172,7 +172,8 @@ def _process_command(pid: int) -> str | None:
             timeout=2,
         )
         return result.stdout or ""
-    except Exception:
+    except Exception as exc:
+        _LOGGER.debug("ps command inspection failed for pid=%s: %s", pid, exc)
         return None
 
 
@@ -182,7 +183,8 @@ def _read_instance_daemon_pid(instance: str) -> int | None:
         return None
     try:
         pid = int(path.read_text(encoding="utf-8").strip())
-    except Exception:
+    except Exception as exc:
+        _LOGGER.warning("failed to read daemon pid for %s, treating as dead: %s", instance, exc)
         pid = 0
     if pid > 0 and _pid_alive(pid):
         command = _process_command(pid)
@@ -200,7 +202,8 @@ def _read_instance_daemon_pid(instance: str) -> int | None:
 def _instance_misc_project_deleted(instance: str) -> bool:
     try:
         return bool(is_misc_project_deleted(instance, quaid_home=quaid_home()))
-    except Exception:
+    except Exception as exc:
+        _LOGGER.warning("failed to check misc project deletion state for %s: %s", instance, exc)
         if _fail_hard_enabled():
             raise
         return False
@@ -265,7 +268,8 @@ def _daemon_pid_has_supervisor_token(pid: int) -> bool:
             text=True,
             timeout=2,
         )
-    except Exception:
+    except Exception as exc:
+        _LOGGER.warning("ps supervisor token check failed for pid=%s; treating as no supervisor token: %s", pid, exc)
         return False
     command = result.stdout or ""
     return " QUAID_SUPERVISOR_PID=" in f" {command}"
@@ -376,7 +380,8 @@ def _valid_linked_project_instances(entry: Dict[str, object]) -> list[str]:
     for raw in list(entry.get("instances") or []):
         try:
             linked_instances.append(validate_instance_id(str(raw or "").strip()))
-        except Exception:
+        except Exception as exc:
+            _LOGGER.debug("skipping invalid linked project instance %r: %s", raw, exc)
             continue
     return sorted(set(linked_instances))
 
@@ -503,6 +508,7 @@ def _janitor_checkpoint_status(
     checkpoint_path = quaid_home() / "instances" / name / "logs" / "janitor" / "checkpoint-all.json"
 
     def _checkpoint_error(message: str, exc: Exception | None = None) -> tuple[str, str]:
+        _LOGGER.warning(message)
         if _fail_hard_enabled():
             raise RuntimeError(message) from exc
         return "", message
@@ -559,7 +565,8 @@ def _janitor_request_started_instances(request: Dict[str, object]) -> list[str]:
     for raw in candidates:
         try:
             name = validate_instance_id(str(raw or "").strip())
-        except Exception:
+        except Exception as exc:
+            _LOGGER.warning("skipping invalid instance name %r in janitor request: %s", raw, exc)
             continue
         if name in seen:
             continue
@@ -577,7 +584,8 @@ def _janitor_request_worker_pids(request: Dict[str, object]) -> dict[str, int]:
         try:
             name = validate_instance_id(str(raw_name or "").strip())
             pid = int(raw_pid)
-        except Exception:
+        except Exception as exc:
+            _LOGGER.warning("skipping invalid worker_pids entry name=%r pid=%r: %s", raw_name, raw_pid, exc)
             continue
         if pid > 0:
             worker_pids[name] = pid
@@ -792,7 +800,8 @@ def _maintain_instance_monitors(known_instances: Dict[str, int]) -> None:
     for instance in sorted(inactive_instances):
         try:
             _stop_instance_monitor(instance)
-        except Exception:
+        except Exception as exc:
+            _LOGGER.warning("failed to stop inactive instance monitor for %s: %s", instance, exc)
             if _fail_hard_enabled():
                 raise
             pass
@@ -813,7 +822,8 @@ def _maintain_instance_monitors(known_instances: Dict[str, int]) -> None:
             )
             try:
                 _stop_instance_monitor(instance)
-            except Exception:
+            except Exception as exc:
+                _LOGGER.warning("failed to stop duplicate instance monitor for %s: %s", instance, exc)
                 if _fail_hard_enabled():
                     raise
                 pass
@@ -827,7 +837,8 @@ def _maintain_instance_monitors(known_instances: Dict[str, int]) -> None:
             continue
         try:
             _stop_instance_monitor(instance)
-        except Exception:
+        except Exception as exc:
+            _LOGGER.warning("failed to stop stale instance monitor for %s: %s", instance, exc)
             if _fail_hard_enabled():
                 raise
             pass
@@ -883,7 +894,8 @@ def stop_all_instance_monitors() -> None:
     for instance in sorted(set(list_instances()) | _internal_path_derived_instances_on_disk()):
         try:
             _stop_instance_monitor(instance)
-        except Exception:
+        except Exception as exc:
+            _LOGGER.warning("failed to stop instance monitor for %s: %s", instance, exc)
             if _fail_hard_enabled():
                 raise
             pass
@@ -981,6 +993,7 @@ def run_supervisor(*, once: bool = False, interval_seconds: float | None = None)
                 project_docs.cleanup_project_state(project)
                 known_workers.pop(project, None)
             except Exception as exc:
+                _LOGGER.warning("project docs worker start failed for %s: %s", project, exc)
                 if project_docs.project_is_registered_for_worker(project):
                     project_docs.merge_state(project, {"status": "error", "last_error": f"worker start failed: {exc}"})
                 else:
@@ -995,7 +1008,8 @@ def run_supervisor(*, once: bool = False, interval_seconds: float | None = None)
                 project_docs.stop_worker(project)
                 project_docs.reap_child_processes()
                 project_docs.cleanup_project_state(project)
-            except Exception:
+            except Exception as exc:
+                _LOGGER.warning("failed to stop project docs worker for %s: %s", project, exc)
                 if _fail_hard_enabled():
                     raise
                 pass
@@ -1022,7 +1036,8 @@ def run_supervisor(*, once: bool = False, interval_seconds: float | None = None)
         try:
             project_docs.stop_worker(project)
             project_docs.reap_child_processes()
-        except Exception:
+        except Exception as exc:
+            _LOGGER.warning("failed to stop project docs worker during supervisor shutdown for %s: %s", project, exc)
             if _fail_hard_enabled():
                 raise
             pass
@@ -1030,7 +1045,8 @@ def run_supervisor(*, once: bool = False, interval_seconds: float | None = None)
         try:
             _stop_instance_monitor(instance)
             project_docs.reap_child_processes()
-        except Exception:
+        except Exception as exc:
+            _LOGGER.warning("failed to stop instance monitor during supervisor shutdown for %s: %s", instance, exc)
             if _fail_hard_enabled():
                 raise
             pass
