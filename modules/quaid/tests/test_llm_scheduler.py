@@ -98,6 +98,31 @@ def test_scheduler_retries_only_incomplete_items_after_timeout():
         scheduler.shutdown(wait=False)
 
 
+def test_scheduler_worker_slot_contention_does_not_backoff_workload_cap():
+    scheduler = GlobalLlmScheduler(max_workers=2)
+    workload = "test.queue_wait"
+    acquired = [scheduler._worker_slots.acquire(timeout=0.01) for _ in range(2)]
+    assert acquired == [True, True]
+    try:
+        with pytest.raises(TimeoutError, match="worker slot unavailable"):
+            scheduler.run_map(
+                workload_key=workload,
+                items=[1, 2],
+                fn=lambda x: x,
+                configured_workers=2,
+                requested_workers=2,
+                timeout_seconds=0.01,
+                timeout_retries=0,
+            )
+
+        # Queue wait is platform contention, not slow work for this workload.
+        assert scheduler._caps[workload] == 2
+    finally:
+        for _ in acquired:
+            scheduler._worker_slots.release()
+        scheduler.shutdown(wait=False)
+
+
 def test_scheduler_cancels_pending_on_worker_error():
     scheduler = GlobalLlmScheduler(max_workers=8)
     workload = "test.cancel_on_error"

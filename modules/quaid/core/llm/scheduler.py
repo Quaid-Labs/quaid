@@ -34,6 +34,7 @@ class GlobalLlmScheduler:
     def __init__(self, max_workers: int = 32) -> None:
         self._max_workers = max(1, int(max_workers))
         self._executor = ThreadPoolExecutor(max_workers=self._max_workers)
+        self._worker_slots = threading.BoundedSemaphore(self._max_workers)
         self._caps: Dict[str, int] = {}
         self._caps_lock = threading.RLock()
 
@@ -72,6 +73,51 @@ class GlobalLlmScheduler:
             if current < configured:
                 current = min(configured, max(active_workers, current) + 1)
             self._caps[workload_key] = current
+
+    def _submit_to_executor(
+        self,
+        *,
+        workload_key: str,
+        item: Any,
+        fn: Callable[[Any], Any],
+        slot_timeout: float,
+    ):
+        timeout = max(0.0, float(slot_timeout))
+        if not self._worker_slots.acquire(timeout=timeout):
+            raise TimeoutError(
+                f"Global LLM scheduler worker slot unavailable after {timeout:.2f}s "
+                f"(workload={workload_key})"
+            )
+
+        released = False
+        release_lock = threading.Lock()
+
+        def _release_once() -> None:
+            nonlocal released
+            with release_lock:
+                if released:
+                    return
+                released = True
+                self._worker_slots.release()
+
+        def _run():
+            try:
+                return fn(item)
+            finally:
+                _release_once()
+
+        try:
+            fut = self._executor.submit(_run)
+        except Exception:
+            _release_once()
+            raise
+
+        def _release_if_cancelled(done_fut) -> None:
+            if done_fut.cancelled():
+                _release_once()
+
+        fut.add_done_callback(_release_if_cancelled)
+        return fut
 
     def run_map(
         self,
@@ -171,20 +217,31 @@ class GlobalLlmScheduler:
                     results[idx] = value
                 return results
 
-            deadline = time.monotonic() + timeout
             in_flight: Dict[Any, int] = {}
             attempt_pending = list(remaining_indices)
             cursor = 0
 
-            def _submit_available() -> None:
+            def _submit_available(*, slot_timeout: float) -> None:
                 nonlocal cursor
                 while cursor < len(attempt_pending) and len(in_flight) < worker_count:
                     idx = attempt_pending[cursor]
+                    try:
+                        acquire_timeout = slot_timeout if not in_flight else 0.0
+                        fut = self._submit_to_executor(
+                            workload_key=workload_key,
+                            item=seq[idx],
+                            fn=fn,
+                            slot_timeout=acquire_timeout,
+                        )
+                    except TimeoutError:
+                        if in_flight:
+                            return
+                        raise
                     cursor += 1
-                    fut = self._executor.submit(fn, seq[idx])
                     in_flight[fut] = idx
 
-            _submit_available()
+            _submit_available(slot_timeout=timeout)
+            deadline = time.monotonic() + timeout
             timed_out = False
             completed_this_attempt: List[int] = []
 
@@ -206,7 +263,7 @@ class GlobalLlmScheduler:
                         fut.cancel()
                     raise
                 completed_this_attempt.append(idx)
-                _submit_available()
+                _submit_available(slot_timeout=0.0)
 
             if not timed_out:
                 # Completed all in-flight work for this attempt; if there are no remaining
