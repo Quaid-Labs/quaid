@@ -18099,7 +18099,7 @@ class TestRecallFastHookInjectContract:
             row for row in payload["graph_results"]
             if row.get("via") == "graph_attached_fact"
         ]
-        assert payload["source_breakdown"]["pronoun_resolved"] is True
+        assert payload["source_breakdown"]["owner_relation_chain_inferred"] is True
         assert attached
         assert attached[0]["id"] == ceramics.id
         assert "ceramics practice" in attached[0]["text"]
@@ -18825,10 +18825,7 @@ class TestRecallFastHookInjectContract:
         with patch.object(mg, "get_graph", return_value=graph), \
              patch.object(mg, "_HAS_CONFIG", True), \
              patch.object(mg, "_get_memory_config", return_value=fake_cfg), \
-             patch.object(mg, "extract_entities_from_text", return_value=[
-                 SimpleNamespace(id="ari-1", name="Ari", type="Person"),
-                 SimpleNamespace(id="noor-1", name="Noor", type="Person"),
-             ]), \
+             patch.object(mg, "extract_entities_from_text", return_value=[]), \
              patch.object(mg, "_get_recall_store_registry", return_value=registry), \
              patch.object(mg, "recall", side_effect=fake_seed_recall):
             rows, meta, bundle = mg._run_recall_store_plan(
@@ -19028,10 +19025,7 @@ class TestRecallFastHookInjectContract:
         with patch.object(mg, "get_graph", return_value=graph), \
              patch.object(mg, "_HAS_CONFIG", True), \
              patch.object(mg, "_get_memory_config", return_value=fake_cfg), \
-             patch.object(mg, "extract_entities_from_text", return_value=[
-                 SimpleNamespace(id="ari-1", name="Ari", type="Person"),
-                 SimpleNamespace(id="noor-1", name="Noor", type="Person"),
-             ]), \
+             patch.object(mg, "extract_entities_from_text", return_value=[]), \
              patch.object(mg, "get_edge_keywords", return_value={
                  "knows": ["partner"],
                  "sibling_of": ["brother"],

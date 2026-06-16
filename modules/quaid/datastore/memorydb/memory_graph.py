@@ -3697,9 +3697,6 @@ class MemoryGraph:
 # Graph-Aware Search Helpers
 # ==========================================================================
 
-# Pronouns that indicate the query is about the owner
-_OWNER_PRONOUNS = {"my", "mine", "our", "ours", "me", "i", "we", "i'm", "i've", "i'd"}
-
 # Cached edge keywords (loaded once, refreshed on demand)
 _edge_keywords_cache: Optional[Dict[str, set]] = None
 _edge_keywords_all: Optional[set] = None  # Flattened set of all keywords
@@ -4818,7 +4815,7 @@ def _looks_like_compact_script_fact(text: str) -> bool:
 
 
 def _get_owner_names() -> set:
-    """Get the owner's name variants for pronoun resolution."""
+    """Get the owner's name variants for owner-scoped matching."""
     if not _HAS_CONFIG:
         return set()
     try:
@@ -4837,13 +4834,10 @@ def _get_owner_names() -> set:
 
 
 def has_owner_pronoun(query: str) -> bool:
-    """Check if query contains pronouns or the owner's name."""
+    """Check if query contains the owner's configured name."""
     # Strip punctuation and possessives ('s)
     cleaned = re.sub(r"'s\b", "", unicodedata.normalize("NFKC", str(query or "")).casefold())
     words = set(re.sub(r'[^\w\s]', '', cleaned).split())
-    if words & _OWNER_PRONOUNS:
-        return True
-    # Also check if the owner's name appears in the query
     owner_names = _get_owner_names()
     if words & owner_names:
         return True

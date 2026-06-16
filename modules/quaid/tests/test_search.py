@@ -486,19 +486,19 @@ class TestRouteQueryFailHard:
 # ---------------------------------------------------------------------------
 
 class TestHasOwnerPronoun:
-    """Tests for has_owner_pronoun()."""
+    """Tests for owner-name matching."""
 
-    def test_my_is_owner_pronoun(self):
+    def test_english_pronoun_alone_is_not_owner_match(self):
         from datastore.memorydb.memory_graph import has_owner_pronoun
-        assert has_owner_pronoun("my favorite color") is True
+        assert has_owner_pronoun("my favorite color") is False
 
     def test_no_pronoun(self):
         from datastore.memorydb.memory_graph import has_owner_pronoun
         assert has_owner_pronoun("the weather today") is False
 
-    def test_i_pronoun(self):
+    def test_first_person_pronoun_alone_is_not_owner_match(self):
         from datastore.memorydb.memory_graph import has_owner_pronoun
-        assert has_owner_pronoun("I like coffee") is True
+        assert has_owner_pronoun("I like coffee") is False
 
     def test_non_ascii_owner_name_matches_compact_query(self):
         import datastore.memorydb.memory_graph as mg
