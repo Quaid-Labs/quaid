@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import deque
 from datetime import datetime, timezone
 import json
+import logging
 import os
 import re
 import shutil
@@ -23,6 +24,8 @@ from lib.agent_notice import (
 from lib.fail_policy import is_fail_hard_enabled
 from lib.instance import instance_id, instance_slug_from_project_dir
 
+logger = logging.getLogger(__name__)
+
 
 def _trace_m15(event: str, **fields) -> None:
     try:
@@ -30,7 +33,7 @@ def _trace_m15(event: str, **fields) -> None:
 
         trace_m15(event, **fields)
     except Exception:
-        pass
+        logger.debug("M15 trace write failed for Codex adapter event %s", event, exc_info=True)
 
 
 def _now_iso() -> str:

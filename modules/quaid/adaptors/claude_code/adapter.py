@@ -40,7 +40,7 @@ def _trace_m15(event: str, **fields) -> None:
 
         trace_m15(event, **fields)
     except Exception:
-        pass
+        logger.debug("M15 trace write failed for Claude Code adapter event %s", event, exc_info=True)
 
 
 class ClaudeCodeAdapter(QuaidAdapter):

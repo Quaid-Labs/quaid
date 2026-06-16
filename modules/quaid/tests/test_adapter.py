@@ -45,6 +45,36 @@ from adaptors.claude_code.adapter import ClaudeCodeAdapter
 from adaptors.codex.adapter import CodexAdapter
 
 
+def test_claude_code_trace_m15_logs_failures(monkeypatch, caplog):
+    from adaptors.claude_code import adapter as claude_adapter
+
+    fake_trace = SimpleNamespace(
+        trace_m15=lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("trace failed"))
+    )
+    monkeypatch.setitem(sys.modules, "lib.m15_trace", fake_trace)
+
+    with caplog.at_level("DEBUG", logger="adaptors.claude_code.adapter"):
+        claude_adapter._trace_m15("adapter.test")
+
+    assert "M15 trace write failed for Claude Code adapter event adapter.test" in caplog.text
+    assert "trace failed" in caplog.text
+
+
+def test_codex_trace_m15_logs_failures(monkeypatch, caplog):
+    from adaptors.codex import adapter as codex_adapter
+
+    fake_trace = SimpleNamespace(
+        trace_m15=lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("trace failed"))
+    )
+    monkeypatch.setitem(sys.modules, "lib.m15_trace", fake_trace)
+
+    with caplog.at_level("DEBUG", logger="adaptors.codex.adapter"):
+        codex_adapter._trace_m15("adapter.test")
+
+    assert "M15 trace write failed for Codex adapter event adapter.test" in caplog.text
+    assert "trace failed" in caplog.text
+
+
 def _write_adapter_config(tmp_path: Path, adapter_type: str) -> None:
     cfg_dir = tmp_path / "config"
     cfg_dir.mkdir(parents=True, exist_ok=True)
