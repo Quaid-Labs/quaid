@@ -453,6 +453,97 @@ def _janitor_checkpoint_status(instance: str) -> tuple[str, Optional[str]]:
     return status, None
 
 
+def _janitor_request_started_instances(request: Dict[str, object]) -> list[str]:
+    names: list[str] = []
+    seen: set[str] = set()
+    candidates: list[object] = []
+    for key in ("started_instances", "instances"):
+        raw = request.get(key)
+        if isinstance(raw, list):
+            candidates.extend(raw)
+    worker_pids = request.get("worker_pids")
+    if isinstance(worker_pids, dict):
+        candidates.extend(worker_pids.keys())
+    exit_codes = request.get("exit_codes")
+    if isinstance(exit_codes, dict):
+        candidates.extend(exit_codes.keys())
+    for raw in candidates:
+        try:
+            name = validate_instance_id(str(raw or "").strip())
+        except Exception:
+            continue
+        if name in seen:
+            continue
+        seen.add(name)
+        names.append(name)
+    return names
+
+
+def _janitor_request_worker_pids(request: Dict[str, object]) -> dict[str, int]:
+    payload = request.get("worker_pids")
+    if not isinstance(payload, dict):
+        return {}
+    worker_pids: dict[str, int] = {}
+    for raw_name, raw_pid in payload.items():
+        try:
+            name = validate_instance_id(str(raw_name or "").strip())
+            pid = int(raw_pid)
+        except Exception:
+            continue
+        if pid > 0:
+            worker_pids[name] = pid
+    return worker_pids
+
+
+def _active_janitor_request_payload(request: Dict[str, object]) -> Dict[str, object]:
+    started_instances = _janitor_request_started_instances(request)
+    return {
+        "request_id": str(request.get("request_id") or "").strip(),
+        "errors": list(request.get("errors") or []),
+        "targets": list(started_instances),
+        "started_instances": list(started_instances),
+        "worker_pids": _janitor_request_worker_pids(request),
+        "exit_codes": {str(k): int(v) for k, v in dict(request.get("exit_codes") or {}).items()},
+    }
+
+
+def _finalize_janitor_request_payload(
+    payload: Dict[str, object],
+    *,
+    started_instances: list[str],
+    errors: list[str],
+    exit_codes: Dict[str, int],
+) -> None:
+    final_errors = list(errors)
+    fail_hard_exc: Exception | None = None
+    if not started_instances and not exit_codes:
+        final_errors.append("janitor request running with no tracked workers")
+    for instance in started_instances:
+        code = exit_codes.get(instance)
+        if code is not None and code != 0:
+            final_errors.append(f"instance {instance} janitor exited rc={code}")
+            continue
+        try:
+            checkpoint_status, checkpoint_error = _janitor_checkpoint_status(instance)
+        except Exception as exc:
+            final_errors.append(str(exc) or f"instance {instance} janitor checkpoint inspection failed")
+            if fail_hard_exc is None:
+                fail_hard_exc = exc
+            continue
+        if checkpoint_error:
+            final_errors.append(checkpoint_error)
+        elif checkpoint_status != "completed":
+            final_errors.append(f"instance {instance} janitor checkpoint status={checkpoint_status}")
+    payload["status"] = "failed" if final_errors else "completed"
+    payload["completed_at"] = project_docs.utc_now()
+    payload["errors"] = final_errors
+    payload["exit_codes"] = {str(k): int(v) for k, v in sorted(exit_codes.items())}
+    payload["worker_pids"] = {}
+    project_docs.write_janitor_request(payload)
+    if fail_hard_exc is not None and _fail_hard_enabled():
+        raise fail_hard_exc
+
+
 def _start_requested_janitor_run(
     request: Dict[str, object],
     scheduled_workers: Dict[str, subprocess.Popen],
@@ -493,6 +584,8 @@ def _start_requested_janitor_run(
             "errors": list(request_errors),
             "targets": list(targets),
             "started_instances": list(started_instances),
+            "worker_pids": dict(worker_pids),
+            "exit_codes": {},
         }
     payload["status"] = "failed" if request_errors else "completed"
     payload["completed_at"] = project_docs.utc_now()
@@ -506,6 +599,7 @@ def _maintain_on_demand_janitor_request(
     scheduled_workers: Dict[str, subprocess.Popen],
     on_demand_workers: Dict[str, subprocess.Popen],
 ) -> Dict[str, object] | None:
+    pending_running_request: Dict[str, object] | None = None
     if active_request is None:
         with _janitor_request_lock():
             request = project_docs.read_janitor_request()
@@ -513,65 +607,78 @@ def _maintain_on_demand_janitor_request(
                 return None
             status = str(request.get("status") or "").strip().lower()
             if status == "running":
-                payload = dict(request)
-                errors = list(payload.get("errors") or [])
-                errors.append("supervisor restarted before janitor request completed")
-                payload["errors"] = errors
-                payload["status"] = "failed"
-                payload["completed_at"] = project_docs.utc_now()
-                project_docs.write_janitor_request(payload)
+                pending_running_request = _active_janitor_request_payload(request)
+            elif status != "pending":
                 return None
-            if status != "pending":
-                return None
+        if pending_running_request is not None:
+            return _maintain_on_demand_janitor_request(
+                pending_running_request,
+                scheduled_workers,
+                on_demand_workers,
+            )
         return _start_requested_janitor_run(request, scheduled_workers, on_demand_workers)
 
     accumulated_exit_codes = {
         str(k): int(v) for k, v in dict(active_request.get("exit_codes") or {}).items()
     }
+    request_id = str(active_request.get("request_id") or "").strip()
+    started_instances = _janitor_request_started_instances(active_request)
+    if not started_instances:
+        started_instances = sorted(
+            {
+                *[str(name) for name in on_demand_workers.keys()],
+                *[str(name) for name in accumulated_exit_codes.keys()],
+                *[str(name) for name in _janitor_request_worker_pids(active_request).keys()],
+            }
+        )
+    worker_pids = _janitor_request_worker_pids(active_request)
     exit_codes: Dict[str, int] = {}
+    live_worker_pids: dict[str, int] = {}
     all_done = True
-    for instance, proc in list(on_demand_workers.items()):
-        code = proc.poll()
-        if code is None:
-            all_done = False
+    for instance in started_instances:
+        proc = on_demand_workers.get(instance)
+        if proc is not None:
+            code = proc.poll()
+            if code is None:
+                all_done = False
+                pid = int(getattr(proc, "pid", 0) or worker_pids.get(instance) or 0)
+                if pid > 0:
+                    live_worker_pids[instance] = pid
+                continue
+            exit_codes[instance] = int(code)
+            on_demand_workers.pop(instance, None)
+            project_docs.reap_child_processes()
             continue
-        exit_codes[instance] = int(code)
-        on_demand_workers.pop(instance, None)
-        project_docs.reap_child_processes()
+        pid = int(worker_pids.get(instance, 0) or 0)
+        if pid > 0 and _pid_alive(pid):
+            all_done = False
+            live_worker_pids[instance] = pid
     if exit_codes:
         accumulated_exit_codes.update({str(k): int(v) for k, v in exit_codes.items()})
     if not all_done:
-        if exit_codes:
-            request_id = str(active_request.get("request_id") or "").strip()
+        if exit_codes or live_worker_pids != worker_pids:
             with _janitor_request_lock():
                 payload = project_docs.read_janitor_request() or {}
                 if str(payload.get("request_id") or "").strip() == request_id:
                     payload["exit_codes"] = {str(k): int(v) for k, v in sorted(accumulated_exit_codes.items())}
+                    payload["worker_pids"] = {str(k): int(v) for k, v in sorted(live_worker_pids.items())}
                     project_docs.write_janitor_request(payload)
         active_request = dict(active_request)
         active_request["exit_codes"] = dict(accumulated_exit_codes)
+        active_request["started_instances"] = list(started_instances)
+        active_request["worker_pids"] = dict(live_worker_pids)
         return active_request
 
-    request_id = str(active_request.get("request_id") or "").strip()
     with _janitor_request_lock():
         payload = project_docs.read_janitor_request() or {}
         if str(payload.get("request_id") or "").strip() != request_id:
             payload = {"request_id": request_id}
-        errors = list(active_request.get("errors") or [])
-        for instance, code in accumulated_exit_codes.items():
-            if code != 0:
-                errors.append(f"instance {instance} janitor exited rc={code}")
-                continue
-            checkpoint_status, checkpoint_error = _janitor_checkpoint_status(instance)
-            if checkpoint_error:
-                errors.append(checkpoint_error)
-            elif checkpoint_status != "completed":
-                errors.append(f"instance {instance} janitor checkpoint status={checkpoint_status}")
-        payload["status"] = "failed" if errors else "completed"
-        payload["completed_at"] = project_docs.utc_now()
-        payload["errors"] = errors
-        payload["exit_codes"] = {str(k): int(v) for k, v in sorted(accumulated_exit_codes.items())}
-        project_docs.write_janitor_request(payload)
+        _finalize_janitor_request_payload(
+            payload,
+            started_instances=started_instances,
+            errors=list(active_request.get("errors") or []),
+            exit_codes=accumulated_exit_codes,
+        )
     return None
 
 
