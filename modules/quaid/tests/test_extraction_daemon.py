@@ -2171,6 +2171,50 @@ def test_extraction_buffer_log_enabled_raises_config_failure_when_failhard(monke
     assert "config paths failed" in str(excinfo.value.__cause__)
 
 
+def test_extraction_buffer_log_header_honors_quaid_now(monkeypatch, tmp_path):
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "buffer-inst")
+    monkeypatch.setenv("QUAID_NOW", "2026-03-11T05:06:07Z")
+    monkeypatch.setattr(extraction_daemon, "_extraction_buffer_log_enabled", lambda: True)
+
+    extraction_daemon._write_extraction_buffer_log(
+        "sess-buffer",
+        phase="stage",
+        signal_type="rolling",
+        transcript_text="User: durable buffer evidence",
+    )
+
+    log_path = tmp_path / "instances" / "buffer-inst" / "logs" / "daemon" / "extraction-buffer.log"
+    text = log_path.read_text(encoding="utf-8")
+    assert text.startswith("=== 2026-03-11T05:06:07Z session=sess-buffer phase=stage signal=rolling")
+
+
+def test_extraction_buffer_log_rejects_malformed_quaid_now_when_failhard(monkeypatch, tmp_path):
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "buffer-inst")
+    monkeypatch.setenv("QUAID_NOW", "not-a-date")
+    monkeypatch.setattr(extraction_daemon, "_extraction_buffer_log_enabled", lambda: True)
+    monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: True)
+
+    with pytest.raises(RuntimeError, match="Invalid QUAID_NOW") as excinfo:
+        extraction_daemon._write_extraction_buffer_log(
+            "sess-buffer",
+            phase="stage",
+            signal_type="rolling",
+            transcript_text="User: durable buffer evidence",
+        )
+
+    assert isinstance(excinfo.value.__cause__, ValueError)
+    assert not (tmp_path / "instances" / "buffer-inst" / "logs" / "daemon" / "extraction-buffer.log").exists()
+
+
+def test_normalize_project_log_timestamp_logs_unrecognized_format(caplog):
+    with caplog.at_level("DEBUG", logger="quaid.daemon"):
+        assert extraction_daemon._normalize_project_log_timestamp("not a timestamp") is None
+
+    assert "unrecognized project log timestamp format" in caplog.text
+
+
 def test_process_signal_reloads_config_before_signal_handling(monkeypatch):
     reloads = []
     old_sig = (("/tmp/config.json", 1, 1),)
@@ -7598,6 +7642,82 @@ class TestSignalRoundTrip:
         assert paths[1] == tmp_path / "shared" / "config" / "openclaw" / "config.json"
         assert "ignoring invalid adapter platform_config_scope" in caplog.text
 
+    def test_config_file_paths_logs_adapter_lookup_failure_when_fail_open(
+        self, monkeypatch, tmp_path, caplog
+    ):
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "openclaw-main")
+        monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: False)
+
+        fake_adapter_mod = types.ModuleType("lib.adapter")
+        fake_adapter_mod.get_adapter = lambda: (_ for _ in ()).throw(RuntimeError("adapter broken"))
+        real_adapter = sys.modules.get("lib.adapter")
+        sys.modules["lib.adapter"] = fake_adapter_mod
+        try:
+            with caplog.at_level("WARNING", logger="quaid.daemon"):
+                paths = extraction_daemon._config_file_paths()
+        finally:
+            if real_adapter is not None:
+                sys.modules["lib.adapter"] = real_adapter
+            else:
+                sys.modules.pop("lib.adapter", None)
+
+        assert paths[1] == tmp_path / "shared" / "config" / "openclaw" / "config.json"
+        assert "daemon config adapter lookup failed" in caplog.text
+        assert "adapter broken" in caplog.text
+
+    def test_config_file_paths_raises_adapter_scope_failure_when_fail_hard(
+        self, monkeypatch, tmp_path
+    ):
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "openclaw-main")
+        monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: True)
+
+        class _Adapter:
+            def get_capability(self, key, default=None):
+                assert key == "platform_config_scope"
+                raise RuntimeError("scope broken")
+
+        fake_adapter_mod = types.ModuleType("lib.adapter")
+        fake_adapter_mod.get_adapter = lambda: _Adapter()
+        real_adapter = sys.modules.get("lib.adapter")
+        sys.modules["lib.adapter"] = fake_adapter_mod
+        try:
+            with pytest.raises(RuntimeError, match="daemon config adapter platform scope lookup failed") as excinfo:
+                extraction_daemon._config_file_paths()
+        finally:
+            if real_adapter is not None:
+                sys.modules["lib.adapter"] = real_adapter
+            else:
+                sys.modules.pop("lib.adapter", None)
+
+        assert isinstance(excinfo.value.__cause__, RuntimeError)
+        assert "scope broken" in str(excinfo.value.__cause__)
+
+    def test_config_file_paths_treats_missing_adapter_scope_capability_as_absent(
+        self, monkeypatch, tmp_path
+    ):
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "openclaw-main")
+        monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: True)
+
+        class _Adapter:
+            pass
+
+        fake_adapter_mod = types.ModuleType("lib.adapter")
+        fake_adapter_mod.get_adapter = lambda: _Adapter()
+        real_adapter = sys.modules.get("lib.adapter")
+        sys.modules["lib.adapter"] = fake_adapter_mod
+        try:
+            paths = extraction_daemon._config_file_paths()
+        finally:
+            if real_adapter is not None:
+                sys.modules["lib.adapter"] = real_adapter
+            else:
+                sys.modules.pop("lib.adapter", None)
+
+        assert paths[1] == tmp_path / "shared" / "config" / "openclaw" / "config.json"
+
     def test_write_and_read_signal_round_trip(self, monkeypatch, tmp_path):
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
         monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
@@ -7899,6 +8019,49 @@ class TestSignalRoundTrip:
         )
 
         assert kept is False
+
+    def test_preserve_missing_transcript_signal_write_failure_respects_failhard(
+        self, monkeypatch, tmp_path, caplog
+    ):
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
+        monkeypatch.setattr(extraction_daemon.time, "time", lambda: 100.0)
+        monkeypatch.setattr(
+            extraction_daemon,
+            "_atomic_write",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("signal write failed")),
+        )
+        signal_data = {
+            "_signal_path": str(tmp_path / "instances" / "test-inst" / "data" / "extraction-signals" / "s.json"),
+            "type": "session_end",
+            "meta": {},
+        }
+
+        monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: False)
+        with caplog.at_level("WARNING", logger="quaid.daemon"):
+            kept = extraction_daemon._preserve_missing_transcript_signal_for_retry(
+                signal_data,
+                session_id="sess-retry",
+                signal_type="session_end",
+                transcript_path="/missing.jsonl",
+                label="test",
+            )
+
+        assert kept is False
+        assert "could not preserve missing-transcript signal for retry" in caplog.text
+
+        monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: True)
+        with pytest.raises(RuntimeError, match="could not preserve missing-transcript signal for retry") as excinfo:
+            extraction_daemon._preserve_missing_transcript_signal_for_retry(
+                signal_data,
+                session_id="sess-retry",
+                signal_type="session_end",
+                transcript_path="/missing.jsonl",
+                label="test",
+            )
+
+        assert isinstance(excinfo.value.__cause__, RuntimeError)
+        assert "signal write failed" in str(excinfo.value.__cause__)
 
     def test_process_signal_preserves_missing_timeout_signal_for_retry(self, monkeypatch, tmp_path):
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
@@ -15738,6 +15901,86 @@ class TestRollingExtraction:
         )
         assert state_key == different_uuid
         assert not extraction_daemon._rolling_state_has_pending_content(state)
+
+    def test_rolling_state_signal_identity_failure_respects_failhard(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "rolling-inst")
+        (tmp_path / "instances" / "rolling-inst").mkdir(parents=True, exist_ok=True)
+        monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: True)
+        monkeypatch.setattr(
+            extraction_daemon,
+            "_signal_source_identity",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("identity broken")),
+        )
+
+        with pytest.raises(RuntimeError, match="rolling state signal identity lookup failed") as excinfo:
+            extraction_daemon._read_rolling_state_for_signal("sess-signal", "/tmp/transcript.jsonl")
+
+        assert isinstance(excinfo.value.__cause__, RuntimeError)
+        assert "identity broken" in str(excinfo.value.__cause__)
+
+    def test_rolling_state_staged_identity_failure_respects_failhard(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "rolling-inst")
+        (tmp_path / "instances" / "rolling-inst").mkdir(parents=True, exist_ok=True)
+        monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: True)
+        extraction_daemon.write_rolling_state(
+            "state-sess",
+            {
+                "session_id": "state-sess",
+                "transcript_path": "/tmp/state.jsonl",
+                "semantic_buffer": "User: pending rolling buffer",
+                "semantic_buffer_tokens": 10,
+            },
+        )
+
+        def _identity(_session_id, _transcript_path, **kwargs):
+            if kwargs.get("staged_state") is not None:
+                raise RuntimeError("state identity broken")
+            return "wanted-identity"
+
+        monkeypatch.setattr(extraction_daemon, "_signal_source_identity", _identity)
+
+        with pytest.raises(RuntimeError, match="rolling staged-state identity lookup failed") as excinfo:
+            extraction_daemon._read_rolling_state_for_signal("wanted-sess", "/tmp/wanted.jsonl")
+
+        assert isinstance(excinfo.value.__cause__, RuntimeError)
+        assert "state identity broken" in str(excinfo.value.__cause__)
+
+    def test_rolling_state_staged_source_cursor_failure_respects_failhard(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "rolling-inst")
+        (tmp_path / "instances" / "rolling-inst").mkdir(parents=True, exist_ok=True)
+        monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: True)
+
+        def _identity(_session_id, _transcript_path, **kwargs):
+            return "state-identity" if kwargs.get("staged_state") is not None else "wanted-identity"
+
+        monkeypatch.setattr(extraction_daemon, "_signal_source_identity", _identity)
+        monkeypatch.setattr(
+            extraction_daemon,
+            "_signal_source_cursor_key",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("source cursor broken")),
+        )
+        extraction_daemon.write_rolling_state(
+            "state-sess",
+            {
+                "session_id": "state-sess",
+                "transcript_path": "/tmp/state.jsonl",
+                "semantic_buffer": "User: pending rolling buffer",
+                "semantic_buffer_tokens": 10,
+            },
+        )
+
+        with pytest.raises(RuntimeError, match="rolling staged-state source cursor lookup failed") as excinfo:
+            extraction_daemon._read_rolling_state_for_signal(
+                "wanted-sess",
+                "/tmp/wanted.jsonl",
+                source_cursor_key="wanted-source-key",
+            )
+
+        assert isinstance(excinfo.value.__cause__, RuntimeError)
+        assert "source cursor broken" in str(excinfo.value.__cause__)
 
     def test_staged_flush_without_completed_rolling_batch_drains_semantic_buffer(self, monkeypatch, tmp_path):
         import sys

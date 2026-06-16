@@ -163,12 +163,25 @@ def _config_file_paths() -> List[Path]:
         from lib.adapter import get_adapter
 
         adapter = get_adapter()
-    except Exception:
+    except Exception as exc:
+        logger.warning("daemon config adapter lookup failed; using instance-only config paths: %s", exc)
+        if _fail_hard_enabled():
+            raise RuntimeError("daemon config adapter lookup failed") from exc
         adapter = None
     if adapter is not None:
-        try:
-            raw_platform = str(adapter.get_capability("platform_config_scope", "") or "").strip()
-        except Exception:
+        get_capability = getattr(adapter, "get_capability", None)
+        if callable(get_capability):
+            try:
+                raw_platform = str(get_capability("platform_config_scope", "") or "").strip()
+            except Exception as exc:
+                logger.warning(
+                    "daemon config adapter platform scope lookup failed; using instance-only config paths: %s",
+                    exc,
+                )
+                if _fail_hard_enabled():
+                    raise RuntimeError("daemon config adapter platform scope lookup failed") from exc
+                raw_platform = ""
+        else:
             raw_platform = ""
         try:
             platform = _validate_platform_config_scope(raw_platform)
@@ -326,6 +339,22 @@ def _extraction_buffer_log_path() -> Path:
     return d / "extraction-buffer.log"
 
 
+def _now_datetime() -> datetime:
+    raw = str(os.environ.get("QUAID_NOW", "") or "").strip()
+    if raw:
+        try:
+            value = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError as exc:
+            logger.warning("Invalid QUAID_NOW=%r; using wall clock for daemon timestamp: %s", raw, exc)
+            if _fail_hard_enabled():
+                raise RuntimeError(f"Invalid QUAID_NOW={raw!r}") from exc
+        else:
+            if value.tzinfo is None:
+                value = value.replace(tzinfo=timezone.utc)
+            return value.astimezone(timezone.utc)
+    return datetime.now(timezone.utc)
+
+
 def _extraction_buffer_log_enabled() -> bool:
     try:
         import json as _json
@@ -364,9 +393,9 @@ def _write_extraction_buffer_log(
     text = str(transcript_text or "").strip()
     if not text or not _extraction_buffer_log_enabled():
         return
+    timestamp = _now_datetime().strftime("%Y-%m-%dT%H:%M:%SZ")
     try:
         path = _extraction_buffer_log_path()
-        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         header = (
             f"=== {timestamp} session={session_id} phase={phase} "
             f"signal={signal_type} chars={len(text)} ===\n"
@@ -1077,12 +1106,14 @@ def _preserve_missing_transcript_signal_for_retry(
         )
         return True
     except Exception as exc:
-        logger.debug(
+        logger.warning(
             "[%s] session %s: could not preserve missing-transcript signal for retry: %s",
             label,
             session_id,
             exc,
         )
+        if _fail_hard_enabled():
+            raise RuntimeError("could not preserve missing-transcript signal for retry") from exc
         return False
 
 
@@ -2995,6 +3026,7 @@ def _normalize_project_log_timestamp(value: Any) -> Optional[str]:
     try:
         parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
     except ValueError:
+        logger.debug("[daemon] unrecognized project log timestamp format: %r", raw)
         return None
     return parsed.isoformat(timespec="seconds")
 
@@ -4312,7 +4344,10 @@ def _read_rolling_state_for_signal(
             if raw_transcript_path
             else ""
         )
-    except Exception:
+    except Exception as exc:
+        logger.warning("[rolling] source identity lookup failed for signal %s: %s", normalized_session_id, exc)
+        if _fail_hard_enabled():
+            raise RuntimeError("rolling state signal identity lookup failed") from exc
         wanted_identity = ""
 
     try:
@@ -4353,7 +4388,10 @@ def _read_rolling_state_for_signal(
                 state_transcript_path,
                 staged_state=state,
             )
-        except Exception:
+        except Exception as exc:
+            logger.warning("[rolling] source identity lookup failed for staged state %s: %s", state_key, exc)
+            if _fail_hard_enabled():
+                raise RuntimeError("rolling staged-state identity lookup failed") from exc
             state_identity = ""
         if wanted_identity and state_identity == wanted_identity:
             return state, _validate_session_id(str(state.get("session_id") or state_key))
@@ -4363,7 +4401,10 @@ def _read_rolling_state_for_signal(
                 state_transcript_path,
                 staged_state=state,
             )
-        except Exception:
+        except Exception as exc:
+            logger.warning("[rolling] source cursor key lookup failed for staged state %s: %s", state_key, exc)
+            if _fail_hard_enabled():
+                raise RuntimeError("rolling staged-state source cursor lookup failed") from exc
             state_source_cursor_key = ""
         if wanted_source_cursor_key and state_source_cursor_key == wanted_source_cursor_key:
             return state, _validate_session_id(str(state.get("session_id") or state_key))
