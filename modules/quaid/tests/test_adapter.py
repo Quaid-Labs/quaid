@@ -607,6 +607,21 @@ class TestOpenClawAdapter:
         adapter = OpenClawAdapter()
         assert adapter.oc_workspace() == workspace
 
+    def test_oc_workspace_logs_malformed_openclaw_config_when_fail_open(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.delenv("OPENCLAW_WORKSPACE", raising=False)
+        monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+        cfg_dir = tmp_path / ".openclaw"
+        cfg_dir.mkdir()
+        (cfg_dir / "openclaw.json").write_text("{bad json", encoding="utf-8")
+
+        adapter = OpenClawAdapter()
+
+        with patch("adaptors.openclaw.adapter.is_fail_hard_enabled", return_value=False):
+            with pytest.raises(RuntimeError, match="Could not resolve OpenClaw workspace"):
+                adapter.oc_workspace()
+
+        assert "OpenClaw config is malformed" in capsys.readouterr().err
+
     def test_oc_workspace_rejects_config_workspace_outside_home_when_fail_hard(self, tmp_path, monkeypatch):
         monkeypatch.delenv("OPENCLAW_WORKSPACE", raising=False)
         home = tmp_path / "home"
@@ -1315,6 +1330,32 @@ class TestOpenClawAdapter:
         assert info.target == "telegram:1000000000"
         assert info.session_key == "agent:main:telegram:direct:1000000000"
 
+    def test_get_last_channel_scores_iso_updated_at(self, tmp_path, monkeypatch):
+        import json
+        sessions_file = tmp_path / "sessions.json"
+        sessions_file.write_text(json.dumps({
+            "agent:main:telegram:direct:old": {
+                "lastChannel": "telegram",
+                "lastTo": "telegram:old",
+                "lastAccountId": "default",
+                "updatedAt": "2026-06-17T10:00:00Z",
+            },
+            "agent:main:telegram:direct:new": {
+                "lastChannel": "telegram",
+                "lastTo": "telegram:new",
+                "lastAccountId": "default",
+                "updatedAt": "2026-06-17T10:05:00+00:00",
+            },
+        }))
+        monkeypatch.setattr(OpenClawAdapter, "_find_sessions_json", lambda self: sessions_file)
+        adapter = OpenClawAdapter()
+
+        info = adapter.get_last_channel()
+
+        assert info is not None
+        assert info.target == "telegram:new"
+        assert info.session_key == "agent:main:telegram:direct:new"
+
     def test_get_sessions_dir(self, tmp_path, monkeypatch):
         sessions_dir = tmp_path / ".openclaw" / "agents" / "main" / "sessions"
         sessions_dir.mkdir(parents=True)
@@ -1802,6 +1843,28 @@ class TestOpenClawAdapter:
         assert notices
         assert "OpenClaw gateway is routed to OpenAI/Codex" in notices[0]
         assert "'anthropic'" in notices[0]
+
+    def test_notify_provider_fallback_logs_notify_error_when_fail_open(self, monkeypatch, capsys):
+        adapter = OpenClawAdapter()
+
+        def _fail_notify(*_args, **_kwargs):
+            raise RuntimeError("notify transport down")
+
+        monkeypatch.setattr(adapter, "notify", _fail_notify)
+
+        with patch("adaptors.openclaw.adapter.is_fail_hard_enabled", return_value=False):
+            adapter._notify_provider_fallback(
+                configured_provider="anthropic",
+                detected_provider="openai-codex",
+                deep_model_before="claude-sonnet-4-5",
+                fast_model_before="claude-haiku-4-5",
+                deep_model_after="gpt-5.4",
+                fast_model_after="gpt-5.4-mini",
+            )
+
+        err = capsys.readouterr().err
+        assert "Provider fallback notice failed" in err
+        assert "notify transport down" in err
 
     def test_get_llm_provider_keeps_openai_models_when_overriding_global_anthropic(self, monkeypatch, tmp_path):
         home = tmp_path / "home"

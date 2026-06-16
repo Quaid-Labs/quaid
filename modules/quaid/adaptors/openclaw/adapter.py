@@ -16,6 +16,7 @@ import shutil
 import subprocess
 import sys
 import unicodedata
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -294,6 +295,17 @@ class OpenClawAdapter(QuaidAdapter):
         try:
             return float(ts)
         except (TypeError, ValueError):
+            raw = str(ts or "").strip()
+            if raw:
+                try:
+                    parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+                    if parsed.tzinfo is None:
+                        parsed = parsed.replace(tzinfo=timezone.utc)
+                    else:
+                        parsed = parsed.astimezone(timezone.utc)
+                    return parsed.timestamp() * 1000.0
+                except ValueError:
+                    pass
             return float(fallback_mtime_ms)
 
     def _pick_recent_channel_info(
@@ -545,10 +557,13 @@ class OpenClawAdapter(QuaidAdapter):
                     print(f"[adapter] {message}", file=sys.stderr)
                     if is_fail_hard_enabled():
                         raise PermissionError(message)
-            except (json.JSONDecodeError, KeyError):
+            except json.JSONDecodeError as exc:
+                print(f"[adapter] OpenClaw config is malformed: {exc}", file=sys.stderr)
                 if is_fail_hard_enabled():
                     raise
-                pass
+            except KeyError:
+                if is_fail_hard_enabled():
+                    raise
         raise RuntimeError(
             "Could not resolve OpenClaw workspace from OpenClaw config "
             "(OPENCLAW_CONFIG_PATH or ~/.openclaw/openclaw.json). "
@@ -1160,11 +1175,11 @@ class OpenClawAdapter(QuaidAdapter):
         try:
             if self.notify(f"[Quaid warning] [provider] {message}", force=True):
                 self._provider_fallback_notices_seen.add(dedupe)
-        except Exception:
+        except Exception as exc:
             if is_fail_hard_enabled():
                 raise
             print(
-                f"[notify] Provider fallback notice failed for {dedupe}",
+                f"[notify] Provider fallback notice failed for {dedupe}: {exc}",
                 file=sys.stderr,
             )
 

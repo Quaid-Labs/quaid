@@ -456,6 +456,7 @@ def store_session_source_text(
     conversation_id: Optional[str] = None,
     source_author_id: Optional[str] = None,
     source_date: Optional[str] = None,
+    session_message_count: Optional[int] = None,
     max_microchunk_tokens: int = DEFAULT_MICROCHUNK_TOKENS,
 ) -> Dict[str, Any]:
     sid = _session_id(session_id)
@@ -473,6 +474,7 @@ def store_session_source_text(
     chunk_id = _hash_id("schunk", owner, sid, source_key, index, content)
     now = _utcnow_iso()
     pairs = parse_message_pairs(body)
+    msg_count = int(session_message_count) if session_message_count is not None else len(pairs)
 
     lock_fd, lock_file = _with_session_lock(sid)
     try:
@@ -496,7 +498,7 @@ def store_session_source_text(
                     owner,
                     _clean(source_channel) or None,
                     _clean(conversation_id or source_conversation_id) or None,
-                    len(pairs),
+                    msg_count,
                     pairs[0]["user_text"][:140] if pairs else "",
                     body,
                     content,
@@ -679,7 +681,7 @@ def index_session_log(
     now = _utcnow_iso()
     content = _content_hash(transcript_text)
     pairs = parse_message_pairs(transcript_text)
-    msg_count = int(message_count or 0) or max(1, len(pairs))
+    msg_count = int(message_count) if message_count is not None else max(1, len(pairs))
     hint = _clean(topic_hint) or (pairs[0]["user_text"][:140] if pairs else "")
 
     with get_connection(_session_db_path()) as conn:
@@ -735,6 +737,7 @@ def index_session_log(
         source_channel=source_channel,
         source_conversation_id=conversation_id,
         conversation_id=conversation_id,
+        session_message_count=msg_count,
         max_microchunk_tokens=DEFAULT_MICROCHUNK_TOKENS,
     )
     return {

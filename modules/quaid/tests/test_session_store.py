@@ -171,6 +171,27 @@ def test_with_session_lock_logs_missing_stale_lock_unlink(monkeypatch, tmp_path,
     assert "sessiondb stale lock already removed for session_id=sess-lock" in caplog.text
 
 
+def test_index_session_log_preserves_explicit_zero_message_count(monkeypatch, tmp_path):
+    monkeypatch.setenv("SESSION_DB_PATH", str(tmp_path / "session.db"))
+
+    out = session_store.index_session_log(
+        session_id="sess-zero-count",
+        owner_id="owner-count",
+        transcript="User: startup wrapper only\n\nAssistant: acknowledged",
+        message_count=0,
+    )
+
+    assert out["status"] == "indexed"
+    assert out["message_count"] == 0
+    with session_store.get_connection(session_store._session_db_path()) as conn:
+        stored = conn.execute(
+            "SELECT message_count FROM sessions WHERE owner_id = ? AND session_id = ?",
+            ("owner-count", "sess-zero-count"),
+        ).fetchone()
+    assert stored is not None
+    assert stored["message_count"] == 0
+
+
 def test_stale_lock_logs_corrupt_pid(tmp_path, caplog):
     lock_path = tmp_path / "session.lock"
     lock_path.write_text("not-a-pid", encoding="utf-8")
