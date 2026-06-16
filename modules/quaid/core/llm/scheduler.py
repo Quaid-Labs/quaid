@@ -23,7 +23,8 @@ def _fail_hard_enabled() -> bool:
         from lib.fail_policy import is_fail_hard_enabled
 
         return bool(is_fail_hard_enabled())
-    except ImportError:
+    except ImportError as exc:
+        logger.critical("fail-hard policy unavailable in LLM scheduler; failing closed: %s", exc)
         return True
 
 
@@ -384,11 +385,12 @@ def get_platform_scheduler_client_for_current_instance():
                     getattr(parallel_cfg, "platform_scheduler_slots", None),
                     default_slots=total_slots,
                 )
-            except Exception:
+            except Exception as exc:
+                logger.warning("platform_scheduler_slots config read failed; using default: %s", exc)
                 if _fail_hard_enabled():
                     raise
-                pass
             _PLATFORM_CLIENT = get_platform_scheduler_client(quaid_home, platform, total_slots)
+            _PLATFORM_CLIENT_INITIALIZED = True
         except Exception as exc:
             logger.warning(
                 "platform scheduler client init failed (%s): proceeding without slot gating", exc
@@ -396,7 +398,6 @@ def get_platform_scheduler_client_for_current_instance():
             if _fail_hard_enabled():
                 raise
             _PLATFORM_CLIENT = None
-        _PLATFORM_CLIENT_INITIALIZED = True
         return _PLATFORM_CLIENT
 
 
@@ -410,7 +411,7 @@ def reset_platform_scheduler_client() -> None:
         if client is not None:
             try:
                 client.close()
-            except Exception:
+            except Exception as exc:
+                logger.warning("platform scheduler client close failed: %s", exc)
                 if _fail_hard_enabled():
                     raise
-                pass

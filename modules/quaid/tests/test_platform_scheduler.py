@@ -9,6 +9,7 @@ import threading
 import time
 import pytest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 
@@ -33,6 +34,131 @@ def test_fail_hard_enabled_fails_closed_on_import_error(monkeypatch, caplog):
 
     assert platform_scheduler._fail_hard_enabled() is True
     assert "fail-hard policy unavailable in platform scheduler" in caplog.text
+
+
+def test_llm_scheduler_fail_hard_enabled_logs_and_fails_closed(monkeypatch, caplog):
+    from core.llm import scheduler as scheduler_mod
+
+    real_import = builtins.__import__
+
+    def failing_import(name, *args, **kwargs):
+        if name == "lib.fail_policy":
+            raise ImportError("missing fail policy")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", failing_import)
+    caplog.set_level("CRITICAL")
+
+    assert scheduler_mod._fail_hard_enabled() is True
+    assert "fail-hard policy unavailable in LLM scheduler" in caplog.text
+
+
+def _patch_llm_platform_client_dependencies(monkeypatch, tmp_path, *, get_config, client_factory):
+    from core.llm import scheduler as scheduler_mod
+    import config as config_mod
+    import core.platform_scheduler as platform_scheduler_mod
+    import core.runtime.parallel_runtime as parallel_runtime_mod
+    import lib.adapter as adapter_mod
+
+    class _Adapter:
+        def quaid_home(self):
+            return tmp_path
+
+        def agent_id_prefix(self):
+            return "pytest"
+
+    scheduler_mod._PLATFORM_CLIENT = None
+    scheduler_mod._PLATFORM_CLIENT_INITIALIZED = False
+    monkeypatch.setattr(adapter_mod, "get_adapter", lambda: _Adapter())
+    monkeypatch.setattr(config_mod, "get_config", get_config)
+    monkeypatch.setattr(parallel_runtime_mod, "get_parallel_config", lambda cfg: cfg.core.parallel)
+    monkeypatch.setattr(platform_scheduler_mod, "get_platform_scheduler_client", client_factory)
+    return scheduler_mod
+
+
+def test_llm_scheduler_platform_slots_config_failure_logs_when_fail_open(monkeypatch, tmp_path, caplog):
+    calls = []
+
+    def _fail_config():
+        raise RuntimeError("config unavailable")
+
+    def _client_factory(quaid_home, platform, total_slots):
+        calls.append((quaid_home, platform, total_slots))
+        return object()
+
+    scheduler_mod = _patch_llm_platform_client_dependencies(
+        monkeypatch,
+        tmp_path,
+        get_config=_fail_config,
+        client_factory=_client_factory,
+    )
+    monkeypatch.setattr(scheduler_mod, "_fail_hard_enabled", lambda: False)
+
+    caplog.set_level("WARNING")
+    client = scheduler_mod.get_platform_scheduler_client_for_current_instance()
+
+    assert client is not None
+    assert calls == [(tmp_path, "pytest", 8)]
+    assert "platform_scheduler_slots config read failed" in caplog.text
+
+
+def test_llm_scheduler_platform_slots_config_failure_raises_when_fail_hard(monkeypatch, tmp_path):
+    def _fail_config():
+        raise RuntimeError("config unavailable")
+
+    scheduler_mod = _patch_llm_platform_client_dependencies(
+        monkeypatch,
+        tmp_path,
+        get_config=_fail_config,
+        client_factory=lambda *_args: object(),
+    )
+    monkeypatch.setattr(scheduler_mod, "_fail_hard_enabled", lambda: True)
+
+    with pytest.raises(RuntimeError, match="config unavailable"):
+        scheduler_mod.get_platform_scheduler_client_for_current_instance()
+
+
+def test_llm_scheduler_failed_platform_client_init_is_not_cached(monkeypatch, tmp_path, caplog):
+    calls = {"count": 0}
+    expected_client = object()
+
+    def _client_factory(*_args):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise RuntimeError("scheduler socket unavailable")
+        return expected_client
+
+    cfg = SimpleNamespace(core=SimpleNamespace(parallel=SimpleNamespace(platform_scheduler_slots=3)))
+    scheduler_mod = _patch_llm_platform_client_dependencies(
+        monkeypatch,
+        tmp_path,
+        get_config=lambda: cfg,
+        client_factory=_client_factory,
+    )
+    monkeypatch.setattr(scheduler_mod, "_fail_hard_enabled", lambda: False)
+
+    caplog.set_level("WARNING")
+    assert scheduler_mod.get_platform_scheduler_client_for_current_instance() is None
+    assert scheduler_mod.get_platform_scheduler_client_for_current_instance() is expected_client
+    assert calls["count"] == 2
+    assert "platform scheduler client init failed" in caplog.text
+
+
+def test_llm_scheduler_platform_client_close_failure_logs_when_fail_open(monkeypatch, caplog):
+    from core.llm import scheduler as scheduler_mod
+
+    class _Client:
+        def close(self):
+            raise RuntimeError("close failed")
+
+    scheduler_mod._PLATFORM_CLIENT = _Client()
+    scheduler_mod._PLATFORM_CLIENT_INITIALIZED = True
+    monkeypatch.setattr(scheduler_mod, "_fail_hard_enabled", lambda: False)
+
+    caplog.set_level("WARNING")
+    scheduler_mod.reset_platform_scheduler_client()
+
+    assert "platform scheduler client close failed" in caplog.text
 
 
 # ---- PlatformSchedulerServer ----
