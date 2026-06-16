@@ -574,6 +574,41 @@ class TestCallLlmProvider:
         assert "M15 trace write failed" in caplog.text
         assert "trace unavailable" in caplog.text
 
+    def test_llm_m15_previews_are_bounded(self, test_adapter):
+        """M15 trace previews should not carry long raw prompts or responses."""
+        import core.llm.clients as llm_clients
+
+        events = []
+
+        def _trace(event, **fields):
+            events.append((event, fields))
+
+        user_message = "secret-" + ("x" * 80)
+        system_prompt = "system-" + ("y" * 80)
+
+        with patch("lib.m15_trace.trace_m15", side_effect=_trace):
+            llm_clients.call_llm(system_prompt, user_message, max_tokens=100, max_retries=0)
+
+        entry = next(fields for event, fields in events if event == "llm.call.entry")
+        call_ok = next(fields for event, fields in events if event == "llm.provider.call_ok")
+        assert entry["prompt_preview"] == "secret-" + ("x" * 23)
+        assert entry["system_preview"] == "system-" + ("y" * 23)
+        assert len(call_ok["response_preview"]) <= 30
+
+    def test_fast_reasoning_m15_prompt_preview_is_bounded(self, monkeypatch):
+        import core.llm.clients as llm_clients
+
+        events = []
+        monkeypatch.setattr(llm_clients, "_load_model_config", lambda: None)
+        monkeypatch.setattr(llm_clients, "get_prompt", lambda _key: "json-only")
+        monkeypatch.setattr(llm_clients, "call_llm", lambda **_kwargs: ("{}", 0.01))
+
+        with patch("lib.m15_trace.trace_m15", side_effect=lambda event, **fields: events.append((event, fields))):
+            llm_clients.call_fast_reasoning("prompt-" + ("z" * 80), max_tokens=100)
+
+        entry = next(fields for event, fields in events if event == "llm.call_fast_reasoning.entry")
+        assert entry["prompt_preview"] == "prompt-" + ("z" * 23)
+
     def test_disabled_llm_returns_none_when_failhard_disabled(self, test_adapter, monkeypatch, caplog):
         """QUAID_DISABLE_LLM may degrade only when failHard is disabled."""
         import core.llm.clients as llm_clients

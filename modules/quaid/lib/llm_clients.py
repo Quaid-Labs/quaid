@@ -656,8 +656,8 @@ def call_llm(system_prompt: str, user_message: str,
         timeout=timeout,
         slot_timeout=slot_timeout,
         max_retries=max_retries,
-        prompt_preview=user_message[:1000],
-        system_preview=system_prompt[:500],
+        prompt_preview=_preview(user_message, 30),
+        system_preview=_preview(system_prompt, 30),
     )
 
     # Cap max_tokens to API limits
@@ -798,7 +798,7 @@ def call_llm(system_prompt: str, user_message: str,
                 resolved_tier=resolved_tier,
                 attempt=attempt + 1,
                 duration_ms=int(max(0.0, float(result.duration or 0.0)) * 1000),
-                response_preview=(result.text or "")[:1000],
+                response_preview=_preview(result.text, 30),
             )
             try:
                 from lib.agent_notice import clear_pending_notices_by_source
@@ -967,7 +967,7 @@ def call_fast_reasoning(prompt: str, max_tokens: int = 200,
         max_tokens=max_tokens,
         timeout=timeout,
         max_retries=max_retries,
-        prompt_preview=prompt[:1000],
+        prompt_preview=_preview(prompt, 30),
     )
     return call_llm(
         system_prompt=effective_system_prompt,
