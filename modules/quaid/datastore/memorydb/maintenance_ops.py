@@ -126,7 +126,15 @@ def _effective_llm_timeout(requested_seconds: Optional[float], default_seconds: 
         return float(default_seconds)
     try:
         requested = float(requested_seconds)
-    except Exception:
+    except Exception as exc:
+        logger.warning(
+            "Invalid memorydb maintenance LLM timeout %r; using default %.1fs: %s",
+            requested_seconds,
+            float(default_seconds),
+            exc,
+        )
+        if is_fail_hard_enabled():
+            raise RuntimeError("Invalid memorydb maintenance LLM timeout") from exc
         return float(default_seconds)
     if requested <= 0:
         return float(default_seconds)

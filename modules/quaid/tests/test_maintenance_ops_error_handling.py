@@ -58,6 +58,24 @@ def test_get_config_value_raises_when_failhard():
             )
 
 
+def test_effective_llm_timeout_invalid_value_warns_and_uses_default_when_fail_open(caplog):
+    with patch.object(maintenance_ops, "is_fail_hard_enabled", return_value=False), \
+         caplog.at_level("WARNING", logger=maintenance_ops.__name__):
+        assert maintenance_ops._effective_llm_timeout("not-a-number", 42.0) == 42.0
+
+    assert "Invalid memorydb maintenance LLM timeout 'not-a-number'; using default 42.0s" in caplog.text
+
+
+def test_effective_llm_timeout_invalid_value_raises_when_failhard(caplog):
+    with patch.object(maintenance_ops, "is_fail_hard_enabled", return_value=True), \
+         caplog.at_level("WARNING", logger=maintenance_ops.__name__):
+        with pytest.raises(RuntimeError, match="Invalid memorydb maintenance LLM timeout") as excinfo:
+            maintenance_ops._effective_llm_timeout("not-a-number", 42.0)
+
+    assert isinstance(excinfo.value.__cause__, ValueError)
+    assert "Invalid memorydb maintenance LLM timeout 'not-a-number'; using default 42.0s" in caplog.text
+
+
 def test_get_last_successful_janitor_completed_at_fail_hard_behavior():
     class _BrokenGraph:
         @contextmanager

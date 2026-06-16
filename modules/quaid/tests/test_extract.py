@@ -8599,17 +8599,20 @@ class TestGetOwnerId:
 
 
 class TestNormalizeFactProvenance:
-    def test_raises_when_missing_speaker_and_source_under_fail_hard(self):
-        from datastore.memorydb.extraction_publish import _normalize_fact_provenance
+    def test_raises_when_missing_speaker_and_source_under_fail_hard(self, caplog):
+        from datastore.memorydb import extraction_publish
 
-        with pytest.raises(RuntimeError, match="missing provenance"):
-            _normalize_fact_provenance(
-                {},
-                label="unit",
-                fact_index=1,
-                fail_hard_enabled=lambda: True,
-                log=SimpleNamespace(warning=lambda *_args, **_kwargs: None),
-            )
+        with caplog.at_level("WARNING", logger=extraction_publish.__name__):
+            with pytest.raises(RuntimeError, match="missing provenance"):
+                extraction_publish._normalize_fact_provenance(
+                    {},
+                    label="unit",
+                    fact_index=1,
+                    fail_hard_enabled=lambda: True,
+                    log=extraction_publish.logger,
+                )
+
+        assert "missing provenance (speaker/source) for fact index=1 in unit extraction" in caplog.text
 
     def test_defaults_to_user_when_missing_speaker_and_source_non_fail_hard(self):
         from datastore.memorydb.extraction_publish import _normalize_fact_provenance

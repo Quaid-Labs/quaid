@@ -542,9 +542,9 @@ def _normalize_fact_provenance(
             f"[extract] missing provenance (speaker/source) for fact index={fact_index} "
             f"in {label} extraction"
         )
+        log.warning("%s; defaulting to user unless failHard is enabled", msg)
         if fail_hard_enabled():
             raise RuntimeError(msg)
-        log.warning("%s - defaulting to user", msg)
         raw_speaker = "user"
         raw_source = "user"
     if raw_speaker not in {"agent", "assistant", "user"}:
