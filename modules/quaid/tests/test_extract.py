@@ -3369,6 +3369,31 @@ class TestExtractFromTranscript:
 
         assert _strip_trailing_question_lines(text) == "Keep option alpha-beta-123."
 
+    def test_explicit_assistant_anchor_drops_incomplete_question_option_fragments(self):
+        from ingest.extract import _explicit_assistant_anchor_facts
+
+        transcript = (
+            "User: Is this setup connected to vendors?\n\n"
+            "Assistant: Mostly question-answer for now.\n\n"
+            "But I can help with vendor notes, setup plans, brainstorm ideas, "
+            "explain things, troubleshoot problems, and write drafts.\n\n"
+            "What made you finally set this up? The vendors being annoying about it,\n"
+            "or did something specific come up?\n\n"
+            "User: honestly just curious. every vendor is using these tools and I figured why not.\n"
+        )
+        facts = [
+            {
+                "text": (
+                    "Alex finally set this up because vendors were being annoying "
+                    "about tool adoption."
+                )
+            }
+        ]
+
+        additions = _explicit_assistant_anchor_facts(transcript, facts)
+
+        assert not any("vendors being annoying about it" in fact["text"] for fact in additions)
+
     def test_carry_selection_is_bounded_and_persistable(self):
         from ingest.extract import _select_carry_facts, _persistable_carry_facts
 

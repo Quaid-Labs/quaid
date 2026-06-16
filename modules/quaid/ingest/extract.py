@@ -1312,6 +1312,14 @@ def _is_assistant_question_fragment_fact_text(text: str, assistant_question_keys
     return _is_dangling_question_option_fragment(trailing)
 
 
+def _is_incomplete_question_option_fact_text(text: str) -> bool:
+    parts = _leading_question_fragment_parts(text)
+    if not parts:
+        return False
+    _, trailing = parts
+    return _is_dangling_question_option_fragment(trailing)
+
+
 def _normalize_structural_anchor_sentence(sentence: str) -> str:
     text = str(sentence or "").strip(" \t\r\n\"'`")
     text = re.sub(r"^\s*[-*•]+\s*", "", text)
@@ -2038,6 +2046,8 @@ def _explicit_assistant_anchor_facts(
             candidate = re.sub(r"\n\s*[-*•]+\s*", " ", candidate)
             candidate = re.sub(r"\s*\n\s*", " ", candidate)
             candidate = _normalize_structural_anchor_sentence(candidate)
+            if _is_incomplete_question_option_fact_text(candidate):
+                continue
             if len(candidate.split()) < 6 or len(candidate) > 360:
                 continue
             if _is_code_shaped_assistant_candidate(candidate):
