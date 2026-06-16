@@ -1300,8 +1300,8 @@ def test_execute_update_once_preserves_structured_project_log_entry_dates(projec
     assert result["project_log_queue"]["history_entries_written"] == 2
     assert project_log_queue.pending_project_log_count("demo") == 0
     project_log_text = project_log.read_text(encoding="utf-8")
-    assert "- [2026-03-01T09:15:00] Started retry middleware rollout" in project_log_text
-    assert "- [2026-03-05T23:59:59] Added error banner" in project_log_text
+    assert "- [2026-03-01T09:15:00+00:00] Started retry middleware rollout" in project_log_text
+    assert "- [2026-03-05T23:59:59+00:00] Added error banner" in project_log_text
 
 
 def test_auto_register_project_docs_materializes_queued_transcript_projects(tmp_path, monkeypatch):

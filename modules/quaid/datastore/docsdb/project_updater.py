@@ -176,9 +176,36 @@ def _project_md_recent_log_limit(default: int = 15) -> int:
     raw = os.getenv("QUAID_PROJECT_MD_RECENT_LIMIT", str(default))
     try:
         limit = int(raw)
-    except Exception:
+    except ValueError as exc:
+        logger.warning("Invalid QUAID_PROJECT_MD_RECENT_LIMIT=%r; using %d", raw, default)
+        if is_fail_hard_enabled():
+            raise RuntimeError(f"Invalid QUAID_PROJECT_MD_RECENT_LIMIT={raw!r}") from exc
         limit = default
     return max(1, limit)
+
+
+def _parse_project_log_datetime(
+    raw: str,
+    *,
+    raw_source: str,
+    fallback_to_wall_clock: bool = True,
+) -> Optional[datetime]:
+    text = str(raw or "").strip()
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
+        text = f"{text}T23:59:59"
+    try:
+        value = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError as exc:
+        if is_fail_hard_enabled():
+            raise RuntimeError(f"Invalid {raw_source} {raw!r}") from exc
+        if fallback_to_wall_clock:
+            logger.warning("Invalid %s %r; using wall clock", raw_source, raw)
+            return datetime.now(timezone.utc)
+        logger.warning("Invalid %s %r; ignoring timestamp", raw_source, raw)
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 def _project_log_now(date_str: Optional[str] = None) -> datetime:
@@ -186,14 +213,7 @@ def _project_log_now(date_str: Optional[str] = None) -> datetime:
     raw_source = "project log date override" if date_str is not None else "QUAID_NOW"
     raw = str(date_str or os.environ.get("QUAID_NOW", "") or "").strip()
     if raw:
-        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw):
-            raw = f"{raw}T23:59:59"
-        try:
-            return datetime.fromisoformat(raw.replace("Z", "+00:00"))
-        except ValueError as exc:
-            if is_fail_hard_enabled():
-                raise RuntimeError(f"Invalid {raw_source} {raw!r}") from exc
-            logger.warning("Invalid %s %r; using wall clock", raw_source, raw)
+        return _parse_project_log_datetime(raw, raw_source=raw_source)
     return datetime.now(timezone.utc)
 
 
@@ -274,7 +294,10 @@ def append_project_logs(
     marker_begin = PROJECT_LOG_BEGIN
     marker_end = PROJECT_LOG_END
     recent_limit = _project_md_recent_log_limit()
-    session_prefix_re = re.compile(r"^\s*Session\s+\d+\s*(?:\([^)]*\))?\s*:\s*", flags=re.IGNORECASE)
+    session_prefix_re = re.compile(
+        r"^\s*(?:session|sesión|sessão|sitzung|会话|セッション|세션|сессия|جلسة|सत्र)\s+\d+\s*(?:\([^)]*\))?\s*:\s*",
+        flags=re.IGNORECASE | re.UNICODE,
+    )
 
     def _normalize_log_entry(raw: object) -> str:
         if isinstance(raw, dict):
@@ -290,12 +313,14 @@ def append_project_logs(
         text = str(raw or "").strip()
         if not text:
             return None
-        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
-            text = f"{text}T23:59:59"
-        try:
-            return datetime.fromisoformat(text.replace("Z", "+00:00")).isoformat(timespec="seconds")
-        except ValueError:
-            return None
+        value = _parse_project_log_datetime(
+            text,
+            raw_source="project log entry timestamp",
+            fallback_to_wall_clock=False,
+        )
+        if value:
+            return value.isoformat(timespec="seconds")
+        return None
 
     def _normalize_log_record(raw: object) -> Optional[Dict[str, str]]:
         text = _normalize_log_entry(raw)
@@ -429,7 +454,14 @@ def append_project_logs(
             try:
                 from lib.instance import visible_projects_dir
                 candidate = visible_projects_dir() / project_name
-            except Exception:
+            except Exception as exc:
+                if is_fail_hard_enabled():
+                    raise RuntimeError("Failed resolving visible projects directory") from exc
+                logger.warning(
+                    "append_project_logs: visible projects dir fallback failed for project=%s: %s",
+                    project_name,
+                    exc,
+                )
                 home = get_quaid_home()
                 if home.name.startswith(".") and len(home.name) > 1:
                     home = home.with_name(home.name[1:])

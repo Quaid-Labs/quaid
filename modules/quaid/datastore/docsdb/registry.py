@@ -572,6 +572,8 @@ class DocsRegistry:
                     tables=("project_definitions", "doc_registry"),
                 )
             except Exception as exc:
+                if _fail_hard_enabled():
+                    raise RuntimeError("DocsRegistry legacy docs-table merge failed") from exc
                 logger.warning("DocsRegistry legacy docs-table merge skipped: %s", exc)
 
     def _get_config(self):
@@ -1894,7 +1896,9 @@ class DocsRegistry:
             from datastore.docsdb.project_updater import refresh_project_md
             refresh_project_md(new_name)
         except Exception as e:
-            logger.debug("PROJECT.md refresh after rename skipped: %s", e)
+            if _fail_hard_enabled():
+                raise RuntimeError(f"PROJECT.md refresh after rename failed for {new_name!r}") from e
+            logger.warning("PROJECT.md refresh after rename skipped: %s", e)
 
         result = {"renamed": renamed, "dir_moved": dir_moved}
         print(f"Renamed project '{old_name}' -> '{new_name}': {renamed} docs updated, dir_moved={dir_moved}")
@@ -1935,7 +1939,8 @@ class DocsRegistry:
 
             rag = DocsRAG(self.db_path)
             for candidate in unique_rag_paths:
-                rag_chunk_deleted += int(rag.remove_chunks_for_path(candidate) or 0)
+                removed = rag.remove_chunks_for_path(candidate)
+                rag_chunk_deleted += int(removed) if removed is not None else 0
         except Exception as e:
             if _fail_hard_enabled():
                 raise RuntimeError(f"Docs RAG cleanup failed for project {project_name!r}") from e
@@ -2313,6 +2318,8 @@ class DocsRegistry:
                 self._config = None
             except Exception as e:
                 print(f"  Warning: config reload failed (stale cache): {e}", file=sys.stderr)
+                if _fail_hard_enabled():
+                    raise RuntimeError("Config reload failed after docs registry update") from e
             return True
         except Exception as e:
             print(f"  Warning: config update failed: {e}", file=sys.stderr)
@@ -2321,8 +2328,10 @@ class DocsRegistry:
             if tmp_path.exists():
                 try:
                     tmp_path.unlink()
-                except Exception:
-                    pass
+                except Exception as cleanup_exc:
+                    logger.warning("Failed cleaning config temp file %s: %s", tmp_path, cleanup_exc)
+            if _fail_hard_enabled():
+                raise RuntimeError("Config update failed") from e
             return False
 
     def _resolve_path(self, relative: str) -> Path:

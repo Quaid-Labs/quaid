@@ -266,7 +266,7 @@ class TestAppendProjectLogs:
         assert "- 2026-03-03 [Compaction] Added API docs" in content
         # PROJECT.log keeps full append-only history (including duplicates).
         history = project_log.read_text()
-        assert "- [2026-03-03T23:59:59] Updated README links" in history
+        assert "- [2026-03-03T23:59:59+00:00] Updated README links" in history
         assert history.count("Updated README links") == 2
         assert "Added API docs" in history
 
@@ -373,7 +373,7 @@ class TestAppendProjectLogs:
         )
 
         assert "- 2026-03-07 [Reset] Added migration notes" in project_md.read_text()
-        assert "- [2026-03-07T15:30:00] Added migration notes" in project_log.read_text()
+        assert "- [2026-03-07T15:30:00+00:00] Added migration notes" in project_log.read_text()
 
     def test_project_log_now_fallback_is_utc_aware(self, setup_env, monkeypatch):
         from datastore.docsdb.project_updater import _project_log_now
@@ -384,6 +384,23 @@ class TestAppendProjectLogs:
 
         assert now.tzinfo is not None
         assert now.utcoffset() == timezone.utc.utcoffset(now)
+
+    def test_project_log_now_normalizes_quaid_now_and_date_override_to_utc(self, setup_env, monkeypatch):
+        from datastore.docsdb.project_updater import _project_log_now
+
+        monkeypatch.setenv("QUAID_NOW", "2026-03-07T15:30:00Z")
+
+        assert _project_log_now().isoformat(timespec="seconds") == "2026-03-07T15:30:00+00:00"
+        assert _project_log_now("2026-03-08").isoformat(timespec="seconds") == "2026-03-08T23:59:59+00:00"
+
+    def test_project_md_recent_log_limit_raises_when_fail_hard(self, setup_env, monkeypatch):
+        from datastore.docsdb import project_updater
+
+        monkeypatch.setenv("QUAID_PROJECT_MD_RECENT_LIMIT", "not-an-int")
+        monkeypatch.setattr(project_updater, "is_fail_hard_enabled", lambda: True)
+
+        with pytest.raises(RuntimeError, match="Invalid QUAID_PROJECT_MD_RECENT_LIMIT"):
+            project_updater._project_md_recent_log_limit()
 
     def test_project_log_history_malformed_quaid_now_honors_failhard(self, setup_env, monkeypatch):
         from datastore.docsdb.registry import DocsRegistry
@@ -439,8 +456,8 @@ class TestAppendProjectLogs:
         assert "- 2026-03-05 [Compaction] Added error banner" in content
 
         history = project_log.read_text(encoding="utf-8")
-        assert "- [2026-03-01T09:15:00] Shipped retry middleware" in history
-        assert "- [2026-03-05T23:59:59] Added error banner" in history
+        assert "- [2026-03-01T09:15:00+00:00] Shipped retry middleware" in history
+        assert "- [2026-03-05T23:59:59+00:00] Added error banner" in history
         assert "2026-03-07T23:59:59" not in history
 
     def test_appends_into_existing_project_log_block(self, setup_env):
@@ -487,6 +504,32 @@ class TestAppendProjectLogs:
         assert metrics["entries_written"] == 1
         assert project_md.read_text() == before
 
+    def test_project_log_strips_unicode_session_prefixes_without_stripping_other_labels(self, setup_env):
+        from datastore.docsdb.project_updater import append_project_logs
+
+        tmp_path = setup_env
+        project_log = tmp_path / "projects" / "test-project" / "PROJECT.log"
+
+        append_project_logs(
+            {
+                "test-project": [
+                    "Sesión 5: Añadió notas",
+                    "会话 6: 添加文档",
+                    "Meeting 7: Keep this title",
+                ],
+            },
+            trigger="Reset",
+            date_str="2026-03-03",
+            dry_run=False,
+        )
+
+        history = project_log.read_text(encoding="utf-8")
+        assert "Añadió notas" in history
+        assert "添加文档" in history
+        assert "Meeting 7: Keep this title" in history
+        assert "Sesión 5:" not in history
+        assert "会话 6:" not in history
+
     def test_visible_project_md_log_is_capped_but_history_is_append_only(self, setup_env, monkeypatch):
         from datastore.docsdb.project_updater import append_project_logs
 
@@ -527,6 +570,20 @@ class TestAppendProjectLogs:
         assert metrics["projects_updated"] == 0
         out = capsys.readouterr().out
         assert "[project-log] unknown project: does-not-exist" in out
+
+    def test_unknown_project_filesystem_fallback_raises_when_fail_hard(self, setup_env, monkeypatch):
+        from datastore.docsdb import project_updater
+
+        monkeypatch.setattr("lib.instance.visible_projects_dir", lambda: (_ for _ in ()).throw(OSError("no projects dir")))
+        monkeypatch.setattr(project_updater, "is_fail_hard_enabled", lambda: True)
+
+        with pytest.raises(RuntimeError, match="Failed resolving visible projects directory"):
+            project_updater.append_project_logs(
+                {"does-not-exist": ["Session 1: should fail"]},
+                trigger="Compaction",
+                date_str="2026-03-03",
+                dry_run=False,
+            )
 
     def test_unknown_project_reroutes_to_quaid_project_log_when_available(self, setup_env, capsys):
         from config import ProjectDefinition

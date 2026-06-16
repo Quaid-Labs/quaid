@@ -116,6 +116,21 @@ class TestFailHardPolicy:
 
         assert "Failed to load fail-hard policy" in caplog.text
 
+    def test_legacy_docs_table_merge_raises_when_fail_hard(self, setup_env, monkeypatch):
+        from datastore.docsdb import db_migration
+        from datastore.docsdb import registry as registry_mod
+
+        monkeypatch.delenv("MEMORY_DB_PATH", raising=False)
+        monkeypatch.setattr(registry_mod, "_fail_hard_enabled", lambda: True)
+        monkeypatch.setattr(
+            db_migration,
+            "migrate_legacy_docs_tables",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("legacy merge failed")),
+        )
+
+        with pytest.raises(RuntimeError, match="DocsRegistry legacy docs-table merge failed"):
+            registry_mod.DocsRegistry()
+
 
 class TestConfigReloadPolicy:
     def test_reload_config_failure_warns_when_fail_open(self, setup_env, monkeypatch, caplog):
@@ -145,6 +160,15 @@ class TestConfigReloadPolicy:
 
         with pytest.raises(RuntimeError, match="Failed to reload config after delete_project"):
             registry_mod._reload_config_after_project_change("delete_project")
+
+    def test_update_config_failure_raises_when_fail_hard(self, setup_env, monkeypatch):
+        from datastore.docsdb import registry as registry_mod
+
+        r = _get_registry()
+        monkeypatch.setattr(registry_mod, "_fail_hard_enabled", lambda: True)
+
+        with pytest.raises(RuntimeError, match="Config update failed"):
+            r._update_config(lambda _data: (_ for _ in ()).throw(RuntimeError("mutator failed")))
 
 
 class TestEnsureTable:
@@ -1376,6 +1400,23 @@ A test project.
             r.rename_project("test-project", "renamed-proj")
 
         assert r.get_project_definition("renamed-proj") is not None
+
+    def test_rename_project_md_refresh_failure_raises_when_fail_hard(self, setup_env, monkeypatch):
+        from datastore.docsdb import project_updater
+        from datastore.docsdb import registry as registry_mod
+
+        r = _get_registry()
+        r.register("projects/test-project/PROJECT.md", project="test-project")
+
+        monkeypatch.setattr(
+            project_updater,
+            "refresh_project_md",
+            lambda _name: (_ for _ in ()).throw(RuntimeError("refresh failed")),
+        )
+        monkeypatch.setattr(registry_mod, "_fail_hard_enabled", lambda: True)
+
+        with pytest.raises(RuntimeError, match="PROJECT.md refresh after rename failed"):
+            r.rename_project("test-project", "renamed-proj")
 
     def test_delete_removes_global_registry_entry(self, setup_env, monkeypatch):
         """delete_project removes the matching global registry entry."""
