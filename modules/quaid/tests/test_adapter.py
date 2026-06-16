@@ -1963,6 +1963,16 @@ class TestClaudeCodeAdapter:
         assert state["status"] == "cannot_install"
         assert "requires claude" in state["reason"]
 
+    def test_get_api_key_raises_when_failhard_enabled(self, monkeypatch):
+        from adaptors.claude_code import adapter as adapter_mod
+
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.setattr(adapter_mod, "is_fail_hard_enabled", lambda: True)
+        adapter = ClaudeCodeAdapter()
+
+        with pytest.raises(RuntimeError, match="ANTHROPIC_API_KEY"):
+            adapter.get_api_key("ANTHROPIC_API_KEY")
+
     def test_get_llm_provider_raises_config_failure_when_failhard_enabled(
         self, monkeypatch
     ):
@@ -2005,6 +2015,39 @@ class TestClaudeCodeAdapter:
 
         assert provider._deep_model == ""
         assert provider._fast_model == ""
+
+    def test_list_agent_instance_ids_raises_on_instance_scan_failure_when_failhard(
+        self, tmp_path, monkeypatch
+    ):
+        from adaptors.claude_code import adapter as adapter_mod
+
+        monkeypatch.setenv("QUAID_INSTANCE", "claude-code-current")
+        monkeypatch.setattr(adapter_mod, "is_fail_hard_enabled", lambda: True)
+        adapter = ClaudeCodeAdapter(home=tmp_path)
+
+        def fail_iterdir(_path):
+            raise OSError("scan failed")
+
+        monkeypatch.setattr(Path, "iterdir", fail_iterdir)
+
+        with pytest.raises(OSError, match="scan failed"):
+            adapter.list_agent_instance_ids()
+
+    def test_bound_project_dir_raises_instance_resolution_failure_when_failhard(
+        self, tmp_path, monkeypatch
+    ):
+        from adaptors.claude_code import adapter as adapter_mod
+
+        adapter = ClaudeCodeAdapter(home=tmp_path)
+        monkeypatch.setattr(adapter_mod, "is_fail_hard_enabled", lambda: True)
+
+        def fail_instance_id():
+            raise RuntimeError("instance unavailable")
+
+        monkeypatch.setattr(adapter, "instance_id", fail_instance_id)
+
+        with pytest.raises(RuntimeError, match="instance unavailable"):
+            adapter._bound_project_dir_for_current_instance()
 
     def test_get_discovery_sessions_dir_scopes_path_derived_instance_to_own_project(self, tmp_path, monkeypatch):
         sessions_root = tmp_path / ".claude" / "projects"
@@ -2349,6 +2392,33 @@ class TestClaudeCodeAdapter:
         assert "Compacted (ctrl+o to see full summary)" not in transcript
         assert "/clear" not in transcript
         assert "My sister is Diana." in transcript
+
+    def test_parse_session_jsonl_accepts_json_encoded_message_string(self, tmp_path):
+        path = tmp_path / "claude-json-message-string.jsonl"
+        path.write_text(
+            json.dumps(
+                {
+                    "type": "user",
+                    "message": json.dumps(
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": "My ceramic mug is from Seto.",
+                                }
+                            ],
+                        }
+                    ),
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        adapter = ClaudeCodeAdapter()
+        transcript = adapter.parse_session_jsonl(path)
+
+        assert "My ceramic mug is from Seto." in transcript
 
     def test_parse_session_jsonl_preserves_text_after_unclosed_local_command_stdout(self, tmp_path):
         path = tmp_path / "claude-local-command-unclosed-stdout.jsonl"

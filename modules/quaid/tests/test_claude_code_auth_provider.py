@@ -7,9 +7,11 @@ import urllib.error
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from adaptors.claude_code.providers import ClaudeCodeOAuthLLMProvider
+from adaptors.claude_code.providers import ClaudeCodeOAuthLLMProvider, _read_token_file
 
 
 def test_http_401_queues_auth_refresh_notice(monkeypatch) -> None:
@@ -122,6 +124,14 @@ def test_oauth_token_in_anthropic_api_key_env_uses_bearer_path(monkeypatch) -> N
     assert api_call.call_args.args[0] == "sk-ant-oat01-standalone-oauth"
 
 
+def test_read_token_file_raises_adapter_failure_when_failhard_enabled() -> None:
+    with patch("lib.adapter.get_adapter", side_effect=RuntimeError("adapter unavailable")), patch(
+        "adaptors.claude_code.providers.is_fail_hard_enabled", return_value=True
+    ):
+        with pytest.raises(RuntimeError, match="adapter unavailable"):
+            _read_token_file()
+
+
 def test_http_404_notifies_agent_before_raise(monkeypatch) -> None:
     provider = ClaudeCodeOAuthLLMProvider(
         deep_model="claude-sonnet-4-5",
@@ -190,3 +200,46 @@ def test_api_call_includes_cc_identity_first_for_oauth_sonnet(monkeypatch) -> No
         assert body["model"] == "claude-sonnet-4-6"
         assert body["system"][0]["text"] == "You are Claude Code, Anthropic's official CLI for Claude."
         assert body["system"][1]["text"] == "sys"
+
+
+def test_api_call_preserves_multi_turn_messages(monkeypatch) -> None:
+    provider = ClaudeCodeOAuthLLMProvider(
+        deep_model="claude-sonnet-4-6",
+        fast_model="claude-haiku-4-5",
+    )
+    response_data = {
+        "content": [{"type": "text", "text": "ok"}],
+        "usage": {"input_tokens": 10, "output_tokens": 4},
+        "model": "claude-sonnet-4-6",
+        "stop_reason": "end_turn",
+    }
+    mock_resp = MagicMock()
+    mock_resp.read.return_value = json.dumps(response_data).encode()
+    mock_resp.__enter__ = lambda s: s
+    mock_resp.__exit__ = MagicMock(return_value=False)
+
+    messages = [
+        {"role": "system", "content": "system one"},
+        {"role": "user", "content": "first user"},
+        {"role": "assistant", "content": "first assistant"},
+        {"role": "system", "content": "system two"},
+        {"role": "user", "content": "second user"},
+    ]
+
+    with patch("adaptors.claude_code.providers.urllib.request.urlopen", return_value=mock_resp) as mock_open:
+        provider._api_call(
+            token="sk-ant-oat01-test-oauth-token",
+            model="claude-sonnet-4-6",
+            messages=messages,
+            max_tokens=64,
+            timeout=30,
+        )
+
+    req = mock_open.call_args[0][0]
+    body = json.loads(req.data.decode())
+    assert [block["text"] for block in body["system"][1:]] == ["system one", "system two"]
+    assert body["messages"] == [
+        {"role": "user", "content": "first user"},
+        {"role": "assistant", "content": "first assistant"},
+        {"role": "user", "content": "second user"},
+    ]

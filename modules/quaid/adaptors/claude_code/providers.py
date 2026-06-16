@@ -43,7 +43,9 @@ def _read_token_file() -> Optional[str]:
         from lib.adapter import get_adapter
         return get_adapter().read_auth_token()
     except Exception as e:
-        logger.debug("[claude-code-oauth] adapter token read error: %s", e)
+        logger.warning("[claude-code-oauth] adapter token read error: %s", e)
+        if is_fail_hard_enabled():
+            raise
         return None
 
 
@@ -194,13 +196,17 @@ class ClaudeCodeOAuthLLMProvider(LLMProvider):
     def _api_call(self, token: str, model: str, messages: list,
                   max_tokens: int, timeout: float) -> LLMResult:
         """Make a single API call with the given OAuth token."""
-        system_prompt = ""
-        user_message = ""
+        system_prompts: list[str] = []
+        api_messages: list[dict] = []
         for m in messages:
-            if m["role"] == "system":
-                system_prompt = m["content"]
-            elif m["role"] == "user":
-                user_message = m["content"]
+            role = m.get("role")
+            content = m.get("content", "")
+            if role == "system":
+                if content:
+                    system_prompts.append(content)
+            elif role in ("user", "assistant"):
+                if content:
+                    api_messages.append({"role": role, "content": content})
 
         headers = {
             "Content-Type": "application/json",
@@ -214,7 +220,7 @@ class ClaudeCodeOAuthLLMProvider(LLMProvider):
             "x-app": "cli",
         }
 
-        if not user_message:
+        if not any(m["role"] == "user" for m in api_messages):
             raise ValueError("Cannot make API call with empty user message")
 
         # CC identity block must be first in the system array.
@@ -225,7 +231,7 @@ class ClaudeCodeOAuthLLMProvider(LLMProvider):
                 "cache_control": {"type": "ephemeral"},
             }
         ]
-        if system_prompt:
+        for system_prompt in system_prompts:
             system_blocks.append({
                 "type": "text",
                 "text": system_prompt,
@@ -236,7 +242,7 @@ class ClaudeCodeOAuthLLMProvider(LLMProvider):
             "model": model,
             "max_tokens": max_tokens,
             "system": system_blocks,
-            "messages": [{"role": "user", "content": user_message}],
+            "messages": api_messages,
         }
 
         start_time = time.time()

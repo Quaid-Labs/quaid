@@ -11,6 +11,7 @@ Uses CLI subcommands via the existing Bash tool + hooks for automation.
 - LLM: OAuth direct API (fast) or claude -p CLI (fallback)
 """
 
+import ast
 import json
 import logging
 import os
@@ -263,7 +264,9 @@ class ClaudeCodeAdapter(QuaidAdapter):
             return key
 
         if is_fail_hard_enabled():
-            return None
+            raise RuntimeError(
+                f"[fail_hard] {env_var_name} is required but not set in the environment."
+            )
 
         # Fallback: .env in quaid home
         print(
@@ -331,7 +334,10 @@ class ClaudeCodeAdapter(QuaidAdapter):
         try:
             home = self.quaid_home() / "instances"
             candidates = list(home.iterdir())
-        except Exception:
+        except Exception as exc:
+            if is_fail_hard_enabled():
+                raise
+            print(f"[adapter][WARN] Could not list Claude Code instances: {exc}", file=sys.stderr)
             candidates = []
         for d in candidates:
             if d.is_dir() and d.name.startswith(prefix) and not _is_deleted_misc_instance(d.name):
@@ -488,7 +494,13 @@ class ClaudeCodeAdapter(QuaidAdapter):
     def _bound_project_dir_for_current_instance(self) -> str:
         try:
             instance_id = str(self.instance_id() or "").strip()
-        except Exception:
+        except Exception as exc:
+            if is_fail_hard_enabled():
+                raise
+            print(
+                f"[adapter][WARN] Could not resolve current Claude Code instance: {exc}",
+                file=sys.stderr,
+            )
             instance_id = os.environ.get("QUAID_INSTANCE", "").strip()
         if not instance_id:
             return ""
@@ -835,19 +847,21 @@ class ClaudeCodeAdapter(QuaidAdapter):
                 row_timestamp = self._row_timestamp(obj)
 
                 # Handle wrapped message format
-                # CC v2.1.89+ may encode message as a Python repr string instead
-                # of an inline JSON dict — use ast.literal_eval as fallback.
+                # CC may encode message as JSON or Python repr string instead
+                # of an inline dict; parse both before falling back to the row.
                 if "message" in obj:
                     raw_msg = obj["message"]
                     if isinstance(raw_msg, dict):
                         msg = raw_msg
                     elif isinstance(raw_msg, str):
                         try:
-                            import ast
-                            parsed = ast.literal_eval(raw_msg)
-                            msg = parsed if isinstance(parsed, dict) else obj
-                        except (ValueError, SyntaxError):
-                            msg = obj
+                            parsed = json.loads(raw_msg)
+                        except json.JSONDecodeError:
+                            try:
+                                parsed = ast.literal_eval(raw_msg)
+                            except (ValueError, SyntaxError):
+                                parsed = None
+                        msg = parsed if isinstance(parsed, dict) else obj
                     else:
                         msg = obj
                 else:
