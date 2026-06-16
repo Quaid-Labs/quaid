@@ -19595,6 +19595,18 @@ class TestRecallFastHookInjectContract:
         assert "_has_generic_graph_signal: entity extraction failed" in caplog.text
         assert "entity scan failed" in caplog.text
 
+    def test_generic_graph_signal_logs_before_failhard_raise(self, caplog):
+        import datastore.memorydb.memory_graph as mg
+
+        with patch.object(mg, "_relation_intent_sequence_for_query", return_value=[]), \
+             patch.object(mg, "extract_entities_from_text", side_effect=RuntimeError("entity scan failed")), \
+             patch.object(mg, "_is_fail_hard_mode", return_value=True), \
+             pytest.raises(RuntimeError, match="Graph-signal entity extraction failed"):
+            mg._has_generic_graph_signal("Ari Noor")
+
+        assert "_has_generic_graph_signal: entity extraction failed" in caplog.text
+        assert "entity scan failed" in caplog.text
+
     def test_merge_recall_batches_preserves_graph_metadata_from_lower_similarity_variant(self):
         import datastore.memorydb.memory_graph as mg
 
