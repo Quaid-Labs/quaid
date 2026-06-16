@@ -162,14 +162,14 @@ class TestBuildTranscript:
         assert "HEARTBEAT" in result
         assert "User: Real message" in result
 
-    def test_strips_channel_prefix(self):
+    def test_preserves_non_timestamp_channel_brackets(self):
         from ingest.extract import build_transcript
 
         messages = [
             {"role": "user", "content": "[Telegram user@12345] Hello"},
         ]
         result = build_transcript(messages)
-        assert result == "User: Hello"
+        assert result == "User: [Telegram user@12345] Hello"
 
     def test_strips_message_id(self):
         from ingest.extract import build_transcript
