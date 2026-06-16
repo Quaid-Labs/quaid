@@ -170,8 +170,8 @@ def _trace_m15(event: str, **fields: Any) -> None:
         from lib.m15_trace import trace_m15
 
         trace_m15(event, **fields)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Failed to write memory graph M15 trace: %s", exc, exc_info=True)
 
 
 def _ensure_visible_identity_stubs() -> List[str]:
@@ -1111,14 +1111,20 @@ class MemoryGraph:
                     "INSERT OR REPLACE INTO vec_source_chunks(chunk_id, embedding) VALUES (?, ?)",
                     (chunk_id, packed_embedding),
                 )
-            except Exception:
+            except Exception as primary_exc:
                 # If vec0 rejects INSERT OR REPLACE, backfill-at-recall repairs
                 # any fail-soft delete/insert gap before ANN scoring.
-                conn.execute("DELETE FROM vec_source_chunks WHERE chunk_id = ?", (chunk_id,))
-                conn.execute(
-                    "INSERT INTO vec_source_chunks(chunk_id, embedding) VALUES (?, ?)",
-                    (chunk_id, packed_embedding),
-                )
+                try:
+                    conn.execute("DELETE FROM vec_source_chunks WHERE chunk_id = ?", (chunk_id,))
+                    conn.execute(
+                        "INSERT INTO vec_source_chunks(chunk_id, embedding) VALUES (?, ?)",
+                        (chunk_id, packed_embedding),
+                    )
+                except Exception as fallback_exc:
+                    raise RuntimeError(
+                        "vec_source_chunks replace and fallback insert both failed: "
+                        f"{fallback_exc}"
+                    ) from primary_exc
         except Exception as exc:
             logger.warning(
                 "store_source_chunk inserted chunk %s but failed vec_source_chunks upsert: %s",
@@ -1522,7 +1528,7 @@ class MemoryGraph:
             "chunk_id": row["chunk_id"],
             "source_id": row["source_id"],
             "session_id": row["session_id"],
-            "chunk_index": int(row["chunk_index"] or 0),
+            "chunk_index": int(row["chunk_index"]) if row["chunk_index"] is not None else 0,
             "chunk_kind": row["chunk_kind"] if "chunk_kind" in row.keys() else "session",
             "parent_chunk_id": row["parent_chunk_id"] if "parent_chunk_id" in row.keys() else None,
             "next_chunk_id": row["next_chunk_id"] if "next_chunk_id" in row.keys() else None,
@@ -4362,7 +4368,8 @@ def _rank_graph_row_for_relation_chain(
     fact_bonus = 1 if str(row.get("via") or "") == "graph_attached_fact" or str(row.get("category") or "").lower() == "fact" else 0
     activity_answer = _relation_chain_activity_answer_score(query, row)
     try:
-        depth = int(row.get("hop_depth") or row.get("depth") or 0)
+        raw_depth = row.get("hop_depth") if row.get("hop_depth") is not None else row.get("depth")
+        depth = int(raw_depth if raw_depth is not None else 0)
     except Exception:
         depth = 0
     try:
@@ -23226,8 +23233,10 @@ def store(
                 "reason": f"circuit_breaker:{breaker.status}",
                 "dedup_telemetry": {},
             }
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("Memory write circuit-breaker check failed: %s", exc)
+        if _is_fail_hard_mode():
+            raise RuntimeError("Memory write circuit-breaker check failed") from exc
 
     # Input validation
     if not text or not text.strip():

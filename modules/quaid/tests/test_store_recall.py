@@ -433,6 +433,24 @@ def test_graph_attached_fact_rows_edge_load_failure_respects_failhard(caplog):
     assert "Failed to load graph edges for anchor" in caplog.text
 
 
+def test_relation_chain_rank_prefers_explicit_zero_hop_depth():
+    import datastore.memorydb.memory_graph as mg
+
+    key = mg._rank_graph_row_for_relation_chain(
+        {
+            "text": "Direct attached fact",
+            "category": "fact",
+            "graph_relation_groups": ["has_fact"],
+            "hop_depth": 0,
+            "depth": 4,
+            "similarity": 0.7,
+        },
+        ["has_fact"],
+    )
+
+    assert key[5] == 0
+
+
 def test_beam_search_graph_deduplicates_nodes_reached_from_same_level(tmp_path):
     import datastore.memorydb.memory_graph as mg
 
@@ -2319,6 +2337,23 @@ class TestRecallBasic:
 
         assert rows == []
         assert meta["stop_reason"] == "empty_db"
+
+    def test_store_circuit_breaker_check_failure_respects_failhard(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+        from datastore.memorydb.memory_graph import store
+
+        graph, _ = _make_graph(tmp_path)
+        adapter = SimpleNamespace(data_dir=lambda: tmp_path / "data")
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("lib.adapter.get_adapter", return_value=adapter), \
+             patch("lib.circuit_breaker.check_write_allowed", side_effect=RuntimeError("breaker down")), \
+             patch.object(mg, "_is_fail_hard_mode", return_value=True):
+            with pytest.raises(RuntimeError, match="Memory write circuit-breaker check failed") as excinfo:
+                store("The write guard should fail loudly", owner_id="operator", skip_dedup=True)
+
+        assert isinstance(excinfo.value.__cause__, RuntimeError)
+        assert "breaker down" in str(excinfo.value.__cause__)
 
     def test_recall_returns_list(self, tmp_path):
         from datastore.memorydb.memory_graph import recall
@@ -6079,6 +6114,42 @@ class TestSourceChunkStorage:
                 (node_id,),
             ).fetchone()["embedding"] is not None
         assert "Failed to index retried embedding for node" in caplog.text
+
+    def test_source_chunk_vec_fallback_preserves_primary_failure_under_failhard(self, tmp_path):
+        """Fallback insert errors should not hide the original vec replace failure."""
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _db_file = _make_graph(tmp_path)
+        primary = sqlite3.OperationalError("replace failed")
+        fallback = sqlite3.OperationalError("fallback insert failed")
+
+        class _FailingVecConn:
+            def __init__(self):
+                self.calls = 0
+
+            def execute(self, sql, *_args, **_kwargs):
+                if "INSERT OR REPLACE INTO vec_source_chunks" in sql:
+                    self.calls += 1
+                    raise primary
+                if "INSERT INTO vec_source_chunks" in sql:
+                    self.calls += 1
+                    raise fallback
+                return SimpleNamespace(fetchone=lambda: None, fetchall=lambda: [])
+
+        conn = _FailingVecConn()
+        with patch.object(mg, "_lib_has_vec", return_value=True), \
+             patch.object(graph, "_ensure_source_chunk_vec_table", return_value=True), \
+             patch.object(mg, "_is_fail_hard_mode", return_value=True):
+            with pytest.raises(RuntimeError, match="Session chunk vector index upsert failed") as excinfo:
+                graph._sync_source_chunk_vec_index(
+                    conn,
+                    chunk_id="chunk-vec-failure",
+                    packed_embedding=b"packed",
+                )
+
+        assert isinstance(excinfo.value.__cause__, RuntimeError)
+        assert excinfo.value.__cause__.__cause__ is primary
+        assert "fallback insert failed" in str(excinfo.value.__cause__)
 
     def test_health_metrics_staleness_distribution_uses_db_buckets(self, tmp_path, monkeypatch):
         """Health metrics bucket accessed_at values without materializing every node row."""
