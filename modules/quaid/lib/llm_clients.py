@@ -459,16 +459,20 @@ def _retry_delay_for_error(exc: BaseException, fallback_delay: float) -> float:
     if retry_after_raw:
         try:
             return max(delay, float(retry_after_raw))
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed parsing Retry-After header %r: %s", retry_after_raw, exc)
     reset_candidates = []
+    now: Optional[datetime] = None
     for key, value in hdrs.items():
         if key.endswith("-reset"):
             try:
                 dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-                reset_candidates.append(max(0.0, (dt - datetime.now(timezone.utc)).total_seconds()))
-            except Exception:
+            except Exception as exc:
+                logger.debug("Failed parsing rate-limit reset header %s=%r: %s", key, value, exc)
                 continue
+            if now is None:
+                now = _now_datetime()
+            reset_candidates.append(max(0.0, (dt - now).total_seconds()))
     if reset_candidates:
         return max(delay, min(reset_candidates))
     return delay
@@ -1295,6 +1299,7 @@ def validate_llm_output(parsed: object, schema_class: type, list_mode: bool = Tr
 
     for item in items:
         if not isinstance(item, dict):
+            logger.warning("Invalid LLM output item skipped: type=%s", type(item).__name__)
             continue
         try:
             # Map dict keys to dataclass fields (case-insensitive for common typos)

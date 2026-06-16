@@ -155,6 +155,16 @@ class TestParseJsonResponse:
         assert results == []
         assert "my-super-secret-token" not in caplog.text
 
+    def test_validate_llm_output_logs_non_dict_items_without_raw_values(self, caplog):
+        caplog.set_level("WARNING")
+        parsed = ["my-super-secret-token", {"file": "a.md", "snippet_index": 1, "action": "KEEP"}]
+
+        results = validate_llm_output(parsed, ReviewDecision)
+
+        assert len(results) == 1
+        assert "Invalid LLM output item skipped: type=str" in caplog.text
+        assert "my-super-secret-token" not in caplog.text
+
 
 # ---------------------------------------------------------------------------
 # Token usage tracking
@@ -644,6 +654,36 @@ class TestCallLlmProvider:
             assert llm_clients._rate_limit_headers(exc) == {}
 
         assert "Failed parsing rate-limit headers: headers broken" in caplog.text
+
+    def test_retry_delay_logs_bad_retry_after_header(self, caplog):
+        import core.llm.clients as llm_clients
+
+        exc = urllib.error.HTTPError(
+            "https://example.test",
+            429,
+            "rate limited",
+            {"Retry-After": "bogus"},
+            None,
+        )
+
+        with caplog.at_level("DEBUG", logger="lib.llm_clients"):
+            assert llm_clients._retry_delay_for_error(exc, 2.5) == 2.5
+
+        assert "Failed parsing Retry-After header 'bogus'" in caplog.text
+
+    def test_retry_delay_reset_header_uses_quaid_now(self, monkeypatch):
+        import core.llm.clients as llm_clients
+
+        monkeypatch.setenv("QUAID_NOW", "2030-01-01T00:00:00Z")
+        exc = urllib.error.HTTPError(
+            "https://example.test",
+            429,
+            "rate limited",
+            {"anthropic-ratelimit-requests-reset": "2030-01-01T00:00:10Z"},
+            None,
+        )
+
+        assert llm_clients._retry_delay_for_error(exc, 1.0) == 10.0
 
     def test_cost_cap_abort(self, test_adapter, monkeypatch):
         """call_llm should abort when cost cap is exceeded."""
