@@ -1131,13 +1131,13 @@ class OpenAICompatibleLLMProvider(LLMProvider):
 
     def __init__(self, base_url: str = "http://localhost:8000",
                  api_key: str = "",
-                 deep_model: str = "", fast_model: str = "",
+                 deep_model: str = "", fast_model: Optional[str] = None,
                  deep_reasoning_effort: str = "high",
                  fast_reasoning_effort: str = "none"):
         self._base_url = base_url.rstrip("/")
         self._api_key = api_key
         self._deep_model = deep_model
-        self._fast_model = fast_model or deep_model
+        self._fast_model = fast_model if fast_model is not None else deep_model
         self._deep_reasoning_effort = self._normalize_reasoning_effort(deep_reasoning_effort, "high")
         self._fast_reasoning_effort = self._normalize_reasoning_effort(fast_reasoning_effort, "none")
 
@@ -1349,13 +1349,13 @@ class OpenAICodexOAuthLLMProvider(LLMProvider):
 
     def __init__(self, api_key: str = "",
                  deep_model: str = "gpt-5.4",
-                 fast_model: str = "gpt-5.4-mini",
+                 fast_model: Optional[str] = "gpt-5.4-mini",
                  base_url: str = "",
                  deep_reasoning_effort: str = "high",
                  fast_reasoning_effort: str = "none"):
         self._api_key = api_key
         self._deep_model = deep_model
-        self._fast_model = fast_model or deep_model
+        self._fast_model = fast_model if fast_model is not None else deep_model
         self._base_url = (base_url or _OPENAI_CODEX_BASE_URL).rstrip("/")
         self._deep_reasoning_effort = OpenAICompatibleLLMProvider._normalize_reasoning_effort(
             deep_reasoning_effort, "high"
@@ -1712,7 +1712,7 @@ class OllamaEmbeddingsProvider(EmbeddingsProvider):
                     batch_error = e
                     break
             if batch_error is None:
-                return []
+                raise RuntimeError("Ollama embeddings retry loop exited without result or error")
             if len(batch) > 1 and isinstance(batch_error, retryable_errors) and time.monotonic() < deadline:
                 split_at = max(1, len(batch) // 2)
                 logger.warning(

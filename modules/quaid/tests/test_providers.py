@@ -915,8 +915,15 @@ class TestOpenAICompatibleLLMProvider:
         p = OpenAICompatibleLLMProvider()
         assert p._base_url == "http://localhost:8000"
         assert p._api_key == ""
+        assert p._fast_model == ""
         assert p._deep_reasoning_effort == "high"
         assert p._fast_reasoning_effort == "none"
+
+    def test_preserves_explicit_empty_fast_model(self):
+        p = OpenAICompatibleLLMProvider(deep_model="qwen3", fast_model="")
+
+        assert p._fast_model == ""
+        assert p._resolve_model("fast") == "qwen3"
 
     def test_llm_call_uses_responses_api_for_openai_gpt5_models(self):
         p = OpenAICompatibleLLMProvider(
@@ -1074,6 +1081,12 @@ class TestOpenAICompatibleLLMProvider:
 
 
 class TestOpenAICodexOAuthLLMProvider:
+    def test_preserves_explicit_empty_fast_model(self):
+        p = OpenAICodexOAuthLLMProvider(deep_model="gpt-5.4", fast_model="")
+
+        assert p._fast_model == ""
+        assert p._resolve_model("fast") == "gpt-5.4"
+
     def test_llm_call_uses_chatgpt_backend_api_contract(self):
         token_payload = {
             "https://api.openai.com/auth": {

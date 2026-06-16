@@ -301,6 +301,20 @@ class TestPlatformSchedulerServer:
 
         assert platform_scheduler.ensure_scheduler_alive(base, "tp") == -1
 
+    def test_get_client_logs_error_when_slot_gating_unavailable(self, monkeypatch, caplog):
+        from core import platform_scheduler
+
+        base = _short_tmp()
+        self._bases.append(base)
+        monkeypatch.setattr(platform_scheduler, "ensure_scheduler_alive", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("spawn failed")))
+        monkeypatch.setattr(platform_scheduler, "_fail_hard_enabled", lambda: False)
+
+        with caplog.at_level("ERROR"):
+            client = platform_scheduler.get_platform_scheduler_client(base, "tp")
+
+        assert client is None
+        assert "proceeding without slot gating" in caplog.text
+
     def test_start_scheduler_child_crash_uses_nonzero_exit_source_guard(self):
         source = Path(__file__).resolve().parents[1] / "core" / "platform_scheduler.py"
         text = source.read_text(encoding="utf-8")

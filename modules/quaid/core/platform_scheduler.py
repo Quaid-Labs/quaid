@@ -504,8 +504,8 @@ def ensure_scheduler_alive(quaid_home: Path, platform: str, total_slots: int = _
 def get_platform_scheduler_client(quaid_home: Path, platform: str, total_slots: int = _DEFAULT_SLOTS) -> Optional[PlatformSchedulerClient]:
     """Get a connected client, starting the scheduler if needed.
 
-    Returns None if the scheduler is unavailable (non-fatal: callers
-    should proceed without slot gating rather than failing).
+    Returns None if the scheduler is unavailable (non-fatal: callers must
+    explicitly null-check before slot gating and proceed ungated).
     """
     try:
         ensure_scheduler_alive(quaid_home, platform, total_slots)
@@ -514,7 +514,7 @@ def get_platform_scheduler_client(quaid_home: Path, platform: str, total_slots: 
         client.status()
         return client
     except Exception as e:
-        logger.warning("platform scheduler unavailable (%s): proceeding without slot gating", e)
+        logger.error("platform scheduler unavailable (%s): proceeding without slot gating", e)
         if _fail_hard_enabled():
             raise
         return None
