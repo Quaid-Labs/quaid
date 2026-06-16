@@ -7264,14 +7264,14 @@ def _sample_candidate_tuples(
 
 def _append_recall_telemetry_trace(payload: Dict[str, Any]) -> None:
     """Write a per-call recall telemetry event to the workspace logs."""
+    now = _now()
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    else:
+        now = now.astimezone(timezone.utc)
     try:
         path = get_logs_dir() / "recall-telemetry.jsonl"
         path.parent.mkdir(parents=True, exist_ok=True)
-        now = _now()
-        if now.tzinfo is None:
-            now = now.replace(tzinfo=timezone.utc)
-        else:
-            now = now.astimezone(timezone.utc)
         event = {
             "ts": now.isoformat(),
             **dict(payload or {}),

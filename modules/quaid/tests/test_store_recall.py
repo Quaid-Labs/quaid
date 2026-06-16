@@ -19837,6 +19837,18 @@ class TestRecallLimitEdgeCases:
         assert payload["telemetry"]["filters"]["threshold_basis"] == "composite_score"
         assert len(payload["telemetry"]["samples"]["threshold_rejected"]) >= 1
 
+    def test_recall_telemetry_malformed_clock_respects_failhard(self, tmp_path, monkeypatch):
+        from datastore.memorydb import memory_graph as mg
+
+        monkeypatch.setenv("QUAID_NOW", "not-a-date")
+        monkeypatch.setattr(mg, "_is_fail_hard_mode", lambda: True)
+        monkeypatch.setattr(mg, "get_logs_dir", lambda: tmp_path / "logs")
+
+        with pytest.raises(RuntimeError, match="Invalid QUAID_NOW"):
+            mg._append_recall_telemetry_trace({"query": "clock contract"})
+
+        assert not (tmp_path / "logs" / "recall-telemetry.jsonl").exists()
+
     def test_normalize_doc_chunk_contract_accepts_docs_rag_shape(self):
         from datastore.memorydb.memory_graph import _normalize_doc_chunk_contract
 
