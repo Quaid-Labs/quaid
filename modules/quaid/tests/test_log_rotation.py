@@ -3,6 +3,7 @@
 import logging
 import os
 import sys
+import types
 from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
@@ -12,10 +13,12 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from core.log_rotation import (
+    DEFAULT_LOG_TOKEN_BUDGET,
     rotate_log_file,
     rotate_project_logs,
     rotate_journal_logs,
     _estimate_tokens,
+    _get_log_token_budget,
     _parse_line_timestamp,
 )
 
@@ -33,6 +36,17 @@ class TestEstimateTokens:
 
 
 class TestRotateLogFile:
+    def test_config_budget_failure_logs_and_uses_default(self, monkeypatch, caplog):
+        def _fail_config():
+            raise RuntimeError("synthetic config failure")
+
+        caplog.set_level(logging.WARNING, logger="core.log_rotation")
+        monkeypatch.setitem(sys.modules, "config", types.SimpleNamespace(get_config=_fail_config))
+
+        assert _get_log_token_budget() == DEFAULT_LOG_TOKEN_BUDGET
+        assert "Failed reading configured project log token budget" in caplog.text
+        assert "synthetic config failure" in caplog.text
+
     def test_no_rotation_when_under_budget(self, tmp_path):
         log = tmp_path / "test.log"
         log.write_text("- [2026-03-11T10:00:00] entry 1\n- [2026-03-11T10:01:00] entry 2\n")

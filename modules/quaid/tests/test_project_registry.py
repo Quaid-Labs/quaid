@@ -112,8 +112,9 @@ class TestRegistryIO:
         events = []
 
         class _FakeLock:
-            def acquire(self):
+            def acquire(self, **_kwargs):
                 events.append("thread-acquire")
+                return True
 
             def release(self):
                 events.append("thread-release")
@@ -147,6 +148,43 @@ class TestRegistryIO:
             "yield",
             "flock-unlock",
             "thread-release",
+        ]
+
+    def test_registry_lock_times_out_waiting_for_flock(self, mock_adapter, monkeypatch):
+        from lib import project_registry_lock
+
+        events = []
+
+        class _FakeLock:
+            def acquire(self, **_kwargs):
+                events.append("thread-acquire")
+                return True
+
+            def release(self):
+                events.append("thread-release")
+
+        def _flock(_fd, flags):
+            if flags & project_registry_lock.fcntl.LOCK_UN:
+                events.append("flock-unlock")
+                return
+            events.append("flock-busy")
+            raise BlockingIOError(project_registry_lock.errno.EAGAIN, "busy")
+
+        monotonic_values = iter([0.0, 0.0, 31.0])
+        monkeypatch.setattr(project_registry_lock, "_registry_thread_lock", _FakeLock())
+        monkeypatch.setattr(project_registry_lock.fcntl, "flock", _flock)
+        monkeypatch.setattr(project_registry_lock.time, "monotonic", lambda: next(monotonic_values))
+        monkeypatch.setattr(project_registry_lock.time, "sleep", lambda seconds: events.append(f"sleep-{seconds}"))
+
+        with pytest.raises(TimeoutError, match="Timed out waiting for project registry lock"):
+            with project_registry_lock.registry_lock():
+                pytest.fail("registry lock should time out")
+
+        assert events == [
+            "thread-acquire",
+            "flock-busy",
+            "thread-release",
+            "sleep-0.05",
         ]
 
 

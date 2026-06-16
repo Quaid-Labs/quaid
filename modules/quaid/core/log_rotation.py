@@ -60,8 +60,8 @@ def _get_log_token_budget() -> int:
         budget = getattr(getattr(cfg, "projects", None), "log_token_budget", 0)
         if budget and int(budget) > 0:
             return int(budget)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("Failed reading configured project log token budget; using default: %s", exc)
     return DEFAULT_LOG_TOKEN_BUDGET
 
 

@@ -11,6 +11,8 @@ import time
 from pathlib import Path
 
 _registry_thread_lock = threading.Lock()
+REGISTRY_LOCK_TIMEOUT_SECONDS = 30.0
+REGISTRY_LOCK_RETRY_SECONDS = 0.05
 
 
 def registry_path() -> Path:
@@ -34,8 +36,13 @@ def registry_lock():
     path = registry_lock_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     lock_fd = None
+    started_at = time.monotonic()
     while True:
-        _registry_thread_lock.acquire()
+        remaining = REGISTRY_LOCK_TIMEOUT_SECONDS - (time.monotonic() - started_at)
+        if remaining <= 0:
+            raise TimeoutError(f"Timed out waiting for project registry lock: {path}")
+        if not _registry_thread_lock.acquire(timeout=min(remaining, REGISTRY_LOCK_RETRY_SECONDS)):
+            continue
         try:
             lock_fd = os.open(str(path), os.O_CREAT | os.O_RDWR, 0o644)
             try:
@@ -52,7 +59,7 @@ def registry_lock():
             _registry_thread_lock.release()
             raise
         _registry_thread_lock.release()
-        time.sleep(0.05)
+        time.sleep(REGISTRY_LOCK_RETRY_SECONDS)
 
     try:
         yield
