@@ -16380,6 +16380,38 @@ class TestRecallFastHookInjectContract:
             analysis = mg._derive_query_requirements(query, intent="GENERAL")
             assert "assistant_source" in analysis["requirements"]
 
+    def test_row_requirement_matches_use_structural_metadata_not_english_prose(self):
+        import datastore.memorydb.memory_graph as mg
+
+        assert mg._row_matches_requirement(
+            {"text": "The assistant recommended a garden layout.", "category": "fact"},
+            "assistant_source",
+        ) is False
+        assert mg._row_matches_requirement(
+            {"text": "Visible response text.", "category": "fact", "source_type": "assistant"},
+            "assistant_source",
+        ) is True
+        assert mg._row_matches_requirement(
+            {"text": "Maya's sister keeps a canoe by the lake.", "category": "fact"},
+            "identity",
+        ) is False
+        assert mg._row_matches_requirement(
+            {"text": "Maya's sister keeps a canoe by the lake.", "category": "person"},
+            "identity",
+        ) is True
+        assert mg._row_matches_requirement(
+            {"text": "The work happened in March.", "category": "fact"},
+            "temporal",
+        ) is False
+        assert mg._row_matches_requirement(
+            {"text": "The work happened.", "category": "event"},
+            "temporal",
+        ) is True
+        assert mg._row_matches_requirement(
+            {"text": "The work happened.", "category": "fact", "occurred_start": "2026-03-12T00:00:00Z"},
+            "temporal",
+        ) is True
+
     def test_relation_matches_use_live_relation_types_without_static_keyword_lists(self):
         import datastore.memorydb.memory_graph as mg
 
@@ -19756,24 +19788,38 @@ class TestRecallFastHookInjectContract:
 
         assert intent == "RELATION"
         assert boosts.get("Person", 0) > 1.0
-    def test_query_fit_multiplier_boosts_neighbour_rows_for_social_queries(self):
+    def test_query_fit_multiplier_uses_structural_identity_category(self):
         import datastore.memorydb.memory_graph as mg
 
-        node = mg.Node(
+        person_node = mg.Node(
+            id="n-person",
+            type="Person",
+            name="Priya grows chili peppers on her balcony.",
+            attributes={},
+        )
+        fact_node = mg.Node(
             id="n-neighbour",
             type="Fact",
             name="Owner's neighbour Priya grows chili peppers on her balcony.",
             attributes={},
         )
 
-        mult = mg._compute_query_fit_multiplier(
+        person_mult = mg._compute_query_fit_multiplier(
             "What do you remember about my neighbour?",
-            node,
-            node.attributes,
+            person_node,
+            person_node.attributes,
             intent="GENERAL",
         )
 
-        assert mult >= 1.05
+        fact_mult = mg._compute_query_fit_multiplier(
+            "What do you remember about my neighbour?",
+            fact_node,
+            fact_node.attributes,
+            intent="GENERAL",
+        )
+
+        assert person_mult >= 1.05
+        assert fact_mult < person_mult
     def test_query_fit_multiplier_boosts_enumeration_rows_for_list_queries(self):
         import datastore.memorydb.memory_graph as mg
 

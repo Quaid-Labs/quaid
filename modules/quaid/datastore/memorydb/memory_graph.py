@@ -16440,59 +16440,44 @@ def _derive_query_requirements(
 
 def _row_matches_requirement(row: Dict[str, Any], requirement: str) -> bool:
     text = str((row or {}).get("text") or "")
-    lower = text.lower()
-    category = str((row or {}).get("category") or "").lower()
-    source_type = str((row or {}).get("source_type") or "").lower()
+    category = str((row or {}).get("category") or (row or {}).get("type") or "").strip().lower()
+    source_type = str((row or {}).get("source_type") or "").strip().lower()
+    provenance_type = str((row or {}).get("source_provenance_type") or "").strip().lower()
 
     if requirement == "assistant_source":
-        return source_type in {"assistant", "subagent", "both", "tool"} or bool(
-            re.search(r"\b(the assistant|assistant|ai|suggested|recommended|implemented|built|recalled)\b", lower)
-        )
+        return source_type in {"assistant", "subagent", "both", "tool"} or provenance_type in {
+            "assistant",
+            "subagent",
+            "tool",
+        }
     if requirement == "identity":
-        return category == "person" or bool(
-            re.search(r"\b(partner|wife|husband|mom|mother|dad|father|sister|brother|friend|coworker|manager|pet|dog|cat|child|children|son|daughter|nephew|niece|family|neighbou?r|next door|named|name is)\b", lower)
-        ) or bool(re.search(r"\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?\b", text))
+        return category in {"person", "identity", "participant"}
     if requirement == "location":
-        return category == "place" or bool(
-            re.search(r"\b(lives?|living|located|location|address|neighborhood|city|country|house|home|apartment)\b", lower)
-        )
+        return category in {"place", "location"}
     if requirement == "organization":
-        return bool(
-            re.search(r"\b(employer|company|team|manager|role|title|promotion|promoted|joined|left)\b", lower)
-        )
+        return category in {"organization", "org", "company", "team"}
     if requirement == "temporal":
-        return bool(
-            re.search(
-                r"\b(january|february|march|april|may|june|july|august|september|october|november|december|week|today|tomorrow|yesterday|late|early|current|currently|latest|as of|birthday|anniversary|at diagnosis|down from|dropped to|improved from|\d{4}|\d{1,2}\.\d)\b",
-                lower,
-            )
-        )
+        if category in {"event", "temporal"}:
+            return True
+        if _collect_recall_temporal_markers(row):
+            return True
+        return bool(re.search(r"(?<!\d)(?:\d{4}-\d{2}-\d{2}|20\d{2})(?!\d)", text))
     if requirement == "causal":
-        return bool(
-            re.search(
-                r"\b(because|reason|motivat|cause|caused|led to|due to|to help|to support|so that|which matters)\b",
-                lower,
-            )
-        )
+        return category in {"causal", "cause"}
     if requirement == "enumeration":
         comma_count = text.count(",")
         semicolon_count = text.count(";")
         if comma_count + semicolon_count >= 2:
             return True
-        if bool(re.search(r"\b\d+\s+(labels?|fields?|files?|tests?|suites?|restaurants?|projects?|people|names?)\b", lower)):
+        if ":" in text and ("," in text or ";" in text):
             return True
-        if bool(
-            re.search(
-                r"\b(defines?|includes?|supports?|covers?|contains?|lists?|across|such as|options?|allowed|available|checkboxes|presets?)\b",
-                lower,
-            )
-        ):
-            return " and " in lower or ":" in text or "," in text
+        if len(re.findall(r"(?:^|[\s,;])\d+[\).:-]", text)) >= 2:
+            return True
         return False
     if requirement == "technical":
-        return bool(
-            re.search(r"\b(api|schema|database|db|table|field|resolver|graphql|rest|middleware|test|tests|stack|framework|architecture|deployment|frontend|backend|implementation|code|source|file)\b", lower)
-        )
+        if category in {"docs", "technical", "code", "project"} or source_type in {"docs", "code", "project"}:
+            return True
+        return bool(re.search(r"(?<!\w)[\w./-]+\.[A-Za-z0-9]{1,8}(?!\w)", text, flags=re.UNICODE))
     return False
 
 
