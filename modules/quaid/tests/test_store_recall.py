@@ -15144,7 +15144,7 @@ class TestRecallFastHookInjectContract:
         assert gate["temporal_span_days"] >= 30
         assert quality["surface_quality"] == "conflicted"
         assert quality["another_recall_may_help"] is True
-        assert "mixed_temporal_candidates" in quality["signals"]
+        assert "wide_temporal_span" in quality["signals"]
         assert "Another recall pass may help" in quality["note"]
 
     def test_memory_quality_does_not_warn_when_ready_docs_evidence_is_present(self):
@@ -15260,20 +15260,21 @@ class TestRecallFastHookInjectContract:
 
         assert queries == []
 
-    def test_recall_validates_quality_gate_with_drill_planner_before_stopping(self):
+    def test_recall_validates_structural_temporal_gate_with_drill_planner_before_stopping(self):
         import datastore.memorydb.memory_graph as mg
 
         broad_row = {
             "id": "a",
-            "text": "Maya's work situation is currently bad ('work being garbage')",
+            "text": "Maya's work situation is bad ('work being garbage')",
             "category": "fact",
             "similarity": 0.93,
         }
         exact_row = {
             "id": "b",
-            "text": "Maya left TechFlow and joined Stripe as a senior PM",
+            "text": "Maya left TechFlow and joined Stripe as a senior PM on 2026-03-16.",
             "category": "fact",
             "similarity": 0.96,
+            "occurred_start": "2026-03-16T00:00:00Z",
         }
         calls = []
         def _fake_recall_once(query, **kwargs):
@@ -15283,12 +15284,12 @@ class TestRecallFastHookInjectContract:
             return [broad_row], {"mode": "deliberate", "query": query}
 
         with patch.object(mg, "_recall_once", side_effect=_fake_recall_once), \
-             patch.object(mg, "_plan_fanout_queries", return_value=["Where does Maya work now?"]), \
+             patch.object(mg, "_plan_fanout_queries", return_value=["Maya work 2026-03-16"]), \
              patch.object(
                  mg,
                  "_drill_plan_queries",
                  return_value=(
-                     ["Maya current employer Stripe"],
+                     ["Maya Stripe 2026-03-16"],
                      {
                          "used_llm": True,
                          "queries_count": 1,
@@ -15300,7 +15301,7 @@ class TestRecallFastHookInjectContract:
                  ),
              ):
             out, meta = mg.recall(
-                "Where does Maya work now?",
+                "Maya work 2026-03-16",
                 owner_id="quaid",
                 limit=1,
                 use_routing=True,
@@ -15308,10 +15309,10 @@ class TestRecallFastHookInjectContract:
                 return_meta=True,
             )
 
-        assert calls == ["Where does Maya work now?", "Maya current employer Stripe"]
+        assert calls == ["Maya work 2026-03-16", "Maya Stripe 2026-03-16"]
         assert out[0]["id"] == "b"
         assert meta["turns"] == 2
-        assert meta["drill_log"][1]["queries"] == ["Maya current employer Stripe"]
+        assert meta["drill_log"][1]["queries"] == ["Maya Stripe 2026-03-16"]
 
     def test_recall_return_meta_continues_after_drill_timeout_when_failhard_disabled(self):
         import datastore.memorydb.memory_graph as mg
@@ -16318,7 +16319,7 @@ class TestRecallFastHookInjectContract:
 
         assert mult >= 1.08
 
-    def test_query_requirements_detect_enumeration_queries(self):
+    def test_query_requirements_do_not_derive_enumeration_from_english_words(self):
         import datastore.memorydb.memory_graph as mg
 
         analysis = mg._derive_query_requirements(
@@ -16326,10 +16327,11 @@ class TestRecallFastHookInjectContract:
             intent="PROJECT",
         )
 
-        assert analysis["enumeration_like"] is True
-        assert "enumeration" in analysis["requirements"]
+        assert analysis["enumeration_like"] is False
+        assert "enumeration" not in analysis["requirements"]
+        assert "technical" in analysis["requirements"]
 
-    def test_query_requirements_treat_neighbour_queries_as_identity(self):
+    def test_query_requirements_do_not_derive_identity_from_english_words(self):
         import datastore.memorydb.memory_graph as mg
 
         analysis = mg._derive_query_requirements(
@@ -16337,7 +16339,7 @@ class TestRecallFastHookInjectContract:
             intent="GENERAL",
         )
 
-        assert "identity" in analysis["requirements"]
+        assert "identity" not in analysis["requirements"]
 
     def test_query_requirements_detect_multilingual_ai_source_terms(self):
         import datastore.memorydb.memory_graph as mg
@@ -19783,18 +19785,19 @@ class TestRecallFastHookInjectContract:
             "What do you remember about my neighbour?",
             person_node,
             person_node.attributes,
-            intent="GENERAL",
+            intent="WHO",
         )
 
         fact_mult = mg._compute_query_fit_multiplier(
             "What do you remember about my neighbour?",
             fact_node,
             fact_node.attributes,
-            intent="GENERAL",
+            intent="WHO",
         )
 
         assert person_mult >= 1.05
         assert fact_mult < person_mult
+
     def test_query_fit_multiplier_boosts_enumeration_rows_for_list_queries(self):
         import datastore.memorydb.memory_graph as mg
 
@@ -19814,7 +19817,7 @@ class TestRecallFastHookInjectContract:
 
         assert mult >= 1.12
 
-    def test_quality_gate_tracks_enumeration_query_without_forcing_validation(self):
+    def test_quality_gate_does_not_derive_enumeration_from_english_words(self):
         import datastore.memorydb.memory_graph as mg
 
         gate = mg._evaluate_quality_gate_readiness(
@@ -19827,14 +19830,14 @@ class TestRecallFastHookInjectContract:
             ],
             intent="PROJECT",
             limit=5,
+            include_relation_keywords=False,
         )
 
-        assert gate["enumeration_like"] is True
-        assert "enumeration" in gate["requirements"]
-        assert gate["coverage"].get("enumeration", 0) == 0
-        assert gate["needs_validation"] is False
+        assert gate["enumeration_like"] is False
+        assert "enumeration" not in gate["requirements"]
+        assert "technical" in gate["requirements"]
 
-    def test_quality_gate_accepts_enumeration_query_with_list_row(self):
+    def test_quality_gate_preserves_structural_list_rows_without_english_requirement(self):
         import datastore.memorydb.memory_graph as mg
 
         gate = mg._evaluate_quality_gate_readiness(
@@ -19847,13 +19850,14 @@ class TestRecallFastHookInjectContract:
             ],
             intent="PROJECT",
             limit=5,
+            include_relation_keywords=False,
         )
 
-        assert gate["enumeration_like"] is True
-        assert gate["coverage"].get("enumeration", 0) >= 1
-        assert gate["needs_validation"] is False
+        assert gate["enumeration_like"] is False
+        assert "enumeration" not in gate["requirements"]
+        assert gate["ready"] is True
 
-    def test_quality_gate_does_not_force_non_structured_enumeration_validation(self):
+    def test_quality_gate_does_not_derive_general_enumeration_from_english_words(self):
         import datastore.memorydb.memory_graph as mg
 
         gate = mg._evaluate_quality_gate_readiness(
@@ -19866,10 +19870,11 @@ class TestRecallFastHookInjectContract:
             ],
             intent="GENERAL",
             limit=5,
+            include_relation_keywords=False,
         )
 
-        assert gate["enumeration_like"] is True
-        assert "enumeration" in gate["requirements"]
+        assert gate["enumeration_like"] is False
+        assert "enumeration" not in gate["requirements"]
         assert gate["needs_validation"] is False
 
     def test_preserve_exact_low_information_entity_hits_for_identity_queries(self):

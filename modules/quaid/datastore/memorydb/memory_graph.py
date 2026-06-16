@@ -16217,34 +16217,21 @@ def _derive_query_requirements(
     *,
     include_relation_keywords: bool = True,
 ) -> Dict[str, Any]:
-    lower = str(query or "").lower()
+    query_text = str(query or "")
+    lower = _unicode_casefold(query_text)
     query_terms = _extract_distinctive_query_terms(query)
     relation_matches = _relation_matches_for_query(query) if include_relation_keywords else []
-    graph_like = bool(relation_matches) or _has_generic_graph_signal(query)
+    graph_like = bool(relation_matches)
     assistant_like = bool(re.search(r"\b(agent|assistant|ai|ki|ia|ии)\b", lower))
-    current_like = bool(
-        re.search(r"\b(current|currently|latest|now|today|most recent|as of|still|yet)\b", lower)
-    )
+    current_like = False
     temporal_like = bool(
-        current_like
-        or intent == "WHEN"
-        or re.search(
-            r"\b(when|date|time|scheduled|schedule|birthday|anniversary|recently|by [a-z]+ \d{1,2}|by \d{4}|\d{4})\b",
-            lower,
-        )
+        intent == "WHEN"
+        or re.search(r"(?<!\d)(?:\d{4}-\d{2}-\d{2}|20\d{2})(?!\d)", query_text)
+        or re.search(r"(?<!\d)\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?(?!\d)", query_text)
+        or _DATE_RANGE_CONNECTION_QUERY_RE.search(query_text)
     )
-    progression_like = bool(
-        re.search(r"\b(evolution|evolve|changed|change over time|progression|trace|over time|what happened)\b", lower)
-    )
-    plural_query_terms = [term for term in query_terms if len(term) >= 4 and term.endswith("s")]
-    enumeration_like = bool(
-        re.search(r"\b(what|which|list|name)\b", lower)
-        and (
-            re.search(r"\b(all|each|both|several|multiple|available|options?)\b", lower)
-            or re.search(r"\b(exist|exists|include|includes|support|supports|cover|covers|contain|contains|suggest|suggested)\b", lower)
-            or bool(plural_query_terms)
-        )
-    )
+    progression_like = False
+    enumeration_like = False
     requirements: List[str] = []
 
     def _add(requirement: str) -> None:
@@ -16255,28 +16242,19 @@ def _derive_query_requirements(
         _add("assistant_source")
     if temporal_like:
         _add("temporal")
-    if intent == "WHO" or graph_like or re.search(
-        r"\b(who|partner|wife|husband|mom|mother|dad|father|sister|brother|friend|coworker|colleague|manager|pet|dog|cat|child|children|son|daughter|nephew|niece|family|contact|name|neighbou?r|next door)\b",
-        lower,
-    ):
+    if intent == "WHO" or graph_like:
         _add("identity")
-    if intent == "WHERE" or re.search(
-        r"\b(where|location|located|live|lives|living|address|neighborhood|city|country|house|home|apartment)\b",
-        lower,
-    ):
+    if intent == "WHERE":
         _add("location")
-    if re.search(r"\b(employer|company|team|role|title|promotion|promoted|joined|left|work|works)\b", lower):
+    if intent == "ORGANIZATION":
         _add("organization")
-    if intent == "WHY" or re.search(r"\b(why|reason|motivat|cause|caused|led to|due to|so that)\b", lower):
+    if intent == "WHY":
         _add("causal")
     if graph_like:
         _add("graph")
     if enumeration_like:
         _add("enumeration")
-    if intent == "PROJECT" or re.search(
-        r"\b(api|schema|database|db|table|field|resolver|graphql|rest|middleware|test|tests|stack|framework|architecture|deployment|frontend|backend|implementation|code|source|file|version|bug|logging|observability)\b",
-        lower,
-    ):
+    if intent == "PROJECT":
         _add("technical")
 
     return {
@@ -18084,12 +18062,17 @@ def _evaluate_quality_gate_readiness(
         requirement: sum(1 for row in sample if _row_matches_requirement(row, requirement))
         for requirement in analysis.get("requirements") or []
     }
+    missing_requirements = [
+        requirement for requirement in analysis.get("requirements") or []
+        if requirement != "enumeration" and requirement_rows.get(requirement, 0) == 0
+    ]
     ready = bool(sample) and lexical_ready
     needs_validation = bool(sample) and (
         (query_terms and overlap_ratio < 0.67)
         or (analysis["temporal_like"] and temporal_rows == 0)
         or analysis["current_like"]
         or analysis["progression_like"]
+        or bool(missing_requirements)
     )
     unresolved: List[str] = []
     if not ready:
@@ -18097,6 +18080,7 @@ def _evaluate_quality_gate_readiness(
     return {
         "requirements": list(analysis.get("requirements") or []),
         "coverage": requirement_rows,
+        "missing_requirements": missing_requirements,
         "query_terms": query_terms,
         "covered_query_terms": covered_query_terms,
         "unsupported_query_terms": unsupported_query_terms,
