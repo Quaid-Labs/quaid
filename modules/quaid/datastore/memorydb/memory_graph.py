@@ -2310,11 +2310,13 @@ class MemoryGraph:
                 if existing_embedding_blob == packed:
                     self._sync_node_domains(active_conn, node.id, self._extract_domains_from_attrs(node.attributes))
                     return result.rowcount > 0
+                vec_sync_exc: Optional[BaseException] = None
                 try:
                     self._ensure_vec_table(active_conn, node.embedding)
                     active_conn.execute("INSERT OR REPLACE INTO vec_nodes(node_id, embedding) VALUES (?, ?)",
                                  (node.id, packed))
                 except Exception as exc:
+                    vec_sync_exc = exc
                     recovered = False
                     # Recover any vec upsert failure via delete-then-insert in the same txn.
                     try:
@@ -2333,6 +2335,7 @@ class MemoryGraph:
                             exc,
                             retry_exc,
                         )
+                        vec_sync_exc = retry_exc
                     if not recovered:
                         # Keep node write durable even if vec index upsert fails.
                         # This avoids run-level aborts for index-only inconsistencies.
@@ -2340,6 +2343,8 @@ class MemoryGraph:
                             "update_node updated node %s but vec_nodes sync was skipped",
                             node.id,
                         )
+                        if _is_fail_hard_mode():
+                            raise RuntimeError("vec_nodes sync failed during update_node") from vec_sync_exc
             if result.rowcount > 0:
                 self._sync_node_domains(active_conn, node.id, self._extract_domains_from_attrs(node.attributes))
             return result.rowcount > 0
@@ -10744,7 +10749,7 @@ def _graph_store_recall(
         query,
         owner_id=owner_id,
         limit=limit,
-        min_similarity=min_similarity or 0.60,
+        min_similarity=min_similarity if min_similarity is not None else 0.60,
         graph_depth=depth,
         domain=domain,
         domain_boost=domain_boost,
@@ -10779,8 +10784,10 @@ def _graph_store_recall(
             combined.extend(anchor_expansions)
             if relation_chain_query:
                 _boost_relation_chain_row_scores(combined, relation_chain_groups, query=query)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("graph store recall anchor expansion failed: %s", exc)
+        if _is_fail_hard_mode():
+            raise RuntimeError("graph store recall anchor expansion failed") from exc
     if date_from or date_to:
         combined = _filter_recall_rows_by_date_bounds(
             combined,
@@ -21590,8 +21597,10 @@ def recall(
                 "fanout_count": 0,
             }
             return ([], meta) if return_meta else []
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("recall circuit breaker check failed: %s", exc)
+        if _is_fail_hard_mode():
+            raise RuntimeError("recall circuit breaker check failed") from exc
 
     if not use_lightweight_config:
         # Empty-DB short-circuit: skip all LLM calls when there is nothing to search.
@@ -21626,8 +21635,10 @@ def recall(
                     "fanout_count": 0,
                 }
                 return ([], _empty_meta) if return_meta else []
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("recall empty DB short-circuit check failed: %s", exc)
+            if _is_fail_hard_mode():
+                raise RuntimeError("recall empty DB short-circuit check failed") from exc
 
     if (
         not use_lightweight_config
@@ -21720,10 +21731,10 @@ def recall(
             from config import get_config
             config_retrieval = get_config().retrieval
         quality_gate = getattr(config_retrieval, "multi_pass_gate", 0.70)
-    except Exception:
-        if use_lightweight_config and _is_fail_hard_mode():
-            raise
-        pass
+    except Exception as exc:
+        logger.warning("recall quality gate config load failed; using default: %s", exc)
+        if _is_fail_hard_mode():
+            raise RuntimeError("recall quality gate config load failed") from exc
 
     recall_start = _time.monotonic()
     deadline = None if overall_timeout_ms is None else (recall_start + (overall_timeout_ms / 1000.0))

@@ -2355,6 +2355,93 @@ class TestRecallBasic:
         assert isinstance(excinfo.value.__cause__, RuntimeError)
         assert "breaker down" in str(excinfo.value.__cause__)
 
+    def test_recall_circuit_breaker_check_failure_respects_failhard(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _ = _make_graph(tmp_path)
+        circuit_breaker = SimpleNamespace(
+            check_current_read_allowed=MagicMock(side_effect=RuntimeError("breaker down"))
+        )
+
+        with patch.dict(sys.modules, {"lib.circuit_breaker": circuit_breaker}), \
+             patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch.object(mg, "_is_fail_hard_mode", return_value=True):
+            with pytest.raises(RuntimeError, match="recall circuit breaker check failed") as excinfo:
+                mg.recall(
+                    "the read guard should fail loudly",
+                    owner_id="operator",
+                    use_routing=False,
+                    max_turns=1,
+                )
+
+        assert isinstance(excinfo.value.__cause__, RuntimeError)
+        assert "breaker down" in str(excinfo.value.__cause__)
+
+    def test_recall_empty_db_count_failure_respects_failhard(self):
+        import datastore.memorydb.memory_graph as mg
+
+        class _FailingConn:
+            def execute(self, *_args, **_kwargs):
+                raise sqlite3.OperationalError("count down")
+
+        class _FailingGraph:
+            def _get_conn(self):
+                class _Ctx:
+                    def __enter__(self):
+                        return _FailingConn()
+
+                    def __exit__(self, *_exc):
+                        return False
+
+                return _Ctx()
+
+        breaker = SimpleNamespace(allows_reads=lambda: True)
+
+        with patch("lib.circuit_breaker.check_current_read_allowed", return_value=breaker), \
+             patch("datastore.memorydb.memory_graph.get_graph", return_value=_FailingGraph()), \
+             patch.object(mg, "_is_fail_hard_mode", return_value=True):
+            with pytest.raises(RuntimeError, match="recall empty DB short-circuit check failed") as excinfo:
+                mg.recall(
+                    "the empty db count should fail loudly",
+                    owner_id="operator",
+                    use_routing=False,
+                    max_turns=1,
+                )
+
+        assert isinstance(excinfo.value.__cause__, sqlite3.OperationalError)
+        assert "count down" in str(excinfo.value.__cause__)
+
+    def test_recall_full_config_quality_gate_failure_respects_failhard(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _ = _make_graph(tmp_path)
+        graph.add_node(
+            mg.Node.create(
+                "fact",
+                "Config guard candidate memory",
+                owner_id="operator",
+                status="pending",
+            ),
+            embed=False,
+        )
+        breaker = SimpleNamespace(allows_reads=lambda: True)
+
+        with patch("lib.circuit_breaker.check_current_read_allowed", return_value=breaker), \
+             patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("config.get_config", side_effect=RuntimeError("config down")), \
+             patch.object(mg, "_is_fail_hard_mode", return_value=True):
+            with pytest.raises(RuntimeError, match="recall quality gate config load failed") as excinfo:
+                mg.recall(
+                    "quality gate config should fail loudly",
+                    owner_id="operator",
+                    use_routing=False,
+                    max_turns=1,
+                    use_lightweight_config=False,
+                )
+
+        assert isinstance(excinfo.value.__cause__, RuntimeError)
+        assert "config down" in str(excinfo.value.__cause__)
+
     def test_recall_returns_list(self, tmp_path):
         from datastore.memorydb.memory_graph import recall
         graph, _ = _make_graph(tmp_path)
@@ -6114,6 +6201,43 @@ class TestSourceChunkStorage:
                 (node_id,),
             ).fetchone()["embedding"] is not None
         assert "Failed to index retried embedding for node" in caplog.text
+
+    def test_update_node_vec_sync_failure_respects_failhard(self, tmp_path):
+        """update_node must match add/delete failHard behavior for vec index drift."""
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _db_file = _make_graph(tmp_path)
+        node = mg.Node.create(
+            "fact",
+            "Vector update candidate",
+            owner_id="operator",
+            status="pending",
+        )
+        graph.add_node(node, embed=False)
+        node.embedding = list(_FAKE_EMBEDDING)
+
+        class _VecFailingConnection:
+            def __init__(self, conn):
+                self._conn = conn
+
+            def execute(self, sql, *args, **kwargs):
+                if "INSERT OR REPLACE INTO vec_nodes" in sql or "INSERT INTO vec_nodes" in sql:
+                    raise sqlite3.OperationalError("vec sync down")
+                return self._conn.execute(sql, *args, **kwargs)
+
+            def __getattr__(self, name):
+                return getattr(self._conn, name)
+
+        with graph._get_conn() as conn:
+            failing_conn = _VecFailingConnection(conn)
+            with patch.object(mg, "_lib_has_vec", return_value=True), \
+                 patch.object(graph, "_ensure_vec_table", return_value=None), \
+                 patch.object(mg, "_is_fail_hard_mode", return_value=True):
+                with pytest.raises(RuntimeError, match="vec_nodes sync failed during update_node") as excinfo:
+                    graph.update_node(node, conn=failing_conn)
+
+        assert isinstance(excinfo.value.__cause__, sqlite3.OperationalError)
+        assert "vec sync down" in str(excinfo.value.__cause__)
 
     def test_source_chunk_vec_fallback_preserves_primary_failure_under_failhard(self, tmp_path):
         """Fallback insert errors should not hide the original vec replace failure."""
@@ -14867,8 +14991,19 @@ class TestRecallFastHookInjectContract:
         assert all(branch["timed_out"] is True for branch in drill_fanout["branches"])
         assert {branch["error_type"] for branch in drill_fanout["branches"]} == {"TimeoutError"}
 
-    def test_recall_return_meta_raises_branch_timeout_when_failhard_enabled(self):
+    def test_recall_return_meta_raises_branch_timeout_when_failhard_enabled(self, tmp_path):
         import datastore.memorydb.memory_graph as mg
+
+        graph, _ = _make_graph(tmp_path)
+        graph.add_node(
+            mg.Node.create(
+                "fact",
+                "Exercise habits timeout candidate",
+                owner_id="quaid",
+                status="pending",
+            ),
+            embed=False,
+        )
 
         with patch.object(
             mg,
@@ -14884,6 +15019,7 @@ class TestRecallFastHookInjectContract:
                 },
             ),
         ), \
+             patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
              patch.object(mg, "run_callables", side_effect=TimeoutError("1 of 1 futures unfinished")), \
              patch.object(mg, "_is_fail_hard_mode", return_value=True):
             with pytest.raises(TimeoutError, match="futures unfinished"):
@@ -16115,6 +16251,68 @@ class TestRecallFastHookInjectContract:
         assert meta["source"] == "test"
         assert meta["counts"]["graph_discoveries"] == 0
         assert bundle is None
+
+    def test_graph_store_recall_preserves_explicit_zero_min_similarity(self):
+        import datastore.memorydb.memory_graph as mg
+
+        captured = {}
+
+        def fake_graph_aware_recall(_query, **kwargs):
+            captured["min_similarity"] = kwargs["min_similarity"]
+            return {"direct_results": [], "graph_results": [], "meta": {}}
+
+        with patch("datastore.memorydb.memory_graph.graph_aware_recall", side_effect=fake_graph_aware_recall), \
+             patch.object(mg, "_relation_chain_groups_for_query", return_value=[]), \
+             patch.object(mg, "get_graph", return_value=SimpleNamespace()), \
+             patch.object(mg, "_expand_high_confidence_entity_anchors", return_value=([], [])):
+            rows, _meta, _bundle = mg._graph_store_recall(
+                "Return everything",
+                owner_id="quaid",
+                limit=5,
+                min_similarity=0.0,
+                domain=None,
+                domain_boost=None,
+                project=None,
+                date_from=None,
+                date_to=None,
+                depth=2,
+            )
+
+        assert rows == []
+        assert captured["min_similarity"] == 0.0
+
+    def test_graph_store_recall_anchor_expansion_failure_respects_failhard(self):
+        import datastore.memorydb.memory_graph as mg
+
+        payload = {
+            "direct_results": [
+                {"id": "fact-1", "text": "Maya keeps the atlas in the studio", "category": "fact", "similarity": 0.8},
+            ],
+            "graph_results": [],
+            "meta": {},
+        }
+
+        with patch("datastore.memorydb.memory_graph.graph_aware_recall", return_value=payload), \
+             patch.object(mg, "_relation_chain_groups_for_query", return_value=[]), \
+             patch.object(mg, "get_graph", return_value=SimpleNamespace()), \
+             patch.object(mg, "_expand_high_confidence_entity_anchors", side_effect=RuntimeError("anchor down")), \
+             patch.object(mg, "_is_fail_hard_mode", return_value=True):
+            with pytest.raises(RuntimeError, match="graph store recall anchor expansion failed") as excinfo:
+                mg._graph_store_recall(
+                    "Where is the atlas?",
+                    owner_id="quaid",
+                    limit=5,
+                    min_similarity=0.6,
+                    domain=None,
+                    domain_boost=None,
+                    project=None,
+                    date_from=None,
+                    date_to=None,
+                    depth=2,
+                )
+
+        assert isinstance(excinfo.value.__cause__, RuntimeError)
+        assert "anchor down" in str(excinfo.value.__cause__)
 
     def test_graph_store_recall_filters_out_of_window_rows(self):
         import datastore.memorydb.memory_graph as mg
