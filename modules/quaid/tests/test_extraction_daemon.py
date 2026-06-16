@@ -2141,6 +2141,36 @@ def test_config_reload_failure_raises_when_failhard(monkeypatch):
     assert "reload failed" in str(excinfo.value.__cause__)
 
 
+def test_extraction_buffer_log_enabled_logs_config_failure_when_fail_open(monkeypatch, caplog):
+    monkeypatch.setattr(
+        extraction_daemon,
+        "_config_file_paths",
+        lambda: (_ for _ in ()).throw(RuntimeError("config paths failed")),
+    )
+    monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: False)
+
+    with caplog.at_level("WARNING", logger="quaid.daemon"):
+        assert extraction_daemon._extraction_buffer_log_enabled() is False
+
+    assert "extraction buffer log config lookup failed; disabling buffer log" in caplog.text
+    assert "config paths failed" in caplog.text
+
+
+def test_extraction_buffer_log_enabled_raises_config_failure_when_failhard(monkeypatch):
+    monkeypatch.setattr(
+        extraction_daemon,
+        "_config_file_paths",
+        lambda: (_ for _ in ()).throw(RuntimeError("config paths failed")),
+    )
+    monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: True)
+
+    with pytest.raises(RuntimeError, match="extraction buffer log config lookup failed") as excinfo:
+        extraction_daemon._extraction_buffer_log_enabled()
+
+    assert isinstance(excinfo.value.__cause__, RuntimeError)
+    assert "config paths failed" in str(excinfo.value.__cause__)
+
+
 def test_process_signal_reloads_config_before_signal_handling(monkeypatch):
     reloads = []
     old_sig = (("/tmp/config.json", 1, 1),)

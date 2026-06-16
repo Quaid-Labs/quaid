@@ -347,7 +347,10 @@ def _extraction_buffer_log_enabled() -> bool:
             if _v is not None:
                 raw = bool(_v)
         return raw
-    except Exception:
+    except Exception as exc:
+        logger.warning("extraction buffer log config lookup failed; disabling buffer log: %s", exc)
+        if _fail_hard_enabled():
+            raise RuntimeError("extraction buffer log config lookup failed") from exc
         return False
 
 
