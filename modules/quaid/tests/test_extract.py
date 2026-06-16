@@ -1469,6 +1469,61 @@ class TestExtractFromTranscript:
         assert call["occurred_end"] == "2026-05-31T23:59:59+00:00"
 
     @patch("ingest.extract.call_deep_reasoning")
+    def test_extraction_shifts_stale_current_week_bounds_to_include_mention_date(self, mock_llm):
+        from ingest.extract import extract_from_transcript
+
+        mock_llm.return_value = (json.dumps({
+            "chunk_assessment": "usable",
+            "facts": [
+                {
+                    "text": "Test Owner's brass desk lamp arrived this week",
+                    "category": "event",
+                    "speaker": "user",
+                    "domains": ["personal"],
+                    "extraction_confidence": "medium",
+                    "occurred_start": "2026-06-09",
+                    "occurred_end": "2026-06-15",
+                }
+            ],
+            "soul_snippets": {},
+            "journal_entries": {},
+            "project_logs": {},
+        }), 0.1)
+
+        result = extract_from_transcript(
+            transcript=(
+                "[2026-06-16T20:04:26Z] User: My brass desk lamp arrived this week.\n"
+                "[2026-06-16T20:04:31Z] Assistant: Noted."
+            ),
+            owner_id="Test Owner",
+            dry_run=True,
+        )
+
+        fact = result["raw_facts"][0]
+        assert fact["mentioned_at"] == "2026-06-16T20:04:26+00:00"
+        assert fact["occurred_start"] == "2026-06-16T23:59:59"
+        assert fact["occurred_end"] == "2026-06-22T23:59:59"
+
+    def test_extraction_keeps_last_week_bounds_before_mention_date(self):
+        from ingest.extract import _normalize_fact_temporal_hint
+
+        fact = _normalize_fact_temporal_hint(
+            {
+                "text": "Test Owner's brass desk lamp arrived last week",
+                "category": "event",
+                "speaker": "user",
+                "occurred_start": "2026-06-09",
+                "occurred_end": "2026-06-15",
+            },
+            default_mentioned_at="2026-06-16T20:04:26+00:00",
+            prefer_default_mentioned_at=True,
+        )
+
+        assert fact["mentioned_at"] == "2026-06-16T20:04:26+00:00"
+        assert fact["occurred_start"] == "2026-06-09T23:59:59"
+        assert fact["occurred_end"] == "2026-06-15T23:59:59"
+
+    @patch("ingest.extract.call_deep_reasoning")
     def test_extraction_prefers_source_mention_time_over_llm_mentioned_at(self, mock_llm):
         from ingest.extract import extract_from_transcript
 

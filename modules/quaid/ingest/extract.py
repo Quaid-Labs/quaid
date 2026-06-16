@@ -27,7 +27,7 @@ import re
 import sys
 import time
 from contextlib import nullcontext
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -90,6 +90,48 @@ def _normalize_extracted_timestamp(value: Any) -> Optional[str]:
     except ValueError:
         return None
     return parsed.isoformat(timespec="seconds")
+
+
+def _parse_extracted_datetime(value: Any) -> Optional[datetime]:
+    normalized = _normalize_extracted_timestamp(value)
+    if not normalized:
+        return None
+    try:
+        return datetime.fromisoformat(normalized.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+_CURRENT_WEEK_RE = re.compile(r"(?<!\w)(?:this|current)\s+week(?:'s)?(?!\w)", re.IGNORECASE)
+
+
+def _maybe_shift_stale_current_week_bounds(fact: Dict[str, Any]) -> Dict[str, Any]:
+    """Repair current-week ranges that the extractor resolved to the previous week."""
+    text = str((fact or {}).get("text") or "")
+    if not _CURRENT_WEEK_RE.search(text):
+        return fact
+    start_dt = _parse_extracted_datetime((fact or {}).get("occurred_start"))
+    end_dt = _parse_extracted_datetime((fact or {}).get("occurred_end"))
+    mentioned_dt = _parse_extracted_datetime(
+        (fact or {}).get("mentioned_at") or (fact or {}).get("_source_timestamp")
+    )
+    if start_dt is None or end_dt is None or mentioned_dt is None:
+        return fact
+
+    span_days = (end_dt.date() - start_dt.date()).days
+    gap_days = (mentioned_dt.date() - end_dt.date()).days
+    if span_days < 5 or span_days > 8 or gap_days < 1 or gap_days > 7:
+        return fact
+
+    shifted_start = start_dt + timedelta(days=7)
+    shifted_end = end_dt + timedelta(days=7)
+    if shifted_start.date() > mentioned_dt.date() or shifted_end.date() < mentioned_dt.date():
+        return fact
+
+    corrected = dict(fact)
+    corrected["occurred_start"] = shifted_start.isoformat(timespec="seconds")
+    corrected["occurred_end"] = shifted_end.isoformat(timespec="seconds")
+    return corrected
 
 
 def _first_transcript_timestamp_hint(transcript_text: str) -> Optional[str]:
@@ -185,6 +227,7 @@ def _normalize_fact_temporal_hint(
         normalized["mentioned_at"] = mentioned_at
     else:
         normalized.pop("mentioned_at", None)
+    normalized = _maybe_shift_stale_current_week_bounds(normalized)
     normalized.pop("occurred_at", None)
     return normalized
 
