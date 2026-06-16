@@ -73,21 +73,6 @@ def _fail_hard_enabled() -> bool:
     return bool(is_fail_hard_enabled())
 
 
-def _now_iso() -> str:
-    raw = str(os.environ.get("QUAID_NOW", "") or "").strip()
-    if raw:
-        try:
-            value = datetime.fromisoformat(raw.replace("Z", "+00:00"))
-        except ValueError:
-            raise ValueError(f"Invalid QUAID_NOW={raw!r}") from None
-        if value.tzinfo is None:
-            value = value.replace(tzinfo=timezone.utc)
-        else:
-            value = value.astimezone(timezone.utc)
-        return value.isoformat()
-    return datetime.now(timezone.utc).isoformat()
-
-
 def _reload_config_after_project_change(action: str) -> bool:
     try:
         from config import reload_config
@@ -375,11 +360,17 @@ def _now_iso() -> str:
     raw = str(os.environ.get("QUAID_NOW", "") or "").strip()
     if raw:
         try:
-            return datetime.fromisoformat(raw.replace("Z", "+00:00")).isoformat()
+            value = datetime.fromisoformat(raw.replace("Z", "+00:00"))
         except ValueError as exc:
             if _fail_hard_enabled():
                 raise RuntimeError(f"Invalid QUAID_NOW={raw!r}") from exc
             logger.warning("Invalid QUAID_NOW=%r; using wall clock", raw)
+        else:
+            if value.tzinfo is None:
+                value = value.replace(tzinfo=timezone.utc)
+            else:
+                value = value.astimezone(timezone.utc)
+            return value.isoformat()
     return datetime.now(timezone.utc).isoformat()
 
 

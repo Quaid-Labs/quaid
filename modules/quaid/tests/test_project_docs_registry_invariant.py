@@ -184,7 +184,7 @@ def test_docs_registry_project_definition_timestamps_honor_quaid_now(project_reg
             state="active",
         )
 
-    monkeypatch.setenv("QUAID_NOW", "2026-03-11T05:06:00Z")
+    monkeypatch.setenv("QUAID_NOW", "2026-03-11T05:06:00")
     with get_connection(registry.db_path) as conn:
         registry._write_project_definition_row_on_conn(conn, "clocked-docs", _definition("clocked-docs"))
     with get_connection(registry.db_path) as conn:
@@ -250,14 +250,16 @@ def test_docs_registry_project_definition_timestamps_honor_quaid_now(project_reg
 
 def test_docs_registry_project_definition_rejects_malformed_quaid_now(project_registry_env, monkeypatch):
     from config import ProjectDefinition
+    from datastore.docsdb import registry as registry_mod
     from datastore.docsdb.registry import DocsRegistry
     from lib.database import get_connection
 
     registry = DocsRegistry(seed_projects=False)
     monkeypatch.setenv("QUAID_NOW", "not-a-date")
+    monkeypatch.setattr(registry_mod, "_fail_hard_enabled", lambda: True)
 
     with get_connection(registry.db_path) as conn:
-        with pytest.raises(ValueError, match="Invalid QUAID_NOW"):
+        with pytest.raises(RuntimeError, match="Invalid QUAID_NOW"):
             registry._write_project_definition_row_on_conn(
                 conn,
                 "bad-clock",
