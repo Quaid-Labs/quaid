@@ -102,6 +102,9 @@ def _parse_extracted_datetime(value: Any) -> Optional[datetime]:
         return None
 
 
+# This intentionally only recognizes the English current-week wording that the
+# extractor prompt emits today. A numeric-only correction would corrupt legitimate
+# "last week" facts with the same previous-week bounds.
 _CURRENT_WEEK_RE = re.compile(r"(?<!\w)(?:this|current)\s+week(?:'s)?(?!\w)", re.IGNORECASE)
 
 
