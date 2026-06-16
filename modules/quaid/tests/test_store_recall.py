@@ -19570,6 +19570,20 @@ class TestRecallFastHookInjectContract:
             assert mg._relation_chain_groups_for_query("兄の妻は何をしていますか") == ["sibling", "spouse"]
             assert mg._has_generic_graph_signal("兄の妻は何をしていますか") is True
 
+    def test_generic_graph_signal_uses_structural_entity_pairs_not_english_cues(self):
+        import datastore.memorydb.memory_graph as mg
+
+        entity_a = SimpleNamespace(id="entity-a")
+        entity_b = SimpleNamespace(id="entity-b")
+
+        with patch.object(mg, "_relation_intent_sequence_for_query", return_value=[]), \
+             patch.object(mg, "extract_entities_from_text", return_value=[entity_a, entity_b]):
+            assert mg._has_generic_graph_signal("Ari Noor") is True
+
+        with patch.object(mg, "_relation_intent_sequence_for_query", return_value=[]), \
+             patch.object(mg, "extract_entities_from_text", return_value=[]):
+            assert mg._has_generic_graph_signal("relationship connection hierarchy family") is False
+
     def test_merge_recall_batches_preserves_graph_metadata_from_lower_similarity_variant(self):
         import datastore.memorydb.memory_graph as mg
 

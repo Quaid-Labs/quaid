@@ -4257,13 +4257,21 @@ def _relation_descriptor_tokens() -> set[str]:
 
 
 def _has_generic_graph_signal(query: str) -> bool:
-    lowered = str(query or "").lower()
     relation_intent_sequence = _relation_intent_sequence_for_query(query)
-    chained_relation_lookup = len(relation_intent_sequence) >= 2 and _has_relation_chain_structure(query)
-    return bool(re.search(
-        r"\b(relation|relationship|related|connected|connection|hierarchy|depends?|dependency|dependent|component|subsystem|part|belongs|ownership|owner|caused|because|why|reason|family|relative|kin|kinship|reports?\s+to)\b",
-        lowered,
-    )) or chained_relation_lookup
+    if len(relation_intent_sequence) >= 2 and _has_relation_chain_structure(query):
+        return True
+    if relation_intent_sequence:
+        return False
+    try:
+        entity_ids = {
+            str(getattr(entity, "id", "") or "").strip()
+            for entity in extract_entities_from_text(query)
+        }
+    except Exception as exc:
+        if _is_fail_hard_mode():
+            raise RuntimeError("Graph-signal entity extraction failed while failHard is enabled") from exc
+        return False
+    return len({entity_id for entity_id in entity_ids if entity_id}) >= 2
 
 
 def _graph_row_relation_groups(row: Dict[str, Any]) -> List[str]:
