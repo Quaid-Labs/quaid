@@ -16482,6 +16482,35 @@ def _query_term_overlap(row: Dict[str, Any], query_terms: List[str]) -> int:
     return sum(1 for term in query_terms if term in text)
 
 
+def _quality_gate_row_text(row: Dict[str, Any]) -> str:
+    if not isinstance(row, dict):
+        return ""
+    parts: List[str] = []
+    for key in ("text", "name", "summary", "content", "title", "category", "source_type"):
+        value = row.get(key)
+        if value is not None:
+            parts.append(str(value))
+    return " ".join(part for part in parts if part)
+
+
+def _covered_query_terms_for_rows(
+    rows: List[Dict[str, Any]],
+    query_terms: List[str],
+) -> List[str]:
+    if not query_terms:
+        return []
+    row_texts = [
+        _quality_gate_row_text(row)
+        for row in rows or []
+        if isinstance(row, dict)
+    ]
+    covered: List[str] = []
+    for term in query_terms:
+        if any(_text_matches_query_term(text, term) for text in row_texts):
+            covered.append(term)
+    return covered
+
+
 def _text_contains_anchor_term(text: str, term: str) -> bool:
     clean_term = " ".join(str(term or "").split()).strip().lower()
     if not clean_term:
@@ -18170,6 +18199,12 @@ def _evaluate_quality_gate_readiness(
     overlap_counts = sorted((_query_term_overlap(row, query_terms) for row in sample), reverse=True)
     best_overlap = overlap_counts[0] if overlap_counts else 0
     overlap_ratio = (best_overlap / len(query_terms)) if query_terms else 1.0
+    covered_query_terms = _covered_query_terms_for_rows(sample, query_terms)
+    covered_query_term_set = set(covered_query_terms)
+    unsupported_query_terms = [
+        term for term in query_terms
+        if term not in covered_query_term_set
+    ]
     min_overlap = 0 if not query_terms else (1 if len(query_terms) <= 2 else 2)
     lexical_ready = (best_overlap >= min_overlap) if min_overlap else bool(sample)
     similarities = sorted(
@@ -18213,6 +18248,8 @@ def _evaluate_quality_gate_readiness(
         "requirements": list(analysis.get("requirements") or []),
         "coverage": requirement_rows,
         "query_terms": query_terms,
+        "covered_query_terms": covered_query_terms,
+        "unsupported_query_terms": unsupported_query_terms,
         "best_overlap": best_overlap,
         "overlap_ratio": round(overlap_ratio, 3),
         "covered_terms_ratio": round(overlap_ratio, 3),
@@ -18257,6 +18294,11 @@ def _summarize_memory_quality(
     ready = bool(gate.get("ready"))
     current_like = bool(gate.get("current_like"))
     progression_like = bool(gate.get("progression_like"))
+    unsupported_query_terms = [
+        str(term)
+        for term in (gate.get("unsupported_query_terms") or [])
+        if str(term or "").strip()
+    ]
     has_docs_evidence = any(_is_docs_recall_row(row) for row in sample if isinstance(row, dict))
     docs_evidence_ready = has_docs_evidence and ready
 
@@ -18316,11 +18358,18 @@ def _summarize_memory_quality(
             note = "Retrieved memory for this topic looks conflicted. Another recall pass may help if exactness matters."
         elif surface_quality == "low":
             if "low_query_term_coverage" in signals:
+                unsupported_note = ""
+                if unsupported_query_terms:
+                    unsupported_note = (
+                        " No retrieved evidence covers these requested terms: "
+                        f"{', '.join(unsupported_query_terms[:6])}."
+                    )
                 note = (
                     "Retrieved memory for this topic looks low-confidence because retrieved evidence "
                     "does not cover all important query terms. Do not assume presupposed events, "
                     "relationships, or missing entities from partial matches; answer only from evidence "
-                    "or say you do not have information. If the important terms are absent, say the "
+                    "or say you do not have information."
+                    f"{unsupported_note} If the important terms are absent, say the "
                     "retrieved memory contains no record or evidence that the presupposed event, "
                     "relationship, participant, or object occurred or exists."
                 )
@@ -18336,6 +18385,7 @@ def _summarize_memory_quality(
         "top_similarity": round(top_similarity, 3),
         "close_competitor_count": close_competitor_count,
         "temporal_span_days": temporal_span_days,
+        "unsupported_query_terms": unsupported_query_terms,
         "note": note,
     }
 

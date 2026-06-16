@@ -7664,9 +7664,21 @@ class TestSourceChunkStorage:
 
         assert rows and rows[0]["id"] == "fact-atlas-storage"
         assert meta["quality_gate"]["evaluation"]["ready"] is False
+        assert meta["quality_gate"]["evaluation"]["covered_query_terms"] == ["atlas"]
+        assert meta["quality_gate"]["evaluation"]["unsupported_query_terms"] == [
+            "vendor",
+            "approve",
+            "launch",
+        ]
         assert meta["quality_gate"]["result_count"] == 1
         assert meta["memory_quality"]["surface_quality"] == "low"
         assert "low_query_term_coverage" in meta["memory_quality"]["signals"]
+        assert meta["memory_quality"]["unsupported_query_terms"] == [
+            "vendor",
+            "approve",
+            "launch",
+        ]
+        assert "vendor, approve, launch" in meta["memory_quality"]["note"]
         assert "no record or evidence" in meta["memory_quality"]["note"]
 
     def test_rrf_shadow_does_not_change_store_plan_ordering_when_active_fusion_disabled(self):
@@ -14306,8 +14318,10 @@ class TestRecallFastHookInjectContract:
 
         assert quality["surface_quality"] == "low"
         assert "low_query_term_coverage" in quality["signals"]
+        assert quality["unsupported_query_terms"] == ["vendor", "approve", "launch"]
         assert "does not cover all important query terms" in quality["note"]
         assert "Do not assume presupposed events" in quality["note"]
+        assert "vendor, approve, launch" in quality["note"]
         assert "no record or evidence" in quality["note"]
 
     def test_quality_gate_normalizes_mixed_naive_and_aware_temporal_markers(self):
