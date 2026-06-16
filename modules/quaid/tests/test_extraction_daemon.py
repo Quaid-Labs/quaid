@@ -123,6 +123,28 @@ def test_session_logs_ingest_request_has_no_direct_fallback(monkeypatch, tmp_pat
     assert registered == ["registered"]
 
 
+def test_session_logs_ingest_transcript_path_prefers_current_rolling_source(tmp_path):
+    session_id = "05aace3b"
+    stale_mirror = tmp_path / "instances" / "openclaw-main" / "logs" / "quaid" / "sessions" / f"{session_id}.jsonl"
+    live_source = tmp_path / ".openclaw" / "agents" / "main" / "sessions" / f"{session_id}.jsonl"
+    stale_mirror.parent.mkdir(parents=True, exist_ok=True)
+    live_source.parent.mkdir(parents=True, exist_ok=True)
+    stale_mirror.write_text('{"role":"user","content":"old mirror"}\n', encoding="utf-8")
+    live_source.write_text('{"role":"user","content":"current live source"}\n', encoding="utf-8")
+
+    chosen = extraction_daemon._session_logs_ingest_transcript_path_for_signal(
+        str(stale_mirror),
+        signal_meta={},
+        cursor_data={"transcript_path": str(stale_mirror)},
+        staged_state={
+            "transcript_path": str(stale_mirror),
+            "buffer_transcript_path": str(live_source),
+        },
+    )
+
+    assert chosen == str(live_source)
+
+
 def test_daemon_lifecycle_signal_mapping_excludes_rolling():
     assert extraction_daemon.DAEMON_SIGNAL_TO_LIFECYCLE_EVENT == {
         "reset": "session.reset",
@@ -14737,6 +14759,189 @@ class TestRollingExtraction:
             assert len(applied) == 1
             assert applied[0][1]["session_id"] == full_session_id
             assert not extraction_daemon._rolling_state_path(full_session_id).exists()
+        finally:
+            if real_registry is not None:
+                sys.modules["core.subagent_registry"] = real_registry
+            else:
+                sys.modules.pop("core.subagent_registry", None)
+            if real_adapter is not None:
+                sys.modules["lib.adapter"] = real_adapter
+            else:
+                sys.modules.pop("lib.adapter", None)
+            if real_notify is not None:
+                sys.modules["core.runtime.notify"] = real_notify
+            else:
+                sys.modules.pop("core.runtime.notify", None)
+
+    def test_session_end_session_logs_ingest_uses_current_rolling_source(self, monkeypatch, tmp_path):
+        import sys
+        import types
+
+        session_id = "05aace3b"
+        stale_mirror = (
+            tmp_path
+            / "instances"
+            / "openclaw-main"
+            / "logs"
+            / "quaid"
+            / "sessions"
+            / f"{session_id}.jsonl"
+        )
+        live_source = tmp_path / ".openclaw" / "agents" / "main" / "sessions" / f"{session_id}.jsonl"
+        stale_mirror.parent.mkdir(parents=True, exist_ok=True)
+        live_source.parent.mkdir(parents=True, exist_ok=True)
+        stale_mirror.write_text('{"role":"user","content":"old mirror content"}\n', encoding="utf-8")
+        live_source.write_text(
+            '{"role":"user","content":"old mirror content"}\n'
+            '{"role":"user","content":"current live source content"}\n',
+            encoding="utf-8",
+        )
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "openclaw-main")
+        instance_root = tmp_path / "instances" / "openclaw-main"
+        instance_root.mkdir(parents=True, exist_ok=True)
+        (instance_root / "config.json").write_text(
+            json.dumps({"adapter": {"type": "openclaw"}}),
+            encoding="utf-8",
+        )
+        extraction_daemon.write_cursor(session_id, 1, str(stale_mirror))
+        extraction_daemon.write_rolling_state(
+            session_id,
+            {
+                "session_id": session_id,
+                "transcript_path": str(stale_mirror),
+                "buffer_transcript_path": str(live_source),
+                "processed_line_offset": 1,
+                "buffered_line_offset": 2,
+                "semantic_buffer": (
+                    "User: current live source content should be indexed from the live OpenClaw path"
+                ),
+                "semantic_buffer_tokens": 12,
+                "carry_facts": [],
+                "raw_facts": [],
+            },
+        )
+        monkeypatch.setattr(extraction_daemon, "_get_owner_id", lambda: "Owner")
+
+        real_registry = sys.modules.get("core.subagent_registry")
+        real_adapter = sys.modules.get("lib.adapter")
+        real_notify = sys.modules.get("core.runtime.notify")
+        fake_registry = types.ModuleType("core.subagent_registry")
+        fake_registry.is_registered_subagent = lambda sid: False
+        fake_registry.get_harvestable = lambda sid: []
+        fake_registry.mark_harvested = lambda sid, cid: None
+        fake_registry._registry_dir = lambda: tmp_path / "registry"
+        sys.modules["core.subagent_registry"] = fake_registry
+
+        fake_adapter_mod = types.ModuleType("lib.adapter")
+
+        class _FakeAdapter(_OwnedTestAdapterMixin):
+            def quaid_home(self):
+                return tmp_path
+
+            def instance_root(self):
+                return instance_root
+
+            def data_dir(self):
+                return instance_root / "data"
+
+            def parse_session_jsonl(self, path):
+                return "User: old mirror content"
+
+        fake_adapter_mod.get_adapter = lambda: _FakeAdapter()
+        fake_adapter_mod.quaid_projects_dir = lambda home: Path(home) / "projects"
+        fake_adapter_mod.quaid_tracking_dir = lambda home: Path(home) / ".git-tracking"
+        sys.modules["lib.adapter"] = fake_adapter_mod
+
+        fake_notify = types.ModuleType("core.runtime.notify")
+        fake_notify.notify_memory_extraction = lambda **kwargs: None
+        sys.modules["core.runtime.notify"] = fake_notify
+
+        import core.docs_updater_hook as docs_updater_mod
+        import core.project_registry as project_registry_mod
+        import ingest.extract as extract_mod
+
+        seen_transcripts = []
+        session_ingest_calls = []
+        monkeypatch.setattr(
+            extract_mod,
+            "extract_from_transcript",
+            lambda **kwargs: seen_transcripts.append(kwargs["transcript"]) or {
+                "carry_facts": [{"text": "Owner mentioned current live source content"}],
+                "raw_facts": [{"text": "Owner mentioned current live source content", "status": "new"}],
+                "raw_snippets": {},
+                "raw_journal": {},
+                "raw_project_logs": {},
+                "facts_skipped": 0,
+                "payload_duplicate_facts_collapsed": 0,
+                "carry_duplicate_facts_dropped": 0,
+                "chunks_processed": 1,
+                "chunks_total": 1,
+                "root_chunks": 1,
+                "split_events": 0,
+                "split_child_chunks": 0,
+                "leaf_chunks": 1,
+                "max_split_depth": 0,
+                "deep_calls": 1,
+                "repair_calls": 0,
+                "assessment_usable": 1,
+                "assessment_nothing_usable": 0,
+                "assessment_needs_smaller_chunk": 0,
+                "unclassified_empty_payloads": 0,
+            },
+        )
+        monkeypatch.setattr(
+            extract_mod,
+            "apply_extracted_payloads",
+            lambda payload, **kwargs: {
+                **payload,
+                "facts_stored": len(payload.get("raw_facts", []) or []),
+                "facts_skipped": 0,
+                "edges_created": 0,
+                "facts": [],
+                "snippets": {},
+                "journal": {},
+                "project_logs": {},
+                "project_log_metrics": {},
+            },
+        )
+        monkeypatch.setattr(
+            extraction_daemon,
+            "_request_session_logs_ingest",
+            lambda **kwargs: session_ingest_calls.append(kwargs) or {"status": "indexed"},
+        )
+        monkeypatch.setattr(project_registry_mod, "snapshot_all_projects", lambda: [])
+        monkeypatch.setattr(docs_updater_mod, "update_project_docs", lambda snapshots, extraction_result: {"docs_updated": 0})
+        monkeypatch.setattr(
+            extraction_daemon,
+            "_read_usage_totals",
+            lambda: {
+                "calls": 0,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "fast_calls": 0,
+                "fast_input_tokens": 0,
+                "fast_output_tokens": 0,
+                "deep_calls": 0,
+                "deep_input_tokens": 0,
+                "deep_output_tokens": 0,
+            },
+        )
+
+        try:
+            extraction_daemon.write_signal(
+                signal_type="session_end",
+                session_id=session_id,
+                transcript_path=str(stale_mirror),
+            )
+            extraction_daemon.process_signal(extraction_daemon.read_pending_signals()[0])
+
+            assert seen_transcripts == [
+                "User: current live source content should be indexed from the live OpenClaw path"
+            ]
+            assert len(session_ingest_calls) == 1
+            assert session_ingest_calls[0]["transcript_path"] == str(live_source)
         finally:
             if real_registry is not None:
                 sys.modules["core.subagent_registry"] = real_registry

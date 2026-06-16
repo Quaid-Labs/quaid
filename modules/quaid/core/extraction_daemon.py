@@ -500,6 +500,50 @@ def _validate_session_logs_ingest_broker_response(response: Dict[str, Any]) -> D
     return result
 
 
+def _session_logs_ingest_transcript_path_for_signal(
+    transcript_path: Optional[str],
+    *,
+    signal_meta: Optional[Dict[str, Any]] = None,
+    cursor_data: Optional[Dict[str, Any]] = None,
+    staged_state: Optional[Dict[str, Any]] = None,
+) -> str:
+    """Pick the transcript source session_logs should ingest for this signal.
+
+    OpenClaw can switch a session between Quaid's preserved mirror and the
+    live host transcript while the daemon is processing a lifecycle signal.
+    Extraction may still be able to read the original signal path, but
+    session_logs runs through the broker after this function returns; hand it
+    the current rolling/live source when one is known and readable.
+    """
+    current = str(transcript_path or "").strip()
+    meta = signal_meta if isinstance(signal_meta, dict) else {}
+    cursor = cursor_data if isinstance(cursor_data, dict) else {}
+    staged = staged_state if isinstance(staged_state, dict) else {}
+    candidates = (
+        ("signal_meta_source", meta.get("source_transcript_path")),
+        ("signal_meta_buffer", meta.get("buffer_transcript_path")),
+        ("rolling_state_source", staged.get("source_transcript_path")),
+        ("rolling_state_buffer", staged.get("buffer_transcript_path")),
+        ("rolling_state", staged.get("transcript_path")),
+        ("cursor", cursor.get("transcript_path")),
+        ("current", current),
+    )
+    seen = set()
+    for source, raw_path in candidates:
+        path = str(raw_path or "").strip()
+        if not path or path in seen:
+            continue
+        seen.add(path)
+        try:
+            if os.path.isfile(path):
+                return path
+        except OSError as exc:
+            logger.warning("session_logs ingest candidate path stat failed from %s: %s", source, exc)
+            if _fail_hard_enabled():
+                raise RuntimeError(f"session_logs ingest candidate path stat failed from {source}") from exc
+    return current
+
+
 def _request_session_logs_ingest(
     *,
     session_id: str,
@@ -6459,11 +6503,26 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
         else:
             if signal_type == "session_end":
                 try:
+                    session_logs_transcript_path = _session_logs_ingest_transcript_path_for_signal(
+                        str(transcript_path),
+                        signal_meta=signal_meta,
+                        cursor_data=cursor_data,
+                        staged_state=staged_state,
+                    )
+                    if session_logs_transcript_path != str(transcript_path):
+                        logger.info(
+                            "[%s] session %s: session_logs ingest using current source transcript path: %s "
+                            "(signal path=%s)",
+                            label,
+                            session_id,
+                            session_logs_transcript_path,
+                            transcript_path,
+                        )
                     sl_result = _request_session_logs_ingest(
                         session_id=session_id,
                         owner_id=_get_owner_id(),
                         label=label,
-                        transcript_path=str(transcript_path),
+                        transcript_path=session_logs_transcript_path,
                         message_count=0,
                         topic_hint="",
                     )
@@ -7211,11 +7270,26 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                 logger.warning("[%s] session %s: failed queuing post-timeout compaction: %s", label, session_id, e)
 
         try:
+            session_logs_transcript_path = _session_logs_ingest_transcript_path_for_signal(
+                str(transcript_path),
+                signal_meta=signal_meta,
+                cursor_data=cursor_data,
+                staged_state=staged_state,
+            )
+            if session_logs_transcript_path != str(transcript_path):
+                logger.info(
+                    "[%s] session %s: session_logs ingest using current source transcript path: %s "
+                    "(signal path=%s)",
+                    label,
+                    session_id,
+                    session_logs_transcript_path,
+                    transcript_path,
+                )
             sl_result = _request_session_logs_ingest(
                 session_id=session_id,
                 owner_id=owner,
                 label=label,
-                transcript_path=str(transcript_path),
+                transcript_path=session_logs_transcript_path,
                 message_count=len(new_lines),
                 topic_hint=result.get("topic_hint", ""),
             )
