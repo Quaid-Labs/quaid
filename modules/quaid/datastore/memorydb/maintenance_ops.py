@@ -264,28 +264,6 @@ def _owner_full_name(owner_id: Optional[str] = None) -> str:
     return "the user"
 
 
-_OWNER_ALIAS_EXACT = frozenset({
-    "the user",
-    "user",
-    "the owner",
-    "owner",
-    "me",
-    "myself",
-    "i",
-})
-
-_ENTITY_PLACEHOLDER_PREFIXES = (
-    "user's ",
-    "the user's ",
-    "owner's ",
-    "the owner's ",
-    "my ",
-    "our ",
-    "his ",
-    "her ",
-    "their ",
-)
-
 _STRUCTURAL_ANCHOR_KINDS = frozenset({
     "explicit_user_structural_anchor",
     "user_mirrored_idea_anchor",
@@ -303,28 +281,19 @@ _ASSISTANT_STRUCTURAL_EDGE_SKIP_KINDS = frozenset({
 })
 
 def _canonicalize_owner_alias(name: str, owner_full: Optional[str] = None) -> str:
-    """Normalize owner aliases in extracted edge entities to the canonical owner name."""
+    """Return edge entity labels unchanged; owner aliasing belongs to the LLM prompt."""
     text = str(name or "").strip()
-    if not text:
-        return text
-    owner = (owner_full or "").strip()
-    if not owner or owner.lower() == "the user":
-        return text
-    if text.lower() in _OWNER_ALIAS_EXACT:
-        return owner
     return text
 
 
 def _is_placeholder_entity_name(name: str, owner_full: Optional[str] = None) -> bool:
-    """Return True when the entity label is role-based/ambiguous, not a named entity."""
+    """Return True when the entity label is empty.
+
+    Lexical owner-placeholder detection is intentionally not duplicated in Python;
+    batch_extract_edges injects owner guidance into the LLM prompt instead.
+    """
     text = str(name or "").strip()
-    if not text:
-        return True
-    lowered = text.lower()
-    if lowered in _OWNER_ALIAS_EXACT:
-        owner = (owner_full or "").strip()
-        return not owner or owner.lower() == "the user"
-    return any(lowered.startswith(prefix) for prefix in _ENTITY_PLACEHOLDER_PREFIXES)
+    return not text
 
 def _load_node_attributes_blob(raw: Any) -> Dict[str, Any]:
     if isinstance(raw, dict):
@@ -4012,137 +3981,21 @@ def apply_review_decisions_from_list(graph: MemoryGraph, decisions: List[Dict[st
     return {"kept": kept, "deleted": deleted, "fixed": fixed, "merged": merged}
 
 
-# ── Temporal resolution (no LLM) ────────────────────────────────────────
-
-# Regex patterns for relative temporal references
-_RELATIVE_TEMPORAL_PATTERNS = [
-    (r'\btomorrow\b', 1),
-    (r'\byesterday\b', -1),
-    (r'\btoday\b', 0),
-    (r'\btonight\b', 0),
-    (r'\bthis morning\b', 0),
-    (r'\bthis afternoon\b', 0),
-    (r'\bthis evening\b', 0),
-    (r'\bnext week\b', 7),
-    (r'\blast week\b', -7),
-    (r'\bnext month\b', 30),
-    (r'\blast month\b', -30),
-    (r'\bnext year\b', 365),
-    (r'\blast year\b', -365),
-]
-
-# Compiled regex to detect ANY relative temporal reference
-_TEMPORAL_DETECTOR = re.compile(
-    '|'.join(pat for pat, _ in _RELATIVE_TEMPORAL_PATTERNS),
-    re.IGNORECASE
-)
-
-
-def _resolve_relative_date(text: str, created_at: str) -> Optional[str]:
-    """Replace relative temporal references with absolute dates.
-
-    Returns the fixed text, or None if no changes needed.
-    """
-    if not _TEMPORAL_DETECTOR.search(text):
-        return None
-
-    try:
-        # Parse created_at (ISO format: 2026-02-05T15:16:27.535993)
-        base_date = datetime.fromisoformat(created_at).date()
-    except (ValueError, TypeError):
-        return None
-
-    new_text = text
-    changed = False
-    for pattern, delta_days in _RELATIVE_TEMPORAL_PATTERNS:
-        # Loop to replace ALL occurrences of each pattern (not just the first)
-        while True:
-            match = re.search(pattern, new_text, re.IGNORECASE)
-            if not match:
-                break
-            target_date = base_date + timedelta(days=delta_days)
-            date_str = target_date.strftime("%Y-%m-%d")
-            new_text = new_text[:match.start()] + f"on {date_str}" + new_text[match.end():]
-            changed = True
-
-    if not changed:
-        return None
-
-    return new_text
+# ── Temporal resolution ─────────────────────────────────────────────────
 
 
 def resolve_temporal_references(graph: MemoryGraph, dry_run: bool = True,
                                  metrics: Optional[JanitorMetrics] = None) -> Dict[str, Any]:
-    """Find and fix facts containing relative temporal references.
-
-    Replaces words like 'tomorrow', 'yesterday', 'today' etc. with absolute dates
-    calculated from the fact's created_at timestamp. No LLM needed.
-    """
+    """No-op: relative temporal normalization is handled by the LLM review pass."""
     if metrics:
         metrics.start_task("temporal_resolution")
 
-    with graph._get_conn() as conn:
-        # Find facts with potential temporal references
-        rows = conn.execute("""
-            SELECT id, name, created_at FROM nodes
-            WHERE deleted_at IS NULL
-            AND (
-                name LIKE '%tomorrow%' OR name LIKE '%yesterday%'
-                OR name LIKE '%today%' OR name LIKE '%tonight%'
-                OR name LIKE '%this morning%' OR name LIKE '%this afternoon%'
-                OR name LIKE '%this evening%'
-                OR name LIKE '%next week%' OR name LIKE '%last week%'
-                OR name LIKE '%next month%' OR name LIKE '%last month%'
-                OR name LIKE '%next year%' OR name LIKE '%last year%'
-            )
-        """).fetchall()
-
-    if not rows:
-        print("  No facts with relative temporal references found")
-        if metrics:
-            metrics.end_task("temporal_resolution")
-        return {"found": 0, "fixed": 0, "skipped": 0}
-
-    print(f"  Found {len(rows)} facts with relative temporal references")
-
-    fixed = 0
-    skipped = 0
-    for row in rows:
-        fact_id = row["id"]
-        old_text = row["name"]
-        created_at = row["created_at"]
-
-        new_text = _resolve_relative_date(old_text, created_at)
-        if new_text is None:
-            skipped += 1
-            continue
-
-        if dry_run:
-            print(f"    Would fix: {old_text[:60]}...")
-            print(f"           →  {new_text[:60]}...")
-        else:
-            from lib.embeddings import get_embedding as _get_emb_temp, pack_embedding as _pack_emb_temp
-            new_emb = _get_emb_temp(new_text)
-            new_hash = content_hash(new_text)
-            packed_emb = _pack_emb_temp(new_emb) if new_emb else None
-            with graph._get_conn() as conn:
-                conn.execute(
-                    "UPDATE nodes SET name = ?, embedding = ?, content_hash = ?, updated_at = ? WHERE id = ?",
-                    (new_text, packed_emb, new_hash, _quaid_now().isoformat(), fact_id)
-                )
-                _upsert_vec_embedding(
-                    conn,
-                    fact_id,
-                    packed_emb,
-                    context="fact rewrite",
-                )
-            print(f"    Fixed: {old_text[:50]}... → {new_text[:50]}...")
-        fixed += 1
+    print("  Temporal reference normalization is handled by the LLM memory review pass")
 
     if metrics:
         metrics.end_task("temporal_resolution")
 
-    return {"found": len(rows), "fixed": fixed, "skipped": skipped}
+    return {"found": 0, "fixed": 0, "skipped": 0}
 
 
 def get_completed_review_work_today() -> Dict[str, int]:

@@ -59,13 +59,13 @@ def test_batch_extract_edges_uses_llm_edges_for_kinship_pattern():
     assert edge["object"] == "Alice"
 
 
-def test_batch_extract_edges_maps_user_alias_via_fact_owner_resolution():
+def test_batch_extract_edges_uses_llm_owner_endpoint_from_prompt_guidance():
     facts = [{"id": "fact-4", "text": "David is the user's brother.", "owner_id": "default"}]
     metrics = maintenance_ops.JanitorMetrics()
 
     response = (
         '[{"fact": 1, "edges": ['
-        '{"subject":"David","subject_type":"Person","relation":"sibling_of","object":"the user","object_type":"Person"}'
+        '{"subject":"David","subject_type":"Person","relation":"sibling_of","object":"Solomon Steadman","object_type":"Person"}'
         ']}]',
         0.05,
     )
@@ -94,8 +94,8 @@ def test_batch_extract_edges_resolves_owner_once_per_fact_not_per_edge():
 
     response = (
         '[{"fact": 1, "edges": ['
-        '{"subject":"David","subject_type":"Person","relation":"sibling_of","object":"the user","object_type":"Person"},'
-        '{"subject":"Lisa","subject_type":"Person","relation":"spouse_of","object":"the user","object_type":"Person"}'
+        '{"subject":"David","subject_type":"Person","relation":"sibling_of","object":"Solomon Steadman","object_type":"Person"},'
+        '{"subject":"Lisa","subject_type":"Person","relation":"spouse_of","object":"Solomon Steadman","object_type":"Person"}'
         ']}]',
         0.05,
     )

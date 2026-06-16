@@ -269,9 +269,9 @@ class TestCombinedTransforms:
 
 
 class TestOwnerAliasCanonicalization:
-    def test_exact_owner_alias_maps_to_owner_full_name(self):
-        assert _canonicalize_owner_alias("the user", "Solomon Steadman") == "Solomon Steadman"
-        assert _canonicalize_owner_alias("ME", "Solomon Steadman") == "Solomon Steadman"
+    def test_maintenance_owner_aliases_are_not_rewritten_in_python(self):
+        assert _canonicalize_owner_alias("the user", "Solomon Steadman") == "the user"
+        assert _canonicalize_owner_alias("ME", "Solomon Steadman") == "ME"
 
     def test_owner_alias_not_changed_without_owner_full_name(self):
         assert _canonicalize_owner_alias("the user", "the user") == "the user"
@@ -279,9 +279,10 @@ class TestOwnerAliasCanonicalization:
 
 
 class TestPlaceholderEntityFiltering:
-    def test_flags_possessive_placeholder_entity_names(self):
-        assert _is_placeholder_entity_name("User's sister", "Solomon Steadman")
-        assert _is_placeholder_entity_name("my brother", "Solomon Steadman")
+    def test_maintenance_placeholder_filter_is_empty_only(self):
+        assert _is_placeholder_entity_name("", "Solomon Steadman")
+        assert not _is_placeholder_entity_name("User's sister", "Solomon Steadman")
+        assert not _is_placeholder_entity_name("my brother", "Solomon Steadman")
 
     def test_allows_named_entities(self):
         assert not _is_placeholder_entity_name("David", "Solomon Steadman")

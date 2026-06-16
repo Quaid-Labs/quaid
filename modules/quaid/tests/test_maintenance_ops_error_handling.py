@@ -1027,35 +1027,18 @@ def test_get_completed_review_work_today_uses_quaid_now(monkeypatch):
     assert captured["params"] == ("2026-03-11T00:00:00",)
 
 
-def test_resolve_temporal_references_uses_quaid_now_for_updated_at(monkeypatch):
+def test_resolve_temporal_references_does_not_rewrite_with_quaid_now(monkeypatch):
     monkeypatch.setenv("QUAID_NOW", "2026-03-11T00:00:00Z")
-    captured = {}
-
-    class _Conn:
-        def execute(self, sql, params=()):
-            text = str(sql)
-            if "SELECT id, name, created_at FROM nodes" in text:
-                return _DummyResult(rows=[{
-                    "id": "n1",
-                    "name": "Quaid is meeting Hauser tomorrow",
-                    "created_at": "2026-03-10T08:00:00",
-                }])
-            if "UPDATE nodes SET name = ?, embedding = ?, content_hash = ?, updated_at = ?" in text:
-                captured["params"] = params
-            return _DummyResult(rowcount=1)
 
     class _Graph:
         @contextmanager
         def _get_conn(self):
-            yield _Conn()
+            raise AssertionError("temporal maintenance should not scan or rewrite nodes")
+            yield
 
-    with patch("lib.embeddings.get_embedding", return_value=[0.1]), \
-         patch("lib.embeddings.pack_embedding", return_value=b"x"), \
-         patch.object(maintenance_ops, "_upsert_vec_embedding", return_value=None):
-        out = maintenance_ops.resolve_temporal_references(_Graph(), dry_run=False)
+    out = maintenance_ops.resolve_temporal_references(_Graph(), dry_run=False)
 
-    assert out["fixed"] == 1
-    assert captured["params"][3] == "2026-03-11T00:00:00"
+    assert out == {"found": 0, "fixed": 0, "skipped": 0}
 
 
 def test_review_dedup_rejections_uses_runtime_clock_for_sql_paths(monkeypatch):
@@ -1272,54 +1255,20 @@ def test_review_fix_decision_uses_runtime_clock_for_updated_at(monkeypatch):
     assert update_params[3] == "2026-07-08T09:10:11"
 
 
-def test_resolve_temporal_references_uses_runtime_clock_for_updated_at(monkeypatch):
+def test_resolve_temporal_references_skips_storage_when_llm_review_owns_dates(monkeypatch):
     monkeypatch.setenv("QUAID_NOW", "2026-07-08T09:10:11")
     metrics = maintenance_ops.JanitorMetrics()
 
-    class _Conn:
-        def __init__(self):
-            self.sql = []
-            self.params = []
-
-        def execute(self, sql, params=()):
-            self.sql.append(str(sql))
-            self.params.append(tuple(params or ()))
-            text = str(sql).strip().upper()
-            if text.startswith("SELECT ID, NAME, CREATED_AT FROM NODES"):
-                return _DummyResult(rows=[{
-                    "id": "n1",
-                    "name": "Maya is meeting Leo tomorrow",
-                    "created_at": "2026-07-08T09:10:11",
-                }])
-            if text.startswith("UPDATE NODES"):
-                return _DummyResult(rowcount=1)
-            raise AssertionError(f"unexpected SQL: {sql}")
-
     class _Graph:
-        def __init__(self):
-            self.calls = []
-
         @contextmanager
         def _get_conn(self):
-            conn = _Conn()
-            self.calls.append(conn)
-            yield conn
+            raise AssertionError("temporal maintenance should not scan or rewrite nodes")
+            yield
 
-    graph = _Graph()
+    out = maintenance_ops.resolve_temporal_references(_Graph(), dry_run=False, metrics=metrics)
 
-    with patch("lib.embeddings.get_embedding", return_value=[0.1]), \
-         patch("lib.embeddings.pack_embedding", return_value=None):
-        out = maintenance_ops.resolve_temporal_references(graph, dry_run=False, metrics=metrics)
-
-    assert out == {"found": 1, "fixed": 1, "skipped": 0}
-    all_sql = "\n".join(sql for call in graph.calls for sql in call.sql)
-    assert "datetime('now')" not in all_sql
-    update_params = [
-        params for call in graph.calls for sql, params in zip(call.sql, call.params)
-        if str(sql).strip().upper().startswith("UPDATE NODES")
-    ][0]
-    assert update_params[0] == "Maya is meeting Leo on 2026-07-09"
-    assert update_params[3] == "2026-07-08T09:10:11"
+    assert out == {"found": 0, "fixed": 0, "skipped": 0}
+    assert metrics.task_duration("temporal_resolution") >= 0.0
 
 
 def test_completed_review_work_today_uses_runtime_clock_for_midnight(monkeypatch):
