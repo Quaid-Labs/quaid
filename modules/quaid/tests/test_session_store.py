@@ -97,10 +97,23 @@ def test_store_session_source_text_malformed_quaid_now_honors_failhard(monkeypat
     assert out["chunk"]["created_at"] != "not-a-clock"
 
 
-def test_source_date_logs_unparseable_value(caplog):
+def test_source_date_logs_unparseable_value_when_fail_open(monkeypatch, caplog):
+    monkeypatch.setattr(session_store, "is_fail_hard_enabled", lambda: False)
+
     with caplog.at_level("WARNING", logger="datastore.sessiondb.session_store"):
         assert session_store._source_date("not a date") is None
 
+    assert "failed to parse session source date 'not a date'" in caplog.text
+
+
+def test_source_date_raises_on_unparseable_value_when_failhard(monkeypatch, caplog):
+    monkeypatch.setattr(session_store, "is_fail_hard_enabled", lambda: True)
+
+    with caplog.at_level("WARNING", logger="datastore.sessiondb.session_store"):
+        with pytest.raises(RuntimeError, match="failed to parse session source date") as exc:
+            session_store._source_date("not a date")
+
+    assert isinstance(exc.value.__cause__, ValueError)
     assert "failed to parse session source date 'not a date'" in caplog.text
 
 
@@ -119,7 +132,7 @@ def test_store_session_source_text_logs_missing_lock_cleanup(monkeypatch, tmp_pa
     assert "sessiondb lock file already removed for session_id=sess-lock-cleanup" in caplog.text
 
 
-def test_stale_lock_treats_permission_error_as_live_process(monkeypatch, tmp_path):
+def test_stale_lock_treats_permission_error_as_live_process(monkeypatch, tmp_path, caplog):
     lock_path = tmp_path / "session.lock"
     lock_path.write_text("12345", encoding="utf-8")
 
@@ -128,7 +141,34 @@ def test_stale_lock_treats_permission_error_as_live_process(monkeypatch, tmp_pat
 
     monkeypatch.setattr(session_store.os, "kill", _kill)
 
-    assert session_store._stale_lock(str(lock_path)) is False
+    with caplog.at_level("WARNING", logger="datastore.sessiondb.session_store"):
+        assert session_store._stale_lock(str(lock_path)) is False
+
+    assert "is not signalable; treating as live" in caplog.text
+
+
+def test_with_session_lock_logs_missing_stale_lock_unlink(monkeypatch, tmp_path, caplog):
+    lock_path = tmp_path / "session.lock"
+    opened = {"count": 0}
+
+    def _open(_path, _flags, _mode):
+        opened["count"] += 1
+        if opened["count"] == 1:
+            raise FileExistsError("exists")
+        return 123
+
+    monkeypatch.setattr(session_store, "_lock_path", lambda _session_id: str(lock_path))
+    monkeypatch.setattr(session_store, "_stale_lock", lambda _path: True)
+    monkeypatch.setattr(session_store.os, "open", _open)
+    monkeypatch.setattr(session_store.os, "write", lambda _fd, _data: None)
+    monkeypatch.setattr(session_store.os, "unlink", lambda _path: (_ for _ in ()).throw(FileNotFoundError("gone")))
+
+    with caplog.at_level("DEBUG", logger="datastore.sessiondb.session_store"):
+        fd, path = session_store._with_session_lock("sess-lock")
+
+    assert fd == 123
+    assert path == str(lock_path)
+    assert "sessiondb stale lock already removed for session_id=sess-lock" in caplog.text
 
 
 def test_stale_lock_logs_corrupt_pid(tmp_path, caplog):

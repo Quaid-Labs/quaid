@@ -81,11 +81,13 @@ def _source_date(value: Any) -> Optional[str]:
         return None
     try:
         return datetime.fromisoformat(raw.replace("Z", "+00:00")).date().isoformat()
-    except ValueError:
+    except ValueError as exc:
         match = re.search(r"\b(20\d{2}-\d{2}-\d{2})\b", raw)
         if match:
             return match.group(1)
         logger.warning("failed to parse session source date %r", raw)
+        if is_fail_hard_enabled():
+            raise RuntimeError(f"failed to parse session source date {raw!r}") from exc
         return None
 
 
@@ -126,7 +128,8 @@ def _stale_lock(path: str) -> bool:
         pid = int(Path(path).read_text(encoding="utf-8").strip())
         os.kill(pid, 0)
         return False
-    except PermissionError:
+    except PermissionError as exc:
+        logger.warning("sessiondb lock file %s pid %s is not signalable; treating as live: %s", path, pid, exc)
         return False
     except FileNotFoundError:
         return True
@@ -152,7 +155,7 @@ def _with_session_lock(session_id: str) -> Tuple[int, str]:
                 try:
                     os.unlink(path)
                 except FileNotFoundError:
-                    pass
+                    logger.debug("sessiondb stale lock already removed for session_id=%s: %s", session_id, path)
                 continue
             if attempt == 299:
                 raise RuntimeError(f"failed to acquire sessiondb lock for {session_id}: {last_err}")
