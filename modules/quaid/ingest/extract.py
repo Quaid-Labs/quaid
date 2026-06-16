@@ -3842,6 +3842,7 @@ def extract_from_transcript(
     # Chunk transcript for extraction (split at turn boundaries)
     chunk_tokens = 0
     chunking_disabled_by_override = False
+    chunk_tokens_override_parse_failed = False
     if chunk_tokens_override is not None:
         try:
             chunk_tokens = int(chunk_tokens_override)
@@ -3853,10 +3854,11 @@ def extract_from_transcript(
                 chunk_tokens_override,
                 exc,
             )
+            chunk_tokens_override_parse_failed = True
             chunk_tokens = 0
         if chunk_tokens > 0:
             logger.debug("[extract] %s: using caller chunk token override=%d", label, chunk_tokens)
-        elif chunk_tokens == 0:
+        elif chunk_tokens == 0 and not chunk_tokens_override_parse_failed:
             chunking_disabled_by_override = True
             logger.debug("[extract] %s: caller chunk token override=0; processing transcript as one root chunk", label)
     if chunk_tokens <= 0 and not chunking_disabled_by_override:

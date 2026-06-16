@@ -7730,6 +7730,46 @@ class TestExtractFromTranscript:
                     chunk_tokens_override="bogus",
                 )
 
+    @patch("lib.batch_utils.chunk_text_by_tokens")
+    @patch("ingest.extract.call_deep_reasoning")
+    def test_invalid_chunk_tokens_override_falls_back_to_configured_budget_when_not_failhard(
+        self,
+        mock_llm,
+        mock_chunk,
+        caplog,
+    ):
+        from ingest.extract import extract_from_transcript
+
+        seen_budgets = []
+
+        def _chunk_side_effect(text, max_tokens, split_on):
+            seen_budgets.append((max_tokens, split_on))
+            return [text]
+
+        cfg = SimpleNamespace(
+            capture=SimpleNamespace(enabled=True, skip_patterns=[], chunk_tokens=1234),
+            retrieval=SimpleNamespace(domains={"personal": "Personal facts"}),
+            projects=SimpleNamespace(definitions={}),
+        )
+        mock_chunk.side_effect = _chunk_side_effect
+        mock_llm.return_value = (json.dumps({"facts": []}), 0.4)
+
+        with patch("ingest.extract.get_config", return_value=cfg), \
+             patch("ingest.extract.is_fail_hard_enabled", return_value=False), \
+             caplog.at_level("WARNING"):
+            result = extract_from_transcript(
+                transcript="User: The orange notebook stays in the cabinet.",
+                owner_id="test",
+                label="invalid-chunk-override-soft-test",
+                dry_run=True,
+                chunk_tokens_override="bogus",
+            )
+
+        assert seen_budgets == [(1234, "\n\n")]
+        assert result["chunks_total"] == 1
+        assert mock_llm.call_count == 1
+        assert "invalid chunk_tokens_override='bogus'" in caplog.text
+
     @patch("ingest.extract.call_deep_reasoning")
     def test_capture_enabled_read_failure_skips_when_not_failhard(self, mock_llm, caplog):
         from ingest.extract import extract_from_transcript
