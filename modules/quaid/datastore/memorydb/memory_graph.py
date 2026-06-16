@@ -4270,6 +4270,7 @@ def _has_generic_graph_signal(query: str) -> bool:
     except Exception as exc:
         if _is_fail_hard_mode():
             raise RuntimeError("Graph-signal entity extraction failed while failHard is enabled") from exc
+        logger.warning("_has_generic_graph_signal: entity extraction failed, defaulting to False: %s", exc)
         return False
     return len({entity_id for entity_id in entity_ids if entity_id}) >= 2
 

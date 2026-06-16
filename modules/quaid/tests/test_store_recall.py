@@ -19584,6 +19584,17 @@ class TestRecallFastHookInjectContract:
              patch.object(mg, "extract_entities_from_text", return_value=[]):
             assert mg._has_generic_graph_signal("relationship connection hierarchy family") is False
 
+    def test_generic_graph_signal_logs_soft_entity_extraction_failure(self, caplog):
+        import datastore.memorydb.memory_graph as mg
+
+        with patch.object(mg, "_relation_intent_sequence_for_query", return_value=[]), \
+             patch.object(mg, "extract_entities_from_text", side_effect=RuntimeError("entity scan failed")), \
+             patch.object(mg, "_is_fail_hard_mode", return_value=False):
+            assert mg._has_generic_graph_signal("Ari Noor") is False
+
+        assert "_has_generic_graph_signal: entity extraction failed" in caplog.text
+        assert "entity scan failed" in caplog.text
+
     def test_merge_recall_batches_preserves_graph_metadata_from_lower_similarity_variant(self):
         import datastore.memorydb.memory_graph as mg
 
