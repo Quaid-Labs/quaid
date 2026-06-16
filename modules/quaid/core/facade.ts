@@ -550,11 +550,6 @@ const DELAYED_REQUESTS_LOCK_STALE_MS = 5_000;
 const COMPACTION_NOTIFY_BATCH_MS = 10_000;
 const COMPACTION_NOTIFY_BATCH_MAX_MS = 45_000;
 const TOOLS_DOMAIN_BLOCK_RE = /<!-- AUTO-GENERATED:DOMAIN-LIST:START -->[\s\S]*?<!-- AUTO-GENERATED:DOMAIN-LIST:END -->\n*/g;
-const RECALL_RETRY_STOPWORDS = new Set([
-  "a", "an", "and", "are", "as", "at", "be", "by", "do", "for", "from", "how", "i",
-  "in", "is", "it", "me", "my", "of", "on", "or", "our", "that", "the", "their", "they",
-  "this", "to", "was", "we", "what", "when", "where", "which", "who", "why", "with", "you", "your",
-]);
 
 export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
   // -------------------------------------------------------------------------
@@ -2433,9 +2428,8 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
   }
 
   function isLowQualityQuery(query: string): boolean {
-    const ACKNOWLEDGMENTS = /^(ok|okay|yes|no|sure|thanks|thank you|got it|sounds good|perfect|great|cool|alright|yep|nope|right|correct|agreed|absolutely|definitely|nice|good|fine|hm+|ah+|oh+)\s*[.!?]?$/i;
     const words = String(query || "").trim().split(/\s+/).filter((w) => w.length > 1);
-    return words.length < 3 || ACKNOWLEDGMENTS.test(String(query || "").trim());
+    return words.length < 3;
   }
 
   function filterMemoriesByPrivacy(memories: MemoryResult[], currentOwner: string): MemoryResult[] {
@@ -3033,20 +3027,23 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
   // Journal store recall
   // -------------------------------------------------------------------------
 
+  function lexicalTokens(value: string, limit = 16): string[] {
+    const seen = new Set<string>();
+    const tokens: string[] = [];
+    const normalized = String(value || "").normalize("NFKC").toLowerCase();
+    for (const match of normalized.matchAll(/[\p{L}\p{N}][\p{L}\p{N}._-]*/gu)) {
+      const token = String(match[0] || "").replace(/^[._-]+|[._-]+$/g, "");
+      const minLength = /[^\x00-\x7F]/u.test(token) ? 2 : 3;
+      if (token.length < minLength || seen.has(token)) continue;
+      seen.add(token);
+      tokens.push(token);
+      if (tokens.length >= limit) break;
+    }
+    return tokens;
+  }
+
   function recallFromJournal(query: string, limit: number, journalDir: string): MemoryResult[] {
-    const stop = new Set([
-      "the", "and", "for", "with", "that", "this", "from", "have", "has", "was", "were",
-      "what", "when", "where", "which", "who", "how", "why", "about", "tell", "me", "your",
-      "my", "our", "their", "his", "her", "its", "into", "onto", "than", "then",
-    ]);
-    const tokens = Array.from(new Set(
-      String(query || "")
-        .toLowerCase()
-        .replace(/[^a-z0-9\s]/g, " ")
-        .split(/\s+/)
-        .map((t) => t.trim())
-        .filter((t) => t.length >= 3 && !stop.has(t))
-    )).slice(0, 16);
+    const tokens = lexicalTokens(query, 16);
     if (!tokens.length) return [];
 
     let files: string[] = [];
@@ -3065,7 +3062,7 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
       try {
         const fullPath = path.join(journalDir, file);
         const content = fs.readFileSync(fullPath, "utf8");
-        const lc = content.toLowerCase();
+        const lc = content.normalize("NFKC").toLowerCase();
         let hits = 0;
         for (const t of tokens) {
           if (lc.includes(t)) hits += 1;
@@ -3511,37 +3508,8 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
     return [];
   }
 
-  function normalizeToken(raw: string): string {
-    return String(raw || "")
-      .toLowerCase()
-      .replace(/[^a-z0-9]/g, "");
-  }
-
-  function stemToken(token: string): string {
-    if (token.length > 6 && token.endsWith("ing")) return token.slice(0, -3);
-    if (token.length > 5 && token.endsWith("ed")) return token.slice(0, -2);
-    if (token.length > 4 && token.endsWith("s")) return token.slice(0, -1);
-    return token;
-  }
-
   function tokenizeQuery(query: string): string[] {
-    return String(query || "")
-      .split(/\s+/)
-      .map((part) => normalizeToken(part))
-      .map((token) => stemToken(token))
-      .filter((token) => token.length >= 3 && !RECALL_RETRY_STOPWORDS.has(token));
-  }
-
-  function temporalCuePresent(query: string): boolean {
-    const lowered = String(query || "").toLowerCase();
-    const cues = ["latest", "current", "currently", "still", "now", "as of", "when", "last", "updated"];
-    return cues.some((cue) => lowered.includes(cue));
-  }
-
-  function attributionCuePresent(query: string): boolean {
-    const lowered = String(query || "").toLowerCase();
-    const cues = ["who", "whose", "did", "does", "said", "asked", "told", "mentioned", "attributed"];
-    return cues.some((cue) => lowered.includes(cue));
+    return lexicalTokens(query, 16);
   }
 
   function isVectorRecallResult(result: MemoryResult): boolean {
@@ -3625,15 +3593,6 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
   function buildExpandedRecallQuery(query: string): string {
     const tokens = tokenizeQuery(query);
     const expanded = new Set(tokens);
-    for (const token of tokens) {
-      expanded.add(stemToken(token));
-    }
-    if (temporalCuePresent(query)) {
-      ["latest", "current", "timeline", "asof", "status"].forEach((t) => expanded.add(t));
-    }
-    if (attributionCuePresent(query)) {
-      ["person", "speaker", "attribution"].forEach((t) => expanded.add(t));
-    }
     const expansionTail = Array.from(expanded).slice(0, 16).join(" ");
     if (!expansionTail) return query;
     return `${query} ${expansionTail}`;
@@ -3661,11 +3620,6 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
     const coverage = computeEntityCoverage(query, results);
     if (coverage < 0.35) {
       reasons.push("low_entity_coverage");
-    }
-
-    if (temporalCuePresent(query)) {
-      const hasTemporalFields = results.some((r) => Boolean(r.createdAt || r.validFrom || r.validUntil));
-      if (!hasTemporalFields) reasons.push("missing_temporal_context");
     }
 
     return { retry: reasons.length > 0, reasons };

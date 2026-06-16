@@ -1683,6 +1683,49 @@ describe("QuaidFacade", () => {
     expect(diagnostics).toBeNull();
   });
 
+  it("recallWithDiagnostics matches unicode journal query terms", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "quaid-facade-journal-unicode-"));
+    const instanceRoot = path.join(workspace, "instances", "alice");
+    const journalDir = path.join(instanceRoot, "journal");
+    await mkdir(journalDir, { recursive: true });
+    await writeFile(
+      path.join(journalDir, "2026-03-07.journal.md"),
+      "Élodie garde le carnet bleu près de la fenêtre.",
+      "utf8",
+    );
+
+    const execPython = vi.fn(async () => {
+      throw new Error("journal must not use bridge recall");
+    });
+    const facade = createQuaidFacade(makeMockDeps({
+      workspace,
+      instanceRoot,
+      execPython,
+      isSystemEnabled: vi.fn((system: string) => system === "journal"),
+      getMemoryConfig: vi.fn(() => ({
+        retrieval: { failHard: false },
+        docs: { journal: { enabled: true, journalDir: "journal" } },
+      })),
+    }));
+
+    try {
+      const { results } = await facade.recallWithDiagnostics({
+        query: "Élodie carnet",
+        limit: 5,
+        routeStores: false,
+        datastores: ["journal"],
+        expandGraph: false,
+      });
+
+      expect(execPython).not.toHaveBeenCalledWith("recall", expect.anything());
+      expect(results).toHaveLength(1);
+      expect(results[0].via).toBe("journal");
+      expect(results[0].text).toContain("Élodie garde le carnet bleu");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   it("recallWithDiagnostics with expandGraph preserves both vector and graph results", async () => {
     const execPython = vi.fn(async (command: string) => {
       if (command === "recall") {
@@ -1790,8 +1833,8 @@ describe("QuaidFacade", () => {
     expect(execPython).toHaveBeenCalledTimes(1);
   });
 
-  it("recallWithToolRetry retries with expanded query and merges results", async () => {
-    const execPython = vi.fn(async (command: string) => {
+  it("recallWithToolRetry retries with unicode query tokens and no english cue tails", async () => {
+    const execPython = vi.fn(async (command: string, args: string[]) => {
       if (command !== "recall-memory-request") return "{}";
       const callCount = execPython.mock.calls.filter(([cmd]) => cmd === "recall-memory-request").length;
       if (callCount === 1) {
@@ -1800,20 +1843,24 @@ describe("QuaidFacade", () => {
         ]);
       }
       return memoryBrokerResponse("vector_basic", [
-        { text: "Alice leads the project alpha roadmap", category: "fact", similarity: 0.84 },
+        { text: "Élodie leads the project alpha roadmap", category: "fact", similarity: 0.84 },
       ]);
     });
     const facade = createQuaidFacade(makeMockDeps({ execPython }));
     const results = await facade.recallWithToolRetry({
-      query: "who leads project alpha",
+      query: "who leads Élodie project alpha",
       routeStores: false,
       datastores: ["vector_basic"],
       expandGraph: false,
       limit: 5,
     });
     expect(results.length).toBeGreaterThanOrEqual(2);
-    expect(results[0].text).toContain("Alice");
+    expect(results[0].text).toContain("Élodie");
     expect(execPython).toHaveBeenCalledTimes(2);
+    const retryArgs = execPython.mock.calls[1]?.[1] as string[];
+    expect(retryArgs[0]).toContain("Élodie");
+    expect(retryArgs[0]).toContain("élodie");
+    expect(retryArgs[0]).not.toMatch(/\b(?:person|speaker|timeline|status)\b/);
   });
 
   it("recallWithToolRetry skips retry when retry_budget_ms is 0", async () => {
@@ -2347,10 +2394,11 @@ describe("QuaidFacade", () => {
     expect(requestSessionCompaction).toHaveBeenCalledWith("agent:main:main");
   });
 
-  it("isLowQualityQuery filters acknowledgments and short prompts", () => {
+  it("isLowQualityQuery filters structurally short prompts only", () => {
     const facade = createQuaidFacade(makeMockDeps());
     expect(facade.isLowQualityQuery("ok")).toBe(true);
     expect(facade.isLowQualityQuery("sounds good")).toBe(true);
+    expect(facade.isLowQualityQuery("thank you for remembering")).toBe(false);
     expect(facade.isLowQualityQuery("please summarize the migration risks")).toBe(false);
   });
 
