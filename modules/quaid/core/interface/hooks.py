@@ -3533,11 +3533,16 @@ def hook_extract(args):
         hook_input = {}
     _ensure_hook_instance_ready(hook_input)
 
-    session_id = hook_input.get("session_id", "") or f"unknown-{_now_epoch()}-{os.getpid()}"
+    raw_transcript_path = str(hook_input.get("transcript_path") or "").strip()
+    session_id = str(hook_input.get("session_id") or "").strip()
+    if not session_id and raw_transcript_path:
+        session_id = Path(raw_transcript_path).expanduser().stem
+    if not session_id:
+        session_id = f"unknown-{_now_epoch()}-{os.getpid()}"
     transcript_path = _resolve_hook_transcript_path(
         session_id=session_id,
         hook_cwd=str(hook_input.get("cwd") or "").strip(),
-        transcript_path=str(hook_input.get("transcript_path") or "").strip(),
+        transcript_path=raw_transcript_path,
     )
     is_precompact = args.precompact if hasattr(args, "precompact") else False
     signal_type = "compaction" if is_precompact else "session_end"
@@ -3852,6 +3857,8 @@ def hook_session_init(args):
             )
     except Exception as e:
         print(f"[quaid][session-init] daemon startup error: {e}", file=sys.stderr)
+        if _fail_hard_enabled():
+            raise
 
     # Probe prompt-model health at session start so the first user turn after a
     # daemon/config bounce can reuse a fresh cached provider error instead of
@@ -3898,12 +3905,11 @@ def hook_session_init(args):
     # Warn when multiple agents share the same instance silo. Concurrent use
     # on the same silo is not supported and may cause memory quality loss.
     try:
-        import time as _time
         import os as _os
         from core.extraction_daemon import _cursor_dir as _get_cursor_dir
         _cursor_dir = _get_cursor_dir()
         if _cursor_dir.is_dir():
-            _now = _time.time()
+            _now = _now_epoch()
             _active_threshold = 120  # seconds: transcript modified within 2 min = active
             for _cf in _cursor_dir.glob("*.json"):
                 try:
@@ -3954,6 +3960,8 @@ def hook_session_init(args):
                 except OSError:
                     continue
     except Exception as _e:
+        if _is_invalid_quaid_now_error(_e):
+            raise
         print(f"[quaid][session-init] multi-instance check error: {_e}", file=sys.stderr)
 
     # Seed an initial cursor for the current session so the daemon's idle
@@ -4097,6 +4105,8 @@ def hook_subagent_start(args):
             "error": str(e),
         })
         print(f"[quaid][subagent-start] error: {e}", file=sys.stderr)
+        if _fail_hard_enabled():
+            raise
 
 
 def hook_subagent_stop(args):
@@ -4184,6 +4194,8 @@ def hook_subagent_stop(args):
             "error": str(e),
         })
         print(f"[quaid][subagent-stop] error: {e}", file=sys.stderr)
+        if _fail_hard_enabled():
+            raise
 
 
 def main():

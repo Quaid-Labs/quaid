@@ -169,6 +169,17 @@ def _run_hook_subagent_stop(hook_input: dict, *, monkeypatch):
     return captured_err.getvalue()
 
 
+def _run_hook_subagent_start(hook_input: dict, *, monkeypatch):
+    """Drive hook_subagent_start with fake stdin and captured stderr."""
+    from core.interface import hooks
+
+    captured_err = io.StringIO()
+    with patch("core.interface.hooks._read_stdin_json", return_value=hook_input), \
+         patch("core.interface.hooks.sys.stderr", captured_err):
+        hooks.hook_subagent_start(MagicMock())
+    return captured_err.getvalue()
+
+
 def test_hook_inject_reports_invalid_json_input():
     from core.interface import hooks
 
@@ -1885,6 +1896,43 @@ def test_hook_extract_raises_signal_write_failure_when_fail_hard_enabled(
         )
 
 
+def test_hook_extract_uses_transcript_stem_when_session_id_missing(
+    monkeypatch, tmp_path
+):
+    from core.interface import hooks
+
+    transcript = tmp_path / "session-from-path.jsonl"
+    transcript.write_text(
+        json.dumps({"type": "user", "message": {"role": "user", "content": "hello"}}) + "\n",
+        encoding="utf-8",
+    )
+    captured = {}
+
+    monkeypatch.setattr(hooks, "_ensure_hook_instance_ready", lambda _hook_input: None)
+    monkeypatch.setattr(
+        hooks,
+        "_maybe_compaction_refresh_context_artifacts",
+        lambda *_args, **_kwargs: None,
+    )
+
+    def fake_write_signal(**kwargs):
+        captured.update(kwargs)
+        return tmp_path / "signal.json"
+
+    monkeypatch.setattr("core.extraction_daemon.write_signal", fake_write_signal)
+    monkeypatch.setattr(
+        "core.extraction_daemon.write_staged_payload_flush_signals",
+        lambda *_args, **_kwargs: [],
+    )
+
+    _run_hook_extract(
+        {"transcript_path": str(transcript), "cwd": str(tmp_path)},
+        monkeypatch=monkeypatch,
+    )
+
+    assert captured["session_id"] == "session-from-path"
+
+
 # ===========================================================================
 # hook_inject — recall resilience
 # ===========================================================================
@@ -3473,6 +3521,50 @@ class TestHookInjectRecallResilience:
 # hook_session_init — registry augmentation
 # ===========================================================================
 
+def test_session_init_daemon_import_failure_raises_when_failhard_enabled(
+    tmp_path, monkeypatch
+):
+    from core.interface import hooks
+
+    fake_daemon = types.ModuleType("core.extraction_daemon")
+    monkeypatch.setitem(sys.modules, "core.extraction_daemon", fake_daemon)
+    monkeypatch.setattr(hooks, "_ensure_hook_instance_ready", lambda _hook_input: None)
+    monkeypatch.setattr(hooks, "_refresh_runtime_config_if_changed", lambda _reason: False)
+    monkeypatch.setattr(hooks, "_seed_turn_based_refresh_state", lambda _session_id: None)
+    monkeypatch.setattr(hooks, "_fail_hard_enabled", lambda: True)
+
+    with pytest.raises(ImportError, match="ensure_alive"):
+        _run_hook_session_init(
+            {"session_id": "sess-daemon-import-fail", "cwd": str(tmp_path)},
+            monkeypatch=monkeypatch,
+            rules_dir=tmp_path / "rules",
+        )
+
+
+def test_session_init_multi_instance_check_honors_quaid_now(
+    tmp_path, monkeypatch
+):
+    from core import extraction_daemon
+    from core.interface import hooks
+
+    cursor_dir = tmp_path / "cursors"
+    cursor_dir.mkdir()
+    monkeypatch.setenv("QUAID_NOW", "not-a-clock")
+    monkeypatch.setattr(hooks, "_ensure_hook_instance_ready", lambda _hook_input: None)
+    monkeypatch.setattr(hooks, "_refresh_runtime_config_if_changed", lambda _reason: False)
+    monkeypatch.setattr(hooks, "_seed_turn_based_refresh_state", lambda _session_id: None)
+    monkeypatch.setattr(hooks, "_validate_prompt_model_config_for_hook", lambda _adapter_id: "")
+    monkeypatch.setattr(extraction_daemon, "ensure_alive", lambda: None)
+    monkeypatch.setattr(extraction_daemon, "_cursor_dir", lambda: cursor_dir)
+
+    with pytest.raises(ValueError, match="Invalid QUAID_NOW"):
+        _run_hook_session_init(
+            {"session_id": "sess-clock-fail", "cwd": str(tmp_path)},
+            monkeypatch=monkeypatch,
+            rules_dir=tmp_path / "rules",
+        )
+
+
 class TestHookSessionInitRegistryAugmentation:
 
     def _make_init_env(self, tmp_path, monkeypatch, *, projects_dir=None, identity_dir=None):
@@ -3891,6 +3983,55 @@ class TestHookSessionInitRegistryAugmentation:
 
 
 class TestSubagentHooks:
+    def test_hook_subagent_start_raises_register_failure_when_failhard(
+        self, monkeypatch
+    ):
+        from core.interface import hooks
+
+        fake_registry = types.ModuleType("core.subagent_registry")
+
+        def fail_register(**_kwargs):
+            raise RuntimeError("register broken")
+
+        fake_registry.register = fail_register
+        monkeypatch.setitem(sys.modules, "core.subagent_registry", fake_registry)
+        monkeypatch.setattr(hooks, "_ensure_hook_instance_ready", lambda _hook_input: None)
+        monkeypatch.setattr(hooks, "_fail_hard_enabled", lambda: True)
+
+        with pytest.raises(RuntimeError, match="register broken"):
+            _run_hook_subagent_start(
+                {
+                    "session_id": "parent-1",
+                    "agent_id": "child-1",
+                    "agent_type": "task",
+                },
+                monkeypatch=monkeypatch,
+            )
+
+    def test_hook_subagent_stop_raises_mark_failure_when_failhard(
+        self, monkeypatch
+    ):
+        from core.interface import hooks
+
+        fake_registry = types.ModuleType("core.subagent_registry")
+
+        def fail_mark_complete(**_kwargs):
+            raise RuntimeError("mark broken")
+
+        fake_registry.mark_complete = fail_mark_complete
+        monkeypatch.setitem(sys.modules, "core.subagent_registry", fake_registry)
+        monkeypatch.setattr(hooks, "_ensure_hook_instance_ready", lambda _hook_input: None)
+        monkeypatch.setattr(hooks, "_fail_hard_enabled", lambda: True)
+
+        with pytest.raises(RuntimeError, match="mark broken"):
+            _run_hook_subagent_stop(
+                {
+                    "session_id": "parent-1",
+                    "agent_id": "child-1",
+                },
+                monkeypatch=monkeypatch,
+            )
+
     def test_hook_subagent_stop_preserves_transcript_into_quaid_logs(self, tmp_path, monkeypatch):
         source = tmp_path / "child.jsonl"
         source.write_text('{"role":"user","content":"hello"}\n', encoding="utf-8")
