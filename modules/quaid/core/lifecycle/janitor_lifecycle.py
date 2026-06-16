@@ -147,7 +147,11 @@ class LifecycleRegistry:
                 first_cfg = routines[0][1].cfg
                 parallel_cfg = get_parallel_config(first_cfg)
                 timeout_seconds = float(getattr(parallel_cfg, "lifecycle_prepass_timeout_seconds", 300) or 300)
-            except Exception:
+            except Exception as exc:
+                logger.warning(
+                    "Failed to resolve lifecycle prepass timeout from config; using 300s default: %s",
+                    exc,
+                )
                 if is_fail_hard_enabled():
                     raise
                 timeout_seconds = 300.0
@@ -420,10 +424,14 @@ class LifecycleRegistry:
             )
             if parsed_cfg > 0:
                 return parsed_cfg
-        except Exception:
+        except Exception as exc:
+            logger.warning(
+                "Failed to read lifecycle parallel timeout config; using default %.3fs: %s",
+                default_seconds,
+                exc,
+            )
             if is_fail_hard_enabled():
                 raise
-            pass
         return float(default_seconds)
 
     def _parallel_map_timeout_retries(self, ctx: RoutineContext, default_retries: int = 1) -> int:
@@ -444,10 +452,14 @@ class LifecycleRegistry:
             parsed_cfg = int(default_retries if cfg_raw is None else cfg_raw)
             if parsed_cfg >= 0:
                 return parsed_cfg
-        except Exception:
+        except Exception as exc:
+            logger.warning(
+                "Failed to read lifecycle parallel timeout retry config; using default %d: %s",
+                default_retries,
+                exc,
+            )
             if is_fail_hard_enabled():
                 raise
-            pass
         return int(default_retries)
 
     def _resolved_write_resources(self, name: str, ctx: RoutineContext) -> List[str]:
@@ -601,10 +613,10 @@ def _resolve_adapter_maintenance_module(default_module: str = "") -> str:
                     parts = module_name.split(".")
                     parts[-1] = "maintenance"
                     return ".".join(parts)
-    except Exception:
+    except Exception as exc:
+        logger.warning("Failed to resolve adapter maintenance module from plugin config: %s", exc)
         if is_fail_hard_enabled():
             raise
-        pass
     # Fallback: discover adapter maintenance modules from local tree without
     # hardcoding any specific adapter identifier.
     try:
@@ -621,10 +633,10 @@ def _resolve_adapter_maintenance_module(default_module: str = "") -> str:
             return candidates[0]
         if candidates:
             return sorted(candidates)[0]
-    except Exception:
+    except Exception as exc:
+        logger.warning("Failed to discover adapter maintenance module from local tree: %s", exc)
         if is_fail_hard_enabled():
             raise
-        pass
     return default_module
 
 

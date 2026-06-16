@@ -319,7 +319,7 @@ def get_monitored_files() -> Dict[str, Dict[str, Any]]:
     except Exception as e:
         if is_fail_hard_enabled():
             raise
-        logger.debug(f"Could not load base context files: {e}")
+        logger.warning("Could not load base context files: %s", e)
 
     if not files:
         # Fallback to hardcoded list if config not available

@@ -137,6 +137,26 @@ class TestGetMonitoredFiles:
             with pytest.raises(RuntimeError, match="base context broken"):
                 get_monitored_files()
 
+    def test_base_context_failure_warns_when_fail_open(self, caplog):
+        cfg = _make_config_with_core_md(files={"AGENTS.md": {"purpose": "System ops", "maxLines": 350}})
+
+        class _Adapter:
+            def get_base_context_files(self):
+                raise RuntimeError("base context broken")
+
+        with patch("core.lifecycle.workspace_audit.get_config", return_value=cfg), \
+             patch("core.lifecycle.workspace_audit.get_bootstrap_markdown_globs", return_value=[]), \
+             patch("lib.adapter.get_adapter", return_value=_Adapter()), \
+             patch("core.lifecycle.workspace_audit.is_fail_hard_enabled", return_value=False):
+            from core.lifecycle.workspace_audit import get_monitored_files
+
+            with caplog.at_level("WARNING", logger="core.lifecycle.workspace_audit"):
+                result = get_monitored_files()
+
+        assert result["AGENTS.md"]["purpose"] == "System ops"
+        assert "Could not load base context files" in caplog.text
+        assert "base context broken" in caplog.text
+
     def test_fallback_when_files_empty(self):
         """Empty files dict in config with no gateway globs triggers fallback."""
         cfg = _make_config_with_core_md(files={})

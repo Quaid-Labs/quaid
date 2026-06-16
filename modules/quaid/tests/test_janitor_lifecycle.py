@@ -609,6 +609,36 @@ def test_lifecycle_registry_run_many_raises_config_failure_when_fail_hard(monkey
         )
 
 
+def test_lifecycle_registry_run_many_warns_on_timeout_config_failure_when_fail_open(
+    monkeypatch, tmp_path, caplog
+):
+    import core.lifecycle.janitor_lifecycle as lifecycle_mod
+
+    registry = LifecycleRegistry()
+    cfg = _make_cfg(False)
+    registry.register("noop", lambda _ctx: RoutineResult(metrics={"ok": 1}))
+    monkeypatch.setattr(lifecycle_mod, "is_fail_hard_enabled", lambda: False)
+    calls = {"count": 0}
+
+    def _get_parallel_config(_cfg):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise RuntimeError("bad timeout config")
+        return cfg.core.parallel
+
+    monkeypatch.setattr(lifecycle_mod, "get_parallel_config", _get_parallel_config)
+
+    with caplog.at_level(logging.WARNING, logger="core.lifecycle.janitor_lifecycle"):
+        result = registry.run_many(
+            [("noop", RoutineContext(cfg=cfg, dry_run=True, workspace=tmp_path))],
+            max_workers=1,
+        )
+
+    assert result["noop"].metrics == {"ok": 1}
+    assert "Failed to resolve lifecycle prepass timeout from config" in caplog.text
+    assert "bad timeout config" in caplog.text
+
+
 def test_lifecycle_registry_run_many_logs_future_failure_when_fail_open(monkeypatch, tmp_path, caplog):
     import core.lifecycle.janitor_lifecycle as lifecycle_mod
 
@@ -809,6 +839,27 @@ def test_parallel_map_timeout_retries_env_override(monkeypatch, tmp_path):
     ctx = RoutineContext(cfg=cfg, dry_run=True, workspace=tmp_path)
     monkeypatch.setenv("QUAID_CORE_PARALLEL_MAP_TIMEOUT_RETRIES", "0")
     assert registry._parallel_map_timeout_retries(ctx) == 0
+
+
+def test_parallel_map_timeout_config_failures_warn_when_fail_open(monkeypatch, tmp_path, caplog):
+    import core.lifecycle.janitor_lifecycle as lifecycle_mod
+
+    registry = LifecycleRegistry()
+    ctx = RoutineContext(cfg=_make_cfg(False), dry_run=True, workspace=tmp_path)
+    monkeypatch.setattr(lifecycle_mod, "is_fail_hard_enabled", lambda: False)
+    monkeypatch.setattr(
+        lifecycle_mod,
+        "get_parallel_config",
+        lambda _cfg: (_ for _ in ()).throw(RuntimeError("parallel config unavailable")),
+    )
+
+    with caplog.at_level(logging.WARNING, logger="core.lifecycle.janitor_lifecycle"):
+        assert registry._parallel_map_timeout_seconds(ctx, default_seconds=12.5) == 12.5
+        assert registry._parallel_map_timeout_retries(ctx, default_retries=3) == 3
+
+    assert "Failed to read lifecycle parallel timeout config" in caplog.text
+    assert "Failed to read lifecycle parallel timeout retry config" in caplog.text
+    assert "parallel config unavailable" in caplog.text
 
 
 def test_lifecycle_registry_uses_prepass_workers_from_config(monkeypatch, tmp_path):
@@ -1142,6 +1193,40 @@ def test_resolve_adapter_maintenance_module_raises_config_failure_when_fail_hard
 
     with pytest.raises(RuntimeError, match="bad plugin config"):
         lifecycle_mod._resolve_adapter_maintenance_module()
+
+
+def test_resolve_adapter_maintenance_module_warns_on_fail_open(monkeypatch, caplog):
+    import core.lifecycle.janitor_lifecycle as lifecycle_mod
+
+    class _BadPath:
+        def __init__(self, *_args):
+            pass
+
+        def resolve(self):
+            return self
+
+        @property
+        def parents(self):
+            return [self, self, self]
+
+        def __truediv__(self, _other):
+            raise RuntimeError("bad adaptors path")
+
+    monkeypatch.setattr(lifecycle_mod, "is_fail_hard_enabled", lambda: False)
+    monkeypatch.setattr(
+        "config.get_config",
+        lambda: (_ for _ in ()).throw(RuntimeError("bad plugin config")),
+    )
+    monkeypatch.setattr(lifecycle_mod, "Path", _BadPath)
+
+    with caplog.at_level(logging.WARNING, logger="core.lifecycle.janitor_lifecycle"):
+        resolved = lifecycle_mod._resolve_adapter_maintenance_module(default_module="fallback.module")
+
+    assert resolved == "fallback.module"
+    assert "Failed to resolve adapter maintenance module from plugin config" in caplog.text
+    assert "Failed to discover adapter maintenance module from local tree" in caplog.text
+    assert "bad plugin config" in caplog.text
+    assert "bad adaptors path" in caplog.text
 
 
 def test_lifecycle_env_module_can_register_write_resources(monkeypatch, tmp_path):
