@@ -8686,6 +8686,8 @@ def _retry_missing_embeddings() -> int:
             logger.info("[daemon] embed-retry: backfilled %d missing embedding(s)", count)
         return count
     except Exception as e:
+        if _fail_hard_enabled():
+            raise RuntimeError("Missing embedding retry failed while failHard is enabled") from e
         logger.debug("[daemon] embed-retry failed: %s", e)
         return 0
 
@@ -8757,6 +8759,8 @@ def daemon_loop(poll_interval: float = 5.0, idle_check_interval: float = 300.0) 
                 try:
                     _retry_missing_embeddings()
                 except Exception as e:
+                    if _fail_hard_enabled():
+                        raise RuntimeError("embed retry failed while failHard is enabled") from e
                     logger.debug("embed retry failed: %s", e)
                 last_embed_retry_check = now
 

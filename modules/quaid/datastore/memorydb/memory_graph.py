@@ -4117,7 +4117,11 @@ def _guided_relation_chain_prefix_maps(
                     continue
                 try:
                     next_node = graph.get_node(next_id)
-                except Exception:
+                except Exception as exc:
+                    if _is_fail_hard_mode():
+                        raise RuntimeError(
+                            f"Failed to load relation-chain node {next_id!r} while failHard is enabled"
+                        ) from exc
                     continue
                 if not next_node:
                     continue
@@ -5800,7 +5804,11 @@ def graph_aware_recall(
                             path,
                         )
                         relation_chain_sequence_by_node[node.id] = relation_sequence
-        except Exception:
+        except Exception as exc:
+            if _is_fail_hard_mode():
+                raise RuntimeError(
+                    "Guided relation-chain prefix expansion failed while failHard is enabled"
+                ) from exc
             relation_chain_path_by_node = {}
             relation_chain_sequence_by_node = {}
 

@@ -303,6 +303,64 @@ def test_relation_chain_edge_load_failure_respects_failhard(caplog):
     assert "Failed to load outbound relation-chain edges" in caplog.text
 
 
+def test_guided_relation_chain_node_load_failure_respects_failhard(caplog):
+    import datastore.memorydb.memory_graph as mg
+
+    edge = SimpleNamespace(id="edge-a", relation="sibling_of", target_id="node-b", source_id="node-a")
+
+    def get_edges(_node_id, direction="out"):
+        return [edge] if direction == "out" else []
+
+    graph = SimpleNamespace(
+        get_edges=get_edges,
+        get_node=MagicMock(side_effect=sqlite3.OperationalError("node scan down")),
+    )
+    with patch.object(mg, "_is_fail_hard_mode", return_value=True):
+        with pytest.raises(RuntimeError, match="Failed to load relation-chain node"):
+            mg._guided_relation_chain_prefix_maps(
+                graph,
+                owner_anchor_id="node-a",
+                owner_anchor_name="Owner",
+                relation_groups=["sibling"],
+            )
+
+    with patch.object(mg, "_is_fail_hard_mode", return_value=False), caplog.at_level("WARNING"):
+        assert mg._guided_relation_chain_prefix_maps(
+            graph,
+            owner_anchor_id="node-a",
+            owner_anchor_name="Owner",
+            relation_groups=["sibling"],
+        ) == ({}, {})
+
+
+def test_graph_aware_recall_guided_relation_chain_failure_respects_failhard(tmp_path):
+    import datastore.memorydb.memory_graph as mg
+
+    graph, _ = _make_graph(tmp_path)
+    owner = mg.Node.create("Person", "Test Owner")
+    graph.add_node(owner, embed=False)
+    fake_cfg = SimpleNamespace(
+        users=SimpleNamespace(
+            identities={"test-owner": SimpleNamespace(person_node_name="Test Owner")}
+        )
+    )
+
+    with patch.object(mg, "get_graph", return_value=graph), \
+         patch.object(mg, "_HAS_CONFIG", True), \
+         patch.object(mg, "_get_memory_config", return_value=fake_cfg), \
+         patch.object(mg, "extract_entities_from_text", return_value=[]), \
+         patch.object(mg, "recall", return_value=([], {"selected_path": "vector"})), \
+         patch.object(mg, "_guided_relation_chain_prefix_maps", side_effect=RuntimeError("edge scan down")), \
+         patch.object(mg, "_is_fail_hard_mode", return_value=True):
+        with pytest.raises(RuntimeError, match="Guided relation-chain prefix expansion failed"):
+            mg.graph_aware_recall(
+                "what does my partner's brother do",
+                owner_id="test-owner",
+                limit=4,
+                graph_depth=2,
+            )
+
+
 def test_graph_mentioned_fact_nodes_failure_respects_failhard(caplog):
     import datastore.memorydb.memory_graph as mg
 
