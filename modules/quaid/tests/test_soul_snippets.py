@@ -869,7 +869,7 @@ class TestDistillation:
                 {
                     "reasoning": "Patterns matter more than runs.",
                     "additions": [
-                        {"text": "Today we fixed a bug in M7.", "after_section": "What I've Learned Here"},
+                        {"text": "2026-02-10 fixed a bug in M7.", "after_section": "What I've Learned Here"},
                         {"text": "Recurring runtime validation beats source-code assumptions.", "after_section": "What the World Is Teaching Me"},
                         {"text": "Edits should preserve the invariant, not the incident.", "after_section": "What I've Learned Here"},
                         {"text": "A third valid addition that should be capped.", "after_section": "END"},
@@ -894,6 +894,33 @@ class TestDistillation:
         ]
         assert result["edits"] == [{"old_text": "old", "new_text": "new", "reason": "clearer"}]
         assert result["captured_dates"] == ["2026-02-10", "2026-02-11"]
+
+    def test_normalize_distillation_result_keeps_temporal_words_as_content(self, workspace_dir, mock_config):
+        with patch("datastore.insightdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.insightdb.soul_snippets import _normalize_distillation_result
+            result = _normalize_distillation_result(
+                "USER.md",
+                {
+                    "reasoning": "Temporal wording can still be durable content.",
+                    "additions": [
+                        {"text": "Today the owner trusts explicit validation over optimism.", "after_section": "Patterns"},
+                        {"text": "Cette semaine, la collaboration privilégie les preuves directes.", "after_section": "Patterns"},
+                    ],
+                    "edits": [],
+                    "captured_dates": [],
+                },
+            )
+
+        assert result["additions"] == [
+            {
+                "text": "Today the owner trusts explicit validation over optimism.",
+                "after_section": "Patterns",
+            },
+            {
+                "text": "Cette semaine, la collaboration privilégie les preuves directes.",
+                "after_section": "Patterns",
+            },
+        ]
 
     def test_apply_distillation_additions(self, workspace_dir, mock_config):
         parent = workspace_dir / "identity" / "SOUL.md"
