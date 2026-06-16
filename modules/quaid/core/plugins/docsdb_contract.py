@@ -317,7 +317,7 @@ def handle_project_docs_update_request(event: Dict[str, Any]) -> Dict[str, Any]:
                 logger.warning("project-docs update index failed for %s: %s", project, exc)
                 raise
             logger.warning("project-docs update index failed for %s (fail-soft): %s", project, exc)
-            metrics["errors"] = int(metrics.get("errors", 0) or 0) + 1
+            metrics["errors"] = int(metrics.get("errors", 0)) + 1
             metrics["index_error"] = str(exc)
 
     return {
