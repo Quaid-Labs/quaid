@@ -84,7 +84,10 @@ def _get_config_value(getter, default):
     """Safely get config value with fallback."""
     try:
         return getter()
-    except Exception:
+    except Exception as exc:
+        logger.warning("memorydb maintenance config read failed; using default %r: %s", default, exc)
+        if is_fail_hard_enabled():
+            raise
         return default
 
 # Thresholds - now loaded from config/config.json

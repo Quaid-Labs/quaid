@@ -125,12 +125,14 @@ def _get_extract_publish_batch_size() -> int:
         return DEFAULT_EXTRACT_PUBLISH_BATCH_SIZE
     try:
         size = int(raw)
-    except Exception:
+    except Exception as exc:
         logger.warning(
             "[datastore-memorydb] invalid QUAID_EXTRACT_PUBLISH_BATCH_SIZE=%r; defaulting to %d",
             raw,
             DEFAULT_EXTRACT_PUBLISH_BATCH_SIZE,
         )
+        if is_fail_hard_enabled():
+            raise RuntimeError(f"Invalid QUAID_EXTRACT_PUBLISH_BATCH_SIZE={raw!r}") from exc
         return DEFAULT_EXTRACT_PUBLISH_BATCH_SIZE
     return max(1, size)
 
@@ -832,6 +834,8 @@ def run_extraction_publish_payload(
                             e,
                             exc_info=True,
                         )
+                        if fail_hard_enabled():
+                            raise
         return fact_entry["status"] == "blocked"
 
     def _begin_publish_batch_write(write_conn: Any, *, batch_index: int) -> None:

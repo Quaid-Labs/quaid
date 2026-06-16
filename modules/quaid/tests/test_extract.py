@@ -5180,6 +5180,15 @@ class TestExtractFromTranscript:
         assert timestamp != "not-a-clock"
         assert timestamp.endswith("+00:00")
 
+    def test_extract_publish_batch_size_invalid_env_raises_under_failhard(self, monkeypatch):
+        from datastore.memorydb import extraction_publish
+
+        monkeypatch.setenv("QUAID_EXTRACT_PUBLISH_BATCH_SIZE", "not-an-int")
+        monkeypatch.setattr("datastore.memorydb.extraction_publish.is_fail_hard_enabled", lambda: True)
+
+        with pytest.raises(RuntimeError, match="Invalid QUAID_EXTRACT_PUBLISH_BATCH_SIZE"):
+            extraction_publish._get_extract_publish_batch_size()
+
     def _run_direct_extraction_publish(self, result, memory_service, *, fail_hard_enabled):
         from datastore.memorydb.extraction_publish import run_extraction_publish_payload
 
@@ -5388,6 +5397,80 @@ class TestExtractFromTranscript:
         assert payload["facts_stored"] == 1
         assert svc.store_calls[0]["_dedup_rowid_max"] == 7
         assert "Failed snapshotting publish batch rowid" in caplog.text
+
+    def test_extraction_publish_edge_failure_raises_under_failhard(self, monkeypatch):
+        monkeypatch.setattr(
+            "datastore.memorydb.extraction_publish.get_config",
+            lambda: SimpleNamespace(retrieval=SimpleNamespace(domains={"personal": "Personal facts"})),
+        )
+        write_conn = MagicMock()
+        write_conn.execute.return_value.fetchone.return_value = (0,)
+
+        class _MemoryService:
+            def warm_embeddings(self, texts, *, timeout_s=None):
+                return {
+                    "requested": len(texts),
+                    "unique": len(set(texts)),
+                    "cache_hits": 0,
+                    "warmed": len(texts),
+                    "failed": 0,
+                }
+
+            def batch_write(self):
+                return nullcontext(write_conn)
+
+            def store(self, **_kwargs):
+                return {"id": "fact-1", "status": "created", "dedup_telemetry": {}}
+
+            def create_edge(self, **_kwargs):
+                raise RuntimeError("edge write failed")
+
+        payload = self._raw_fact_publish_payload()
+        payload["raw_facts"][0]["edges"] = [
+            {"subject": "Maya", "relation": "uses", "object": "blue notebook"}
+        ]
+
+        with pytest.raises(RuntimeError, match="edge write failed"):
+            self._run_direct_extraction_publish(payload, _MemoryService(), fail_hard_enabled=lambda: True)
+
+    def test_extraction_publish_edge_failure_logs_and_continues_when_fail_open(self, monkeypatch, caplog):
+        monkeypatch.setattr(
+            "datastore.memorydb.extraction_publish.get_config",
+            lambda: SimpleNamespace(retrieval=SimpleNamespace(domains={"personal": "Personal facts"})),
+        )
+        write_conn = MagicMock()
+        write_conn.execute.return_value.fetchone.return_value = (0,)
+
+        class _MemoryService:
+            def warm_embeddings(self, texts, *, timeout_s=None):
+                return {
+                    "requested": len(texts),
+                    "unique": len(set(texts)),
+                    "cache_hits": 0,
+                    "warmed": len(texts),
+                    "failed": 0,
+                }
+
+            def batch_write(self):
+                return nullcontext(write_conn)
+
+            def store(self, **_kwargs):
+                return {"id": "fact-1", "status": "created", "dedup_telemetry": {}}
+
+            def create_edge(self, **_kwargs):
+                raise RuntimeError("edge write failed")
+
+        payload = self._raw_fact_publish_payload()
+        payload["raw_facts"][0]["edges"] = [
+            {"subject": "Maya", "relation": "uses", "object": "blue notebook"}
+        ]
+        caplog.set_level("WARNING")
+
+        self._run_direct_extraction_publish(payload, _MemoryService(), fail_hard_enabled=lambda: False)
+
+        assert payload["facts_stored"] == 1
+        assert payload["edges_created"] == 0
+        assert "edge failed for Maya --uses--> blue notebook" in caplog.text
 
     @patch("ingest.extract._memory.store")
     def test_apply_extracted_payloads_passes_temporal_provenance_to_store(self, mock_store):

@@ -36,6 +36,28 @@ def test_default_owner_fallback_and_fail_hard():
             maintenance_ops._default_owner_id()
 
 
+def test_get_config_value_logs_and_returns_default_when_fail_open(caplog):
+    caplog.set_level("WARNING")
+
+    with patch.object(maintenance_ops, "is_fail_hard_enabled", return_value=False):
+        value = maintenance_ops._get_config_value(
+            lambda: (_ for _ in ()).throw(RuntimeError("config failed")),
+            "fallback",
+        )
+
+    assert value == "fallback"
+    assert "memorydb maintenance config read failed" in caplog.text
+
+
+def test_get_config_value_raises_when_failhard():
+    with patch.object(maintenance_ops, "is_fail_hard_enabled", return_value=True):
+        with pytest.raises(RuntimeError, match="config failed"):
+            maintenance_ops._get_config_value(
+                lambda: (_ for _ in ()).throw(RuntimeError("config failed")),
+                "fallback",
+            )
+
+
 def test_get_last_successful_janitor_completed_at_fail_hard_behavior():
     class _BrokenGraph:
         @contextmanager
