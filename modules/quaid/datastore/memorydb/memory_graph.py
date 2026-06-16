@@ -11452,6 +11452,31 @@ def _run_recall_store_plan(
     phases["store_plan_serial_ms"] = serial_ms
     phases["total_ms"] = wall_ms
     meta["phases_ms"] = phases
+    store_plan_gate_intent = "GENERAL"
+    try:
+        store_plan_gate_intent, _ = classify_intent(query)
+    except Exception:
+        store_plan_gate_intent = "GENERAL"
+    store_plan_include_relation_keywords = not fast_mode
+    store_plan_gate_eval = _evaluate_quality_gate_readiness(
+        query,
+        final_rows,
+        intent=store_plan_gate_intent,
+        limit=limit,
+        include_relation_keywords=store_plan_include_relation_keywords,
+    )
+    quality_gate = dict(meta.get("quality_gate") or {})
+    quality_gate["evaluation"] = store_plan_gate_eval
+    quality_gate["result_count"] = len(final_rows)
+    meta["quality_gate"] = quality_gate
+    meta["memory_quality"] = _summarize_memory_quality(
+        query,
+        final_rows,
+        gate_eval=store_plan_gate_eval,
+        intent=store_plan_gate_intent,
+        limit=limit,
+        include_relation_keywords=store_plan_include_relation_keywords,
+    )
     if not meta.get("turn_details"):
         meta["turn_details"] = [{
             "turn": 1,
@@ -18295,7 +18320,9 @@ def _summarize_memory_quality(
                     "Retrieved memory for this topic looks low-confidence because retrieved evidence "
                     "does not cover all important query terms. Do not assume presupposed events, "
                     "relationships, or missing entities from partial matches; answer only from evidence "
-                    "or say you do not have information."
+                    "or say you do not have information. If the important terms are absent, say the "
+                    "retrieved memory contains no record or evidence that the presupposed event, "
+                    "relationship, participant, or object occurred or exists."
                 )
             else:
                 note = "Retrieved memory for this topic looks low-confidence. Another recall pass may help if exactness matters."

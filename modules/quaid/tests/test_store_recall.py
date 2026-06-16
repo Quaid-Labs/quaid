@@ -7615,6 +7615,60 @@ class TestSourceChunkStorage:
         assert meta["planned_stores"] == ["vector"]
         assert captured["common_kwargs"]["owner_id"] == "test-owner-alpha"
 
+    def test_store_plan_attaches_memory_quality_for_low_query_coverage(self):
+        import datastore.memorydb.memory_graph as mg
+
+        def _fake_vector(_query, **_kwargs):
+            return (
+                [
+                    {
+                        "id": "fact-atlas-storage",
+                        "text": "Atlas uses SQLite for local storage.",
+                        "category": "fact",
+                        "similarity": 0.96,
+                    }
+                ],
+                {
+                    "selected_path": "vector",
+                    "counts": {"final_results": 1},
+                    "phases_ms": {"total_ms": 1},
+                },
+                None,
+            )
+
+        registry = {
+            "vector": {"recall": _fake_vector, "recall_fast": _fake_vector},
+            "docs": {"recall": lambda *_a, **_k: ([], {}, None), "recall_fast": lambda *_a, **_k: ([], {}, None)},
+            "graph": {"recall": lambda *_a, **_k: ([], {}, None), "recall_fast": lambda *_a, **_k: ([], {}, None)},
+            "session_chunks": {"recall": lambda *_a, **_k: ([], {}, None), "recall_fast": lambda *_a, **_k: ([], {}, None)},
+        }
+
+        with patch.object(mg, "_get_recall_store_registry", return_value=registry), \
+             patch.object(
+                 mg,
+                 "_recover_explicit_entity_facet_rows",
+                 return_value=([], {"applied": False}),
+             ):
+            rows, meta, _bundle = mg._run_recall_store_plan(
+                "Which vendor did Atlas approve for the launch?",
+                stores=["vector"],
+                limit=1,
+                owner_id="owner-alpha",
+                min_similarity=0.0,
+                planner_profile="off",
+                planned_queries=["Which vendor did Atlas approve for the launch?"],
+                planner_meta={"planned_stores": ["vector"]},
+                fast_mode=False,
+                common_kwargs={"project": None},
+            )
+
+        assert rows and rows[0]["id"] == "fact-atlas-storage"
+        assert meta["quality_gate"]["evaluation"]["ready"] is False
+        assert meta["quality_gate"]["result_count"] == 1
+        assert meta["memory_quality"]["surface_quality"] == "low"
+        assert "low_query_term_coverage" in meta["memory_quality"]["signals"]
+        assert "no record or evidence" in meta["memory_quality"]["note"]
+
     def test_rrf_shadow_does_not_change_store_plan_ordering_when_active_fusion_disabled(self):
         """Shadow telemetry remains observational when active RRF fusion is disabled."""
         import datastore.memorydb.memory_graph as mg
@@ -14254,6 +14308,7 @@ class TestRecallFastHookInjectContract:
         assert "low_query_term_coverage" in quality["signals"]
         assert "does not cover all important query terms" in quality["note"]
         assert "Do not assume presupposed events" in quality["note"]
+        assert "no record or evidence" in quality["note"]
 
     def test_quality_gate_normalizes_mixed_naive_and_aware_temporal_markers(self):
         import datastore.memorydb.memory_graph as mg
