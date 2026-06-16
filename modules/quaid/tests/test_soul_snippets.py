@@ -2167,6 +2167,28 @@ def test_append_review_telemetry_honors_quaid_now(monkeypatch):
     assert rows[-1]["event"] == "probe"
 
 
+def test_append_review_telemetry_uses_utc_wall_clock_without_quaid_now(monkeypatch):
+    import datastore.insightdb.soul_snippets as soul_snippets
+
+    class _FakeDateTime:
+        @classmethod
+        def now(cls, tz=None):
+            assert tz is soul_snippets.UTC
+            return datetime(2026, 3, 11, 5, 6, 7, tzinfo=tz)
+
+    monkeypatch.delenv("QUAID_NOW", raising=False)
+    monkeypatch.setattr(soul_snippets, "datetime", _FakeDateTime)
+
+    soul_snippets._append_review_telemetry({"event": "probe-no-override"})
+
+    rows = [
+        json.loads(line)
+        for line in soul_snippets._review_telemetry_path().read_text(encoding="utf-8").splitlines()
+    ]
+    assert rows[-1]["ts"] == "2026-03-11T05:06:07Z"
+    assert rows[-1]["event"] == "probe-no-override"
+
+
 # =============================================================================
 # Config parsing tests
 # =============================================================================

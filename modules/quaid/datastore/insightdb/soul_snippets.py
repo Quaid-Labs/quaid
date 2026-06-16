@@ -489,7 +489,11 @@ def _text_snapshot_stats(text: str) -> Dict[str, int]:
 def _append_review_telemetry(event: Dict[str, Any]) -> None:
     path = _review_telemetry_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {"ts": _quaid_now().replace(tzinfo=UTC).isoformat(timespec="seconds").replace("+00:00", "Z")}
+    if os.environ.get("QUAID_NOW", "").strip():
+        timestamp = _quaid_now().replace(tzinfo=UTC)
+    else:
+        timestamp = datetime.now(UTC)
+    payload = {"ts": timestamp.isoformat(timespec="seconds").replace("+00:00", "Z")}
     payload["adapter"] = _runtime_adapter_label()
     payload["instance"] = str(os.environ.get("QUAID_INSTANCE", "") or "").strip()
     payload.update(event)
