@@ -307,6 +307,14 @@ class TestAnthropicLLMProvider:
 # ---------------------------------------------------------------------------
 
 class TestClaudeCodeLLMProvider:
+    def test_init_logs_deprecation_warning(self, caplog):
+        with caplog.at_level("WARNING", logger="lib.providers"):
+            p = ClaudeCodeLLMProvider()
+
+        assert p.get_profiles()["deep"]["model"] == "claude-opus-4-6"
+        assert "ClaudeCodeLLMProvider is deprecated" in caplog.text
+        assert "ClaudeCodeOAuthLLMProvider" in caplog.text
+
     def test_resolve_alias_high(self):
         p = ClaudeCodeLLMProvider(deep_model="claude-opus-4-6")
         assert p._resolve_alias("deep") == "opus"

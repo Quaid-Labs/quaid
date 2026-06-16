@@ -517,6 +517,10 @@ class ClaudeCodeLLMProvider(LLMProvider):
 
     def __init__(self, deep_model: str = "claude-opus-4-6",
                  fast_model: str = "claude-haiku-4-5"):
+        logger.warning(
+            "ClaudeCodeLLMProvider is deprecated; use "
+            "adaptors.claude_code.providers.ClaudeCodeOAuthLLMProvider"
+        )
         self._deep_model = deep_model
         self._fast_model = fast_model
 
