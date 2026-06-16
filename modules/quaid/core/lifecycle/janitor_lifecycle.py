@@ -154,8 +154,30 @@ class LifecycleRegistry:
         timeout_seconds = max(0.001, float(timeout_seconds))
         deadline = time.monotonic() + timeout_seconds
         run_started = time.monotonic()
-        run_id = f"{int(time.time() * 1000)}-{os.getpid()}-{threading.get_ident()}"
+        run_id = f"{int(_now_datetime().timestamp() * 1000)}-{os.getpid()}-{threading.get_ident()}"
         ws_for_telemetry = routines[0][1].workspace
+
+        def _record_task_error(name: str, exc: Exception) -> None:
+            nonlocal failed
+            logger.exception("Parallel lifecycle run failed for %s", name)
+            if is_fail_hard_enabled():
+                raise RuntimeError(f"Parallel lifecycle run failed for {name}") from exc
+            failed += 1
+            results[name] = RoutineResult(errors=[f"Parallel lifecycle run failed for {name}: {exc}"])
+            self._append_parallel_telemetry(
+                ws_for_telemetry,
+                {
+                    "event": "task_error",
+                    "run_id": run_id,
+                    "routine": name,
+                    "elapsed_seconds": round(
+                        max(0.0, time.monotonic() - float(task_started_monotonic.get(name, run_started))),
+                        3,
+                    ),
+                    "error": str(exc),
+                },
+            )
+
         self._append_parallel_telemetry(
             ws_for_telemetry,
             {
@@ -242,26 +264,7 @@ class LifecycleRegistry:
                                 },
                             )
                         except Exception as exc:  # pragma: no cover
-                            failed += 1
-                            results[name] = RoutineResult(
-                                errors=[f"Parallel lifecycle run failed for {name}: {exc}"]
-                            )
-                            self._append_parallel_telemetry(
-                                ws_for_telemetry,
-                                {
-                                    "event": "task_error",
-                                    "run_id": run_id,
-                                    "routine": name,
-                                    "elapsed_seconds": round(
-                                        max(
-                                            0.0,
-                                            time.monotonic() - float(task_started_monotonic.get(name, run_started)),
-                                        ),
-                                        3,
-                                    ),
-                                    "error": str(exc),
-                                },
-                            )
+                            _record_task_error(name, exc)
                     continue
                 name = fut_to_name[done]
                 pending.discard(done)
@@ -281,21 +284,7 @@ class LifecycleRegistry:
                         },
                     )
                 except Exception as exc:  # pragma: no cover
-                    failed += 1
-                    results[name] = RoutineResult(errors=[f"Parallel lifecycle run failed for {name}: {exc}"])
-                    self._append_parallel_telemetry(
-                        ws_for_telemetry,
-                        {
-                            "event": "task_error",
-                            "run_id": run_id,
-                            "routine": name,
-                            "elapsed_seconds": round(
-                                max(0.0, time.monotonic() - float(task_started_monotonic.get(name, run_started))),
-                                3,
-                            ),
-                            "error": str(exc),
-                        },
-                    )
+                    _record_task_error(name, exc)
         self._append_parallel_telemetry(
             ws_for_telemetry,
             {

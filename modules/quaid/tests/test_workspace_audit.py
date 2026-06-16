@@ -99,7 +99,8 @@ class TestGetMonitoredFiles:
     def test_fallback_when_config_missing(self):
         """When config loading fails and no gateway globs, falls back to hardcoded list."""
         with patch("core.lifecycle.workspace_audit.get_config", side_effect=Exception("config not found")), \
-             patch("core.lifecycle.workspace_audit.get_bootstrap_markdown_globs", return_value=[]):
+             patch("core.lifecycle.workspace_audit.get_bootstrap_markdown_globs", return_value=[]), \
+             patch("core.lifecycle.workspace_audit.is_fail_hard_enabled", return_value=False):
             from core.lifecycle.workspace_audit import get_monitored_files
             result = get_monitored_files()
             # Fallback should have the standard files
@@ -111,6 +112,30 @@ class TestGetMonitoredFiles:
             assert "IDENTITY.md" in result
             assert "HEARTBEAT.md" in result
             assert "TODO.md" in result
+
+    def test_config_failure_raises_when_fail_hard(self):
+        with patch("core.lifecycle.workspace_audit.get_config", side_effect=Exception("config not found")), \
+             patch("core.lifecycle.workspace_audit.is_fail_hard_enabled", return_value=True):
+            from core.lifecycle.workspace_audit import get_monitored_files
+
+            with pytest.raises(Exception, match="config not found"):
+                get_monitored_files()
+
+    def test_base_context_failure_raises_when_fail_hard(self):
+        cfg = _make_config_with_core_md(files={"AGENTS.md": {"purpose": "System ops", "maxLines": 350}})
+
+        class _Adapter:
+            def get_base_context_files(self):
+                raise RuntimeError("base context broken")
+
+        with patch("core.lifecycle.workspace_audit.get_config", return_value=cfg), \
+             patch("core.lifecycle.workspace_audit.get_bootstrap_markdown_globs", return_value=[]), \
+             patch("lib.adapter.get_adapter", return_value=_Adapter()), \
+             patch("core.lifecycle.workspace_audit.is_fail_hard_enabled", return_value=True):
+            from core.lifecycle.workspace_audit import get_monitored_files
+
+            with pytest.raises(RuntimeError, match="base context broken"):
+                get_monitored_files()
 
     def test_fallback_when_files_empty(self):
         """Empty files dict in config with no gateway globs triggers fallback."""
@@ -126,7 +151,8 @@ class TestGetMonitoredFiles:
     def test_fallback_has_correct_max_lines(self):
         """Hardcoded fallback has sensible maxLines defaults."""
         with patch("core.lifecycle.workspace_audit.get_config", side_effect=Exception("err")), \
-             patch("core.lifecycle.workspace_audit.get_bootstrap_markdown_globs", return_value=[]):
+             patch("core.lifecycle.workspace_audit.get_bootstrap_markdown_globs", return_value=[]), \
+             patch("core.lifecycle.workspace_audit.is_fail_hard_enabled", return_value=False):
             from core.lifecycle.workspace_audit import get_monitored_files
             result = get_monitored_files()
             assert result["SOUL.md"]["maxLines"] == 80
@@ -637,6 +663,30 @@ class TestReviewDecisionApplyLocking:
         assert "old content" not in (iroot / "A.md").read_text()
         assert sum(1 for mode in lock_modes if mode & fcntl.LOCK_EX) >= 1
         assert lock_modes.count(fcntl.LOCK_UN) >= 1
+
+    def test_apply_review_decisions_raises_decision_error_when_fail_hard(self, tmp_path):
+        from core.lifecycle.workspace_audit import apply_review_decisions
+
+        cfg = _make_config_with_core_md(files={"A.md": {"purpose": "A", "maxLines": 100}})
+        decisions_data = {
+            "decisions": [
+                {
+                    "file": "A.md",
+                    "section": "Move Me",
+                    "action": "MOVE_TO_DOCS",
+                    "target": "docs/move-me.md",
+                    "reason": "belongs in docs",
+                }
+            ]
+        }
+
+        with _adapter_patch(tmp_path) as iroot, \
+             patch("core.lifecycle.workspace_audit.get_config", return_value=cfg), \
+             patch("core.lifecycle.workspace_audit.is_fail_hard_enabled", return_value=True):
+            (iroot / "A.md").write_text("# A\n\n## Move Me\n\ncontent\n", encoding="utf-8")
+            with patch("pathlib.Path.write_text", side_effect=OSError("disk full")):
+                with pytest.raises(RuntimeError, match="workspace audit decision apply failed"):
+                    apply_review_decisions(dry_run=False, decisions_data=decisions_data)
 
     def test_move_to_docs_migration_note_honors_quaid_now(self, tmp_path, monkeypatch):
         from core.lifecycle.workspace_audit import apply_review_decisions

@@ -280,6 +280,8 @@ def get_monitored_files() -> Dict[str, Dict[str, Any]]:
             if hasattr(core_md, 'files') and core_md.files:
                 files.update(core_md.files)
     except Exception as e:
+        if is_fail_hard_enabled():
+            raise
         logger.warning(f"Could not load coreMarkdown config: {e}")
 
     # Discover bootstrap files from adapter config (single source of truth)
@@ -315,6 +317,8 @@ def get_monitored_files() -> Dict[str, Dict[str, Any]]:
             if path_str not in files:
                 files[path_str] = config
     except Exception as e:
+        if is_fail_hard_enabled():
+            raise
         logger.debug(f"Could not load base context files: {e}")
 
     if not files:
@@ -800,6 +804,10 @@ def apply_review_decisions(dry_run: bool = True,
                         stats["trimmed"] += 1
 
                 except Exception as e:
+                    if is_fail_hard_enabled():
+                        raise RuntimeError(
+                            f"workspace audit decision apply failed for '{section}' in {filename}"
+                        ) from e
                     logger.error(f"Error processing '{section}' in {filename}: {e}")
                     print(f"  Error processing '{section}': {e}")
                     stats["errors"] += 1

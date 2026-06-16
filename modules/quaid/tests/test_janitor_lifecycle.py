@@ -1,5 +1,6 @@
 import importlib
 import json
+import logging
 import sqlite3
 import sys
 import threading
@@ -568,6 +569,27 @@ def test_lifecycle_parallel_telemetry_disabled_ignores_quaid_now(monkeypatch, tm
     assert not (tmp_path / "logs").exists()
 
 
+def test_lifecycle_run_many_run_id_honors_quaid_now(monkeypatch, tmp_path):
+    import core.lifecycle.janitor_lifecycle as lifecycle_mod
+
+    registry = LifecycleRegistry()
+    registry.register("noop", lambda _ctx: RoutineResult(metrics={"ok": 1}))
+    monkeypatch.setattr(lifecycle_mod, "_LIFECYCLE_PARALLEL_TELEMETRY_ENABLED", True)
+    monkeypatch.setenv("QUAID_NOW", "2026-03-11T05:06:07Z")
+
+    result = registry.run_many(
+        [("noop", RoutineContext(cfg=_make_cfg(False), dry_run=True, workspace=tmp_path))],
+        max_workers=1,
+    )
+
+    assert result["noop"].metrics == {"ok": 1}
+    telemetry_path = tmp_path / "logs" / "janitor" / "lifecycle-parallel-telemetry.jsonl"
+    rows = [json.loads(line) for line in telemetry_path.read_text().splitlines()]
+    run_ids = {row["run_id"] for row in rows if "run_id" in row}
+    assert len(run_ids) == 1
+    assert next(iter(run_ids)).startswith("1773205567000-")
+
+
 def test_lifecycle_registry_run_many_raises_config_failure_when_fail_hard(monkeypatch, tmp_path):
     import core.lifecycle.janitor_lifecycle as lifecycle_mod
 
@@ -585,6 +607,39 @@ def test_lifecycle_registry_run_many_raises_config_failure_when_fail_hard(monkey
             [("noop", RoutineContext(cfg=_make_cfg(False), dry_run=True, workspace=tmp_path))],
             max_workers=1,
         )
+
+
+def test_lifecycle_registry_run_many_logs_future_failure_when_fail_open(monkeypatch, tmp_path, caplog):
+    import core.lifecycle.janitor_lifecycle as lifecycle_mod
+
+    registry = LifecycleRegistry()
+    registry.register("boom", lambda _ctx: (_ for _ in ()).throw(RuntimeError("routine crashed")))
+    monkeypatch.setattr(lifecycle_mod, "is_fail_hard_enabled", lambda: False)
+
+    with caplog.at_level(logging.ERROR, logger="core.lifecycle.janitor_lifecycle"):
+        result = registry.run_many(
+            [("boom", RoutineContext(cfg=_make_cfg(False), dry_run=True, workspace=tmp_path))],
+            max_workers=1,
+        )
+
+    assert "Parallel lifecycle run failed for boom" in caplog.text
+    assert "routine crashed" in result["boom"].errors[0]
+
+
+def test_lifecycle_registry_run_many_raises_future_failure_when_fail_hard(monkeypatch, tmp_path):
+    import core.lifecycle.janitor_lifecycle as lifecycle_mod
+
+    registry = LifecycleRegistry()
+    registry.register("boom", lambda _ctx: (_ for _ in ()).throw(RuntimeError("routine crashed")))
+    monkeypatch.setattr(lifecycle_mod, "is_fail_hard_enabled", lambda: True)
+
+    with pytest.raises(RuntimeError, match="Parallel lifecycle run failed for boom") as exc:
+        registry.run_many(
+            [("boom", RoutineContext(cfg=_make_cfg(False), dry_run=True, workspace=tmp_path))],
+            max_workers=1,
+        )
+
+    assert "routine crashed" in str(exc.value.__cause__)
 
 
 def test_lifecycle_registry_run_many_times_out_pending_tasks(tmp_path):
