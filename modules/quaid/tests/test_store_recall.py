@@ -19751,13 +19751,18 @@ class TestRecallFastHookInjectContract:
 
         assert captured == {"node_id": "owner-node", "relations": None, "depth": 2}
 
-    def test_classify_intent_prefers_relation_for_broad_family_prompt(self):
+    def test_classify_intent_is_neutral_without_english_lexical_gates(self):
         import datastore.memorydb.memory_graph as mg
 
-        intent, boosts = mg.classify_intent("What do you know about my family?")
+        english_intent, english_boosts = mg.classify_intent("What do you know about my family?")
+        japanese_intent, japanese_boosts = mg.classify_intent("美玲の家族について何を覚えている？")
 
-        assert intent == "RELATION"
-        assert boosts.get("Person", 0) > 1.0
+        assert english_intent == "GENERAL"
+        assert english_boosts == {}
+        assert japanese_intent == "GENERAL"
+        assert japanese_boosts == {}
+
+
     def test_query_fit_multiplier_uses_structural_identity_category(self):
         import datastore.memorydb.memory_graph as mg
 

@@ -6932,93 +6932,14 @@ def _prefer_user_provenance_for_full_fit_rows(
 # Intent-Aware Query Classification
 # ==========================================================================
 
-# Intent categories with regex patterns and type boosts
-_INTENT_PATTERNS = {
-    "WHO": {
-        "patterns": [r"\bwho\b", r"\bwhose\b", r"\bwhom\b", r"person\b", r"people\b", r"family\b", r"friend\b", r"\bneighbou?r\b", r"\bnext door\b"],
-        "type_boosts": {"Person": 1.3, "Fact": 1.0},
-    },
-    "WHEN": {
-        "patterns": [
-            r"\bwhen\b", r"\bdate\b", r"\btime\b", r"\byear\b", r"\bmonth\b", r"\bday\b",
-            r"\bschedule\b", r"\bbirthday\b", r"\banniversary\b",
-            r"\brecent\b", r"\brecently\b", r"\blatest\b",
-        ],
-        "type_boosts": {"Event": 1.3, "Fact": 1.0},
-    },
-    "WHERE": {
-        "patterns": [r"\bwhere\b", r"\blocation\b", r"\baddress\b", r"\blive[sd]?\b", r"\bcity\b", r"\bcountry\b"],
-        "type_boosts": {"Place": 1.3, "Fact": 1.0},
-    },
-    "WHAT": {
-        "patterns": [r"\bwhat\b", r"\bwhich\b", r"\btell me about\b", r"\bdescribe\b"],
-        "type_boosts": {},  # No specific boost
-    },
-    "PREFERENCE": {
-        "patterns": [r"\blike[sd]?\b", r"\bprefer[s]?\b", r"\bfavorite\b", r"\bhate[sd]?\b", r"\bavoid\b", r"\benjoy\b"],
-        "type_boosts": {"Preference": 1.3},
-    },
-    "RELATION": {
-        "patterns": [r"\brelated to\b", r"\bconnect", r"\brelationship\b", r"\bmarried\b", r"\bspouse\b", r"\bchild\b", r"\bparent\b", r"\bsibling\b", r"\bfamily\b", r"\brelative\b", r"\bpet\b", r"\bneighbou?r\b", r"\bnext door\b"],
-        "type_boosts": {"Person": 1.2},
-    },
-    "WHY": {
-        "patterns": [r"\bwhy\b", r"\breason\b", r"\bcause[sd]?\b", r"\bbecause\b", r"\bled to\b", r"\bresult(?:ed)? in\b", r"\bdue to\b", r"\bhow come\b"],
-        "type_boosts": {"Event": 1.2, "Fact": 1.1},
-    },
-    "PROJECT": {
-        "patterns": [
-            r"\btech\s*stack\b", r"\bdatabase\b", r"\bschema\b", r"\bapi\b", r"\bendpoint\b",
-            r"\bmiddleware\b", r"\bframework\b", r"\barchitecture\b", r"\bdeployment\b",
-            r"\bimplementation\b", r"\bcode\b", r"\bfunction\b", r"\bfile\b", r"\bmodule\b",
-            r"\bpackage\b", r"\blibrary\b", r"\bdependenc", r"\broute\b", r"\bserver\b",
-            r"\bfrontend\b", r"\bbackend\b", r"\btesting\b", r"\btest suite\b",
-            r"\bbug\b", r"\bfeature\b", r"\brefactor\b", r"\bcommit\b", r"\bbranch\b",
-            r"\bproject\b", r"\bapp\b", r"\bportfolio\b",
-        ],
-        "type_boosts": {"Fact": 1.0, "Decision": 1.2},
-    },
-}
-
-
 def classify_intent(query: str) -> Tuple[str, Dict[str, float]]:
-    """Classify query intent using regex patterns.
+    """Return the neutral intent.
 
-    Returns:
-        (intent_name, type_boosts) where type_boosts maps node type to multiplier.
+    Semantic intent routing belongs to the planner/fanout layer. This helper keeps
+    the legacy API shape without applying English-only lexical classifiers in the
+    deliberate recall path.
     """
-    query_lower = query.lower()
-    best_intent = "GENERAL"
-    best_score = 0
-    best_boosts: Dict[str, float] = {}
-    relation_favor = bool(
-        re.search(
-            r"\b(family|relative|sibling|brother|sister|parent|child|son|daughter|nephew|niece|spouse|husband|wife)\b",
-            query_lower,
-            re.IGNORECASE,
-        )
-    )
-
-    for intent_name, config in _INTENT_PATTERNS.items():
-        score = sum(1 for p in config["patterns"] if re.search(p, query_lower, re.IGNORECASE))
-        if score > best_score:
-            best_score = score
-            best_intent = intent_name
-            best_boosts = config["type_boosts"]
-            continue
-        if (
-            score == best_score
-            and relation_favor
-            and intent_name == "RELATION"
-            and best_intent == "WHO"
-        ):
-            # Broad kinship prompts often score WHO and RELATION equally.
-            # Prefer RELATION so graph-aware recall planning can include
-            # sibling/spouse/children clusters by default.
-            best_intent = intent_name
-            best_boosts = config["type_boosts"]
-
-    return best_intent, best_boosts
+    return "GENERAL", {}
 
 
 def _expand_low_signal_query(query: str, intent: str) -> str:
