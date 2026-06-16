@@ -2271,6 +2271,28 @@ class TestHookInjectRecallResilience:
         assert "美玲は青い万年筆を毎朝使う" in context
         assert context.count("万年筆") == 1
 
+    def test_recall_fast_close_competitor_accented_latin_words_do_not_bigram_dedupe(self):
+        from core.interface import hooks
+
+        rows = [
+            {
+                "text": "Jürgen liebt München morgens",
+                "similarity": 1.0,
+                "category": "fact",
+            },
+            {
+                "text": "Jürgen wohnt in München abends",
+                "similarity": 0.99,
+                "category": "fact",
+            },
+        ]
+
+        deduped = hooks._dedupe_close_competitor_memories(rows)
+        tokens = hooks._close_competitor_memory_tokens(rows[0]["text"])
+
+        assert len(deduped) == 2
+        assert not any(token.startswith("bg:") for token in tokens)
+
     def test_hook_inject_writes_preinject_evidence_for_memory_context(
         self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
     ):

@@ -375,12 +375,34 @@ def _close_competitor_memory_tokens(text: str) -> set[str]:
     tokens: set[str] = set()
     current: List[str] = []
 
+    def is_compact_script_token(token: str) -> bool:
+        compact_prefixes = (
+            "CJK ",
+            "HIRAGANA",
+            "KATAKANA",
+            "HANGUL",
+            "THAI",
+            "LAO",
+            "KHMER",
+            "MYANMAR",
+        )
+        for ch in token:
+            if not ch.isalpha():
+                continue
+            try:
+                name = unicodedata.name(ch)
+            except ValueError:
+                continue
+            if name.startswith(compact_prefixes):
+                return True
+        return False
+
     def flush() -> None:
         if not current:
             return
         token = "".join(current)
         tokens.add(token)
-        if any(ord(ch) > 127 for ch in token) and len(token) >= 2:
+        if is_compact_script_token(token) and len(token) >= 2:
             for idx in range(len(token) - 1):
                 tokens.add(f"bg:{token[idx:idx + 2]}")
         current.clear()
