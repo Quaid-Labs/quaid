@@ -83,7 +83,10 @@ def _source_date(value: Any) -> Optional[str]:
         return datetime.fromisoformat(raw.replace("Z", "+00:00")).date().isoformat()
     except ValueError:
         match = re.search(r"\b(20\d{2}-\d{2}-\d{2})\b", raw)
-        return match.group(1) if match else None
+        if match:
+            return match.group(1)
+        logger.warning("failed to parse session source date %r", raw)
+        return None
 
 
 def _json_list(value: Any) -> str:
@@ -125,7 +128,12 @@ def _stale_lock(path: str) -> bool:
         return False
     except PermissionError:
         return False
-    except (FileNotFoundError, ValueError, ProcessLookupError):
+    except FileNotFoundError:
+        return True
+    except ValueError as exc:
+        logger.warning("sessiondb lock file %s contains invalid pid: %s", path, exc)
+        return True
+    except ProcessLookupError:
         return True
 
 
@@ -641,7 +649,7 @@ def store_session_source_text(
         try:
             os.unlink(lock_file)
         except FileNotFoundError:
-            pass
+            logger.debug("sessiondb lock file already removed for session_id=%s: %s", sid, lock_file)
         except OSError as exc:
             logger.error("failed to remove sessiondb lock file %s for session_id=%s: %s", lock_file, sid, exc)
 

@@ -97,6 +97,28 @@ def test_store_session_source_text_malformed_quaid_now_honors_failhard(monkeypat
     assert out["chunk"]["created_at"] != "not-a-clock"
 
 
+def test_source_date_logs_unparseable_value(caplog):
+    with caplog.at_level("WARNING", logger="datastore.sessiondb.session_store"):
+        assert session_store._source_date("not a date") is None
+
+    assert "failed to parse session source date 'not a date'" in caplog.text
+
+
+def test_store_session_source_text_logs_missing_lock_cleanup(monkeypatch, tmp_path, caplog):
+    monkeypatch.setenv("SESSION_DB_PATH", str(tmp_path / "session.db"))
+    monkeypatch.setattr(session_store.os, "unlink", lambda _path: (_ for _ in ()).throw(FileNotFoundError("gone")))
+
+    with caplog.at_level("DEBUG", logger="datastore.sessiondb.session_store"):
+        out = session_store.store_session_source_text(
+            text="User: alpha fact\n\nAssistant: noted.",
+            owner_id="owner-lock",
+            session_id="sess-lock-cleanup",
+        )
+
+    assert out["status"] == "stored"
+    assert "sessiondb lock file already removed for session_id=sess-lock-cleanup" in caplog.text
+
+
 def test_stale_lock_treats_permission_error_as_live_process(monkeypatch, tmp_path):
     lock_path = tmp_path / "session.lock"
     lock_path.write_text("12345", encoding="utf-8")
@@ -107,6 +129,16 @@ def test_stale_lock_treats_permission_error_as_live_process(monkeypatch, tmp_pat
     monkeypatch.setattr(session_store.os, "kill", _kill)
 
     assert session_store._stale_lock(str(lock_path)) is False
+
+
+def test_stale_lock_logs_corrupt_pid(tmp_path, caplog):
+    lock_path = tmp_path / "session.lock"
+    lock_path.write_text("not-a-pid", encoding="utf-8")
+
+    with caplog.at_level("WARNING", logger="datastore.sessiondb.session_store"):
+        assert session_store._stale_lock(str(lock_path)) is True
+
+    assert "contains invalid pid" in caplog.text
 
 
 def test_stale_lock_treats_missing_process_as_stale(monkeypatch, tmp_path):
