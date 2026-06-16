@@ -399,6 +399,58 @@ def test_graph_mentioned_fact_nodes_failure_respects_failhard(caplog):
     assert "Failed to load facts mentioning graph anchor" in caplog.text
 
 
+def test_graph_mentioned_fact_nodes_row_deserialization_failure_respects_failhard(caplog):
+    import datastore.memorydb.memory_graph as mg
+
+    class _Conn:
+        def execute(self, *_args, **_kwargs):
+            class _Cursor:
+                def fetchall(self):
+                    return [{"id": "bad-row"}, {"id": "good-row"}]
+
+            return _Cursor()
+
+    class _Graph:
+        def _get_conn(self):
+            class _Ctx:
+                def __enter__(self):
+                    return _Conn()
+
+                def __exit__(self, *_exc):
+                    return False
+
+            return _Ctx()
+
+        def _row_to_node(self, row):
+            if row["id"] == "bad-row":
+                raise RuntimeError("row decode failed")
+            return mg.Node(
+                id="good-row",
+                type="Fact",
+                name="Ari keeps the project ledger updated.",
+            )
+
+    with patch.object(mg, "_is_fail_hard_mode", return_value=True):
+        with pytest.raises(RuntimeError, match="Node deserialization failed during graph mention traversal"):
+            mg._graph_mentioned_fact_nodes(
+                _Graph(),
+                anchor_text="Ari",
+                query="Ari ledger",
+                seen_ids=set(),
+            )
+
+    with patch.object(mg, "_is_fail_hard_mode", return_value=False), caplog.at_level("WARNING"):
+        facts = mg._graph_mentioned_fact_nodes(
+            _Graph(),
+            anchor_text="Ari",
+            query="Ari ledger",
+            seen_ids=set(),
+        )
+
+    assert [fact.id for fact in facts] == ["good-row"]
+    assert "Skipping corrupt graph mention fact row bad-row: row decode failed" in caplog.text
+
+
 def test_graph_attached_fact_rows_edge_load_failure_respects_failhard(caplog):
     import datastore.memorydb.memory_graph as mg
 
@@ -431,6 +483,55 @@ def test_graph_attached_fact_rows_edge_load_failure_respects_failhard(caplog):
         ) == []
 
     assert "Failed to load graph edges for anchor" in caplog.text
+
+
+def test_graph_attached_fact_rows_fact_load_failure_respects_failhard(caplog):
+    import datastore.memorydb.memory_graph as mg
+
+    anchor = mg.Node.create("Person", "Ari")
+    good_fact = mg.Node.create("Fact", "Ari keeps the project ledger updated.")
+    good_fact.id = "good-fact"
+    edges = [
+        mg.Edge.create(anchor.id, "bad-fact", "has_fact"),
+        mg.Edge.create(anchor.id, good_fact.id, "has_fact"),
+    ]
+
+    class _Graph:
+        def get_edges(self, *_args, **_kwargs):
+            return edges
+
+        def get_node(self, node_id):
+            if node_id == "bad-fact":
+                raise RuntimeError("fact load failed")
+            return good_fact
+
+    with patch.object(mg, "_is_fail_hard_mode", return_value=True):
+        with pytest.raises(RuntimeError, match="Fact-node load failed during graph attached-fact traversal"):
+            mg._graph_attached_fact_rows(
+                _Graph(),
+                anchor_node=anchor,
+                anchor_text="Ari",
+                anchor_score=0.9,
+                graph_path="Ari",
+                relation_sequence=[],
+                hop_depth=0,
+                seen_ids=set(),
+            )
+
+    with patch.object(mg, "_is_fail_hard_mode", return_value=False), caplog.at_level("WARNING"):
+        rows = mg._graph_attached_fact_rows(
+            _Graph(),
+            anchor_node=anchor,
+            anchor_text="Ari",
+            anchor_score=0.9,
+            graph_path="Ari",
+            relation_sequence=[],
+            hop_depth=0,
+            seen_ids=set(),
+        )
+
+    assert [row["id"] for row in rows] == [good_fact.id]
+    assert "Skipping graph-attached fact bad-fact after load failure: fact load failed" in caplog.text
 
 
 def test_relation_chain_rank_prefers_explicit_zero_hop_depth():

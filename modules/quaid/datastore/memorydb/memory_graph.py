@@ -5088,7 +5088,15 @@ def _graph_mentioned_fact_nodes(
     for row_index, row in enumerate(rows):
         try:
             fact = graph._row_to_node(row)
-        except Exception:
+        except Exception as exc:
+            row_id = ""
+            try:
+                row_id = str(row["id"] or "")
+            except Exception:
+                row_id = ""
+            logger.warning("Skipping corrupt graph mention fact row %s: %s", row_id, exc)
+            if _is_fail_hard_mode():
+                raise RuntimeError("Node deserialization failed during graph mention traversal") from exc
             continue
         if not fact or str(getattr(fact, "id", "") or "") in seen_ids:
             continue
@@ -5516,7 +5524,10 @@ def _graph_attached_fact_rows(
             continue
         try:
             fact = graph.get_node(fact_id)
-        except Exception:
+        except Exception as exc:
+            logger.warning("Skipping graph-attached fact %s after load failure: %s", fact_id, exc)
+            if _is_fail_hard_mode():
+                raise RuntimeError("Fact-node load failed during graph attached-fact traversal") from exc
             continue
         if not fact or str(getattr(fact, "type", "") or "").lower() not in _SUBJECT_ATTACHABLE_MEMORY_TYPES:
             continue
