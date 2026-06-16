@@ -9270,6 +9270,50 @@ class TestRollingExtraction:
         assert ingest_calls[0]["message_count"] == 0
         assert ingest_calls[0]["topic_hint"] == ""
 
+    def test_session_end_no_new_content_skips_missing_session_logs_transcript(self, monkeypatch, tmp_path):
+        import core.ingest_runtime as ingest_runtime
+
+        transcript_path = tmp_path / "session.jsonl"
+        transcript_path.write_text("", encoding="utf-8")
+        missing_session_logs_path = tmp_path / "missing-session-logs.jsonl"
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "rolling-inst")
+        extraction_daemon.write_cursor("sess-empty-no-file", 0, str(transcript_path))
+        monkeypatch.setattr(extraction_daemon, "_get_owner_id", lambda: "Owner")
+        monkeypatch.setattr(extraction_daemon, "_session_has_harvestable_subagents", lambda *args, **kwargs: False)
+        monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: True)
+        monkeypatch.setattr(
+            ingest_runtime,
+            "run_session_logs_ingest",
+            lambda **_kwargs: (_ for _ in ()).throw(AssertionError("must route through broker request")),
+        )
+        monkeypatch.setattr(
+            extraction_daemon,
+            "_session_logs_ingest_transcript_path_for_signal",
+            lambda *_args, **_kwargs: str(missing_session_logs_path),
+        )
+        monkeypatch.setattr(
+            extraction_daemon,
+            "_request_session_logs_ingest",
+            lambda **_kwargs: (_ for _ in ()).throw(
+                AssertionError("missing empty session transcript should not be ingested")
+            ),
+        )
+
+        extraction_daemon.write_signal(
+            signal_type="session_end",
+            session_id="sess-empty-no-file",
+            transcript_path=str(transcript_path),
+        )
+        extraction_daemon.process_signal(extraction_daemon.read_pending_signals()[0])
+
+        assert extraction_daemon.read_pending_signals() == []
+        lock_dir = tmp_path / "instances" / "rolling-inst" / "data" / "session-processing"
+        lock_files = list(lock_dir.glob("*.lock"))
+        assert len(lock_files) == 1
+        assert extraction_daemon._processing_lock_active(lock_files[0].stem) is False
+
     @pytest.mark.parametrize("signal_type", ["compaction", "timeout"])
     def test_process_signal_noop_does_not_recreate_empty_rolling_state(
         self, monkeypatch, tmp_path, signal_type

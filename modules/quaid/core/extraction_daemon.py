@@ -6518,19 +6518,28 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                             session_logs_transcript_path,
                             transcript_path,
                         )
-                    sl_result = _request_session_logs_ingest(
-                        session_id=session_id,
-                        owner_id=_get_owner_id(),
-                        label=label,
-                        transcript_path=session_logs_transcript_path,
-                        message_count=0,
-                        topic_hint="",
-                    )
-                    sl_status = sl_result.get("status", "unknown") if isinstance(sl_result, dict) else str(sl_result)
-                    sl_reason = sl_result.get("reason", "") if isinstance(sl_result, dict) else ""
-                    logger.info("[%s] session %s: session_logs ingest (no-new-content path): %s%s",
-                                label, session_id, sl_status,
-                                f" ({sl_reason})" if sl_reason else "")
+                    if not session_logs_transcript_path or not os.path.isfile(session_logs_transcript_path):
+                        logger.info(
+                            "[%s] session %s: session_logs ingest skipped for empty session; "
+                            "transcript path is unavailable: %s",
+                            label,
+                            session_id,
+                            session_logs_transcript_path,
+                        )
+                    else:
+                        sl_result = _request_session_logs_ingest(
+                            session_id=session_id,
+                            owner_id=_get_owner_id(),
+                            label=label,
+                            transcript_path=session_logs_transcript_path,
+                            message_count=0,
+                            topic_hint="",
+                        )
+                        sl_status = sl_result.get("status", "unknown") if isinstance(sl_result, dict) else str(sl_result)
+                        sl_reason = sl_result.get("reason", "") if isinstance(sl_result, dict) else ""
+                        logger.info("[%s] session %s: session_logs ingest (no-new-content path): %s%s",
+                                    label, session_id, sl_status,
+                                    f" ({sl_reason})" if sl_reason else "")
                 except Exception as e:
                     if _fail_hard_enabled():
                         logger.error(
