@@ -13,7 +13,7 @@ import os
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError, as_completed
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -359,6 +359,11 @@ _SCHEDULER_LOCK = threading.RLock()
 _PLATFORM_CLIENT = None
 _PLATFORM_CLIENT_LOCK = threading.RLock()
 _PLATFORM_CLIENT_INITIALIZED = False
+_PLATFORM_CLIENT_CACHE_TAG: Optional[Tuple[str, str]] = None
+
+
+def _platform_client_cache_tag(quaid_home: Any, platform: Any) -> Tuple[str, str]:
+    return (os.path.abspath(os.path.expanduser(os.fspath(quaid_home))), str(platform or "").strip())
 
 
 def _scheduler_max_workers(default_max_workers: int = 32) -> int:
@@ -422,16 +427,27 @@ def get_platform_scheduler_client_for_current_instance():
 
     Returns None if unavailable (non-fatal: callers proceed without slot gating).
     """
-    global _PLATFORM_CLIENT, _PLATFORM_CLIENT_INITIALIZED
+    global _PLATFORM_CLIENT, _PLATFORM_CLIENT_INITIALIZED, _PLATFORM_CLIENT_CACHE_TAG
     with _PLATFORM_CLIENT_LOCK:
-        if _PLATFORM_CLIENT_INITIALIZED:
-            return _PLATFORM_CLIENT
         try:
             from lib.adapter import get_adapter
             from core.platform_scheduler import get_platform_scheduler_client
             adapter = get_adapter()
             quaid_home = adapter.quaid_home()
             platform = adapter.agent_id_prefix()
+            cache_tag = _platform_client_cache_tag(quaid_home, platform)
+            if _PLATFORM_CLIENT_INITIALIZED and _PLATFORM_CLIENT_CACHE_TAG == cache_tag:
+                return _PLATFORM_CLIENT
+            if _PLATFORM_CLIENT_INITIALIZED and _PLATFORM_CLIENT is not None:
+                try:
+                    _PLATFORM_CLIENT.close()
+                except Exception as exc:
+                    logger.warning("platform scheduler client close failed during context switch: %s", exc)
+                    if _fail_hard_enabled():
+                        raise
+            _PLATFORM_CLIENT = None
+            _PLATFORM_CLIENT_INITIALIZED = False
+            _PLATFORM_CLIENT_CACHE_TAG = None
             total_slots = 8
             try:
                 from config import get_config
@@ -448,6 +464,7 @@ def get_platform_scheduler_client_for_current_instance():
                     raise
             _PLATFORM_CLIENT = get_platform_scheduler_client(quaid_home, platform, total_slots)
             _PLATFORM_CLIENT_INITIALIZED = True
+            _PLATFORM_CLIENT_CACHE_TAG = cache_tag
         except Exception as exc:
             logger.warning(
                 "platform scheduler client init failed (%s): proceeding without slot gating", exc
@@ -455,16 +472,19 @@ def get_platform_scheduler_client_for_current_instance():
             if _fail_hard_enabled():
                 raise
             _PLATFORM_CLIENT = None
+            _PLATFORM_CLIENT_INITIALIZED = False
+            _PLATFORM_CLIENT_CACHE_TAG = None
         return _PLATFORM_CLIENT
 
 
 def reset_platform_scheduler_client() -> None:
     """Reset the cached platform scheduler client (for testing / re-init)."""
-    global _PLATFORM_CLIENT, _PLATFORM_CLIENT_INITIALIZED
+    global _PLATFORM_CLIENT, _PLATFORM_CLIENT_INITIALIZED, _PLATFORM_CLIENT_CACHE_TAG
     with _PLATFORM_CLIENT_LOCK:
         client = _PLATFORM_CLIENT
         _PLATFORM_CLIENT = None
         _PLATFORM_CLIENT_INITIALIZED = False
+        _PLATFORM_CLIENT_CACHE_TAG = None
         if client is not None:
             try:
                 client.close()

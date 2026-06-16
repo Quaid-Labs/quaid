@@ -69,6 +69,7 @@ def _patch_llm_platform_client_dependencies(monkeypatch, tmp_path, *, get_config
 
     scheduler_mod._PLATFORM_CLIENT = None
     scheduler_mod._PLATFORM_CLIENT_INITIALIZED = False
+    scheduler_mod._PLATFORM_CLIENT_CACHE_TAG = None
     monkeypatch.setattr(adapter_mod, "get_adapter", lambda: _Adapter())
     monkeypatch.setattr(config_mod, "get_config", get_config)
     monkeypatch.setattr(parallel_runtime_mod, "get_parallel_config", lambda cfg: cfg.core.parallel)
@@ -142,6 +143,62 @@ def test_llm_scheduler_failed_platform_client_init_is_not_cached(monkeypatch, tm
     assert scheduler_mod.get_platform_scheduler_client_for_current_instance() is expected_client
     assert calls["count"] == 2
     assert "platform scheduler client init failed" in caplog.text
+
+
+def test_llm_scheduler_rebuilds_platform_client_when_adapter_context_changes(monkeypatch, tmp_path):
+    from core.llm import scheduler as scheduler_mod
+    import config as config_mod
+    import core.platform_scheduler as platform_scheduler_mod
+    import core.runtime.parallel_runtime as parallel_runtime_mod
+    import lib.adapter as adapter_mod
+
+    class _Adapter:
+        def __init__(self, home, platform):
+            self._home = home
+            self._platform = platform
+
+        def quaid_home(self):
+            return self._home
+
+        def agent_id_prefix(self):
+            return self._platform
+
+    class _Client:
+        def __init__(self, tag):
+            self.tag = tag
+            self.closed = False
+
+        def close(self):
+            self.closed = True
+
+    cfg = SimpleNamespace(core=SimpleNamespace(parallel=SimpleNamespace(platform_scheduler_slots=3)))
+    state = {"adapter": _Adapter(tmp_path / "a", "pytest-a")}
+    clients = []
+
+    def _client_factory(quaid_home, platform, total_slots):
+        client = _Client((quaid_home, platform, total_slots))
+        clients.append(client)
+        return client
+
+    scheduler_mod._PLATFORM_CLIENT = None
+    scheduler_mod._PLATFORM_CLIENT_INITIALIZED = False
+    scheduler_mod._PLATFORM_CLIENT_CACHE_TAG = None
+    monkeypatch.setattr(adapter_mod, "get_adapter", lambda: state["adapter"])
+    monkeypatch.setattr(config_mod, "get_config", lambda: cfg)
+    monkeypatch.setattr(parallel_runtime_mod, "get_parallel_config", lambda cfg_obj: cfg_obj.core.parallel)
+    monkeypatch.setattr(platform_scheduler_mod, "get_platform_scheduler_client", _client_factory)
+
+    first = scheduler_mod.get_platform_scheduler_client_for_current_instance()
+    assert scheduler_mod.get_platform_scheduler_client_for_current_instance() is first
+    assert len(clients) == 1
+
+    state["adapter"] = _Adapter(tmp_path / "b", "pytest-b")
+    second = scheduler_mod.get_platform_scheduler_client_for_current_instance()
+
+    assert second is not first
+    assert len(clients) == 2
+    assert first.closed is True
+    assert second.tag == (tmp_path / "b", "pytest-b", 3)
 
 
 def test_llm_scheduler_platform_client_close_failure_logs_when_fail_open(monkeypatch, caplog):
