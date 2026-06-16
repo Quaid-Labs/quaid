@@ -18,10 +18,74 @@ def _mark_deleted_misc_project(tmp_path, instance_id: str) -> None:
     _save_registry(registry, quaid_home=tmp_path)
 
 
-def _write_janitor_checkpoint(tmp_path, instance_id: str, status: str = "completed") -> None:
+def _write_janitor_checkpoint(
+    tmp_path,
+    instance_id: str,
+    status: str = "completed",
+    *,
+    started_at: str = "2099-01-01T00:00:00+00:00",
+    finished_at: str = "2099-01-01T00:00:01+00:00",
+) -> None:
     checkpoint = tmp_path / "instances" / instance_id / "logs" / "janitor" / "checkpoint-all.json"
     checkpoint.parent.mkdir(parents=True, exist_ok=True)
-    checkpoint.write_text(json.dumps({"status": status}), encoding="utf-8")
+    payload = {
+        "task": "all",
+        "status": status,
+        "started_at": started_at,
+        "heartbeat_at": finished_at,
+    }
+    if status == "completed":
+        payload["finished_at"] = finished_at
+        payload["last_completed_at"] = finished_at
+        payload["terminal_status"] = status
+    elif status == "failed":
+        payload["finished_at"] = finished_at
+        payload["last_failed_at"] = finished_at
+        payload["terminal_status"] = status
+    checkpoint.write_text(json.dumps(payload), encoding="utf-8")
+    if status in {"completed", "failed"}:
+        stats = tmp_path / "instances" / instance_id / "logs" / "janitor-stats.json"
+        stats.parent.mkdir(parents=True, exist_ok=True)
+        stats.write_text(
+            json.dumps(
+                {
+                    "last_run": finished_at,
+                    "task": "all",
+                    "dry_run": False,
+                    "success": status == "completed",
+                    "applied_changes": {},
+                    "metrics": {},
+                    "api_usage": {},
+                }
+            ),
+            encoding="utf-8",
+        )
+
+
+def _write_janitor_stats(
+    tmp_path,
+    instance_id: str,
+    *,
+    last_run: str = "2099-01-01T00:00:01+00:00",
+    dry_run: bool = False,
+    success: bool = True,
+) -> None:
+    stats = tmp_path / "instances" / instance_id / "logs" / "janitor-stats.json"
+    stats.parent.mkdir(parents=True, exist_ok=True)
+    stats.write_text(
+        json.dumps(
+            {
+                "last_run": last_run,
+                "task": "all",
+                "dry_run": dry_run,
+                "success": success,
+                "applied_changes": {},
+                "metrics": {},
+                "api_usage": {},
+            }
+        ),
+        encoding="utf-8",
+    )
 
 
 def _internal_instance_for(tmp_path, adapter_id: str, *parts: str) -> str:
@@ -1125,12 +1189,58 @@ def test_requested_janitor_run_fails_when_child_checkpoint_missing(monkeypatch, 
     assert payload["errors"] == ["instance alpha janitor checkpoint missing"]
 
 
+def test_requested_janitor_run_rejects_zero_exit_with_stale_dry_run_stats(monkeypatch, tmp_path):
+    from core import project_docs, project_docs_supervisor as supervisor
+
+    class _DoneProc:
+        pid = 101
+
+        def poll(self):
+            return 0
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setattr(supervisor, "quaid_home", lambda: tmp_path)
+    monkeypatch.setattr(supervisor, "_fail_hard_enabled", lambda: False)
+    monkeypatch.setattr(supervisor.project_docs, "reap_child_processes", lambda: 0)
+
+    request = project_docs.request_janitor_run(reason="pytest", requested_by="pytest")
+    active = {
+        "request_id": request["request_id"],
+        "started_at": "2026-06-16T08:15:40+00:00",
+        "started_instances": ["alpha"],
+        "errors": [],
+        "exit_codes": {},
+    }
+    _write_janitor_checkpoint(
+        tmp_path,
+        "alpha",
+        "completed",
+        started_at="2026-06-16T08:15:41+00:00",
+        finished_at="2026-06-16T08:15:42+00:00",
+    )
+    _write_janitor_stats(
+        tmp_path,
+        "alpha",
+        last_run="2026-06-16T08:15:27+00:00",
+        dry_run=True,
+        success=True,
+    )
+
+    active = supervisor._maintain_on_demand_janitor_request(active, {}, {"alpha": _DoneProc()})
+
+    assert active is None
+    payload = project_docs.read_janitor_request()
+    assert payload["status"] == "failed"
+    assert payload["exit_codes"] == {"alpha": 0}
+    assert payload["errors"] == ["instance alpha janitor stats came from dry-run"]
+
+
 def test_running_janitor_request_recovers_from_persisted_dead_worker(monkeypatch, tmp_path):
     from core import project_docs, project_docs_supervisor as supervisor
 
     monkeypatch.setenv("QUAID_HOME", str(tmp_path))
     monkeypatch.setattr(supervisor, "quaid_home", lambda: tmp_path)
-    monkeypatch.setattr(supervisor, "_pid_alive", lambda _pid: False)
+    monkeypatch.setattr(supervisor, "_pid_matches_janitor_worker", lambda _pid: False)
     monkeypatch.setattr(supervisor, "_fail_hard_enabled", lambda: False)
 
     request = project_docs.request_janitor_run(reason="pytest", requested_by="pytest")
@@ -1138,6 +1248,7 @@ def test_running_janitor_request_recovers_from_persisted_dead_worker(monkeypatch
         {
             **request,
             "status": "running",
+            "started_at": "2026-06-16T08:15:40+00:00",
             "started_instances": ["alpha"],
             "worker_pids": {"alpha": 1234},
         }
@@ -1150,7 +1261,10 @@ def test_running_janitor_request_recovers_from_persisted_dead_worker(monkeypatch
     payload = project_docs.read_janitor_request()
     assert payload["status"] == "failed"
     assert payload["worker_pids"] == {}
-    assert payload["errors"] == ["instance alpha janitor checkpoint status=failed"]
+    assert payload["errors"] == [
+        "instance alpha janitor worker pid=1234 is no longer active",
+        "instance alpha janitor checkpoint status=failed",
+    ]
 
 
 def test_running_janitor_request_tracks_live_worker_pid_after_supervisor_restart(monkeypatch, tmp_path):
@@ -1158,7 +1272,7 @@ def test_running_janitor_request_tracks_live_worker_pid_after_supervisor_restart
 
     monkeypatch.setenv("QUAID_HOME", str(tmp_path))
     monkeypatch.setattr(supervisor, "quaid_home", lambda: tmp_path)
-    monkeypatch.setattr(supervisor, "_pid_alive", lambda pid: pid == 1234)
+    monkeypatch.setattr(supervisor, "_pid_matches_janitor_worker", lambda pid: pid == 1234)
 
     request = project_docs.request_janitor_run(reason="pytest", requested_by="pytest")
     project_docs.write_janitor_request(

@@ -45,7 +45,12 @@ def _start_supervisor_watchdog() -> threading.Thread | None:
     def _watch() -> None:
         while not _STOP:
             if not _supervisor_alive():
-                os._exit(0)
+                print(
+                    "[janitor-worker] supervisor exited before worker completed",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                os._exit(1)
             time.sleep(5.0)
 
     thread = threading.Thread(target=_watch, name="janitor-supervisor-watchdog", daemon=True)

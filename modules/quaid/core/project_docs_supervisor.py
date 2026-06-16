@@ -120,6 +120,15 @@ def _pid_alive(pid: int) -> bool:
         return False
 
 
+def _pid_matches_janitor_worker(pid: int) -> bool:
+    if not _pid_alive(pid):
+        return False
+    command = _process_command(pid)
+    if command is None:
+        return True
+    return "janitor_worker" in command
+
+
 def _instance_root(instance: str) -> Path:
     return quaid_home() / "instances" / validate_instance_id(instance)
 
@@ -429,7 +438,67 @@ def _requested_janitor_instances(request: Dict[str, object]) -> tuple[list[str],
     return sorted(all_instances - deleted), []
 
 
-def _janitor_checkpoint_status(instance: str) -> tuple[str, Optional[str]]:
+def _parse_janitor_timestamp(raw: object) -> datetime | None:
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    parsed = datetime.fromisoformat(text)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _janitor_terminal_timestamp(payload: Dict[str, object], status: str) -> datetime | None:
+    candidates = ["finished_at"]
+    if status == "completed":
+        candidates.append("last_completed_at")
+    elif status == "failed":
+        candidates.append("last_failed_at")
+    for key in candidates:
+        parsed = _parse_janitor_timestamp(payload.get(key))
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _janitor_stats_completion_error(instance: str, status: str, request_started_at: datetime) -> str | None:
+    stats_path = quaid_home() / "instances" / instance / "logs" / "janitor-stats.json"
+    try:
+        raw = stats_path.read_text(encoding="utf-8")
+        payload = json.loads(raw)
+    except FileNotFoundError:
+        return f"instance {instance} janitor stats missing"
+    except Exception as exc:
+        return f"instance {instance} janitor stats unreadable: {exc}"
+    if not isinstance(payload, dict):
+        return f"instance {instance} janitor stats invalid"
+    if str(payload.get("task") or "").strip() != "all":
+        return f"instance {instance} janitor stats task={payload.get('task')!r}"
+    if bool(payload.get("dry_run")):
+        return f"instance {instance} janitor stats came from dry-run"
+    try:
+        last_run = _parse_janitor_timestamp(payload.get("last_run"))
+    except Exception as exc:
+        return f"instance {instance} janitor stats timestamp invalid: {exc}"
+    if last_run is None:
+        return f"instance {instance} janitor stats missing last_run"
+    if last_run < request_started_at:
+        return f"instance {instance} janitor stats stale for request"
+    success = bool(payload.get("success"))
+    if status == "completed" and not success:
+        return f"instance {instance} janitor stats success=false"
+    if status == "failed" and success:
+        return f"instance {instance} janitor stats success=true with failed checkpoint"
+    return None
+
+
+def _janitor_checkpoint_status(
+    instance: str,
+    *,
+    request_started_at: object = "",
+) -> tuple[str, Optional[str]]:
     name = validate_instance_id(instance)
     checkpoint_path = quaid_home() / "instances" / name / "logs" / "janitor" / "checkpoint-all.json"
 
@@ -450,6 +519,26 @@ def _janitor_checkpoint_status(instance: str) -> tuple[str, Optional[str]]:
     status = str(payload.get("status") or "").strip().lower()
     if not status:
         return _checkpoint_error(f"instance {name} janitor checkpoint missing status")
+    if request_started_at and status in {"completed", "failed"}:
+        try:
+            request_started = _parse_janitor_timestamp(request_started_at)
+            checkpoint_started = _parse_janitor_timestamp(payload.get("started_at"))
+            checkpoint_finished = _janitor_terminal_timestamp(payload, status)
+        except Exception as exc:
+            return _checkpoint_error(f"instance {name} janitor checkpoint timestamp invalid: {exc}", exc)
+        if request_started is None:
+            return _checkpoint_error(f"instance {name} janitor request timestamp invalid")
+        if checkpoint_started is None:
+            return _checkpoint_error(f"instance {name} janitor checkpoint missing started_at")
+        if checkpoint_started < request_started:
+            return _checkpoint_error(f"instance {name} janitor checkpoint stale for request")
+        if checkpoint_finished is None:
+            return _checkpoint_error(f"instance {name} janitor checkpoint missing terminal timestamp")
+        if checkpoint_finished < request_started:
+            return _checkpoint_error(f"instance {name} janitor checkpoint terminal timestamp stale for request")
+        stats_error = _janitor_stats_completion_error(name, status, request_started)
+        if stats_error:
+            return _checkpoint_error(stats_error)
     return status, None
 
 
@@ -499,6 +588,7 @@ def _active_janitor_request_payload(request: Dict[str, object]) -> Dict[str, obj
     started_instances = _janitor_request_started_instances(request)
     return {
         "request_id": str(request.get("request_id") or "").strip(),
+        "started_at": str(request.get("started_at") or "").strip(),
         "errors": list(request.get("errors") or []),
         "targets": list(started_instances),
         "started_instances": list(started_instances),
@@ -513,9 +603,12 @@ def _finalize_janitor_request_payload(
     started_instances: list[str],
     errors: list[str],
     exit_codes: Dict[str, int],
+    worker_pids: Dict[str, int] | None = None,
+    request_started_at: object = "",
 ) -> None:
     final_errors = list(errors)
     fail_hard_exc: Exception | None = None
+    worker_pids = worker_pids or {}
     if not started_instances and not exit_codes:
         final_errors.append("janitor request running with no tracked workers")
     for instance in started_instances:
@@ -523,8 +616,15 @@ def _finalize_janitor_request_payload(
         if code is not None and code != 0:
             final_errors.append(f"instance {instance} janitor exited rc={code}")
             continue
+        if code is None and int(worker_pids.get(instance, 0) or 0) > 0:
+            final_errors.append(
+                f"instance {instance} janitor worker pid={int(worker_pids[instance])} is no longer active"
+            )
         try:
-            checkpoint_status, checkpoint_error = _janitor_checkpoint_status(instance)
+            checkpoint_status, checkpoint_error = _janitor_checkpoint_status(
+                instance,
+                request_started_at=request_started_at,
+            )
         except Exception as exc:
             final_errors.append(str(exc) or f"instance {instance} janitor checkpoint inspection failed")
             if fail_hard_exc is None:
@@ -581,6 +681,7 @@ def _start_requested_janitor_run(
             project_docs.write_janitor_request(payload)
         return {
             "request_id": payload.get("request_id"),
+            "started_at": str(payload.get("started_at") or "").strip(),
             "errors": list(request_errors),
             "targets": list(targets),
             "started_instances": list(started_instances),
@@ -650,7 +751,7 @@ def _maintain_on_demand_janitor_request(
             project_docs.reap_child_processes()
             continue
         pid = int(worker_pids.get(instance, 0) or 0)
-        if pid > 0 and _pid_alive(pid):
+        if pid > 0 and _pid_matches_janitor_worker(pid):
             all_done = False
             live_worker_pids[instance] = pid
     if exit_codes:
@@ -678,6 +779,8 @@ def _maintain_on_demand_janitor_request(
             started_instances=started_instances,
             errors=list(active_request.get("errors") or []),
             exit_codes=accumulated_exit_codes,
+            worker_pids=worker_pids,
+            request_started_at=str(active_request.get("started_at") or payload.get("started_at") or "").strip(),
         )
     return None
 
