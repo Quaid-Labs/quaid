@@ -235,15 +235,18 @@ def test_resolved_workspace_raises_when_failhard_and_roots_unavailable(monkeypat
         rag_module._resolved_workspace()
 
 
-def test_get_file_hash_raises_read_failure_when_failhard(tmp_path, monkeypatch):
+def test_get_file_hash_raises_read_failure_when_failhard(tmp_path, monkeypatch, caplog):
     import datastore.docsdb.rag as rag_module
 
     rag = _make_rag(tmp_path)
     missing_file = tmp_path / "missing.md"
     monkeypatch.setattr(rag_module, "is_fail_hard_enabled", lambda: True)
 
+    caplog.set_level("WARNING")
     with pytest.raises(FileNotFoundError):
         rag._get_file_hash(str(missing_file))
+
+    assert "Failed to hash docs file" in caplog.text
 
 
 # ---------------------------------------------------------------------------
@@ -520,14 +523,17 @@ class TestNeedsReindex:
 
         assert "Error checking if" in caplog.text
 
-    def test_needs_reindex_wrapper_raises_on_unexpected_failure_when_failhard(self, tmp_path):
+    def test_needs_reindex_wrapper_raises_on_unexpected_failure_when_failhard(self, tmp_path, caplog):
         rag = _make_rag(tmp_path)
         test_file = tmp_path / "first.md"
 
+        caplog.set_level("WARNING")
         with patch.object(rag, "needs_reindex_many", side_effect=ValueError("bad timestamp")), \
              patch("datastore.docsdb.rag.is_fail_hard_enabled", return_value=True), \
              pytest.raises(RuntimeError, match="needs reindex"):
             rag.needs_reindex(str(test_file))
+
+        assert "Error checking if" in caplog.text
 
 
 # ---------------------------------------------------------------------------
@@ -845,7 +851,18 @@ class TestIndexDocument:
              pytest.raises(RuntimeError, match="Failed embedding"):
             rag.index_document(str(test_file))
 
-    def test_registry_timestamp_sync_failure_raises_when_fail_hard(self, tmp_path):
+    def test_index_document_read_failure_logs_before_failhard(self, tmp_path, caplog):
+        rag = _make_rag(tmp_path)
+        missing_file = tmp_path / "missing.md"
+
+        caplog.set_level("WARNING")
+        with patch("datastore.docsdb.rag.is_fail_hard_enabled", return_value=True), \
+             pytest.raises(RuntimeError, match="Error reading docs source"):
+            rag.index_document(str(missing_file))
+
+        assert "Error reading" in caplog.text
+
+    def test_registry_timestamp_sync_failure_raises_when_fail_hard(self, tmp_path, caplog):
         rag = _make_rag(tmp_path)
         test_file = tmp_path / "guide.md"
         test_file.write_text("# Guide\nBody.")
@@ -857,12 +874,15 @@ class TestIndexDocument:
             def update_timestamps(self, *_args, **_kwargs):
                 raise OSError("registry locked")
 
+        caplog.set_level("WARNING")
         with patch.object(rag, "chunk_markdown", return_value=["# Guide\nChunk A"]), \
              patch("datastore.docsdb.rag._lib_get_embeddings", return_value=[[0.1, 0.2, 0.3]]), \
              patch("datastore.docsdb.registry.DocsRegistry", BrokenRegistry), \
              patch("datastore.docsdb.rag.is_fail_hard_enabled", return_value=True), \
              pytest.raises(RuntimeError, match="Failed to persist docs registry timestamp"):
             rag.index_document(str(test_file))
+
+        assert "Failed to persist docs registry timestamp" in caplog.text
 
     def test_registry_timestamp_sync_failure_warns_when_fail_open(self, tmp_path, caplog):
         rag = _make_rag(tmp_path)
@@ -2949,7 +2969,7 @@ class TestDocsSearchFiltering:
         assert len(results) == 1
         assert results[0]["source"].endswith("alpha.md")
 
-    def test_search_docs_vec_failure_raises_when_failhard_enabled(self, tmp_path):
+    def test_search_docs_vec_failure_raises_when_failhard_enabled(self, tmp_path, caplog):
         rag = _make_rag(tmp_path)
 
         class _BoomConn:
@@ -2962,6 +2982,7 @@ class TestDocsSearchFiltering:
             def execute(self, sql, params=()):
                 raise sqlite3.OperationalError("vec query exploded")
 
+        caplog.set_level("WARNING")
         with patch("datastore.docsdb.rag._lib_get_connection", return_value=_BoomConn()), \
              patch("datastore.docsdb.rag._lib_get_embedding", return_value=[1.0, 0.0, 0.0]), \
              patch("datastore.docsdb.rag._lib_has_vec", return_value=True), \
@@ -2969,6 +2990,8 @@ class TestDocsSearchFiltering:
              patch("datastore.docsdb.rag.is_fail_hard_enabled", return_value=True):
             with pytest.raises(RuntimeError, match="failHard is enabled"):
                 rag.search_docs("alpha")
+
+        assert "Doc RAG vec recall failed; falling back to row scan" in caplog.text
 
     def test_infer_project_from_chunks_prefers_highest_similarity_sum(self, tmp_path):
         rag = _make_rag(tmp_path)

@@ -1173,9 +1173,9 @@ class DocsRAG:
             with open(file_path, 'rb') as f:
                 return hashlib.md5(f.read()).hexdigest()
         except Exception as exc:
+            logger.warning("Failed to hash docs file %s; treating hash as empty: %s", file_path, exc)
             if is_fail_hard_enabled():
                 raise
-            logger.warning("Failed to hash docs file %s; treating hash as empty: %s", file_path, exc)
             return ""
 
     def _needs_reindex_from_indexed_at(self, file_path: str, indexed_at: Optional[str]) -> bool:
@@ -1257,9 +1257,9 @@ class DocsRAG:
         try:
             return self.needs_reindex_many([file_path]).get(file_path, True)
         except Exception as e:
+            logger.warning("Error checking if %s needs reindex: %s", file_path, e)
             if is_fail_hard_enabled():
                 raise RuntimeError(f"Error checking if {file_path} needs reindex") from e
-            logger.warning("Error checking if %s needs reindex: %s", file_path, e)
             return False
 
     def _is_archive_log(self, file_path: str) -> bool:
@@ -1301,9 +1301,9 @@ class DocsRAG:
                 ).isoformat()
                 content = f.read()
         except Exception as e:
+            logger.warning("Error reading %s: %s", canonical_file_path, e)
             if is_fail_hard_enabled():
                 raise RuntimeError(f"Error reading docs source {canonical_file_path}") from e
-            logger.warning("Error reading %s: %s", canonical_file_path, e)
             return 0
 
         # Add temporal context for archived log files
@@ -1448,9 +1448,9 @@ class DocsRAG:
                     "Failed to persist docs registry timestamp after indexing "
                     f"{canonical_file_path}: {exc}"
                 )
+                logger.warning(message)
                 if is_fail_hard_enabled():
                     raise RuntimeError(message) from exc
-                logger.warning(message)
 
         return chunks_created
 
@@ -2048,11 +2048,11 @@ class DocsRAG:
                     sql += " ORDER BY knn.distance"
                     rows = conn.execute(sql, tuple([packed_query, candidate_limit] + params)).fetchall()
                 except Exception as exc:
+                    logger.warning("Doc RAG vec recall failed; falling back to row scan: %s", exc)
                     if is_fail_hard_enabled():
                         raise RuntimeError(
                             "Doc RAG vec recall failed while failHard is enabled."
                         ) from exc
-                    logger.warning("Doc RAG vec recall failed; falling back to row scan: %s", exc)
                     use_vec = False
 
             if not use_vec:

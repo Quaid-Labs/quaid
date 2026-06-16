@@ -1311,6 +1311,75 @@ NEW: Updated line.
         ]
 
 
+def test_update_doc_from_transcript_registry_timestamp_failure_warns_when_fail_open(
+    tmp_path, monkeypatch, caplog
+):
+    with _adapter_patch(tmp_path) as iroot:
+        from datastore.docsdb import updater
+
+        doc = iroot / "docs" / "doc.md"
+        doc.parent.mkdir(parents=True, exist_ok=True)
+        doc.write_text("# Doc\n\nExisting line.\n", encoding="utf-8")
+
+        class _BrokenRegistry:
+            def update_timestamps(self, *_args, **_kwargs):
+                raise OSError("registry locked")
+
+        response = """<<<EDIT
+OLD: Existing line.
+NEW: Updated line.
+>>>
+<<<SUMMARY: update >>>"""
+
+        monkeypatch.setattr(updater, "call_deep_reasoning", lambda **_kwargs: (response, 0.1))
+        monkeypatch.setattr(updater, "is_fail_hard_enabled", lambda: False)
+        monkeypatch.setattr("datastore.docsdb.registry.DocsRegistry", _BrokenRegistry)
+
+        caplog.set_level("WARNING")
+        ok = updater.update_doc_from_transcript(
+            "docs/doc.md",
+            "test purpose",
+            "transcript",
+            dry_run=False,
+        )
+
+        assert ok is True
+        assert "Failed syncing modified_at to registry for docs/doc.md" in caplog.text
+
+
+def test_update_doc_from_transcript_registry_timestamp_failure_raises_when_failhard(
+    tmp_path, monkeypatch
+):
+    with _adapter_patch(tmp_path) as iroot:
+        from datastore.docsdb import updater
+
+        doc = iroot / "docs" / "doc.md"
+        doc.parent.mkdir(parents=True, exist_ok=True)
+        doc.write_text("# Doc\n\nExisting line.\n", encoding="utf-8")
+
+        class _BrokenRegistry:
+            def update_timestamps(self, *_args, **_kwargs):
+                raise OSError("registry locked")
+
+        response = """<<<EDIT
+OLD: Existing line.
+NEW: Updated line.
+>>>
+<<<SUMMARY: update >>>"""
+
+        monkeypatch.setattr(updater, "call_deep_reasoning", lambda **_kwargs: (response, 0.1))
+        monkeypatch.setattr(updater, "is_fail_hard_enabled", lambda: True)
+        monkeypatch.setattr("datastore.docsdb.registry.DocsRegistry", _BrokenRegistry)
+
+        with pytest.raises(OSError, match="registry locked"):
+            updater.update_doc_from_transcript(
+                "docs/doc.md",
+                "test purpose",
+                "transcript",
+                dry_run=False,
+            )
+
+
 class TestCmdUpdateStaleNeverIndexed:
     def test_update_doc_from_diffs_caps_total_diff_prompt(self, tmp_path, monkeypatch):
         with _adapter_patch(tmp_path) as iroot:

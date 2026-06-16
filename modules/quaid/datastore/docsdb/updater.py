@@ -1621,8 +1621,15 @@ def update_doc_from_transcript(
                 from datastore.docsdb.registry import DocsRegistry
                 registry = DocsRegistry()
                 registry.update_timestamps(doc_path, modified_at=modified_at)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning(
+                    "Failed syncing modified_at to registry for %s: %s",
+                    doc_path,
+                    exc,
+                    exc_info=True,
+                )
+                if is_fail_hard_enabled():
+                    raise
         log_doc_update(doc_path, trigger, sources, f"{applied} edit(s): {summary}",
                        dry_run, True, chars_before, chars_after)
         return True
