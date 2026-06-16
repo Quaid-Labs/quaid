@@ -179,13 +179,15 @@ def _ensure_visible_identity_stubs() -> List[str]:
     try:
         adapter = get_adapter_instance()
         visible_root = adapter.visible_instance_root()
-    except Exception:
+    except Exception as exc:
+        logger.warning("Failed to resolve visible identity stubs root: %s", exc)
         return []
 
     created: List[str] = []
     try:
         visible_root.mkdir(parents=True, exist_ok=True)
-    except Exception:
+    except Exception as exc:
+        logger.warning("Failed to create visible identity stubs directory %s: %s", visible_root, exc)
         return []
 
     for name in ("SOUL.md", "USER.md", "ENVIRONMENT.md"):
@@ -1199,8 +1201,8 @@ class MemoryGraph:
         try:
             from lib.embeddings import get_embeddings_provider
             model = get_embeddings_provider().model_name
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("get_embedding: failed to load provider model name, cache disabled: %s", exc)
 
         # Check cache (must match current model to avoid stale embeddings)
         # Skip cache entirely when model is unknown — avoids cross-model cache pollution
@@ -4830,7 +4832,8 @@ def _get_owner_names() -> set:
                 names.add(full)
                 names.update(full.split())
         return names
-    except Exception:
+    except Exception as exc:
+        logger.warning("_get_owner_names: failed to load owner names: %s", exc)
         return set()
 
 
@@ -13105,7 +13108,10 @@ def _recall_once(
                     )
                 )
             ]
-        except Exception:
+        except Exception as exc:
+            logger.warning("Domain filter join table unavailable; falling back to row attributes: %s", exc)
+            if _is_fail_hard_mode():
+                raise
             return [
                 r for r in rows
                 if (
@@ -13139,7 +13145,10 @@ def _recall_once(
                         )
                     )
                 ]
-            except Exception:
+            except Exception as exc:
+                logger.warning("Domain filter join table unavailable; falling back to row attributes: %s", exc)
+                if _is_fail_hard_mode():
+                    raise
                 # Fallback to attribute-based filtering if join table is unavailable.
                 output = [
                     r for r in output
@@ -17822,6 +17831,7 @@ def _filter_recall_rows_by_date_bounds(
     if not normalized_from and not normalized_to:
         return list(rows or [])
     filtered: List[Dict[str, Any]] = []
+    undated_dropped = 0
     for row in rows or []:
         if not isinstance(row, dict):
             continue
@@ -17832,6 +17842,8 @@ def _filter_recall_rows_by_date_bounds(
         if not start_date:
             if keep_undated and not _row_is_source_chunk_temporal_evidence(row):
                 filtered.append(row)
+            else:
+                undated_dropped += 1
             continue
         if normalized_from and (end_date or start_date) < normalized_from:
             continue
@@ -17839,6 +17851,16 @@ def _filter_recall_rows_by_date_bounds(
             continue
         row.setdefault("temporal_filter_basis", basis)
         filtered.append(row)
+    if undated_dropped:
+        logger.debug(
+            "Date-bounded recall excluded %d undated row(s) date_from=%r date_to=%r "
+            "temporal_dimension=%s keep_undated=%s",
+            undated_dropped,
+            date_from,
+            date_to,
+            temporal_dimension,
+            keep_undated,
+        )
     return filtered
 
 
@@ -20674,7 +20696,10 @@ def recall_fast(
     recall_fast_started = _time.monotonic()
     try:
         recall_fast_deadline = recall_fast_started + _recall_store_plan_timeout_s(timeout_ms, fast_mode=True)
-    except Exception:
+    except Exception as exc:
+        logger.warning("recall_fast: failed to compute deadline, running unbounded: %s", exc)
+        if _is_fail_hard_mode():
+            raise
         recall_fast_deadline = None
 
     _trace_m15(

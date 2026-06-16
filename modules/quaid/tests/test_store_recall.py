@@ -89,6 +89,43 @@ def test_get_related_excludes_deleted_and_superseded_targets(tmp_path):
     assert superseded.id not in ids
 
 
+def test_visible_identity_stubs_logs_adapter_resolution_failure(caplog):
+    import datastore.memorydb.memory_graph as mg
+
+    with patch.object(mg, "get_adapter_instance", side_effect=RuntimeError("adapter unavailable")), \
+         caplog.at_level("WARNING"):
+        assert mg._ensure_visible_identity_stubs() == []
+
+    assert "Failed to resolve visible identity stubs root" in caplog.text
+    assert "adapter unavailable" in caplog.text
+
+
+def test_visible_identity_stubs_logs_directory_creation_failure(caplog):
+    import datastore.memorydb.memory_graph as mg
+
+    visible_root = SimpleNamespace(
+        mkdir=MagicMock(side_effect=OSError("mkdir down")),
+    )
+    adapter = SimpleNamespace(visible_instance_root=lambda: visible_root)
+
+    with patch.object(mg, "get_adapter_instance", return_value=adapter), caplog.at_level("WARNING"):
+        assert mg._ensure_visible_identity_stubs() == []
+
+    assert "Failed to create visible identity stubs directory" in caplog.text
+    assert "mkdir down" in caplog.text
+
+
+def test_owner_name_loading_failure_logs_fallback(caplog):
+    import datastore.memorydb.memory_graph as mg
+
+    with patch.object(mg, "_HAS_CONFIG", True), \
+         patch.object(mg, "_get_memory_config", side_effect=RuntimeError("identity config down")), \
+         caplog.at_level("WARNING"):
+        assert mg._get_owner_names() == set()
+
+    assert "_get_owner_names: failed to load owner names" in caplog.text
+
+
 def test_get_related_bidirectional_excludes_deleted_and_superseded_neighbors(tmp_path):
     import datastore.memorydb.memory_graph as mg
 
@@ -1006,6 +1043,150 @@ def test_recall_once_full_config_failure_respects_failhard():
     assert "config down" in str(excinfo.value.__cause__)
 
 
+def test_recall_once_domain_filter_join_failure_respects_failhard(caplog):
+    import datastore.memorydb.memory_graph as mg
+
+    node = mg.Node.create(
+        "Fact",
+        "The operator keeps the domain marker in the field notebook.",
+        owner_id="operator",
+        attributes={"domains": ["personal"]},
+    )
+
+    class _FailingConn:
+        def execute(self, *_args, **_kwargs):
+            raise sqlite3.OperationalError("node_domains down")
+
+    class _FailingCtx:
+        def __enter__(self):
+            return _FailingConn()
+
+        def __exit__(self, *_exc):
+            return False
+
+    graph = SimpleNamespace(
+        search_hybrid=MagicMock(return_value=[(node, 0.95)]),
+        search_fts=MagicMock(return_value=[]),
+        _get_conn=lambda: _FailingCtx(),
+    )
+    cfg = SimpleNamespace(retrieval=SimpleNamespace())
+
+    kwargs = {
+        "owner_id": "operator",
+        "limit": 5,
+        "min_similarity": 0.0,
+        "use_routing": False,
+        "use_aliases": False,
+        "use_intent": False,
+        "use_multi_pass": False,
+        "use_reranker": False,
+        "include_graph_traversal": False,
+        "include_co_session": False,
+        "include_mmr": False,
+        "include_lexical_anchor_shaping": False,
+        "low_signal_retry": False,
+        "track_access": False,
+        "domain": {"personal": True},
+    }
+
+    with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+         patch("config.get_config", return_value=cfg), \
+         patch.object(mg, "_active_domains_for_filter", return_value={"personal"}), \
+         patch.object(mg, "_relation_matches_for_query", return_value=[]), \
+         patch.object(mg, "_has_generic_graph_signal", return_value=False), \
+         patch.object(mg, "_ollama_healthy", return_value=True), \
+         patch.object(mg, "_is_fail_hard_mode", return_value=True), \
+         caplog.at_level("WARNING"):
+        with pytest.raises(sqlite3.OperationalError, match="node_domains down"):
+            mg._recall_once("domain marker", **kwargs)
+
+    assert "Domain filter join table unavailable" in caplog.text
+
+
+def test_recall_once_domain_filter_join_failure_logs_and_falls_back(caplog):
+    import datastore.memorydb.memory_graph as mg
+
+    node = mg.Node.create(
+        "Fact",
+        "The operator keeps the fallback domain marker in the field notebook.",
+        owner_id="operator",
+        attributes={"domains": ["personal"]},
+    )
+
+    class _FailingConn:
+        def execute(self, *_args, **_kwargs):
+            raise sqlite3.OperationalError("node_domains down")
+
+    class _FailingCtx:
+        def __enter__(self):
+            return _FailingConn()
+
+        def __exit__(self, *_exc):
+            return False
+
+    graph = SimpleNamespace(
+        search_hybrid=MagicMock(return_value=[(node, 0.95)]),
+        search_fts=MagicMock(return_value=[]),
+        _get_conn=lambda: _FailingCtx(),
+    )
+    cfg = SimpleNamespace(retrieval=SimpleNamespace())
+
+    with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+         patch("config.get_config", return_value=cfg), \
+         patch.object(mg, "_active_domains_for_filter", return_value={"personal"}), \
+         patch.object(mg, "_relation_matches_for_query", return_value=[]), \
+         patch.object(mg, "_has_generic_graph_signal", return_value=False), \
+         patch.object(mg, "_ollama_healthy", return_value=True), \
+         patch.object(mg, "_is_fail_hard_mode", return_value=False), \
+         caplog.at_level("WARNING"):
+        rows = mg._recall_once(
+            "fallback domain marker",
+            owner_id="operator",
+            limit=5,
+            min_similarity=0.0,
+            use_routing=False,
+            use_aliases=False,
+            use_intent=False,
+            use_multi_pass=False,
+            use_reranker=False,
+            include_graph_traversal=False,
+            include_co_session=False,
+            include_mmr=False,
+            include_lexical_anchor_shaping=False,
+            low_signal_retry=False,
+            track_access=False,
+            domain={"personal": True},
+        )
+
+    assert [row["id"] for row in rows] == [node.id]
+    assert "Domain filter join table unavailable" in caplog.text
+
+
+def test_recall_fast_deadline_failure_respects_failhard(caplog):
+    import datastore.memorydb.memory_graph as mg
+
+    with patch.object(mg, "_recall_store_plan_timeout_s", side_effect=RuntimeError("timeout config down")), \
+         patch.object(mg, "_is_fail_hard_mode", return_value=True), \
+         caplog.at_level("WARNING"):
+        with pytest.raises(RuntimeError, match="timeout config down"):
+            mg.recall_fast("", return_meta=True)
+
+    assert "recall_fast: failed to compute deadline" in caplog.text
+
+
+def test_recall_fast_deadline_failure_logs_and_runs_unbounded(caplog):
+    import datastore.memorydb.memory_graph as mg
+
+    with patch.object(mg, "_recall_store_plan_timeout_s", side_effect=RuntimeError("timeout config down")), \
+         patch.object(mg, "_is_fail_hard_mode", return_value=False), \
+         caplog.at_level("WARNING"):
+        rows, meta = mg.recall_fast("", return_meta=True)
+
+    assert rows == []
+    assert meta["stop_reason"] == "empty_query"
+    assert "recall_fast: failed to compute deadline" in caplog.text
+
+
 def test_recall_once_reranker_falls_back_when_failhard_disabled(tmp_path):
     import datastore.memorydb.memory_graph as mg
 
@@ -1866,6 +2047,21 @@ class TestStoreBasic:
 
         assert second == pytest.approx(first)
         assert embedded.call_count == 1
+
+    def test_get_embedding_logs_provider_model_failure(self, tmp_path, caplog):
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _ = _make_graph(tmp_path)
+        graph.get_embedding = mg.MemoryGraph.get_embedding.__get__(graph, type(graph))
+
+        with patch("lib.embeddings.get_embeddings_provider", side_effect=RuntimeError("provider down")), \
+             patch.object(mg, "_lib_get_embedding", side_effect=_fake_get_embedding) as embedded, \
+             caplog.at_level("WARNING"):
+            embedding = graph.get_embedding("Operator stores a cache diagnostic memory")
+
+        assert embedding is not None
+        assert embedded.call_count == 1
+        assert "get_embedding: failed to load provider model name, cache disabled" in caplog.text
 
     def test_log_dedup_decision_missing_node_fallback_preserves_audit_row(self, tmp_path, capsys):
         import datastore.memorydb.memory_graph as mg
@@ -5273,6 +5469,27 @@ class TestTimestampOverride:
 
         assert filtered == []
         assert "Invalid temporal value for occurred_start" in caplog.text
+
+    def test_temporal_filter_logs_undated_row_exclusion(self, caplog):
+        import datastore.memorydb.memory_graph as mg
+
+        rows = [
+            {
+                "id": "undated-fact",
+                "text": "Undated preference without a temporal axis",
+            }
+        ]
+
+        with caplog.at_level("DEBUG"):
+            filtered = mg._filter_recall_rows_by_date_bounds(
+                rows,
+                date_from="2026-05-07",
+                date_to="2026-05-07",
+                keep_undated=False,
+            )
+
+        assert filtered == []
+        assert "Date-bounded recall excluded 1 undated row" in caplog.text
 
     def test_recall_raises_on_malformed_occurred_axis_under_failhard(self, tmp_path):
         """Full recall validates explicit temporal axes even without date bounds."""
