@@ -1701,6 +1701,119 @@ _ASSISTANT_SCHEMA_FEATURE_BULLET_RE = re.compile(
 )
 
 _GENERIC_SPEAKER_PREFIX_RE = re.compile(r"^\s*([^:\n]{1,60}):\s*(.*)$")
+_EXPLICIT_ANCHOR_USER_SPEAKER_KEYS = {
+    "user",
+    "human",
+    "owner",
+    "operator",
+    "usuario",
+    "usuaria",
+    "usuário",
+    "utilizador",
+    "utilisateur",
+    "utilisatrice",
+    "benutzer",
+    "nutzer",
+    "utente",
+    "gebruiker",
+    "пользователь",
+    "користувач",
+    "użytkownik",
+    "用户",
+    "用戶",
+    "使用者",
+    "ユーザー",
+    "利用者",
+    "사용자",
+    "مستخدم",
+    "المستخدم",
+    "उपयोगकर्ता",
+    "kullanıcı",
+}
+_EXPLICIT_ANCHOR_ASSISTANT_SPEAKER_KEYS = {
+    "assistant",
+    "agent",
+    "bot",
+    "ai",
+    "ai assistant",
+    "aiアシスタント",
+    "asistente",
+    "assistente",
+    "assistante",
+    "assistent",
+    "assistentin",
+    "помощник",
+    "ассистент",
+    "助手",
+    "助理",
+    "ai助手",
+    "智能助手",
+    "アシスタント",
+    "어시스턴트",
+    "도우미",
+    "مساعد",
+    "المساعد",
+    "सहायक",
+    "asistan",
+}
+_EXPLICIT_ANCHOR_NON_DIALOGUE_SPEAKER_KEYS = {
+    "system",
+    "tool",
+    "developer",
+    "function",
+    "memory",
+    "context",
+}
+
+
+def _speaker_label_key(value: str) -> str:
+    text = unicodedata.normalize("NFKC", str(value or "")).casefold()
+    text = text.replace("_", " ").replace("-", " ")
+    return re.sub(r"\s+", " ", text.strip())
+
+
+def _explicit_anchor_role_for_speaker_key(speaker_key: str, owner_aliases: set[str]) -> Optional[str]:
+    key = _speaker_label_key(speaker_key)
+    candidates = [key]
+    if "/" in key:
+        candidates.append(key.rsplit("/", 1)[-1].strip())
+    for candidate in candidates:
+        if candidate in owner_aliases:
+            return "user"
+        if candidate in _EXPLICIT_ANCHOR_ASSISTANT_SPEAKER_KEYS:
+            return "assistant"
+    return None
+
+
+def _infer_alternating_counterpart_roles(lines: List[str], owner_aliases: set[str]) -> Dict[str, str]:
+    speaker_keys: List[str] = []
+    known_roles: Dict[str, str] = {}
+    for raw_line in lines:
+        match = _GENERIC_SPEAKER_PREFIX_RE.match(raw_line)
+        if not match:
+            continue
+        key = _speaker_label_key(match.group(1))
+        if not key:
+            continue
+        speaker_keys.append(key)
+        role = _explicit_anchor_role_for_speaker_key(key, owner_aliases)
+        if role:
+            known_roles[key] = role
+
+    ordered_keys = list(dict.fromkeys(speaker_keys))
+    unknown_keys = [key for key in ordered_keys if key not in known_roles]
+    known_role_values = set(known_roles.values())
+    if len(ordered_keys) != 2 or len(unknown_keys) != 1 or len(known_role_values) != 1:
+        return {}
+    if unknown_keys[0] in _EXPLICIT_ANCHOR_NON_DIALOGUE_SPEAKER_KEYS:
+        return {}
+    if len(speaker_keys) < 3:
+        return {}
+    if any(left == right for left, right in zip(speaker_keys, speaker_keys[1:])):
+        return {}
+
+    known_role = next(iter(known_role_values))
+    return {unknown_keys[0]: "assistant" if known_role == "user" else "user"}
 
 
 def _assistant_anchor_informative_tokens(text: str, *, min_len: int = 4) -> List[str]:
@@ -1828,33 +1941,28 @@ def _build_assistant_anchor_fact(
 
 
 def _canonicalize_explicit_anchor_transcript(transcript: str, *, owner_id: str) -> str:
-    owner_aliases: set[str] = {"user", "human", "owner"}
+    owner_aliases: set[str] = set(_EXPLICIT_ANCHOR_USER_SPEAKER_KEYS)
     owner_text = str(owner_id or "").strip()
     if owner_text:
-        owner_aliases.add(owner_text.lower())
-        first_token = owner_text.split()[0].strip(".,;:!?()[]{}\"'`").lower()
+        owner_aliases.add(_speaker_label_key(owner_text))
+        first_token = owner_text.split()[0].strip(".,;:!?()[]{}\"'`")
         if first_token:
-            owner_aliases.add(first_token)
-    assistant_aliases = {
-        "assistant",
-        "agent",
-        "ai assistant",
-        "ai_assistant",
-        "ai-assistant",
-        "aiアシスタント",
-    }
+            owner_aliases.add(_speaker_label_key(first_token))
 
+    lines = str(transcript or "").splitlines()
+    inferred_roles = _infer_alternating_counterpart_roles(lines, owner_aliases)
     normalized_lines: List[str] = []
-    for raw_line in str(transcript or "").splitlines():
+    for raw_line in lines:
         match = _GENERIC_SPEAKER_PREFIX_RE.match(raw_line)
         if not match:
             normalized_lines.append(raw_line)
             continue
-        speaker = re.sub(r"\s+", " ", match.group(1).strip().lower().replace("_", " ").replace("-", " "))
+        speaker = _speaker_label_key(match.group(1))
         content = match.group(2)
-        if speaker in owner_aliases:
+        role = _explicit_anchor_role_for_speaker_key(speaker, owner_aliases) or inferred_roles.get(speaker)
+        if role == "user":
             normalized_lines.append(f"User: {content}")
-        elif speaker in assistant_aliases:
+        elif role == "assistant":
             normalized_lines.append(f"Assistant: {content}")
         else:
             normalized_lines.append(raw_line)

@@ -1129,6 +1129,108 @@ class TestExtractFromTranscript:
         assert result["explicit_structural_anchor_facts"] == 1
         assert texts[0] == "Mi ritual de viernes es tostar semillas de calabaza con la clave cedro-plantilla-4821"
 
+    def test_explicit_anchor_canonicalizes_multilingual_role_prefixes(self):
+        from ingest.extract import _canonicalize_explicit_anchor_transcript
+
+        result = _canonicalize_explicit_anchor_transcript(
+            (
+                "Usuario: Mi marcador de estante es cedro-plantilla-4821.\n"
+                "Asistente: Entendido."
+            ),
+            owner_id="Solomon Steadman",
+        )
+
+        assert result == (
+            "User: Mi marcador de estante es cedro-plantilla-4821.\n"
+            "Assistant: Entendido."
+        )
+
+    def test_explicit_anchor_infers_unknown_counterpart_in_alternating_transcript(self):
+        from ingest.extract import _canonicalize_explicit_anchor_transcript
+
+        result = _canonicalize_explicit_anchor_transcript(
+            (
+                "Usuario: Mi marcador de estante es cedro-plantilla-4821.\n"
+                "Respuesta: Entendido.\n"
+                "Usuario: También uso nogal-brujula-7142."
+            ),
+            owner_id="Solomon Steadman",
+        )
+
+        assert result == (
+            "User: Mi marcador de estante es cedro-plantilla-4821.\n"
+            "Assistant: Entendido.\n"
+            "User: También uso nogal-brujula-7142."
+        )
+
+    def test_explicit_anchor_does_not_infer_single_metadata_label_as_turn(self):
+        from ingest.extract import _canonicalize_explicit_anchor_transcript
+
+        result = _canonicalize_explicit_anchor_transcript(
+            (
+                "Estado: activo\n"
+                "Usuario: Mi marcador de estante es cedro-plantilla-4821."
+            ),
+            owner_id="Solomon Steadman",
+        )
+
+        assert result == (
+            "Estado: activo\n"
+            "User: Mi marcador de estante es cedro-plantilla-4821."
+        )
+
+    def test_explicit_anchor_does_not_infer_tool_label_as_assistant_turn(self):
+        from ingest.extract import _canonicalize_explicit_anchor_transcript
+
+        result = _canonicalize_explicit_anchor_transcript(
+            (
+                "User: Store cedar-template-4821 for the shelf marker.\n"
+                "Tool: {\"status\":\"ok\"}\n"
+                "User: Also store walnut-compass-7142."
+            ),
+            owner_id="Solomon Steadman",
+        )
+
+        assert result == (
+            "User: Store cedar-template-4821 for the shelf marker.\n"
+            "Tool: {\"status\":\"ok\"}\n"
+            "User: Also store walnut-compass-7142."
+        )
+
+    @patch("ingest.extract.call_deep_reasoning")
+    def test_explicit_structural_anchor_preserves_non_english_role_prefixes(self, mock_llm):
+        from ingest.extract import extract_from_transcript
+
+        mock_llm.return_value = (json.dumps({
+            "chunk_assessment": "usable",
+            "facts": [
+                {
+                    "text": "Solomon tiene un marcador de estante",
+                    "category": "fact",
+                    "speaker": "user",
+                    "domains": ["personal"],
+                    "extraction_confidence": "high",
+                    "privacy": "private",
+                }
+            ],
+            "soul_snippets": {},
+            "journal_entries": {},
+            "project_logs": {},
+        }), 0.1)
+
+        result = extract_from_transcript(
+            transcript=(
+                "Usuario: Mi marcador de estante es cedro-plantilla-4821.\n\n"
+                "Asistente: Entendido."
+            ),
+            owner_id="Solomon Steadman",
+            dry_run=True,
+        )
+
+        texts = [fact["text"] for fact in result["raw_facts"]]
+        assert result["explicit_structural_anchor_facts"] == 1
+        assert texts[0] == "Mi marcador de estante es cedro-plantilla-4821"
+
     def test_prefixed_turn_parser_accepts_codex_row_timestamps(self):
         from ingest import extract as extract_mod
 
