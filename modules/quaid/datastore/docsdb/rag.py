@@ -61,10 +61,20 @@ def _resolved_workspace() -> Path:
     """
     try:
         return _workspace().resolve()
-    except Exception:
+    except Exception as workspace_exc:
         try:
             return get_visible_quaid_home().resolve()
-        except Exception:
+        except Exception as home_exc:
+            if is_fail_hard_enabled():
+                raise RuntimeError(
+                    "Failed to resolve docs workspace root"
+                ) from home_exc
+            logger.warning(
+                "Failed to resolve docs workspace root; using cwd fallback: "
+                "workspace_error=%s visible_home_error=%s",
+                workspace_exc,
+                home_exc,
+            )
             return Path.cwd().resolve()
 
 
@@ -1162,7 +1172,10 @@ class DocsRAG:
         try:
             with open(file_path, 'rb') as f:
                 return hashlib.md5(f.read()).hexdigest()
-        except Exception:
+        except Exception as exc:
+            if is_fail_hard_enabled():
+                raise
+            logger.warning("Failed to hash docs file %s; treating hash as empty: %s", file_path, exc)
             return ""
 
     def _needs_reindex_from_indexed_at(self, file_path: str, indexed_at: Optional[str]) -> bool:

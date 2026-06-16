@@ -220,6 +220,32 @@ def _make_rag(tmp_path):
     return DocsRAG(db_path=db_path)
 
 
+def test_resolved_workspace_raises_when_failhard_and_roots_unavailable(monkeypatch):
+    import datastore.docsdb.rag as rag_module
+
+    monkeypatch.setattr(rag_module, "_workspace", lambda: (_ for _ in ()).throw(RuntimeError("workspace missing")))
+    monkeypatch.setattr(
+        rag_module,
+        "get_visible_quaid_home",
+        lambda: (_ for _ in ()).throw(RuntimeError("home missing")),
+    )
+    monkeypatch.setattr(rag_module, "is_fail_hard_enabled", lambda: True)
+
+    with pytest.raises(RuntimeError, match="Failed to resolve docs workspace root"):
+        rag_module._resolved_workspace()
+
+
+def test_get_file_hash_raises_read_failure_when_failhard(tmp_path, monkeypatch):
+    import datastore.docsdb.rag as rag_module
+
+    rag = _make_rag(tmp_path)
+    missing_file = tmp_path / "missing.md"
+    monkeypatch.setattr(rag_module, "is_fail_hard_enabled", lambda: True)
+
+    with pytest.raises(FileNotFoundError):
+        rag._get_file_hash(str(missing_file))
+
+
 # ---------------------------------------------------------------------------
 # chunk_markdown
 # ---------------------------------------------------------------------------

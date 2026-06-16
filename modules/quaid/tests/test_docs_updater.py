@@ -2,6 +2,7 @@
 
 import builtins
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 import sys
 import os
 import json
@@ -1083,6 +1084,48 @@ class TestDriftDetectionFallback:
         score_mock.assert_called_once()
         # args: commits_behind, lines_changed, days_stale
         assert score_mock.call_args.args[1] == 1
+
+    def test_detect_drift_days_stale_honors_quaid_now(self, tmp_path, monkeypatch):
+        cfg = _make_test_config(
+            source_mapping={"src.py": {"docs": ["docs/doc.md"]}},
+        )
+        doc_commit = int(datetime(2026, 3, 1, tzinfo=timezone.utc).timestamp())
+        src_commit = int(datetime(2026, 3, 3, tzinfo=timezone.utc).timestamp())
+
+        def _fake_run(cmd, *args, **kwargs):
+            command = " ".join(cmd)
+            if "--format=%ct" in command and "docs/doc.md" in command:
+                return MagicMock(stdout=f"{doc_commit}\n")
+            if "--format=%ct" in command and "src.py" in command:
+                return MagicMock(stdout=f"{src_commit}\n")
+            if "--format=%H" in command and "src.py" in command:
+                return MagicMock(stdout="abc123\n")
+            if "rev-list --count" in command and "src.py" in command:
+                return MagicMock(stdout="2\n")
+            if "diff --stat" in command and "src.py" in command:
+                return MagicMock(stdout="1 insertion(+)\n")
+            return MagicMock(stdout="")
+
+        with patch("datastore.docsdb.updater.get_config", return_value=cfg), \
+             _adapter_patch(tmp_path) as iroot, \
+             patch("datastore.docsdb.updater.subprocess.run", side_effect=_fake_run), \
+             patch("datastore.docsdb.updater._compute_staleness_score", return_value=42.0) as score_mock:
+            doc = iroot / "docs" / "doc.md"
+            src = iroot / "src.py"
+            doc.parent.mkdir(parents=True, exist_ok=True)
+            doc.write_text("# Doc\n")
+            src.write_text("print('x')\n")
+
+            import datastore.docsdb.updater as updater
+
+            monkeypatch.setenv("QUAID_NOW", "2026-03-11T00:00:00Z")
+            monkeypatch.setattr(updater, "is_fail_hard_enabled", lambda: False)
+            out = updater.detect_drift_from_git()
+
+        assert len(out) == 1
+        score_mock.assert_called_once()
+        assert score_mock.call_args.args[2] == pytest.approx(10.0)
+        assert out[0].days_stale == 10.0
 
     def test_detect_drift_returns_partial_results_when_budget_exhausted(self, tmp_path, monkeypatch, caplog):
         cfg = _make_test_config(

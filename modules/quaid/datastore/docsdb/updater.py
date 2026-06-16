@@ -1073,7 +1073,7 @@ def get_git_diff(source_path: str, since_mtime: float) -> str:
     parts = []
 
     # Git log since the doc was last modified
-    since_iso = datetime.fromtimestamp(since_mtime).strftime("%Y-%m-%dT%H:%M:%S")
+    since_iso = datetime.fromtimestamp(since_mtime, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
     try:
         log_output = _run_git_command(
             ["git", "log", "--oneline", f"--after={since_iso}", "--", source_path],
@@ -2202,7 +2202,7 @@ def detect_drift_from_git(since_hours: int = 24) -> List[DriftReport]:
                     total_lines_changed += 1
 
         if stale_sources:
-            days_stale = (time.time() - doc_commit_time) / 86400 if doc_commit_time > 0 else 0
+            days_stale = (_now_datetime().timestamp() - doc_commit_time) / 86400 if doc_commit_time > 0 else 0
             score = _compute_staleness_score(
                 total_commits_behind, total_lines_changed, days_stale
             )
