@@ -11351,28 +11351,7 @@ class TestRecallTelemetry:
                 **kwargs,
             ) == []
 
-    def test_priority_anchor_terms_for_fast_attribution_prefers_structural_anchor(self):
-        import datastore.memorydb.memory_graph as mg
-
-        narrowed = mg._priority_anchor_terms_for_fast_attribution(
-            "Who came up with the FaceTime idea for Linda's birthday?",
-            ["facetime", "linda"],
-        )
-
-        assert narrowed == ["facetime"]
-
-    def test_priority_query_terms_for_fast_attribution_keeps_anchor_and_idea(self):
-        import datastore.memorydb.memory_graph as mg
-
-        narrowed = mg._priority_query_terms_for_fast_attribution(
-            "Who came up with the FaceTime idea for Linda's birthday?",
-            ["came", "facetime", "idea", "linda", "birthday"],
-            ["facetime"],
-        )
-
-        assert narrowed == ["facetime", "idea"]
-
-    def test_build_fast_drill_fallback_queries_adds_owner_and_assistant_attribution_queries(self):
+    def test_build_fast_drill_fallback_queries_uses_content_anchors_for_assistant_source(self):
         import datastore.memorydb.memory_graph as mg
 
         with patch.object(
@@ -11397,9 +11376,9 @@ class TestRecallTelemetry:
                 owner_id="maya",
             )
 
-        assert queries == ["maya facetime linda idea", "assistant facetime idea"]
+        assert queries == ["facetime linda", "facetime"]
 
-    def test_build_fast_drill_fallback_queries_uses_row_context_for_origin_attribution(self):
+    def test_build_fast_drill_fallback_queries_ignores_row_text_for_assistant_source(self):
         import datastore.memorydb.memory_graph as mg
 
         queries = mg._build_fast_drill_fallback_queries(
@@ -11431,42 +11410,7 @@ class TestRecallTelemetry:
             ],
         )
 
-        assert queries == ["maya facetime linda idea", "assistant facetime calls dinner idea"]
-
-    def test_prioritize_fast_origin_attribution_rows_prefers_ideation_rows(self):
-        import datastore.memorydb.memory_graph as mg
-
-        rows = mg._prioritize_fast_origin_attribution_rows(
-            "Who came up with the FaceTime idea for Linda's birthday?",
-            [
-                {
-                    "id": "a",
-                    "text": "Rachel FaceTimed into Linda's birthday dinner with Ethan and Lily",
-                    "source_type": "user",
-                    "similarity": 1.0,
-                },
-                {
-                    "id": "b",
-                    "text": "The layered surprises worked! Remember we talked about the FaceTime call idea? Glad you went with that",
-                    "source_type": "assistant",
-                    "similarity": 0.99,
-                },
-                {
-                    "id": "c",
-                    "text": "maybe we do a facetime thing for her like she calls during dinner actually",
-                    "source_type": "user",
-                    "similarity": 0.78,
-                },
-                {
-                    "id": "d",
-                    "text": "Maya and David planned to have Rachel call via FaceTime during Maya's mom's April 2026 birthday dinner to layer the surprises",
-                    "source_type": "user",
-                    "similarity": 0.81,
-                },
-            ],
-        )
-
-        assert [row["id"] for row in rows[:4]] == ["b", "d", "c", "a"]
+        assert queries == ["facetime linda", "facetime"]
 
     def test_prioritize_fast_assistant_memory_rows_prefers_callback_like_assistant_row(self):
         import datastore.memorydb.memory_graph as mg
@@ -12272,7 +12216,7 @@ class TestRecallTelemetry:
         assert meta["quality_gate"]["fast_drill_candidate"] is True
         assert "needs_validation" in meta["quality_gate"]["fast_drill_reasons"]
 
-    def test_recall_fast_uses_owner_and_assistant_drill_for_origin_attribution_query(self):
+    def test_recall_fast_uses_content_anchor_drill_for_assistant_source_query(self):
         import datastore.memorydb.memory_graph as mg
 
         run_calls = []
@@ -12357,12 +12301,12 @@ class TestRecallTelemetry:
         assert len(run_calls) == 2
         assert run_calls[1]["planner_profile"] == "off"
         assert run_calls[1]["planned_queries"][0] == "Who came up with the FaceTime idea for Linda's birthday?"
-        assert run_calls[1]["limit"] == 12
-        assert "maya facetime linda idea" in run_calls[1]["planned_queries"]
-        assert "assistant facetime idea" in run_calls[1]["planned_queries"]
+        assert run_calls[1]["limit"] == 10
+        assert "facetime linda" in run_calls[1]["planned_queries"]
+        assert "facetime" in run_calls[1]["planned_queries"]
         assert meta["quality_gate"]["fast_drill_enabled"] is True
-        assert "maya facetime linda idea" in meta["quality_gate"]["fast_drill_queries"]
-        assert "assistant facetime idea" in meta["quality_gate"]["fast_drill_queries"]
+        assert "facetime linda" in meta["quality_gate"]["fast_drill_queries"]
+        assert "facetime" in meta["quality_gate"]["fast_drill_queries"]
 
     def test_recall_fast_recovers_assistant_suggestion_cluster_rows(self):
         import datastore.memorydb.memory_graph as mg
