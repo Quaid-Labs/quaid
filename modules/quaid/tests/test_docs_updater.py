@@ -942,6 +942,48 @@ class TestCleanupStateLocking:
 
             assert not updater._changelog_path().exists()
 
+    def test_queue_delayed_notification_logs_exc_info(self, tmp_path, monkeypatch, caplog):
+        with _adapter_patch(tmp_path):
+            import datastore.docsdb.updater as updater
+
+            monkeypatch.setattr(
+                updater,
+                "queue_deferred_notice",
+                lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("notice queue offline")),
+            )
+            caplog.set_level("WARNING", logger="datastore.docsdb.updater")
+
+            updater._queue_delayed_notification("message", "doc_update", "normal", "pytest")
+
+            assert "Failed queuing delayed notification" in caplog.text
+            assert any(record.exc_info for record in caplog.records)
+
+    def test_load_changelog_logs_corrupt_file(self, tmp_path, caplog):
+        with _adapter_patch(tmp_path):
+            import datastore.docsdb.updater as updater
+
+            path = updater._changelog_path()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("{not-json", encoding="utf-8")
+            caplog.set_level("WARNING", logger="datastore.docsdb.updater")
+
+            assert updater._load_changelog() == []
+
+            assert "Failed reading docs updater changelog; starting empty" in caplog.text
+
+    def test_load_cleanup_state_logs_corrupt_file(self, tmp_path, caplog):
+        with _adapter_patch(tmp_path):
+            import datastore.docsdb.updater as updater
+
+            path = updater._cleanup_state_path()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("{not-json", encoding="utf-8")
+            caplog.set_level("WARNING", logger="datastore.docsdb.updater")
+
+            assert updater._load_cleanup_state() == {}
+
+            assert "Failed reading docs cleanup state; starting empty" in caplog.text
+
     def test_reset_cleanup_state_honors_quaid_now(self, tmp_path, monkeypatch):
         with _adapter_patch(tmp_path):
             import datastore.docsdb.updater as updater
@@ -989,6 +1031,43 @@ class TestCleanupStateLocking:
 
 
 class TestAuditLogFallback:
+    def test_log_doc_update_db_warns_on_write_failure_when_fail_open(self, tmp_path, monkeypatch, caplog):
+        with _adapter_patch(tmp_path):
+            import datastore.docsdb.updater as updater
+
+            monkeypatch.setattr(updater, "_ensure_audit_table", lambda: (_ for _ in ()).throw(RuntimeError("audit offline")))
+            monkeypatch.setattr(updater, "is_fail_hard_enabled", lambda: False)
+            caplog.set_level("WARNING", logger="datastore.docsdb.updater")
+
+            updater.log_doc_update_db(
+                "docs/test.md",
+                ["src/app.py"],
+                12.5,
+                "updated docs",
+                commit_hash="abc123",
+                agent_id="pytest",
+            )
+
+            assert "Audit log write failed" in caplog.text
+            assert "audit offline" in caplog.text
+
+    def test_log_doc_update_db_raises_on_write_failure_when_failhard(self, tmp_path, monkeypatch):
+        with _adapter_patch(tmp_path):
+            import datastore.docsdb.updater as updater
+
+            monkeypatch.setattr(updater, "_ensure_audit_table", lambda: (_ for _ in ()).throw(RuntimeError("audit offline")))
+            monkeypatch.setattr(updater, "is_fail_hard_enabled", lambda: True)
+
+            with pytest.raises(RuntimeError, match="audit offline"):
+                updater.log_doc_update_db(
+                    "docs/test.md",
+                    ["src/app.py"],
+                    12.5,
+                    "updated docs",
+                    commit_hash="abc123",
+                    agent_id="pytest",
+                )
+
     def test_get_update_log_warns_on_read_failure(self, tmp_path, caplog):
         with _adapter_patch(tmp_path):
             import datastore.docsdb.updater as updater

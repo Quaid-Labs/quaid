@@ -163,7 +163,11 @@ def _queue_delayed_notification(message: str, kind: str, priority: str, source: 
             source=str(source),
         )
     except Exception:
-        logger.warning("Failed queuing delayed notification", extra={"source": source, "kind": kind})
+        logger.warning(
+            "Failed queuing delayed notification",
+            extra={"source": source, "kind": kind},
+            exc_info=True,
+        )
 
 
 def _docs_index_timeout_seconds() -> float:
@@ -307,7 +311,8 @@ def _load_changelog() -> List[dict]:
         return []
     try:
         return json.loads(_changelog_path().read_text())
-    except (json.JSONDecodeError, IOError):
+    except (json.JSONDecodeError, IOError) as exc:
+        logger.warning("Failed reading docs updater changelog; starting empty: %s", exc)
         return []
 
 
@@ -386,7 +391,8 @@ def _load_cleanup_state() -> Dict[str, dict]:
         return {}
     try:
         return json.loads(_cleanup_state_path().read_text())
-    except (json.JSONDecodeError, IOError):
+    except (json.JSONDecodeError, IOError) as exc:
+        logger.warning("Failed reading docs cleanup state; starting empty: %s", exc)
         return {}
 
 
@@ -2299,7 +2305,9 @@ def log_doc_update_db(
                 timestamp,
             ))
     except Exception as e:
-        print(f"  Warning: audit log write failed: {e}", file=sys.stderr)
+        logger.warning("Audit log write failed: %s", e, exc_info=True)
+        if is_fail_hard_enabled():
+            raise
 
 
 def get_update_log(limit: int = 50) -> List[Dict[str, Any]]:
