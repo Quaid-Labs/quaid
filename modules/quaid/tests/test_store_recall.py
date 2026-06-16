@@ -11117,17 +11117,17 @@ class TestRecallTelemetry:
             owner_id="maya",
         )
 
-        assert queries == ["maya biscuit assistant recall", "assistant biscuit memory"]
+        assert queries == ["biscuit maya", "biscuit"]
 
-    def test_build_fast_drill_fallback_queries_refines_assistant_memory_when_planner_is_disabled(self):
+    def test_build_fast_drill_fallback_queries_refines_assistant_memory_without_recall_verb(self):
         import datastore.memorydb.memory_graph as mg
 
         queries = mg._build_fast_drill_fallback_queries(
-            "What did the agent recall about Biscuit that surprised Maya?",
+            "What did the agent say about Biscuit that surprised Maya?",
             gate_eval={
                 "requirements": ["assistant_source"],
                 "coverage": {"assistant_source": 3},
-                "query_terms": ["agent", "recall", "biscuit", "surprised", "maya"],
+                "query_terms": ["agent", "say", "biscuit", "surprised", "maya"],
                 "overlap_ratio": 0.4,
                 "needs_validation": True,
             },
@@ -11140,7 +11140,7 @@ class TestRecallTelemetry:
             owner_id="maya",
         )
 
-        assert queries == ["maya biscuit assistant recall", "assistant biscuit memory"]
+        assert queries == ["biscuit maya", "biscuit"]
 
     def test_recover_assistant_suggestion_cluster_rows_lifts_structural_siblings(self, tmp_path):
         import datastore.memorydb.memory_graph as mg
@@ -12059,7 +12059,7 @@ class TestRecallTelemetry:
                     None,
                 )
             return (
-                [{"id": "b", "text": "The assistant recalled that Biscuit once tried to eat a pinecone", "category": "fact", "similarity": 0.98, "source_type": "assistant"}],
+                [{"id": "b", "text": "The assistant noted that Biscuit once tried to eat a pinecone", "category": "fact", "similarity": 0.98, "source_type": "assistant"}],
                 {"phases_ms": {"total_ms": 90, "store_plan_wall_ms": 90}, "store_runs": [{"store": "vector", "result_count": 1}]},
                 None,
             )
@@ -12098,10 +12098,7 @@ class TestRecallTelemetry:
 
         assert rows[0]["id"] == "b"
         assert run_calls[1]["planned_queries"][0] == query
-        assert (
-            "assistant biscuit memory" in run_calls[1]["planned_queries"]
-            or "maya biscuit assistant recall" in run_calls[1]["planned_queries"]
-        )
+        assert "biscuit maya" in run_calls[1]["planned_queries"]
         assert run_calls[1]["limit"] == 10
         assert meta["quality_gate"]["fast_drill_enabled"] is True
 
@@ -12123,7 +12120,7 @@ class TestRecallTelemetry:
                     None,
                 )
             return (
-                [{"id": "b", "text": "The assistant recalled that Biscuit once tried to eat a pinecone", "category": "fact", "similarity": 0.98, "source_type": "assistant"}],
+                [{"id": "b", "text": "The assistant noted that Biscuit once tried to eat a pinecone", "category": "fact", "similarity": 0.98, "source_type": "assistant"}],
                 {"phases_ms": {"total_ms": 90, "store_plan_wall_ms": 90}, "store_runs": [{"store": "vector", "result_count": 1}]},
                 None,
             )
@@ -12136,9 +12133,9 @@ class TestRecallTelemetry:
             mg,
             "_plan_fanout_queries",
             return_value=(
-                ["What did the agent recall about Biscuit that surprised Maya?"],
+                ["What did the agent say about Biscuit that surprised Maya?"],
                 {
-                    "query": "What did the agent recall about Biscuit that surprised Maya?",
+                    "query": "What did the agent say about Biscuit that surprised Maya?",
                     "used_llm": False,
                     "bailout_reason": "preserve_short_exact_query",
                     "queries_count": 1,
@@ -12160,7 +12157,7 @@ class TestRecallTelemetry:
                 {
                     "requirements": ["assistant_source"],
                     "coverage": {"assistant_source": 0},
-                    "query_terms": ["agent", "recall", "biscuit", "surprised", "maya"],
+                    "query_terms": ["agent", "say", "biscuit", "surprised", "maya"],
                     "ready": False,
                     "needs_validation": True,
                     "overlap_ratio": 0.2,
@@ -12174,18 +12171,18 @@ class TestRecallTelemetry:
             return_value={"ready": True, "needs_validation": False},
         ):
             rows, meta = mg.recall_fast(
-                "What did the agent recall about Biscuit that surprised Maya?",
+                "What did the agent say about Biscuit that surprised Maya?",
                 return_meta=True,
             )
 
         assert len(run_calls) == 2
         assert run_calls[1]["planner_profile"] == "off"
-        assert run_calls[1]["planned_queries"][0] == "What did the agent recall about Biscuit that surprised Maya?"
-        assert "maya biscuit assistant recall" in run_calls[1]["planned_queries"]
-        assert "assistant biscuit memory" in run_calls[1]["planned_queries"]
-        assert rows[0]["text"] == "The assistant recalled that Biscuit once tried to eat a pinecone"
+        assert run_calls[1]["planned_queries"][0] == "What did the agent say about Biscuit that surprised Maya?"
+        assert "biscuit maya" in run_calls[1]["planned_queries"]
+        assert "biscuit" in run_calls[1]["planned_queries"]
+        assert rows[0]["text"] == "The assistant noted that Biscuit once tried to eat a pinecone"
         assert meta["quality_gate"]["fast_drill_enabled"] is True
-        assert "assistant biscuit memory" in meta["quality_gate"]["fast_drill_queries"]
+        assert "biscuit" in meta["quality_gate"]["fast_drill_queries"]
 
     def test_recall_fast_uses_assistant_anchor_drill_when_planner_disabled_surface_is_conflicted(self):
         import datastore.memorydb.memory_graph as mg
@@ -12222,7 +12219,7 @@ class TestRecallTelemetry:
                     None,
                 )
             return (
-                [{"id": "b", "text": "The assistant recalled that Biscuit once tried to eat a pinecone", "category": "fact", "similarity": 0.98, "source_type": "assistant"}],
+                [{"id": "b", "text": "The assistant noted that Biscuit once tried to eat a pinecone", "category": "fact", "similarity": 0.98, "source_type": "assistant"}],
                 {"phases_ms": {"total_ms": 90, "store_plan_wall_ms": 90}, "store_runs": [{"store": "vector", "result_count": 1}]},
                 None,
             )
@@ -12235,9 +12232,9 @@ class TestRecallTelemetry:
             mg,
             "_plan_fanout_queries",
             return_value=(
-                ["What did the agent recall about Biscuit that surprised Maya?"],
+                ["What did the agent say about Biscuit that surprised Maya?"],
                 {
-                    "query": "What did the agent recall about Biscuit that surprised Maya?",
+                    "query": "What did the agent say about Biscuit that surprised Maya?",
                     "used_llm": False,
                     "bailout_reason": "planner_disabled",
                     "queries_count": 1,
@@ -12261,16 +12258,16 @@ class TestRecallTelemetry:
             return_value=[],
         ):
             rows, meta = mg.recall_fast(
-                "What did the agent recall about Biscuit that surprised Maya?",
+                "What did the agent say about Biscuit that surprised Maya?",
                 return_meta=True,
             )
 
         assert len(run_calls) == 2
         assert run_calls[1]["planner_profile"] == "off"
-        assert run_calls[1]["planned_queries"][0] == "What did the agent recall about Biscuit that surprised Maya?"
-        assert "maya biscuit assistant recall" in run_calls[1]["planned_queries"]
+        assert run_calls[1]["planned_queries"][0] == "What did the agent say about Biscuit that surprised Maya?"
+        assert "biscuit maya" in run_calls[1]["planned_queries"]
         assert run_calls[1]["limit"] == 10
-        assert any(row["text"] == "The assistant recalled that Biscuit once tried to eat a pinecone" for row in rows)
+        assert any(row["text"] == "The assistant noted that Biscuit once tried to eat a pinecone" for row in rows)
         assert meta["quality_gate"]["fast_drill_enabled"] is True
         assert meta["quality_gate"]["fast_drill_candidate"] is True
         assert "needs_validation" in meta["quality_gate"]["fast_drill_reasons"]

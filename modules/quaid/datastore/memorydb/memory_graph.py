@@ -18492,7 +18492,6 @@ def _build_fast_drill_fallback_queries(
         return []
     assistant_coverage = int((gate.get("coverage") or {}).get("assistant_source") or 0)
     requirements = {str(item) for item in (gate.get("requirements") or []) if str(item)}
-    lower_query = str(query or "").lower()
 
     def _normalize_term(raw: Any) -> str:
         return " ".join(str(raw or "").split()).strip().strip(".,;:!?\"'").lower()
@@ -18628,7 +18627,6 @@ def _build_fast_drill_fallback_queries(
         assistant_memory_needs_refine = (
             _is_assistant_memory_query(query, gate)
             and bool(gate.get("needs_validation"))
-            and bool(re.search(r"\b(recall|remember)\w*\b", lower_query))
         )
         if "assistant_source" not in requirements:
             return []
@@ -18642,88 +18640,28 @@ def _build_fast_drill_fallback_queries(
             for raw in _extract_explicit_query_anchor_terms(query, limit=6)
         ]
         explicit_terms = [term for term in explicit_terms if term]
-        queries: List[str] = []
-        if explicit_terms and re.search(r"\b(recall|remember)\w*\b", lower_query):
-            owner_term = ""
-            seen_owner_terms = {explicit_terms[0]}
-            owner_skip_terms = {
-                "agent",
-                "ai",
-                "assistant",
-                "callback",
-                "memory",
-                "recall",
-                "recalled",
-                "remember",
-                "remembered",
-                "what",
-                "who",
-                "did",
-            }
-            for raw in (
-                explicit_terms[1:]
-                + list(gate.get("query_terms") or [])
-                + list(_extract_distinctive_query_terms(query, limit=8))
-            ):
-                term = _normalize_term(raw)
-                if (
-                    not term
-                    or term in seen_owner_terms
-                    or term in _QUERY_STOPWORDS
-                    or term in owner_skip_terms
-                    or len(term) < 3
-                ):
-                    continue
-                owner_term = term
-                break
-            if owner_term:
-                queries.append(f"{owner_term} {explicit_terms[0]} assistant recall")
-        if explicit_terms and re.search(r"\b(recall|remember)\w*\b", lower_query):
-            queries.append(f"assistant {explicit_terms[0]} memory")
-            return queries
-        filtered_terms: List[str] = []
-        filtered_seen: set[str] = set()
-        skip_terms = {
-            "agent",
-            "ai",
-            "assistant",
-            "came",
-            "did",
-            "idea",
-            "ideas",
-            "recall",
-            "recalled",
-            "remember",
-            "remembered",
-            "said",
-            "suggest",
-            "suggested",
-            "what",
-            "who",
-        }
-        for raw in (
-            list(_extract_explicit_query_anchor_terms(query, limit=6))
-            + list(gate.get("query_terms") or [])
-            + list(_extract_distinctive_query_terms(query, limit=8))
-        ):
-            term = _normalize_term(raw)
-            if (
-                not term
-                or term in filtered_seen
-                or term in _QUERY_STOPWORDS
-                or term in skip_terms
-                or len(term) < 3
-            ):
+        if not explicit_terms:
+            explicit_terms = [
+                _normalize_term(raw)
+                for raw in _extract_vocabulary_free_query_terms(query, limit=4)
+            ]
+            explicit_terms = [term for term in explicit_terms if term]
+        anchor_terms: List[str] = []
+        seen_anchor_terms: set[str] = set()
+        for term in explicit_terms:
+            if term in seen_anchor_terms:
                 continue
-            filtered_seen.add(term)
-            filtered_terms.append(term)
-            if len(filtered_terms) >= 4:
+            seen_anchor_terms.add(term)
+            anchor_terms.append(term)
+            if len(anchor_terms) >= 4:
                 break
-        if not filtered_terms:
+        if not anchor_terms:
             return []
-        if len(filtered_terms) == 1 and re.search(r"\b(recall|remember)\w*\b", lower_query):
-            filtered_terms.append("memory")
-        return ["assistant " + " ".join(filtered_terms[:4])]
+        queries: List[str] = []
+        if len(anchor_terms) >= 2:
+            queries.append(" ".join(anchor_terms[:2]))
+        queries.append(anchor_terms[0])
+        return queries
 
     attribution_fallback = _build_origin_attribution_fallback()
     if attribution_fallback:
@@ -18773,8 +18711,9 @@ def _is_assistant_memory_query(query: str, gate_eval: Optional[Dict[str, Any]]) 
     requirements = {str(item) for item in (gate.get("requirements") or []) if str(item)}
     if "assistant_source" not in requirements or "enumeration" in requirements:
         return False
-    lower = str(query or "").lower()
-    return bool(re.search(r"\b(recall|remember)\w*\b", lower))
+    if _is_origin_attribution_query(query):
+        return False
+    return True
 
 
 _ORIGIN_ATTRIBUTION_CUE_RE = re.compile(
@@ -18826,12 +18765,6 @@ def _prioritize_fast_origin_attribution_rows(query: str, rows: List[Dict[str, An
     return priority_rows + remaining_rows
 
 
-_ASSISTANT_MEMORY_CALLBACK_CUE_RE = re.compile(
-    r"\b(?:remember(?:ed)?|recall(?:ed)?|once|back when|used to|old detail)\b",
-    re.IGNORECASE,
-)
-
-
 def _prioritize_fast_assistant_memory_rows(
     query: str,
     rows: List[Dict[str, Any]],
@@ -18841,9 +18774,6 @@ def _prioritize_fast_assistant_memory_rows(
     if not rows:
         return rows
     if not _is_assistant_memory_query(query, gate_eval):
-        return rows
-    lower_query = str(query or "").lower()
-    if not re.search(r"\b(recall|remember)\w*\b", lower_query):
         return rows
     anchor_terms = [
         str(term or "").strip().lower()
@@ -18883,7 +18813,7 @@ def _prioritize_fast_assistant_memory_rows(
             continue
         lower_text = str((row or {}).get("text") or "").lower()
         kind = str((row or {}).get("structural_anchor_kind") or "").strip().lower()
-        if kind not in anchor_kind_priority and not _ASSISTANT_MEMORY_CALLBACK_CUE_RE.search(lower_text):
+        if kind not in anchor_kind_priority and not row.get("_assistant_memory_recovery"):
             remaining_rows.append(row)
             continue
         if not row.get("_assistant_memory_recovery") and not _row_anchor_match(row):
@@ -18897,7 +18827,6 @@ def _prioritize_fast_assistant_memory_rows(
             anchor_kind_priority.get(str((row or {}).get("structural_anchor_kind") or "").strip().lower(), 0),
             1 if _row_primary_anchor_match(row) else 0,
             1 if _row_anchor_match(row) else 0,
-            1 if _ASSISTANT_MEMORY_CALLBACK_CUE_RE.search(str((row or {}).get("text") or "").lower()) else 0,
             float((row or {}).get("similarity", 0.0) or 0.0),
         ),
         reverse=True,
@@ -18921,9 +18850,6 @@ def _assistant_memory_surface_resolved(
 ) -> bool:
     if not _is_assistant_memory_query(query, gate_eval):
         return False
-    lower_query = str(query or "").lower()
-    if not re.search(r"\b(recall|remember)\w*\b", lower_query):
-        return False
     sample = [row for row in list(rows or [])[:5] if isinstance(row, dict)]
     if not sample:
         return False
@@ -18946,7 +18872,7 @@ def _assistant_memory_surface_resolved(
             "assistant_callback_anchor",
             "assistant_option_list_anchor",
             "assistant_option_bullet_anchor",
-        } and not _ASSISTANT_MEMORY_CALLBACK_CUE_RE.search(lower_text):
+        } and not row.get("_assistant_memory_recovery"):
             return False
         return bool(row.get("_assistant_memory_recovery") or (primary_anchor and primary_anchor in lower_text))
 
@@ -19181,14 +19107,11 @@ def _recover_assistant_memory_cluster_rows(
                 return
             if float(score) < 0.40:
                 return
-        if kind != "assistant_callback_anchor" and not _ASSISTANT_MEMORY_CALLBACK_CUE_RE.search(lower_text):
-            return
-        has_callback_cue = bool(_ASSISTANT_MEMORY_CALLBACK_CUE_RE.search(lower_text))
         adjusted = float(score)
         if kind == "assistant_callback_anchor":
-            adjusted += 0.12 if has_callback_cue else 0.02
+            adjusted += 0.02
         elif kind == "assistant_option_list_anchor":
-            adjusted += 0.10 if has_callback_cue else 0.06
+            adjusted += 0.06
         else:
             adjusted += 0.03
         candidate_scores[node_id] = adjusted
@@ -19292,8 +19215,8 @@ def _recover_assistant_memory_cluster_rows(
             seed_rows = []
 
         seed_score_by_kind = {
-            "assistant_callback_anchor": 0.45,
-            "assistant_option_list_anchor": 0.39,
+            "assistant_option_list_anchor": 0.47,
+            "assistant_callback_anchor": 0.43,
             "assistant_option_bullet_anchor": 0.35,
         }
         for sql_row in seed_rows:
@@ -19368,8 +19291,6 @@ def _recover_assistant_memory_cluster_rows(
                 continue
             if candidate_scores.get(node.id, 0.0) <= 0.0:
                 continue
-        if kind != "assistant_callback_anchor" and not _ASSISTANT_MEMORY_CALLBACK_CUE_RE.search(lower_text):
-            continue
         similarity = candidate_scores.get(node.id, _cluster_sibling_fallback_score(cluster_best_score))
         recovered.append(
             _build_recall_row_from_node(
