@@ -9712,11 +9712,12 @@ class TestRecallTelemetry:
         assert meta["bailout_counts"]["low_information_message"] == 1
         assert meta["bailout_counts"]["too_short"] == 0
 
-    def test_low_signal_query_expansion_preserves_non_ascii_query_text(self):
+    def test_low_signal_query_expansion_is_language_neutral_noop(self):
         from datastore.memorydb.memory_graph import _expand_low_signal_query
 
         assert _expand_low_signal_query("美玲の予定", "WHEN") == "美玲の予定"
-        assert _expand_low_signal_query("Maya timeline", "WHEN") != "Maya timeline"
+        assert _expand_low_signal_query("Maya timeline", "WHEN") == "Maya timeline"
+        assert _expand_low_signal_query("Maya app", "PROJECT") == "Maya app"
 
     def test_build_branch_telemetry_tracks_parallel_fan_math(self):
         from datastore.memorydb.memory_graph import _build_branch_telemetry

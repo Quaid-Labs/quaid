@@ -7029,20 +7029,8 @@ def classify_intent(query: str) -> Tuple[str, Dict[str, float]]:
 
 
 def _expand_low_signal_query(query: str, intent: str) -> str:
-    """Expand under-specified recall queries when first pass yields low signal."""
-    q = (query or "").strip()
-    if not q:
-        return q
-    if _has_non_ascii(q):
-        return q
-    intent = (intent or "GENERAL").upper()
-    if intent == "WHEN":
-        return f"{q} timeline latest current date before after changed"
-    if intent == "PROJECT":
-        return f"{q} project implementation code schema api tests migration"
-    if intent in {"WHO", "RELATION"}:
-        return f"{q} who relationship said suggested source"
-    return f"{q} key facts names dates details"
+    """Return the original query; semantic expansion belongs to planner fanout."""
+    return (query or "").strip()
 
 
 def _get_fusion_weights(intent: Optional[str] = None) -> Tuple[float, float]:
