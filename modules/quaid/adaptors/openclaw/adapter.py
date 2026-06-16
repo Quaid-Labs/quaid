@@ -49,7 +49,7 @@ class OpenClawAdapter(QuaidAdapter):
     }
     _NON_ROUTABLE_NOTIFY_CHANNELS = {"webchat"}
     _HOST_MEMORY_POLICY_PATH_RE = re.compile(
-        r"(?:^|[\s`\"'(<\[])(?:memory|openclaw-workspace)[/\\][^\s`\"')>\]]+",
+        r"(?:^|[\s`\"'(<\[])(?:memory[/\\][^\s`\"')>\]]+|openclaw-workspace(?:[/\\][^\s`\"')>\]]+)?)",
         re.IGNORECASE,
     )
     _SAFE_SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
@@ -91,6 +91,18 @@ class OpenClawAdapter(QuaidAdapter):
         if normalized_role != "assistant" or not raw:
             return False
         return bool(OpenClawAdapter._HOST_MEMORY_POLICY_PATH_RE.search(raw))
+
+    @classmethod
+    def _strip_host_memory_policy_paths(cls, role: str, text: str) -> str:
+        normalized_role = str(role or "").strip().lower()
+        raw = str(text or "")
+        if normalized_role != "assistant" or not raw:
+            return raw
+        value = cls._HOST_MEMORY_POLICY_PATH_RE.sub(" ", raw)
+        value = re.sub(r"\s*/\s*(?=[,.;:!?]|\Z)", " ", value)
+        value = re.sub(r"\s+([,.;:!?])", r"\1", value)
+        value = re.sub(r"[ \t]{2,}", " ", value)
+        return value.strip()
 
     def _openclaw_config_path_candidates(self) -> list[Path]:
         """OpenClaw config candidates, honoring OPENCLAW_CONFIG_PATH first."""
@@ -880,7 +892,9 @@ class OpenClawAdapter(QuaidAdapter):
                     continue
                 try:
                     obj = json.loads(line)
-                except json.JSONDecodeError:
+                except json.JSONDecodeError as exc:
+                    if is_fail_hard_enabled():
+                        raise RuntimeError(f"OpenClaw session transcript contains malformed JSON: {path}") from exc
                     continue
                 if not isinstance(obj, dict):
                     continue
@@ -899,8 +913,7 @@ class OpenClawAdapter(QuaidAdapter):
                             role = "user" if payload_type == "user_message" else "assistant"
                             text = str(payload.get("message", "")).strip()
                             source_type = ""
-                            if self._is_host_memory_policy_reply(role, text):
-                                continue
+                            text = self._strip_host_memory_policy_paths(role, text)
                             if "[Subagent Context]" in text or "You are running as a subagent" in text:
                                 source_type = "subagent"
                                 text = re.sub(
@@ -919,6 +932,7 @@ class OpenClawAdapter(QuaidAdapter):
                                 })
                             continue
                         record = payload
+                        row_timestamp = self._row_timestamp(record) or row_timestamp
 
                 role = str(record.get("role", "")).strip().lower()
                 if role not in ("user", "assistant"):
@@ -940,7 +954,8 @@ class OpenClawAdapter(QuaidAdapter):
 
                 stripped = content.strip()
                 source_type = ""
-                if self._is_host_memory_policy_reply(role, stripped):
+                stripped = self._strip_host_memory_policy_paths(role, stripped)
+                if not stripped:
                     continue
                 if "[Subagent Context]" in stripped or "You are running as a subagent" in stripped:
                     source_type = "subagent"

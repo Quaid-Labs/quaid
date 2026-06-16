@@ -587,7 +587,10 @@ class TestOpenClawAdapter:
                             "type": "event_msg",
                             "payload": {
                                 "type": "agent_message",
-                                "message": "保存しました: memory/2026-06-15-user-note.md",
+                                "message": (
+                                    "保存しました: memory/2026-06-15-user-note.md "
+                                    "Your appointment is tomorrow at 3pm."
+                                ),
                             },
                         }
                     ),
@@ -609,6 +612,7 @@ class TestOpenClawAdapter:
         transcript = adapter.parse_session_jsonl(session_file)
 
         assert "memory/2026-06-15-user-note.md" not in transcript
+        assert "Your appointment is tomorrow at 3pm." in transcript
         assert "Durable memory is a product feature" in transcript
 
     def test_host_memory_policy_reply_does_not_use_english_phrase_gate(self):
@@ -652,6 +656,39 @@ class TestOpenClawAdapter:
 
         assert "[2026-06-11T15:09:12.914Z] User: I started using a 14mm Sailor" in transcript
         assert "[2026-06-11T15:09:17.625Z] Assistant: Noted." in transcript
+
+    def test_parse_session_jsonl_uses_payload_timestamp_after_event_msg_fallthrough(self, tmp_path):
+        session_file = tmp_path / "oc-session-payload-timestamp.jsonl"
+        session_file.write_text(
+            json.dumps(
+                {
+                    "timestamp": "2026-06-11T15:09:12.914Z",
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "custom_transcript_row",
+                        "timestamp": "2026-06-11T15:10:17.625Z",
+                        "role": "assistant",
+                        "content": "The payload timestamp should win.",
+                    },
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        adapter = OpenClawAdapter()
+        transcript = adapter.parse_session_jsonl(session_file)
+
+        assert "[2026-06-11T15:10:17.625Z] Assistant: The payload timestamp should win." in transcript
+        assert "2026-06-11T15:09:12.914Z" not in transcript
+
+    def test_parse_session_jsonl_raises_on_malformed_json_under_failhard(self, monkeypatch, tmp_path):
+        session_file = tmp_path / "oc-session-corrupt.jsonl"
+        session_file.write_text('{"role":"user","content":"ok"}\n{bad-json\n', encoding="utf-8")
+        monkeypatch.setattr("adaptors.openclaw.adapter.is_fail_hard_enabled", lambda: True)
+
+        with pytest.raises(RuntimeError, match="malformed JSON"):
+            OpenClawAdapter().parse_session_jsonl(session_file)
 
     def test_parse_session_jsonl_accepts_role_rows_with_message_field(self, tmp_path):
         session_file = tmp_path / "oc-session-message-field.jsonl"
@@ -3616,7 +3653,7 @@ class TestCodexAdapter:
         assert "Assistant: Quaid is noisy on startup here" in transcript
         assert "User: My espresso setup uses a Baratza Encore grinder." in transcript
 
-    def test_parse_session_jsonl_strips_openclaw_self_memory_acknowledgement(self, tmp_path):
+    def test_parse_session_jsonl_strips_openclaw_memory_paths_without_dropping_reply(self, tmp_path):
         path = tmp_path / "rollout-openclaw-memory-ack.jsonl"
         path.write_text(
             "\n".join(
@@ -3649,8 +3686,9 @@ class TestCodexAdapter:
         adapter = OpenClawAdapter()
         transcript = adapter.parse_session_jsonl(path)
         assert "cobalt-postage-oc" in transcript
-        assert "saved it in memory/" not in transcript
-        assert "I have remembered" not in transcript
+        assert "memory/2026-04-25-1909.md" not in transcript
+        assert "openclaw-workspace" not in transcript
+        assert "I have remembered cobalt-postage-oc" in transcript
 
     def test_parse_session_jsonl_preserves_openclaw_durable_memory_refusal_without_path_marker(self, tmp_path):
         path = tmp_path / "rollout-openclaw-memory-refusal.jsonl"
