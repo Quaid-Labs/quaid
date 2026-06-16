@@ -2095,6 +2095,52 @@ def test_config_reload_watcher_reloads_when_config_mtime_changes(monkeypatch, tm
     assert extraction_daemon._reload_config_if_changed("test stable") is False
 
 
+def test_config_reload_failure_logs_and_returns_false_when_not_failhard(monkeypatch, caplog):
+    old_sig = (("/tmp/config.json", 1, 1),)
+    new_sig = (("/tmp/config.json", 2, 1),)
+    context = ("/tmp/quaid", "pytest-runner")
+
+    monkeypatch.setattr(extraction_daemon, "_config_file_signature", old_sig)
+    monkeypatch.setattr(extraction_daemon, "_config_file_signature_context", context)
+    monkeypatch.setattr(extraction_daemon, "_config_reload_context", lambda: context)
+    monkeypatch.setattr(extraction_daemon, "_active_config_file_signature", lambda: new_sig)
+    monkeypatch.setattr(
+        extraction_daemon,
+        "_force_reload_config",
+        lambda: (_ for _ in ()).throw(RuntimeError("reload failed")),
+    )
+    monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: False)
+
+    with caplog.at_level("WARNING", logger="core.extraction_daemon"):
+        assert extraction_daemon._reload_config_if_changed("test signal") is False
+
+    assert "config changed but reload failed before test signal" in caplog.text
+    assert "reload failed" in caplog.text
+
+
+def test_config_reload_failure_raises_when_failhard(monkeypatch):
+    old_sig = (("/tmp/config.json", 1, 1),)
+    new_sig = (("/tmp/config.json", 2, 1),)
+    context = ("/tmp/quaid", "pytest-runner")
+
+    monkeypatch.setattr(extraction_daemon, "_config_file_signature", old_sig)
+    monkeypatch.setattr(extraction_daemon, "_config_file_signature_context", context)
+    monkeypatch.setattr(extraction_daemon, "_config_reload_context", lambda: context)
+    monkeypatch.setattr(extraction_daemon, "_active_config_file_signature", lambda: new_sig)
+    monkeypatch.setattr(
+        extraction_daemon,
+        "_force_reload_config",
+        lambda: (_ for _ in ()).throw(RuntimeError("reload failed")),
+    )
+    monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: True)
+
+    with pytest.raises(RuntimeError, match="config reload failed before test signal") as excinfo:
+        extraction_daemon._reload_config_if_changed("test signal")
+
+    assert isinstance(excinfo.value.__cause__, RuntimeError)
+    assert "reload failed" in str(excinfo.value.__cause__)
+
+
 def test_process_signal_reloads_config_before_signal_handling(monkeypatch):
     reloads = []
     old_sig = (("/tmp/config.json", 1, 1),)

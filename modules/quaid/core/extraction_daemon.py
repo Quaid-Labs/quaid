@@ -255,6 +255,8 @@ def _reload_config_if_changed(reason: str = "daemon poll") -> bool:
         _force_reload_config()
     except Exception as exc:
         logger.warning("config changed but reload failed before %s: %s", reason, exc)
+        if _fail_hard_enabled():
+            raise RuntimeError(f"config reload failed before {reason}") from exc
         return False
 
     _config_file_signature = _active_config_file_signature()
