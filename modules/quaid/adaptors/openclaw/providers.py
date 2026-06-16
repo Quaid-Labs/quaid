@@ -36,7 +36,9 @@ def _try_notify(msg: str, **kwargs) -> None:
     try:
         notify_agent(msg, **kwargs)
     except Exception:
-        logger.debug("notify_agent unavailable; logging provider error locally: %s", msg)
+        if _fail_hard_enabled():
+            raise
+        logger.debug("notify_agent unavailable; logging provider error locally: %s", msg, exc_info=True)
 
 
 class OpenClawGatewayLLMProvider(LLMProvider):
