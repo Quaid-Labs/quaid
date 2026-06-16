@@ -1244,6 +1244,35 @@ def test_requested_janitor_run_fails_when_child_checkpoint_failed(monkeypatch, t
     assert payload["errors"] == ["instance alpha janitor checkpoint status=failed"]
 
 
+def test_requested_janitor_run_raises_on_worker_failure_when_failhard(monkeypatch, tmp_path, caplog):
+    from core import project_docs, project_docs_supervisor as supervisor
+
+    class _FailedProc:
+        pid = 101
+
+        def poll(self):
+            return 1
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setattr(supervisor, "quaid_home", lambda: tmp_path)
+    monkeypatch.setattr(supervisor, "_fail_hard_enabled", lambda: True)
+    monkeypatch.setattr(supervisor.project_docs, "reap_child_processes", lambda: 0)
+
+    request = project_docs.request_janitor_run(reason="pytest", requested_by="pytest")
+    workers: dict[str, subprocess.Popen] = {"alpha": _FailedProc()}
+    active = {"request_id": request["request_id"], "errors": [], "exit_codes": {}}
+
+    with caplog.at_level("ERROR", logger=supervisor.__name__):
+        with pytest.raises(RuntimeError, match="instance alpha janitor exited rc=1"):
+            supervisor._maintain_on_demand_janitor_request(active, {}, workers)
+
+    assert "janitor request failed under failHard: instance alpha janitor exited rc=1" in caplog.text
+    payload = project_docs.read_janitor_request()
+    assert payload["status"] == "failed"
+    assert payload["exit_codes"] == {"alpha": 1}
+    assert payload["errors"] == ["instance alpha janitor exited rc=1"]
+
+
 def test_requested_janitor_run_fails_when_child_checkpoint_still_running(monkeypatch, tmp_path):
     from core import project_docs, project_docs_supervisor as supervisor
 

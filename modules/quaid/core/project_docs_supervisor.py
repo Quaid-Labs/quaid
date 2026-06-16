@@ -648,8 +648,12 @@ def _finalize_janitor_request_payload(
     payload["exit_codes"] = {str(k): int(v) for k, v in sorted(exit_codes.items())}
     payload["worker_pids"] = {}
     project_docs.write_janitor_request(payload)
-    if fail_hard_exc is not None and _fail_hard_enabled():
-        raise fail_hard_exc
+    if final_errors and _fail_hard_enabled():
+        message = "janitor request failed under failHard: " + "; ".join(final_errors)
+        _LOGGER.error(message)
+        if fail_hard_exc is not None:
+            raise RuntimeError(message) from fail_hard_exc
+        raise RuntimeError(message)
 
 
 def _start_requested_janitor_run(
