@@ -16025,6 +16025,61 @@ class TestRecallFastHookInjectContract:
         assert meta["counts"]["lexical_rescue_added"] == 1
         assert meta["flags"]["lexical_rescue_used"] is True
 
+    def test_recall_once_rescues_rows_covering_missing_query_terms(self):
+        import datastore.memorydb.memory_graph as mg
+
+        exact = mg.Node(
+            id="kinetic-origami-fact",
+            type="Fact",
+            name="Mira disliked kinetic origami after trying it twice.",
+            attributes={},
+        )
+        generic_rows = [
+            mg.Node(
+                id=f"generic-{idx}",
+                type="Fact",
+                name=f"Mira said the same thing in planning note {idx}.",
+                attributes={},
+            )
+            for idx in range(8)
+        ]
+        graph = MagicMock()
+        graph.search_hybrid.return_value = [
+            (node, 0.96 - (idx * 0.01))
+            for idx, node in enumerate(generic_rows)
+        ]
+        graph.search_fts.return_value = []
+
+        def _quality_passthrough(_node, quality, *_args, **_kwargs):
+            return quality
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch.object(mg, "_ollama_healthy", return_value=True), \
+             patch.object(mg, "_compute_composite_score", side_effect=_quality_passthrough), \
+             patch.object(mg, "_compute_query_fit_multiplier", return_value=1.0), \
+             patch.object(mg, "_search_nodes_by_query_terms", return_value=[(exact, 1.0)]):
+            rows, meta = mg._recall_once(
+                "Has Mira ever said the same thing twice about kinetic origami?",
+                owner_id="quaid",
+                limit=5,
+                use_aliases=False,
+                use_routing=False,
+                use_multi_pass=False,
+                use_reranker=False,
+                include_graph_traversal=False,
+                include_co_session=False,
+                include_mmr=False,
+                include_lexical_anchor_shaping=True,
+                lexical_anchor_planner_mode="deterministic",
+                min_similarity=0.0,
+                track_access=False,
+                return_meta=True,
+            )
+
+        assert any(row["id"] == "kinetic-origami-fact" for row in rows[:5])
+        assert meta["counts"]["lexical_rescue_added"] == 1
+        assert meta["flags"]["lexical_rescue_used"] is True
+
     def test_recall_once_disables_fast_anchor_miss_penalty_without_explicit_anchor(self, tmp_path):
         import datastore.memorydb.memory_graph as mg
 

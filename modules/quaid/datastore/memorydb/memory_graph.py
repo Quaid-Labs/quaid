@@ -12476,6 +12476,15 @@ def _recall_once(
                 ),
                 default=0,
             )
+            existing_query_hits: Set[str] = set()
+            for node, _score in scored_results:
+                existing_query_hits.update(
+                    _query_term_hits({"text": _node_searchable_text(node)}, query_terms)
+                )
+            missing_query_terms = [
+                term for term in query_terms if term not in existing_query_hits
+            ]
+            missing_query_term_set = set(missing_query_terms)
             best_ratio = best_overlap / max(1, len(query_terms))
             if best_ratio >= 0.75 and best_overlap >= min_overlap:
                 boosted_results: List[Tuple[Node, float]] = []
@@ -12532,8 +12541,12 @@ def _recall_once(
                         if not getattr(node, "id", None)
                     ]
                     for node, fts_rank in fts_rescue:
-                        overlap = _query_term_overlap({"text": _node_searchable_text(node)}, query_terms)
-                        if overlap < min_overlap or overlap <= best_overlap:
+                        query_hits = _query_term_hits({"text": _node_searchable_text(node)}, query_terms)
+                        overlap = len(query_hits)
+                        covers_missing_terms = bool(query_hits & missing_query_term_set)
+                        if overlap < min_overlap:
+                            continue
+                        if overlap <= best_overlap and not covers_missing_terms:
                             continue
                         rescue_score = _fast_term_rescue_score(
                             overlap=overlap,
@@ -12543,6 +12556,11 @@ def _recall_once(
                             best_existing_score=best_existing_score,
                             best_existing_overlap=best_overlap,
                         )
+                        if covers_missing_terms:
+                            rescue_score = max(
+                                rescue_score,
+                                min(0.98, max(0.90, best_existing_score - 0.01)),
+                            )
                         existing = scored_by_id.get(node.id)
                         if existing is None:
                             scored_by_id[node.id] = (node, rescue_score)
@@ -16528,10 +16546,14 @@ def _row_matches_requirement(row: Dict[str, Any], requirement: str) -> bool:
 
 
 def _query_term_overlap(row: Dict[str, Any], query_terms: List[str]) -> int:
+    return len(_query_term_hits(row, query_terms))
+
+
+def _query_term_hits(row: Dict[str, Any], query_terms: List[str]) -> Set[str]:
     if not query_terms:
-        return 0
+        return set()
     text = str((row or {}).get("text") or "").lower()
-    return sum(1 for term in query_terms if term in text)
+    return {term for term in query_terms if term in text}
 
 
 def _quality_gate_row_text(row: Dict[str, Any]) -> str:
