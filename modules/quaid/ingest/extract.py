@@ -102,16 +102,47 @@ def _parse_extracted_datetime(value: Any) -> Optional[datetime]:
         return None
 
 
-# This intentionally only recognizes the English current-week wording that the
-# extractor prompt emits today. A numeric-only correction would corrupt legitimate
-# "last week" facts with the same previous-week bounds.
-_CURRENT_WEEK_RE = re.compile(r"(?<!\w)(?:this|current)\s+week(?:'s)?(?!\w)", re.IGNORECASE)
+_STALE_WEEK_CLASSIFICATION_VALUES = {"current_week", "previous_week", "other"}
+
+
+def _classify_stale_week_reference(text: str, *, mentioned_at: str) -> str:
+    """Disambiguate stale one-week ranges without hardcoded language phrases."""
+    prompt = (
+        "Classify the event-time phrase in FACT_TEXT relative to MENTIONED_AT.\n"
+        "Return strict JSON only: {\"classification\":\"current_week|previous_week|other\"}.\n"
+        "Use current_week only when the text says the event happened during the calendar week "
+        "that contains MENTIONED_AT, in any language.\n"
+        "Use previous_week only when the text says the event happened during the immediately "
+        "preceding week, in any language.\n"
+        "Use other when the text is ambiguous, has no week-relative event-time phrase, or refers "
+        "to another range.\n\n"
+        f"MENTIONED_AT: {mentioned_at}\n"
+        f"FACT_TEXT: {str(text or '').strip()}"
+    )
+    try:
+        response_text, _duration = call_deep_reasoning(
+            prompt=prompt,
+            system_prompt="Return valid JSON only. No markdown. No prose.",
+            max_tokens=80,
+            timeout=60.0,
+        )
+        parsed = parse_json_response(response_text)
+        if isinstance(parsed, dict):
+            value = str(parsed.get("classification") or "").strip().lower()
+            if value in _STALE_WEEK_CLASSIFICATION_VALUES:
+                return value
+        logger.warning("[extract] stale-week classifier returned invalid output: %r", response_text)
+    except Exception as exc:
+        if is_fail_hard_enabled():
+            raise RuntimeError("[extract] stale-week temporal classifier failed") from exc
+        logger.warning("[extract] stale-week temporal classifier failed: %s", exc)
+    return "other"
 
 
 def _maybe_shift_stale_current_week_bounds(fact: Dict[str, Any]) -> Dict[str, Any]:
     """Repair current-week ranges that the extractor resolved to the previous week."""
     text = str((fact or {}).get("text") or "")
-    if not _CURRENT_WEEK_RE.search(text):
+    if not text.strip():
         return fact
     start_dt = _parse_extracted_datetime((fact or {}).get("occurred_start"))
     end_dt = _parse_extracted_datetime((fact or {}).get("occurred_end"))
@@ -129,6 +160,12 @@ def _maybe_shift_stale_current_week_bounds(fact: Dict[str, Any]) -> Dict[str, An
     shifted_start = start_dt + timedelta(days=7)
     shifted_end = end_dt + timedelta(days=7)
     if shifted_start.date() > mentioned_dt.date() or shifted_end.date() < mentioned_dt.date():
+        return fact
+    classification = _classify_stale_week_reference(
+        text,
+        mentioned_at=mentioned_dt.isoformat(timespec="seconds"),
+    )
+    if classification != "current_week":
         return fact
 
     corrected = dict(fact)
@@ -1527,96 +1564,28 @@ def _assistant_anchor_keywords(text: str) -> str:
     return " ".join(dict.fromkeys(tokens[:12]))
 
 
-_GENERIC_ASSISTANT_ANCHOR_TOKENS = {
-    "actually",
-    "anything",
-    "awesome",
-    "calendar",
-    "casual",
-    "conversation",
-    "email",
-    "finally",
-    "great",
-    "help",
-    "helpful",
-    "mostly",
-    "phone",
-    "questions",
-    "random",
-    "really",
-    "reminders",
-    "right",
-    "stuff",
-    "thing",
-    "things",
-    "totally",
-    "whatever",
-    "whenever",
-    "work",
-}
-
-_ASSISTANT_META_CHATTER_RE = re.compile(
-    r"^(?:"
-    r"hey\b.*\bnice to meet you\b|"
-    r"i\s+(?:can(?:not|'t)?|can't|don't|do not|am|i'm|love)\b|"
-    r"mostly\b|"
-    r"nah\b|"
-    r"ha[,! ]|"
-    r"does [a-z][a-z'-]* have\b"
-    r")",
-    re.IGNORECASE,
-)
-
-_ASSISTANT_TECHNICAL_META_CHATTER_RE = re.compile(
-    r"^(?:"
-    r"let me\b|"
-    r"ok,?\s+back to\b|"
-    r"already fixed\b|"
-    r"100%\b|"
-    r"yeah,\s+since\b|"
-    r"yep\b|"
-    r"(?:absolutely\.\s+)?i(?:'ll| will)\s+(?:set up|write|add|create)\b.*\b(?:test suite|tests|route|routes|resolver|resolvers|column|table|query|sql|graphql|api)\b|"
-    r"i also cleaned up\b.*\b(?:route|routes|handler|handlers|endpoint|endpoints)\b|"
-    r"thanks!?\b|"
-    r"enjoy!?\b|"
-    r"committed!?\s+.*\b(?:live|ready|queued)\b|"
-    r".*\bfiles changed\b.*\blines added\b|"
-    r"on it\b"
-    r")",
-    re.IGNORECASE,
-)
-
 _ASSISTANT_TECHNICAL_SUMMARY_RE = re.compile(
     r"^(?:"
-    r"//\s*N\+1 BUG\b|"
-    r"//\s*---- CORS ----|"
-    r"//\s*Build client response\b|"
-    r"//\s*better-sqlite3 does not allow\b|"
-    r"/\*\*\s*Trim whitespace from string values\.\s*\*/\s*function trimValue\b|"
-    r"//\s*Periodically purge expired entries\b|"
-    r"//\s*NOTE:\s*requireOwnership\(\) is NOT implemented\b|"
-    r"//\s*Check for existing user\b|"
-    r"[A-Za-z0-9_ ]+\s+\(unique\s+(?:index|constraint)\s+on\s+[A-Za-z0-9_]+\)(?:,|$)|"
+    r"//|"
+    r"/\*\*.*\*/\s*[A-Za-z_][A-Za-z0-9_]*\b|"
     r"(?:describe|it)\(['\"]|"
     r"type\s+[A-Z][A-Za-z0-9_]+\s*\{|"
-    r"\d+\s+lines\.\s+Hooks into the response `finish` event\b|"
-    r"\d+\s+lines\.\s+.*`[^`]+`|"
-    r"\d+\s+lines\.\s+.*\b(?:[A-Za-z_][A-Za-z0-9_]*\(\)|[A-Z][A-Za-z0-9_]*[A-Z][A-Za-z0-9_]*)\b|"
-    r".*\bN\+1\b.*\b(?:query|queries|test|tests|resolver|resolvers)\b|"
-    r".*\b(?:query|queries|test|tests|resolver|resolvers)\b.*\bN\+1\b|"
-    r".*\bcommitted!?\s+.*\b(?:live|ready|queued)\b|"
-    r".*\bfiles changed\b.*\blines added\b|"
-    r".*\b(?:endpoint|route|middleware|resolver|schema|query|mutation|database|sqlite|cors|jwt|pbkdf2)\b.*`[^`]+`"
+    r"\d+\s+[^.\n]*\.\s+.*`[^`]+`|"
+    r"\d+\s+[^.\n]*\.\s+.*\b(?:[A-Za-z_][A-Za-z0-9_]*\(\)|[A-Z][A-Za-z0-9_]*[A-Z][A-Za-z0-9_]*)\b|"
+    r".*\bN\+1\b.*|"
+    r".*`[^`]+`.*\b[A-Za-z_][A-Za-z0-9_]*\(\)"
     r")",
     re.IGNORECASE,
 )
 
-_ASSISTANT_PROJECT_SIGNAL_RE = re.compile(
-    r"\b("
-    r"api|graphql|rest|endpoint|schema|database|sqlite|server|frontend|backend|"
-    r"test|tests|queries|resolver|middleware|project|seed(?:ed)?"
-    r")\b",
-    re.IGNORECASE,
+_ASSISTANT_STRUCTURAL_PROJECT_SIGNAL_RE = re.compile(
+    r"(?:"
+    r"`[^`\n]+`|"
+    r"(?:^|[\s`])/[A-Za-z0-9_./:-]+(?:\?[A-Za-z0-9_=,&%.-]+)?\b|"
+    r"(?:^|[\s`])(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:js|ts|tsx|jsx|html|css|json|md|ya?ml|sql)\b|"
+    r"\b(?:GET|POST|PUT|DELETE|PATCH)\s+/|"
+    r"\b[A-Za-z_][A-Za-z0-9_]*\(\)"
+    r")",
 )
 
 _ASSISTANT_REFERENCE_BULLET_RE = re.compile(
@@ -1626,7 +1595,6 @@ _ASSISTANT_REFERENCE_BULLET_RE = re.compile(
     r"(?:\.env(?:\.example)?|\.gitignore|(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:js|ts|tsx|jsx|html|css|json|md|ya?ml))`?\s*(?:[—:-]|$)|"
     r"[A-Za-z_][A-Za-z0-9_]*\s*:\s+[A-Za-z]|"
     r"[A-Z][A-Za-z0-9_ ]+:\s+[A-Za-z]|"
-    r"A\s+`[^`]+`\s+(?:table|endpoint|column)\b|"
     r"(?:const|function|app\.[A-Za-z_]+|module\.exports)\b"
     r")",
     re.IGNORECASE,
@@ -1653,70 +1621,26 @@ _ASSISTANT_CODE_SHAPED_RE = re.compile(
 
 _ASSISTANT_IMPLEMENTATION_BULLET_RE = re.compile(
     r"^(?:"
-    r"A\s+`[^`]+`\s+(?:table|endpoint|column|route|constant|query)\b|"
-    r"(?:Express middleware|Lazy DB connection|foreign key|schema comments)\b|"
-    r"tests/(?:setup|helpers)\.js`?\b|"
-    r"This test demonstrates the vulnerability would allow\b|"
-    r"Custom application error with HTTP status code\b|"
-    r"Operational errors\b|"
-    r"Programming errors\b|"
-    r"a generic 500 response in production\b|"
-    r"Format a timestamp for error logs\b|"
-    r"Express error-handling middleware\b|"
-    r"Catch-all 404 handler\b|"
-    r"Build an Express middleware that validates req\.body against a rules object\b|"
-    r"[A-Za-z ]+\s+(?:generation|creation)\s*\([^)]*\b(?:format|unique|valid|invalid|constraint|cascade|code|id)[^)]*\)|"
-    r"Retrieval by code\b|"
-    r"Idempotency\s*\([^)]*\)|"
-    r"Edge cases\s*\([^)]*\)|"
-    r"includes the final status code and timing\b|"
-    r"Uses transactions for atomic inserts\b|"
-    r"[A-Z][A-Za-z0-9_]+\s+with\s+[a-z_]+(?:,\s*[a-z_ ]+){2,}\b|"
-    r"nanoid:\s*\^[0-9][^`]*`?\b|"
-    r"//\s*BUG:\s*No authorization check\b|"
-    r"//\s*Should verify args\.owner_id\b|"
-    r"An auth middleware for protected routes\b|"
-    r"Restrict access to users with a specific role\b|"
-    r"Must be used after requireAuth\b|"
+    r".*`[A-Za-z_][A-Za-z0-9_./:-]*`.*|"
+    r".*\"[^\"\n]*[A-Za-z]-\d+[^\"\n]*\".*\"[^\"\n]*[A-Za-z]-\d+[^\"\n]*\".*|"
+    r"(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:js|ts|tsx|jsx|json|md|ya?ml)`?\b|"
+    r"//\s*[A-Z_]+:|"
     r"[A-Za-z_][A-Za-z0-9_]*\(\)`?|"
-    r"[a-z][A-Za-z0-9_]*(?: uses| filters)\b|"
-    r"(?:Fetch|Parse|Guess|Generate|Filter|Filtering uses|Respects|Attaches)\b|"
-    r"Attempts to extract\b|"
-    r".*\b(?:GROUP\s+BY|JOIN|SUM|COUNT|ORDER\s+BY|WHERE)\b.*|"
-    r".*\b(?:parse|parser)\b.*\b(?:strings?|structured\s+(?:objects?|rows?|records?))\b|"
-    r".*\b(?:falls?\s+back|fallback)\b.*\b(?:full|raw|original)\s+text\b"
+    r"[A-Za-z_][A-Za-z0-9_]*\s*\([^)]{8,}\)|"
+    r".*\([^)]*\b[A-Za-z_][A-Za-z0-9_]*_[A-Za-z0-9_]+\b[^)]*\).*|"
+    r".*\b(?:GROUP\s+BY|JOIN|SUM|COUNT|ORDER\s+BY|WHERE)\b.*"
     r")",
     re.IGNORECASE,
 )
 
 _ASSISTANT_SCHEMA_FEATURE_BULLET_RE = re.compile(
     r"^(?:"
-    r"(?:[A-Z][A-Za-z0-9_]{2,})\b.*\b"
-    r"(?:nested|resolver|computed|reference|placeholder|stub|owner)\b|"
-    r"(?:[A-Z][A-Za-z0-9_ -]{0,40}\s+(?:CRUD|filtering|sharing|structured records?))\b|"
-    r"[A-Z][A-Za-z0-9_]+\s+with\s+[A-Za-z0-9_ -]+(?:,\s*[A-Za-z0-9_ -]+){1,}\b|"
-    r"New\s+`?[^`\n]+`?\s+table\s+with\b|"
-    r"[A-Z][A-Za-z0-9_]*(?:\s+Server)?\s+mounted\s+at\s+`?/[A-Za-z0-9_./:-]+`?\s+via\b|"
-    r"Health check at\b|"
-    r"[A-Za-z0-9_-]+\s+constant is now exported\b|"
-    r"[A-Za-z0-9_-]+`?\s+column added\b|"
-    r"docker-compose\.yml:|Dockerfile:|[A-Za-z0-9_ -]+ endpoints:"
+    r"[A-Z][A-Za-z0-9_]+\s+[^,\n]+(?:,\s*[^,\n]+){2,}\b|"
+    r"[A-Z][A-Za-z0-9_]+\b.*\([^)]{8,}\)|"
+    r"`[^`\n]+`.*`?/[A-Za-z0-9_./:-]+`?|"
+    r"[A-Z][A-Za-z0-9_]*(?:\s+[A-Z][A-Za-z0-9_]*)?\s+[^`\n]*`?/[A-Za-z0-9_./:-]+`?|"
+    r"docker-compose\.yml:|Dockerfile:"
     r")",
-    re.IGNORECASE,
-)
-
-_ASSISTANT_RECALL_CALLBACK_RE = re.compile(
-    r"\b(?:once|remember(?:ed)?|that\s+thing|from\s+months\s+ago|used\s+to)\b",
-    re.IGNORECASE,
-)
-
-_USER_RECALL_REACTION_RE = re.compile(
-    r"\b(?:can't\s+believe|cannot\s+believe|forgot\s+about|remember(?:ed)?|months\s+ago)\b",
-    re.IGNORECASE,
-)
-
-_USER_EXPLICIT_RECALL_REACTION_ANCHOR_RE = re.compile(
-    r"\b(?:can't\s+believe|cannot\s+believe|forgot\s+about|months\s+ago|remember(?:ed)?\s+(?:that|the|this))\b",
     re.IGNORECASE,
 )
 
@@ -1724,23 +1648,59 @@ _GENERIC_SPEAKER_PREFIX_RE = re.compile(r"^\s*([^:\n]{1,60}):\s*(.*)$")
 
 
 def _assistant_anchor_informative_tokens(text: str, *, min_len: int = 4) -> List[str]:
-    return [
-        token
-        for token in _structural_overlap_tokens(text, min_len=min_len)
-        if token not in _GENERIC_ASSISTANT_ANCHOR_TOKENS
-    ]
+    return _structural_overlap_tokens(text, min_len=min_len)
 
 
 def _assistant_anchor_has_project_signal(*parts: str) -> bool:
-    return bool(_ASSISTANT_PROJECT_SIGNAL_RE.search("\n".join(str(part or "") for part in parts)))
+    text = "\n".join(str(part or "") for part in parts)
+    return bool(_ASSISTANT_STRUCTURAL_PROJECT_SIGNAL_RE.search(text))
+
+
+def _assistant_bullet_has_named_option_shape(text: str) -> bool:
+    raw = str(text or "").strip()
+    has_option_separator = bool(re.search(r"\s+[—–-]\s+", raw))
+    leading = re.split(r"\s+[—–-]\s+|[:(,]", raw, maxsplit=1)[0].strip()
+    if not leading:
+        return False
+    if _has_non_ascii_text(leading) and any(ch.isalpha() for ch in leading):
+        return len(leading) <= 80
+    if not has_option_separator:
+        return False
+    tokens = re.findall(r"\b[A-Za-z][A-Za-z0-9'+-]*\b", leading)
+    if len(tokens) >= 2 and all(token.islower() for token in tokens):
+        return True
+    titleish = [
+        token
+        for token in tokens
+        if token.isupper() or (token[:1].isupper() and not token[1:].isupper())
+    ]
+    return len(titleish) >= 2
+
+
+def _assistant_paragraph_has_named_option_shape(text: str) -> bool:
+    raw = str(text or "").strip()
+    if len(re.findall(r"\b[A-Z][A-Za-z0-9'+-]*(?:\s*(?:\+|&)\s*|\s+)[A-Z][A-Za-z0-9'+-]*\b", raw)) >= 2:
+        return True
+    if not any(ord(ch) > 127 and ch.isalpha() for ch in raw):
+        return False
+    optionish_segments = 0
+    for segment in re.split(r"\s*[,،，、]\s*", raw):
+        tokens = [
+            token
+            for token in re.findall(r"(?u)\b[\w'+-]+\b", segment)
+            if any(ch.isalpha() for ch in token)
+        ]
+        if len(tokens) >= 2 and len(segment.strip()) <= 100:
+            optionish_segments += 1
+    return optionish_segments >= 2
 
 
 def _is_low_signal_assistant_anchor_candidate(text: str) -> bool:
-    return bool(_ASSISTANT_META_CHATTER_RE.search(str(text or "").strip()))
+    return False
 
 
 def _is_low_signal_technical_assistant_candidate(text: str) -> bool:
-    return bool(_ASSISTANT_TECHNICAL_META_CHATTER_RE.search(str(text or "").strip()))
+    return False
 
 
 def _is_technical_summary_assistant_candidate(text: str) -> bool:
@@ -1763,16 +1723,15 @@ def _is_schema_or_feature_style_assistant_bullet(text: str) -> bool:
     return bool(_ASSISTANT_SCHEMA_FEATURE_BULLET_RE.search(str(text or "").strip()))
 
 
-def _assistant_anchor_has_recall_callback_signal(text: str) -> bool:
-    return bool(_ASSISTANT_RECALL_CALLBACK_RE.search(str(text or "").strip()))
-
-
-def _user_turn_has_recall_reaction_signal(text: str) -> bool:
-    return bool(_USER_RECALL_REACTION_RE.search(str(text or "").strip()))
-
-
-def _user_turn_has_explicit_recall_reaction_anchor_signal(text: str) -> bool:
-    return bool(_USER_EXPLICIT_RECALL_REACTION_ANCHOR_RE.search(str(text or "").strip()))
+def _text_references_tokens(text: str, reference_tokens: set[str], *, min_overlap: int = 1) -> bool:
+    if not reference_tokens:
+        return False
+    candidate_tokens = set(_structural_overlap_tokens(text, min_len=4))
+    if len(candidate_tokens & reference_tokens) >= max(1, min_overlap):
+        return True
+    if _has_non_ascii_text(text):
+        return _tokens_overlap_text(text, reference_tokens)
+    return False
 
 
 def _strip_trailing_question_lines(text: str) -> str:
@@ -1938,6 +1897,7 @@ def _explicit_user_recall_reaction_facts(
         for fact in facts or []
         if isinstance(fact, dict)
     ).lower()
+    existing_tokens = set(_structural_overlap_tokens(existing_text, min_len=4))
     seen_fact_texts: set[str] = set()
     additions: List[Dict[str, Any]] = []
 
@@ -1947,8 +1907,8 @@ def _explicit_user_recall_reaction_facts(
             continue
         prev_text = turns[index - 1][1] if index > 0 and turns[index - 1][0] == "assistant" else ""
         next_text = turns[index + 1][1] if index + 1 < len(turns) and turns[index + 1][0] == "assistant" else ""
-        prev_callback = _assistant_anchor_has_recall_callback_signal(prev_text)
-        next_callback = _assistant_anchor_has_recall_callback_signal(next_text)
+        prev_callback = _text_references_tokens(prev_text, existing_tokens)
+        next_callback = _text_references_tokens(next_text, existing_tokens)
         if not prev_callback and not next_callback:
             continue
         assistant_context_tokens = set(
@@ -1975,11 +1935,6 @@ def _explicit_user_recall_reaction_facts(
                 or (_has_non_ascii_text(candidate) and _tokens_overlap_text(candidate, assistant_context_tokens))
             )
             if not overlaps_assistant_context:
-                continue
-            if (
-                not _user_turn_has_explicit_recall_reaction_anchor_signal(candidate)
-                and not _has_non_ascii_text(candidate)
-            ):
                 continue
             fact_key = _fact_text_key(candidate)
             if not fact_key or fact_key in seen_fact_texts or candidate.lower() in existing_text:
@@ -2071,7 +2026,10 @@ def _explicit_assistant_anchor_facts(
                     next_text,
                     existing_text,
                 )
-                if len(informative_tokens) < 2 and not has_project_signal and not _has_exact_value_signal(bullet_candidate):
+                has_exact_signal = _has_exact_value_signal(bullet_candidate)
+                if not has_project_signal and not has_exact_signal and not _assistant_bullet_has_named_option_shape(bullet_candidate):
+                    continue
+                if len(informative_tokens) < 2 and not has_project_signal and not has_exact_signal:
                     continue
                 fact_key = _fact_text_key(bullet_candidate)
                 if not fact_key or fact_key in seen_fact_texts:
@@ -2098,6 +2056,8 @@ def _explicit_assistant_anchor_facts(
                 continue
             if _is_code_shaped_assistant_candidate(candidate):
                 continue
+            if _is_implementation_style_assistant_bullet(candidate):
+                continue
             sentence_count = len(_split_fact_sentences(candidate))
             candidate_tokens = _structural_overlap_tokens(candidate, min_len=4)
             informative_tokens = _assistant_anchor_informative_tokens(candidate)
@@ -2117,6 +2077,7 @@ def _explicit_assistant_anchor_facts(
                 existing_text,
             )
             has_exact_signal = _has_exact_value_signal(candidate)
+            has_named_option_signal = _assistant_paragraph_has_named_option_shape(candidate)
             separator_segments = [
                 segment for segment in re.split(r"\s*[,;/]\s*", candidate)
                 if segment.strip()
@@ -2137,18 +2098,22 @@ def _explicit_assistant_anchor_facts(
             recall_reaction_callback_shape = (
                 len(context_overlap) >= 2
                 and len(next_overlap) >= 1
+                and len(existing_overlap) >= 1
                 and sentence_count >= 2
-                and _assistant_anchor_has_recall_callback_signal(candidate)
-                and _user_turn_has_recall_reaction_signal(next_text)
+                and _text_references_tokens(next_text, set(candidate_tokens) | existing_tokens)
             )
             post_recall_reaction_callback_shape = (
                 len(context_overlap) >= 2
                 and len(prev_overlap) >= 1
                 and len(existing_overlap) >= 1
                 and sentence_count >= 2
-                and _user_turn_has_recall_reaction_signal(prev_text)
+                and _text_references_tokens(prev_text, existing_tokens)
             )
             callback_shape = callback_shape or recall_reaction_callback_shape or post_recall_reaction_callback_shape
+            if listish_shape and not has_project_signal and not existing_overlap and not has_named_option_signal:
+                listish_shape = False
+            if question_plan_shape and not has_project_signal and not existing_overlap and not has_named_option_signal:
+                question_plan_shape = False
             if listish_shape and informative_segments < 2 and not has_project_signal and not has_exact_signal:
                 listish_shape = False
             if question_plan_shape and len(context_overlap) < 3 and not has_project_signal and not has_exact_signal:
