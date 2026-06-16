@@ -1573,6 +1573,32 @@ class TestOpenClawAdapter:
             with pytest.raises(json.JSONDecodeError):
                 adapter.get_deep_provider_default()
 
+    def test_installer_provider_detection_warns_bad_config_when_fail_open(self, monkeypatch, tmp_path, capsys):
+        home = tmp_path / "home"
+        cfg_dir = home / ".openclaw"
+        cfg_dir.mkdir(parents=True)
+        (cfg_dir / "openclaw.json").write_text("{bad json", encoding="utf-8")
+        monkeypatch.setattr(Path, "home", lambda: home)
+        adapter = OpenClawAdapter()
+
+        with patch("adaptors.openclaw.adapter.is_fail_hard_enabled", return_value=False):
+            assert adapter._detect_gateway_primary_provider() == ""
+
+        assert "gateway provider config read failed" in capsys.readouterr().err
+
+    def test_installer_provider_detection_warns_bad_auth_profiles_when_fail_open(self, monkeypatch, tmp_path, capsys):
+        home = tmp_path / "home"
+        cfg_dir = home / ".openclaw" / "agents" / "main" / "agent"
+        cfg_dir.mkdir(parents=True)
+        (cfg_dir / "auth-profiles.json").write_text("{bad json", encoding="utf-8")
+        monkeypatch.setattr(Path, "home", lambda: home)
+        adapter = OpenClawAdapter()
+
+        with patch("adaptors.openclaw.adapter.is_fail_hard_enabled", return_value=False):
+            assert adapter._detect_gateway_primary_provider() == ""
+
+        assert "gateway auth profiles read failed" in capsys.readouterr().err
+
     def test_openclaw_notify_reraises_transport_failure_when_fail_hard(self, monkeypatch):
         adapter = OpenClawAdapter()
         monkeypatch.setattr(adapter, "get_last_channel", lambda *_args, **_kwargs: SimpleNamespace(

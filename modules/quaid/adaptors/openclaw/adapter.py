@@ -263,10 +263,10 @@ class OpenClawAdapter(QuaidAdapter):
                     ).strip()
                     if "/" in primary:
                         return str(primary.split("/", 1)[0] or "").strip().lower()
-            except Exception:
+            except Exception as exc:
+                print(f"[adapter] gateway provider config read failed: {exc}", file=sys.stderr)
                 if is_fail_hard_enabled():
                     raise
-                pass
         profiles_path = self._get_agent_config_dir() / "auth-profiles.json"
         if profiles_path.exists():
             try:
@@ -281,10 +281,10 @@ class OpenClawAdapter(QuaidAdapter):
                     normalized = str(p or "").strip().lower()
                     if normalized:
                         return normalized
-            except Exception:
+            except Exception as exc:
+                print(f"[adapter] gateway auth profiles read failed: {exc}", file=sys.stderr)
                 if is_fail_hard_enabled():
                     raise
-                pass
         return ""
 
     @staticmethod

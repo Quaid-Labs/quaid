@@ -819,6 +819,9 @@ function clearDeferredNoticesForAgent(agentLabel, reason, sources = ["provider",
         error: String(result.error?.message || ""),
         sources: normalizedSources
       });
+      if (isFailHardEnabled()) {
+        throw new Error(`deferred notice clear failed status=${String(result.status ?? "unknown")}`);
+      }
       return 0;
     }
     let payload = {};
@@ -833,6 +836,9 @@ function clearDeferredNoticesForAgent(agentLabel, reason, sources = ["provider",
         error: String(parseErr?.message || parseErr),
         sources: normalizedSources
       });
+      if (isFailHardEnabled()) {
+        throw parseErr;
+      }
       return 0;
     }
     const removed = Math.max(0, Number(payload?.removed || 0) || 0);
@@ -854,6 +860,9 @@ function clearDeferredNoticesForAgent(agentLabel, reason, sources = ["provider",
       error: String(err?.message || err),
       sources: normalizedSources
     });
+    if (isFailHardEnabled()) {
+      throw err;
+    }
     return 0;
   }
 }
@@ -881,11 +890,15 @@ function hasProviderDeferredNoticesForAgent(agentLabel) {
       return false;
     });
   } catch (err) {
+    console.warn(`[quaid] provider deferred notice probe failed: ${String(err?.message || err)}`);
     writeHookTrace("deferred_notice.provider_probe_check_error", {
       instance_id: instanceId,
       agent_label: agentLabel,
       error: String(err?.message || err)
     });
+    if (isFailHardEnabled()) {
+      throw err;
+    }
     return false;
   }
 }
@@ -1361,7 +1374,11 @@ function readSessionsIndex() {
       return {};
     }
     return JSON.parse(fs.readFileSync(sessionsPath, "utf8")) || {};
-  } catch {
+  } catch (err) {
+    console.warn(`[quaid] OpenClaw sessions index read failed: ${String(err?.message || err)}`);
+    writeHookTrace("session_index.read_error", {
+      error: String(err?.message || err)
+    });
     return {};
   }
 }
@@ -6747,12 +6764,12 @@ ${relayContext}` : relayContext;
           queueAgentMainFlushForLifecycle(commandAction, event, ctx, sessionId);
         }
       } catch (err) {
-        if (isFailHardEnabled2()) throw err;
         console.error(`[quaid] ${sourceEvent} command detector failed:`, err);
         writeHookTrace("hook.message.error", {
           source_event: sourceEvent,
           error: String(err?.message || err)
         });
+        if (isFailHardEnabled2()) throw err;
       }
     };
     onChecked("message_received", async (event, ctx) => {
@@ -6964,12 +6981,12 @@ ${relayContext}` : relayContext;
         }
         queueAgentMainFlushForLifecycle(action, event, ctx, sessionId);
       } catch (err) {
-        if (isFailHardEnabled2()) throw err;
         console.error(`[quaid] command:${action} hook failed:`, err);
         writeHookTrace("hook.command.error", {
           action,
           error: String(err?.message || err)
         });
+        if (isFailHardEnabled2()) throw err;
       }
     };
     registerInternalHookChecked("command", async (event, ctx) => {
@@ -7023,12 +7040,12 @@ ${relayContext}` : relayContext;
           hook_session_id: sessionId
         });
       } catch (err) {
-        if (isFailHardEnabled2()) throw err;
         console.error("[quaid] command:compact hook failed:", err);
         writeHookTrace("hook.command.error", {
           action,
           error: String(err?.message || err)
         });
+        if (isFailHardEnabled2()) throw err;
       }
     }, {
       name: "command-memory-extraction",
@@ -7078,8 +7095,11 @@ ${relayContext}` : relayContext;
         });
         console.log(`[quaid][signal] daemon signal compaction session=${sessionId} source=session action=compact:before`);
       } catch (err) {
-        if (isFailHardEnabled2()) throw err;
         console.error("[quaid] session hook failed:", err);
+        writeHookTrace("hook.session.error", {
+          error: String(err?.message || err)
+        });
+        if (isFailHardEnabled2()) throw err;
       }
     }, {
       name: "session-memory-extraction",
@@ -7423,6 +7443,9 @@ notify_user("\u{1F9E0} Processing memories from ${startNotify.triggerDesc}...")
           session_id: sessionId || "",
           error: msg
         });
+        if (isFailHardEnabled2()) {
+          throw err;
+        }
         return;
       }
       if (!extractionResult) {
@@ -7674,7 +7697,7 @@ notify_memory_extraction(
             error: String(doErr?.message || doErr)
           });
           if (isFailHardEnabled2()) {
-            console.error(`[quaid] extraction failed (fail-hard): ${doErr}`);
+            throw doErr;
           }
         });
       } catch (err) {
@@ -7806,7 +7829,7 @@ notify_memory_extraction(
             error: String(doErr?.message || doErr)
           });
           if (isFailHardEnabled2()) {
-            console.error(`[quaid] extraction failed (fail-hard): ${doErr}`);
+            throw doErr;
           }
         });
       } catch (err) {

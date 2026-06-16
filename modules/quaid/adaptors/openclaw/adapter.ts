@@ -1021,6 +1021,9 @@ function clearDeferredNoticesForAgent(
         error: String(result.error?.message || ""),
         sources: normalizedSources,
       });
+      if (isFailHardEnabled()) {
+        throw new Error(`deferred notice clear failed status=${String(result.status ?? "unknown")}`);
+      }
       return 0;
     }
     let payload: { removed?: number } = {};
@@ -1035,6 +1038,9 @@ function clearDeferredNoticesForAgent(
         error: String((parseErr as Error)?.message || parseErr),
         sources: normalizedSources,
       });
+      if (isFailHardEnabled()) {
+        throw parseErr;
+      }
       return 0;
     }
     const removed = Math.max(0, Number(payload?.removed || 0) || 0);
@@ -1056,6 +1062,9 @@ function clearDeferredNoticesForAgent(
       error: String((err as Error)?.message || err),
       sources: normalizedSources,
     });
+    if (isFailHardEnabled()) {
+      throw err;
+    }
     return 0;
   }
 }
@@ -1084,11 +1093,15 @@ function hasProviderDeferredNoticesForAgent(agentLabel: string): boolean {
       return false;
     });
   } catch (err: unknown) {
+    console.warn(`[quaid] provider deferred notice probe failed: ${String((err as Error)?.message || err)}`);
     writeHookTrace("deferred_notice.provider_probe_check_error", {
       instance_id: instanceId,
       agent_label: agentLabel,
       error: String((err as Error)?.message || err),
     });
+    if (isFailHardEnabled()) {
+      throw err;
+    }
     return false;
   }
 }
@@ -1778,7 +1791,11 @@ function readSessionsIndex(): Record<string, any> {
       return {};
     }
     return JSON.parse(fs.readFileSync(sessionsPath, "utf8")) || {};
-  } catch {
+  } catch (err: unknown) {
+    console.warn(`[quaid] OpenClaw sessions index read failed: ${String((err as Error)?.message || err)}`);
+    writeHookTrace("session_index.read_error", {
+      error: String((err as Error)?.message || err),
+    });
     return {};
   }
 }
@@ -8249,12 +8266,12 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
           queueAgentMainFlushForLifecycle(commandAction, event, ctx, sessionId);
         }
       } catch (err: unknown) {
-        if (isFailHardEnabled()) throw err;
         console.error(`[quaid] ${sourceEvent} command detector failed:`, err);
         writeHookTrace("hook.message.error", {
           source_event: sourceEvent,
           error: String((err as Error)?.message || err),
         });
+        if (isFailHardEnabled()) throw err;
       }
     };
     onChecked("message_received", async (event: any, ctx: any) => {
@@ -8504,12 +8521,12 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
         }
         queueAgentMainFlushForLifecycle(action, event, ctx, sessionId);
       } catch (err: unknown) {
-        if (isFailHardEnabled()) throw err;
         console.error(`[quaid] command:${action} hook failed:`, err);
         writeHookTrace("hook.command.error", {
           action,
           error: String((err as Error)?.message || err),
         });
+        if (isFailHardEnabled()) throw err;
       }
     };
     registerInternalHookChecked("command", async (event: any, ctx: any) => {
@@ -8563,12 +8580,12 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
           hook_session_id: sessionId,
         });
       } catch (err: unknown) {
-        if (isFailHardEnabled()) throw err;
         console.error("[quaid] command:compact hook failed:", err);
         writeHookTrace("hook.command.error", {
           action,
           error: String((err as Error)?.message || err),
         });
+        if (isFailHardEnabled()) throw err;
       }
     }, {
       name: "command-memory-extraction",
@@ -8618,8 +8635,11 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
         });
         console.log(`[quaid][signal] daemon signal compaction session=${sessionId} source=session action=compact:before`);
       } catch (err: unknown) {
-        if (isFailHardEnabled()) throw err;
         console.error("[quaid] session hook failed:", err);
+        writeHookTrace("hook.session.error", {
+          error: String((err as Error)?.message || err),
+        });
+        if (isFailHardEnabled()) throw err;
       }
     }, {
       name: "session-memory-extraction",
@@ -9029,9 +9049,9 @@ notify_user("🧠 Processing memories from ${startNotify.triggerDesc}...")
           session_id: sessionId || "",
           error: msg,
         });
-        // Extraction is best-effort at this adapter boundary. Lower layers still
-        // enforce failHard semantics where configured, but we avoid crashing the
-        // active gateway/session loop on background extraction failures.
+        if (isFailHardEnabled()) {
+          throw err;
+        }
         return;
       }
 
@@ -9326,7 +9346,7 @@ notify_memory_extraction(
               error: String((doErr as Error)?.message || doErr),
             });
             if (isFailHardEnabled()) {
-              console.error(`[quaid] extraction failed (fail-hard): ${doErr}`);
+              throw doErr;
             }
           });
       } catch (err: unknown) {
@@ -9482,7 +9502,7 @@ notify_memory_extraction(
               error: String((doErr as Error)?.message || doErr),
             });
             if (isFailHardEnabled()) {
-              console.error(`[quaid] extraction failed (fail-hard): ${doErr}`);
+              throw doErr;
             }
           });
       } catch (err: unknown) {
