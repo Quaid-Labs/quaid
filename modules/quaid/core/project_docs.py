@@ -522,7 +522,8 @@ def _process_command(pid: int) -> str:
         if result.returncode != 0:
             return ""
         return (result.stdout or "").strip()
-    except Exception:
+    except (OSError, subprocess.SubprocessError) as exc:
+        logger.debug("Failed inspecting process command for pid=%s: %s", pid, exc)
         return ""
 
 
@@ -742,7 +743,8 @@ def _adapter_type_from_instance_name(instance_name: str) -> str:
         from lib.adapter import _adapter_type_from_instance_id
 
         return str(_adapter_type_from_instance_id(name) or "").strip().lower()
-    except Exception:
+    except Exception as exc:
+        logger.debug("Failed resolving adapter type for instance %r: %s", instance_name, exc)
         return ""
 
 
@@ -1302,16 +1304,16 @@ def _commit_queued_project_logs(project: str, *, dry_run: bool = False) -> Dict[
             metrics["entries_seen"] += len(entries) + max(0, dropped_entries)
             if not item_id:
                 metrics["errors"] += 1
+                logger.warning("Skipping project-log queue item without id for %s", name)
                 if _fail_hard_enabled():
                     raise RuntimeError(f"project-log queue item missing id for {name}")
-                logger.warning("Skipping project-log queue item without id for %s", name)
                 continue
             if dropped_entries:
                 metrics["errors"] += 1
                 message = f"project-log queue item {item_id} for {name} dropped {dropped_entries} malformed entries"
+                logger.critical("%s; dead-lettering item for inspection", message)
                 if _fail_hard_enabled():
                     raise RuntimeError(message)
-                logger.critical("%s; dead-lettering item for inspection", message)
                 docs_updater.dead_letter_project_log_queue_item(name, item_id, message)
                 continue
             if not entries:
@@ -1916,7 +1918,8 @@ def _parse_iso_ts(value: Any) -> Optional[float]:
         if raw.endswith("Z"):
             raw = raw[:-1] + "+00:00"
         return datetime.fromisoformat(raw).timestamp()
-    except Exception:
+    except Exception as exc:
+        logger.debug("Unparseable ISO timestamp %r: %s", value, exc)
         return None
 
 

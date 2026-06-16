@@ -7,6 +7,7 @@ import contextlib
 import json
 import logging
 import os
+import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -1221,6 +1222,52 @@ def test_commit_queued_project_logs_holds_queue_lock_around_drain_and_mark(monke
     assert events == ["enter", "exit"]
 
 
+def test_commit_queued_project_logs_logs_missing_id_before_failhard(monkeypatch, caplog):
+    from core import project_docs
+
+    class _Lock:
+        def __enter__(self):
+            return None
+
+        def __exit__(self, exc_type, exc, tb):
+            return None
+
+    monkeypatch.setattr("core.docs.updater.project_log_queue_lock", lambda _project: _Lock())
+    monkeypatch.setattr("core.docs.updater.drain_project_log_queue", lambda _project: [{"entries": [{"text": "queued"}]}])
+    monkeypatch.setattr("core.project_docs._fail_hard_enabled", lambda: True)
+
+    with caplog.at_level(logging.WARNING, logger="core.project_docs"):
+        with pytest.raises(RuntimeError, match="project-log queue item missing id for demo"):
+            project_docs._commit_queued_project_logs("demo")
+
+    assert "Skipping project-log queue item without id for demo" in caplog.text
+
+
+def test_commit_queued_project_logs_logs_dropped_entries_before_failhard(monkeypatch, caplog):
+    from core import project_docs
+
+    class _Lock:
+        def __enter__(self):
+            return None
+
+        def __exit__(self, exc_type, exc, tb):
+            return None
+
+    item_id = "1-2-aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    monkeypatch.setattr("core.docs.updater.project_log_queue_lock", lambda _project: _Lock())
+    monkeypatch.setattr(
+        "core.docs.updater.drain_project_log_queue",
+        lambda _project: [{"id": item_id, "_dropped_entries_count": 1, "entries": [{"text": "queued"}]}],
+    )
+    monkeypatch.setattr("core.project_docs._fail_hard_enabled", lambda: True)
+
+    with caplog.at_level(logging.CRITICAL, logger="core.project_docs"):
+        with pytest.raises(RuntimeError, match=f"project-log queue item {item_id} for demo dropped 1 malformed entries"):
+            project_docs._commit_queued_project_logs("demo")
+
+    assert f"project-log queue item {item_id} for demo dropped 1 malformed entries" in caplog.text
+
+
 def test_commit_queued_project_logs_dead_letters_malformed_item(project_env):
     _tmp_path, _src, _entry = project_env
     from core import project_docs
@@ -1252,6 +1299,43 @@ def test_commit_queued_project_logs_dead_letters_malformed_item(project_env):
     assert project_log_queue.pending_project_log_count("demo") == 0
     dead_letters = list(project_log_queue.project_queue_dead_letter_dir("demo").glob("*.json"))
     assert any(path.name.endswith(f"{item_id}.json") for path in dead_letters)
+
+
+def test_project_docs_process_command_timeout_logs_debug(monkeypatch, caplog):
+    from core import project_docs
+
+    def timeout_run(*_args, **_kwargs):
+        raise subprocess.TimeoutExpired(cmd=["ps"], timeout=2)
+
+    monkeypatch.setattr(project_docs.subprocess, "run", timeout_run)
+
+    with caplog.at_level(logging.DEBUG, logger="core.project_docs"):
+        assert project_docs._process_command(123) == ""
+
+    assert "Failed inspecting process command for pid=123" in caplog.text
+
+
+def test_adapter_type_from_instance_name_logs_resolution_failure(monkeypatch, caplog):
+    from core import project_docs
+
+    monkeypatch.setattr(
+        "lib.adapter._adapter_type_from_instance_id",
+        lambda _instance: (_ for _ in ()).throw(RuntimeError("adapter lookup failed")),
+    )
+
+    with caplog.at_level(logging.DEBUG, logger="core.project_docs"):
+        assert project_docs._adapter_type_from_instance_name("codex-demo") == ""
+
+    assert "Failed resolving adapter type for instance 'codex-demo'" in caplog.text
+
+
+def test_parse_iso_ts_logs_unparseable_timestamp(caplog):
+    from core import project_docs
+
+    with caplog.at_level(logging.DEBUG, logger="core.project_docs"):
+        assert project_docs._parse_iso_ts("not-a-date") is None
+
+    assert "Unparseable ISO timestamp 'not-a-date'" in caplog.text
 
 
 def test_project_log_queue_dead_letters_invalid_json_during_drain(project_env, monkeypatch):
