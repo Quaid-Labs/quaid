@@ -16,6 +16,14 @@ class _StopDaemonLoop(Exception):
     pass
 
 
+class _NoopVersionWatcher:
+    def __init__(self, **_kwargs):
+        pass
+
+    def tick(self):
+        return None
+
+
 class _OwnedTestAdapterMixin:
     def owns_session_path(self, path, session_id=""):
         return True
@@ -604,6 +612,7 @@ def test_session_logs_ingest_request_validates_sessiondb_response_without_fallba
 def test_daemon_loop_preserves_signal_when_processing_raises(monkeypatch):
     signal_payload = {"session_id": "sess-1", "type": "reset"}
     marked = []
+    failures = []
     read_calls = 0
     process_calls = 0
 
@@ -625,6 +634,11 @@ def test_daemon_loop_preserves_signal_when_processing_raises(monkeypatch):
     monkeypatch.setattr(extraction_daemon, "read_pending_signals", fake_read_pending_signals)
     monkeypatch.setattr(extraction_daemon, "process_signal", fake_process_signal)
     monkeypatch.setattr(extraction_daemon, "mark_signal_processed", lambda sig: marked.append(sig))
+    monkeypatch.setattr(
+        extraction_daemon,
+        "_record_signal_process_failure_for_retry",
+        lambda sig, exc, *, label: failures.append((sig, exc, label)),
+    )
     monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: False)
     monkeypatch.setattr(extraction_daemon, "_supervisor_alive", lambda: True)
     monkeypatch.setattr(extraction_daemon, "_reload_config_if_changed", lambda _reason: None)
@@ -645,6 +659,9 @@ def test_daemon_loop_preserves_signal_when_processing_raises(monkeypatch):
         extraction_daemon.daemon_loop(poll_interval=0.0, idle_check_interval=999999.0)
 
     assert marked == []
+    assert failures and failures[0][0] is signal_payload
+    assert str(failures[0][1]) == "boom"
+    assert failures[0][2] == "daemon-loop"
     assert read_calls >= 1
     assert process_calls == 1
 
@@ -664,6 +681,7 @@ def test_daemon_loop_raises_signal_processing_failure_under_failhard(monkeypatch
 
     monkeypatch.setattr(extraction_daemon, "write_pid", lambda _pid: None)
     monkeypatch.setattr(extraction_daemon, "remove_pid", lambda: None)
+    monkeypatch.setattr("core.compatibility.VersionWatcher", _NoopVersionWatcher)
     monkeypatch.setattr(extraction_daemon, "read_pending_signals", fake_read_pending_signals)
     monkeypatch.setattr(extraction_daemon, "process_signal", fake_process_signal)
     monkeypatch.setattr(extraction_daemon, "mark_signal_processed", lambda sig: marked.append(sig))
@@ -694,6 +712,92 @@ def test_daemon_loop_raises_signal_processing_failure_under_failhard(monkeypatch
     assert read_calls == 1
 
 
+def test_daemon_loop_warns_on_version_watcher_failure_when_fail_open(monkeypatch, caplog):
+    class _FailingVersionWatcher:
+        def __init__(self, **_kwargs):
+            pass
+
+        def tick(self):
+            raise RuntimeError("watcher down")
+
+    monkeypatch.setattr("core.compatibility.VersionWatcher", _FailingVersionWatcher)
+    monkeypatch.setattr(
+        "core.compatibility.read_circuit_breaker",
+        lambda _data_dir: types.SimpleNamespace(
+            allows_writes=lambda: True,
+            status="normal",
+            message="",
+        ),
+    )
+    monkeypatch.setattr(extraction_daemon, "write_pid", lambda _pid: None)
+    monkeypatch.setattr(extraction_daemon, "remove_pid", lambda: None)
+    monkeypatch.setattr(extraction_daemon, "_supervisor_alive", lambda: True)
+    monkeypatch.setattr(extraction_daemon, "_reload_config_if_changed", lambda _reason: None)
+    monkeypatch.setattr(extraction_daemon, "_retry_missing_embeddings", lambda: 0)
+    monkeypatch.setattr(extraction_daemon, "check_chunk_ready_sessions", lambda: None)
+    monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
+    monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: False)
+    monkeypatch.setattr(extraction_daemon.signal, "signal", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        extraction_daemon.time,
+        "sleep",
+        lambda _seconds: (_ for _ in ()).throw(_StopDaemonLoop()),
+    )
+
+    with caplog.at_level("WARNING", logger="quaid.daemon"):
+        with pytest.raises(_StopDaemonLoop):
+            extraction_daemon.daemon_loop(poll_interval=0.0, idle_check_interval=999999.0)
+
+    assert "version watcher tick failed" in caplog.text
+    assert "watcher down" in caplog.text
+
+
+def test_daemon_loop_raises_version_watcher_failure_under_failhard(monkeypatch):
+    class _FailingVersionWatcher:
+        def __init__(self, **_kwargs):
+            pass
+
+        def tick(self):
+            raise RuntimeError("watcher down")
+
+    monkeypatch.setattr("core.compatibility.VersionWatcher", _FailingVersionWatcher)
+    monkeypatch.setattr(extraction_daemon, "write_pid", lambda _pid: None)
+    monkeypatch.setattr(extraction_daemon, "remove_pid", lambda: None)
+    monkeypatch.setattr(extraction_daemon, "_supervisor_alive", lambda: True)
+    monkeypatch.setattr(extraction_daemon, "_reload_config_if_changed", lambda _reason: None)
+    monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: True)
+    monkeypatch.setattr(extraction_daemon.signal, "signal", lambda *_args, **_kwargs: None)
+
+    with pytest.raises(RuntimeError, match="version watcher tick failed while failHard is enabled") as excinfo:
+        extraction_daemon.daemon_loop(poll_interval=0.0, idle_check_interval=999999.0)
+
+    assert isinstance(excinfo.value.__cause__, RuntimeError)
+    assert "watcher down" in str(excinfo.value.__cause__)
+
+
+def test_worker_loop_exits_nonzero_when_daemon_crashes(monkeypatch):
+    removed = []
+
+    monkeypatch.setattr(
+        extraction_daemon,
+        "daemon_loop",
+        lambda: (_ for _ in ()).throw(RuntimeError("daemon boom")),
+    )
+    monkeypatch.setattr(extraction_daemon.os, "getpid", lambda: 4242)
+    monkeypatch.setattr(extraction_daemon, "_remove_pid_if_matches", lambda pid: removed.append(pid))
+    monkeypatch.setattr(
+        extraction_daemon.os,
+        "_exit",
+        lambda code: (_ for _ in ()).throw(SystemExit(code)),
+    )
+
+    with pytest.raises(SystemExit) as excinfo:
+        extraction_daemon._run_worker_loop()
+
+    assert excinfo.value.code == 1
+    assert removed == [4242]
+
+
 def test_retry_missing_embeddings_helper_reraises_under_failhard(monkeypatch):
     from datastore.memorydb import memory_graph
 
@@ -714,6 +818,7 @@ def test_daemon_loop_reraises_embedding_retry_failure_under_failhard(monkeypatch
 
     monkeypatch.setattr(extraction_daemon, "write_pid", lambda _pid: None)
     monkeypatch.setattr(extraction_daemon, "remove_pid", lambda: None)
+    monkeypatch.setattr("core.compatibility.VersionWatcher", _NoopVersionWatcher)
     monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: True)
     monkeypatch.setattr(extraction_daemon, "_supervisor_alive", lambda: True)
     monkeypatch.setattr(extraction_daemon, "_reload_config_if_changed", lambda _reason: None)
@@ -748,6 +853,7 @@ def test_daemon_loop_reraises_chunk_readiness_failure_under_failhard(monkeypatch
 
     monkeypatch.setattr(extraction_daemon, "write_pid", lambda _pid: None)
     monkeypatch.setattr(extraction_daemon, "remove_pid", lambda: None)
+    monkeypatch.setattr("core.compatibility.VersionWatcher", _NoopVersionWatcher)
     monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: True)
     monkeypatch.setattr(extraction_daemon, "_supervisor_alive", lambda: True)
     monkeypatch.setattr(extraction_daemon, "_reload_config_if_changed", lambda _reason: None)
@@ -782,6 +888,7 @@ def test_daemon_loop_reraises_idle_check_failure_under_failhard(monkeypatch):
 
     monkeypatch.setattr(extraction_daemon, "write_pid", lambda _pid: None)
     monkeypatch.setattr(extraction_daemon, "remove_pid", lambda: None)
+    monkeypatch.setattr("core.compatibility.VersionWatcher", _NoopVersionWatcher)
     monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: True)
     monkeypatch.setattr(extraction_daemon, "_supervisor_alive", lambda: True)
     monkeypatch.setattr(extraction_daemon, "_reload_config_if_changed", lambda _reason: None)
@@ -840,6 +947,33 @@ def test_load_runtime_adapter_for_signal_warns_and_degrades_when_fail_open(monke
     assert adapter is None
     assert "adapter load failed" in caplog.text
     assert "sess-adapter" in caplog.text
+
+
+def test_load_runtime_adapter_raises_under_failhard(monkeypatch):
+    fake_adapter_mod = types.ModuleType("lib.adapter")
+    fake_adapter_mod.get_adapter = lambda: (_ for _ in ()).throw(RuntimeError("runtime adapter broken"))
+    monkeypatch.setitem(sys.modules, "lib.adapter", fake_adapter_mod)
+    monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: True)
+
+    with pytest.raises(RuntimeError, match="runtime adapter load failed") as excinfo:
+        extraction_daemon._load_runtime_adapter()
+
+    assert isinstance(excinfo.value.__cause__, RuntimeError)
+    assert "runtime adapter broken" in str(excinfo.value.__cause__)
+
+
+def test_load_runtime_adapter_warns_and_degrades_when_fail_open(monkeypatch, caplog):
+    fake_adapter_mod = types.ModuleType("lib.adapter")
+    fake_adapter_mod.get_adapter = lambda: (_ for _ in ()).throw(RuntimeError("runtime adapter broken"))
+    monkeypatch.setitem(sys.modules, "lib.adapter", fake_adapter_mod)
+    monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: False)
+
+    with caplog.at_level("WARNING", logger="quaid.daemon"):
+        adapter = extraction_daemon._load_runtime_adapter()
+
+    assert adapter is None
+    assert "runtime adapter load failed" in caplog.text
+    assert "runtime adapter broken" in caplog.text
 
 
 @pytest.mark.parametrize("initial_daemon_env", [None, "caller"])
@@ -2606,6 +2740,41 @@ def test_ensure_discovered_session_cursors_can_be_disabled_via_env(monkeypatch, 
     cursor_dir = tmp_path / "instances" / instance_id / "data" / "session-cursors"
     if cursor_dir.exists():
         assert list(cursor_dir.glob("*.json")) == []
+
+
+def test_ensure_discovered_session_cursors_warns_and_degrades_when_fail_open(
+    monkeypatch,
+    tmp_path,
+    caplog,
+):
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: False)
+
+    class _Adapter:
+        def get_sessions_dir(self):
+            raise RuntimeError("sessions dir unavailable")
+
+    with caplog.at_level("WARNING", logger="quaid.daemon"):
+        discovered = extraction_daemon._ensure_discovered_session_cursors(_Adapter())
+
+    assert discovered == 0
+    assert "session discovery directory lookup failed" in caplog.text
+    assert "sessions dir unavailable" in caplog.text
+
+
+def test_ensure_discovered_session_cursors_raises_when_fail_hard(monkeypatch, tmp_path):
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: True)
+
+    class _Adapter:
+        def get_sessions_dir(self):
+            raise RuntimeError("sessions dir unavailable")
+
+    with pytest.raises(RuntimeError, match="session discovery directory lookup failed") as excinfo:
+        extraction_daemon._ensure_discovered_session_cursors(_Adapter())
+
+    assert isinstance(excinfo.value.__cause__, RuntimeError)
+    assert "sessions dir unavailable" in str(excinfo.value.__cause__)
 
 
 def test_ensure_discovered_session_cursors_skips_checkpoint_sidecars(monkeypatch, tmp_path):
@@ -8020,6 +8189,54 @@ class TestSignalRoundTrip:
 
         assert kept is False
 
+    def test_record_signal_process_failure_updates_attempts_and_dead_letters(
+        self, monkeypatch, tmp_path, caplog
+    ):
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
+        monkeypatch.setenv("QUAID_NOW", "2026-06-14T12:00:00Z")
+        monkeypatch.setattr(extraction_daemon, "MAX_SIGNAL_PROCESS_ATTEMPTS", 2)
+
+        sig_path = extraction_daemon.write_signal(
+            signal_type="reset",
+            session_id="sess-crashing",
+            transcript_path="/tmp/crashing.jsonl",
+        )
+        signal_data = extraction_daemon.read_pending_signals()[0]
+
+        with caplog.at_level("WARNING", logger="quaid.daemon"):
+            preserved = extraction_daemon._record_signal_process_failure_for_retry(
+                signal_data,
+                RuntimeError("process boom"),
+                label="test",
+            )
+
+        assert preserved is True
+        payload = json.loads(sig_path.read_text(encoding="utf-8"))
+        assert payload["process_attempts"] == 1
+        assert payload["last_process_failure"] == "process boom"
+        assert payload["last_process_failure_at"] == "2026-06-14T12:00:00Z"
+        assert "preserving for retry" in caplog.text
+
+        caplog.clear()
+        signal_data = extraction_daemon.read_pending_signals()[0]
+        with caplog.at_level("ERROR", logger="quaid.daemon"):
+            preserved = extraction_daemon._record_signal_process_failure_for_retry(
+                signal_data,
+                RuntimeError("process boom again"),
+                label="test",
+            )
+
+        assert preserved is False
+        assert not sig_path.exists()
+        dead_letters = list(extraction_daemon._signal_dead_letter_dir().glob("*.json"))
+        assert len(dead_letters) == 1
+        payload = json.loads(dead_letters[0].read_text(encoding="utf-8"))
+        assert payload["process_attempts"] == 2
+        assert payload["dead_letter_reason"] == "process_attempts_exhausted"
+        assert payload["dead_lettered_at"] == "2026-06-14T12:00:00Z"
+        assert "moved to dead letter" in caplog.text
+
     def test_preserve_missing_transcript_signal_write_failure_respects_failhard(
         self, monkeypatch, tmp_path, caplog
     ):
@@ -8146,6 +8363,48 @@ class TestSignalRoundTrip:
         assert second is not None
         extraction_daemon._release_session_processing_lock("sess-sidecar", second)
         assert lock_path.exists()
+
+    def test_session_processing_lock_payload_write_warns_when_fail_open(
+        self, monkeypatch, tmp_path, caplog
+    ):
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
+        monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: False)
+        monkeypatch.setattr(
+            extraction_daemon.os,
+            "fsync",
+            lambda _fd: (_ for _ in ()).throw(OSError("disk full")),
+        )
+
+        with caplog.at_level("WARNING", logger="quaid.daemon"):
+            lock_fd = extraction_daemon._acquire_session_processing_lock("sess-payload-warn")
+
+        try:
+            assert lock_fd is not None
+            assert "failed writing session processing lock payload" in caplog.text
+            assert "disk full" in caplog.text
+        finally:
+            extraction_daemon._release_session_processing_lock("sess-payload-warn", lock_fd)
+
+    def test_session_processing_lock_payload_write_raises_when_fail_hard(
+        self, monkeypatch, tmp_path, caplog
+    ):
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "test-inst")
+        monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: True)
+        monkeypatch.setattr(
+            extraction_daemon.os,
+            "fsync",
+            lambda _fd: (_ for _ in ()).throw(OSError("disk full")),
+        )
+
+        with caplog.at_level("WARNING", logger="quaid.daemon"):
+            with pytest.raises(RuntimeError, match="session processing lock payload write failed") as excinfo:
+                extraction_daemon._acquire_session_processing_lock("sess-payload-failhard")
+
+        assert isinstance(excinfo.value.__cause__, OSError)
+        assert "disk full" in str(excinfo.value.__cause__)
+        assert "failed writing session processing lock payload" in caplog.text
 
     def test_processing_lock_active_ignores_unlocked_sidecar_with_live_pid(self, monkeypatch, tmp_path):
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
@@ -8915,6 +9174,52 @@ class TestCheckIdleSessions:
 
         with pytest.raises(OSError, match="rolling state unavailable"):
             extraction_daemon.check_idle_sessions(timeout_minutes=30)
+
+    def test_check_idle_sessions_warns_on_subagent_registry_failure_when_fail_open(
+        self, monkeypatch, tmp_path, caplog
+    ):
+        instance_id = os.environ.get("QUAID_INSTANCE", "pytest-runner")
+        cursor_dir = tmp_path / "instances" / instance_id / "data" / "session-cursors"
+        cursor_dir.mkdir(parents=True)
+
+        fake_registry = types.ModuleType("core.subagent_registry")
+        fake_registry._registry_dir = lambda: (_ for _ in ()).throw(RuntimeError("registry down"))
+        monkeypatch.setitem(sys.modules, "core.subagent_registry", fake_registry)
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setattr(extraction_daemon, "_load_runtime_adapter", lambda: None)
+        monkeypatch.setattr(extraction_daemon, "_ensure_discovered_session_cursors", lambda _adapter: 0)
+        monkeypatch.setattr(extraction_daemon, "_read_installed_at", lambda: 0.0)
+        monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
+        monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: False)
+
+        with caplog.at_level("WARNING", logger="quaid.daemon"):
+            extraction_daemon.check_idle_sessions(timeout_minutes=30)
+
+        assert "idle subagent registry load failed" in caplog.text
+        assert "registry down" in caplog.text
+
+    def test_check_idle_sessions_raises_subagent_registry_failure_when_fail_hard(
+        self, monkeypatch, tmp_path, caplog
+    ):
+        instance_id = os.environ.get("QUAID_INSTANCE", "pytest-runner")
+        cursor_dir = tmp_path / "instances" / instance_id / "data" / "session-cursors"
+        cursor_dir.mkdir(parents=True)
+
+        fake_registry = types.ModuleType("core.subagent_registry")
+        fake_registry._registry_dir = lambda: (_ for _ in ()).throw(RuntimeError("registry down"))
+        monkeypatch.setitem(sys.modules, "core.subagent_registry", fake_registry)
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setattr(extraction_daemon, "_load_runtime_adapter", lambda: None)
+        monkeypatch.setattr(extraction_daemon, "_ensure_discovered_session_cursors", lambda _adapter: 0)
+        monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: True)
+
+        with caplog.at_level("WARNING", logger="quaid.daemon"):
+            with pytest.raises(RuntimeError, match="idle subagent registry load failed") as excinfo:
+                extraction_daemon.check_idle_sessions(timeout_minutes=30)
+
+        assert isinstance(excinfo.value.__cause__, RuntimeError)
+        assert "registry down" in str(excinfo.value.__cause__)
+        assert "idle subagent registry load failed" in caplog.text
 
     def test_skips_session_when_transcript_file_missing(self, monkeypatch, tmp_path):
         """check_idle_sessions must skip cursors pointing to non-existent transcripts."""

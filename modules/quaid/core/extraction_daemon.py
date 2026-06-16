@@ -118,6 +118,7 @@ MAX_TRANSCRIPT_LINES = 50_000
 
 # Max signals to process per poll cycle (B031)
 MAX_SIGNALS_PER_POLL = 100
+MAX_SIGNAL_PROCESS_ATTEMPTS = 5
 
 TRANSCRIPT_REBASE_MAX_RETRIES = 3
 
@@ -295,6 +296,12 @@ def _get_quaid_version() -> str:
 def _signal_dir() -> Path:
     # Signals are per-instance to prevent cross-instance daemon race conditions.
     d = _instance_root() / "data" / "extraction-signals"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _signal_dead_letter_dir() -> Path:
+    d = _instance_root() / "data" / "extraction-signals-dead-letter"
     d.mkdir(parents=True, exist_ok=True)
     return d
 
@@ -1114,6 +1121,89 @@ def _preserve_missing_transcript_signal_for_retry(
         )
         if _fail_hard_enabled():
             raise RuntimeError("could not preserve missing-transcript signal for retry") from exc
+        return False
+
+
+def _record_signal_process_failure_for_retry(
+    signal_data: Dict[str, Any],
+    exc: BaseException,
+    *,
+    label: str,
+) -> bool:
+    """Persist failed process attempts and dead-letter signals that keep crashing."""
+    sig_path_raw = str(signal_data.get("_signal_path") or "").strip()
+    session_id = str(signal_data.get("session_id") or "").strip()
+    signal_type = str(signal_data.get("type") or signal_data.get("signal_type") or "").strip()
+    if not sig_path_raw:
+        logger.warning(
+            "[%s] failed processing %s signal for %s with no signal file; cannot update retry attempts: %s",
+            label,
+            signal_type or "unknown",
+            session_id or "unknown",
+            exc,
+        )
+        return False
+
+    sig_path = Path(sig_path_raw)
+    try:
+        signal_root = _signal_dir().resolve()
+        if not sig_path.resolve(strict=False).is_relative_to(signal_root):
+            logger.warning(
+                "[%s] refusing to update failed signal outside signal dir: %s",
+                label,
+                sig_path,
+            )
+            return False
+
+        try:
+            attempts = int(signal_data.get("process_attempts") or 0) + 1
+        except (TypeError, ValueError):
+            attempts = 1
+        payload = dict(signal_data)
+        payload.pop("_signal_path", None)
+        payload["process_attempts"] = attempts
+        payload["last_process_failure"] = str(exc)
+        payload["last_process_failure_at"] = _now_datetime().isoformat().replace("+00:00", "Z")
+
+        _atomic_write(sig_path, json.dumps(payload))
+        if attempts >= int(MAX_SIGNAL_PROCESS_ATTEMPTS):
+            payload["dead_lettered_at"] = _now_datetime().isoformat().replace("+00:00", "Z")
+            payload["dead_letter_reason"] = "process_attempts_exhausted"
+            _atomic_write(sig_path, json.dumps(payload))
+            dead_letter_path = _signal_dead_letter_dir() / sig_path.name
+            if dead_letter_path.exists():
+                dead_letter_path = dead_letter_path.with_name(
+                    f"{dead_letter_path.stem}.{uuid.uuid4().hex[:8]}{dead_letter_path.suffix}"
+                )
+            os.replace(str(sig_path), str(dead_letter_path))
+            logger.error(
+                "[%s] signal processing failed %d times; moved to dead letter: %s",
+                label,
+                attempts,
+                dead_letter_path,
+            )
+            return False
+
+        logger.warning(
+            "[%s] signal processing failed; preserving for retry "
+            "(attempt=%d/%d session=%s type=%s): %s",
+            label,
+            attempts,
+            MAX_SIGNAL_PROCESS_ATTEMPTS,
+            session_id or "unknown",
+            signal_type or "unknown",
+            exc,
+        )
+        return True
+    except Exception as record_exc:
+        logger.warning(
+            "[%s] could not update failed signal retry attempts for %s: %s",
+            label,
+            sig_path,
+            record_exc,
+        )
+        if _fail_hard_enabled():
+            raise RuntimeError("could not update failed signal retry attempts") from record_exc
         return False
 
 
@@ -2774,8 +2864,14 @@ def _acquire_session_processing_lock(session_id: str) -> Optional[int]:
         os.ftruncate(fd, 0)
         os.write(fd, json.dumps(payload).encode("utf-8"))
         os.fsync(fd)
-    except OSError:
-        pass
+    except OSError as exc:
+        logger.warning("failed writing session processing lock payload for %s: %s", session_id, exc)
+        if _fail_hard_enabled():
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            raise RuntimeError("session processing lock payload write failed") from exc
     return fd
 
 
@@ -4982,7 +5078,10 @@ def _load_runtime_adapter():
     try:
         from lib.adapter import get_adapter
         return get_adapter()
-    except Exception:
+    except Exception as exc:
+        logger.warning("runtime adapter load failed: %s", exc)
+        if _fail_hard_enabled():
+            raise RuntimeError("runtime adapter load failed") from exc
         return None
 
 
@@ -5159,7 +5258,10 @@ def _ensure_discovered_session_cursors(adapter=None) -> int:
             if callable(discovery_dir_fn)
             else active_adapter.get_sessions_dir()
         )
-    except Exception:
+    except Exception as exc:
+        logger.warning("session discovery directory lookup failed: %s", exc)
+        if _fail_hard_enabled():
+            raise RuntimeError("session discovery directory lookup failed") from exc
         return 0
     if not sessions_dir:
         return 0
@@ -7810,8 +7912,10 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
                 registered_subagents.update(rdata.get("children", {}).keys())
             except (json.JSONDecodeError, OSError):
                 continue
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("idle subagent registry load failed: %s", exc)
+        if _fail_hard_enabled():
+            raise RuntimeError("idle subagent registry load failed") from exc
 
     # B003: Hoist pending signals read outside the loop
     pending = read_pending_signals()
@@ -8896,7 +9000,9 @@ def daemon_loop(poll_interval: float = 5.0, idle_check_interval: float = 300.0) 
             try:
                 version_watcher.tick()
             except Exception as e:
-                logger.debug("version watcher tick failed: %s", e)
+                logger.warning("version watcher tick failed: %s", e)
+                if _fail_hard_enabled():
+                    raise RuntimeError("version watcher tick failed while failHard is enabled") from e
 
             # Check circuit breaker before processing signals
             breaker = read_circuit_breaker(data_dir)
@@ -8957,8 +9063,11 @@ def daemon_loop(poll_interval: float = 5.0, idle_check_interval: float = 300.0) 
                     if _fail_hard_enabled():
                         raise
                     logger.error("failed processing signal: %s", e, exc_info=True)
-                    # Preserve the signal for a future retry. Outer-loop exceptions
-                    # mean we do not know whether processing was durable.
+                    _record_signal_process_failure_for_retry(
+                        sig,
+                        e,
+                        label="daemon-loop",
+                    )
 
             # Periodic idle session check. Use a timeout-aware cadence so
             # shorter configured inactivity windows do not wait on a fixed
@@ -8993,8 +9102,11 @@ def daemon_loop(poll_interval: float = 5.0, idle_check_interval: float = 300.0) 
                 if _fail_hard_enabled():
                     raise
                 logger.error("shutdown signal processing failed: %s", e)
-                # Preserve the signal across shutdown so the next daemon instance
-                # can retry it instead of dropping extraction work.
+                _record_signal_process_failure_for_retry(
+                    sig,
+                    e,
+                    label="daemon-shutdown",
+                )
 
     finally:
         remove_pid()
@@ -9090,6 +9202,18 @@ def flush_pending_signals(
 # ---------------------------------------------------------------------------
 # Daemon lifecycle commands
 # ---------------------------------------------------------------------------
+
+def _run_worker_loop() -> None:
+    exit_code = 0
+    try:
+        daemon_loop()
+    except Exception as exc:
+        exit_code = 1
+        logger.error("daemon crashed: %s", exc, exc_info=True)
+    finally:
+        _remove_pid_if_matches(os.getpid())
+        os._exit(exit_code)
+
 
 def ensure_alive() -> int:
     """Ensure the daemon is running. Start it if not. Returns PID."""
@@ -9441,13 +9565,7 @@ def main():
         _root.handlers.clear()
         _root.addHandler(_handler)
         _root.setLevel(logging.INFO)
-        try:
-            daemon_loop()
-        except Exception as _e:
-            logger.error("daemon crashed: %s", _e, exc_info=True)
-        finally:
-            _remove_pid_if_matches(os.getpid())
-            os._exit(0)
+        _run_worker_loop()
     else:
         parser.print_help()
         sys.exit(1)
