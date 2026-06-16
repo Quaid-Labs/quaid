@@ -3883,6 +3883,35 @@ class TestRecallBasic:
 
         assert [row["id"] for row in ranked[:2]] == ["day-after", "same-day"]
 
+    def test_prioritize_date_relation_callback_rows_requires_date_token_overlap(self):
+        import datastore.memorydb.memory_graph as mg
+
+        rows = [
+            {
+                "id": "direct-range",
+                "text": "May 18 planning notes covered the launch checklist.",
+                "category": "fact",
+                "similarity": 0.95,
+                "created_at": "2026-05-18T12:00:00",
+            },
+            {
+                "id": "assistant-other-date",
+                "text": "April 19 callback anchored to the archive review.",
+                "category": "fact",
+                "source_type": "assistant",
+                "structural_anchor_kind": "assistant_callback_anchor",
+                "similarity": 0.80,
+                "created_at": "2026-04-19T12:00:00",
+            },
+        ]
+
+        ranked = mg._prioritize_date_relation_callback_rows(
+            "What happened on May 18-19?",
+            rows,
+        )
+
+        assert [row["id"] for row in ranked] == ["direct-range", "assistant-other-date"]
+
     def test_recall_deliberate_prioritizes_fresh_direct_anchor_row_before_final_limit(self):
         import datastore.memorydb.memory_graph as mg
 
