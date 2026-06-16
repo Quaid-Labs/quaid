@@ -1515,6 +1515,11 @@ def backfill_embeddings(graph: MemoryGraph, metrics: JanitorMetrics,
             else:
                 print(f"  FTS5 index OK ({fts_count} entries)")
     except Exception as e:
+        msg = f"FTS5 integrity check failed: {e}"
+        logger.warning(msg)
+        metrics.add_warning(msg)
+        if is_fail_hard_enabled():
+            raise RuntimeError("FTS5 integrity check failed during embedding backfill") from e
         print(f"  FTS5 check skipped: {e}")
 
     metrics.end_task("embedding_backfill")
@@ -3738,8 +3743,11 @@ Respond with a JSON array only, no markdown fencing:
                     metrics.add_error(f"Review aborted: {e}")
                 raise RuntimeError(str(e)) from e
             print(f"    Batch {batch_num} failed: {e}")
+            logger.warning("Review batch %s failed: %s", batch_num, e)
             if metrics:
                 _record_llm_batch_issue(metrics, f"Review batch {batch_num}: {e}")
+            if is_fail_hard_enabled():
+                raise RuntimeError(f"Review batch {batch_num} failed while failHard is enabled") from e
             continue
 
     uncovered_ids = sorted(reviewed_ids - covered_ids)

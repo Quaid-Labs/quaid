@@ -1175,3 +1175,134 @@ def test_backfill_embeddings_non_positive_limit_honors_fail_hard(monkeypatch):
     with patch.object(maintenance_ops, "is_fail_hard_enabled", return_value=True):
         with pytest.raises(RuntimeError, match="Invalid QUAID_JANITOR_EMBED_BACKFILL_LIMIT"):
             maintenance_ops._janitor_embedding_backfill_limit(default_limit=11)
+
+
+def test_backfill_embeddings_fts_failure_warns_and_continues_when_not_failhard(caplog):
+    class _Conn:
+        def execute(self, sql, params=()):
+            text = str(sql).strip().upper()
+            if text.startswith("SELECT ID, NAME FROM NODES WHERE EMBEDDING IS NULL"):
+                return _DummyResult(rows=[])
+            if text.startswith("SELECT COUNT(*) FROM NODES_FTS"):
+                raise RuntimeError("fts unavailable")
+            return _DummyResult(rows=[(0,)])
+
+    class _Graph:
+        @contextmanager
+        def _get_conn(self):
+            yield _Conn()
+
+    metrics = maintenance_ops.JanitorMetrics()
+
+    with patch.object(maintenance_ops, "is_fail_hard_enabled", return_value=False), caplog.at_level("WARNING"):
+        out = maintenance_ops.backfill_embeddings(_Graph(), metrics, dry_run=True)
+
+    assert out == {"found": 0, "embedded": 0, "fts_rebuilt": False}
+    assert any("FTS5 integrity check failed" in warning["warning"] for warning in metrics.warnings)
+    assert "FTS5 integrity check failed" in caplog.text
+
+
+def test_backfill_embeddings_fts_failure_raises_when_failhard():
+    class _Conn:
+        def execute(self, sql, params=()):
+            text = str(sql).strip().upper()
+            if text.startswith("SELECT ID, NAME FROM NODES WHERE EMBEDDING IS NULL"):
+                return _DummyResult(rows=[])
+            if text.startswith("SELECT COUNT(*) FROM NODES_FTS"):
+                raise RuntimeError("fts unavailable")
+            return _DummyResult(rows=[(0,)])
+
+    class _Graph:
+        @contextmanager
+        def _get_conn(self):
+            yield _Conn()
+
+    with patch.object(maintenance_ops, "is_fail_hard_enabled", return_value=True):
+        with pytest.raises(RuntimeError, match="FTS5 integrity check failed during embedding backfill") as excinfo:
+            maintenance_ops.backfill_embeddings(_Graph(), maintenance_ops.JanitorMetrics(), dry_run=True)
+
+    assert isinstance(excinfo.value.__cause__, RuntimeError)
+    assert "fts unavailable" in str(excinfo.value.__cause__)
+
+
+def _review_pending_graph():
+    class _Conn:
+        def execute(self, sql, params=()):
+            text = str(sql).strip().upper()
+            if text.startswith("SELECT COUNT(*) FROM NODES WHERE STATUS = 'PENDING'"):
+                return _DummyResult(rows=[(1,)])
+            if "FROM NODES" in text and "WHERE STATUS = 'PENDING'" in text:
+                return _DummyResult(
+                    rows=[
+                        {
+                            "id": "mem-1",
+                            "type": "Fact",
+                            "name": "Solomon keeps the orange notebook in the cabinet",
+                            "created_at": "2026-03-11T00:00:00",
+                            "verified": 0,
+                            "confidence": 0.8,
+                            "source": "unit-test",
+                            "session_id": "sess-1",
+                            "speaker": "user",
+                        }
+                    ]
+                )
+            return _DummyResult(rows=[])
+
+    class _Graph:
+        @contextmanager
+        def _get_conn(self):
+            yield _Conn()
+
+    return _Graph()
+
+
+def _review_pending_config():
+    return SimpleNamespace(
+        models=SimpleNamespace(max_output=lambda tier: 1024),
+        core=SimpleNamespace(parallel=SimpleNamespace(enabled=False, llm_workers=1, task_workers={})),
+    )
+
+
+def test_review_pending_apply_failure_warns_and_continues_when_not_failhard(caplog):
+    metrics = maintenance_ops.JanitorMetrics()
+
+    with patch.object(maintenance_ops, "_cfg", _review_pending_config()), \
+         patch.object(maintenance_ops, "_owner_display_name", return_value="Solomon"), \
+         patch.object(maintenance_ops, "_owner_full_name", return_value="Solomon Steadman"), \
+         patch.object(maintenance_ops, "call_deep_reasoning", return_value=('[{"id":"mem-1","action":"KEEP"}]', 0.05)), \
+         patch.object(maintenance_ops, "apply_review_decisions_from_list", side_effect=ValueError("apply failed")), \
+         patch.object(maintenance_ops, "is_fail_hard_enabled", return_value=False), \
+         caplog.at_level("WARNING"):
+        out = maintenance_ops.review_pending_memories(
+            _review_pending_graph(),
+            dry_run=False,
+            metrics=metrics,
+            max_items=1,
+        )
+
+    assert out["total_reviewed"] == 1
+    assert out["kept"] == 0
+    assert any("Review batch 1: apply failed" in error["error"] for error in metrics.errors)
+    assert "Review batch 1 failed" in caplog.text
+
+
+def test_review_pending_apply_failure_raises_when_failhard():
+    metrics = maintenance_ops.JanitorMetrics()
+
+    with patch.object(maintenance_ops, "_cfg", _review_pending_config()), \
+         patch.object(maintenance_ops, "_owner_display_name", return_value="Solomon"), \
+         patch.object(maintenance_ops, "_owner_full_name", return_value="Solomon Steadman"), \
+         patch.object(maintenance_ops, "call_deep_reasoning", return_value=('[{"id":"mem-1","action":"KEEP"}]', 0.05)), \
+         patch.object(maintenance_ops, "apply_review_decisions_from_list", side_effect=ValueError("apply failed")), \
+         patch.object(maintenance_ops, "is_fail_hard_enabled", return_value=True):
+        with pytest.raises(RuntimeError, match="Review batch 1 failed while failHard is enabled") as excinfo:
+            maintenance_ops.review_pending_memories(
+                _review_pending_graph(),
+                dry_run=False,
+                metrics=metrics,
+                max_items=1,
+            )
+
+    assert isinstance(excinfo.value.__cause__, ValueError)
+    assert "apply failed" in str(excinfo.value.__cause__)
