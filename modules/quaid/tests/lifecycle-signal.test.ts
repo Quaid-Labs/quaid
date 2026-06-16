@@ -1193,6 +1193,237 @@ describe("lifecycle signal detection", () => {
     }
   });
 
+  it("honors QUAID_NOW for OpenClaw cursor, signal, preserved, and trace records", async () => {
+    const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), "quaid-oc-now-"));
+    const homeDir = path.join(baseDir, "home");
+    const quaidHome = path.join(baseDir, ".quaid");
+    const visibleHome = path.join(baseDir, "quaid");
+    const openClawRoot = path.join(homeDir, ".openclaw");
+    const sessionsDir = path.join(openClawRoot, "agents", "main", "sessions");
+    const openClawConfigPath = path.join(openClawRoot, "openclaw.json");
+    const instanceRoot = path.join(quaidHome, "instances", "openclaw-main");
+    const expectedNow = "2026-03-11T05:06:07.000Z";
+    fs.mkdirSync(sessionsDir, { recursive: true });
+    fs.mkdirSync(path.join(instanceRoot, "logs"), { recursive: true });
+    fs.writeFileSync(
+      path.join(instanceRoot, "config.json"),
+      JSON.stringify({ retrieval: { fail_hard: false } }),
+      "utf8",
+    );
+    fs.writeFileSync(
+      openClawConfigPath,
+      JSON.stringify({ agents: { list: [{ id: "main", default: true }] } }),
+      "utf8",
+    );
+
+    try {
+      vi.stubEnv("HOME", homeDir);
+      vi.stubEnv("QUAID_HOME", quaidHome);
+      vi.stubEnv("QUAID_VISIBLE_HOME", visibleHome);
+      vi.stubEnv("OPENCLAW_CONFIG_PATH", openClawConfigPath);
+      vi.stubEnv("QUAID_INSTANCE", "openclaw-main");
+      vi.stubEnv("QUAID_NOW", "2026-03-11T05:06:07Z");
+      vi.resetModules();
+      const isolatedAdapter = await import("../adaptors/openclaw/adapter.js");
+      const isolatedTest = isolatedAdapter.__test;
+
+      const cursorSession = "cursor-session";
+      const cursorTranscript = path.join(sessionsDir, `${cursorSession}.jsonl`);
+      fs.writeFileSync(cursorTranscript, `${JSON.stringify({ role: "user", content: "cursor write" })}\n`, "utf8");
+      isolatedTest.writeSessionCursorToEnd(cursorSession, cursorTranscript);
+      const cursorPayload = JSON.parse(fs.readFileSync(
+        path.join(instanceRoot, "data", "session-cursors", `${cursorSession}.json`),
+        "utf8",
+      ));
+      expect(cursorPayload.updated_at).toBe(expectedNow);
+
+      const seededSession = "seed-session";
+      const seededTranscript = path.join(sessionsDir, `${seededSession}.jsonl`);
+      fs.writeFileSync(seededTranscript, `${JSON.stringify({ role: "user", content: "seed cursor" })}\n`, "utf8");
+      expect(isolatedTest.seedRollingCursorForTranscript(
+        seededSession,
+        seededTranscript,
+        "main",
+        "test",
+        { wakeDaemon: false },
+      )).toBe(true);
+      const seededPayload = JSON.parse(fs.readFileSync(
+        path.join(instanceRoot, "data", "session-cursors", `${seededSession}.json`),
+        "utf8",
+      ));
+      expect(seededPayload.updated_at).toBe(expectedNow);
+
+      const preservedPath = isolatedTest.appendPreservedTranscriptMessage(
+        "preserved-session",
+        "user",
+        "remember the tangerine-cased notebook",
+        "test",
+      );
+      expect(preservedPath).toBeTruthy();
+      const preservedLine = fs.readFileSync(String(preservedPath), "utf8").trim().split("\n").at(-1)!;
+      expect(JSON.parse(preservedLine).message.timestamp).toBe(expectedNow);
+
+      const signalSession = "signal-session";
+      const signalTranscript = path.join(sessionsDir, `${signalSession}.jsonl`);
+      fs.writeFileSync(signalTranscript, `${JSON.stringify({ role: "user", content: "signal write" })}\n`, "utf8");
+      isolatedTest.rememberSessionTranscriptPath(signalSession, signalTranscript, "test");
+      const sigPath = isolatedTest.writeDaemonSignal(signalSession, "session_end", { source: "test" });
+      expect(sigPath).toBeTruthy();
+      expect(JSON.parse(fs.readFileSync(String(sigPath), "utf8")).timestamp).toBe(expectedNow);
+
+      isolatedTest.writeHookTrace("test.quaid_now", { session_id: "trace-session" });
+      const tracePath = path.join(instanceRoot, "logs", "quaid-hook-trace.jsonl");
+      const traceLine = fs.readFileSync(tracePath, "utf8").trim().split("\n").at(-1)!;
+      expect(JSON.parse(traceLine).ts).toBe(expectedNow);
+
+      const evidence = isolatedTest.buildPreinjectEvidenceEntry({
+        sessionId: "preinject-session",
+        query: "What notebook color?",
+        source: "test",
+        recallResults: [],
+        injectedResults: [],
+      });
+      expect(evidence.ts).toBe(expectedNow);
+    } finally {
+      vi.unstubAllEnvs();
+      try { fs.rmSync(baseDir, { recursive: true, force: true }); } catch {}
+    }
+  });
+
+  it("raises OpenClaw cursor write failures when failHard is enabled", async () => {
+    const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), "quaid-oc-cursor-failhard-"));
+    const homeDir = path.join(baseDir, "home");
+    const quaidHome = path.join(baseDir, ".quaid");
+    const openClawRoot = path.join(homeDir, ".openclaw");
+    const sessionsDir = path.join(openClawRoot, "agents", "main", "sessions");
+    const openClawConfigPath = path.join(openClawRoot, "openclaw.json");
+    const instanceRoot = path.join(quaidHome, "instances", "openclaw-main");
+    const sessionId = "cursor-failhard-session";
+    const transcriptPath = path.join(sessionsDir, `${sessionId}.jsonl`);
+    fs.mkdirSync(sessionsDir, { recursive: true });
+    fs.mkdirSync(instanceRoot, { recursive: true });
+    fs.writeFileSync(transcriptPath, `${JSON.stringify({ role: "user", content: "cursor failhard" })}\n`, "utf8");
+    fs.writeFileSync(
+      path.join(instanceRoot, "config.json"),
+      JSON.stringify({ retrieval: { fail_hard: true } }),
+      "utf8",
+    );
+    fs.writeFileSync(
+      openClawConfigPath,
+      JSON.stringify({ agents: { list: [{ id: "main", default: true }] } }),
+      "utf8",
+    );
+    fs.mkdirSync(path.join(instanceRoot, "data"), { recursive: true });
+    fs.writeFileSync(path.join(instanceRoot, "data", "session-cursors"), "not a directory", "utf8");
+
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    try {
+      vi.stubEnv("HOME", homeDir);
+      vi.stubEnv("QUAID_HOME", quaidHome);
+      vi.stubEnv("OPENCLAW_CONFIG_PATH", openClawConfigPath);
+      vi.stubEnv("QUAID_INSTANCE", "openclaw-main");
+      vi.resetModules();
+      const isolatedAdapter = await import("../adaptors/openclaw/adapter.js");
+
+      expect(() => isolatedAdapter.__test.writeSessionCursorToEnd(sessionId, transcriptPath)).toThrow();
+      expect(warnSpy.mock.calls.some((call) => String(call[0]).includes("writeSessionCursorToEnd failed"))).toBe(true);
+    } finally {
+      warnSpy.mockRestore();
+      vi.unstubAllEnvs();
+      try { fs.rmSync(baseDir, { recursive: true, force: true }); } catch {}
+    }
+  });
+
+  it("logs OpenClaw cursor repair and internal cleanup failures", async () => {
+    const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), "quaid-oc-cleanup-warn-"));
+    const homeDir = path.join(baseDir, "home");
+    const quaidHome = path.join(baseDir, ".quaid");
+    const openClawRoot = path.join(homeDir, ".openclaw");
+    const openClawConfigPath = path.join(openClawRoot, "openclaw.json");
+    const instanceRoot = path.join(quaidHome, "instances", "openclaw-main");
+    const cursorDir = path.join(instanceRoot, "data", "session-cursors");
+    const signalDir = path.join(instanceRoot, "data", "extraction-signals");
+    fs.mkdirSync(cursorDir, { recursive: true });
+    fs.mkdirSync(signalDir, { recursive: true });
+    fs.writeFileSync(path.join(cursorDir, "bad-cursor.json"), "{broken json", "utf8");
+    fs.writeFileSync(path.join(signalDir, "bad-signal.json"), "{broken json", "utf8");
+    fs.writeFileSync(
+      path.join(instanceRoot, "config.json"),
+      JSON.stringify({ retrieval: { fail_hard: false } }),
+      "utf8",
+    );
+    fs.mkdirSync(path.dirname(openClawConfigPath), { recursive: true });
+    fs.writeFileSync(
+      openClawConfigPath,
+      JSON.stringify({ agents: { list: [{ id: "main", default: true }] } }),
+      "utf8",
+    );
+
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      vi.stubEnv("HOME", homeDir);
+      vi.stubEnv("QUAID_HOME", quaidHome);
+      vi.stubEnv("OPENCLAW_CONFIG_PATH", openClawConfigPath);
+      vi.stubEnv("QUAID_INSTANCE", "openclaw-main");
+      vi.resetModules();
+      const isolatedAdapter = await import("../adaptors/openclaw/adapter.js");
+      const isolatedTest = isolatedAdapter.__test;
+
+      isolatedTest.repairSessionCursorPathsFromQuaidEventLogs();
+      isolatedTest.purgeInternalSessionArtifacts();
+
+      const warningText = warnSpy.mock.calls.map((call) => String(call[0])).join("\n");
+      expect(warningText).toContain("failed repairing cursor");
+      expect(warningText).toContain("failed advancing internal cursor");
+      expect(warningText).toContain("failed pruning internal signal");
+    } finally {
+      warnSpy.mockRestore();
+      vi.unstubAllEnvs();
+      try { fs.rmSync(baseDir, { recursive: true, force: true }); } catch {}
+    }
+  });
+
+  it("raises OpenClaw cursor repair failures when failHard is enabled", async () => {
+    const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), "quaid-oc-repair-failhard-"));
+    const homeDir = path.join(baseDir, "home");
+    const quaidHome = path.join(baseDir, ".quaid");
+    const openClawRoot = path.join(homeDir, ".openclaw");
+    const openClawConfigPath = path.join(openClawRoot, "openclaw.json");
+    const instanceRoot = path.join(quaidHome, "instances", "openclaw-main");
+    const cursorDir = path.join(instanceRoot, "data", "session-cursors");
+    fs.mkdirSync(cursorDir, { recursive: true });
+    fs.writeFileSync(path.join(cursorDir, "bad-cursor.json"), "{broken json", "utf8");
+    fs.writeFileSync(
+      path.join(instanceRoot, "config.json"),
+      JSON.stringify({ retrieval: { fail_hard: true } }),
+      "utf8",
+    );
+    fs.mkdirSync(path.dirname(openClawConfigPath), { recursive: true });
+    fs.writeFileSync(
+      openClawConfigPath,
+      JSON.stringify({ agents: { list: [{ id: "main", default: true }] } }),
+      "utf8",
+    );
+
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      vi.stubEnv("HOME", homeDir);
+      vi.stubEnv("QUAID_HOME", quaidHome);
+      vi.stubEnv("OPENCLAW_CONFIG_PATH", openClawConfigPath);
+      vi.stubEnv("QUAID_INSTANCE", "openclaw-main");
+      vi.resetModules();
+      const isolatedAdapter = await import("../adaptors/openclaw/adapter.js");
+
+      expect(() => isolatedAdapter.__test.repairSessionCursorPathsFromQuaidEventLogs()).toThrow();
+      expect(warnSpy.mock.calls.some((call) => String(call[0]).includes("failed repairing cursor"))).toBe(true);
+    } finally {
+      warnSpy.mockRestore();
+      vi.unstubAllEnvs();
+      try { fs.rmSync(baseDir, { recursive: true, force: true }); } catch {}
+    }
+  });
+
   it("queues late transcript_update extraction when OC writes real content after reset signal", () => {
     const sessionId = "b960bd81-2534-4e49-b72a-549cc7c5e26b";
     const resetMs = Date.parse("2026-04-26T21:32:03.000Z");

@@ -3053,6 +3053,42 @@ class TestCodexAdapter:
         assert adapter.owns_session_path(session_file) is False
         assert adapter.get_session_path(session_id) is None
 
+    def test_get_session_path_from_cursor_logs_failure_when_fail_open(self, tmp_path, monkeypatch, caplog):
+        from adaptors.codex import adapter as codex_adapter
+
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        monkeypatch.setenv("QUAID_INSTANCE", "codex-main")
+        monkeypatch.setattr(codex_adapter, "is_fail_hard_enabled", lambda: False)
+
+        err = RuntimeError("cursor read failed")
+        fake_daemon = SimpleNamespace(read_cursor=lambda _session_id: (_ for _ in ()).throw(err))
+        monkeypatch.setitem(sys.modules, "core.extraction_daemon", fake_daemon)
+
+        adapter = CodexAdapter()
+        with caplog.at_level("DEBUG", logger="adaptors.codex.adapter"):
+            assert adapter._get_session_path_from_cursor("thread-1") is None
+
+        assert "Failed reading Codex session cursor for thread-1" in caplog.text
+        assert "cursor read failed" in caplog.text
+
+    def test_get_session_path_from_cursor_raises_failure_when_fail_hard(self, tmp_path, monkeypatch, caplog):
+        from adaptors.codex import adapter as codex_adapter
+
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        monkeypatch.setenv("QUAID_INSTANCE", "codex-main")
+        monkeypatch.setattr(codex_adapter, "is_fail_hard_enabled", lambda: True)
+
+        err = RuntimeError("cursor read failed")
+        fake_daemon = SimpleNamespace(read_cursor=lambda _session_id: (_ for _ in ()).throw(err))
+        monkeypatch.setitem(sys.modules, "core.extraction_daemon", fake_daemon)
+
+        adapter = CodexAdapter()
+        with caplog.at_level("DEBUG", logger="adaptors.codex.adapter"):
+            with pytest.raises(RuntimeError, match="cursor read failed"):
+                adapter._get_session_path_from_cursor("thread-1")
+
+        assert "Failed reading Codex session cursor for thread-1" in caplog.text
+
     def test_check_session_transition_accepts_thread_id_payload(self, tmp_path, monkeypatch):
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         monkeypatch.delenv("QUAID_INSTANCE", raising=False)

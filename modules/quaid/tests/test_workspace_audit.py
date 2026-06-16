@@ -708,6 +708,35 @@ class TestReviewDecisionApplyLocking:
                 with pytest.raises(RuntimeError, match="workspace audit decision apply failed"):
                     apply_review_decisions(dry_run=False, decisions_data=decisions_data)
 
+    def test_apply_review_decisions_raises_project_review_queue_failure_when_fail_hard(self, tmp_path, caplog):
+        from core.lifecycle.workspace_audit import apply_review_decisions
+
+        cfg = _make_config_with_core_md(files={"A.md": {"purpose": "A", "maxLines": 100}})
+        decisions_data = {
+            "decisions": [
+                {
+                    "file": "A.md",
+                    "section": "Move Me",
+                    "action": "MOVE_TO_PROJECT",
+                    "project_hint": "alpha",
+                    "reason": "belongs in project",
+                }
+            ]
+        }
+
+        with _adapter_patch(tmp_path) as iroot, \
+             patch("core.lifecycle.workspace_audit.get_config", return_value=cfg), \
+             patch("core.lifecycle.workspace_audit.is_fail_hard_enabled", return_value=True), \
+             patch("core.lifecycle.workspace_audit._queue_project_review", side_effect=RuntimeError("queue down")):
+            (iroot / "A.md").write_text("# A\n\n## Move Me\n\ncontent\n", encoding="utf-8")
+            with caplog.at_level("WARNING", logger="core.lifecycle.workspace_audit"):
+                with pytest.raises(RuntimeError, match="workspace audit decision apply failed") as excinfo:
+                    apply_review_decisions(dry_run=False, decisions_data=decisions_data)
+
+        assert "Failed to queue project review: queue down" in caplog.text
+        assert isinstance(excinfo.value.__cause__, RuntimeError)
+        assert str(excinfo.value.__cause__) == "queue down"
+
     def test_move_to_docs_migration_note_honors_quaid_now(self, tmp_path, monkeypatch):
         from core.lifecycle.workspace_audit import apply_review_decisions
 

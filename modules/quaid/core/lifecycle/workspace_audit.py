@@ -728,6 +728,8 @@ def apply_review_decisions(dry_run: bool = True,
                                 )
                             except Exception as e:
                                 logger.warning(f"Failed to queue project review: {e}")
+                                if is_fail_hard_enabled():
+                                    raise
 
                         stats["project_detected"] = stats.get("project_detected", 0) + 1
 

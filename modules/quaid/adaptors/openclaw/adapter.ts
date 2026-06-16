@@ -66,6 +66,24 @@ function _resolveOpenClawConfigPath(): string {
   return candidates[0];
 }
 
+function nowIsoForPersistentRecord(): string {
+  const raw = String(process.env.QUAID_NOW || "").trim();
+  if (raw) {
+    const hasExplicitZone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(raw);
+    const candidate = /^\d{4}-\d{2}-\d{2}$/.test(raw)
+      ? `${raw}T00:00:00Z`
+      : hasExplicitZone
+        ? raw
+        : `${raw}Z`;
+    const parsed = new Date(candidate);
+    if (Number.isNaN(parsed.getTime())) {
+      throw new Error(`Invalid QUAID_NOW=${JSON.stringify(raw)}`);
+    }
+    return parsed.toISOString();
+  }
+  return new Date().toISOString();
+}
+
 function _openClawRootDir(): string {
   return path.dirname(_resolveOpenClawConfigPath());
 }
@@ -2068,14 +2086,19 @@ function writeSessionCursorToEnd(sessionId: string, transcriptPath: string, agen
       ? sessionCursorPathForAgent(sid, agentLabel)
       : sessionCursorPath(sid);
     fs.mkdirSync(path.dirname(cursorPath), { recursive: true });
-    const nowIso = new Date().toISOString().replace(/\.\d+Z$/, "Z");
+    const nowIso = nowIsoForPersistentRecord();
     fs.writeFileSync(cursorPath, JSON.stringify({
       session_id: sid,
       line_offset: _countTranscriptLines(resolvedPath),
       transcript_path: resolvedPath,
       updated_at: nowIso,
     }, null, 2), "utf8");
-  } catch {}
+  } catch (err: unknown) {
+    console.warn(
+      `[quaid][cursor] writeSessionCursorToEnd failed for session=${sid}: ${String((err as Error)?.message || err)}`
+    );
+    if (isFailHardEnabled()) throw err;
+  }
 }
 
 function isInstancePreservedSessionTranscript(transcriptPath: string, instanceRoot: string): boolean {
@@ -2133,7 +2156,7 @@ function seedRollingCursorForTranscript(
       && shouldRepairRollingCursorToLiveTranscript(cursorPath, resolvedPath, instanceRoot);
     if (cursorExists && !repairingPreservedMirror) return false;
     fs.mkdirSync(cursorDir, { recursive: true });
-    const nowIso = new Date().toISOString().replace(/\.\d+Z$/, "Z");
+    const nowIso = nowIsoForPersistentRecord();
     fs.writeFileSync(cursorPath, JSON.stringify({
       session_id: sid,
       line_offset: 0,
@@ -2155,6 +2178,7 @@ function seedRollingCursorForTranscript(
     return true;
   } catch (e) {
     console.warn(`[quaid][cursor] cursor seed error: ${e}`);
+    if (isFailHardEnabled()) throw e;
     return false;
   }
 }
@@ -2180,9 +2204,19 @@ function purgeInternalSessionArtifacts(): void {
           seen.add(sessionId);
           updatedSessions += 1;
         }
-      } catch {}
+      } catch (err: unknown) {
+        console.warn(
+          `[quaid][cleanup] failed advancing internal cursor ${cursorPath}: ${String((err as Error)?.message || err)}`
+        );
+      }
     }
-  } catch {}
+  } catch (err: unknown) {
+    if (!isMissingFileError(err)) {
+      console.warn(
+        `[quaid][cleanup] failed scanning internal session cursor dir ${cursorDir}: ${String((err as Error)?.message || err)}`
+      );
+    }
+  }
 
   try {
     const signalNames = fs.readdirSync(signalDir).filter((name) => name.endsWith(".json"));
@@ -2199,9 +2233,19 @@ function purgeInternalSessionArtifacts(): void {
           seen.add(sessionId);
           updatedSessions += 1;
         }
-      } catch {}
+      } catch (err: unknown) {
+        console.warn(
+          `[quaid][cleanup] failed pruning internal signal ${signalPath}: ${String((err as Error)?.message || err)}`
+        );
+      }
     }
-  } catch {}
+  } catch (err: unknown) {
+    if (!isMissingFileError(err)) {
+      console.warn(
+        `[quaid][cleanup] failed scanning internal signal dir ${signalDir}: ${String((err as Error)?.message || err)}`
+      );
+    }
+  }
 
   if (updatedSessions) {
     console.log(`[quaid][cleanup] advanced ${updatedSessions} internal session cursor(s) to EOF`);
@@ -2297,13 +2341,24 @@ function repairSessionCursorPathsFromQuaidEventLogs(): void {
         if (!resolved) continue;
 
         payload.transcript_path = resolved;
-        payload.updated_at = new Date().toISOString().replace(/\.\d+Z$/, "Z");
+        payload.updated_at = nowIsoForPersistentRecord();
         fs.writeFileSync(cursorPath, JSON.stringify(payload), "utf8");
         sessionTranscriptPaths.set(sessionId, resolved);
         repaired += 1;
-      } catch {}
+      } catch (err: unknown) {
+        console.warn(
+          `[quaid][cleanup] failed repairing cursor ${cursorPath}: ${String((err as Error)?.message || err)}`
+        );
+        if (isFailHardEnabled()) throw err;
+      }
     }
-  } catch {}
+  } catch (err: unknown) {
+    if (isMissingFileError(err)) return;
+    console.warn(
+      `[quaid][cleanup] failed scanning cursor repairs in ${cursorDir}: ${String((err as Error)?.message || err)}`
+    );
+    if (isFailHardEnabled()) throw err;
+  }
   if (repaired) {
     console.log(`[quaid][cleanup] repaired ${repaired} cursor(s) that pointed at Quaid event logs`);
   }
@@ -3012,7 +3067,7 @@ function appendPreservedTranscriptMessage(
     message: {
       role,
       content: text,
-      timestamp: new Date().toISOString(),
+      timestamp: nowIsoForPersistentRecord(),
     },
   });
   try {
@@ -3385,7 +3440,7 @@ function writeDaemonSignal(
     transcript_path: resolvedPath,
     adapter: "openclaw",
     supports_compaction_control: true,
-    timestamp: new Date().toISOString(),
+    timestamp: nowIsoForPersistentRecord(),
     meta: meta || {},
   };
   const fname = `${Date.now()}_${process.pid}_${signalType}.json`;
@@ -3604,7 +3659,7 @@ function _jsonSafe(value: unknown): string {
 
 function writeHookTrace(event: string, data: Record<string, unknown> = {}): void {
   const payload = {
-    ts: new Date().toISOString(),
+    ts: nowIsoForPersistentRecord(),
     event,
     ...data,
   };
@@ -3732,7 +3787,7 @@ function buildPreinjectEvidenceEntry(params: {
   const recallDetails = buildPreinjectEvidenceDetails(params.recallResults);
   const injectedDetails = buildPreinjectEvidenceDetails(params.injectedResults);
   return {
-    ts: new Date().toISOString(),
+    ts: nowIsoForPersistentRecord(),
     sessionId: String(params.sessionId || "").trim() || "unknown",
     sessionKey: String(params.sessionKey || "").trim() || undefined,
     query: String(params.query || "").trim(),
@@ -9840,11 +9895,17 @@ export const __test = {
   resolvePreservedConversationTranscriptPath,
   preserveSessionTranscript,
   shouldMirrorTranscriptUpdateToPreservedCopy,
+  writeSessionCursorToEnd,
+  seedRollingCursorForTranscript,
+  repairSessionCursorPathsFromQuaidEventLogs,
+  purgeInternalSessionArtifacts,
+  writeHookTrace,
   isMainInteractiveSessionKey,
   selectNewKeyFanoutTarget,
   findLatestMeaningfulUserSessionFromFilesystem,
   resolveLifecycleFlushSessionCandidate,
   buildPreinjectEvidenceEntry,
   appendPreinjectEvidenceLog,
+  nowIsoForPersistentRecord,
   NEW_KEY_FALLBACK_DELAY_MS,
 };
