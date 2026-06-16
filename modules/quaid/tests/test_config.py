@@ -1686,6 +1686,46 @@ class TestLightweightLibConfig:
             assert get_retrieval_rrf_k() == 42
             assert get_db_path_lightweight() == tmp_path / "instances" / "codex-main" / "data" / "custom-memory.db"
 
+    def test_lightweight_config_logs_empty_text_values_before_defaulting(
+        self,
+        tmp_path,
+        monkeypatch,
+        caplog,
+    ):
+        from lib.config import (
+            get_db_path_lightweight,
+            get_embedding_model,
+            get_embeddings_provider_id,
+            get_ollama_url,
+        )
+
+        global_cfg = tmp_path / "shared" / "config" / "global" / "config.json"
+        global_cfg.parent.mkdir(parents=True, exist_ok=True)
+        global_cfg.write_text(
+            json.dumps({
+                "database": {"path": ""},
+                "ollama": {"url": "", "embeddingModel": ""},
+                "models": {"embeddingsProvider": ""},
+            }),
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "codex-main")
+        monkeypatch.delenv("MEMORY_DB_PATH", raising=False)
+        monkeypatch.delenv("OLLAMA_URL", raising=False)
+
+        with patch("config.get_config", side_effect=AssertionError("full config should not load")), \
+             caplog.at_level("WARNING", logger="lib.config"):
+            assert get_db_path_lightweight() == tmp_path / "instances" / "codex-main" / "data" / "memory.db"
+            assert get_ollama_url() == "http://localhost:11434"
+            assert get_embedding_model() == "nomic-embed-text"
+            assert get_embeddings_provider_id() == "ollama"
+
+        assert "Empty config value for database.path" in caplog.text
+        assert "Empty config value for ollama.url" in caplog.text
+        assert "Empty config value for ollama.embedding_model" in caplog.text
+        assert "Empty config value for models.embeddings_provider" in caplog.text
+
     def test_lightweight_config_uses_adapter_type_for_legacy_claude_code_instance(self, tmp_path, monkeypatch):
         from lib.config import get_embedding_model, get_injection_timeout_ms
 

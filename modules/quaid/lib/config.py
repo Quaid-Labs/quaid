@@ -263,6 +263,17 @@ def _section_value(section: str, key: str, default: Any = None) -> Any:
     return section_data.get(key, default)
 
 
+def _section_text_value(section: str, key: str, default: str) -> str:
+    raw = _section_value(section, key, default)
+    if raw is None:
+        return default
+    text = str(raw).strip()
+    if text:
+        return text
+    logger.warning("Empty config value for %s.%s; using default %r", section, key, default)
+    return default
+
+
 def _cross_instance_override_owner(path: Path) -> str | None:
     """Return the instance name when an override points at another instance DB."""
     instance = os.environ.get("QUAID_INSTANCE", "").strip()
@@ -328,7 +339,7 @@ def get_db_path_lightweight() -> Path:
     env_path = _validated_memory_override("MEMORY_DB_PATH")
     if env_path is not None:
         return env_path
-    raw = str(_section_value("database", "path", "data/memory.db") or "data/memory.db").strip()
+    raw = _section_text_value("database", "path", "data/memory.db")
     p = Path(raw).expanduser()
     if p.is_absolute():
         return p
@@ -412,12 +423,12 @@ def get_ollama_url() -> str:
     env_url = os.environ.get("OLLAMA_URL")
     if env_url:
         return env_url
-    return str(_section_value("ollama", "url", "http://localhost:11434") or "http://localhost:11434")
+    return _section_text_value("ollama", "url", "http://localhost:11434")
 
 
 def get_embedding_model() -> str:
     """Get the Ollama embedding model name."""
-    return str(_section_value("ollama", "embedding_model", "nomic-embed-text") or "nomic-embed-text")
+    return _section_text_value("ollama", "embedding_model", "nomic-embed-text")
 
 
 def get_embedding_dim() -> int:
@@ -431,8 +442,7 @@ def get_embedding_dim() -> int:
 
 def get_embeddings_provider_id() -> str:
     """Get the configured embeddings provider id without plugin initialization."""
-    raw = _section_value("models", "embeddings_provider", "ollama")
-    return str(raw or "ollama").strip().lower()
+    return _section_text_value("models", "embeddings_provider", "ollama").lower()
 
 
 def get_retrieval_lightweight_config() -> SimpleNamespace:
