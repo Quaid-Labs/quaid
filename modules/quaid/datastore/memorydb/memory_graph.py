@@ -101,7 +101,6 @@ from lib.tokens import (
     extract_key_tokens as _lib_extract_key_tokens,
     is_subset_overlap_candidate,
     texts_are_near_identical,
-    STOPWORDS as _LIB_STOPWORDS,
 )
 from lib.runtime_context import get_workspace_dir, get_adapter_instance, get_logs_dir
 
@@ -2873,7 +2872,7 @@ class MemoryGraph:
                 raw_words = re.sub(r'[^\w\s]', '', query).split()
                 words = [
                     w for w in raw_words
-                    if len(w) >= _recall_query_term_min_len(w) and w.lower() not in _LIB_STOPWORDS
+                    if len(w) >= _recall_query_term_min_len(w)
                 ]
                 proper_nouns = [w for w in words if _is_fts_fallback_high_signal_token(w)]
                 common_words = [w for w in words if w not in proper_nouns]
@@ -4890,7 +4889,7 @@ def extract_entities_from_text(text: str) -> List[Node]:
     unique_words = []
     for w in words:
         key = _identifier_key(w) if _has_non_ascii(w) else w.lower()
-        if key not in seen and key not in _LIB_STOPWORDS:
+        if key not in seen:
             seen.add(key)
             unique_words.append(w)
 
