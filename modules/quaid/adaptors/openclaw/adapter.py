@@ -534,6 +534,7 @@ class OpenClawAdapter(QuaidAdapter):
         """
         # Fallback: resolve workspace from gateway config when env vars are absent.
         cfg_path = self.get_gateway_config_path()
+        config_error = ""
         if cfg_path is not None and cfg_path.exists():
             try:
                 with open(cfg_path) as f:
@@ -558,14 +559,16 @@ class OpenClawAdapter(QuaidAdapter):
                     if is_fail_hard_enabled():
                         raise PermissionError(message)
             except json.JSONDecodeError as exc:
-                print(f"[adapter] OpenClaw config is malformed: {exc}", file=sys.stderr)
+                config_error = f"OpenClaw config is malformed: {exc}"
+                print(f"[adapter] {config_error}", file=sys.stderr)
                 if is_fail_hard_enabled():
                     raise
             except KeyError:
                 if is_fail_hard_enabled():
                     raise
+        detail = f"{config_error}. " if config_error else ""
         raise RuntimeError(
-            "Could not resolve OpenClaw workspace from OpenClaw config "
+            f"{detail}Could not resolve OpenClaw workspace from OpenClaw config "
             "(OPENCLAW_CONFIG_PATH or ~/.openclaw/openclaw.json). "
             "Set QUAID_HOME or configure adapter.type=standalone in config.json."
         )
@@ -1176,8 +1179,6 @@ class OpenClawAdapter(QuaidAdapter):
             if self.notify(f"[Quaid warning] [provider] {message}", force=True):
                 self._provider_fallback_notices_seen.add(dedupe)
         except Exception as exc:
-            if is_fail_hard_enabled():
-                raise
             print(
                 f"[notify] Provider fallback notice failed for {dedupe}: {exc}",
                 file=sys.stderr,

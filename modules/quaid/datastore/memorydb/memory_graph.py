@@ -6454,7 +6454,9 @@ def _resolve_auto_inject_graph_depth() -> int:
     try:
         retrieval_cfg = _get_retrieval_lightweight_config()
         raw_depth = getattr(retrieval_cfg, "auto_inject_graph_depth", default_depth)
-        return max(1, int(raw_depth or default_depth))
+        if raw_depth is None:
+            return default_depth
+        return max(0, int(raw_depth))
     except Exception:
         if _is_fail_hard_mode():
             raise

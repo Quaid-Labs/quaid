@@ -674,6 +674,29 @@ class TestConfigPathResolution:
         finally:
             config._config = old_config
 
+    def test_loads_janitor_schedule_window_and_tool_hint_timeout(self, tmp_path):
+        import config
+        old_config = config._config
+        config._config = None
+        try:
+            config_file = tmp_path / "config.json"
+            config_file.write_text(json.dumps({
+                "janitor": {
+                    "scheduledHour": 0,
+                    "windowHours": 6,
+                },
+                "retrieval": {
+                    "toolHintTimeoutMs": 2500,
+                },
+            }))
+            with patch.object(config, "_config_paths", lambda: [config_file]):
+                cfg = load_config()
+                assert cfg.janitor.scheduled_hour == 0
+                assert cfg.janitor.window_hours == 6
+                assert cfg.retrieval.tool_hint_timeout_ms == 2500
+        finally:
+            config._config = old_config
+
     def test_loads_project_definitions_from_db_with_list_type_validation(self, tmp_path):
         import config
         old_config = config._config
@@ -844,6 +867,41 @@ class TestConfigPathResolution:
                  patch("lib.fail_policy.is_fail_hard_enabled", return_value=True):
                 with pytest.raises(RuntimeError, match="db down"):
                     load_config()
+        finally:
+            config._config = old_config
+
+    def test_project_definition_db_error_preserved_when_fail_policy_import_fails(self, tmp_path, monkeypatch):
+        import config
+        old_config = config._config
+        config._config = None
+        real_import = __import__
+
+        def fail_policy_import(name, *args, **kwargs):
+            if name == "lib.fail_policy":
+                raise ImportError("fail policy unavailable")
+            return real_import(name, *args, **kwargs)
+
+        try:
+            config_file = tmp_path / "config.json"
+            config_file.write_text(json.dumps({
+                "projects": {
+                    "definitions": {
+                        "json-proj": {"label": "JSON Project", "homeDir": "projects/json-proj/"}
+                    }
+                }
+            }))
+            docs_db = tmp_path / "docs.db"
+            docs_db.write_text("", encoding="utf-8")
+
+            monkeypatch.setattr("builtins.__import__", fail_policy_import)
+            with patch.object(config, "_config_paths", lambda: [config_file]), \
+                 patch("lib.config.get_docs_db_path", return_value=docs_db), \
+                 patch("lib.database.get_connection", side_effect=RuntimeError("db down")):
+                with pytest.raises(RuntimeError, match="db down") as excinfo:
+                    load_config()
+
+            assert isinstance(excinfo.value.__cause__, ImportError)
+            assert str(excinfo.value.__cause__) == "fail policy unavailable"
         finally:
             config._config = old_config
 
@@ -1454,6 +1512,50 @@ class TestConfigPathResolution:
                 assert cfg.retrieval.auto_inject_graph_depth == 3
         finally:
             config._config = old_config
+
+    def test_retrieval_auto_inject_graph_depth_preserves_explicit_zero(self, tmp_path):
+        import config
+        old_config = config._config
+        config._config = None
+        try:
+            config_file = tmp_path / "config.json"
+            config_file.write_text(json.dumps({
+                "retrieval": {
+                    "autoInjectGraphDepth": 0,
+                }
+            }))
+            with patch.object(config, "_config_paths", lambda: [config_file]):
+                cfg = load_config()
+                assert cfg.retrieval.auto_inject_graph_depth == 0
+        finally:
+            config._config = old_config
+
+    def test_retrieval_top_level_reranker_aliases_are_loaded(self, tmp_path, capsys):
+        import config
+        old_config = config._config
+        old_warned = set(config._warned_unknown_config_keys)
+        config._config = None
+        config._warned_unknown_config_keys.clear()
+        try:
+            config_file = tmp_path / "config.json"
+            config_file.write_text(json.dumps({
+                "retrieval": {
+                    "rerankerEnabled": False,
+                    "rerankerTopK": 7,
+                    "rerankerInstruction": "Only route exact matches",
+                }
+            }))
+            with patch.object(config, "_config_paths", lambda: [config_file]), \
+                 patch.dict(os.environ, {"QUAID_QUIET": ""}, clear=False):
+                cfg = load_config()
+            assert cfg.retrieval.reranker_enabled is False
+            assert cfg.retrieval.reranker_top_k == 7
+            assert cfg.retrieval.reranker_instruction == "Only route exact matches"
+            assert "Unknown config key ignored: retrieval.reranker_enabled" not in capsys.readouterr().err
+        finally:
+            config._config = old_config
+            config._warned_unknown_config_keys.clear()
+            config._warned_unknown_config_keys.update(old_warned)
 
     def test_reload_config_resets_unknown_key_warning_cache(self, tmp_path, capsys):
         import config

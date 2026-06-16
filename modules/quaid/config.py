@@ -1254,6 +1254,8 @@ def _load_config_inner() -> MemoryConfig:
             'task_timeout_minutes',
             config_data.get('janitor', {}).get('taskTimeoutMinutes', 240),
         ),
+        scheduled_hour=min(23, _coerce_nonnegative_int(_cfg_get(config_data.get('janitor', {}), 'scheduled_hour', 4), 4)),
+        window_hours=_coerce_positive_int(_cfg_get(config_data.get('janitor', {}), 'window_hours', 2), 2),
         run_tests=config_data.get('janitor', {}).get('run_tests',
                   config_data.get('janitor', {}).get('runTests', False)),
         opus_review=opus_review,
@@ -1263,6 +1265,12 @@ def _load_config_inner() -> MemoryConfig:
     
     retrieval_data = config_data.get('retrieval', {})
     reranker_data = retrieval_data.get('reranker', {})
+    if not isinstance(reranker_data, dict):
+        reranker_data = {}
+    reranker_instruction_default = (
+        'Given a personal memory query, determine if this memory is relevant to the query'
+    )
+    raw_auto_inject_graph_depth = _cfg_get(retrieval_data, 'auto_inject_graph_depth', 2)
     traversal_data = retrieval_data.get('traversal', {})
     traversal = TraversalConfig(
         use_beam=traversal_data.get('useBeam', traversal_data.get('use_beam', True)),
@@ -1300,9 +1308,18 @@ def _load_config_inner() -> MemoryConfig:
         boost_recent=retrieval_data.get('boost_recent', True),
         boost_frequent=retrieval_data.get('boost_frequent', True),
         max_tokens=retrieval_data.get('max_tokens', 2000),
-        reranker_enabled=reranker_data.get('enabled', True),
-        reranker_top_k=reranker_data.get('top_k', 20),
-        reranker_instruction=reranker_data.get('instruction', 'Given a personal memory query, determine if this memory is relevant to the query'),
+        reranker_enabled=_config_bool(
+            _cfg_get(reranker_data, 'enabled', _cfg_get(retrieval_data, 'reranker_enabled', True)),
+            True,
+        ),
+        reranker_top_k=int(_cfg_get(reranker_data, 'top_k', _cfg_get(retrieval_data, 'reranker_top_k', 20))),
+        reranker_instruction=str(
+            _cfg_get(
+                reranker_data,
+                'instruction',
+                _cfg_get(retrieval_data, 'reranker_instruction', reranker_instruction_default),
+            )
+        ),
         reranker_timeout_ms=int(retrieval_data.get('reranker_timeout_ms', retrieval_data.get('rerankerTimeoutMs', 15000))),
         rrf_k=retrieval_data.get('rrf_k', 60),
         store_plan_rrf_fusion=_config_bool(retrieval_data.get('store_plan_rrf_fusion', retrieval_data.get('storePlanRrfFusion', True)), True),
@@ -1326,9 +1343,10 @@ def _load_config_inner() -> MemoryConfig:
         injection_timeout_ms=int(retrieval_data.get('injection_timeout_ms', retrieval_data.get('injectionTimeoutMs', 3000))),
         injection_fanout_max=int(retrieval_data.get('injection_fanout_max', retrieval_data.get('injectionFanoutMax', 5))),
         injection_fanout_llm_ms=int(retrieval_data.get('injection_fanout_llm_ms', retrieval_data.get('injectionFanoutLlmMs', 1500))),
-        auto_inject_graph_depth=max(1, int(retrieval_data.get('auto_inject_graph_depth', 2) or 2)),
+        auto_inject_graph_depth=max(0, int(raw_auto_inject_graph_depth)),
         domains=parsed_domains,
         traversal=traversal,
+        tool_hint_timeout_ms=int(_cfg_get(retrieval_data, 'tool_hint_timeout_ms', 1500)),
     )
     
     logging_cfg = LoggingConfig(
@@ -1432,10 +1450,9 @@ def _load_config_inner() -> MemoryConfig:
         logger.warning("Failed to load project definitions from datastore; falling back to JSON config: %s", exc)
         try:
             from lib.fail_policy import is_fail_hard_enabled
-
-            if is_fail_hard_enabled():
-                raise
-        except ImportError:
+        except ImportError as import_exc:
+            raise exc from import_exc
+        if is_fail_hard_enabled():
             raise
     if not project_definitions:
         # Fallback: load from JSON if DB not available (fresh install, tests)

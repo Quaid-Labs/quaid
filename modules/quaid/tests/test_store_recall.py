@@ -10509,6 +10509,36 @@ class TestRecallTelemetry:
         assert captured["graph_depth"] == 3
         assert meta["auto_inject_graph_depth"] == 3
 
+    def test_recall_fast_graph_auto_inject_depth_preserves_explicit_zero(self):
+        import datastore.memorydb.memory_graph as mg
+
+        captured = {}
+        retrieval_cfg = SimpleNamespace(auto_inject_graph_depth=0)
+
+        def _fake_run(query, *, stores, limit, owner_id, min_similarity, planner_profile, planned_queries, planner_meta, fast_mode, graph_depth, common_kwargs):
+            captured["graph_depth"] = graph_depth
+            return [], {"phases_ms": {"total_ms": 0}}, None
+
+        with patch.object(mg, "_get_retrieval_lightweight_config", return_value=retrieval_cfg), patch.object(
+            mg,
+            "_plan_fanout_queries",
+            return_value=(
+                ["Who is Maya's niece?"],
+                {
+                    "used_llm": False,
+                    "queries_count": 1,
+                    "elapsed_ms": 0,
+                    "planner_profile": "fast",
+                    "planned_stores": ["vector", "graph"],
+                    "planned_project": None,
+                },
+            ),
+        ), patch.object(mg, "_run_recall_store_plan", side_effect=_fake_run):
+            _rows, meta = mg.recall_fast("Who is Maya's niece?", return_meta=True)
+
+        assert captured["graph_depth"] == 0
+        assert meta["auto_inject_graph_depth"] == 0
+
     def test_deliberate_recall_routes_relation_chain_planner_graph_through_store_plan(self):
         import datastore.memorydb.memory_graph as mg
 

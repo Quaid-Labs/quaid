@@ -617,9 +617,10 @@ class TestOpenClawAdapter:
         adapter = OpenClawAdapter()
 
         with patch("adaptors.openclaw.adapter.is_fail_hard_enabled", return_value=False):
-            with pytest.raises(RuntimeError, match="Could not resolve OpenClaw workspace"):
+            with pytest.raises(RuntimeError, match="OpenClaw config is malformed") as excinfo:
                 adapter.oc_workspace()
 
+        assert "Could not resolve OpenClaw workspace" in str(excinfo.value)
         assert "OpenClaw config is malformed" in capsys.readouterr().err
 
     def test_oc_workspace_rejects_config_workspace_outside_home_when_fail_hard(self, tmp_path, monkeypatch):
@@ -1853,6 +1854,28 @@ class TestOpenClawAdapter:
         monkeypatch.setattr(adapter, "notify", _fail_notify)
 
         with patch("adaptors.openclaw.adapter.is_fail_hard_enabled", return_value=False):
+            adapter._notify_provider_fallback(
+                configured_provider="anthropic",
+                detected_provider="openai-codex",
+                deep_model_before="claude-sonnet-4-5",
+                fast_model_before="claude-haiku-4-5",
+                deep_model_after="gpt-5.4",
+                fast_model_after="gpt-5.4-mini",
+            )
+
+        err = capsys.readouterr().err
+        assert "Provider fallback notice failed" in err
+        assert "notify transport down" in err
+
+    def test_notify_provider_fallback_never_raises_on_notify_failure_under_failhard(self, monkeypatch, capsys):
+        adapter = OpenClawAdapter()
+
+        def _fail_notify(*_args, **_kwargs):
+            raise RuntimeError("notify transport down")
+
+        monkeypatch.setattr(adapter, "notify", _fail_notify)
+
+        with patch("adaptors.openclaw.adapter.is_fail_hard_enabled", return_value=True):
             adapter._notify_provider_fallback(
                 configured_provider="anthropic",
                 detected_provider="openai-codex",
