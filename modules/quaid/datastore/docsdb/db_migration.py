@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, List
 
+from lib.fail_policy import is_fail_hard_enabled
 from lib.instance import quaid_home as _quaid_home
 
 logger = logging.getLogger(__name__)
@@ -60,7 +61,15 @@ def migrate_legacy_docs_tables(shared_db_path: Path, tables: Iterable[str]) -> N
     target = Path(shared_db_path).expanduser()
     try:
         target_key = str(target.resolve())
-    except Exception:
+    except Exception as exc:
+        logger.warning(
+            "Failed resolving docs DB migration target path %s: %s",
+            target,
+            exc,
+            exc_info=True,
+        )
+        if is_fail_hard_enabled():
+            raise RuntimeError(f"Failed resolving docs DB migration target path {target}") from exc
         target_key = str(target)
     cache_key = (target_key, wanted)
 
@@ -128,8 +137,13 @@ def _migrate_locked(target_db: Path, wanted_tables: tuple[str, ...]) -> None:
             finally:
                 try:
                     conn.execute(f"DETACH DATABASE {alias}")
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.warning(
+                        "Failed detaching legacy docs migration database %s: %s",
+                        alias,
+                        exc,
+                        exc_info=True,
+                    )
     finally:
         conn.close()
 
@@ -150,7 +164,14 @@ def _legacy_instance_db_paths(target_db: Path) -> List[Path]:
         try:
             if candidate.resolve() == target_db.resolve():
                 continue
-        except Exception:
+        except Exception as exc:
+            logger.debug(
+                "Failed comparing legacy docs DB path %s to target %s: %s",
+                candidate,
+                target_db,
+                exc,
+                exc_info=True,
+            )
             if str(candidate) == str(target_db):
                 continue
         out.append(candidate)

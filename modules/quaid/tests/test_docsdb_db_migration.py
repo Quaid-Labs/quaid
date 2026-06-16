@@ -124,3 +124,54 @@ def test_migrate_legacy_docs_tables_skips_signature_failures_with_warning(
     assert state == []
     assert "failed reading DB signature" in caplog.text
     assert "stat failed" in caplog.text
+
+
+def test_migrate_legacy_docs_tables_logs_target_resolution_failure(
+    monkeypatch,
+    caplog,
+):
+    class BrokenTarget:
+        def expanduser(self):
+            return self
+
+        def resolve(self):
+            raise OSError("resolve failed")
+
+        def __str__(self):
+            return "/tmp/broken-target.db"
+
+    calls = []
+    db_migration._PROCESS_DONE_KEYS.clear()
+    monkeypatch.setattr(db_migration, "Path", lambda _path: BrokenTarget())
+    monkeypatch.setattr(db_migration, "_migrate_locked", lambda target, wanted: calls.append((target, wanted)))
+    monkeypatch.setattr(db_migration, "is_fail_hard_enabled", lambda: False)
+
+    with caplog.at_level(logging.WARNING, logger="datastore.docsdb.db_migration"):
+        db_migration.migrate_legacy_docs_tables("/unused", ("doc_registry",))
+
+    assert calls
+    assert "Failed resolving docs DB migration target path /tmp/broken-target.db" in caplog.text
+    assert "resolve failed" in caplog.text
+
+
+def test_migrate_legacy_docs_tables_target_resolution_failure_raises_under_failhard(
+    monkeypatch,
+):
+    class BrokenTarget:
+        def expanduser(self):
+            return self
+
+        def resolve(self):
+            raise OSError("resolve failed")
+
+        def __str__(self):
+            return "/tmp/broken-target.db"
+
+    db_migration._PROCESS_DONE_KEYS.clear()
+    monkeypatch.setattr(db_migration, "Path", lambda _path: BrokenTarget())
+    monkeypatch.setattr(db_migration, "_migrate_locked", lambda _target, _wanted: None)
+    monkeypatch.setattr(db_migration, "is_fail_hard_enabled", lambda: True)
+
+    with pytest.raises(RuntimeError, match="Failed resolving docs DB migration target path") as excinfo:
+        db_migration.migrate_legacy_docs_tables("/unused", ("doc_registry",))
+    assert isinstance(excinfo.value.__cause__, OSError)
