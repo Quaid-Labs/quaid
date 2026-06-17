@@ -948,6 +948,49 @@ def test_reranker_falls_back_on_llm_failure_when_failhard_disabled():
         ) == [(node, 0.9)]
 
 
+def test_reranker_default_timeout_still_fails_hard_on_slow_response():
+    import datastore.memorydb.memory_graph as mg
+
+    node = SimpleNamespace(id="n1", name="Quinn added auxiliary columns to the inventory tracker")
+
+    def _fake_reasoning(*_args, **_kwargs):
+        return "1. 5", {}
+
+    with patch("lib.llm_clients.call_fast_reasoning", side_effect=_fake_reasoning), \
+         patch.object(mg, "_is_fail_hard_mode", return_value=True), \
+         patch.object(mg.time, "monotonic", side_effect=[0.0, 15.904, 15.904]):
+        with pytest.raises(RuntimeError, match="Recall reranker failed while failHard is enabled"):
+            mg._rerank_via_llm(
+                "inventory tracker migration fields",
+                [(node, 0.9)],
+                "Rank memories",
+            )
+
+
+def test_reranker_uses_explicit_recall_budget_for_slow_response():
+    import datastore.memorydb.memory_graph as mg
+
+    node = SimpleNamespace(id="n1", name="Quinn added auxiliary columns to the inventory tracker")
+    captured = {}
+
+    def _fake_reasoning(*_args, **kwargs):
+        captured["timeout"] = kwargs.get("timeout")
+        return "1. 5", {}
+
+    with patch("lib.llm_clients.call_fast_reasoning", side_effect=_fake_reasoning), \
+         patch.object(mg, "_is_fail_hard_mode", return_value=True), \
+         patch.object(mg.time, "monotonic", side_effect=[0.0, 15.904]):
+        rows = mg._rerank_via_llm(
+            "inventory tracker migration fields",
+            [(node, 0.9)],
+            "Rank memories",
+            overall_timeout_ms=180_000,
+        )
+
+    assert captured["timeout"] == 45
+    assert rows[0][0] is node
+
+
 def test_reranker_blend_is_clamped_to_score_range():
     import datastore.memorydb.memory_graph as mg
 
@@ -1013,6 +1056,47 @@ def test_recall_once_reranker_raises_when_failhard_enabled(tmp_path):
                     include_lexical_anchor_shaping=False,
                     low_signal_retry=False,
                 )
+
+
+def test_recall_once_passes_overall_timeout_to_reranker(tmp_path):
+    import datastore.memorydb.memory_graph as mg
+
+    graph, _ = _make_graph(tmp_path)
+    captured = {}
+
+    def _fake_reranker(_query, results, _config_retrieval=None, overall_timeout_ms=None):
+        captured["overall_timeout_ms"] = overall_timeout_ms
+        return results
+
+    with patch.object(mg, "get_graph", return_value=graph), \
+         patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+        mg.store(
+            "Maya keeps the cedar ledger near the workshop door.",
+            owner_id="quaid",
+            skip_dedup=True,
+        )
+
+        with patch.object(mg, "_rerank_with_cross_encoder", side_effect=_fake_reranker):
+            rows = mg._recall_once(
+                "cedar ledger",
+                owner_id="quaid",
+                limit=5,
+                min_similarity=0.0,
+                use_routing=False,
+                use_aliases=False,
+                use_intent=False,
+                use_multi_pass=False,
+                use_reranker=True,
+                include_graph_traversal=False,
+                include_co_session=False,
+                include_mmr=False,
+                include_lexical_anchor_shaping=False,
+                low_signal_retry=False,
+                timeout_ms=180_000,
+            )
+
+    assert captured["overall_timeout_ms"] == 180_000
+    assert rows
 
 
 def test_recall_once_full_config_failure_respects_failhard():

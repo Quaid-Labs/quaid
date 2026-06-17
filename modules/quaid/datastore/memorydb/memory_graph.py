@@ -214,6 +214,10 @@ _INJECTION_PATTERNS = [
 _LOW_INFO_ENTITY_CATEGORIES = {"person", "place", "entity", "concept", "event", "organization", "pet"}
 _LOW_INFO_ENTITY_TEXT_RE = re.compile(r"[^\W\d_][\w'_-]*(?:\s+[^\W\d_][\w'_-]*)?", re.UNICODE)
 _RECALL_PLANNER_TIMEOUT_CAP_S = 60.0
+_RERANKER_DEFAULT_TIMEOUT_MS = 15_000
+_RERANKER_MIN_TIMEOUT_MS = 250
+_RERANKER_BUDGET_TIMEOUT_FRACTION = 0.25
+_RERANKER_BUDGET_TIMEOUT_CAP_MS = 60_000
 
 
 def _identifier_key(value: str) -> str:
@@ -6978,7 +6982,40 @@ def _get_fusion_weights(intent: Optional[str] = None) -> Tuple[float, float]:
         return (0.7, 0.3)  # Default unchanged
 
 
-def _rerank_with_cross_encoder(query: str, results: List[tuple], config_retrieval=None) -> List[tuple]:
+def _resolve_reranker_timeout_ms(
+    config_retrieval=None,
+    overall_timeout_ms: Optional[int] = None,
+) -> int:
+    reranker_timeout_ms = _RERANKER_DEFAULT_TIMEOUT_MS
+    if config_retrieval:
+        try:
+            reranker_timeout_ms = int(
+                getattr(config_retrieval, "reranker_timeout_ms", reranker_timeout_ms)
+                or reranker_timeout_ms
+            )
+        except Exception:
+            reranker_timeout_ms = _RERANKER_DEFAULT_TIMEOUT_MS
+    reranker_timeout_ms = max(_RERANKER_MIN_TIMEOUT_MS, reranker_timeout_ms)
+
+    if overall_timeout_ms is not None:
+        try:
+            overall_budget_ms = int(overall_timeout_ms)
+        except (TypeError, ValueError):
+            overall_budget_ms = 0
+        if overall_budget_ms > reranker_timeout_ms:
+            budget_timeout_ms = int(overall_budget_ms * _RERANKER_BUDGET_TIMEOUT_FRACTION)
+            budget_timeout_ms = min(_RERANKER_BUDGET_TIMEOUT_CAP_MS, budget_timeout_ms)
+            reranker_timeout_ms = max(reranker_timeout_ms, budget_timeout_ms)
+
+    return reranker_timeout_ms
+
+
+def _rerank_with_cross_encoder(
+    query: str,
+    results: List[tuple],
+    config_retrieval=None,
+    overall_timeout_ms: Optional[int] = None,
+) -> List[tuple]:
     """Rerank results using an LLM for relevance judgments.
 
     Always uses a single fast-reasoning LLM call path (provider selected by adapter).
@@ -6999,27 +7036,37 @@ def _rerank_with_cross_encoder(query: str, results: List[tuple], config_retrieva
     to_rerank = results[:top_k]
     rest = results[top_k:]
 
-    reranked = _rerank_via_llm(query, to_rerank, instruction, config_retrieval)
+    reranked = _rerank_via_llm(
+        query,
+        to_rerank,
+        instruction,
+        config_retrieval,
+        overall_timeout_ms=overall_timeout_ms,
+    )
 
     # Sort reranked by blended score
     reranked.sort(key=lambda x: x[1], reverse=True)
     return reranked + rest
 
 
-def _rerank_via_llm(query: str, candidates: List[tuple], instruction: str, config_retrieval=None) -> List[tuple]:
+def _rerank_via_llm(
+    query: str,
+    candidates: List[tuple],
+    instruction: str,
+    config_retrieval=None,
+    overall_timeout_ms: Optional[int] = None,
+) -> List[tuple]:
     """Batch rerank via fast-reasoning LLM call — single call for all candidates."""
     from lib.llm_clients import call_fast_reasoning
     start_monotonic = time.monotonic()
 
-    # Hard wall timeout: reranker must not block the user path.
-    # If timeout is hit, return best-so-far (original candidate ranking).
-    reranker_timeout_ms = 15000
-    if config_retrieval:
-        try:
-            reranker_timeout_ms = int(getattr(config_retrieval, "reranker_timeout_ms", reranker_timeout_ms) or reranker_timeout_ms)
-        except Exception:
-            reranker_timeout_ms = 15000
-    reranker_timeout_ms = max(250, reranker_timeout_ms)
+    # Hard wall timeout: reranker must not block the user path. An explicit
+    # recall budget may widen the reranker slice, but failHard still raises
+    # if the widened deadline is exceeded.
+    reranker_timeout_ms = _resolve_reranker_timeout_ms(
+        config_retrieval,
+        overall_timeout_ms=overall_timeout_ms,
+    )
     timeout_seconds = max(1, int((reranker_timeout_ms + 999) // 1000))
 
     # Build numbered candidate list
@@ -12170,7 +12217,12 @@ def _recall_once(
         _phase_t0 = _time.monotonic()
         try:
             _pre_rerank_order = [node.id for node, _ in scored_results[:20]]
-            scored_results = _rerank_with_cross_encoder(clean_query, scored_results, config_retrieval)
+            scored_results = _rerank_with_cross_encoder(
+                clean_query,
+                scored_results,
+                config_retrieval,
+                overall_timeout_ms=timeout_ms,
+            )
             _post_rerank_order = [node.id for node, _ in sorted(scored_results[:20], key=lambda x: x[1], reverse=True)]
             _reranker_changes = sum(1 for i, nid in enumerate(_pre_rerank_order)
                                     if i < len(_post_rerank_order) and _post_rerank_order[i] != nid)
