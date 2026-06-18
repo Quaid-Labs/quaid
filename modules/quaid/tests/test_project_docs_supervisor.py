@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import json
 import subprocess
+import sys
 import types
 
 import pytest
@@ -137,6 +138,26 @@ def test_supervisor_tick_starts_instance_monitors_and_janitor_workers(monkeypatc
     assert supervisor.run_supervisor(once=True, interval_seconds=0.5) == 0
     assert started_instances == ["alpha", "beta"]
     assert started_janitors == ["alpha", "beta"]
+
+
+def test_supervisor_main_records_failure_marker(monkeypatch, tmp_path):
+    from core import project_docs_supervisor as supervisor
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setattr(
+        supervisor,
+        "run_supervisor",
+        lambda *, once=False: (_ for _ in ()).throw(RuntimeError("supervisor boom")),
+    )
+    monkeypatch.setattr(sys, "argv", ["project_docs_supervisor.py", "run", "--once"])
+
+    with pytest.raises(RuntimeError, match="supervisor boom"):
+        supervisor.main()
+
+    failure = supervisor.project_docs.read_supervisor_failure()
+    assert failure is not None
+    assert failure["error_type"] == "RuntimeError"
+    assert failure["error"] == "supervisor boom"
 
 
 def test_supervisor_boot_mode_skips_docs_ticks_and_uses_raw_project_listing(monkeypatch):

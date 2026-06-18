@@ -201,6 +201,10 @@ def supervisor_log_path() -> Path:
     return supervisor_dir() / "supervisor.log"
 
 
+def supervisor_failure_path() -> Path:
+    return supervisor_dir() / "supervisor-failure.json"
+
+
 def janitor_request_path() -> Path:
     return supervisor_dir() / "janitor-request.json"
 
@@ -674,6 +678,44 @@ def read_supervisor_pid() -> Optional[int]:
 def read_worker_pid(project: str) -> Optional[int]:
     name = validate_project_name(project)
     return _read_valid_pid(worker_pid_path(name), role=WORKER_ROLE, project=name)
+
+
+def read_supervisor_failure() -> Optional[Dict[str, Any]]:
+    data = _read_json(supervisor_failure_path(), {})
+    return data if isinstance(data, dict) and data else None
+
+
+def clear_supervisor_failure() -> None:
+    try:
+        supervisor_failure_path().unlink(missing_ok=True)
+    except OSError as exc:
+        logger.warning("Failed clearing project-docs supervisor failure marker: %s", exc)
+        if _fail_hard_enabled():
+            raise
+
+
+def write_supervisor_failure(exc: BaseException) -> None:
+    payload = {
+        "failed_at": utc_now(),
+        "error_type": type(exc).__name__,
+        "error": str(exc),
+    }
+    _atomic_write_json(supervisor_failure_path(), payload)
+
+
+def _raise_supervisor_failure_if_failhard() -> None:
+    failure = read_supervisor_failure()
+    if not failure:
+        return
+    message = (
+        "project-docs supervisor previously failed"
+        f" at {failure.get('failed_at') or 'unknown time'}:"
+        f" {failure.get('error_type') or 'Error'}: {failure.get('error') or 'unknown error'}"
+    )
+    logger.warning(message)
+    if _fail_hard_enabled():
+        raise RuntimeError(message)
+    clear_supervisor_failure()
 
 
 def write_supervisor_pid(token: str) -> None:
@@ -2090,6 +2132,7 @@ def _unlink_pid_record_if_matches(path: Path, *, pid: int, token: Optional[str] 
 
 
 def ensure_supervisor_alive() -> int:
+    _raise_supervisor_failure_if_failhard()
     pid = read_supervisor_pid()
     if pid is not None:
         return pid
@@ -2098,6 +2141,7 @@ def ensure_supervisor_alive() -> int:
 
 def start_supervisor() -> int:
     with _exclusive_file_lock(_spawn_lock_path("supervisor")):
+        _raise_supervisor_failure_if_failhard()
         existing = read_supervisor_pid()
         matching = _matching_supervisor_pids()
         if existing is not None and (not matching or matching == [existing]):
@@ -2110,6 +2154,7 @@ def start_supervisor() -> int:
             except OSError:
                 pass
         supervisor_dir().mkdir(parents=True, exist_ok=True)
+        clear_supervisor_failure()
         log_path = supervisor_log_path()
         script = Path(__file__).parent / "project_docs_supervisor.py"
         env = scrub_background_process_env(dict(os.environ))
@@ -2143,6 +2188,7 @@ def start_supervisor() -> int:
 
 def stop_supervisor() -> bool:
     with _exclusive_file_lock(_spawn_lock_path("supervisor")):
+        clear_supervisor_failure()
         record = _read_pid_record(supervisor_pid_path())
         pid = int((record or {}).get("pid") or 0)
         targets: List[int] = []

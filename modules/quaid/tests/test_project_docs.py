@@ -2097,6 +2097,48 @@ def test_start_supervisor_reaps_matching_orphans_before_spawn(project_env, monke
     assert captured["env"]["QUAID_SUPERVISOR_BOOT"] == "1"
 
 
+def test_ensure_supervisor_alive_raises_previous_failure_when_failhard(project_env, monkeypatch):
+    _tmp_path, _src, _entry = project_env
+    from core import project_docs
+
+    project_docs.write_supervisor_failure(RuntimeError("supervisor boom"))
+    monkeypatch.setattr(project_docs, "_fail_hard_enabled", lambda: True)
+    monkeypatch.setattr(
+        project_docs.subprocess,
+        "Popen",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("supervisor should not restart")),
+    )
+
+    with pytest.raises(RuntimeError, match="project-docs supervisor previously failed.*supervisor boom"):
+        project_docs.ensure_supervisor_alive()
+
+    assert project_docs.read_supervisor_failure() is not None
+
+
+def test_ensure_supervisor_alive_clears_previous_failure_when_failopen(project_env, monkeypatch):
+    _tmp_path, _src, _entry = project_env
+    from core import project_docs
+
+    class _FakePopen:
+        pid = 33335
+
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def poll(self):
+            return None
+
+    project_docs.write_supervisor_failure(RuntimeError("transient supervisor boom"))
+    monkeypatch.setattr(project_docs, "_fail_hard_enabled", lambda: False)
+    monkeypatch.setattr(project_docs, "read_supervisor_pid", lambda: None)
+    monkeypatch.setattr(project_docs, "_matching_supervisor_pids", lambda **_kwargs: [])
+    monkeypatch.setattr(project_docs.subprocess, "Popen", _FakePopen)
+    monkeypatch.setattr(project_docs, "_wait_for_pid", lambda *args, **kwargs: 33335)
+
+    assert project_docs.ensure_supervisor_alive() == 33335
+    assert project_docs.read_supervisor_failure() is None
+
+
 def test_start_supervisor_hydrates_anthropic_key_from_shared_auth(project_env, monkeypatch):
     tmp_path, _src, _entry = project_env
     from core import project_docs

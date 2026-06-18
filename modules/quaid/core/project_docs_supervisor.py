@@ -1111,7 +1111,16 @@ def main() -> None:
     sub.add_parser("stop", help="Stop supervisor")
     args = parser.parse_args()
     if args.command == "run":
-        raise SystemExit(run_supervisor(once=bool(args.once)))
+        try:
+            code = run_supervisor(once=bool(args.once))
+        except Exception as exc:
+            try:
+                project_docs.write_supervisor_failure(exc)
+            except Exception:
+                _LOGGER.exception("failed writing project-docs supervisor failure marker")
+            raise
+        project_docs.clear_supervisor_failure()
+        raise SystemExit(code)
     if args.command == "ensure":
         print(project_docs.ensure_supervisor_alive())
         return
