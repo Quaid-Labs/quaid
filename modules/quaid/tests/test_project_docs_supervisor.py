@@ -473,6 +473,51 @@ def test_supervisor_worker_start_failure_raises_when_failhard(monkeypatch, caplo
     assert "project docs worker start failed for demo" in caplog.text
 
 
+def test_known_project_worker_exit_raises_when_failhard(monkeypatch, caplog):
+    from core import project_docs_supervisor as supervisor
+
+    merged = []
+    known_workers = {"demo": 1234}
+
+    monkeypatch.setattr(supervisor.project_docs, "read_worker_pid", lambda _project: None)
+    monkeypatch.setattr(supervisor.project_docs, "utc_now", lambda: "2026-06-18T00:00:00+00:00")
+    monkeypatch.setattr(supervisor.project_docs, "merge_state", lambda project, updates: merged.append((project, updates)) or {})
+    monkeypatch.setattr(supervisor, "_fail_hard_enabled", lambda: True)
+
+    with caplog.at_level("WARNING", logger=supervisor.__name__):
+        with pytest.raises(RuntimeError, match="project docs worker for demo exited unexpectedly pid=1234"):
+            supervisor._handle_known_project_worker_exit("demo", known_workers)
+
+    assert "project docs worker for demo exited unexpectedly pid=1234" in caplog.text
+    assert known_workers == {}
+    assert merged == [
+        (
+            "demo",
+            {
+                "status": "error",
+                "last_error": "project docs worker for demo exited unexpectedly pid=1234",
+                "last_failed_at": "2026-06-18T00:00:00+00:00",
+            },
+        )
+    ]
+
+
+def test_known_project_worker_exit_allows_retry_when_failopen(monkeypatch):
+    from core import project_docs_supervisor as supervisor
+
+    merged = []
+    known_workers = {"demo": 1234}
+
+    monkeypatch.setattr(supervisor.project_docs, "read_worker_pid", lambda _project: None)
+    monkeypatch.setattr(supervisor.project_docs, "utc_now", lambda: "2026-06-18T00:00:00+00:00")
+    monkeypatch.setattr(supervisor.project_docs, "merge_state", lambda project, updates: merged.append((project, updates)) or {})
+    monkeypatch.setattr(supervisor, "_fail_hard_enabled", lambda: False)
+
+    assert supervisor._handle_known_project_worker_exit("demo", known_workers) is True
+    assert known_workers == {}
+    assert merged[0][1]["status"] == "error"
+
+
 def test_supervisor_skips_ambiguous_multi_instance_project_without_crashing_failhard(monkeypatch, caplog):
     from core import project_docs_supervisor as supervisor
 

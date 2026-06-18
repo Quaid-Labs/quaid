@@ -402,6 +402,28 @@ def _project_worker_start_skip_reason(project: str, entry: Dict[str, object]) ->
     )
 
 
+def _handle_known_project_worker_exit(project: str, known_workers: Dict[str, int]) -> bool:
+    known_pid = int(known_workers.get(project, 0) or 0)
+    if known_pid <= 0:
+        return False
+    if project_docs.read_worker_pid(project) is not None:
+        return False
+    message = f"project docs worker for {project} exited unexpectedly pid={known_pid}"
+    _LOGGER.warning(message)
+    project_docs.merge_state(
+        project,
+        {
+            "status": "error",
+            "last_error": message,
+            "last_failed_at": project_docs.utc_now(),
+        },
+    )
+    known_workers.pop(project, None)
+    if _fail_hard_enabled():
+        raise RuntimeError(message)
+    return True
+
+
 def _start_janitor_worker(instance: str) -> subprocess.Popen:
     return _spawn_janitor_worker(instance, command="scheduler-once")
 
@@ -973,6 +995,8 @@ def run_supervisor(*, once: bool = False, interval_seconds: float | None = None)
                 known_workers.pop(project, None)
                 continue
             try:
+                if _handle_known_project_worker_exit(project, known_workers):
+                    continue
                 project_docs.reap_stale_worker(project, stale_after_seconds=stale_after)
                 skip_reason = _project_worker_start_skip_reason(project, projects.get(project) or {})
                 if skip_reason:
