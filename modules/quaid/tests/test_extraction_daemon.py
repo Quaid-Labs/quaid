@@ -2259,11 +2259,12 @@ def test_ensure_alive_starts_directly_when_project_docs_supervisor_failure_marke
             project_docs.ProjectDocsSupervisorFailureError("project-docs supervisor previously failed")
         ),
     )
+    monkeypatch.setattr(project_docs, "clear_supervisor_failure", lambda: steps.append("clear"))
 
     caplog.set_level("WARNING")
 
     assert extraction_daemon.ensure_alive() == 6666
-    assert steps == ["enable:codex-livetest", "direct"]
+    assert steps == ["enable:codex-livetest", "direct", "clear"]
     assert "project docs supervisor ensure_alive failed" in caplog.text
     assert "project docs supervisor is in failed state" in caplog.text
 

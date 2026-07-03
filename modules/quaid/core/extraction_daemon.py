@@ -9367,6 +9367,7 @@ def ensure_alive() -> int:
                 if fail_hard:
                     raise
         project_docs_mod = None
+        recovered_from_supervisor_failure = False
         try:
             from core import project_docs as project_docs_mod
             project_docs_mod.enable_instance_monitor(_instance_id())
@@ -9382,6 +9383,7 @@ def ensure_alive() -> int:
                 logger.error(
                     "project docs supervisor is in failed state; starting extraction daemon directly"
                 )
+                recovered_from_supervisor_failure = True
             else:
                 try:
                     from lib.fail_policy import is_fail_hard_enabled
@@ -9427,7 +9429,10 @@ def ensure_alive() -> int:
     pid = read_pid()
     if pid is not None:
         return pid
-    return start_daemon()
+    fallback_pid = start_daemon()
+    if recovered_from_supervisor_failure and fallback_pid and fallback_pid > 0:
+        project_docs_mod.clear_supervisor_failure()
+    return fallback_pid
 
 
 def _terminate_daemon_pid(pid: int, *, grace_seconds: float = 10.0) -> bool:
