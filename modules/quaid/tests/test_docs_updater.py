@@ -1834,6 +1834,29 @@ class TestCmdUpdateStaleNeverIndexed:
             with pytest.raises(RuntimeError, match="Project not found for docs update: missing-proj"):
                 updater.cmd_update_stale(dry_run=False, project="missing-proj")
 
+    def test_update_stale_skips_non_visible_misc_project(self, tmp_path, monkeypatch, capsys):
+        with _adapter_patch(tmp_path):
+            from datastore.docsdb import updater
+
+            class _FakeRegistry:
+                def list_projects(self):
+                    return [{"name": "quaid"}]
+
+            monkeypatch.setattr("datastore.docsdb.registry.DocsRegistry", _FakeRegistry)
+
+            def fail_check_staleness(*_args, **_kwargs):
+                raise AssertionError("hidden misc project should skip before staleness check")
+
+            monkeypatch.setattr(updater, "check_staleness", fail_check_staleness)
+
+            count = updater.cmd_update_stale(
+                dry_run=False,
+                project="misc--claude-code-cc-livetest-51aa91834f73",
+            )
+
+            assert count == 0
+            assert "SKIPPED misc--claude-code-cc-livetest-51aa91834f73" in capsys.readouterr().out
+
     def test_update_stale_normalizes_explicit_project_case(self, tmp_path, monkeypatch):
         with _adapter_patch(tmp_path):
             from datastore.docsdb import updater

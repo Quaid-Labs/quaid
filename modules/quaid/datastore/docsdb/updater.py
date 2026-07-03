@@ -1778,6 +1778,15 @@ def cmd_update_stale(
                 if _normalize_project_name(str(entry.get("name") or "").strip())
             }
             if project_name not in visible_projects:
+                if project_name and project_name.startswith("misc--"):
+                    logger.info(
+                        "Skipping docs update for non-visible scratch project: %s",
+                        requested_project_name,
+                    )
+                    print(
+                        f"  SKIPPED {requested_project_name} — scratch project is not visible"
+                    )
+                    return 0
                 raise RuntimeError(f"Project not found for docs update: {requested_project_name}")
     project = project_name
     stale = check_staleness(project=project)
