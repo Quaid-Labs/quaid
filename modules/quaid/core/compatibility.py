@@ -456,6 +456,7 @@ class VersionWatcher:
         self._binary_path: Optional[Path] = None
         self._host_info: Optional[HostInfo] = None
         self._last_state: Optional[CircuitBreakerState] = None
+        self._incomplete_host_recheck_attempted: bool = False
 
         # Load cached version info
         cache = _version_cache_path(data_dir)
@@ -500,6 +501,13 @@ class VersionWatcher:
             self._do_full_check()
             return
         if not self._host_info.binary_path or not re.search(r"\d", str(self._host_info.version or "")):
+            interval = self._check_interval()
+            if (
+                self._incomplete_host_recheck_attempted
+                and time.time() - self._last_full_check <= interval
+            ):
+                return
+            self._incomplete_host_recheck_attempted = True
             logger.info("Host version cache incomplete, running compatibility check")
             self._do_full_check()
             return

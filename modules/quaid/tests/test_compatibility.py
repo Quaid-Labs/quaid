@@ -353,6 +353,34 @@ class TestVersionWatcher:
         mock_adapter.get_host_info.assert_called_once()
         assert read_circuit_breaker(tmp_path).is_normal()
 
+    def test_incomplete_host_version_recheck_respects_interval_after_first_attempt(self, tmp_path):
+        (tmp_path / "host-version.json").write_text(json.dumps({
+            "platform": "openclaw",
+            "version": "unknown",
+            "binary_path": None,
+            "last_full_check": time.time(),
+        }), encoding="utf-8")
+        write_circuit_breaker(tmp_path, CircuitBreakerState(
+            status=DEGRADED,
+            reason="Incompatible: openclaw unknown",
+            host_version="unknown",
+        ))
+        watcher = VersionWatcher(data_dir=tmp_path, quaid_version="0.2.15")
+        mock_adapter = MagicMock()
+        mock_adapter.get_host_info.return_value = HostInfo(
+            platform="openclaw",
+            version="unknown",
+            binary_path=None,
+        )
+
+        with patch("lib.adapter.get_adapter", return_value=mock_adapter), \
+             patch("core.compatibility.fetch_compatibility_matrix", return_value={"matrix": []}), \
+             patch.object(watcher, "_check_quaid_update"):
+            watcher.tick()
+            watcher.tick()
+
+        mock_adapter.get_host_info.assert_called_once()
+
     def test_mtime_change_triggers_check(self, tmp_path):
         # Create a fake binary
         binary = tmp_path / "fake-binary"
