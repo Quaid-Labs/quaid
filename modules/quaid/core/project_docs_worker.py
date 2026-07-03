@@ -70,6 +70,20 @@ def _start_update_heartbeat(project: str, interval_seconds: float) -> tuple[thre
     return stop_event, thread
 
 
+def _append_worker_failure_log(project: str, exc: BaseException) -> None:
+    try:
+        log_path = project_docs.worker_log_path(project)
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with log_path.open("a", encoding="utf-8") as handle:
+            handle.write(f"Project docs worker fatal error for {project}: {exc}\n")
+    except Exception:
+        logging.getLogger(__name__).warning(
+            "Failed writing project docs worker fatal log for %s",
+            project,
+            exc_info=True,
+        )
+
+
 def _refresh_runtime_config_for_update(project: str) -> None:
     """Reload per-process model caches before long-lived worker LLM calls."""
     try:
@@ -155,6 +169,7 @@ def run_worker(project: str, *, once: bool = False, interval_seconds: Optional[f
                 name,
                 raw_request_id if "raw_request_id" in locals() else "-",
             )
+            _append_worker_failure_log(name, exc)
             if project_docs._fail_hard_enabled():
                 raise
             state = project_docs.read_state(name)

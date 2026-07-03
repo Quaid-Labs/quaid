@@ -40,6 +40,10 @@ _PROJECT_MD_MANAGED_MARKERS = (
 )
 
 
+class DocsEditBlockMismatch(RuntimeError):
+    """Raised when the LLM produced edit blocks that do not apply cleanly."""
+
+
 def _log_preview(value: Any, limit: int = 1200) -> str:
     text = str(value or "").replace("\r\n", "\n")
     if len(text) <= limit:
@@ -284,6 +288,9 @@ def _update_project(
                 metrics["docs_updated"] += 1
             else:
                 metrics["docs_skipped"] += 1
+        except DocsEditBlockMismatch as e:
+            logger.warning("[docs-hook] Failed to update %s: %s", doc_path, e)
+            metrics["errors"] += 1
         except Exception as e:
             if is_fail_hard_enabled():
                 raise
@@ -444,10 +451,8 @@ def _update_single_doc(
                 _log_preview(failed.get("old")),
                 _log_preview(failed.get("new")),
             )
-        if is_fail_hard_enabled():
-            raise RuntimeError(message)
         logger.warning("[docs-hook] %s", message)
-        return False
+        raise DocsEditBlockMismatch(message)
 
     if applied > 0 and updated != current_doc:
         doc_path.write_text(updated, encoding="utf-8")

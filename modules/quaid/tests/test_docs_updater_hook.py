@@ -236,10 +236,11 @@ class TestUpdateProjectDocs:
             metrics = update_project_docs(snapshots)
 
         assert metrics["docs_updated"] == 0
-        assert metrics["docs_skipped"] == 1
+        assert metrics["docs_skipped"] == 0
+        assert metrics["errors"] == 1
         assert doc_path.read_text(encoding="utf-8") == original
 
-    def test_update_unmatched_edit_raises_when_fail_hard_enabled(self, tmp_path, caplog):
+    def test_update_unmatched_edit_records_error_when_fail_hard_enabled(self, tmp_path, caplog):
         project_dir = tmp_path / "projects" / "my-app"
         project_dir.mkdir(parents=True)
         doc_path = project_dir / "PROJECT.md"
@@ -270,10 +271,12 @@ class TestUpdateProjectDocs:
                 "reasons": ["clear doc update"],
             }
 
-            with pytest.raises(RuntimeError, match="did not match PROJECT.md content"):
-                update_project_docs(snapshots)
+            metrics = update_project_docs(snapshots)
 
         assert doc_path.read_text(encoding="utf-8") == original
+        assert metrics["docs_updated"] == 0
+        assert metrics["docs_skipped"] == 0
+        assert metrics["errors"] == 1
         assert "Unmatched edit block for PROJECT.md #1" in caplog.text
         assert "Missing old text" in caplog.text
         assert "Should not write" in caplog.text

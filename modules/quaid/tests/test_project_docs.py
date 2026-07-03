@@ -504,6 +504,38 @@ def test_project_docs_worker_refresh_resets_model_caches(monkeypatch):
     assert calls == ["reload_config", "reset_llm", "reset_embeddings"]
 
 
+def test_project_docs_worker_writes_fatal_log_before_failhard_raise(monkeypatch, tmp_path):
+    from core import project_docs_worker
+
+    log_path = tmp_path / "workers" / "demo.log"
+    monkeypatch.setattr(project_docs_worker.project_docs, "validate_project_name", lambda project: project)
+    monkeypatch.setattr(project_docs_worker, "_supervisor_alive", lambda: True)
+    monkeypatch.setattr(project_docs_worker.project_docs, "read_update_request", lambda _project: {"request_id": "req-1"})
+    monkeypatch.setattr(project_docs_worker.project_docs, "update_request_ready_for_worker", lambda request: True)
+    monkeypatch.setattr(project_docs_worker.project_docs, "write_worker_heartbeat", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(project_docs_worker.project_docs, "worker_log_path", lambda _project: log_path)
+    monkeypatch.setattr(project_docs_worker.project_docs, "_fail_hard_enabled", lambda: True)
+    monkeypatch.setattr(
+        project_docs_worker,
+        "_start_update_heartbeat",
+        lambda _project, _interval: (
+            type("Stop", (), {"set": lambda self: None})(),
+            type("Thread", (), {"join": lambda self, timeout=None: None})(),
+        ),
+    )
+    monkeypatch.setattr(project_docs_worker, "_refresh_runtime_config_for_update", lambda _project: None)
+    monkeypatch.setattr(
+        project_docs_worker.project_docs,
+        "execute_update_once",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("edit block mismatch")),
+    )
+
+    with pytest.raises(RuntimeError, match="edit block mismatch"):
+        project_docs_worker.run_worker("demo", once=True, interval_seconds=0.5)
+
+    assert "Project docs worker fatal error for demo: edit block mismatch" in log_path.read_text(encoding="utf-8")
+
+
 def test_project_docs_worker_supervisor_pid_parse_failure_logs(monkeypatch, caplog):
     from core import project_docs_worker
 
