@@ -185,17 +185,27 @@ def test_docs_scaffold_penalty_requires_managed_project_marker():
     managed_penalty = _docs_scaffold_penalty(
         query_terms,
         "/tmp/workspace/projects/portfolio-site/PROJECT.md",
+        "### Project Home",
         f"### Project Home\n{PROJECT_HOME_BEGIN}\n- `/tmp/workspace/projects/portfolio-site`",
+        2,
+    )
+    current_state_penalty = _docs_scaffold_penalty(
+        query_terms,
+        "/tmp/workspace/projects/portfolio-site/PROJECT.md",
+        "## Current State",
+        "## Current State\nPortfolio project launch notes and decisions.",
         2,
     )
     ordinary_penalty = _docs_scaffold_penalty(
         query_terms,
         "/tmp/workspace/projects/portfolio-site/PROJECT.md",
-        "## Current State\nPortfolio project launch notes and decisions.",
+        "## Implementation Notes",
+        "## Implementation Notes\nPortfolio project launch notes and decisions.",
         2,
     )
 
     assert managed_penalty > 0.0
+    assert current_state_penalty > 0.0
     assert ordinary_penalty == 0.0
 
 
@@ -2195,6 +2205,63 @@ class TestDocsSearchFiltering:
         assert len(results) == 2
         assert results[0]["source"].endswith("docs/examples.md")
         assert results[0]["similarity"] >= results[1]["similarity"]
+
+    @patch("datastore.docsdb.rag._lib_get_embedding", return_value=[0.1, 0.2, 0.3])
+    @patch("datastore.docsdb.rag._lib_unpack_embedding", return_value=[0.1, 0.2, 0.3])
+    @patch("datastore.docsdb.rag._lib_cosine_similarity", return_value=1.0)
+    def test_search_docs_prefers_examples_over_project_current_state_anchor_mention(
+        self,
+        _sim,
+        _unpack,
+        _embed,
+        tmp_path,
+    ):
+        rag = _make_rag(tmp_path)
+        db = sqlite3.connect(rag.db_path)
+        try:
+            db.execute(
+                "INSERT INTO doc_chunks (id, source_file, chunk_index, content, section_header, embedding) VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    "project-current:0",
+                    "/tmp/workspace/projects/livetest-agentmsg-CDX/PROJECT.md",
+                    0,
+                    (
+                        "## Current State\n"
+                        "Key probe targets: Mailbox.deliver (method), "
+                        "brass postal scale (docs-recall marker phrase)"
+                    ),
+                    "## Current State",
+                    b"e",
+                ),
+            )
+            db.execute(
+                "INSERT INTO doc_chunks (id, source_file, chunk_index, content, section_header, embedding) VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    "examples:0",
+                    "/tmp/workspace/projects/livetest-agentmsg-CDX/agentmsg/examples.md",
+                    0,
+                    "brass postal scale (distinct phrase in examples.md for docs recall probes)",
+                    "## Examples",
+                    b"e",
+                ),
+            )
+            db.commit()
+        finally:
+            db.close()
+
+        with patch.object(
+            rag,
+            "_get_project_paths",
+            return_value={
+                "home_dir": "/tmp/workspace/projects/livetest-agentmsg-CDX",
+                "source_roots": ["/tmp/workspace/projects/livetest-agentmsg-CDX"],
+            },
+        ):
+            results = rag.search_docs("brass postal scale", limit=2, project="livetest-agentmsg-CDX")
+
+        assert len(results) == 2
+        assert results[0]["source"].endswith("agentmsg/examples.md")
+        assert results[0]["similarity"] > results[1]["similarity"]
 
     @patch("datastore.docsdb.rag._lib_get_embedding", return_value=[0.1, 0.2, 0.3])
     @patch("datastore.docsdb.rag._lib_unpack_embedding", return_value=[0.1, 0.2, 0.3])

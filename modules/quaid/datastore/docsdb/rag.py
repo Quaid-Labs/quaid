@@ -495,6 +495,7 @@ def _docs_exact_anchor_boost(
 def _docs_scaffold_penalty(
     query_terms: List[str],
     source_file: str,
+    section_header: Optional[str],
     content: str,
     content_hits: int,
 ) -> float:
@@ -511,6 +512,16 @@ def _docs_scaffold_penalty(
     penalty = 0.0
     if file_name == "project.md" and has_managed_marker:
         penalty += 0.28
+    if file_name == "project.md":
+        header = str(section_header or "").strip()
+        if not header:
+            for line in str(content or "").splitlines():
+                candidate = line.strip()
+                if candidate.startswith("#"):
+                    header = candidate
+                    break
+        if re.match(r"^##\s+Current\s+State\b", header, flags=re.IGNORECASE):
+            penalty += 0.22
     if file_name == "status.md" and content_hits < 2:
         penalty += 0.10
     return penalty
@@ -584,7 +595,7 @@ def _docs_rank_score(query_terms: List[str], query: str, source_file: str, secti
         score -= 0.18
     if wants_specific_source:
         score -= _docs_source_penalty(query_terms, source_file)
-    score -= _docs_scaffold_penalty(query_terms, source_file, content, content_hits)
+    score -= _docs_scaffold_penalty(query_terms, source_file, section_header, content, content_hits)
 
     return max(0.0, round(score, 4))
 
