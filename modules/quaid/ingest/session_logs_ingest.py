@@ -106,6 +106,50 @@ def _safe_read_transcript_path(path: Path, source_kind: str, *, session_jsonl: b
         return None
 
 
+def _reset_backup_for_missing_session_path(path: Path) -> Optional[Path]:
+    """Find the newest OpenClaw /reset backup for a missing session JSONL."""
+    if path.name.endswith(".reset.") or ".jsonl.reset." in path.name:
+        return None
+    if not path.name.endswith(".jsonl"):
+        return None
+    prefix = f"{path.name}.reset."
+    try:
+        if not path.parent.is_dir():
+            return None
+        candidates = [
+            candidate
+            for candidate in path.parent.iterdir()
+            if candidate.name.startswith(prefix) and candidate.is_file()
+        ]
+    except OSError as exc:
+        logger.warning("Failed scanning reset transcript backups for %s: %s", path, exc)
+        if is_fail_hard_enabled():
+            raise
+        return None
+    if not candidates:
+        return None
+    return sorted(candidates, key=lambda candidate: candidate.name)[-1]
+
+
+def _read_reset_backup_for_missing_path(path: Path, source_kind: str) -> Optional[tuple[Path, str, str]]:
+    backup_path = _reset_backup_for_missing_session_path(path)
+    if not backup_path:
+        return None
+    transcript = _safe_read_transcript_path(
+        backup_path,
+        f"{source_kind}_reset_backup",
+        session_jsonl=True,
+    )
+    if not transcript or not transcript.strip():
+        return None
+    logger.info(
+        "Session transcript source %s was renamed by reset; using backup: %s",
+        path,
+        backup_path,
+    )
+    return backup_path, transcript, f"{source_kind}_reset_backup"
+
+
 def _resolve_transcript_source(
     *,
     session_id: str,
@@ -118,6 +162,9 @@ def _resolve_transcript_source(
             transcript = _safe_read_transcript_path(p, "transcript_path", session_jsonl=False)
             if transcript and transcript.strip():
                 return p, transcript, "transcript_path"
+        reset_backup = _read_reset_backup_for_missing_path(p, "transcript_path")
+        if reset_backup:
+            return reset_backup
 
     if session_file:
         p = Path(str(session_file)).expanduser()
@@ -125,12 +172,19 @@ def _resolve_transcript_source(
             transcript = _safe_read_transcript_path(p, "session_file", session_jsonl=True)
             if transcript and transcript.strip():
                 return p, transcript, "session_file"
+        reset_backup = _read_reset_backup_for_missing_path(p, "session_file")
+        if reset_backup:
+            return reset_backup
 
     session_path = get_adapter_instance().get_session_path(session_id)
     if session_path and session_path.exists() and session_path.is_file():
         transcript = _safe_read_transcript_path(session_path, "adapter_session_path", session_jsonl=True)
         if transcript and transcript.strip():
             return session_path, transcript, "adapter_session_path"
+    if session_path:
+        reset_backup = _read_reset_backup_for_missing_path(session_path, "adapter_session_path")
+        if reset_backup:
+            return reset_backup
 
     return None, None, "missing"
 

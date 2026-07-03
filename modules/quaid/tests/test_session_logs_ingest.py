@@ -308,6 +308,59 @@ def test_resolve_transcript_source_falls_back_from_empty_transcript_path(monkeyp
     assert "Fallback transcript survives empty source." in str(content)
 
 
+def test_resolve_transcript_source_uses_latest_reset_backup_for_missing_transcript_path(monkeypatch, tmp_path):
+    adapter = TestAdapter(tmp_path)
+    set_adapter(adapter)
+
+    missing = tmp_path / "551c5587.jsonl"
+    old_backup = tmp_path / "551c5587.jsonl.reset.2026-07-03T06-15-00.000Z"
+    new_backup = tmp_path / "551c5587.jsonl.reset.2026-07-03T06-16-15.535Z"
+    old_backup.write_text(json.dumps({"role": "user", "content": "Old reset backup."}) + "\n", encoding="utf-8")
+    new_backup.write_text(json.dumps({"role": "user", "content": "Brass postal scale reset backup."}) + "\n", encoding="utf-8")
+
+    src_path, content, source_kind = session_logs_ingest._resolve_transcript_source(
+        session_id="551c5587",
+        session_file=None,
+        transcript_path=str(missing),
+    )
+
+    assert src_path == new_backup
+    assert source_kind == "transcript_path_reset_backup"
+    assert "Brass postal scale reset backup." in str(content)
+
+
+def test_run_uses_reset_backup_from_missing_adapter_session_path(monkeypatch, tmp_path):
+    adapter = TestAdapter(tmp_path)
+    set_adapter(adapter)
+    missing = tmp_path / "551c5587-eb06-4b73-b3ea-cfc496a91216.jsonl"
+    backup = tmp_path / "551c5587-eb06-4b73-b3ea-cfc496a91216.jsonl.reset.2026-07-03T06-16-15.535Z"
+    backup.write_text(
+        json.dumps({"role": "user", "content": "Spare workshop key under a brass postal scale."}) + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(adapter, "get_session_path", lambda _session_id: missing)
+
+    fake_bridge = MagicMock()
+    fake_bridge.store_session_transcript.return_value = {
+        "status": "indexed",
+        "session_id": "551c5587-eb06-4b73-b3ea-cfc496a91216",
+        "chunks": 1,
+    }
+    monkeypatch.setattr("ingest.session_logs_ingest.get_session_memory_bridge", lambda: fake_bridge)
+
+    out = session_logs_ingest._run(
+        session_id="551c5587-eb06-4b73-b3ea-cfc496a91216",
+        owner_id="quaid",
+        label="SessionEnd",
+    )
+
+    assert out["status"] == "indexed"
+    assert out["source_kind"] == "adapter_session_path_reset_backup"
+    kwargs = fake_bridge.store_session_transcript.call_args.kwargs
+    assert kwargs["source_path"] == str(backup)
+    assert "Spare workshop key under a brass postal scale." in kwargs["transcript"]
+
+
 def test_session_logs_ingest_unavailable_transcript_raises_when_fail_hard(monkeypatch, tmp_path):
     adapter = TestAdapter(tmp_path)
     set_adapter(adapter)
