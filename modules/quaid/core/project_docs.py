@@ -47,6 +47,10 @@ _BACKGROUND_PROCESS_SCRUB_ENV_KEYS = (
 logger = logging.getLogger(__name__)
 
 
+class ProjectDocsSupervisorFailureError(RuntimeError):
+    """Raised when a persisted project-docs supervisor failure marker is active."""
+
+
 def _now_datetime() -> datetime:
     raw = str(os.environ.get("QUAID_NOW", "") or "").strip()
     if raw:
@@ -714,7 +718,7 @@ def _raise_supervisor_failure_if_failhard() -> None:
     )
     logger.warning(message)
     if _fail_hard_enabled():
-        raise RuntimeError(message)
+        raise ProjectDocsSupervisorFailureError(message)
     clear_supervisor_failure()
 
 

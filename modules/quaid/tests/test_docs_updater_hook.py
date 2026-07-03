@@ -240,7 +240,48 @@ class TestUpdateProjectDocs:
         assert metrics["errors"] == 1
         assert doc_path.read_text(encoding="utf-8") == original
 
-    def test_update_unmatched_edit_records_error_when_fail_hard_enabled(self, tmp_path, caplog):
+    def test_update_unmatched_edit_records_error_when_fail_open(self, tmp_path, caplog):
+        project_dir = tmp_path / "projects" / "my-app"
+        project_dir.mkdir(parents=True)
+        doc_path = project_dir / "PROJECT.md"
+        original = "# Project\n\nInitial."
+        doc_path.write_text(original, encoding="utf-8")
+        snapshots = [{
+            "project": "my-app",
+            "is_initial": False,
+            "diff": "diff --git a/main.py b/main.py\n+print('hello')",
+            "changes": [{"status": "M", "path": "main.py", "old_path": None}],
+        }]
+        response = (
+            "<<<EDIT\n"
+            "SECTION: Project\n"
+            "OLD: Missing old text\n"
+            "NEW: Should not write\n"
+            ">>>"
+        )
+
+        caplog.set_level("WARNING")
+        with patch("datastore.docsdb.updater.classify_doc_change") as mock_classify, \
+             patch("core.project_registry.get_project", return_value={"canonical_path": str(project_dir)}), \
+             patch("core.docs_updater_hook.is_fail_hard_enabled", return_value=False), \
+             patch("lib.llm_clients.call_deep_reasoning", return_value=(response, 0.1)):
+            mock_classify.return_value = {
+                "classification": "significant",
+                "confidence": 0.8,
+                "reasons": ["clear doc update"],
+            }
+
+            metrics = update_project_docs(snapshots)
+
+        assert doc_path.read_text(encoding="utf-8") == original
+        assert metrics["docs_updated"] == 0
+        assert metrics["docs_skipped"] == 0
+        assert metrics["errors"] == 1
+        assert "Unmatched edit block for PROJECT.md #1" in caplog.text
+        assert "Missing old text" in caplog.text
+        assert "Should not write" in caplog.text
+
+    def test_update_unmatched_edit_raises_when_fail_hard_enabled(self, tmp_path, caplog):
         project_dir = tmp_path / "projects" / "my-app"
         project_dir.mkdir(parents=True)
         doc_path = project_dir / "PROJECT.md"
@@ -271,15 +312,12 @@ class TestUpdateProjectDocs:
                 "reasons": ["clear doc update"],
             }
 
-            metrics = update_project_docs(snapshots)
+            with pytest.raises(RuntimeError, match="did not match PROJECT.md content"):
+                update_project_docs(snapshots)
 
         assert doc_path.read_text(encoding="utf-8") == original
-        assert metrics["docs_updated"] == 0
-        assert metrics["docs_skipped"] == 0
-        assert metrics["errors"] == 1
         assert "Unmatched edit block for PROJECT.md #1" in caplog.text
-        assert "Missing old text" in caplog.text
-        assert "Should not write" in caplog.text
+        assert "Failed to update" in caplog.text
 
     def test_project_md_managed_marker_edit_is_ignored_under_fail_hard(self, tmp_path, caplog):
         project_dir = tmp_path / "projects" / "my-app"

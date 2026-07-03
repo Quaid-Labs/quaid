@@ -289,8 +289,10 @@ def _update_project(
             else:
                 metrics["docs_skipped"] += 1
         except DocsEditBlockMismatch as e:
-            logger.warning("[docs-hook] Failed to update %s: %s", doc_path, e)
+            logger.error("[docs-hook] Failed to update %s: %s", doc_path, e)
             metrics["errors"] += 1
+            if is_fail_hard_enabled():
+                raise
         except Exception as e:
             if is_fail_hard_enabled():
                 raise

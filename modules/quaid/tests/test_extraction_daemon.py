@@ -2234,6 +2234,61 @@ def test_ensure_alive_falls_back_to_direct_start_when_supervisor_monitor_times_o
     ]
 
 
+def test_ensure_alive_starts_directly_when_project_docs_supervisor_failure_marker_is_active(
+    monkeypatch, caplog
+):
+    from core import project_docs
+
+    steps = []
+
+    monkeypatch.delenv("QUAID_SUPERVISOR_DISABLE", raising=False)
+    monkeypatch.setenv("QUAID_INSTANCE", "codex-livetest")
+    monkeypatch.setattr(extraction_daemon, "read_pid", lambda: None)
+    monkeypatch.setattr(extraction_daemon, "start_daemon", lambda: steps.append("direct") or 6666)
+    monkeypatch.setattr("lib.adapter.get_adapter", lambda: object())
+    monkeypatch.setattr("lib.fail_policy.is_fail_hard_enabled", lambda: True)
+    monkeypatch.setattr(
+        project_docs,
+        "enable_instance_monitor",
+        lambda instance: steps.append(f"enable:{instance}"),
+    )
+    monkeypatch.setattr(
+        project_docs,
+        "ensure_supervisor_alive",
+        lambda: (_ for _ in ()).throw(
+            project_docs.ProjectDocsSupervisorFailureError("project-docs supervisor previously failed")
+        ),
+    )
+
+    caplog.set_level("WARNING")
+
+    assert extraction_daemon.ensure_alive() == 6666
+    assert steps == ["enable:codex-livetest", "direct"]
+    assert "project docs supervisor ensure_alive failed" in caplog.text
+    assert "project docs supervisor is in failed state" in caplog.text
+
+
+def test_ensure_alive_still_raises_generic_project_docs_error_under_failhard(monkeypatch):
+    steps = []
+
+    monkeypatch.delenv("QUAID_SUPERVISOR_DISABLE", raising=False)
+    monkeypatch.setenv("QUAID_INSTANCE", "codex-livetest")
+    monkeypatch.setattr(extraction_daemon, "read_pid", lambda: None)
+    monkeypatch.setattr(extraction_daemon, "start_daemon", lambda: steps.append("direct") or 7777)
+    monkeypatch.setattr("lib.adapter.get_adapter", lambda: object())
+    monkeypatch.setattr("lib.fail_policy.is_fail_hard_enabled", lambda: True)
+    monkeypatch.setattr("core.project_docs.enable_instance_monitor", lambda _instance: None)
+    monkeypatch.setattr(
+        "core.project_docs.ensure_supervisor_alive",
+        lambda: (_ for _ in ()).throw(RuntimeError("fresh supervisor bootstrap failed")),
+    )
+
+    with pytest.raises(RuntimeError, match="fresh supervisor bootstrap failed"):
+        extraction_daemon.ensure_alive()
+
+    assert steps == []
+
+
 def test_stop_daemon_disables_supervisor_instance_monitor(monkeypatch):
     disabled = []
 

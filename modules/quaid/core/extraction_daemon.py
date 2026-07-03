@@ -9366,30 +9366,40 @@ def ensure_alive() -> int:
                     fail_hard = bool(is_fail_hard_enabled())
                 if fail_hard:
                     raise
+        project_docs_mod = None
         try:
-            from core.project_docs import ensure_supervisor_alive
-            from core import project_docs
-            project_docs.enable_instance_monitor(_instance_id())
-            ensure_supervisor_alive()
+            from core import project_docs as project_docs_mod
+            project_docs_mod.enable_instance_monitor(_instance_id())
+            project_docs_mod.ensure_supervisor_alive()
         except Exception as exc:
             logger.warning("project docs supervisor ensure_alive failed: %s", exc)
-            try:
-                from lib.fail_policy import is_fail_hard_enabled
-            except Exception:
-                fail_hard = False
+            supervisor_failure_error = getattr(
+                project_docs_mod,
+                "ProjectDocsSupervisorFailureError",
+                None,
+            )
+            if supervisor_failure_error is not None and isinstance(exc, supervisor_failure_error):
+                logger.error(
+                    "project docs supervisor is in failed state; starting extraction daemon directly"
+                )
             else:
-                fail_hard = bool(is_fail_hard_enabled())
-            if fail_hard:
-                raise
+                try:
+                    from lib.fail_policy import is_fail_hard_enabled
+                except Exception:
+                    fail_hard = False
+                else:
+                    fail_hard = bool(is_fail_hard_enabled())
+                if fail_hard:
+                    raise
         else:
             pid = read_pid()
             if pid is not None:
                 return pid
             try:
-                wait_default = project_docs.pid_startup_wait_seconds()
+                wait_default = project_docs_mod.pid_startup_wait_seconds()
                 wait_seconds = float(os.environ.get("QUAID_INSTANCE_MONITOR_WAIT_SECONDS", str(wait_default)) or wait_default)
             except ValueError:
-                wait_seconds = project_docs.pid_startup_wait_seconds()
+                wait_seconds = project_docs_mod.pid_startup_wait_seconds()
             deadline = time.time() + max(0.5, wait_seconds)
             while time.time() < deadline:
                 time.sleep(0.1)
