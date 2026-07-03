@@ -193,6 +193,12 @@ before dispatching any tester to M1. Missing this step makes M2 Part B
 (rolling extraction) impossible to pass because the 1500-token fixture
 cannot cross the production default of 8000 tokens.
 
+For `oc`/`all`, the same script also registers the VM Codex OAuth access token
+with OpenClaw via `openclaw models auth paste-token --provider openai` before
+restarting the gateway. Do not replace this with `auth-profiles.json` seeding
+alone; OpenClaw 2026.6.11 requires the CLI registration to populate its SQLite
+model-provider registry.
+
 
 
 Write livetest overrides to the **per-platform** config files, not the global

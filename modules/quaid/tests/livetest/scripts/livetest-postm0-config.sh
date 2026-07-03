@@ -122,6 +122,39 @@ REMEOF
 
 if printf '%s\n' "${platforms[@]}" | grep -qx 'openclaw'; then
     echo
+    echo "[postm0] registering OpenClaw OpenAI model auth from VM Codex OAuth..."
+    ssh "$REMOTE_HOST" 'bash -s' <<'REMEOF'
+set -euo pipefail
+source ~/.zprofile 2>/dev/null || true
+export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"
+if ! command -v openclaw >/dev/null 2>&1; then
+    echo '  error: openclaw CLI not found; cannot register OpenClaw model auth' >&2
+    exit 1
+fi
+TOKEN="$(
+python3 <<'PYEOF'
+import json
+import pathlib
+
+auth_path = pathlib.Path.home() / ".codex" / "auth.json"
+try:
+    payload = json.loads(auth_path.read_text(encoding="utf-8"))
+except Exception as exc:
+    raise SystemExit(f"failed reading {auth_path}: {exc}") from exc
+tokens = payload.get("tokens", {})
+if not isinstance(tokens, dict):
+    tokens = {}
+access_token = str(tokens.get("access_token", "")).strip()
+if not access_token:
+    raise SystemExit(f"missing tokens.access_token in {auth_path}")
+print(access_token)
+PYEOF
+)"
+printf '%s\n' "$TOKEN" | openclaw models auth paste-token --provider openai
+echo '  registered OpenClaw openai provider models from ~/.codex/auth.json'
+REMEOF
+
+    echo
     echo "[postm0] restarting OpenClaw gateway so it loads the M0-installed Quaid extension..."
     "$SCRIPT_DIR/livetest-openclaw-gateway-restart.sh" --restart --host "$REMOTE_HOST" --config "$CONFIG_PATH"
 fi
