@@ -2256,6 +2256,27 @@ class TestClaudeCodeAdapter:
         assert adapter.get_instance_name() == instance_slug_from_project_dir(str(project_dir))
         assert adapter.get_discovery_sessions_dir() == claude_session_dir
 
+    def test_hashed_instance_matches_private_tmp_claude_session_dir_without_binding(self, tmp_path, monkeypatch):
+        sessions_root = tmp_path / ".claude" / "projects"
+        claude_session_dir = sessions_root / "-private-tmp-cc-livetest"
+        foreign_session_dir = sessions_root / "-private-tmp-cc-livetest-other"
+        claude_session_dir.mkdir(parents=True)
+        foreign_session_dir.mkdir(parents=True)
+        owned = claude_session_dir / "ae38bd3c.jsonl"
+        foreign = foreign_session_dir / "ae38bd3c.jsonl"
+        owned.write_text("{}", encoding="utf-8")
+        foreign.write_text("{}", encoding="utf-8")
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "claude-code-cc-livetest-51aa91834f73")
+
+        adapter = ClaudeCodeAdapter()
+
+        assert adapter.get_discovery_sessions_dir() == claude_session_dir
+        assert adapter.owns_session_path(owned, session_id="ae38bd3c") is True
+        assert adapter.owns_session_path(foreign, session_id="ae38bd3c") is False
+
     def test_get_discovery_sessions_dir_uses_binding_without_claude_project_dir(self, tmp_path, monkeypatch):
         from lib.instance import _legacy_instance_slug_from_project_dir
 

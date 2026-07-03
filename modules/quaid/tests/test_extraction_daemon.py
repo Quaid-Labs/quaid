@@ -3025,6 +3025,30 @@ def test_ensure_discovered_session_cursors_scopes_claude_code_to_current_project
     assert cursor["transcript_path"] == str(sibling)
 
 
+def test_daemon_adapter_ownership_accepts_private_tmp_cc_transcript_for_hashed_instance(monkeypatch, tmp_path):
+    from adaptors.claude_code.adapter import ClaudeCodeAdapter
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "claude-code-cc-livetest-51aa91834f73")
+    transcript = (
+        tmp_path
+        / ".claude"
+        / "projects"
+        / "-private-tmp-cc-livetest"
+        / "ae38bd3c.jsonl"
+    )
+    transcript.parent.mkdir(parents=True)
+    transcript.write_text('{"type":"user","message":{"content":"brass desk lamp"}}\n', encoding="utf-8")
+
+    assert extraction_daemon._adapter_owns_transcript_path(
+        ClaudeCodeAdapter(),
+        "ae38bd3c",
+        str(transcript),
+    ) is True
+
+
 def test_adapter_ownership_rejects_foreign_transcript_even_when_cursor_matches(monkeypatch, tmp_path):
     monkeypatch.setenv("QUAID_HOME", str(tmp_path))
     monkeypatch.setenv("QUAID_INSTANCE", "foreign-owner")

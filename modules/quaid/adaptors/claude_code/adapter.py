@@ -551,12 +551,16 @@ class ClaudeCodeAdapter(QuaidAdapter):
         return unique_matches[0] if len(unique_matches) == 1 else ""
 
     def _current_project_session_slug(self) -> str:
+        slugs = self._current_project_session_slugs()
+        return slugs[0] if slugs else ""
+
+    def _current_project_session_slugs(self) -> list[str]:
         project_dir = os.environ.get("CLAUDE_PROJECT_DIR", "").strip()
         if project_dir:
-            return _legacy_instance_slug_from_project_dir(project_dir)
+            return [_legacy_instance_slug_from_project_dir(project_dir)]
         bound_project_dir = self._bound_project_dir_for_current_instance()
         if bound_project_dir:
-            return _legacy_instance_slug_from_project_dir(bound_project_dir)
+            return [_legacy_instance_slug_from_project_dir(bound_project_dir)]
         instance_id = ""
         try:
             instance_id = str(self.instance_id() or "").strip()
@@ -567,8 +571,19 @@ class ClaudeCodeAdapter(QuaidAdapter):
             instance_id = os.environ.get("QUAID_INSTANCE", "").strip()
         prefix = f"{self.agent_id_prefix()}-"
         if instance_id.startswith(prefix):
-            return instance_id[len(prefix):].strip()
-        return ""
+            slug = instance_id[len(prefix):].strip()
+            slugs = [slug] if slug else []
+            hash_suffix = re.search(r"-[0-9a-f]{12}$", slug)
+            if hash_suffix:
+                readable = slug[:hash_suffix.start()].strip("-")
+                if readable and readable not in slugs:
+                    # Claude Code stores session dirs with the legacy absolute-path
+                    # slug (for example /private/tmp/name -> private-tmp-name), while
+                    # Quaid instance ids use basename+hash when no binding/env is
+                    # available. Use the readable prefix as a constrained fallback.
+                    slugs.append(readable)
+            return slugs
+        return []
 
     def _project_sessions_root(self) -> Path:
         return Path.home() / ".claude" / "projects"
@@ -596,19 +611,34 @@ class ClaudeCodeAdapter(QuaidAdapter):
         root = self.get_sessions_dir()
         if root is None:
             return None
-        expected_slug = self._current_project_session_slug()
-        if not expected_slug:
+        expected_slugs = self._current_project_session_slugs()
+        if not expected_slugs:
             return root
+        expected = set(expected_slugs)
         matches = [
             candidate
             for candidate in root.iterdir()
             if candidate.is_dir()
-            and self._normalize_claude_project_dir_name(candidate.name) == expected_slug
+            and self._session_project_slug_matches(
+                self._normalize_claude_project_dir_name(candidate.name),
+                expected,
+            )
         ]
         if matches:
             matches.sort(key=lambda path: path.stat().st_mtime, reverse=True)
             return matches[0]
-        return root / f"-{expected_slug}"
+        return root / f"-{expected_slugs[0]}"
+
+    @staticmethod
+    def _session_project_slug_matches(candidate_slug: str, expected_slugs: set[str]) -> bool:
+        candidate = str(candidate_slug or "").strip()
+        if not candidate:
+            return False
+        for expected in expected_slugs:
+            expected = str(expected or "").strip()
+            if candidate == expected or candidate.endswith(f"-{expected}"):
+                return True
+        return False
 
     def owns_session_path(self, path: Path, session_id: str = "") -> bool:
         """Return True only for transcripts under this CC project's session dir."""
@@ -618,10 +648,13 @@ class ClaudeCodeAdapter(QuaidAdapter):
         sid = str(session_id or "").strip()
         if sid and transcript_path.stem != sid and sid not in transcript_path.stem:
             return False
-        expected_slug = self._current_project_session_slug()
-        if not expected_slug:
+        expected_slugs = self._current_project_session_slugs()
+        if not expected_slugs:
             return True
-        return self._session_project_slug_from_path(transcript_path) == expected_slug
+        return self._session_project_slug_matches(
+            self._session_project_slug_from_path(transcript_path),
+            set(expected_slugs),
+        )
 
     def get_session_path(self, session_id: str) -> Optional[Path]:
         session_id = str(session_id or "").strip()
