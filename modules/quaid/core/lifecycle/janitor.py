@@ -343,9 +343,10 @@ def _start_checkpoint_heartbeat(
     stage_getter,
     *,
     enabled: bool,
-) -> tuple[Optional[threading.Event], Optional[threading.Thread]]:
+) -> tuple[Optional[threading.Event], Optional[threading.Thread], List[BaseException]]:
+    errors: List[BaseException] = []
     if not enabled:
-        return None, None
+        return None, None, errors
 
     stop_event = threading.Event()
     interval_seconds = max(0.1, _checkpoint_heartbeat_interval_seconds())
@@ -357,7 +358,10 @@ def _start_checkpoint_heartbeat(
             except Exception as exc:
                 janitor_logger.warn("checkpoint_heartbeat_failed", error=str(exc))
                 if is_fail_hard_enabled():
-                    raise RuntimeError("Janitor checkpoint heartbeat failed") from exc
+                    errors.append(RuntimeError("Janitor checkpoint heartbeat failed"))
+                    errors[-1].__cause__ = exc
+                    stop_event.set()
+                    return
 
     thread = threading.Thread(
         target=_loop,
@@ -365,7 +369,7 @@ def _start_checkpoint_heartbeat(
         daemon=True,
     )
     thread.start()
-    return stop_event, thread
+    return stop_event, thread, errors
 
 
 def _default_owner_id() -> str:
@@ -639,6 +643,7 @@ def _check_for_updates() -> Optional[Dict[str, str]]:
         latest_tag = data.get("tag_name", "").lstrip("v")
         html_url = data.get("html_url", f"https://github.com/{REPO}/releases")
     except urllib.error.URLError as e:
+        # Update-check network reachability is informational; it must not abort janitor.
         janitor_logger.warn("update_check_network_failed", error=str(e))
         return None
     except Exception as e:
@@ -1385,7 +1390,7 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
 
     # Track which tasks were skipped due to budget
     _budget_skipped = []
-    checkpoint_heartbeat_stop, checkpoint_heartbeat_thread = _start_checkpoint_heartbeat(
+    checkpoint_heartbeat_stop, checkpoint_heartbeat_thread, checkpoint_heartbeat_errors = _start_checkpoint_heartbeat(
         _checkpoint_save,
         lambda: checkpoint_state.get("current_stage", ""),
         enabled=(task == "all" and not dry_run),
@@ -2013,6 +2018,8 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
         checkpoint_heartbeat_stop.set()
     if checkpoint_heartbeat_thread is not None:
         checkpoint_heartbeat_thread.join(timeout=1.0)
+    if checkpoint_heartbeat_errors and is_fail_hard_enabled():
+        raise RuntimeError(f"Critical error in task {task}") from checkpoint_heartbeat_errors[0]
     if critical_error is not None:
         raise RuntimeError(f"Critical error in task {task}") from critical_error
 

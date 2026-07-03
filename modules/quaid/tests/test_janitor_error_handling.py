@@ -531,7 +531,7 @@ def test_checkpoint_heartbeat_updates_during_long_stage(monkeypatch):
         writes.append({"stage": stage, "status": status, "completed": completed})
 
     monkeypatch.setenv("QUAID_JANITOR_CHECKPOINT_HEARTBEAT_S", "0.1")
-    stop_event, thread = janitor._start_checkpoint_heartbeat(
+    stop_event, thread, errors = janitor._start_checkpoint_heartbeat(
         _save_fn,
         lambda: "review",
         enabled=True,
@@ -546,6 +546,7 @@ def test_checkpoint_heartbeat_updates_during_long_stage(monkeypatch):
         thread.join(timeout=1.0)
 
     assert writes, "Expected at least one heartbeat write"
+    assert errors == []
     assert all(row["stage"] == "review" for row in writes)
     assert all(row["status"] == "running" for row in writes)
 
@@ -639,16 +640,22 @@ def test_llm_provider_check_raises_when_fail_hard(monkeypatch, tmp_path):
     assert str(excinfo.value.__cause__) == "provider down"
 
 
-def test_checkpoint_heartbeat_failure_raises_when_fail_hard(monkeypatch):
+def test_checkpoint_heartbeat_failure_records_error_when_fail_hard(monkeypatch):
     monkeypatch.setattr(janitor, "is_fail_hard_enabled", lambda: True)
 
     class _FakeEvent:
         def __init__(self):
             self.calls = 0
+            self.stopped = False
 
         def wait(self, _interval):
+            if self.stopped:
+                return True
             self.calls += 1
             return self.calls > 1
+
+        def set(self):
+            self.stopped = True
 
     class _FakeThread:
         def __init__(self, *, target, name, daemon):
@@ -662,12 +669,49 @@ def test_checkpoint_heartbeat_failure_raises_when_fail_hard(monkeypatch):
     monkeypatch.setattr(janitor.threading, "Event", _FakeEvent)
     monkeypatch.setattr(janitor.threading, "Thread", _FakeThread)
 
-    with pytest.raises(RuntimeError, match="Janitor checkpoint heartbeat failed"):
-        janitor._start_checkpoint_heartbeat(
-            lambda **_kwargs: (_ for _ in ()).throw(OSError("heartbeat write failed")),
-            lambda: "review",
-            enabled=True,
+    stop_event, thread, errors = janitor._start_checkpoint_heartbeat(
+        lambda **_kwargs: (_ for _ in ()).throw(OSError("heartbeat write failed")),
+        lambda: "review",
+        enabled=True,
+    )
+
+    assert stop_event is not None
+    assert thread is not None
+    assert len(errors) == 1
+    assert str(errors[0]) == "Janitor checkpoint heartbeat failed"
+    assert str(errors[0].__cause__) == "heartbeat write failed"
+
+
+def test_run_task_raises_recorded_heartbeat_failure_when_fail_hard(monkeypatch, tmp_path):
+    cfg = _minimal_janitor_cfg(memory=False, journal=False)
+    _patch_minimal_janitor_run(monkeypatch, tmp_path, cfg)
+    monkeypatch.setattr(janitor, "is_fail_hard_enabled", lambda: True)
+
+    class _FakeStop:
+        def set(self):
+            pass
+
+    class _FakeThread:
+        def join(self, timeout=None):
+            pass
+
+    err = RuntimeError("Janitor checkpoint heartbeat failed")
+    err.__cause__ = OSError("checkpoint write failed")
+    monkeypatch.setattr(
+        janitor,
+        "_start_checkpoint_heartbeat",
+        lambda *_args, **_kwargs: (_FakeStop(), _FakeThread(), [err]),
+    )
+
+    with pytest.raises(RuntimeError, match="Critical error in task all") as excinfo:
+        janitor._run_task_optimized_inner(
+            "all",
+            dry_run=False,
+            incremental=False,
+            resume_checkpoint=False,
         )
+
+    assert excinfo.value.__cause__ is err
 
 
 def test_pid_alive_probe_failure_raises_when_fail_hard(monkeypatch):
