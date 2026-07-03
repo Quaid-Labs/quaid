@@ -2269,6 +2269,52 @@ def test_ensure_alive_starts_directly_when_project_docs_supervisor_failure_marke
     assert "project docs supervisor is in failed state" in caplog.text
 
 
+def test_ensure_alive_returns_direct_pid_when_supervisor_disabled(monkeypatch):
+    steps = []
+
+    monkeypatch.setenv("QUAID_SUPERVISOR_DISABLE", "1")
+    monkeypatch.setenv("QUAID_INSTANCE", "codex-livetest")
+    monkeypatch.setattr(extraction_daemon, "read_pid", lambda: None)
+    monkeypatch.setattr(extraction_daemon, "start_daemon", lambda: steps.append("direct") or 8888)
+
+    assert extraction_daemon.ensure_alive() == 8888
+    assert steps == ["direct"]
+
+
+def test_ensure_alive_returns_direct_pid_when_recovered_marker_clear_fails(
+    monkeypatch, caplog
+):
+    from core import project_docs
+
+    steps = []
+
+    monkeypatch.delenv("QUAID_SUPERVISOR_DISABLE", raising=False)
+    monkeypatch.setenv("QUAID_INSTANCE", "codex-livetest")
+    monkeypatch.setattr(extraction_daemon, "read_pid", lambda: None)
+    monkeypatch.setattr(extraction_daemon, "start_daemon", lambda: steps.append("direct") or 9999)
+    monkeypatch.setattr("lib.adapter.get_adapter", lambda: object())
+    monkeypatch.setattr("lib.fail_policy.is_fail_hard_enabled", lambda: True)
+    monkeypatch.setattr(project_docs, "enable_instance_monitor", lambda _instance: None)
+    monkeypatch.setattr(
+        project_docs,
+        "ensure_supervisor_alive",
+        lambda: (_ for _ in ()).throw(
+            project_docs.ProjectDocsSupervisorFailureError("project-docs supervisor previously failed")
+        ),
+    )
+    monkeypatch.setattr(
+        project_docs,
+        "clear_supervisor_failure",
+        lambda: (_ for _ in ()).throw(OSError("unlink denied")),
+    )
+
+    caplog.set_level("WARNING")
+
+    assert extraction_daemon.ensure_alive() == 9999
+    assert steps == ["direct"]
+    assert "failed clearing recovered project-docs supervisor failure marker" in caplog.text
+
+
 def test_ensure_alive_still_raises_generic_project_docs_error_under_failhard(monkeypatch):
     steps = []
 

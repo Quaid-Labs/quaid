@@ -9346,6 +9346,8 @@ def _run_worker_loop() -> None:
 
 def ensure_alive() -> int:
     """Ensure the daemon is running. Start it if not. Returns PID."""
+    project_docs_mod = None
+    recovered_from_supervisor_failure = False
     if os.environ.get("QUAID_SUPERVISOR_DISABLE", "").strip() != "1":
         explicit_instance = str(os.environ.get("QUAID_INSTANCE", "") or "").strip()
         if explicit_instance:
@@ -9366,8 +9368,6 @@ def ensure_alive() -> int:
                     fail_hard = bool(is_fail_hard_enabled())
                 if fail_hard:
                     raise
-        project_docs_mod = None
-        recovered_from_supervisor_failure = False
         try:
             from core import project_docs as project_docs_mod
             project_docs_mod.enable_instance_monitor(_instance_id())
@@ -9431,7 +9431,10 @@ def ensure_alive() -> int:
         return pid
     fallback_pid = start_daemon()
     if recovered_from_supervisor_failure and fallback_pid and fallback_pid > 0:
-        project_docs_mod.clear_supervisor_failure()
+        try:
+            project_docs_mod.clear_supervisor_failure()
+        except Exception as exc:
+            logger.warning("failed clearing recovered project-docs supervisor failure marker: %s", exc)
     return fallback_pid
 
 
