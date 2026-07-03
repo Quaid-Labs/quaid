@@ -126,6 +126,30 @@ def test_owner_name_loading_failure_logs_fallback(caplog):
     assert "_get_owner_names: failed to load owner names" in caplog.text
 
 
+def test_owner_name_loading_failure_raises_when_failhard_enabled():
+    import datastore.memorydb.memory_graph as mg
+
+    with patch.object(mg, "_HAS_CONFIG", True), \
+         patch.object(mg, "_get_memory_config", side_effect=RuntimeError("identity config down")), \
+         patch.object(mg, "_is_fail_hard_mode", return_value=True):
+        with pytest.raises(RuntimeError, match="identity config down"):
+            mg._get_owner_names()
+
+
+def test_malformed_node_attributes_raise_when_failhard_enabled(tmp_path):
+    import datastore.memorydb.memory_graph as mg
+
+    graph, _ = _make_graph(tmp_path)
+    node = mg.Node.create("Fact", "Malformed attributes fact", owner_id="quaid")
+    graph.add_node(node, embed=False)
+    with graph._get_conn() as conn:
+        conn.execute("UPDATE nodes SET attributes = ? WHERE id = ?", ("{bad json", node.id))
+
+    with patch.object(mg, "_is_fail_hard_mode", return_value=True):
+        with pytest.raises(json.JSONDecodeError):
+            graph.get_node(node.id)
+
+
 def test_get_related_bidirectional_excludes_deleted_and_superseded_neighbors(tmp_path):
     import datastore.memorydb.memory_graph as mg
 
@@ -5939,7 +5963,7 @@ class TestTimestampOverride:
                 owner_id="m9-test-owner",
                 session_id="m9-session-filter",
                 status="active",
-                extraction_confidence=0.91,
+                extraction_confidence=0.0,
             ),
             embed=False,
         )
@@ -5985,7 +6009,7 @@ class TestTimestampOverride:
         payload = json.loads(result.stdout)
         texts = [row["text"] for row in payload["results"]]
         assert texts == ["The leatherworking awl lives in the brass toolkit."]
-        assert payload["results"][0]["extraction_confidence"] == 0.91
+        assert payload["results"][0]["extraction_confidence"] == 0.0
 
         text_result = subprocess.run(
             [
@@ -6005,7 +6029,7 @@ class TestTimestampOverride:
         )
 
         assert text_result.returncode == 0, text_result.stderr
-        assert "[C:0.9]" in text_result.stdout
+        assert "[C:0.0]" in text_result.stdout
         assert "[C:0.5]" not in text_result.stdout
 
 

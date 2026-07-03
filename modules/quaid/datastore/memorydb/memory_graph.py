@@ -916,9 +916,10 @@ class MemoryGraph:
                         needs_rebuild = fts_hit is None
                 if needs_rebuild:
                     conn.execute("INSERT INTO nodes_fts(nodes_fts) VALUES('rebuild')")
-            except Exception as e:
-                import logging
-                logging.getLogger(__name__).warning(f"FTS5 rebuild check failed: {e}")
+            except Exception as exc:
+                logger.warning("FTS5 rebuild check failed: %s", exc)
+                if _is_fail_hard_mode():
+                    raise
 
         # sqlite-vec: create and populate vector index (separate connection with extension loaded)
         if _lib_has_vec():
@@ -963,8 +964,8 @@ class MemoryGraph:
                         m = _re.search(r'float\[(\d+)\]', row[0])
                         if m:
                             existing_dim = int(m.group(1))
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.warning("_init_vec_index: failed to read existing dimension: %s", exc)
 
                 if existing_dim is not None and existing_dim != configured_dim:
                     logger.warning(
@@ -1084,8 +1085,9 @@ class MemoryGraph:
                     match = re.search(r"float\[(\d+)\]", row[0])
                     if match:
                         existing_dim = int(match.group(1))
-            except Exception:
+            except Exception as exc:
                 existing_dim = None
+                logger.warning("_init_source_chunk_vec_index: failed to read existing dimension: %s", exc)
             if existing_dim is not None and existing_dim != configured_dim:
                 logger.warning(
                     "vec_source_chunks dimension mismatch: table=%d configured=%d; rebuilding chunk ANN index",
@@ -1206,6 +1208,8 @@ class MemoryGraph:
             model = get_embeddings_provider().model_name
         except Exception as exc:
             logger.warning("get_embedding: failed to load provider model name, cache disabled: %s", exc)
+            if _is_fail_hard_mode():
+                raise
 
         # Check cache (must match current model to avoid stale embeddings)
         # Skip cache entirely when model is unknown — avoids cross-model cache pollution
@@ -1644,6 +1648,8 @@ class MemoryGraph:
                     "store_source_chunk failed to read default owner; using 'default': %s",
                     exc,
                 )
+                if _is_fail_hard_mode():
+                    raise
                 owner_id = "default"
         owner_id = str(owner_id).strip() or "default"
         source_id = str(source_id or session_id or "").strip() or None
@@ -2511,12 +2517,13 @@ class MemoryGraph:
         attrs_raw = row['attributes']
         try:
             attributes = json.loads(attrs_raw) if attrs_raw else {}
-        except (TypeError, ValueError):
-            import logging
-            logging.getLogger(__name__).warning(
+        except (TypeError, ValueError) as exc:
+            logger.warning(
                 "[memory_graph] malformed node attributes JSON for node_id=%s; using empty attributes",
                 row['id']
             )
+            if _is_fail_hard_mode():
+                raise
             attributes = {}
         return Node(
             id=row['id'],
@@ -2616,12 +2623,13 @@ class MemoryGraph:
         attrs_raw = row['attributes']
         try:
             attributes = json.loads(attrs_raw) if attrs_raw else {}
-        except (TypeError, ValueError):
-            import logging
-            logging.getLogger(__name__).warning(
+        except (TypeError, ValueError) as exc:
+            logger.warning(
                 "[memory_graph] malformed edge attributes JSON for edge_id=%s; using empty attributes",
                 row['id']
             )
+            if _is_fail_hard_mode():
+                raise
             attributes = {}
         return Edge(
             id=row['id'],
@@ -3571,8 +3579,8 @@ class MemoryGraph:
                 ).fetchone()
                 if row and row["completed_at"]:
                     last_janitor_completed_at = str(row["completed_at"])
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("get_stats: janitor_runs query failed: %s", exc)
 
         active_count = int(status_counts.get("active") or 0)
         return {
@@ -3672,15 +3680,15 @@ class MemoryGraph:
                     GROUP BY decision
                 """).fetchall():
                     dedup_stats[row["decision"]] = row["cnt"]
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("get_extended_stats: dedup_log query failed: %s", exc)
 
             # Embedding cache size
             cache_size = 0
             try:
                 cache_size = conn.execute("SELECT COUNT(*) FROM embedding_cache").fetchone()[0]
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("get_extended_stats: embedding_cache query failed: %s", exc)
 
         return {
             "total_nodes": total,
@@ -4843,6 +4851,8 @@ def _get_owner_names() -> set:
         return names
     except Exception as exc:
         logger.warning("_get_owner_names: failed to load owner names: %s", exc)
+        if _is_fail_hard_mode():
+            raise
         return set()
 
 
@@ -5562,8 +5572,9 @@ def _graph_attached_fact_rows(
     explicit_anchor_hit = _text_mentions_graph_anchor(str(query or ""), anchor_text)
     try:
         query_relation_groups = _relation_chain_groups_for_query(str(query or ""))
-    except Exception:
+    except Exception as exc:
         query_relation_groups = []
+        logger.warning("_score_graph_cluster_row: relation groups extraction failed: %s", exc)
     relation_sequence_groups = _relation_groups_for_sequence(list(relation_sequence or []))
     terminal_relation_chain_anchor = bool(query_relation_groups) and (
         _prefix_relation_group_match_length(relation_sequence_groups, query_relation_groups)
@@ -6158,12 +6169,16 @@ def register_domain(domain: str, description: str = "", active: bool = True) -> 
             publish_domains_to_runtime_config(cfg, active_domains)
         except Exception as exc:
             logger.warning("register_domain: failed publishing active domains to runtime config: %s", exc)
+            if _is_fail_hard_mode():
+                raise
     try:
         from lib.tools_domain_sync import sync_tools_domain_block
 
         sync_tools_domain_block(domains=active_domains, workspace=get_workspace_dir())
     except Exception as exc:
         logger.warning("register_domain: failed syncing TOOLS domain block: %s", exc)
+        if _is_fail_hard_mode():
+            raise
     return {
         "status": "ok",
         "domain": did,
@@ -8760,8 +8775,8 @@ def _docs_source_matches_project(rag: Any, source_file: str, project: Optional[s
             inferred = str(infer_project(source_file) or "").strip()
             if inferred:
                 inferred_project = inferred
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("_project_matches_source: failed to infer project for %s: %s", source_file, exc)
     project_token = _project_key(project)
     if not project_token:
         return True
@@ -11880,6 +11895,8 @@ def _recall_once(
                     boosted_node_factors[node_id] = factor
         except Exception as exc:
             logger.warning("domain boost index lookup failed; skipping boost: %s", exc)
+            if _is_fail_hard_mode():
+                raise
             boosted_node_factors = {}
     requested_project = _normalize_project_tag(project)
 
@@ -13485,8 +13502,8 @@ def _recall_once(
                             max_chunk_tokens=max_chunk_tokens,
                             max_total_chunk_tokens=max_total_chunk_tokens,
                         )
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.warning("low-signal recall retry failed: %s", exc)
 
     return _return_validated_recall(
         final_output,
@@ -20085,8 +20102,8 @@ def _load_tools_md() -> Optional[str]:
     candidates = [projects_dir / "quaid" / "TOOLS.md"]
     try:
         candidates += sorted(projects_dir.glob("*/TOOLS.md"))
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("_load_tools_hint: project TOOLS.md glob failed: %s", exc)
 
     for p in candidates:
         try:
@@ -24663,8 +24680,10 @@ Write a natural, flowing paragraph. Only include information from the facts abov
                 node.attributes["summary_fact_count"] = len(facts)
                 graph.update_node(node)
                 return summary
-        except Exception as e:
-            print(f"[memory_graph] LLM summary failed for {node.name}: {e}", file=sys.stderr)
+        except Exception as exc:
+            logger.warning("LLM summary failed for %s: %s", node.name, exc)
+            if _is_fail_hard_mode():
+                raise
 
     # Fallback: simple concatenation
     summary = f"{node.name}: " + ". ".join(facts[:10])
@@ -25386,7 +25405,8 @@ if __name__ == "__main__":
                     json_payload = _build_recall_json_payload(out)
                 else:
                     for r in out:
-                        conf = r.get('extraction_confidence', 0.5) or 0.5
+                        conf_raw = r.get('extraction_confidence')
+                        conf = conf_raw if conf_raw is not None else 0.5
                         created = r.get('created_at', '') or ''
                         date_str = f"({created.split('T')[0]})" if created else ""
                         print(f"[1.00] [{r['category']}]{date_str}[C:{conf:.1f}] {r['text']} |ID:{r['id']}|T:{created}|VF:|VU:|P:{r['privacy'] or 'shared'}|O:{r['owner_id'] or ''}")
