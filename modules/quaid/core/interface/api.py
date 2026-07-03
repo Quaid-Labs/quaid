@@ -56,6 +56,10 @@ def _query_has_recall_signal(query: str) -> bool:
     return _has_compact_script_recall_signal(text)
 
 
+def _log_recall_fast_trace_failure(event: str) -> None:
+    logger.debug("[api.recall_fast] m15 trace failed for %s", event, exc_info=True)
+
+
 def store(
     text: str,
     owner_id: str,
@@ -228,7 +232,7 @@ def recall_fast(
             word_count=_query_word_count(query),
         )
     except Exception:
-        pass
+        _log_recall_fast_trace_failure("entry")
     if not _query_has_recall_signal(query):
         logger.debug("[api.recall_fast] query too short (%d words), returning empty", _query_word_count(query))
         try:
@@ -240,7 +244,7 @@ def recall_fast(
                 word_count=_query_word_count(query),
             )
         except Exception:
-            pass
+            _log_recall_fast_trace_failure("short_query_skip")
         return ([], None) if return_meta else []
 
     try:
@@ -268,7 +272,7 @@ def recall_fast(
                 planner=(meta or {}).get("planner") if isinstance(meta, dict) else None,
             )
         except Exception:
-            pass
+            _log_recall_fast_trace_failure("exit")
         return result
     except Exception as exc:
         try:
@@ -280,7 +284,7 @@ def recall_fast(
                 error=str(exc),
             )
         except Exception:
-            pass
+            _log_recall_fast_trace_failure("exception")
         raise
 
 
