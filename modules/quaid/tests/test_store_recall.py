@@ -610,7 +610,7 @@ def test_relation_chain_rank_prefers_explicit_zero_hop_depth():
         ["has_fact"],
     )
 
-    assert key[5] == 0
+    assert key[6] == 0
 
 
 def test_beam_search_graph_deduplicates_nodes_reached_from_same_level(tmp_path):
@@ -18330,6 +18330,96 @@ class TestRecallFastHookInjectContract:
         assert attached[0]["via"] == "graph_attached_fact"
         assert attached[0]["graph_relation_sequence"] == ["spouse_of", "sibling_of", "has_fact"]
         assert "Yuni --sibling_of--> Kai" in attached[0]["graph_path"]
+
+    def test_graph_aware_recall_owner_pronoun_chain_does_not_use_seed_subject_as_owner(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _ = _make_graph(tmp_path)
+        owner = mg.Node.create("Person", "Test Owner")
+        partner = mg.Node.create("Person", "Test Partner")
+        sibling = mg.Node.create("Person", "Test Sibling")
+        work = mg.Node.create("Fact", "Test Sibling repairs cedar instruments")
+        unrelated = mg.Node.create("Person", "Unrelated Person")
+        relative = mg.Node.create("Person", "Unrelated Relative")
+        wrong_fact = mg.Node.create("Fact", "Unrelated Relative has a misleading family note")
+        for node in (owner, partner, sibling, work, unrelated, relative, wrong_fact):
+            graph.add_node(node, embed=False)
+        graph.add_edge(mg.Edge.create(owner.id, partner.id, "spouse_of"))
+        graph.add_edge(mg.Edge.create(partner.id, sibling.id, "sibling_of"))
+        graph.add_edge(mg.Edge.create(sibling.id, work.id, "has_fact"))
+        graph.add_edge(mg.Edge.create(unrelated.id, relative.id, "sibling_of"))
+        graph.add_edge(mg.Edge.create(relative.id, wrong_fact.id, "has_fact"))
+
+        fake_cfg = SimpleNamespace(users=SimpleNamespace(identities={}))
+        seed_rows = [
+            {
+                "id": wrong_fact.id,
+                "text": wrong_fact.name,
+                "category": "fact",
+                "similarity": 1.0,
+            }
+        ]
+
+        with patch.object(mg, "get_graph", return_value=graph), \
+             patch.object(mg, "_HAS_CONFIG", True), \
+             patch.object(mg, "_get_memory_config", return_value=fake_cfg), \
+             patch.object(mg, "extract_entities_from_text", return_value=[]), \
+             patch.object(mg, "get_edge_keywords", return_value={
+                 "spouse_of": ["partner"],
+                 "sibling_of": ["brother"],
+             }):
+            payload = mg.graph_aware_recall(
+                "what does my partner's brother do",
+                owner_id="unconfigured-alpha",
+                limit=8,
+                graph_depth=2,
+                candidate_pool=seed_rows,
+            )
+
+        assert payload["source_breakdown"]["pronoun_resolved"] is False
+        assert payload["direct_results"] == seed_rows
+        assert payload["graph_results"] == []
+
+    def test_relation_chain_sort_prefers_terminal_direct_fact_over_terminal_path_row(self):
+        import datastore.memorydb.memory_graph as mg
+
+        terminal_fact = {
+            "id": "fact-terminal",
+            "text": "Test Sibling repairs cedar instruments",
+            "category": "fact",
+            "via": "graph_attached_fact",
+            "similarity": 0.60,
+            "graph_relation_sequence": ["spouse_of", "sibling_of", "has_fact"],
+        }
+        terminal_graph_fact = {
+            "id": "graph-fact-terminal",
+            "text": "Test Sibling repairs cedar instruments",
+            "category": "graph",
+            "type": "Fact",
+            "via": "graph",
+            "similarity": 0.60,
+            "graph_relation_sequence": ["spouse_of", "sibling_of", "has_fact"],
+        }
+        terminal_path_row = {
+            "id": "path-terminal",
+            "text": "Test Owner --spouse_of--> Partner --sibling_of--> Work Sibling",
+            "category": "graph",
+            "via": "graph",
+            "similarity": 0.99,
+            "graph_relation_sequence": ["spouse_of", "sibling_of"],
+        }
+
+        ranked = sorted(
+            [terminal_path_row, terminal_fact, terminal_graph_fact],
+            key=lambda row: mg._relation_chain_sort_key(
+                row,
+                ["spouse", "sibling"],
+                query="what does my partner's sibling do",
+            ),
+            reverse=True,
+        )
+
+        assert [row["id"] for row in ranked[:2]] == ["fact-terminal", "graph-fact-terminal"]
 
     def test_graph_aware_recall_anchors_relation_only_unicode_query_to_owner(self, tmp_path):
         import datastore.memorydb.memory_graph as mg

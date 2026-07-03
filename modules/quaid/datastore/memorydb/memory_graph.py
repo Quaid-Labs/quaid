@@ -4396,12 +4396,19 @@ def _rank_graph_row_for_relation_chain(
     relation_groups: List[str],
     *,
     query: Optional[str] = None,
-) -> Tuple[int, int, int, int, int, int, float]:
+) -> Tuple[int, int, int, int, int, int, int, float]:
     row_groups = _graph_row_relation_groups(row)
     ordered_hits = _ordered_relation_group_match_length(row_groups, relation_groups)
     prefix_hits = _prefix_relation_group_match_length(row_groups, relation_groups)
     terminal_hits = _terminal_relation_chain_match(row_groups, relation_groups)
-    fact_bonus = 1 if str(row.get("via") or "") == "graph_attached_fact" or str(row.get("category") or "").lower() == "fact" else 0
+    row_category = str(row.get("category") or "").lower()
+    row_type = str(row.get("type") or "").lower()
+    fact_bonus = 1 if (
+        str(row.get("via") or "") == "graph_attached_fact"
+        or row_category in _SUBJECT_ATTACHABLE_MEMORY_TYPES
+        or row_type in _SUBJECT_ATTACHABLE_MEMORY_TYPES
+    ) else 0
+    terminal_direct_fact = int(bool(terminal_hits and fact_bonus))
     activity_answer = _relation_chain_activity_answer_score(query, row)
     try:
         raw_depth = row.get("hop_depth") if row.get("hop_depth") is not None else row.get("depth")
@@ -4412,7 +4419,7 @@ def _rank_graph_row_for_relation_chain(
         similarity = float(row.get("similarity") or 0.0)
     except Exception:
         similarity = 0.0
-    return ordered_hits, prefix_hits, terminal_hits, activity_answer, fact_bonus, depth, similarity
+    return ordered_hits, prefix_hits, terminal_hits, terminal_direct_fact, activity_answer, fact_bonus, depth, similarity
 
 
 def _relation_chain_sort_key(
@@ -4420,13 +4427,13 @@ def _relation_chain_sort_key(
     relation_groups: List[str],
     *,
     query: Optional[str] = None,
-) -> Tuple[int, int, int, int, int, int, float]:
-    ordered_hits, prefix_hits, terminal_hits, activity_answer, fact_bonus, depth, similarity = _rank_graph_row_for_relation_chain(
+) -> Tuple[int, int, int, int, int, int, int, float]:
+    ordered_hits, prefix_hits, terminal_hits, terminal_direct_fact, activity_answer, fact_bonus, depth, similarity = _rank_graph_row_for_relation_chain(
         row,
         relation_groups,
         query=query,
     )
-    return ordered_hits, prefix_hits, terminal_hits, activity_answer, fact_bonus, -depth, similarity
+    return ordered_hits, prefix_hits, terminal_hits, terminal_direct_fact, activity_answer, fact_bonus, -depth, similarity
 
 
 def _boost_relation_chain_row_scores(
@@ -4436,7 +4443,7 @@ def _boost_relation_chain_row_scores(
     query: Optional[str] = None,
 ) -> None:
     for row in rows:
-        ordered_hits, prefix_hits, terminal_hits, activity_answer, fact_bonus, depth, current_similarity = _rank_graph_row_for_relation_chain(
+        ordered_hits, prefix_hits, terminal_hits, terminal_direct_fact, activity_answer, fact_bonus, depth, current_similarity = _rank_graph_row_for_relation_chain(
             row,
             relation_groups,
             query=query,
@@ -4444,7 +4451,7 @@ def _boost_relation_chain_row_scores(
         graph_like = str(row.get("via") or "").startswith("graph") or str(row.get("category") or "").lower() == "graph"
         if ordered_hits >= 2 or (ordered_hits >= 1 and fact_bonus):
             cap = 0.996 if fact_bonus else 0.994
-            target = 0.86 + (0.03 * ordered_hits) + (0.02 * prefix_hits) + (0.02 * terminal_hits) + (0.01 * activity_answer) + (0.02 * fact_bonus) - (0.01 * max(depth - 1, 0))
+            target = 0.86 + (0.03 * ordered_hits) + (0.02 * prefix_hits) + (0.02 * terminal_hits) + (0.03 * terminal_direct_fact) + (0.01 * activity_answer) + (0.02 * fact_bonus) - (0.01 * max(depth - 1, 0))
             row["similarity"] = round(max(
                 current_similarity,
                 min(cap, target),
@@ -5740,7 +5747,8 @@ def graph_aware_recall(
     graph_query_embedding: Optional[List[float]] = None
 
     # 1. Pronoun resolution
-    if has_owner_pronoun(query):
+    owner_pronoun_query = has_owner_pronoun(query)
+    if owner_pronoun_query:
         owner_person = resolve_owner_person(owner_id)
         if owner_person:
             expand_from.append(owner_person.id)
@@ -5763,6 +5771,11 @@ def graph_aware_recall(
         and owner_anchor_id
         and owner_anchor_name
         and candidate_pool is None
+    )
+    owner_relation_chain_without_anchor = bool(
+        relation_chain_query
+        and not owner_anchor_id
+        and not query_entities
     )
 
     # 2. Vector search (fact-only): keep direct hits strictly factual, then
@@ -5882,32 +5895,33 @@ def graph_aware_recall(
     # Do not mark the direct fact as seen here: if graph expansion later reaches
     # the same fact, the graph-attached duplicate carries path metadata and can
     # replace the direct row during merge.
-    for fact in direct:
-        fact_id = fact.get("id")
-        fact_category = fact.get("category", "").lower()
-        if fact_id and fact_category in _SUBJECT_ATTACHABLE_MEMORY_TYPES:
-            # Check for inbound has_fact edges
-            in_edges = graph.get_edges(fact_id, direction="in")
-            for edge in in_edges:
-                if edge.relation == "has_fact":
-                    person = graph.get_node(edge.source_id)
-                    if person and person.type == "Person":
-                        chain_path = relation_chain_path_by_node.get(person.id)
-                        if chain_path:
-                            fact["via"] = "graph_attached_fact"
-                            fact["via_relation"] = "has_fact"
-                            fact["source_name"] = person.name
-                            fact["graph_path"] = f"{chain_path} --has_fact--> {fact.get('text') or fact.get('content') or fact.get('name') or ''}"
-                            _annotate_graph_traversal_fields(
-                                fact,
-                                relation_chain_sequence_by_node.get(person.id, []) + ["has_fact"],
-                                discovery_kind="graph_attached_fact",
-                            )
-                        deferred_expand_from.append(person.id)
+    if not owner_relation_chain_without_anchor:
+        for fact in direct:
+            fact_id = fact.get("id")
+            fact_category = fact.get("category", "").lower()
+            if fact_id and fact_category in _SUBJECT_ATTACHABLE_MEMORY_TYPES:
+                # Check for inbound has_fact edges
+                in_edges = graph.get_edges(fact_id, direction="in")
+                for edge in in_edges:
+                    if edge.relation == "has_fact":
+                        person = graph.get_node(edge.source_id)
+                        if person and person.type == "Person":
+                            chain_path = relation_chain_path_by_node.get(person.id)
+                            if chain_path:
+                                fact["via"] = "graph_attached_fact"
+                                fact["via_relation"] = "has_fact"
+                                fact["source_name"] = person.name
+                                fact["graph_path"] = f"{chain_path} --has_fact--> {fact.get('text') or fact.get('content') or fact.get('name') or ''}"
+                                _annotate_graph_traversal_fields(
+                                    fact,
+                                    relation_chain_sequence_by_node.get(person.id, []) + ["has_fact"],
+                                    discovery_kind="graph_attached_fact",
+                                )
+                            deferred_expand_from.append(person.id)
 
     # If we still don't have an anchor node, infer one from direct fact subjects
     # (e.g., "Quaid has sisters..." -> anchor "Quaid").
-    if not expand_from and not deferred_expand_from and direct:
+    if not owner_relation_chain_without_anchor and not expand_from and not deferred_expand_from and direct:
         for fact in direct:
             text = _leading_fact_subject_text(fact.get("text", ""))
             text_key = _identifier_key(text)
