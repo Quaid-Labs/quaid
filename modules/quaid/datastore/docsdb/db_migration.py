@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import os
 import sqlite3
+import sys
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -106,6 +107,8 @@ def _migrate_locked(target_db: Path, wanted_tables: tuple[str, ...]) -> None:
                     source_db,
                     exc,
                 )
+                if is_fail_hard_enabled():
+                    raise RuntimeError(f"Legacy docs DB signature read failed for {source_db}") from exc
                 continue
 
             alias = "src_docs"
@@ -137,6 +140,7 @@ def _migrate_locked(target_db: Path, wanted_tables: tuple[str, ...]) -> None:
                 if is_fail_hard_enabled():
                     raise RuntimeError(f"Legacy docs DB merge failed for {source_db}") from exc
             finally:
+                body_exc_type = sys.exc_info()[0]
                 try:
                     conn.execute(f"DETACH DATABASE {alias}")
                 except Exception as exc:
@@ -146,6 +150,8 @@ def _migrate_locked(target_db: Path, wanted_tables: tuple[str, ...]) -> None:
                         exc,
                         exc_info=True,
                     )
+                    if is_fail_hard_enabled() and body_exc_type is None:
+                        raise RuntimeError(f"Failed detaching legacy docs migration database {alias}") from exc
     finally:
         conn.close()
 
@@ -167,13 +173,17 @@ def _legacy_instance_db_paths(target_db: Path) -> List[Path]:
             if candidate.resolve() == target_db.resolve():
                 continue
         except Exception as exc:
-            logger.debug(
+            logger.warning(
                 "Failed comparing legacy docs DB path %s to target %s: %s",
                 candidate,
                 target_db,
                 exc,
                 exc_info=True,
             )
+            if is_fail_hard_enabled():
+                raise RuntimeError(
+                    f"Failed comparing legacy docs DB path {candidate} to target {target_db}"
+                ) from exc
             if str(candidate) == str(target_db):
                 continue
         out.append(candidate)

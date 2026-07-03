@@ -2331,6 +2331,8 @@ def get_update_log(limit: int = 50) -> List[Dict[str, Any]]:
             return [dict(row) for row in rows]
     except Exception as exc:
         logger.warning("Failed reading docs update audit log: %s", exc)
+        if is_fail_hard_enabled():
+            raise RuntimeError("Failed reading docs update audit log") from exc
         return []
 
 

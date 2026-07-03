@@ -36,9 +36,37 @@ def test_docs_embedding_timeout_logs_invalid_global_timeout(monkeypatch, caplog)
 
     monkeypatch.delenv("QUAID_DOCS_EMBED_TIMEOUT_SECONDS", raising=False)
     monkeypatch.setenv("OLLAMA_EMBED_TIMEOUT_S", "not-a-number")
+    monkeypatch.setattr("datastore.docsdb.rag.is_fail_hard_enabled", lambda: False)
     caplog.set_level("WARNING", logger="datastore.docsdb.rag")
 
     assert _docs_embedding_timeout_seconds() == 60.0
+    assert "Invalid OLLAMA_EMBED_TIMEOUT_S='not-a-number'; using default 120s" in caplog.text
+
+
+def test_docs_embedding_timeout_invalid_docs_env_raises_when_failhard(monkeypatch, caplog):
+    from datastore.docsdb import rag as rag_module
+
+    monkeypatch.setenv("QUAID_DOCS_EMBED_TIMEOUT_SECONDS", "not-a-number")
+    monkeypatch.setattr(rag_module, "is_fail_hard_enabled", lambda: True)
+
+    with caplog.at_level("WARNING", logger="datastore.docsdb.rag"):
+        with pytest.raises(RuntimeError, match="Invalid QUAID_DOCS_EMBED_TIMEOUT_SECONDS"):
+            rag_module._docs_embedding_timeout_seconds()
+
+    assert "Invalid QUAID_DOCS_EMBED_TIMEOUT_SECONDS='not-a-number'" in caplog.text
+
+
+def test_docs_embedding_timeout_invalid_global_env_raises_when_failhard(monkeypatch, caplog):
+    from datastore.docsdb import rag as rag_module
+
+    monkeypatch.delenv("QUAID_DOCS_EMBED_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.setenv("OLLAMA_EMBED_TIMEOUT_S", "not-a-number")
+    monkeypatch.setattr(rag_module, "is_fail_hard_enabled", lambda: True)
+
+    with caplog.at_level("WARNING", logger="datastore.docsdb.rag"):
+        with pytest.raises(RuntimeError, match="Invalid OLLAMA_EMBED_TIMEOUT_S"):
+            rag_module._docs_embedding_timeout_seconds()
+
     assert "Invalid OLLAMA_EMBED_TIMEOUT_S='not-a-number'; using default 120s" in caplog.text
 
 

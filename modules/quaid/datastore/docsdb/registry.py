@@ -2344,6 +2344,8 @@ class DocsRegistry:
                     tmp_path.unlink()
                 except Exception as cleanup_exc:
                     logger.warning("Failed cleaning config temp file %s: %s", tmp_path, cleanup_exc)
+                    if _fail_hard_enabled():
+                        raise RuntimeError(f"Failed cleaning config temp file {tmp_path}") from cleanup_exc
             if _fail_hard_enabled():
                 raise RuntimeError("Config update failed") from e
             return False

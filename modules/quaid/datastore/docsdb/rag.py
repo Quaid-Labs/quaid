@@ -227,12 +227,18 @@ def _docs_embedding_timeout_seconds() -> float:
             timeout = float(raw)
             if timeout > 0:
                 return timeout
-        except Exception:
+        except Exception as exc:
             logger.warning("Invalid QUAID_DOCS_EMBED_TIMEOUT_SECONDS=%r; using default docs embedding timeout", raw)
+            if is_fail_hard_enabled():
+                raise RuntimeError(f"Invalid QUAID_DOCS_EMBED_TIMEOUT_SECONDS={raw!r}") from exc
     try:
         global_timeout = float(os.environ.get("OLLAMA_EMBED_TIMEOUT_S", "120") or 120)
-    except Exception:
+    except Exception as exc:
         logger.warning("Invalid OLLAMA_EMBED_TIMEOUT_S=%r; using default 120s", os.environ.get("OLLAMA_EMBED_TIMEOUT_S"))
+        if is_fail_hard_enabled():
+            raise RuntimeError(
+                f"Invalid OLLAMA_EMBED_TIMEOUT_S={os.environ.get('OLLAMA_EMBED_TIMEOUT_S')!r}"
+            ) from exc
         global_timeout = 120.0
     if global_timeout <= 0:
         global_timeout = 120.0

@@ -170,6 +170,30 @@ class TestConfigReloadPolicy:
         with pytest.raises(RuntimeError, match="Config update failed"):
             r._update_config(lambda _data: (_ for _ in ()).throw(RuntimeError("mutator failed")))
 
+    def test_update_config_cleanup_failure_raises_when_fail_hard(self, setup_env, monkeypatch, caplog):
+        from datastore.docsdb import registry as registry_mod
+
+        r = _get_registry()
+        workspace = setup_env
+        tmp_config = workspace / "config.tmp"
+        tmp_config.write_text("{}")
+
+        def fail_unlink(path):
+            if path == tmp_config:
+                raise OSError("unlink failed")
+            return original_unlink(path)
+
+        original_unlink = Path.unlink
+        monkeypatch.setattr(registry_mod, "_fail_hard_enabled", lambda: True)
+        monkeypatch.setattr(Path, "unlink", fail_unlink)
+
+        with caplog.at_level(logging.WARNING, logger="datastore.docsdb.registry"):
+            with pytest.raises(RuntimeError, match="Failed cleaning config temp file") as excinfo:
+                r._update_config(lambda _data: (_ for _ in ()).throw(RuntimeError("mutator failed")))
+
+        assert isinstance(excinfo.value.__cause__, OSError)
+        assert "Failed cleaning config temp file" in caplog.text
+
 
 class TestEnsureTable:
     def test_idempotent(self, setup_env):

@@ -1068,15 +1068,29 @@ class TestAuditLogFallback:
                     agent_id="pytest",
                 )
 
-    def test_get_update_log_warns_on_read_failure(self, tmp_path, caplog):
+    def test_get_update_log_warns_on_read_failure(self, tmp_path, monkeypatch, caplog):
         with _adapter_patch(tmp_path):
             import datastore.docsdb.updater as updater
 
+            monkeypatch.setattr(updater, "is_fail_hard_enabled", lambda: False)
             caplog.set_level("WARNING")
             with patch.object(updater, "_ensure_audit_table", side_effect=RuntimeError("db offline")):
                 rows = updater.get_update_log(limit=5)
 
             assert rows == []
+            assert "Failed reading docs update audit log" in caplog.text
+
+    def test_get_update_log_raises_on_read_failure_when_failhard(self, tmp_path, monkeypatch, caplog):
+        with _adapter_patch(tmp_path):
+            import datastore.docsdb.updater as updater
+
+            monkeypatch.setattr(updater, "is_fail_hard_enabled", lambda: True)
+            caplog.set_level("WARNING")
+            with patch.object(updater, "_ensure_audit_table", side_effect=RuntimeError("db offline")):
+                with pytest.raises(RuntimeError, match="Failed reading docs update audit log") as excinfo:
+                    updater.get_update_log(limit=5)
+
+            assert isinstance(excinfo.value.__cause__, RuntimeError)
             assert "Failed reading docs update audit log" in caplog.text
 
 
