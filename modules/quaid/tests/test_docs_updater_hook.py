@@ -239,7 +239,7 @@ class TestUpdateProjectDocs:
         assert metrics["docs_skipped"] == 1
         assert doc_path.read_text(encoding="utf-8") == original
 
-    def test_update_unmatched_edit_raises_when_fail_hard_enabled(self, tmp_path):
+    def test_update_unmatched_edit_raises_when_fail_hard_enabled(self, tmp_path, caplog):
         project_dir = tmp_path / "projects" / "my-app"
         project_dir.mkdir(parents=True)
         doc_path = project_dir / "PROJECT.md"
@@ -259,6 +259,7 @@ class TestUpdateProjectDocs:
             ">>>"
         )
 
+        caplog.set_level("WARNING")
         with patch("datastore.docsdb.updater.classify_doc_change") as mock_classify, \
              patch("core.project_registry.get_project", return_value={"canonical_path": str(project_dir)}), \
              patch("core.docs_updater_hook.is_fail_hard_enabled", return_value=True), \
@@ -273,6 +274,58 @@ class TestUpdateProjectDocs:
                 update_project_docs(snapshots)
 
         assert doc_path.read_text(encoding="utf-8") == original
+        assert "Unmatched edit block for PROJECT.md #1" in caplog.text
+        assert "Missing old text" in caplog.text
+        assert "Should not write" in caplog.text
+
+    def test_project_md_managed_marker_edit_is_ignored_under_fail_hard(self, tmp_path, caplog):
+        project_dir = tmp_path / "projects" / "my-app"
+        project_dir.mkdir(parents=True)
+        doc_path = project_dir / "PROJECT.md"
+        original = (
+            "# Project: Demo\n\n"
+            "### Registered Docs\n"
+            "<!-- BEGIN:REGISTERED_DOCS -->\n"
+            "| Document | Why Read It | Auto-Update |\n"
+            "|----------|-------------|-------------|\n"
+            "<!-- END:REGISTERED_DOCS -->\n"
+        )
+        doc_path.write_text(original, encoding="utf-8")
+        snapshots = [{
+            "project": "my-app",
+            "is_initial": False,
+            "diff": "diff --git a/README.md b/README.md\n+content",
+            "changes": [{"status": "A", "path": "README.md", "old_path": None}],
+        }]
+        response = (
+            "<<<EDIT\n"
+            "SECTION: Registered Docs\n"
+            "OLD: | Document | Why Read It | Auto-Update |\n"
+            "|----------|-------------|-------------|\n"
+            "NEW: | Document | Why Read It | Auto-Update |\n"
+            "|----------|-------------|-------------|\n"
+            "| `README.md` | Project overview | Yes |\n"
+            ">>>"
+        )
+
+        caplog.set_level("WARNING")
+        with patch("datastore.docsdb.updater.classify_doc_change") as mock_classify, \
+             patch("core.project_registry.get_project", return_value={"canonical_path": str(project_dir)}), \
+             patch("core.docs_updater_hook.is_fail_hard_enabled", return_value=True), \
+             patch("lib.llm_clients.call_deep_reasoning", return_value=(response, 0.1)):
+            mock_classify.return_value = {
+                "classification": "significant",
+                "confidence": 0.8,
+                "reasons": ["clear doc update"],
+            }
+
+            metrics = update_project_docs(snapshots)
+
+        assert metrics["docs_skipped"] == 1
+        assert metrics["docs_updated"] == 0
+        assert doc_path.read_text(encoding="utf-8") == original
+        assert "Ignoring PROJECT.md LLM edit targeting registry-managed marker block" in caplog.text
+        assert "Registered Docs" in caplog.text
 
     def test_project_md_prompt_excludes_registry_managed_marker_blocks(self, tmp_path):
         doc_path = tmp_path / "PROJECT.md"

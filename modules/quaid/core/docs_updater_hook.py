@@ -22,6 +22,123 @@ logger = logging.getLogger(__name__)
 # PROJECT.log remains append-only and must never be edited by this path.
 _UPDATABLE_ROOT_DOCS = {"PROJECT.md", "TOOLS.md", "AGENTS.md"}
 _FAST_GATE_MAX_TOKENS = 200
+_PROJECT_MD_MANAGED_SECTIONS = {
+    "project home",
+    "source roots",
+    "in this project directory",
+    "external files",
+    "registered docs",
+    "recent major changes",
+}
+_PROJECT_MD_MANAGED_MARKERS = (
+    ("<!-- BEGIN:PROJECT_HOME -->", "<!-- END:PROJECT_HOME -->"),
+    ("<!-- BEGIN:SOURCE_ROOTS -->", "<!-- END:SOURCE_ROOTS -->"),
+    ("<!-- BEGIN:IN_DIR_FILES -->", "<!-- END:IN_DIR_FILES -->"),
+    ("<!-- BEGIN:EXTERNAL_FILES -->", "<!-- END:EXTERNAL_FILES -->"),
+    ("<!-- BEGIN:REGISTERED_DOCS -->", "<!-- END:REGISTERED_DOCS -->"),
+    ("<!-- BEGIN:PROJECT_LOG -->", "<!-- END:PROJECT_LOG -->"),
+)
+
+
+def _log_preview(value: Any, limit: int = 1200) -> str:
+    text = str(value or "").replace("\r\n", "\n")
+    if len(text) <= limit:
+        return text
+    return text[:limit] + "...<truncated>"
+
+
+def _parse_edit_block_fields(edit_block: str) -> Dict[str, str]:
+    lines = str(edit_block or "").strip().split("\n")
+    parsed: Dict[str, str] = {"section": "", "old": "", "new": ""}
+    for i, line in enumerate(lines):
+        if line.startswith("SECTION:"):
+            parsed["section"] = line[len("SECTION:"):].strip()
+        elif line.startswith("OLD:"):
+            old_parts = [line[len("OLD:"):].strip()]
+            j = i + 1
+            while j < len(lines) and not lines[j].startswith("NEW:"):
+                old_parts.append(lines[j])
+                j += 1
+            parsed["old"] = "\n".join(old_parts).strip()
+        elif line.startswith("NEW:"):
+            new_parts = [line[len("NEW:"):].strip()]
+            new_parts.extend(lines[i + 1:])
+            parsed["new"] = "\n".join(new_parts).strip()
+            break
+    return parsed
+
+
+def _text_overlaps_project_md_managed_block(doc_text: str, needle: str) -> bool:
+    if not needle or needle == "ADD":
+        return False
+    spans = []
+    for begin, end in _PROJECT_MD_MANAGED_MARKERS:
+        start = doc_text.find(begin)
+        stop = doc_text.find(end, start + len(begin)) if start >= 0 else -1
+        if start >= 0 and stop >= 0:
+            spans.append((start, stop + len(end)))
+    if not spans:
+        return False
+    start = doc_text.find(needle)
+    while start >= 0:
+        stop = start + len(needle)
+        if any(start >= span_start and stop <= span_stop for span_start, span_stop in spans):
+            return True
+        start = doc_text.find(needle, start + 1)
+    return False
+
+
+def _project_md_managed_edit_reason(doc_text: str, edit_block: str) -> Optional[str]:
+    parsed = _parse_edit_block_fields(edit_block)
+    section = parsed["section"].strip().lower().lstrip("#").strip()
+    if section in _PROJECT_MD_MANAGED_SECTIONS:
+        return f"section={parsed['section']!r}"
+    old_text = parsed["old"]
+    new_text = parsed["new"]
+    combined = f"{old_text}\n{new_text}"
+    for begin, end in _PROJECT_MD_MANAGED_MARKERS:
+        if begin in combined or end in combined:
+            return f"marker={begin}"
+    if _text_overlaps_project_md_managed_block(doc_text, old_text):
+        return "old text is inside a registry-managed marker block"
+    return None
+
+
+def _filter_project_md_managed_edits(doc_name: str, doc_text: str, edits: List[str]) -> List[str]:
+    if doc_name != "PROJECT.md":
+        return edits
+    kept = []
+    for index, edit_block in enumerate(edits, start=1):
+        reason = _project_md_managed_edit_reason(doc_text, edit_block)
+        if not reason:
+            kept.append(edit_block)
+            continue
+        parsed = _parse_edit_block_fields(edit_block)
+        logger.warning(
+            "[docs-hook] Ignoring PROJECT.md LLM edit targeting registry-managed marker block #%d (%s); OLD=%r NEW=%r",
+            index,
+            reason,
+            _log_preview(parsed["old"]),
+            _log_preview(parsed["new"]),
+        )
+    return kept
+
+
+def _unmatched_edit_blocks(doc_text: str, edits: List[str]) -> List[Dict[str, str]]:
+    updated = doc_text
+    unmatched: List[Dict[str, str]] = []
+    for index, edit_block in enumerate(edits, start=1):
+        parsed = _parse_edit_block_fields(edit_block)
+        old_text = parsed["old"]
+        new_text = parsed["new"]
+        if old_text == "ADD" and new_text:
+            updated = updated.rstrip() + "\n\n" + new_text
+        elif old_text and new_text and old_text in updated:
+            updated = updated.replace(old_text, new_text, 1)
+        else:
+            parsed["index"] = str(index)
+            unmatched.append(parsed)
+    return unmatched
 
 
 def update_project_docs(
@@ -308,11 +425,25 @@ def _update_single_doc(
         logger.info("[docs-hook] No valid edits parsed for %s", doc_name)
         return False
 
+    edits = _filter_project_md_managed_edits(doc_name, current_doc, edits)
+    if not edits:
+        logger.info("[docs-hook] Only registry-managed PROJECT.md edits were proposed for %s", doc_name)
+        return False
+
     from datastore.docsdb.updater import apply_edit_blocks
     updated, applied, unmatched = apply_edit_blocks(current_doc, edits)
 
     if unmatched:
         message = f"{unmatched} edit block(s) did not match {doc_name} content"
+        for failed in _unmatched_edit_blocks(current_doc, edits):
+            logger.warning(
+                "[docs-hook] Unmatched edit block for %s #%s SECTION=%r OLD=%r NEW=%r",
+                doc_name,
+                failed.get("index", "?"),
+                _log_preview(failed.get("section")),
+                _log_preview(failed.get("old")),
+                _log_preview(failed.get("new")),
+            )
         if is_fail_hard_enabled():
             raise RuntimeError(message)
         logger.warning("[docs-hook] %s", message)
