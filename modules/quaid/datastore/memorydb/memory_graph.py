@@ -4485,7 +4485,7 @@ def _rank_graph_row_for_relation_chain(
     row_type = str(row.get("type") or "").lower()
     fact_bonus = 1 if (
         str(row.get("via") or "") == "graph_attached_fact"
-        or row_category in _SUBJECT_ATTACHABLE_MEMORY_TYPES
+        or row_category == "fact"
         or row_type in _SUBJECT_ATTACHABLE_MEMORY_TYPES
     ) else 0
     terminal_direct_fact = int(bool(terminal_hits and fact_bonus))
