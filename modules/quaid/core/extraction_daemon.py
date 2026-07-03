@@ -8631,6 +8631,7 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
             data = active_cursor
             session_id = str(data.get("session_id") or session_id)
             cursor_file = active_file
+        using_stale_source_cursor_for_grown_transcript = False
         active_cursor, active_file, active_key = _active_source_cursor_for_grown_transcript(
             cursor_file=cursor_file,
             session_id=str(session_id),
@@ -8651,6 +8652,7 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
             data = active_cursor
             session_id = str(data.get("session_id") or session_id)
             cursor_file = active_file
+            using_stale_source_cursor_for_grown_transcript = True
         if _retire_shadowed_cursor_alias(
             cursor_file=cursor_file,
             session_id=str(session_id),
@@ -8943,23 +8945,14 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
             state["buffer_transcript_path"] = str(buffer_transcript_path)
             write_rolling_state(session_id, state)
             buffered_line_offset = int(state.get("buffered_line_offset", buffered_line_offset) or buffered_line_offset)
-        if (
+        scan_cursor_reached_eof_after_growth = (
             transcript_grew_since_cursor
             and total_lines > 0
             and buffered_line_offset >= total_lines
             and current_size_bytes > cursor_size_bytes
             and not bool(data.get("internal", False))
             and not unfroze_internal_cursor
-        ):
-            cursor_key_for_write = str(data.get("cursor_key") or cursor_file.stem or "").strip() or None
-            write_cursor(
-                session_id,
-                buffered_line_offset,
-                str(transcript_path),
-                internal=bool(data.get("internal", False)),
-                source_key=cursor_key_for_write,
-                last_flushed_line_offset=int(data.get("last_flushed_line_offset", 0) or 0),
-            )
+        )
 
         semantic_tokens = int(state.get("semantic_buffer_tokens", 0) or 0)
         near_budget_threshold = _rolling_ready_threshold(chunk_budget)
@@ -8974,6 +8967,25 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
             semantic_tokens >= chunk_budget
             or semantic_tokens >= near_budget_threshold
         )
+        if scan_cursor_reached_eof_after_growth and (
+            should_signal or not using_stale_source_cursor_for_grown_transcript
+        ):
+            cursor_key_for_write = str(data.get("cursor_key") or cursor_file.stem or "").strip() or None
+            write_cursor(
+                session_id,
+                buffered_line_offset,
+                str(transcript_path),
+                internal=bool(data.get("internal", False)),
+                source_key=cursor_key_for_write,
+                last_flushed_line_offset=int(data.get("last_flushed_line_offset", 0) or 0),
+            )
+        elif scan_cursor_reached_eof_after_growth:
+            logger.info(
+                "session %s rolling scan buffered stale source cursor tail to EOF below threshold; "
+                "preserving cursor offset %s for lifecycle drain",
+                session_id,
+                data.get("line_offset", 0),
+            )
         if not should_signal:
             if cursor_rebase_buffer_reset and total_lines > 0 and buffered_line_offset >= total_lines:
                 cursor_key_for_write = str(data.get("cursor_key") or cursor_file.stem or "").strip() or None

@@ -12617,6 +12617,111 @@ class TestRollingExtraction:
         assert source_cursor["line_offset"] == 3
         assert source_cursor["transcript_size_bytes"] == transcript_path.stat().st_size
 
+    def test_check_chunk_ready_sessions_preserves_subthreshold_stale_source_cursor(
+        self, monkeypatch, tmp_path
+    ):
+        import sys
+        import types
+
+        session_id = "019f27a4-0000-7000-b000-000000000000"
+        transcript_path = tmp_path / f"rollout-2026-07-03T11-22-21-{session_id}.jsonl"
+        transcript_path.write_text(
+            '{"type":"event_msg","payload":{"type":"user_message","message":"m1 checkpoint"}}\n'
+            '{"type":"event_msg","payload":{"type":"assistant_message","message":"ack"}}\n',
+            encoding="utf-8",
+        )
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "rolling-inst")
+        source_key = extraction_daemon._signal_source_cursor_key(session_id, str(transcript_path))
+        extraction_daemon.write_cursor(
+            session_id,
+            2,
+            str(transcript_path),
+            source_key=source_key,
+            last_flushed_line_offset=2,
+        )
+        extraction_daemon.write_rolling_state(
+            session_id,
+            {
+                "session_id": session_id,
+                "transcript_path": str(transcript_path),
+                "buffer_transcript_path": str(transcript_path),
+                "processed_line_offset": 2,
+                "buffered_line_offset": 2,
+                "semantic_buffer": "",
+                "semantic_buffer_tokens": 0,
+            },
+        )
+
+        transcript_path.write_text(
+            '{"type":"event_msg","payload":{"type":"user_message","message":"m1 checkpoint"}}\n'
+            '{"type":"event_msg","payload":{"type":"assistant_message","message":"ack"}}\n'
+            '{"type":"event_msg","payload":{"type":"user_message","message":"small m2 tail that is below rolling threshold"}}\n',
+            encoding="utf-8",
+        )
+        extraction_daemon.write_cursor(session_id, 0, str(transcript_path))
+        alias_file = extraction_daemon._cursor_dir() / f"{session_id}.json"
+
+        real_glob = Path.glob
+
+        def fake_glob(path, pattern):
+            if path == extraction_daemon._cursor_dir() and pattern == "*.json":
+                return iter([alias_file])
+            return real_glob(path, pattern)
+
+        def fake_buffer_transcript_tail(path, from_line, state, adapter=None, **kwargs):
+            assert path == str(transcript_path)
+            assert from_line == 2
+            return (
+                {
+                    "buffer_transcript_path": str(transcript_path),
+                    "buffered_line_offset": 3,
+                    "semantic_buffer": "User: small m2 tail that is below rolling threshold",
+                    "semantic_buffer_tokens": 12,
+                },
+                {
+                    "raw_lines_added": 1,
+                    "semantic_chars_added": 51,
+                    "semantic_tokens_added": 12,
+                    "buffered_line_offset": 3,
+                },
+            )
+
+        real_adapter = sys.modules.get("lib.adapter")
+        fake_adapter_mod = types.ModuleType("lib.adapter")
+        fake_adapter_mod.get_adapter = lambda: _OwnedTestAdapterMixin()
+        sys.modules["lib.adapter"] = fake_adapter_mod
+
+        captured = []
+        monkeypatch.setattr(Path, "glob", fake_glob)
+        monkeypatch.setattr(extraction_daemon, "_ensure_discovered_session_cursors", lambda adapter: None)
+        monkeypatch.setattr(extraction_daemon, "_cursor_or_adapter_owns_transcript_path", lambda *args, **kwargs: True)
+        monkeypatch.setattr(extraction_daemon, "_reconcile_internal_cursor_state", lambda *args, **kwargs: "not_internal")
+        monkeypatch.setattr(extraction_daemon, "_buffer_transcript_tail", fake_buffer_transcript_tail)
+        monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
+        monkeypatch.setattr(
+            extraction_daemon,
+            "write_signal",
+            lambda *args, **kwargs: captured.append((args, kwargs)),
+        )
+
+        try:
+            extraction_daemon.check_chunk_ready_sessions(chunk_tokens=100)
+        finally:
+            if real_adapter is not None:
+                sys.modules["lib.adapter"] = real_adapter
+            else:
+                sys.modules.pop("lib.adapter", None)
+
+        assert captured == []
+        source_cursor = extraction_daemon.read_cursor(session_id, source_key=source_key)
+        assert source_cursor["line_offset"] == 2
+        assert source_cursor["last_flushed_line_offset"] == 2
+        rolling_state = extraction_daemon.read_rolling_state(session_id)
+        assert rolling_state["buffered_line_offset"] == 3
+        assert rolling_state["semantic_buffer_tokens"] == 12
+
     def test_check_chunk_ready_sessions_rejects_stale_source_cursor_after_rebase_growth(
         self, monkeypatch, tmp_path
     ):
@@ -16195,7 +16300,6 @@ class TestRollingExtraction:
                 signal_type="session_end",
                 session_id=session_id,
                 transcript_path=str(transcript_path),
-                meta={"source_cursor_key": source_key},
             )
             extraction_daemon.process_signal(extraction_daemon.read_pending_signals()[0])
 
