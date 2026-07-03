@@ -356,6 +356,8 @@ def _start_checkpoint_heartbeat(
                 save_fn(stage=str(stage_getter() or ""), status="running", completed=False)
             except Exception as exc:
                 janitor_logger.warn("checkpoint_heartbeat_failed", error=str(exc))
+                if is_fail_hard_enabled():
+                    raise RuntimeError("Janitor checkpoint heartbeat failed") from exc
 
     thread = threading.Thread(
         target=_loop,
@@ -491,6 +493,8 @@ def _pid_alive(pid: int) -> bool:
     except Exception as exc:
         # Unknown PID probe failures should not cause lock stealing.
         janitor_logger.warn("janitor_pid_probe_failed", pid=pid, error=str(exc))
+        if is_fail_hard_enabled():
+            raise RuntimeError(f"Janitor PID probe failed for pid={pid}") from exc
         return True
 
 
@@ -639,6 +643,8 @@ def _check_for_updates() -> Optional[Dict[str, str]]:
         return None
     except Exception as e:
         janitor_logger.warn("update_check_failed", error=str(e))
+        if is_fail_hard_enabled():
+            raise RuntimeError("Update check failed") from e
         return None
 
     # Cache the result via datastore helper
@@ -1267,6 +1273,9 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
             if not _profiles.get("deep", {}).get("available"):
                 raise RuntimeError("High-reasoning model not available")
         except Exception as _provider_err:
+            janitor_logger.warn("llm_provider_check_failed", error=str(_provider_err))
+            if is_fail_hard_enabled():
+                raise RuntimeError("LLM provider check failed") from _provider_err
             print("⚠️" * 10)
             print(f"⚠️  WARNING: LLM provider not available: {_provider_err}")
             print("⚠️  The janitor needs a working LLM provider for review, dedup, and decay tasks.")

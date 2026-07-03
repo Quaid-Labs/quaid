@@ -135,6 +135,8 @@ def _queue_project_review(
                 pending = []
         except (json.JSONDecodeError, IOError) as exc:
             logger.warning("Failed to read pending project review queue %s: %s", queue_path, exc)
+            if is_fail_hard_enabled():
+                raise RuntimeError(f"Failed to read pending project review queue: {queue_path}") from exc
             pending = []
         pending.append(entry)
         f.seek(0)
@@ -162,6 +164,8 @@ def get_pending_project_reviews() -> List[Dict[str, Any]]:
             pending = json.load(f)
     except (json.JSONDecodeError, IOError) as exc:
         logger.warning("Failed to read pending project reviews %s: %s", _pending_project_review(), exc)
+        if is_fail_hard_enabled():
+            raise RuntimeError(f"Failed to read pending project reviews: {_pending_project_review()}") from exc
         return []
 
     return pending

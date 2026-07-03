@@ -65,6 +65,11 @@ def _patch_minimal_janitor_run(monkeypatch, tmp_path, cfg=None, lifecycle_result
     monkeypatch.setattr(janitor, "count_nodes_by_status", lambda *_a, **_kw: {}, raising=False)
     monkeypatch.setattr(janitor, "graduate_approved_to_active", lambda *_a, **_kw: 0, raising=False)
     monkeypatch.setattr(janitor, "checkpoint_wal", lambda *_a, **_kw: None, raising=False)
+    monkeypatch.setattr(
+        janitor,
+        "get_llm_provider",
+        lambda: SimpleNamespace(get_profiles=lambda: {"deep": {"available": True}}),
+    )
 
     class _Graph:
         def get_health_metrics(self):
@@ -489,6 +494,7 @@ def test_run_tests_unexpected_error_raises_when_fail_hard(monkeypatch):
 
 def test_pid_alive_logs_unknown_probe_failure(monkeypatch):
     warnings = []
+    monkeypatch.setattr(janitor, "is_fail_hard_enabled", lambda: False)
     monkeypatch.setattr(janitor.os, "kill", lambda *_args: (_ for _ in ()).throw(OSError("probe failed")))
     monkeypatch.setattr(janitor.janitor_logger, "warn", lambda event, **fields: warnings.append((event, fields)))
 
@@ -610,6 +616,89 @@ def test_run_task_rejects_malformed_quaid_now_from_checkpoint_save(monkeypatch, 
             incremental=False,
             resume_checkpoint=False,
         )
+
+
+def test_llm_provider_check_raises_when_fail_hard(monkeypatch, tmp_path):
+    _patch_minimal_janitor_run(monkeypatch, tmp_path)
+    monkeypatch.setattr(janitor, "is_fail_hard_enabled", lambda: True)
+    monkeypatch.setattr(
+        janitor,
+        "get_llm_provider",
+        lambda: (_ for _ in ()).throw(RuntimeError("provider down")),
+    )
+
+    with pytest.raises(RuntimeError, match="LLM provider check failed") as excinfo:
+        janitor._run_task_optimized_inner(
+            "review",
+            dry_run=False,
+            incremental=False,
+            resume_checkpoint=False,
+        )
+
+    assert isinstance(excinfo.value.__cause__, RuntimeError)
+    assert str(excinfo.value.__cause__) == "provider down"
+
+
+def test_checkpoint_heartbeat_failure_raises_when_fail_hard(monkeypatch):
+    monkeypatch.setattr(janitor, "is_fail_hard_enabled", lambda: True)
+
+    class _FakeEvent:
+        def __init__(self):
+            self.calls = 0
+
+        def wait(self, _interval):
+            self.calls += 1
+            return self.calls > 1
+
+    class _FakeThread:
+        def __init__(self, *, target, name, daemon):
+            self.target = target
+            self.name = name
+            self.daemon = daemon
+
+        def start(self):
+            self.target()
+
+    monkeypatch.setattr(janitor.threading, "Event", _FakeEvent)
+    monkeypatch.setattr(janitor.threading, "Thread", _FakeThread)
+
+    with pytest.raises(RuntimeError, match="Janitor checkpoint heartbeat failed"):
+        janitor._start_checkpoint_heartbeat(
+            lambda **_kwargs: (_ for _ in ()).throw(OSError("heartbeat write failed")),
+            lambda: "review",
+            enabled=True,
+        )
+
+
+def test_pid_alive_probe_failure_raises_when_fail_hard(monkeypatch):
+    monkeypatch.setattr(janitor, "is_fail_hard_enabled", lambda: True)
+    monkeypatch.setattr(
+        janitor.os,
+        "kill",
+        lambda *_args: (_ for _ in ()).throw(RuntimeError("probe failed")),
+    )
+
+    with pytest.raises(RuntimeError, match="Janitor PID probe failed"):
+        janitor._pid_alive(12345)
+
+
+def test_check_for_updates_generic_failure_raises_when_fail_hard(tmp_path, monkeypatch):
+    version_file = tmp_path / "VERSION"
+    version_file.write_text("0.1.0", encoding="utf-8")
+    monkeypatch.setattr(janitor, "_version_file", lambda: version_file)
+    monkeypatch.setattr(janitor, "get_graph", lambda: object())
+    monkeypatch.setattr(janitor, "get_update_check_cache", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(janitor, "is_fail_hard_enabled", lambda: True)
+    monkeypatch.setattr(
+        urllib.request,
+        "urlopen",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("payload failed")),
+    )
+
+    with pytest.raises(RuntimeError, match="Update check failed") as excinfo:
+        janitor._check_for_updates()
+
+    assert str(excinfo.value.__cause__) == "payload failed"
 
 
 def test_check_for_updates_ignores_non_object_github_payload(tmp_path, monkeypatch):

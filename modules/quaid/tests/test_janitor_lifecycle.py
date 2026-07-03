@@ -562,12 +562,27 @@ def test_lifecycle_parallel_telemetry_logs_write_failure(monkeypatch, tmp_path, 
 
     registry = LifecycleRegistry()
     monkeypatch.setattr(lifecycle_mod, "_LIFECYCLE_PARALLEL_TELEMETRY_ENABLED", True)
+    monkeypatch.setattr(lifecycle_mod, "is_fail_hard_enabled", lambda: False)
     monkeypatch.setattr(Path, "open", lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("disk full")))
 
     with caplog.at_level(logging.WARNING, logger="core.lifecycle.janitor_lifecycle"):
         registry._append_parallel_telemetry(tmp_path, {"event": "probe"})
 
     assert "Failed to append lifecycle parallel telemetry: disk full" in caplog.text
+
+
+def test_lifecycle_parallel_telemetry_write_failure_raises_when_fail_hard(monkeypatch, tmp_path):
+    import core.lifecycle.janitor_lifecycle as lifecycle_mod
+
+    registry = LifecycleRegistry()
+    monkeypatch.setattr(lifecycle_mod, "_LIFECYCLE_PARALLEL_TELEMETRY_ENABLED", True)
+    monkeypatch.setattr(lifecycle_mod, "is_fail_hard_enabled", lambda: True)
+    monkeypatch.setattr(Path, "open", lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("disk full")))
+
+    with pytest.raises(RuntimeError, match="Failed to append lifecycle parallel telemetry") as excinfo:
+        registry._append_parallel_telemetry(tmp_path, {"event": "probe"})
+
+    assert str(excinfo.value.__cause__) == "disk full"
 
 
 def test_lifecycle_parallel_telemetry_disabled_ignores_quaid_now(monkeypatch, tmp_path):
@@ -580,6 +595,25 @@ def test_lifecycle_parallel_telemetry_disabled_ignores_quaid_now(monkeypatch, tm
     registry._append_parallel_telemetry(tmp_path, {"event": "probe"})
 
     assert not (tmp_path / "logs").exists()
+
+
+def test_lifecycle_run_many_preserves_explicit_zero_prepass_timeout(tmp_path):
+    registry = LifecycleRegistry()
+
+    def _slow(_ctx):
+        time.sleep(0.02)
+        return RoutineResult(metrics={"finished": 1})
+
+    registry.register("slow", _slow)
+    cfg = _make_cfg(False, lifecycle_timeout_seconds=0)
+
+    result = registry.run_many(
+        [("slow", RoutineContext(cfg=cfg, dry_run=True, workspace=tmp_path))],
+        max_workers=1,
+    )
+
+    assert "timed out" in result["slow"].errors[0]
+    assert "0.00s" in result["slow"].errors[0]
 
 
 def test_lifecycle_run_many_run_id_honors_quaid_now(monkeypatch, tmp_path):

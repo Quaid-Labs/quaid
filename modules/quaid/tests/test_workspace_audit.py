@@ -891,9 +891,12 @@ class TestProjectReviewQueue:
             assert data[0]["section"] == "First"
             assert data[1]["section"] == "Second"
 
-    def test_queue_handles_corrupt_file(self, tmp_path):
+    def test_queue_handles_corrupt_file(self, tmp_path, monkeypatch):
         """If existing file is corrupt, starts fresh (doesn't crash)."""
+        import core.lifecycle.workspace_audit as workspace_audit
         from core.lifecycle.workspace_audit import _queue_project_review
+
+        monkeypatch.setattr(workspace_audit, "is_fail_hard_enabled", lambda: False)
 
         with _hidden_adapter_patch(tmp_path) as iroot:
             (iroot / "logs" / "janitor").mkdir(parents=True, exist_ok=True)
@@ -903,6 +906,19 @@ class TestProjectReviewQueue:
             data = json.loads(pending_file.read_text())
             assert len(data) == 1
             assert data[0]["section"] == "New"
+
+    def test_queue_corrupt_file_raises_when_fail_hard(self, tmp_path, monkeypatch):
+        import core.lifecycle.workspace_audit as workspace_audit
+        from core.lifecycle.workspace_audit import _queue_project_review
+
+        monkeypatch.setattr(workspace_audit, "is_fail_hard_enabled", lambda: True)
+        with _hidden_adapter_patch(tmp_path) as iroot:
+            (iroot / "logs" / "janitor").mkdir(parents=True, exist_ok=True)
+            pending_file = iroot / "logs" / "janitor" / "pending-project-review.json"
+            pending_file.write_text("{broken json")
+
+            with pytest.raises(RuntimeError, match="Failed to read pending project review queue"):
+                _queue_project_review(section="New", source_file="TOOLS.md")
 
     def test_get_returns_pending(self, tmp_path):
         """get_pending_project_reviews returns queued items without deleting."""
@@ -924,9 +940,12 @@ class TestProjectReviewQueue:
         with _hidden_adapter_patch(tmp_path):
             assert get_pending_project_reviews() == []
 
-    def test_get_returns_empty_for_corrupt_file(self, tmp_path):
+    def test_get_returns_empty_for_corrupt_file(self, tmp_path, monkeypatch):
         """get_pending_project_reviews returns [] if file is corrupt."""
+        import core.lifecycle.workspace_audit as workspace_audit
         from core.lifecycle.workspace_audit import get_pending_project_reviews
+
+        monkeypatch.setattr(workspace_audit, "is_fail_hard_enabled", lambda: False)
 
         with _hidden_adapter_patch(tmp_path) as iroot:
             (iroot / "logs" / "janitor").mkdir(parents=True, exist_ok=True)
@@ -934,8 +953,24 @@ class TestProjectReviewQueue:
             pending_file.write_text("not valid json!")
             assert get_pending_project_reviews() == []
 
-    def test_get_logs_warning_for_corrupt_file(self, tmp_path, caplog):
+    def test_get_corrupt_file_raises_when_fail_hard(self, tmp_path, monkeypatch):
+        import core.lifecycle.workspace_audit as workspace_audit
         from core.lifecycle.workspace_audit import get_pending_project_reviews
+
+        monkeypatch.setattr(workspace_audit, "is_fail_hard_enabled", lambda: True)
+        with _hidden_adapter_patch(tmp_path) as iroot:
+            (iroot / "logs" / "janitor").mkdir(parents=True, exist_ok=True)
+            pending_file = iroot / "logs" / "janitor" / "pending-project-review.json"
+            pending_file.write_text("not valid json!")
+
+            with pytest.raises(RuntimeError, match="Failed to read pending project reviews"):
+                get_pending_project_reviews()
+
+    def test_get_logs_warning_for_corrupt_file(self, tmp_path, caplog, monkeypatch):
+        import core.lifecycle.workspace_audit as workspace_audit
+        from core.lifecycle.workspace_audit import get_pending_project_reviews
+
+        monkeypatch.setattr(workspace_audit, "is_fail_hard_enabled", lambda: False)
 
         with _hidden_adapter_patch(tmp_path) as iroot:
             (iroot / "logs" / "janitor").mkdir(parents=True, exist_ok=True)

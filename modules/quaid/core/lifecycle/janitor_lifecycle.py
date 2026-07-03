@@ -146,7 +146,8 @@ class LifecycleRegistry:
             try:
                 first_cfg = routines[0][1].cfg
                 parallel_cfg = get_parallel_config(first_cfg)
-                timeout_seconds = float(getattr(parallel_cfg, "lifecycle_prepass_timeout_seconds", 300) or 300)
+                raw_timeout = getattr(parallel_cfg, "lifecycle_prepass_timeout_seconds", None)
+                timeout_seconds = float(300 if raw_timeout is None else raw_timeout)
             except Exception as exc:
                 logger.warning(
                     "Failed to resolve lifecycle prepass timeout from config; using 300s default: %s",
@@ -315,8 +316,10 @@ class LifecycleRegistry:
             with (logs_dir / "lifecycle-parallel-telemetry.jsonl").open("a", encoding="utf-8") as f:
                 f.write(json.dumps(row, ensure_ascii=True) + "\n")
         except Exception as exc:
-            # Telemetry must never break janitor execution.
+            # Telemetry is best-effort unless failHard requires surfacing the write failure.
             logger.warning("Failed to append lifecycle parallel telemetry: %s", exc)
+            if is_fail_hard_enabled():
+                raise RuntimeError("Failed to append lifecycle parallel telemetry") from exc
             return
 
     def _lock_registry_for_workspace(self, workspace: Path) -> ResourceLockRegistry:
