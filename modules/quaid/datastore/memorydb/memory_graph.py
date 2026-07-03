@@ -4216,7 +4216,7 @@ def _relation_chain_owner_anchor_fallback(
         return None
 
     best_node: Optional[Node] = None
-    best_score: Tuple[int, int, int, str] = (-1, -1, 0, "")
+    best_score: Tuple[int, int, int, int, str] = (-1, -1, -1, 0, "")
     for row in rows:
         try:
             node = graph._row_to_node(row)
@@ -4240,6 +4240,13 @@ def _relation_chain_owner_anchor_fallback(
             continue
         if not path_by_node:
             continue
+        try:
+            anchor_out_edges = len(list(graph.get_edges(node.id, direction="out")))
+        except Exception as exc:
+            logger.warning("Failed to count fallback owner anchor edges for %s: %s", node.id, exc)
+            if _is_fail_hard_mode():
+                raise RuntimeError("Failed to count fallback owner anchor edges") from exc
+            anchor_out_edges = 0
         terminal_count = sum(
             1
             for sequence in sequence_by_node.values()
@@ -4259,7 +4266,7 @@ def _relation_chain_owner_anchor_fallback(
                 logger.warning("Failed to count terminal relation-chain facts for %s: %s", terminal_id, exc)
                 if _is_fail_hard_mode():
                     raise RuntimeError("Failed to count terminal relation-chain facts") from exc
-        score = (terminal_count, direct_terminal_facts, -len(str(node.name or "")), str(node.name or ""))
+        score = (terminal_count, anchor_out_edges, direct_terminal_facts, -len(str(node.name or "")), str(node.name or ""))
         if score > best_score:
             best_score = score
             best_node = node

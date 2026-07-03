@@ -18391,13 +18391,34 @@ class TestRecallFastHookInjectContract:
         partner = mg.Node.create("Person", "Actual Partner")
         sibling = mg.Node.create("Person", "Terminal Sibling")
         work = mg.Node.create("Fact", "Terminal Sibling repairs cedar instruments")
-        for node in (contaminated_owner, unrelated, wrong_fact, actual_owner, partner, sibling, work):
+        peripheral_anchor = mg.Node.create("Person", "Peripheral Anchor")
+        peripheral_partner = mg.Node.create("Person", "Peripheral Partner")
+        for node in (
+            contaminated_owner,
+            unrelated,
+            wrong_fact,
+            actual_owner,
+            partner,
+            sibling,
+            work,
+            peripheral_anchor,
+            peripheral_partner,
+        ):
             graph.add_node(node, embed=False)
         graph.add_edge(mg.Edge.create(contaminated_owner.id, unrelated.id, "knows"))
         graph.add_edge(mg.Edge.create(unrelated.id, wrong_fact.id, "has_fact"))
         graph.add_edge(mg.Edge.create(actual_owner.id, partner.id, "spouse_of"))
         graph.add_edge(mg.Edge.create(partner.id, sibling.id, "sibling_of"))
         graph.add_edge(mg.Edge.create(sibling.id, work.id, "has_fact"))
+        graph.add_edge(mg.Edge.create(peripheral_anchor.id, peripheral_partner.id, "spouse_of"))
+        graph.add_edge(mg.Edge.create(peripheral_partner.id, actual_owner.id, "sibling_of"))
+        for index in range(6):
+            contact = mg.Node.create("Person", f"Owner Contact {index}")
+            owner_fact = mg.Node.create("Fact", f"Actual Owner background fact {index}")
+            graph.add_node(contact, embed=False)
+            graph.add_node(owner_fact, embed=False)
+            graph.add_edge(mg.Edge.create(actual_owner.id, contact.id, "knows"))
+            graph.add_edge(mg.Edge.create(actual_owner.id, owner_fact.id, "has_fact"))
 
         fake_cfg = SimpleNamespace(
             users=SimpleNamespace(
