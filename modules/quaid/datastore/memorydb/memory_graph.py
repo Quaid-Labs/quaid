@@ -5574,7 +5574,7 @@ def _graph_attached_fact_rows(
         query_relation_groups = _relation_chain_groups_for_query(str(query or ""))
     except Exception as exc:
         query_relation_groups = []
-        logger.warning("_score_graph_cluster_row: relation groups extraction failed: %s", exc)
+        logger.warning("_graph_attached_fact_rows: relation groups extraction failed: %s", exc)
     relation_sequence_groups = _relation_groups_for_sequence(list(relation_sequence or []))
     terminal_relation_chain_anchor = bool(query_relation_groups) and (
         _prefix_relation_group_match_length(relation_sequence_groups, query_relation_groups)

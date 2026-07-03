@@ -2500,6 +2500,36 @@ class TestStoreBasic:
             assert call["include_mmr"] is True
             assert call["low_signal_retry"] is True
 
+    def test_low_signal_retry_failure_logs_warning(self, tmp_path, caplog):
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _ = _make_graph(tmp_path)
+        original_recall_once = mg._recall_once
+
+        with patch.object(mg, "get_graph", return_value=graph), \
+             patch.object(mg, "_expand_low_signal_query", return_value="expanded sparse query"), \
+             patch.object(mg, "_recall_once", side_effect=RuntimeError("retry failed")), \
+             caplog.at_level("WARNING"):
+            rows = original_recall_once(
+                "sparse query",
+                owner_id="quaid",
+                limit=5,
+                min_similarity=0.99,
+                use_routing=False,
+                use_aliases=False,
+                use_intent=False,
+                use_multi_pass=False,
+                use_reranker=False,
+                include_graph_traversal=False,
+                include_co_session=False,
+                include_mmr=False,
+                include_lexical_anchor_shaping=False,
+                low_signal_retry=True,
+            )
+
+        assert rows == []
+        assert "low-signal recall retry failed: retry failed" in caplog.text
+
     def test_plan_fanout_queries_bails_for_structural_low_information_message(self):
         import datastore.memorydb.memory_graph as mg
 
