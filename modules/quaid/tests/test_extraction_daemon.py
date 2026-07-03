@@ -12614,8 +12614,7 @@ class TestRollingExtraction:
             }
         ]
         source_cursor = extraction_daemon.read_cursor(session_id, source_key=source_key)
-        assert source_cursor["line_offset"] == 3
-        assert source_cursor["transcript_size_bytes"] == transcript_path.stat().st_size
+        assert source_cursor["line_offset"] == 2
 
     def test_check_chunk_ready_sessions_preserves_subthreshold_stale_source_cursor(
         self, monkeypatch, tmp_path
@@ -12721,6 +12720,100 @@ class TestRollingExtraction:
         rolling_state = extraction_daemon.read_rolling_state(session_id)
         assert rolling_state["buffered_line_offset"] == 3
         assert rolling_state["semantic_buffer_tokens"] == 12
+
+    def test_process_signal_rolling_below_threshold_preserves_source_cursor(
+        self, monkeypatch, tmp_path
+    ):
+        import sys
+        import types
+
+        session_id = "019f27d3-0000-7000-b000-000000000000"
+        transcript_path = tmp_path / f"{session_id}.jsonl"
+        transcript_path.write_text(
+            '{"role":"user","content":"m1 checkpoint"}\n'
+            '{"role":"assistant","content":"ack"}\n'
+            '{"role":"user","content":"chunk one content buffered by rolling scan"}\n',
+            encoding="utf-8",
+        )
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "rolling-inst")
+        source_key = extraction_daemon._signal_source_cursor_key(session_id, str(transcript_path))
+        extraction_daemon.write_cursor(
+            session_id,
+            2,
+            str(transcript_path),
+            source_key=source_key,
+            last_flushed_line_offset=2,
+        )
+        extraction_daemon.write_rolling_state(
+            session_id,
+            {
+                "session_id": session_id,
+                "transcript_path": str(transcript_path),
+                "buffer_transcript_path": str(transcript_path),
+                "processed_line_offset": 3,
+                "buffered_line_offset": 3,
+                "semantic_buffer": "User: chunk one content buffered by rolling scan",
+                "semantic_buffer_tokens": 90,
+            },
+        )
+
+        real_registry = sys.modules.get("core.subagent_registry")
+        real_adapter = sys.modules.get("lib.adapter")
+        fake_registry = types.ModuleType("core.subagent_registry")
+        fake_registry.is_registered_subagent = lambda sid: False
+        sys.modules["core.subagent_registry"] = fake_registry
+
+        fake_adapter_mod = types.ModuleType("lib.adapter")
+
+        class _FakeAdapter(_OwnedTestAdapterMixin):
+            def parse_session_jsonl(self, path):
+                rendered = []
+                for raw in Path(path).read_text(encoding="utf-8").splitlines():
+                    row = json.loads(raw)
+                    content = str(row.get("content") or "").strip()
+                    if content:
+                        rendered.append(f"{row.get('role', 'unknown').title()}: {content}")
+                return "\n".join(rendered)
+
+        fake_adapter_mod.get_adapter = lambda: _FakeAdapter()
+        sys.modules["lib.adapter"] = fake_adapter_mod
+
+        monkeypatch.setattr(extraction_daemon, "_get_capture_chunk_tokens", lambda default=8000: 100)
+        monkeypatch.setattr(extraction_daemon, "_get_capture_chunk_max_lines", lambda default=0: 100)
+        monkeypatch.setattr(extraction_daemon, "_get_owner_id", lambda: "Owner")
+        monkeypatch.setattr(extraction_daemon, "_cursor_or_adapter_owns_transcript_path", lambda *args, **kwargs: True)
+        monkeypatch.setattr(extraction_daemon, "_reconcile_internal_cursor_state", lambda *args, **kwargs: "not_internal")
+
+        try:
+            extraction_daemon.write_signal(
+                signal_type="rolling",
+                session_id=session_id,
+                transcript_path=str(transcript_path),
+                meta={
+                    "reason": "semantic_chunk_budget_near",
+                    "source_cursor_key": source_key,
+                },
+            )
+            extraction_daemon.process_signal(extraction_daemon.read_pending_signals()[0])
+        finally:
+            if real_registry is not None:
+                sys.modules["core.subagent_registry"] = real_registry
+            else:
+                sys.modules.pop("core.subagent_registry", None)
+            if real_adapter is not None:
+                sys.modules["lib.adapter"] = real_adapter
+            else:
+                sys.modules.pop("lib.adapter", None)
+
+        cursor = extraction_daemon.read_cursor(session_id, source_key=source_key)
+        assert cursor["line_offset"] == 2
+        assert cursor["last_flushed_line_offset"] == 2
+        state = extraction_daemon.read_rolling_state(session_id)
+        assert state["buffered_line_offset"] == 3
+        assert state["semantic_buffer_tokens"] == 90
+        assert extraction_daemon.read_pending_signals() == []
 
     def test_check_chunk_ready_sessions_rejects_stale_source_cursor_after_rebase_growth(
         self, monkeypatch, tmp_path

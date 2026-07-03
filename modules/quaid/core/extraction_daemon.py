@@ -7297,7 +7297,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                 write_rolling_state(session_id, staged_state)
                 write_cursor(
                     session_id,
-                    buffered_line_offset,
+                    cursor_offset,
                     transcript_path,
                     source_key=lock_owner_key,
                     last_flushed_line_offset=cursor_last_flushed_line_offset,
@@ -8967,9 +8967,7 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
             semantic_tokens >= chunk_budget
             or semantic_tokens >= near_budget_threshold
         )
-        if scan_cursor_reached_eof_after_growth and (
-            should_signal or not using_stale_source_cursor_for_grown_transcript
-        ):
+        if scan_cursor_reached_eof_after_growth and not using_stale_source_cursor_for_grown_transcript:
             cursor_key_for_write = str(data.get("cursor_key") or cursor_file.stem or "").strip() or None
             write_cursor(
                 session_id,
@@ -8981,8 +8979,8 @@ def check_chunk_ready_sessions(chunk_tokens: Optional[int] = None) -> None:
             )
         elif scan_cursor_reached_eof_after_growth:
             logger.info(
-                "session %s rolling scan buffered stale source cursor tail to EOF below threshold; "
-                "preserving cursor offset %s for lifecycle drain",
+                "session %s rolling scan buffered stale source cursor tail to EOF; "
+                "preserving cursor offset %s until rolling extraction or lifecycle drain succeeds",
                 session_id,
                 data.get("line_offset", 0),
             )
