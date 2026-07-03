@@ -107,7 +107,13 @@ def _safe_read_transcript_path(path: Path, source_kind: str, *, session_jsonl: b
 
 
 def _reset_backup_for_missing_session_path(path: Path) -> Optional[Path]:
-    """Find the newest OpenClaw /reset backup for a missing session JSONL."""
+    """Find the newest OpenClaw /reset backup for a missing session JSONL.
+
+    OpenClaw renames the native transcript to ``<session>.jsonl.reset.<ts>``
+    during reset handling. When the canonical path is missing, that sibling is
+    the authoritative completed transcript, so failHard should ingest it rather
+    than treating the original path disappearance as data loss.
+    """
     if path.name.endswith(".reset.") or ".jsonl.reset." in path.name:
         return None
     if not path.name.endswith(".jsonl"):

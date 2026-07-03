@@ -329,6 +329,26 @@ def test_resolve_transcript_source_uses_latest_reset_backup_for_missing_transcri
     assert "Brass postal scale reset backup." in str(content)
 
 
+def test_resolve_transcript_source_uses_reset_backup_under_failhard(monkeypatch, tmp_path):
+    adapter = TestAdapter(tmp_path)
+    set_adapter(adapter)
+    monkeypatch.setattr(session_logs_ingest, "is_fail_hard_enabled", lambda: True)
+
+    missing = tmp_path / "551c5587.jsonl"
+    backup = tmp_path / "551c5587.jsonl.reset.2026-07-03T06-16-15.535Z"
+    backup.write_text(json.dumps({"role": "user", "content": "Reset backup is authoritative."}) + "\n", encoding="utf-8")
+
+    src_path, content, source_kind = session_logs_ingest._resolve_transcript_source(
+        session_id="551c5587",
+        session_file=None,
+        transcript_path=str(missing),
+    )
+
+    assert src_path == backup
+    assert source_kind == "transcript_path_reset_backup"
+    assert "Reset backup is authoritative." in str(content)
+
+
 def test_run_uses_reset_backup_from_missing_adapter_session_path(monkeypatch, tmp_path):
     adapter = TestAdapter(tmp_path)
     set_adapter(adapter)
