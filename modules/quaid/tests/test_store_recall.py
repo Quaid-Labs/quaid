@@ -18433,6 +18433,46 @@ class TestRecallFastHookInjectContract:
         assert attached[0]["id"] == work.id
         assert "Actual Owner --spouse_of--> Actual Partner --sibling_of--> Terminal Sibling" in attached[0]["graph_path"]
 
+    def test_graph_aware_recall_does_not_reanchor_to_partial_relation_chain(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _ = _make_graph(tmp_path)
+        contaminated_owner = mg.Node.create("Person", "Contaminated Owner")
+        partial_owner = mg.Node.create("Person", "Partial Owner")
+        partner = mg.Node.create("Person", "Only Partner")
+        wrong_fact = mg.Node.create("Fact", "Only Partner has an unrelated note")
+        for node in (contaminated_owner, partial_owner, partner, wrong_fact):
+            graph.add_node(node, embed=False)
+        graph.add_edge(mg.Edge.create(partial_owner.id, partner.id, "spouse_of"))
+        graph.add_edge(mg.Edge.create(partner.id, wrong_fact.id, "has_fact"))
+
+        fake_cfg = SimpleNamespace(
+            users=SimpleNamespace(
+                identities={
+                    "contaminated-owner": SimpleNamespace(person_node_name="Contaminated Owner")
+                }
+            )
+        )
+
+        with patch.object(mg, "get_graph", return_value=graph), \
+             patch.object(mg, "_HAS_CONFIG", True), \
+             patch.object(mg, "_get_memory_config", return_value=fake_cfg), \
+             patch.object(mg, "extract_entities_from_text", return_value=[]), \
+             patch.object(mg, "get_edge_keywords", return_value={
+                 "spouse_of": ["partner"],
+                 "sibling_of": ["brother"],
+             }):
+            payload = mg.graph_aware_recall(
+                "what does my partner's brother do",
+                owner_id="contaminated-owner",
+                limit=8,
+                graph_depth=2,
+                candidate_pool=[],
+            )
+
+        assert "owner_relation_chain_reanchored" not in payload["source_breakdown"]
+        assert payload["graph_results"] == []
+
     def test_relation_chain_sort_prefers_terminal_direct_fact_over_terminal_path_row(self):
         import datastore.memorydb.memory_graph as mg
 

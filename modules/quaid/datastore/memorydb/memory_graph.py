@@ -4263,6 +4263,8 @@ def _relation_chain_owner_anchor_fallback(
         if score > best_score:
             best_score = score
             best_node = node
+    if best_score[0] <= 0:
+        return None
     return best_node
 
 
