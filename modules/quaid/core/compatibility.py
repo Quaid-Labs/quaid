@@ -128,6 +128,8 @@ def _version_cmp_tuple(v: str) -> Tuple[int, int, int, int]:
 
 def _version_satisfies(version: str, range_spec: str) -> bool:
     """Check if a version satisfies a range like '>=2026.3.0 <2026.5.0'."""
+    if not str(version or "").strip() or not re.search(r"\d", str(version or "")):
+        return False
     v = _version_cmp_tuple(version)
     for constraint in range_spec.strip().split():
         constraint = constraint.strip()
@@ -495,6 +497,10 @@ class VersionWatcher:
         """Called on every daemon tick. Cheap mtime check, full check when needed."""
         # Lazy-resolve host info on first tick
         if self._host_info is None:
+            self._do_full_check()
+            return
+        if not self._host_info.binary_path or not re.search(r"\d", str(self._host_info.version or "")):
+            logger.info("Host version cache incomplete, running compatibility check")
             self._do_full_check()
             return
 

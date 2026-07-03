@@ -5192,7 +5192,7 @@ class TestKeychainFallback:
 class TestNotifyEdgeCases:
     def test_openclaw_host_info_parses_version_before_git_hash(self, monkeypatch):
         adapter = OpenClawAdapter()
-        monkeypatch.setattr(adapter, "_resolve_message_cli", lambda: "/opt/homebrew/bin/openclaw")
+        monkeypatch.setattr(adapter, "_resolve_host_binary", lambda: "/opt/homebrew/bin/openclaw")
         mock_result = MagicMock()
         mock_result.returncode = 0
         mock_result.stdout = "OpenClaw 2026.4.15 (abc123)\n"
@@ -5206,6 +5206,34 @@ class TestNotifyEdgeCases:
         assert info.binary_path == "/opt/homebrew/bin/openclaw"
         assert mock_run.call_args.kwargs["env"]["PATH"].startswith("/opt/homebrew/bin:")
 
+    def test_resolve_host_binary_uses_openclaw_from_path(self, tmp_path, monkeypatch):
+        binary = tmp_path / "bin" / "openclaw"
+        binary.parent.mkdir(parents=True)
+        binary.write_text("#!/bin/sh\n", encoding="utf-8")
+        monkeypatch.setattr("adaptors.openclaw.adapter.shutil.which", lambda name: str(binary) if name == "openclaw" else None)
+
+        assert OpenClawAdapter()._resolve_host_binary() == str(binary.resolve())
+
+    def test_openclaw_host_info_resolves_binary_with_sparse_path(self, tmp_path, monkeypatch):
+        homebrew_bin = tmp_path / "opt" / "homebrew" / "bin"
+        binary = homebrew_bin / "openclaw"
+        binary.parent.mkdir(parents=True)
+        binary.write_text("#!/bin/sh\n", encoding="utf-8")
+        monkeypatch.setenv("PATH", "/usr/bin:/bin")
+        adapter = OpenClawAdapter()
+        monkeypatch.setattr(adapter, "_resolve_message_cli", lambda: None)
+        monkeypatch.setattr(adapter, "_resolve_host_binary", lambda: str(binary.resolve()))
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = "OpenClaw 2026.6.11 (e085fa1)\n"
+        mock_result.stderr = ""
+
+        with patch("adaptors.openclaw.adapter.subprocess.run", return_value=mock_result):
+            info = adapter.get_host_info()
+
+        assert info.version == "2026.6.11"
+        assert info.binary_path == str(binary.resolve())
+
     def test_openclaw_host_info_falls_back_to_package_json_when_cli_fails(self, tmp_path, monkeypatch):
         package_dir = tmp_path / "openclaw"
         package_dir.mkdir()
@@ -5217,7 +5245,7 @@ class TestNotifyEdgeCases:
         )
 
         adapter = OpenClawAdapter()
-        monkeypatch.setattr(adapter, "_resolve_message_cli", lambda: str(binary))
+        monkeypatch.setattr(adapter, "_resolve_host_binary", lambda: str(binary))
         mock_result = MagicMock()
         mock_result.returncode = 127
         mock_result.stdout = ""

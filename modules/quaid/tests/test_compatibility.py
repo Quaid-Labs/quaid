@@ -96,6 +96,10 @@ class TestSemver:
         assert _version_satisfies("2026.3", ">=2026.3.0")
         assert _version_satisfies("2026.3.0", "=2026.3")
 
+    def test_unknown_version_does_not_satisfy_numeric_ranges(self):
+        assert not _version_satisfies("unknown", "<2026.3.7")
+        assert not _version_satisfies("", ">=2026.3.0")
+
 
 class TestCircuitBreaker:
     def test_read_missing_file(self, tmp_path):
@@ -233,6 +237,32 @@ class TestEvaluateCompatibility:
         assert state.untested is True
         assert "Untested" in state.reason
 
+    def test_literal_unknown_version_reports_untested_not_incompatible(self):
+        info = HostInfo(platform="openclaw", version="unknown")
+        matrix = self._matrix(entries=[{
+            "host": "openclaw",
+            "host_range": "<2026.3.7",
+            "quaid_range": ">=0.2.0",
+            "status": "incompatible",
+            "message": "OpenClaw 2026.3.7 or later is required.",
+        }])
+        state = evaluate_compatibility(info, "0.2.15", matrix)
+        assert state.is_normal()
+        assert state.untested is True
+        assert "Untested" in state.reason
+
+    def test_openclaw_2026_6_reports_untested_when_matrix_has_no_entry(self):
+        info = HostInfo(platform="openclaw", version="2026.6.11")
+        matrix = self._matrix(entries=[{
+            "host": "openclaw",
+            "host_range": ">=2026.3.7 <=2026.5.2",
+            "quaid_range": ">=0.2.0",
+            "status": "compatible",
+        }])
+        state = evaluate_compatibility(info, "0.2.15", matrix)
+        assert state.is_normal()
+        assert state.untested is True
+
     def test_wrong_platform_reports_untested_by_default(self):
         info = HostInfo(platform="claude-code", version="2.1.72")
         matrix = self._matrix(entries=[{
@@ -294,6 +324,34 @@ class TestVersionWatcher:
         (tmp_path / "host-version.json").write_text("null", encoding="utf-8")
         watcher = VersionWatcher(data_dir=tmp_path, quaid_version="0.2.15")
         assert watcher._host_info is None
+
+    def test_incomplete_host_version_cache_triggers_full_check(self, tmp_path):
+        (tmp_path / "host-version.json").write_text(json.dumps({
+            "platform": "openclaw",
+            "version": "unknown",
+            "binary_path": None,
+            "last_full_check": time.time(),
+        }), encoding="utf-8")
+        write_circuit_breaker(tmp_path, CircuitBreakerState(
+            status=DEGRADED,
+            reason="Incompatible: openclaw unknown",
+            host_version="unknown",
+        ))
+        watcher = VersionWatcher(data_dir=tmp_path, quaid_version="0.2.15")
+        mock_adapter = MagicMock()
+        mock_adapter.get_host_info.return_value = HostInfo(
+            platform="openclaw",
+            version="2026.6.11",
+            binary_path=str(tmp_path / "openclaw"),
+        )
+
+        with patch("lib.adapter.get_adapter", return_value=mock_adapter), \
+             patch("core.compatibility.fetch_compatibility_matrix", return_value={"matrix": []}), \
+             patch.object(watcher, "_check_quaid_update"):
+            watcher.tick()
+
+        mock_adapter.get_host_info.assert_called_once()
+        assert read_circuit_breaker(tmp_path).is_normal()
 
     def test_mtime_change_triggers_check(self, tmp_path):
         # Create a fake binary

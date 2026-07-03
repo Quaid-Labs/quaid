@@ -374,6 +374,35 @@ class OpenClawAdapter(QuaidAdapter):
                 return resolved
         return None
 
+    def _resolve_host_binary(self) -> Optional[str]:
+        """Resolve the OpenClaw host binary for compatibility checks.
+
+        Compatibility detection should not depend on notification routing env
+        such as QUAID_MESSAGE_CLI. Daemons launched with a sparse PATH still
+        need to locate the installed host binary so version checks can recover
+        after OpenClaw upgrades.
+        """
+        candidates = [
+            shutil.which("openclaw"),
+            "/opt/homebrew/bin/openclaw",
+            "/usr/local/bin/openclaw",
+            str(Path.home() / ".local" / "bin" / "openclaw"),
+        ]
+        for candidate in candidates:
+            if not candidate:
+                continue
+            requested = Path(candidate).expanduser()
+            try:
+                resolved = requested.resolve()
+            except (OSError, RuntimeError) as exc:
+                print(f"[adapter] Invalid OpenClaw host binary path {requested}: {exc}", file=sys.stderr)
+                if is_fail_hard_enabled():
+                    raise
+                continue
+            if resolved.is_file() and requested.name == "openclaw":
+                return str(resolved)
+        return None
+
     def _notify_subprocess_env(self) -> dict:
         """Build a notification subprocess env with a resilient PATH.
 
@@ -460,8 +489,8 @@ class OpenClawAdapter(QuaidAdapter):
         """Detect OpenClaw platform version and binary path."""
         from core.compatibility import HostInfo
 
-        # Find the OC binary
-        binary = self._resolve_message_cli()
+        # Find the OC binary independently of notification routing.
+        binary = self._resolve_host_binary()
         version = "unknown"
 
         if binary:
