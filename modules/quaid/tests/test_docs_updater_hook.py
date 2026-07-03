@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 from core.docs_updater_hook import (
     update_project_docs,
     _build_update_context,
+    _update_single_doc,
     _FAST_GATE_MAX_TOKENS,
 )
 from datastore.docsdb.updater import apply_edit_blocks
@@ -272,3 +273,31 @@ class TestUpdateProjectDocs:
                 update_project_docs(snapshots)
 
         assert doc_path.read_text(encoding="utf-8") == original
+
+    def test_project_md_prompt_excludes_registry_managed_marker_blocks(self, tmp_path):
+        doc_path = tmp_path / "PROJECT.md"
+        doc_path.write_text(
+            "# Project: Demo\n\n"
+            "### Registered Docs\n"
+            "<!-- BEGIN:REGISTERED_DOCS -->\n"
+            "| Document | Why Read It | Auto-Update |\n"
+            "|----------|-------------|-------------|\n"
+            "<!-- END:REGISTERED_DOCS -->\n",
+            encoding="utf-8",
+        )
+        captured = {}
+
+        def _fake_deep_reasoning(**kwargs):
+            captured["system_prompt"] = kwargs["system_prompt"]
+            return "NO_CHANGES_NEEDED", 0.1
+
+        with patch("lib.llm_clients.call_deep_reasoning", side_effect=_fake_deep_reasoning):
+            assert _update_single_doc(
+                doc_path,
+                "## Changes\n\nRegistered source docs changed.",
+                {"classification": "significant", "confidence": 0.8},
+                dry_run=False,
+            ) is False
+
+        assert "Do not edit those marker blocks" in captured["system_prompt"]
+        assert "Registered Docs" in captured["system_prompt"]

@@ -267,6 +267,15 @@ def _update_single_doc(
         "Be surgical — only edit what changed. "
         "If nothing needs updating, respond with: NO_CHANGES_NEEDED"
     )
+    if doc_name == "PROJECT.md":
+        system_prompt += (
+            "\n\nPROJECT.md contains registry-managed marker blocks such as "
+            "Project Home, Source Roots, In This Project Directory, External Files, "
+            "Registered Docs, and Recent Major Changes. Do not edit those marker "
+            "blocks. They are refreshed deterministically before and after this LLM "
+            "update. If only those sections need changes, respond with: "
+            "NO_CHANGES_NEEDED"
+        )
 
     user_message = (
         f"## Current {doc_name}:\n\n{current_doc}\n\n"

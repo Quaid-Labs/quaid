@@ -250,6 +250,11 @@ def _empty_project_update_metrics() -> Dict[str, Any]:
     }
 
 
+def _merge_registry_sync_counts(total: Dict[str, int], delta: Dict[str, Any]) -> None:
+    for key in ("registered", "unregistered", "project_md_refreshed"):
+        total[key] = int(total.get(key) or 0) + int(delta.get(key) or 0)
+
+
 def handle_project_docs_update_request(event: Dict[str, Any]) -> Dict[str, Any]:
     """Handle project-doc worker apply/index work through DocsDB authority."""
     payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
@@ -287,6 +292,15 @@ def handle_project_docs_update_request(event: Dict[str, Any]) -> Dict[str, Any]:
     from core.docs_updater_hook import update_project_docs
     from core.project_registry import get_project, get_project_raw
 
+    entry: Dict[str, Any] = {}
+    if not dry_run:
+        entry = get_project_raw(project) or get_project(project)
+        if not entry:
+            raise KeyError(f"Project not found: {project}")
+        # Refresh PROJECT.md registry-managed sections before the LLM sees the
+        # document. Those marker blocks are deterministic, not LLM-owned.
+        _merge_registry_sync_counts(registry_sync, _sync_visible_project_docs_registry(project, dict(entry)))
+
     if snapshots or project_log_entries or request:
         metrics = update_project_docs(
             list(snapshots),
@@ -296,10 +310,7 @@ def handle_project_docs_update_request(event: Dict[str, Any]) -> Dict[str, Any]:
         )
 
     if not dry_run:
-        entry = get_project_raw(project) or get_project(project)
-        if not entry:
-            raise KeyError(f"Project not found: {project}")
-        registry_sync = _sync_visible_project_docs_registry(project, dict(entry))
+        _merge_registry_sync_counts(registry_sync, _sync_visible_project_docs_registry(project, dict(entry)))
         try:
             from core.project_docs import PROJECT_LOG
 

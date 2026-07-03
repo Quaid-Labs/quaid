@@ -706,7 +706,10 @@ def test_execute_update_once_snapshots_applies_indexes_and_advances_cursors(proj
         assert canonical_path == str(Path(entry["canonical_path"]))
         assert root_docs == {"PROJECT.md", "TOOLS.md", "AGENTS.md"}
         assert protected_names == {"PROJECT.log"}
-        return {"registered": 3, "unregistered": 1, "project_md_refreshed": 1}
+        if calls == ["sync_registry"]:
+            return {"registered": 3, "unregistered": 1, "project_md_refreshed": 1}
+        assert calls == ["sync_registry", "update_docs", "sync_registry"]
+        return {"registered": 0, "unregistered": 0, "project_md_refreshed": 1}
 
     def _update_registered_docs(*args, **kwargs):
         calls.append("update_registered_docs")
@@ -727,16 +730,17 @@ def test_execute_update_once_snapshots_applies_indexes_and_advances_cursors(proj
     assert result["indexed_docs"] == 2
     assert result["indexed_project_logs"] == 1
     assert result["snapshot"]["commit_hash"]
-    assert calls == ["update_docs", "sync_registry", "update_registered_docs", "index_project_logs"]
+    assert calls == ["sync_registry", "update_docs", "sync_registry", "update_registered_docs", "index_project_logs"]
     update_docs.assert_called_once()
     assert update_docs.call_args.kwargs["force_project"] == "demo"
     assert update_docs.call_args.kwargs["extraction_result"]["project_logs"]["demo"]
-    sync_registry.assert_called_once_with(
-        "demo",
-        str(Path(entry["canonical_path"])),
-        root_docs={"PROJECT.md", "TOOLS.md", "AGENTS.md"},
-        protected_names={"PROJECT.log"},
-    )
+    assert sync_registry.call_count == 2
+    for call in sync_registry.call_args_list:
+        assert call.args == ("demo", str(Path(entry["canonical_path"])))
+        assert call.kwargs == {
+            "root_docs": {"PROJECT.md", "TOOLS.md", "AGENTS.md"},
+            "protected_names": {"PROJECT.log"},
+        }
     update_registered.assert_called_once_with(
         project="demo",
         dry_run=False,
@@ -753,7 +757,7 @@ def test_execute_update_once_snapshots_applies_indexes_and_advances_cursors(proj
     assert state["project_log_offset"] == project_log.stat().st_size
     assert state["last_indexed_docs"] == 2
     assert state["last_indexed_project_logs"] == 1
-    assert state["last_registry_sync"] == {"registered": 3, "unregistered": 1, "project_md_refreshed": 1}
+    assert state["last_registry_sync"] == {"registered": 3, "unregistered": 1, "project_md_refreshed": 2}
     assert state["last_metrics"]["docs_updated"] == 1
 
 
