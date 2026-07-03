@@ -11,6 +11,7 @@ See docs/PROJECT-SYSTEM-SPEC.md#extraction-event-integration.
 """
 
 import logging
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -143,6 +144,53 @@ def _unmatched_edit_blocks(doc_text: str, edits: List[str]) -> List[Dict[str, st
             parsed["index"] = str(index)
             unmatched.append(parsed)
     return unmatched
+
+
+def _normalize_heading(value: str) -> str:
+    return str(value or "").strip().lstrip("#").strip().casefold()
+
+
+def _apply_project_md_empty_section_edits(
+    doc_text: str,
+    edits: List[str],
+) -> tuple[str, List[str], int]:
+    updated = doc_text
+    remaining = []
+    applied = 0
+
+    for edit_block in edits:
+        parsed = _parse_edit_block_fields(edit_block)
+        if parsed["old"] != "(empty)" or not parsed["section"].strip() or not parsed["new"].strip():
+            remaining.append(edit_block)
+            continue
+
+        section_name = _normalize_heading(parsed["section"])
+        match = None
+        for candidate in re.finditer(r"^(#{1,6})[ \t]+(.+?)[ \t]*\n", updated, flags=re.MULTILINE):
+            if _normalize_heading(candidate.group(2)) == section_name:
+                match = candidate
+                break
+        if match is None:
+            remaining.append(edit_block)
+            continue
+
+        level = len(match.group(1))
+        next_heading = re.search(
+            rf"^#{{1,{level}}}[ \t]+.+?[ \t]*\n",
+            updated[match.end():],
+            flags=re.MULTILINE,
+        )
+        content_start = match.end()
+        content_end = len(updated) if next_heading is None else content_start + next_heading.start()
+        if updated[content_start:content_end].strip():
+            remaining.append(edit_block)
+            continue
+
+        replacement = "\n" + parsed["new"].strip() + "\n\n"
+        updated = updated[:content_start] + replacement + updated[content_end:]
+        applied += 1
+
+    return updated, remaining, applied
 
 
 def update_project_docs(
@@ -400,7 +448,9 @@ def _update_single_doc(
             "Registered Docs, and Recent Major Changes. Do not edit those marker "
             "blocks. They are refreshed deterministically before and after this LLM "
             "update. If only those sections need changes, respond with: "
-            "NO_CHANGES_NEEDED"
+            "NO_CHANGES_NEEDED\n\n"
+            "For editable PROJECT.md sections that are truly empty, use OLD: (empty). "
+            "Do not use OLD: (empty) when the section already contains text."
         )
 
     user_message = (
@@ -428,7 +478,6 @@ def _update_single_doc(
         return False
 
     # Parse and apply edits using the shared edit block parser
-    import re
     edits = re.findall(r'<<<EDIT\s*\n(.*?)>>>', response, re.DOTALL)
     if not edits:
         logger.info("[docs-hook] No valid edits parsed for %s", doc_name)
@@ -440,11 +489,20 @@ def _update_single_doc(
         return False
 
     from datastore.docsdb.updater import apply_edit_blocks
-    updated, applied, unmatched = apply_edit_blocks(current_doc, edits)
+    pre_applied = 0
+    if doc_name == "PROJECT.md":
+        current_for_regular_edits, edits, pre_applied = _apply_project_md_empty_section_edits(
+            current_doc,
+            edits,
+        )
+    else:
+        current_for_regular_edits = current_doc
+    updated, applied, unmatched = apply_edit_blocks(current_for_regular_edits, edits)
+    applied += pre_applied
 
     if unmatched:
         message = f"{unmatched} edit block(s) did not match {doc_name} content"
-        for failed in _unmatched_edit_blocks(current_doc, edits):
+        for failed in _unmatched_edit_blocks(current_for_regular_edits, edits):
             logger.warning(
                 "[docs-hook] Unmatched edit block for %s #%s SECTION=%r OLD=%r NEW=%r",
                 doc_name,

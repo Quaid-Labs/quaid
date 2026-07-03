@@ -319,6 +319,92 @@ class TestUpdateProjectDocs:
         assert "Unmatched edit block for PROJECT.md #1" in caplog.text
         assert "Failed to update" in caplog.text
 
+    def test_project_md_empty_section_sentinel_applies_under_fail_hard(self, tmp_path):
+        project_dir = tmp_path / "projects" / "my-app"
+        project_dir.mkdir(parents=True)
+        doc_path = project_dir / "PROJECT.md"
+        doc_path.write_text(
+            "# Project: Demo\n\n"
+            "## What This Is\n"
+            "Demo project.\n\n"
+            "## Key Constraints and Decisions\n\n"
+            "## Where To Learn More\n",
+            encoding="utf-8",
+        )
+        snapshots = [{
+            "project": "my-app",
+            "is_initial": False,
+            "diff": "diff --git a/api.py b/api.py\n+def demo(): pass",
+            "changes": [{"status": "M", "path": "api.py", "old_path": None}],
+        }]
+        response = (
+            "<<<EDIT\n"
+            "SECTION: Key Constraints and Decisions\n"
+            "OLD: (empty)\n"
+            "NEW: - Not for production use; livetest fixture only.\n"
+            ">>>\n"
+            "<<<SUMMARY: captured livetest constraint >>>"
+        )
+
+        with patch("datastore.docsdb.updater.classify_doc_change") as mock_classify, \
+             patch("core.project_registry.get_project", return_value={"canonical_path": str(project_dir)}), \
+             patch("core.docs_updater_hook.is_fail_hard_enabled", return_value=True), \
+             patch("lib.llm_clients.call_deep_reasoning", return_value=(response, 0.1)):
+            mock_classify.return_value = {
+                "classification": "significant",
+                "confidence": 0.8,
+                "reasons": ["clear doc update"],
+            }
+
+            metrics = update_project_docs(snapshots)
+
+        content = doc_path.read_text(encoding="utf-8")
+        assert metrics["docs_updated"] == 1
+        assert "- Not for production use; livetest fixture only." in content
+        assert "## Key Constraints and Decisions\n\n- Not for production use" in content
+
+    def test_project_md_empty_section_sentinel_rejects_nonempty_section_under_fail_hard(
+        self, tmp_path
+    ):
+        project_dir = tmp_path / "projects" / "my-app"
+        project_dir.mkdir(parents=True)
+        doc_path = project_dir / "PROJECT.md"
+        original = (
+            "# Project: Demo\n\n"
+            "## Key Constraints and Decisions\n"
+            "- Existing constraint.\n\n"
+            "## Where To Learn More\n"
+        )
+        doc_path.write_text(original, encoding="utf-8")
+        snapshots = [{
+            "project": "my-app",
+            "is_initial": False,
+            "diff": "diff --git a/api.py b/api.py\n+def demo(): pass",
+            "changes": [{"status": "M", "path": "api.py", "old_path": None}],
+        }]
+        response = (
+            "<<<EDIT\n"
+            "SECTION: Key Constraints and Decisions\n"
+            "OLD: (empty)\n"
+            "NEW: - Replacement should not apply.\n"
+            ">>>"
+        )
+
+        with patch("datastore.docsdb.updater.classify_doc_change") as mock_classify, \
+             patch("core.project_registry.get_project", return_value={"canonical_path": str(project_dir)}), \
+             patch("core.docs_updater_hook.is_fail_hard_enabled", return_value=True), \
+             patch("lib.llm_clients.call_deep_reasoning", return_value=(response, 0.1)):
+            mock_classify.return_value = {
+                "classification": "significant",
+                "confidence": 0.8,
+                "reasons": ["clear doc update"],
+            }
+
+            with pytest.raises(RuntimeError, match="did not match PROJECT.md content"):
+                update_project_docs(snapshots)
+
+        assert doc_path.read_text(encoding="utf-8") == original
+
     def test_project_md_managed_marker_edit_is_ignored_under_fail_hard(self, tmp_path, caplog):
         project_dir = tmp_path / "projects" / "my-app"
         project_dir.mkdir(parents=True)
