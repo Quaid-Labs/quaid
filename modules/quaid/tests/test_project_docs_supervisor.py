@@ -1281,7 +1281,7 @@ def test_requested_janitor_run_accumulates_exit_codes_across_polls(monkeypatch, 
     assert payload["exit_codes"] == {"alpha": 0, "beta": 0}
 
 
-def test_requested_janitor_run_fails_when_child_checkpoint_failed(monkeypatch, tmp_path):
+def test_requested_janitor_run_accepts_zero_exit_when_child_checkpoint_failed(monkeypatch, tmp_path):
     from core import project_docs, project_docs_supervisor as supervisor
 
     class _DoneProc:
@@ -1305,9 +1305,9 @@ def test_requested_janitor_run_fails_when_child_checkpoint_failed(monkeypatch, t
 
     assert active is None
     payload = project_docs.read_janitor_request()
-    assert payload["status"] == "failed"
+    assert payload["status"] == "completed"
     assert payload["exit_codes"] == {"alpha": 0}
-    assert payload["errors"] == ["instance alpha janitor checkpoint status=failed"]
+    assert payload["errors"] == []
 
 
 def test_requested_janitor_run_raises_on_worker_failure_when_failhard(monkeypatch, tmp_path, caplog):
@@ -1339,7 +1339,7 @@ def test_requested_janitor_run_raises_on_worker_failure_when_failhard(monkeypatc
     assert payload["errors"] == ["instance alpha janitor exited rc=1"]
 
 
-def test_requested_janitor_run_fails_when_child_checkpoint_still_running(monkeypatch, tmp_path):
+def test_requested_janitor_run_accepts_zero_exit_when_child_checkpoint_still_running(monkeypatch, tmp_path):
     from core import project_docs, project_docs_supervisor as supervisor
 
     class _DoneProc:
@@ -1363,12 +1363,12 @@ def test_requested_janitor_run_fails_when_child_checkpoint_still_running(monkeyp
 
     assert active is None
     payload = project_docs.read_janitor_request()
-    assert payload["status"] == "failed"
+    assert payload["status"] == "completed"
     assert payload["exit_codes"] == {"alpha": 0}
-    assert payload["errors"] == ["instance alpha janitor checkpoint status=running"]
+    assert payload["errors"] == []
 
 
-def test_requested_janitor_run_fails_when_child_checkpoint_missing(monkeypatch, tmp_path):
+def test_requested_janitor_run_accepts_zero_exit_when_child_checkpoint_missing(monkeypatch, tmp_path):
     from core import project_docs, project_docs_supervisor as supervisor
 
     class _DoneProc:
@@ -1390,12 +1390,12 @@ def test_requested_janitor_run_fails_when_child_checkpoint_missing(monkeypatch, 
 
     assert active is None
     payload = project_docs.read_janitor_request()
-    assert payload["status"] == "failed"
+    assert payload["status"] == "completed"
     assert payload["exit_codes"] == {"alpha": 0}
-    assert payload["errors"] == ["instance alpha janitor checkpoint missing"]
+    assert payload["errors"] == []
 
 
-def test_requested_janitor_run_rejects_zero_exit_with_stale_dry_run_stats(monkeypatch, tmp_path):
+def test_requested_janitor_run_accepts_zero_exit_with_stale_dry_run_stats(monkeypatch, tmp_path):
     from core import project_docs, project_docs_supervisor as supervisor
 
     class _DoneProc:
@@ -1436,9 +1436,9 @@ def test_requested_janitor_run_rejects_zero_exit_with_stale_dry_run_stats(monkey
 
     assert active is None
     payload = project_docs.read_janitor_request()
-    assert payload["status"] == "failed"
+    assert payload["status"] == "completed"
     assert payload["exit_codes"] == {"alpha": 0}
-    assert payload["errors"] == ["instance alpha janitor stats came from dry-run"]
+    assert payload["errors"] == []
 
 
 def test_running_janitor_request_recovers_from_persisted_dead_worker(monkeypatch, tmp_path):
@@ -1515,11 +1515,11 @@ def test_janitor_checkpoint_status_raises_missing_checkpoint_when_failhard(monke
 def test_requested_janitor_run_writes_failed_status_before_failhard_reraise(monkeypatch, tmp_path):
     from core import project_docs, project_docs_supervisor as supervisor
 
-    class _DoneProc:
+    class _FailedProc:
         pid = 101
 
         def poll(self):
-            return 0
+            return 1
 
     monkeypatch.setenv("QUAID_HOME", str(tmp_path))
     monkeypatch.setattr(supervisor, "quaid_home", lambda: tmp_path)
@@ -1527,16 +1527,16 @@ def test_requested_janitor_run_writes_failed_status_before_failhard_reraise(monk
     monkeypatch.setattr(supervisor.project_docs, "reap_child_processes", lambda: 0)
 
     request = project_docs.request_janitor_run(reason="pytest", requested_by="pytest")
-    workers: dict[str, subprocess.Popen] = {"alpha": _DoneProc()}
+    workers: dict[str, subprocess.Popen] = {"alpha": _FailedProc()}
     active = {"request_id": request["request_id"], "errors": [], "exit_codes": {}}
 
-    with pytest.raises(RuntimeError, match="instance alpha janitor checkpoint missing"):
+    with pytest.raises(RuntimeError, match="instance alpha janitor exited rc=1"):
         supervisor._maintain_on_demand_janitor_request(active, {}, workers)
 
     payload = project_docs.read_janitor_request()
     assert payload["status"] == "failed"
-    assert payload["exit_codes"] == {"alpha": 0}
-    assert payload["errors"] == ["instance alpha janitor checkpoint missing"]
+    assert payload["exit_codes"] == {"alpha": 1}
+    assert payload["errors"] == ["instance alpha janitor exited rc=1"]
 
 
 def test_start_janitor_worker_refuses_disabled_instance(monkeypatch):

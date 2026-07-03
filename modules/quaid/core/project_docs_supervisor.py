@@ -646,6 +646,8 @@ def _finalize_janitor_request_payload(
         if code is not None and code != 0:
             final_errors.append(f"instance {instance} janitor exited rc={code}")
             continue
+        if code == 0:
+            continue
         if code is None and int(worker_pids.get(instance, 0) or 0) > 0:
             final_errors.append(
                 f"instance {instance} janitor worker pid={int(worker_pids[instance])} is no longer active"
