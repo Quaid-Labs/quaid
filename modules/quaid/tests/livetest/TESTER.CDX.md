@@ -11,9 +11,9 @@ Milestone files reference these; export them once at session start:
 ```bash
 export LANE=cdx
 export LANE_UPPER=CDX
-export INSTANCE=codex-private-tmp-cdx-livetest
+export INSTANCE=codex-cdx-livetest-b89008986acd
 export QCLI=~/.quaid/plugins/quaid/quaid
-export SILO=~/.quaid/instances/codex-private-tmp-cdx-livetest
+export SILO=~/.quaid/instances/codex-cdx-livetest-b89008986acd
 export LIFECYCLE="/new"  # CDX has no /clear or /compact hook
 ```
 
@@ -382,14 +382,16 @@ writes files without creating a project), report as ISSUE — do not rule
 PASS-WITH-NOTE.
 
 ### M5 Part A — Multi-Agent Silo Verification
-CDX uses `codex-private-tmp-cdx-livetest` as the instance ID (set via `QUAID_INSTANCE`).
-Runtime silo is at `~/.quaid/instances/codex-private-tmp-cdx-livetest/` (hidden).
+CDX uses the path-derived instance ID for `/tmp/cdx-livetest`:
+`codex-cdx-livetest-b89008986acd` (set via `QUAID_INSTANCE`). The adapter
+derives the same ID after resolving the project dir symlink to `/private/tmp`.
+Runtime silo is at `~/.quaid/instances/codex-cdx-livetest-b89008986acd/` (hidden).
 Follow the CDX Part A procedure in `livetest-guide/M5.md`. Never SKIP — all three
 platforms run M5.
 
 ### M5 Part B — Multi-Instance Verification
 CDX has no `make_instance` — isolation is verified by canary test between two
-`QUAID_INSTANCE` values (`codex-private-tmp-cdx-livetest` and `codex-m13test`).
+`QUAID_INSTANCE` values (`codex-cdx-livetest-b89008986acd` and `codex-m13test`).
 Follow the CDX Part B procedure in `livetest-guide/M5.md`. Never SKIP — all
 three platforms run M5.
 
@@ -417,9 +419,9 @@ p.parent.mkdir(parents=True, exist_ok=True)
 p.write_text(json.dumps(d, indent=2))
 print(\"capture.inactivityTimeoutMinutes=1 in global config\")
 PY
-  && QUAID_HOME=$HOME/.quaid QUAID_INSTANCE=codex-private-tmp-cdx-livetest \
+  && QUAID_HOME=$HOME/.quaid QUAID_INSTANCE=codex-cdx-livetest-b89008986acd \
   quaid daemon stop && sleep 2 && \
-  QUAID_HOME=$HOME/.quaid QUAID_INSTANCE=codex-private-tmp-cdx-livetest \
+  QUAID_HOME=$HOME/.quaid QUAID_INSTANCE=codex-cdx-livetest-b89008986acd \
   quaid daemon start'
 ```
 
@@ -429,7 +431,7 @@ PY
    context is loaded.
 2. From the coordinator side (do NOT ask the agent to do this), append a unique
    canary to the system-context markdown that the CDX system-context loader
-   reads (e.g., `~/.quaid/instances/codex-private-tmp-cdx-livetest/SOUL.md` —
+   reads (e.g., `~/.quaid/instances/codex-cdx-livetest-b89008986acd/SOUL.md` —
    pick the file that the platform's system-context injection actually
    includes). Same canary text as the main M16 procedure ("The office plant
    is named Bartholomew. It is a fiddle-leaf fig.").

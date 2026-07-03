@@ -667,6 +667,13 @@ shell. CC derives the instance from the transcript path â€” `/tmp/cc-livetest` â
 no effect on where facts are stored. For coordinator verification: always use
 `QUAID_INSTANCE=claude-code-cc-livetest-51aa91834f73 quaid recall <query>`.
 
+**CDX instance caveat:** CDX also uses the adapter's path-derived instance for
+its project directory. For the standard `/tmp/cdx-livetest` lane, the canonical
+instance is `codex-cdx-livetest-b89008986acd` after resolving macOS `/tmp` to
+`/private/tmp`. Do not substitute the legacy `codex-private-tmp-cdx-livetest`;
+that creates a setup-only ghost silo while hooks write to the canonical hashed
+runtime silo.
+
 **CC async extraction:** CC extraction fires asynchronously after `/exit` (not
 inline like OC). Tell CC testers to wait **at least 2 minutes** after exiting a
 session before checking recall or the DB. Checking immediately after `/exit` will

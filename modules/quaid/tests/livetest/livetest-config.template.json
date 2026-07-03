@@ -35,7 +35,7 @@
     },
     "cdx": {
       "enabled": true,
-      "instance_name": "codex-livetest",
+      "instance_name": "codex-cdx-livetest-b89008986acd",
       "project_dir": "/tmp/cdx-livetest"
     }
   },

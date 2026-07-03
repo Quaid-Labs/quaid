@@ -464,7 +464,8 @@ and emitted install status messages in the platform pane. Missing survey,
 ambiguous source, or silent install is a failure signal, not a pass. Do not
 paper over a silent installer by asking the platform agent to narrate progress.
 
-**CDX recall uses file browsing instead of Quaid** — Launch CDX with
-`QUAID_INSTANCE=<instance_name> codex --yolo` so the agent's shell environment
-inherits the instance identifier. Without it, autonomous `quaid recall` calls
-search the wrong silo.
+**CDX recall uses file browsing instead of Quaid** — Launch CDX with the
+path-derived instance identifier for the project directory, for example
+`QUAID_INSTANCE=codex-cdx-livetest-b89008986acd codex --yolo` from the standard
+`/tmp/cdx-livetest` lane. Without it, autonomous `quaid recall` calls search the
+wrong silo.

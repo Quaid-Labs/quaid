@@ -81,16 +81,48 @@ print(val)
 "
 }
 
+codex_instance_from_project_dir() {
+    python3 - "$1" <<'PYEOF'
+import hashlib
+import pathlib
+import re
+import sys
+
+project_dir = str(sys.argv[1] or "").strip()
+if not project_dir:
+    raise SystemExit("missing CDX project_dir")
+root = pathlib.Path(project_dir).expanduser().resolve()
+readable = re.sub(r"[^a-z0-9]+", "-", root.name.lower()).strip("-") or "project"
+digest = hashlib.sha256(str(root).encode("utf-8", "surrogatepass")).hexdigest()[:12]
+print(f"codex-{readable}-{digest}")
+PYEOF
+}
+
 REMOTE_HOST="$(read_config remote.host)"
 WORKSPACE="$(read_config remote.workspace)"
 OC_INSTANCE="$(read_config platforms.oc.instance_name)"
 CC_INSTANCE="$(read_config platforms.cc.instance_name)"
 CDX_INSTANCE="$(read_config platforms.cdx.instance_name)"
 CC_PROJECT_DIR="$(read_config platforms.cc.project_dir)"
+CDX_PROJECT_DIR="$(read_config platforms.cdx.project_dir)"
 
 if [[ -z "$REMOTE_HOST" || -z "$WORKSPACE" ]]; then
     echo "Error: remote.host and remote.workspace must be set in $CONFIG_PATH" >&2
     exit 1
+fi
+if [[ "$PLATFORM" == "all" || "$PLATFORM" == "cdx" ]]; then
+    if [[ -z "$CDX_PROJECT_DIR" ]]; then
+        echo "Error: platforms.cdx.project_dir must be set so CDX uses the adapter-derived instance" >&2
+        exit 1
+    fi
+    CDX_EXPECTED_INSTANCE="$(codex_instance_from_project_dir "$CDX_PROJECT_DIR")"
+    if [[ "$CDX_INSTANCE" != "$CDX_EXPECTED_INSTANCE" ]]; then
+        echo "Error: platforms.cdx.instance_name must match the path-derived Codex instance" >&2
+        echo "  project_dir: $CDX_PROJECT_DIR" >&2
+        echo "  expected   : $CDX_EXPECTED_INSTANCE" >&2
+        echo "  configured : ${CDX_INSTANCE:-<empty>}" >&2
+        exit 1
+    fi
 fi
 
 # --- Safety banner ---

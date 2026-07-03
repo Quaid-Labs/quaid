@@ -128,6 +128,23 @@ print(val)
 "
 }
 
+codex_instance_from_project_dir() {
+    python3 - "$1" <<'PYEOF'
+import hashlib
+import pathlib
+import re
+import sys
+
+project_dir = str(sys.argv[1] or "").strip()
+if not project_dir:
+    raise SystemExit("missing CDX project_dir")
+root = pathlib.Path(project_dir).expanduser().resolve()
+readable = re.sub(r"[^a-z0-9]+", "-", root.name.lower()).strip("-") or "project"
+digest = hashlib.sha256(str(root).encode("utf-8", "surrogatepass")).hexdigest()[:12]
+print(f"codex-{readable}-{digest}")
+PYEOF
+}
+
 REMOTE_HOST="$(read_config remote.host)"
 
 if [[ -z "$REMOTE_HOST" ]]; then
@@ -693,6 +710,25 @@ echo "========================================"
 echo ""
 
 ERRORS=0
+
+CDX_ENABLED_CONFIG="$(read_config platforms.cdx.enabled)"
+if [[ "$CDX_ENABLED_CONFIG" == "True" || "$CDX_ENABLED_CONFIG" == "true" ]]; then
+    CDX_PROJECT_DIR_CONFIG="$(read_config platforms.cdx.project_dir)"
+    CDX_INSTANCE_CONFIG="$(read_config platforms.cdx.instance_name)"
+    if [[ -z "$CDX_PROJECT_DIR_CONFIG" ]]; then
+        echo "  $FAIL  platforms.cdx.project_dir must be set so CDX uses the adapter-derived instance"
+        ERRORS=$((ERRORS + 1))
+    else
+        CDX_EXPECTED_INSTANCE="$(codex_instance_from_project_dir "$CDX_PROJECT_DIR_CONFIG")"
+        if [[ "$CDX_INSTANCE_CONFIG" != "$CDX_EXPECTED_INSTANCE" ]]; then
+            echo "  $FAIL  platforms.cdx.instance_name must match the path-derived Codex instance"
+            echo "         project_dir: $CDX_PROJECT_DIR_CONFIG"
+            echo "         expected   : $CDX_EXPECTED_INSTANCE"
+            echo "         configured : ${CDX_INSTANCE_CONFIG:-<empty>}"
+            ERRORS=$((ERRORS + 1))
+        fi
+    fi
+fi
 
 # --- Check 1: Remote ≠ local ---
 echo "[1/8] Verifying remote is not this machine..."
