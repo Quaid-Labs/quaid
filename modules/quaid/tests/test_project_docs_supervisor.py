@@ -569,6 +569,35 @@ def test_known_project_worker_exit_marks_active_request_failed_when_failopen(mon
     ]
 
 
+def test_known_project_worker_exit_marks_active_request_before_failhard_raise(monkeypatch):
+    from core import project_docs_supervisor as supervisor
+
+    recorded = []
+    known_workers = {"demo": 1234}
+    request = {"request_id": "req-1", "status": "pending"}
+
+    monkeypatch.setattr(supervisor.project_docs, "read_worker_pid", lambda _project: None)
+    monkeypatch.setattr(supervisor.project_docs, "read_update_request", lambda _project: request)
+    monkeypatch.setattr(
+        supervisor.project_docs,
+        "record_update_request_worker_exit",
+        lambda project, req, message: recorded.append((project, req, message)),
+    )
+    monkeypatch.setattr(supervisor, "_fail_hard_enabled", lambda: True)
+
+    with pytest.raises(RuntimeError, match="project docs worker for demo exited unexpectedly pid=1234"):
+        supervisor._handle_known_project_worker_exit("demo", known_workers)
+
+    assert known_workers == {}
+    assert recorded == [
+        (
+            "demo",
+            request,
+            "project docs worker for demo exited unexpectedly pid=1234",
+        )
+    ]
+
+
 def test_record_update_request_worker_exit_marks_request_failed(tmp_path, monkeypatch):
     from core import project_docs
 
