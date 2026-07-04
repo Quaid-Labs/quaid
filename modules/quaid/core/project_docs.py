@@ -1873,6 +1873,8 @@ def execute_update_once(project: str, *, request: Optional[Dict[str, Any]] = Non
                 except RuntimeError as exc:
                     if not _is_project_docs_edit_block_mismatch_error(exc):
                         raise
+                    if _fail_hard_enabled():
+                        raise
                     logger.error(
                         "Project docs update edit-block mismatch for %s request_id=%s: %s",
                         name,

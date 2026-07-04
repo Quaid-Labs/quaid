@@ -890,7 +890,7 @@ def test_execute_update_once_broker_failure_has_no_direct_fallback(project_env):
     assert state["last_error"] == "synthetic broker failure"
 
 
-def test_execute_update_once_records_project_md_edit_mismatch_without_worker_crash(project_env, caplog):
+def test_execute_update_once_records_project_md_edit_mismatch_when_fail_open(project_env, caplog):
     _tmp_path, src, _entry = project_env
     from core import project_docs
 
@@ -899,7 +899,7 @@ def test_execute_update_once_records_project_md_edit_mismatch_without_worker_cra
 
     caplog.set_level(logging.ERROR, logger="core.project_docs")
     with patch("core.project_docs._request_project_docs_update_via_broker", side_effect=mismatch), \
-         patch("core.project_docs._fail_hard_enabled", return_value=True):
+         patch("core.project_docs._fail_hard_enabled", return_value=False):
         result = project_docs.execute_update_once("demo")
 
     assert result["status"] == "error"
@@ -911,6 +911,23 @@ def test_execute_update_once_records_project_md_edit_mismatch_without_worker_cra
     assert state["status"] == "error"
     assert state["last_metrics"]["update_error"] == str(mismatch)
     assert "Project docs update edit-block mismatch for demo" in caplog.text
+
+
+def test_execute_update_once_raises_project_md_edit_mismatch_when_fail_hard(project_env):
+    _tmp_path, src, _entry = project_env
+    from core import project_docs
+
+    (src / "tool.py").write_text("print('edit mismatch')\n", encoding="utf-8")
+    mismatch = RuntimeError("1 edit block(s) did not match PROJECT.md content")
+
+    with patch("core.project_docs._request_project_docs_update_via_broker", side_effect=mismatch), \
+         patch("core.project_docs._fail_hard_enabled", return_value=True), \
+         pytest.raises(RuntimeError, match="1 edit block"):
+        project_docs.execute_update_once("demo")
+
+    state = project_docs.read_state("demo")
+    assert state["status"] == "error"
+    assert state["last_error"] == str(mismatch)
 
 
 def test_project_docs_poison_request_exhausts_retries_without_tight_loop(project_env, monkeypatch):
