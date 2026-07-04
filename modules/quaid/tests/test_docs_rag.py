@@ -177,6 +177,31 @@ def test_docs_rank_score_penalizes_non_english_root_overview_structurally():
     assert specific > overview
 
 
+def test_docs_rank_score_penalizes_project_md_subsection_over_source_anchor():
+    from datastore.docsdb.rag import _docs_query_terms, _docs_rank_score
+
+    query = "canela archive marker"
+    query_terms = _docs_query_terms(query)
+    generated_project_summary = _docs_rank_score(
+        query_terms,
+        query,
+        "/tmp/workspace/projects/demo/PROJECT.md",
+        "## 状態",
+        "- canela archive marker appears in generated project summary.",
+        1.0,
+    )
+    source_doc = _docs_rank_score(
+        query_terms,
+        query,
+        "/tmp/workspace/projects/demo/docs/examples.md",
+        "## Examples",
+        "send('canela archive marker: subscribed delivery')",
+        1.0,
+    )
+
+    assert source_doc > generated_project_summary
+
+
 def test_docs_scaffold_penalty_requires_managed_project_marker():
     from datastore.docsdb.rag import _docs_query_terms, _docs_scaffold_penalty
     from lib.project_templates import PROJECT_HOME_BEGIN

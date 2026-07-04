@@ -537,11 +537,16 @@ def _docs_is_root_overview_chunk(source_file: str, section_header: Optional[str]
     English heading labels, so non-English project overviews receive the same
     treatment as English ones.
     """
-    if Path(source_file or "").name.lower() not in _ROOT_OVERVIEW_FILES:
+    file_name = Path(source_file or "").name.lower()
+    if file_name not in _ROOT_OVERVIEW_FILES:
         return False
     header = str(section_header or "").strip()
     match = re.match(r"^(#{1,6})\s+\S", header)
-    return bool(match and len(match.group(1)) == 1)
+    if not match:
+        return False
+    if file_name == "project.md":
+        return True
+    return len(match.group(1)) == 1
 
 
 def _docs_rank_score(query_terms: List[str], query: str, source_file: str, section_header: Optional[str], content: str, similarity: float) -> float:
