@@ -21164,6 +21164,40 @@ class TestRecallLimitEdgeCases:
         assert payload["docs"]["chunks"][0]["content"].startswith("The backend uses Express")
         assert payload["docs"]["telemetry"]["resolved_project"] == "recipe-app"
 
+    def test_build_recall_json_payload_strips_per_row_recall_meta(self):
+        import datastore.memorydb.memory_graph as mg
+
+        row = {
+            "text": "Maya lives in South Austin",
+            "category": "fact",
+            "similarity": 0.91,
+            "_recall_meta": {"store_runs": [{"store": "vector", "debug": "x" * 8000}]},
+        }
+        meta = {"store_runs": [{"store": "vector", "debug": "x" * 8000}]}
+
+        payload = mg._build_recall_json_payload([row], meta=meta)
+
+        assert payload["meta"] == meta
+        assert "_recall_meta" not in payload["results"][0]
+        assert row["_recall_meta"] == meta
+
+    def test_recall_output_row_sanitizer_strips_transport_meta_without_mutating_input(self):
+        import datastore.memorydb.memory_graph as mg
+
+        row = {
+            "text": "Ari keeps the workshop ledger",
+            "category": "fact",
+            "similarity": 0.88,
+            "_recall_meta": {"selected_path": "fast", "debug": "x" * 8000},
+        }
+
+        output = mg._strip_recall_transport_meta_from_output_rows([row])
+
+        assert output == [
+            {"text": "Ari keeps the workshop ledger", "category": "fact", "similarity": 0.88}
+        ]
+        assert "_recall_meta" in row
+
     def test_build_docs_only_recall_json_payload_exposes_docs_as_results(self):
         from datastore.memorydb.memory_graph import _build_docs_only_recall_json_payload
 

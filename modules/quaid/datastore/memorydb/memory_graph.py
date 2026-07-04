@@ -7925,9 +7925,10 @@ def _build_recall_json_payload(
     graph_payload: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Build a machine-readable recall payload with a strict top-level contract."""
+    validated_results = _validate_recall_result_rows(results)
     payload: Dict[str, Any] = {
         "contract": "quaid.recall.v1",
-        "results": _validate_recall_result_rows(results),
+        "results": _strip_recall_transport_meta_from_output_rows(validated_results),
     }
     if isinstance(meta, dict):
         payload["meta"] = meta
@@ -15790,6 +15791,21 @@ def _attach_recall_meta(results: List[Dict[str, Any]], meta: Dict[str, Any]) -> 
         if isinstance(row, dict):
             row["_recall_meta"] = dict(meta)
     return results
+
+
+def _strip_recall_transport_meta_from_output_rows(rows: Any) -> Any:
+    """Remove internal recall transport metadata from public JSON result rows."""
+    if not isinstance(rows, list):
+        return rows
+    output: List[Any] = []
+    for row in rows:
+        if isinstance(row, dict) and "_recall_meta" in row:
+            clean = dict(row)
+            clean.pop("_recall_meta", None)
+            output.append(clean)
+        else:
+            output.append(row)
+    return output
 
 
 def _print_recall_results(results: List[Dict[str, Any]]) -> None:
@@ -25750,7 +25766,7 @@ if __name__ == "__main__":
                 return_meta=True,
             )
             if args.json:
-                print(json.dumps({"results": results, "meta": meta}))
+                print(json.dumps({"results": _strip_recall_transport_meta_from_output_rows(results), "meta": meta}))
             else:
                 _print_recall_results(results)
 
