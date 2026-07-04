@@ -135,7 +135,7 @@ import pathlib
 import re
 import sys
 
-project_dir = str(sys.argv[1] or "").strip()
+project_dir = str(sys.argv[1] if len(sys.argv) > 1 else "").strip()
 if not project_dir:
     raise SystemExit("missing CDX project_dir")
 root = pathlib.Path(project_dir).expanduser().resolve()
@@ -728,7 +728,7 @@ import pathlib
 import re
 import sys
 
-project_dir = str(sys.argv[1] or "").strip()
+project_dir = str(sys.argv[1] if len(sys.argv) > 1 else "").strip()
 if not project_dir:
     raise SystemExit("missing CDX project_dir")
 
@@ -1380,6 +1380,8 @@ else
     echo "  [5/8] wipe complete"
 fi
 
+# Codex project trust is independent of wiping. The installer runs from the dev
+# checkout, but the CDX lane launches from platforms.cdx.project_dir after M0.
 ensure_remote_codex_project_trust "[5a/8] Trusting CDX project paths in Codex config..."
 abort_if_errors "Preflight"
 
