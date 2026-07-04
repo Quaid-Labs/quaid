@@ -1758,6 +1758,11 @@ def _request_project_docs_update_via_broker(
     return _validate_project_docs_update_broker_response(response)
 
 
+def _is_project_docs_edit_block_mismatch_error(exc: BaseException) -> bool:
+    message = str(exc or "")
+    return "edit block(s) did not match" in message and "PROJECT.md content" in message
+
+
 def _notify_project_docs_update(
     project: str,
     result: Dict[str, Any],
@@ -1856,14 +1861,32 @@ def execute_update_once(project: str, *, request: Optional[Dict[str, Any]] = Non
                     )
                 if not dry_run and not should_apply_docs:
                     merge_progress(name, "index_docs", "indexing registered project docs")
-                broker_result = _request_project_docs_update_via_broker(
-                    name,
-                    snapshots=snapshots,
-                    project_log_entries=log_entries,
-                    project_log_offset=log_offset,
-                    request=request,
-                    dry_run=dry_run,
-                )
+                try:
+                    broker_result = _request_project_docs_update_via_broker(
+                        name,
+                        snapshots=snapshots,
+                        project_log_entries=log_entries,
+                        project_log_offset=log_offset,
+                        request=request,
+                        dry_run=dry_run,
+                    )
+                except RuntimeError as exc:
+                    if not _is_project_docs_edit_block_mismatch_error(exc):
+                        raise
+                    logger.error(
+                        "Project docs update edit-block mismatch for %s request_id=%s: %s",
+                        name,
+                        request_id or "-",
+                        exc,
+                    )
+                    metrics["errors"] = int(metrics.get("errors", 0) or 0) + 1
+                    metrics["update_error"] = str(exc)
+                    broker_result = {
+                        "metrics": metrics,
+                        "registry_sync": registry_sync,
+                        "indexed_docs": 0,
+                        "indexed_project_logs": 0,
+                    }
                 metrics = broker_result["metrics"]
                 if project_log_queue_metrics.get("errors"):
                     metrics["errors"] = int(metrics.get("errors", 0) or 0) + int(project_log_queue_metrics.get("errors", 0) or 0)
