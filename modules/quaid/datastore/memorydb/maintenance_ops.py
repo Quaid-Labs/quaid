@@ -336,6 +336,36 @@ def _looks_like_relationship_backfill_fact(text: str, attrs: Optional[Dict[str, 
 
     return True
 
+
+def _edge_backfill_checked(attrs: Optional[Dict[str, Any]]) -> bool:
+    try:
+        return int((attrs or {}).get("edge_backfill_check_version") or 0) >= EDGE_BACKFILL_CHECK_VERSION
+    except Exception:
+        return False
+
+
+def _mark_edge_backfill_checked(graph: "MemoryGraph", fact_id: str, attrs: Dict[str, Any], edges_returned: int) -> None:
+    updated = dict(attrs or {})
+    updated["edge_backfill_check_version"] = EDGE_BACKFILL_CHECK_VERSION
+    updated["edge_backfill_checked_at"] = _quaid_now().isoformat()
+    updated["edge_backfill_edges_returned"] = int(edges_returned)
+    with graph._get_conn() as conn:
+        conn.execute(
+            "UPDATE nodes SET attributes = ?, updated_at = ? WHERE id = ?",
+            (json.dumps(updated, sort_keys=True), _quaid_now().isoformat(), fact_id),
+        )
+
+
+def _link_edge_to_backfilled_fact(graph: "MemoryGraph", edge_id: str, fact_id: str) -> None:
+    if not edge_id or not fact_id:
+        return
+    with graph._get_conn() as conn:
+        conn.execute(
+            "UPDATE edges SET source_fact_id = COALESCE(source_fact_id, ?) WHERE id = ?",
+            (fact_id, edge_id),
+        )
+
+
 def _default_owner_id() -> str:
     """Get the default owner ID from config."""
     try:
@@ -2364,6 +2394,7 @@ EDGE_BATCH_SIZE = 25  # Safety cap for edge extraction batch size
 # Compound relationship facts need enough room for the full JSON schema per
 # fact; 300/fact deterministically truncated two-fact CDX edge-backfill batches.
 EDGE_BACKFILL_OUTPUT_TOKENS_PER_FACT = 600
+EDGE_BACKFILL_CHECK_VERSION = 1
 
 _EDGE_BATCH_RETRYABLE_ERROR_MARKERS = frozenset(
     {
@@ -2669,10 +2700,13 @@ def backfill_edges(
     filtered_out = 0
     for row in rows:
         attrs = _load_node_attributes_blob(row["attributes"] if "attributes" in row.keys() else None)
+        if _edge_backfill_checked(attrs):
+            filtered_out += 1
+            continue
         if not _looks_like_relationship_backfill_fact(row["name"], attrs):
             filtered_out += 1
             continue
-        facts.append({"id": row["id"], "text": row["name"], "owner_id": row["owner_id"]})
+        facts.append({"id": row["id"], "text": row["name"], "owner_id": row["owner_id"], "attributes": attrs})
         if len(facts) >= max_facts:
             break
     result["found"] = len(facts)
@@ -2708,6 +2742,7 @@ def backfill_edges(
         edge_lists = batch_extract_edges(batch, graph, metrics, relations_list)
 
         for fact, edges in zip(batch, edge_lists):
+            fact_had_errors = False
             for edge in edges:
                 try:
                     _owner = owner_id or fact.get("owner_id") or _default_owner_id()
@@ -2718,6 +2753,7 @@ def backfill_edges(
                         owner_id=_owner,
                         source_fact_id=edge["fact_id"],
                     )
+                    _link_edge_to_backfilled_fact(graph, str(edge_result.get("edge_id") or ""), str(fact["id"]))
                     if edge_result.get("status") == "created":
                         result["edges_created"] += 1
                         print(
@@ -2725,8 +2761,17 @@ def backfill_edges(
                             f" (from: {fact['text'][:60]})"
                         )
                 except Exception as e:
+                    fact_had_errors = True
                     result["errors"] += 1
                     print(f"  [edge_backfill] error creating edge: {e}")
+            if not fact_had_errors:
+                try:
+                    _mark_edge_backfill_checked(graph, str(fact["id"]), fact.get("attributes") or {}, len(edges))
+                except Exception as exc:
+                    logger.warning("edge_backfill failed to mark fact %s as checked: %s", fact.get("id"), exc)
+                    if is_fail_hard_enabled():
+                        raise
+                    result["errors"] += 1
 
     return result
 

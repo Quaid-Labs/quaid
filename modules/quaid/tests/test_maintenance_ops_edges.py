@@ -446,8 +446,11 @@ def test_backfill_edges_does_not_filter_candidates_by_english_phrases():
 
     class _Conn:
         def execute(self, sql, params=()):
-            captured["sql"] = sql
-            captured["params"] = params
+            if "SELECT n.id" in sql:
+                captured["sql"] = sql
+                captured["params"] = params
+            elif "UPDATE nodes SET attributes" in sql:
+                captured.setdefault("updates", []).append((sql, params))
             return _DummyResult(rows)
 
     class _Graph:
@@ -476,10 +479,88 @@ def test_backfill_edges_does_not_filter_candidates_by_english_phrases():
     assert "GLOB" not in captured["sql"]
     assert captured["params"] == (200,)
     assert captured["facts"] == [
-        {"id": "noise-1", "text": "Conan O'Brien Needs a Friend — funny, light, great for runs.", "owner_id": "default"},
-        {"id": "fact-1", "text": "Maya lives with her partner David.", "owner_id": "default"},
-        {"id": "fact-2", "text": "Sophie está casada con Marc.", "owner_id": "default"},
+        {
+            "id": "noise-1",
+            "text": "Conan O'Brien Needs a Friend — funny, light, great for runs.",
+            "owner_id": "default",
+            "attributes": {},
+        },
+        {
+            "id": "fact-1",
+            "text": "Maya lives with her partner David.",
+            "owner_id": "default",
+            "attributes": {},
+        },
+        {
+            "id": "fact-2",
+            "text": "Sophie está casada con Marc.",
+            "owner_id": "default",
+            "attributes": {},
+        },
     ]
+    assert len(captured["updates"]) == 3
+
+
+def test_backfill_edges_marks_no_edge_llm_results_as_checked():
+    stored_attrs = {}
+
+    class _DummyResult:
+        def __init__(self, rows=None):
+            self._rows = rows or []
+
+        def fetchall(self):
+            return self._rows
+
+    class _Conn:
+        def execute(self, sql, params=()):
+            if "SELECT n.id" in sql:
+                attrs = stored_attrs.get("fact-1", {})
+                return _DummyResult(
+                    [
+                        {
+                            "id": "fact-1",
+                            "name": "The office plant is named Bartholomew.",
+                            "owner_id": "default",
+                            "attributes": maintenance_ops.json.dumps(attrs),
+                        }
+                    ]
+                )
+            if "UPDATE nodes SET attributes" in sql:
+                attrs_json, _updated_at, fact_id = params
+                stored_attrs[fact_id] = maintenance_ops.json.loads(attrs_json)
+                return _DummyResult()
+            raise AssertionError(f"unexpected SQL: {sql}")
+
+    class _Graph:
+        @contextmanager
+        def _get_conn(self):
+            yield _Conn()
+
+    with patch.object(maintenance_ops, "batch_extract_edges", return_value=[[]]) as batch_extract:
+        first = maintenance_ops.backfill_edges(
+            graph=_Graph(),
+            metrics=maintenance_ops.JanitorMetrics(),
+            dry_run=False,
+            max_facts=10,
+            owner_id="default",
+        )
+
+    assert first == {"found": 1, "edges_created": 0, "errors": 0}
+    assert stored_attrs["fact-1"]["edge_backfill_check_version"] == maintenance_ops.EDGE_BACKFILL_CHECK_VERSION
+    assert stored_attrs["fact-1"]["edge_backfill_edges_returned"] == 0
+    batch_extract.assert_called_once()
+
+    with patch.object(maintenance_ops, "batch_extract_edges") as second_batch_extract:
+        second = maintenance_ops.backfill_edges(
+            graph=_Graph(),
+            metrics=maintenance_ops.JanitorMetrics(),
+            dry_run=True,
+            max_facts=10,
+            owner_id="default",
+        )
+
+    assert second == {"found": 0, "edges_created": 0, "errors": 0}
+    second_batch_extract.assert_not_called()
 
 
 def test_find_edge_candidates_partial_scan_is_not_english_keyword_gated():
