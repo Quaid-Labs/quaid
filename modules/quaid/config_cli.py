@@ -28,7 +28,14 @@ def _workspace_root() -> Path:
 
 def _platform_from_instance_name(instance_name: str) -> str:
     name = str(instance_name or "").strip().lower().replace("_", "-")
-    if name.startswith("claude-code-") or name == "claude-code":
+    if (
+        name.startswith("claude-code-")
+        or name == "claude-code"
+        or name.startswith("cc-")
+        or name == "cc"
+        or name.startswith("claude-")
+        or name == "claude"
+    ):
         return "claude-code"
     if name == "claudecode":
         return "claude-code"
