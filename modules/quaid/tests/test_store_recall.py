@@ -7331,6 +7331,78 @@ class TestSourceChunkStorage:
         assert "next_chunk_id" not in output
         assert "source_id" not in output
 
+    def test_default_recall_output_suppresses_auto_session_chunk_rows(self):
+        """Default recall uses session chunks as support context, not standalone public rows."""
+        import datastore.memorydb.memory_graph as mg
+
+        rows = [
+            {
+                "id": "sch_auto",
+                "text": "[session_chunk] sess#2: copper ledger context",
+                "category": "session_chunk",
+                "source_type": "session_chunk",
+                "via": "session_chunks",
+                "similarity": 1.0,
+                "chunk_id": "sch_auto",
+                "session_chunk_id": "sch_auto",
+                "session_window_expanded": True,
+            },
+            {
+                "id": "fact-1",
+                "text": (
+                    "[memory] The copper ledger is on the west shelf.\n"
+                    "[session_chunk] sess#2: copper ledger context"
+                ),
+                "category": "fact",
+                "similarity": 0.94,
+                "session_window_expanded": True,
+                "session_window_chunk_ids": ["sch_auto"],
+            },
+        ]
+
+        output_rows, output_meta = mg._prepare_recall_output_rows(
+            rows,
+            {"session_chunks_auto_included": True},
+            include_chunks=False,
+        )
+
+        assert output_meta == {"session_chunks_auto_included": True}
+        assert [row["id"] for row in output_rows] == ["fact-1"]
+        assert "copper ledger context" in output_rows[0]["text"]
+        assert "session_window_chunk_ids" not in output_rows[0]
+
+    def test_cli_default_store_plan_output_suppresses_session_chunk_rows(self):
+        """CLI default store plans hide auto-support chunks unless stores were explicit."""
+        import datastore.memorydb.memory_graph as mg
+
+        rows = [
+            {
+                "id": "sch_default",
+                "text": "[session_chunk] sess#3: source-only context",
+                "category": "session_chunk",
+                "source_type": "session_chunk",
+                "via": "session_chunks",
+                "similarity": 0.99,
+                "chunk_id": "sch_default",
+                "session_chunk_id": "sch_default",
+            },
+            {
+                "id": "fact-default",
+                "text": "Readable fact row",
+                "category": "fact",
+                "similarity": 0.93,
+            },
+        ]
+
+        output_rows, _meta = mg._prepare_recall_output_rows(
+            rows,
+            {"planned_stores": ["vector", "session_chunks"]},
+            include_chunks=False,
+            suppress_session_chunk_rows=True,
+        )
+
+        assert [row["id"] for row in output_rows] == ["fact-default"]
+
     def test_print_recall_results_hides_session_chunk_provenance_suffix(self, capsys):
         """Text recall should not expose internal chunk ids on session chunk rows."""
         import datastore.memorydb.memory_graph as mg

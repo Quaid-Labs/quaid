@@ -7836,6 +7836,18 @@ def _is_session_chunk_output_row(row: Dict[str, Any]) -> bool:
     return source_type == "session_chunk" or via == "session_chunks"
 
 
+def _should_suppress_default_session_chunk_rows(
+    meta: Optional[Dict[str, Any]],
+    *,
+    suppress_session_chunk_rows: bool,
+) -> bool:
+    if suppress_session_chunk_rows:
+        return True
+    if not isinstance(meta, dict):
+        return False
+    return bool(meta.get("session_chunks_auto_included"))
+
+
 def _sanitize_default_recall_output_row(row: Dict[str, Any]) -> Dict[str, Any]:
     sanitized = dict(row)
     preserve_session_chunk_navigation = _is_session_chunk_output_row(row)
@@ -7857,6 +7869,7 @@ def _prepare_recall_output_rows(
     *,
     include_chunks: bool = False,
     preserve_source_chunk_ids: bool = False,
+    suppress_session_chunk_rows: bool = False,
     max_chunk_tokens: Optional[int] = None,
     max_total_chunk_tokens: Optional[int] = None,
 ) -> Tuple[Any, Optional[Dict[str, Any]]]:
@@ -7864,9 +7877,15 @@ def _prepare_recall_output_rows(
         if not isinstance(rows, list):
             return rows, meta
         output_rows: List[Any] = []
+        suppress_default_session_chunks = _should_suppress_default_session_chunk_rows(
+            meta,
+            suppress_session_chunk_rows=suppress_session_chunk_rows,
+        )
         for row in rows:
             if not isinstance(row, dict) or preserve_source_chunk_ids:
                 output_rows.append(row)
+                continue
+            if suppress_default_session_chunks and _is_session_chunk_output_row(row):
                 continue
             output_rows.append(_sanitize_default_recall_output_row(row))
         return output_rows, meta
@@ -7906,6 +7925,9 @@ def _return_validated_recall(
         meta,
         include_chunks=include_chunks,
         preserve_source_chunk_ids=preserve_source_chunk_ids,
+        suppress_session_chunk_rows=(
+            isinstance(meta, dict) and bool(meta.get("session_chunks_auto_included"))
+        ),
         max_chunk_tokens=max_chunk_tokens,
         max_total_chunk_tokens=max_total_chunk_tokens,
     )
@@ -11557,6 +11579,8 @@ def _run_recall_store_plan(
     meta["selected_path"] = "store_plan" if len(normalized_stores) > 1 or normalized_stores != ["vector"] else meta.get("selected_path", "vector")
     meta["planned_stores"] = normalized_stores
     meta["planned_project"] = planned_project
+    if isinstance(planner_meta, dict) and planner_meta.get("session_chunks_auto_included"):
+        meta["session_chunks_auto_included"] = True
     meta["store_runs"] = store_runs
     if rrf_fusion_meta.get("enabled") or rrf_fusion_meta.get("failed"):
         meta["rrf_fusion"] = rrf_fusion_meta
@@ -25613,6 +25637,7 @@ if __name__ == "__main__":
                             results,
                             meta,
                             include_chunks=include_chunks,
+                            suppress_session_chunk_rows=not stores_explicit,
                             max_chunk_tokens=max_chunk_tokens,
                             max_total_chunk_tokens=max_total_chunk_tokens,
                         )
@@ -25622,6 +25647,7 @@ if __name__ == "__main__":
                             results,
                             meta,
                             include_chunks=include_chunks,
+                            suppress_session_chunk_rows=not stores_explicit,
                             max_chunk_tokens=max_chunk_tokens,
                             max_total_chunk_tokens=max_total_chunk_tokens,
                         )
