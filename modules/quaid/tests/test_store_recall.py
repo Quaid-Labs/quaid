@@ -5938,6 +5938,36 @@ class TestTimestampOverride:
         assert payload["contract"] == "quaid.recall.v1"
         assert payload["results"] == []
 
+    def test_recall_cli_invalid_temporal_dimension_exits_nonzero(self, tmp_path):
+        module_root = Path(__file__).resolve().parents[1]
+        env = {
+            **os.environ,
+            "MEMORY_DB_PATH": str(tmp_path / "memory.db"),
+            "QUAID_HOME": str(tmp_path / ".quaid"),
+            "QUAID_INSTANCE": "cli-temporal-invalid",
+            "QUAID_ADAPTER_TYPE": "standalone",
+        }
+
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "datastore.memorydb.memory_graph",
+                "recall",
+                "nothing-to-find",
+                '{"temporal_dimension":"banana"}',
+            ],
+            cwd=str(module_root),
+            env=env,
+            text=True,
+            capture_output=True,
+            timeout=20,
+            check=False,
+        )
+
+        assert result.returncode != 0
+        assert "temporal_dimension must be one of" in result.stderr
+
     def test_recall_json_cli_keeps_combined_stream_parseable(self, tmp_path):
         module_root = Path(__file__).resolve().parents[1]
         quaid_home = tmp_path / ".quaid"
