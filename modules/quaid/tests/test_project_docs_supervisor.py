@@ -571,7 +571,7 @@ def test_known_project_worker_exit_marks_active_request_failed_when_failopen(mon
     ]
 
 
-def test_known_project_worker_exit_records_active_request_without_failhard_supervisor_crash(monkeypatch):
+def test_known_project_worker_exit_records_active_request_without_failhard_supervisor_crash(monkeypatch, caplog):
     from core import project_docs_supervisor as supervisor
 
     recorded = []
@@ -587,9 +587,11 @@ def test_known_project_worker_exit_records_active_request_without_failhard_super
     )
     monkeypatch.setattr(supervisor, "_fail_hard_enabled", lambda: True)
 
-    assert supervisor._handle_known_project_worker_exit("demo", known_workers) is True
+    with caplog.at_level("WARNING", logger=supervisor.__name__):
+        assert supervisor._handle_known_project_worker_exit("demo", known_workers) is True
 
     assert known_workers == {}
+    assert "recorded in active request; containing supervisor-level raise" in caplog.text
     assert recorded == [
         (
             "demo",
@@ -639,7 +641,7 @@ def test_known_project_worker_exit_existing_error_state_does_not_raise_failhard(
 
 
 @pytest.mark.parametrize("status", ["fresh", "stopped"])
-def test_known_project_worker_exit_recorded_terminal_state_does_not_raise_failhard(monkeypatch, status):
+def test_known_project_worker_exit_recorded_terminal_state_does_not_raise_failhard(monkeypatch, caplog, status):
     from core import project_docs_supervisor as supervisor
 
     known_workers = {"demo": 1234}
@@ -655,8 +657,10 @@ def test_known_project_worker_exit_recorded_terminal_state_does_not_raise_failha
     )
     monkeypatch.setattr(supervisor, "_fail_hard_enabled", lambda: True)
 
-    assert supervisor._handle_known_project_worker_exit("demo", known_workers) is True
+    with caplog.at_level("INFO", logger=supervisor.__name__):
+        assert supervisor._handle_known_project_worker_exit("demo", known_workers) is True
     assert known_workers == {}
+    assert f"already reflected in project state status={status}" in caplog.text
 
 
 def test_record_update_request_worker_exit_marks_request_failed(tmp_path, monkeypatch):
