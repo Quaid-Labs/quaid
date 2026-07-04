@@ -4279,6 +4279,124 @@ def test_process_signal_reset_backup_extracts_after_scan_only_cursor(
     assert cursor["processed_signal_type"] == "reset"
 
 
+def test_process_signal_reset_backup_extracts_after_internal_cursor_missing_live(
+    monkeypatch,
+    tmp_path,
+):
+    from lib.adapter import set_adapter, reset_adapter
+    from ingest import extract as extract_mod
+    from core import ingest_runtime
+    from core.runtime import notify as notify_mod
+
+    session_id = "62a754fb-e158-47e6-bebc-0e8a967fc653"
+    live_dir = tmp_path / ".openclaw" / "agents" / "main" / "sessions"
+    live_dir.mkdir(parents=True)
+    live_path = live_dir / f"{session_id}.jsonl"
+    backup_path = live_dir / f"{session_id}.jsonl.reset.2026-07-04T09-14-17.044Z"
+    live_path.write_text(
+        "\n".join([
+            f'{{"type":"session","id":"{session_id}"}}',
+            '{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"**[Quaid — Memory Extraction]** summary"}]}}',
+            '{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"**[Quaid — Memory Extraction (cont. 2/3)]** summary"}]}}',
+            '{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"**[Quaid — Memory Extraction (cont. 3/3)]** summary"}]}}',
+        ]) + "\n",
+        encoding="utf-8",
+    )
+    backup_path.write_text(
+        live_path.read_text(encoding="utf-8")
+        + '{"type":"message","message":{"role":"user","content":[{"type":"text","text":"The indigo glass lantern lives on the cedar shelf."}]}}\n',
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path / ".quaid"))
+    monkeypatch.setenv("QUAID_INSTANCE", "openclaw-main")
+    source_key = extraction_daemon._signal_source_cursor_key(session_id, str(live_path))
+    extraction_daemon.write_cursor(
+        session_id,
+        4,
+        str(live_path),
+        source_key=source_key,
+        internal=True,
+    )
+    live_path.unlink()
+
+    captured = {}
+
+    class _Adapter(_OwnedTestAdapterMixin):
+        def instance_root(self):
+            return tmp_path / ".quaid" / "instances" / "openclaw-main"
+
+        def parse_session_jsonl(self, path):
+            captured["parsed_path"] = str(path)
+            raw = Path(path).read_text(encoding="utf-8")
+            if "indigo glass lantern" in raw:
+                return "User: The indigo glass lantern lives on the cedar shelf.\nAssistant: ACK"
+            return ""
+
+        def is_subagent_session(self, session_id, transcript_path=None):
+            return False
+
+    set_adapter(_Adapter())
+    monkeypatch.setattr(extraction_daemon, "_get_owner_id", lambda: "owner-1")
+    monkeypatch.setattr(extraction_daemon, "_read_usage_totals", lambda: {})
+    monkeypatch.setattr(extraction_daemon, "_session_has_harvestable_subagents", lambda *args, **kwargs: False)
+    monkeypatch.setattr(extraction_daemon, "_warm_payload_embeddings", lambda _facts: {})
+    monkeypatch.setattr(notify_mod, "notify_memory_extraction", lambda **_kwargs: None)
+    monkeypatch.setattr(ingest_runtime, "run_session_logs_ingest", lambda **_kwargs: {"status": "indexed"})
+
+    def fake_extract_from_transcript(transcript, **kwargs):
+        captured["transcript"] = transcript
+        return {
+            "chunks_processed": 1,
+            "chunks_total": 1,
+            "unclassified_empty_payloads": 0,
+            "raw_facts": [{"text": "The indigo glass lantern lives on the cedar shelf.", "category": "fact"}],
+            "facts": [],
+            "soul_snippets": {},
+            "journal_entries": {},
+            "project_logs": {},
+            "raw_snippets": {},
+            "raw_journal": {},
+            "raw_project_logs": {},
+            "carry_facts": [],
+        }
+
+    monkeypatch.setattr(extract_mod, "extract_from_transcript", fake_extract_from_transcript)
+    monkeypatch.setattr(
+        extract_mod,
+        "apply_extracted_payloads",
+        lambda *_args, **_kwargs: {
+            "facts_stored": 1,
+            "facts_skipped": 0,
+            "edges_created": 0,
+            "facts": [],
+            "snippets": {},
+            "journal": {},
+            "project_log_metrics": {},
+        },
+    )
+
+    try:
+        signal_path = extraction_daemon.write_signal(
+            signal_type="reset",
+            session_id=session_id,
+            transcript_path=str(live_path),
+        )
+        signal_data = json.loads(signal_path.read_text(encoding="utf-8"))
+        signal_data["_signal_path"] = str(signal_path)
+
+        extraction_daemon.process_signal(signal_data)
+    finally:
+        reset_adapter()
+
+    assert captured["parsed_path"].endswith(".jsonl")
+    assert "indigo glass lantern" in captured["transcript"]
+    cursor = extraction_daemon.read_cursor(session_id, source_key=source_key)
+    assert cursor["line_offset"] == 5
+    assert cursor["transcript_path"] == str(backup_path)
+    assert cursor["processed_signal_type"] == "reset"
+
+
 def test_process_signal_reset_extracts_short_openclaw_message_field_transcript(
     monkeypatch,
     tmp_path,
@@ -12892,6 +13010,137 @@ class TestRollingExtraction:
         assert state["buffered_line_offset"] == 3
         assert state["semantic_buffer_tokens"] == 90
         assert extraction_daemon.read_pending_signals() == []
+
+    def test_process_signal_session_end_drains_live_residual_after_rolling_snapshot(
+        self, monkeypatch, tmp_path
+    ):
+        from lib.adapter import set_adapter, reset_adapter
+        from ingest import extract as extract_mod
+        from core import ingest_runtime
+        from core.runtime import notify as notify_mod
+
+        session_id = "b414e0a0-9c4a-4466-b10d-4995b15eb74f"
+        snapshot_path = tmp_path / "snapshots" / session_id / "snapshot" / f"{session_id}.jsonl"
+        live_path = tmp_path / ".quaid" / "instances" / "openclaw-main" / "logs" / "quaid" / "sessions" / f"{session_id}.jsonl"
+        snapshot_path.parent.mkdir(parents=True)
+        live_path.parent.mkdir(parents=True)
+        snapshot_path.write_text(
+            '{"role":"user","content":"chunk one already staged"}\n'
+            '{"role":"assistant","content":"ack"}\n',
+            encoding="utf-8",
+        )
+        live_path.write_text(
+            snapshot_path.read_text(encoding="utf-8")
+            + '{"role":"user","content":"Baxter keeps the orange linen notebook beside the window."}\n'
+            + '{"role":"assistant","content":"noted"}\n',
+            encoding="utf-8",
+        )
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path / ".quaid"))
+        monkeypatch.setenv("QUAID_INSTANCE", "openclaw-main")
+        source_key = extraction_daemon._signal_source_cursor_key(session_id, str(live_path))
+        extraction_daemon.write_cursor(
+            session_id,
+            2,
+            str(live_path),
+            source_key=source_key,
+            last_flushed_line_offset=2,
+        )
+        extraction_daemon.write_rolling_state(
+            session_id,
+            {
+                "session_id": session_id,
+                "transcript_path": str(snapshot_path),
+                "source_transcript_path": str(live_path),
+                "buffer_transcript_path": str(snapshot_path),
+                "processed_line_offset": 2,
+                "buffered_line_offset": 2,
+                "semantic_buffer": "",
+                "semantic_buffer_tokens": 0,
+                "raw_facts": [{"text": "chunk one already staged", "category": "fact"}],
+                "carry_facts": [],
+                "rolling_batches": 1,
+            },
+        )
+
+        captured = {}
+
+        class _Adapter(_OwnedTestAdapterMixin):
+            def instance_root(self):
+                return tmp_path / ".quaid" / "instances" / "openclaw-main"
+
+            def parse_session_jsonl(self, path):
+                raw = Path(path).read_text(encoding="utf-8")
+                if "orange linen notebook" in raw:
+                    return "User: Baxter keeps the orange linen notebook beside the window.\nAssistant: noted"
+                return "User: chunk one already staged"
+
+            def is_subagent_session(self, session_id, transcript_path=None):
+                return False
+
+        set_adapter(_Adapter())
+        monkeypatch.setattr(extraction_daemon, "_get_capture_chunk_tokens", lambda default=8000: 100)
+        monkeypatch.setattr(extraction_daemon, "_get_capture_chunk_max_lines", lambda default=0: 100)
+        monkeypatch.setattr(extraction_daemon, "_get_owner_id", lambda: "owner-1")
+        monkeypatch.setattr(extraction_daemon, "_read_usage_totals", lambda: {})
+        monkeypatch.setattr(extraction_daemon, "_session_has_harvestable_subagents", lambda *args, **kwargs: False)
+        monkeypatch.setattr(extraction_daemon, "_warm_payload_embeddings", lambda _facts: {})
+        monkeypatch.setattr(extraction_daemon, "_cursor_or_adapter_owns_transcript_path", lambda *args, **kwargs: True)
+        monkeypatch.setattr(extraction_daemon, "_reconcile_internal_cursor_state", lambda *args, **kwargs: "not_internal")
+        monkeypatch.setattr(notify_mod, "notify_memory_extraction", lambda **_kwargs: None)
+        monkeypatch.setattr(ingest_runtime, "run_session_logs_ingest", lambda **_kwargs: {"status": "indexed"})
+
+        def fake_extract_from_transcript(transcript, **kwargs):
+            captured["transcript"] = transcript
+            return {
+                "chunks_processed": 1,
+                "chunks_total": 1,
+                "unclassified_empty_payloads": 0,
+                "raw_facts": [{"text": "Baxter keeps the orange linen notebook beside the window.", "category": "fact"}],
+                "facts": [],
+                "soul_snippets": {},
+                "journal_entries": {},
+                "project_logs": {},
+                "raw_snippets": {},
+                "raw_journal": {},
+                "raw_project_logs": {},
+                "carry_facts": [],
+            }
+
+        monkeypatch.setattr(extract_mod, "extract_from_transcript", fake_extract_from_transcript)
+        monkeypatch.setattr(
+            extract_mod,
+            "apply_extracted_payloads",
+            lambda *_args, **_kwargs: {
+                "facts_stored": 2,
+                "facts_skipped": 0,
+                "edges_created": 0,
+                "facts": [],
+                "snippets": {},
+                "journal": {},
+                "project_log_metrics": {},
+            },
+        )
+
+        try:
+            signal_path = extraction_daemon.write_signal(
+                signal_type="session_end",
+                session_id=session_id,
+                transcript_path=str(snapshot_path),
+                meta={"source_cursor_key": source_key},
+            )
+            signal_data = json.loads(signal_path.read_text(encoding="utf-8"))
+            signal_data["_signal_path"] = str(signal_path)
+
+            extraction_daemon.process_signal(signal_data)
+        finally:
+            reset_adapter()
+
+        assert "orange linen notebook" in captured["transcript"]
+        cursor = extraction_daemon.read_cursor(session_id, source_key=source_key)
+        assert cursor["line_offset"] == 4
+        assert cursor["transcript_path"] == str(live_path)
+        assert not extraction_daemon._rolling_state_path(session_id).exists()
 
     def test_check_chunk_ready_sessions_rejects_stale_source_cursor_after_rebase_growth(
         self, monkeypatch, tmp_path

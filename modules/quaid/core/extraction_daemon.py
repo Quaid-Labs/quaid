@@ -4473,6 +4473,54 @@ def _rolling_state_has_pending_content(state: Dict[str, Any]) -> bool:
     return bool(staged_state_has_payload(state or {}) or _semantic_buffer_has_content(state or {}))
 
 
+def _resolve_existing_transcript_fallback_for_signal(
+    *,
+    label: str,
+    session_id: str,
+    transcript_path: str,
+    signal_meta: Dict[str, Any],
+    cursor_data: Dict[str, Any],
+    staged_state: Dict[str, Any],
+    adapter=None,
+) -> Tuple[str, str]:
+    """Return an existing fallback transcript path before classifying/reading it."""
+    for fallback_source, fallback_path in (
+        ("signal_meta_source", str(signal_meta.get("source_transcript_path") or "").strip()),
+        ("cursor", str(cursor_data.get("transcript_path") or "").strip()),
+        ("rolling_state", str(staged_state.get("transcript_path") or "").strip()),
+        ("rolling_state_source", str(staged_state.get("source_transcript_path") or "").strip()),
+        ("rolling_state_buffer", str(staged_state.get("buffer_transcript_path") or "").strip()),
+    ):
+        if fallback_path and os.path.isfile(fallback_path):
+            return fallback_path, fallback_source
+
+    if adapter is not None:
+        get_session_path = getattr(adapter, "get_session_path", None)
+        if callable(get_session_path):
+            try:
+                adapter_path = get_session_path(session_id)
+            except Exception as exc:
+                logger.warning(
+                    "[%s] failed resolving adapter transcript path for %s: %s",
+                    label,
+                    session_id,
+                    exc,
+                )
+            else:
+                adapter_path_str = str(adapter_path or "").strip()
+                if adapter_path_str and os.path.isfile(adapter_path_str):
+                    return adapter_path_str, "adapter"
+
+    if transcript_path and str(transcript_path).endswith(".jsonl"):
+        import glob as _glob
+        reset_pattern = str(transcript_path)[:-len(".jsonl")] + ".jsonl.reset.*"
+        reset_candidates = sorted(_glob.glob(reset_pattern))
+        if reset_candidates:
+            return reset_candidates[-1], "reset_backup"
+
+    return "", ""
+
+
 def _read_rolling_state_for_signal(
     session_id: str,
     transcript_path: str,
@@ -5994,6 +6042,26 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
     adapter = _load_runtime_adapter_for_signal(label, session_id)
     cursor_data = _read_cursor_with_source_compat(session_id, lock_owner_key)
 
+    if not transcript_path or not os.path.isfile(transcript_path):
+        fallback_path, fallback_source = _resolve_existing_transcript_fallback_for_signal(
+            label=label,
+            session_id=session_id,
+            transcript_path=str(transcript_path or ""),
+            signal_meta=signal_meta,
+            cursor_data=cursor_data,
+            staged_state=staged_state,
+            adapter=adapter,
+        )
+        if fallback_path:
+            transcript_path = fallback_path
+            logger.info(
+                "[%s] transcript path missing/invalid before internal cursor reconciliation; "
+                "using %s fallback: %s",
+                label,
+                fallback_source,
+                transcript_path,
+            )
+
     if (
         transcript_path
         and os.path.isfile(transcript_path)
@@ -6574,6 +6642,51 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             )
             cursor_offset = 0
             reset_staged_state_for_full_reextract = True
+
+    if (
+        signal_type in ("compaction", "reset", "session_end", "timeout")
+        and not rolling_mode
+        and not staged_payload_sweep_signal
+        and staged_state_has_payload(staged_state)
+    ):
+        staged_source_path = str(
+            staged_state.get("source_transcript_path")
+            or staged_state.get("buffer_transcript_path")
+            or ""
+        ).strip()
+        if (
+            staged_source_path
+            and os.path.isfile(staged_source_path)
+            and staged_source_path != str(transcript_path or "")
+        ):
+            try:
+                staged_source_lines = count_transcript_lines(staged_source_path)
+                current_lines = count_transcript_lines(transcript_path)
+            except OSError as exc:
+                if _fail_hard_enabled():
+                    _release_session_processing_lock(lock_owner_key, lock_fd)
+                    raise
+                logger.warning(
+                    "[%s] session %s: failed comparing rolling staged source transcript %s to %s: %s",
+                    label,
+                    session_id,
+                    staged_source_path,
+                    transcript_path,
+                    exc,
+                )
+            else:
+                if staged_source_lines > current_lines or _is_daemon_owned_transcript_snapshot_path(str(transcript_path)):
+                    logger.info(
+                        "[%s] session %s: staged rolling payload source has live residual "
+                        "(%s lines=%d > %s lines=%d); draining source transcript during lifecycle flush",
+                        label,
+                        session_id,
+                        staged_source_path,
+                        staged_source_lines,
+                        transcript_path,
+                        current_lines,
+                    )
+                    transcript_path = staged_source_path
 
     total_lines = count_transcript_lines(transcript_path)
     cursor_clamped_to_eof = False
