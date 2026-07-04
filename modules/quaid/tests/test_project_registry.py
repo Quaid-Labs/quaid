@@ -324,6 +324,18 @@ class TestDeleteProject:
         data = _load_registry()
         assert data["deleted_projects"]["my-app"] == "2026-03-11T05:03:00+00:00"
 
+    def test_delete_raises_under_failhard_when_project_directory_remains(self, mock_adapter):
+        _, tmp_path = mock_adapter
+        create_project("my-app")
+
+        with patch("core.project_registry._safe_remove_project_dir", return_value=False), \
+             patch("core.project_registry._fail_hard_enabled", return_value=True), \
+             patch("core.project_registry.time.sleep"), \
+             pytest.raises(RuntimeError, match="project_dirs_present=True"):
+            delete_project("my-app")
+
+        assert (tmp_path / "projects" / "my-app").exists()
+
     def test_rejects_unknown(self, mock_adapter):
         with pytest.raises(KeyError):
             delete_project("nonexistent")

@@ -50,6 +50,8 @@ from lib.fail_policy import is_fail_hard_enabled
 from lib.llm_clients import call_deep_reasoning, call_fast_reasoning
 from lib.runtime_context import get_workspace_dir, notify_agent, queue_deferred_notice
 logger = logging.getLogger(__name__)
+_PROJECT_VISIBILITY_RETRY_ATTEMPTS = 5
+_PROJECT_VISIBILITY_RETRY_DELAY_SECONDS = 0.1
 
 def _workspace() -> Path:
     return get_workspace_dir()
@@ -1772,11 +1774,19 @@ def cmd_update_stale(
         registry = DocsRegistry()
         list_projects = getattr(registry, "list_projects", None)
         if callable(list_projects):
-            visible_projects = {
-                _normalize_project_name(str(entry.get("name") or "").strip())
-                for entry in list_projects()
-                if _normalize_project_name(str(entry.get("name") or "").strip())
-            }
+            visible_projects = set()
+            for attempt in range(_PROJECT_VISIBILITY_RETRY_ATTEMPTS):
+                visible_projects = {
+                    _normalize_project_name(str(entry.get("name") or "").strip())
+                    for entry in list_projects()
+                    if _normalize_project_name(str(entry.get("name") or "").strip())
+                }
+                if project_name in visible_projects:
+                    break
+                if project_name and project_name.startswith("misc--"):
+                    break
+                if attempt < _PROJECT_VISIBILITY_RETRY_ATTEMPTS - 1:
+                    time.sleep(_PROJECT_VISIBILITY_RETRY_DELAY_SECONDS)
             if project_name not in visible_projects:
                 if project_name and project_name.startswith("misc--"):
                     logger.info(

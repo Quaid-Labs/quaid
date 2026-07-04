@@ -25,6 +25,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -2061,10 +2062,17 @@ class DocsRegistry:
                         check=True, capture_output=True, timeout=10,
                     )
                     dir_deleted = True
-                except (FileNotFoundError, subprocess.CalledProcessError):
-                    # trash not available — warn user instead of irreversible rmtree
-                    print(f"  WARNING: 'trash' command not available. Please manually delete: {project_dir}")
-                    dir_deleted = False
+                except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+                    logger.warning("trash command failed for project directory %s; falling back to rmtree: %s", project_dir, exc)
+                    try:
+                        shutil.rmtree(project_dir)
+                        dir_deleted = True
+                    except OSError as rm_exc:
+                        logger.warning("Failed to delete project directory %s: %s", project_dir, rm_exc)
+                        if _fail_hard_enabled():
+                            raise RuntimeError(f"Failed to delete project directory {project_dir}") from rm_exc
+                        print(f"  WARNING: Failed to delete project directory. Please manually delete: {project_dir}")
+                        dir_deleted = False
 
         # 3. Remove from DB
         self.delete_project_definition(project_name)

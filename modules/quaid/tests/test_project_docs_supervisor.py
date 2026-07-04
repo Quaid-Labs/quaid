@@ -236,6 +236,26 @@ def test_supervisor_without_instance_skips_docs_ticks_and_uses_raw_project_listi
     assert calls == ["raw"]
 
 
+def test_supervisor_projects_filters_to_current_instance(monkeypatch):
+    from core import project_docs_supervisor as supervisor
+
+    monkeypatch.delenv("QUAID_SUPERVISOR_BOOT", raising=False)
+    monkeypatch.setenv("QUAID_INSTANCE", "codex-cdx-livetest-b89008986acd")
+    monkeypatch.setattr(
+        supervisor,
+        "list_projects",
+        lambda: {
+            "cdx-owned": {"instances": ["codex-cdx-livetest-b89008986acd"]},
+            "cc-owned": {"instances": ["claude-code-cc-livetest-51aa91834f73"]},
+            "unlinked": {"instances": []},
+        },
+    )
+
+    projects = supervisor._supervisor_projects()
+
+    assert set(projects) == {"cdx-owned"}
+
+
 def test_supervisor_docs_tick_routes_authoritative_listener_without_direct_calls(monkeypatch, tmp_path):
     from core import project_docs_supervisor as supervisor
     from core.runtime.events import DOCS_PROJECT_MAINTENANCE_OBSERVED_EVENT

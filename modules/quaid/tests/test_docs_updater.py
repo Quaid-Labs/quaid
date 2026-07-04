@@ -1848,6 +1848,34 @@ class TestCmdUpdateStaleNeverIndexed:
             with pytest.raises(RuntimeError, match="Project not found for docs update: missing-proj"):
                 updater.cmd_update_stale(dry_run=False, project="missing-proj")
 
+    def test_update_stale_waits_for_new_project_visibility(self, tmp_path, monkeypatch):
+        with _adapter_patch(tmp_path):
+            from datastore.docsdb import updater
+
+            calls = 0
+            slept: list[float] = []
+
+            class _FakeRegistry:
+                def list_projects(self):
+                    nonlocal calls
+                    calls += 1
+                    if calls == 1:
+                        return []
+                    return [{"name": "livetest-agentmsg-cdx"}]
+
+                def list_docs(self, project=None):
+                    return []
+
+            monkeypatch.setattr("datastore.docsdb.registry.DocsRegistry", _FakeRegistry)
+            monkeypatch.setattr(updater.time, "sleep", lambda seconds: slept.append(seconds))
+            monkeypatch.setattr(updater, "check_staleness", lambda project=None: {})
+
+            count = updater.cmd_update_stale(dry_run=False, project="livetest-agentmsg-cdx")
+
+            assert count == 0
+            assert calls == 2
+            assert slept == [updater._PROJECT_VISIBILITY_RETRY_DELAY_SECONDS]
+
     def test_update_stale_skips_non_visible_misc_project(self, tmp_path, monkeypatch, capsys):
         with _adapter_patch(tmp_path):
             from datastore.docsdb import updater

@@ -1101,6 +1101,17 @@ class TestDeleteProject:
         assert result["dir_deleted"] is True
         assert not (tmp_path / "projects" / "test-project").exists()
 
+    def test_removes_directory_when_trash_is_unavailable(self, setup_env):
+        tmp_path = setup_env
+        r = _get_registry()
+        (tmp_path / "projects" / "test-project" / "notes.md").write_text("# Notes")
+
+        with patch("datastore.docsdb.registry.subprocess.run", side_effect=FileNotFoundError("trash")):
+            result = r.delete_project("test-project")
+
+        assert result["dir_deleted"] is True
+        assert not (tmp_path / "projects" / "test-project").exists()
+
     def test_delete_project_clears_docs_rag_chunks(self, setup_env):
         tmp_path = setup_env
         r = _get_registry()

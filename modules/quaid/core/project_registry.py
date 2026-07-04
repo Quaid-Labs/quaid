@@ -202,6 +202,27 @@ def _safe_remove_project_dir(path: Path, allowed_roots: List[Path]) -> bool:
     return True
 
 
+def _project_dirs_present(paths: List[Path]) -> bool:
+    """Return whether any managed project directory candidate still exists."""
+    seen: set[str] = set()
+    for path in paths:
+        try:
+            resolved = path.resolve()
+        except Exception:
+            resolved = Path(os.path.realpath(str(path)))
+        key = str(resolved)
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            if resolved.exists():
+                return True
+        except OSError as exc:
+            logger.warning("Failed checking project directory cleanup state for %s: %s", resolved, exc)
+            return True
+    return False
+
+
 def _safe_remove_tracking_dir(path: Path, tracking_base: Path) -> bool:
     """Guarded recursive delete for shadow-git project tracking dirs."""
     try:
@@ -1000,6 +1021,7 @@ def delete_project(name: str) -> None:
     final_worker_state = True
     final_docs_db_rows = True
     final_rag_clear = rag_cleanup_clear
+    final_project_dirs_present = True
     try:
         from core import project_docs
 
@@ -1063,7 +1085,14 @@ def delete_project(name: str) -> None:
             final_project_exists = project_exists_raw(name)
             final_worker_state = project_docs.has_project_state(name)
             final_docs_db_rows = not docs_db_clear
-            if not final_project_exists and not final_worker_state and docs_db_clear and final_rag_clear:
+            final_project_dirs_present = _project_dirs_present(candidate_dirs)
+            if (
+                not final_project_exists
+                and not final_worker_state
+                and not final_project_dirs_present
+                and docs_db_clear
+                and final_rag_clear
+            ):
                 converged = True
                 break
             if attempt < 7:
@@ -1100,6 +1129,7 @@ def delete_project(name: str) -> None:
         message = (
             f"Project delete for {name} did not fully converge "
             f"(registry_present={final_project_exists}, worker_state_present={final_worker_state}, "
+            f"project_dirs_present={final_project_dirs_present}, "
             f"docs_db_rows_present={final_docs_db_rows}, rag_cleanup_clear={final_rag_clear})"
         )
         logger.warning(message)

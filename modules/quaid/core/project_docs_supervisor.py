@@ -372,7 +372,15 @@ def _dispatcher_only_mode() -> bool:
 
 
 def _supervisor_projects() -> Dict[str, Dict[str, object]]:
-    return list_projects_raw() if _dispatcher_only_mode() else list_projects()
+    if _dispatcher_only_mode():
+        return list_projects_raw()
+    current_instance = validate_instance_id(str(os.environ.get("QUAID_INSTANCE") or "").strip())
+    projects = list_projects()
+    return {
+        name: entry
+        for name, entry in projects.items()
+        if current_instance in _valid_linked_project_instances(entry)
+    }
 
 
 def _valid_linked_project_instances(entry: Dict[str, object]) -> list[str]:
