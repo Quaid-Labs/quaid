@@ -638,6 +638,27 @@ def test_known_project_worker_exit_existing_error_state_does_not_raise_failhard(
     assert known_workers == {}
 
 
+@pytest.mark.parametrize("status", ["fresh", "stopped"])
+def test_known_project_worker_exit_recorded_terminal_state_does_not_raise_failhard(monkeypatch, status):
+    from core import project_docs_supervisor as supervisor
+
+    known_workers = {"demo": 1234}
+    state = {"status": status}
+
+    monkeypatch.setattr(supervisor.project_docs, "read_worker_pid", lambda _project: None)
+    monkeypatch.setattr(supervisor.project_docs, "read_update_request", lambda _project: None)
+    monkeypatch.setattr(supervisor.project_docs, "read_state", lambda _project: state)
+    monkeypatch.setattr(
+        supervisor.project_docs,
+        "merge_state",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("terminal state already recorded")),
+    )
+    monkeypatch.setattr(supervisor, "_fail_hard_enabled", lambda: True)
+
+    assert supervisor._handle_known_project_worker_exit("demo", known_workers) is True
+    assert known_workers == {}
+
+
 def test_record_update_request_worker_exit_marks_request_failed(tmp_path, monkeypatch):
     from core import project_docs
 

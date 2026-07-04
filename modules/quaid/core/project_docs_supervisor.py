@@ -426,7 +426,8 @@ def _handle_known_project_worker_exit(project: str, known_workers: Dict[str, int
         return True
     else:
         state = project_docs.read_state(project)
-        if str(state.get("status") or "").strip().lower() == "error" and str(state.get("last_error") or "").strip():
+        state_status = str(state.get("status") or "").strip().lower()
+        if state_status in {"fresh", "error", "stopped"}:
             known_workers.pop(project, None)
             return True
         project_docs.merge_state(
