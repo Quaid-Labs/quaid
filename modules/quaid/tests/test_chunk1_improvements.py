@@ -490,6 +490,12 @@ class TestTemporalContradictionCandidates:
         assert row["id_b"] == "n-old"
         assert row["dedup_reason"] == "subset_overlap"
         assert row["similarity"] == round(sim_value, 3)
+        assert row["occurred_start_a"] is None
+        assert row["occurred_end_a"] is None
+        assert row["mentioned_at_a"] is None
+        assert row["occurred_start_b"] is None
+        assert row["occurred_end_b"] is None
+        assert row["mentioned_at_b"] is None
 
     def test_recall_similar_pairs_skips_subset_overlap_on_negation_mismatch(self, monkeypatch):
         """Subset heuristic must not fire when only one side is negated."""
