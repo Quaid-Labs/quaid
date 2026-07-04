@@ -1106,11 +1106,25 @@ class TestDeleteProject:
         r = _get_registry()
         (tmp_path / "projects" / "test-project" / "notes.md").write_text("# Notes")
 
-        with patch("datastore.docsdb.registry.subprocess.run", side_effect=FileNotFoundError("trash")):
+        with patch("datastore.docsdb.registry.subprocess.run", side_effect=FileNotFoundError("trash")), \
+             patch("datastore.docsdb.registry._fail_hard_enabled", return_value=False):
             result = r.delete_project("test-project")
 
         assert result["dir_deleted"] is True
         assert not (tmp_path / "projects" / "test-project").exists()
+
+    def test_delete_project_does_not_rmtree_when_trash_fails_under_failhard(self, setup_env):
+        tmp_path = setup_env
+        r = _get_registry()
+        project_dir = tmp_path / "projects" / "test-project"
+        (project_dir / "notes.md").write_text("# Notes")
+
+        with patch("datastore.docsdb.registry.subprocess.run", side_effect=FileNotFoundError("trash")), \
+             patch("datastore.docsdb.registry._fail_hard_enabled", return_value=True), \
+             pytest.raises(RuntimeError, match="trash failed for project directory"):
+            r.delete_project("test-project")
+
+        assert project_dir.exists()
 
     def test_delete_project_clears_docs_rag_chunks(self, setup_env):
         tmp_path = setup_env

@@ -2063,7 +2063,10 @@ class DocsRegistry:
                     )
                     dir_deleted = True
                 except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
-                    logger.warning("trash command failed for project directory %s; falling back to rmtree: %s", project_dir, exc)
+                    logger.warning("trash command failed for project directory %s: %s", project_dir, exc)
+                    if _fail_hard_enabled():
+                        raise RuntimeError(f"trash failed for project directory {project_dir}") from exc
+                    logger.warning("falling back to rmtree for project directory %s", project_dir)
                     try:
                         shutil.rmtree(project_dir)
                         dir_deleted = True
