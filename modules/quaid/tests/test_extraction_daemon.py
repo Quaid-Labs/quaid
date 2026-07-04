@@ -10578,6 +10578,84 @@ class TestRollingExtraction:
             else:
                 sys.modules.pop("lib.adapter", None)
 
+    def test_check_chunk_ready_sessions_preserves_source_cursor_for_subthreshold_tail(self, monkeypatch, tmp_path):
+        import sys
+        import types
+
+        transcript_path = tmp_path / "session.jsonl"
+        first_line = json.dumps(
+            {"type": "event_msg", "payload": {"type": "user_message", "message": "seed line"}}
+        ) + "\n"
+        transcript_path.write_text(first_line, encoding="utf-8")
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "rolling-inst")
+        session_id = "sess-roll-source-preserve"
+        source_key = extraction_daemon._signal_source_cursor_key(session_id, str(transcript_path))
+        extraction_daemon.write_cursor(
+            session_id,
+            1,
+            str(transcript_path),
+            source_key=source_key,
+            last_flushed_line_offset=1,
+        )
+
+        second_line = json.dumps(
+            {"type": "event_msg", "payload": {"type": "user_message", "message": "sub threshold rolling content"}}
+        ) + "\n"
+        third_line = json.dumps(
+            {"type": "event_msg", "payload": {"type": "assistant_message", "message": "ack"}}
+        ) + "\n"
+        transcript_path.write_text(first_line + second_line + third_line, encoding="utf-8")
+
+        real_adapter = sys.modules.get("lib.adapter")
+        fake_adapter_mod = types.ModuleType("lib.adapter")
+
+        class _FakeAdapter(_OwnedTestAdapterMixin):
+            def parse_session_jsonl(self, path):
+                messages = []
+                for raw in Path(path).read_text(encoding="utf-8").splitlines():
+                    payload = json.loads(raw)
+                    event_payload = payload.get("payload", {})
+                    message = event_payload.get("message")
+                    if message:
+                        messages.append(f"User: {message}")
+                return "\n\n".join(messages)
+
+        fake_adapter_mod.get_adapter = lambda: _FakeAdapter()
+        sys.modules["lib.adapter"] = fake_adapter_mod
+
+        captured = []
+        monkeypatch.setattr(extraction_daemon, "_get_capture_chunk_tokens", lambda default=8000: 100)
+        monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
+        monkeypatch.setattr(
+            extraction_daemon,
+            "write_signal",
+            lambda signal_type, session_id, transcript_path, **kwargs: captured.append(
+                {
+                    "signal_type": signal_type,
+                    "session_id": session_id,
+                    "transcript_path": transcript_path,
+                    "meta": kwargs.get("meta", {}),
+                }
+            ),
+        )
+
+        try:
+            extraction_daemon.check_chunk_ready_sessions()
+
+            state = extraction_daemon.read_rolling_state(session_id)
+            source_cursor = extraction_daemon.read_cursor(session_id, source_key=source_key)
+            assert captured == []
+            assert state["buffered_line_offset"] == 3
+            assert source_cursor["line_offset"] == 1
+            assert source_cursor["last_flushed_line_offset"] == 1
+        finally:
+            if real_adapter is not None:
+                sys.modules["lib.adapter"] = real_adapter
+            else:
+                sys.modules.pop("lib.adapter", None)
+
     def test_check_chunk_ready_sessions_skips_active_processing_lock(self, monkeypatch, tmp_path):
         import sys
         import types
@@ -12991,7 +13069,7 @@ class TestRollingExtraction:
         assert source_cursor["line_offset"] == 1
         assert source_cursor["transcript_size_bytes"] == transcript_path.stat().st_size
 
-    def test_check_chunk_ready_sessions_does_not_rebuffer_grown_source_after_baseline_refresh(
+    def test_check_chunk_ready_sessions_does_not_rebuffer_grown_source_while_preserving_cursor(
         self, monkeypatch, tmp_path
     ):
         session_id = "019ebe37-1111-7000-b000-000000000000"
@@ -13065,8 +13143,7 @@ class TestRollingExtraction:
         assert buffered_from_lines == [0]
         assert captured == []
         source_cursor = extraction_daemon.read_cursor(session_id, source_key=source_key)
-        assert source_cursor["line_offset"] == 1
-        assert source_cursor["transcript_size_bytes"] == transcript_path.stat().st_size
+        assert source_cursor["line_offset"] == 0
 
     def test_check_chunk_ready_sessions_dedupes_same_source_alias_cursors(
         self, monkeypatch, tmp_path
