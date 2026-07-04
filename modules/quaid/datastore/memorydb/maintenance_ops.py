@@ -340,7 +340,8 @@ def _looks_like_relationship_backfill_fact(text: str, attrs: Optional[Dict[str, 
 def _edge_backfill_checked(attrs: Optional[Dict[str, Any]]) -> bool:
     try:
         return int((attrs or {}).get("edge_backfill_check_version") or 0) >= EDGE_BACKFILL_CHECK_VERSION
-    except Exception:
+    except Exception as exc:
+        logger.debug("edge_backfill check marker was unreadable; reprocessing fact: %s", exc)
         return False
 
 
@@ -2753,17 +2754,29 @@ def backfill_edges(
                         owner_id=_owner,
                         source_fact_id=edge["fact_id"],
                     )
-                    _link_edge_to_backfilled_fact(graph, str(edge_result.get("edge_id") or ""), str(fact["id"]))
-                    if edge_result.get("status") == "created":
-                        result["edges_created"] += 1
-                        print(
-                            f"  + {edge['subject']} --{edge['relation']}--> {edge['object']}"
-                            f" (from: {fact['text'][:60]})"
-                        )
                 except Exception as e:
                     fact_had_errors = True
                     result["errors"] += 1
                     print(f"  [edge_backfill] error creating edge: {e}")
+                    continue
+                try:
+                    _link_edge_to_backfilled_fact(graph, str(edge_result.get("edge_id") or ""), str(fact["id"]))
+                except Exception as exc:
+                    logger.warning(
+                        "edge_backfill failed to link edge %s to fact %s: %s",
+                        edge_result.get("edge_id"),
+                        fact.get("id"),
+                        exc,
+                    )
+                    if is_fail_hard_enabled():
+                        raise
+                    result["errors"] += 1
+                if edge_result.get("status") == "created":
+                    result["edges_created"] += 1
+                    print(
+                        f"  + {edge['subject']} --{edge['relation']}--> {edge['object']}"
+                        f" (from: {fact['text'][:60]})"
+                    )
             if not fact_had_errors:
                 try:
                     _mark_edge_backfill_checked(graph, str(fact["id"]), fact.get("attributes") or {}, len(edges))

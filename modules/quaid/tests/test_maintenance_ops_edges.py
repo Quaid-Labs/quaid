@@ -4,6 +4,8 @@ from contextlib import contextmanager
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from datastore.memorydb import maintenance_ops
@@ -561,6 +563,118 @@ def test_backfill_edges_marks_no_edge_llm_results_as_checked():
 
     assert second == {"found": 0, "edges_created": 0, "errors": 0}
     second_batch_extract.assert_not_called()
+
+
+def test_edge_backfill_checked_logs_unreadable_marker(caplog):
+    with caplog.at_level("DEBUG", logger=maintenance_ops.__name__):
+        assert maintenance_ops._edge_backfill_checked({"edge_backfill_check_version": object()}) is False
+
+    assert "edge_backfill check marker was unreadable" in caplog.text
+
+
+def test_backfill_edges_link_failure_still_marks_fact_checked_when_fail_open():
+    stored_attrs = {}
+
+    class _DummyResult:
+        def __init__(self, rows=None):
+            self._rows = rows or []
+
+        def fetchall(self):
+            return self._rows
+
+    class _Conn:
+        def execute(self, sql, params=()):
+            if "SELECT n.id" in sql:
+                return _DummyResult(
+                    [
+                        {
+                            "id": "fact-1",
+                            "name": "Maya lives with her partner David.",
+                            "owner_id": "default",
+                            "attributes": "{}",
+                        }
+                    ]
+                )
+            if "UPDATE nodes SET attributes" in sql:
+                attrs_json, _updated_at, fact_id = params
+                stored_attrs[fact_id] = maintenance_ops.json.loads(attrs_json)
+                return _DummyResult()
+            raise AssertionError(f"unexpected SQL: {sql}")
+
+    class _Graph:
+        @contextmanager
+        def _get_conn(self):
+            yield _Conn()
+
+    edge = {
+        "fact_id": "fact-1",
+        "subject": "Maya",
+        "relation": "partner_of",
+        "object": "David",
+    }
+    with patch.object(maintenance_ops, "batch_extract_edges", return_value=[[edge]]), \
+         patch.object(maintenance_ops, "create_edge", return_value={"status": "created", "edge_id": "edge-1"}), \
+         patch.object(maintenance_ops, "_link_edge_to_backfilled_fact", side_effect=RuntimeError("link failed")), \
+         patch.object(maintenance_ops, "is_fail_hard_enabled", return_value=False):
+        out = maintenance_ops.backfill_edges(
+            graph=_Graph(),
+            metrics=maintenance_ops.JanitorMetrics(),
+            dry_run=False,
+            max_facts=10,
+            owner_id="default",
+        )
+
+    assert out == {"found": 1, "edges_created": 1, "errors": 1}
+    assert stored_attrs["fact-1"]["edge_backfill_check_version"] == maintenance_ops.EDGE_BACKFILL_CHECK_VERSION
+    assert stored_attrs["fact-1"]["edge_backfill_edges_returned"] == 1
+
+
+def test_backfill_edges_link_failure_raises_when_failhard():
+    class _DummyResult:
+        def __init__(self, rows=None):
+            self._rows = rows or []
+
+        def fetchall(self):
+            return self._rows
+
+    class _Conn:
+        def execute(self, sql, params=()):
+            if "SELECT n.id" in sql:
+                return _DummyResult(
+                    [
+                        {
+                            "id": "fact-1",
+                            "name": "Maya lives with her partner David.",
+                            "owner_id": "default",
+                            "attributes": "{}",
+                        }
+                    ]
+                )
+            raise AssertionError(f"unexpected SQL: {sql}")
+
+    class _Graph:
+        @contextmanager
+        def _get_conn(self):
+            yield _Conn()
+
+    edge = {
+        "fact_id": "fact-1",
+        "subject": "Maya",
+        "relation": "partner_of",
+        "object": "David",
+    }
+    with patch.object(maintenance_ops, "batch_extract_edges", return_value=[[edge]]), \
+         patch.object(maintenance_ops, "create_edge", return_value={"status": "created", "edge_id": "edge-1"}), \
+         patch.object(maintenance_ops, "_link_edge_to_backfilled_fact", side_effect=RuntimeError("link failed")), \
+         patch.object(maintenance_ops, "is_fail_hard_enabled", return_value=True):
+        with pytest.raises(RuntimeError, match="link failed"):
+            maintenance_ops.backfill_edges(
+                graph=_Graph(),
+                metrics=maintenance_ops.JanitorMetrics(),
+                dry_run=False,
+                max_facts=10,
+                owner_id="default",
+            )
 
 
 def test_find_edge_candidates_partial_scan_is_not_english_keyword_gated():
