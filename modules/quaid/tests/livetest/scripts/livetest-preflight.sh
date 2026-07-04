@@ -993,6 +993,21 @@ else:
 PYEOF" 2>/dev/null | tr -d '\r'
     }
 
+    version_at_least() {
+        python3 - "$1" "$2" <<'PYEOF'
+import re
+import sys
+
+def parts(value: str) -> tuple[int, int, int]:
+    match = re.search(r"(\d+)\.(\d+)\.(\d+)", value or "")
+    if not match:
+        return (0, 0, 0)
+    return tuple(int(piece) for piece in match.groups())
+
+print("1" if parts(sys.argv[1]) >= parts(sys.argv[2]) else "0")
+PYEOF
+    }
+
     BEFORE_CLAUDE="$(remote_pkg_version "@anthropic-ai/claude-code")"
     BEFORE_CODEX="$(remote_pkg_version "@openai/codex")"
     BEFORE_OPENCLAW="$(remote_openclaw_version)"
@@ -1002,10 +1017,21 @@ PYEOF" 2>/dev/null | tr -d '\r'
 
     if [[ "$RUN_PLATFORM_UPGRADES" != "1" ]]; then
         drift=0
+        matrix_min_openclaw_version="${OPENCLAW_MATRIX_MIN_OPENCLAW_VERSION:-2026.6.11}"
+        oc_enabled="$(read_config platforms.oc.enabled)"
         echo "  remote version -> npm latest:"
         echo "    claude   : $BEFORE_CLAUDE -> $LATEST_CLAUDE"
         echo "    codex    : $BEFORE_CODEX -> $LATEST_CODEX"
         echo "    openclaw : $BEFORE_OPENCLAW -> $LATEST_OPENCLAW"
+        if [[ "$oc_enabled" == "True" || "$oc_enabled" == "true" ]]; then
+            if [[ "$BEFORE_OPENCLAW" != "__MISSING__" && "$BEFORE_OPENCLAW" != "__UNKNOWN__" \
+              && "$(version_at_least "$BEFORE_OPENCLAW" "$matrix_min_openclaw_version")" != "1" ]]; then
+                echo "  ERROR: OpenClaw $BEFORE_OPENCLAW is too old for Matrix plugin support; need >= $matrix_min_openclaw_version." >&2
+                echo "         Run $SCRIPT_DIR/livetest-presnapshot-preflight.sh --config $CONFIG_PATH" >&2
+                echo "         to update the base snapshot before starting this run." >&2
+                exit 1
+            fi
+        fi
         if [[ "$LATEST_CLAUDE" != "__UNKNOWN__" && "$BEFORE_CLAUDE" != "__MISSING__" && "$BEFORE_CLAUDE" != "$LATEST_CLAUDE" ]]; then
             drift=1
         fi
@@ -1489,7 +1515,7 @@ if codex_token:
         if not isinstance(tools, dict):
             tools = {}
             cfg["tools"] = tools
-        # OC 2026.6.5 requires the message tool for Matrix replies. Preserve
+        # OC 2026.6.11 requires the message tool for Matrix replies. Preserve
         # the coding profile while explicitly allowing the channel delivery tool.
         if isinstance(tools.get("allow"), list) and tools.get("allow"):
             if "message" not in tools["allow"]:

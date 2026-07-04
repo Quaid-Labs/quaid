@@ -93,7 +93,7 @@ run_presnapshot_matrix_plugin_install() {
     # R223: OC Matrix requires both a new enough gateway plugin API and the
     # actual @openclaw/matrix plugin in the base image. Keep this
     # presnapshot-only so normal runs stay fast.
-    min_openclaw_version="${OPENCLAW_MATRIX_MIN_OPENCLAW_VERSION:-2026.6.5}"
+    min_openclaw_version="${OPENCLAW_MATRIX_MIN_OPENCLAW_VERSION:-2026.6.11}"
     matrix_plugin_version="${OPENCLAW_MATRIX_PLUGIN_VERSION:-2026.6.1}"
     matrix_plugin_spec="${OPENCLAW_MATRIX_PLUGIN_SPEC:-@openclaw/matrix@${matrix_plugin_version}}"
     oc_version="$(ssh "$remote_host" "set -euo pipefail; export PATH=\"/opt/homebrew/bin:\$HOME/.local/bin:\$PATH\"; eval \"\$(/opt/homebrew/bin/brew shellenv 2>/dev/null)\" 2>/dev/null || true; if ! command -v openclaw >/dev/null 2>&1; then echo MISSING_OPENCLAW; exit 0; fi; OC_ROOT=\"\$(npm root -g 2>/dev/null)/openclaw\"; if [[ -f \"\$OC_ROOT/package.json\" ]]; then node -e 'console.log(require(process.argv[1]).version || \"\")' \"\$OC_ROOT/package.json\"; else openclaw --version 2>/dev/null | head -1; fi" 2>&1 || true)"
