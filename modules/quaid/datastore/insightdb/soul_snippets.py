@@ -24,6 +24,7 @@ import os
 import re
 import shutil
 import tempfile
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone as _tz
 UTC = _tz.utc
 from pathlib import Path
@@ -42,6 +43,8 @@ from lib.runtime_context import (
 from lib.tokens import estimate_tokens
 from prompt_sets import get_prompt
 
+_FILE_LOCK_REGISTRIES: Dict[str, Any] = {}
+
 # Configuration
 def _workspace_dir() -> Path:
     return get_workspace_dir()
@@ -49,6 +52,53 @@ def _workspace_dir() -> Path:
 
 def _visible_instance_dir() -> Path:
     return get_visible_workspace_dir()
+
+
+def _lifecycle_file_lock_wait_seconds(default_seconds: int = 120) -> int:
+    try:
+        parallel_cfg = getattr(getattr(get_config(), "core", None), "parallel", None)
+        raw = getattr(parallel_cfg, "lock_wait_seconds", default_seconds)
+        return max(1, int(raw if raw is not None else default_seconds))
+    except Exception as exc:
+        logger.warning("Failed to resolve lifecycle file lock wait; using default: %s", exc)
+        if is_fail_hard_enabled():
+            raise RuntimeError("Failed to resolve lifecycle file lock wait") from exc
+        return int(default_seconds)
+
+
+def _lifecycle_file_lock_registry():
+    lock_root = None
+    try:
+        from core.runtime.paths import get_runtime_root
+
+        lock_root = get_runtime_root(_workspace_dir().resolve()) / "locks" / "janitor"
+        key = str(lock_root)
+        existing = _FILE_LOCK_REGISTRIES.get(key)
+        if existing is not None:
+            return existing
+        from core.runtime.parallel_runtime import ResourceLockRegistry
+
+        registry = ResourceLockRegistry(lock_root)
+        _FILE_LOCK_REGISTRIES[key] = registry
+        return registry
+    except Exception as exc:
+        logger.warning("Failed to initialize lifecycle file lock registry: %s", exc)
+        if is_fail_hard_enabled():
+            raise RuntimeError("Failed to initialize lifecycle file lock registry") from exc
+        from core.runtime.parallel_runtime import ResourceLockRegistry
+
+        fallback_root = lock_root or (_workspace_dir() / "locks" / "janitor")
+        return ResourceLockRegistry(fallback_root)
+
+
+@contextmanager
+def _core_markdown_write_lock():
+    """Protect shared identity markdown writes without holding the lock across LLM calls."""
+    with _lifecycle_file_lock_registry().acquire_many(
+        ["files:global"],
+        timeout_seconds=_lifecycle_file_lock_wait_seconds(),
+    ):
+        yield
 
 def _identity_dir() -> Path:
     """Resolve Quaid-managed identity dir for snippet/identity file writes.
@@ -1968,6 +2018,7 @@ def run_journal_distillation(
     cfg = _get_journal_config()
     max_tokens = cfg.max_tokens if cfg else 8192
     llm_timeout = _journal_review_timeout_seconds()
+    backed_up_files: set[str] = set()
 
     for filename in target_files:
         _, entries = read_journal_file(filename)
@@ -2031,9 +2082,6 @@ def run_journal_distillation(
             f"  {filename}: {len(entries)} entries -> {len(windows)} window(s) "
             f"(cap={_REVIEW_WINDOW_TOKEN_CAP}, context≈{context_tokens}, entry_budget≈{entry_budget})"
         )
-
-        if not dry_run:
-            backup_file(filename)
 
         file_had_success = False
         captured_dates_all: set[str] = set()
@@ -2156,11 +2204,22 @@ def run_journal_distillation(
                 f"  Deep Reasoning responded for{filename} window {window_idx}/{len(windows)} "
                 f"in {float(duration or 0.0):.1f}s"
             )
-            before_apply = read_parent_file(filename)
-            before_stats = _text_snapshot_stats(before_apply)
-            stats = apply_distillation(filename, result, dry_run=dry_run)
-            after_apply = read_parent_file(filename)
-            after_stats = _text_snapshot_stats(after_apply)
+            if dry_run:
+                before_apply = read_parent_file(filename)
+                before_stats = _text_snapshot_stats(before_apply)
+                stats = apply_distillation(filename, result, dry_run=True)
+                after_apply = read_parent_file(filename)
+                after_stats = _text_snapshot_stats(after_apply)
+            else:
+                with _core_markdown_write_lock():
+                    if filename not in backed_up_files:
+                        backup_file(filename)
+                        backed_up_files.add(filename)
+                    before_apply = read_parent_file(filename)
+                    before_stats = _text_snapshot_stats(before_apply)
+                    stats = apply_distillation(filename, result, dry_run=False)
+                    after_apply = read_parent_file(filename)
+                    after_stats = _text_snapshot_stats(after_apply)
             _append_review_telemetry({
                 "task": "journal_distillation",
                 "status": "apply_result",
@@ -2283,10 +2342,8 @@ def run_soul_snippets_review(
     )
 
     stats = {"folded": 0, "rewritten": 0, "discarded": 0, "errors": []}
+    backed_up_files: set[str] = set()
     for filename, payload in file_payloads.items():
-        if not dry_run:
-            backup_file(filename)
-
         current_parent = read_parent_file(filename)
         current_project = read_project_generated_file(filename)
         parent_stats = _text_snapshot_stats(current_parent)
@@ -2540,15 +2597,33 @@ def run_soul_snippets_review(
                 f"  Review model responded for {filename} window {window_label} "
                 f"in {float(duration or 0.0):.1f}s"
             )
-            before_apply = read_parent_file(filename)
-            before_stats = _text_snapshot_stats(before_apply)
-            file_stats = apply_decisions(
-                decisions,
-                {filename: window_payload},
-                dry_run=dry_run,
-            )
-            after_apply = read_parent_file(filename)
-            after_stats = _text_snapshot_stats(after_apply)
+            if dry_run:
+                before_apply = read_parent_file(filename)
+                before_stats = _text_snapshot_stats(before_apply)
+                file_stats = apply_decisions(
+                    decisions,
+                    {filename: window_payload},
+                    dry_run=True,
+                )
+                after_apply = read_parent_file(filename)
+                after_stats = _text_snapshot_stats(after_apply)
+            else:
+                with _core_markdown_write_lock():
+                    if filename not in backed_up_files:
+                        backup_file(filename)
+                        backed_up_files.add(filename)
+                    latest_payload = dict(window_payload)
+                    latest_payload["parent_content"] = read_parent_file(filename)
+                    latest_payload["project_content"] = read_project_generated_file(filename)
+                    before_apply = latest_payload["parent_content"]
+                    before_stats = _text_snapshot_stats(before_apply)
+                    file_stats = apply_decisions(
+                        decisions,
+                        {filename: latest_payload},
+                        dry_run=False,
+                    )
+                    after_apply = read_parent_file(filename)
+                    after_stats = _text_snapshot_stats(after_apply)
             _append_review_telemetry({
                 "task": "snippet_review",
                 "status": "apply_result",
@@ -2653,8 +2728,8 @@ def register_lifecycle_routines(registry, result_factory) -> None:
             result.errors.append(f"Journal distillation failed: {exc}")
         return result
 
-    registry.register("snippets", _run_snippets_review)
-    registry.register("journal", _run_journal_distillation)
+    registry.register("snippets", _run_snippets_review, write_resources=[])
+    registry.register("journal", _run_journal_distillation, write_resources=[])
 
 
 if __name__ == "__main__":

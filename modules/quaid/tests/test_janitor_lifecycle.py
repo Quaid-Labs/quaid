@@ -173,6 +173,30 @@ def test_snippets_and_journal_lifecycle_run(monkeypatch, tmp_path):
     assert calls["journal"] == [(True, True)]
 
 
+def test_snippets_lifecycle_does_not_hold_files_lock_during_review(monkeypatch, tmp_path):
+    from core.runtime.parallel_runtime import ResourceLockRegistry
+
+    calls = []
+
+    def _run_snippets_review(*, dry_run, **kwargs):
+        calls.append(dry_run)
+        return {"folded": 1, "rewritten": 0, "discarded": 0}
+
+    monkeypatch.setattr("datastore.insightdb.soul_snippets.run_soul_snippets_review", _run_snippets_review)
+
+    cfg = _make_cfg(False)
+    cfg.core.parallel.lock_wait_seconds = 1
+    registry = build_default_registry()
+    lock_registry = ResourceLockRegistry(get_runtime_root(tmp_path.resolve()) / "locks" / "janitor")
+
+    with lock_registry.acquire_many(["files:global"], timeout_seconds=1):
+        result = registry.run("snippets", RoutineContext(cfg=cfg, dry_run=False, workspace=tmp_path))
+
+    assert calls == [False]
+    assert result.errors == []
+    assert result.metrics["snippets_folded"] == 1
+
+
 def test_docs_lifecycle_staleness_and_cleanup(monkeypatch, tmp_path):
     calls = {"updated": [], "cleaned": []}
 

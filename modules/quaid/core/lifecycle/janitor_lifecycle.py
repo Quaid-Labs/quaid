@@ -73,7 +73,7 @@ class LifecycleRegistry:
     def __init__(self) -> None:
         self._routines: Dict[str, LifecycleRoutine] = {}
         self._owners: Dict[str, str] = {}
-        self._write_resources: Dict[str, List[str]] = {}
+        self._write_resources: Dict[str, Optional[List[str]]] = {}
         self._registry_guard = threading.Lock()
         self._lock_registries: Dict[str, ResourceLockRegistry] = {}
         self._lock_registries_guard = threading.Lock()
@@ -99,7 +99,7 @@ class LifecycleRegistry:
                 )
             self._routines[name] = routine
             self._owners[name] = owner
-            self._write_resources[name] = list(write_resources or [])
+            self._write_resources[name] = None if write_resources is None else list(write_resources)
 
     def has(self, name: str) -> bool:
         with self._registry_guard:
@@ -118,7 +118,7 @@ class LifecycleRegistry:
             return routine(bound_ctx)
 
         resources = self._resolved_write_resources(name, ctx)
-        if lock_cfg["require_registration"] and not resources:
+        if lock_cfg["require_registration"] and not resources and self._missing_write_resource_registration(name):
             return RoutineResult(errors=[f"Lifecycle routine '{name}' missing write resource registration"])
 
         if not resources:
@@ -469,7 +469,9 @@ class LifecycleRegistry:
 
     def _resolved_write_resources(self, name: str, ctx: RoutineContext) -> List[str]:
         with self._registry_guard:
-            declared = self._write_resources.get(name) or _DEFAULT_WRITE_RESOURCES.get(name, [])
+            declared = self._write_resources.get(name)
+            if declared is None:
+                declared = _DEFAULT_WRITE_RESOURCES.get(name, [])
         out: List[str] = []
         for raw in declared:
             token = str(raw or "").strip()
@@ -494,6 +496,12 @@ class LifecycleRegistry:
                 out.append(token)
         # Deterministic order + dedupe.
         return sorted(set(out))
+
+    def _missing_write_resource_registration(self, name: str) -> bool:
+        with self._registry_guard:
+            declared = self._write_resources.get(name)
+            has_explicit_policy = name in self._write_resources and declared is not None
+        return not has_explicit_policy and name not in _DEFAULT_WRITE_RESOURCES
 
 
 _DEFAULT_WRITE_RESOURCES: Dict[str, List[str]] = {
