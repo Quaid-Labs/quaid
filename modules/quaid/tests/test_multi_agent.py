@@ -133,13 +133,22 @@ class TestListAgentInstanceIds:
     def test_cc_returns_current_instance_main(self, monkeypatch, tmp_path):
         monkeypatch.setenv("QUAID_INSTANCE", "claude-code-main")
         adapter = _make_cc_adapter(tmp_path)
-        ids = adapter.list_agent_instance_ids()
+        with patch("adaptors.claude_code.adapter.is_fail_hard_enabled", return_value=False):
+            ids = adapter.list_agent_instance_ids()
         assert ids == ["claude-code-main"]
+
+    def test_cc_missing_instances_dir_raises_when_fail_hard(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("QUAID_INSTANCE", "claude-code-main")
+        adapter = _make_cc_adapter(tmp_path)
+        with patch("adaptors.claude_code.adapter.is_fail_hard_enabled", return_value=True):
+            with pytest.raises(FileNotFoundError):
+                adapter.list_agent_instance_ids()
 
     def test_cc_returns_current_instance_project(self, monkeypatch, tmp_path):
         monkeypatch.setenv("QUAID_INSTANCE", "claude-code-myproject")
         adapter = _make_cc_adapter(tmp_path)
-        ids = adapter.list_agent_instance_ids()
+        with patch("adaptors.claude_code.adapter.is_fail_hard_enabled", return_value=False):
+            ids = adapter.list_agent_instance_ids()
         assert ids == ["claude-code-myproject"]
 
     def test_cc_skips_deleted_misc_instance_from_scan(self, monkeypatch, tmp_path):
@@ -149,7 +158,8 @@ class TestListAgentInstanceIds:
         _mark_deleted_misc_project(tmp_path, "claude-code-private-tmp-quaid-m13-test")
 
         adapter = _make_cc_adapter(tmp_path)
-        ids = adapter.list_agent_instance_ids()
+        with patch("adaptors.claude_code.adapter.is_fail_hard_enabled", return_value=False):
+            ids = adapter.list_agent_instance_ids()
 
         assert ids == ["claude-code-main"]
 
@@ -158,7 +168,8 @@ class TestListAgentInstanceIds:
         _mark_deleted_misc_project(tmp_path, "claude-code-private-tmp-quaid-m13-test")
 
         adapter = _make_cc_adapter(tmp_path)
-        ids = adapter.list_agent_instance_ids()
+        with patch("adaptors.claude_code.adapter.is_fail_hard_enabled", return_value=False):
+            ids = adapter.list_agent_instance_ids()
 
         assert ids == []
 
@@ -169,16 +180,25 @@ class TestListAgentInstanceIds:
         _mark_deleted_misc_project(tmp_path, "codex-private-tmp-cdx-m13-test")
 
         adapter = _make_cdx_adapter(tmp_path)
-        ids = adapter.list_agent_instance_ids()
+        with patch("adaptors.codex.adapter.is_fail_hard_enabled", return_value=False):
+            ids = adapter.list_agent_instance_ids()
 
         assert ids == ["codex-private-tmp-cdx-livetest"]
+
+    def test_cdx_missing_instances_dir_raises_when_fail_hard(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("QUAID_INSTANCE", "codex-private-tmp-cdx-livetest")
+        adapter = _make_cdx_adapter(tmp_path)
+        with patch("adaptors.codex.adapter.is_fail_hard_enabled", return_value=True):
+            with pytest.raises(FileNotFoundError):
+                adapter.list_agent_instance_ids()
 
     def test_cdx_skips_deleted_misc_current_instance(self, monkeypatch, tmp_path):
         monkeypatch.setenv("QUAID_INSTANCE", "codex-private-tmp-cdx-m13-test")
         _mark_deleted_misc_project(tmp_path, "codex-private-tmp-cdx-m13-test")
 
         adapter = _make_cdx_adapter(tmp_path)
-        ids = adapter.list_agent_instance_ids()
+        with patch("adaptors.codex.adapter.is_fail_hard_enabled", return_value=False):
+            ids = adapter.list_agent_instance_ids()
 
         assert ids == []
 
@@ -352,7 +372,9 @@ class TestNamingConvention:
         monkeypatch.setenv("QUAID_INSTANCE", "claude-code-main")
         adapter = _make_cc_adapter(tmp_path)
         prefix = adapter.agent_id_prefix()
-        for iid in adapter.list_agent_instance_ids():
+        with patch("adaptors.claude_code.adapter.is_fail_hard_enabled", return_value=False):
+            ids = adapter.list_agent_instance_ids()
+        for iid in ids:
             assert iid.startswith(f"{prefix}-")
 
     def test_oc_list_ids_all_start_with_prefix(self, tmp_path):

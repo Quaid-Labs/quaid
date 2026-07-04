@@ -61,6 +61,18 @@ def _make_cfg(projects_enabled: bool = True, lifecycle_timeout_seconds: float = 
     )
 
 
+@pytest.fixture(autouse=True)
+def _disable_platform_scheduler_for_lifecycle_unit_tests(monkeypatch):
+    from core.llm import scheduler as scheduler_mod
+
+    scheduler_mod.reset_global_llm_scheduler(wait=False)
+    scheduler_mod.reset_platform_scheduler_client()
+    monkeypatch.setattr(scheduler_mod, "get_platform_scheduler_client_for_current_instance", lambda: None)
+    yield
+    scheduler_mod.reset_global_llm_scheduler(wait=False)
+    scheduler_mod.reset_platform_scheduler_client()
+
+
 def test_rag_lifecycle_runs_and_returns_metrics(monkeypatch, tmp_path):
     (tmp_path / "docs").mkdir(parents=True, exist_ok=True)
     (tmp_path / "projects" / "demo").mkdir(parents=True, exist_ok=True)
