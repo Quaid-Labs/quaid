@@ -1069,6 +1069,35 @@ def _record_update_request_failure(project: str, request: Dict[str, Any], exc: E
     )
 
 
+def record_update_request_worker_exit(project: str, request: Dict[str, Any], message: str) -> None:
+    """Mark a force-update request failed after its worker process exits."""
+    name = validate_project_name(project)
+    request_id = str((request or {}).get("request_id") or "").strip()
+    if not request_id:
+        return
+    now = utc_now()
+    payload = dict(request or {})
+    payload.update({
+        "status": "failed",
+        "completed_at": now,
+        "last_attempt_at": now,
+        "last_failed_at": now,
+        "last_error": message,
+    })
+    payload.pop("next_retry_at", None)
+    _atomic_write_json(request_path(name), payload)
+    merge_state(
+        name,
+        {
+            "status": "error",
+            "pending_request_id": None,
+            "last_error": message,
+            "last_failed_at": now,
+            "last_request_id": request_id,
+        },
+    )
+
+
 def _is_permanent_update_request_failure(exc: Exception) -> bool:
     if isinstance(exc, (KeyError, ValueError)):
         return True

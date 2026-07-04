@@ -501,6 +501,7 @@ def test_known_project_worker_exit_raises_when_failhard(monkeypatch, caplog):
     known_workers = {"demo": 1234}
 
     monkeypatch.setattr(supervisor.project_docs, "read_worker_pid", lambda _project: None)
+    monkeypatch.setattr(supervisor.project_docs, "read_update_request", lambda _project: None)
     monkeypatch.setattr(supervisor.project_docs, "utc_now", lambda: "2026-06-18T00:00:00+00:00")
     monkeypatch.setattr(supervisor.project_docs, "merge_state", lambda project, updates: merged.append((project, updates)) or {})
     monkeypatch.setattr(supervisor, "_fail_hard_enabled", lambda: True)
@@ -530,6 +531,7 @@ def test_known_project_worker_exit_allows_retry_when_failopen(monkeypatch):
     known_workers = {"demo": 1234}
 
     monkeypatch.setattr(supervisor.project_docs, "read_worker_pid", lambda _project: None)
+    monkeypatch.setattr(supervisor.project_docs, "read_update_request", lambda _project: None)
     monkeypatch.setattr(supervisor.project_docs, "utc_now", lambda: "2026-06-18T00:00:00+00:00")
     monkeypatch.setattr(supervisor.project_docs, "merge_state", lambda project, updates: merged.append((project, updates)) or {})
     monkeypatch.setattr(supervisor, "_fail_hard_enabled", lambda: False)
@@ -537,6 +539,54 @@ def test_known_project_worker_exit_allows_retry_when_failopen(monkeypatch):
     assert supervisor._handle_known_project_worker_exit("demo", known_workers) is True
     assert known_workers == {}
     assert merged[0][1]["status"] == "error"
+
+
+def test_known_project_worker_exit_marks_active_request_failed_when_failopen(monkeypatch):
+    from core import project_docs_supervisor as supervisor
+
+    recorded = []
+    known_workers = {"demo": 1234}
+    request = {"request_id": "req-1", "status": "pending"}
+
+    monkeypatch.setattr(supervisor.project_docs, "read_worker_pid", lambda _project: None)
+    monkeypatch.setattr(supervisor.project_docs, "read_update_request", lambda _project: request)
+    monkeypatch.setattr(
+        supervisor.project_docs,
+        "record_update_request_worker_exit",
+        lambda project, req, message: recorded.append((project, req, message)),
+    )
+    monkeypatch.setattr(supervisor, "_fail_hard_enabled", lambda: False)
+
+    assert supervisor._handle_known_project_worker_exit("demo", known_workers) is True
+
+    assert known_workers == {}
+    assert recorded == [
+        (
+            "demo",
+            request,
+            "project docs worker for demo exited unexpectedly pid=1234",
+        )
+    ]
+
+
+def test_record_update_request_worker_exit_marks_request_failed(tmp_path, monkeypatch):
+    from core import project_docs
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "alpha")
+    request = {"request_id": "req-1", "status": "pending"}
+    project_docs._atomic_write_json(project_docs.request_path("demo"), request)
+
+    project_docs.record_update_request_worker_exit("demo", request, "worker exited")
+
+    stored = project_docs.read_update_request("demo")
+    state = project_docs.read_state("demo")
+    assert stored["status"] == "failed"
+    assert stored["last_error"] == "worker exited"
+    assert "next_retry_at" not in stored
+    assert state["status"] == "error"
+    assert state["pending_request_id"] is None
+    assert state["last_request_id"] == request["request_id"]
 
 
 def test_supervisor_skips_ambiguous_multi_instance_project_without_crashing_failhard(monkeypatch, caplog):

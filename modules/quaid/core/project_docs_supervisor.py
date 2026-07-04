@@ -410,14 +410,23 @@ def _handle_known_project_worker_exit(project: str, known_workers: Dict[str, int
         return False
     message = f"project docs worker for {project} exited unexpectedly pid={known_pid}"
     _LOGGER.warning(message)
-    project_docs.merge_state(
-        project,
-        {
-            "status": "error",
-            "last_error": message,
-            "last_failed_at": project_docs.utc_now(),
-        },
-    )
+    request = project_docs.read_update_request(project)
+    if request:
+        try:
+            project_docs.record_update_request_worker_exit(project, request, message)
+        except Exception as exc:
+            _LOGGER.warning("failed to record project docs worker exit for %s: %s", project, exc)
+            if _fail_hard_enabled():
+                raise
+    else:
+        project_docs.merge_state(
+            project,
+            {
+                "status": "error",
+                "last_error": message,
+                "last_failed_at": project_docs.utc_now(),
+            },
+        )
     known_workers.pop(project, None)
     if _fail_hard_enabled():
         raise RuntimeError(message)
