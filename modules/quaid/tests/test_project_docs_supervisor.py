@@ -502,6 +502,7 @@ def test_known_project_worker_exit_raises_when_failhard(monkeypatch, caplog):
 
     monkeypatch.setattr(supervisor.project_docs, "read_worker_pid", lambda _project: None)
     monkeypatch.setattr(supervisor.project_docs, "read_update_request", lambda _project: None)
+    monkeypatch.setattr(supervisor.project_docs, "read_state", lambda _project: {})
     monkeypatch.setattr(supervisor.project_docs, "utc_now", lambda: "2026-06-18T00:00:00+00:00")
     monkeypatch.setattr(supervisor.project_docs, "merge_state", lambda project, updates: merged.append((project, updates)) or {})
     monkeypatch.setattr(supervisor, "_fail_hard_enabled", lambda: True)
@@ -532,6 +533,7 @@ def test_known_project_worker_exit_allows_retry_when_failopen(monkeypatch):
 
     monkeypatch.setattr(supervisor.project_docs, "read_worker_pid", lambda _project: None)
     monkeypatch.setattr(supervisor.project_docs, "read_update_request", lambda _project: None)
+    monkeypatch.setattr(supervisor.project_docs, "read_state", lambda _project: {})
     monkeypatch.setattr(supervisor.project_docs, "utc_now", lambda: "2026-06-18T00:00:00+00:00")
     monkeypatch.setattr(supervisor.project_docs, "merge_state", lambda project, updates: merged.append((project, updates)) or {})
     monkeypatch.setattr(supervisor, "_fail_hard_enabled", lambda: False)
@@ -569,7 +571,7 @@ def test_known_project_worker_exit_marks_active_request_failed_when_failopen(mon
     ]
 
 
-def test_known_project_worker_exit_marks_active_request_before_failhard_raise(monkeypatch):
+def test_known_project_worker_exit_records_active_request_without_failhard_supervisor_crash(monkeypatch):
     from core import project_docs_supervisor as supervisor
 
     recorded = []
@@ -585,8 +587,7 @@ def test_known_project_worker_exit_marks_active_request_before_failhard_raise(mo
     )
     monkeypatch.setattr(supervisor, "_fail_hard_enabled", lambda: True)
 
-    with pytest.raises(RuntimeError, match="project docs worker for demo exited unexpectedly pid=1234"):
-        supervisor._handle_known_project_worker_exit("demo", known_workers)
+    assert supervisor._handle_known_project_worker_exit("demo", known_workers) is True
 
     assert known_workers == {}
     assert recorded == [
@@ -596,6 +597,45 @@ def test_known_project_worker_exit_marks_active_request_before_failhard_raise(mo
             "project docs worker for demo exited unexpectedly pid=1234",
         )
     ]
+
+
+def test_known_project_worker_exit_existing_failed_request_does_not_raise_failhard(monkeypatch):
+    from core import project_docs_supervisor as supervisor
+
+    known_workers = {"demo": 1234}
+    request = {"request_id": "req-1", "status": "failed", "last_error": "worker failed"}
+
+    monkeypatch.setattr(supervisor.project_docs, "read_worker_pid", lambda _project: None)
+    monkeypatch.setattr(supervisor.project_docs, "read_update_request", lambda _project: request)
+    monkeypatch.setattr(
+        supervisor.project_docs,
+        "record_update_request_worker_exit",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("already terminal")),
+    )
+    monkeypatch.setattr(supervisor, "_fail_hard_enabled", lambda: True)
+
+    assert supervisor._handle_known_project_worker_exit("demo", known_workers) is True
+    assert known_workers == {}
+
+
+def test_known_project_worker_exit_existing_error_state_does_not_raise_failhard(monkeypatch):
+    from core import project_docs_supervisor as supervisor
+
+    known_workers = {"demo": 1234}
+    state = {"status": "error", "last_error": "update failed"}
+
+    monkeypatch.setattr(supervisor.project_docs, "read_worker_pid", lambda _project: None)
+    monkeypatch.setattr(supervisor.project_docs, "read_update_request", lambda _project: None)
+    monkeypatch.setattr(supervisor.project_docs, "read_state", lambda _project: state)
+    monkeypatch.setattr(
+        supervisor.project_docs,
+        "merge_state",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("already recorded")),
+    )
+    monkeypatch.setattr(supervisor, "_fail_hard_enabled", lambda: True)
+
+    assert supervisor._handle_known_project_worker_exit("demo", known_workers) is True
+    assert known_workers == {}
 
 
 def test_record_update_request_worker_exit_marks_request_failed(tmp_path, monkeypatch):

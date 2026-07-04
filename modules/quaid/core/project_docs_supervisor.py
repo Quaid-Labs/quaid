@@ -412,13 +412,23 @@ def _handle_known_project_worker_exit(project: str, known_workers: Dict[str, int
     _LOGGER.warning(message)
     request = project_docs.read_update_request(project)
     if request:
+        status = str(request.get("status") or "").strip().lower()
+        if status in {"failed", "completed", "cancelled"}:
+            known_workers.pop(project, None)
+            return True
         try:
             project_docs.record_update_request_worker_exit(project, request, message)
         except Exception as exc:
             _LOGGER.warning("failed to record project docs worker exit for %s: %s", project, exc)
             if _fail_hard_enabled():
                 raise
+        known_workers.pop(project, None)
+        return True
     else:
+        state = project_docs.read_state(project)
+        if str(state.get("status") or "").strip().lower() == "error" and str(state.get("last_error") or "").strip():
+            known_workers.pop(project, None)
+            return True
         project_docs.merge_state(
             project,
             {
