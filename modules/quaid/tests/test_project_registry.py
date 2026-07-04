@@ -603,6 +603,26 @@ class TestUnlinkProject:
         # creator should still be present
         assert "creator-instance" in entry["instances"]
 
+    def test_unlink_preserves_sibling_instance(self, mock_adapter):
+        """Unlinking the caller must not remove other linked instances."""
+        _, tmp_path = mock_adapter
+        rules_dir = tmp_path / ".claude" / "rules"
+        rules_dir.mkdir(parents=True)
+        project_rules = rules_dir / "quaid-my-app-project-catalog.md"
+        project_rules.write_text("shared project catalog", encoding="utf-8")
+
+        with patch("lib.instance.instance_id", return_value="codex-main"):
+            create_project("my-app")
+        with patch("lib.instance.instance_id", return_value="codex-silo2"):
+            link_project("my-app")
+
+        with patch("lib.instance.instance_id", return_value="codex-main"):
+            entry = unlink_project("my-app")
+
+        assert entry["instances"] == ["codex-silo2"]
+        assert get_project("my-app")["instances"] == ["codex-silo2"]
+        assert project_rules.is_file()
+
     def test_unlink_is_idempotent(self, mock_adapter):
         """Calling unlink_project() when already unlinked does not raise."""
         _, tmp_path = mock_adapter
@@ -635,6 +655,27 @@ class TestUnlinkProject:
         loaded = get_project("my-app")
         assert "drop-instance" not in loaded["instances"]
 
+    def test_unlink_prune_failure_does_not_mutate_registry(self, mock_adapter, monkeypatch):
+        """failHard side-effect failures must not leave a partial unlink."""
+        _, tmp_path = mock_adapter
+        rules_dir = tmp_path / ".claude" / "rules"
+        rules_dir.mkdir(parents=True)
+        project_rules = rules_dir / "quaid-my-app-project-catalog.md"
+        project_rules.write_text("stale my-app catalog", encoding="utf-8")
+
+        with patch("lib.instance.instance_id", return_value="drop-instance"):
+            create_project("my-app")
+
+        monkeypatch.chdir(tmp_path)
+        with patch("lib.instance.instance_id", return_value="drop-instance"), \
+             patch("pathlib.Path.unlink", side_effect=OSError("rules prune failed")), \
+             patch("core.project_registry._fail_hard_enabled", return_value=True), \
+             pytest.raises(OSError, match="rules prune failed"):
+            unlink_project("my-app")
+
+        loaded = get_project("my-app")
+        assert loaded["instances"] == ["drop-instance"]
+
     def test_unlink_prunes_project_cached_rules_files(self, mock_adapter, monkeypatch):
         _, tmp_path = mock_adapter
         rules_dir = tmp_path / ".claude" / "rules"
@@ -646,10 +687,8 @@ class TestUnlinkProject:
         legacy_combined = rules_dir / "quaid-projects.md.bak"
         legacy_combined.write_text("legacy backup", encoding="utf-8")
 
-        with patch("lib.instance.instance_id", return_value="creator-instance"):
-            create_project("my-app")
         with patch("lib.instance.instance_id", return_value="drop-instance"):
-            link_project("my-app")
+            create_project("my-app")
 
         monkeypatch.chdir(tmp_path)
         with patch("lib.instance.instance_id", return_value="drop-instance"):

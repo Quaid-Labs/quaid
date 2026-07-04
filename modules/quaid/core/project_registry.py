@@ -782,6 +782,8 @@ def _prune_cached_rules_for_project(name: str) -> None:
                     path.unlink()
         except OSError as exc:
             logger.warning("Failed to prune cached rules for project %s in %s: %s", name, rules_dir, exc)
+            if _fail_hard_enabled():
+                raise
 
 
 def unlink_project(name: str) -> Dict[str, Any]:
@@ -801,13 +803,28 @@ def unlink_project(name: str) -> Dict[str, Any]:
     """
     name = _normalize_project_name(name)
     _raise_if_reserved_project_mutation(name, "unlink")
+    from lib.instance import instance_id as _instance_id
+
+    instance = _instance_id()
     with _registry_lock():
         registry = _load_registry()
         if name not in registry["projects"]:
             raise KeyError(f"Project not found: {name}")
 
-        from lib.instance import instance_id as _instance_id
-        instance = _instance_id()
+        instances = registry["projects"][name].get("instances", [])
+        should_unlink = instance in instances
+        remaining_instances = [item for item in instances if item != instance]
+
+    if should_unlink and not remaining_instances:
+        # Run failHard-sensitive side effects before the registry write so a
+        # pruning failure cannot leave a partially committed unlink.
+        _prune_cached_rules_for_project(name)
+
+    with _registry_lock():
+        registry = _load_registry()
+        if name not in registry["projects"]:
+            raise KeyError(f"Project not found: {name}")
+
         instances = registry["projects"][name].get("instances", [])
         if instance in instances:
             instances.remove(instance)
@@ -816,7 +833,6 @@ def unlink_project(name: str) -> Dict[str, Any]:
             _save_registry(registry)
             logger.info("Unlinked instance %s from project %s", instance, name)
         entry = registry["projects"][name]
-    _prune_cached_rules_for_project(name)
     return entry
 
 
