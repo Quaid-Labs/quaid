@@ -4506,6 +4506,8 @@ def _resolve_existing_transcript_fallback_for_signal(
                     session_id,
                     exc,
                 )
+                if _fail_hard_enabled():
+                    raise
             else:
                 adapter_path_str = str(adapter_path or "").strip()
                 if adapter_path_str and os.path.isfile(adapter_path_str):

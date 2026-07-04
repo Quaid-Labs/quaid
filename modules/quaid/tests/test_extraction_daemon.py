@@ -3912,6 +3912,25 @@ def test_process_signal_uses_adapter_resolved_transcript_when_signal_path_missin
     assert "cobalt-postage-oc" in captured.get("transcript", "")
 
 
+def test_resolve_existing_transcript_fallback_adapter_error_raises_under_failhard(monkeypatch):
+    class _Adapter:
+        def get_session_path(self, _session_id):
+            raise OSError("adapter path boom")
+
+    monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: True)
+
+    with pytest.raises(OSError, match="adapter path boom"):
+        extraction_daemon._resolve_existing_transcript_fallback_for_signal(
+            label="daemon-test",
+            session_id="sess-adapter-failhard",
+            transcript_path="",
+            signal_meta={},
+            cursor_data={},
+            staged_state={},
+            adapter=_Adapter(),
+        )
+
+
 @pytest.mark.parametrize(
     "cursor_fixture",
     ["size_mismatch", "zero_size_identity_changed"],
