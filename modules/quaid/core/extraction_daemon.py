@@ -9391,11 +9391,28 @@ def flush_pending_signals(
             "preserved": 0,
             "errors": 0,
             "passes": 0,
+            "idle_checks": 0,
             "remaining_signals": 0,
             "elapsed_seconds": 0.0,
             "instance": _instance_id(),
             "instance_root": str(_instance_root()),
         }
+        idle_checked = False
+
+        def _run_idle_check_once() -> int:
+            nonlocal idle_checked
+            idle_checked = True
+            summary["idle_checks"] = int(summary["idle_checks"]) + 1
+            try:
+                check_idle_sessions(_effective_idle_timeout_minutes(_get_idle_timeout_minutes()))
+            except Exception as exc:
+                if _fail_hard_enabled():
+                    raise RuntimeError("idle check failed while daemon flush is enabled") from exc
+                summary["errors"] = int(summary["errors"]) + 1
+                logger.error("flush idle check failed: %s", exc, exc_info=True)
+            remaining_after_idle = _pending_signal_count()
+            summary["remaining_signals"] = remaining_after_idle
+            return remaining_after_idle
 
         while True:
             signals = read_pending_signals()
@@ -9403,6 +9420,10 @@ def flush_pending_signals(
             if not signals:
                 summary["remaining_signals"] = remaining
                 if remaining == 0:
+                    if not idle_checked:
+                        remaining = _run_idle_check_once()
+                        if remaining > 0:
+                            continue
                     summary["status"] = "drained"
                     break
                 if time.time() >= deadline:
@@ -9434,6 +9455,10 @@ def flush_pending_signals(
             remaining = _pending_signal_count()
             summary["remaining_signals"] = remaining
             if remaining == 0:
+                if not idle_checked:
+                    remaining = _run_idle_check_once()
+                    if remaining > 0:
+                        continue
                 summary["status"] = "drained"
                 break
             if int(max_passes or 0) > 0 and int(summary["passes"]) >= int(max_passes):

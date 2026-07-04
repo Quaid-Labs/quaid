@@ -1052,6 +1052,7 @@ def test_flush_pending_signals_preserves_processing_failure_when_fail_open(monke
     monkeypatch.setattr(extraction_daemon, "_instance_root", lambda: tmp_path)
     monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [signal_payload])
     monkeypatch.setattr(extraction_daemon, "_pending_signal_count", lambda: 0)
+    monkeypatch.setattr(extraction_daemon, "check_idle_sessions", lambda _mins: None)
     monkeypatch.setattr(
         extraction_daemon,
         "process_signal",
@@ -1066,6 +1067,78 @@ def test_flush_pending_signals_preserves_processing_failure_when_fail_open(monke
     assert summary["errors"] == 1
     assert summary["preserved"] == 1
     assert summary["processed"] == 0
+
+
+def test_flush_pending_signals_drains_timeout_eligible_idle_sessions(monkeypatch, tmp_path):
+    transcript_path = tmp_path / "session.jsonl"
+    transcript_path.write_text(
+        '{"role":"user","content":"timeout flush codeword cedar-lantern"}\n'
+        '{"role":"assistant","content":"ack"}\n',
+        encoding="utf-8",
+    )
+
+    now = 1_700_000_000.0
+    old_mtime = now - (31 * 60)
+    os.utime(transcript_path, (old_mtime, old_mtime))
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setattr(extraction_daemon, "_instance_id", lambda: "pytest-runner")
+    monkeypatch.setattr(extraction_daemon, "_reload_config_if_changed", lambda _reason: None)
+    monkeypatch.setattr(extraction_daemon, "_load_runtime_adapter", lambda: None)
+    monkeypatch.setattr(extraction_daemon, "_ensure_discovered_session_cursors", lambda _adapter: None)
+    monkeypatch.setattr(extraction_daemon, "_read_installed_at", lambda: now - (2 * 60 * 60))
+    monkeypatch.setattr(extraction_daemon, "_get_idle_timeout_minutes", lambda: 30)
+    monkeypatch.setattr(extraction_daemon.time, "time", lambda: now)
+
+    cursor_dir = extraction_daemon._cursor_dir()
+    (cursor_dir / "sess-flush-idle.json").write_text(
+        json.dumps(
+            {
+                "session_id": "sess-flush-idle",
+                "line_offset": 0,
+                "transcript_path": str(transcript_path),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    processed = []
+
+    def _process_and_consume(sig):
+        processed.append(sig)
+        extraction_daemon.mark_signal_processed(sig)
+
+    monkeypatch.setattr(extraction_daemon, "process_signal", _process_and_consume)
+
+    summary = extraction_daemon.flush_pending_signals(timeout_seconds=0, poll_interval=0)
+
+    assert summary["status"] == "drained"
+    assert summary["idle_checks"] == 1
+    assert summary["attempted"] == 1
+    assert summary["processed"] == 1
+    assert summary["remaining_signals"] == 0
+    assert processed[0]["type"] == "timeout"
+    assert processed[0]["session_id"] == "sess-flush-idle"
+
+
+def test_flush_pending_signals_raises_idle_check_failure_under_failhard(monkeypatch, tmp_path):
+    monkeypatch.delenv("QUAID_DAEMON", raising=False)
+    monkeypatch.setattr(extraction_daemon, "_instance_id", lambda: "pytest-runner")
+    monkeypatch.setattr(extraction_daemon, "_instance_root", lambda: tmp_path)
+    monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
+    monkeypatch.setattr(extraction_daemon, "_pending_signal_count", lambda: 0)
+    monkeypatch.setattr(
+        extraction_daemon,
+        "check_idle_sessions",
+        lambda _mins: (_ for _ in ()).throw(RuntimeError("idle scanner down")),
+    )
+    monkeypatch.setattr(extraction_daemon, "_get_idle_timeout_minutes", lambda: 30)
+    monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: True)
+
+    with pytest.raises(RuntimeError, match="idle check failed while daemon flush is enabled"):
+        extraction_daemon.flush_pending_signals(timeout_seconds=0, poll_interval=0)
+
+    assert "QUAID_DAEMON" not in os.environ
 
 
 def test_flush_pending_signals_raises_processing_failure_under_failhard(monkeypatch, tmp_path):
