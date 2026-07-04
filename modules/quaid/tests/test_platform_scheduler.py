@@ -19,6 +19,16 @@ def _short_tmp() -> Path:
     return d
 
 
+def test_scheduler_socket_path_uses_short_fallback_for_long_quaid_home(tmp_path):
+    from core import platform_scheduler
+
+    long_home = tmp_path / ("very-long-quaid-home-" + ("x" * 120))
+    sock_path = platform_scheduler._sock_path(long_home, "claude-code")
+
+    assert str(sock_path).startswith("/tmp/")
+    assert len(str(sock_path)) < 100
+
+
 def test_fail_hard_enabled_fails_closed_on_import_error(monkeypatch, caplog):
     from core import platform_scheduler
 

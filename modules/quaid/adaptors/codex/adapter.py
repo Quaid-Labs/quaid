@@ -170,6 +170,8 @@ class CodexAdapter(QuaidAdapter):
         try:
             home = self.quaid_home() / "instances"
             candidates = list(home.iterdir())
+        except FileNotFoundError:
+            candidates = []
         except Exception as exc:
             if is_fail_hard_enabled():
                 raise

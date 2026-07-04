@@ -511,7 +511,7 @@ describe("install daemon policy", () => {
     );
 
     expect(presnapshotText).toContain("run_presnapshot_matrix_plugin_install() {");
-    expect(presnapshotText).toContain('min_openclaw_version="${OPENCLAW_MATRIX_MIN_OPENCLAW_VERSION:-2026.6.5}"');
+    expect(presnapshotText).toContain('min_openclaw_version="${OPENCLAW_MATRIX_MIN_OPENCLAW_VERSION:-2026.6.11}"');
     expect(presnapshotText).toContain('matrix_plugin_version="${OPENCLAW_MATRIX_PLUGIN_VERSION:-2026.6.1}"');
     expect(presnapshotText).toContain('matrix_plugin_spec="${OPENCLAW_MATRIX_PLUGIN_SPEC:-@openclaw/matrix@${matrix_plugin_version}}"');
     expect(presnapshotText).toContain("openclaw plugins list");

@@ -147,9 +147,7 @@ def _now() -> datetime:
         try:
             return datetime.fromisoformat(raw.replace("Z", "+00:00"))
         except ValueError as exc:
-            if _is_fail_hard_mode():
-                raise RuntimeError(f"Invalid QUAID_NOW={raw!r}") from exc
-            logger.warning("Invalid QUAID_NOW=%r; using wall clock", raw)
+            raise ValueError(f"Invalid QUAID_NOW={raw!r}") from exc
     return datetime.now()
 
 

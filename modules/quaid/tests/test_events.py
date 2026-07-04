@@ -2816,6 +2816,7 @@ def test_request_project_docs_update_runs_authoritative_handler(monkeypatch, tmp
     assert response["status"] == "ok"
     result = response["responses"][0]["result"]
     assert calls == [
+        ("sync", "demo", str(project_root), ["AGENTS.md", "PROJECT.md", "TOOLS.md"], ["PROJECT.log"]),
         (
             "update",
             [{"project": "demo", "changes": [{"path": "tool.py"}]}],
@@ -2836,7 +2837,7 @@ def test_request_project_docs_update_runs_authoritative_handler(monkeypatch, tmp
         ("index_logs", "demo"),
     ]
     assert result["metrics"]["docs_updated"] == 2
-    assert result["registry_sync"] == {"registered": 3, "unregistered": 1, "project_md_refreshed": 1}
+    assert result["registry_sync"] == {"registered": 6, "unregistered": 2, "project_md_refreshed": 2}
     assert result["indexed_docs"] == 4
     assert result["indexed_project_logs"] == 5
 

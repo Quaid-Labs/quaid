@@ -1518,17 +1518,13 @@ class TestStoreBasic:
         assert node is not None
         assert node.created_at == "2026-03-11T23:59:59"
 
-    def test_malformed_quaid_now_honors_failhard(self, monkeypatch):
+    def test_malformed_quaid_now_is_rejected(self, monkeypatch):
         import datastore.memorydb.memory_graph as mg
 
         monkeypatch.setenv("QUAID_NOW", "not-a-date")
 
-        with patch.object(mg, "_is_fail_hard_mode", return_value=True):
-            with pytest.raises(RuntimeError, match="Invalid QUAID_NOW"):
-                mg._now()
-
-        with patch.object(mg, "_is_fail_hard_mode", return_value=False):
-            assert mg._now().isoformat().startswith("20")
+        with pytest.raises(ValueError, match="Invalid QUAID_NOW"):
+            mg._now()
 
     def test_supersede_node_timestamps_honor_quaid_now(self, tmp_path, monkeypatch):
         import datastore.memorydb.memory_graph as mg
@@ -21100,14 +21096,13 @@ class TestRecallLimitEdgeCases:
         assert payload["telemetry"]["filters"]["threshold_basis"] == "composite_score"
         assert len(payload["telemetry"]["samples"]["threshold_rejected"]) >= 1
 
-    def test_recall_telemetry_malformed_clock_respects_failhard(self, tmp_path, monkeypatch):
+    def test_recall_telemetry_malformed_clock_is_rejected(self, tmp_path, monkeypatch):
         from datastore.memorydb import memory_graph as mg
 
         monkeypatch.setenv("QUAID_NOW", "not-a-date")
-        monkeypatch.setattr(mg, "_is_fail_hard_mode", lambda: True)
         monkeypatch.setattr(mg, "get_logs_dir", lambda: tmp_path / "logs")
 
-        with pytest.raises(RuntimeError, match="Invalid QUAID_NOW"):
+        with pytest.raises(ValueError, match="Invalid QUAID_NOW"):
             mg._append_recall_telemetry_trace({"query": "clock contract"})
 
         assert not (tmp_path / "logs" / "recall-telemetry.jsonl").exists()

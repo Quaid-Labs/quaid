@@ -19,6 +19,7 @@ On client disconnect: held slots are reclaimed, queued requests dropped.
 """
 
 import errno
+import hashlib
 import json
 import logging
 import os
@@ -52,7 +53,14 @@ def _shared_run_dir(quaid_home: Path) -> Path:
 
 
 def _sock_path(quaid_home: Path, platform: str) -> Path:
-    return _shared_run_dir(quaid_home) / f"{platform}-scheduler.sock"
+    path = _shared_run_dir(quaid_home) / f"{platform}-scheduler.sock"
+    if len(str(path)) < 100:
+        return path
+    digest = hashlib.sha256(f"{Path(quaid_home).resolve()}::{platform}".encode("utf-8")).hexdigest()[:16]
+    short_base = os.environ.get("QUAID_PLATFORM_SCHEDULER_SOCKET_DIR") or "/tmp"
+    short_dir = Path(short_base) / "quaid-platform-scheduler"
+    short_dir.mkdir(parents=True, exist_ok=True)
+    return short_dir / f"{platform}-{digest}.sock"
 
 
 def _pid_path(quaid_home: Path, platform: str) -> Path:
