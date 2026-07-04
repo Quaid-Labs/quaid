@@ -601,7 +601,7 @@ def test_known_project_worker_exit_records_active_request_without_failhard_super
     ]
 
 
-def test_known_project_worker_exit_existing_failed_request_does_not_raise_failhard(monkeypatch):
+def test_known_project_worker_exit_existing_failed_request_does_not_raise_failhard(monkeypatch, caplog):
     from core import project_docs_supervisor as supervisor
 
     known_workers = {"demo": 1234}
@@ -616,11 +616,36 @@ def test_known_project_worker_exit_existing_failed_request_does_not_raise_failha
     )
     monkeypatch.setattr(supervisor, "_fail_hard_enabled", lambda: True)
 
-    assert supervisor._handle_known_project_worker_exit("demo", known_workers) is True
+    with caplog.at_level("INFO", logger=supervisor.__name__):
+        assert supervisor._handle_known_project_worker_exit("demo", known_workers) is True
     assert known_workers == {}
+    assert "already recorded in terminal request status=failed" in caplog.text
 
 
-def test_known_project_worker_exit_existing_error_state_does_not_raise_failhard(monkeypatch):
+def test_known_project_worker_exit_record_failure_does_not_log_success_when_failopen(monkeypatch, caplog):
+    from core import project_docs_supervisor as supervisor
+
+    known_workers = {"demo": 1234}
+    request = {"request_id": "req-1", "status": "pending"}
+
+    monkeypatch.setattr(supervisor.project_docs, "read_worker_pid", lambda _project: None)
+    monkeypatch.setattr(supervisor.project_docs, "read_update_request", lambda _project: request)
+    monkeypatch.setattr(
+        supervisor.project_docs,
+        "record_update_request_worker_exit",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("record boom")),
+    )
+    monkeypatch.setattr(supervisor, "_fail_hard_enabled", lambda: False)
+
+    with caplog.at_level("WARNING", logger=supervisor.__name__):
+        assert supervisor._handle_known_project_worker_exit("demo", known_workers) is True
+
+    assert known_workers == {}
+    assert "failed to record project docs worker exit for demo: record boom" in caplog.text
+    assert "recorded in active request; containing supervisor-level raise" not in caplog.text
+
+
+def test_known_project_worker_exit_existing_error_state_does_not_raise_failhard(monkeypatch, caplog):
     from core import project_docs_supervisor as supervisor
 
     known_workers = {"demo": 1234}
@@ -636,8 +661,10 @@ def test_known_project_worker_exit_existing_error_state_does_not_raise_failhard(
     )
     monkeypatch.setattr(supervisor, "_fail_hard_enabled", lambda: True)
 
-    assert supervisor._handle_known_project_worker_exit("demo", known_workers) is True
+    with caplog.at_level("INFO", logger=supervisor.__name__):
+        assert supervisor._handle_known_project_worker_exit("demo", known_workers) is True
     assert known_workers == {}
+    assert "already reflected in project state status=error" in caplog.text
 
 
 @pytest.mark.parametrize("status", ["fresh", "stopped"])

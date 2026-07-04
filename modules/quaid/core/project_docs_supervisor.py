@@ -428,12 +428,13 @@ def _handle_known_project_worker_exit(project: str, known_workers: Dict[str, int
             _LOGGER.warning("failed to record project docs worker exit for %s: %s", project, exc)
             if _fail_hard_enabled():
                 raise
-        # The worker failure is now durable in the request/state files. Raising
-        # here under failHard would only cascade into a global supervisor marker.
-        _LOGGER.warning(
-            "project docs worker exit for %s recorded in active request; containing supervisor-level raise",
-            project,
-        )
+        else:
+            # The worker failure is now durable in the request/state files. Raising
+            # here under failHard would only cascade into a global supervisor marker.
+            _LOGGER.warning(
+                "project docs worker exit for %s recorded in active request; containing supervisor-level raise",
+                project,
+            )
         known_workers.pop(project, None)
         return True
     else:
