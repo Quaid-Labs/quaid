@@ -280,6 +280,38 @@ class TestConfigPathResolution:
         assert "shared/config/claude/config.json" not in str(paths[1])
         assert paths[2] == tmp_path / "shared" / "config" / "global" / "config.json"
 
+    def test_claude_code_platform_models_override_global_for_short_instance(self, tmp_path):
+        import config
+
+        root = tmp_path / "instances" / "cc-livetest"
+        platform_cfg = tmp_path / "shared" / "config" / "claude-code" / "config.json"
+        global_cfg = tmp_path / "shared" / "config" / "global" / "config.json"
+        root.mkdir(parents=True)
+        platform_cfg.parent.mkdir(parents=True, exist_ok=True)
+        global_cfg.parent.mkdir(parents=True, exist_ok=True)
+        (root / "config.json").write_text(json.dumps({}), encoding="utf-8")
+        platform_cfg.write_text(
+            json.dumps({"models": {"fastReasoning": "invalid-model-m6-probe"}}),
+            encoding="utf-8",
+        )
+        global_cfg.write_text(
+            json.dumps({"models": {"fastReasoning": "claude-haiku-4-5"}}),
+            encoding="utf-8",
+        )
+
+        old_config = config._config
+        config._config = None
+        try:
+            with patch.object(config, "_workspace_root", lambda: root), \
+                 patch.object(config, "_quaid_home", lambda: tmp_path):
+                paths = config._config_paths()
+                cfg = config.load_config()
+
+            assert paths[1] == platform_cfg
+            assert cfg.models.fast_reasoning == "invalid-model-m6-probe"
+        finally:
+            config._config = old_config
+
     def test_config_paths_include_platform_and_global_shared_layers_for_codex(self):
         import config
 
