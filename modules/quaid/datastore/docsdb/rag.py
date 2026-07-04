@@ -600,6 +600,10 @@ def _docs_rank_score(query_terms: List[str], query: str, source_file: str, secti
         score -= 0.18
     if wants_specific_source:
         score -= _docs_source_penalty(query_terms, source_file)
+        if path_hits == 0 and header_hits == 0 and content_hits == 0:
+            # Concrete docs-anchor queries should not let embedding ties put
+            # zero-overlap chunks above rows that actually contain the anchor.
+            score -= 0.24
     score -= _docs_scaffold_penalty(query_terms, source_file, section_header, content, content_hits)
 
     return max(0.0, round(score, 4))
