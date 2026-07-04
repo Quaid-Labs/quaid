@@ -464,6 +464,9 @@ class TestTemporalContradictionCandidates:
             created_at="2026-04-01T00:00:00",
             valid_from=None,
             valid_until=None,
+            occurred_start=None,
+            occurred_end=None,
+            mentioned_at=None,
         )
         old_node = SimpleNamespace(
             id="n-old",
@@ -473,6 +476,9 @@ class TestTemporalContradictionCandidates:
             created_at="2026-03-01T00:00:00",
             valid_from=None,
             valid_until=None,
+            occurred_start=None,
+            occurred_end=None,
+            mentioned_at=None,
         )
 
         class _FakeGraph:
@@ -512,6 +518,9 @@ class TestTemporalContradictionCandidates:
             created_at="2026-04-01T00:00:00",
             valid_from=None,
             valid_until=None,
+            occurred_start=None,
+            occurred_end=None,
+            mentioned_at=None,
         )
         old_node = SimpleNamespace(
             id="n-old",
@@ -521,6 +530,9 @@ class TestTemporalContradictionCandidates:
             created_at="2026-03-01T00:00:00",
             valid_from=None,
             valid_until=None,
+            occurred_start=None,
+            occurred_end=None,
+            mentioned_at=None,
         )
 
         class _FakeGraph:
