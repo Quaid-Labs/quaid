@@ -7841,6 +7841,7 @@ def _should_suppress_default_session_chunk_rows(
     *,
     suppress_session_chunk_rows: bool,
 ) -> bool:
+    # CLI default store plans pass the flag; API/programmatic recall uses persisted auto-include metadata.
     if suppress_session_chunk_rows:
         return True
     if not isinstance(meta, dict):
