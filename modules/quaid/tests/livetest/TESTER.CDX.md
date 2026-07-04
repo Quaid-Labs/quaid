@@ -60,6 +60,10 @@ sequence. If you re-use a pre-install Codex session for M1 seeding,
 `hook-inject` will not fire, the seed will not produce a session transition
 signal, and extraction will silently skip the turn.
 
+Preflight also seeds Codex project trust for the configured CDX project path and
+its resolved realpath. This matters on macOS where `/tmp/cdx-livetest` resolves
+to `/private/tmp/cdx-livetest`; both forms must be trusted before hooks fire.
+
 **MANDATORY — verify effective models before any test messages:**
 CDX may define models in the instance, platform, or global config layer. Do not
 patch tiers mid-run. Verify the effective layered values are sane before sending

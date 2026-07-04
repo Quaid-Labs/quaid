@@ -696,6 +696,127 @@ verify_codex_oauth_seed_persisted() {
     fi
 }
 
+ensure_remote_codex_project_trust() {
+    local heading="${1:-Trusting CDX project paths in Codex config...}"
+    local cdx_enabled cdx_project_dir
+
+    echo ""
+    echo "$heading"
+
+    cdx_enabled="$(read_config platforms.cdx.enabled)"
+    if [[ "$cdx_enabled" != "True" && "$cdx_enabled" != "true" ]]; then
+        echo "  (skipped — CDX platform not enabled in config)"
+        return 0
+    fi
+
+    cdx_project_dir="$(read_config platforms.cdx.project_dir)"
+    if [[ -z "$cdx_project_dir" ]]; then
+        echo "  $FAIL  platforms.cdx.project_dir must be set before Codex project trust can be seeded"
+        ERRORS=$((ERRORS + 1))
+        return 0
+    fi
+
+    if [[ "$DRY_RUN" == "1" ]]; then
+        echo "  [dry-run] would trust $cdx_project_dir and its resolved path in $REMOTE_HOST:~/.codex/config.{json,toml}"
+        return 0
+    fi
+
+    ssh "$REMOTE_HOST" python3 - "$cdx_project_dir" <<'PYEOF'
+import json
+import os
+import pathlib
+import re
+import sys
+
+project_dir = str(sys.argv[1] or "").strip()
+if not project_dir:
+    raise SystemExit("missing CDX project_dir")
+
+logical = pathlib.Path(project_dir).expanduser()
+try:
+    resolved = logical.resolve(strict=False)
+except Exception:
+    resolved = logical
+
+candidates = []
+for candidate in (logical, resolved):
+    value = str(candidate)
+    if value and value not in candidates:
+        candidates.append(value)
+
+codex_dir = pathlib.Path.home() / ".codex"
+codex_dir.mkdir(parents=True, exist_ok=True)
+
+config_json = codex_dir / "config.json"
+if config_json.exists() and config_json.read_text(encoding="utf-8").strip():
+    payload = json.loads(config_json.read_text(encoding="utf-8"))
+else:
+    payload = {}
+if not isinstance(payload, dict):
+    raise SystemExit(f"invalid Codex config JSON at {config_json}")
+
+projects = payload.get("projects")
+if not isinstance(projects, dict):
+    projects = {}
+payload["projects"] = projects
+for candidate in candidates:
+    entry = projects.get(candidate)
+    if not isinstance(entry, dict):
+        entry = {}
+    entry["trust_level"] = "trusted"
+    projects[candidate] = entry
+
+tmp_json = config_json.with_name(f"{config_json.name}.tmp-{os.getpid()}")
+tmp_json.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+os.replace(tmp_json, config_json)
+
+config_toml = codex_dir / "config.toml"
+text = config_toml.read_text(encoding="utf-8") if config_toml.exists() else ""
+
+def upsert_project_trust(raw: str, candidate: str) -> str:
+    normalized = str(raw or "").replace("\r\n", "\n")
+    lines = normalized.split("\n") if normalized else []
+    table = f"[projects.{json.dumps(candidate)}]"
+    trust_line = 'trust_level = "trusted"'
+
+    table_index = -1
+    for idx, line in enumerate(lines):
+        if line.strip() == table:
+            table_index = idx
+            break
+
+    if table_index == -1:
+        prefix = normalized.rstrip("\n")
+        separator = "\n\n" if prefix else ""
+        return f"{prefix}{separator}{table}\n{trust_line}\n"
+
+    section_end = len(lines)
+    for idx in range(table_index + 1, len(lines)):
+        if re.match(r"^\s*\[[^\]]+\]\s*$", lines[idx]):
+            section_end = idx
+            break
+
+    for idx in range(table_index + 1, section_end):
+        if re.match(r"^\s*trust_level\s*=", lines[idx]):
+            lines[idx] = trust_line
+            return "\n".join(lines).rstrip("\n") + "\n"
+
+    lines.insert(section_end, trust_line)
+    return "\n".join(lines).rstrip("\n") + "\n"
+
+updated = text
+for candidate in candidates:
+    updated = upsert_project_trust(updated, candidate)
+
+if updated != text:
+    tmp_toml = config_toml.with_name(f"{config_toml.name}.tmp-{os.getpid()}")
+    tmp_toml.write_text(updated, encoding="utf-8")
+    os.replace(tmp_toml, config_toml)
+
+print("  trusted Codex project paths: " + ", ".join(candidates))
+PYEOF
+}
+
 echo "========================================"
 echo " livetest-preflight"
 echo " Remote host : $REMOTE_HOST"
@@ -1258,6 +1379,9 @@ else
     LIVETEST_WIPE_YES=1 "$SCRIPT_DIR/livetest-wipe.sh" "${WIPE_ARGS[@]}"
     echo "  [5/8] wipe complete"
 fi
+
+ensure_remote_codex_project_trust "[5a/8] Trusting CDX project paths in Codex config..."
+abort_if_errors "Preflight"
 
 # --- Step 6: Code sync to remote (after wipe so install source is not deleted) ---
 echo ""
