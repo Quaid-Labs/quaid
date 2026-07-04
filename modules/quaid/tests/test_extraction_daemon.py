@@ -1135,7 +1135,7 @@ def test_flush_pending_signals_raises_idle_check_failure_under_failhard(monkeypa
     monkeypatch.setattr(extraction_daemon, "_get_idle_timeout_minutes", lambda: 30)
     monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: True)
 
-    with pytest.raises(RuntimeError, match="idle check failed while daemon flush is enabled"):
+    with pytest.raises(RuntimeError, match="idle check failed during daemon flush while failHard is enabled"):
         extraction_daemon.flush_pending_signals(timeout_seconds=0, poll_interval=0)
 
     assert "QUAID_DAEMON" not in os.environ

@@ -9407,7 +9407,7 @@ def flush_pending_signals(
                 check_idle_sessions(_effective_idle_timeout_minutes(_get_idle_timeout_minutes()))
             except Exception as exc:
                 if _fail_hard_enabled():
-                    raise RuntimeError("idle check failed while daemon flush is enabled") from exc
+                    raise RuntimeError("idle check failed during daemon flush while failHard is enabled") from exc
                 summary["errors"] = int(summary["errors"]) + 1
                 logger.error("flush idle check failed: %s", exc, exc_info=True)
             remaining_after_idle = _pending_signal_count()
