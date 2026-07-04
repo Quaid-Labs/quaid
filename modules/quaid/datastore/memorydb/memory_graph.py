@@ -7676,6 +7676,7 @@ def _attach_source_chunks_to_recall_rows(
                 if row_chunk_id and row_owner:
                     chunk_owner_pairs.add((row_chunk_id, row_owner))
             chunks_by_key: Dict[Tuple[str, str], Dict[str, Any]] = {}
+            chunk_existing_owners: Dict[str, set[str]] = {}
             if chunk_owner_pairs:
                 graph._ensure_source_chunks_table(conn)
                 sorted_pairs = sorted(chunk_owner_pairs)
@@ -7690,6 +7691,17 @@ def _attach_source_chunks_to_recall_rows(
                     chunk_owner = str(chunk.get("owner_id") or "").strip()
                     if chunk_id and chunk_owner:
                         chunks_by_key[(chunk_id, chunk_owner)] = chunk
+                chunk_ids = sorted({chunk_id for chunk_id, _owner in sorted_pairs if chunk_id})
+                if chunk_ids:
+                    placeholders = ",".join("?" for _ in chunk_ids)
+                    for db_row in conn.execute(
+                        f"SELECT chunk_id, owner_id FROM source_chunks WHERE chunk_id IN ({placeholders})",
+                        chunk_ids,
+                    ).fetchall():
+                        chunk_id = str(db_row["chunk_id"] or "").strip()
+                        chunk_owner = str(db_row["owner_id"] or "").strip()
+                        if chunk_id and chunk_owner:
+                            chunk_existing_owners.setdefault(chunk_id, set()).add(chunk_owner)
     except Exception as exc:
         if _is_fail_hard_mode():
             raise RuntimeError("Failed to attach source chunks to recall results") from exc
@@ -7734,6 +7746,20 @@ def _attach_source_chunks_to_recall_rows(
             continue
         chunk = chunks_by_key.get((chunk_id, row_owner))
         if not chunk:
+            existing_owners = chunk_existing_owners.get(chunk_id, set())
+            if row_owner and existing_owners and row_owner not in existing_owners:
+                summary["missing"] += 1
+                row["source_chunk_missing"] = True
+                if _is_fail_hard_mode():
+                    raise RuntimeError(
+                        f"Recall result source chunk owner mismatch: result={row_id} chunk={chunk_id}"
+                    )
+                logger.warning(
+                    "[recall] include_chunks owner mismatch for result %s chunk %s",
+                    row_id,
+                    chunk_id,
+                )
+                continue
             summary["missing"] += 1
             row["source_chunk_missing"] = True
             if _is_fail_hard_mode():

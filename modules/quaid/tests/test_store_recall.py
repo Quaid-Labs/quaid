@@ -7653,6 +7653,51 @@ class TestSourceChunkStorage:
         assert meta["session_chunks"]["attached"] == 0
         assert meta["session_chunks"]["missing"] == 1
 
+    def test_recall_include_chunks_raises_on_cross_owner_chunk_under_failhard(self, tmp_path):
+        """A mutated chunk owner must not bypass failHard include-chunks reads."""
+        from datastore.memorydb.memory_graph import recall, store
+
+        graph, _db_file = _make_graph(tmp_path)
+        chunk = graph.store_source_chunk(
+            "User: Cora keeps the cedar token in the radio drawer.",
+            owner_id="cora",
+            session_id="session-owner-mismatch",
+            chunk_index=0,
+        )
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+            store(
+                "Cora keeps the cedar token in the radio drawer",
+                owner_id="cora",
+                source="extract",
+                source_id="session-owner-mismatch",
+                source_chunk_id=chunk["chunk_id"],
+                skip_dedup=True,
+            )
+
+        with graph._get_conn() as conn:
+            conn.execute(
+                "UPDATE source_chunks SET owner_id = ? WHERE chunk_id = ?",
+                ("intruder-owner", chunk["chunk_id"]),
+            )
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
+             patch("datastore.memorydb.memory_graph._is_fail_hard_mode", return_value=True):
+            with pytest.raises(RuntimeError, match="owner mismatch"):
+                recall(
+                    "Cora cedar token radio drawer",
+                    owner_id="cora",
+                    use_routing=False,
+                    use_reranker=False,
+                    include_lexical_anchor_shaping=False,
+                    min_similarity=0.0,
+                    max_turns=1,
+                    include_chunks=True,
+                    return_meta=True,
+                )
+
     def test_recall_include_chunks_marks_missing_chunk_when_failhard_disabled(self, tmp_path):
         """Missing opt-in evidence is visible but non-fatal when failHard is disabled."""
         from datastore.memorydb.memory_graph import recall, store
