@@ -754,6 +754,11 @@ def enable_instance_monitor(instance: str) -> None:
             raise
 
 
+def read_instance_monitor_disabled(instance: str) -> Optional[Dict[str, Any]]:
+    data = _read_json(instance_monitor_disabled_path(instance), {})
+    return data if isinstance(data, dict) and data else None
+
+
 def is_instance_monitor_disabled(instance: str) -> bool:
     try:
         return instance_monitor_disabled_path(instance).is_file()

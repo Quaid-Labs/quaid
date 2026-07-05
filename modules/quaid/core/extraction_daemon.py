@@ -9518,11 +9518,27 @@ def ensure_alive() -> int:
                     fail_hard = bool(is_fail_hard_enabled())
                 if fail_hard:
                     raise
+        monitor_disabled_error = False
         try:
             from core import project_docs as project_docs_mod
-            project_docs_mod.enable_instance_monitor(_instance_id())
+            instance_id = _instance_id()
+            disabled_marker = project_docs_mod.read_instance_monitor_disabled(instance_id)
+            if disabled_marker:
+                reason = str(disabled_marker.get("reason") or "").strip()
+                if reason != "daemon_stop":
+                    pid = read_pid()
+                    if pid is not None:
+                        return pid
+                    monitor_disabled_error = True
+                    raise RuntimeError(
+                        f"instance monitor for {instance_id} is disabled ({reason or 'unknown reason'}); "
+                        "not starting extraction daemon directly"
+                    )
+            project_docs_mod.enable_instance_monitor(instance_id)
             project_docs_mod.ensure_supervisor_alive()
         except Exception as exc:
+            if monitor_disabled_error:
+                raise
             logger.warning("project docs supervisor ensure_alive failed: %s", exc)
             supervisor_failure_error = getattr(
                 project_docs_mod,

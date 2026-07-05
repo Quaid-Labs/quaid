@@ -2245,6 +2245,57 @@ def test_ensure_alive_uses_supervisor_pid_startup_budget(monkeypatch):
     assert enabled == ["claude-code-livetest"]
 
 
+def test_ensure_alive_reenables_daemon_stop_instance_monitor_marker(monkeypatch):
+    steps = []
+
+    monkeypatch.delenv("QUAID_SUPERVISOR_DISABLE", raising=False)
+    monkeypatch.setenv("QUAID_INSTANCE", "claude-code-livetest")
+    monkeypatch.setattr(extraction_daemon, "read_pid", lambda: 4444)
+    monkeypatch.setattr("lib.adapter.get_adapter", lambda: object())
+    monkeypatch.setattr(
+        "core.project_docs.read_instance_monitor_disabled",
+        lambda instance: {"instance": instance, "reason": "daemon_stop"},
+    )
+    monkeypatch.setattr(
+        "core.project_docs.enable_instance_monitor",
+        lambda instance: steps.append(f"enable:{instance}"),
+    )
+    monkeypatch.setattr(
+        "core.project_docs.ensure_supervisor_alive",
+        lambda: steps.append("ensure") or 1111,
+    )
+
+    assert extraction_daemon.ensure_alive() == 4444
+    assert steps == ["enable:claude-code-livetest", "ensure"]
+
+
+def test_ensure_alive_refuses_crash_loop_disabled_instance_monitor_marker(monkeypatch):
+    steps = []
+
+    monkeypatch.delenv("QUAID_SUPERVISOR_DISABLE", raising=False)
+    monkeypatch.setenv("QUAID_INSTANCE", "claude-code-livetest")
+    monkeypatch.setattr(extraction_daemon, "read_pid", lambda: None)
+    monkeypatch.setattr(extraction_daemon, "start_daemon", lambda: steps.append("direct") or 5555)
+    monkeypatch.setattr("lib.adapter.get_adapter", lambda: object())
+    monkeypatch.setattr(
+        "core.project_docs.read_instance_monitor_disabled",
+        lambda instance: {"instance": instance, "reason": "daemon_crash_loop:3_crashes"},
+    )
+    monkeypatch.setattr(
+        "core.project_docs.enable_instance_monitor",
+        lambda instance: steps.append(f"enable:{instance}"),
+    )
+    monkeypatch.setattr(
+        "core.project_docs.ensure_supervisor_alive",
+        lambda: steps.append("ensure") or 1111,
+    )
+
+    with pytest.raises(RuntimeError, match="daemon_crash_loop:3_crashes"):
+        extraction_daemon.ensure_alive()
+
+    assert steps == []
+
+
 def test_ensure_alive_bootstraps_explicit_instance_before_supervisor(monkeypatch):
     now = {"value": 100.0}
     steps = []
