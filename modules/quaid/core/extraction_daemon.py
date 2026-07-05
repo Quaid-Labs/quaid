@@ -9501,6 +9501,34 @@ def flush_pending_signals(
                     raise RuntimeError("idle check failed during daemon flush while failHard is enabled") from exc
                 summary["errors"] = int(summary["errors"]) + 1
                 logger.error("flush idle check failed: %s", exc, exc_info=True)
+            if _pending_signal_count() == 0:
+                pending = read_pending_signals()
+                pending_session_ids = {s.get("session_id") for s in pending}
+                known_cursor_session_ids: set[str] = set()
+                try:
+                    for cursor_file in _cursor_dir().glob("*.json"):
+                        try:
+                            cursor_data = json.loads(cursor_file.read_text(encoding="utf-8"))
+                        except (json.JSONDecodeError, OSError):
+                            continue
+                        if isinstance(cursor_data, dict):
+                            cursor_session_id = str(cursor_data.get("session_id") or "").strip()
+                            if cursor_session_id:
+                                known_cursor_session_ids.add(cursor_session_id)
+                except OSError as exc:
+                    if _fail_hard_enabled():
+                        raise RuntimeError(
+                            "cursor scan failed during daemon flush while failHard is enabled"
+                        ) from exc
+                    logger.debug("flush cursor scan failed before rolling recovery: %s", exc)
+                _queue_idle_semantic_rolling_flushes_without_cursor(
+                    pending_session_ids=pending_session_ids,
+                    pending_source_keys=_pending_signal_source_keys(pending),
+                    known_cursor_session_ids=known_cursor_session_ids,
+                    now=time.time(),
+                    timeout_seconds=0.0,
+                    installed_at_ts=0.0,
+                )
             remaining_after_idle = _pending_signal_count()
             summary["remaining_signals"] = remaining_after_idle
             return remaining_after_idle

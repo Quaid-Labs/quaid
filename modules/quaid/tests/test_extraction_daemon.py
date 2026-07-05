@@ -1121,6 +1121,52 @@ def test_flush_pending_signals_drains_timeout_eligible_idle_sessions(monkeypatch
     assert processed[0]["session_id"] == "sess-flush-idle"
 
 
+def test_flush_pending_signals_drains_cursorless_rolling_semantic_buffer(monkeypatch, tmp_path):
+    transcript_path = tmp_path / "rollout-short.jsonl"
+    transcript_path.write_text(
+        '{"role":"user","content":"The reading chair has a brass desk lamp beside it."}\n'
+        '{"role":"assistant","content":"Noted."}\n',
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setattr(extraction_daemon, "_instance_id", lambda: "pytest-runner")
+    monkeypatch.setattr(extraction_daemon, "check_idle_sessions", lambda _mins: None)
+
+    extraction_daemon.write_rolling_state(
+        "sess-flush-rolling",
+        {
+            "transcript_path": str(transcript_path),
+            "buffer_transcript_path": str(transcript_path),
+            "buffered_line_offset": 2,
+            "processed_line_offset": 2,
+            "semantic_buffer": "User: The reading chair has a brass desk lamp beside it.\nAssistant: Noted.",
+            "semantic_buffer_tokens": 18,
+        },
+    )
+
+    processed = []
+
+    def _process_and_consume(sig):
+        processed.append(sig)
+        extraction_daemon.mark_signal_processed(sig)
+
+    monkeypatch.setattr(extraction_daemon, "process_signal", _process_and_consume)
+
+    summary = extraction_daemon.flush_pending_signals(timeout_seconds=0, poll_interval=0)
+
+    assert summary["status"] == "drained"
+    assert summary["idle_checks"] == 1
+    assert summary["attempted"] == 1
+    assert summary["processed"] == 1
+    assert summary["remaining_signals"] == 0
+    assert processed[0]["type"] == "session_end"
+    assert processed[0]["session_id"] == "sess-flush-rolling"
+    assert processed[0]["transcript_path"] == str(transcript_path)
+    assert processed[0]["meta"]["reason"] == "idle_rolling_semantic_buffer_flush"
+    assert processed[0]["meta"]["semantic_buffer_tokens"] == 18
+
+
 def test_flush_pending_signals_raises_idle_check_failure_under_failhard(monkeypatch, tmp_path):
     monkeypatch.delenv("QUAID_DAEMON", raising=False)
     monkeypatch.setattr(extraction_daemon, "_instance_id", lambda: "pytest-runner")
