@@ -9520,7 +9520,7 @@ def flush_pending_signals(
                         raise RuntimeError(
                             "cursor scan failed during daemon flush while failHard is enabled"
                         ) from exc
-                    logger.debug("flush cursor scan failed before rolling recovery: %s", exc)
+                    logger.warning("flush cursor scan failed before rolling recovery: %s", exc)
                 _queue_idle_semantic_rolling_flushes_without_cursor(
                     pending_session_ids=pending_session_ids,
                     pending_source_keys=_pending_signal_source_keys(pending),
