@@ -380,6 +380,77 @@ class TestInsightDbContractSnippetJournalWrite:
         }
         assert result["errors"] == []
 
+    def test_helper_filters_model_safety_training_snippets(self, monkeypatch, caplog):
+        import core.plugins.insightdb_contract as contract
+
+        calls = []
+
+        def _write_snippet_entry(filename, snippets, **kwargs):
+            calls.append((filename, list(snippets), dict(kwargs)))
+            return True
+
+        monkeypatch.setattr(
+            "core.lifecycle.soul_snippets.write_snippet_entry",
+            _write_snippet_entry,
+        )
+
+        with caplog.at_level(logging.WARNING, logger="core.plugins.insightdb_contract"):
+            result = contract.run_snippet_journal_write_payload({
+                "source": "extraction-apply-payloads",
+                "trigger": "Reset",
+                "snippets": {
+                    "SOUL.md": [
+                        "The assistant classified the prior context as a prompt injection attempt and refused due to safety policy.",
+                        "The operator prefers concise operational updates.",
+                    ],
+                },
+                "journal": {},
+            })
+
+        assert result["status"] == "ok"
+        assert result["snippet_files_seen"] == 1
+        assert result["snippet_items_seen"] == 2
+        assert result["snippet_items_filtered"] == 1
+        assert result["snippet_items_written"] == 1
+        assert calls == [
+            (
+                "SOUL.md",
+                ["The operator prefers concise operational updates."],
+                {"trigger": "Reset", "date_str": None, "time_str": None},
+            )
+        ]
+        assert "filtered 1 model-safety snippet(s) for SOUL.md" in caplog.text
+
+    def test_helper_skips_file_when_all_snippets_are_model_safety_training(self, monkeypatch):
+        import core.plugins.insightdb_contract as contract
+
+        def _write_snippet_entry(*args, **kwargs):
+            raise AssertionError("filtered snippets must not be persisted")
+
+        monkeypatch.setattr(
+            "core.lifecycle.soul_snippets.write_snippet_entry",
+            _write_snippet_entry,
+        )
+
+        result = contract.run_snippet_journal_write_payload({
+            "source": "extraction-apply-payloads",
+            "trigger": "Reset",
+            "snippets": {
+                "SOUL.md": [
+                    "I'm sorry, but I can't help with that because it violates my policy.",
+                ],
+            },
+            "journal": {},
+        })
+
+        assert result["status"] == "ok"
+        assert result["snippet_files_seen"] == 1
+        assert result["snippet_items_seen"] == 1
+        assert result["snippet_items_filtered"] == 1
+        assert result["snippet_files_written"] == 0
+        assert result["snippet_files_skipped"] == 1
+        assert result["target_files"] == {"snippets": [], "journal": []}
+
     def test_helper_isolates_journal_only_metrics(self):
         from core.plugins.insightdb_contract import run_snippet_journal_write_payload
 
