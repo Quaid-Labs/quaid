@@ -2866,6 +2866,12 @@ class TestHookInjectRecallResilience:
         context = payload["hookSpecificOutput"]["additionalContext"]
         assert "[Quaid error] [provider]" in context
         assert "invalid-model-m6-probe" in context
+        log_path = tmp_path / "instances" / "claude-code-test" / "logs" / "daemon" / "preinject.jsonl"
+        entry = json.loads(log_path.read_text(encoding="utf-8").splitlines()[0])
+        assert entry["sessionId"] == "sess-cc-provider-probe"
+        assert entry["noticeCount"] == 1
+        assert entry["notices"][0]["category"] == "direct_notice"
+        assert "invalid-model-m6-probe" in entry["notices"][0]["text"]
 
     def test_session_start_reprobes_after_daemon_bounce_for_first_prompt_notice(
         self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
@@ -3099,6 +3105,8 @@ class TestHookInjectRecallResilience:
         from core import extraction_daemon
         from lib import runtime_context
 
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", "claude-code-test")
         monkeypatch.setattr(extraction_daemon, "write_cursor", lambda *a: None)
         mock_adapter.adapter_id.return_value = "claude-code"
         monkeypatch.setattr(
@@ -3129,6 +3137,12 @@ class TestHookInjectRecallResilience:
         assert "Do not call --deferred-drain; relay delivery is complete." in context
         assert "silver lantern" in context
         assert "quaid notify --deferred-drain" not in context
+        log_path = tmp_path / "instances" / "claude-code-test" / "logs" / "daemon" / "preinject.jsonl"
+        entry = json.loads(log_path.read_text(encoding="utf-8").splitlines()[0])
+        assert entry["sessionId"] == "sess-deferred-drain"
+        assert entry["noticeCount"] == 1
+        assert entry["notices"][0]["category"] == "deferred_notice"
+        assert "silver lantern" in entry["notices"][0]["text"]
 
     def test_codex_deferred_notice_relay_emits_before_recall_work(
         self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
@@ -3284,7 +3298,11 @@ class TestHookInjectRecallResilience:
         assert any(event == "hook.inject.context_emitted" for event, _payload in trace_events)
         log_path = tmp_path / "instances" / "claude-code-test" / "logs" / "daemon" / "preinject.jsonl"
         entry = json.loads(log_path.read_text(encoding="utf-8").splitlines()[0])
-        assert entry["injected"][0]["text"] == "Espresso setup uses a Baratza Encore grinder."
+        assert any(item["text"] == "Espresso setup uses a Baratza Encore grinder." for item in entry["injected"])
+        assert any(
+            item.get("category") == "deferred_notice" and "blue sparrow" in item["text"]
+            for item in entry["injected"]
+        )
 
     def test_memory_context_still_injected_without_tool_hint_round_trip(
         self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch

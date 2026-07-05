@@ -1298,6 +1298,7 @@ def _write_preinject_evidence(
     memories: List[Dict],
     recall_meta: dict | None,
     docs_bundle: Dict | None,
+    notice_rows: List[Dict] | None = None,
 ) -> None:
     injected_memories = _filter_injectable_memories(
         memories,
@@ -1310,7 +1311,13 @@ def _write_preinject_evidence(
             if isinstance(chunk, dict):
                 injected_docs.append({**chunk, "category": "project_doc"})
 
-    injected = _preinject_evidence_details([*injected_memories, *injected_docs])
+    injected_notices = [
+        dict(row)
+        for row in list(notice_rows or [])
+        if isinstance(row, dict) and str(row.get("text") or row.get("content") or "").strip()
+    ]
+
+    injected = _preinject_evidence_details([*injected_memories, *injected_docs, *injected_notices])
     if not injected:
         return
 
@@ -1322,6 +1329,8 @@ def _write_preinject_evidence(
         "source": "hook_inject",
         "recallCount": len(_preinject_evidence_details(list(memories or []))),
         "recall": _preinject_evidence_details(list(memories or [])),
+        "noticeCount": len(_preinject_evidence_details(injected_notices)),
+        "notices": _preinject_evidence_details(injected_notices),
         "injectedCount": len(injected),
         "injected": injected,
         "diagnostics": _summarize_recall_meta(recall_meta),
@@ -1345,6 +1354,36 @@ def _write_preinject_evidence(
             fail_hard = True
         if fail_hard:
             raise
+
+
+def _preinject_notice_rows(
+    *,
+    direct_notice_context: str = "",
+    deferred_notice_relay_context: str = "",
+    deferred_notice_hint: str = "",
+    pending_context: str = "",
+) -> List[Dict]:
+    rows: List[Dict] = []
+
+    def _add(category: str, text: str, source: str) -> None:
+        rendered = str(text or "").strip()
+        if not rendered:
+            return
+        rows.append(
+            {
+                "id": category,
+                "text": rendered,
+                "category": category,
+                "via": source,
+                "source": source,
+            }
+        )
+
+    _add("direct_notice", direct_notice_context, "direct_notice")
+    _add("deferred_notice", deferred_notice_relay_context, "deferred_notice")
+    _add("deferred_notice_hint", deferred_notice_hint, "deferred_notice_hint")
+    _add("pending_notice", pending_context, "pending_context")
+    return rows
 
 
 def _extract_codex_tool_output_trace(hook_input: dict, max_chars: int = 12000) -> Dict[str, Any]:
@@ -1728,6 +1767,16 @@ def hook_inject(args):
                 "context_len": len(context),
             })
             if context:
+                _write_preinject_evidence(
+                    session_id=session_id,
+                    query=query,
+                    memories=[],
+                    recall_meta=None,
+                    docs_bundle=None,
+                    notice_rows=_preinject_notice_rows(
+                        deferred_notice_relay_context=deferred_notice_relay_context,
+                    ),
+                )
                 print(json.dumps({
                     "hookSpecificOutput": {
                         "hookEventName": "UserPromptSubmit",
@@ -1765,6 +1814,18 @@ def hook_inject(args):
                     "context_len": len(context),
                 })
                 if context:
+                    _write_preinject_evidence(
+                        session_id=session_id,
+                        query=query,
+                        memories=[],
+                        recall_meta=None,
+                        docs_bundle=None,
+                        notice_rows=_preinject_notice_rows(
+                            direct_notice_context=direct_notice_context,
+                            pending_context=pending_context,
+                            deferred_notice_relay_context=deferred_notice_relay_context,
+                        ),
+                    )
                     print(json.dumps({
                         "hookSpecificOutput": {
                             "hookEventName": "UserPromptSubmit",
@@ -1775,7 +1836,8 @@ def hook_inject(args):
         except Exception as e:
             if _is_provider_failure(e):
                 notice = _provider_failure_notice_message(e)
-                context_parts = [_format_direct_agent_notices([notice])]
+                direct_notice_context = _format_direct_agent_notices([notice])
+                context_parts = [direct_notice_context]
                 if deferred_notice_relay_context:
                     context_parts.append(deferred_notice_relay_context)
                 if turn_refresh_context:
@@ -1790,6 +1852,17 @@ def hook_inject(args):
                     "source": "exception",
                 })
                 if context:
+                    _write_preinject_evidence(
+                        session_id=session_id,
+                        query=query,
+                        memories=[],
+                        recall_meta=None,
+                        docs_bundle=None,
+                        notice_rows=_preinject_notice_rows(
+                            direct_notice_context=direct_notice_context,
+                            deferred_notice_relay_context=deferred_notice_relay_context,
+                        ),
+                    )
                     print(json.dumps({
                         "hookSpecificOutput": {
                             "hookEventName": "UserPromptSubmit",
@@ -2062,10 +2135,10 @@ def hook_inject(args):
             context_parts.append(direct_notice_context)
 
         recall_provider_notice = _extract_recall_provider_notice(memories, recall_meta)
+        recall_provider_notice_context = ""
         if recall_provider_notice:
-            context_parts.append(
-                _format_direct_agent_notices([recall_provider_notice])
-            )
+            recall_provider_notice_context = _format_direct_agent_notices([recall_provider_notice])
+            context_parts.append(recall_provider_notice_context)
             memories = [
                 mem for mem in list(memories or [])
                 if not (
@@ -2126,6 +2199,14 @@ def hook_inject(args):
             memories=memories or [],
             recall_meta=recall_meta,
             docs_bundle=docs_bundle if isinstance(docs_bundle, dict) else None,
+            notice_rows=_preinject_notice_rows(
+                direct_notice_context="\n\n".join(
+                    part for part in (direct_notice_context, recall_provider_notice_context) if part
+                ),
+                pending_context=pending_context,
+                deferred_notice_relay_context=deferred_notice_relay_context,
+                deferred_notice_hint=deferred_notice_hint,
+            ),
         )
         _write_hook_trace("hook.inject.context_emitted", {
             "query": query[:160],
@@ -2193,20 +2274,22 @@ def hook_inject(args):
             deferred_notice_relay_context = _get_deferred_notice_relay_context()
             deferred_notice_hint = "" if deferred_notice_relay_context else _get_deferred_notice_hint()
         fallback_context_parts = []
+        provider_notice_context = ""
+        recall_error_notice_context = ""
         if provider_failure:
             # Provider/LLM failure — surface to agent so they can inform the user
-            fallback_context_parts.append(
+            provider_notice_context = (
                 f"<quaid_system_message>{_provider_failure_notice_message(e)}</quaid_system_message>"
             )
+            fallback_context_parts.append(provider_notice_context)
         elif turn_refresh_context:
-            fallback_context_parts.append(
-                _format_direct_agent_notices(
-                    [
-                        "[Quaid error] [recall] Quaid recall failed before memory injection. "
-                        f"{_safe_agent_error(e)}"
-                    ]
-                )
+            recall_error_notice_context = _format_direct_agent_notices(
+                [
+                    "[Quaid error] [recall] Quaid recall failed before memory injection. "
+                    f"{_safe_agent_error(e)}"
+                ]
             )
+            fallback_context_parts.append(recall_error_notice_context)
         if pending_context:
             fallback_context_parts.append(pending_context)
         if deferred_notice_relay_context:
@@ -2230,6 +2313,21 @@ def hook_inject(args):
                 )
             except Exception:
                 pass
+            _write_preinject_evidence(
+                session_id=session_id,
+                query=query,
+                memories=[],
+                recall_meta=None,
+                docs_bundle=None,
+                notice_rows=_preinject_notice_rows(
+                    direct_notice_context="\n\n".join(
+                        part for part in (provider_notice_context, recall_error_notice_context) if part
+                    ),
+                    pending_context=pending_context,
+                    deferred_notice_relay_context=deferred_notice_relay_context,
+                    deferred_notice_hint=deferred_notice_hint,
+                ),
+            )
             print(json.dumps({
                 "hookSpecificOutput": {
                     "hookEventName": "UserPromptSubmit",
