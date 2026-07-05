@@ -32,7 +32,6 @@ def _zero_snippet_journal_metrics() -> Dict[str, Any]:
         "status": "failed",
         "snippet_files_seen": 0,
         "snippet_items_seen": 0,
-        "snippet_items_filtered": 0,
         "snippet_files_written": 0,
         "snippet_items_written": 0,
         "snippet_files_skipped": 0,
@@ -42,65 +41,6 @@ def _zero_snippet_journal_metrics() -> Dict[str, Any]:
         "target_files": {"snippets": [], "journal": []},
         "errors": [],
     }
-
-
-_MODEL_SAFETY_SNIPPET_PHRASES = (
-    "as an ai language model",
-    "as a language model",
-    "i can't assist",
-    "i cannot assist",
-    "i can't comply",
-    "i cannot comply",
-    "i can't help",
-    "i cannot help",
-    "i'm sorry, but i can't",
-    "i am sorry, but i cannot",
-    "i must refuse",
-    "i have to refuse",
-    "against my policy",
-    "violates my policy",
-    "content policy",
-    "safety policy",
-    "safety guidelines",
-    "policy doesn't allow",
-    "policy does not allow",
-)
-_MODEL_SAFETY_SNIPPET_COMPOUND_PHRASES = (
-    ("prompt injection", "refus"),
-    ("prompt injection", "safety"),
-    ("prompt injection", "policy"),
-    ("jailbreak", "refus"),
-    ("jailbreak", "safety"),
-    ("system prompt", "refus"),
-    ("developer instruction", "refus"),
-)
-
-
-def _is_model_safety_training_snippet(text: str) -> bool:
-    """Reject model refusal/safety-policy boilerplate before identity persistence."""
-    normalized = " ".join(str(text or "").strip().lower().split())
-    if not normalized:
-        return False
-    if any(phrase in normalized for phrase in _MODEL_SAFETY_SNIPPET_PHRASES):
-        return True
-    return any(all(part in normalized for part in parts) for parts in _MODEL_SAFETY_SNIPPET_COMPOUND_PHRASES)
-
-
-def _filter_model_safety_training_snippets(filename: str, items: List[str]) -> List[str]:
-    kept: List[str] = []
-    dropped = 0
-    for item in items:
-        if _is_model_safety_training_snippet(item):
-            dropped += 1
-            continue
-        kept.append(item)
-    if dropped:
-        logger.warning(
-            "[insightdb] filtered %d model-safety snippet(s) for %s",
-            dropped,
-            filename,
-        )
-    return kept
 
 
 def _reject_split_write_request(message: str) -> Dict[str, Any]:
@@ -131,13 +71,8 @@ def _run_snippet_write_payload(payload: Dict[str, Any], result: Dict[str, Any], 
         valid = [str(item).strip() for item in items if isinstance(item, str) and str(item).strip()]
         if not valid:
             continue
-        filtered_valid = _filter_model_safety_training_snippets(str(filename), valid)
         result["snippet_files_seen"] += 1
         result["snippet_items_seen"] += len(valid)
-        result["snippet_items_filtered"] += len(valid) - len(filtered_valid)
-        if not filtered_valid:
-            result["snippet_files_skipped"] += 1
-            continue
         snippet_targets.append(_logical_snippet_target(str(filename)))
         if not write_snippets or dry_run:
             result["snippet_files_skipped"] += 1
@@ -145,7 +80,7 @@ def _run_snippet_write_payload(payload: Dict[str, Any], result: Dict[str, Any], 
         try:
             written = soul_snippets.write_snippet_entry(
                 str(filename),
-                filtered_valid,
+                valid,
                 trigger=trigger,
                 date_str=date_str,
                 time_str=time_str,
@@ -161,7 +96,7 @@ def _run_snippet_write_payload(payload: Dict[str, Any], result: Dict[str, Any], 
             continue
         if written:
             result["snippet_files_written"] += 1
-            result["snippet_items_written"] += len(filtered_valid)
+            result["snippet_items_written"] += len(valid)
         else:
             result["snippet_files_skipped"] += 1
 
@@ -232,7 +167,6 @@ def run_snippet_journal_write_payload(payload: Dict[str, Any]) -> Dict[str, Any]
         "status": "ok",
         "snippet_files_seen": 0,
         "snippet_items_seen": 0,
-        "snippet_items_filtered": 0,
         "snippet_files_written": 0,
         "snippet_items_written": 0,
         "snippet_files_skipped": 0,

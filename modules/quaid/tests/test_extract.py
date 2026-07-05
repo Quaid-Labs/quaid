@@ -8654,6 +8654,15 @@ class TestLoadPrompt:
         assert "Do not extract agent statements of memory absence" in prompt
         assert "transient answer states, not user knowledge" in prompt
 
+    def test_prompt_excludes_model_safety_runtime_behavior(self):
+        from ingest.extract import _build_extraction_user_message
+
+        prompt = _build_extraction_user_message("assistant: refusal text")
+        assert "Do not extract the assistant's own safety policies" in prompt
+        assert "refusal behavior" in prompt
+        assert "facts, soul snippets, or journal entries" in prompt
+        assert "model runtime behavior, not user identity or durable memory" in prompt
+
     def test_prompt_keeps_tentative_plans_and_object_provenance(self):
         from ingest.extract import _build_extraction_user_message, _load_extraction_prompt
 
