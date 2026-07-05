@@ -983,6 +983,8 @@ def _maintain_instance_monitors(known_instances: Dict[str, int]) -> None:
             known_instances.pop(instance, None)
             pid = None
             known_pid = None
+        if pid is not None:
+            project_docs.consume_instance_monitor_restart_request(instance)
         if pid is None:
             if known_pid is not None:
                 restart_request = project_docs.consume_instance_monitor_restart_request(instance)

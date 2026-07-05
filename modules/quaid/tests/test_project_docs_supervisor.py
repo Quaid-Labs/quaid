@@ -1137,6 +1137,38 @@ def test_maintain_instance_monitors_ignores_explicit_daemon_stop_restart(monkeyp
     assert supervisor._INSTANCE_MONITOR_CRASHES == {}
 
 
+def test_maintain_instance_monitors_discards_restart_marker_after_healthy_start(monkeypatch):
+    from core import project_docs_supervisor as supervisor
+    from core import extraction_daemon
+
+    consumed = []
+    known = {"openclaw-main": 202}
+
+    monkeypatch.setattr(supervisor, "_live_instances_for_supervisor", lambda: ({"openclaw-main"}, set()))
+    monkeypatch.setattr(supervisor, "_read_instance_daemon_pid", lambda _name: 202)
+    monkeypatch.setattr(extraction_daemon, "_matching_daemon_pids", lambda **_kwargs: [202])
+    monkeypatch.setattr(
+        supervisor.project_docs,
+        "consume_instance_monitor_restart_request",
+        lambda name: consumed.append(name) or {"instance": name, "previous_reason": "daemon_stop"},
+    )
+    monkeypatch.setattr(
+        supervisor,
+        "_instance_monitor_restart_allowed_after_crash",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("healthy daemon counted as crash")),
+    )
+    monkeypatch.setattr(
+        supervisor,
+        "_start_instance_monitor",
+        lambda _name: (_ for _ in ()).throw(AssertionError("healthy daemon restarted")),
+    )
+
+    supervisor._maintain_instance_monitors(known)
+
+    assert consumed == ["openclaw-main"]
+    assert known == {"openclaw-main": 202}
+
+
 def test_maintain_instance_monitors_disables_after_crash_retry_limit(monkeypatch):
     from core import project_docs_supervisor as supervisor
     from core import extraction_daemon
