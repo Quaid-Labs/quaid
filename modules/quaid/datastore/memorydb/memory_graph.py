@@ -61,6 +61,9 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple, Set
 
+if len(sys.argv) > 2 and sys.argv[1] in {"recall", "recall-fast"} and "--json" in sys.argv[2:]:
+    os.environ["QUAID_QUIET"] = "1"
+
 from lib.config import (
     get_db_path,
     get_db_path_lightweight as _get_db_path_lightweight,

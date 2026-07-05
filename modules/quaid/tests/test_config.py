@@ -1652,6 +1652,56 @@ class TestConfigPathResolution:
                 if _boom in callbacks:
                     callbacks.remove(_boom)
 
+    def test_config_callback_warning_suppressed_when_quiet(self, capsys, monkeypatch):
+        import config
+
+        def _boom(_value, _cfg):
+            raise ValueError("callback boom")
+
+        cfg = MemoryConfig()
+        cfg.plugins.strict = False
+        monkeypatch.setenv("QUAID_QUIET", "1")
+
+        with config._config_callbacks_lock:
+            callbacks = config._config_callbacks.setdefault("plugins.slots.adapter", [])
+            callbacks.append(_boom)
+        try:
+            config._run_config_callbacks(cfg)
+            assert "Config callback failed" not in capsys.readouterr().err
+        finally:
+            with config._config_callbacks_lock:
+                callbacks = config._config_callbacks.get("plugins.slots.adapter", [])
+                if _boom in callbacks:
+                    callbacks.remove(_boom)
+
+    def test_plugin_surface_warnings_suppressed_when_quiet_json_mode(self, tmp_path, capsys, monkeypatch):
+        import config
+
+        old_config = config._config
+        config._config = None
+        monkeypatch.setenv("QUAID_QUIET", "1")
+        config_file = tmp_path / "config.json"
+        config_file.write_text(json.dumps({
+            "plugins": {
+                "enabled": True,
+                "strict": False,
+                "slots": {},
+            }
+        }))
+
+        def _surface_warning(*args, **kwargs):
+            return [], ["Plugin fixture declares surface tool_runtime with empty exports"]
+
+        try:
+            with patch.object(config, "_config_paths", lambda: [config_file]), \
+                 patch("core.runtime.plugins.initialize_plugin_runtime", return_value=(object(), [], [])), \
+                 patch("core.runtime.events.validate_declared_event_contract", return_value=[]), \
+                 patch("core.runtime.plugins.run_plugin_contract_surface", side_effect=_surface_warning):
+                _ = load_config()
+            assert "declares surface tool_runtime" not in capsys.readouterr().err
+        finally:
+            config._config = old_config
+
     def test_config_callback_failure_raises_when_plugins_strict(self):
         import config
 

@@ -810,7 +810,8 @@ def _run_config_callbacks(config: "MemoryConfig") -> None:
                 msg = f"Config callback failed for '{path}': {exc}"
                 if strict:
                     raise ValueError(msg) from exc
-                print(f"[plugins][warn] {msg}", file=sys.stderr)
+                if not os.environ.get("QUAID_QUIET"):
+                    print(f"[plugins][warn] {msg}", file=sys.stderr)
 
 
 def _on_adapter_slot_config(path_value: Any, _: "MemoryConfig") -> None:
@@ -1694,8 +1695,9 @@ def _load_config_inner() -> MemoryConfig:
         def _emit_plugin_messages() -> None:
             for msg in plugin_errors:
                 print(f"[plugins][error] {msg}", file=sys.stderr)
-            for msg in plugin_warnings:
-                print(f"[plugins][warn] {msg}", file=sys.stderr)
+            if not os.environ.get("QUAID_QUIET"):
+                for msg in plugin_warnings:
+                    print(f"[plugins][warn] {msg}", file=sys.stderr)
 
         active_slots = {
             "adapter": plugins.slots.adapter,
