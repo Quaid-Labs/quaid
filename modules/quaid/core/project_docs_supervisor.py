@@ -30,6 +30,7 @@ from lib.instance import internal_path_derived_instance_ids, list_instances, qua
 _STOP = False
 _INSTANCE_DB_OVERRIDE_ENV_KEYS = ("MEMORY_DB_PATH", "MEMORY_ARCHIVE_DB_PATH")
 _LOGGER = logging.getLogger(__name__)
+_INSTANCE_MONITOR_CRASHES: Dict[str, Dict[str, object]] = {}
 
 
 def _handle_stop(_signum, _frame) -> None:
@@ -45,6 +46,82 @@ def _interval_from_env(name: str, default: float) -> float:
         return max(0.5, float(raw))
     except ValueError:
         return default
+
+
+def _int_from_env(name: str, default: int, *, minimum: int = 1) -> int:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return max(minimum, int(raw))
+    except ValueError:
+        return default
+
+
+def _instance_monitor_crash_retry_limit() -> int:
+    return _int_from_env("QUAID_SUPERVISOR_DAEMON_CRASH_RETRY_LIMIT", 3)
+
+
+def _instance_monitor_crash_retry_window_seconds() -> float:
+    return _interval_from_env("QUAID_SUPERVISOR_DAEMON_CRASH_RETRY_WINDOW_SECONDS", 600.0)
+
+
+def _instance_monitor_restart_backoff_seconds(attempt: int) -> float:
+    base = _interval_from_env("QUAID_SUPERVISOR_DAEMON_RESTART_BACKOFF_SECONDS", 30.0)
+    max_delay = _interval_from_env("QUAID_SUPERVISOR_DAEMON_RESTART_BACKOFF_MAX_SECONDS", 300.0)
+    return min(max_delay, base * (2 ** max(0, int(attempt) - 1)))
+
+
+def _instance_monitor_restart_allowed_after_crash(instance: str, pid: int, *, now: float) -> bool:
+    """Throttle supervisor-owned extraction daemon restarts after crash exits."""
+    name = validate_instance_id(instance)
+    state = _INSTANCE_MONITOR_CRASHES.setdefault(name, {})
+    if state.get("last_pid") != int(pid):
+        window_seconds = _instance_monitor_crash_retry_window_seconds()
+        raw_crashes = state.get("crashes")
+        crashes = [
+            float(ts)
+            for ts in (raw_crashes if isinstance(raw_crashes, list) else [])
+            if now - float(ts) <= window_seconds
+        ]
+        crashes.append(float(now))
+        attempt = len(crashes)
+        limit = _instance_monitor_crash_retry_limit()
+        state["last_pid"] = int(pid)
+        state["crashes"] = crashes
+        if attempt >= limit:
+            reason = f"daemon_crash_loop:{attempt}_crashes"
+            _LOGGER.critical(
+                "instance monitor %s reached daemon crash retry limit (%d/%d); disabling auto-restart",
+                name,
+                attempt,
+                limit,
+            )
+            project_docs.disable_instance_monitor(name, reason=reason)
+            _INSTANCE_MONITOR_CRASHES.pop(name, None)
+            return False
+        backoff = _instance_monitor_restart_backoff_seconds(attempt)
+        state["next_restart_at"] = float(now) + backoff
+        _LOGGER.error(
+            "instance monitor %s daemon pid=%s exited unexpectedly; delaying restart for %.1fs "
+            "(attempt %d/%d)",
+            name,
+            pid,
+            backoff,
+            attempt,
+            limit,
+        )
+        return False
+
+    next_restart_at = float(state.get("next_restart_at") or 0.0)
+    if now < next_restart_at:
+        _LOGGER.debug(
+            "instance monitor %s restart delayed for %.1fs after daemon crash",
+            name,
+            next_restart_at - now,
+        )
+        return False
+    return True
 
 
 def _fail_hard_enabled() -> bool:
@@ -883,6 +960,7 @@ def _maintain_instance_monitors(known_instances: Dict[str, int]) -> None:
         known_instances.pop(instance, None)
     for instance in sorted(live):
         pid = _read_instance_daemon_pid(instance)
+        known_pid = known_instances.get(instance)
         matching = _extraction_daemon._matching_daemon_pids(
             quaid_home=quaid_home(),
             instance=instance,
@@ -904,7 +982,16 @@ def _maintain_instance_monitors(known_instances: Dict[str, int]) -> None:
                 pass
             known_instances.pop(instance, None)
             pid = None
+            known_pid = None
         if pid is None:
+            if known_pid is not None and not _instance_monitor_restart_allowed_after_crash(
+                instance,
+                int(known_pid),
+                now=time.time(),
+            ):
+                if project_docs.is_instance_monitor_disabled(instance):
+                    known_instances.pop(instance, None)
+                continue
             pid = _start_instance_monitor(instance)
         known_instances[instance] = pid
     for instance in list(known_instances.keys()):

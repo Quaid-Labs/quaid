@@ -1079,6 +1079,69 @@ def test_maintain_instance_monitors_reconciles_duplicate_live_daemons(monkeypatc
     assert known == {"codex-private-tmp-cdx-livetest": 9001}
 
 
+def test_maintain_instance_monitors_delays_restart_after_daemon_crash(monkeypatch):
+    from core import project_docs_supervisor as supervisor
+    from core import extraction_daemon
+
+    started = []
+    known = {"openclaw-main": 101}
+
+    monkeypatch.setattr(supervisor, "_INSTANCE_MONITOR_CRASHES", {})
+    monkeypatch.setenv("QUAID_SUPERVISOR_DAEMON_RESTART_BACKOFF_SECONDS", "30")
+    monkeypatch.setattr(supervisor, "_live_instances_for_supervisor", lambda: ({"openclaw-main"}, set()))
+    monkeypatch.setattr(supervisor, "_read_instance_daemon_pid", lambda _name: None)
+    monkeypatch.setattr(extraction_daemon, "_matching_daemon_pids", lambda **_kwargs: [])
+    monkeypatch.setattr(supervisor, "_start_instance_monitor", lambda name: started.append(name) or 202)
+    monkeypatch.setattr(supervisor.time, "time", lambda: 1000.0)
+    monkeypatch.setattr(supervisor.project_docs, "is_instance_monitor_disabled", lambda _name: False)
+
+    supervisor._maintain_instance_monitors(known)
+
+    assert started == []
+    assert known == {"openclaw-main": 101}
+
+    monkeypatch.setattr(supervisor.time, "time", lambda: 1031.0)
+    supervisor._maintain_instance_monitors(known)
+
+    assert started == ["openclaw-main"]
+    assert known == {"openclaw-main": 202}
+
+
+def test_maintain_instance_monitors_disables_after_crash_retry_limit(monkeypatch):
+    from core import project_docs_supervisor as supervisor
+    from core import extraction_daemon
+
+    disabled = []
+    known = {"openclaw-main": 101}
+
+    monkeypatch.setattr(supervisor, "_INSTANCE_MONITOR_CRASHES", {})
+    monkeypatch.setenv("QUAID_SUPERVISOR_DAEMON_CRASH_RETRY_LIMIT", "2")
+    monkeypatch.setenv("QUAID_SUPERVISOR_DAEMON_RESTART_BACKOFF_SECONDS", "1")
+    monkeypatch.setattr(supervisor, "_live_instances_for_supervisor", lambda: ({"openclaw-main"}, set()))
+    monkeypatch.setattr(supervisor, "_read_instance_daemon_pid", lambda _name: None)
+    monkeypatch.setattr(extraction_daemon, "_matching_daemon_pids", lambda **_kwargs: [])
+    monkeypatch.setattr(supervisor, "_start_instance_monitor", lambda _name: 202)
+    monkeypatch.setattr(supervisor.project_docs, "disable_instance_monitor", lambda name, reason: disabled.append((name, reason)))
+    monkeypatch.setattr(supervisor.project_docs, "is_instance_monitor_disabled", lambda _name: bool(disabled))
+
+    now = {"value": 1000.0}
+    monkeypatch.setattr(supervisor.time, "time", lambda: now["value"])
+
+    supervisor._maintain_instance_monitors(known)
+    assert known == {"openclaw-main": 101}
+    assert disabled == []
+
+    now["value"] = 1002.0
+    supervisor._maintain_instance_monitors(known)
+    assert known == {"openclaw-main": 202}
+
+    now["value"] = 1003.0
+    supervisor._maintain_instance_monitors(known)
+
+    assert disabled == [("openclaw-main", "daemon_crash_loop:2_crashes")]
+    assert known == {}
+
+
 def test_wait_for_instance_pid_accepts_concurrent_live_monitor(monkeypatch):
     from core import project_docs_supervisor as supervisor
 
