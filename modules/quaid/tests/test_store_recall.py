@@ -10303,19 +10303,19 @@ class TestRecallTelemetry:
         assert meta["used_llm"] is True
         assert meta["named_entity_tokens"] == 0
 
-    def test_plan_fanout_queries_fast_profiles_preserve_kinship_chain_vector_without_llm(self):
+    def test_plan_fanout_queries_fast_profiles_preserve_kinship_chain_graph_without_llm(self):
         import datastore.memorydb.memory_graph as mg
 
         with patch("lib.llm_clients.call_fast_reasoning", side_effect=AssertionError("planner should not be called")):
             queries, meta = mg._plan_fanout_queries(
-                "what does my partner's brother's wife do",
+                "what does my spouse's sibling's partner do",
                 return_meta=True,
                 planner_profile="fast",
             )
 
-        assert queries == ["what does my partner's brother's wife do"]
+        assert queries == ["what does my spouse's sibling's partner do"]
         assert meta["bailout_reason"] == "preserve_short_exact_query"
-        assert meta["planned_stores"] == ["vector"]
+        assert meta["planned_stores"] == ["vector", "graph"]
 
     def test_plan_fanout_queries_full_uses_llm_to_classify_short_exact_stores(self):
         import datastore.memorydb.memory_graph as mg
@@ -10381,7 +10381,7 @@ class TestRecallTelemetry:
         assert "session_chunks" in captured["prompt"]
         assert mg._normalize_store_plan(None) == ["vector"]
 
-    def test_plan_fanout_queries_full_allows_relation_chain_vector_without_structural_anchor(self):
+    def test_plan_fanout_queries_full_keeps_relation_chain_graph_when_llm_downgrades(self):
         import datastore.memorydb.memory_graph as mg
 
         class _Graph:
@@ -10400,15 +10400,15 @@ class TestRecallTelemetry:
                  return_value={"stores": ["vector"], "queries": ["positional family relationship"]},
              ), patch("lib.llm_clients.call_fast_reasoning", side_effect=_fake_call_fast_reasoning):
             queries, meta = mg._plan_fanout_queries(
-                "what does my partner's brother's wife do",
+                "what does my spouse's sibling do",
                 timeout_s=60.0,
                 return_meta=True,
                 planner_profile="full",
             )
 
-        assert queries == ["what does my partner's brother's wife do"]
+        assert queries == ["what does my spouse's sibling do"]
         assert meta["bailout_reason"] == "preserve_short_exact_query"
-        assert meta["planned_stores"] == ["vector"]
+        assert meta["planned_stores"] == ["vector", "graph"]
 
     def test_plan_fanout_queries_keeps_default_graph_when_llm_downgrades_named_lookup(self):
         import datastore.memorydb.memory_graph as mg
@@ -16796,6 +16796,17 @@ class TestRecallFastHookInjectContract:
 
         assert stores == ["vector"]
 
+    def test_infer_recall_store_defaults_routes_relation_chain_to_graph(self):
+        import datastore.memorydb.memory_graph as mg
+
+        with patch.object(mg, "_registered_project_name_in_query", return_value=None), \
+             patch.object(mg, "get_edge_keywords", return_value={}), \
+             patch.object(mg, "extract_entities_from_text", return_value=[]):
+            stores, project = mg._infer_recall_store_defaults("what does my spouse's sibling do")
+
+        assert stores == ["vector", "graph"]
+        assert project is None
+
     def test_infer_recall_store_defaults_routes_docs_for_project_says_query(self, tmp_path, monkeypatch):
         import datastore.memorydb.memory_graph as mg
 
@@ -16819,7 +16830,7 @@ class TestRecallFastHookInjectContract:
         assert stores == ["vector", "docs"]
         assert project == "cross-live-test"
 
-    def test_infer_recall_store_defaults_does_not_match_project_name_inside_relation_word(self, tmp_path, monkeypatch):
+    def test_infer_recall_store_defaults_does_not_match_project_name_inside_relation_chain_word(self, tmp_path, monkeypatch):
         import datastore.memorydb.memory_graph as mg
 
         class _Graph:
@@ -16835,10 +16846,10 @@ class TestRecallFastHookInjectContract:
         with patch("datastore.memorydb.memory_graph.get_graph", return_value=_Graph()), \
              patch("datastore.memorydb.memory_graph.get_edge_keywords", return_value={}):
             stores, project = mg._infer_recall_store_defaults(
-                "what does my partner's brother's wife do",
+                "what does my mother's sibling do",
             )
 
-        assert stores == ["vector"]
+        assert stores == ["vector", "graph"]
         assert project is None
 
     def test_infer_recall_store_defaults_uses_unicode_project_name_boundaries(self, tmp_path, monkeypatch):

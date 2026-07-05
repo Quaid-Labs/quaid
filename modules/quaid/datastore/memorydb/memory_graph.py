@@ -20162,6 +20162,17 @@ def _infer_recall_store_defaults(text: str) -> Tuple[List[str], Optional[str]]:
     project_name: Optional[str] = _registered_project_name_in_query(lowered)
 
     project_docs_like = bool(project_name)
+    try:
+        relation_chain_groups = _relation_chain_groups_for_query(text)
+        relation_chain_like = (
+            len(relation_chain_groups) >= 2
+            and _has_relation_chain_structure(text)
+        )
+    except Exception as exc:
+        if _is_fail_hard_mode():
+            raise RuntimeError("Relation-chain store classification failed while failHard is enabled") from exc
+        logger.warning("relation-chain store classification failed: %s", exc)
+        relation_chain_like = False
 
     if project_docs_like:
         stores = ["vector", "docs"]
@@ -20169,6 +20180,8 @@ def _infer_recall_store_defaults(text: str) -> Tuple[List[str], Optional[str]]:
         stores = ["vector", "session_chunks"]
     elif _is_named_entity_graph_fact_lookup(text):
         stores = ["vector", "graph"]
+    if relation_chain_like and "graph" not in stores:
+        stores = [*stores, "graph"]
 
     return _planner_store_plan(stores), project_name
 
