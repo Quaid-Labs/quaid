@@ -14737,8 +14737,8 @@ def _prioritize_fast_anchor_direct_rows(query: str, rows: List[Dict[str, Any]]) 
         priority_rows.sort(
             key=lambda row: (
                 _row_confidence_sort_key(row),
-                float(row.get("similarity", 0.0) or 0.0),
                 _row_created_sort_key(row),
+                float(row.get("similarity", 0.0) or 0.0),
             ),
             reverse=True,
         )
@@ -17445,6 +17445,15 @@ def _select_final_recall_rows_with_facet_rescue(
         ),
         default=0,
     )
+    direct_memory_signal = max(
+        (
+            _facet_non_anchor_signal(row)
+            for row in filtered
+            if isinstance(row, dict)
+            and not row.get("_facet_rescue")
+        ),
+        default=0,
+    )
     facet_rows.sort(
         key=lambda row: (
             _facet_signal(row),
@@ -17460,7 +17469,7 @@ def _select_final_recall_rows_with_facet_rescue(
     leading_reserved = [
         row for row in reserved
         if _facet_non_anchor_signal(row) >= _facet_rescue_leading_signal_threshold(row)
-        and _facet_non_anchor_signal(row) > source_dated_session_signal
+        and _facet_non_anchor_signal(row) > max(source_dated_session_signal, direct_memory_signal)
     ]
     leading_reserved_keys = {_key(row) for row in leading_reserved}
     trailing_reserved = [
@@ -17553,13 +17562,22 @@ def _prioritize_high_signal_facet_rescue_rows(
         ),
         default=0,
     )
+    direct_memory_signal = max(
+        (
+            _non_anchor_signal(row)
+            for row in rows
+            if isinstance(row, dict)
+            and not row.get("_facet_rescue")
+        ),
+        default=0,
+    )
     leading: List[Tuple[int, int, int, int, int, Dict[str, Any]]] = []
     trailing: List[Dict[str, Any]] = []
     for index, row in enumerate(rows):
         signal = _non_anchor_signal(row) if isinstance(row, dict) and row.get("_facet_rescue") else 0
         if (
             signal >= _facet_rescue_leading_signal_threshold(row)
-            and signal > source_dated_session_signal
+            and signal > max(source_dated_session_signal, direct_memory_signal)
         ):
             leading.append((
                 signal,

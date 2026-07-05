@@ -3745,6 +3745,39 @@ class TestRecallBasic:
             "partial-same-topic",
         ]
 
+    def test_fast_direct_priority_prefers_recent_full_fit_over_stale_similarity(self):
+        import datastore.memorydb.memory_graph as mg
+
+        query = "what is my weekly ritual"
+        assert mg._extract_explicit_query_anchor_terms(query) == []
+        rows = [
+            {
+                "id": "stale-active",
+                "text": "Test Owner's weekly ritual is strength work at Ridge Gym.",
+                "category": "fact",
+                "similarity": 0.99,
+                "extraction_confidence": 0.91,
+                "status": "active",
+                "created_at": "2026-05-01T08:00:00",
+            },
+            {
+                "id": "fresh-pending",
+                "text": "Test Owner's weekly ritual is polishing cedar lanterns.",
+                "category": "fact",
+                "similarity": 0.82,
+                "extraction_confidence": 0.91,
+                "status": "pending",
+                "created_at": "2026-05-09T16:32:25",
+            },
+        ]
+
+        ranked = mg._prioritize_fast_anchor_direct_rows(query, rows)
+
+        assert [row["id"] for row in ranked[:2]] == [
+            "fresh-pending",
+            "stale-active",
+        ]
+
     def test_fast_direct_priority_prefers_confident_fact_over_entity_stub(self):
         import datastore.memorydb.memory_graph as mg
 
@@ -17973,6 +18006,91 @@ class TestRecallFastHookInjectContract:
 
         assert selected[0]["id"] == "facet-exact"
         assert selected.index(rows[0]) < selected.index(rows[3])
+
+    def test_final_selection_keeps_direct_full_fit_above_equal_signal_facet_rescue(self):
+        import datastore.memorydb.memory_graph as mg
+
+        rows = [
+            {
+                "id": "stale-active",
+                "text": "Ari's weekly ritual is strength work at Ridge Gym.",
+                "category": "fact",
+                "similarity": 0.99,
+                "extraction_confidence": 0.91,
+                "status": "active",
+                "created_at": "2026-05-01T08:00:00",
+            },
+            {
+                "id": "fresh-direct",
+                "text": "Ari's weekly ritual is polishing cedar lanterns.",
+                "category": "fact",
+                "similarity": 0.82,
+                "extraction_confidence": 0.91,
+                "status": "pending",
+                "created_at": "2026-05-09T16:32:25Z",
+            },
+            {
+                "id": "old-facet",
+                "text": "Ari's weekly ritual is strength work at Ridge Gym.",
+                "category": "fact",
+                "similarity": 0.91,
+                "_facet_rescue": True,
+                "via": "facet_rescue_lexical",
+                "keywords": "weekly ritual strength work",
+            },
+            {
+                "id": "old-facet-2",
+                "text": "Ari keeps a weekly gym ritual.",
+                "category": "fact",
+                "similarity": 0.90,
+                "_facet_rescue": True,
+                "via": "facet_rescue_lexical",
+                "keywords": "weekly ritual gym",
+            },
+        ]
+
+        ranked = mg._prioritize_fast_anchor_direct_rows(
+            "What's my weekly ritual?",
+            rows,
+        )
+        selected = mg._select_final_recall_rows_with_facet_rescue(
+            "What's my weekly ritual?",
+            ranked,
+            limit=2,
+            intent="GENERAL",
+        )
+
+        assert selected[0]["id"] == "fresh-direct"
+        assert any(row.get("_facet_rescue") for row in selected)
+
+    def test_high_signal_facet_rescue_does_not_bury_equal_signal_direct_memory(self):
+        import datastore.memorydb.memory_graph as mg
+
+        rows = [
+            {
+                "id": "fresh-direct",
+                "text": "Ari's weekly ritual is polishing cedar lanterns.",
+                "category": "fact",
+                "similarity": 0.97,
+            },
+            {
+                "id": "old-facet",
+                "text": "Ari's weekly ritual is strength work at Ridge Gym.",
+                "category": "fact",
+                "similarity": 0.91,
+                "_facet_rescue": True,
+                "via": "facet_rescue_lexical",
+                "keywords": "weekly ritual strength work",
+            },
+        ]
+
+        selected = mg._prioritize_high_signal_facet_rescue_rows(
+            "What's my weekly ritual?",
+            rows,
+        )
+
+        assert selected[0]["id"] == "fresh-direct"
+        assert selected[1]["id"] == "old-facet"
 
     def test_merge_preserves_facet_rescue_provenance_for_same_memory(self):
         import datastore.memorydb.memory_graph as mg
