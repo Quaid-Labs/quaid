@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 const childProcessState = vi.hoisted(() => ({
   daemonStartCalls: [] as Array<{ file: string; args: readonly string[]; env: Record<string, string | undefined> }>,
   deferredRelayStdout: "" as string,
+  gatewayRestartSpawns: [] as Array<{ file: string; args: readonly string[]; env: Record<string, string | undefined> }>,
 }));
 
 vi.mock("node:child_process", async () => {
@@ -45,6 +46,22 @@ vi.mock("node:child_process", async () => {
       }
       return actual.spawnSync(file, args as any, options);
     }) as typeof actual.spawnSync,
+    spawn: ((file: string, args?: readonly string[] | null, options?: any) => {
+      const normalizedArgs = Array.isArray(args) ? args.map((arg) => String(arg)) : [];
+      const inlineScript = normalizedArgs.join("\n");
+      if (inlineScript.includes("openclaw") && inlineScript.includes("gateway") && inlineScript.includes("restart")) {
+        childProcessState.gatewayRestartSpawns.push({
+          file,
+          args: normalizedArgs,
+          env: (options?.env || {}) as Record<string, string | undefined>,
+        });
+        return {
+          on: vi.fn(),
+          unref: vi.fn(),
+        } as any;
+      }
+      return actual.spawn(file, args as any, options);
+    }) as typeof actual.spawn,
   };
 });
 
@@ -179,6 +196,7 @@ function seedDeferredNoticeFixture(prefix: string, instanceId: string, message: 
 afterEach(() => {
   childProcessState.daemonStartCalls = [];
   childProcessState.deferredRelayStdout = "";
+  childProcessState.gatewayRestartSpawns = [];
   vi.clearAllTimers();
   vi.useRealTimers();
   vi.restoreAllMocks();
@@ -2581,6 +2599,8 @@ describe("openclaw deferred notices", () => {
       "# USER\nInitial OC M7 identity canary: basalt-harbor\n",
       "utf8",
     );
+    fs.writeFileSync(path.join(identityDir, "SOUL.md"), "# SOUL\n", "utf8");
+    fs.writeFileSync(path.join(identityDir, "ENVIRONMENT.md"), "# ENVIRONMENT\n", "utf8");
 
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
@@ -2626,6 +2646,7 @@ describe("openclaw deferred notices", () => {
     expect(combinedSystemContext(first)).toContain("basalt-harbor");
     expect(combinedSystemContext(first)).not.toContain("Quaid Refreshed Identity Context");
     expect(String(first?.prependContext || "")).toContain("basalt-harbor");
+    expect(childProcessState.gatewayRestartSpawns).toHaveLength(0);
 
     fs.writeFileSync(
       path.join(identityDir, "USER.md"),
@@ -2651,6 +2672,10 @@ describe("openclaw deferred notices", () => {
     expect(combinedSystemContext(stillGated)).toContain("Bartholomew");
     expect(combinedSystemContext(stillGated)).not.toContain("Quaid Refreshed Identity Context");
     expect(String(stillGated?.prependContext || "")).toContain("Bartholomew");
+    expect(childProcessState.gatewayRestartSpawns).toHaveLength(1);
+    expect(childProcessState.gatewayRestartSpawns[0]?.args.join("\n")).toContain("openclaw");
+    expect(childProcessState.gatewayRestartSpawns[0]?.args.join("\n")).toContain("gateway");
+    expect(childProcessState.gatewayRestartSpawns[0]?.args.join("\n")).toContain("restart");
 
     await commandNewHandler(
       {
@@ -2690,6 +2715,7 @@ describe("openclaw deferred notices", () => {
     expect(String(refreshed?.prependContext || "")).toContain("Quaid Refreshed Identity Context");
     expect(String(refreshed?.prependContext || "")).toContain("Bartholomew");
     expect(String(refreshed?.prependContext || "")).toContain("fiddle-leaf fig");
+    expect(childProcessState.gatewayRestartSpawns).toHaveLength(1);
 
     warn.mockRestore();
     log.mockRestore();

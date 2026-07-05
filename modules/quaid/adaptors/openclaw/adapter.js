@@ -1,5 +1,5 @@
 import { Type } from "@sinclair/typebox";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import * as path from "node:path";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -3271,6 +3271,9 @@ function getContextRefreshStrategy(config = getMemoryConfig()) {
 const REFRESHED_IDENTITY_CONTEXT_TURNS = 3;
 const REFRESHED_IDENTITY_CONTEXT_MAX_CHARS = 9500;
 const IDENTITY_CONTEXT_FILES = ["USER.md", "SOUL.md", "ENVIRONMENT.md"];
+const IDENTITY_GATEWAY_RESTART_DELAY_MS = 750;
+const identitySignatureAtStartupByInstance = /* @__PURE__ */ new Map();
+const identityGatewayRestartScheduledByInstance = /* @__PURE__ */ new Map();
 function clipRefreshedIdentityText(text, maxChars) {
   const raw = String(text || "").trim();
   if (raw.length <= maxChars) return raw;
@@ -3318,6 +3321,111 @@ ${clipped}` : "";
   if (context.length <= maxChars) return context;
   const bodyBudget = Math.max(200, maxChars - header.length - footer.length);
   return `${header}${clipRefreshedIdentityText(body, bodyBudget)}${footer}`;
+}
+function identityContextSignature(instanceId) {
+  const normalizedInstance = String(instanceId || "").trim();
+  if (!normalizedInstance) return "";
+  const identityDir = path.join(VISIBLE_WORKSPACE, "instances", normalizedInstance);
+  return IDENTITY_CONTEXT_FILES.map((filename) => {
+    const filePath = path.join(identityDir, filename);
+    try {
+      const stat = fs.statSync(filePath);
+      if (!stat.isFile()) return `${filename}:not-file`;
+      return `${filename}:${stat.size}:${Math.floor(stat.mtimeMs)}`;
+    } catch (err) {
+      if (!isMissingFileError(err)) {
+        if (isFailHardEnabled()) throw err;
+        return `${filename}:error`;
+      }
+      return `${filename}:missing`;
+    }
+  }).join("|");
+}
+function initialIdentityContextSignature(instanceId) {
+  const normalizedInstance = String(instanceId || "").trim();
+  if (!normalizedInstance) return "";
+  if (!identitySignatureAtStartupByInstance.has(normalizedInstance)) {
+    identitySignatureAtStartupByInstance.set(normalizedInstance, identityContextSignature(normalizedInstance));
+  }
+  return identitySignatureAtStartupByInstance.get(normalizedInstance) || "";
+}
+function spawnOpenClawGatewayRestartForIdentityChange(instanceId, signature, source) {
+  const script = `
+const { spawnSync } = require("node:child_process");
+setTimeout(() => {
+  const env = {
+    ...process.env,
+    PATH: process.env.PATH || "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin",
+  };
+  let status = 1;
+  try {
+    const result = spawnSync("openclaw", ["gateway", "restart"], { env, stdio: "ignore" });
+    status = Number(result.status ?? (result.error ? 1 : 0));
+  } catch {}
+  if (status !== 0 && process.platform === "darwin") {
+    try {
+      const uid = typeof process.getuid === "function" ? process.getuid() : "";
+      if (uid !== "") {
+        spawnSync("launchctl", ["kickstart", "-k", \`gui/\${uid}/ai.openclaw.gateway\`], { env, stdio: "ignore" });
+      }
+    } catch {}
+  }
+}, ${IDENTITY_GATEWAY_RESTART_DELAY_MS});
+`;
+  const child = spawn(process.execPath, ["-e", script], {
+    detached: true,
+    stdio: "ignore",
+    env: {
+      ...process.env,
+      PATH: process.env.PATH || "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+    }
+  });
+  child.on("error", (err) => {
+    writeHookTrace("hook.identity_gateway_restart_spawn_error", {
+      instance_id: instanceId,
+      signature,
+      source,
+      error: String(err?.message || err)
+    });
+  });
+  child.unref();
+  writeHookTrace("hook.identity_gateway_restart_scheduled", {
+    instance_id: instanceId,
+    signature,
+    source,
+    delay_ms: IDENTITY_GATEWAY_RESTART_DELAY_MS
+  });
+  return true;
+}
+function maybeScheduleOpenClawGatewayRestartForIdentityChange(instanceId, source) {
+  const normalizedInstance = String(instanceId || "").trim();
+  if (!normalizedInstance) return;
+  const startupSignature = initialIdentityContextSignature(normalizedInstance);
+  const currentSignature = identityContextSignature(normalizedInstance);
+  if (!currentSignature || currentSignature === startupSignature) return;
+  if (identityGatewayRestartScheduledByInstance.get(normalizedInstance) === currentSignature) return;
+  identityGatewayRestartScheduledByInstance.set(normalizedInstance, currentSignature);
+  try {
+    spawnOpenClawGatewayRestartForIdentityChange(normalizedInstance, currentSignature, source);
+  } catch (err) {
+    writeHookTrace("hook.identity_gateway_restart_error", {
+      instance_id: normalizedInstance,
+      source,
+      error: String(err?.message || err)
+    });
+    if (isFailHardEnabled()) throw err;
+    console.warn(`[quaid] OpenClaw identity gateway restart scheduling failed: ${String(err?.message || err)}`);
+  }
+}
+try {
+  initialIdentityContextSignature(_QUAID_INSTANCE);
+} catch (err) {
+  writeHookTrace("hook.identity_gateway_start_signature_error", {
+    instance_id: _QUAID_INSTANCE,
+    error: String(err?.message || err)
+  });
+  if (isFailHardEnabled()) throw err;
+  console.warn(`[quaid] OpenClaw identity gateway startup signature failed: ${String(err?.message || err)}`);
 }
 function loadAdapterContractDeclarations(strictMode) {
   try {
@@ -4997,6 +5105,7 @@ const quaidPlugin = {
       const startAgentLabel = resolveHookAgentLabel(event, ctx);
       const startInstanceId = getInstanceId(startAgentLabel);
       ensureAgentInstanceProvisioned(startAgentLabel, "before_agent_start", { wakeDaemon: false });
+      maybeScheduleOpenClawGatewayRestartForIdentityChange(startInstanceId, "before_agent_start");
       try {
         const messages = facade.collectJanitorNudges({
           statePath: JANITOR_NUDGE_STATE_PATH,
@@ -5267,6 +5376,7 @@ ${refreshedIdentityContext}` : refreshedIdentityContext;
         sessionIdToAgentId.set(promptSessionId, promptAgentLabel);
       }
       ensureAgentInstanceProvisioned(promptAgentLabel, "before_prompt_build");
+      maybeScheduleOpenClawGatewayRestartForIdentityChange(promptInstanceId, "before_prompt_build");
       const nowMs = Date.now();
       pingDaemonAliveIfNeeded(promptInstanceId, nowMs);
       let appendSystemContext;
@@ -6942,6 +7052,11 @@ ${relayContext}` : relayContext;
     const handleLifecycleCommandHook = async (action, event, ctx) => {
       try {
         const sessionId = resolveLifecycleCommandTargetSessionId(action, event, ctx);
+        const commandAgentLabel = resolveHookAgentLabel(event, ctx);
+        maybeScheduleOpenClawGatewayRestartForIdentityChange(
+          getInstanceId(commandAgentLabel),
+          `command:${action}`
+        );
         const preferredTranscriptPath = resolveLifecycleTranscriptPath(action, event, ctx);
         writeHookTrace("hook.command.received", {
           action,

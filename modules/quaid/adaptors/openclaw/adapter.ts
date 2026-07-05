@@ -4093,6 +4093,9 @@ function getContextRefreshStrategy(config: any = getMemoryConfig()): "compaction
 const REFRESHED_IDENTITY_CONTEXT_TURNS = 3;
 const REFRESHED_IDENTITY_CONTEXT_MAX_CHARS = 9_500;
 const IDENTITY_CONTEXT_FILES = ["USER.md", "SOUL.md", "ENVIRONMENT.md"] as const;
+const IDENTITY_GATEWAY_RESTART_DELAY_MS = 750;
+const identitySignatureAtStartupByInstance = new Map<string, string>();
+const identityGatewayRestartScheduledByInstance = new Map<string, string>();
 
 function clipRefreshedIdentityText(text: string, maxChars: number): string {
   const raw = String(text || "").trim();
@@ -4147,6 +4150,118 @@ function buildRefreshedIdentityContext(instanceId: string, maxChars: number = RE
   if (context.length <= maxChars) return context;
   const bodyBudget = Math.max(200, maxChars - header.length - footer.length);
   return `${header}${clipRefreshedIdentityText(body, bodyBudget)}${footer}`;
+}
+
+function identityContextSignature(instanceId: string): string {
+  const normalizedInstance = String(instanceId || "").trim();
+  if (!normalizedInstance) return "";
+  const identityDir = path.join(VISIBLE_WORKSPACE, "instances", normalizedInstance);
+  return IDENTITY_CONTEXT_FILES
+    .map((filename) => {
+      const filePath = path.join(identityDir, filename);
+      try {
+        const stat = fs.statSync(filePath);
+        if (!stat.isFile()) return `${filename}:not-file`;
+        return `${filename}:${stat.size}:${Math.floor(stat.mtimeMs)}`;
+      } catch (err: unknown) {
+        if (!isMissingFileError(err)) {
+          if (isFailHardEnabled()) throw err;
+          return `${filename}:error`;
+        }
+        return `${filename}:missing`;
+      }
+    })
+    .join("|");
+}
+
+function initialIdentityContextSignature(instanceId: string): string {
+  const normalizedInstance = String(instanceId || "").trim();
+  if (!normalizedInstance) return "";
+  if (!identitySignatureAtStartupByInstance.has(normalizedInstance)) {
+    identitySignatureAtStartupByInstance.set(normalizedInstance, identityContextSignature(normalizedInstance));
+  }
+  return identitySignatureAtStartupByInstance.get(normalizedInstance) || "";
+}
+
+function spawnOpenClawGatewayRestartForIdentityChange(instanceId: string, signature: string, source: string): boolean {
+  const script = `
+const { spawnSync } = require("node:child_process");
+setTimeout(() => {
+  const env = {
+    ...process.env,
+    PATH: process.env.PATH || "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin",
+  };
+  let status = 1;
+  try {
+    const result = spawnSync("openclaw", ["gateway", "restart"], { env, stdio: "ignore" });
+    status = Number(result.status ?? (result.error ? 1 : 0));
+  } catch {}
+  if (status !== 0 && process.platform === "darwin") {
+    try {
+      const uid = typeof process.getuid === "function" ? process.getuid() : "";
+      if (uid !== "") {
+        spawnSync("launchctl", ["kickstart", "-k", \`gui/\${uid}/ai.openclaw.gateway\`], { env, stdio: "ignore" });
+      }
+    } catch {}
+  }
+}, ${IDENTITY_GATEWAY_RESTART_DELAY_MS});
+`;
+  const child = spawn(process.execPath, ["-e", script], {
+    detached: true,
+    stdio: "ignore",
+    env: {
+      ...process.env,
+      PATH: process.env.PATH || "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin",
+    },
+  });
+  child.on("error", (err: Error) => {
+    writeHookTrace("hook.identity_gateway_restart_spawn_error", {
+      instance_id: instanceId,
+      signature,
+      source,
+      error: String(err?.message || err),
+    });
+  });
+  child.unref();
+  writeHookTrace("hook.identity_gateway_restart_scheduled", {
+    instance_id: instanceId,
+    signature,
+    source,
+    delay_ms: IDENTITY_GATEWAY_RESTART_DELAY_MS,
+  });
+  return true;
+}
+
+function maybeScheduleOpenClawGatewayRestartForIdentityChange(instanceId: string, source: string): void {
+  const normalizedInstance = String(instanceId || "").trim();
+  if (!normalizedInstance) return;
+  const startupSignature = initialIdentityContextSignature(normalizedInstance);
+  const currentSignature = identityContextSignature(normalizedInstance);
+  if (!currentSignature || currentSignature === startupSignature) return;
+  if (identityGatewayRestartScheduledByInstance.get(normalizedInstance) === currentSignature) return;
+  identityGatewayRestartScheduledByInstance.set(normalizedInstance, currentSignature);
+  try {
+    spawnOpenClawGatewayRestartForIdentityChange(normalizedInstance, currentSignature, source);
+  } catch (err: unknown) {
+    writeHookTrace("hook.identity_gateway_restart_error", {
+      instance_id: normalizedInstance,
+      source,
+      error: String((err as Error)?.message || err),
+    });
+    if (isFailHardEnabled()) throw err;
+    console.warn(`[quaid] OpenClaw identity gateway restart scheduling failed: ${String((err as Error)?.message || err)}`);
+  }
+}
+
+try {
+  initialIdentityContextSignature(_QUAID_INSTANCE);
+} catch (err: unknown) {
+  writeHookTrace("hook.identity_gateway_start_signature_error", {
+    instance_id: _QUAID_INSTANCE,
+    error: String((err as Error)?.message || err),
+  });
+  if (isFailHardEnabled()) throw err;
+  console.warn(`[quaid] OpenClaw identity gateway startup signature failed: ${String((err as Error)?.message || err)}`);
 }
 
 type AdapterContractDeclarations = {
@@ -6150,6 +6265,7 @@ const quaidPlugin = {
       const startAgentLabel = resolveHookAgentLabel(event, ctx);
       const startInstanceId = getInstanceId(startAgentLabel);
       ensureAgentInstanceProvisioned(startAgentLabel, "before_agent_start", { wakeDaemon: false });
+      maybeScheduleOpenClawGatewayRestartForIdentityChange(startInstanceId, "before_agent_start");
       try {
         const messages = facade.collectJanitorNudges({
           statePath: JANITOR_NUDGE_STATE_PATH,
@@ -6470,6 +6586,7 @@ notify_user(${JSON.stringify(message)})
         sessionIdToAgentId.set(promptSessionId, promptAgentLabel);
       }
       ensureAgentInstanceProvisioned(promptAgentLabel, "before_prompt_build");
+      maybeScheduleOpenClawGatewayRestartForIdentityChange(promptInstanceId, "before_prompt_build");
 
       // Keep the extraction daemon alive across long OC sessions.
       // ensureDaemonAlive() is only called once at boot — if the daemon crashes or
@@ -8487,6 +8604,11 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
     ) => {
       try {
         const sessionId = resolveLifecycleCommandTargetSessionId(action, event, ctx);
+        const commandAgentLabel = resolveHookAgentLabel(event, ctx);
+        maybeScheduleOpenClawGatewayRestartForIdentityChange(
+          getInstanceId(commandAgentLabel),
+          `command:${action}`,
+        );
         const preferredTranscriptPath = resolveLifecycleTranscriptPath(action, event, ctx);
         writeHookTrace("hook.command.received", {
           action,
