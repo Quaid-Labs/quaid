@@ -1718,7 +1718,10 @@ def _load_config_inner() -> MemoryConfig:
                 slots=active_slots,
                 strict=plugins.strict,
             )
-            plugin_warnings.extend(event_errors)
+            if plugins.strict:
+                plugin_errors.extend(event_errors)
+            else:
+                plugin_warnings.extend(event_errors)
         except Exception as exc:
             msg = f"Event contract validation failed: {exc}"
             if plugins.strict:

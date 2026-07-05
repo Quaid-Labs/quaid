@@ -1702,6 +1702,63 @@ class TestConfigPathResolution:
         finally:
             config._config = old_config
 
+    def test_plugin_event_validation_errors_raise_when_strict_even_when_quiet(self, tmp_path, capsys, monkeypatch):
+        import config
+
+        old_config = config._config
+        config._config = None
+        monkeypatch.setenv("QUAID_QUIET", "1")
+        config_file = tmp_path / "config.json"
+        config_file.write_text(json.dumps({
+            "plugins": {
+                "enabled": True,
+                "strict": True,
+                "slots": {},
+            }
+        }))
+
+        try:
+            with patch.object(config, "_config_paths", lambda: [config_file]), \
+                 patch("core.runtime.plugins.initialize_plugin_runtime", return_value=(object(), [], [])), \
+                 patch(
+                     "core.runtime.events.validate_declared_event_contract",
+                     return_value=["Plugin fixture event contract mismatch"],
+                 ):
+                with pytest.raises(ValueError, match="Plugin contract init failures"):
+                    load_config()
+            assert "Plugin fixture event contract mismatch" in capsys.readouterr().err
+        finally:
+            config._config = old_config
+
+    def test_plugin_errors_emit_and_raise_when_quiet(self, tmp_path, capsys, monkeypatch):
+        import config
+
+        old_config = config._config
+        config._config = None
+        monkeypatch.setenv("QUAID_QUIET", "1")
+        config_file = tmp_path / "config.json"
+        config_file.write_text(json.dumps({
+            "plugins": {
+                "enabled": True,
+                "strict": True,
+                "slots": {},
+            }
+        }))
+
+        try:
+            with patch.object(config, "_config_paths", lambda: [config_file]), \
+                 patch("core.runtime.plugins.initialize_plugin_runtime", return_value=(object(), [], [])), \
+                 patch("core.runtime.events.validate_declared_event_contract", return_value=[]), \
+                 patch(
+                     "core.runtime.plugins.run_plugin_contract_surface",
+                     return_value=(["Plugin fixture hard failure"], []),
+                 ):
+                with pytest.raises(ValueError, match="Plugin contract init failures"):
+                    load_config()
+            assert "Plugin fixture hard failure" in capsys.readouterr().err
+        finally:
+            config._config = old_config
+
     def test_config_callback_failure_raises_when_plugins_strict(self):
         import config
 
