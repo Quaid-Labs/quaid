@@ -2651,7 +2651,10 @@ def _queue_missing_staged_rolling_flushes_from_state(
     """Recover publish-ready rolling stages even when their cursor row disappeared."""
     try:
         state_files = sorted(_rolling_state_dir().glob("*.json"))
-    except OSError:
+    except OSError as exc:
+        if _fail_hard_enabled():
+            raise
+        logger.debug("rolling state recovery scan failed: %s", exc)
         return
     for state_file in state_files:
         try:
@@ -2710,6 +2713,82 @@ def _queue_missing_staged_rolling_flushes_from_state(
                 "source_cursor_key": source_key,
                 "buffered_line_offset": int(rolling.get("buffered_line_offset", 0) or 0),
                 "flush_staged_payload_only": True,
+            },
+        )
+        _remember_queued_source_signal(
+            pending_session_ids=pending_session_ids,
+            pending_source_keys=pending_source_keys,
+            session_id=session_id,
+            source_key=source_key,
+        )
+
+
+def _queue_idle_semantic_rolling_flushes_without_cursor(
+    *,
+    pending_session_ids: set[str],
+    pending_source_keys: set[str],
+    known_cursor_session_ids: set[str],
+    now: float,
+    timeout_seconds: float,
+    installed_at_ts: float,
+) -> None:
+    """Recover sub-threshold rolling semantic buffers whose cursor row disappeared."""
+    try:
+        state_files = sorted(_rolling_state_dir().glob("*.json"))
+    except OSError as exc:
+        if _fail_hard_enabled():
+            raise
+        logger.debug("idle rolling semantic recovery state scan failed: %s", exc)
+        return
+    for state_file in state_files:
+        try:
+            session_id = _validate_session_id(state_file.stem)
+            rolling = read_rolling_state(session_id)
+        except Exception as exc:
+            if _fail_hard_enabled():
+                raise
+            logger.warning("idle rolling semantic recovery scan failed for %s: %s", state_file, exc)
+            continue
+        if session_id in known_cursor_session_ids or session_id in pending_session_ids:
+            continue
+        if not _semantic_buffer_has_content(rolling):
+            continue
+        transcript_path = _rolling_state_flush_transcript_path(session_id, rolling)
+        if not transcript_path:
+            continue
+        try:
+            mtime = os.path.getmtime(transcript_path)
+        except OSError as exc:
+            if _fail_hard_enabled():
+                raise
+            logger.debug("idle rolling semantic recovery skipped %s: %s", transcript_path, exc)
+            continue
+        if mtime < installed_at_ts or now - mtime < timeout_seconds:
+            continue
+        source_key = _signal_source_cursor_key(session_id, transcript_path, staged_state=rolling)
+        if _source_signal_already_pending(
+            pending_source_keys=pending_source_keys,
+            source_key=source_key,
+            session_id=session_id,
+            scanner="idle-rolling-state-recovery",
+        ):
+            continue
+        if _processing_lock_active(source_key):
+            continue
+        logger.info(
+            "session %s has idle rolling semantic buffer without cursor row; generating session_end flush",
+            session_id,
+        )
+        write_signal(
+            signal_type="session_end",
+            session_id=session_id,
+            transcript_path=transcript_path,
+            meta={
+                "reason": "idle_rolling_semantic_buffer_flush",
+                "recovered_from_rolling_state": True,
+                "source_cursor_key": source_key,
+                "semantic_buffer_tokens": int(rolling.get("semantic_buffer_tokens", 0) or 0),
+                "buffered_line_offset": int(rolling.get("buffered_line_offset", 0) or 0),
             },
         )
         _remember_queued_source_signal(
@@ -8317,6 +8396,18 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
             "mtime": mtime,
             "cursor_data": data,
         })
+
+    _queue_idle_semantic_rolling_flushes_without_cursor(
+        pending_session_ids=pending_session_ids,
+        pending_source_keys=pending_source_keys,
+        known_cursor_session_ids={
+            str(row.get("session_id") or "").strip()
+            for row in cursor_rows
+        },
+        now=now,
+        timeout_seconds=timeout_seconds,
+        installed_at_ts=installed_at_ts,
+    )
 
     # Process recently-active sessions first. Old stale cursors can be expensive
     # to re-extract and should not starve the session that just crossed its idle

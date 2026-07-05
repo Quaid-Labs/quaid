@@ -18845,6 +18845,77 @@ class TestRollingExtraction:
         assert captured[0]["meta"]["flush_staged_payload_only"] is True
         assert not lock_path.exists()
 
+    def test_recovers_idle_semantic_rolling_buffer_without_cursor_row(self, monkeypatch, tmp_path):
+        """A sub-threshold rolling buffer must still timeout-flush if its cursor row disappeared."""
+        instance_id = os.environ.get("QUAID_INSTANCE", "pytest-runner")
+        transcript = tmp_path / "lost-cursor-semantic.jsonl"
+        transcript.write_text(
+            '{"role":"user","content":"Hermes keeps the brass typewriter on the west desk."}\n'
+            '{"role":"assistant","content":"ack"}\n',
+            encoding="utf-8",
+        )
+        state_file = self._setup_rolling_state(
+            tmp_path,
+            instance_id,
+            "lost-semantic-sess",
+            [],
+            transcript,
+        )
+        state = json.loads(state_file.read_text(encoding="utf-8"))
+        state["buffer_transcript_path"] = str(transcript)
+        state["buffered_line_offset"] = 2
+        state["processed_line_offset"] = 0
+        state["semantic_buffer"] = "User: Hermes keeps the brass typewriter on the west desk."
+        state["semantic_buffer_tokens"] = 12
+        state["raw_facts"] = []
+        state_file.write_text(json.dumps(state), encoding="utf-8")
+
+        now = 1_700_000_000.0
+        old_time = now - 120
+        os.utime(transcript, (old_time, old_time))
+
+        captured = []
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        monkeypatch.setenv("QUAID_INSTANCE", instance_id)
+        monkeypatch.setattr(extraction_daemon.time, "time", lambda: now)
+        monkeypatch.setattr(extraction_daemon, "_read_installed_at", lambda: now - 7200)
+        monkeypatch.setattr(extraction_daemon, "_ensure_discovered_session_cursors", lambda _adapter: None)
+        monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
+        monkeypatch.setattr(
+            extraction_daemon,
+            "write_signal",
+            lambda signal_type, session_id, transcript_path, **kwargs: captured.append(
+                {
+                    "signal_type": signal_type,
+                    "session_id": session_id,
+                    "transcript_path": transcript_path,
+                    "meta": kwargs.get("meta", {}),
+                }
+            ),
+        )
+
+        extraction_daemon.check_idle_sessions(timeout_minutes=1)
+
+        source_key = extraction_daemon._signal_source_cursor_key(
+            "lost-semantic-sess",
+            str(transcript),
+            staged_state=state,
+        )
+        assert captured == [
+            {
+                "signal_type": "session_end",
+                "session_id": "lost-semantic-sess",
+                "transcript_path": str(transcript),
+                "meta": {
+                    "reason": "idle_rolling_semantic_buffer_flush",
+                    "recovered_from_rolling_state": True,
+                    "source_cursor_key": source_key,
+                    "semantic_buffer_tokens": 12,
+                    "buffered_line_offset": 2,
+                },
+            }
+        ]
+
     def test_recovers_missing_rolling_stage_flush_when_snapshot_was_cleaned(
         self, monkeypatch, tmp_path
     ):
