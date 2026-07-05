@@ -15180,9 +15180,6 @@ def _cap_mixed_session_chunk_results(
             break
         out.append(candidate)
 
-    if len(out) == len(selected) and not candidate_pool:
-        return rows, {"applied": False, "cap": cap, "selected_session_count": selected_session_count}
-
     return out[:top_limit], {
         "applied": True,
         "cap": cap,
