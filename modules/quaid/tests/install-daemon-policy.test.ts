@@ -614,6 +614,9 @@ describe("install daemon policy", () => {
     expect(postinstallText).toContain('updatedToml = removeTomlBool(updatedToml, "features", "codex_hooks");');
     expect(postinstallText).toContain('updatedToml = upsertTomlBool(updatedToml, "features", "hooks", true);');
     expect(postinstallText).toContain('updatedToml = upsertTomlStringInTable(');
+    expect(postinstallText).toContain("upsertCodexHookTrustState(");
+    expect(postinstallText).toContain("normalizedCodexCommandHookHash(");
+    expect(postinstallText).toContain("trusted_hash");
     expect(postinstallText).toContain('"trust_level"');
     expect(postinstallText).toContain('"trusted"');
   });

@@ -89,6 +89,11 @@ describe("codex postinstall hook registration", () => {
     expect(configToml).toContain("[features]");
     expect(configToml).toContain("hooks = true");
     expect(configToml).not.toContain("codex_hooks");
+    expect(configToml).toContain(`[hooks.state."${path.join(codexDir, "hooks.json")}:session_start:0:0"]`);
+    expect(configToml).toContain(`[hooks.state."${path.join(codexDir, "hooks.json")}:user_prompt_submit:1:0"]`);
+    expect(configToml).toContain(`[hooks.state."${path.join(codexDir, "hooks.json")}:stop:0:0"]`);
+    expect(configToml).toMatch(/trusted_hash = "sha256:[a-f0-9]{64}"/);
+    expect(configToml).toContain("enabled = true");
     expect(configToml.slice(0, configToml.indexOf("[features]"))).not.toMatch(/^hooks\s*=/m);
     expect(configToml).not.toContain("[[hooks.SessionStart]]");
     expect(configToml).not.toContain("[[hooks.SessionStart.hooks]]");

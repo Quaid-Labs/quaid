@@ -3,6 +3,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { createHash } from "node:crypto";
 
 function escapeShellSingle(value) {
   return `'${String(value).replace(/'/g, `'\\''`)}'`;
@@ -239,6 +240,83 @@ function tomlString(value) {
   return JSON.stringify(String(value));
 }
 
+function canonicalJson(value) {
+  if (Array.isArray(value)) {
+    return value.map(canonicalJson);
+  }
+  if (value && typeof value === "object") {
+    const out = {};
+    for (const key of Object.keys(value).sort()) {
+      const nested = canonicalJson(value[key]);
+      if (nested !== undefined) {
+        out[key] = nested;
+      }
+    }
+    return out;
+  }
+  return value;
+}
+
+function sha256TomlVersion(value) {
+  const serialized = JSON.stringify(canonicalJson(value));
+  return `sha256:${createHash("sha256").update(serialized).digest("hex")}`;
+}
+
+function codexHookEventKey(eventName) {
+  return String(eventName || "")
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .replace(/[-\s]+/g, "_")
+    .toLowerCase();
+}
+
+function normalizedCodexCommandHookHash(eventName, group, hook) {
+  const normalizedHook = {
+    type: "command",
+    command: String(hook?.command || ""),
+    timeout: Math.max(1, Number(hook?.timeout || 600)),
+    async: Boolean(hook?.async),
+  };
+  if (hook?.statusMessage) {
+    normalizedHook.statusMessage = String(hook.statusMessage);
+  }
+  return sha256TomlVersion({
+    event_name: codexHookEventKey(eventName),
+    ...(group?.matcher ? { matcher: String(group.matcher) } : {}),
+    hooks: [normalizedHook],
+  });
+}
+
+function isManagedQuaidHook(hook, managedCommands) {
+  const command = String(hook?.command || "");
+  return managedCommands.some((token) => command.includes(token));
+}
+
+function upsertCodexHookTrustState(text, hooksPath, hooksConfig, managedCommands) {
+  let updated = text;
+  const events = hooksConfig?.hooks && typeof hooksConfig.hooks === "object" ? hooksConfig.hooks : {};
+  for (const [eventName, groups] of Object.entries(events)) {
+    if (!Array.isArray(groups)) continue;
+    groups.forEach((group, groupIndex) => {
+      const hooks = Array.isArray(group?.hooks) ? group.hooks : [];
+      hooks.forEach((hook, handlerIndex) => {
+        if (!isManagedQuaidHook(hook, managedCommands)) return;
+        const key = `${hooksPath}:${codexHookEventKey(eventName)}:${groupIndex}:${handlerIndex}`;
+        const tableName = `hooks.state.${JSON.stringify(key)}`;
+        const trustedHash = normalizedCodexCommandHookHash(eventName, group, hook);
+        updated = upsertTomlStringInTable(
+          updated,
+          tableName,
+          "trusted_hash",
+          JSON.stringify(trustedHash),
+        );
+        // Quaid owns these hook entries; installation should leave them runnable.
+        updated = upsertTomlBool(updated, tableName, "enabled", true);
+      });
+    });
+  }
+  return updated;
+}
+
 function managedHookTomlBlocks(desired) {
   const blocks = [];
   for (const [eventName, groups] of Object.entries(desired)) {
@@ -385,6 +463,12 @@ for (const candidate of trustCandidates) {
     JSON.stringify("trusted"),
   );
 }
+updatedToml = upsertCodexHookTrustState(
+  updatedToml,
+  hooksPath,
+  hooksConfig,
+  managedCommands,
+);
 if (updatedToml !== currentToml) {
   fs.mkdirSync(path.dirname(configPath), { recursive: true });
   const tmpPath = `${configPath}.tmp-${process.pid}-${Date.now()}`;
