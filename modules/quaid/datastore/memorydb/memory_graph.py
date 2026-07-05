@@ -15158,7 +15158,8 @@ def _cap_mixed_session_chunk_results(
             continue
         selected_keys.add(key)
         candidate_pool.append(row)
-    if not candidate_pool:
+    selected_non_session_count = len(selected) - selected_session_count
+    if not candidate_pool and not selected_non_session_count:
         return rows, {
             "applied": False,
             "cap": cap,
@@ -15178,6 +15179,9 @@ def _cap_mixed_session_chunk_results(
         if len(out) >= top_limit:
             break
         out.append(candidate)
+
+    if len(out) == len(selected) and not candidate_pool:
+        return rows, {"applied": False, "cap": cap, "selected_session_count": selected_session_count}
 
     return out[:top_limit], {
         "applied": True,

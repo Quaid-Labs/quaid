@@ -7172,6 +7172,53 @@ class TestSourceChunkStorage:
         assert meta["session_chunk_result_cap"]["selected_session_count"] == 4
         assert meta["session_chunk_result_cap"]["final_session_count"] == 3
 
+    def test_mixed_session_cap_keeps_facts_already_in_selected_window(self):
+        """Selected compact facts should count as session-chunk replacements."""
+        import datastore.memorydb.memory_graph as mg
+
+        session_rows = [
+            {
+                "id": f"chunk-{idx}",
+                "chunk_id": f"chunk-{idx}",
+                "session_chunk_id": f"chunk-{idx}",
+                "text": "[session_chunk] User: The workshop bench has an opal task lamp.",
+                "category": "session_chunk",
+                "source_type": "session_chunk",
+                "via": "session_chunks",
+                "similarity": 0.96,
+            }
+            for idx in range(8)
+        ]
+        fact_rows = [
+            {
+                "id": "opal-lamp-fact-1",
+                "text": "The workshop bench has an opal task lamp.",
+                "category": "Fact",
+                "source_type": "memory",
+                "similarity": 1.0,
+            },
+            {
+                "id": "opal-lamp-fact-2",
+                "text": "Solomon keeps an opal task lamp by the workshop bench.",
+                "category": "Fact",
+                "source_type": "memory",
+                "similarity": 0.98,
+            },
+        ]
+        selected_rows = [*session_rows, *fact_rows]
+
+        capped, meta = mg._cap_mixed_session_chunk_results(
+            selected_rows,
+            selected_rows,
+            limit=10,
+        )
+
+        assert meta["applied"] is True
+        assert meta["candidate_count"] == 0
+        assert meta["selected_session_count"] == 8
+        assert meta["final_session_count"] == 3
+        assert [row["id"] for row in capped[-2:]] == ["opal-lamp-fact-1", "opal-lamp-fact-2"]
+
     def test_store_fact_persists_source_chunk_id(self, tmp_path):
         """Facts can carry a durable pointer to the source chunk that produced them."""
         from datastore.memorydb.memory_graph import get_memory, store
