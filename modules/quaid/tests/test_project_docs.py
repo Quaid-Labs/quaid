@@ -500,11 +500,18 @@ def test_project_docs_worker_refreshes_runtime_config_before_update(monkeypatch)
 
     monkeypatch.setattr(project_docs_worker.project_docs, "execute_update_once", fake_execute)
     monkeypatch.setattr(project_docs_worker.project_docs, "clear_worker_pid_for_current_process", lambda project: calls.append(("clear_pid", project)))
+    monkeypatch.setattr(project_docs_worker.project_docs, "clear_worker_exit", lambda project: calls.append(("clear_exit", project)))
+    monkeypatch.setattr(
+        project_docs_worker.project_docs,
+        "write_worker_exit",
+        lambda project, payload=None: calls.append(("exit", project, payload or {})),
+    )
 
     assert project_docs_worker.run_worker("demo", once=True, interval_seconds=0.5) == 0
     assert ("refresh", "demo") in calls
     assert ("execute", "demo", {"request_id": "req-1"}) in calls
     assert calls.index(("refresh", "demo")) < calls.index(("execute", "demo", {"request_id": "req-1"}))
+    assert ("exit", "demo", {"status": "completed", "reason": "once_complete", "exit_code": 0}) in calls
 
 
 def test_project_docs_worker_refresh_resets_model_caches(monkeypatch):
@@ -529,6 +536,8 @@ def test_project_docs_worker_writes_fatal_log_before_failhard_raise(monkeypatch,
     monkeypatch.setattr(project_docs_worker.project_docs, "read_update_request", lambda _project: {"request_id": "req-1"})
     monkeypatch.setattr(project_docs_worker.project_docs, "update_request_ready_for_worker", lambda request: True)
     monkeypatch.setattr(project_docs_worker.project_docs, "write_worker_heartbeat", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(project_docs_worker.project_docs, "clear_worker_exit", lambda _project: None)
+    monkeypatch.setattr(project_docs_worker.project_docs, "write_worker_exit", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(project_docs_worker.project_docs, "worker_log_path", lambda _project: log_path)
     monkeypatch.setattr(project_docs_worker.project_docs, "_fail_hard_enabled", lambda: True)
     monkeypatch.setattr(
@@ -1061,6 +1070,8 @@ def test_project_docs_worker_respects_request_retry_backoff(monkeypatch):
     monkeypatch.setattr(project_docs_worker.project_docs, "write_worker_heartbeat", lambda *args, **kwargs: calls.append(("heartbeat", args, kwargs)))
     monkeypatch.setattr(project_docs_worker.project_docs, "execute_update_once", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("backoff request should not run")))
     monkeypatch.setattr(project_docs_worker.project_docs, "clear_worker_pid_for_current_process", lambda project: calls.append(("clear", project)))
+    monkeypatch.setattr(project_docs_worker.project_docs, "clear_worker_exit", lambda project: calls.append(("clear_exit", project)))
+    monkeypatch.setattr(project_docs_worker.project_docs, "write_worker_exit", lambda project, payload=None: calls.append(("exit", project, payload or {})))
 
     assert project_docs_worker.run_worker("demo", once=True, interval_seconds=0.5) == 0
 
@@ -1083,6 +1094,8 @@ def test_project_docs_worker_uses_lightweight_pending_predicate(monkeypatch):
     )
     monkeypatch.setattr(project_docs_worker.project_docs, "write_worker_heartbeat", lambda *args, **kwargs: calls.append(("heartbeat", args, kwargs)))
     monkeypatch.setattr(project_docs_worker.project_docs, "clear_worker_pid_for_current_process", lambda project: calls.append(("clear", project)))
+    monkeypatch.setattr(project_docs_worker.project_docs, "clear_worker_exit", lambda project: calls.append(("clear_exit", project)))
+    monkeypatch.setattr(project_docs_worker.project_docs, "write_worker_exit", lambda project, payload=None: calls.append(("exit", project, payload or {})))
 
     assert project_docs_worker.run_worker("demo", once=True, interval_seconds=0.5) == 0
 
@@ -2412,6 +2425,22 @@ def test_worker_heartbeat_writes_atomic_json_pid_record(project_env):
     assert pid_data["token"] is None
 
 
+def test_worker_exit_marker_round_trips_and_clears(project_env):
+    _tmp_path, _src, _entry = project_env
+    from core import project_docs
+
+    project_docs.write_worker_exit("demo", {"status": "completed", "reason": "once_complete"})
+
+    marker = project_docs.read_worker_exit("demo")
+    assert marker["project"] == "demo"
+    assert marker["pid"] == os.getpid()
+    assert marker["status"] == "completed"
+    assert marker["reason"] == "once_complete"
+
+    project_docs.clear_worker_exit("demo")
+    assert project_docs.read_worker_exit("demo") == {}
+
+
 def test_pid_startup_wait_allows_first_bootstrap_headroom(project_env, monkeypatch):
     _tmp_path, _src, _entry = project_env
     from core import project_docs
@@ -2518,9 +2547,11 @@ def test_cleanup_project_state_removes_all_project_artifacts(project_env):
         project_docs._spawn_lock_path("worker", "demo"),
         project_docs.worker_pid_path("demo"),
         project_docs.worker_heartbeat_path("demo"),
+        project_docs.worker_exit_path("demo"),
         project_docs._worker_dir() / "demo.log",
         project_docs._state_dir() / ".demo.json.123.tmp",
         project_docs._worker_dir() / ".demo.heartbeat.json.123.tmp",
+        project_docs._worker_dir() / ".demo.exit.json.123.tmp",
     ]
     for path in paths:
         path.parent.mkdir(parents=True, exist_ok=True)

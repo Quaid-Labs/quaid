@@ -189,6 +189,10 @@ def worker_heartbeat_path(project: str) -> Path:
     return _safe_path(_worker_dir(), project, ".heartbeat.json")
 
 
+def worker_exit_path(project: str) -> Path:
+    return _safe_path(_worker_dir(), project, ".exit.json")
+
+
 def worker_log_path(project: str) -> Path:
     return _safe_path(_worker_dir(), project, ".log")
 
@@ -341,6 +345,7 @@ def cleanup_project_state(project: str) -> Dict[str, int]:
         _spawn_lock_path("worker", name),
         worker_pid_path(name),
         worker_heartbeat_path(name),
+        worker_exit_path(name),
         worker_log_path(name),
     ]
     temp_patterns = [
@@ -348,6 +353,7 @@ def cleanup_project_state(project: str) -> Dict[str, int]:
         _state_dir() / f".{name}.json.*.tmp",
         _worker_dir() / f".{name}.pid.*.tmp",
         _worker_dir() / f".{name}.heartbeat.json.*.tmp",
+        _worker_dir() / f".{name}.exit.json.*.tmp",
     ]
     for pattern in temp_patterns:
         candidates.extend(pattern.parent.glob(pattern.name))
@@ -387,6 +393,7 @@ def has_project_state(project: str) -> bool:
         _spawn_lock_path("worker", name),
         worker_pid_path(name),
         worker_heartbeat_path(name),
+        worker_exit_path(name),
         worker_log_path(name),
     ]
     temp_patterns = [
@@ -394,6 +401,7 @@ def has_project_state(project: str) -> bool:
         _state_dir() / f".{name}.json.*.tmp",
         _worker_dir() / f".{name}.pid.*.tmp",
         _worker_dir() / f".{name}.heartbeat.json.*.tmp",
+        _worker_dir() / f".{name}.exit.json.*.tmp",
     ]
     for path in candidates:
         if path.exists():
@@ -810,6 +818,31 @@ def is_instance_monitor_disabled(instance: str) -> bool:
 def clear_worker_pid_for_current_process(project: str) -> None:
     token = os.environ.get("QUAID_PROJECT_DOCS_WORKER_TOKEN", "").strip() or None
     _unlink_pid_record_if_matches(worker_pid_path(project), pid=os.getpid(), token=token)
+
+
+def write_worker_exit(project: str, payload: Optional[Dict[str, Any]] = None) -> None:
+    data = {
+        "project": validate_project_name(project),
+        "pid": os.getpid(),
+        "exited_at": utc_now(),
+    }
+    if payload:
+        data.update(payload)
+    _atomic_write_json(worker_exit_path(project), data)
+
+
+def read_worker_exit(project: str) -> Dict[str, Any]:
+    data = _read_json(worker_exit_path(project), {})
+    return data if isinstance(data, dict) else {}
+
+
+def clear_worker_exit(project: str) -> None:
+    try:
+        worker_exit_path(project).unlink(missing_ok=True)
+    except OSError as exc:
+        logger.warning("Failed clearing project-docs worker exit marker for %s: %s", project, exc)
+        if _fail_hard_enabled():
+            raise
 
 
 def get_project_entry(project: str) -> Dict[str, Any]:
@@ -2339,6 +2372,7 @@ def start_worker(project: str) -> int:
         if existing is not None:
             return existing
         _worker_dir().mkdir(parents=True, exist_ok=True)
+        clear_worker_exit(name)
         log_path = worker_log_path(name)
         script = Path(__file__).parent / "project_docs_worker.py"
         entry = get_project_entry(name)

@@ -63,6 +63,14 @@ def _write_janitor_checkpoint(
         )
 
 
+@pytest.fixture(autouse=True)
+def _default_no_project_worker_exit_marker(monkeypatch):
+    from core import project_docs_supervisor as supervisor
+
+    monkeypatch.setattr(supervisor.project_docs, "read_worker_exit", lambda _project: {})
+    monkeypatch.setattr(supervisor.project_docs, "clear_worker_exit", lambda _project: None)
+
+
 def _write_janitor_stats(
     tmp_path,
     instance_id: str,
@@ -543,6 +551,78 @@ def test_known_project_worker_exit_raises_when_failhard(monkeypatch, caplog):
             },
         )
     ]
+
+
+def test_known_project_worker_exit_clean_marker_does_not_raise_failhard(monkeypatch, caplog):
+    from core import project_docs_supervisor as supervisor
+
+    cleared = []
+    known_workers = {"demo": 1234}
+
+    monkeypatch.setattr(supervisor.project_docs, "read_worker_pid", lambda _project: None)
+    monkeypatch.setattr(
+        supervisor.project_docs,
+        "read_worker_exit",
+        lambda _project: {"pid": 1234, "status": "completed", "reason": "once_complete"},
+    )
+    monkeypatch.setattr(supervisor.project_docs, "clear_worker_exit", lambda project: cleared.append(project))
+    monkeypatch.setattr(
+        supervisor.project_docs,
+        "merge_state",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("clean exit should not mark error")),
+    )
+    monkeypatch.setattr(supervisor, "_fail_hard_enabled", lambda: True)
+
+    with caplog.at_level("INFO", logger=supervisor.__name__):
+        assert supervisor._handle_known_project_worker_exit("demo", known_workers) is True
+
+    assert known_workers == {}
+    assert cleared == ["demo"]
+    assert "exited cleanly status=completed" in caplog.text
+    assert "exited unexpectedly" not in caplog.text
+
+
+def test_known_project_worker_exit_marker_pid_mismatch_still_raises_failhard(monkeypatch):
+    from core import project_docs_supervisor as supervisor
+
+    known_workers = {"demo": 1234}
+
+    monkeypatch.setattr(supervisor.project_docs, "read_worker_pid", lambda _project: None)
+    monkeypatch.setattr(
+        supervisor.project_docs,
+        "read_worker_exit",
+        lambda _project: {"pid": 9999, "status": "completed", "reason": "stale_marker"},
+    )
+    monkeypatch.setattr(supervisor.project_docs, "read_update_request", lambda _project: None)
+    monkeypatch.setattr(supervisor.project_docs, "read_state", lambda _project: {})
+    monkeypatch.setattr(supervisor.project_docs, "merge_state", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(supervisor, "_fail_hard_enabled", lambda: True)
+
+    with pytest.raises(RuntimeError, match="project docs worker for demo exited unexpectedly pid=1234"):
+        supervisor._handle_known_project_worker_exit("demo", known_workers)
+
+
+def test_known_project_worker_exit_failed_marker_still_raises_failhard(monkeypatch, caplog):
+    from core import project_docs_supervisor as supervisor
+
+    known_workers = {"demo": 1234}
+
+    monkeypatch.setattr(supervisor.project_docs, "read_worker_pid", lambda _project: None)
+    monkeypatch.setattr(
+        supervisor.project_docs,
+        "read_worker_exit",
+        lambda _project: {"pid": 1234, "status": "failed", "reason": "tick_failed"},
+    )
+    monkeypatch.setattr(supervisor.project_docs, "read_update_request", lambda _project: None)
+    monkeypatch.setattr(supervisor.project_docs, "read_state", lambda _project: {})
+    monkeypatch.setattr(supervisor.project_docs, "merge_state", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(supervisor, "_fail_hard_enabled", lambda: True)
+
+    with caplog.at_level("WARNING", logger=supervisor.__name__):
+        with pytest.raises(RuntimeError, match="project docs worker for demo exited unexpectedly pid=1234"):
+            supervisor._handle_known_project_worker_exit("demo", known_workers)
+
+    assert "recorded non-clean exit status=failed" in caplog.text
 
 
 def test_known_project_worker_exit_allows_retry_when_failopen(monkeypatch):

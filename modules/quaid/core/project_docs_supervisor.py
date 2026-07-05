@@ -487,12 +487,45 @@ def _project_worker_start_skip_reason(project: str, entry: Dict[str, object]) ->
     )
 
 
+def _handle_recorded_clean_worker_exit(project: str, known_pid: int) -> bool:
+    exit_marker = project_docs.read_worker_exit(project)
+    if not exit_marker:
+        return False
+    try:
+        marker_pid = int(exit_marker.get("pid") or 0)
+    except Exception:
+        marker_pid = 0
+    if marker_pid != known_pid:
+        return False
+    status = str(exit_marker.get("status") or "").strip().lower()
+    if status not in {"completed", "stopped"}:
+        _LOGGER.warning(
+            "project docs worker for %s recorded non-clean exit status=%s pid=%s; treating as unexpected",
+            project,
+            status or "-",
+            known_pid,
+        )
+        return False
+    _LOGGER.info(
+        "project docs worker for %s exited cleanly status=%s reason=%s pid=%s; containing supervisor-level raise",
+        project,
+        status,
+        str(exit_marker.get("reason") or "-"),
+        known_pid,
+    )
+    project_docs.clear_worker_exit(project)
+    return True
+
+
 def _handle_known_project_worker_exit(project: str, known_workers: Dict[str, int]) -> bool:
     known_pid = int(known_workers.get(project, 0) or 0)
     if known_pid <= 0:
         return False
     if project_docs.read_worker_pid(project) is not None:
         return False
+    if _handle_recorded_clean_worker_exit(project, known_pid):
+        known_workers.pop(project, None)
+        return True
     message = f"project docs worker for {project} exited unexpectedly pid={known_pid}"
     _LOGGER.warning(message)
     request = project_docs.read_update_request(project)

@@ -115,6 +115,19 @@ def _refresh_runtime_config_for_update(project: str) -> None:
             raise
 
 
+def _record_worker_exit(project: str, **payload: object) -> None:
+    try:
+        project_docs.write_worker_exit(project, payload)
+    except Exception:
+        logging.getLogger(__name__).warning(
+            "Failed writing project docs worker exit marker for %s",
+            project,
+            exc_info=True,
+        )
+        if project_docs._fail_hard_enabled():
+            raise
+
+
 def run_worker(project: str, *, once: bool = False, interval_seconds: Optional[float] = None) -> int:
     name = project_docs.validate_project_name(project)
     interval = interval_seconds
@@ -125,10 +138,12 @@ def run_worker(project: str, *, once: bool = False, interval_seconds: Optional[f
             interval = 5.0
     interval = max(0.5, float(interval))
 
+    project_docs.clear_worker_exit(name)
     project_docs.write_worker_heartbeat(name, {"status": "starting"})
     while not _STOP:
         if not _supervisor_alive():
             project_docs.merge_state(name, {"status": "stopped", "last_error": "supervisor exited"})
+            _record_worker_exit(name, status="stopped", reason="supervisor_exited", exit_code=0)
             project_docs.clear_worker_pid_for_current_process(name)
             return 0
         try:
@@ -156,6 +171,7 @@ def run_worker(project: str, *, once: bool = False, interval_seconds: Optional[f
                 project_docs.write_worker_heartbeat(name, {"status": "idle"})
         except KeyError:
             # Project was deleted; supervisor will stop/remove this worker.
+            _record_worker_exit(name, status="stopped", reason="project_deleted", exit_code=0)
             project_docs.clear_worker_pid_for_current_process(name)
             try:
                 project_docs.worker_heartbeat_path(name).unlink(missing_ok=True)
@@ -170,6 +186,7 @@ def run_worker(project: str, *, once: bool = False, interval_seconds: Optional[f
                 raw_request_id if "raw_request_id" in locals() else "-",
             )
             _append_worker_failure_log(name, exc)
+            _record_worker_exit(name, status="failed", reason="tick_failed", last_error=str(exc))
             if project_docs._fail_hard_enabled():
                 raise
             state = project_docs.read_state(name)
@@ -177,10 +194,12 @@ def run_worker(project: str, *, once: bool = False, interval_seconds: Optional[f
                 project_docs.merge_state(name, {"status": "error", "last_error": str(exc), "last_failed_at": project_docs.utc_now()})
             project_docs.write_worker_heartbeat(name, {"status": "error", "last_error": str(exc)})
         if once:
+            _record_worker_exit(name, status="completed", reason="once_complete", exit_code=0)
             project_docs.clear_worker_pid_for_current_process(name)
             return 0
         time.sleep(interval)
     project_docs.write_worker_heartbeat(name, {"status": "stopped"})
+    _record_worker_exit(name, status="stopped", reason="stop_requested", exit_code=0)
     project_docs.clear_worker_pid_for_current_process(name)
     return 0
 
