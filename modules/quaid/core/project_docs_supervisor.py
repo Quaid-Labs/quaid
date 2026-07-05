@@ -984,6 +984,18 @@ def _maintain_instance_monitors(known_instances: Dict[str, int]) -> None:
             pid = None
             known_pid = None
         if pid is None:
+            if known_pid is not None:
+                restart_request = project_docs.consume_instance_monitor_restart_request(instance)
+                if str((restart_request or {}).get("previous_reason") or "").strip() == "daemon_stop":
+                    _LOGGER.info(
+                        "instance monitor %s previous daemon pid=%s stopped by explicit daemon_stop; "
+                        "restarting without crash accounting",
+                        instance,
+                        known_pid,
+                    )
+                    _INSTANCE_MONITOR_CRASHES.pop(instance, None)
+                    known_instances.pop(instance, None)
+                    known_pid = None
             if known_pid is not None and not _instance_monitor_restart_allowed_after_crash(
                 instance,
                 int(known_pid),

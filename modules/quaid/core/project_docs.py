@@ -223,6 +223,16 @@ def instance_monitor_disabled_path(instance: str) -> Path:
     return instance_monitor_disabled_dir() / f"{validate_instance_id(instance)}.json"
 
 
+def instance_monitor_restart_request_dir() -> Path:
+    return project_docs_root() / "instance-monitor-restart-requests"
+
+
+def instance_monitor_restart_request_path(instance: str) -> Path:
+    from lib.instance import validate_instance_id
+
+    return instance_monitor_restart_request_dir() / f"{validate_instance_id(instance)}.json"
+
+
 def _fail_hard_enabled() -> bool:
     try:
         from lib.fail_policy import is_fail_hard_enabled
@@ -745,18 +755,46 @@ def disable_instance_monitor(instance: str, *, reason: str = "manual_stop") -> N
     )
 
 
-def enable_instance_monitor(instance: str) -> None:
-    try:
-        instance_monitor_disabled_path(instance).unlink(missing_ok=True)
-    except OSError as exc:
-        logger.warning("Failed clearing disabled instance monitor marker for %s: %s", instance, exc)
-        if _fail_hard_enabled():
-            raise
-
-
 def read_instance_monitor_disabled(instance: str) -> Optional[Dict[str, Any]]:
     data = _read_json(instance_monitor_disabled_path(instance), {})
     return data if isinstance(data, dict) and data else None
+
+
+def consume_instance_monitor_restart_request(instance: str) -> Optional[Dict[str, Any]]:
+    path = instance_monitor_restart_request_path(instance)
+    data = _read_json(path, {})
+    try:
+        path.unlink(missing_ok=True)
+    except OSError as exc:
+        logger.warning("Failed clearing instance monitor restart request marker for %s: %s", instance, exc)
+        if _fail_hard_enabled():
+            raise
+    return data if isinstance(data, dict) and data else None
+
+
+def enable_instance_monitor(instance: str) -> None:
+    name = instance
+    disabled_marker = read_instance_monitor_disabled(name)
+    if disabled_marker and str(disabled_marker.get("reason") or "").strip() == "daemon_stop":
+        try:
+            _atomic_write_json(
+                instance_monitor_restart_request_path(name),
+                {
+                    "instance": disabled_marker.get("instance") or name,
+                    "previous_reason": "daemon_stop",
+                    "requested_at": utc_now(),
+                },
+            )
+        except Exception as exc:
+            logger.warning("Failed writing instance monitor restart request marker for %s: %s", name, exc)
+            if _fail_hard_enabled():
+                raise
+    try:
+        instance_monitor_disabled_path(name).unlink(missing_ok=True)
+    except OSError as exc:
+        logger.warning("Failed clearing disabled instance monitor marker for %s: %s", name, exc)
+        if _fail_hard_enabled():
+            raise
 
 
 def is_instance_monitor_disabled(instance: str) -> bool:

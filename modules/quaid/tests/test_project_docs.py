@@ -68,6 +68,22 @@ def test_fail_hard_enabled_propagates_policy_runtime_errors(monkeypatch):
         project_docs._fail_hard_enabled()
 
 
+def test_enable_instance_monitor_records_daemon_stop_restart_request(monkeypatch, tmp_path):
+    from core import project_docs
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+
+    project_docs.disable_instance_monitor("openclaw-main", reason="daemon_stop")
+    project_docs.enable_instance_monitor("openclaw-main")
+
+    assert not project_docs.instance_monitor_disabled_path("openclaw-main").exists()
+    marker = project_docs.consume_instance_monitor_restart_request("openclaw-main")
+    assert marker is not None
+    assert marker["instance"] == "openclaw-main"
+    assert marker["previous_reason"] == "daemon_stop"
+    assert project_docs.consume_instance_monitor_restart_request("openclaw-main") is None
+
+
 def test_project_docs_utc_now_honors_quaid_now(monkeypatch):
     from core import project_docs
 
