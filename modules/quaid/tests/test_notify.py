@@ -506,7 +506,9 @@ class TestNotifyAgent:
         requests = payload.get("requests", [])
         assert len(requests) == 1
         assert requests[0]["priority"] == "high"
-        assert "[Quaid error] [provider] provider down" in requests[0]["message"]
+        assert "[Quaid error] [provider]" in requests[0]["message"]
+        assert "Tell the user: Quaid memory recall is currently degraded" in requests[0]["message"]
+        assert "Detail: provider down" in requests[0]["message"]
 
     def test_openclaw_provider_error_uses_deferred_not_direct_notification(self, tmp_path):
         adapter = MagicMock()
