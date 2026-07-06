@@ -119,6 +119,15 @@ function readHookTraceEvents(hiddenHome: string, instanceId: string): any[] {
     .map((line) => JSON.parse(line));
 }
 
+function readExtractionSignals(hiddenHome: string, instanceId: string): any[] {
+  const signalDir = path.join(hiddenHome, "instances", instanceId, "data", "extraction-signals");
+  if (!fs.existsSync(signalDir)) return [];
+  return fs.readdirSync(signalDir)
+    .filter((name) => name.endsWith(".json"))
+    .sort()
+    .map((name) => JSON.parse(fs.readFileSync(path.join(signalDir, name), "utf8")));
+}
+
 async function loadAdapterWithHomes(
   hiddenHome: string,
   visibleHome: string,
@@ -697,6 +706,139 @@ describe("openclaw deferred notices", () => {
     expect(traceEvents).toContain("hook.before_agent_start.embedded_fallback_transcript_preserved");
     expect(traceEvents).toContain("hook.before_prompt_build.embedded_fallback_duplicate_skip");
     expect(traceEvents.filter((eventName) => eventName === "hook.before_prompt_build.injection_applied")).toHaveLength(1);
+
+    fetchMock.mockRestore();
+    warn.mockRestore();
+    log.mockRestore();
+    error.mockRestore();
+    removeTempDir(fixture.home);
+  });
+
+  it("queues a session_end drain for embedded fallback preserved transcript content", async () => {
+    vi.stubEnv("QUAID_DISABLE_NOTIFICATIONS", "1");
+    const fixture = seedDeferredNoticeFixture(
+      "quaid-oc-embedded-fallback-session-end-home-",
+      "openclaw-main",
+      "[Quaid] embedded fallback session_end fixture",
+    );
+    const configPath = path.join(fixture.hiddenHome, "instances", "openclaw-main", "config.json");
+    const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+    writeJson(configPath, {
+      ...config,
+      systems: { memory: true, projects: false },
+      retrieval: { ...config.retrieval, autoInject: true },
+    });
+    const deviceId = "device-needs-scope-upgrade-session-end";
+    const devicesDir = path.join(path.dirname(fixture.openClawConfigPath), "devices");
+    writeJson(path.join(devicesDir, "pending.json"), {
+      "scope-request-session-end": {
+        requestId: "scope-request-session-end",
+        deviceId,
+        scopes: ["operator.write", "operator.pairing"],
+      },
+    });
+    writeJson(path.join(devicesDir, "paired.json"), {
+      [deviceId]: {
+        deviceId,
+        scopes: ["operator.read"],
+        approvedScopes: ["operator.read"],
+      },
+    });
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () => ({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      text: async () => "OK",
+    } as any));
+
+    const plugin = await loadAdapterWithHomes(
+      fixture.hiddenHome,
+      fixture.visibleHome,
+      fixture.openClawConfigPath,
+      "openclaw-main",
+    );
+    const adapterModule = await import("../adaptors/openclaw/adapter.js");
+    const testApi = (adapterModule as any).__test;
+    testApi.clearAutoInjectTurnCaches();
+    const api = makeFakeApi();
+    plugin.register(api as any);
+
+    const beforeAgentStartCall = api.on.mock.calls.find((call: any[]) =>
+      call?.[0] === "before_agent_start" && call?.[2]?.name === "memory-injection"
+    );
+    expect(beforeAgentStartCall).toBeTruthy();
+
+    const statement = "The reading chair for this instance has a brass desk lamp beside it.";
+    const sessionId = "session-embedded-fallback-session-end";
+    const sessionKey = "agent:main:matrix:room-embedded-fallback-session-end";
+    const memory = {
+      id: "mem-embedded-brass-lamp",
+      text: statement,
+      similarity: 1,
+      via: "vector",
+      category: "fact",
+    };
+    testApi.rememberCompletedAutoInjectTurn(testApi.autoInjectTurnKey("main", statement, sessionKey), {
+      allMemories: [memory],
+      recallDiagnostics: { mode: "test" },
+      injection: {
+        toInject: [memory],
+        prependContext: [
+          "<injected_memories>",
+          `- fact | ${statement}`,
+          "</injected_memories>",
+        ].join("\n"),
+      },
+    }, Date.now());
+
+    const beforeAgentStartHandler = beforeAgentStartCall?.[1];
+    await beforeAgentStartHandler(
+      {
+        prependContext: "",
+        prompt: statement,
+        messages: [{ role: "user", content: statement }],
+        sessionId,
+        sessionKey,
+      },
+      {
+        sessionId,
+        sessionKey,
+        agentId: "main",
+        trigger: "user",
+      },
+    );
+
+    const preservedTranscript = path.join(
+      fixture.hiddenHome,
+      "instances",
+      "openclaw-main",
+      "logs",
+      "quaid",
+      "sessions",
+      `${sessionId}.jsonl`,
+    );
+    expect(fs.readFileSync(preservedTranscript, "utf8")).toContain(statement);
+
+    const signals = readExtractionSignals(fixture.hiddenHome, "openclaw-main");
+    expect(signals).toHaveLength(1);
+    expect(signals[0]).toMatchObject({
+      type: "session_end",
+      session_id: sessionId,
+      transcript_path: preservedTranscript,
+      meta: {
+        source: "embedded_prompt_build_fallback",
+        hook_session_id: sessionId,
+        hook_session_key: sessionKey,
+      },
+    });
+    expect(Number(signals[0]?.meta?.transcript_size || 0)).toBeGreaterThan(0);
+
+    const traceEvents = readHookTraceEvents(fixture.hiddenHome, "openclaw-main").map((row) => String(row.event || ""));
+    expect(traceEvents).toContain("hook.before_agent_start.embedded_fallback_session_end_queued");
 
     fetchMock.mockRestore();
     warn.mockRestore();

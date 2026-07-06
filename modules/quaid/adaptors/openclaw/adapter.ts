@@ -6204,6 +6204,7 @@ const quaidPlugin = {
     const identityOnlyRefreshResults = new WeakSet<object>();
     const autoInjectedMemoryResults = new WeakSet<object>();
     const embeddedPromptBuildFallbackTurns = new Map<string, number>();
+    const embeddedFallbackLifecycleSignalSizes = new Map<string, number>();
     const EMBEDDED_PROMPT_BUILD_FALLBACK_TTL_MS = 30_000;
     const readOptionalOpenClawDeviceJson = (filePath: string): Record<string, any> => {
       if (!fs.existsSync(filePath)) return {};
@@ -6324,6 +6325,101 @@ const quaidPlugin = {
       });
       return preservedPath;
     };
+    const queueEmbeddedFallbackLifecycleDrain = (
+      agentLabel: string,
+      event: any,
+      ctx: any,
+      preservedPath: string | null,
+    ): void => {
+      const sessionId = String(event?.sessionId || ctx?.sessionId || ctx?.session?.id || "").trim();
+      if (!sessionId || !preservedPath) return;
+      const sessionKey = firstNonEmptyString(
+        event?.sessionKey,
+        ctx?.sessionKey,
+        event?.targetSessionKey,
+        ctx?.targetSessionKey,
+        resolveSessionKeyForSessionId(sessionId),
+      );
+      const sessionContext = { sessionId, sessionKey };
+      if (!isSystemEnabled("memory") || isInternalSessionContext(sessionContext, sessionContext)) {
+        return;
+      }
+      let transcriptSize = 0;
+      try {
+        transcriptSize = fs.statSync(preservedPath).size;
+      } catch (err: unknown) {
+        const message = String((err as Error)?.message || err);
+        writeHookTrace("hook.before_agent_start.embedded_fallback_session_end_error", {
+          session_id: sessionId,
+          preserved_path: preservedPath,
+          error: message.slice(0, 240),
+        });
+        if (isFailHardEnabled()) throw err;
+        console.warn(`[quaid] embedded fallback lifecycle drain skipped: ${message}`);
+        return;
+      }
+      const previousSize = Number(embeddedFallbackLifecycleSignalSizes.get(sessionId) || 0);
+      if (transcriptSize <= previousSize) {
+        writeHookTrace("hook.before_agent_start.embedded_fallback_session_end_skipped", {
+          session_id: sessionId,
+          reason: "no_new_content",
+          transcript_size: transcriptSize,
+          previous_size: previousSize,
+        });
+        return;
+      }
+      const resolvedAgentLabel = resolveHookAgentLabel(sessionContext, sessionContext) || agentLabel;
+      sessionIdToAgentId.set(sessionId, resolvedAgentLabel);
+      rememberSessionTranscriptPath(sessionId, preservedPath, "embedded-fallback-lifecycle-drain", {
+        trustedSessionMapping: true,
+      });
+      if (!sessionNeedsLifecycleFlush(sessionId, preservedPath, resolvedAgentLabel)) {
+        writeHookTrace("hook.before_agent_start.embedded_fallback_session_end_skipped", {
+          session_id: sessionId,
+          reason: "no_unextracted_content",
+          transcript_size: transcriptSize,
+        });
+        return;
+      }
+      if (!facade.shouldProcessLifecycleSignal(sessionId, {
+        label: "ResetSignal",
+        source: "hook",
+        signature: `hook:embedded_prompt_build_fallback:${transcriptSize}`,
+      })) {
+        writeHookTrace("hook.before_agent_start.embedded_fallback_session_end_skipped", {
+          session_id: sessionId,
+          reason: "duplicate",
+          transcript_size: transcriptSize,
+        });
+        return;
+      }
+      facade.markLifecycleSignalFromHook(sessionId, "ResetSignal");
+      const sigPath = writeDaemonSignal(sessionId, "session_end", {
+        source: "embedded_prompt_build_fallback",
+        hook_session_id: sessionId,
+        hook_session_key: sessionKey,
+        transcript_size: transcriptSize,
+      });
+      if (!sigPath) {
+        writeHookTrace("hook.before_agent_start.embedded_fallback_session_end_skipped", {
+          session_id: sessionId,
+          reason: "signal_write_failed",
+          transcript_size: transcriptSize,
+        });
+        if (isFailHardEnabled()) {
+          throw new Error(`embedded fallback session_end signal write failed for session ${sessionId}`);
+        }
+        return;
+      }
+      embeddedFallbackLifecycleSignalSizes.set(sessionId, transcriptSize);
+      writeHookTrace("hook.before_agent_start.embedded_fallback_session_end_queued", {
+        session_id: sessionId,
+        session_key: sessionKey,
+        transcript_size: transcriptSize,
+        signal_path: sigPath,
+        preserved_path: preservedPath,
+      });
+    };
 
     // Register lifecycle hooks.
     const beforeAgentStartHandler = async (event: any, ctx: any): Promise<HookContextResult | undefined> => {
@@ -6414,7 +6510,8 @@ notify_user(${JSON.stringify(message)})
           session_key: String(event?.sessionKey || ctx?.sessionKey || ""),
           reason: "openclaw_scope_upgrade_pending",
         });
-        preserveEmbeddedPromptBuildFallbackTranscript(startAgentLabel, event, ctx);
+        const preservedPath = preserveEmbeddedPromptBuildFallbackTranscript(startAgentLabel, event, ctx);
+        queueEmbeddedFallbackLifecycleDrain(startAgentLabel, event, ctx, preservedPath);
         const fallbackEvent = {
           ...(event && typeof event === "object" ? event : {}),
           __quaidEmbeddedPromptBuildFallback: true,
