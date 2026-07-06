@@ -311,7 +311,9 @@ def _prime_config_reload_watcher() -> None:
 
 def _force_reload_config() -> None:
     from config import reload_config
+    from lib.llm_clients import reset_model_config_cache
     reload_config()
+    reset_model_config_cache()
 
 
 def _reload_config_if_changed(reason: str = "daemon poll") -> bool:

@@ -2539,6 +2539,23 @@ def test_config_reload_watcher_reloads_when_config_mtime_changes(monkeypatch, tm
     assert extraction_daemon._reload_config_if_changed("test stable") is False
 
 
+def test_force_reload_config_resets_llm_model_cache(monkeypatch):
+    import config
+    import lib.llm_clients as llm_clients
+
+    calls = []
+    monkeypatch.setattr(config, "reload_config", lambda: calls.append("reload_config"))
+    monkeypatch.setattr(
+        llm_clients,
+        "reset_model_config_cache",
+        lambda: calls.append("reset_model_config_cache"),
+    )
+
+    extraction_daemon._force_reload_config()
+
+    assert calls == ["reload_config", "reset_model_config_cache"]
+
+
 def test_config_reload_failure_logs_and_returns_false_when_not_failhard(monkeypatch, caplog):
     old_sig = (("/tmp/config.json", 1, 1),)
     new_sig = (("/tmp/config.json", 2, 1),)
