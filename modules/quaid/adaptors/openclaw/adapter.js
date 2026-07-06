@@ -5036,6 +5036,7 @@ const quaidPlugin = {
     let timeoutManager = null;
     let beforePromptBuildHandler = async () => void 0;
     const identityOnlyRefreshResults = /* @__PURE__ */ new WeakSet();
+    const autoInjectedMemoryResults = /* @__PURE__ */ new WeakSet();
     const embeddedPromptBuildFallbackTurns = /* @__PURE__ */ new Map();
     const EMBEDDED_PROMPT_BUILD_FALLBACK_TTL_MS = 3e4;
     const readOptionalOpenClawDeviceJson = (filePath) => {
@@ -5222,7 +5223,6 @@ notify_user(${JSON.stringify(message)})
       if (!autoInjectEnabled) {
         return result;
       }
-      const fallbackTurnKey = embeddedPromptBuildFallbackTurnKey(startAgentLabel, event, ctx);
       if (openClawScopeUpgradePending()) {
         writeHookTrace("hook.before_agent_start.embedded_prompt_build_fallback", {
           session_id: String(event?.sessionId || ctx?.sessionId || ctx?.session?.id || ""),
@@ -5250,8 +5250,8 @@ notify_user(${JSON.stringify(message)})
             "embedded_prompt_build_fallback_identity_only"
           );
         }
-        if (promptResult?.prependContext || promptResult?.prependSystemContext || promptResult?.appendSystemContext) {
-          markEmbeddedPromptBuildFallbackTurn(fallbackTurnKey);
+        if (promptResult && autoInjectedMemoryResults.has(promptResult)) {
+          markEmbeddedPromptBuildFallbackTurn(embeddedPromptBuildFallbackTurnKey(startAgentLabel, fallbackEvent, ctx));
         }
         if (event && typeof event === "object" && promptResult) {
           if (promptResult.prependContext) event.prependContext = promptResult.prependContext;
@@ -6039,6 +6039,9 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
         } catch (notifyErr) {
           console.warn(`[quaid] Auto-inject recall notification skipped: ${notifyErr.message}`);
         }
+        const appliedResult = withDocs({ prependContext: event?.prependContext || void 0 });
+        autoInjectedMemoryResults.add(appliedResult);
+        return appliedResult;
       } catch (error) {
         console.error("[quaid] Auto-injection error:", error);
         writeHookTrace("hook.before_prompt_build.error", {

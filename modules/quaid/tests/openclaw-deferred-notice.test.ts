@@ -814,6 +814,10 @@ describe("openclaw deferred notices", () => {
       ctx,
     );
     expect(String(firstPrompt?.prependContext || "")).not.toContain("<injected_memories>");
+    expect(
+      readHookTraceEvents(fixture.hiddenHome, "openclaw-main")
+        .map((row) => String(row.event || "")),
+    ).not.toContain("hook.before_prompt_build.embedded_fallback_duplicate_skip");
 
     const query = "What grinder do I use for espresso?";
     const memory = {
@@ -848,10 +852,23 @@ describe("openclaw deferred notices", () => {
     );
     expect(String(secondStart?.prependContext || "")).toContain("Baratza Encore");
 
+    const secondPrompt = await beforePromptBuildHandler(
+      {
+        prependContext: "",
+        prompt: query,
+        messages: [{ role: "user", content: query }],
+        sessionId,
+        sessionKey,
+      },
+      ctx,
+    );
+    expect(String(secondPrompt?.prependContext || "")).not.toContain("Baratza Encore");
+
     const traceRows = readHookTraceEvents(fixture.hiddenHome, "openclaw-main");
     const traceEvents = traceRows.map((row) => String(row.event || ""));
     expect(traceEvents).toContain("hook.identity_refresh.drained");
     expect(traceEvents).toContain("hook.before_prompt_build.embedded_fallback_duplicate_skip");
+    expect(traceEvents.filter((eventName) => eventName === "hook.before_prompt_build.embedded_fallback_duplicate_skip")).toHaveLength(1);
     expect(traceEvents.filter((eventName) => eventName === "hook.before_prompt_build.injection_applied")).toHaveLength(1);
 
     fetchMock.mockRestore();

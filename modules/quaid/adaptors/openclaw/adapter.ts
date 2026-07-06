@@ -6202,6 +6202,7 @@ const quaidPlugin = {
     };
     let beforePromptBuildHandler: (event: any, ctx: any) => Promise<HookContextResult | undefined> = async () => undefined;
     const identityOnlyRefreshResults = new WeakSet<object>();
+    const autoInjectedMemoryResults = new WeakSet<object>();
     const embeddedPromptBuildFallbackTurns = new Map<string, number>();
     const EMBEDDED_PROMPT_BUILD_FALLBACK_TTL_MS = 30_000;
     const readOptionalOpenClawDeviceJson = (filePath: string): Record<string, any> => {
@@ -6407,7 +6408,6 @@ notify_user(${JSON.stringify(message)})
         return result;
       }
 
-      const fallbackTurnKey = embeddedPromptBuildFallbackTurnKey(startAgentLabel, event, ctx);
       if (openClawScopeUpgradePending()) {
         writeHookTrace("hook.before_agent_start.embedded_prompt_build_fallback", {
           session_id: String(event?.sessionId || ctx?.sessionId || ctx?.session?.id || ""),
@@ -6435,12 +6435,8 @@ notify_user(${JSON.stringify(message)})
             "embedded_prompt_build_fallback_identity_only",
           );
         }
-        if (
-          promptResult?.prependContext
-          || promptResult?.prependSystemContext
-          || promptResult?.appendSystemContext
-        ) {
-          markEmbeddedPromptBuildFallbackTurn(fallbackTurnKey);
+        if (promptResult && autoInjectedMemoryResults.has(promptResult)) {
+          markEmbeddedPromptBuildFallbackTurn(embeddedPromptBuildFallbackTurnKey(startAgentLabel, fallbackEvent, ctx));
         }
         if (event && typeof event === "object" && promptResult) {
           if (promptResult.prependContext) event.prependContext = promptResult.prependContext;
@@ -7360,6 +7356,9 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
         } catch (notifyErr: unknown) {
           console.warn(`[quaid] Auto-inject recall notification skipped: ${(notifyErr as Error).message}`);
         }
+        const appliedResult = withDocs({ prependContext: event?.prependContext || undefined });
+        autoInjectedMemoryResults.add(appliedResult);
+        return appliedResult;
 
       } catch (error: unknown) {
         console.error("[quaid] Auto-injection error:", error);
