@@ -488,6 +488,8 @@ class TestNotifyAgent:
 
         assert "invalid-model-m6-probe" in first_turn
         assert "invalid-model-m6-probe" in second_turn
+        assert "Tell the user: Quaid memory recall is currently degraded" in first_turn
+        assert "Tell the user: Quaid memory recall is currently degraded" in second_turn
 
     def test_falls_back_to_deferred_when_notify_returns_false(self, tmp_path):
         adapter = MagicMock()
@@ -533,6 +535,7 @@ class TestNotifyAgent:
         assert requests[0]["source"] == "provider"
         assert requests[0]["priority"] == "high"
         assert "[Quaid error] [provider]" in requests[0]["message"]
+        assert "Tell the user: Quaid memory recall is currently degraded" in requests[0]["message"]
         assert "invalid-model-m6-probe" in requests[0]["message"]
 
     def test_falls_back_to_deferred_when_notify_raises(self, tmp_path):

@@ -2865,12 +2865,14 @@ class TestHookInjectRecallResilience:
         payload = json.loads(out)
         context = payload["hookSpecificOutput"]["additionalContext"]
         assert "[Quaid error] [provider]" in context
+        assert "Tell the user: Quaid memory recall is currently degraded" in context
         assert "invalid-model-m6-probe" in context
         log_path = tmp_path / "instances" / "claude-code-test" / "logs" / "daemon" / "preinject.jsonl"
         entry = json.loads(log_path.read_text(encoding="utf-8").splitlines()[0])
         assert entry["sessionId"] == "sess-cc-provider-probe"
         assert entry["noticeCount"] == 1
         assert entry["notices"][0]["category"] == "direct_notice"
+        assert "Tell the user: Quaid memory recall is currently degraded" in entry["notices"][0]["text"]
         assert "invalid-model-m6-probe" in entry["notices"][0]["text"]
 
     def test_session_start_reprobes_after_daemon_bounce_for_first_prompt_notice(

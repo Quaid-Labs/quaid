@@ -44,7 +44,25 @@ def _format_notice(message: str, *, severity: str, source: str) -> str:
     source_token = str(source or "").strip()
     if source_token:
         prefix = f"{prefix} [{source_token}]"
-    return f"{prefix} {message.strip()}"
+    text = message.strip()
+    if label == "error" and source_token.lower() in {"provider", "llm_config"}:
+        text = format_provider_error_for_relay(text)
+    return f"{prefix} {text}"
+
+
+def format_provider_error_for_relay(message: str) -> str:
+    text = re.sub(r"\s+", " ", str(message or "").strip())
+    if not text:
+        text = "provider error"
+    detail = text
+    max_detail = 160
+    if len(detail) > max_detail:
+        detail = f"{detail[: max_detail - 1].rstrip()}…"
+    return (
+        "Tell the user: Quaid memory recall is currently degraded because its model provider failed. "
+        "I may answer without fresh Quaid memory until it recovers. "
+        f"Detail: {detail}"
+    )
 
 
 def format_pending_notice_relay(messages: list[str]) -> str:

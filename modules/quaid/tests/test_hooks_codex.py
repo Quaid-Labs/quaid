@@ -912,6 +912,7 @@ def test_codex_hook_inject_probes_prompt_model_config(monkeypatch, tmp_path):
     payload = json.loads(out)
     context = payload["hookSpecificOutput"]["additionalContext"]
     assert "[Quaid error] [provider]" in context
+    assert "Tell the user: Quaid memory recall is currently degraded" in context
     assert "invalid-model-m6-probe" in context
 
 

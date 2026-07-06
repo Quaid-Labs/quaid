@@ -856,6 +856,9 @@ def _provider_failure_notice_message(exc: Exception) -> str:
         text = _safe_agent_error(exc)
     if text.lower().startswith("[quaid error] [provider]"):
         return text
+    from lib.agent_notice import format_provider_error_for_relay
+
+    text = format_provider_error_for_relay(text)
     return f"[Quaid error] [provider] {text}"
 
 
