@@ -1435,6 +1435,46 @@ class TestExtractFromTranscript:
         assert fact["_source_timestamp"] == "2026-06-13T00:07:18+00:00"
         assert "created_at" not in fact
 
+    @patch("ingest.extract._current_utc_timestamp", return_value="2026-07-06T05:40:09+00:00")
+    @patch("ingest.extract.call_deep_reasoning")
+    def test_extraction_preserves_in_chunk_fact_mentioned_at(self, mock_llm, _mock_now):
+        from ingest.extract import extract_from_transcript
+
+        mock_llm.return_value = (json.dumps({
+            "chunk_assessment": "usable",
+            "facts": [
+                {
+                    "text": "Solomon started using a 14mm Sailor Pro Gear nib this week",
+                    "category": "fact",
+                    "speaker": "user",
+                    "domains": ["personal"],
+                    "extraction_confidence": "high",
+                    "privacy": "private",
+                    "mentioned_at": "2026-07-06T05:15:41+00:00",
+                    "occurred_start": "2026-06-29",
+                    "occurred_end": "2026-07-06",
+                }
+            ],
+            "soul_snippets": {},
+            "journal_entries": {},
+            "project_logs": {},
+        }), 0.1)
+
+        result = extract_from_transcript(
+            transcript=(
+                "[2026-07-06T05:11:40Z] User: Earlier in the session I mentioned my desk setup.\n\n"
+                "[2026-07-06T05:15:41Z] User: I started using a 14mm Sailor Pro Gear nib this week for my journal."
+            ),
+            owner_id="Solomon Steadman",
+            dry_run=True,
+        )
+
+        fact = result["raw_facts"][0]
+        assert fact["mentioned_at"] == "2026-07-06T05:15:41+00:00"
+        assert fact["occurred_start"] == "2026-06-29T23:59:59"
+        assert fact["occurred_end"] == "2026-07-06T23:59:59"
+        assert fact["_source_timestamp"] == "2026-07-06T05:40:09+00:00"
+
     @patch("ingest.extract._current_utc_timestamp", return_value="2026-05-09T08:00:00+00:00")
     @patch("ingest.extract.call_deep_reasoning")
     def test_extraction_does_not_use_project_log_entry_date_as_created_at(self, mock_llm, _mock_now):

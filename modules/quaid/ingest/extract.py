@@ -265,6 +265,32 @@ def _transcript_timestamp_hints(transcript_text: str) -> List[str]:
     return hints
 
 
+def _timestamp_within_transcript_hints(value: Any, hints: List[str]) -> bool:
+    """Return true when a timestamp falls within the observed chunk timestamp span."""
+    if not hints:
+        return False
+
+    def _comparable_datetime(raw: Any) -> Optional[datetime]:
+        parsed = _parse_extracted_datetime(raw)
+        if parsed is None:
+            return None
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+
+    candidate = _comparable_datetime(value)
+    if candidate is None:
+        return False
+    parsed_hints = [
+        parsed
+        for hint in hints
+        if (parsed := _comparable_datetime(hint)) is not None
+    ]
+    if not parsed_hints:
+        return False
+    return min(parsed_hints) <= candidate <= max(parsed_hints)
+
+
 def _current_utc_timestamp() -> str:
     quaid_now = os.environ.get("QUAID_NOW", "").strip()
     if quaid_now:
@@ -2851,6 +2877,7 @@ def _merge_parsed_payloads(
         or effective_date_hint
         or mention_date_hint
     )
+    timestamp_hints = _transcript_timestamp_hints(transcript_text)
     question_echo_keys = _user_question_echo_keys(transcript_text)
     assistant_question_keys = _assistant_question_sentence_keys(transcript_text)
     for parsed in payloads:
@@ -2880,8 +2907,13 @@ def _merge_parsed_payloads(
                     default_source_timestamp=source_timestamp_hint,
                     default_mentioned_at=effective_mention_hint,
                     # effective_mention_hint is structural when present: transcript
-                    # timestamp, session hint, or caller wall-clock fallback.
-                    prefer_default_mentioned_at=True,
+                    # timestamp, session hint, or caller wall-clock fallback. Keep
+                    # an extracted mention time only when it is inside this chunk's
+                    # timestamp span; out-of-range values are treated as hallucinated.
+                    prefer_default_mentioned_at=not _timestamp_within_transcript_hints(
+                        raw_fact.get("mentioned_at"),
+                        timestamp_hints,
+                    ),
                 )
                 if source_chunk_id:
                     normalized_fact["_source_chunk_id"] = source_chunk_id
