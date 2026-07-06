@@ -7483,6 +7483,49 @@ class TestSourceChunkStorage:
 
         assert [row["id"] for row in output_rows] == ["fact-default"]
 
+    def test_cli_explicit_store_plan_output_keeps_session_chunk_rows_despite_auto_meta(self):
+        """Explicit session_chunks store requests must expose that branch's fused rows."""
+        import datastore.memorydb.memory_graph as mg
+
+        rows = [
+            {
+                "id": "sch_rrf",
+                "text": "[session_chunk] sess#3: Lisbon ferry receipt context",
+                "category": "session_chunk",
+                "source_type": "session_chunk",
+                "via": "session_chunks",
+                "similarity": 0.99,
+                "chunk_id": "sch_rrf",
+                "session_chunk_id": "sch_rrf",
+                "source_chunk_id": "sch_rrf",
+                "source_ranks": {"session_chunks": 1},
+            },
+            {
+                "id": "fact-rrf",
+                "text": "Readable vector fact row",
+                "category": "fact",
+                "similarity": 0.93,
+                "source_ranks": {"vector": 1},
+            },
+        ]
+
+        output_rows, _meta = mg._prepare_recall_output_rows(
+            rows,
+            {
+                "planned_stores": ["vector", "session_chunks"],
+                "session_chunks_auto_included": True,
+            },
+            include_chunks=False,
+            suppress_session_chunk_rows=False,
+            respect_auto_session_chunk_meta=False,
+        )
+
+        assert [row["id"] for row in output_rows] == ["sch_rrf", "fact-rrf"]
+        assert output_rows[0]["source_ranks"] == {"session_chunks": 1}
+        assert output_rows[0]["chunk_id"] == "sch_rrf"
+        assert output_rows[0]["session_chunk_id"] == "sch_rrf"
+        assert "source_chunk_id" not in output_rows[0]
+
     def test_print_recall_results_hides_session_chunk_provenance_suffix(self, capsys):
         """Text recall should not expose internal chunk ids on session chunk rows."""
         import datastore.memorydb.memory_graph as mg

@@ -7843,10 +7843,13 @@ def _should_suppress_default_session_chunk_rows(
     meta: Optional[Dict[str, Any]],
     *,
     suppress_session_chunk_rows: bool,
+    respect_auto_include_meta: bool = True,
 ) -> bool:
     # CLI default store plans pass the flag; API/programmatic recall uses persisted auto-include metadata.
     if suppress_session_chunk_rows:
         return True
+    if not respect_auto_include_meta:
+        return False
     if not isinstance(meta, dict):
         return False
     return bool(meta.get("session_chunks_auto_included"))
@@ -7874,6 +7877,7 @@ def _prepare_recall_output_rows(
     include_chunks: bool = False,
     preserve_source_chunk_ids: bool = False,
     suppress_session_chunk_rows: bool = False,
+    respect_auto_session_chunk_meta: bool = True,
     max_chunk_tokens: Optional[int] = None,
     max_total_chunk_tokens: Optional[int] = None,
 ) -> Tuple[Any, Optional[Dict[str, Any]]]:
@@ -7884,6 +7888,7 @@ def _prepare_recall_output_rows(
         suppress_default_session_chunks = _should_suppress_default_session_chunk_rows(
             meta,
             suppress_session_chunk_rows=suppress_session_chunk_rows,
+            respect_auto_include_meta=respect_auto_session_chunk_meta,
         )
         for row in rows:
             if not isinstance(row, dict) or preserve_source_chunk_ids:
@@ -25674,6 +25679,7 @@ if __name__ == "__main__":
                             meta,
                             include_chunks=include_chunks,
                             suppress_session_chunk_rows=not stores_explicit,
+                            respect_auto_session_chunk_meta=not stores_explicit,
                             max_chunk_tokens=max_chunk_tokens,
                             max_total_chunk_tokens=max_total_chunk_tokens,
                         )
@@ -25684,6 +25690,7 @@ if __name__ == "__main__":
                             meta,
                             include_chunks=include_chunks,
                             suppress_session_chunk_rows=not stores_explicit,
+                            respect_auto_session_chunk_meta=not stores_explicit,
                             max_chunk_tokens=max_chunk_tokens,
                             max_total_chunk_tokens=max_total_chunk_tokens,
                         )
