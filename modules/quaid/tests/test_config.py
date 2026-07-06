@@ -334,6 +334,47 @@ class TestConfigPathResolution:
         assert paths[1] == Path("/tmp/quaid/shared/config/openclaw/config.json")
         assert paths[2] == Path("/tmp/quaid/shared/config/global/config.json")
 
+    def test_openclaw_platform_models_override_global(self, tmp_path):
+        import config
+
+        root = tmp_path / "instances" / "openclaw-main"
+        platform_cfg = tmp_path / "shared" / "config" / "openclaw" / "config.json"
+        global_cfg = tmp_path / "shared" / "config" / "global" / "config.json"
+        root.mkdir(parents=True)
+        platform_cfg.parent.mkdir(parents=True, exist_ok=True)
+        global_cfg.parent.mkdir(parents=True, exist_ok=True)
+        (root / "config.json").write_text(
+            json.dumps({"adapter": {"type": "openclaw"}}),
+            encoding="utf-8",
+        )
+        platform_cfg.write_text(
+            json.dumps({"models": {"fastReasoning": "invalid-model-m6-probe"}}),
+            encoding="utf-8",
+        )
+        global_cfg.write_text(
+            json.dumps({
+                "models": {
+                    "fastReasoning": "claude-haiku-4-5",
+                    "deepReasoning": "claude-sonnet-4-5",
+                }
+            }),
+            encoding="utf-8",
+        )
+
+        old_config = config._config
+        config._config = None
+        try:
+            with patch.object(config, "_workspace_root", lambda: root), \
+                 patch.object(config, "_quaid_home", lambda: tmp_path):
+                paths = config._config_paths()
+                cfg = config.load_config()
+
+            assert paths[1] == platform_cfg
+            assert cfg.models.fast_reasoning == "invalid-model-m6-probe"
+            assert cfg.models.deep_reasoning == "claude-sonnet-4-5"
+        finally:
+            config._config = old_config
+
     def test_config_inheritance_merge_order_global_then_platform_then_instance(self, tmp_path):
         import config
 
