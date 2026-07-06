@@ -5035,6 +5035,7 @@ const quaidPlugin = {
     });
     let timeoutManager = null;
     let beforePromptBuildHandler = async () => void 0;
+    const identityOnlyRefreshResults = /* @__PURE__ */ new WeakSet();
     const embeddedPromptBuildFallbackTurns = /* @__PURE__ */ new Map();
     const EMBEDDED_PROMPT_BUILD_FALLBACK_TTL_MS = 3e4;
     const readOptionalOpenClawDeviceJson = (filePath) => {
@@ -5237,6 +5238,18 @@ notify_user(${JSON.stringify(message)})
           appendSystemContext: result.appendSystemContext ?? event?.appendSystemContext
         };
         const promptResult = await beforePromptBuildHandler(fallbackEvent, ctx);
+        if (promptResult && identityOnlyRefreshResults.has(promptResult)) {
+          const fallbackSessionId = String(event?.sessionId || ctx?.sessionId || ctx?.session?.id || "").trim();
+          drainRefreshedIdentityContext(
+            [
+              resolveProjectDocsRefreshKey(event, ctx, fallbackSessionId),
+              fallbackSessionId,
+              identityRefreshInstanceKey(startInstanceId)
+            ],
+            startInstanceId,
+            "embedded_prompt_build_fallback_identity_only"
+          );
+        }
         if (promptResult?.prependContext || promptResult?.prependSystemContext || promptResult?.appendSystemContext) {
           markEmbeddedPromptBuildFallbackTurn(fallbackTurnKey);
         }
@@ -5303,6 +5316,24 @@ notify_user(${JSON.stringify(message)})
         targets: ["appendSystemContext", "prependContext", "prependSystemContext"]
       });
       return context;
+    };
+    const drainRefreshedIdentityContext = (refreshKeys, instanceId, source) => {
+      const keys = Array.from(
+        new Set(
+          refreshKeys.map((key) => String(key || "").trim()).filter(Boolean)
+        )
+      );
+      if (keys.length === 0) return;
+      let drained = false;
+      for (const key of keys) {
+        if (refreshedIdentityContextTurns.delete(key)) drained = true;
+      }
+      if (!drained) return;
+      writeHookTrace("hook.identity_refresh.drained", {
+        refresh_keys: keys,
+        instance_id: instanceId,
+        source
+      });
     };
     const peekRefreshedIdentityContext = (refreshKeys, instanceId, targetHook) => {
       const keys = Array.from(
@@ -5480,6 +5511,7 @@ ${refreshedIdentityContext}` : refreshedIdentityContext,
 
 ${refreshedIdentityContext}` : refreshedIdentityContext
         };
+        identityOnlyRefreshResults.add(result);
         if (event && typeof event === "object") {
           if (result.prependContext) event.prependContext = result.prependContext;
           if (result.prependSystemContext) event.prependSystemContext = result.prependSystemContext;

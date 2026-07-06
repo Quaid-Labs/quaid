@@ -705,6 +705,162 @@ describe("openclaw deferred notices", () => {
     removeTempDir(fixture.home);
   });
 
+  it("allows recall after embedded fallback consumes an identity-only refresh", async () => {
+    vi.stubEnv("QUAID_DISABLE_NOTIFICATIONS", "1");
+    const fixture = seedDeferredNoticeFixture(
+      "quaid-oc-embedded-fallback-identity-drain-home-",
+      "openclaw-main",
+      "[Quaid] embedded fallback identity fixture",
+    );
+    const configPath = path.join(fixture.hiddenHome, "instances", "openclaw-main", "config.json");
+    const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+    writeJson(configPath, {
+      ...config,
+      systems: { memory: true, projects: true },
+      retrieval: { ...config.retrieval, autoInject: true },
+    });
+    const identityDir = path.join(fixture.visibleHome, "instances", "openclaw-main");
+    fs.mkdirSync(identityDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(identityDir, "USER.md"),
+      "# USER\nThe office plant is named Bartholomew. It is a fiddle-leaf fig.\n",
+      "utf8",
+    );
+    const deviceId = "device-needs-scope-upgrade-identity";
+    const devicesDir = path.join(path.dirname(fixture.openClawConfigPath), "devices");
+    writeJson(path.join(devicesDir, "pending.json"), {
+      "scope-request-identity": {
+        requestId: "scope-request-identity",
+        deviceId,
+        scopes: ["operator.write", "operator.pairing"],
+      },
+    });
+    writeJson(path.join(devicesDir, "paired.json"), {
+      [deviceId]: {
+        deviceId,
+        scopes: ["operator.read"],
+        approvedScopes: ["operator.read"],
+      },
+    });
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () => ({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      text: async () => "OK",
+    } as any));
+
+    const plugin = await loadAdapterWithHomes(
+      fixture.hiddenHome,
+      fixture.visibleHome,
+      fixture.openClawConfigPath,
+      "openclaw-main",
+    );
+    const adapterModule = await import("../adaptors/openclaw/adapter.js");
+    const testApi = (adapterModule as any).__test;
+    testApi.clearAutoInjectTurnCaches();
+    const api = makeFakeApi();
+    plugin.register(api as any);
+
+    const beforeAgentStartCall = api.on.mock.calls.find((call: any[]) =>
+      call?.[0] === "before_agent_start" && call?.[2]?.name === "memory-injection"
+    );
+    const beforePromptBuildCall = api.on.mock.calls.find((call: any[]) =>
+      call?.[0] === "before_prompt_build" && call?.[2]?.name === "memory-injection-prompt-build"
+    );
+    const beforeCompactionCall = api.on.mock.calls.find((call: any[]) =>
+      call?.[0] === "before_compaction" && call?.[2]?.name === "compaction-memory-extraction"
+    );
+    expect(beforeAgentStartCall).toBeTruthy();
+    expect(beforePromptBuildCall).toBeTruthy();
+    expect(beforeCompactionCall).toBeTruthy();
+
+    const beforeAgentStartHandler = beforeAgentStartCall?.[1];
+    const beforePromptBuildHandler = beforePromptBuildCall?.[1];
+    const beforeCompactionHandler = beforeCompactionCall?.[1];
+    const sessionId = "session-embedded-fallback-identity-drain";
+    const sessionKey = "agent:main:matrix:room-embedded-fallback-identity-drain";
+    const ctx = { sessionId, sessionKey, agentId: "main", trigger: "user" };
+
+    await beforeCompactionHandler(
+      { messages: [], sessionId, sessionKey },
+      ctx,
+    );
+
+    const firstStart = await beforeAgentStartHandler(
+      {
+        prependContext: "",
+        prompt: "Hello",
+        messages: [{ role: "user", content: "Hello" }],
+        sessionId,
+        sessionKey,
+      },
+      ctx,
+    );
+    expect(combinedSystemContext(firstStart)).toContain("Quaid Refreshed Identity Context");
+    expect(combinedSystemContext(firstStart)).toContain("Bartholomew");
+
+    const firstPrompt = await beforePromptBuildHandler(
+      {
+        prependContext: "",
+        prompt: "Hello",
+        messages: [{ role: "user", content: "Hello" }],
+        sessionId,
+        sessionKey,
+      },
+      ctx,
+    );
+    expect(String(firstPrompt?.prependContext || "")).not.toContain("<injected_memories>");
+
+    const query = "What grinder do I use for espresso?";
+    const memory = {
+      id: "mem-embedded-identity-baratza",
+      text: "Solomon owns a Baratza Encore grinder and a Flair 58 espresso setup.",
+      similarity: 1,
+      via: "vector",
+      category: "fact",
+    };
+    testApi.rememberCompletedAutoInjectTurn(testApi.autoInjectTurnKey("main", query, sessionKey), {
+      allMemories: [memory],
+      recallDiagnostics: { mode: "test" },
+      injection: {
+        toInject: [memory],
+        prependContext: [
+          "<injected_memories>",
+          "- fact | Solomon owns a Baratza Encore grinder and a Flair 58 espresso setup.",
+          "</injected_memories>",
+        ].join("\n"),
+      },
+    }, Date.now());
+
+    const secondStart = await beforeAgentStartHandler(
+      {
+        prependContext: "",
+        prompt: query,
+        messages: [{ role: "user", content: query }],
+        sessionId,
+        sessionKey,
+      },
+      ctx,
+    );
+    expect(String(secondStart?.prependContext || "")).toContain("Baratza Encore");
+
+    const traceRows = readHookTraceEvents(fixture.hiddenHome, "openclaw-main");
+    const traceEvents = traceRows.map((row) => String(row.event || ""));
+    expect(traceEvents).toContain("hook.identity_refresh.drained");
+    expect(traceEvents).toContain("hook.before_prompt_build.embedded_fallback_duplicate_skip");
+    expect(traceEvents.filter((eventName) => eventName === "hook.before_prompt_build.injection_applied")).toHaveLength(1);
+
+    fetchMock.mockRestore();
+    warn.mockRestore();
+    log.mockRestore();
+    error.mockRestore();
+    removeTempDir(fixture.home);
+  });
+
   it("delivers deferred notices through before_prompt_build relay context", async () => {
     vi.useFakeTimers();
     vi.stubEnv("QUAID_DISABLE_NOTIFICATIONS", "1");
