@@ -281,6 +281,75 @@ def test_quaid_cli_ignores_stale_inherited_quaid_home_when_installed_home_exists
     assert str(visible_home) not in result.stderr
 
 
+def test_quaid_instances_prune_stale_openclaw_requires_force(tmp_path: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    quaid_bin = repo_root / "quaid"
+
+    home = tmp_path / "home"
+    quaid_home = home / ".quaid"
+    env = {
+        **os.environ,
+        "HOME": str(home),
+        "QUAID_HOME": str(quaid_home),
+        "QUAID_PYTHON_BIN": os.environ.get("QUAID_PYTHON_BIN", "python3"),
+    }
+
+    result = subprocess.run(
+        [str(quaid_bin), "instances", "prune-stale-openclaw"],
+        cwd=tmp_path,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 2
+    assert "without --force" in result.stderr
+
+
+def test_quaid_instances_prune_stale_openclaw_removes_deleted_agent_silo(tmp_path: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    quaid_bin = repo_root / "quaid"
+
+    home = tmp_path / "home"
+    quaid_home = home / ".quaid"
+    visible_home = home / "quaid"
+    openclaw_root = home / ".openclaw"
+    stale = quaid_home / "instances" / "openclaw-m13test"
+
+    (openclaw_root).mkdir(parents=True)
+    (openclaw_root / "openclaw.json").write_text(
+        json.dumps({"agents": {"list": [{"id": "main"}]}}),
+        encoding="utf-8",
+    )
+    stale.mkdir(parents=True)
+    (stale / "config.json").write_text(
+        json.dumps({"adapter": {"type": "openclaw"}}) + "\n",
+        encoding="utf-8",
+    )
+
+    env = {
+        **os.environ,
+        "HOME": str(home),
+        "QUAID_HOME": str(quaid_home),
+        "QUAID_VISIBLE_HOME": str(visible_home),
+        "OPENCLAW_CONFIG_PATH": str(openclaw_root / "openclaw.json"),
+        "QUAID_PYTHON_BIN": os.environ.get("QUAID_PYTHON_BIN", "python3"),
+    }
+
+    result = subprocess.run(
+        [str(quaid_bin), "instances", "prune-stale-openclaw", "--force", "--json"],
+        cwd=tmp_path,
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert json.loads(result.stdout)["pruned"] == ["openclaw-m13test"]
+    assert not stale.exists()
+
+
 def test_quaid_session_expand_microchunk_cli(tmp_path: Path, monkeypatch) -> None:
     from datastore.sessiondb import session_store
 

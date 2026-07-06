@@ -672,8 +672,37 @@ else:
     print()
 PYEOF
         ;;
+      prune-stale-openclaw)
+        "$PYTHON_BIN" - "$@" <<'PYEOF'
+import sys, os, json
+sys.path.insert(0, os.environ.get("QUAID_MODULE_ROOT", os.path.dirname(os.path.abspath(__file__))))
+from lib.instance import InstanceError, prune_stale_openclaw_agent_instances, quaid_home
+
+args = set(sys.argv[1:])
+json_mode = "--json" in args
+if "--force" not in args:
+    print("error: refusing to delete stale OpenClaw Quaid silos without --force", file=sys.stderr)
+    print("This removes ~/.quaid/instances/openclaw-* directories whose native OpenClaw agent is gone.", file=sys.stderr)
+    sys.exit(2)
+
+try:
+    pruned = prune_stale_openclaw_agent_instances(require_livetest_harness=False)
+except InstanceError as exc:
+    print(f"error: {exc}", file=sys.stderr)
+    sys.exit(2)
+
+if json_mode:
+    print(json.dumps({"home": str(quaid_home()), "pruned": pruned}))
+else:
+    if pruned:
+        for name in pruned:
+            print(f"Pruned stale OpenClaw Quaid silo: {name}")
+    else:
+        print("No stale OpenClaw Quaid silos found.")
+PYEOF
+        ;;
       *)
-        echo "Usage: quaid instances list"
+        echo "Usage: quaid instances list | quaid instances prune-stale-openclaw --force [--json]"
         exit 1
         ;;
     esac
@@ -785,6 +814,7 @@ PYEOF
     echo ""
     echo "Config:"
     echo "  instances list       List all Quaid instances under QUAID_HOME"
+    echo "  instances prune-stale-openclaw --force  Remove OpenClaw agent silos after native agent delete"
     echo ""
     echo "Config (deprecated CLI):"
     echo "  config               Deprecated; edit config files directly"

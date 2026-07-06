@@ -316,12 +316,13 @@ After the test, clean up:
   --on-timeout "ssh REMOTE_HOST 'pkill -f openclaw-update >/dev/null 2>&1 || true; pkill -f openclaw-completion >/dev/null 2>&1 || true; pkill -f openclaw-agent >/dev/null 2>&1 || true; pkill -f openclaw-agents >/dev/null 2>&1 || true'" \
   -- ssh REMOTE_HOST 'source ~/.zprofile; openclaw agents delete m13test --force'
 ssh REMOTE_HOST 'trash /tmp/oc-m13-workspace 2>/dev/null || rm -rf /tmp/oc-m13-workspace'
-ssh REMOTE_HOST '~/quaidcode/dev/modules/quaid/tests/livetest/scripts/livetest-prune-openclaw-silos.sh --home ~/.quaid'
+ssh REMOTE_HOST 'QUAID_HOME=~/.quaid ~/.quaid/plugins/quaid/quaid instances prune-stale-openclaw --force'
 ```
-Note: `--force` is required in non-interactive (SSH) context. If that still fails,
-manually remove only `~/.openclaw/agents/m13test`, then rerun the livetest prune
-script above. Do not manually `rm -rf ~/.quaid/instances/openclaw-*`; production
-instance listing intentionally never deletes stale silos as a side effect.
+Note: `--force` is required in non-interactive (SSH) context. If native agent
+delete still fails, manually remove only `~/.openclaw/agents/m13test`, then rerun
+`quaid instances prune-stale-openclaw --force`. Do not manually `rm -rf
+~/.quaid/instances/openclaw-*`; production instance listing intentionally never
+deletes stale silos as a side effect.
 
 Do NOT re-run the installer for M13 — that overwrites the gateway
 config and disrupts the active livetest instance.

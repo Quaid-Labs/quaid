@@ -306,6 +306,28 @@ class TestListInstances:
         for name in deleted_names:
             assert not (tmp_path / "instances" / name).exists()
 
+    def test_openclaw_physical_prune_allows_explicit_operator_cleanup(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        oc_root = tmp_path / "openclaw-runtime"
+        oc_root.mkdir()
+        monkeypatch.setenv("OPENCLAW_CONFIG_PATH", str(oc_root / "openclaw.json"))
+        (oc_root / "openclaw.json").write_text(
+            json.dumps({"agents": {"list": [{"id": "main"}]}}),
+            encoding="utf-8",
+        )
+        stale = tmp_path / "instances" / "openclaw-deleted"
+        stale.mkdir(parents=True)
+        stale.joinpath("config.json").write_text(
+            json.dumps({"adapter": {"type": "openclaw"}}),
+            encoding="utf-8",
+        )
+
+        assert prune_stale_openclaw_agent_instances(
+            tmp_path,
+            require_livetest_harness=False,
+        ) == ["openclaw-deleted"]
+        assert not stale.exists()
+
     def test_openclaw_physical_prune_ignores_empty_native_agent_residue(self, monkeypatch, tmp_path):
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
         monkeypatch.setenv("HOME", str(tmp_path))

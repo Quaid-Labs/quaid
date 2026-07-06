@@ -405,13 +405,19 @@ def stale_openclaw_agent_instances(home: Optional[Path] = None) -> List[str]:
     return stale
 
 
-def prune_stale_openclaw_agent_instances(home: Optional[Path] = None) -> List[str]:
+def prune_stale_openclaw_agent_instances(
+    home: Optional[Path] = None,
+    *,
+    require_livetest_harness: bool = True,
+) -> List[str]:
     """Delete stale OpenClaw agent silos whose native agent state is gone.
 
     This is intentionally restricted to the livetest harness. User-facing
     instance listing must never delete local instance data as a side effect.
+    Explicit operator cleanup commands may pass require_livetest_harness=False
+    after their own force confirmation.
     """
-    if not _livetest_harness_enabled():
+    if require_livetest_harness and not _livetest_harness_enabled():
         raise InstanceError(
             "Refusing to delete stale OpenClaw silos outside the livetest harness; "
             "set QUAID_LIVETEST_HARNESS=1 only from tests/livetest cleanup tools."
