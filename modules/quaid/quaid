@@ -686,7 +686,10 @@ if "--force" not in args:
     sys.exit(2)
 
 try:
-    pruned = prune_stale_openclaw_agent_instances(require_livetest_harness=False)
+    pruned = prune_stale_openclaw_agent_instances(
+        require_livetest_harness=False,
+        raise_on_failure=True,
+    )
 except InstanceError as exc:
     print(f"error: {exc}", file=sys.stderr)
     sys.exit(2)

@@ -364,6 +364,7 @@ def _prune_stale_openclaw_agent_instance(
     instance_dir: Path,
     *,
     home: Optional[Path] = None,
+    raise_on_failure: bool = False,
 ) -> bool:
     """Remove a stale OpenClaw agent silo after the native agent is gone."""
     if not _is_stale_openclaw_agent_instance(name, instance_dir):
@@ -378,7 +379,17 @@ def _prune_stale_openclaw_agent_instance(
             return False
         shutil.rmtree(target)
         return True
-    except OSError:
+    except OSError as exc:
+        if raise_on_failure:
+            raise InstanceError(
+                f"Failed to delete stale OpenClaw silo '{name}' at {instance_dir}: {exc}"
+            ) from exc
+        logger.warning(
+            "Failed to delete stale OpenClaw silo %s at %s: %s",
+            name,
+            instance_dir,
+            exc,
+        )
         return False
 
 
@@ -409,13 +420,15 @@ def prune_stale_openclaw_agent_instances(
     home: Optional[Path] = None,
     *,
     require_livetest_harness: bool = True,
+    raise_on_failure: bool = False,
 ) -> List[str]:
     """Delete stale OpenClaw agent silos whose native agent state is gone.
 
     This is intentionally restricted to the livetest harness. User-facing
     instance listing must never delete local instance data as a side effect.
     Explicit operator cleanup commands may pass require_livetest_harness=False
-    after their own force confirmation.
+    after their own force confirmation, and raise_on_failure=True to avoid
+    reporting partial success.
     """
     if require_livetest_harness and not _livetest_harness_enabled():
         raise InstanceError(
@@ -426,7 +439,12 @@ def prune_stale_openclaw_agent_instances(
     instances_dir = (Path(home).resolve() if home is not None else quaid_home()) / "instances"
     for name in stale_openclaw_agent_instances(home):
         entry = instances_dir / name
-        if _prune_stale_openclaw_agent_instance(name, entry, home=instances_dir.parent):
+        if _prune_stale_openclaw_agent_instance(
+            name,
+            entry,
+            home=instances_dir.parent,
+            raise_on_failure=raise_on_failure,
+        ):
             pruned.append(name)
     return pruned
 

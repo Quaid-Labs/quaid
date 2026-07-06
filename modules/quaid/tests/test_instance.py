@@ -328,6 +328,68 @@ class TestListInstances:
         ) == ["openclaw-deleted"]
         assert not stale.exists()
 
+    def test_openclaw_physical_prune_warns_delete_failure_by_default(
+        self, monkeypatch, tmp_path, caplog
+    ):
+        import lib.instance as instance_mod
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        oc_root = tmp_path / "openclaw-runtime"
+        oc_root.mkdir()
+        monkeypatch.setenv("OPENCLAW_CONFIG_PATH", str(oc_root / "openclaw.json"))
+        (oc_root / "openclaw.json").write_text(
+            json.dumps({"agents": {"list": [{"id": "main"}]}}),
+            encoding="utf-8",
+        )
+        stale = tmp_path / "instances" / "openclaw-deleted"
+        stale.mkdir(parents=True)
+        stale.joinpath("config.json").write_text(
+            json.dumps({"adapter": {"type": "openclaw"}}),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(instance_mod.shutil, "rmtree", lambda _path: (_ for _ in ()).throw(OSError("locked")))
+
+        with caplog.at_level("WARNING", logger="lib.instance"):
+            assert prune_stale_openclaw_agent_instances(
+                tmp_path,
+                require_livetest_harness=False,
+            ) == []
+
+        assert stale.exists()
+        assert "Failed to delete stale OpenClaw silo openclaw-deleted" in caplog.text
+        assert "locked" in caplog.text
+
+    def test_openclaw_physical_prune_raises_delete_failure_for_operator_cleanup(
+        self, monkeypatch, tmp_path
+    ):
+        import lib.instance as instance_mod
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        oc_root = tmp_path / "openclaw-runtime"
+        oc_root.mkdir()
+        monkeypatch.setenv("OPENCLAW_CONFIG_PATH", str(oc_root / "openclaw.json"))
+        (oc_root / "openclaw.json").write_text(
+            json.dumps({"agents": {"list": [{"id": "main"}]}}),
+            encoding="utf-8",
+        )
+        stale = tmp_path / "instances" / "openclaw-deleted"
+        stale.mkdir(parents=True)
+        stale.joinpath("config.json").write_text(
+            json.dumps({"adapter": {"type": "openclaw"}}),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(instance_mod.shutil, "rmtree", lambda _path: (_ for _ in ()).throw(OSError("locked")))
+
+        with pytest.raises(InstanceError, match="Failed to delete stale OpenClaw silo 'openclaw-deleted'") as excinfo:
+            prune_stale_openclaw_agent_instances(
+                tmp_path,
+                require_livetest_harness=False,
+                raise_on_failure=True,
+            )
+
+        assert isinstance(excinfo.value.__cause__, OSError)
+        assert stale.exists()
+
     def test_openclaw_physical_prune_ignores_empty_native_agent_residue(self, monkeypatch, tmp_path):
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
         monkeypatch.setenv("HOME", str(tmp_path))
