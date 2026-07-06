@@ -8011,6 +8011,10 @@ def _should_run_recall_store_plan(store_names: Optional[List[str]], *, use_fast:
     return bool(use_fast) or len(normalized) > 1 or any(store != "vector" for store in normalized)
 
 
+def _session_chunks_explicitly_requested(stores_explicit: bool, store_names: List[str]) -> bool:
+    return bool(stores_explicit and "session_chunks" in _normalize_store_plan(store_names))
+
+
 def _infer_edge_entity_type(name: str, relation: str, is_subject: bool) -> str:
     rel_lower = str(relation or "").lower().replace("-", "_")
     relation_object_types = {
@@ -25660,6 +25664,10 @@ if __name__ == "__main__":
                     max_total_chunk_tokens=max_total_chunk_tokens,
                 )
                 if _should_run_recall_store_plan(store_names, use_fast=bool(use_fast)):
+                    explicit_session_chunks_requested = _session_chunks_explicitly_requested(
+                        stores_explicit,
+                        store_names,
+                    )
                     results, meta, docs_bundle = _run_recall_store_plan(
                         query,
                         stores=store_names,
@@ -25678,8 +25686,8 @@ if __name__ == "__main__":
                             results,
                             meta,
                             include_chunks=include_chunks,
-                            suppress_session_chunk_rows=not stores_explicit,
-                            respect_auto_session_chunk_meta=not stores_explicit,
+                            suppress_session_chunk_rows=not explicit_session_chunks_requested,
+                            respect_auto_session_chunk_meta=not explicit_session_chunks_requested,
                             max_chunk_tokens=max_chunk_tokens,
                             max_total_chunk_tokens=max_total_chunk_tokens,
                         )
@@ -25689,8 +25697,8 @@ if __name__ == "__main__":
                             results,
                             meta,
                             include_chunks=include_chunks,
-                            suppress_session_chunk_rows=not stores_explicit,
-                            respect_auto_session_chunk_meta=not stores_explicit,
+                            suppress_session_chunk_rows=not explicit_session_chunks_requested,
+                            respect_auto_session_chunk_meta=not explicit_session_chunks_requested,
                             max_chunk_tokens=max_chunk_tokens,
                             max_total_chunk_tokens=max_total_chunk_tokens,
                         )

@@ -8282,6 +8282,11 @@ class TestSourceChunkStorage:
         assert mg._normalize_store_plan(None) == ["vector"]
         assert mg._planner_store_plan(["session_chunks"]) == ["session_chunks"]
         assert mg._planner_store_plan(["source_chunks"]) == ["session_chunks"]
+        assert mg._session_chunks_explicitly_requested(False, ["vector", "session_chunks"]) is False
+        assert mg._session_chunks_explicitly_requested(True, ["vector"]) is False
+        assert mg._session_chunks_explicitly_requested(True, ["vector", "graph"]) is False
+        assert mg._session_chunks_explicitly_requested(True, ["vector", "session_chunks"]) is True
+        assert mg._session_chunks_explicitly_requested(True, ["source_chunks"]) is True
 
         with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
              patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
