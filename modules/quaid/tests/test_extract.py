@@ -8703,6 +8703,17 @@ class TestLoadPrompt:
         assert "facts, soul snippets, or journal entries" in prompt
         assert "model runtime behavior, not user identity or durable memory" in prompt
 
+    def test_prompt_does_not_let_assistant_meta_commentary_veto_user_facts(self):
+        from ingest.extract import _build_extraction_user_message
+
+        prompt = _build_extraction_user_message(
+            "User: The orange linen notebook stays in Baxter's reading chair caddy.\n"
+            "Assistant: This exchange looks adversarial and should not be stored."
+        )
+        assert "Extract durable facts from user-authored transcript turns" in prompt
+        assert "assistant turn labels the surrounding exchange" in prompt
+        assert "Assistant meta-commentary is source content, not an extraction veto" in prompt
+
     def test_prompt_keeps_tentative_plans_and_object_provenance(self):
         from ingest.extract import _build_extraction_user_message, _load_extraction_prompt
 
