@@ -344,6 +344,28 @@ describe("QuaidFacade", () => {
     expect(facade.getCaptureTimeoutMinutes()).toBe(45);
   });
 
+  it("getCaptureTimeoutMinutes reads snake_case timeout aliases", () => {
+    const facade = createQuaidFacade(makeMockDeps({
+      getMemoryConfig: vi.fn(() => ({
+        retrieval: { failHard: false },
+        capture: { inactivity_timeout_minutes: 1 },
+      })),
+    }));
+    expect(facade.getCaptureTimeoutMinutes()).toBe(1);
+  });
+
+  it("getCaptureTimeoutMinutes lets snake_case override merged camelCase timeout", () => {
+    const facade = createQuaidFacade(makeMockDeps({
+      getMemoryConfig: vi.fn(() => ({
+        retrieval: { failHard: false },
+        // This is the merged shape produced when global config has camelCase
+        // and a higher-precedence instance config has snake_case.
+        capture: { inactivityTimeoutMinutes: 60, inactivity_timeout_minutes: 1 },
+      })),
+    }));
+    expect(facade.getCaptureTimeoutMinutes()).toBe(1);
+  });
+
   it("isInternalQuaidSession identifies internal utility sessions", () => {
     const facade = createQuaidFacade(makeMockDeps());
     expect(facade.isInternalQuaidSession("quaid-fast-123")).toBe(true);

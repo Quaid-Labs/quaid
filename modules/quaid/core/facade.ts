@@ -744,7 +744,7 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
 
   function getCaptureTimeoutMinutes(): number {
     const capture = deps.getMemoryConfig().capture || {};
-    const raw = capture.inactivityTimeoutMinutes ?? capture.inactivity_timeout_minutes ?? 120;
+    const raw = capture.inactivity_timeout_minutes ?? capture.inactivityTimeoutMinutes ?? 120;
     const num = Number(raw);
     return Number.isFinite(num) ? Math.max(0, num) : 120;
   }
