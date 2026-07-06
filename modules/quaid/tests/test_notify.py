@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import pytest
 
-from lib.agent_notice import clear_pending_notices_by_source
+from lib.agent_notice import clear_pending_notices_by_source, format_pending_notice_relay
 from core.runtime.notify import (
     notify_memory_recall,
     notify_memory_extraction,
@@ -490,6 +490,15 @@ class TestNotifyAgent:
         assert "invalid-model-m6-probe" in second_turn
         assert "Tell the user: Quaid memory recall is currently degraded" in first_turn
         assert "Tell the user: Quaid memory recall is currently degraded" in second_turn
+
+        relay = format_pending_notice_relay(
+            [
+                "[Quaid error] [provider] Tell the user: Quaid memory recall is currently degraded "
+                "because its model provider failed. Detail: invalid-model-m6-probe"
+            ]
+        )
+        assert "RESPONSE CONTRACT" in relay
+        assert 'first sentence to the user must say: "Quaid memory recall is currently degraded' in relay
 
     def test_falls_back_to_deferred_when_notify_returns_false(self, tmp_path):
         adapter = MagicMock()

@@ -554,6 +554,17 @@ def _format_direct_agent_notices(messages: List[str]) -> str:
     if not notices:
         return ""
     body = "\n".join(f"• {message}" for message in notices)
+    if any(
+        notice.lower().startswith(("[quaid error] [provider]", "[quaid error] [llm_config]"))
+        for notice in notices
+    ):
+        return (
+            "RESPONSE CONTRACT: Before answering anything else, your first sentence to the user must say: "
+            "\"Quaid memory recall is currently degraded because its model provider failed.\" "
+            "Then continue with the user's request using any non-Quaid knowledge you have. "
+            "Do not skip or paraphrase away this status sentence.\n\n"
+            f"<quaid_system_message>\n{body}\n</quaid_system_message>"
+        )
     return (
         "MANDATORY: start your next response by briefly relaying these live Quaid notices to the user. "
         "Then answer the user's current message.\n\n"
@@ -1278,7 +1289,7 @@ def _preinject_evidence_details(rows: List[Dict], limit: int = 10) -> List[Dict]
             continue
         detail: Dict[str, Any] = {
             "id": row.get("id"),
-            "text": text[:500],
+            "text": text[:1000],
         }
         try:
             similarity = row.get("similarity")
@@ -2281,9 +2292,7 @@ def hook_inject(args):
         recall_error_notice_context = ""
         if provider_failure:
             # Provider/LLM failure — surface to agent so they can inform the user
-            provider_notice_context = (
-                f"<quaid_system_message>{_provider_failure_notice_message(e)}</quaid_system_message>"
-            )
+            provider_notice_context = _format_direct_agent_notices([_provider_failure_notice_message(e)])
             fallback_context_parts.append(provider_notice_context)
         elif turn_refresh_context:
             recall_error_notice_context = _format_direct_agent_notices(

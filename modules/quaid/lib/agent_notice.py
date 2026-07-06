@@ -20,6 +20,8 @@ _DEFERRED_FILE = "delayed-llm-requests.json"
 _STATE_RETENTION_SECONDS = 7 * 24 * 60 * 60
 _MAX_DEFERRED_NOTICES = 500
 _NOTICE_SOURCE_RE = re.compile(r"^\s*\[Quaid(?: [^\]]+)?\]\s*\[([^\]]+)\]", flags=re.IGNORECASE)
+_PROVIDER_RELAY_SOURCES = {"provider", "llm_config"}
+_PROVIDER_RELAY_SENTENCE = "Quaid memory recall is currently degraded because its model provider failed."
 
 
 def _trace_m15(event: str, **fields: Any) -> None:
@@ -59,10 +61,17 @@ def format_provider_error_for_relay(message: str) -> str:
     if len(detail) > max_detail:
         detail = f"{detail[: max_detail - 1].rstrip()}…"
     return (
-        "Tell the user: Quaid memory recall is currently degraded because its model provider failed. "
+        f"Tell the user: {_PROVIDER_RELAY_SENTENCE} "
         "I may answer without fresh Quaid memory until it recovers. "
         f"Detail: {detail}"
     )
+
+
+def _contains_provider_relay_notice(notices: list[str]) -> bool:
+    for notice in notices:
+        if pending_notice_source(notice) in _PROVIDER_RELAY_SOURCES:
+            return True
+    return False
 
 
 def format_pending_notice_relay(messages: list[str]) -> str:
@@ -70,6 +79,14 @@ def format_pending_notice_relay(messages: list[str]) -> str:
     if not notices:
         return ""
     body = "\n".join(f"• {message}" for message in notices)
+    if _contains_provider_relay_notice(notices):
+        return (
+            "RESPONSE CONTRACT: Before answering anything else, your first sentence to the user must say: "
+            f"\"{_PROVIDER_RELAY_SENTENCE}\" "
+            "Then continue with the user's request using any non-Quaid knowledge you have. "
+            "Do not skip or paraphrase away this status sentence.\n\n"
+            f"<quaid_system_message>\n{body}\n</quaid_system_message>"
+        )
     return (
         "MANDATORY: Quaid has active notices for the human user. "
         "Begin your next response by relaying each notice below in plain language, "

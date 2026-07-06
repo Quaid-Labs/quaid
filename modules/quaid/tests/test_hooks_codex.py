@@ -814,6 +814,8 @@ def test_codex_hook_inject_surfaces_provider_error_notice(monkeypatch, tmp_path)
 
     payload = json.loads(out)
     context = payload["hookSpecificOutput"]["additionalContext"]
+    assert "RESPONSE CONTRACT" in context
+    assert 'first sentence to the user must say: "Quaid memory recall is currently degraded' in context
     assert "[Quaid error]" in context
     assert "[provider]" in context
     assert "invalid-model-xyzzy" in context
@@ -911,6 +913,8 @@ def test_codex_hook_inject_probes_prompt_model_config(monkeypatch, tmp_path):
     assert probe.call_args.kwargs["timeout"] == 8
     payload = json.loads(out)
     context = payload["hookSpecificOutput"]["additionalContext"]
+    assert "RESPONSE CONTRACT" in context
+    assert 'first sentence to the user must say: "Quaid memory recall is currently degraded' in context
     assert "[Quaid error] [provider]" in context
     assert "Tell the user: Quaid memory recall is currently degraded" in context
     assert "invalid-model-m6-probe" in context
