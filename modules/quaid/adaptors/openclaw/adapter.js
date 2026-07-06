@@ -3783,6 +3783,9 @@ function recordPromptScopedProviderNotice(agentLabel, message, reason) {
   });
   return true;
 }
+function shouldValidatePromptModelConfigForTurn(autoInjectEnabled, agentLabel) {
+  return autoInjectEnabled || hasProviderDeferredNoticesForAgent(agentLabel) || Boolean(promptModelConfigNotice);
+}
 async function validatePromptModelConfigIfChanged(agentLabel, _sessionKey) {
   const fingerprint = currentPromptModelConfigFingerprint();
   if (!fingerprint) {
@@ -5631,7 +5634,11 @@ ${projectPlacementContext}` : projectPlacementContext;
       };
       try {
         const autoInjectEnabled = isAutoInjectEnabled(getMemoryConfig2());
-        if (autoInjectEnabled || hasProviderDeferredNoticesForAgent(promptAgentLabel)) {
+        const shouldValidatePromptModelConfig = shouldValidatePromptModelConfigForTurn(
+          autoInjectEnabled,
+          promptAgentLabel
+        );
+        if (shouldValidatePromptModelConfig) {
           await validatePromptModelConfigForTurn();
         }
         const deferredNoticeRelayPrimaryTurnKey = deferredNoticeRelayTurnKey(
@@ -5804,15 +5811,7 @@ ${deferredNoticeRelayContext}` : deferredNoticeRelayContext;
           });
         } else {
           turnPromise = (async () => {
-            if (!autoInjectEnabled) {
-              return {
-                allMemories: [],
-                recallDiagnostics: null,
-                injection: null,
-                skipReason: "auto_inject_disabled"
-              };
-            }
-            const modelConfigNotice2 = await validatePromptModelConfigForTurn();
+            const modelConfigNotice2 = shouldValidatePromptModelConfig ? await validatePromptModelConfigForTurn() : "";
             if (modelConfigNotice2) {
               writeHookTrace("hook.before_prompt_build.model_config_short_circuit", {
                 query: query.slice(0, 80),
@@ -5823,6 +5822,14 @@ ${deferredNoticeRelayContext}` : deferredNoticeRelayContext;
                 recallDiagnostics: null,
                 injection: null,
                 modelConfigNotice: modelConfigNotice2
+              };
+            }
+            if (!autoInjectEnabled) {
+              return {
+                allMemories: [],
+                recallDiagnostics: null,
+                injection: null,
+                skipReason: "auto_inject_disabled"
               };
             }
             if (lowQualityQuery) {

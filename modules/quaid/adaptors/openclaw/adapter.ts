@@ -4670,6 +4670,10 @@ function recordPromptScopedProviderNotice(agentLabel: string, message: string, r
   return true;
 }
 
+function shouldValidatePromptModelConfigForTurn(autoInjectEnabled: boolean, agentLabel: string): boolean {
+  return autoInjectEnabled || hasProviderDeferredNoticesForAgent(agentLabel) || Boolean(promptModelConfigNotice);
+}
+
 async function validatePromptModelConfigIfChanged(agentLabel: string, _sessionKey: string): Promise<string> {
   const fingerprint = currentPromptModelConfigFingerprint();
   if (!fingerprint) {
@@ -6893,7 +6897,11 @@ notify_user(${JSON.stringify(message)})
         const autoInjectEnabled = isAutoInjectEnabled(getMemoryConfig());
         // Clear stale provider deferred notices before the relay drain can
         // inject them into this turn after a config restore.
-        if (autoInjectEnabled || hasProviderDeferredNoticesForAgent(promptAgentLabel)) {
+        const shouldValidatePromptModelConfig = shouldValidatePromptModelConfigForTurn(
+          autoInjectEnabled,
+          promptAgentLabel,
+        );
+        if (shouldValidatePromptModelConfig) {
           await validatePromptModelConfigForTurn();
         }
         const deferredNoticeRelayPrimaryTurnKey = deferredNoticeRelayTurnKey(
@@ -7107,15 +7115,9 @@ notify_user(${JSON.stringify(message)})
           });
         } else {
           turnPromise = (async (): Promise<AutoInjectTurnOutcome> => {
-            if (!autoInjectEnabled) {
-              return {
-                allMemories: [],
-                recallDiagnostics: null,
-                injection: null,
-                skipReason: "auto_inject_disabled",
-              };
-            }
-            const modelConfigNotice = await validatePromptModelConfigForTurn();
+            const modelConfigNotice = shouldValidatePromptModelConfig
+              ? await validatePromptModelConfigForTurn()
+              : "";
             if (modelConfigNotice) {
               writeHookTrace("hook.before_prompt_build.model_config_short_circuit", {
                 query: query.slice(0, 80),
@@ -7126,6 +7128,14 @@ notify_user(${JSON.stringify(message)})
                 recallDiagnostics: null,
                 injection: null,
                 modelConfigNotice,
+              };
+            }
+            if (!autoInjectEnabled) {
+              return {
+                allMemories: [],
+                recallDiagnostics: null,
+                injection: null,
+                skipReason: "auto_inject_disabled",
               };
             }
             if (lowQualityQuery) {
