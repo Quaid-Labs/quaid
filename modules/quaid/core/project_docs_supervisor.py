@@ -591,7 +591,7 @@ def _spawn_janitor_worker(instance: str, *, command: str) -> subprocess.Popen:
         raise RuntimeError(f"refusing to start janitor worker for deleted misc instance {name}")
     if command != "run-all-once" and project_docs.is_instance_monitor_disabled(name):
         raise RuntimeError(f"refusing to start janitor worker for disabled instance {name}")
-    script = Path(__file__).parent / "janitor_worker.py"
+    script = Path(__file__).resolve().parent / "janitor_worker.py"
     env = _instance_child_env(name)
     with _janitor_worker_log_path(name).open("ab") as log_fh:
         return subprocess.Popen(
@@ -601,6 +601,7 @@ def _spawn_janitor_worker(instance: str, *, command: str) -> subprocess.Popen:
             stderr=log_fh,
             start_new_session=False,
             env=env,
+            cwd=str(script.parent),
         )
 
 

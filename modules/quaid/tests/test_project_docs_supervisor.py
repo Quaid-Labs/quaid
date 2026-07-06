@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+from pathlib import Path
 import subprocess
 import sys
 import types
@@ -1330,6 +1331,7 @@ def test_start_janitor_worker_strips_inherited_memory_db_overrides(monkeypatch, 
     class _FakePopen:
         def __init__(self, *_args, **kwargs):
             captured["env"] = dict(kwargs.get("env") or {})
+            captured["cwd"] = kwargs.get("cwd")
 
     monkeypatch.setenv("QUAID_HOME", str(tmp_path))
     monkeypatch.setenv("INSTANCE", "openclaw-main")
@@ -1347,6 +1349,7 @@ def test_start_janitor_worker_strips_inherited_memory_db_overrides(monkeypatch, 
     supervisor._start_janitor_worker("claude-code-private-tmp-cc-livetest")
 
     env = captured["env"]
+    assert Path(captured["cwd"]) == Path(supervisor.__file__).resolve().parent
     assert "MEMORY_DB_PATH" not in env
     assert "MEMORY_ARCHIVE_DB_PATH" not in env
     assert env["QUAID_HOME"] == str(tmp_path)
