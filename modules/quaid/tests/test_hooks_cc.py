@@ -1001,7 +1001,7 @@ def test_runtime_config_reload_invalidates_cached_model_config_error(monkeypatch
 
     probe.assert_called_once()
     assert "healthy again" in restored
-    assert "Ignore earlier provider-error notices" in restored
+    assert "provider-error notices" not in restored
 
 
 def test_runtime_config_baseline_invalidates_cached_model_config_error(monkeypatch, tmp_path):
@@ -1047,7 +1047,7 @@ def test_runtime_config_baseline_invalidates_cached_model_config_error(monkeypat
 
     probe.assert_called_once()
     assert "healthy again" in restored
-    assert "Ignore earlier provider-error notices" in restored
+    assert "provider-error notices" not in restored
 
 
 def test_claude_code_inject_writes_session_end_signal_for_empty_prompt_reset_metadata(
@@ -3248,7 +3248,7 @@ class TestHookInjectRecallResilience:
             restored = hooks._validate_prompt_model_config_for_hook("claude-code")
 
         assert "healthy again" in restored
-        assert "Ignore earlier provider-error notices" in restored
+        assert "provider-error notices" not in restored
 
         with patch("lib.llm_clients.call_fast_reasoning") as probe:
             assert hooks._validate_prompt_model_config_for_hook("claude-code") == ""

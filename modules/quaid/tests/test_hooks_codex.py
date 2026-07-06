@@ -1004,6 +1004,7 @@ def test_codex_prompt_model_recovery_clears_sticky_provider_notices(monkeypatch,
         recovery_notice = hooks._validate_prompt_model_config_for_hook("codex")
 
     assert "healthy again" in recovery_notice
+    assert "provider-error notices" not in recovery_notice
     pending_text = pending_path.read_text(encoding="utf-8")
     assert "invalid-model-m6-probe persisted" not in pending_text
     assert "keep this notice" in pending_text

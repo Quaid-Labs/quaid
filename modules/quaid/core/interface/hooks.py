@@ -1021,7 +1021,7 @@ def _validate_prompt_model_config_for_hook(adapter_id: str) -> str:
         })
         return (
             "[Quaid status] Quaid's fast recall model provider is healthy again. "
-            "Ignore earlier provider-error notices from this conversation and answer using the current Quaid context."
+            "Current Quaid memory recall is available for this turn."
         )
     return ""
 
