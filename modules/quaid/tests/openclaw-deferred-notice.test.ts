@@ -204,6 +204,47 @@ afterEach(() => {
 });
 
 describe("openclaw deferred notices", () => {
+  it("clears stuck before_prompt_build in-flight turns after a hard timeout", async () => {
+    vi.useFakeTimers();
+    vi.stubEnv("QUAID_BEFORE_PROMPT_BUILD_IN_FLIGHT_TIMEOUT_MS", "25");
+    const fixture = seedDeferredNoticeFixture(
+      "quaid-oc-before-prompt-stuck-turn-home-",
+      "openclaw-main",
+      "[Quaid] stuck turn fixture",
+    );
+
+    await loadAdapterWithHomes(
+      fixture.hiddenHome,
+      fixture.visibleHome,
+      fixture.openClawConfigPath,
+      "openclaw-main",
+    );
+    const adapterModule = await import("../adaptors/openclaw/adapter.js");
+    const testApi = (adapterModule as any).__test;
+    testApi.clearAutoInjectTurnCaches();
+
+    const query = "What grinder do I use for my espresso setup?";
+    const turnKey = testApi.autoInjectTurnKey("main", query, "agent:main:tui-main");
+    const tracked = testApi.trackBeforePromptBuildInFlightTurn(
+      turnKey,
+      query,
+      new Promise(() => {}),
+      true,
+      Date.now(),
+    );
+    expect(testApi.beforePromptBuildInFlightTurnCount()).toBe(1);
+
+    await vi.advanceTimersByTimeAsync(testApi.BEFORE_PROMPT_BUILD_IN_FLIGHT_TIMEOUT_MS + 1);
+    const outcome = await tracked;
+
+    expect(outcome.skipReason).toBe("in_flight_timeout");
+    expect(testApi.beforePromptBuildInFlightTurnCount()).toBe(0);
+    const traceEvents = readHookTraceEvents(fixture.hiddenHome, "openclaw-main").map((row) => String(row.event || ""));
+    expect(traceEvents).toContain("hook.before_prompt_build.in_flight_timeout");
+
+    removeTempDir(fixture.home);
+  });
+
   it("skips prompt-build injection for timestamped slug-generator sessions", async () => {
     vi.stubEnv("QUAID_DISABLE_NOTIFICATIONS", "1");
     const fixture = seedDeferredNoticeFixture(

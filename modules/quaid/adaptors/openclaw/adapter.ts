@@ -4423,6 +4423,10 @@ const MODEL_CONFIG_VALIDATION_TIMEOUT_MS = _envTimeoutMs("QUAID_MODEL_CONFIG_VAL
 // the internal recall deadline plus sync docs/model-context work so prompt
 // dispatch waits for the returned injection payload.
 const BEFORE_PROMPT_BUILD_HOOK_TIMEOUT_MS = 60_000;
+const BEFORE_PROMPT_BUILD_IN_FLIGHT_TIMEOUT_MS = _envTimeoutMs(
+  "QUAID_BEFORE_PROMPT_BUILD_IN_FLIGHT_TIMEOUT_MS",
+  Math.max(BEFORE_PROMPT_BUILD_HOOK_TIMEOUT_MS, PYTHON_BRIDGE_TIMEOUT_MS) + 5_000,
+);
 const IMMEDIATE_PROVIDER_NOTICE_SUPPRESS_MS = 500;
 let promptModelConfigFingerprint = "";
 let promptModelConfigNotice = "";
@@ -4882,7 +4886,7 @@ type AutoInjectTurnOutcome = {
   recallDiagnostics: Record<string, unknown> | null;
   injection: ReturnType<ReturnType<typeof createQuaidFacade>["prepareAutoInjectionContext"]>;
   modelConfigNotice?: string;
-  skipReason?: "auto_inject_disabled" | "low_quality_query";
+  skipReason?: "auto_inject_disabled" | "low_quality_query" | "in_flight_timeout";
 };
 
 // Re-entrancy guard for beforePromptBuildHandler.
@@ -4896,6 +4900,64 @@ const _beforePromptBuildInFlightByTurn = new Map<string, Promise<AutoInjectTurnO
 const AUTO_INJECT_COMPLETED_TURN_CACHE_TTL_MS = 5_000;
 const AUTO_INJECT_COMPLETED_TURN_CACHE_MAX = 32;
 const _beforePromptBuildCompletedByTurn = new Map<string, { outcome: AutoInjectTurnOutcome; expiresAtMs: number }>();
+
+function _withBeforePromptBuildInFlightTimeout(
+  turnPromise: Promise<AutoInjectTurnOutcome>,
+  turnKey: string,
+  query: string,
+  startedAtMs: number = Date.now(),
+): Promise<AutoInjectTurnOutcome> {
+  let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<AutoInjectTurnOutcome>((resolve) => {
+    timeoutTimer = setTimeout(() => {
+      const elapsedMs = Date.now() - startedAtMs;
+      writeHookTrace("hook.before_prompt_build.in_flight_timeout", {
+        query: String(query || "").slice(0, 80),
+        timeout_ms: BEFORE_PROMPT_BUILD_IN_FLIGHT_TIMEOUT_MS,
+        elapsed_ms: elapsedMs,
+        active_turns: _beforePromptBuildInFlightByTurn.size,
+      });
+      resolve({
+        allMemories: [],
+        recallDiagnostics: null,
+        injection: null,
+        skipReason: "in_flight_timeout",
+      });
+    }, BEFORE_PROMPT_BUILD_IN_FLIGHT_TIMEOUT_MS);
+  });
+  return Promise.race([turnPromise, timeoutPromise]).finally(() => {
+    if (timeoutTimer !== undefined) {
+      clearTimeout(timeoutTimer);
+    }
+  });
+}
+
+function _trackBeforePromptBuildInFlightTurn(
+  turnKey: string,
+  query: string,
+  turnPromise: Promise<AutoInjectTurnOutcome>,
+  rememberCompleted: boolean,
+  startedAtMs: number = Date.now(),
+): Promise<AutoInjectTurnOutcome> {
+  const trackedPromise = _withBeforePromptBuildInFlightTimeout(turnPromise, turnKey, query, startedAtMs);
+  _beforePromptBuildInFlightByTurn.set(turnKey, trackedPromise);
+  trackedPromise.then(
+    (outcome) => {
+      if (_beforePromptBuildInFlightByTurn.get(turnKey) === trackedPromise) {
+        _beforePromptBuildInFlightByTurn.delete(turnKey);
+      }
+      if (rememberCompleted) {
+        _rememberCompletedAutoInjectTurn(turnKey, outcome, Date.now());
+      }
+    },
+    () => {
+      if (_beforePromptBuildInFlightByTurn.get(turnKey) === trackedPromise) {
+        _beforePromptBuildInFlightByTurn.delete(turnKey);
+      }
+    },
+  );
+  return trackedPromise;
+}
 
 function _autoInjectTurnKey(agentLabel: string, query: string, sessionScope?: string): string {
   const normalizedAgent = String(agentLabel || "main").trim().toLowerCase() || "main";
@@ -7137,21 +7199,11 @@ notify_user(${JSON.stringify(message)})
             return { allMemories, recallDiagnostics, injection, modelConfigNotice: modelConfigNotice || undefined };
           })();
           createdTurnPromise = true;
-          _beforePromptBuildInFlightByTurn.set(turnKey, turnPromise);
-          turnPromise.then(
-            (outcome) => {
-              if (_beforePromptBuildInFlightByTurn.get(turnKey) === turnPromise) {
-                _beforePromptBuildInFlightByTurn.delete(turnKey);
-              }
-              if (createdTurnPromise) {
-                _rememberCompletedAutoInjectTurn(turnKey, outcome, Date.now());
-              }
-            },
-            () => {
-              if (_beforePromptBuildInFlightByTurn.get(turnKey) === turnPromise) {
-                _beforePromptBuildInFlightByTurn.delete(turnKey);
-              }
-            },
+          turnPromise = _trackBeforePromptBuildInFlightTurn(
+            turnKey,
+            query,
+            turnPromise,
+            createdTurnPromise,
           );
         }
 
@@ -10001,6 +10053,9 @@ export const __test = {
   rememberCompletedAutoInjectTurn: _rememberCompletedAutoInjectTurn,
   getCompletedAutoInjectTurn: _getCompletedAutoInjectTurn,
   clearAutoInjectTurnCaches: _clearAutoInjectTurnCaches,
+  trackBeforePromptBuildInFlightTurn: _trackBeforePromptBuildInFlightTurn,
+  beforePromptBuildInFlightTurnCount: () => _beforePromptBuildInFlightByTurn.size,
+  BEFORE_PROMPT_BUILD_IN_FLIGHT_TIMEOUT_MS,
   AUTO_INJECT_COMPLETED_TURN_CACHE_TTL_MS,
   buildAutoInjectRecallOptions: _buildAutoInjectRecallOptions,
   buildFacadeRecallOptions: _buildFacadeRecallOptions,
