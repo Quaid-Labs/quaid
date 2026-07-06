@@ -382,6 +382,142 @@ describe("openclaw deferred notices", () => {
     removeTempDir(fixture.home);
   });
 
+  it("uses identity-only context on the post-compaction refresh turn", async () => {
+    vi.stubEnv("QUAID_DISABLE_NOTIFICATIONS", "1");
+    const fixture = seedDeferredNoticeFixture(
+      "quaid-oc-compaction-identity-only-home-",
+      "openclaw-main",
+      "[Quaid] identity-only fixture",
+    );
+    const configPath = path.join(fixture.hiddenHome, "instances", "openclaw-main", "config.json");
+    const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+    writeJson(configPath, {
+      ...config,
+      systems: { memory: true, projects: true },
+      retrieval: { ...config.retrieval, autoInject: true },
+    });
+    const identityDir = path.join(fixture.visibleHome, "instances", "openclaw-main");
+    fs.mkdirSync(identityDir, { recursive: true });
+    for (const filename of ["USER.md", "SOUL.md", "ENVIRONMENT.md"]) {
+      fs.writeFileSync(
+        path.join(identityDir, filename),
+        `# ${filename}\n\nThe office plant is named Bartholomew. It is a fiddle-leaf fig.\n`,
+        "utf8",
+      );
+    }
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const plugin = await loadAdapterWithHomes(
+      fixture.hiddenHome,
+      fixture.visibleHome,
+      fixture.openClawConfigPath,
+      "openclaw-main",
+    );
+    const adapterModule = await import("../adaptors/openclaw/adapter.js");
+    const testApi = (adapterModule as any).__test;
+    testApi.clearAutoInjectTurnCaches();
+    const api = makeFakeApi();
+    plugin.register(api as any);
+
+    const beforePromptBuildCall = api.on.mock.calls.find((call: any[]) =>
+      call?.[0] === "before_prompt_build" && call?.[2]?.name === "memory-injection-prompt-build"
+    );
+    const messageReceivedCall = api.on.mock.calls.find((call: any[]) =>
+      call?.[0] === "message_received" && call?.[2]?.name === "message-received-command-memory-extraction"
+    );
+    const beforeCompactionCall = api.on.mock.calls.find((call: any[]) =>
+      call?.[0] === "before_compaction" && call?.[2]?.name === "compaction-memory-extraction"
+    );
+    expect(beforePromptBuildCall).toBeTruthy();
+    expect(messageReceivedCall).toBeTruthy();
+    expect(beforeCompactionCall).toBeTruthy();
+
+    const beforePromptBuildHandler = beforePromptBuildCall?.[1];
+    const messageReceivedHandler = messageReceivedCall?.[1];
+    const beforeCompactionHandler = beforeCompactionCall?.[1];
+    const sessionId = "session-post-compact-identity-only";
+    const sessionKey = "agent:main:matrix:identity-only";
+    const query = "What's the office plant named?";
+
+    await messageReceivedHandler(
+      { text: query, sessionId, sessionKey, timestamp: 1778267431707 },
+      { sessionId, sessionKey, agentId: "main", trigger: "user" },
+    );
+    await beforeCompactionHandler(
+      { messages: [], sessionId, sessionKey },
+      { sessionId, sessionKey, agentId: "main", trigger: "compact" },
+    );
+
+    const memory = {
+      id: "mem-baratza-should-not-inject",
+      text: "Solomon owns a Baratza Encore grinder and a Flair 58 espresso setup.",
+      similarity: 1,
+      via: "vector",
+      category: "fact",
+    };
+    testApi.rememberCompletedAutoInjectTurn(testApi.autoInjectTurnKey("main", query, sessionKey), {
+      allMemories: [memory],
+      recallDiagnostics: { mode: "test" },
+      injection: {
+        toInject: [memory],
+        prependContext: [
+          "<injected_memories>",
+          "- fact | Solomon owns a Baratza Encore grinder and a Flair 58 espresso setup.",
+          "</injected_memories>",
+        ].join("\n"),
+      },
+    }, Date.now());
+
+    const result = await beforePromptBuildHandler(
+      {
+        prependContext: "",
+        prompt: "",
+        body: "",
+        cleanedBody: "",
+        messages: [],
+        sessionId,
+        sessionKey,
+      },
+      {
+        sessionId,
+        sessionKey,
+        agentId: "main",
+        trigger: "user",
+      },
+    );
+
+    const rendered = [
+      result?.prependContext,
+      result?.prependSystemContext,
+      result?.appendSystemContext,
+    ].map((value) => String(value || "")).join("\n");
+    expect(rendered).toContain("Bartholomew");
+    expect(rendered).not.toContain("Baratza Encore");
+    expect(String((result as any)?.prependContext || "")).not.toContain("<injected_memories>");
+    expect(log.mock.calls.some((call) => String(call.join(" ")).includes("Auto-injected"))).toBe(false);
+
+    const traceRows = readHookTraceEvents(fixture.hiddenHome, "openclaw-main");
+    expect(traceRows).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        event: "hook.before_prompt_build.context_emitted",
+        context_mode: "openclaw_identity_refresh",
+        recall_count: 0,
+        docs_count: 0,
+      }),
+    ]));
+    const traceEvents = traceRows.map((row) => String(row.event || ""));
+    expect(traceEvents).not.toContain("hook.before_prompt_build.query_extracted");
+    expect(traceEvents).not.toContain("hook.before_prompt_build.injection_applied");
+
+    warn.mockRestore();
+    log.mockRestore();
+    error.mockRestore();
+    removeTempDir(fixture.home);
+  });
+
   it("delivers auto-injection from before_agent_start while OpenClaw scope upgrade forces embedded fallback", async () => {
     vi.stubEnv("QUAID_DISABLE_NOTIFICATIONS", "1");
     const fixture = seedDeferredNoticeFixture(
@@ -2111,7 +2247,7 @@ describe("openclaw deferred notices", () => {
     removeTempDir(fixture.home);
   });
 
-  it("re-arms project context injection after before_compaction under default strategy", async () => {
+  it("returns identity-only context after before_compaction under default strategy", async () => {
     vi.useFakeTimers();
     const fixture = seedDeferredNoticeFixture(
       "quaid-oc-compaction-refresh-home-",
@@ -2203,7 +2339,8 @@ describe("openclaw deferred notices", () => {
       },
       promptCtx,
     );
-    expect(combinedSystemContext(third)).toContain("Compaction refresh canary: amber-skyline");
+    expect(combinedSystemContext(third)).toContain("Quaid Refreshed Identity Context");
+    expect(combinedSystemContext(third)).not.toContain("Compaction refresh canary: amber-skyline");
 
     warn.mockRestore();
     log.mockRestore();
@@ -2381,7 +2518,7 @@ describe("openclaw deferred notices", () => {
     removeTempDir(fixture.home);
   });
 
-  it("re-arms project context injection when before_compaction uses a different session id on the same session key", async () => {
+  it("returns identity-only context when before_compaction uses a different session id on the same session key", async () => {
     vi.useFakeTimers();
     const fixture = seedDeferredNoticeFixture(
       "quaid-oc-compaction-refresh-key-home-",
@@ -2474,7 +2611,8 @@ describe("openclaw deferred notices", () => {
       },
       promptCtx,
     );
-    expect(combinedSystemContext(third)).toContain("Compaction refresh canary: mortimer-fern");
+    expect(combinedSystemContext(third)).toContain("Quaid Refreshed Identity Context");
+    expect(combinedSystemContext(third)).not.toContain("Compaction refresh canary: mortimer-fern");
 
     warn.mockRestore();
     log.mockRestore();
@@ -2482,7 +2620,7 @@ describe("openclaw deferred notices", () => {
     removeTempDir(fixture.home);
   });
 
-  it("re-arms project context injection when /compact is captured as a message event", async () => {
+  it("returns identity-only context when /compact is captured as a message event", async () => {
     vi.useFakeTimers();
     const fixture = seedDeferredNoticeFixture(
       "quaid-oc-message-compact-refresh-home-",
@@ -2577,7 +2715,8 @@ describe("openclaw deferred notices", () => {
       },
       ctx,
     );
-    expect(combinedSystemContext(third)).toContain("brass-fern");
+    expect(combinedSystemContext(third)).toContain("Quaid Refreshed Identity Context");
+    expect(combinedSystemContext(third)).not.toContain("brass-fern");
 
     warn.mockRestore();
     log.mockRestore();

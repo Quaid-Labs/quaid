@@ -5413,6 +5413,38 @@ ${missingUserOverride}` : missingUserOverride;
           cached_len: missingUserRecovery?.text.length ?? 0
         });
       }
+      const emitIdentityOnlyRefresh = (refreshedIdentityContext, sessionKeyDocs) => {
+        const prependContext = [
+          ...prependContextParts,
+          refreshedIdentityContext,
+          stripQuaidInjectedMemoryBlocks(stripOpenClawInternalContext(event?.prependContext || ""))
+        ].filter(Boolean).join("\n\n") || void 0;
+        const result = {
+          ...prependContext ? { prependContext } : {},
+          prependSystemContext: prependSystemContext ? `${prependSystemContext}
+
+${refreshedIdentityContext}` : refreshedIdentityContext,
+          appendSystemContext: appendSystemContext ? `${appendSystemContext}
+
+${refreshedIdentityContext}` : refreshedIdentityContext
+        };
+        if (event && typeof event === "object") {
+          if (result.prependContext) event.prependContext = result.prependContext;
+          if (result.prependSystemContext) event.prependSystemContext = result.prependSystemContext;
+          if (result.appendSystemContext) event.appendSystemContext = result.appendSystemContext;
+        }
+        writeHookTrace("hook.before_prompt_build.context_emitted", {
+          session_id: promptSessionId,
+          session_key: sessionKeyDocs,
+          instance_id: promptInstanceId,
+          context_len: refreshedIdentityContext.length,
+          context_mode: "openclaw_identity_refresh",
+          recall_count: 0,
+          docs_count: 0,
+          reason: "compaction_identity_refresh_only"
+        });
+        return result;
+      };
       if (isSystemEnabled2("projects")) {
         try {
           const identityContext = await promptFacade.injectProjectContext(void 0, {
@@ -5438,7 +5470,7 @@ ${identityContext}` : identityContext;
           promptInstanceId
         );
         if (refreshedIdentityContext) {
-          prependContextParts.push(refreshedIdentityContext);
+          return emitIdentityOnlyRefresh(refreshedIdentityContext, sessionKeyDocs);
         }
         writeHookTrace("hook.docs_gate_check", {
           session_id: sessionKeyDocs,
