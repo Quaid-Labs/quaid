@@ -794,7 +794,6 @@ def _finalize_janitor_request_payload(
     request_started_at: object = "",
 ) -> None:
     final_errors = list(errors)
-    fail_hard_exc: Exception | None = None
     worker_pids = worker_pids or {}
     if not started_instances and not exit_codes:
         final_errors.append("janitor request running with no tracked workers")
@@ -816,8 +815,6 @@ def _finalize_janitor_request_payload(
             )
         except Exception as exc:
             final_errors.append(str(exc) or f"instance {instance} janitor checkpoint inspection failed")
-            if fail_hard_exc is None:
-                fail_hard_exc = exc
             continue
         if checkpoint_error:
             final_errors.append(checkpoint_error)
@@ -832,9 +829,9 @@ def _finalize_janitor_request_payload(
     if final_errors and _fail_hard_enabled():
         message = "janitor request failed under failHard: " + "; ".join(final_errors)
         _LOGGER.error(message)
-        if fail_hard_exc is not None:
-            raise RuntimeError(message) from fail_hard_exc
-        raise RuntimeError(message)
+        # The request record is the user-facing failure surface: `quaid janitor --status`
+        # exits non-zero and prints these errors. Raising here would convert one
+        # failed instance worker into a global supervisor-failure marker.
 
 
 def _start_requested_janitor_run(

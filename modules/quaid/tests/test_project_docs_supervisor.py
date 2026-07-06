@@ -1706,7 +1706,7 @@ def test_requested_janitor_run_accepts_zero_exit_when_child_checkpoint_failed(mo
     assert payload["errors"] == []
 
 
-def test_requested_janitor_run_raises_on_worker_failure_when_failhard(monkeypatch, tmp_path, caplog):
+def test_requested_janitor_run_contains_worker_failure_when_failhard(monkeypatch, tmp_path, caplog):
     from core import project_docs, project_docs_supervisor as supervisor
 
     class _FailedProc:
@@ -1725,8 +1725,7 @@ def test_requested_janitor_run_raises_on_worker_failure_when_failhard(monkeypatc
     active = {"request_id": request["request_id"], "errors": [], "exit_codes": {}}
 
     with caplog.at_level("ERROR", logger=supervisor.__name__):
-        with pytest.raises(RuntimeError, match="instance alpha janitor exited rc=1"):
-            supervisor._maintain_on_demand_janitor_request(active, {}, workers)
+        assert supervisor._maintain_on_demand_janitor_request(active, {}, workers) is None
 
     assert "janitor request failed under failHard: instance alpha janitor exited rc=1" in caplog.text
     payload = project_docs.read_janitor_request()
@@ -1908,7 +1907,7 @@ def test_janitor_checkpoint_status_raises_missing_checkpoint_when_failhard(monke
     assert "instance alpha janitor checkpoint missing" in caplog.text
 
 
-def test_requested_janitor_run_writes_failed_status_before_failhard_reraise(monkeypatch, tmp_path):
+def test_requested_janitor_run_writes_failed_status_without_supervisor_reraise(monkeypatch, tmp_path, caplog):
     from core import project_docs, project_docs_supervisor as supervisor
 
     class _FailedProc:
@@ -1926,9 +1925,10 @@ def test_requested_janitor_run_writes_failed_status_before_failhard_reraise(monk
     workers: dict[str, subprocess.Popen] = {"alpha": _FailedProc()}
     active = {"request_id": request["request_id"], "errors": [], "exit_codes": {}}
 
-    with pytest.raises(RuntimeError, match="instance alpha janitor exited rc=1"):
-        supervisor._maintain_on_demand_janitor_request(active, {}, workers)
+    with caplog.at_level("ERROR", logger=supervisor.__name__):
+        assert supervisor._maintain_on_demand_janitor_request(active, {}, workers) is None
 
+    assert "janitor request failed under failHard: instance alpha janitor exited rc=1" in caplog.text
     payload = project_docs.read_janitor_request()
     assert payload["status"] == "failed"
     assert payload["exit_codes"] == {"alpha": 1}
