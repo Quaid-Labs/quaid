@@ -17435,6 +17435,13 @@ def _select_final_recall_rows_with_facet_rescue(
             if term and (term in search_text or _text_contains_anchor_term(search_text, term))
         )
 
+    def _facet_text_signal(row: Dict[str, Any]) -> int:
+        search_text = str((row or {}).get("text") or "").lower()
+        return sum(
+            1 for term in query_terms
+            if term and (term in search_text or _text_contains_anchor_term(search_text, term))
+        )
+
     def _facet_non_anchor_signal(row: Dict[str, Any]) -> int:
         search_text = " ".join([
             str((row or {}).get("text") or ""),
@@ -17467,6 +17474,7 @@ def _select_final_recall_rows_with_facet_rescue(
     facet_rows.sort(
         key=lambda row: (
             _facet_signal(row),
+            _facet_text_signal(row),
             1 if _is_related_entity_facet_rescue_row(row) else 0,
             float(row.get("similarity", 0.0) or 0.0),
             len(str(row.get("keywords") or "")),
@@ -17478,8 +17486,11 @@ def _select_final_recall_rows_with_facet_rescue(
     reserved_keys = {_key(row) for row in reserved}
     leading_reserved = [
         row for row in reserved
-        if _facet_non_anchor_signal(row) >= _facet_rescue_leading_signal_threshold(row)
-        and _facet_non_anchor_signal(row) > max(source_dated_session_signal, direct_memory_signal)
+        if _facet_non_anchor_signal(row) > max(source_dated_session_signal, direct_memory_signal)
+        and (
+            _facet_non_anchor_signal(row) >= _facet_rescue_leading_signal_threshold(row)
+            or _facet_text_signal(row) >= len(query_terms)
+        )
     ]
     leading_reserved_keys = {_key(row) for row in leading_reserved}
     trailing_reserved = [
@@ -17562,6 +17573,13 @@ def _prioritize_high_signal_facet_rescue_rows(
             if term and (term in search_text or _text_contains_anchor_term(search_text, term))
         )
 
+    def _text_signal(row: Dict[str, Any]) -> int:
+        search_text = str((row or {}).get("text") or "").lower()
+        return sum(
+            1 for term in query_terms
+            if term and (term in search_text or _text_contains_anchor_term(search_text, term))
+        )
+
     source_dated_session_signal = max(
         (
             _non_anchor_signal(row)
@@ -17581,17 +17599,23 @@ def _prioritize_high_signal_facet_rescue_rows(
         ),
         default=0,
     )
-    leading: List[Tuple[int, int, int, int, int, Dict[str, Any]]] = []
+    leading: List[Tuple[int, int, int, float, int, Dict[str, Any]]] = []
     trailing: List[Dict[str, Any]] = []
     for index, row in enumerate(rows):
         signal = _non_anchor_signal(row) if isinstance(row, dict) and row.get("_facet_rescue") else 0
+        text_signal = _text_signal(row) if isinstance(row, dict) and row.get("_facet_rescue") else 0
         if (
-            signal >= _facet_rescue_leading_signal_threshold(row)
-            and signal > max(source_dated_session_signal, direct_memory_signal)
+            signal > max(source_dated_session_signal, direct_memory_signal)
+            and (
+                signal >= _facet_rescue_leading_signal_threshold(row)
+                or text_signal >= len(query_terms)
+            )
         ):
             leading.append((
                 signal,
+                text_signal,
                 1 if _is_related_entity_facet_rescue_row(row) else 0,
+                float(row.get("similarity", 0.0) or 0.0),
                 -index,
                 row,
             ))
@@ -17602,7 +17626,7 @@ def _prioritize_high_signal_facet_rescue_rows(
     leading.sort(key=lambda item: item[:5], reverse=True)
     return [
         row
-        for _signal, _related, _negative_index, row in leading
+        for _signal, _text_signal_count, _related, _similarity, _negative_index, row in leading
     ] + trailing
 
 

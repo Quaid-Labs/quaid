@@ -18187,6 +18187,44 @@ class TestRecallFastHookInjectContract:
         assert selected[0]["id"] == "fresh-direct"
         assert selected[1]["id"] == "old-facet"
 
+    def test_high_signal_facet_rescue_prefers_text_coverage_over_keyword_only_signal(self):
+        import datastore.memorydb.memory_graph as mg
+
+        rows = [
+            {
+                "id": "keyword-only-topic",
+                "text": "Noor keeps Friday strength work at Ridge Gym.",
+                "category": "fact",
+                "similarity": 0.80,
+                "_facet_rescue": True,
+                "via": "facet_rescue_lexical",
+                "keywords": "Noor weekly ritual strength work",
+            },
+            {
+                "id": "text-covered-ritual",
+                "text": "Noor's weekly ritual is polishing cedar lanterns.",
+                "category": "preference",
+                "similarity": 0.91,
+                "_facet_rescue": True,
+                "via": "facet_rescue_lexical",
+                "keywords": "Noor weekly ritual cedar lanterns",
+            },
+        ]
+
+        prioritized = mg._prioritize_high_signal_facet_rescue_rows(
+            "What is Noor's weekly ritual?",
+            rows,
+        )
+        selected = mg._select_final_recall_rows_with_facet_rescue(
+            "What is Noor's weekly ritual?",
+            rows,
+            limit=2,
+            intent="GENERAL",
+        )
+
+        assert prioritized[0]["id"] == "text-covered-ritual"
+        assert selected[0]["id"] == "text-covered-ritual"
+
     def test_merge_preserves_facet_rescue_provenance_for_same_memory(self):
         import datastore.memorydb.memory_graph as mg
 
