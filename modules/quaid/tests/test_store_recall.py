@@ -7172,6 +7172,142 @@ class TestSourceChunkStorage:
         assert meta["session_chunk_result_cap"]["selected_session_count"] == 4
         assert meta["session_chunk_result_cap"]["final_session_count"] == 3
 
+    def test_mixed_store_plan_defers_query_echo_chunks_to_keep_answer_fact(self):
+        import datastore.memorydb.memory_graph as mg
+
+        query = "What is Noor's cedar ritual?"
+        docs_rows = [
+            {
+                "id": "docs-1",
+                "text": "PROJECT.log cedar setup note",
+                "category": "docs",
+                "source_type": "docs",
+                "similarity": 1.0,
+            },
+            {
+                "id": "docs-duplicate",
+                "text": "PROJECT.log cedar setup note",
+                "category": "docs",
+                "source_type": "docs",
+                "similarity": 1.0,
+            },
+            {
+                "id": "docs-2",
+                "text": "PROJECT.md cedar overview note",
+                "category": "docs",
+                "source_type": "docs",
+                "similarity": 0.99,
+            },
+        ]
+        echo_chunks = [
+            {
+                "id": f"echo-{idx}",
+                "chunk_id": f"echo-{idx}",
+                "session_chunk_id": f"echo-{idx}",
+                "source_chunk_id": f"echo-{idx}",
+                "text": f"[session_chunk] User: {query}\nAssistant: It might be the older gym schedule.",
+                "category": "session_chunk",
+                "source_type": "source_chunk",
+                "via": "session_chunks",
+                "similarity": 0.95 - (idx * 0.01),
+            }
+            for idx in range(2)
+        ]
+        answer_fact = {
+            "id": "answer-fact",
+            "text": "Noor's cedar ritual is polishing lantern hooks.",
+            "category": "Preference",
+            "source_type": "memory",
+            "similarity": 0.86,
+        }
+        fused_rows = [*docs_rows, *echo_chunks, answer_fact]
+
+        def _payload(rows):
+            return rows, {"selected_path": "test", "counts": {"final_results": len(rows)}}, None
+
+        registry = {
+            "vector": {
+                "recall": lambda *_args, **_kwargs: _payload([answer_fact]),
+                "recall_fast": lambda *_args, **_kwargs: _payload([answer_fact]),
+            },
+            "session_chunks": {
+                "recall": lambda *_args, **_kwargs: _payload(echo_chunks),
+                "recall_fast": lambda *_args, **_kwargs: _payload(echo_chunks),
+            },
+            "docs": {
+                "recall": lambda *_args, **_kwargs: _payload(docs_rows),
+                "recall_fast": lambda *_args, **_kwargs: _payload(docs_rows),
+            },
+            "graph": {
+                "recall": lambda *_args, **_kwargs: _payload([]),
+                "recall_fast": lambda *_args, **_kwargs: _payload([]),
+            },
+        }
+
+        with patch.object(mg, "_get_recall_store_registry", return_value=registry), \
+             patch.object(
+                 mg,
+                 "_active_rrf_recall_store_plan",
+                 return_value=(fused_rows, {"enabled": True}),
+             ), \
+             patch.object(mg, "_shadow_rrf_recall_store_plan", return_value={"enabled": True}), \
+             patch.object(mg, "_recover_explicit_entity_facet_rows", return_value=([], {"applied": False})):
+            rows, meta, _bundle = mg._run_recall_store_plan(
+                query,
+                stores=["docs", "vector", "session_chunks"],
+                limit=5,
+                owner_id="noor",
+                min_similarity=0.0,
+                planner_profile="fast",
+                planned_queries=[query],
+                planner_meta={"planned_stores": ["docs", "vector", "session_chunks"]},
+                fast_mode=True,
+                common_kwargs={
+                    "session_chunk_window_before": 0,
+                    "session_chunk_window_after": 0,
+                },
+            )
+
+        assert len(rows) == 5
+        row_ids = [row["id"] for row in rows]
+        assert "answer-fact" in row_ids
+        echo_indexes = [idx for idx, row_id in enumerate(row_ids) if str(row_id).startswith("echo-")]
+        assert echo_indexes
+        assert row_ids.index("answer-fact") < min(echo_indexes)
+        assert meta["query_echo_session_deferral"]["applied"] is True
+        assert meta["query_echo_session_deferral"]["deferred"] == 2
+
+    def test_query_echo_session_deferral_preserves_non_echo_session_order(self):
+        import datastore.memorydb.memory_graph as mg
+
+        rows = [
+            {
+                "id": "session-context",
+                "chunk_id": "session-context",
+                "text": "[session_chunk] User: Noor said the cedar cabinet key is in the kiln drawer.",
+                "category": "session_chunk",
+                "source_type": "session_chunk",
+                "via": "session_chunks",
+                "similarity": 0.94,
+            },
+            {
+                "id": "fact",
+                "text": "Noor keeps a cedar cabinet key.",
+                "category": "fact",
+                "similarity": 0.86,
+            },
+        ]
+
+        ordered, meta = mg._defer_query_echo_session_rows(
+            "Where is Noor's cedar key?",
+            rows,
+            rows,
+            limit=2,
+        )
+
+        assert [row["id"] for row in ordered[:2]] == ["session-context", "fact"]
+        assert meta["applied"] is False
+
     def test_mixed_session_cap_keeps_facts_already_in_selected_window(self):
         """Selected compact facts should count as session-chunk replacements."""
         import datastore.memorydb.memory_graph as mg

@@ -11533,6 +11533,12 @@ def _run_recall_store_plan(
         merged,
         limit=limit,
     )
+    final_rows, query_echo_session_meta = _defer_query_echo_session_rows(
+        query,
+        final_rows,
+        merged,
+        limit=limit,
+    )
     final_rows, session_conflict_meta = _suppress_weaker_synthetic_temporal_conflicts_after_session_source(
         query,
         final_rows,
@@ -11622,6 +11628,8 @@ def _run_recall_store_plan(
         meta["preserved_graph_cluster_rows"] = preserved_graph_cluster_rows
     if session_conflict_meta.get("suppressed"):
         meta["session_source_conflict_suppression"] = session_conflict_meta
+    if query_echo_session_meta.get("applied"):
+        meta["query_echo_session_deferral"] = query_echo_session_meta
     if session_chunk_cap_meta.get("applied"):
         meta["session_chunk_result_cap"] = session_chunk_cap_meta
     if store_plan_facet_rescue_meta.get("applied") or store_plan_facet_rescue_meta.get("error"):
@@ -15044,6 +15052,41 @@ def _is_first_order_session_source_row(row: Dict[str, Any]) -> bool:
     return source_type in {"session_chunk", "source_chunk"} or str((row or {}).get("via") or "") == "session_chunks"
 
 
+def _normalize_query_echo_text(value: Any) -> str:
+    return re.sub(r"\s+", " ", unicodedata.normalize("NFKC", str(value or "")).casefold()).strip()
+
+
+# Protocol role labels emitted by Quaid transcript parsers, not user-language content.
+_QUERY_ECHO_USER_ROLE_KEYS = frozenset({"user", "human", "operator"})
+
+
+def _query_echo_line_matches(query: str, line: str) -> bool:
+    normalized_query = _normalize_query_echo_text(query)
+    if not normalized_query:
+        return False
+    current = unicodedata.normalize("NFKC", str(line or "")).strip()
+    for _ in range(3):
+        match = re.match(r"^(?:\[[^\]]+\]\s*)?([^:\r\n]{1,80})\s*:\s*(.*)$", current)
+        if not match:
+            return False
+        label = match.group(1).strip().casefold()
+        payload = match.group(2).strip()
+        role_key = re.sub(r"[\s_-]+", " ", label.rsplit("/", 1)[-1]).strip()
+        if role_key in _QUERY_ECHO_USER_ROLE_KEYS:
+            return _normalize_query_echo_text(payload) == normalized_query
+        current = payload
+    return False
+
+
+def _is_current_query_echo_session_row(query: str, row: Dict[str, Any]) -> bool:
+    if not _is_first_order_session_source_row(row):
+        return False
+    normalized_query = _normalize_query_echo_text(query)
+    if len(normalized_query) < 8:
+        return False
+    return any(_query_echo_line_matches(normalized_query, line) for line in str(row.get("text") or "").splitlines())
+
+
 def _session_row_provenance_source_type(row: Dict[str, Any]) -> str:
     if not isinstance(row, dict):
         return ""
@@ -15196,6 +15239,56 @@ def _cap_mixed_session_chunk_results(
         "final_session_count": sum(1 for row in out if _is_first_order_session_source_row(row)),
         "candidate_count": len(candidate_pool),
         "replaced": max(0, selected_session_count - kept_session),
+    }
+
+
+def _defer_query_echo_session_rows(
+    query: str,
+    rows: List[Dict[str, Any]],
+    candidate_rows: List[Dict[str, Any]],
+    *,
+    limit: int,
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """Keep prior turns that quote the current query behind answer evidence."""
+    top_limit = max(1, int(limit or 1))
+    selected = [row for row in list(rows or [])[:top_limit] if isinstance(row, dict)]
+    if not selected:
+        return rows, {"applied": False}
+    echo_rows = [row for row in selected if _is_current_query_echo_session_row(query, row)]
+    if not echo_rows:
+        return rows, {"applied": False}
+
+    out = [row for row in selected if not _is_current_query_echo_session_row(query, row)]
+    out_keys = {_rrf_recall_row_identity(row) for row in out}
+    candidate_pool: List[Dict[str, Any]] = []
+    for row in [*list(rows or [])[top_limit:], *list(candidate_rows or [])]:
+        if not isinstance(row, dict) or _is_current_query_echo_session_row(query, row):
+            continue
+        key = _rrf_recall_row_identity(row)
+        if not key or key in out_keys:
+            continue
+        if not str(row.get("text") or "").strip():
+            continue
+        out_keys.add(key)
+        candidate_pool.append(row)
+        if len(out) + len(candidate_pool) >= top_limit:
+            break
+
+    for candidate in candidate_pool:
+        if len(out) >= top_limit:
+            break
+        out.append(candidate)
+    for row in echo_rows:
+        if len(out) >= top_limit:
+            break
+        out.append(row)
+        out_keys.add(_rrf_recall_row_identity(row))
+
+    return out[:top_limit], {
+        "applied": True,
+        "deferred": len(echo_rows),
+        "refilled": len(candidate_pool),
+        "selected_session_count": sum(1 for row in selected if _is_first_order_session_source_row(row)),
     }
 
 

@@ -232,71 +232,17 @@ function isDocsProjectRecallItem(item: MemoryResult): boolean {
   return via === "project" || category === "project" || sourceType === "docs";
 }
 
-function isSourceTranscriptRecallItem(item: MemoryResult): boolean {
-  const via = String(item?.via || "").trim().toLowerCase();
-  const category = String(item?.category || "").trim().toLowerCase();
-  const sourceType = String(item?.sourceType || "").trim().toLowerCase();
-  return (
-    via === "session_chunks"
-    || category === "session_chunk"
-    || category === "source_chunk"
-    || sourceType === "session_chunk"
-    || sourceType === "source_chunk"
-  );
-}
-
-function normalizeAutoInjectionText(value: unknown): string {
-  return String(value || "")
-    .normalize("NFKC")
-    .toLowerCase()
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function autoInjectionEvidenceIdentity(item: MemoryResult): string {
-  const text = normalizeAutoInjectionText(item?.text);
-  if (text) return `text:${text}`;
-  return recallItemIdentity(item);
-}
-
-function dedupeAutoInjectionEvidence(rows: MemoryResult[]): MemoryResult[] {
-  const out: MemoryResult[] = [];
-  const seen = new Set<string>();
-  for (const row of rows) {
-    const key = autoInjectionEvidenceIdentity(row);
-    if (key && seen.has(key)) continue;
-    if (key) seen.add(key);
-    out.push(row);
-  }
-  return out;
-}
-
-function isCurrentQueryEchoSourceItem(item: MemoryResult, currentQuery?: string): boolean {
-  if (!currentQuery || !isSourceTranscriptRecallItem(item)) return false;
-  const query = normalizeAutoInjectionText(currentQuery);
-  const text = normalizeAutoInjectionText(item?.text);
-  return query.length >= 8 && text.includes(query);
-}
-
-function selectAutoInjectionMemories(rows: MemoryResult[], limit: number, currentQuery?: string): MemoryResult[] {
+function selectAutoInjectionMemories(rows: MemoryResult[], limit: number): MemoryResult[] {
   const boundedLimit = Math.max(1, Number(limit) || 1);
   if (!Array.isArray(rows) || rows.length === 0) return [];
-  const dedupedRows = dedupeAutoInjectionEvidence(rows);
-  const queryEchoRows: MemoryResult[] = [];
-  const nonQueryEchoRows: MemoryResult[] = [];
-  for (const item of dedupedRows) {
-    if (isCurrentQueryEchoSourceItem(item, currentQuery)) queryEchoRows.push(item);
-    else nonQueryEchoRows.push(item);
-  }
-  const orderedRows = [...nonQueryEchoRows, ...queryEchoRows];
-  const projectRows = orderedRows.filter(isDocsProjectRecallItem);
-  if (projectRows.length === 0) return orderedRows.slice(0, boundedLimit);
+  const projectRows = rows.filter(isDocsProjectRecallItem);
+  if (projectRows.length === 0) return rows.slice(0, boundedLimit);
 
   const targetProjectRows = Math.min(
     projectRows.length,
     Math.max(1, Math.min(Math.ceil(boundedLimit / 2), boundedLimit)),
   );
-  const out = orderedRows.slice(0, boundedLimit);
+  const out = rows.slice(0, boundedLimit);
   let present = out.filter(isDocsProjectRecallItem).length;
   if (present >= targetProjectRows) return out;
 
@@ -4089,12 +4035,6 @@ ${lines.join("\n")}
           .map((msg) => String((msg as any)?.role || "").trim().toLowerCase())
           .filter((role) => role === "user" || role === "assistant")
       : [];
-    const currentUserQuery = Array.isArray(eventMessages)
-      ? [...eventMessages]
-          .reverse()
-          .find((msg) => msg && typeof msg === "object" && String((msg as any)?.role || "").trim().toLowerCase() === "user")
-      : null;
-    const currentQueryText = currentUserQuery ? getMessageText(currentUserQuery).trim() : "";
     const visibleTurnCount = visibleRoles.length;
     const priorVisibleTurnCount = Number((priorInjectionLog as any)?.visibleTurnCount || 0);
     const restartedConversation = priorVisibleTurnCount > 0 && visibleTurnCount < priorVisibleTurnCount;
@@ -4103,7 +4043,7 @@ ${lines.join("\n")}
       previouslyInjected = [];
       newMemories = filtered;
     }
-    const toInject = selectAutoInjectionMemories(newMemories, injectLimit, currentQueryText);
+    const toInject = selectAutoInjectionMemories(newMemories, injectLimit);
     if (!toInject.length) return null;
 
     const formatted = formatMemoriesForInjection(toInject);
