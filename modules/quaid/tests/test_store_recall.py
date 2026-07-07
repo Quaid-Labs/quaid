@@ -18198,25 +18198,25 @@ class TestRecallFastHookInjectContract:
                 "similarity": 0.80,
                 "_facet_rescue": True,
                 "via": "facet_rescue_lexical",
-                "keywords": "Noor weekly ritual strength work",
+                "keywords": "Noor ritual strength work",
             },
             {
                 "id": "text-covered-ritual",
-                "text": "Noor's weekly ritual is polishing cedar lanterns.",
+                "text": "Noor's ritual is polishing cedar lanterns.",
                 "category": "preference",
                 "similarity": 0.91,
                 "_facet_rescue": True,
                 "via": "facet_rescue_lexical",
-                "keywords": "Noor weekly ritual cedar lanterns",
+                "keywords": "Noor ritual cedar lanterns",
             },
         ]
 
         prioritized = mg._prioritize_high_signal_facet_rescue_rows(
-            "What is Noor's weekly ritual?",
+            "What is Noor's ritual?",
             rows,
         )
         selected = mg._select_final_recall_rows_with_facet_rescue(
-            "What is Noor's weekly ritual?",
+            "What is Noor's ritual?",
             rows,
             limit=2,
             intent="GENERAL",
@@ -18224,6 +18224,44 @@ class TestRecallFastHookInjectContract:
 
         assert prioritized[0]["id"] == "text-covered-ritual"
         assert selected[0]["id"] == "text-covered-ritual"
+
+    def test_high_signal_facet_rescue_keeps_higher_signal_above_partial_text_coverage(self):
+        import datastore.memorydb.memory_graph as mg
+
+        rows = [
+            {
+                "id": "higher-signal",
+                "text": "Noor keeps Friday strength work at Ridge Gym.",
+                "category": "fact",
+                "similarity": 0.83,
+                "_facet_rescue": True,
+                "via": "facet_rescue_lexical",
+                "keywords": "Noor cedar lantern ritual strength work",
+            },
+            {
+                "id": "partial-text-coverage",
+                "text": "Noor's cedar ritual is polishing maple stones.",
+                "category": "preference",
+                "similarity": 0.95,
+                "_facet_rescue": True,
+                "via": "facet_rescue_lexical",
+                "keywords": "Noor cedar ritual maple stones",
+            },
+        ]
+
+        prioritized = mg._prioritize_high_signal_facet_rescue_rows(
+            "What is Noor's cedar lantern ritual?",
+            rows,
+        )
+        selected = mg._select_final_recall_rows_with_facet_rescue(
+            "What is Noor's cedar lantern ritual?",
+            rows,
+            limit=2,
+            intent="GENERAL",
+        )
+
+        assert prioritized[0]["id"] == "higher-signal"
+        assert selected[0]["id"] == "higher-signal"
 
     def test_merge_preserves_facet_rescue_provenance_for_same_memory(self):
         import datastore.memorydb.memory_graph as mg
