@@ -5106,6 +5106,128 @@ def test_process_signal_skips_preserved_checkpoint_session_end_while_live_exists
     assert "orange linen notebook" in state["semantic_buffer"]
 
 
+def test_process_signal_extracts_preserved_mirror_user_turn_missing_from_live(
+    monkeypatch,
+    tmp_path,
+):
+    from lib.adapter import set_adapter, reset_adapter
+    from ingest import extract as extract_mod
+    from core import ingest_runtime
+    from core.runtime import notify as notify_mod
+
+    session_id = "a7d33c41-ad97-4e1e-8b53-5013708684e4"
+    live_dir = tmp_path / ".openclaw" / "agents" / "main" / "sessions"
+    mirror_dir = tmp_path / "instances" / "openclaw-main" / "logs" / "quaid" / "sessions"
+    live_dir.mkdir(parents=True)
+    mirror_dir.mkdir(parents=True)
+    live_path = live_dir / f"{session_id}.jsonl"
+    mirror_path = mirror_dir / f"{session_id}.jsonl"
+    live_lines = [
+        f'{{"type":"session","id":"{session_id}"}}',
+        '{"type":"message","message":{"role":"user","content":[{"type":"text","text":"Hello"}]}}',
+        '{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"**[Quaid — Memory Extraction]** summary"}]}}',
+        '{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"**[Quaid — Memory Extraction (cont. 2/3)]** summary"}]}}',
+        '{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"**[Quaid — Memory Extraction (cont. 3/3)]** summary"}]}}',
+        '{"type":"custom_message","customType":"openclaw.runtime-context","content":"context"}',
+        '{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"Project docs update completed."}]}}',
+    ]
+    mirror_lines = [
+        f'{{"type":"session","id":"{session_id}"}}',
+        '{"type":"message","message":{"role":"user","content":[{"type":"text","text":"Baxter uses an orange linen notebook from Emília Rosa."}]}}',
+        '{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"ACK"}]}}',
+    ]
+    live_path.write_text("\n".join(live_lines) + "\n", encoding="utf-8")
+    mirror_path.write_text("\n".join(mirror_lines) + "\n", encoding="utf-8")
+
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "openclaw-main")
+    source_key = extraction_daemon._signal_source_cursor_key(session_id, str(live_path))
+    extraction_daemon.write_cursor(
+        session_id,
+        len(live_lines),
+        str(live_path),
+        source_key=source_key,
+        processed_signal_type="reset",
+    )
+
+    captured = {}
+
+    class _Adapter(_OwnedTestAdapterMixin):
+        def instance_root(self):
+            return tmp_path / "instances" / "openclaw-main"
+
+        def parse_session_jsonl(self, path):
+            captured.setdefault("parsed_paths", []).append(str(path))
+            raw = Path(path).read_text(encoding="utf-8")
+            if "Baxter uses an orange linen notebook" in raw:
+                return "User: Baxter uses an orange linen notebook from Emília Rosa.\n\nAssistant: ACK"
+            return "User: Hello\n\nAssistant: Project docs update completed."
+
+        def is_subagent_session(self, session_id, transcript_path=None):
+            return False
+
+    set_adapter(_Adapter())
+    monkeypatch.setattr(extraction_daemon, "_get_owner_id", lambda: "owner-1")
+    monkeypatch.setattr(extraction_daemon, "_read_usage_totals", lambda: {})
+    monkeypatch.setattr(extraction_daemon, "_session_has_harvestable_subagents", lambda *args, **kwargs: False)
+    monkeypatch.setattr(extraction_daemon, "_warm_payload_embeddings", lambda _facts: {})
+    monkeypatch.setattr(notify_mod, "notify_memory_extraction", lambda **_kwargs: None)
+    monkeypatch.setattr(ingest_runtime, "run_session_logs_ingest", lambda **_kwargs: {"status": "indexed"})
+
+    def fake_extract_from_transcript(transcript, **kwargs):
+        captured["transcript"] = transcript
+        return {
+            "chunks_processed": 1,
+            "chunks_total": 1,
+            "unclassified_empty_payloads": 0,
+            "raw_facts": [{"text": "Baxter uses an orange linen notebook from Emília Rosa.", "category": "fact"}],
+            "facts": [],
+            "soul_snippets": {},
+            "journal_entries": {},
+            "project_logs": {},
+            "raw_snippets": {},
+            "raw_journal": {},
+            "raw_project_logs": {},
+            "carry_facts": [],
+        }
+
+    monkeypatch.setattr(extract_mod, "extract_from_transcript", fake_extract_from_transcript)
+    monkeypatch.setattr(
+        extract_mod,
+        "apply_extracted_payloads",
+        lambda *_args, **_kwargs: {
+            "facts_stored": 1,
+            "facts_skipped": 0,
+            "edges_created": 0,
+            "facts": [],
+            "snippets": {},
+            "journal": {},
+            "project_log_metrics": {},
+        },
+    )
+
+    try:
+        signal_path = extraction_daemon.write_signal(
+            signal_type="session_end",
+            session_id=session_id,
+            transcript_path=str(mirror_path),
+        )
+        signal_data = json.loads(signal_path.read_text(encoding="utf-8"))
+        signal_data["_signal_path"] = str(signal_path)
+
+        extraction_daemon.process_signal(signal_data)
+    finally:
+        reset_adapter()
+
+    assert str(mirror_path) in captured["parsed_paths"]
+    assert "Baxter uses an orange linen notebook" in captured["transcript"]
+    mirror_source_key = extraction_daemon._signal_source_cursor_key(session_id, str(mirror_path))
+    cursor = extraction_daemon.read_cursor(session_id, source_key=mirror_source_key)
+    assert cursor["line_offset"] == len(mirror_lines)
+    assert cursor["transcript_path"] == str(mirror_path)
+    assert cursor["processed_signal_type"] == "session_end"
+
+
 def test_process_signal_timeout_preserves_cursor_on_larger_preserved_mirror(
     monkeypatch,
     tmp_path,

@@ -5661,6 +5661,44 @@ def _iter_parsed_transcript_turns(transcript_text: str) -> List[Tuple[str, str]]
     return turns
 
 
+def _preserved_mirror_user_turns_are_covered_by_live(
+    adapter: Any,
+    live_transcript_path: str,
+    preserved_transcript_path: str,
+) -> bool:
+    """Return True only when the preserved mirror adds no user-authored turns."""
+    if adapter is None:
+        return False
+    parse_session_jsonl = getattr(adapter, "parse_session_jsonl", None)
+    if not callable(parse_session_jsonl):
+        return False
+    try:
+        live_turns = _iter_parsed_transcript_turns(parse_session_jsonl(Path(live_transcript_path)))
+        preserved_turns = _iter_parsed_transcript_turns(parse_session_jsonl(Path(preserved_transcript_path)))
+    except Exception as exc:
+        if _fail_hard_enabled():
+            raise
+        logger.warning(
+            "failed comparing preserved mirror user turns (%s -> %s): %s",
+            live_transcript_path,
+            preserved_transcript_path,
+            exc,
+        )
+        return False
+
+    live_user_turns = {
+        re.sub(r"\s+", " ", str(content or "")).strip()
+        for role, content in live_turns
+        if role == "user" and str(content or "").strip()
+    }
+    preserved_user_turns = [
+        re.sub(r"\s+", " ", str(content or "")).strip()
+        for role, content in preserved_turns
+        if role == "user" and str(content or "").strip()
+    ]
+    return all(turn in live_user_turns for turn in preserved_user_turns)
+
+
 def _is_timeout_startup_user_turn(
     text: str,
     startup_wrapper_predicate: Optional[Callable[[str], bool]] = None,
@@ -6546,10 +6584,11 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             and os.path.isfile(cursor_transcript)
             and not _is_daemon_preserved_session_transcript_path(cursor_transcript)
             and _is_daemon_preserved_session_transcript_path(str(transcript_path))
+            and _preserved_mirror_user_turns_are_covered_by_live(adapter, cursor_transcript, str(transcript_path))
         ):
             # OpenClaw can emit session_end against the preserved mirror while
-            # the live transcript is still active. Treat that as a checkpoint,
-            # not terminal relocation, so rolling state survives.
+            # the live transcript is still active. Treat it as a checkpoint
+            # only when every preserved user turn is already in the live file.
             logger.info(
                 "[%s] session %s: preserved transcript mirror changed while live transcript still exists "
                 "(%s -> %s, cursor_size=%d, current_size=%d); treating as active-session checkpoint",
