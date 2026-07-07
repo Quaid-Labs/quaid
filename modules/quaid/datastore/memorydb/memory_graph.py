@@ -11576,6 +11576,11 @@ def _run_recall_store_plan(
         final_rows,
         temporal_dimension=kwargs.get("temporal_dimension"),
     )
+    final_rows, exact_docs_text_dedup_meta = _dedupe_exact_docs_text_recall_rows(
+        final_rows,
+        merged,
+        limit=limit,
+    )
     if rrf_fusion_meta.get("enabled"):
         rrf_shadow_meta = dict(rrf_shadow_meta)
         rrf_shadow_meta["comparison_suppressed_reason"] = "active_rrf_fusion"
@@ -11628,6 +11633,8 @@ def _run_recall_store_plan(
         meta["preserved_graph_cluster_rows"] = preserved_graph_cluster_rows
     if session_conflict_meta.get("suppressed"):
         meta["session_source_conflict_suppression"] = session_conflict_meta
+    if exact_docs_text_dedup_meta.get("deduped"):
+        meta["exact_docs_text_dedup"] = exact_docs_text_dedup_meta
     if query_echo_session_meta.get("applied"):
         meta["query_echo_session_deferral"] = query_echo_session_meta
     if session_chunk_cap_meta.get("applied"):
@@ -15054,6 +15061,66 @@ def _is_first_order_session_source_row(row: Dict[str, Any]) -> bool:
 
 def _normalize_query_echo_text(value: Any) -> str:
     return re.sub(r"\s+", " ", unicodedata.normalize("NFKC", str(value or "")).casefold()).strip()
+
+
+def _recall_text_dedup_key(row: Dict[str, Any]) -> str:
+    return _normalize_query_echo_text((row or {}).get("text"))
+
+
+def _dedupe_exact_docs_text_recall_rows(
+    rows: List[Dict[str, Any]],
+    candidate_rows: List[Dict[str, Any]],
+    *,
+    limit: int,
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """Keep exact duplicate docs evidence from consuming multiple recall slots."""
+    top_limit = max(1, int(limit or 1))
+    selected = [row for row in list(rows or [])[:top_limit] if isinstance(row, dict)]
+    if not selected:
+        return rows, {"deduped": False}
+
+    seen_texts: set[str] = set()
+    out: List[Dict[str, Any]] = []
+    removed = 0
+    for row in selected:
+        if not _is_docs_recall_row(row):
+            out.append(row)
+            continue
+        text_key = _recall_text_dedup_key(row)
+        if text_key and text_key in seen_texts:
+            removed += 1
+            continue
+        if text_key:
+            seen_texts.add(text_key)
+        out.append(row)
+    if not removed:
+        return rows, {"deduped": False}
+
+    seen_rows = {_rrf_recall_row_identity(row) for row in out}
+    refilled = 0
+    for row in [*list(rows or [])[top_limit:], *list(candidate_rows or [])]:
+        if len(out) >= top_limit:
+            break
+        if not isinstance(row, dict):
+            continue
+        row_key = _rrf_recall_row_identity(row)
+        if row_key in seen_rows:
+            continue
+        text_key = _recall_text_dedup_key(row) if _is_docs_recall_row(row) else ""
+        if _is_docs_recall_row(row) and text_key and text_key in seen_texts:
+            continue
+        if text_key:
+            seen_texts.add(text_key)
+        seen_rows.add(row_key)
+        out.append(row)
+        refilled += 1
+
+    return out[:top_limit], {
+        "deduped": True,
+        "removed": removed,
+        "refilled": refilled,
+        "selected_count": len(selected),
+    }
 
 
 # Protocol role labels emitted by Quaid transcript parsers, not user-language content.

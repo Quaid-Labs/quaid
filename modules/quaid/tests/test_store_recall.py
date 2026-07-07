@@ -7271,11 +7271,51 @@ class TestSourceChunkStorage:
         assert len(rows) == 5
         row_ids = [row["id"] for row in rows]
         assert "answer-fact" in row_ids
+        assert "docs-duplicate" not in row_ids
         echo_indexes = [idx for idx, row_id in enumerate(row_ids) if str(row_id).startswith("echo-")]
         assert echo_indexes
         assert row_ids.index("answer-fact") < min(echo_indexes)
+        assert meta["exact_docs_text_dedup"]["deduped"] is True
+        assert meta["exact_docs_text_dedup"]["removed"] == 1
         assert meta["query_echo_session_deferral"]["applied"] is True
         assert meta["query_echo_session_deferral"]["deferred"] == 2
+
+    def test_exact_docs_text_recall_dedup_preserves_distinct_topical_rows(self):
+        import datastore.memorydb.memory_graph as mg
+
+        rows = [
+            {
+                "id": "project-note",
+                "text": "PROJECT.log cedar setup note",
+                "category": "docs",
+                "similarity": 1.0,
+            },
+            {
+                "id": "project-note-copy",
+                "text": "PROJECT.log cedar setup note",
+                "category": "docs",
+                "similarity": 0.99,
+            },
+            {
+                "id": "same-topic-distinct",
+                "text": "PROJECT.log cedar setup note includes the brass clamp.",
+                "category": "docs",
+                "similarity": 0.98,
+            },
+        ]
+        fill_row = {
+            "id": "fill",
+            "text": "Noor keeps the cedar setup note in the field binder.",
+            "category": "fact",
+            "similarity": 0.70,
+        }
+
+        ordered, meta = mg._dedupe_exact_docs_text_recall_rows(rows, [*rows, fill_row], limit=3)
+
+        assert [row["id"] for row in ordered] == ["project-note", "same-topic-distinct", "fill"]
+        assert meta["deduped"] is True
+        assert meta["removed"] == 1
+        assert meta["refilled"] == 1
 
     def test_query_echo_session_deferral_preserves_non_echo_session_order(self):
         import datastore.memorydb.memory_graph as mg
