@@ -2768,6 +2768,49 @@ describe("QuaidFacade", () => {
     await rm(workspace, { recursive: true, force: true });
   });
 
+  it("prepareAutoInjectionContext dedupes docs and defers query-echo session chunks", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "quaid-facade-auto-inject-evidence-order-"));
+    await mkdir(path.join(workspace, "runtime", "injection"), { recursive: true });
+    const facade = createQuaidFacade(makeMockDeps({ workspace }));
+    const query = "What is Noor's cedar ritual?";
+    const baseMemories = [
+      { id: "p1", text: "PROJECT.log cedar setup note", category: "project", similarity: 1.0, via: "project", sourceType: "docs" },
+      { id: "p1-duplicate", text: "PROJECT.log cedar setup note", category: "project", similarity: 1.0, via: "project", sourceType: "docs" },
+      { id: "p2", text: "PROJECT.md cedar overview note", category: "project", similarity: 0.99, via: "project", sourceType: "docs" },
+      {
+        id: "chunk-1",
+        text: "[session_chunk] User: What is Noor's cedar ritual?\nAssistant: It might be the gym schedule.",
+        category: "session_chunk",
+        sourceType: "session_chunk",
+        via: "session_chunks",
+        similarity: 0.95,
+      },
+      {
+        id: "chunk-2",
+        text: "[session_chunk] User: What is Noor's cedar ritual?\nAssistant: I said it was the older schedule.",
+        category: "session_chunk",
+        sourceType: "session_chunk",
+        via: "session_chunks",
+        similarity: 0.94,
+      },
+      { id: "fact", text: "Noor's cedar ritual is polishing lantern hooks.", category: "preference", similarity: 0.86, via: "vector" },
+    ];
+
+    const result = facade.prepareAutoInjectionContext({
+      allMemories: baseMemories,
+      eventMessages: [{ role: "user", content: query, timestamp: Date.now() }],
+      context: { sessionId: "sess-auto-evidence-order" },
+      existingPrependContext: "",
+      injectLimit: 5,
+      maxInjectionIdsPerSession: 100,
+    });
+
+    expect(result).toBeTruthy();
+    expect(result?.toInject.map((m) => m.id)).toEqual(["p1", "p2", "fact", "chunk-1", "chunk-2"]);
+    expect(result?.toInject.filter((m) => m.text === "PROJECT.log cedar setup note")).toHaveLength(1);
+    await rm(workspace, { recursive: true, force: true });
+  });
+
   it("formatRecallToolResponse returns grouped text and source breakdown", () => {
     const facade = createQuaidFacade(makeMockDeps());
     const out = facade.formatRecallToolResponse([
