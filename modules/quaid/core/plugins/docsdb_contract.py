@@ -59,16 +59,16 @@ def _valid_linked_project_instances(entry: Dict[str, Any]) -> list[str]:
     return sorted(set(linked))
 
 
-def _project_docs_monitor_skip_reason(name: str, entry: Dict[str, Any]) -> str:
+def _project_docs_monitor_skip_reason(name: str, entry: Dict[str, Any]) -> tuple[str, int]:
     if str(os.environ.get("QUAID_INSTANCE", "") or "").strip():
-        return ""
+        return "", 0
     linked = _valid_linked_project_instances(entry)
     if len(linked) == 1:
-        return ""
+        return "", len(linked)
     return (
         "cannot queue host-wide project-docs monitor request without a resolvable "
         f"QUAID_INSTANCE (valid_linked_instances={len(linked)}: {', '.join(linked) or 'none'})"
-    )
+    ), len(linked)
 
 
 def _queue_project_docs_monitor_requests(*, reason: str, requested_by: str) -> Dict[str, Any]:
@@ -112,9 +112,10 @@ def _queue_project_docs_monitor_requests(*, reason: str, requested_by: str) -> D
     for name in names:
         try:
             entry = projects.get(name) or {}
-            skip_reason = _project_docs_monitor_skip_reason(name, entry)
+            skip_reason, linked_count = _project_docs_monitor_skip_reason(name, entry)
             if skip_reason:
-                logger.info("Skipping project-docs monitor request for %s: %s", name, skip_reason)
+                log = logger.warning if linked_count == 0 else logger.info
+                log("Skipping project-docs monitor request for %s: %s", name, skip_reason)
                 result["skipped_projects"].append({"name": name, "reason": skip_reason})
                 continue
             request = project_docs.request_update(name, reason=reason, requested_by=requested_by)

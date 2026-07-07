@@ -497,6 +497,38 @@ def test_project_docs_monitor_skips_ambiguous_host_wide_projects(monkeypatch, ca
     assert "Skipping project-docs monitor request for shared" in caplog.text
 
 
+def test_project_docs_monitor_warns_for_zero_linked_host_wide_projects(monkeypatch, caplog):
+    from core.plugins import docsdb_contract
+
+    requested: list[str] = []
+
+    monkeypatch.delenv("QUAID_SUPERVISOR_DISABLE", raising=False)
+    monkeypatch.delenv("QUAID_INSTANCE", raising=False)
+    monkeypatch.setenv("QUAID_SUPERVISOR_PID", str(os.getpid()))
+    monkeypatch.setattr("core.project_registry.list_projects", lambda: {"orphaned": {"instances": []}})
+    monkeypatch.setattr(
+        "core.project_docs.request_update",
+        lambda name, *, reason, requested_by: requested.append(name) or {"project": name, "request_id": f"req-{name}"},
+    )
+
+    with caplog.at_level(logging.WARNING, logger="core.plugins.docsdb_contract"):
+        result = docsdb_contract._queue_project_docs_monitor_requests(reason="janitor", requested_by="pytest")
+
+    assert requested == []
+    assert result["requested"] == 0
+    assert result["errors"] == []
+    assert result["skipped_projects"] == [
+        {
+            "name": "orphaned",
+            "reason": (
+                "cannot queue host-wide project-docs monitor request without a resolvable "
+                "QUAID_INSTANCE (valid_linked_instances=0: none)"
+            ),
+        }
+    ]
+    assert "Skipping project-docs monitor request for orphaned" in caplog.text
+
+
 def test_project_docs_monitor_uses_ambient_instance_for_multi_linked_projects(monkeypatch):
     from core.plugins import docsdb_contract
 
