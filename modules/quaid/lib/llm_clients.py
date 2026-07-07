@@ -55,6 +55,10 @@ class ProviderUnavailableError(Exception):
     """
 
 
+class ProviderConfigError(RuntimeError):
+    """Raised when configured LLM model/provider access is invalid."""
+
+
 def _is_provider_config_error(exc: Optional[Exception]) -> bool:
     if exc is None:
         return False
@@ -933,13 +937,14 @@ def call_llm(system_prompt: str, user_message: str,
             error=str(last_error),
         )
         err_type = type(last_error).__name__ if last_error is not None else "UnknownError"
-        raise RuntimeError(
+        error_cls = ProviderConfigError if _is_provider_config else RuntimeError
+        raise error_cls(
             "LLM call failed after retries while failHard is enabled "
             f"(provider={provider_name}, tier={resolved_tier}, model={model}, "
             f"error_type={err_type}, error={last_error})."
         ) from last_error
     if _is_provider_config:
-        raise RuntimeError(
+        raise ProviderConfigError(
             f"Quaid could not access its {resolved_tier} language model provider "
             f"({provider_name}, model={model}). Error: {_short_error_text(last_error)}"
         ) from last_error

@@ -48,6 +48,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 # Ensure plugin root is importable (B060)
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from lib.llm_clients import ProviderConfigError as _ProviderConfigError
 from lib.llm_clients import ProviderUnavailableError as _ProviderUnavailableError
 
 logger = logging.getLogger("quaid.daemon")
@@ -9384,6 +9385,12 @@ def daemon_loop(poll_interval: float = 5.0, idle_check_interval: float = 300.0) 
             for sig in signals:
                 try:
                     process_signal(sig)
+                except _ProviderConfigError as pce:
+                    logger.error(
+                        "Provider configuration error during signal processing - will retry after config repair "
+                        "(signal preserved; notice queued): %s",
+                        pce,
+                    )
                 except _ProviderUnavailableError as pue:
                     # Provider is confirmed down (retryable HTTP codes exhausted).
                     # Default: log clearly and let the natural retry loop handle it —
@@ -9560,6 +9567,9 @@ def flush_pending_signals(
                 sig_path = Path(sig_path_raw) if sig_path_raw else None
                 try:
                     process_signal(sig)
+                except _ProviderConfigError as exc:
+                    summary["errors"] = int(summary["errors"]) + 1
+                    logger.error("flush signal provider config error; signal preserved: %s", exc)
                 except _ProviderUnavailableError as exc:
                     summary["errors"] = int(summary["errors"]) + 1
                     logger.error("flush signal provider unavailable; signal preserved: %s", exc)
