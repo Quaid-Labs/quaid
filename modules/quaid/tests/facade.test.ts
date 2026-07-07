@@ -2811,6 +2811,36 @@ describe("QuaidFacade", () => {
     await rm(workspace, { recursive: true, force: true });
   });
 
+  it("prepareAutoInjectionContext preserves non-echo session chunk ordering", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "quaid-facade-auto-inject-session-order-"));
+    await mkdir(path.join(workspace, "runtime", "injection"), { recursive: true });
+    const facade = createQuaidFacade(makeMockDeps({ workspace }));
+    const baseMemories = [
+      {
+        id: "session-context",
+        text: "[session_chunk] User: Noor said the cedar cabinet key is in the kiln drawer.",
+        category: "session_chunk",
+        sourceType: "session_chunk",
+        via: "session_chunks",
+        similarity: 0.94,
+      },
+      { id: "fact", text: "Noor keeps a cedar cabinet key.", category: "fact", similarity: 0.86, via: "vector" },
+    ];
+
+    const result = facade.prepareAutoInjectionContext({
+      allMemories: baseMemories,
+      eventMessages: [{ role: "user", content: "Where is Noor's cedar key?", timestamp: Date.now() }],
+      context: { sessionId: "sess-auto-session-order" },
+      existingPrependContext: "",
+      injectLimit: 2,
+      maxInjectionIdsPerSession: 100,
+    });
+
+    expect(result).toBeTruthy();
+    expect(result?.toInject.map((m) => m.id)).toEqual(["session-context", "fact"]);
+    await rm(workspace, { recursive: true, force: true });
+  });
+
   it("formatRecallToolResponse returns grouped text and source breakdown", () => {
     const facade = createQuaidFacade(makeMockDeps());
     const out = facade.formatRecallToolResponse([
