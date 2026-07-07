@@ -47,6 +47,30 @@ def _supervisor_parent_pid() -> int | None:
         return None
 
 
+def _valid_linked_project_instances(entry: Dict[str, Any]) -> list[str]:
+    from lib.instance import validate_instance_id
+
+    linked: list[str] = []
+    for raw in list(entry.get("instances") or []):
+        try:
+            linked.append(validate_instance_id(str(raw or "").strip()))
+        except Exception as exc:
+            logger.debug("Skipping invalid linked project instance %r: %s", raw, exc)
+    return sorted(set(linked))
+
+
+def _project_docs_monitor_skip_reason(name: str, entry: Dict[str, Any]) -> str:
+    if str(os.environ.get("QUAID_INSTANCE", "") or "").strip():
+        return ""
+    linked = _valid_linked_project_instances(entry)
+    if len(linked) == 1:
+        return ""
+    return (
+        "cannot queue host-wide project-docs monitor request without a resolvable "
+        f"QUAID_INSTANCE (valid_linked_instances={len(linked)}: {', '.join(linked) or 'none'})"
+    )
+
+
 def _queue_project_docs_monitor_requests(*, reason: str, requested_by: str) -> Dict[str, Any]:
     """Queue async project-docs monitor refresh requests for registered projects.
 
@@ -80,12 +104,19 @@ def _queue_project_docs_monitor_requests(*, reason: str, requested_by: str) -> D
         "errors": [],
         "supervisor_pid": None,
         "skipped": False,
+        "skipped_projects": [],
     }
     if not names:
         return result
 
     for name in names:
         try:
+            entry = projects.get(name) or {}
+            skip_reason = _project_docs_monitor_skip_reason(name, entry)
+            if skip_reason:
+                logger.info("Skipping project-docs monitor request for %s: %s", name, skip_reason)
+                result["skipped_projects"].append({"name": name, "reason": skip_reason})
+                continue
             request = project_docs.request_update(name, reason=reason, requested_by=requested_by)
             result["requested"] = int(result["requested"]) + 1
             result["projects"].append({"name": name, "request_id": request.get("request_id")})
@@ -133,8 +164,10 @@ def run_project_docs_monitor_maintenance(ctx: Any, result_factory: Any) -> Any:
         return result
 
     errors = list(queued.get("errors") or [])
+    skipped_projects = list(queued.get("skipped_projects") or [])
     result.metrics["project_docs_update_requests"] = int(queued.get("requested") or 0)
     result.metrics["project_docs_update_request_errors"] = len(errors)
+    result.metrics["project_docs_update_requests_skipped"] = len(skipped_projects)
     result.data["supervisor_pid"] = queued.get("supervisor_pid")
     result.data["project_docs_monitor"] = queued
     if errors:

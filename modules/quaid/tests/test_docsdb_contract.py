@@ -458,6 +458,69 @@ def test_project_docs_monitor_uses_supervisor_parent_without_reensure(monkeypatc
     assert result["errors"] == []
 
 
+def test_project_docs_monitor_skips_ambiguous_host_wide_projects(monkeypatch, caplog):
+    from core.plugins import docsdb_contract
+
+    requested: list[str] = []
+
+    monkeypatch.delenv("QUAID_SUPERVISOR_DISABLE", raising=False)
+    monkeypatch.delenv("QUAID_INSTANCE", raising=False)
+    monkeypatch.setenv("QUAID_SUPERVISOR_PID", str(os.getpid()))
+    monkeypatch.setattr(
+        "core.project_registry.list_projects",
+        lambda: {
+            "shared": {"instances": ["openclaw-main", "codex-cdx-livetest"]},
+            "solo": {"instances": ["openclaw-main"]},
+        },
+    )
+    monkeypatch.setattr(
+        "core.project_docs.request_update",
+        lambda name, *, reason, requested_by: requested.append(name) or {"project": name, "request_id": f"req-{name}"},
+    )
+
+    with caplog.at_level(logging.INFO, logger="core.plugins.docsdb_contract"):
+        result = docsdb_contract._queue_project_docs_monitor_requests(reason="janitor", requested_by="pytest")
+
+    assert requested == ["solo"]
+    assert result["requested"] == 1
+    assert result["projects"] == [{"name": "solo", "request_id": "req-solo"}]
+    assert result["errors"] == []
+    assert result["skipped_projects"] == [
+        {
+            "name": "shared",
+            "reason": (
+                "cannot queue host-wide project-docs monitor request without a resolvable "
+                "QUAID_INSTANCE (valid_linked_instances=2: codex-cdx-livetest, openclaw-main)"
+            ),
+        }
+    ]
+    assert "Skipping project-docs monitor request for shared" in caplog.text
+
+
+def test_project_docs_monitor_uses_ambient_instance_for_multi_linked_projects(monkeypatch):
+    from core.plugins import docsdb_contract
+
+    requested: list[str] = []
+
+    monkeypatch.delenv("QUAID_SUPERVISOR_DISABLE", raising=False)
+    monkeypatch.setenv("QUAID_INSTANCE", "openclaw-main")
+    monkeypatch.setenv("QUAID_SUPERVISOR_PID", str(os.getpid()))
+    monkeypatch.setattr(
+        "core.project_registry.list_projects",
+        lambda: {"shared": {"instances": ["openclaw-main", "codex-cdx-livetest"]}},
+    )
+    monkeypatch.setattr(
+        "core.project_docs.request_update",
+        lambda name, *, reason, requested_by: requested.append(name) or {"project": name, "request_id": "req-shared"},
+    )
+
+    result = docsdb_contract._queue_project_docs_monitor_requests(reason="janitor", requested_by="pytest")
+
+    assert requested == ["shared"]
+    assert result["requested"] == 1
+    assert result["skipped_projects"] == []
+
+
 def test_project_docs_monitor_materializes_queued_projects(tmp_path, monkeypatch):
     from core.plugins import docsdb_contract
     from core.project_registry import project_exists_raw
