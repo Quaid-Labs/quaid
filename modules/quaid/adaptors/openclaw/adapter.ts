@@ -6862,6 +6862,22 @@ notify_user(${JSON.stringify(message)})
         });
         return result;
       };
+      const promptModelConfigSessionKey = String(
+        event?.sessionKey || ctx?.sessionKey || event?.targetSessionKey || ctx?.targetSessionKey || "",
+      ).trim();
+      let promptModelConfigValidationStarted = false;
+      let promptModelConfigValidationNotice = "";
+      const validatePromptModelConfigForTurn = async (): Promise<string> => {
+        if (promptModelConfigValidationStarted) {
+          return promptModelConfigValidationNotice;
+        }
+        promptModelConfigValidationStarted = true;
+        promptModelConfigValidationNotice = await validatePromptModelConfigIfChanged(
+          promptAgentLabel,
+          promptModelConfigSessionKey,
+        );
+        return promptModelConfigValidationNotice;
+      };
       if (isSystemEnabled("projects")) {
         try {
           const identityContext = await promptFacade.injectProjectContext(undefined, {
@@ -6890,6 +6906,18 @@ notify_user(${JSON.stringify(message)})
           promptInstanceId,
         );
         if (refreshedIdentityContext) {
+          if (shouldValidatePromptModelConfigForTurn(isAutoInjectEnabled(getMemoryConfig()), promptAgentLabel)) {
+            const modelConfigNotice = await validatePromptModelConfigForTurn();
+            if (modelConfigNotice) {
+              const providerNoticeContext = formatImmediateProviderNoticeContext(modelConfigNotice);
+              if (providerNoticeContext) {
+                prependContextParts.unshift(providerNoticeContext);
+              }
+              appendSystemContext = appendSystemContext
+                ? `${providerNoticeContext || modelConfigNotice}\n\n${appendSystemContext}`
+                : (providerNoticeContext || modelConfigNotice);
+            }
+          }
           return emitIdentityOnlyRefresh(refreshedIdentityContext, sessionKeyDocs);
         }
         writeHookTrace("hook.docs_gate_check", {
@@ -7003,23 +7031,6 @@ notify_user(${JSON.stringify(message)})
         }
         return result;
       };
-      const promptModelConfigSessionKey = String(
-        event?.sessionKey || ctx?.sessionKey || event?.targetSessionKey || ctx?.targetSessionKey || "",
-      ).trim();
-      let promptModelConfigValidationStarted = false;
-      let promptModelConfigValidationNotice = "";
-      const validatePromptModelConfigForTurn = async (): Promise<string> => {
-        if (promptModelConfigValidationStarted) {
-          return promptModelConfigValidationNotice;
-        }
-        promptModelConfigValidationStarted = true;
-        promptModelConfigValidationNotice = await validatePromptModelConfigIfChanged(
-          promptAgentLabel,
-          promptModelConfigSessionKey,
-        );
-        return promptModelConfigValidationNotice;
-      };
-
       try {
         const autoInjectEnabled = isAutoInjectEnabled(getMemoryConfig());
         // Clear stale provider deferred notices before the relay drain can

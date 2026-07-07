@@ -459,6 +459,12 @@ describe("openclaw deferred notices", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () => ({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      text: async () => "OK",
+    } as any));
 
     const plugin = await loadAdapterWithHomes(
       fixture.hiddenHome,
@@ -562,6 +568,116 @@ describe("openclaw deferred notices", () => {
     expect(traceEvents).not.toContain("hook.before_prompt_build.query_extracted");
     expect(traceEvents).not.toContain("hook.before_prompt_build.injection_applied");
 
+    fetchMock.mockRestore();
+    warn.mockRestore();
+    log.mockRestore();
+    error.mockRestore();
+    removeTempDir(fixture.home);
+  });
+
+  it("validates provider config before identity-only refresh returns", async () => {
+    vi.stubEnv("QUAID_DISABLE_NOTIFICATIONS", "1");
+    const fixture = seedDeferredNoticeFixture(
+      "quaid-oc-identity-refresh-provider-home-",
+      "openclaw-main",
+      "[Quaid] identity provider fixture",
+    );
+    const configPath = path.join(fixture.hiddenHome, "instances", "openclaw-main", "config.json");
+    const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+    writeJson(configPath, {
+      ...config,
+      systems: { memory: true, projects: true },
+      retrieval: { ...config.retrieval, autoInject: true },
+      models: {
+        ...config.models,
+        fastReasoning: "invalid-model-identity-refresh",
+        deepReasoning: "invalid-model-identity-refresh",
+      },
+    });
+    const identityDir = path.join(fixture.visibleHome, "instances", "openclaw-main");
+    fs.mkdirSync(identityDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(identityDir, "USER.md"),
+      "# USER\n\nThe office plant is named Bartholomew. It is a fiddle-leaf fig.\n",
+      "utf8",
+    );
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (_url: any, init: any) => {
+      expect(String(init?.headers?.["x-openclaw-model"] || "")).toContain("invalid-model-identity-refresh");
+      return {
+        ok: false,
+        status: 404,
+        statusText: "Not Found",
+        text: async () => JSON.stringify({ error: { message: "model not found" } }),
+      } as any;
+    });
+
+    const plugin = await loadAdapterWithHomes(
+      fixture.hiddenHome,
+      fixture.visibleHome,
+      fixture.openClawConfigPath,
+      "openclaw-main",
+    );
+    const api = makeFakeApi();
+    plugin.register(api as any);
+
+    const beforePromptBuildCall = api.on.mock.calls.find((call: any[]) =>
+      call?.[0] === "before_prompt_build" && call?.[2]?.name === "memory-injection-prompt-build"
+    );
+    const beforeCompactionCall = api.on.mock.calls.find((call: any[]) =>
+      call?.[0] === "before_compaction" && call?.[2]?.name === "compaction-memory-extraction"
+    );
+    expect(beforePromptBuildCall).toBeTruthy();
+    expect(beforeCompactionCall).toBeTruthy();
+
+    const sessionId = "session-identity-provider-error";
+    const sessionKey = "agent:main:matrix:identity-provider-error";
+    await beforeCompactionCall?.[1](
+      { messages: [], sessionId, sessionKey },
+      { sessionId, sessionKey, agentId: "main", trigger: "compact" },
+    );
+
+    const result = await beforePromptBuildCall?.[1](
+      {
+        prependContext: "",
+        prompt: "What's the office plant named?",
+        body: "What's the office plant named?",
+        cleanedBody: "What's the office plant named?",
+        messages: [{ role: "user", content: "What's the office plant named?" }],
+        sessionId,
+        sessionKey,
+      },
+      {
+        sessionId,
+        sessionKey,
+        agentId: "main",
+        trigger: "user",
+      },
+    );
+
+    const combined = `${String(result?.prependContext || "")}\n${combinedSystemContext(result)}`;
+    expect(fetchMock).toHaveBeenCalled();
+    expect(combined).toContain("Bartholomew");
+    expect(combined).toContain("[Quaid error] [provider]");
+    expect(combined).toContain("active provider/configuration error");
+    expect(String(result?.prependContext || "")).not.toContain("<injected_memories>");
+
+    const traceRows = readHookTraceEvents(fixture.hiddenHome, "openclaw-main");
+    const traceEvents = traceRows.map((row) => String(row.event || ""));
+    expect(traceEvents).toContain("hook.before_prompt_build.model_config_error");
+    expect(traceRows).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        event: "hook.before_prompt_build.context_emitted",
+        context_mode: "openclaw_identity_refresh",
+        recall_count: 0,
+      }),
+    ]));
+    expect(traceEvents).not.toContain("hook.before_prompt_build.injection_applied");
+
+    fetchMock.mockRestore();
     warn.mockRestore();
     log.mockRestore();
     error.mockRestore();

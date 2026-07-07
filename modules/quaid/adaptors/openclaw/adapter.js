@@ -5621,6 +5621,22 @@ ${refreshedIdentityContext}` : refreshedIdentityContext
         });
         return result;
       };
+      const promptModelConfigSessionKey = String(
+        event?.sessionKey || ctx?.sessionKey || event?.targetSessionKey || ctx?.targetSessionKey || ""
+      ).trim();
+      let promptModelConfigValidationStarted = false;
+      let promptModelConfigValidationNotice = "";
+      const validatePromptModelConfigForTurn = async () => {
+        if (promptModelConfigValidationStarted) {
+          return promptModelConfigValidationNotice;
+        }
+        promptModelConfigValidationStarted = true;
+        promptModelConfigValidationNotice = await validatePromptModelConfigIfChanged(
+          promptAgentLabel,
+          promptModelConfigSessionKey
+        );
+        return promptModelConfigValidationNotice;
+      };
       if (isSystemEnabled2("projects")) {
         try {
           const identityContext = await promptFacade.injectProjectContext(void 0, {
@@ -5646,6 +5662,18 @@ ${identityContext}` : identityContext;
           promptInstanceId
         );
         if (refreshedIdentityContext) {
+          if (shouldValidatePromptModelConfigForTurn(isAutoInjectEnabled(getMemoryConfig2()), promptAgentLabel)) {
+            const modelConfigNotice = await validatePromptModelConfigForTurn();
+            if (modelConfigNotice) {
+              const providerNoticeContext = formatImmediateProviderNoticeContext(modelConfigNotice);
+              if (providerNoticeContext) {
+                prependContextParts.unshift(providerNoticeContext);
+              }
+              appendSystemContext = appendSystemContext ? `${providerNoticeContext || modelConfigNotice}
+
+${appendSystemContext}` : providerNoticeContext || modelConfigNotice;
+            }
+          }
           return emitIdentityOnlyRefresh(refreshedIdentityContext, sessionKeyDocs);
         }
         writeHookTrace("hook.docs_gate_check", {
@@ -5739,22 +5767,6 @@ ${projectPlacementContext}` : projectPlacementContext;
           if (result.appendSystemContext) event.appendSystemContext = result.appendSystemContext;
         }
         return result;
-      };
-      const promptModelConfigSessionKey = String(
-        event?.sessionKey || ctx?.sessionKey || event?.targetSessionKey || ctx?.targetSessionKey || ""
-      ).trim();
-      let promptModelConfigValidationStarted = false;
-      let promptModelConfigValidationNotice = "";
-      const validatePromptModelConfigForTurn = async () => {
-        if (promptModelConfigValidationStarted) {
-          return promptModelConfigValidationNotice;
-        }
-        promptModelConfigValidationStarted = true;
-        promptModelConfigValidationNotice = await validatePromptModelConfigIfChanged(
-          promptAgentLabel,
-          promptModelConfigSessionKey
-        );
-        return promptModelConfigValidationNotice;
       };
       try {
         const autoInjectEnabled = isAutoInjectEnabled(getMemoryConfig2());
