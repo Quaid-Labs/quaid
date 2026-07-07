@@ -232,6 +232,7 @@ def test_start_worker_env_uses_pending_request_runtime_context(project_env, monk
         def __init__(self, args, **kwargs):
             captured["args"] = list(args)
             captured["env"] = dict(kwargs.get("env") or {})
+            captured["cwd"] = kwargs.get("cwd")
 
     monkeypatch.setattr(project_docs.subprocess, "Popen", _FakePopen)
     monkeypatch.setattr(project_docs, "_wait_for_pid", lambda *_args, **_kwargs: 4242)
@@ -239,6 +240,11 @@ def test_start_worker_env_uses_pending_request_runtime_context(project_env, monk
     assert project_docs.start_worker("demo") == 4242
 
     assert captured["args"][-2:] == ["run", "demo"]
+    worker_script = Path(captured["args"][1])
+    assert worker_script.is_absolute()
+    assert worker_script.name == "project_docs_worker.py"
+    assert str(worker_script.resolve()) == captured["args"][1]
+    assert captured["cwd"] == str(worker_script.parent)
     env = captured["env"]
     assert env["QUAID_HOME"] == str(tmp_path)
     assert env["QUAID_INSTANCE"] == "codex-private-tmp-cdx-livetest"

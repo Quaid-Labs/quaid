@@ -2374,7 +2374,7 @@ def start_worker(project: str) -> int:
         _worker_dir().mkdir(parents=True, exist_ok=True)
         clear_worker_exit(name)
         log_path = worker_log_path(name)
-        script = Path(__file__).parent / "project_docs_worker.py"
+        script = (Path(__file__).parent / "project_docs_worker.py").resolve()
         entry = get_project_entry(name)
         request = read_update_request(name)
         env = scrub_background_process_env(dict(os.environ))
@@ -2396,6 +2396,7 @@ def start_worker(project: str) -> int:
                 stderr=log_fh,
                 start_new_session=False,
                 env=env,
+                cwd=str(script.parent),
             )
         try:
             return _wait_for_pid(
