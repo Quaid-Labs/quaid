@@ -674,6 +674,13 @@ instance is `codex-cdx-livetest-b89008986acd` after resolving macOS `/tmp` to
 that creates a setup-only ghost silo while hooks write to the canonical hashed
 runtime silo.
 
+**CDX M1 lifecycle caveat:** CDX LIFECYCLE is `/new`, NOT `/clear`. Sending `/clear`
+in the CDX CLI does not create a new rollout file or session_end signal — the canary
+will never be extracted from the below-threshold session. After sending `/new`, also
+send one follow-up message to trigger `hook-inject` and fire `check_session_transition`.
+If `/new` hangs (pane wedge), restart the Codex CLI process via `tmux kill-window` +
+relaunch via SSH. See TESTER.CDX.md for the full CDX lifecycle explanation.
+
 **CC async extraction:** CC extraction fires asynchronously after `/exit` (not
 inline like OC). Tell CC testers to wait **at least 2 minutes** after exiting a
 session before checking recall or the DB. Checking immediately after `/exit` will
@@ -1064,6 +1071,26 @@ Run after all three platforms reach M16 PASS. Full procedure in
 `tests/livetest/livetest-guide/` under "Cross-Platform Project Linking Test."
 
 XP tests that all three platforms can share a project and recall each other's docs.
+
+---
+
+## Step 5b — GLOBAL (Janitor Review Cycle)
+
+Run after ALL lanes complete XP. CDX is the sole apply lane; CC and OC stand down.
+Full procedure in `tests/livetest/livetest-guide/GLOBAL.md`.
+
+**🔥 GLOBAL apply command pitfall:** The apply command in the GLOBAL brief Step 4 MUST be:
+```bash
+ssh REMOTE_HOST "QUAID_HOME=~/.quaid QUAID_INSTANCE=CDX_INSTANCE ~/.quaid/plugins/quaid/quaid janitor --task all --apply --approve"
+```
+
+Do NOT omit `--apply --approve`. Using `quaid janitor --task all` alone (without the flags)
+only queues a supervisor dry-run; the actual LLM review pass never runs and the tester sees
+all-zeros stats in stdout. The tester must then poll `quaid janitor --status` or tail
+`~/.quaid/instances/*/logs/janitor.log` for `janitor_complete` to get actual results.
+
+The apply runs in the background and returns quickly with a request ID. Budget 5–30 min
+for the background apply to complete depending on pending row volume.
 
 ---
 
