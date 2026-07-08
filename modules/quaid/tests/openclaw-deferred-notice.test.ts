@@ -799,6 +799,19 @@ describe("openclaw deferred notices", () => {
     expect(fs.existsSync(preservedTranscript)).toBe(true);
     expect(fs.readFileSync(preservedTranscript, "utf8")).toContain(query);
 
+    const duplicateStartResult = await beforeAgentStartHandler(startEvent, {
+      sessionId,
+      sessionKey,
+      agentId: "main",
+      trigger: "user",
+    });
+    expect(String(duplicateStartResult?.prependContext || "")).toContain("Baratza Encore");
+    const preservedLinesAfterDuplicate = fs.readFileSync(preservedTranscript, "utf8")
+      .split(/\r?\n/)
+      .filter((line) => line.trim());
+    expect(preservedLinesAfterDuplicate.filter((line) => line.includes(query))).toHaveLength(1);
+    expect(readExtractionSignals(fixture.hiddenHome, "openclaw-main")).toHaveLength(1);
+
     const beforePromptBuildHandler = beforePromptBuildCall?.[1];
     const promptResult = await beforePromptBuildHandler(
       {
@@ -819,6 +832,7 @@ describe("openclaw deferred notices", () => {
 
     const traceEvents = readHookTraceEvents(fixture.hiddenHome, "openclaw-main").map((row) => String(row.event || ""));
     expect(traceEvents).toContain("hook.before_agent_start.embedded_prompt_build_fallback");
+    expect(traceEvents).toContain("hook.before_agent_start.embedded_prompt_build_fallback_skipped");
     expect(traceEvents).toContain("hook.before_agent_start.embedded_fallback_transcript_preserved");
     expect(traceEvents).toContain("hook.before_prompt_build.embedded_fallback_duplicate_skip");
     expect(traceEvents.filter((eventName) => eventName === "hook.before_prompt_build.injection_applied")).toHaveLength(1);

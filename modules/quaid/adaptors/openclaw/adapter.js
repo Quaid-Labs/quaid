@@ -5053,8 +5053,10 @@ const quaidPlugin = {
     const identityOnlyRefreshResults = /* @__PURE__ */ new WeakSet();
     const autoInjectedMemoryResults = /* @__PURE__ */ new WeakSet();
     const embeddedPromptBuildFallbackTurns = /* @__PURE__ */ new Map();
+    const embeddedPromptBuildFallbackStartRuns = /* @__PURE__ */ new Map();
     const embeddedFallbackLifecycleSignalSizes = /* @__PURE__ */ new Map();
     const EMBEDDED_PROMPT_BUILD_FALLBACK_TTL_MS = 3e4;
+    const EMBEDDED_PROMPT_BUILD_FALLBACK_START_TTL_MS = 5e3;
     const readOptionalOpenClawDeviceJson = (filePath) => {
       if (!fs.existsSync(filePath)) return {};
       try {
@@ -5110,6 +5112,44 @@ const quaidPlugin = {
       const selected = selectAutoInjectQuery(event, lastUserMessageQuery, Date.now(), sessionId);
       return _autoInjectTurnKey(agentLabel, selected.query, sessionScope);
     };
+    const embeddedPromptBuildFallbackSelection = (event, ctx) => {
+      const sessionId = String(event?.sessionId || ctx?.sessionId || ctx?.session?.id || "").trim();
+      const selected = selectAutoInjectQuery(event, lastUserMessageQuery, Date.now(), sessionId);
+      return {
+        userText: scrubAutoInjectQuery(selected.rawPrompt || selected.query || "").trim(),
+        source: String(selected.source || "")
+      };
+    };
+    const embeddedPromptBuildFallbackStartEventKey = (agentLabel, event, ctx) => {
+      const sessionId = String(event?.sessionId || ctx?.sessionId || ctx?.session?.id || "").trim();
+      const sessionScope = firstNonEmptyString(
+        event?.sessionKey,
+        ctx?.sessionKey,
+        event?.targetSessionKey,
+        ctx?.targetSessionKey,
+        sessionId
+      );
+      const { userText } = embeddedPromptBuildFallbackSelection(event, ctx);
+      return userText ? _autoInjectTurnKey(agentLabel, userText, sessionScope) : "";
+    };
+    const getEmbeddedPromptBuildFallbackStartRun = (eventKey) => {
+      const key = String(eventKey || "").trim();
+      if (!key) return null;
+      const nowMs = Date.now();
+      for (const [existingKey, run] of embeddedPromptBuildFallbackStartRuns.entries()) {
+        if (run.expiresAtMs <= nowMs) embeddedPromptBuildFallbackStartRuns.delete(existingKey);
+      }
+      const prior = embeddedPromptBuildFallbackStartRuns.get(key);
+      return prior && prior.expiresAtMs > nowMs ? prior.promise : null;
+    };
+    const rememberEmbeddedPromptBuildFallbackStartRun = (eventKey, promise) => {
+      const key = String(eventKey || "").trim();
+      if (!key) return;
+      embeddedPromptBuildFallbackStartRuns.set(key, {
+        promise,
+        expiresAtMs: Date.now() + EMBEDDED_PROMPT_BUILD_FALLBACK_START_TTL_MS
+      });
+    };
     const markEmbeddedPromptBuildFallbackTurn = (turnKey) => {
       const key = String(turnKey || "").trim();
       if (!key) return;
@@ -5130,8 +5170,7 @@ const quaidPlugin = {
     const preserveEmbeddedPromptBuildFallbackTranscript = (agentLabel, event, ctx) => {
       const sessionId = String(event?.sessionId || ctx?.sessionId || ctx?.session?.id || "").trim();
       if (!sessionId) return null;
-      const selected = selectAutoInjectQuery(event, lastUserMessageQuery, Date.now(), sessionId);
-      const userText = scrubAutoInjectQuery(selected.rawPrompt || selected.query || "").trim();
+      const { userText, source } = embeddedPromptBuildFallbackSelection(event, ctx);
       if (userText.length < 3 || PROMPT_RELAY_SKIP_RE.test(userText) || userText.startsWith("Extract memorable facts")) {
         return null;
       }
@@ -5162,7 +5201,7 @@ const quaidPlugin = {
       writeHookTrace("hook.before_agent_start.embedded_fallback_transcript_preserved", {
         session_id: sessionId,
         session_key: sessionKey,
-        source: selected.source,
+        source,
         text_len: userText.length,
         preserved_path: preservedPath
       });
@@ -5329,42 +5368,56 @@ notify_user(${JSON.stringify(message)})
         return result;
       }
       if (openClawScopeUpgradePending()) {
-        writeHookTrace("hook.before_agent_start.embedded_prompt_build_fallback", {
-          session_id: String(event?.sessionId || ctx?.sessionId || ctx?.session?.id || ""),
-          session_key: String(event?.sessionKey || ctx?.sessionKey || ""),
-          reason: "openclaw_scope_upgrade_pending"
-        });
-        const preservedPath = preserveEmbeddedPromptBuildFallbackTranscript(startAgentLabel, event, ctx);
-        queueEmbeddedFallbackLifecycleDrain(startAgentLabel, event, ctx, preservedPath);
-        const fallbackEvent = {
-          ...event && typeof event === "object" ? event : {},
-          __quaidEmbeddedPromptBuildFallback: true,
-          prependContext: result.prependContext ?? event?.prependContext,
-          prependSystemContext: result.prependSystemContext ?? event?.prependSystemContext,
-          appendSystemContext: result.appendSystemContext ?? event?.appendSystemContext
-        };
-        const promptResult = await beforePromptBuildHandler(fallbackEvent, ctx);
-        if (promptResult && identityOnlyRefreshResults.has(promptResult)) {
-          const fallbackSessionId = String(event?.sessionId || ctx?.sessionId || ctx?.session?.id || "").trim();
-          drainRefreshedIdentityContext(
-            [
-              resolveProjectDocsRefreshKey(event, ctx, fallbackSessionId),
-              fallbackSessionId,
-              identityRefreshInstanceKey(startInstanceId)
-            ],
-            startInstanceId,
-            "embedded_prompt_build_fallback_identity_only"
-          );
+        const startEventKey = embeddedPromptBuildFallbackStartEventKey(startAgentLabel, event, ctx);
+        const duplicateStartRun = getEmbeddedPromptBuildFallbackStartRun(startEventKey);
+        if (duplicateStartRun) {
+          writeHookTrace("hook.before_agent_start.embedded_prompt_build_fallback_skipped", {
+            session_id: String(event?.sessionId || ctx?.sessionId || ctx?.session?.id || ""),
+            session_key: String(event?.sessionKey || ctx?.sessionKey || ""),
+            reason: "duplicate_start_event"
+          });
+          return await duplicateStartRun;
         }
-        if (promptResult && autoInjectedMemoryResults.has(promptResult)) {
-          markEmbeddedPromptBuildFallbackTurn(embeddedPromptBuildFallbackTurnKey(startAgentLabel, fallbackEvent, ctx));
-        }
-        if (event && typeof event === "object" && promptResult) {
-          if (promptResult.prependContext) event.prependContext = promptResult.prependContext;
-          if (promptResult.prependSystemContext) event.prependSystemContext = promptResult.prependSystemContext;
-          if (promptResult.appendSystemContext) event.appendSystemContext = promptResult.appendSystemContext;
-        }
-        return promptResult || result;
+        const startRun = (async () => {
+          writeHookTrace("hook.before_agent_start.embedded_prompt_build_fallback", {
+            session_id: String(event?.sessionId || ctx?.sessionId || ctx?.session?.id || ""),
+            session_key: String(event?.sessionKey || ctx?.sessionKey || ""),
+            reason: "openclaw_scope_upgrade_pending"
+          });
+          const preservedPath = preserveEmbeddedPromptBuildFallbackTranscript(startAgentLabel, event, ctx);
+          queueEmbeddedFallbackLifecycleDrain(startAgentLabel, event, ctx, preservedPath);
+          const fallbackEvent = {
+            ...event && typeof event === "object" ? event : {},
+            __quaidEmbeddedPromptBuildFallback: true,
+            prependContext: result.prependContext ?? event?.prependContext,
+            prependSystemContext: result.prependSystemContext ?? event?.prependSystemContext,
+            appendSystemContext: result.appendSystemContext ?? event?.appendSystemContext
+          };
+          const promptResult = await beforePromptBuildHandler(fallbackEvent, ctx);
+          if (promptResult && identityOnlyRefreshResults.has(promptResult)) {
+            const fallbackSessionId = String(event?.sessionId || ctx?.sessionId || ctx?.session?.id || "").trim();
+            drainRefreshedIdentityContext(
+              [
+                resolveProjectDocsRefreshKey(event, ctx, fallbackSessionId),
+                fallbackSessionId,
+                identityRefreshInstanceKey(startInstanceId)
+              ],
+              startInstanceId,
+              "embedded_prompt_build_fallback_identity_only"
+            );
+          }
+          if (promptResult && autoInjectedMemoryResults.has(promptResult)) {
+            markEmbeddedPromptBuildFallbackTurn(embeddedPromptBuildFallbackTurnKey(startAgentLabel, fallbackEvent, ctx));
+          }
+          if (event && typeof event === "object" && promptResult) {
+            if (promptResult.prependContext) event.prependContext = promptResult.prependContext;
+            if (promptResult.prependSystemContext) event.prependSystemContext = promptResult.prependSystemContext;
+            if (promptResult.appendSystemContext) event.appendSystemContext = promptResult.appendSystemContext;
+          }
+          return promptResult || result;
+        })();
+        rememberEmbeddedPromptBuildFallbackStartRun(startEventKey, startRun);
+        return await startRun;
       }
       return result;
     };
