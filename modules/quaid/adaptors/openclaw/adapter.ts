@@ -6957,6 +6957,47 @@ notify_user(${JSON.stringify(message)})
         );
         return promptModelConfigValidationNotice;
       };
+      const injectFilePlacementReminder = (sessionKeyDocs: string): void => {
+        if (!promptInstanceId) return;
+        const miscPath = path.join(VISIBLE_WORKSPACE, "projects", `misc--${promptInstanceId}`);
+        const projectPlacementContext = [
+          `[Quaid — active knowledge layer | instance: ${promptInstanceId}]`,
+          `Quaid tracks files, projects, and knowledge across sessions. ALL files live inside tracked projects.`,
+          ``,
+          `[PROJECT CREATION — MANDATORY BEFORE ANY WORK BEGINS]`,
+          `Before you write a single file, spawn a coding agent, run a build, or execute any multi-step task:`,
+          `  STEP 1: Run quaid project create <name> --source-root <path>`,
+          `  STEP 2: Then do the work inside that project.`,
+          `DO NOT spawn a coding agent or subagent without completing Step 1 first.`,
+          `DO NOT write any file without completing Step 1 first.`,
+          `DO NOT create directories or PROJECT.md files manually — only the quaid CLI creates projects.`,
+          `This applies to ALL work requests — even quick ones, even "just a script", even "just a test".`,
+          ``,
+          `[FILE PLACEMENT]`,
+          `When the user says "temporary", "quick", "throwaway", or "somewhere temporary", use the misc project:`,
+          `  Misc project path: ${miscPath}/`,
+          `  The misc project directory already exists — write files there directly.`,
+          `  After writing the file, register it to misc:`,
+          `    quaid registry register <absolute-file-path> --project misc--${promptInstanceId}`,
+          `  If quaid commands say "project not found" for misc--${promptInstanceId}, create it first:`,
+          `    quaid project create misc--${promptInstanceId} --source-root ${miscPath}/`,
+          `  (If registration says "already exists", that is fine — proceed to write.)`,
+          `For durable new work: run Step 1 above to create a named project first.`,
+          `For work that belongs to an existing project: write there directly.`,
+          ``,
+          `[EXISTING SHARED PROJECTS — LINK ONLY FOR DURABLE ENGAGEMENT]`,
+          `If Quaid docs recall or a Documentation Scope Hint names an unlinked project candidate:`,
+          `  - For a read-only lookup, one-fact question, "what does X mean?", or "tell me about X": DO NOT link the project. Answer from scoped recall or direct file read.`,
+          `  - For explicit durable work, edits, API/tool use, "start working on this project", "link this project", or "set up to develop this": run quaid project link <project-name> first.`,
+          `After linking for durable work, retry Quaid docs recall before falling back to filesystem grep.`,
+          ``,
+          `Always tell the user which project received the file.`,
+        ].join("\n");
+        prependSystemContext = prependSystemContext
+          ? `${prependSystemContext}\n\n${projectPlacementContext}`
+          : projectPlacementContext;
+        writeHookTrace("hook.file_placement_reminder_injected", { session_id: sessionKeyDocs });
+      };
       if (isSystemEnabled("projects")) {
         try {
           const identityContext = await promptFacade.injectProjectContext(undefined, {
@@ -6997,6 +7038,7 @@ notify_user(${JSON.stringify(message)})
                 : (providerNoticeContext || modelConfigNotice);
             }
           }
+          injectFilePlacementReminder(sessionKeyDocs);
           return emitIdentityOnlyRefresh(refreshedIdentityContext, sessionKeyDocs);
         }
         writeHookTrace("hook.docs_gate_check", {
@@ -7036,46 +7078,7 @@ notify_user(${JSON.stringify(message)})
         // Prepend mandatory file-placement rules on EVERY turn (not just first).
         // appendSystemContext (project docs) is gated once per session — expensive.
         // prependSystemContext (placement rules) is a cheap template — always inject.
-        if (promptInstanceId) {
-          const miscPath = path.join(VISIBLE_WORKSPACE, "projects", `misc--${promptInstanceId}`);
-          const projectPlacementContext = [
-            `[Quaid — active knowledge layer | instance: ${promptInstanceId}]`,
-            `Quaid tracks files, projects, and knowledge across sessions. ALL files live inside tracked projects.`,
-            ``,
-            `[PROJECT CREATION — MANDATORY BEFORE ANY WORK BEGINS]`,
-            `Before you write a single file, spawn a coding agent, run a build, or execute any multi-step task:`,
-            `  STEP 1: Run quaid project create <name> --source-root <path>`,
-            `  STEP 2: Then do the work inside that project.`,
-            `DO NOT spawn a coding agent or subagent without completing Step 1 first.`,
-            `DO NOT write any file without completing Step 1 first.`,
-            `DO NOT create directories or PROJECT.md files manually — only the quaid CLI creates projects.`,
-            `This applies to ALL work requests — even quick ones, even "just a script", even "just a test".`,
-            ``,
-            `[FILE PLACEMENT]`,
-            `When the user says "temporary", "quick", "throwaway", or "somewhere temporary", use the misc project:`,
-            `  Misc project path: ${miscPath}/`,
-            `  The misc project directory already exists — write files there directly.`,
-            `  After writing the file, register it to misc:`,
-            `    quaid registry register <absolute-file-path> --project misc--${promptInstanceId}`,
-            `  If quaid commands say "project not found" for misc--${promptInstanceId}, create it first:`,
-            `    quaid project create misc--${promptInstanceId} --source-root ${miscPath}/`,
-            `  (If registration says "already exists", that is fine — proceed to write.)`,
-            `For durable new work: run Step 1 above to create a named project first.`,
-            `For work that belongs to an existing project: write there directly.`,
-            ``,
-            `[EXISTING SHARED PROJECTS — LINK ONLY FOR DURABLE ENGAGEMENT]`,
-            `If Quaid docs recall or a Documentation Scope Hint names an unlinked project candidate:`,
-            `  - For a read-only lookup, one-fact question, "what does X mean?", or "tell me about X": DO NOT link the project. Answer from scoped recall or direct file read.`,
-            `  - For explicit durable work, edits, API/tool use, "start working on this project", "link this project", or "set up to develop this": run quaid project link <project-name> first.`,
-            `After linking for durable work, retry Quaid docs recall before falling back to filesystem grep.`,
-            ``,
-            `Always tell the user which project received the file.`,
-          ].join("\n");
-          prependSystemContext = prependSystemContext
-            ? `${prependSystemContext}\n\n${projectPlacementContext}`
-            : projectPlacementContext;
-          writeHookTrace("hook.file_placement_reminder_injected", { session_id: sessionKeyDocs });
-        }
+        injectFilePlacementReminder(sessionKeyDocs);
       }
 
       // Helper: carry any built docs context through all early returns.

@@ -562,6 +562,8 @@ describe("openclaw deferred notices", () => {
       result?.appendSystemContext,
     ].map((value) => String(value || "")).join("\n");
     expect(rendered).toContain("Bartholomew");
+    expect(String(result?.prependSystemContext || "")).toContain("[FILE PLACEMENT]");
+    expect(String(result?.prependSystemContext || "")).toContain("misc--openclaw-main");
     expect(rendered).not.toContain("Baratza Encore");
     expect(String((result as any)?.prependContext || "")).not.toContain("<injected_memories>");
     expect(log.mock.calls.some((call) => String(call.join(" ")).includes("Auto-injected"))).toBe(false);
