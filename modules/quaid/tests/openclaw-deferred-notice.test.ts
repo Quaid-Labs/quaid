@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 
 const childProcessState = vi.hoisted(() => ({
   daemonStartCalls: [] as Array<{ file: string; args: readonly string[]; env: Record<string, string | undefined> }>,
+  daemonRunningInstances: new Set<string>(),
   deferredRelayStdout: "" as string,
   gatewayRestartSpawns: [] as Array<{ file: string; args: readonly string[]; env: Record<string, string | undefined> }>,
 }));
@@ -17,12 +18,21 @@ vi.mock("node:child_process", async () => {
     execFileSync: ((file: string, args?: readonly string[] | null, options?: any) => {
       const normalizedArgs = Array.isArray(args) ? args.map((arg) => String(arg)) : [];
       if (normalizedArgs[0] === "daemon" && normalizedArgs[1] === "start") {
+        const target = String(options?.env?.QUAID_INSTANCE || "default").trim() || "default";
+        childProcessState.daemonRunningInstances.add(target);
         childProcessState.daemonStartCalls.push({
           file,
           args: normalizedArgs,
           env: (options?.env || {}) as Record<string, string | undefined>,
         });
         return "";
+      }
+      if (normalizedArgs[0] === "daemon" && normalizedArgs[1] === "status") {
+        const target = String(options?.env?.QUAID_INSTANCE || "default").trim() || "default";
+        return JSON.stringify({
+          running: childProcessState.daemonRunningInstances.has(target),
+          pid: childProcessState.daemonRunningInstances.has(target) ? 12345 : null,
+        });
       }
       return actual.execFileSync(file, args as any, options);
     }) as typeof actual.execFileSync,
@@ -204,6 +214,7 @@ function seedDeferredNoticeFixture(prefix: string, instanceId: string, message: 
 
 afterEach(() => {
   childProcessState.daemonStartCalls = [];
+  childProcessState.daemonRunningInstances.clear();
   childProcessState.deferredRelayStdout = "";
   childProcessState.gatewayRestartSpawns = [];
   vi.clearAllTimers();
@@ -1142,6 +1153,103 @@ describe("openclaw deferred notices", () => {
     expect(traceEvents).toContain("hook.before_prompt_build.embedded_fallback_duplicate_skip");
     expect(traceEvents.filter((eventName) => eventName === "hook.before_prompt_build.embedded_fallback_duplicate_skip")).toHaveLength(1);
     expect(traceEvents.filter((eventName) => eventName === "hook.before_prompt_build.injection_applied")).toHaveLength(1);
+
+    fetchMock.mockRestore();
+    warn.mockRestore();
+    log.mockRestore();
+    error.mockRestore();
+    removeTempDir(fixture.home);
+  });
+
+  it("retries project docs injection after an initial failure", async () => {
+    vi.stubEnv("QUAID_DISABLE_NOTIFICATIONS", "1");
+    const fixture = seedDeferredNoticeFixture(
+      "quaid-oc-project-docs-retry-home-",
+      "openclaw-main",
+      "[Quaid] placeholder",
+    );
+    const configPath = path.join(fixture.hiddenHome, "instances", "openclaw-main", "config.json");
+    const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+    writeJson(configPath, {
+      ...config,
+      systems: { memory: true, projects: true },
+      retrieval: { ...config.retrieval, failHard: true, autoInject: false },
+    });
+    const projectDir = path.join(fixture.visibleHome, "projects", "saffron-docs");
+    fs.mkdirSync(projectDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(projectDir, "PROJECT.md"),
+      "# Saffron Docs\nSaffron project keeps docs alive after retry.\n",
+      "utf8",
+    );
+
+    const linkedModulesRoot = path.join(fixture.hiddenHome, "modules", "quaid");
+    const repoModulesRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () => ({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      text: async () => "OK",
+    } as any));
+
+    const plugin = await loadAdapterWithHomes(
+      fixture.hiddenHome,
+      fixture.visibleHome,
+      fixture.openClawConfigPath,
+      "openclaw-main",
+    );
+    const api = makeFakeApi();
+    plugin.register(api as any);
+
+    const beforePromptBuildCall = api.on.mock.calls.find((call: any[]) =>
+      call?.[0] === "before_prompt_build" && call?.[2]?.name === "memory-injection-prompt-build"
+    );
+    expect(beforePromptBuildCall).toBeTruthy();
+    const beforePromptBuildHandler = beforePromptBuildCall?.[1];
+    const sessionKey = "agent:main:matrix:project-docs-retry";
+
+    fs.unlinkSync(linkedModulesRoot);
+    const first = await beforePromptBuildHandler(
+      {
+        prependContext: "",
+        prompt: "First docs attempt",
+        messages: [{ role: "user", content: "First docs attempt" }],
+        sessionId: "session-project-docs-retry-a",
+        sessionKey,
+        cwd: projectDir,
+      },
+      {
+        sessionId: "session-project-docs-retry-a",
+        sessionKey,
+        agentId: "main",
+        trigger: "user",
+        cwd: projectDir,
+      },
+    );
+    expect(combinedSystemContext(first)).not.toContain("Saffron project keeps docs alive after retry");
+
+    fs.symlinkSync(repoModulesRoot, linkedModulesRoot, "dir");
+    const second = await beforePromptBuildHandler(
+      {
+        prependContext: "",
+        prompt: "Second docs attempt",
+        messages: [{ role: "user", content: "Second docs attempt" }],
+        sessionId: "session-project-docs-retry-b",
+        sessionKey,
+        cwd: projectDir,
+      },
+      {
+        sessionId: "session-project-docs-retry-b",
+        sessionKey,
+        agentId: "main",
+        trigger: "user",
+        cwd: projectDir,
+      },
+    );
+    expect(combinedSystemContext(second)).toContain("Saffron project keeps docs alive after retry");
 
     fetchMock.mockRestore();
     warn.mockRestore();

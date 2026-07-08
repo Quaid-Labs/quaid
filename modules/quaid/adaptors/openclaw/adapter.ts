@@ -7008,10 +7008,10 @@ notify_user(${JSON.stringify(message)})
           ctx_session_key: String(ctx?.sessionKey || ""),
         });
         if (sessionKeyDocs && !projectDocsInjectedSessions.has(sessionKeyDocs)) {
-          projectDocsInjectedSessions.add(sessionKeyDocs);
           try {
             const hookCwd = String(event?.cwd || ctx?.cwd || process.cwd() || "");
             const projectDocs = await promptFacade.injectProjectContext(undefined, { cwd: hookCwd });
+            projectDocsInjectedSessions.add(sessionKeyDocs);
             if (projectDocs) {
               appendSystemContext = projectDocs;
               writeHookTrace("hook.project_docs_injected", { session_id: sessionKeyDocs, len: projectDocs.length });
@@ -7080,7 +7080,7 @@ notify_user(${JSON.stringify(message)})
 
       // Helper: carry any built docs context through all early returns.
       // The docs gate block above may have set prependSystemContext/appendSystemContext
-      // and added the session to projectDocsInjectedSessions. Any early return after
+      // and marked the session in projectDocsInjectedSessions. Any early return after
       // that point MUST include those values — otherwise the session is marked as
       // "docs delivered" but the model never received them (e.g. rawPrompt < 5 during
       // a mass-reset fan-out triggers before_prompt_build before the user's message,

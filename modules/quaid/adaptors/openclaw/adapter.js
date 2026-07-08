@@ -5752,10 +5752,10 @@ ${appendSystemContext}` : providerNoticeContext || modelConfigNotice;
           ctx_session_key: String(ctx?.sessionKey || "")
         });
         if (sessionKeyDocs && !projectDocsInjectedSessions.has(sessionKeyDocs)) {
-          projectDocsInjectedSessions.add(sessionKeyDocs);
           try {
             const hookCwd = String(event?.cwd || ctx?.cwd || process.cwd() || "");
             const projectDocs = await promptFacade.injectProjectContext(void 0, { cwd: hookCwd });
+            projectDocsInjectedSessions.add(sessionKeyDocs);
             if (projectDocs) {
               appendSystemContext = projectDocs;
               writeHookTrace("hook.project_docs_injected", { session_id: sessionKeyDocs, len: projectDocs.length });
