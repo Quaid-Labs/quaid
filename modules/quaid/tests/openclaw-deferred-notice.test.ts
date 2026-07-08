@@ -937,6 +937,20 @@ describe("openclaw deferred notices", () => {
         ].join("\n"),
       },
     }, Date.now());
+    const liveTranscript = path.join(
+      path.dirname(fixture.openClawConfigPath),
+      "agents",
+      "main",
+      "sessions",
+      `${sessionId}.jsonl`,
+    );
+    fs.mkdirSync(path.dirname(liveTranscript), { recursive: true });
+    fs.writeFileSync(
+      liveTranscript,
+      `${JSON.stringify({ type: "message", message: { role: "user", content: "Live transcript turn." } })}\n`,
+      "utf8",
+    );
+    testApi.rememberSessionTranscriptPath(sessionId, liveTranscript, "test-live-transcript");
 
     const beforeAgentStartHandler = beforeAgentStartCall?.[1];
     await beforeAgentStartHandler(
@@ -982,6 +996,11 @@ describe("openclaw deferred notices", () => {
 
     const traceEvents = readHookTraceEvents(fixture.hiddenHome, "openclaw-main").map((row) => String(row.event || ""));
     expect(traceEvents).toContain("hook.before_agent_start.embedded_fallback_session_end_queued");
+
+    const followupSignalPath = testApi.writeDaemonSignal(sessionId, "session_end", { source: "test-followup" });
+    expect(followupSignalPath).toBeTruthy();
+    const followupSignal = JSON.parse(fs.readFileSync(String(followupSignalPath), "utf8"));
+    expect(followupSignal.transcript_path).toBe(liveTranscript);
 
     fetchMock.mockRestore();
     warn.mockRestore();

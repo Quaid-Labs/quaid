@@ -5247,9 +5247,6 @@ const quaidPlugin = {
       }
       const resolvedAgentLabel = resolveHookAgentLabel(sessionContext, sessionContext) || agentLabel;
       sessionIdToAgentId.set(sessionId, resolvedAgentLabel);
-      rememberSessionTranscriptPath(sessionId, preservedPath, "embedded-fallback-lifecycle-drain", {
-        trustedSessionMapping: true
-      });
       if (!sessionNeedsLifecycleFlush(sessionId, preservedPath, resolvedAgentLabel)) {
         writeHookTrace("hook.before_agent_start.embedded_fallback_session_end_skipped", {
           session_id: sessionId,
@@ -5270,12 +5267,26 @@ const quaidPlugin = {
         });
         return;
       }
-      const sigPath = writeDaemonSignal(sessionId, "session_end", {
-        source: "embedded_prompt_build_fallback",
-        hook_session_id: sessionId,
-        hook_session_key: sessionKey,
-        transcript_size: transcriptSize
+      const previousTranscriptPath = String(sessionTranscriptPaths.get(sessionId) || "").trim();
+      const shouldRestoreTranscriptPath = Boolean(
+        previousTranscriptPath && previousTranscriptPath !== preservedPath && fs.existsSync(previousTranscriptPath) && transcriptPathMatchesSession(sessionId, previousTranscriptPath)
+      );
+      rememberSessionTranscriptPath(sessionId, preservedPath, "embedded-fallback-lifecycle-drain", {
+        trustedSessionMapping: true
       });
+      let sigPath = null;
+      try {
+        sigPath = writeDaemonSignal(sessionId, "session_end", {
+          source: "embedded_prompt_build_fallback",
+          hook_session_id: sessionId,
+          hook_session_key: sessionKey,
+          transcript_size: transcriptSize
+        });
+      } finally {
+        if (shouldRestoreTranscriptPath) {
+          sessionTranscriptPaths.set(sessionId, previousTranscriptPath);
+        }
+      }
       if (!sigPath) {
         writeHookTrace("hook.before_agent_start.embedded_fallback_session_end_skipped", {
           session_id: sessionId,
@@ -5379,13 +5390,24 @@ notify_user(${JSON.stringify(message)})
           return await duplicateStartRun;
         }
         const startRun = (async () => {
+          const fallbackSessionId = String(event?.sessionId || ctx?.sessionId || ctx?.session?.id || "").trim();
+          const previousTranscriptPath = String(sessionTranscriptPaths.get(fallbackSessionId) || "").trim();
+          const shouldRestoreTranscriptPath = Boolean(
+            fallbackSessionId && previousTranscriptPath && fs.existsSync(previousTranscriptPath) && transcriptPathMatchesSession(fallbackSessionId, previousTranscriptPath)
+          );
           writeHookTrace("hook.before_agent_start.embedded_prompt_build_fallback", {
-            session_id: String(event?.sessionId || ctx?.sessionId || ctx?.session?.id || ""),
+            session_id: fallbackSessionId,
             session_key: String(event?.sessionKey || ctx?.sessionKey || ""),
             reason: "openclaw_scope_upgrade_pending"
           });
           const preservedPath = preserveEmbeddedPromptBuildFallbackTranscript(startAgentLabel, event, ctx);
-          queueEmbeddedFallbackLifecycleDrain(startAgentLabel, event, ctx, preservedPath);
+          try {
+            queueEmbeddedFallbackLifecycleDrain(startAgentLabel, event, ctx, preservedPath);
+          } finally {
+            if (shouldRestoreTranscriptPath) {
+              sessionTranscriptPaths.set(fallbackSessionId, previousTranscriptPath);
+            }
+          }
           const fallbackEvent = {
             ...event && typeof event === "object" ? event : {},
             __quaidEmbeddedPromptBuildFallback: true,
@@ -5395,7 +5417,6 @@ notify_user(${JSON.stringify(message)})
           };
           const promptResult = await beforePromptBuildHandler(fallbackEvent, ctx);
           if (promptResult && identityOnlyRefreshResults.has(promptResult)) {
-            const fallbackSessionId = String(event?.sessionId || ctx?.sessionId || ctx?.session?.id || "").trim();
             drainRefreshedIdentityContext(
               [
                 resolveProjectDocsRefreshKey(event, ctx, fallbackSessionId),
