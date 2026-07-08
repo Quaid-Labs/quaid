@@ -2019,9 +2019,29 @@ function sessionCursorPathForAgent(sessionId: string, agentLabel: string = "main
   );
 }
 
-function readSessionCursorOffset(sessionId: string, agentLabel: string = "main"): number {
+function _sameTranscriptPath(left: string, right: string): boolean {
+  const a = String(left || "").trim();
+  const b = String(right || "").trim();
+  if (!a || !b) return false;
+  try {
+    return path.resolve(a) === path.resolve(b);
+  } catch {
+    return a === b;
+  }
+}
+
+function readSessionCursorOffset(
+  sessionId: string,
+  agentLabel: string = "main",
+  transcriptPath: string = "",
+): number {
   try {
     const payload = JSON.parse(fs.readFileSync(sessionCursorPathForAgent(sessionId, agentLabel), "utf8"));
+    const expectedPath = String(transcriptPath || "").trim();
+    const cursorPath = String(payload?.transcript_path || "").trim();
+    if (expectedPath && (!cursorPath || !_sameTranscriptPath(cursorPath, expectedPath))) {
+      return 0;
+    }
     const offset = Number(payload?.line_offset || 0);
     return Number.isFinite(offset) && offset > 0 ? Math.floor(offset) : 0;
   } catch {
@@ -2069,7 +2089,7 @@ function sessionNeedsLifecycleFlush(sessionId: string, transcriptPath: string, a
   if (rollingStateHasPayload(sid, agentLabel)) return true;
   const totalLines = _countTranscriptLines(resolvedPath);
   if (totalLines <= 0) return false;
-  const cursorOffset = readSessionCursorOffset(sid, agentLabel);
+  const cursorOffset = readSessionCursorOffset(sid, agentLabel, resolvedPath);
   if (totalLines <= cursorOffset) return false;
   const messages = parseSessionMessagesJsonl(resolvedPath).slice(Math.max(0, cursorOffset));
   if (!Array.isArray(messages) || messages.length === 0) return false;
@@ -10257,6 +10277,7 @@ export const __test = {
   preserveSessionTranscript,
   shouldMirrorTranscriptUpdateToPreservedCopy,
   writeSessionCursorToEnd,
+  sessionNeedsLifecycleFlush,
   seedRollingCursorForTranscript,
   repairSessionCursorPathsFromQuaidEventLogs,
   purgeInternalSessionArtifacts,

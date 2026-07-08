@@ -2394,6 +2394,54 @@ describe("lifecycle signal detection", () => {
     }
   });
 
+  it("lifecycle flush treats a cursor from another transcript path as unprocessed", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "quaid-oc-lifecycle-cursor-path-"));
+    const quaidHome = path.join(root, ".quaid");
+    const instanceRoot = path.join(quaidHome, "instances", "openclaw-main");
+    const liveDir = path.join(root, ".openclaw", "agents", "main", "sessions");
+    const preservedDir = path.join(instanceRoot, "logs", "quaid", "sessions");
+    const sessionId = "scope-upgrade-session";
+    const livePath = path.join(liveDir, `${sessionId}.jsonl`);
+    const preservedPath = path.join(preservedDir, `${sessionId}.jsonl`);
+    fs.mkdirSync(liveDir, { recursive: true });
+    fs.mkdirSync(preservedDir, { recursive: true });
+    fs.mkdirSync(path.join(instanceRoot, "data", "session-cursors"), { recursive: true });
+    fs.writeFileSync(
+      livePath,
+      Array.from({ length: 7 }, (_unused, index) => (
+        `${JSON.stringify({ type: "message", message: { role: "assistant", content: [{ type: "text", text: `prior ${index}` }] } })}\n`
+      )).join(""),
+      "utf8",
+    );
+    fs.writeFileSync(
+      preservedPath,
+      `${JSON.stringify({ type: "message", message: { role: "user", content: [{ type: "text", text: "Baxter uses an orange linen notebook." }] } })}\n`,
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(instanceRoot, "data", "session-cursors", `${sessionId}.json`),
+      JSON.stringify({
+        session_id: sessionId,
+        line_offset: 7,
+        transcript_path: livePath,
+        updated_at: "2026-07-09T00:00:00.000Z",
+      }, null, 2),
+      "utf8",
+    );
+
+    try {
+      vi.stubEnv("QUAID_HOME", quaidHome);
+      vi.stubEnv("QUAID_INSTANCE", "openclaw-main");
+      vi.resetModules();
+      const isolatedAdapter = await import("../adaptors/openclaw/adapter.js");
+      expect(isolatedAdapter.__test.sessionNeedsLifecycleFlush(sessionId, preservedPath, "main")).toBe(true);
+    } finally {
+      vi.unstubAllEnvs();
+      vi.resetModules();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("mirrors transcript updates only for configured session-key prefixes", () => {
     const cfg = {
       adapter: {
