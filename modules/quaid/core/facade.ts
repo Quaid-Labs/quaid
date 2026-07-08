@@ -164,9 +164,11 @@ export type DatastoreStats = {
   active_nodes?: number;
 };
 
+type LifecycleSignalSource = "user_command" | "system_notice" | "hook" | "embedded_fallback";
+
 export type LifecycleSignal = {
   label: "ResetSignal" | "CompactionSignal";
-  source: "user_command" | "system_notice" | "hook";
+  source: LifecycleSignalSource;
   signature: string;
   messageIndex?: number;
 };
@@ -649,7 +651,7 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
   let _cachedNodeCount: number | null = null;
   let _nodeCountTimestamp = 0;
   const lifecycleSignalHistory = new Map<string, {
-    source: "user_command" | "system_notice" | "hook";
+    source: LifecycleSignalSource;
     signature: string;
     seenAt: number;
   }>();

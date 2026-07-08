@@ -2968,6 +2968,24 @@ describe("QuaidFacade", () => {
     expect(facade.shouldProcessLifecycleSignal(sessionId, signal, 60_000, 60_000)).toBe(true);
   });
 
+  it("embedded fallback lifecycle dedup does not suppress later system notices", () => {
+    const facade = createQuaidFacade(makeMockDeps());
+    const sessionId = "sess-embedded-fallback";
+    const embedded = {
+      label: "ResetSignal" as const,
+      source: "embedded_fallback" as const,
+      signature: "hook:embedded_prompt_build_fallback:128",
+    };
+    const systemNotice = {
+      label: "ResetSignal" as const,
+      source: "system_notice" as const,
+      signature: "system:session_end",
+    };
+    expect(facade.shouldProcessLifecycleSignal(sessionId, embedded, 60_000, 60_000)).toBe(true);
+    expect(facade.shouldProcessLifecycleSignal(sessionId, embedded, 60_000, 60_000)).toBe(false);
+    expect(facade.shouldProcessLifecycleSignal(sessionId, systemNotice, 60_000, 60_000)).toBe(true);
+  });
+
   it("isInternalMaintenancePrompt detects janitor/review internal prompts", () => {
     const facade = createQuaidFacade(makeMockDeps());
     expect(facade.isInternalMaintenancePrompt("Review batch #42 and respond with a JSON array only:")).toBe(true);

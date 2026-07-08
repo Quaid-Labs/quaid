@@ -5221,7 +5221,7 @@ const quaidPlugin = {
       }
       if (!facade.shouldProcessLifecycleSignal(sessionId, {
         label: "ResetSignal",
-        source: "hook",
+        source: "embedded_fallback",
         signature: `hook:embedded_prompt_build_fallback:${transcriptSize}`
       })) {
         writeHookTrace("hook.before_agent_start.embedded_fallback_session_end_skipped", {
@@ -5231,7 +5231,6 @@ const quaidPlugin = {
         });
         return;
       }
-      facade.markLifecycleSignalFromHook(sessionId, "ResetSignal");
       const sigPath = writeDaemonSignal(sessionId, "session_end", {
         source: "embedded_prompt_build_fallback",
         hook_session_id: sessionId,
