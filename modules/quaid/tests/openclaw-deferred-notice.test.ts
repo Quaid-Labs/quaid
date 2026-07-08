@@ -3043,6 +3043,113 @@ describe("openclaw deferred notices", () => {
     removeTempDir(fixture.home);
   });
 
+  it("keeps identity refresh armed when refreshed context build throws", async () => {
+    const fixture = seedDeferredNoticeFixture(
+      "quaid-oc-compaction-refresh-retry-home-",
+      "openclaw-main",
+      "[Quaid] compaction refresh retry fixture",
+    );
+    const configPath = path.join(fixture.hiddenHome, "instances", "openclaw-main", "config.json");
+    const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+    writeJson(configPath, {
+      ...config,
+      systems: { memory: true, projects: true },
+      retrieval: { ...config.retrieval, failHard: true, autoInject: false },
+    });
+    const identityDir = path.join(fixture.visibleHome, "instances", "openclaw-main");
+    fs.mkdirSync(identityDir, { recursive: true });
+    const userPath = path.join(identityDir, "USER.md");
+    fs.writeFileSync(userPath, "# USER\nThe office plant is named Bartholomew.\n", "utf8");
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () => ({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      text: async () => "OK",
+    } as any));
+
+    const plugin = await loadAdapterWithHomes(
+      fixture.hiddenHome,
+      fixture.visibleHome,
+      fixture.openClawConfigPath,
+      "openclaw-main",
+    );
+    const api = makeFakeApi();
+    plugin.register(api as any);
+
+    const beforePromptBuildCall = api.on.mock.calls.find((call: any[]) =>
+      call?.[0] === "before_prompt_build" && call?.[2]?.name === "memory-injection-prompt-build"
+    );
+    const beforeCompactionCall = api.on.mock.calls.find((call: any[]) =>
+      call?.[0] === "before_compaction" && call?.[2]?.name === "compaction-memory-extraction"
+    );
+    expect(beforePromptBuildCall).toBeTruthy();
+    expect(beforeCompactionCall).toBeTruthy();
+
+    const beforePromptBuildHandler = beforePromptBuildCall?.[1];
+    const beforeCompactionHandler = beforeCompactionCall?.[1];
+    const promptCtx = {
+      sessionId: "session-compaction-refresh-retry",
+      sessionKey: "agent:main:tui-refresh-retry",
+      agentId: "main",
+      trigger: "user",
+    };
+
+    await beforeCompactionHandler(
+      {
+        messages: [],
+        sessionId: promptCtx.sessionId,
+        sessionKey: promptCtx.sessionKey,
+      },
+      {
+        ...promptCtx,
+        trigger: "system",
+      },
+    );
+
+    fs.chmodSync(userPath, 0o000);
+    let firstError = "";
+    try {
+      await beforePromptBuildHandler(
+        {
+          prependContext: "",
+          prompt: "first",
+          messages: [{ role: "user", content: "first" }],
+          sessionId: promptCtx.sessionId,
+          sessionKey: promptCtx.sessionKey,
+        },
+        promptCtx,
+      );
+    } catch (err: unknown) {
+      firstError = String((err as Error)?.message || err);
+    } finally {
+      fs.chmodSync(userPath, 0o600);
+    }
+    expect(firstError).toContain("EACCES");
+
+    const retry = await beforePromptBuildHandler(
+      {
+        prependContext: "",
+        prompt: "retry",
+        messages: [{ role: "user", content: "retry" }],
+        sessionId: promptCtx.sessionId,
+        sessionKey: promptCtx.sessionKey,
+      },
+      promptCtx,
+    );
+    expect(combinedSystemContext(retry)).toContain("Quaid Refreshed Identity Context");
+    expect(combinedSystemContext(retry)).toContain("Bartholomew");
+
+    fetchMock.mockRestore();
+    warn.mockRestore();
+    log.mockRestore();
+    error.mockRestore();
+    removeTempDir(fixture.home);
+  });
+
   it("surfaces compact identity refresh on before_agent_start before prompt-build recall", async () => {
     vi.useFakeTimers();
     const fixture = seedDeferredNoticeFixture(

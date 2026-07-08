@@ -6669,10 +6669,10 @@ notify_user(${JSON.stringify(message)})
         0,
       );
       if (turns <= 0) return "";
+      const context = buildRefreshedIdentityContext(instanceId);
       for (const key of keys) {
         refreshedIdentityContextTurns.delete(key);
       }
-      const context = buildRefreshedIdentityContext(instanceId);
       if (!context) {
         writeHookTrace("hook.identity_refresh.empty", {
           refresh_keys: keys,
