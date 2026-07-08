@@ -5053,6 +5053,7 @@ const quaidPlugin = {
     const identityOnlyRefreshResults = /* @__PURE__ */ new WeakSet();
     const autoInjectedMemoryResults = /* @__PURE__ */ new WeakSet();
     const embeddedPromptBuildFallbackTurns = /* @__PURE__ */ new Map();
+    const embeddedPromptBuildFallbackTurnKeysBySession = /* @__PURE__ */ new Map();
     const embeddedPromptBuildFallbackStartRuns = /* @__PURE__ */ new Map();
     const embeddedFallbackLifecycleSignalSizes = /* @__PURE__ */ new Map();
     const EMBEDDED_PROMPT_BUILD_FALLBACK_TTL_MS = 3e4;
@@ -5100,15 +5101,25 @@ const quaidPlugin = {
       }
       return false;
     };
-    const embeddedPromptBuildFallbackTurnKey = (agentLabel, event, ctx) => {
+    const embeddedPromptBuildFallbackSessionScope = (event, ctx) => {
       const sessionId = String(event?.sessionId || ctx?.sessionId || ctx?.session?.id || "").trim();
-      const sessionScope = firstNonEmptyString(
+      return firstNonEmptyString(
         event?.sessionKey,
         ctx?.sessionKey,
         event?.targetSessionKey,
         ctx?.targetSessionKey,
         sessionId
       );
+    };
+    const embeddedPromptBuildFallbackSessionGuardKey = (agentLabel, event, ctx) => {
+      const sessionScope = embeddedPromptBuildFallbackSessionScope(event, ctx);
+      const label = String(agentLabel || "main").trim().toLowerCase() || "main";
+      return sessionScope ? `${label}
+${sessionScope}` : "";
+    };
+    const embeddedPromptBuildFallbackTurnKey = (agentLabel, event, ctx) => {
+      const sessionId = String(event?.sessionId || ctx?.sessionId || ctx?.session?.id || "").trim();
+      const sessionScope = embeddedPromptBuildFallbackSessionScope(event, ctx);
       const selected = selectAutoInjectQuery(event, lastUserMessageQuery, Date.now(), sessionId);
       return _autoInjectTurnKey(agentLabel, selected.query, sessionScope);
     };
@@ -5122,13 +5133,7 @@ const quaidPlugin = {
     };
     const embeddedPromptBuildFallbackStartEventKey = (agentLabel, event, ctx) => {
       const sessionId = String(event?.sessionId || ctx?.sessionId || ctx?.session?.id || "").trim();
-      const sessionScope = firstNonEmptyString(
-        event?.sessionKey,
-        ctx?.sessionKey,
-        event?.targetSessionKey,
-        ctx?.targetSessionKey,
-        sessionId
-      );
+      const sessionScope = embeddedPromptBuildFallbackSessionScope(event, ctx);
       const { userText } = embeddedPromptBuildFallbackSelection(event, ctx);
       return userText ? _autoInjectTurnKey(agentLabel, userText, sessionScope) : "";
     };
@@ -5150,22 +5155,48 @@ const quaidPlugin = {
         expiresAtMs: Date.now() + EMBEDDED_PROMPT_BUILD_FALLBACK_START_TTL_MS
       });
     };
-    const markEmbeddedPromptBuildFallbackTurn = (turnKey) => {
+    const markEmbeddedPromptBuildFallbackTurn = (turnKey, sessionGuardKey = "") => {
       const key = String(turnKey || "").trim();
       if (!key) return;
       const nowMs = Date.now();
-      for (const [existingKey, expiresAtMs] of embeddedPromptBuildFallbackTurns.entries()) {
-        if (expiresAtMs <= nowMs) embeddedPromptBuildFallbackTurns.delete(existingKey);
+      for (const [existingKey, expiresAtMs2] of embeddedPromptBuildFallbackTurns.entries()) {
+        if (expiresAtMs2 <= nowMs) embeddedPromptBuildFallbackTurns.delete(existingKey);
       }
-      embeddedPromptBuildFallbackTurns.set(key, nowMs + EMBEDDED_PROMPT_BUILD_FALLBACK_TTL_MS);
+      for (const [existingKey, entry] of embeddedPromptBuildFallbackTurnKeysBySession.entries()) {
+        if (entry.expiresAtMs <= nowMs) embeddedPromptBuildFallbackTurnKeysBySession.delete(existingKey);
+      }
+      const expiresAtMs = nowMs + EMBEDDED_PROMPT_BUILD_FALLBACK_TTL_MS;
+      embeddedPromptBuildFallbackTurns.set(key, expiresAtMs);
+      const guardKey = String(sessionGuardKey || "").trim();
+      if (guardKey) {
+        embeddedPromptBuildFallbackTurnKeysBySession.set(guardKey, { turnKey: key, expiresAtMs });
+      }
     };
-    const consumeEmbeddedPromptBuildFallbackTurn = (turnKey) => {
+    const consumeEmbeddedPromptBuildFallbackTurn = (turnKey, sessionGuardKey = "") => {
       const key = String(turnKey || "").trim();
-      if (!key) return false;
-      const expiresAtMs = Number(embeddedPromptBuildFallbackTurns.get(key) || 0);
-      if (!expiresAtMs) return false;
-      embeddedPromptBuildFallbackTurns.delete(key);
-      return expiresAtMs > Date.now();
+      const guardKey = String(sessionGuardKey || "").trim();
+      const nowMs = Date.now();
+      const consumeTurnKey = (candidate) => {
+        const normalized = String(candidate || "").trim();
+        if (!normalized) return false;
+        const expiresAtMs = Number(embeddedPromptBuildFallbackTurns.get(normalized) || 0);
+        if (!expiresAtMs) return false;
+        embeddedPromptBuildFallbackTurns.delete(normalized);
+        if (guardKey) {
+          const handoff2 = embeddedPromptBuildFallbackTurnKeysBySession.get(guardKey);
+          if (handoff2?.turnKey === normalized) {
+            embeddedPromptBuildFallbackTurnKeysBySession.delete(guardKey);
+          }
+        }
+        return expiresAtMs > nowMs;
+      };
+      if (consumeTurnKey(key)) return true;
+      if (!guardKey) return false;
+      const handoff = embeddedPromptBuildFallbackTurnKeysBySession.get(guardKey);
+      if (!handoff) return false;
+      embeddedPromptBuildFallbackTurnKeysBySession.delete(guardKey);
+      embeddedPromptBuildFallbackTurns.delete(handoff.turnKey);
+      return handoff.expiresAtMs > nowMs;
     };
     const preserveEmbeddedPromptBuildFallbackTranscript = (agentLabel, event, ctx) => {
       const sessionId = String(event?.sessionId || ctx?.sessionId || ctx?.session?.id || "").trim();
@@ -5415,6 +5446,8 @@ notify_user(${JSON.stringify(message)})
             prependSystemContext: result.prependSystemContext ?? event?.prependSystemContext,
             appendSystemContext: result.appendSystemContext ?? event?.appendSystemContext
           };
+          const fallbackTurnKey = embeddedPromptBuildFallbackTurnKey(startAgentLabel, fallbackEvent, ctx);
+          const fallbackSessionGuardKey = embeddedPromptBuildFallbackSessionGuardKey(startAgentLabel, fallbackEvent, ctx);
           const promptResult = await beforePromptBuildHandler(fallbackEvent, ctx);
           if (promptResult && identityOnlyRefreshResults.has(promptResult)) {
             drainRefreshedIdentityContext(
@@ -5428,7 +5461,7 @@ notify_user(${JSON.stringify(message)})
             );
           }
           if (promptResult && autoInjectedMemoryResults.has(promptResult)) {
-            markEmbeddedPromptBuildFallbackTurn(embeddedPromptBuildFallbackTurnKey(startAgentLabel, fallbackEvent, ctx));
+            markEmbeddedPromptBuildFallbackTurn(fallbackTurnKey, fallbackSessionGuardKey);
           }
           if (event && typeof event === "object" && promptResult) {
             if (promptResult.prependContext) event.prependContext = promptResult.prependContext;
@@ -5624,7 +5657,8 @@ ${refreshedIdentityContext}` : refreshedIdentityContext;
       const promptFacade = getAdapterFacadeForInstance(promptInstanceId);
       const promptSessionId = String(event?.sessionId || ctx?.sessionId || ctx?.session?.id || "").trim();
       const embeddedFallbackTurnKey = embeddedPromptBuildFallbackTurnKey(promptAgentLabel, event, ctx);
-      if (!event?.__quaidEmbeddedPromptBuildFallback && consumeEmbeddedPromptBuildFallbackTurn(embeddedFallbackTurnKey)) {
+      const embeddedFallbackSessionGuardKey = embeddedPromptBuildFallbackSessionGuardKey(promptAgentLabel, event, ctx);
+      if (!event?.__quaidEmbeddedPromptBuildFallback && consumeEmbeddedPromptBuildFallbackTurn(embeddedFallbackTurnKey, embeddedFallbackSessionGuardKey)) {
         writeHookTrace("hook.before_prompt_build.embedded_fallback_duplicate_skip", {
           session_id: promptSessionId,
           session_key: String(event?.sessionKey || ctx?.sessionKey || "")

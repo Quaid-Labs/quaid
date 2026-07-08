@@ -756,10 +756,15 @@ describe("openclaw deferred notices", () => {
     const beforePromptBuildCall = api.on.mock.calls.find((call: any[]) =>
       call?.[0] === "before_prompt_build" && call?.[2]?.name === "memory-injection-prompt-build"
     );
+    const messageReceivedCall = api.on.mock.calls.find((call: any[]) =>
+      call?.[0] === "message_received" && call?.[2]?.name === "message-received-command-memory-extraction"
+    );
     expect(beforeAgentStartCall).toBeTruthy();
     expect(beforePromptBuildCall).toBeTruthy();
+    expect(messageReceivedCall).toBeTruthy();
 
     const query = "What grinder do I use for espresso?";
+    const driftQuery = "What pourover brewer do I use?";
     const sessionId = "session-embedded-fallback-inject";
     const sessionKey = "agent:main:matrix:room-embedded-fallback";
     const memory = {
@@ -781,8 +786,33 @@ describe("openclaw deferred notices", () => {
         ].join("\n"),
       },
     }, Date.now());
+    testApi.rememberCompletedAutoInjectTurn(testApi.autoInjectTurnKey("main", driftQuery, sessionKey), {
+      allMemories: [{
+        id: "mem-embedded-hario-drift",
+        text: "Solomon owns a Hario Switch pourover brewer.",
+        similarity: 1,
+        via: "vector",
+        category: "fact",
+      }],
+      recallDiagnostics: { mode: "test" },
+      injection: {
+        toInject: [{
+          id: "mem-embedded-hario-drift",
+          text: "Solomon owns a Hario Switch pourover brewer.",
+          similarity: 1,
+          via: "vector",
+          category: "fact",
+        }],
+        prependContext: [
+          "<injected_memories>",
+          "- fact | Solomon owns a Hario Switch pourover brewer.",
+          "</injected_memories>",
+        ].join("\n"),
+      },
+    }, Date.now());
 
     const beforeAgentStartHandler = beforeAgentStartCall?.[1];
+    const messageReceivedHandler = messageReceivedCall?.[1];
     const startEvent = {
       prependContext: "",
       prompt: query,
@@ -826,11 +856,15 @@ describe("openclaw deferred notices", () => {
     expect(readExtractionSignals(fixture.hiddenHome, "openclaw-main")).toHaveLength(1);
 
     const beforePromptBuildHandler = beforePromptBuildCall?.[1];
+    await messageReceivedHandler(
+      { text: driftQuery, sessionId, sessionKey, timestamp: Date.now() },
+      { sessionId, sessionKey, agentId: "main", trigger: "user" },
+    );
     const promptResult = await beforePromptBuildHandler(
       {
         prependContext: "",
-        prompt: query,
-        messages: [{ role: "user", content: query }],
+        prompt: "",
+        messages: [],
         sessionId,
         sessionKey,
       },
@@ -842,6 +876,7 @@ describe("openclaw deferred notices", () => {
       },
     );
     expect(String(promptResult?.prependContext || "")).not.toContain("Baratza Encore");
+    expect(String(promptResult?.prependContext || "")).not.toContain("Hario Switch");
 
     const traceEvents = readHookTraceEvents(fixture.hiddenHome, "openclaw-main").map((row) => String(row.event || ""));
     expect(traceEvents).toContain("hook.before_agent_start.embedded_prompt_build_fallback");
