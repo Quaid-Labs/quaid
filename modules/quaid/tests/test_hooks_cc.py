@@ -1993,6 +1993,52 @@ def test_hook_extract_precompact_refreshes_rules_context_from_identity_and_proje
     assert "stale rules body" not in user_rules + tools_rules
 
 
+def test_hook_extract_precompact_accepts_fresh_cc_camelcase_payload(
+    tmp_path, sessions_dir, mock_adapter, monkeypatch
+):
+    session_id = "635c0dc1-7bb0-4ea2-9ff5-b2cd86b15425"
+    transcript = sessions_dir / "cc-fresh" / f"{session_id}.jsonl"
+    transcript.parent.mkdir(parents=True, exist_ok=True)
+    transcript.write_text('{"role":"user","content":"/compact"}\n', encoding="utf-8")
+    data_dir = tmp_path / "data"
+    captured_signal = {}
+
+    mock_adapter.adapter_id.return_value = "claude-code"
+    mock_adapter.get_session_path.return_value = None
+    mock_adapter.get_sessions_dir.return_value = str(sessions_dir)
+    mock_adapter.data_dir.return_value = data_dir
+
+    def fake_write_signal(**kwargs):
+        captured_signal.update(kwargs)
+        return tmp_path / "signal.json"
+
+    monkeypatch.setattr("core.interface.hooks._maybe_compaction_refresh_context_artifacts", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("core.interface.hooks.subprocess.Popen", lambda *a, **kw: None)
+    monkeypatch.setattr("core.extraction_daemon.write_signal", fake_write_signal)
+    monkeypatch.setattr("core.extraction_daemon.write_staged_payload_flush_signals", lambda *_args, **_kwargs: [])
+
+    _run_hook_extract(
+        {
+            "sessionId": session_id,
+            "cwd": str(tmp_path),
+            "transcriptPath": str(transcript),
+        },
+        monkeypatch=monkeypatch,
+        precompact=True,
+    )
+
+    assert captured_signal["signal_type"] == "compaction"
+    assert captured_signal["session_id"] == session_id
+    assert captured_signal["transcript_path"] == str(transcript)
+    marker_file = data_dir / "context-refresh-compaction" / f"{session_id}.json"
+    latest_file = data_dir / "context-refresh-compaction" / "_latest.json"
+    assert marker_file.is_file()
+    assert latest_file.is_file()
+    marker_payload = json.loads(marker_file.read_text(encoding="utf-8"))
+    assert marker_payload["reason"] == "precompact_hook"
+    assert marker_payload["source"] == "hook_extract_precompact"
+
+
 def test_hook_extract_raises_signal_write_failure_when_fail_hard_enabled(
     tmp_path, mock_adapter, monkeypatch
 ):

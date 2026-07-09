@@ -3558,7 +3558,17 @@ def _extract_hook_session_id(hook_input: dict) -> str:
     except Exception:
         pass
 
-    for key in ("session_id", "thread_id", "threadId", "conversation_id"):
+    for key in ("session_id", "sessionId", "thread_id", "threadId", "conversation_id", "conversationId"):
+        value = str(hook_input.get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _extract_hook_transcript_path(hook_input: dict) -> str:
+    if not isinstance(hook_input, dict):
+        return ""
+    for key in ("transcript_path", "transcriptPath", "session_file", "sessionFile"):
         value = str(hook_input.get(key) or "").strip()
         if value:
             return value
@@ -3696,8 +3706,8 @@ def hook_extract(args):
         hook_input = {}
     _ensure_hook_instance_ready(hook_input)
 
-    raw_transcript_path = str(hook_input.get("transcript_path") or "").strip()
-    session_id = str(hook_input.get("session_id") or "").strip()
+    raw_transcript_path = _extract_hook_transcript_path(hook_input)
+    session_id = _extract_hook_session_id(hook_input)
     if not session_id and raw_transcript_path:
         session_id = Path(raw_transcript_path).expanduser().stem
     if not session_id:

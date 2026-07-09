@@ -717,11 +717,12 @@ class ClaudeCodeAdapter(QuaidAdapter):
             value = str(hook_input.get(key) or "").strip()
             if value:
                 return value
-        transcript_path = str(hook_input.get("transcript_path") or "").strip()
-        if transcript_path:
-            match = self._SESSION_ID_FROM_TRANSCRIPT_RE.search(Path(transcript_path).name)
-            if match:
-                return match.group(1)
+        for key in ("transcript_path", "transcriptPath", "session_file", "sessionFile"):
+            transcript_path = str(hook_input.get(key) or "").strip()
+            if transcript_path:
+                match = self._SESSION_ID_FROM_TRANSCRIPT_RE.search(Path(transcript_path).name)
+                if match:
+                    return match.group(1)
         return ""
 
     def _transition_command_for_hook(self, hook_input: dict) -> str:
