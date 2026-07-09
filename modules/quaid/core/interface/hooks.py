@@ -1677,7 +1677,7 @@ def hook_inject(args):
             transcript_path = _resolve_hook_transcript_path(
                 session_id=session_id,
                 hook_cwd=hook_input.get("cwd", "").strip() if hook_input else "",
-                transcript_path=hook_input.get("transcript_path", "").strip() if hook_input else "",
+                transcript_path=_extract_hook_transcript_path(hook_input),
             )
             signal_type = str(signal_spec.get("signal_type") or "session_end")
             meta = dict(signal_spec.get("meta") or {})
@@ -1917,7 +1917,7 @@ def hook_inject(args):
                 transcript_path = _resolve_hook_transcript_path(
                     session_id=session_id,
                     hook_cwd=hook_input.get("cwd", "").strip() if hook_input else "",
-                    transcript_path=hook_input.get("transcript_path", "").strip() if hook_input else "",
+                    transcript_path=_extract_hook_transcript_path(hook_input),
                 )
                 if transcript_path:
                     write_cursor(session_id, 0, transcript_path)
@@ -2026,7 +2026,7 @@ def hook_inject(args):
                 "keys": sorted(hook_input.keys()) if isinstance(hook_input, dict) else [],
                 "thread_id": str(hook_input.get("thread_id") or hook_input.get("threadId") or "").strip() if isinstance(hook_input, dict) else "",
                 "session_field": str(hook_input.get("session_id") or "").strip() if isinstance(hook_input, dict) else "",
-                "transcript_path": str(hook_input.get("transcript_path") or "").strip() if isinstance(hook_input, dict) else "",
+                "transcript_path": _extract_hook_transcript_path(hook_input),
             }
             payload.update(_extract_codex_tool_output_trace(hook_input if isinstance(hook_input, dict) else {}))
             _write_hook_trace("hook.inject.codex_payload", payload)
@@ -4151,7 +4151,7 @@ def hook_session_init(args):
                 transcript_path = _resolve_hook_transcript_path(
                     session_id=current_session_id,
                     hook_cwd=hook_input.get("cwd", "").strip() if hook_input else "",
-                    transcript_path=hook_input.get("transcript_path", "").strip() if hook_input else "",
+                    transcript_path=_extract_hook_transcript_path(hook_input),
                 )
                 if transcript_path:
                     write_cursor(current_session_id, 0, transcript_path)

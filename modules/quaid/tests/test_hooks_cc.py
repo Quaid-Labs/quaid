@@ -415,8 +415,8 @@ def test_claude_code_inject_refreshes_rules_context_for_compact_command(monkeypa
 
     out, err = _run_hook_inject(
         {
-            "session_id": "sess-cc-compact",
-            "transcript_path": str(transcript_path),
+            "sessionId": "sess-cc-compact",
+            "transcriptPath": str(transcript_path),
             "cwd": str(tmp_path),
             "prompt": "/compact",
         },
@@ -1144,8 +1144,8 @@ def test_claude_code_session_start_clear_queues_prior_session_signal(
     adapter = ClaudeCodeAdapter(home=quaid_home)
     assert adapter.check_session_transition(
         {
-            "session_id": "32c388db",
-            "transcript_path": str(old_transcript),
+            "sessionId": "32c388db",
+            "transcriptPath": str(old_transcript),
             "cwd": str(tmp_path),
         }
     ) is None
@@ -1179,8 +1179,8 @@ def test_claude_code_session_start_clear_queues_prior_session_signal(
 
     _run_hook_session_init(
         {
-            "session_id": "2d29284b",
-            "transcript_path": str(new_transcript),
+            "sessionId": "2d29284b",
+            "transcriptPath": str(new_transcript),
             "cwd": str(tmp_path),
             "source": "clear",
         },
@@ -1377,6 +1377,41 @@ class TestHookInjectCursorSeeding:
         assert written.get("sid") == session_id
         assert written.get("offset") == 0
         assert written.get("path") == str(transcript)
+
+    def test_camelcase_transcript_path_writes_cursor(
+        self, tmp_path, cursor_dir, mock_adapter, monkeypatch
+    ):
+        """Fresh CC UserPromptSubmit payloads may use sessionId/transcriptPath."""
+        session_id = "sess-camelcase-cursor"
+        transcript = tmp_path / f"{session_id}.jsonl"
+        transcript.write_text('{"role":"user","content":"hello"}\n', encoding="utf-8")
+        written = {}
+
+        from core import extraction_daemon
+
+        def fake_write_cursor(sid, offset, path):
+            written["sid"] = sid
+            written["offset"] = offset
+            written["path"] = path
+
+        monkeypatch.setattr(extraction_daemon, "write_cursor", fake_write_cursor)
+
+        with patch("core.interface.api.recall_fast", return_value=[]):
+            _run_hook_inject(
+                {
+                    "prompt": "hello world test",
+                    "sessionId": session_id,
+                    "transcriptPath": str(transcript),
+                    "cwd": str(tmp_path),
+                },
+                monkeypatch=monkeypatch,
+            )
+
+        assert written == {
+            "sid": session_id,
+            "offset": 0,
+            "path": str(transcript),
+        }
 
     def test_rglob_miss_uses_cwd_fallback(
         self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch

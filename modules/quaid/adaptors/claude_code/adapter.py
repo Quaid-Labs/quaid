@@ -713,16 +713,25 @@ class ClaudeCodeAdapter(QuaidAdapter):
     def _extract_hook_session_id(self, hook_input) -> str:
         if not isinstance(hook_input, dict):
             return ""
-        for key in ("session_id", "sessionId", "thread_id", "threadId", "conversation_id"):
+        for key in ("session_id", "sessionId", "thread_id", "threadId", "conversation_id", "conversationId"):
             value = str(hook_input.get(key) or "").strip()
             if value:
                 return value
+        transcript_path = self._extract_hook_transcript_path(hook_input)
+        if transcript_path:
+            match = self._SESSION_ID_FROM_TRANSCRIPT_RE.search(Path(transcript_path).name)
+            if match:
+                return match.group(1)
+        return ""
+
+    @staticmethod
+    def _extract_hook_transcript_path(hook_input) -> str:
+        if not isinstance(hook_input, dict):
+            return ""
         for key in ("transcript_path", "transcriptPath", "session_file", "sessionFile"):
-            transcript_path = str(hook_input.get(key) or "").strip()
-            if transcript_path:
-                match = self._SESSION_ID_FROM_TRANSCRIPT_RE.search(Path(transcript_path).name)
-                if match:
-                    return match.group(1)
+            value = str(hook_input.get(key) or "").strip()
+            if value:
+                return value
         return ""
 
     def _transition_command_for_hook(self, hook_input: dict) -> str:
@@ -751,7 +760,7 @@ class ClaudeCodeAdapter(QuaidAdapter):
         if not current_id:
             return None
 
-        current_tx = str(hook_input.get("transcript_path") or "").strip()
+        current_tx = self._extract_hook_transcript_path(hook_input)
         last = self._read_session_transition_state()
         last_id = str(last.get("session_id") or "").strip()
         last_tx = str(last.get("transcript_path") or "").strip()
