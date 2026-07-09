@@ -1445,6 +1445,23 @@ function isOpenClawTransientSessionId(value: unknown): boolean {
   );
 }
 
+function lastUserMessageQueryMatchesSession(
+  lastUserMessageQuery: LastUserMessageQuery,
+  currentSessionId?: string,
+): boolean {
+  if (!lastUserMessageQuery) return false;
+  const cachedSessionId = String(lastUserMessageQuery.sessionId || "").trim();
+  const originSessionId = String(lastUserMessageQuery.originSessionId || "").trim();
+  const activeSessionId = String(currentSessionId || "").trim();
+  return !(
+    cachedSessionId
+    && activeSessionId
+    && cachedSessionId !== activeSessionId
+    && !isOpenClawTransientSessionId(cachedSessionId)
+    && !isOpenClawTransientSessionId(originSessionId)
+  );
+}
+
 function selectQueuedStartupRecoveryMessage(
   event: any,
   lastUserMessageQuery: LastUserMessageQuery,
@@ -1457,16 +1474,7 @@ function selectQueuedStartupRecoveryMessage(
   if (ageMs < 0 || ageMs > QUEUED_STARTUP_RECOVERY_CACHE_MS || text.length < 3 || text.startsWith("/")) {
     return null;
   }
-  const cachedSessionId = String(lastUserMessageQuery.sessionId || "").trim();
-  const originSessionId = String(lastUserMessageQuery.originSessionId || "").trim();
-  const activeSessionId = String(currentSessionId || "").trim();
-  if (
-    cachedSessionId
-    && activeSessionId
-    && cachedSessionId !== activeSessionId
-    && !isOpenClawTransientSessionId(cachedSessionId)
-    && !isOpenClawTransientSessionId(originSessionId)
-  ) {
+  if (!lastUserMessageQueryMatchesSession(lastUserMessageQuery, currentSessionId)) {
     return null;
   }
 
@@ -1541,16 +1549,7 @@ function selectMissingUserMessageRecoveryMessage(
   if (ageMs < 0 || ageMs > 10_000 || text.length < 3 || text.startsWith("/")) {
     return null;
   }
-  const cachedSessionId = String(lastUserMessageQuery.sessionId || "").trim();
-  const originSessionId = String(lastUserMessageQuery.originSessionId || "").trim();
-  const activeSessionId = String(currentSessionId || "").trim();
-  if (
-    cachedSessionId
-    && activeSessionId
-    && cachedSessionId !== activeSessionId
-    && !isOpenClawTransientSessionId(cachedSessionId)
-    && !isOpenClawTransientSessionId(originSessionId)
-  ) {
+  if (!lastUserMessageQueryMatchesSession(lastUserMessageQuery, currentSessionId)) {
     return null;
   }
 
@@ -1753,7 +1752,12 @@ function selectAutoInjectQuery(
   }
 
   // Next prefer the most recent user text captured by message_received if it is fresh.
-  if (lastUserMessageQuery && (nowMs - lastUserMessageQuery.seenAtMs) <= 10_000 && lastUserMessageQuery.text.length >= 3) {
+  if (
+    lastUserMessageQuery
+    && (nowMs - lastUserMessageQuery.seenAtMs) <= 10_000
+    && lastUserMessageQuery.text.length >= 3
+    && lastUserMessageQueryMatchesSession(lastUserMessageQuery, currentSessionId)
+  ) {
     return {
       query: lastUserMessageQuery.text.slice(0, 500),
       source: "message_received_cache",
@@ -6944,7 +6948,8 @@ notify_user(${JSON.stringify(message)})
           session_id: String(event?.sessionId || ctx?.sessionId || ""),
         });
       }
-      const queuedStartupRecovery = selectQueuedStartupRecoveryMessage(event, lastUserMessageQuery, nowMs, promptSessionId);
+      const promptLastUserMessageQuery = lastUserMessageQuery;
+      const queuedStartupRecovery = selectQueuedStartupRecoveryMessage(event, promptLastUserMessageQuery, nowMs, promptSessionId);
       const queuedStartupOverride = buildQueuedStartupUserMessageOverride(queuedStartupRecovery);
       if (queuedStartupOverride) {
         prependSystemContext = prependSystemContext
@@ -6956,7 +6961,7 @@ notify_user(${JSON.stringify(message)})
           cached_len: queuedStartupRecovery?.text.length ?? 0,
         });
       }
-      const missingUserRecovery = selectMissingUserMessageRecoveryMessage(event, lastUserMessageQuery, nowMs, promptSessionId);
+      const missingUserRecovery = selectMissingUserMessageRecoveryMessage(event, promptLastUserMessageQuery, nowMs, promptSessionId);
       const missingUserOverride = buildMissingUserMessageOverride(missingUserRecovery);
       if (missingUserOverride) {
         prependSystemContext = prependSystemContext
@@ -7233,7 +7238,7 @@ notify_user(${JSON.stringify(message)})
 
         let { query, source: querySource, rawPrompt } = selectAutoInjectQuery(
           event,
-          lastUserMessageQuery,
+          promptLastUserMessageQuery,
           nowMs,
           promptSessionId,
         );
@@ -7245,7 +7250,7 @@ notify_user(${JSON.stringify(message)})
           await sleepMs(TRANSCRIPT_TAIL_SETTLE_MS);
           const settled = selectAutoInjectQuery(
             event,
-            lastUserMessageQuery,
+            promptLastUserMessageQuery,
             Date.now(),
             promptSessionId,
           );
@@ -7356,7 +7361,7 @@ notify_user(${JSON.stringify(message)})
           query,
           querySource,
           sessionKey: preparationSessionKey,
-          timestampMs: Number(lastUserMessageQuery?.sourceTimestampMs || 0),
+          timestampMs: Number(promptLastUserMessageQuery?.sourceTimestampMs || 0),
         });
 
         // Re-entrancy guard: if before_prompt_build fires while we are already inside

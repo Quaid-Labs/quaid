@@ -443,6 +443,131 @@ describe("openclaw deferred notices", () => {
     removeTempDir(fixture.home);
   });
 
+  it("does not switch to another session's cached user query during transcript-tail settle", async () => {
+    vi.stubEnv("QUAID_DISABLE_NOTIFICATIONS", "1");
+    vi.stubEnv("QUAID_OC_TRANSCRIPT_TAIL_SETTLE_MS", "20");
+    const fixture = seedDeferredNoticeFixture(
+      "quaid-oc-transcript-tail-cross-session-home-",
+      "openclaw-main",
+      "[Quaid] cross-session settle fixture",
+    );
+    const configPath = path.join(fixture.hiddenHome, "instances", "openclaw-main", "config.json");
+    const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+    writeJson(configPath, {
+      ...config,
+      systems: { memory: true, projects: false },
+      retrieval: { ...config.retrieval, autoInject: true },
+    });
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () => ({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      text: async () => "OK",
+    } as any));
+
+    const plugin = await loadAdapterWithHomes(
+      fixture.hiddenHome,
+      fixture.visibleHome,
+      fixture.openClawConfigPath,
+      "openclaw-main",
+    );
+    const adapterModule = await import("../adaptors/openclaw/adapter.js");
+    const testApi = (adapterModule as any).__test;
+    testApi.clearAutoInjectTurnCaches();
+    const api = makeFakeApi();
+    plugin.register(api as any);
+
+    const beforePromptBuildCall = api.on.mock.calls.find((call: any[]) =>
+      call?.[0] === "before_prompt_build" && call?.[2]?.name === "memory-injection-prompt-build"
+    );
+    const messageReceivedCall = api.on.mock.calls.find((call: any[]) =>
+      call?.[0] === "message_received" && call?.[2]?.name === "message-received-command-memory-extraction"
+    );
+    expect(beforePromptBuildCall).toBeTruthy();
+    expect(messageReceivedCall).toBeTruthy();
+
+    const beforePromptBuildHandler = beforePromptBuildCall?.[1];
+    const messageReceivedHandler = messageReceivedCall?.[1];
+    const sessionAId = "session-tail-settle-a";
+    const sessionAKey = "agent:main:matrix:room-tail-settle-a";
+    const sessionBId = "session-tail-settle-b";
+    const sessionBKey = "agent:main:matrix:room-tail-settle-b";
+    const staleTail = "ok now";
+    const sessionBQuery = "What pourover brewer do I use?";
+    const sessionBMemory = {
+      id: "mem-cross-session-hario",
+      text: "Solomon owns a Hario Switch pourover brewer.",
+      similarity: 1,
+      via: "vector",
+      category: "fact",
+    };
+    testApi.rememberCompletedAutoInjectTurn(testApi.autoInjectTurnKey("main", sessionBQuery, sessionAKey), {
+      allMemories: [sessionBMemory],
+      recallDiagnostics: { mode: "test" },
+      injection: {
+        toInject: [sessionBMemory],
+        prependContext: [
+          "<injected_memories>",
+          "- fact | Solomon owns a Hario Switch pourover brewer.",
+          "</injected_memories>",
+        ].join("\n"),
+      },
+    }, Date.now());
+
+    const sessionsDir = path.join(path.dirname(fixture.openClawConfigPath), "agents", "main", "sessions");
+    fs.mkdirSync(sessionsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(sessionsDir, `${sessionAId}.jsonl`),
+      `${JSON.stringify({ role: "user", content: staleTail })}\n`,
+      "utf8",
+    );
+
+    const promptPromise = beforePromptBuildHandler(
+      {
+        prependContext: "",
+        prompt: "",
+        body: "",
+        cleanedBody: "",
+        messages: [],
+        sessionId: sessionAId,
+        sessionKey: sessionAKey,
+      },
+      {
+        sessionId: sessionAId,
+        sessionKey: sessionAKey,
+        agentId: "main",
+        trigger: "user",
+      },
+    );
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await messageReceivedHandler(
+      { text: sessionBQuery, sessionId: sessionBId, sessionKey: sessionBKey, timestamp: Date.now() },
+      { sessionId: sessionBId, sessionKey: sessionBKey, agentId: "main", trigger: "user" },
+    );
+
+    const result = await promptPromise;
+    const context = String(result?.prependContext || "");
+    expect(context).not.toContain("Hario Switch");
+    expect(log.mock.calls.some((call) => String(call.join(" ")).includes("Auto-injected"))).toBe(false);
+    const traceRows = readHookTraceEvents(fixture.hiddenHome, "openclaw-main");
+    const queryExtracted = traceRows.filter((row) => row.event === "hook.before_prompt_build.query_extracted").at(-1);
+    expect(queryExtracted).toEqual(expect.objectContaining({
+      session_id: sessionAId,
+      query: staleTail,
+      source: "transcript_tail",
+    }));
+
+    fetchMock.mockRestore();
+    warn.mockRestore();
+    log.mockRestore();
+    error.mockRestore();
+    removeTempDir(fixture.home);
+  });
+
   it("uses identity-only context on the post-compaction refresh turn", async () => {
     vi.stubEnv("QUAID_DISABLE_NOTIFICATIONS", "1");
     const fixture = seedDeferredNoticeFixture(
