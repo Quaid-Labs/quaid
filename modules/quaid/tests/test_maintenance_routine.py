@@ -176,42 +176,6 @@ def test_maintenance_retries_locked_dedup_review():
     assert any("database busy" in line for line in result.logs)
 
 
-def test_maintenance_retry_preserves_failed_attempt_additive_metrics():
-    from datastore.memorydb import maintenance
-
-    calls = 0
-    sleeps = []
-    ctx = SimpleNamespace(
-        graph=object(),
-        options={"subtask": "review"},
-        dry_run=False,
-    )
-
-    def _fake_attempt(_ctx, result):
-        nonlocal calls
-        calls += 1
-        if calls == 1:
-            result.metrics["memories_reviewed"] = 8
-            result.metrics["review_carryover"] = 2
-            raise sqlite3.OperationalError("database is locked")
-        result.metrics["memories_reviewed"] = 2
-        result.metrics["review_carryover"] = 0
-        return result
-
-    with patch(
-        "datastore.memorydb.maintenance._run_memory_graph_maintenance_once",
-        side_effect=_fake_attempt,
-    ), patch("datastore.memorydb.maintenance.time.sleep", lambda delay: sleeps.append(delay)):
-        result = maintenance.run_memory_graph_maintenance(ctx, _Result)
-
-    assert calls == 2
-    assert sleeps == [0.1]
-    assert result.errors == []
-    assert result.metrics["memories_reviewed"] == 10
-    assert result.metrics["review_carryover"] == 0
-    assert any("database busy" in line for line in result.logs)
-
-
 def test_maintenance_exhausts_locked_dedup_review_retry():
     from datastore.memorydb import maintenance
 

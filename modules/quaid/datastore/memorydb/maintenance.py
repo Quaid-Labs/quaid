@@ -16,28 +16,6 @@ from datastore.memorydb.memory_graph import (
 )
 
 
-_RETRY_ADDITIVE_METRICS = {
-    "invalid_facts_skipped",
-    "memories_reviewed",
-    "memories_deleted",
-    "memories_fixed",
-    "dedup_reviewed",
-    "dedup_confirmed",
-    "dedup_reversed",
-    "duplicates_merged",
-    "contradictions_resolved",
-    "contradictions_false_positive",
-    "contradictions_merged",
-    "memories_decayed",
-    "memories_deleted_by_decay",
-    "decay_queued",
-    "decay_reviewed",
-    "decay_review_deleted",
-    "decay_review_extended",
-    "decay_review_pinned",
-}
-
-
 def _fail_hard_enabled() -> bool:
     try:
         from lib.fail_policy import is_fail_hard_enabled
@@ -50,13 +28,6 @@ def _append_result_log(result, message: str) -> None:
     logs = getattr(result, "logs", None)
     if isinstance(logs, list):
         logs.append(message)
-
-
-def _merge_retry_additive_metrics(target: dict, source: dict) -> None:
-    for key in _RETRY_ADDITIVE_METRICS:
-        if key not in source:
-            continue
-        target[key] = int(target.get(key, 0) or 0) + int(source.get(key, 0) or 0)
 
 
 def _record_memory_maintenance_error(result, exc: BaseException):
@@ -209,24 +180,19 @@ def _run_memory_graph_maintenance_once(ctx, result):
 
 def run_memory_graph_maintenance(ctx, result_factory):
     retry_logs = []
-    retry_metrics = {}
     attempts = len(_DATASTORE_BUSY_RETRY_DELAYS_SECONDS) + 1
     for attempt in range(1, attempts + 1):
         result = result_factory()
         for line in retry_logs:
             _append_result_log(result, line)
         try:
-            final_result = _run_memory_graph_maintenance_once(ctx, result)
-            _merge_retry_additive_metrics(final_result.metrics, retry_metrics)
-            return final_result
+            return _run_memory_graph_maintenance_once(ctx, result)
         except sqlite3.OperationalError as exc:
             if not _is_sqlite_busy_or_locked(exc) or attempt >= attempts:
-                _merge_retry_additive_metrics(result.metrics, retry_metrics)
                 result.errors.append(
                     f"Memory graph maintenance failed ({exc.__class__.__name__}): {exc}"
                 )
                 return result
-            _merge_retry_additive_metrics(retry_metrics, result.metrics)
             delay = _DATASTORE_BUSY_RETRY_DELAYS_SECONDS[attempt - 1]
             retry_logs.append(
                 "Memory graph maintenance database busy; "
