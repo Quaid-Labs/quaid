@@ -8318,6 +8318,9 @@ class TestExtractFromTranscript:
         texts = [fact["text"] for fact in result["raw_facts"]]
         assert result["parallel_root_workers"] == 3
         assert result["chunks_processed"] == 2
+        assert result["chunks_failed"] == 1
+        assert result["chunk_calls"] == 3
+        assert result["deep_calls"] == 3
         assert result["facts_stored"] == 2
         assert "Maya likes coffee." in texts
         assert "Maya lives in Austin." in texts

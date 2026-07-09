@@ -2841,6 +2841,7 @@ def _merge_extract_telemetry(target: Dict[str, Any], source: Dict[str, Any]) -> 
         "assessment_usable",
         "assessment_nothing_usable",
         "assessment_needs_smaller_chunk",
+        "chunks_failed",
         "unclassified_empty_payloads",
         "carry_duplicate_facts_dropped",
         "facts_skipped",
@@ -3987,6 +3988,7 @@ def extract_from_transcript(
         "assessment_usable": 0,
         "assessment_nothing_usable": 0,
         "assessment_needs_smaller_chunk": 0,
+        "chunks_failed": 0,
         "unclassified_empty_payloads": 0,
         "carry_duplicate_facts_dropped": 0,
         "artifact_facts_dropped": 0,
@@ -4207,6 +4209,7 @@ def extract_from_transcript(
                     "assessment_usable": 0,
                     "assessment_nothing_usable": 0,
                     "assessment_needs_smaller_chunk": 0,
+                    "chunks_failed": 0,
                     "unclassified_empty_payloads": 0,
                     "carry_duplicate_facts_dropped": 0,
                     "facts_skipped": 0,
@@ -4229,6 +4232,10 @@ def extract_from_transcript(
                     )
                     if raise_on_llm_failure or is_fail_hard_enabled():
                         raise
+                    local_telemetry["chunks_failed"] = int(
+                        local_telemetry.get("chunks_failed", 0) or 0
+                    ) + 1
+                    _merge_extract_telemetry(result, local_telemetry)
 
         for ci in sorted(root_results):
             parsed_payloads, local_telemetry, source_chunk_ref = root_results[ci]
