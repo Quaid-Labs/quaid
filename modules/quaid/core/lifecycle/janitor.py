@@ -1643,7 +1643,7 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
                 metrics.end_task("dedup_review")
                 print(f"Task completed in {metrics.task_duration('dedup_review'):.2f}s\n")
 
-        if task in ("duplicates", "all") and _system_enabled_or_skip("duplicates", "Task 3: Find Near-Duplicates"):
+        if task in ("duplicates", "all") and _system_enabled_or_skip("duplicates", "Task 3: Find Near-Duplicates") and not _skip_if_over_budget("Task 3: Find Near-Duplicates", 30):
             if task == "all" and not memory_pipeline_ok:
                 print("[Task 3: Find Near-Duplicates] SKIPPED — pipeline aborted\n")
             else:

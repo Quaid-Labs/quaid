@@ -3399,6 +3399,7 @@ def review_pending_memories(
     dry_run: bool = True,
     metrics: Optional[JanitorMetrics] = None,
     max_items: int = 0,
+    llm_timeout_seconds: Optional[float] = None,
 ) -> Dict[str, Any]:
     """
     Review all pending memories via the deep-reasoning LLM.
@@ -3612,6 +3613,7 @@ Respond with a JSON array only, no markdown fencing:
                 payload["user_message"],
                 system_prompt=system_prompt,
                 max_tokens=payload["batch_max_tokens"],
+                timeout=_effective_llm_timeout(llm_timeout_seconds, DEEP_REASONING_TIMEOUT),
             )
             error: Optional[Exception] = None
         except Exception as exc:
@@ -3701,6 +3703,7 @@ Respond with a JSON array only, no markdown fencing:
                     retry_prompt,
                     system_prompt=system_prompt,
                     max_tokens=max(200 * len(missing_payload), 300),
+                    timeout=_effective_llm_timeout(llm_timeout_seconds, DEEP_REASONING_TIMEOUT),
                 )
                 if metrics:
                     metrics.add_llm_call(retry_duration)
@@ -3748,6 +3751,7 @@ Respond with a JSON array only, no markdown fencing:
                         single_prompt,
                         system_prompt=system_prompt,
                         max_tokens=300,
+                        timeout=_effective_llm_timeout(llm_timeout_seconds, DEEP_REASONING_TIMEOUT),
                     )
                     if metrics:
                         metrics.add_llm_call(single_duration)

@@ -82,6 +82,49 @@ def test_maintenance_reraises_task_failure_under_failhard():
             handler(ctx)
 
 
+def test_maintenance_skips_short_fact_value_error_even_under_failhard():
+    registry = _Registry()
+    register_lifecycle_routines(registry, _Result)
+    handler = registry.handlers["memory_graph_maintenance"]
+
+    ctx = SimpleNamespace(
+        graph=object(),
+        options={"subtask": "review"},
+        dry_run=True,
+    )
+
+    with patch(
+        "datastore.memorydb.maintenance.ops.review_pending_memories",
+        side_effect=ValueError("Facts must be at least 3 words (got 2: 'short fact')"),
+    ), patch("datastore.memorydb.maintenance._fail_hard_enabled", return_value=True):
+        result = handler(ctx)
+
+    assert result.errors == []
+    assert result.metrics["invalid_facts_skipped"] == 1
+    assert any("skipped malformed fact" in line for line in result.logs)
+
+
+def test_maintenance_passes_llm_timeout_to_review():
+    registry = _Registry()
+    register_lifecycle_routines(registry, _Result)
+    handler = registry.handlers["memory_graph_maintenance"]
+
+    ctx = SimpleNamespace(
+        graph=object(),
+        options={"subtask": "review", "llm_timeout_seconds": 42},
+        dry_run=True,
+    )
+
+    with patch(
+        "datastore.memorydb.maintenance.ops.review_pending_memories",
+        return_value={"total_reviewed": 0, "deleted": 0, "fixed": 0, "carryover": 0, "review_coverage_ratio": 1.0},
+    ) as review_mock:
+        result = handler(ctx)
+
+    assert not result.errors
+    assert review_mock.call_args.kwargs["llm_timeout_seconds"] == 42.0
+
+
 def test_maintenance_passes_llm_timeout_to_dedup_review():
     registry = _Registry()
     register_lifecycle_routines(registry, _Result)

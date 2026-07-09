@@ -45,6 +45,10 @@ def _record_memory_maintenance_error(result, exc: BaseException):
     return result
 
 
+def _is_recoverable_memory_maintenance_error(exc: BaseException) -> bool:
+    return isinstance(exc, ValueError) and "at least 3 words" in str(exc)
+
+
 def _run_memory_graph_maintenance_once(ctx, result):
     graph = ctx.graph
     subtask = str((ctx.options or {}).get("subtask") or "review").strip().lower()
@@ -59,6 +63,7 @@ def _run_memory_graph_maintenance_once(ctx, result):
             dry_run=ctx.dry_run,
             metrics=metrics,
             max_items=max_items,
+            llm_timeout_seconds=llm_timeout_seconds,
         )
         result.metrics["memories_reviewed"] = int(r.get("total_reviewed", 0))
         result.metrics["memories_deleted"] = int(r.get("deleted", 0))
@@ -195,6 +200,8 @@ def run_memory_graph_maintenance(ctx, result_factory):
             )
             time.sleep(delay)
         except Exception as exc:
+            if _is_recoverable_memory_maintenance_error(exc):
+                return _record_memory_maintenance_error(result, exc)
             if _fail_hard_enabled():
                 raise
             return _record_memory_maintenance_error(result, exc)
