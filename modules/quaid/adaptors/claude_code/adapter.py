@@ -424,6 +424,20 @@ class ClaudeCodeAdapter(QuaidAdapter):
             "into `<path>/.claude/settings.json`. Use this to give a CC project its own "
             "isolated memory store.\n"
             "  - `--dry-run` — Preview without making changes\n"
+            "\n"
+            "### Quaid Project Placement Rules\n\n"
+            "- Quaid project names are global across instances.\n"
+            "- If the user names a project and asks to link it, start working on it, "
+            "or use its project tools/files, run `quaid project link <project-name>` "
+            "first using the exact project name the user gave.\n"
+            "- Do not replace a user-provided project name with the current Claude Code "
+            "instance name, lane name, or a newly invented project name.\n"
+            "- Only run `quaid project create <name> --source-root <path>` when the user "
+            "is asking for a new durable project or `quaid project link <name>` reports "
+            "that the project does not exist.\n"
+            "- Do not create project directories or `PROJECT.md` files manually; use the "
+            "Quaid project CLI, then do the work inside the linked or created project.\n"
+            "- Always tell the user which project was linked or created before writing files.\n"
         )
 
     def get_host_info(self):

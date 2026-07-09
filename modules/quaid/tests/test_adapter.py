@@ -2132,6 +2132,15 @@ class TestClaudeCodeAdapter:
         assert state["status"] == "cannot_install"
         assert "requires claude" in state["reason"]
 
+    def test_get_cli_tools_snippet_prefers_link_for_named_existing_project(self):
+        adapter = ClaudeCodeAdapter()
+        snippet = adapter.get_cli_tools_snippet()
+
+        assert "quaid project link <project-name>" in snippet
+        assert "using the exact project name the user gave" in snippet
+        assert "Do not replace a user-provided project name" in snippet
+        assert "quaid project create <name> --source-root <path>" in snippet
+
     def test_get_api_key_raises_when_failhard_enabled(self, monkeypatch):
         from adaptors.claude_code import adapter as adapter_mod
 
