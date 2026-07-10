@@ -43,7 +43,9 @@ def _trace_m15(event: str, **fields) -> None:
 
         trace_m15(event, **fields)
     except Exception as exc:
-        logger.debug("M15 trace write failed: %s", exc, exc_info=True)
+        logger.warning("M15 trace write failed: %s", exc, exc_info=True)
+        if is_fail_hard_enabled():
+            raise
 
 
 class ProviderUnavailableError(Exception):
@@ -126,6 +128,8 @@ def _notify_provider_access_error(
         )
     except Exception as notice_exc:
         logger.warning("Failed queueing provider access error for agent relay: %s", notice_exc)
+        if is_fail_hard_enabled():
+            raise
 
 
 def _is_retryable_llm_transport_error(exc: Optional[BaseException]) -> bool:
@@ -239,7 +243,14 @@ def _load_pricing():
             # but MemoryConfig doesn't expose raw_config — use ModelConfig fields instead.
             # Custom pricing can be added to _PRICING dict directly or via env overrides.
             _pricing_loaded = True
-        except ImportError:
+        except ImportError as exc:
+            if is_fail_hard_enabled():
+                raise RuntimeError(
+                    "Failed to load pricing configuration while failHard is enabled."
+                ) from exc
+            if not _pricing_error_logged:
+                logger.warning("Pricing config unavailable; using built-in defaults: %s", exc)
+                _pricing_error_logged = True
             _pricing_loaded = True
         except Exception as exc:
             if is_fail_hard_enabled():
@@ -517,7 +528,7 @@ def _retry_delay_for_error(exc: BaseException, fallback_delay: float) -> float:
         try:
             return max(delay, float(retry_after_raw))
         except Exception as exc:
-            logger.debug("Failed parsing Retry-After header %r: %s", retry_after_raw, exc)
+            logger.warning("Failed parsing Retry-After header %r: %s", retry_after_raw, exc)
     reset_candidates = []
     now: Optional[datetime] = None
     for key, value in hdrs.items():
@@ -525,7 +536,7 @@ def _retry_delay_for_error(exc: BaseException, fallback_delay: float) -> float:
             try:
                 dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
             except Exception as exc:
-                logger.debug("Failed parsing rate-limit reset header %s=%r: %s", key, value, exc)
+                logger.warning("Failed parsing rate-limit reset header %s=%r: %s", key, value, exc)
                 continue
             if now is None:
                 now = _now_datetime()
@@ -820,13 +831,6 @@ def call_llm(system_prompt: str, user_message: str,
                         call_timeout=call_timeout,
                     )
                     result = llm.llm_call(messages, resolved_tier, max_tokens, call_timeout)
-                _track_usage(result)
-                _append_usage_event(
-                    result,
-                    tier=resolved_tier,
-                    provider_name=provider_name,
-                    requested_model=model,
-                )
                 if result.truncated:
                     message = (
                         "LLM response truncated by max_tokens "
@@ -842,39 +846,6 @@ def call_llm(system_prompt: str, user_message: str,
                         f"(provider={provider_name}, tier={resolved_tier}, model={result.model or model}, "
                         f"timeout={timeout_for_attempt})"
                     )
-                _append_trace({
-                    "status": "ok",
-                    "provider": provider_name,
-                    "tier": resolved_tier,
-                    "requested_model": str(model or ""),
-                    "resolved_model": str(model or ""),
-                    "returned_model": str(result.model or ""),
-                    "attempt": int(attempt + 1),
-                    "duration_ms": int(max(0.0, float(result.duration or 0.0)) * 1000),
-                    "timeout_s": float(timeout_for_attempt if timeout_for_attempt is not None else 0.0),
-                    "request_preview": _preview(user_message, 30),
-                    "system_preview": _preview(system_prompt, 30),
-                    "response_preview": _preview(result.text, 30),
-                    "error_code": "",
-                    "key_fp": _key_fp(),
-                })
-                _trace_m15(
-                    "llm.provider.call_ok",
-                    provider=provider_name,
-                    requested_model=model,
-                    returned_model=result.model,
-                    resolved_tier=resolved_tier,
-                    attempt=attempt + 1,
-                    duration_ms=int(max(0.0, float(result.duration or 0.0)) * 1000),
-                    response_preview=_preview(result.text, 30),
-                )
-                try:
-                    from lib.agent_notice import clear_pending_notices_by_source
-
-                    clear_pending_notices_by_source(sources={"provider", "llm_config"})
-                except Exception as notice_exc:
-                    logger.warning("Failed clearing provider pending notices after successful LLM call: %s", notice_exc)
-                return result.text, result.duration
             except Exception as e:
                 last_error = e
                 _trace_m15(
@@ -931,6 +902,49 @@ def call_llm(system_prompt: str, user_message: str,
                     time.sleep(delay)
                     continue
                 break
+            else:
+                _track_usage(result)
+                _append_usage_event(
+                    result,
+                    tier=resolved_tier,
+                    provider_name=provider_name,
+                    requested_model=model,
+                )
+                _append_trace({
+                    "status": "ok",
+                    "provider": provider_name,
+                    "tier": resolved_tier,
+                    "requested_model": str(model or ""),
+                    "resolved_model": str(model or ""),
+                    "returned_model": str(result.model or ""),
+                    "attempt": int(attempt + 1),
+                    "duration_ms": int(max(0.0, float(result.duration or 0.0)) * 1000),
+                    "timeout_s": float(timeout_for_attempt if timeout_for_attempt is not None else 0.0),
+                    "request_preview": _preview(user_message, 30),
+                    "system_preview": _preview(system_prompt, 30),
+                    "response_preview": _preview(result.text, 30),
+                    "error_code": "",
+                    "key_fp": _key_fp(),
+                })
+                _trace_m15(
+                    "llm.provider.call_ok",
+                    provider=provider_name,
+                    requested_model=model,
+                    returned_model=result.model,
+                    resolved_tier=resolved_tier,
+                    attempt=attempt + 1,
+                    duration_ms=int(max(0.0, float(result.duration or 0.0)) * 1000),
+                    response_preview=_preview(result.text, 30),
+                )
+                try:
+                    from lib.agent_notice import clear_pending_notices_by_source
+
+                    clear_pending_notices_by_source(sources={"provider", "llm_config"})
+                except Exception as notice_exc:
+                    logger.warning("Failed clearing provider pending notices after successful LLM call: %s", notice_exc)
+                    if is_fail_hard_enabled():
+                        raise
+                return result.text, result.duration
 
         duration = time.time() - start_time
         logger.error("[llm_clients] LLM error: %s", last_error)

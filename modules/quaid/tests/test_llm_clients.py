@@ -275,6 +275,25 @@ class TestTokenUsage:
             llm_clients._pricing_loaded = old_loaded
             llm_clients._pricing_error_logged = old_error_logged
 
+    def test_load_pricing_warns_once_on_import_error_when_failhard_disabled(self):
+        import core.llm.clients as llm_clients
+        old_loaded = llm_clients._pricing_loaded
+        old_error_logged = llm_clients._pricing_error_logged
+        llm_clients._pricing_loaded = False
+        llm_clients._pricing_error_logged = False
+        try:
+            with patch("config.get_config", side_effect=ImportError("config missing")), \
+                 patch("core.llm.clients.is_fail_hard_enabled", return_value=False), \
+                 patch("core.llm.clients.logger.warning") as log_warning:
+                llm_clients._load_pricing()
+                llm_clients._load_pricing()
+            assert llm_clients._pricing_loaded is True
+            assert llm_clients._pricing_error_logged is True
+            assert log_warning.call_count == 1
+        finally:
+            llm_clients._pricing_loaded = old_loaded
+            llm_clients._pricing_error_logged = old_error_logged
+
     def test_load_pricing_raises_when_failhard_enabled(self):
         import core.llm.clients as llm_clients
         old_loaded = llm_clients._pricing_loaded
@@ -286,6 +305,22 @@ class TestTokenUsage:
                  patch("core.llm.clients.is_fail_hard_enabled", return_value=True):
                 with pytest.raises(RuntimeError, match="pricing configuration"):
                     llm_clients._load_pricing()
+        finally:
+            llm_clients._pricing_loaded = old_loaded
+            llm_clients._pricing_error_logged = old_error_logged
+
+    def test_load_pricing_import_error_raises_when_failhard_enabled(self):
+        import core.llm.clients as llm_clients
+        old_loaded = llm_clients._pricing_loaded
+        old_error_logged = llm_clients._pricing_error_logged
+        llm_clients._pricing_loaded = False
+        llm_clients._pricing_error_logged = False
+        try:
+            with patch("config.get_config", side_effect=ImportError("config missing")), \
+                 patch("core.llm.clients.is_fail_hard_enabled", return_value=True):
+                with pytest.raises(RuntimeError, match="pricing configuration") as excinfo:
+                    llm_clients._load_pricing()
+            assert isinstance(excinfo.value.__cause__, ImportError)
         finally:
             llm_clients._pricing_loaded = old_loaded
             llm_clients._pricing_error_logged = old_error_logged
@@ -610,11 +645,21 @@ class TestCallLlmProvider:
         import core.llm.clients as llm_clients
 
         with patch("lib.m15_trace.trace_m15", side_effect=RuntimeError("trace unavailable")), \
-             caplog.at_level("DEBUG"):
+             patch("core.llm.clients.is_fail_hard_enabled", return_value=False), \
+             caplog.at_level("WARNING"):
             llm_clients._trace_m15("llm.test")
 
         assert "M15 trace write failed" in caplog.text
         assert "trace unavailable" in caplog.text
+
+    def test_m15_trace_failure_raises_when_failhard_enabled(self):
+        """M15 tracing is optional only in fail-open mode."""
+        import core.llm.clients as llm_clients
+
+        with patch("lib.m15_trace.trace_m15", side_effect=RuntimeError("trace unavailable")), \
+             patch("core.llm.clients.is_fail_hard_enabled", return_value=True):
+            with pytest.raises(RuntimeError, match="trace unavailable"):
+                llm_clients._trace_m15("llm.test")
 
     def test_llm_m15_previews_are_bounded(self, test_adapter):
         """M15 trace previews should not carry long raw prompts or responses."""
@@ -760,10 +805,28 @@ class TestCallLlmProvider:
             None,
         )
 
-        with caplog.at_level("DEBUG", logger="lib.llm_clients"):
+        with caplog.at_level("WARNING", logger="lib.llm_clients"):
             assert llm_clients._retry_delay_for_error(exc, 2.5) == 2.5
 
         assert "Failed parsing Retry-After header 'bogus'" in caplog.text
+
+    def test_retry_delay_logs_bad_reset_header(self, monkeypatch, caplog):
+        import core.llm.clients as llm_clients
+
+        monkeypatch.setenv("QUAID_NOW", "2030-01-01T00:00:00Z")
+        exc = urllib.error.HTTPError(
+            "https://example.test",
+            429,
+            "rate limited",
+            {"anthropic-ratelimit-requests-reset": "not-a-date"},
+            None,
+        )
+
+        with caplog.at_level("WARNING", logger="lib.llm_clients"):
+            assert llm_clients._retry_delay_for_error(exc, 2.5) == 2.5
+
+        assert "Failed parsing rate-limit reset header" in caplog.text
+        assert "not-a-date" in caplog.text
 
     def test_retry_delay_reset_header_uses_quaid_now(self, monkeypatch):
         import core.llm.clients as llm_clients
@@ -928,6 +991,26 @@ class TestCallLlmProvider:
         assert result is not None
         assert call_count[0] == 2
 
+    def test_usage_event_failure_after_success_is_not_retried(self, test_adapter):
+        """A post-success usage-log OSError must not be classified as provider failure."""
+        import core.llm.clients as llm_clients
+
+        with patch("core.llm.clients._append_usage_event", side_effect=OSError("usage log locked")):
+            with pytest.raises(OSError, match="usage log locked"):
+                llm_clients.call_llm("system", "user", max_retries=3)
+
+        assert len(test_adapter.llm_calls) == 1
+
+    def test_trace_append_failure_after_success_is_not_retried(self, test_adapter):
+        """A post-success trace OSError must not trigger duplicate provider calls."""
+        import core.llm.clients as llm_clients
+
+        with patch("core.llm.clients._append_trace", side_effect=OSError("trace log locked")):
+            with pytest.raises(OSError, match="trace log locked"):
+                llm_clients.call_llm("system", "user", max_retries=3)
+
+        assert len(test_adapter.llm_calls) == 1
+
     def test_raises_on_persistent_error_when_failhard_enabled(self, test_adapter):
         """Persistent provider failures should raise when failHard is enabled."""
         import core.llm.clients as llm_clients
@@ -1067,13 +1150,26 @@ class TestCallLlmProvider:
         with patch(
             "lib.agent_notice.clear_pending_notices_by_source",
             side_effect=RuntimeError("notice store locked"),
-        ), caplog.at_level("WARNING"):
+        ), patch("core.llm.clients.is_fail_hard_enabled", return_value=False), caplog.at_level("WARNING"):
             result, duration = llm_clients.call_llm("system", "user", max_retries=0)
 
         assert result is not None
         assert duration > 0
         assert "Failed clearing provider pending notices" in caplog.text
         assert "notice store locked" in caplog.text
+
+    def test_successful_call_raises_pending_notice_cleanup_failure_when_failhard(self, test_adapter):
+        """Stale provider notice cleanup failures must surface under failHard."""
+        import core.llm.clients as llm_clients
+
+        with patch(
+            "lib.agent_notice.clear_pending_notices_by_source",
+            side_effect=RuntimeError("notice store locked"),
+        ), patch("core.llm.clients.is_fail_hard_enabled", return_value=True):
+            with pytest.raises(RuntimeError, match="notice store locked"):
+                llm_clients.call_llm("system", "user", max_retries=0)
+
+        assert len(test_adapter.llm_calls) == 1
 
     def test_config_error_notifies_agent_before_failhard_raise(self, test_adapter):
         import core.llm.clients as llm_clients
@@ -1095,6 +1191,20 @@ class TestCallLlmProvider:
         assert "invalid-model-xyzzy" in mock_notify.call_args.args[0]
         assert mock_notify.call_args.kwargs["severity"] == "error"
         assert mock_notify.call_args.kwargs["source"] == "provider"
+
+    def test_provider_notice_queue_failure_raises_when_failhard(self):
+        import core.llm.clients as llm_clients
+
+        with patch("core.llm.clients.notify_agent", side_effect=RuntimeError("notice queue locked")), \
+             patch("core.llm.clients.is_fail_hard_enabled", return_value=True):
+            with pytest.raises(RuntimeError, match="notice queue locked"):
+                llm_clients._notify_provider_access_error(
+                    provider_name="TestProvider",
+                    resolved_tier="fast",
+                    model="mock-model",
+                    last_error=RuntimeError("provider denied"),
+                    dedupe_prefix="llm-config",
+                )
 
     def test_uses_remaining_deadline_for_slot_and_provider_timeout(self):
         """Per-attempt timeout should use remaining deadline, not full timeout each retry."""
