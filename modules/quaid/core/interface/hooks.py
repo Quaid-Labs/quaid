@@ -2645,6 +2645,8 @@ def _arm_compaction_refresh_marker(
                 encoding="utf-8",
             )
     except Exception:
+        if _fail_hard_enabled():
+            raise
         pass
 
 

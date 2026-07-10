@@ -1889,6 +1889,25 @@ def test_compaction_refresh_marker_ttl_honors_quaid_now(tmp_path, mock_adapter, 
     assert not latest_file.exists()
 
 
+def test_arm_compaction_refresh_marker_raises_latest_path_failure_when_fail_hard(tmp_path, monkeypatch):
+    from core.interface import hooks
+
+    marker_file = tmp_path / "context-refresh-compaction" / "session-a.json"
+    monkeypatch.setattr(hooks, "_context_refresh_strategy", lambda: "compaction")
+    monkeypatch.setattr(hooks, "_context_refresh_compaction_marker_path", lambda _session_id: marker_file)
+    monkeypatch.setattr(
+        hooks,
+        "_context_refresh_compaction_latest_marker_path",
+        lambda: (_ for _ in ()).throw(RuntimeError("latest path broken")),
+    )
+    monkeypatch.setattr(hooks, "_fail_hard_enabled", lambda: True)
+
+    with pytest.raises(RuntimeError, match="latest path broken"):
+        hooks._arm_compaction_refresh_marker("session-a", reason="pytest", source="test")
+
+    assert marker_file.is_file()
+
+
 def test_consume_compaction_refresh_marker_logs_malformed_latest_fail_open(
     tmp_path, mock_adapter, monkeypatch, caplog
 ):
