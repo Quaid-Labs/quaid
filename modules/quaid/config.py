@@ -1028,7 +1028,7 @@ def _load_config_inner() -> MemoryConfig:
     for config_path in reversed(_config_paths()):
         if config_path.exists():
             try:
-                with open(config_path, 'r') as f:
+                with open(config_path, 'r', encoding="utf-8") as f:
                     parsed = json.load(f)
                 if isinstance(parsed, dict):
                     raw_config = _deep_merge_dicts(raw_config, parsed)

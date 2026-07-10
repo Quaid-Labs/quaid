@@ -433,6 +433,29 @@ class TestConfigPathResolution:
         finally:
             config._config = old_config
 
+    def test_load_from_json_file_reads_utf8(self, tmp_path):
+        import config
+        old_config = config._config
+        real_open = open
+        opened = {}
+        config._config = None
+        try:
+            config_file = tmp_path / "config.json"
+            config_file.write_text(json.dumps({"notifications": {"level": "café"}}), encoding="utf-8")
+
+            def _tracking_open(file, mode="r", *args, **kwargs):
+                if Path(file) == config_file:
+                    opened["encoding"] = kwargs.get("encoding")
+                return real_open(file, mode, *args, **kwargs)
+
+            with patch.object(config, "_config_paths", lambda: [config_file]), \
+                 patch("builtins.open", side_effect=_tracking_open):
+                cfg = load_config()
+                assert cfg.notifications.level == "café"
+                assert opened["encoding"] == "utf-8"
+        finally:
+            config._config = old_config
+
     def test_loads_prompt_set_from_config(self, tmp_path):
         import config
         old_config = config._config
