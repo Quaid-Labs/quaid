@@ -96,7 +96,11 @@ def _scope_projects_to_current_instance(projects: Dict[str, Dict[str, Any]]) -> 
 
 
 def _project_visible_to_current_instance(project: Optional[Dict[str, Any]]) -> bool:
-    return bool(project) and _linked_to_current_instance(project)
+    if not project:
+        return False
+    if not _dedupe_instances(project.get("instances", [])):
+        return True
+    return _linked_to_current_instance(project)
 
 
 def _require_project_visible(name: str, project: Optional[Dict[str, Any]]) -> Dict[str, Any]:

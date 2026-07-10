@@ -131,6 +131,10 @@ class TestCmdList:
                 "description": "CC",
                 "instances": ["claude-code-private-tmp-cc-livetest"],
             },
+            "orphan-proj": {
+                "description": "No linked instances",
+                "instances": [],
+            },
         }
         with patch("core.project_registry.list_projects", return_value=projects), \
              patch("core.project_registry_cli._current_instance_id", return_value="codex-private-tmp-cdx-livetest"):
@@ -237,6 +241,16 @@ class TestCmdShow:
         out = capsys.readouterr().out
         parsed = json.loads(out)
         assert parsed["my-proj"]["instances"] == ["alive-instance"]
+
+    def test_show_allows_project_with_no_linked_instances(self, capsys):
+        project = {"description": "Unlinked but global", "instances": []}
+        with patch("core.project_registry.get_project", return_value=project), \
+             patch("core.project_registry_cli._current_instance_id", return_value="codex-cdx-livetest"):
+            cli.cmd_show(_args(name="orphan-proj"))
+        out = capsys.readouterr().out
+        parsed = json.loads(out)
+        assert parsed["orphan-proj"]["description"] == "Unlinked but global"
+        assert parsed["orphan-proj"]["instances"] == []
 
     def test_show_rejects_project_not_linked_to_current_instance(self, capsys):
         project = {"description": "CDX", "instances": ["codex-private-tmp-cdx-livetest"]}
