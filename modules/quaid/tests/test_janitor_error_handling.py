@@ -768,6 +768,39 @@ def test_check_for_updates_generic_failure_raises_when_fail_hard(tmp_path, monke
     assert str(excinfo.value.__cause__) == "payload failed"
 
 
+def test_check_for_updates_reads_version_as_utf8(tmp_path, monkeypatch):
+    version_file = tmp_path / "VERSION"
+    version_file.write_text("0.1.0", encoding="utf-8")
+    monkeypatch.setattr(janitor, "_version_file", lambda: version_file)
+    monkeypatch.setattr(janitor, "get_graph", lambda: object())
+    monkeypatch.setattr(janitor, "get_update_check_cache", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(janitor, "is_fail_hard_enabled", lambda: False)
+
+    read_encodings = []
+    real_read_text = Path.read_text
+
+    def tracking_read_text(self, *args, **kwargs):
+        if self == version_file:
+            read_encodings.append(kwargs.get("encoding"))
+        return real_read_text(self, *args, **kwargs)
+
+    class _Resp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return b'["bad-payload"]'
+
+    monkeypatch.setattr(Path, "read_text", tracking_read_text)
+    monkeypatch.setattr(urllib.request, "urlopen", lambda *_args, **_kwargs: _Resp())
+
+    assert janitor._check_for_updates() is None
+    assert read_encodings == ["utf-8"]
+
+
 def test_check_for_updates_ignores_non_object_github_payload(tmp_path, monkeypatch):
     version_file = tmp_path / "VERSION"
     version_file.write_text("0.1.0", encoding="utf-8")

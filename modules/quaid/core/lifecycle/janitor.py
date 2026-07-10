@@ -584,7 +584,7 @@ def _check_for_updates() -> Optional[Dict[str, str]]:
     version_file = _version_file()
     if not version_file.exists():
         return None
-    current = version_file.read_text().strip()
+    current = version_file.read_text(encoding="utf-8").strip()
     if not current:
         return None
 
