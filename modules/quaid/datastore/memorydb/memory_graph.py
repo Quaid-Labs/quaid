@@ -685,8 +685,12 @@ class MemoryGraph:
             ]:
                 try:
                     conn.execute(stmt)
-                except sqlite3.OperationalError:
-                    pass
+                except sqlite3.OperationalError as exc:
+                    logger.warning("memory DB index repair failed for %r: %s", stmt, exc)
+                    if _is_fail_hard_mode():
+                        raise RuntimeError(
+                            "Memory graph index repair failed while failHard is enabled"
+                        ) from exc
 
             # Rebuild FTS to include keywords column if schema predates it
             try:

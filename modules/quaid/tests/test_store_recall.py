@@ -5394,6 +5394,73 @@ class TestStoreKeywords:
 
         assert leftover is None
 
+    def test_init_index_repair_failure_respects_failhard(self, tmp_path, caplog):
+        """Index repair failures must not be silently swallowed under failHard."""
+        import datastore.memorydb.memory_graph as mg
+
+        class _Cursor:
+            def __init__(self, rows=None):
+                self._rows = list(rows or [])
+
+            def fetchone(self):
+                return self._rows[0] if self._rows else None
+
+            def fetchall(self):
+                return list(self._rows)
+
+        class _Conn:
+            def execute(self, sql, params=()):
+                text = " ".join(str(sql).split())
+                if "SELECT 1 FROM sqlite_master WHERE type='table' AND name='nodes'" in text:
+                    return _Cursor([(1,)])
+                if "idx_nodes_name_lower" in text:
+                    raise sqlite3.OperationalError("expression indexes disabled")
+                if "SELECT sql FROM sqlite_master WHERE type='table' AND name='nodes_fts'" in text:
+                    return _Cursor([("CREATE VIRTUAL TABLE nodes_fts USING fts5(name, keywords, tokenize='porter unicode61')",)])
+                if "WHERE type='trigger' AND name IN ('nodes_ai', 'nodes_ad', 'nodes_au')" in text:
+                    return _Cursor([])
+                if "WHERE type='trigger' AND name='nodes_au'" in text:
+                    return _Cursor([])
+                if "PRAGMA table_info(dedup_log)" in text:
+                    return _Cursor([])
+                if "SELECT COUNT(*) FROM nodes_fts" in text or "SELECT COUNT(*) FROM nodes" in text:
+                    return _Cursor([(0,)])
+                if "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?" in text:
+                    return _Cursor([(1,)])
+                return _Cursor([])
+
+            def executescript(self, _schema):
+                return None
+
+        class _ConnCtx:
+            def __enter__(self):
+                return _Conn()
+
+            def __exit__(self, *_exc):
+                return False
+
+        graph = mg.MemoryGraph.__new__(mg.MemoryGraph)
+        graph.db_path = tmp_path / "fake.db"
+        graph._get_conn = lambda: _ConnCtx()
+
+        with patch.object(mg, "_is_fail_hard_mode", return_value=True), \
+             patch.object(mg, "_lib_has_vec", return_value=False), \
+             caplog.at_level("WARNING", logger=mg.__name__):
+            with pytest.raises(RuntimeError, match="index repair failed"):
+                graph._init_db()
+
+        assert "memory DB index repair failed" in caplog.text
+        assert "idx_nodes_name_lower" in caplog.text
+
+        caplog.clear()
+        with patch.object(mg, "_is_fail_hard_mode", return_value=False), \
+             patch.object(mg, "_lib_has_vec", return_value=False), \
+             caplog.at_level("WARNING", logger=mg.__name__):
+            graph._init_db()
+
+        assert "memory DB index repair failed" in caplog.text
+        assert "idx_nodes_name_lower" in caplog.text
+
     @pytest.mark.parametrize(
         ("fail_marker", "message"),
         [
