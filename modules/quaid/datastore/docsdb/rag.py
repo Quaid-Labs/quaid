@@ -1067,7 +1067,7 @@ class DocsRAG:
                 remaining = remaining[1:]
         return [part for part in parts if part]
 
-    def chunk_markdown(self, content: str, max_tokens: int = None) -> List[DocumentChunk]:
+    def chunk_markdown(self, content: str, max_tokens: int = None) -> List[str]:
         """Smart chunking of markdown content at headers/paragraphs."""
         if max_tokens is None:
             max_tokens = _chunk_max_tokens()
@@ -1119,7 +1119,6 @@ class DocsRAG:
         if current_chunk_lines:
             chunks.append('\n'.join(current_chunk_lines))
         
-        # Convert to DocumentChunk objects (will be populated with source info later)
         return [chunk for chunk in chunks if chunk.strip()]
 
     def chunk_project_log(self, content: str, max_tokens: int = None) -> List[str]:
