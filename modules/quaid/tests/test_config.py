@@ -514,13 +514,13 @@ class TestConfigPathResolution:
         finally:
             config._config = old_config
 
-    def test_loads_capture_compact_on_timeout_from_new_or_legacy_keys(self, tmp_path):
+    def test_loads_capture_compact_on_timeout_from_canonical_and_alpha_installer_keys(self, tmp_path):
         import config
         old_config = config._config
         config._config = None
         try:
             config_file = tmp_path / "config.json"
-            config_file.write_text(json.dumps({"capture": {"compactOnTimeout": False}}))
+            config_file.write_text(json.dumps({"capture": {"compact_on_timeout": False}}))
             with patch.object(config, "_config_paths", lambda: [config_file]):
                 cfg = load_config()
                 assert cfg.capture.compact_on_timeout is False

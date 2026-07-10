@@ -9333,6 +9333,22 @@ def test_get_compact_on_timeout_raises_malformed_config_when_fail_hard(
         extraction_daemon._get_compact_on_timeout(default=False)
 
 
+def test_get_compact_on_timeout_reads_canonical_and_alpha_installer_keys(
+    monkeypatch,
+    tmp_path,
+):
+    import config as config_mod
+
+    config_path = tmp_path / "config.json"
+    monkeypatch.setattr(config_mod, "_config_paths", lambda: [config_path])
+
+    config_path.write_text(json.dumps({"capture": {"compact_on_timeout": False}}), encoding="utf-8")
+    assert extraction_daemon._get_compact_on_timeout(default=True) is False
+
+    config_path.write_text(json.dumps({"capture": {"autoCompactionOnTimeout": True}}), encoding="utf-8")
+    assert extraction_daemon._get_compact_on_timeout(default=False) is True
+
+
 def test_should_skip_new_orphan_transcript_logs_install_state_failure_fail_open(
     monkeypatch,
     tmp_path,

@@ -2143,7 +2143,7 @@ _write_config() {
     "enabled": true,
     "strictness": "high",
     "inactivityTimeoutMinutes": 60,
-    "autoCompactionOnTimeout": ${AUTO_COMPACTION_ON_TIMEOUT},
+    "compact_on_timeout": ${AUTO_COMPACTION_ON_TIMEOUT},
     "skipPatterns": ["^(thanks|ok|sure|yes|no)$", "^(hi|hello|hey)\\\\b"]
   },
   "decay": {

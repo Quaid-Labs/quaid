@@ -1489,8 +1489,7 @@ obj = json.load(open(p, "r", encoding="utf-8"))
 capture = obj.setdefault("capture", {})
 capture["inactivityTimeoutMinutes"] = 0.1
 capture["inactivity_timeout_minutes"] = 0.1
-capture["autoCompactionOnTimeout"] = False
-capture["auto_compaction_on_timeout"] = False
+capture["compact_on_timeout"] = False
 with open(p, "w", encoding="utf-8") as f:
     json.dump(obj, f, indent=2)
     f.write("\n")
@@ -1502,8 +1501,7 @@ import json, sys
 p = sys.argv[1]
 obj = json.load(open(p, "r", encoding="utf-8"))
 capture = obj.setdefault("capture", {})
-capture["autoCompactionOnTimeout"] = False
-capture["auto_compaction_on_timeout"] = False
+capture["compact_on_timeout"] = False
 with open(p, "w", encoding="utf-8") as f:
     json.dump(obj, f, indent=2)
     f.write("\n")

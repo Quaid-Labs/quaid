@@ -300,7 +300,6 @@ export type RecallDiagnostics = {
 
 export type JanitorNudgeOptions = {
   statePath: string;
-  pendingInstallMigrationPath: string;
   pendingApprovalRequestsPath: string;
   cooldownMs?: number;
   nowMs?: number;
@@ -1390,20 +1389,6 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
     let changed = false;
 
     try {
-      if (fs.existsSync(options.pendingInstallMigrationPath)) {
-        const raw = readObjectFile(options.pendingInstallMigrationPath);
-        const lastInstallNudge = Number(state.lastInstallNudgeAt || 0);
-        if (raw?.status === "pending" && now - lastInstallNudge > cooldown) {
-          nudges.push("Hey, I see you just installed Quaid. Want me to help migrate important context into managed memory now?");
-          state.lastInstallNudgeAt = now;
-          changed = true;
-        }
-      }
-    } catch (err: unknown) {
-      console.warn(`[quaid][facade] install nudge check failed: ${String((err as Error)?.message || err)}`);
-    }
-
-    try {
       if (fs.existsSync(options.pendingApprovalRequestsPath)) {
         const raw = readObjectFile(options.pendingApprovalRequestsPath);
         const requests = Array.isArray(raw?.requests) ? raw.requests : [];
@@ -1831,8 +1816,8 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
   function maybeForceCompactionAfterTimeout(sessionId?: string): void {
     const captureCfg = deps.getMemoryConfig().capture || {};
     const enabled = Boolean(
-      captureCfg.autoCompactionOnTimeout
-      ?? captureCfg.auto_compaction_on_timeout
+      captureCfg.compact_on_timeout
+      ?? captureCfg.autoCompactionOnTimeout
       ?? true,
     );
     if (!enabled) return;

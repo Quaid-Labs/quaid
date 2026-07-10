@@ -2555,7 +2555,7 @@ describe("QuaidFacade", () => {
     const facade = createQuaidFacade(makeMockDeps({
       getMemoryConfig: vi.fn(() => ({
         retrieval: { failHard: false },
-        capture: { autoCompactionOnTimeout: true },
+        capture: { compact_on_timeout: true },
       })),
       listCompactionSessions: () => [{ key: "agent:main:main", sessionId: "sess-main" }],
       requestSessionCompaction,
@@ -3430,15 +3430,12 @@ describe("QuaidFacade", () => {
   // emitProjectEvent test removed — project events now emitted from Python extraction
   // (ingest/extract.py) instead of the TypeScript facade.
 
-  it("collectJanitorNudges emits install/approval nudges with cooldown persistence", async () => {
+  it("collectJanitorNudges emits approval nudges with cooldown persistence", async () => {
     const workspace = await mkdtemp(path.join(tmpdir(), "quaid-facade-janitor-nudges-"));
     const facade = createQuaidFacade(makeMockDeps({ workspace }));
     const statePath = path.join(workspace, "runtime", "notes", "janitor-nudge-state.json");
-    const pendingInstallMigrationPath = path.join(workspace, "runtime", "pending-install-migration.json");
     const pendingApprovalRequestsPath = path.join(workspace, "runtime", "notes", "pending-approval-requests.json");
-    await mkdir(path.dirname(pendingInstallMigrationPath), { recursive: true });
     await mkdir(path.dirname(pendingApprovalRequestsPath), { recursive: true });
-    await writeFile(pendingInstallMigrationPath, JSON.stringify({ status: "pending" }), "utf8");
     await writeFile(
       pendingApprovalRequestsPath,
       JSON.stringify({ requests: [{ status: "pending" }, { status: "resolved" }] }),
@@ -3447,17 +3444,14 @@ describe("QuaidFacade", () => {
 
     const nudges = facade.collectJanitorNudges({
       statePath,
-      pendingInstallMigrationPath,
       pendingApprovalRequestsPath,
       nowMs: 1_700_000_000_000,
     });
-    expect(nudges).toHaveLength(2);
-    expect(nudges[0]).toContain("just installed Quaid");
-    expect(nudges[1]).toContain("1 pending approval request");
+    expect(nudges).toHaveLength(1);
+    expect(nudges[0]).toContain("1 pending approval request");
 
     const suppressed = facade.collectJanitorNudges({
       statePath,
-      pendingInstallMigrationPath,
       pendingApprovalRequestsPath,
       nowMs: 1_700_000_000_500,
     });

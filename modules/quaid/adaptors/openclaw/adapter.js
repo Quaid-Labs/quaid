@@ -158,19 +158,6 @@ function _resolveQuaidInstance() {
     }
   } catch {
   }
-  const candidates = [
-    path.join(WORKSPACE, ".oc-instance-name"),
-    path.join(os.homedir(), ".openclaw", "extensions", "quaid", ".oc-instance-name")
-  ];
-  for (const candidate of candidates) {
-    try {
-      if (fs.existsSync(candidate)) {
-        const val = fs.readFileSync(candidate, "utf8").trim();
-        if (val) return val;
-      }
-    } catch {
-    }
-  }
   return "openclaw-main";
 }
 function _resolvePythonPluginRoot(workspace = WORKSPACE, moduleRootOverride) {
@@ -256,7 +243,6 @@ const QUAID_LOGS_DIR = path.join(QUAID_INSTANCE_ROOT, "logs");
 const QUAID_TIMEOUT_LOG_DIR = path.join(QUAID_LOGS_DIR, "session-timeout");
 const QUAID_HOOK_TRACE_PATH = path.join(QUAID_LOGS_DIR, "quaid-hook-trace.jsonl");
 const QUAID_PREINJECT_LOG_PATH = path.join(QUAID_LOGS_DIR, "daemon", "preinject.jsonl");
-const PENDING_INSTALL_MIGRATION_PATH = path.join(QUAID_RUNTIME_DIR, "pending-install-migration.json");
 const PENDING_APPROVAL_REQUESTS_PATH = path.join(QUAID_NOTES_DIR, "pending-approval-requests.json");
 const JANITOR_NUDGE_STATE_PATH = path.join(QUAID_NOTES_DIR, "janitor-nudge-state.json");
 const ADAPTER_PLUGIN_MANIFEST_PATH = path.join(PYTHON_PLUGIN_ROOT, "adaptors", "openclaw", "plugin.json");
@@ -5359,7 +5345,6 @@ ${sessionScope}` : "";
       try {
         const messages = facade.collectJanitorNudges({
           statePath: JANITOR_NUDGE_STATE_PATH,
-          pendingInstallMigrationPath: PENDING_INSTALL_MIGRATION_PATH,
           pendingApprovalRequestsPath: PENDING_APPROVAL_REQUESTS_PATH
         });
         for (const message of messages) {

@@ -673,10 +673,6 @@ function _seedJanitorInstallCheckpoint(instanceId = "") {
   }
 }
 
-function runtimePendingInstallMigrationPath() {
-  return path.join(RUNTIME_DIR, "pending-install-migration.json");
-}
-
 let _adapterManifests = [];
 let _existingInstallDetected = false;
 let _chainedPlatformInstall = false;
@@ -3655,7 +3651,7 @@ async function step3_models() {
   if (DEBUG_SETUP) {
     log.info(C.dim(`[step3_models] timeout compaction support for ${adapterType}: ${supportsTimeoutCompaction ? "yes" : "no"}`));
   }
-  const autoCompactionOnTimeout = supportsTimeoutCompaction; // Auto-enable if supported
+  const compactOnTimeout = supportsTimeoutCompaction; // Auto-enable if supported
 
   const supportedProviders = Array.isArray(adapterCaps.providers) && adapterCaps.providers.length > 0
     ? adapterCaps.providers
@@ -3993,7 +3989,7 @@ async function step3_models() {
     advancedSetup: false,
     adapterType,
     janitorAskFirst,
-    autoCompactionOnTimeout,
+    compactOnTimeout,
   };
 }
 
@@ -4907,11 +4903,6 @@ except Exception as e:
     s.stop(C.green("OpenClaw plugin registered and gateway ready"));
   }
 
-  // Workspace migration is intentionally not part of installer flow.
-  // Memory should accumulate naturally, or users can request migration later.
-  const migrationCompleted = true;
-  const mdFiles = [];
-
   if (resolvedInstanceId && !postInstallStateStabilized) {
     const postInstall = _stabilizePostInstallExtractionState(resolvedInstanceId);
     postInstallStateStabilized = true;
@@ -5137,23 +5128,6 @@ print('created' if created else 'exists')
     } catch {}
   }
   log.message("");
-  try {
-    const markerPath = runtimePendingInstallMigrationPath();
-    fs.mkdirSync(path.dirname(markerPath), { recursive: true });
-    if (migrationCompleted || mdFiles.length === 0) {
-      try { fs.rmSync(markerPath, { force: true }); } catch {}
-    } else {
-      fs.writeFileSync(
-        markerPath,
-        JSON.stringify({
-          createdAt: new Date().toISOString(),
-          status: "pending",
-          prompt: "Hey, I see you just installed Quaid. Want me to help migrate important context into managed memory now?"
-        }, null, 2) + "\n",
-        "utf8"
-      );
-    }
-  } catch {}
   await waitForKey("Press any key to run validation...");
 }
 
@@ -6096,7 +6070,7 @@ function writeConfig(owner, models, embeddings, systems, janitorPolicies = null)
       strictness: "high",
       chunk_tokens: 8000,
       inactivityTimeoutMinutes: 60,
-      autoCompactionOnTimeout: models.autoCompactionOnTimeout ?? true,
+      compact_on_timeout: models.compactOnTimeout ?? true,
       skipPatterns: ["^(thanks|ok|sure|yes|no)$", "^(hi|hello|hey)\\b"],
     },
     decay: {
@@ -6795,7 +6769,7 @@ function buildInstallPlan(pluginSrc, owner, models, embeddings, systems, schedul
       dim: embeddings?.embedDim || null,
     },
     options: {
-      timeoutCompaction: models?.autoCompactionOnTimeout ?? false,
+      timeoutCompaction: models?.compactOnTimeout ?? false,
       janitorEnabled: !!(schedule?.janitorEnabled ?? true),
       journalEnabled: !!(systems?.journal ?? true),
       projectsEnabled: !!(systems?.projects ?? true),
@@ -6819,7 +6793,7 @@ function buildInstallPlan(pluginSrc, owner, models, embeddings, systems, schedul
     // would not have offered. Consumers should treat any true flag as a bug.
     parityWarnings: (() => {
       const warnings = [];
-      if ((models?.autoCompactionOnTimeout) && !_platformSupportsTimeoutCompaction(platform)) {
+      if ((models?.compactOnTimeout) && !_platformSupportsTimeoutCompaction(platform)) {
         warnings.push("timeoutCompaction enabled on platform that does not support it");
       }
       return warnings;

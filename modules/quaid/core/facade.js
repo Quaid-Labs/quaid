@@ -794,19 +794,6 @@ function createQuaidFacade(deps) {
     const nudges = [];
     let changed = false;
     try {
-      if (fs.existsSync(options.pendingInstallMigrationPath)) {
-        const raw = readObjectFile(options.pendingInstallMigrationPath);
-        const lastInstallNudge = Number(state.lastInstallNudgeAt || 0);
-        if (raw?.status === "pending" && now - lastInstallNudge > cooldown) {
-          nudges.push("Hey, I see you just installed Quaid. Want me to help migrate important context into managed memory now?");
-          state.lastInstallNudgeAt = now;
-          changed = true;
-        }
-      }
-    } catch (err) {
-      console.warn(`[quaid][facade] install nudge check failed: ${String(err?.message || err)}`);
-    }
-    try {
       if (fs.existsSync(options.pendingApprovalRequestsPath)) {
         const raw = readObjectFile(options.pendingApprovalRequestsPath);
         const requests = Array.isArray(raw?.requests) ? raw.requests : [];
@@ -1184,7 +1171,7 @@ function createQuaidFacade(deps) {
   function maybeForceCompactionAfterTimeout(sessionId) {
     const captureCfg = deps.getMemoryConfig().capture || {};
     const enabled = Boolean(
-      captureCfg.autoCompactionOnTimeout ?? captureCfg.auto_compaction_on_timeout ?? true
+      captureCfg.compact_on_timeout ?? captureCfg.autoCompactionOnTimeout ?? true
     );
     if (!enabled) return;
     const key = resolveSessionForCompaction(sessionId);

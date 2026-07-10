@@ -696,7 +696,7 @@ _KNOWN_CAPTURE_KEYS = {
     "skip_patterns",
     "inactivity_timeout_minutes",
     "compact_on_timeout",
-    "auto_compaction_on_timeout",
+    "auto_compaction_on_timeout",  # normalized from alpha installer key autoCompactionOnTimeout
     "chunk_tokens",
     "chunk_max_lines",
     "chunk_size",
@@ -1134,6 +1134,8 @@ def _load_config_inner() -> MemoryConfig:
         compact_on_timeout=bool(_cfg_get(
             capture_data,
             'compact_on_timeout',
+            # Alpha installers wrote capture.autoCompactionOnTimeout; after
+            # _load_nested() normalization that arrives here as snake_case.
             _cfg_get(capture_data, 'auto_compaction_on_timeout', True),
         )),
         chunk_tokens=_cfg_get(

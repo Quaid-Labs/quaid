@@ -371,7 +371,7 @@ function compactSummary(cfgPath, cfg) {
   const destructivePolicy = String(getPath(cfg, "janitor.approvalPolicies.destructiveMemoryOps", "auto"));
   const routerFailOpen = !!getPath(cfg, "retrieval.router_fail_open", getPath(cfg, "retrieval.routerFailOpen", true));
   const failHard = retrievalFailHard(cfg);
-  const autoCompactionOnTimeout = !!getPath(cfg, "capture.autoCompactionOnTimeout", true);
+  const compactOnTimeout = !!getPath(cfg, "capture.compact_on_timeout", getPath(cfg, "capture.autoCompactionOnTimeout", true));
   const identityMode = String(getPath(cfg, "identity.mode", "single_user"));
   const strictPrivacy = !!getPath(cfg, "privacy.enforceStrictFilters", getPath(cfg, "privacy.enforce_strict_filters", true));
   const janitorParallel = coreParallelEnabled(cfg);
@@ -394,7 +394,7 @@ function compactSummary(cfgPath, cfg) {
     `${C.bold("Janitor Apply")}: ${janitorApplyMode} ${C.dim("(master policy)")}`,
     `${C.bold("Janitor Policies")}: core=${corePolicy} project=${projectPolicy} workspace=${workspacePolicy} destructive=${destructivePolicy}`,
     `${C.bold("Timeout")}: ${captureTimeoutMinutes(cfg)}m`,
-    `${C.bold("Auto-compact Timeout")}: ${autoCompactionOnTimeout ? "on" : "off"} ${C.dim("(trigger compaction after timeout extraction)")}`,
+    `${C.bold("Auto-compact Timeout")}: ${compactOnTimeout ? "on" : "off"} ${C.dim("(trigger compaction after timeout extraction)")}`,
     `${C.bold("Identity Mode")}: ${identityMode}`,
     `${C.bold("Strict Privacy")}: ${strictPrivacy ? "on" : "off"}`,
     `${C.bold("Pre-injection Pass")}: ${getPath(cfg, "retrieval.preInjectionPass", true) ? "on" : "off"} ${C.dim("(auto-inject total_recall planner)")}`,
@@ -883,10 +883,10 @@ async function runEdit() {
       setCaptureTimeoutMinutes(cfg, parseInt(String(next).trim(), 10));
     } else if (menu === "timeout_auto_compact") {
       const next = handleCancel(await confirm({
-        message: "capture.autoCompactionOnTimeout",
-        initialValue: !!getPath(cfg, "capture.autoCompactionOnTimeout", true),
+        message: "capture.compact_on_timeout",
+        initialValue: !!getPath(cfg, "capture.compact_on_timeout", getPath(cfg, "capture.autoCompactionOnTimeout", true)),
       }));
-      setPath(cfg, "capture.autoCompactionOnTimeout", !!next);
+      setPath(cfg, "capture.compact_on_timeout", !!next);
     } else if (menu === "systems") {
       await editSystems(cfg, cfgPath);
     } else if (menu === "save") {
@@ -936,7 +936,7 @@ function showConfig() {
   console.log(`core parallel:    ${coreParallelEnabled(cfg) ? "on" : "off"} (llmWorkers=${coreLlmWorkers(cfg)} embeddingWorkers=${coreEmbeddingWorkers(cfg)} prepassWorkers=${coreLifecyclePrepassWorkers(cfg)})`);
   console.log(`janitor policies: core=${getPath(cfg, "janitor.approvalPolicies.coreMarkdownWrites", "ask")} project=${getPath(cfg, "janitor.approvalPolicies.projectDocsWrites", "ask")} destructive=${getPath(cfg, "janitor.approvalPolicies.destructiveMemoryOps", "auto")}`);
   console.log(`idle timeout:     ${captureTimeoutMinutes(cfg)}m`);
-  console.log(`timeout compact:  ${getPath(cfg, "capture.autoCompactionOnTimeout", true) ? "on" : "off"}`);
+  console.log(`timeout compact:  ${getPath(cfg, "capture.compact_on_timeout", getPath(cfg, "capture.autoCompactionOnTimeout", true)) ? "on" : "off"}`);
   console.log("\nsystems:");
   for (const row of systemRows(cfg)) {
     console.log(`  ${row.key.padEnd(10, " ")} ${row.on ? "on" : "off"}  # ${row.desc}`);

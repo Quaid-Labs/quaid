@@ -8746,7 +8746,7 @@ def _get_idle_timeout_minutes(default: int = 30) -> int:
 
 
 def _get_compact_on_timeout(default: bool = True) -> bool:
-    """Read timeout compaction toggle from live config with legacy alias support."""
+    """Read timeout compaction toggle from live config."""
     try:
         import json as _json
         from config import _config_paths
@@ -8764,11 +8764,9 @@ def _get_compact_on_timeout(default: bool = True) -> bool:
                 _capture = _data.get("capture", {})
                 if "compact_on_timeout" in _capture:
                     raw = bool(_capture.get("compact_on_timeout"))
-                elif "compactOnTimeout" in _capture:
-                    raw = bool(_capture.get("compactOnTimeout"))
-                elif "auto_compaction_on_timeout" in _capture:
-                    raw = bool(_capture.get("auto_compaction_on_timeout"))
                 elif "autoCompactionOnTimeout" in _capture:
+                    # Alpha installers wrote this key before capture.compact_on_timeout
+                    # became the canonical config surface.
                     raw = bool(_capture.get("autoCompactionOnTimeout"))
             except Exception as exc:
                 logger.warning("timeout compaction config read failed for %s; ignoring file: %s", _cp, exc)

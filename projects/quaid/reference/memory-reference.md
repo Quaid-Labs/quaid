@@ -653,7 +653,7 @@ The previous per-message approach (fast classifier on each message pair) was:
 
 Capture timeout config keys:
 - `capture.inactivity_timeout_minutes` (default `60`): minutes of inactivity before timeout extraction runs (`0` disables timeout extraction).
-- `capture.auto_compaction_on_timeout` (default `true`): when timeout extraction runs, whether to trigger gateway compaction automatically after extraction.
+- `capture.compact_on_timeout` (default `true`): when timeout extraction runs, whether to trigger gateway compaction automatically after extraction.
 
 ### 2.7 Shared Library (`lib/`)
 
