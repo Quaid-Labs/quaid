@@ -64,6 +64,15 @@ def test_cmd_refresh_stores_token(monkeypatch, capsys, tmp_path: Path) -> None:
     assert "Auth credential (openai_api) stored at" in captured.out
 
 
+def test_main_without_subcommand_is_usage_error(capsys) -> None:
+    exit_code = auth_cli.main([])
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert captured.out == ""
+    assert "usage:" in captured.err
+
+
 def test_main_refresh_reads_from_stdin(monkeypatch, capsys, tmp_path: Path) -> None:
     adapter = _AdapterStub(tmp_path / ".auth-token")
     monkeypatch.setattr("lib.adapter.get_adapter", lambda: adapter)

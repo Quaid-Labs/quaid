@@ -86,8 +86,8 @@ def main(argv: list[str] | None = None) -> int:
             print(str(exc))
             return 1
 
-    parser.print_help()
-    return 0
+    parser.print_help(sys.stderr)
+    return 1
 
 
 if __name__ == "__main__":
