@@ -5224,6 +5224,7 @@ def _stage_semantic_buffer_payload(
     max_line_chars = max((len(line) for line in new_lines), default=0)
     max_line_estimated_tokens = max((max(1, len(line) // 4) for line in new_lines), default=0)
     carry_facts_in = len(staged_state.get("carry_facts", []) or [])
+    _reset_daemon_llm_usage_budget()
     stage_result = extract_from_transcript(
         transcript=stage_text,
         owner_id=owner,
@@ -5416,6 +5417,13 @@ def _daemon_extract_chunk_tokens(chunk_budget: int) -> int:
         return budget
     focused_budget = max(1, int(budget * DAEMON_EXTRACT_CHUNK_RATIO))
     return max(1, min(budget, DAEMON_EXTRACT_CHUNK_MAX_TOKENS, focused_budget))
+
+
+def _reset_daemon_llm_usage_budget() -> None:
+    """Keep the janitor-named LLM cost cap scoped to one daemon extraction."""
+    from lib.llm_clients import reset_token_usage
+
+    reset_token_usage()
 
 
 def _daemon_extract_llm_timeout_seconds(default: float = DAEMON_EXTRACT_LLM_TIMEOUT_SECONDS) -> float:
@@ -8040,6 +8048,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
         usage_before_extract = _read_usage_totals()
         extract_started_at = time.time()
         if transcript_text.strip():
+            _reset_daemon_llm_usage_budget()
             tail_result = extract_from_transcript(
                 transcript=transcript_text,
                 owner_id=owner,
@@ -8114,6 +8123,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                     continue
                 # Subagent harvests are separately parsed child transcripts, not
                 # rolling buffers, so they keep the configured extraction budget.
+                _reset_daemon_llm_usage_budget()
                 child_result = extract_from_transcript(
                     transcript=child_text,
                     owner_id=owner,

@@ -1493,8 +1493,10 @@ def test_stage_semantic_buffer_payload_uses_focused_extract_chunks(monkeypatch):
     import ingest.extract as extract_mod
 
     calls = []
+    events = []
 
     def fake_extract_from_transcript(**kwargs):
+        events.append("extract")
         calls.append(kwargs)
         return {
             "raw_facts": [],
@@ -1519,6 +1521,11 @@ def test_stage_semantic_buffer_payload_uses_focused_extract_chunks(monkeypatch):
         }
 
     monkeypatch.setattr(extract_mod, "extract_from_transcript", fake_extract_from_transcript)
+    monkeypatch.setattr(
+        extraction_daemon,
+        "_reset_daemon_llm_usage_budget",
+        lambda: events.append("reset"),
+    )
     monkeypatch.setattr(extraction_daemon, "_warm_payload_embeddings", lambda facts: {
         "requested": 0,
         "unique": 0,
@@ -1548,6 +1555,7 @@ def test_stage_semantic_buffer_payload_uses_focused_extract_chunks(monkeypatch):
     )
 
     assert len(calls) == 1
+    assert events == ["reset", "extract"]
     assert "wall_timeout_seconds" not in calls[0]
     assert calls[0]["chunk_tokens_override"] == 900
     assert calls[0]["llm_timeout_seconds"] == pytest.approx(120.0)
@@ -7635,6 +7643,7 @@ def test_process_signal_harvests_subagent_when_parent_cursor_at_eof(monkeypatch,
     child_path.write_text('{"role":"user","content":"child"}\n', encoding="utf-8")
 
     captured = {}
+    events = []
 
     class _FakeAdapter(_OwnedTestAdapterMixin):
         def instance_root(self):
@@ -7673,6 +7682,7 @@ def test_process_signal_harvests_subagent_when_parent_cursor_at_eof(monkeypatch,
     from ingest import extract as extract_mod
 
     def fake_extract_from_transcript(transcript, **kwargs):
+        events.append("extract")
         captured.setdefault("transcripts", []).append(transcript)
         assert transcript.startswith("Subagent/User:")
         return {
@@ -7698,6 +7708,11 @@ def test_process_signal_harvests_subagent_when_parent_cursor_at_eof(monkeypatch,
 
     monkeypatch.setattr(extract_mod, "extract_from_transcript", fake_extract_from_transcript)
     monkeypatch.setattr(
+        extraction_daemon,
+        "_reset_daemon_llm_usage_budget",
+        lambda: events.append("reset"),
+    )
+    monkeypatch.setattr(
         extract_mod,
         "apply_extracted_payloads",
         lambda payload, *args, **kwargs: captured.setdefault("flush_payload", payload) or {"facts_stored": 0, "facts_skipped": 0, "facts": []},
@@ -7720,6 +7735,7 @@ def test_process_signal_harvests_subagent_when_parent_cursor_at_eof(monkeypatch,
         reset_adapter()
 
     assert captured["transcripts"] == ["Subagent/User: Child-only Mendoza Malbec fact."]
+    assert events == ["reset", "extract"]
     stamped = captured["flush_payload"]["raw_facts"][0]
     assert stamped["source"] == "subagent"
     assert stamped["_source_label"].endswith("-subagent-extraction")
@@ -20978,13 +20994,20 @@ class TestProcessSignalRetryOnException:
 
         calls = []
         marked = []
+        events = []
 
         def _raise_empty_response(*_args, **kwargs):
+            events.append("extract")
             calls.append(kwargs)
             assert kwargs["raise_on_llm_failure"] is True
             raise RuntimeError("Deep Reasoning returned no response")
 
         monkeypatch.setattr(extract_mod, "extract_from_transcript", _raise_empty_response)
+        monkeypatch.setattr(
+            extraction_daemon,
+            "_reset_daemon_llm_usage_budget",
+            lambda: events.append("reset"),
+        )
         monkeypatch.setattr(extraction_daemon, "mark_signal_processed", lambda sig: marked.append(sig))
 
         set_adapter(_Adapter())
@@ -20999,6 +21022,7 @@ class TestProcessSignalRetryOnException:
             reset_adapter()
 
         assert calls
+        assert events == ["reset", "extract"]
         assert marked == []
         assert sig_path.exists()
 
