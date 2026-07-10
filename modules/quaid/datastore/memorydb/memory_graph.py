@@ -1023,7 +1023,7 @@ class MemoryGraph:
         """Insert stored node embeddings that are missing from the sqlite-vec index."""
         clauses = [
             "n.embedding IS NOT NULL",
-            "n.id NOT IN (SELECT node_id FROM vec_nodes)",
+            "v.node_id IS NULL",
         ]
         params: List[Any] = []
         if owner_id:
@@ -1032,7 +1032,9 @@ class MemoryGraph:
 
         missing = conn.execute(
             f"""
-                SELECT n.id, n.embedding FROM nodes n
+                SELECT n.id, n.embedding
+                FROM nodes n
+                LEFT JOIN vec_nodes v ON v.node_id = n.id
                 WHERE {' AND '.join(clauses)}
             """,
             params,
@@ -1181,8 +1183,9 @@ class MemoryGraph:
             """
             SELECT sc.chunk_id, sc.embedding
             FROM source_chunks sc
+            LEFT JOIN vec_source_chunks vsc ON vsc.chunk_id = sc.chunk_id
             WHERE sc.embedding IS NOT NULL
-              AND sc.chunk_id NOT IN (SELECT chunk_id FROM vec_source_chunks)
+              AND vsc.chunk_id IS NULL
             """
         ).fetchall()
         count = 0

@@ -6774,6 +6774,32 @@ class TestSourceChunkStorage:
                 (node_id,),
             ).fetchone()[0] == 1
 
+    def test_node_vec_backfill_uses_left_join_anti_join(self):
+        """Node vec backfill should use an indexed anti-join, not NOT IN."""
+        import datastore.memorydb.memory_graph as mg
+
+        class _Cursor:
+            def fetchall(self):
+                return []
+
+        class _Conn:
+            def __init__(self):
+                self.sql = []
+
+            def execute(self, sql, params=()):
+                self.sql.append(" ".join(str(sql).split()))
+                return _Cursor()
+
+        conn = _Conn()
+        graph = mg.MemoryGraph.__new__(mg.MemoryGraph)
+
+        assert graph._backfill_vec_index(conn, owner_id="rowan") == 0
+
+        select_sql = conn.sql[0]
+        assert "LEFT JOIN vec_nodes v ON v.node_id = n.id" in select_sql
+        assert "v.node_id IS NULL" in select_sql
+        assert "NOT IN" not in select_sql
+
     def test_retry_missing_embeddings_indexes_pending_nodes(self, tmp_path):
         """Daemon retry repairs fresh pending facts stored while embeddings were unavailable."""
         import datastore.memorydb.memory_graph as mg
@@ -7012,6 +7038,35 @@ class TestSourceChunkStorage:
         assert isinstance(excinfo.value.__cause__, RuntimeError)
         assert excinfo.value.__cause__.__cause__ is primary
         assert "fallback insert failed" in str(excinfo.value.__cause__)
+
+    def test_source_chunk_vec_backfill_uses_left_join_anti_join(self):
+        """Source chunk vec backfill should avoid NOT IN scans over the ANN table."""
+        import datastore.memorydb.memory_graph as mg
+
+        class _Cursor:
+            def fetchall(self):
+                return []
+
+        class _Conn:
+            def __init__(self):
+                self.sql = []
+
+            def execute(self, sql, params=()):
+                self.sql.append(" ".join(str(sql).split()))
+                return _Cursor()
+
+        conn = _Conn()
+        graph = mg.MemoryGraph.__new__(mg.MemoryGraph)
+        graph._ensure_source_chunks_table = lambda _conn: None
+        graph._ensure_source_chunk_vec_table = lambda _conn: True
+
+        with patch.object(mg, "_lib_has_vec", return_value=True):
+            assert graph._backfill_source_chunk_vec_index(conn) == 0
+
+        select_sql = conn.sql[0]
+        assert "LEFT JOIN vec_source_chunks vsc ON vsc.chunk_id = sc.chunk_id" in select_sql
+        assert "vsc.chunk_id IS NULL" in select_sql
+        assert "NOT IN" not in select_sql
 
     def test_health_metrics_staleness_distribution_uses_db_buckets(self, tmp_path, monkeypatch):
         """Health metrics bucket accessed_at values without materializing every node row."""
