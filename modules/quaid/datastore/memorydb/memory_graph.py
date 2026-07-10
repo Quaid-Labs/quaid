@@ -2324,7 +2324,16 @@ class MemoryGraph:
                     ).fetchone()
                     if row is not None:
                         existing_embedding_blob = row[0]
-                except Exception:
+                except Exception as exc:
+                    logger.warning(
+                        "update_node failed reading existing embedding for %s before vec_nodes sync: %s",
+                        node.id,
+                        exc,
+                    )
+                    if _is_fail_hard_mode():
+                        raise RuntimeError(
+                            "update_node failed reading existing embedding before vec_nodes sync"
+                        ) from exc
                     existing_embedding_blob = None
             result = active_conn.execute("""
                 UPDATE nodes SET

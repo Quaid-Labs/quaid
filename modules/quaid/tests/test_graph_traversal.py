@@ -299,6 +299,68 @@ class TestVecUpsertFailures:
         assert "vec_nodes retry failed" in caplog.text
         assert "vec_nodes sync was skipped" in caplog.text
 
+    def test_update_node_existing_embedding_read_raises_with_fail_hard(self, graph, caplog):
+        node = Node.create(type="Person", name="VecReadFailHard", owner_id="quaid", status="approved")
+        graph.add_node(node, embed=False)
+        node.name = "VecReadFailHard changed"
+        node.embedding = [0.3, 0.4, 0.5]
+
+        class _SelectFailingConnection:
+            def __init__(self, conn):
+                self._conn = conn
+
+            def execute(self, sql, *args, **kwargs):
+                if "SELECT embedding FROM nodes WHERE id" in str(sql):
+                    raise sqlite3.OperationalError("embedding select down")
+                return self._conn.execute(sql, *args, **kwargs)
+
+            def __getattr__(self, name):
+                return getattr(self._conn, name)
+
+        with graph._get_conn() as conn:
+            failing_conn = _SelectFailingConnection(conn)
+            with patch("datastore.memorydb.memory_graph._lib_has_vec", return_value=True), \
+                 patch("datastore.memorydb.memory_graph._is_fail_hard_mode", return_value=True):
+                caplog.set_level("WARNING")
+                with pytest.raises(RuntimeError, match="existing embedding") as excinfo:
+                    graph.update_node(node, conn=failing_conn)
+
+        assert isinstance(excinfo.value.__cause__, sqlite3.OperationalError)
+        assert "embedding select down" in str(excinfo.value.__cause__)
+        assert "failed reading existing embedding" in caplog.text
+        assert graph.get_node(node.id).name == "VecReadFailHard"
+
+    def test_update_node_existing_embedding_read_warns_without_fail_hard(self, graph, caplog):
+        node = Node.create(type="Person", name="VecReadFailOpen", owner_id="quaid", status="approved")
+        graph.add_node(node, embed=False)
+        node.name = "VecReadFailOpen changed"
+        node.embedding = [0.3, 0.4, 0.5]
+
+        class _SelectFailingConnection:
+            def __init__(self, conn):
+                self._conn = conn
+
+            def execute(self, sql, *args, **kwargs):
+                if "SELECT embedding FROM nodes WHERE id" in str(sql):
+                    raise sqlite3.OperationalError("embedding select down")
+                if "INSERT OR REPLACE INTO vec_nodes" in str(sql):
+                    return self._conn.execute("SELECT 1")
+                return self._conn.execute(sql, *args, **kwargs)
+
+            def __getattr__(self, name):
+                return getattr(self._conn, name)
+
+        with graph._get_conn() as conn:
+            failing_conn = _SelectFailingConnection(conn)
+            with patch("datastore.memorydb.memory_graph._lib_has_vec", return_value=True), \
+                 patch.object(MemoryGraph, "_ensure_vec_table", return_value=None), \
+                 patch("datastore.memorydb.memory_graph._is_fail_hard_mode", return_value=False):
+                caplog.set_level("WARNING")
+                assert graph.update_node(node, conn=failing_conn) is True
+
+        assert graph.get_node(node.id).name == "VecReadFailOpen changed"
+        assert "failed reading existing embedding" in caplog.text
+
     def test_update_node_vec_upsert_clears_embedding_without_fail_hard(self, graph, caplog):
         node = Node.create(type="Person", name="VecUpdateSoftFail", owner_id="quaid", status="approved")
         graph.add_node(node, embed=False)
