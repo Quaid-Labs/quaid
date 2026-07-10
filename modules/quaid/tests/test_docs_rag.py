@@ -2177,6 +2177,7 @@ class TestDocsSearchFiltering:
     @patch("datastore.docsdb.rag._lib_unpack_embedding", return_value=[0.1, 0.2, 0.3])
     @patch("datastore.docsdb.rag._lib_cosine_similarity", return_value=0.95)
     def test_search_docs_scoped_filter_falls_back_when_vec_undercovers_scope(
+        self,
         _sim,
         _unpack,
         _embed,
