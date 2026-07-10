@@ -2555,6 +2555,8 @@ def _context_refresh_state_path() -> Path | None:
             return None
         return Path(data_dir) / "context-refresh-state.json"
     except Exception:
+        if _fail_hard_enabled():
+            raise
         return None
 
 
@@ -2567,6 +2569,8 @@ def _context_refresh_timeout_marker_path(session_id: str) -> Path | None:
 
         return get_adapter().data_dir() / "context-refresh-timeout" / f"{sid}.json"
     except Exception:
+        if _fail_hard_enabled():
+            raise
         return None
 
 
@@ -2579,6 +2583,8 @@ def _context_refresh_compaction_marker_path(session_id: str) -> Path | None:
 
         return get_adapter().data_dir() / "context-refresh-compaction" / f"{sid}.json"
     except Exception:
+        if _fail_hard_enabled():
+            raise
         return None
 
 
@@ -2588,6 +2594,8 @@ def _context_refresh_compaction_latest_marker_path() -> Path | None:
 
         return get_adapter().data_dir() / "context-refresh-compaction" / "_latest.json"
     except Exception:
+        if _fail_hard_enabled():
+            raise
         return None
 
 
