@@ -2212,6 +2212,85 @@ class TestStoreBasic:
         assert second == pytest.approx(first)
         assert embedded.call_count == 1
 
+    def test_get_embedding_cache_read_failure_raises_when_fail_hard(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _ = _make_graph(tmp_path)
+        graph.get_embedding = mg.MemoryGraph.get_embedding.__get__(graph, type(graph))
+
+        with patch("lib.embeddings.get_embeddings_provider", return_value=SimpleNamespace(model_name="test-model")), \
+             patch.object(graph, "_get_conn", side_effect=sqlite3.OperationalError("cache read failed")), \
+             patch.object(mg, "_is_fail_hard_mode", return_value=True):
+            with pytest.raises(sqlite3.OperationalError, match="cache read failed"):
+                graph.get_embedding("Maya checks cache read failures")
+
+    def test_get_embedding_cache_write_failure_raises_when_fail_hard(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _ = _make_graph(tmp_path)
+        graph.get_embedding = mg.MemoryGraph.get_embedding.__get__(graph, type(graph))
+
+        class _FailingConn:
+            row_factory = None
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def execute(self, sql, _params=()):
+                if "sqlite_master" in sql or "PRAGMA table_info" in sql:
+                    return SimpleNamespace(fetchall=lambda: [], fetchone=lambda: None)
+                if sql.strip().upper().startswith("SELECT"):
+                    return SimpleNamespace(fetchone=lambda: None)
+                if sql.strip().upper().startswith("CREATE"):
+                    return SimpleNamespace(fetchone=lambda: None)
+                raise sqlite3.OperationalError("cache write failed")
+
+        failing_conn = _FailingConn()
+
+        with patch("lib.embeddings.get_embeddings_provider", return_value=SimpleNamespace(model_name="test-model")), \
+             patch.object(graph, "_get_conn", return_value=failing_conn), \
+             patch.object(mg, "_lib_get_embedding", side_effect=_fake_get_embedding), \
+             patch.object(mg, "_is_fail_hard_mode", return_value=True):
+            with pytest.raises(sqlite3.OperationalError, match="cache write failed"):
+                graph.get_embedding("Maya checks cache write failures")
+
+    def test_get_embedding_cache_write_failure_logs_when_fail_open(self, tmp_path, caplog):
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _ = _make_graph(tmp_path)
+        graph.get_embedding = mg.MemoryGraph.get_embedding.__get__(graph, type(graph))
+
+        class _FailingWriteConn:
+            row_factory = None
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def execute(self, sql, _params=()):
+                if "sqlite_master" in sql or "PRAGMA table_info" in sql:
+                    return SimpleNamespace(fetchall=lambda: [], fetchone=lambda: None)
+                if sql.strip().upper().startswith("SELECT"):
+                    return SimpleNamespace(fetchone=lambda: None)
+                if sql.strip().upper().startswith("CREATE"):
+                    return SimpleNamespace(fetchone=lambda: None)
+                raise sqlite3.OperationalError("cache write failed")
+
+        with patch("lib.embeddings.get_embeddings_provider", return_value=SimpleNamespace(model_name="test-model")), \
+             patch.object(graph, "_get_conn", return_value=_FailingWriteConn()), \
+             patch.object(mg, "_lib_get_embedding", side_effect=_fake_get_embedding), \
+             patch.object(mg, "_is_fail_hard_mode", return_value=False), \
+             caplog.at_level("WARNING"):
+            embedding = graph.get_embedding("Maya logs cache write failures")
+
+        assert embedding is not None
+        assert "get_embedding: embedding cache write failed; returning uncached embedding" in caplog.text
+
     def test_get_embedding_logs_provider_model_failure(self, tmp_path, caplog):
         import datastore.memorydb.memory_graph as mg
 

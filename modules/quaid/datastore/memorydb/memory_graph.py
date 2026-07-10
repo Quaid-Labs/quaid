@@ -1243,8 +1243,10 @@ class MemoryGraph:
                     ).fetchone()
                     if row and row["embedding"]:
                         return self._unpack_embedding(row["embedding"])
-            except Exception:
-                pass  # Cache miss or table doesn't exist
+            except Exception as exc:
+                if _is_fail_hard_mode():
+                    raise
+                logger.warning("get_embedding: embedding cache lookup failed; computing fresh embedding: %s", exc)
 
         # Cache miss — compute fresh with a MemoryDB-level bound unless the caller
         # supplied a tighter operation-specific budget.
@@ -1259,8 +1261,10 @@ class MemoryGraph:
                         "INSERT OR REPLACE INTO embedding_cache (text_hash, embedding, model) VALUES (?, ?, ?)",
                         (text_hash, self._pack_embedding(embedding), model)
                     )
-            except Exception:
-                pass  # Cache write failure is non-fatal
+            except Exception as exc:
+                if _is_fail_hard_mode():
+                    raise
+                logger.warning("get_embedding: embedding cache write failed; returning uncached embedding: %s", exc)
         return embedding
 
     def warm_embedding_cache(
