@@ -1583,6 +1583,41 @@ NEW: Updated line.
         ]
 
 
+def test_update_doc_from_transcript_clamps_nonpositive_llm_timeout(tmp_path, monkeypatch, caplog):
+    with _adapter_patch(tmp_path) as iroot:
+        from datastore.docsdb import updater
+
+        doc = iroot / "docs" / "doc.md"
+        doc.parent.mkdir(parents=True, exist_ok=True)
+        doc.write_text("# Doc\n\nExisting line.\n", encoding="utf-8")
+
+        captured = {}
+        response = """<<<EDIT
+OLD: Existing line.
+NEW: Updated line.
+>>>
+<<<SUMMARY: timeout >>>"""
+
+        def _fake_deep(**kwargs):
+            captured["timeout"] = kwargs.get("timeout")
+            return response, 0.1
+
+        monkeypatch.setenv("QUAID_DOCS_TRANSCRIPT_TIMEOUT_SECONDS", "0")
+        monkeypatch.setattr(updater, "call_deep_reasoning", _fake_deep)
+
+        caplog.set_level("WARNING")
+        ok = updater.update_doc_from_transcript(
+            "docs/doc.md",
+            "test purpose",
+            "short transcript",
+            dry_run=True,
+        )
+
+    assert ok is True
+    assert captured["timeout"] == 1.0
+    assert "Non-positive QUAID_DOCS_TRANSCRIPT_TIMEOUT_SECONDS='0'; using minimum 1s" in caplog.text
+
+
 def test_update_doc_from_transcript_registry_timestamp_failure_warns_when_fail_open(
     tmp_path, monkeypatch, caplog
 ):
@@ -1684,6 +1719,48 @@ class TestCmdUpdateStaleNeverIndexed:
         assert "QUAID DOCS SAFETY NOTE" in prompt
         assert "Project diff catalog limit reached" in prompt
         assert len(prompt.encode("utf-8")) < 7000
+
+    def test_update_doc_from_diffs_clamps_nonpositive_llm_timeout(self, tmp_path, monkeypatch, caplog):
+        with _adapter_patch(tmp_path) as iroot:
+            from datastore.docsdb import updater
+
+            doc = iroot / "docs" / "doc.md"
+            doc.parent.mkdir(parents=True, exist_ok=True)
+            doc.write_text("# Doc\n\nExisting details.\n", encoding="utf-8")
+
+            captured = {}
+
+            def _fake_deep(**kwargs):
+                captured["timeout"] = kwargs.get("timeout")
+                return "# Doc\n\nUpdated safely.\n<!-- CHANGE_SUMMARY: timeout -->", 0.1
+
+            monkeypatch.setenv("QUAID_DOCS_UPDATE_TIMEOUT_SECONDS", "0")
+            monkeypatch.setattr(updater, "get_git_diff", lambda *_args, **_kwargs: "+meaningful change\n")
+            monkeypatch.setattr(
+                updater,
+                "classify_doc_change",
+                lambda _diff: {
+                    "classification": "significant",
+                    "confidence": 0.95,
+                    "reasons": ["meaningful"],
+                    "lines_changed": 1,
+                    "trivial_signals": 0,
+                    "significant_signals": 1,
+                },
+            )
+            monkeypatch.setattr(updater, "call_deep_reasoning", _fake_deep)
+
+            caplog.set_level("WARNING")
+            ok = updater.update_doc_from_diffs(
+                "docs/doc.md",
+                "test purpose",
+                ["src/meaningful.py"],
+                dry_run=True,
+            )
+
+        assert ok is False
+        assert captured["timeout"] == 1.0
+        assert "Non-positive QUAID_DOCS_UPDATE_TIMEOUT_SECONDS='0'; using minimum 1s" in caplog.text
 
     def test_update_doc_from_diffs_gate_skip_does_not_count_as_written(self, tmp_path, monkeypatch):
         with _adapter_patch(tmp_path) as iroot:

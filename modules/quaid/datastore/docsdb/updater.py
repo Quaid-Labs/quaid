@@ -178,16 +178,20 @@ def _queue_delayed_notification(message: str, kind: str, priority: str, source: 
 
 
 def _docs_index_timeout_seconds() -> float:
-    raw = str(os.environ.get("QUAID_DOCS_INDEX_TIMEOUT_SECONDS", "120") or "").strip()
+    return _positive_env_timeout_seconds("QUAID_DOCS_INDEX_TIMEOUT_SECONDS", 120.0)
+
+
+def _positive_env_timeout_seconds(env_name: str, default_seconds: float) -> float:
+    raw = str(os.environ.get(env_name, str(default_seconds)) or "").strip()
     if not raw:
-        return 120.0
+        return default_seconds
     try:
         parsed = float(raw)
     except ValueError:
-        logger.warning("Invalid QUAID_DOCS_INDEX_TIMEOUT_SECONDS=%r; using default 120s", raw)
-        return 120.0
+        logger.warning("Invalid %s=%r; using default %.0fs", env_name, raw, default_seconds)
+        return default_seconds
     if parsed <= 0:
-        logger.warning("Non-positive QUAID_DOCS_INDEX_TIMEOUT_SECONDS=%r; using minimum 1s", raw)
+        logger.warning("Non-positive %s=%r; using minimum 1s", env_name, raw)
         return 1.0
     return parsed
 
@@ -1354,7 +1358,7 @@ def update_doc_from_diffs(
     )
 
     print(f"  Calling Deep Reasoning to update {doc_path}...")
-    doc_update_timeout = float(os.environ.get("QUAID_DOCS_UPDATE_TIMEOUT_SECONDS", "300") or "300")
+    doc_update_timeout = _positive_env_timeout_seconds("QUAID_DOCS_UPDATE_TIMEOUT_SECONDS", 300.0)
     response, duration = call_deep_reasoning(
         prompt=user_message,
         system_prompt=system_prompt,
@@ -1547,7 +1551,7 @@ def update_doc_from_transcript(
     from lib.tokens import estimate_tokens
 
     transcript_tokens = estimate_tokens(transcript)
-    transcript_update_timeout = float(os.environ.get("QUAID_DOCS_TRANSCRIPT_TIMEOUT_SECONDS", "120") or "120")
+    transcript_update_timeout = _positive_env_timeout_seconds("QUAID_DOCS_TRANSCRIPT_TIMEOUT_SECONDS", 120.0)
 
     chunk_template = (
         f"CURRENT DOCUMENT ({doc_path}):\n\n{current_doc}\n\n"
