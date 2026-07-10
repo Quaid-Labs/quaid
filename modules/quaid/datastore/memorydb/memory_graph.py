@@ -506,6 +506,18 @@ def _ensure_embedding_cache_table(conn: sqlite3.Connection) -> None:
     conn.execute("DROP TABLE embedding_cache_legacy")
 
 
+def _executescript_atomic(conn: sqlite3.Connection, schema: str) -> None:
+    """Run schema DDL as one SQLite transaction despite executescript pre-commit."""
+    try:
+        conn.executescript(f"BEGIN IMMEDIATE;\n{schema}\nCOMMIT;")
+    except Exception:
+        try:
+            conn.execute("ROLLBACK")
+        except sqlite3.Error:
+            pass
+        raise
+
+
 class MemoryGraph:
     """Local graph-based memory system."""
 
@@ -583,7 +595,7 @@ class MemoryGraph:
             if not _nodes_exists:
                 # Fresh DB — apply schema with sqlite's parser so inline comments
                 # do not accidentally suppress statements (e.g., FTS/triggers).
-                conn.executescript(schema)
+                _executescript_atomic(conn, schema)
 
             # Migrate: add new columns to existing DBs (safe, idempotent)
             for col, typedef in [
@@ -682,7 +694,7 @@ class MemoryGraph:
                 conn.execute("DROP TRIGGER IF EXISTS nodes_ad")
                 conn.execute("DROP TRIGGER IF EXISTS nodes_au")
                 conn.execute("DROP TABLE IF EXISTS nodes_fts")
-                conn.executescript(schema)
+                _executescript_atomic(conn, schema)
                 conn.execute("INSERT INTO nodes_fts(nodes_fts) VALUES('rebuild')")
 
             # Migrate FTS to porter stemming tokenizer if not already using it
@@ -696,7 +708,7 @@ class MemoryGraph:
                     conn.execute("DROP TRIGGER IF EXISTS nodes_au")
                     conn.execute("DROP TABLE IF EXISTS nodes_fts")
                     # Recreate with porter tokenizer (from schema.sql).
-                    conn.executescript(schema)
+                    _executescript_atomic(conn, schema)
                     conn.execute("INSERT INTO nodes_fts(nodes_fts) VALUES('rebuild')")
             except Exception as exc:
                 logger.warning("memory DB FTS porter-tokenizer migration failed: %s", exc)
@@ -727,7 +739,7 @@ class MemoryGraph:
                     conn.execute("DROP TRIGGER IF EXISTS nodes_ai")
                     conn.execute("DROP TRIGGER IF EXISTS nodes_ad")
                     conn.execute("DROP TRIGGER IF EXISTS nodes_au")
-                    conn.executescript(schema)
+                    _executescript_atomic(conn, schema)
                     conn.execute("INSERT INTO nodes_fts(nodes_fts) VALUES('rebuild')")
             except Exception as exc:
                 logger.warning("memory DB FTS stale-trigger migration failed: %s", exc)
@@ -760,7 +772,7 @@ class MemoryGraph:
                 )
                 if broad_update_trigger:
                     conn.execute("DROP TRIGGER IF EXISTS nodes_au")
-                    conn.executescript(schema)
+                    _executescript_atomic(conn, schema)
             except Exception as exc:
                 logger.warning("memory DB FTS update-trigger migration failed: %s", exc)
                 if _is_fail_hard_mode():
@@ -800,7 +812,7 @@ class MemoryGraph:
                     "memory DB missing baseline schema tables; repairing with schema.sql: %s",
                     ",".join(missing_baseline_tables[:12]),
                 )
-                conn.executescript(schema)
+                _executescript_atomic(conn, schema)
 
             _ensure_embedding_cache_table(conn)
 

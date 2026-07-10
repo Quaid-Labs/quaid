@@ -5034,6 +5034,25 @@ class TestStoreKeywords:
             ).fetchall()
             assert rows
 
+    def test_schema_script_rolls_back_partial_ddl_on_error(self, tmp_path):
+        """A failed schema batch must not leave partially-created tables behind."""
+        import datastore.memorydb.memory_graph as mg
+
+        db_file = tmp_path / "partial-schema.db"
+        broken_schema = """
+        CREATE TABLE created_before_error (id INTEGER PRIMARY KEY);
+        INSERT INTO missing_table VALUES (1);
+        """
+
+        with sqlite3.connect(db_file) as conn:
+            with pytest.raises(sqlite3.OperationalError):
+                mg._executescript_atomic(conn, broken_schema)
+            leftover = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='created_before_error'"
+            ).fetchone()
+
+        assert leftover is None
+
     @pytest.mark.parametrize(
         ("fail_marker", "message"),
         [
