@@ -5703,6 +5703,23 @@ class TestTimestampOverride:
 
         assert reranked == scored
 
+    def test_asof_temporal_rerank_uses_stable_node_ids(self):
+        import datastore.memorydb.memory_graph as mg
+
+        old = mg.Node.create("Fact", "archive old", owner_id="quaid")
+        old.occurred_start = "2023-01-01T00:00:00Z"
+        recent = mg.Node.create("Fact", "archive recent", owner_id="quaid")
+        recent.occurred_start = "2024-01-01T00:00:00Z"
+
+        with patch("builtins.id", side_effect=AssertionError("must not use object identity")):
+            reranked = mg._apply_open_ended_asof_temporal_rerank(
+                [(old, 0.9), (recent, 0.89)],
+                date_from=None,
+                date_to="2024-06-30",
+            )
+
+        assert [node.id for node, _score in reranked] == [recent.id, old.id]
+
     def test_asof_temporal_rerank_requires_upper_bound(self):
         """Unbounded and lower-bound-only searches keep ordinary relevance ordering."""
         import datastore.memorydb.memory_graph as mg

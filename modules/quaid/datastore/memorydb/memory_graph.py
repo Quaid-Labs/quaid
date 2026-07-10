@@ -18426,13 +18426,13 @@ def _apply_open_ended_asof_temporal_rerank(
     if span_days < 14:
         return scored_results
 
-    date_by_node_id = {id(node): event_date for node, _score, event_date in dated}
+    date_by_node_id = {node.id: event_date for node, _score, event_date in dated}
     # Date_to-only recall is an as-of view: recency within the eligible window is
     # load-bearing, but semantic score still wins unless stale rows are close.
     max_boost = 0.22
     reranked: List[Tuple[Node, float]] = []
     for node, score in scored_results:
-        event_date = date_by_node_id.get(id(node))
+        event_date = date_by_node_id.get(node.id)
         if event_date is None:
             reranked.append((node, score))
             continue
@@ -18441,7 +18441,7 @@ def _apply_open_ended_asof_temporal_rerank(
     reranked.sort(
         key=lambda item: (
             round(item[1], 3),
-            date_by_node_id.get(id(item[0]), date.min).toordinal(),
+            date_by_node_id.get(item[0].id, date.min).toordinal(),
             item[1],
         ),
         reverse=True,
