@@ -1737,7 +1737,7 @@ def apply_edit_blocks(doc_text: str, edits: List[str]) -> Tuple[str, int, int]:
                 new_text = '\n'.join(new_parts).strip()
                 break
 
-        if old_text == 'ADD' and new_text:
+        if old_text and old_text.upper() == 'ADD' and new_text:
             updated = updated.rstrip() + '\n\n' + new_text
             applied += 1
         elif old_text and new_text and old_text in updated:

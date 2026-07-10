@@ -1623,6 +1623,23 @@ def test_save_changelog_uses_atomic_replace(tmp_path):
         assert mock_replace.call_count >= 1
 
 
+def test_apply_edit_blocks_treats_add_sentinel_case_insensitively():
+    from datastore.docsdb import updater
+
+    updated, applied, unmatched = updater.apply_edit_blocks(
+        "# Doc\n",
+        [
+            """OLD: add
+NEW: Added section.
+""",
+        ],
+    )
+
+    assert updated == "# Doc\n\nAdded section."
+    assert applied == 1
+    assert unmatched == 0
+
+
 def test_update_doc_from_transcript_skips_partial_edit_blocks(tmp_path, monkeypatch):
     with _adapter_patch(tmp_path) as iroot:
         from datastore.docsdb import updater
