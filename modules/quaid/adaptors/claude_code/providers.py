@@ -67,6 +67,8 @@ def _queue_auth_refresh_notice() -> None:
         )
     except Exception as exc:
         logger.warning("[claude-code-oauth] failed queuing auth refresh notice: %s", exc)
+        if is_fail_hard_enabled():
+            raise
 
 
 def _get_valid_token() -> Tuple[Optional[str], str]:

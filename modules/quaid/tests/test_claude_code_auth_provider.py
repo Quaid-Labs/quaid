@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import logging
 import sys
 import urllib.error
 from pathlib import Path
@@ -11,7 +12,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from adaptors.claude_code.providers import ClaudeCodeOAuthLLMProvider, _read_token_file
+from adaptors.claude_code.providers import ClaudeCodeOAuthLLMProvider, _queue_auth_refresh_notice, _read_token_file
 
 
 def test_http_401_queues_auth_refresh_notice(monkeypatch) -> None:
@@ -45,6 +46,27 @@ def test_http_401_queues_auth_refresh_notice(monkeypatch) -> None:
     assert "claude setup-token" in notice
     assert "quaid auth refresh <token>" in notice
     assert "credentials.json" not in notice
+
+
+def test_auth_refresh_notice_queue_failure_warns_when_fail_open(caplog) -> None:
+    with patch(
+        "adaptors.claude_code.providers.queue_deferred_notice",
+        side_effect=RuntimeError("queue unavailable"),
+    ), patch("adaptors.claude_code.providers.is_fail_hard_enabled", return_value=False):
+        with caplog.at_level(logging.WARNING, logger="adaptors.claude_code.providers"):
+            _queue_auth_refresh_notice()
+
+    assert "failed queuing auth refresh notice" in caplog.text
+    assert "queue unavailable" in caplog.text
+
+
+def test_auth_refresh_notice_queue_failure_raises_when_failhard() -> None:
+    with patch(
+        "adaptors.claude_code.providers.queue_deferred_notice",
+        side_effect=RuntimeError("queue unavailable"),
+    ), patch("adaptors.claude_code.providers.is_fail_hard_enabled", return_value=True):
+        with pytest.raises(RuntimeError, match="queue unavailable"):
+            _queue_auth_refresh_notice()
 
 
 def test_failhard_error_guides_token_refresh(monkeypatch) -> None:
