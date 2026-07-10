@@ -1598,6 +1598,30 @@ class TestStoreValidation:
         assert "store failed to read default owner" in caplog.text
         assert "config broken" in caplog.text
 
+    def test_missing_owner_none_config_defaults_without_string_none(self, tmp_path, monkeypatch):
+        import datastore.memorydb.memory_graph as mg
+        from datastore.memorydb.memory_graph import store
+
+        graph, _ = _make_graph(tmp_path)
+        monkeypatch.setattr(mg, "_get_memory_config", lambda: SimpleNamespace(users=SimpleNamespace(default_owner=None)))
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+            result = store("Quaid keeps the walnut archive", owner_id=None, skip_dedup=True)
+
+        node = graph.get_node(result["id"])
+        assert node is not None
+        assert node.owner_id == "default"
+        with graph._get_conn() as conn:
+            owners = [
+                row["owner_id"]
+                for row in conn.execute(
+                    "SELECT owner_id FROM nodes WHERE name = ?",
+                    ("Quaid keeps the walnut archive",),
+                ).fetchall()
+            ]
+        assert owners == ["default"]
+
     def test_missing_owner_config_failure_respects_failhard(self, tmp_path):
         import datastore.memorydb.memory_graph as mg
         from datastore.memorydb.memory_graph import store

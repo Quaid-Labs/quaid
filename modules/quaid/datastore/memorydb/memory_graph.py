@@ -23379,9 +23379,7 @@ def store(
                 exc,
             )
             owner_id = "default"
-    owner_id = str(owner_id).strip()
-    if not owner_id:
-        owner_id = "default"
+    owner_id = str(owner_id or "").strip() or "default"
 
     confidence = _validate_confidence_unit_interval(confidence, "confidence")
     extraction_confidence = _validate_confidence_unit_interval(
