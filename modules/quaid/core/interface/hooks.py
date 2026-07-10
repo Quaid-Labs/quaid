@@ -3641,6 +3641,8 @@ def _extract_hook_session_id(hook_input: dict) -> str:
             if resolved:
                 return resolved
     except Exception:
+        if _fail_hard_enabled():
+            raise
         pass
 
     for key in ("session_id", "sessionId", "thread_id", "threadId", "conversation_id", "conversationId"):

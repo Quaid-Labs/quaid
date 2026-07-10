@@ -297,6 +297,29 @@ def test_get_pending_context_raises_when_fail_hard(monkeypatch, caplog):
     assert "Failed reading pending hook context: adapter broken" in caplog.text
 
 
+def test_extract_hook_session_id_uses_heuristic_when_adapter_extractor_fails_fail_open(monkeypatch):
+    from core.interface import hooks
+
+    adapter = _adapter_mock()
+    adapter._extract_hook_session_id = lambda _payload: (_ for _ in ()).throw(RuntimeError("adapter broken"))
+    monkeypatch.setattr("lib.adapter.get_adapter", lambda: adapter)
+    monkeypatch.setattr(hooks, "_fail_hard_enabled", lambda: False)
+
+    assert hooks._extract_hook_session_id({"session_id": "heuristic-session"}) == "heuristic-session"
+
+
+def test_extract_hook_session_id_raises_adapter_extractor_failure_when_fail_hard(monkeypatch):
+    from core.interface import hooks
+
+    adapter = _adapter_mock()
+    adapter._extract_hook_session_id = lambda _payload: (_ for _ in ()).throw(RuntimeError("adapter broken"))
+    monkeypatch.setattr("lib.adapter.get_adapter", lambda: adapter)
+    monkeypatch.setattr(hooks, "_fail_hard_enabled", lambda: True)
+
+    with pytest.raises(RuntimeError, match="adapter broken"):
+        hooks._extract_hook_session_id({"session_id": "heuristic-session"})
+
+
 def test_context_refresh_state_path_rejects_non_path_adapter_data_dir(monkeypatch):
     from core.interface import hooks
 
