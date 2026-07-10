@@ -1284,6 +1284,18 @@ class TestOpenClawAdapter:
         with patch("adaptors.openclaw.adapter.is_fail_hard_enabled", return_value=True):
             assert adapter.get_api_key("TEST_KEY") is None
 
+    def test_get_api_key_missing_workspace_returns_none_when_failhard_disabled(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+        monkeypatch.delenv("TEST_KEY", raising=False)
+        adapter = OpenClawAdapter()
+
+        with patch("adaptors.openclaw.adapter.is_fail_hard_enabled", return_value=False):
+            assert adapter.get_api_key("TEST_KEY") is None
+
+        err = capsys.readouterr().err
+        assert "attempting workspace .env lookup because failHard is disabled" in err
+        assert "Skipping workspace .env lookup for TEST_KEY" in err
+
     def test_get_last_channel_no_sessions_file(self, monkeypatch):
         monkeypatch.setattr(OpenClawAdapter, "_find_sessions_json",
                            lambda self: None)

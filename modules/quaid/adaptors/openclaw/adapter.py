@@ -753,7 +753,14 @@ class OpenClawAdapter(QuaidAdapter):
             "attempting workspace .env lookup because failHard is disabled.",
             file=sys.stderr,
         )
-        env_file = self.oc_workspace() / ".env"
+        try:
+            env_file = self.oc_workspace() / ".env"
+        except RuntimeError as exc:
+            print(
+                f"[adapter][FALLBACK] Skipping workspace .env lookup for {env_var_name}: {exc}",
+                file=sys.stderr,
+            )
+            return None
         if env_file.exists():
             found = read_env_file(env_file, env_var_name)
             if found:
