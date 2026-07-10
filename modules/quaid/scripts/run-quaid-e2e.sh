@@ -1037,7 +1037,7 @@ restore_test_gateway() {
   if [[ ${#LOCAL_CONFIG_ARGS[@]} -gt 0 ]]; then
     restore_args=("${LOCAL_CONFIG_ARGS[@]}")
   fi
-  python3 "${BOOTSTRAP_ROOT}/scripts/apply-runtime-profile.py" --profile "$PROFILE_TEST" --auth-path "$AUTH_PATH" "${restore_args[@]}" >/dev/null 2>&1
+  python3 "${BOOTSTRAP_ROOT}/scripts/apply-runtime-profile.py" --profile "$PROFILE_TEST" --auth-path "$AUTH_PATH" ${restore_args[@]+"${restore_args[@]}"} >/dev/null 2>&1
   openclaw gateway stop >/dev/null 2>&1 || true
   set -e
   start_gateway_safe

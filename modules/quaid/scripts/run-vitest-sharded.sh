@@ -26,7 +26,7 @@ labels=()
 cleanup() {
   local rc=$?
   if [[ "$rc" -ne 0 ]]; then
-    for pid in "${pids[@]:-}"; do
+    for pid in ${pids[@]+"${pids[@]}"}; do
       kill "$pid" >/dev/null 2>&1 || true
     done
   fi
