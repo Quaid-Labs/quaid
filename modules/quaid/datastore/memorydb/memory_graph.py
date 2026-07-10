@@ -18923,6 +18923,7 @@ _ASSISTANT_STRUCTURAL_LIST_ANCHOR_KINDS = {
     "assistant_callback_anchor",
     "assistant_plan_anchor",
 }
+_ASSISTANT_CLUSTER_SIBLING_FETCH_LIMIT = 50
 
 
 def _is_assistant_suggestion_list_query(query: str, gate_eval: Optional[Dict[str, Any]]) -> bool:
@@ -19182,6 +19183,7 @@ def _recover_assistant_suggestion_cluster_rows(
     if owner_id:
         owner_sql = " AND owner_id = ?"
         params.append(owner_id)
+    params.append(_ASSISTANT_CLUSTER_SIBLING_FETCH_LIMIT)
     sibling_rows: List[sqlite3.Row] = []
     try:
         with graph._get_conn() as conn:
@@ -19198,6 +19200,7 @@ def _recover_assistant_suggestion_cluster_rows(
                     'assistant_plan_anchor'
                   )
                 ORDER BY created_at, id
+                LIMIT ?
                 """,
                 params,
             ).fetchall()
@@ -19436,6 +19439,7 @@ def _recover_assistant_memory_cluster_rows(
     elif owner_id:
         owner_sql = " AND owner_id = ?"
         params.append(owner_id)
+    params.append(_ASSISTANT_CLUSTER_SIBLING_FETCH_LIMIT)
     try:
         with graph._get_conn() as conn:
             sibling_rows = conn.execute(
@@ -19451,6 +19455,7 @@ def _recover_assistant_memory_cluster_rows(
                     'assistant_option_bullet_anchor'
                   )
                 ORDER BY created_at, id
+                LIMIT ?
                 """,
                 params,
             ).fetchall()

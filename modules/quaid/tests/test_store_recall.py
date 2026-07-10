@@ -12265,6 +12265,37 @@ class TestRecallTelemetry:
             for row in rows
         )
 
+    def test_recover_assistant_suggestion_cluster_rows_caps_sibling_fetch(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _ = _make_graph(tmp_path)
+        cluster_ts = "2026-01-02T03:04:05"
+        seed = None
+        for index in range(mg._ASSISTANT_CLUSTER_SIBLING_FETCH_LIMIT + 7):
+            node = mg.Node.create(
+                "Fact",
+                f"Assistant suggested rollout option {index}.",
+                owner_id="owner",
+                created_at=cluster_ts,
+                attributes={
+                    "source_type": "assistant",
+                    "structural_anchor_kind": "assistant_option_bullet_anchor",
+                },
+            )
+            graph.add_node(node, embed=False)
+            seed = seed or node
+
+        with patch.object(mg, "get_graph", return_value=graph), \
+             patch.object(graph, "search_hybrid", return_value=[(seed, 0.91)]):
+            rows = mg._recover_assistant_suggestion_cluster_rows(
+                "Which rollout options did the assistant suggest?",
+                gate_eval={"requirements": ["assistant_source", "enumeration"]},
+                owner_id="owner",
+                limit=100,
+            )
+
+        assert len(rows) == mg._ASSISTANT_CLUSTER_SIBLING_FETCH_LIMIT
+
     def test_assistant_suggestion_cluster_sibling_fallback_score_is_floored(self, tmp_path):
         import datastore.memorydb.memory_graph as mg
 
@@ -12672,6 +12703,38 @@ class TestRecallTelemetry:
             "assistant_callback_anchor",
             "assistant_option_list_anchor",
         ]
+
+    def test_recover_assistant_memory_cluster_rows_caps_sibling_fetch(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _ = _make_graph(tmp_path)
+        cluster_ts = "2026-01-02T03:04:05"
+        seed = None
+        for index in range(mg._ASSISTANT_CLUSTER_SIBLING_FETCH_LIMIT + 7):
+            node = mg.Node.create(
+                "Fact",
+                f"Assistant recalled rollout memory {index}.",
+                owner_id="owner",
+                created_at=cluster_ts,
+                attributes={
+                    "source_type": "assistant",
+                    "structural_anchor_kind": "assistant_callback_anchor",
+                },
+            )
+            graph.add_node(node, embed=False)
+            seed = seed or node
+
+        with patch.object(mg, "get_graph", return_value=graph), \
+             patch.object(graph, "search_hybrid", return_value=[(seed, 0.91)]), \
+             patch.object(mg, "_extract_explicit_query_anchor_terms", return_value=["rollout"]):
+            rows = mg._recover_assistant_memory_cluster_rows(
+                "What did the assistant recall about rollout?",
+                gate_eval={"requirements": ["assistant_source"]},
+                owner_id="owner",
+                limit=100,
+            )
+
+        assert len(rows) == mg._ASSISTANT_CLUSTER_SIBLING_FETCH_LIMIT
 
     def test_recover_assistant_memory_cluster_search_failure_respects_failhard(self, monkeypatch):
         import datastore.memorydb.memory_graph as mg
