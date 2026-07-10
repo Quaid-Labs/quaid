@@ -2050,16 +2050,11 @@ class DocsRAG:
                 return []
 
             use_vec = _lib_has_vec() and self._doc_vec_table_exists(conn)
-            if use_vec and (project_scope_token or doc_filters):
-                # sqlite-vec evaluates ANN k-NN before the SQL WHERE predicate.
-                # For project/docs-scoped recall, that can starve valid matches when
-                # the global top-k candidate set doesn't contain scoped rows.
-                # Prefer exact filtered scan semantics for scoped queries.
-                use_vec = False
+            scoped_vec_filter = bool(project_scope_token or doc_filters)
             if use_vec:
                 try:
                     packed_query = _lib_pack_embedding(query_embedding)
-                    candidate_limit = max(64, limit * 16)
+                    candidate_limit = max(512, limit * 128) if scoped_vec_filter else max(64, limit * 16)
                     sql = """
                         SELECT dc.*, knn.distance AS vec_distance
                         FROM (
@@ -2073,6 +2068,14 @@ class DocsRAG:
                         sql += f" WHERE {where}"
                     sql += " ORDER BY knn.distance"
                     rows = conn.execute(sql, tuple([packed_query, candidate_limit] + params)).fetchall()
+                    if scoped_vec_filter and where:
+                        scope_count_row = conn.execute(
+                            f"SELECT COUNT(*) FROM doc_chunks dc WHERE {where}",
+                            tuple(params),
+                        ).fetchone()
+                        scope_count = int(scope_count_row[0] if scope_count_row else 0)
+                        if len(rows) < scope_count:
+                            use_vec = False
                 except Exception as exc:
                     logger.warning("Doc RAG vec recall failed; falling back to row scan: %s", exc)
                     if is_fail_hard_enabled():

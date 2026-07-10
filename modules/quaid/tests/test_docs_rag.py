@@ -2100,41 +2100,148 @@ class TestDocsSearchFiltering:
         assert results[0]["source"] == "projects/cross-live-test/beacon-maintenance.md"
 
     @patch("datastore.docsdb.rag._lib_get_embedding", return_value=[0.1, 0.2, 0.3])
-    @patch("datastore.docsdb.rag._lib_unpack_embedding", return_value=[0.1, 0.2, 0.3])
-    @patch("datastore.docsdb.rag._lib_cosine_similarity", return_value=0.95)
-    def test_search_docs_project_filter_bypasses_vec_candidate_stage(self, _sim, _unpack, _embed, tmp_path):
+    @patch("datastore.docsdb.rag._lib_unpack_embedding", side_effect=AssertionError("scan path should not run"))
+    def test_search_docs_scoped_filter_uses_vec_when_candidates_cover_scope(self, _unpack, _embed, tmp_path):
         rag = _make_rag(tmp_path)
-        db = sqlite3.connect(rag.db_path)
-        try:
-            db.execute(
-                "INSERT INTO doc_chunks (id, source_file, chunk_index, content, section_header, embedding) VALUES (?, ?, ?, ?, ?, ?)",
-                (
+
+        class _Row:
+            def __init__(self):
+                self.values = [
                     "scoped:0",
                     "/tmp/workspace/projects/quaid/m10-test-doc.md",
                     0,
                     "veiled-wintersmith-runebell",
                     "# Canary",
                     b"e",
-                ),
-            )
-            db.commit()
-        finally:
-            db.close()
+                ]
 
-        with patch("datastore.docsdb.rag._lib_has_vec", return_value=True), \
-             patch.object(rag, "_doc_vec_table_exists", return_value=True), \
-             patch("datastore.docsdb.rag.is_fail_hard_enabled", return_value=False), \
-             patch("datastore.docsdb.rag.logger.warning") as warn_mock, \
-             patch.object(
-                 rag,
-                 "_get_project_paths",
-                 return_value={"home_dir": "/tmp/workspace/projects/quaid", "source_roots": []},
-             ):
-            results = rag.search_docs("veiled-wintersmith-runebell", limit=10, project="quaid")
+            def __getitem__(self, key):
+                if key == "vec_distance":
+                    return 0.05
+                return self.values[key]
+
+        class _Result:
+            def __init__(self, *, rows=None, one=None):
+                self.rows = rows or []
+                self.one = one
+
+            def fetchall(self):
+                return self.rows
+
+            def fetchone(self):
+                return self.one
+
+        class _Conn:
+            def __init__(self):
+                self.scan_queries = 0
+                self.vec_candidate_limit = None
+
+            def execute(self, sql, params=()):
+                text = str(sql)
+                if "FROM vec_doc_chunks" in text:
+                    self.vec_candidate_limit = params[1]
+                    return _Result(rows=[_Row()])
+                if "SELECT COUNT(*) FROM doc_chunks dc" in text:
+                    return _Result(one=(1,))
+                if "SELECT * FROM doc_chunks" in text:
+                    self.scan_queries += 1
+                    return _Result(rows=[])
+                raise AssertionError(f"unexpected SQL: {text}")
+
+        class _Ctx:
+            def __init__(self, conn):
+                self.conn = conn
+
+            def __enter__(self):
+                return self.conn
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        conn = _Conn()
+        with patch("datastore.docsdb.rag._lib_get_connection", return_value=_Ctx(conn)), \
+             patch("datastore.docsdb.rag._lib_has_vec", return_value=True), \
+             patch.object(rag, "_doc_vec_table_exists", return_value=True):
+            results = rag.search_docs(
+                "veiled-wintersmith-runebell",
+                limit=5,
+                docs=["m10-test-doc.md"],
+            )
 
         assert len(results) == 1
-        vec_warnings = [str(call.args[0]) for call in warn_mock.call_args_list if call.args]
-        assert not any("Doc RAG vec recall failed" in msg for msg in vec_warnings)
+        assert results[0]["source"] == "/tmp/workspace/projects/quaid/m10-test-doc.md"
+        assert conn.scan_queries == 0
+        assert conn.vec_candidate_limit >= 512
+
+    @patch("datastore.docsdb.rag._lib_get_embedding", return_value=[0.1, 0.2, 0.3])
+    @patch("datastore.docsdb.rag._lib_unpack_embedding", return_value=[0.1, 0.2, 0.3])
+    @patch("datastore.docsdb.rag._lib_cosine_similarity", return_value=0.95)
+    def test_search_docs_scoped_filter_falls_back_when_vec_undercovers_scope(
+        _sim,
+        _unpack,
+        _embed,
+        tmp_path,
+    ):
+        rag = _make_rag(tmp_path)
+
+        class _Result:
+            def __init__(self, *, rows=None, one=None):
+                self.rows = rows or []
+                self.one = one
+
+            def fetchall(self):
+                return self.rows
+
+            def fetchone(self):
+                return self.one
+
+        class _Conn:
+            def __init__(self):
+                self.scan_queries = 0
+
+            def execute(self, sql, params=()):
+                text = str(sql)
+                if "FROM vec_doc_chunks" in text:
+                    return _Result(rows=[])
+                if "SELECT COUNT(*) FROM doc_chunks dc" in text:
+                    return _Result(one=(1,))
+                if "SELECT * FROM doc_chunks" in text:
+                    self.scan_queries += 1
+                    return _Result(rows=[
+                        (
+                            "scoped:0",
+                            "/tmp/workspace/projects/quaid/m10-test-doc.md",
+                            0,
+                            "veiled-wintersmith-runebell",
+                            "# Canary",
+                            b"e",
+                        )
+                    ])
+                raise AssertionError(f"unexpected SQL: {text}")
+
+        class _Ctx:
+            def __init__(self, conn):
+                self.conn = conn
+
+            def __enter__(self):
+                return self.conn
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        conn = _Conn()
+        with patch("datastore.docsdb.rag._lib_get_connection", return_value=_Ctx(conn)), \
+             patch("datastore.docsdb.rag._lib_has_vec", return_value=True), \
+             patch.object(rag, "_doc_vec_table_exists", return_value=True):
+            results = rag.search_docs(
+                "veiled-wintersmith-runebell",
+                limit=5,
+                docs=["m10-test-doc.md"],
+            )
+
+        assert len(results) == 1
+        assert results[0]["source"] == "/tmp/workspace/projects/quaid/m10-test-doc.md"
+        assert conn.scan_queries >= 1
 
     @patch("datastore.docsdb.rag._lib_get_embedding", return_value=[0.1, 0.2, 0.3])
     @patch("datastore.docsdb.rag._lib_unpack_embedding", return_value=[0.1, 0.2, 0.3])
