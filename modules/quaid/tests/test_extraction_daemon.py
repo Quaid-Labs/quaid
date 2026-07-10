@@ -525,6 +525,23 @@ def test_finalize_no_payload_signal_failhard_observation_error_prevents_finaliza
     assert order == []
 
 
+def test_write_context_refresh_timeout_marker_raises_write_failure_when_fail_hard(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setenv("QUAID_INSTANCE", "daemon-inst")
+    monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: True)
+
+    def fail_write(_path, _content):
+        raise OSError("marker disk full")
+
+    monkeypatch.setattr(extraction_daemon, "_atomic_write", fail_write)
+
+    with pytest.raises(OSError, match="marker disk full"):
+        extraction_daemon.write_context_refresh_timeout_marker("sess-marker-fail")
+
+
 def test_process_signal_full_flush_records_daemon_lifecycle_observation(monkeypatch, tmp_path):
     from ingest import extract as extract_mod
     from lib.adapter import reset_adapter, set_adapter
@@ -10046,6 +10063,23 @@ class TestSignalRoundTrip:
         assert len(rows) == 1
         assert json.loads(rows[0])["session_id"] == "sess-lock"
         assert events == ["lock", ("write", True), ("flush", True), ("unlock", True)]
+
+    def test_write_rolling_metric_raises_write_failure_when_fail_hard(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(extraction_daemon, "_instance_root", lambda: tmp_path)
+        monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: True)
+        real_open = Path.open
+        metric_path = tmp_path / "logs" / "daemon" / "rolling-extraction.jsonl"
+
+        def fail_metric_open(self, *args, **kwargs):
+            mode = args[0] if args else kwargs.get("mode", "r")
+            if self == metric_path and "a" in mode:
+                raise OSError("metric disk full")
+            return real_open(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "open", fail_metric_open)
+
+        with pytest.raises(OSError, match="metric disk full"):
+            extraction_daemon.write_rolling_metric("rolling_flush", "sess-metric-fail")
 
     def test_processing_lock_active_reaps_old_unlocked_empty_file(self, monkeypatch, tmp_path):
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))

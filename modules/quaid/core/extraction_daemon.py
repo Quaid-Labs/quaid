@@ -552,6 +552,8 @@ def write_context_refresh_timeout_marker(session_id: str) -> None:
         _atomic_write(marker_path, json.dumps(payload))
     except OSError as e:
         logger.warning("timeout refresh marker write failed for %s: %s", sid, e)
+        if _fail_hard_enabled():
+            raise
 
 
 # ---------------------------------------------------------------------------
@@ -4346,6 +4348,8 @@ def write_rolling_metric(event: str, session_id: str, **data: Any) -> None:
                 fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
     except OSError as exc:
         logger.warning("rolling metric write failed for %s: %s", session_id, exc)
+        if _fail_hard_enabled():
+            raise
 
 
 def _rolling_debug_dump_enabled() -> bool:
