@@ -1,5 +1,6 @@
 import builtins
 import json
+import logging
 import os
 import pathlib
 import sys
@@ -2768,6 +2769,44 @@ def test_daemon_loop_exits_when_supervisor_disappears(monkeypatch):
     monkeypatch.setattr(extraction_daemon.signal, "signal", lambda *_args, **_kwargs: None)
 
     extraction_daemon.daemon_loop(poll_interval=0.0, idle_check_interval=999999.0)
+
+
+def test_supervisor_alive_returns_false_for_missing_process(monkeypatch):
+    monkeypatch.setenv("QUAID_SUPERVISOR_PID", "12345")
+
+    def fake_kill(_pid, _sig):
+        raise ProcessLookupError("gone")
+
+    monkeypatch.setattr(extraction_daemon.os, "kill", fake_kill)
+
+    assert extraction_daemon._supervisor_alive() is False
+
+
+def test_supervisor_alive_treats_permission_denied_as_alive(monkeypatch):
+    monkeypatch.setenv("QUAID_SUPERVISOR_PID", "12345")
+
+    def fake_kill(_pid, _sig):
+        raise PermissionError("not allowed")
+
+    monkeypatch.setattr(extraction_daemon.os, "kill", fake_kill)
+
+    assert extraction_daemon._supervisor_alive() is True
+
+
+def test_supervisor_alive_warns_and_stays_alive_on_probe_failure(monkeypatch, caplog):
+    monkeypatch.setenv("QUAID_SUPERVISOR_PID", "12345")
+    monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: False)
+
+    def fake_kill(_pid, _sig):
+        raise OSError("probe failed")
+
+    monkeypatch.setattr(extraction_daemon.os, "kill", fake_kill)
+
+    with caplog.at_level(logging.WARNING):
+        assert extraction_daemon._supervisor_alive() is True
+
+    assert "supervisor liveness check failed" in caplog.text
+    assert "probe failed" in caplog.text
 
 
 def test_ensure_alive_prefers_supervisor_owned_instance_monitor(monkeypatch):

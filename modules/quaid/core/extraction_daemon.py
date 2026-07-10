@@ -952,8 +952,15 @@ def _supervisor_alive() -> bool:
         pid = int(raw)
         os.kill(pid, 0)
         return True
-    except Exception:
+    except ProcessLookupError:
         return False
+    except PermissionError:
+        return True
+    except Exception as exc:
+        logger.warning("[daemon] supervisor liveness check failed for pid %s: %s", raw, exc)
+        if _fail_hard_enabled():
+            raise
+        return True
 
 
 def read_pid() -> Optional[int]:
