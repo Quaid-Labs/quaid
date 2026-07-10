@@ -917,9 +917,9 @@ def _select_carry_facts(
         sticky_quota = 1 if max_items >= 3 else 0
         recent_quota = max(0, max_items - anchor_quota - sticky_quota)
     elif max_items <= 6:
-        anchor_quota = min(2, max_items)
-        recent_quota = max(0, max_items - anchor_quota)
-        sticky_quota = max(0, max_items - anchor_quota - recent_quota)
+        sticky_quota = 1
+        anchor_quota = min(2, max_items - sticky_quota)
+        recent_quota = max(0, max_items - anchor_quota - sticky_quota)
     else:
         anchor_quota = min(8, max(4, int(max_items * 0.25)))
         recent_quota = min(max_items - anchor_quota - 2, max(4, int(max_items * 0.45)))

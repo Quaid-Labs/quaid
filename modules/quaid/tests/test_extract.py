@@ -3764,6 +3764,39 @@ class TestExtractFromTranscript:
         assert len(selected) == 3
         assert [fact["_carry_bucket"] for fact in selected] == ["anchor", "recent", "sticky"]
 
+    def test_five_item_carry_selection_reserves_sticky_quota(self):
+        from ingest.extract import _select_carry_facts
+
+        facts = [
+            {
+                "text": "Maya keeps the archive schedule as the stable continuity note",
+                "category": "fact",
+                "extraction_confidence": "high",
+            },
+            {
+                "text": "Maya chose the blue cabinet as the archive storage plan",
+                "category": "decision",
+            },
+            {
+                "text": "Maya linked the recipe parser notes to the kitchen project",
+                "project": "recipe-app",
+            },
+            {"text": "Maya moved the green folder beside the monitor"},
+            {"text": "Maya placed the brass key on the window shelf"},
+        ]
+
+        selected = _select_carry_facts(facts, max_items=5, max_chars=4000)
+
+        assert len(selected) == 5
+        assert [fact["_carry_bucket"] for fact in selected] == [
+            "anchor",
+            "anchor",
+            "recent",
+            "recent",
+            "sticky",
+        ]
+        assert selected[-1]["text"] == "Maya keeps the archive schedule as the stable continuity note"
+
     def test_materialized_cached_payload_can_be_applied_with_snippets_and_journal(self, monkeypatch):
         import ingest.extract as extract_mod
 
