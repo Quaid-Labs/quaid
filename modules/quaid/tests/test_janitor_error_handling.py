@@ -640,6 +640,29 @@ def test_llm_provider_check_raises_when_fail_hard(monkeypatch, tmp_path):
     assert str(excinfo.value.__cause__) == "provider down"
 
 
+def test_non_llm_task_skips_llm_provider_check(monkeypatch, tmp_path):
+    lifecycle_result = janitor.RoutineResult(metrics={"temporal_found": 2, "temporal_fixed": 1})
+    _patch_minimal_janitor_run(monkeypatch, tmp_path, lifecycle_result=lifecycle_result)
+    monkeypatch.setattr(janitor, "is_fail_hard_enabled", lambda: True)
+    monkeypatch.setattr(janitor, "record_janitor_run", lambda *_args, **_kwargs: None, raising=False)
+    monkeypatch.setattr(
+        janitor,
+        "get_llm_provider",
+        lambda: (_ for _ in ()).throw(RuntimeError("provider down")),
+    )
+
+    result = janitor._run_task_optimized_inner(
+        "temporal",
+        dry_run=False,
+        incremental=False,
+        resume_checkpoint=False,
+    )
+
+    assert result["success"] is True
+    assert result["applied_changes"]["temporal_found"] == 2
+    assert result["applied_changes"]["temporal_fixed"] == 1
+
+
 def test_checkpoint_heartbeat_failure_records_error_when_fail_hard(monkeypatch):
     monkeypatch.setattr(janitor, "is_fail_hard_enabled", lambda: True)
 

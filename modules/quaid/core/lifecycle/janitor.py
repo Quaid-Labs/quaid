@@ -1278,10 +1278,18 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
         print("[policy] Switch scope to auto/ask in layered config JSON when ready.")
         return False
 
-    # ⚠️ LLM PROVIDER CHECK — janitor needs a working LLM provider for most tasks.
+    # Tasks that require an active LLM (Deep Reasoning). Skipped in dry-run mode so that
+    # dry-run completes quickly without blocking on an LLM provider. This enforces
+    # the invariant stated at line 843: "dry-run never calls the LLM".
+    _LLM_TASKS = frozenset({
+        "review", "dedup_review", "decay_review",
+        "snippets", "journal",
+    })
+
+    # ⚠️ LLM PROVIDER CHECK — janitor needs a working LLM provider for LLM tasks.
     # The adapter layer handles provider selection and authentication.
     # Skip in dry-run mode — dry-run never calls the LLM.
-    if not dry_run and task not in ("embeddings", "cleanup", "project_docs_monitor"):
+    if not dry_run and (task == "all" or task in _LLM_TASKS):
         try:
             _llm = get_llm_provider()
             _profiles = _llm.get_profiles()
@@ -1334,14 +1342,6 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
         "project_docs_monitor": "projects",
         # Infrastructure tasks (always run): tests, cleanup
     }
-
-    # Tasks that require an active LLM (Deep Reasoning). Skipped in dry-run mode so that
-    # dry-run completes quickly without blocking on an LLM provider. This enforces
-    # the invariant stated at line 843: "dry-run never calls the LLM".
-    _LLM_TASKS = frozenset({
-        "review", "dedup_review", "decay_review",
-        "snippets", "journal",
-    })
 
     def _system_enabled_or_skip(task_name: str, task_label: str) -> bool:
         """Check if the system gate for a task is enabled. Prints skip message if disabled."""
