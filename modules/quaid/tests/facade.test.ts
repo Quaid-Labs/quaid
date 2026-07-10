@@ -556,7 +556,8 @@ describe("QuaidFacade", () => {
   it("updateExtractionLog writes topic hint from first meaningful user message", async () => {
     const workspace = await mkdtemp(path.join(tmpdir(), "quaid-facade-log-update-"));
     await mkdir(path.join(workspace, "data"), { recursive: true });
-    await writeFile(path.join(workspace, "data", "extraction-log.json"), "{}", "utf8");
+    const extractionLogPath = path.join(workspace, "data", "extraction-log.json");
+    await writeFile(extractionLogPath, "{}", "utf8");
     const priorQuaidNow = process.env.QUAID_NOW;
     process.env.QUAID_NOW = "2026-03-11T05:06:07Z";
     const facade = createQuaidFacade(makeMockDeps({ workspace }));
@@ -570,7 +571,8 @@ describe("QuaidFacade", () => {
         ],
         "CompactionSignal",
       );
-      const payload = JSON.parse(await readFile(path.join(workspace, "data", "extraction-log.json"), "utf8"));
+      expect((await readdir(path.dirname(extractionLogPath))).some((file) => file.includes(".tmp-"))).toBe(false);
+      const payload = JSON.parse(await readFile(extractionLogPath, "utf8"));
       expect(payload["sess-topic"]).toBeTruthy();
       expect(payload["sess-topic"].last_extracted_at).toBe("2026-03-11T05:06:07.000Z");
       expect(payload["sess-topic"].label).toBe("CompactionSignal");
@@ -2258,14 +2260,19 @@ describe("QuaidFacade", () => {
 
   it("hasPendingMemoryNotes tracks queued session notes", async () => {
     const workspace = await mkdtemp(path.join(tmpdir(), "quaid-facade-notes-"));
+    const notesPath = path.join(workspace, "runtime", "notes", "memory-notes-sess-notes-1.json");
     const facade = createQuaidFacade(makeMockDeps({ workspace }));
-    expect(facade.hasPendingMemoryNotes("sess-notes-1")).toBe(false);
-    facade.addMemoryNote("sess-notes-1", "My sister is Shannon", "fact");
-    expect(facade.hasPendingMemoryNotes("sess-notes-1")).toBe(true);
-    const drained = facade.getAndClearMemoryNotes("sess-notes-1");
-    expect(drained.length).toBeGreaterThan(0);
-    expect(facade.hasPendingMemoryNotes("sess-notes-1")).toBe(false);
-    await rm(workspace, { recursive: true, force: true });
+    try {
+      expect(facade.hasPendingMemoryNotes("sess-notes-1")).toBe(false);
+      facade.addMemoryNote("sess-notes-1", "My sister is Shannon", "fact");
+      expect((await readdir(path.dirname(notesPath))).some((file) => file.includes(".tmp-"))).toBe(false);
+      expect(facade.hasPendingMemoryNotes("sess-notes-1")).toBe(true);
+      const drained = facade.getAndClearMemoryNotes("sess-notes-1");
+      expect(drained.length).toBeGreaterThan(0);
+      expect(facade.hasPendingMemoryNotes("sess-notes-1")).toBe(false);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
   });
 
   it("sanitizes memory note session ids before building paths", async () => {
@@ -2603,6 +2610,7 @@ describe("QuaidFacade", () => {
     const workspace = await mkdtemp(path.join(tmpdir(), "quaid-facade-injection-quaid-now-"));
     await mkdir(path.join(workspace, "runtime", "injection"), { recursive: true });
     const priorQuaidNow = process.env.QUAID_NOW;
+    const injectionLogPath = path.join(workspace, "runtime", "injection", "memory-injection-sess-quaid-now.log");
     const facade = createQuaidFacade(makeMockDeps({ workspace }));
     try {
       process.env.QUAID_NOW = "2026-03-11T05:06:07Z";
@@ -2612,6 +2620,7 @@ describe("QuaidFacade", () => {
         [{ text: "alpha", category: "fact", similarity: 0.9 }],
         100,
       );
+      expect((await readdir(path.dirname(injectionLogPath))).some((file) => file.includes(".tmp-"))).toBe(false);
       let injectionLog = JSON.parse(await readFile(facade.getInjectionLogPath("sess-quaid-now"), "utf8"));
       expect(injectionLog.timestamp).toBe("2026-03-11T05:06:07.000Z");
       expect(injectionLog.lastInjectedAt).toBe("2026-03-11T05:06:07.000Z");

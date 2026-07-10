@@ -54,6 +54,18 @@ function nowIsoForPersistentRecord(): string {
   return new Date().toISOString();
 }
 
+function writeFileAtomicSync(pathname: string, content: string, mode: number = 0o600): void {
+  const tmpPath = `${pathname}.tmp-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  fs.mkdirSync(path.dirname(pathname), { recursive: true });
+  try {
+    fs.writeFileSync(tmpPath, content, { mode });
+    fs.renameSync(tmpPath, pathname);
+  } catch (err: unknown) {
+    try { fs.unlinkSync(tmpPath); } catch {}
+    throw err;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -1039,7 +1051,7 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
       topic_hint: topicHint,
     };
     const trimmed = trimExtractionLogEntries(extractionLog, MAX_EXTRACTION_LOG_ENTRIES);
-    fs.writeFileSync(extractionLogPath, JSON.stringify(trimmed, null, 2), { mode: 0o600 });
+    writeFileAtomicSync(extractionLogPath, JSON.stringify(trimmed, null, 2));
   }
 
   const INJECTION_LOG_DIR = path.join(deps.workspace, "runtime", "injection");
@@ -1105,10 +1117,7 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
   }
 
   function writeDelayedRequestsJson(pathname: string, payload: unknown): void {
-    const tmpPath = `${pathname}.tmp-${process.pid}-${Date.now()}`;
-    fs.mkdirSync(path.dirname(pathname), { recursive: true });
-    fs.writeFileSync(tmpPath, JSON.stringify(payload, null, 2), { mode: 0o600 });
-    fs.renameSync(tmpPath, pathname);
+    writeFileAtomicSync(pathname, JSON.stringify(payload, null, 2));
   }
 
   function withDelayedRequestsLock<T>(requestsPath: string, fn: () => T): T {
@@ -2459,7 +2468,7 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
     const injectionLogPath = getInjectionLogPath(sessionId);
     try {
       const encoded = pretty ? JSON.stringify(payload, null, 2) : JSON.stringify(payload);
-      fs.writeFileSync(injectionLogPath, encoded, { mode: 0o600 });
+      writeFileAtomicSync(injectionLogPath, encoded);
     } catch (err: unknown) {
       if (deps.isFailHardEnabled()) {
         throw new Error(`[quaid][facade] Injection log write failed for ${injectionLogPath}`, { cause: err as Error });
@@ -3266,7 +3275,7 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
           if (!msg.includes("ENOENT") && deps.isFailHardEnabled()) throw err;
         }
         existing.push(`[${category}] ${text}`);
-        fs.writeFileSync(notesPath, JSON.stringify(existing), { mode: 0o600 });
+        writeFileAtomicSync(notesPath, JSON.stringify(existing));
       });
     } catch (err: unknown) {
       if (deps.isFailHardEnabled()) throw err;
