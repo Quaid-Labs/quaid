@@ -776,6 +776,8 @@ def _refresh_runtime_config_if_changed(reason: str) -> bool:
                 "error": str(exc)[:500],
             },
         )
+        if _fail_hard_enabled():
+            raise
         return False
     _HOOK_RUNTIME_CONFIG_SNAPSHOT = snapshot
     _write_runtime_config_snapshot_state(snapshot)

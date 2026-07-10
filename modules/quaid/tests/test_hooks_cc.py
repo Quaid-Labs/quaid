@@ -948,6 +948,56 @@ def test_refresh_runtime_config_if_changed_reloads_and_resets_caches(monkeypatch
     assert cleared == [{"provider", "llm_config", "embeddings"}]
 
 
+def test_refresh_runtime_config_if_changed_returns_false_on_reload_failure_fail_open(monkeypatch, tmp_path):
+    from core.interface import hooks
+
+    cfg = tmp_path / "config.json"
+    cfg.write_text("{}", encoding="utf-8")
+    traces = []
+
+    monkeypatch.setattr(hooks, "_runtime_config_snapshot", lambda: ((str(cfg), 2),))
+    monkeypatch.setattr(hooks, "_HOOK_RUNTIME_CONFIG_SNAPSHOT", ((str(cfg), 1),))
+    monkeypatch.setattr(
+        "config.reload_config",
+        lambda: (_ for _ in ()).throw(RuntimeError("reload broken")),
+    )
+    monkeypatch.setattr(hooks, "_write_hook_trace", lambda event, payload: traces.append((event, payload)))
+    monkeypatch.setattr(hooks, "_fail_hard_enabled", lambda: False)
+
+    assert hooks._refresh_runtime_config_if_changed("test") is False
+    assert traces == [
+        (
+            "hook.runtime_config.reload_failed",
+            {
+                "reason": "test",
+                "error_type": "RuntimeError",
+                "error": "reload broken",
+            },
+        )
+    ]
+
+
+def test_refresh_runtime_config_if_changed_raises_reload_failure_when_fail_hard(monkeypatch, tmp_path):
+    from core.interface import hooks
+
+    cfg = tmp_path / "config.json"
+    cfg.write_text("{}", encoding="utf-8")
+    traces = []
+
+    monkeypatch.setattr(hooks, "_runtime_config_snapshot", lambda: ((str(cfg), 2),))
+    monkeypatch.setattr(hooks, "_HOOK_RUNTIME_CONFIG_SNAPSHOT", ((str(cfg), 1),))
+    monkeypatch.setattr(
+        "config.reload_config",
+        lambda: (_ for _ in ()).throw(RuntimeError("reload broken")),
+    )
+    monkeypatch.setattr(hooks, "_write_hook_trace", lambda event, payload: traces.append((event, payload)))
+    monkeypatch.setattr(hooks, "_fail_hard_enabled", lambda: True)
+
+    with pytest.raises(RuntimeError, match="reload broken"):
+        hooks._refresh_runtime_config_if_changed("test")
+    assert traces and traces[0][0] == "hook.runtime_config.reload_failed"
+
+
 def test_reset_runtime_resolution_caches_raises_embedding_reset_failure_when_fail_hard(monkeypatch):
     from core.interface import hooks
 
