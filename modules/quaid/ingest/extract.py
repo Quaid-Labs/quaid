@@ -3037,6 +3037,14 @@ def _synthesize_project_logs_from_facts(
     synthesized: Dict[str, List[Dict[str, Any]]] = {}
     fact_rows = [fact for fact in (facts or []) if isinstance(fact, dict)]
     published_rows = [entry for entry in (published_facts or []) if isinstance(entry, dict)]
+    if len(fact_rows) != len(published_rows):
+        msg = (
+            "project log synthesis fact/status length mismatch "
+            f"(facts={len(fact_rows)}, published={len(published_rows)})"
+        )
+        if is_fail_hard_enabled():
+            raise RuntimeError(msg)
+        logger.warning("[extract] %s; synthesizing aligned prefix only", msg)
     for fact, entry in zip(fact_rows, published_rows):
         status = str(entry.get("status", "") or "").strip().lower()
         if status not in {"stored", "updated", "would_store"}:

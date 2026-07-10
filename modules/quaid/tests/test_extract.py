@@ -6708,6 +6708,51 @@ class TestExtractFromTranscript:
             dry_run=False,
         )
 
+    def test_synthesize_project_logs_raises_on_fact_status_length_mismatch_under_failhard(self, monkeypatch):
+        from ingest import extract as extract_mod
+
+        monkeypatch.setattr(extract_mod, "is_fail_hard_enabled", lambda: True)
+
+        with pytest.raises(RuntimeError, match="project log synthesis fact/status length mismatch"):
+            extract_mod._synthesize_project_logs_from_facts(
+                [
+                    {
+                        "text": "Added retry middleware to the recipe app",
+                        "project": "recipe-app",
+                    },
+                ],
+                [],
+            )
+
+    def test_synthesize_project_logs_warns_on_fact_status_length_mismatch_when_fail_open(
+        self,
+        monkeypatch,
+        caplog,
+    ):
+        from ingest import extract as extract_mod
+
+        monkeypatch.setattr(extract_mod, "is_fail_hard_enabled", lambda: False)
+
+        with caplog.at_level("WARNING", logger=extract_mod.logger.name):
+            synthesized = extract_mod._synthesize_project_logs_from_facts(
+                [
+                    {
+                        "text": "Added retry middleware to the recipe app",
+                        "project": "recipe-app",
+                    },
+                    {
+                        "text": "Added a second project fact that lacks publish status",
+                        "project": "recipe-app",
+                    },
+                ],
+                [{"status": "stored"}],
+            )
+
+        assert synthesized == {
+            "recipe-app": [{"text": "Added retry middleware to the recipe app"}],
+        }
+        assert "project log synthesis fact/status length mismatch" in caplog.text
+
     @patch("ingest.extract.enqueue_project_logs")
     @patch("ingest.extract._memory.store")
     def test_apply_extracted_payloads_project_logs_use_session_date_when_quaid_now_missing(
