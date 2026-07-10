@@ -188,10 +188,12 @@ not a condition to work around with manual signals.
 
 **GATE: this step is mandatory between M0 PASS and the first M1 brief.**
 Run `scripts/livetest-postm0-config.sh <cc|oc|cdx|all>` and verify that
-`capture.chunk_tokens` resolves to `1500` for every installed instance
+`capture.chunk_tokens` resolves to `1500` for every installed instance, and
+that CC's `models.fastReasoning` is set to `claude-haiku-4-5-20251001`,
 before dispatching any tester to M1. Missing this step makes M2 Part B
 (rolling extraction) impossible to pass because the 1500-token fixture
-cannot cross the production default of 8000 tokens.
+cannot cross the production default of 8000 tokens, and makes CC M6 Part B
+miss provider-error coverage because the fast model is unset.
 
 For `oc`/`all`, the same script also registers the VM Codex OAuth access token
 with OpenClaw via `openclaw models auth paste-token --provider openai` before
@@ -214,7 +216,7 @@ during M0. Using `>` wipes the file and the next inject hook fails with
 Files to merge into (apply the same overrides to each):
 
 - `~/.quaid/shared/config/openclaw/config.json`
-- `~/.quaid/shared/config/claude_code/config.json`
+- `~/.quaid/shared/config/claude-code/config.json`
 - `~/.quaid/shared/config/codex/config.json`
 
 Overrides to apply at post-M0 (safe for all platforms, all milestones):
@@ -222,6 +224,8 @@ Overrides to apply at post-M0 (safe for all platforms, all milestones):
 - `livetest.enableExtractionBufferLog: true` — sanitizer/extraction buffer audits.
 - `capture.chunk_tokens: 1500` — livetest rolling-extraction standard
   (production default 8000; smaller so rolling fires inside a test session).
+- CC only: `models.fastReasoning: claude-haiku-4-5-20251001` — explicit
+  fast recall model for M6 provider-error validation.
 
 Do NOT apply `capture.inactivityTimeoutMinutes: 1` globally or run-wide.
 It gets flipped to `1` **only on the platform currently running M4**, and
@@ -231,7 +235,7 @@ below).
 Deep-merge Python one-liner, parameterized by platform:
 
 ```bash
-for platform in openclaw claude_code codex; do
+for platform in openclaw claude-code codex; do
   ssh admin@$VM_IP "python3 << PYEOF
 import json, os, sys
 p = os.path.expanduser(f\"~/.quaid/shared/config/${platform}/config.json\")
@@ -240,13 +244,18 @@ overrides = {
     'livetest': {'enableExtractionBufferLog': True},
     'capture': {'chunk_tokens': 1500}
 }
+if "${platform}" == "claude-code":
+    overrides.setdefault('models', {})['fastReasoning'] = 'claude-haiku-4-5-20251001'
 def merge(b, o):
     r = json.loads(json.dumps(b))
     for k, v in o.items():
         r[k] = merge(r.get(k, {}), v) if isinstance(v, dict) and isinstance(r.get(k), dict) else v
     return r
-json.dump(merge(existing, overrides), open(p, 'w'), indent=2)
+merged = merge(existing, overrides)
+json.dump(merged, open(p, 'w'), indent=2)
 print('merged platform config:', p)
+if "${platform}" == "claude-code":
+    print('models.fastReasoning:', merged.get('models', {}).get('fastReasoning'))
 PYEOF
 "
 done
@@ -919,7 +928,7 @@ import json; p = 'WORKSPACE/instances/$INSTANCE/config.json'
 with open(p) as f: d = json.load(f)
 models = d.get('models', {})
 print('$INSTANCE', 'fast=', models.get('fastReasoning'), 'deep=', models.get('deepReasoning'))
-assert models.get('fastReasoning') in ('gpt-5.4-mini', 'claude-haiku-4-5')
+assert models.get('fastReasoning') in ('gpt-5.4-mini', 'claude-haiku-4-5', 'claude-haiku-4-5-20251001')
 assert models.get('deepReasoning') in ('gpt-5.4', 'claude-sonnet-4-6')
 \""
 done
@@ -927,7 +936,8 @@ done
 
 **Apply per-platform livetest overrides** — see the "Post-first-M0: Livetest
 Config Overrides (per-platform)" section above. Write `enableExtractionBufferLog`
-and `chunk_tokens=1500` into each platform's config (OC, CC, CDX); do NOT write
+and `chunk_tokens=1500` into each platform's config (OC, CC, CDX), and write
+CC `models.fastReasoning=claude-haiku-4-5-20251001`; do NOT write
 `inactivityTimeoutMinutes` globally. The M4 idle-timeout flip is per-platform
 and only around M4 on the lane running that milestone.
 

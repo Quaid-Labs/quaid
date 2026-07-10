@@ -10,13 +10,14 @@
 #   livetest-postm0-config.sh all             # every installed platform
 #
 # Platforms map to config dirs:
-#   cc  -> ~/.quaid/shared/config/claude_code/config.json
+#   cc  -> ~/.quaid/shared/config/claude-code/config.json
 #   oc  -> ~/.quaid/shared/config/openclaw/config.json
 #   cdx -> ~/.quaid/shared/config/codex/config.json
 #
 # Overrides written (safe for all platforms, all milestones):
 #   livetest.enableExtractionBufferLog: true
 #   capture.chunk_tokens: 1500
+#   claude-code only: models.fastReasoning: claude-haiku-4-5-20251001
 #
 # Per-platform is the correct layer: platform config supersedes global, and
 # per-instance can override platform later (e.g. M4 idle-timeout flip on one
@@ -79,6 +80,8 @@ overrides = {
     'livetest': {'enableExtractionBufferLog': True},
     'capture': {'chunk_tokens': 1500},
 }
+if platform == 'claude-code':
+    overrides.setdefault('models', {})['fastReasoning'] = 'claude-haiku-4-5-20251001'
 def merge(base, over):
     out = json.loads(json.dumps(base))
     for k, v in over.items():
@@ -92,6 +95,8 @@ p.write_text(json.dumps(merged, indent=2))
 print(f'  merged {p}')
 print(f'  capture.chunk_tokens={merged.get(\"capture\",{}).get(\"chunk_tokens\")}')
 print(f'  livetest.enableExtractionBufferLog={merged.get(\"livetest\",{}).get(\"enableExtractionBufferLog\")}')
+if platform == 'claude-code':
+    print(f'  models.fastReasoning={merged.get(\"models\",{}).get(\"fastReasoning\")}')
 PYEOF
 "
 done
