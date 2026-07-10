@@ -382,6 +382,64 @@ def test_prompt_model_probe_state_path_raises_data_dir_failure_when_fail_hard(mo
         hooks._prompt_model_probe_state_path()
 
 
+def test_get_projects_dir_uses_visible_home_fallback_when_fail_open(monkeypatch, tmp_path, caplog):
+    from core.interface import hooks
+
+    monkeypatch.setenv("QUAID_VISIBLE_HOME", str(tmp_path / "visible"))
+    monkeypatch.setattr("lib.adapter.get_adapter", lambda: (_ for _ in ()).throw(RuntimeError("adapter broken")))
+    monkeypatch.setattr(hooks, "_fail_hard_enabled", lambda: False)
+
+    with caplog.at_level("WARNING", logger="core.interface.hooks"):
+        assert hooks._get_projects_dir() == (tmp_path / "visible").resolve() / "projects"
+
+    assert "Failed resolving hook projects directory from adapter" in caplog.text
+    assert "adapter broken" in caplog.text
+
+
+def test_get_projects_dir_raises_adapter_failure_when_fail_hard(monkeypatch, tmp_path, caplog):
+    from core.interface import hooks
+
+    monkeypatch.setenv("QUAID_VISIBLE_HOME", str(tmp_path / "visible"))
+    monkeypatch.setattr("lib.adapter.get_adapter", lambda: (_ for _ in ()).throw(RuntimeError("adapter broken")))
+    monkeypatch.setattr(hooks, "_fail_hard_enabled", lambda: True)
+
+    with caplog.at_level("WARNING", logger="core.interface.hooks"):
+        with pytest.raises(RuntimeError, match="adapter broken"):
+            hooks._get_projects_dir()
+
+    assert "Failed resolving hook projects directory from adapter" in caplog.text
+
+
+def test_get_identity_dir_uses_instance_fallback_when_fail_open(monkeypatch, tmp_path, caplog):
+    from core.interface import hooks
+
+    monkeypatch.setenv("QUAID_VISIBLE_HOME", str(tmp_path / "visible"))
+    monkeypatch.setenv("QUAID_INSTANCE", "cc-test")
+    monkeypatch.setattr("lib.adapter.get_adapter", lambda: (_ for _ in ()).throw(RuntimeError("adapter broken")))
+    monkeypatch.setattr(hooks, "_fail_hard_enabled", lambda: False)
+
+    with caplog.at_level("WARNING", logger="core.interface.hooks"):
+        assert hooks._get_identity_dir() == (tmp_path / "visible").resolve() / "instances" / "cc-test"
+
+    assert "Failed resolving hook identity directory from adapter" in caplog.text
+    assert "adapter broken" in caplog.text
+
+
+def test_get_identity_dir_raises_adapter_failure_when_fail_hard(monkeypatch, tmp_path, caplog):
+    from core.interface import hooks
+
+    monkeypatch.setenv("QUAID_VISIBLE_HOME", str(tmp_path / "visible"))
+    monkeypatch.setenv("QUAID_INSTANCE", "cc-test")
+    monkeypatch.setattr("lib.adapter.get_adapter", lambda: (_ for _ in ()).throw(RuntimeError("adapter broken")))
+    monkeypatch.setattr(hooks, "_fail_hard_enabled", lambda: True)
+
+    with caplog.at_level("WARNING", logger="core.interface.hooks"):
+        with pytest.raises(RuntimeError, match="adapter broken"):
+            hooks._get_identity_dir()
+
+    assert "Failed resolving hook identity directory from adapter" in caplog.text
+
+
 def test_adapter_compatibility_context_returns_empty_on_failure_fail_open(monkeypatch):
     from core.interface import hooks
 

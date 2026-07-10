@@ -4084,7 +4084,10 @@ def _get_projects_dir() -> Path:
         from lib.adapter import get_adapter
         adapter = get_adapter()
         return adapter.projects_dir()
-    except Exception:
+    except Exception as exc:
+        logger.warning("Failed resolving hook projects directory from adapter: %s", exc)
+        if _fail_hard_enabled():
+            raise
         return _visible_home_fallback() / "projects"
 
 
@@ -4094,7 +4097,10 @@ def _get_identity_dir() -> Path:
         from lib.adapter import get_adapter
         adapter = get_adapter()
         return adapter.identity_dir()
-    except Exception:
+    except Exception as exc:
+        logger.warning("Failed resolving hook identity directory from adapter: %s", exc)
+        if _fail_hard_enabled():
+            raise
         instance = str(os.environ.get("QUAID_INSTANCE", "") or "").strip()
         base = _visible_home_fallback()
         if instance:
