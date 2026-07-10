@@ -9539,12 +9539,10 @@ class TestSignalRoundTrip:
         with caplog.at_level("WARNING", logger="quaid.daemon"):
             lock_fd = extraction_daemon._acquire_session_processing_lock("sess-payload-warn")
 
-        try:
-            assert lock_fd is not None
-            assert "failed writing session processing lock payload" in caplog.text
-            assert "disk full" in caplog.text
-        finally:
-            extraction_daemon._release_session_processing_lock("sess-payload-warn", lock_fd)
+        assert lock_fd is None
+        assert extraction_daemon._processing_lock_active("sess-payload-warn") is False
+        assert "failed writing session processing lock payload" in caplog.text
+        assert "disk full" in caplog.text
 
     def test_session_processing_lock_payload_write_raises_when_fail_hard(
         self, monkeypatch, tmp_path, caplog

@@ -3073,6 +3073,11 @@ def _acquire_session_processing_lock(session_id: str) -> Optional[int]:
             except OSError:
                 pass
             raise RuntimeError("session processing lock payload write failed") from exc
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        return None
     return fd
 
 
