@@ -440,6 +440,62 @@ def test_get_identity_dir_raises_adapter_failure_when_fail_hard(monkeypatch, tmp
     assert "Failed resolving hook identity directory from adapter" in caplog.text
 
 
+def test_runtime_config_snapshot_raises_config_path_failure_when_fail_hard(monkeypatch, caplog):
+    from core.interface import hooks
+
+    fake_config = types.ModuleType("config")
+    fake_config._config_paths = lambda: (_ for _ in ()).throw(RuntimeError("config paths broken"))
+    monkeypatch.setitem(sys.modules, "config", fake_config)
+    monkeypatch.setattr(hooks, "_fail_hard_enabled", lambda: True)
+
+    with caplog.at_level("WARNING", logger="core.interface.hooks"):
+        with pytest.raises(RuntimeError, match="config paths broken"):
+            hooks._runtime_config_snapshot()
+
+    assert "Failed building runtime config snapshot" in caplog.text
+
+
+def test_daemon_probe_generation_raises_adapter_failure_when_fail_hard(monkeypatch, caplog):
+    from core.interface import hooks
+
+    monkeypatch.setattr("lib.adapter.get_adapter", lambda: (_ for _ in ()).throw(RuntimeError("adapter broken")))
+    monkeypatch.setattr(hooks, "_fail_hard_enabled", lambda: True)
+
+    with caplog.at_level("WARNING", logger="core.interface.hooks"):
+        with pytest.raises(RuntimeError, match="adapter broken"):
+            hooks._daemon_probe_generation()
+
+    assert "Failed resolving daemon probe generation" in caplog.text
+
+
+def test_adapter_capability_raises_adapter_failure_when_fail_hard(monkeypatch, caplog):
+    from core.interface import hooks
+
+    monkeypatch.setattr("lib.adapter.get_adapter", lambda: (_ for _ in ()).throw(RuntimeError("capability broken")))
+    monkeypatch.setattr(hooks, "_fail_hard_enabled", lambda: True)
+
+    with caplog.at_level("WARNING", logger="core.interface.hooks"):
+        with pytest.raises(RuntimeError, match="capability broken"):
+            hooks._adapter_capability("deferred_notice_relay", False)
+
+    assert "Failed reading adapter capability deferred_notice_relay" in caplog.text
+
+
+def test_iter_project_context_dirs_raises_registry_failure_when_fail_hard(monkeypatch, tmp_path, caplog):
+    from core.interface import hooks
+
+    projects_dir = tmp_path / "projects"
+    projects_dir.mkdir()
+    monkeypatch.setattr("core.project_registry.list_projects", lambda: (_ for _ in ()).throw(RuntimeError("registry broken")))
+    monkeypatch.setattr(hooks, "_fail_hard_enabled", lambda: True)
+
+    with caplog.at_level("WARNING", logger="core.interface.hooks"):
+        with pytest.raises(RuntimeError, match="registry broken"):
+            hooks._iter_project_context_dirs(projects_dir)
+
+    assert "Failed loading project registry context dirs" in caplog.text
+
+
 def test_adapter_compatibility_context_returns_empty_on_failure_fail_open(monkeypatch):
     from core.interface import hooks
 
@@ -2638,6 +2694,64 @@ def test_hook_extract_raises_signal_write_failure_when_fail_hard_enabled(
         )
 
 
+def test_hook_extract_auth_token_capture_failure_raises_when_fail_hard_enabled(
+    tmp_path, mock_adapter, monkeypatch
+):
+    from core.interface import hooks
+
+    transcript = tmp_path / "hook-extract-auth-failhard.jsonl"
+    transcript.write_text(
+        json.dumps({"type": "user", "message": {"role": "user", "content": "store lapis compass"}}) + "\n",
+        encoding="utf-8",
+    )
+
+    mock_adapter.adapter_id.return_value = "claude-code"
+    mock_adapter.get_session_path.return_value = None
+    mock_adapter.get_sessions_dir.return_value = str(tmp_path / "sessions")
+    mock_adapter.store_auth_token.side_effect = RuntimeError("auth token store broken")
+
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "session-token")
+    monkeypatch.setattr(hooks, "_fail_hard_enabled", lambda: True)
+
+    with pytest.raises(RuntimeError, match="auth token store broken"):
+        _run_hook_extract(
+            {
+                "session_id": "sess-hook-extract-auth-failhard",
+                "cwd": str(tmp_path),
+                "transcript_path": str(transcript),
+            },
+            monkeypatch=monkeypatch,
+        )
+
+
+def test_hook_extract_adapter_metadata_failure_raises_when_fail_hard_enabled(
+    tmp_path, monkeypatch
+):
+    from core.interface import hooks
+
+    transcript = tmp_path / "hook-extract-adapter-failhard.jsonl"
+    transcript.write_text(
+        json.dumps({"type": "user", "message": {"role": "user", "content": "store jade sextant"}}) + "\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+    monkeypatch.setattr(hooks, "_fail_hard_enabled", lambda: True)
+    monkeypatch.setattr(hooks, "_maybe_compaction_refresh_context_artifacts", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(hooks, "_resolve_hook_transcript_path", lambda **_kwargs: str(transcript))
+    monkeypatch.setattr("lib.adapter.get_adapter", lambda: (_ for _ in ()).throw(RuntimeError("adapter metadata broken")))
+
+    with pytest.raises(RuntimeError, match="adapter metadata broken"):
+        _run_hook_extract(
+            {
+                "session_id": "sess-hook-extract-adapter-failhard",
+                "cwd": str(tmp_path),
+                "transcript_path": str(transcript),
+            },
+            monkeypatch=monkeypatch,
+        )
+
+
 def test_hook_extract_uses_transcript_stem_when_session_id_missing(
     monkeypatch, tmp_path
 ):
@@ -4416,6 +4530,61 @@ def test_session_init_daemon_ensure_alive_failure_raises_when_failhard_enabled(
         )
 
 
+def test_session_init_auth_token_capture_failure_raises_when_failhard_enabled(
+    tmp_path, monkeypatch
+):
+    from core.interface import hooks
+
+    adapter = _adapter_mock()
+    adapter.store_auth_token.side_effect = RuntimeError("auth store broken")
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "session-token")
+    monkeypatch.setattr("lib.adapter.get_adapter", lambda: adapter)
+    monkeypatch.setattr(hooks, "_ensure_hook_instance_ready", lambda _hook_input: None)
+    monkeypatch.setattr(hooks, "_refresh_runtime_config_if_changed", lambda _reason: False)
+    monkeypatch.setattr(hooks, "_seed_turn_based_refresh_state", lambda _session_id: None)
+    monkeypatch.setattr(hooks, "_fail_hard_enabled", lambda: True)
+
+    with pytest.raises(RuntimeError, match="auth store broken"):
+        _run_hook_session_init(
+            {"session_id": "sess-auth-capture-fail", "cwd": str(tmp_path)},
+            monkeypatch=monkeypatch,
+            rules_dir=tmp_path / "rules",
+        )
+
+
+def test_session_init_prior_session_signal_failure_raises_when_failhard_enabled(
+    tmp_path, monkeypatch
+):
+    from core import extraction_daemon
+    from core.interface import hooks
+
+    ended_transcript = tmp_path / "ended.jsonl"
+    ended_transcript.write_text('{"role":"user","content":"remember amber atlas"}\n', encoding="utf-8")
+    adapter = _adapter_mock()
+    adapter.adapter_id.return_value = "codex"
+    adapter.check_session_transition.return_value = {
+        "ended_session_id": "ended-session",
+        "ended_transcript_path": str(ended_transcript),
+        "signal_type": "session_end",
+        "meta": {},
+    }
+    monkeypatch.setattr("lib.adapter.get_adapter", lambda: adapter)
+    monkeypatch.setattr(hooks, "_ensure_hook_instance_ready", lambda _hook_input: None)
+    monkeypatch.setattr(hooks, "_refresh_runtime_config_if_changed", lambda _reason: False)
+    monkeypatch.setattr(hooks, "_seed_turn_based_refresh_state", lambda _session_id: None)
+    monkeypatch.setattr(hooks, "_validate_prompt_model_config_for_hook", lambda _adapter_id: "")
+    monkeypatch.setattr(extraction_daemon, "ensure_alive", lambda: None)
+    monkeypatch.setattr(extraction_daemon, "write_signal", lambda **_kwargs: (_ for _ in ()).throw(OSError("signal broken")))
+    monkeypatch.setattr(hooks, "_fail_hard_enabled", lambda: True)
+
+    with pytest.raises(OSError, match="signal broken"):
+        _run_hook_session_init(
+            {"session_id": "current-session", "cwd": str(tmp_path)},
+            monkeypatch=monkeypatch,
+            rules_dir=tmp_path / "rules",
+        )
+
+
 def test_session_init_multi_instance_check_honors_quaid_now(
     tmp_path, monkeypatch
 ):
@@ -4435,6 +4604,28 @@ def test_session_init_multi_instance_check_honors_quaid_now(
     with pytest.raises(ValueError, match="Invalid QUAID_NOW"):
         _run_hook_session_init(
             {"session_id": "sess-clock-fail", "cwd": str(tmp_path)},
+            monkeypatch=monkeypatch,
+            rules_dir=tmp_path / "rules",
+        )
+
+
+def test_session_init_multi_instance_check_failure_raises_when_failhard_enabled(
+    tmp_path, monkeypatch
+):
+    from core import extraction_daemon
+    from core.interface import hooks
+
+    monkeypatch.setattr(hooks, "_ensure_hook_instance_ready", lambda _hook_input: None)
+    monkeypatch.setattr(hooks, "_refresh_runtime_config_if_changed", lambda _reason: False)
+    monkeypatch.setattr(hooks, "_seed_turn_based_refresh_state", lambda _session_id: None)
+    monkeypatch.setattr(hooks, "_validate_prompt_model_config_for_hook", lambda _adapter_id: "")
+    monkeypatch.setattr(extraction_daemon, "ensure_alive", lambda: None)
+    monkeypatch.setattr(extraction_daemon, "_cursor_dir", lambda: (_ for _ in ()).throw(RuntimeError("cursor dir broken")))
+    monkeypatch.setattr(hooks, "_fail_hard_enabled", lambda: True)
+
+    with pytest.raises(RuntimeError, match="cursor dir broken"):
+        _run_hook_session_init(
+            {"session_id": "sess-multi-instance-fail", "cwd": str(tmp_path)},
             monkeypatch=monkeypatch,
             rules_dir=tmp_path / "rules",
         )

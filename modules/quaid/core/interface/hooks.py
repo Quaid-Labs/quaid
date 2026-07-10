@@ -641,7 +641,10 @@ def _runtime_config_snapshot() -> tuple[tuple[str, int], ...]:
                 mtime_ns = -1
             snapshot.append((str(path), int(mtime_ns)))
         return tuple(snapshot)
-    except Exception:
+    except Exception as exc:
+        logger.warning("Failed building runtime config snapshot: %s", exc)
+        if _fail_hard_enabled():
+            raise
         return tuple()
 
 
@@ -953,7 +956,10 @@ def _daemon_probe_generation() -> tuple[str, int, str]:
         except OSError:
             pid_text = ""
         return (str(pid_path), mtime_ns, pid_text)
-    except Exception:
+    except Exception as exc:
+        logger.warning("Failed resolving daemon probe generation: %s", exc)
+        if _fail_hard_enabled():
+            raise
         return ("", -1, "")
 
 
@@ -1222,7 +1228,10 @@ def _iter_project_context_dirs(projects_dir: Path) -> List[tuple[str, Path, Dict
             canonical = Path(raw_canonical).resolve()
             if canonical.is_dir() and not canonical.is_relative_to(projects_dir_resolved):
                 registry_extra[proj_name] = canonical
-    except Exception:
+    except Exception as exc:
+        logger.warning("Failed loading project registry context dirs: %s", exc)
+        if _fail_hard_enabled():
+            raise
         pass
 
     seen_names = {d.name for d in subdirs}
@@ -2557,7 +2566,10 @@ def _adapter_capability(key: str, default: Any = None) -> Any:
         from lib.adapter import get_adapter
 
         return get_adapter().get_capability(key, default)
-    except Exception:
+    except Exception as exc:
+        logger.warning("Failed reading adapter capability %s: %s", key, exc)
+        if _fail_hard_enabled():
+            raise
         return default
 
 
@@ -3934,6 +3946,8 @@ def hook_extract(args):
                 print(f"[quaid][{label}] CLAUDE_CODE_OAUTH_TOKEN not in env", file=sys.stderr)
         except Exception as _te:
             print(f"[quaid][{label}] auth token capture failed: {_te}", file=sys.stderr)
+            if _fail_hard_enabled():
+                raise
 
         # Determine adapter type/capabilities for lifecycle signal metadata.
         try:
@@ -3941,7 +3955,10 @@ def hook_extract(args):
             adapter = get_adapter()
             adapter_name = str(adapter.adapter_id() or "").strip().lower() or "unknown"
             supports_compaction = bool(adapter.get_capability("supports_compaction_control", False))
-        except Exception:
+        except Exception as _ae:
+            print(f"[quaid][{label}] adapter metadata detection failed: {_ae}", file=sys.stderr)
+            if _fail_hard_enabled():
+                raise
             adapter_name = "unknown"
             supports_compaction = False
 
@@ -4180,6 +4197,8 @@ def hook_session_init(args):
             print("[quaid][session-init] CLAUDE_CODE_OAUTH_TOKEN not in env — .auth-token not updated", file=sys.stderr)
     except Exception as _e:
         print(f"[quaid][session-init] auth token capture failed: {_e}", file=sys.stderr)
+        if _fail_hard_enabled():
+            raise
 
     # Start the extraction daemon if not already running. Daemons are
     # instance-scoped and ensure_alive()/start_daemon() is lock-guarded
@@ -4245,6 +4264,8 @@ def hook_session_init(args):
                     print(f"[quaid][session-init] queued extraction for prior session {_ended_sid}", file=sys.stderr)
     except Exception as _e:
         print(f"[quaid][session-init] prior-session signal error: {_e}", file=sys.stderr)
+        if _fail_hard_enabled():
+            raise
 
     # Warn when multiple agents share the same instance silo. Concurrent use
     # on the same silo is not supported and may cause memory quality loss.
@@ -4307,6 +4328,8 @@ def hook_session_init(args):
         if _is_invalid_quaid_now_error(_e):
             raise
         print(f"[quaid][session-init] multi-instance check error: {_e}", file=sys.stderr)
+        if _fail_hard_enabled():
+            raise
 
     # Seed an initial cursor for the current session so the daemon's idle
     # check can discover it for timeout extraction.  Without this, new
