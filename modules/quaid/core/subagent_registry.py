@@ -68,7 +68,10 @@ def _registry_dir() -> Path:
     try:
         from lib.instance import instance_root
         base = instance_root()
-    except Exception:
+    except Exception as exc:
+        logger.warning("[subagent-registry] failed to resolve instance root; using env fallback: %s", exc)
+        if _fail_hard_enabled():
+            raise
         home = os.environ.get("QUAID_HOME", "").strip()
         instance = os.environ.get("QUAID_INSTANCE", "").strip() or "standalone"
         hidden_root = Path(home).resolve() if home else Path.home() / ".quaid"

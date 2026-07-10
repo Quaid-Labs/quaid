@@ -51,6 +51,47 @@ def test_fail_hard_enabled_propagates_policy_runtime_errors(monkeypatch):
         registry._fail_hard_enabled()
 
 
+def test_registry_dir_instance_root_failure_warns_and_uses_env_fallback(tmp_path, monkeypatch, caplog):
+    import core.subagent_registry as registry
+    import lib.instance as instance_mod
+
+    monkeypatch.setenv("QUAID_INSTANCE", "fallback-instance")
+    monkeypatch.setattr(
+        instance_mod,
+        "instance_root",
+        lambda: (_ for _ in ()).throw(RuntimeError("instance root unavailable")),
+    )
+    monkeypatch.setattr(registry, "_fail_hard_enabled", lambda: False)
+
+    with caplog.at_level("WARNING", logger="core.subagent_registry"):
+        resolved = registry._registry_dir()
+
+    assert resolved == tmp_path / "instances" / "fallback-instance" / "data" / "subagent-registry"
+    assert resolved.is_dir()
+    assert "failed to resolve instance root" in caplog.text
+
+
+def test_registry_dir_instance_root_failure_raises_when_failhard(tmp_path, monkeypatch, caplog):
+    import core.subagent_registry as registry
+    import lib.instance as instance_mod
+
+    monkeypatch.setenv("QUAID_INSTANCE", "fallback-instance")
+    monkeypatch.setattr(
+        instance_mod,
+        "instance_root",
+        lambda: (_ for _ in ()).throw(RuntimeError("instance root unavailable")),
+    )
+    monkeypatch.setattr(registry, "_fail_hard_enabled", lambda: True)
+
+    with caplog.at_level("WARNING", logger="core.subagent_registry"):
+        with pytest.raises(RuntimeError, match="instance root unavailable"):
+            registry._registry_dir()
+
+    fallback = tmp_path / "instances" / "fallback-instance" / "data" / "subagent-registry"
+    assert not fallback.exists()
+    assert "failed to resolve instance root" in caplog.text
+
+
 # ---------------------------------------------------------------------------
 # register()
 # ---------------------------------------------------------------------------
