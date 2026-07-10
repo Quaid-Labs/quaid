@@ -392,15 +392,10 @@ def _docs_term_min_len(term: str) -> int:
 def _docs_query_terms(query: str) -> List[str]:
     """Extract lightweight lexical terms for doc reranking."""
     raw_terms = _docs_lexical_tokens(query)
-    stop = {
-        "the", "a", "an", "and", "or", "to", "for", "of", "in", "on", "at",
-        "is", "are", "was", "were", "be", "do", "does", "did", "how", "what",
-        "which", "who", "when", "where", "why", "current", "currently",
-    }
     out: List[str] = []
     for term in raw_terms:
         t = term.strip().strip("/.")
-        if len(t) < _docs_term_min_len(t) or t in stop:
+        if len(t) < _docs_term_min_len(t):
             continue
         if t not in out:
             out.append(t)

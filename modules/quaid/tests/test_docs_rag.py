@@ -81,6 +81,14 @@ def test_docs_lexical_terms_keep_single_compact_unicode_anchor():
     assert _project_log_line_query_score("- [2026-03-05T23:59:59] 猫 rollout finished", ["猫"]) == 1
 
 
+def test_docs_query_terms_do_not_apply_english_stopwords():
+    from datastore.docsdb.rag import _docs_query_terms
+
+    terms = _docs_query_terms("was current currently atlas")
+
+    assert terms == ["was", "current", "currently", "atlas"]
+
+
 def test_docs_rank_score_uses_unicode_normalized_terms():
     from datastore.docsdb.rag import _docs_query_terms, _docs_rank_score
 
