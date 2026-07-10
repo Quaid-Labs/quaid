@@ -1225,6 +1225,25 @@ class TestOpenClawAdapter:
         with pytest.raises(RuntimeError, match="malformed JSON"):
             OpenClawAdapter().parse_session_jsonl(session_file)
 
+    def test_parse_session_jsonl_logs_malformed_json_when_fail_open(self, monkeypatch, tmp_path, caplog):
+        session_file = tmp_path / "oc-session-corrupt-fail-open.jsonl"
+        session_file.write_text(
+            "\n".join([
+                json.dumps({"role": "user", "content": "keep before"}),
+                "{bad-json",
+                json.dumps({"role": "assistant", "content": "keep after"}),
+            ]),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr("adaptors.openclaw.adapter.is_fail_hard_enabled", lambda: False)
+
+        with caplog.at_level("WARNING", logger="adaptors.openclaw.adapter"):
+            transcript = OpenClawAdapter().parse_session_jsonl(session_file)
+
+        assert "User: keep before" in transcript
+        assert "Assistant: keep after" in transcript
+        assert "Skipped malformed JSON line" in caplog.text
+
     def test_parse_session_jsonl_accepts_role_rows_with_message_field(self, tmp_path):
         session_file = tmp_path / "oc-session-message-field.jsonl"
         session_file.write_text(
@@ -1965,6 +1984,22 @@ class TestOpenClawAdapter:
             with pytest.raises(PermissionError, match="Rejected unsafe QUAID_MESSAGE_CLI"):
                 adapter._resolve_message_cli()
 
+    def test_get_host_info_logs_version_probe_failure_when_fail_open(self, monkeypatch, caplog):
+        adapter = OpenClawAdapter()
+        monkeypatch.setattr(adapter, "_resolve_host_binary", lambda: "/tmp/openclaw")
+        monkeypatch.setattr(adapter, "_read_openclaw_package_version", lambda _binary: "")
+        monkeypatch.setattr(
+            "adaptors.openclaw.adapter.subprocess.run",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(FileNotFoundError("openclaw missing")),
+        )
+
+        with patch("adaptors.openclaw.adapter.is_fail_hard_enabled", return_value=False), \
+             caplog.at_level("WARNING", logger="adaptors.openclaw.adapter"):
+            info = adapter.get_host_info()
+
+        assert info.version == "unknown"
+        assert "openclaw --version failed for /tmp/openclaw" in caplog.text
+
     def test_notify_rejects_option_like_route_values(self, monkeypatch):
         adapter = OpenClawAdapter()
         mock_info = ChannelInfo(
@@ -2311,7 +2346,7 @@ class TestOpenClawAdapter:
         assert "Provider fallback notice failed" in err
         assert "notify transport down" in err
 
-    def test_notify_provider_fallback_never_raises_on_notify_failure_under_failhard(self, monkeypatch, capsys):
+    def test_notify_provider_fallback_raises_on_notify_failure_under_failhard(self, monkeypatch, capsys):
         adapter = OpenClawAdapter()
 
         def _fail_notify(*_args, **_kwargs):
@@ -2320,14 +2355,15 @@ class TestOpenClawAdapter:
         monkeypatch.setattr(adapter, "notify", _fail_notify)
 
         with patch("adaptors.openclaw.adapter.is_fail_hard_enabled", return_value=True):
-            adapter._notify_provider_fallback(
-                configured_provider="anthropic",
-                detected_provider="openai-codex",
-                deep_model_before="claude-sonnet-4-5",
-                fast_model_before="claude-haiku-4-5",
-                deep_model_after="gpt-5.4",
-                fast_model_after="gpt-5.4-mini",
-            )
+            with pytest.raises(RuntimeError, match="notify transport down"):
+                adapter._notify_provider_fallback(
+                    configured_provider="anthropic",
+                    detected_provider="openai-codex",
+                    deep_model_before="claude-sonnet-4-5",
+                    fast_model_before="claude-haiku-4-5",
+                    deep_model_after="gpt-5.4",
+                    fast_model_after="gpt-5.4-mini",
+                )
 
         err = capsys.readouterr().err
         assert "Provider fallback notice failed" in err
@@ -2554,6 +2590,62 @@ class TestOpenClawAdapter:
         assert result["supported"] is False
         assert result["ok"] is True
         assert result["results"] == []
+
+    def test_list_agent_instance_ids_logs_gateway_config_failure_when_fail_open(
+        self,
+        monkeypatch,
+        tmp_path,
+        caplog,
+    ):
+        home = tmp_path / "home"
+        cfg_dir = home / ".openclaw"
+        cfg_dir.mkdir(parents=True)
+        (cfg_dir / "openclaw.json").write_text("{bad-json", encoding="utf-8")
+        monkeypatch.setattr(Path, "home", lambda: home)
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path / ".quaid"))
+        adapter = OpenClawAdapter()
+
+        with patch("adaptors.openclaw.adapter.is_fail_hard_enabled", return_value=False), \
+             caplog.at_level("WARNING", logger="adaptors.openclaw.adapter"):
+            assert adapter.list_agent_instance_ids() == ["openclaw-main"]
+
+        assert "list_agent_instance_ids: gateway config unreadable" in caplog.text
+
+    def test_list_agent_instance_ids_logs_silo_scan_failure_when_fail_open(
+        self,
+        monkeypatch,
+        tmp_path,
+        caplog,
+    ):
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path / ".quaid"))
+        adapter = OpenClawAdapter()
+        instances_dir = adapter.quaid_home() / "instances"
+        instances_dir.mkdir(parents=True)
+        original_iterdir = Path.iterdir
+
+        def fail_iterdir(path):
+            if path == instances_dir:
+                raise OSError("scan failed")
+            return original_iterdir(path)
+
+        monkeypatch.setattr(Path, "iterdir", fail_iterdir)
+
+        with patch("adaptors.openclaw.adapter.is_fail_hard_enabled", return_value=False), \
+             caplog.at_level("WARNING", logger="adaptors.openclaw.adapter"):
+            assert adapter.list_agent_instance_ids() == ["openclaw-main"]
+
+        assert "list_agent_instance_ids: silo scan failed" in caplog.text
+
+    def test_iter_sessions_index_logs_read_failure_when_fail_open(self, monkeypatch, tmp_path, caplog):
+        sessions_json = tmp_path / "sessions.json"
+        sessions_json.write_text("{bad-json", encoding="utf-8")
+        adapter = OpenClawAdapter()
+        monkeypatch.setattr("adaptors.openclaw.adapter.is_fail_hard_enabled", lambda: False)
+
+        with caplog.at_level("WARNING", logger="adaptors.openclaw.adapter"):
+            assert adapter._iter_sessions_index(sessions_json) == []
+
+        assert "_iter_sessions_index: could not read" in caplog.text
 
 
 class TestClaudeCodeAdapter:

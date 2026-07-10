@@ -10,6 +10,7 @@ IMPORTANT:
 """
 
 import json
+import logging
 import os
 import re
 import shutil
@@ -24,6 +25,8 @@ from adaptors.openclaw.providers import OpenClawGatewayLLMProvider
 from lib.adapter import ChannelInfo, QuaidAdapter, read_env_file
 from lib.fail_policy import is_fail_hard_enabled
 from lib.providers import AnthropicLLMProvider, OpenAICodexOAuthLLMProvider
+
+logger = logging.getLogger(__name__)
 
 
 class OpenClawAdapter(QuaidAdapter):
@@ -506,10 +509,10 @@ class OpenClawAdapter(QuaidAdapter):
                     )
                     if parsed:
                         version = parsed
-            except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+            except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
                 if is_fail_hard_enabled():
                     raise
-                pass
+                logger.warning("openclaw --version failed for %s: %s", binary, exc)
             if version == "unknown":
                 package_version = self._read_openclaw_package_version(binary)
                 if package_version:
@@ -1039,6 +1042,7 @@ class OpenClawAdapter(QuaidAdapter):
                 except json.JSONDecodeError as exc:
                     if is_fail_hard_enabled():
                         raise RuntimeError(f"OpenClaw session transcript contains malformed JSON: {path}") from exc
+                    logger.warning("Skipped malformed JSON line in %s: %s", path, exc)
                     continue
                 if not isinstance(obj, dict):
                     continue
@@ -1284,6 +1288,8 @@ class OpenClawAdapter(QuaidAdapter):
                 f"[notify] Provider fallback notice failed for {dedupe}: {exc}",
                 file=sys.stderr,
             )
+            if is_fail_hard_enabled():
+                raise
 
     def installer_supported_providers(self) -> list:
         return ["anthropic", "openai"]
@@ -1566,10 +1572,10 @@ class OpenClawAdapter(QuaidAdapter):
                         label = self._sanitize_agent_label(str(key or "").strip(), default="")
                         if label and label not in {"defaults", "list"} and label not in labels:
                             labels.append(label)
-            except (json.JSONDecodeError, IOError, KeyError):
+            except (json.JSONDecodeError, IOError, KeyError) as exc:
                 if is_fail_hard_enabled():
                     raise
-                pass
+                logger.warning("list_agent_instance_ids: gateway config unreadable: %s", exc)
 
         # Source 2: silo directories under quaid_home()/instances
         silo_prefix = f"{prefix}-"
@@ -1581,10 +1587,10 @@ class OpenClawAdapter(QuaidAdapter):
                         label = self._sanitize_agent_label(entry.name[len(silo_prefix):], default="")
                         if label and label not in labels and self._agent_label_has_platform_state(label):
                             labels.append(label)
-        except (OSError, RuntimeError):
+        except (OSError, RuntimeError) as exc:
             if is_fail_hard_enabled():
                 raise
-            pass
+            logger.warning("list_agent_instance_ids: silo scan failed: %s", exc)
 
         if not labels:
             return [f"{prefix}-main"]
@@ -1657,9 +1663,10 @@ class OpenClawAdapter(QuaidAdapter):
     def _iter_sessions_index(self, sessions_json: Path):
         try:
             data = json.loads(sessions_json.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
             if is_fail_hard_enabled():
                 raise
+            logger.warning("_iter_sessions_index: could not read %s: %s", sessions_json, exc)
             return []
         if not isinstance(data, dict):
             return []
