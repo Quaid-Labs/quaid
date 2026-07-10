@@ -3060,6 +3060,34 @@ def test_start_daemon_returns_negative_one_when_pid_file_never_appears(monkeypat
     assert read_pid_calls >= 2
 
 
+def test_start_daemon_locks_pid_sidecar_file(monkeypatch, tmp_path):
+    pid_path = tmp_path / "extraction-daemon.pid"
+    opened_paths = []
+    real_open = extraction_daemon.os.open
+
+    class _FakePopen:
+        pid = 99999
+
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+    def fake_open(path, flags, mode=0o777):
+        opened_paths.append(Path(path))
+        return real_open(path, flags, mode)
+
+    monkeypatch.setattr(extraction_daemon, "_pid_path", lambda: pid_path)
+    monkeypatch.setattr(extraction_daemon, "_log_path", lambda: tmp_path / "daemon.log")
+    monkeypatch.setattr(extraction_daemon, "_matching_daemon_pids", lambda **_kwargs: [])
+    monkeypatch.setattr(extraction_daemon, "read_pid", lambda: None)
+    monkeypatch.setattr(extraction_daemon.os, "open", fake_open)
+    monkeypatch.setattr(extraction_daemon.subprocess, "Popen", _FakePopen)
+    monkeypatch.setattr(extraction_daemon.time, "sleep", lambda *_args, **_kwargs: None)
+
+    assert extraction_daemon.start_daemon() == -1
+    assert opened_paths[0] == pid_path.with_name("extraction-daemon.pid.lock")
+    assert pid_path not in opened_paths
+
+
 def test_start_daemon_exports_quaid_home_to_worker_env(monkeypatch, tmp_path):
     pid_path = tmp_path / "extraction-daemon.pid"
     captured = {}

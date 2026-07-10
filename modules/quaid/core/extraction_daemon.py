@@ -393,6 +393,11 @@ def _pid_path() -> Path:
     return _instance_root() / "data" / "extraction-daemon.pid"
 
 
+def _pid_lock_path() -> Path:
+    pid_path = _pid_path()
+    return pid_path.with_name(f"{pid_path.name}.lock")
+
+
 def _log_path() -> Path:
     d = _instance_root() / "logs" / "daemon"
     d.mkdir(parents=True, exist_ok=True)
@@ -10130,21 +10135,22 @@ def _terminate_daemon_pid(pid: int, *, grace_seconds: float = 10.0) -> bool:
 def start_daemon() -> int:
     """Start the daemon as a background process. Returns child PID.
 
-    Uses flock on PID file to prevent concurrent starts (B001).
+    Uses a stable sidecar flock so atomic PID-file replacement does not orphan
+    the startup lock.
     """
     # Capture before scrub_background_process_env clears QUAID_INSTANCE; the
     # worker process still needs the validated instance stamped back in.
     instance = _instance_id()
     if not instance:
         raise RuntimeError("cannot start extraction daemon without QUAID_INSTANCE")
-    # B001: Acquire exclusive lock on PID file to prevent TOCTOU race
     pid_file = _pid_path()
     pid_file.parent.mkdir(parents=True, exist_ok=True)
+    lock_file = _pid_lock_path()
 
     try:
-        lock_fd = os.open(str(pid_file), os.O_RDWR | os.O_CREAT)
+        lock_fd = os.open(str(lock_file), os.O_RDWR | os.O_CREAT, 0o600)
     except OSError as e:
-        logger.error("cannot open PID file for locking: %s", e)
+        logger.error("cannot open daemon startup lock file: %s", e)
         # Fall back to checking existing PID
         existing = read_pid()
         return existing if existing else -1
