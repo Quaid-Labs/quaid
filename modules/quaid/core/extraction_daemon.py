@@ -4077,6 +4077,7 @@ def _append_payload_result(
             for filename, items in (extra_result.get("raw_snippets", {}) or {}).items()
         },
     }
+    payload["raw_journal"] = dict(payload.get("raw_journal", {}) or {})
     for filename, text in (extra_result.get("raw_journal", {}) or {}).items():
         if not isinstance(text, str) or not text.strip():
             continue

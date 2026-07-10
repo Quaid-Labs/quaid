@@ -3900,6 +3900,23 @@ def test_write_rolling_state_clears_structurally_empty_payload_artifacts(monkeyp
     assert not extraction_daemon._rolling_state_path("sess-empty-struct").exists()
 
 
+def test_append_payload_result_initializes_missing_raw_journal():
+    payload = {
+        "facts_skipped": 0,
+        "raw_facts": [],
+        "raw_source_chunks": [],
+        "raw_snippets": {},
+        "raw_project_logs": {},
+    }
+    extra = {
+        "raw_journal": {"journal.md": "first note"},
+    }
+
+    out = extraction_daemon._append_payload_result(payload, extra)
+
+    assert out["raw_journal"] == {"journal.md": "first note"}
+
+
 def test_process_signal_skips_foreign_adapter_transcript(monkeypatch, tmp_path):
     from lib.adapter import set_adapter, reset_adapter
 
