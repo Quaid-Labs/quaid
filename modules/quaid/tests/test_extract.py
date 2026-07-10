@@ -399,7 +399,7 @@ class TestExtractFromTranscript:
     def test_invalid_bare_date_timestamp_is_rejected(self):
         from ingest.extract import _normalize_extracted_timestamp
 
-        assert _normalize_extracted_timestamp("2024-02-29") == "2024-02-29T23:59:59"
+        assert _normalize_extracted_timestamp("2024-02-29") == "2024-02-29T23:59:59+00:00"
         assert _normalize_extracted_timestamp("2023-02-29") is None
         assert _normalize_extracted_timestamp("2024-13-01") is None
 
@@ -1343,6 +1343,13 @@ class TestExtractFromTranscript:
 
         assert extract_mod._current_utc_timestamp() == "2026-03-11T00:00:00+00:00"
 
+    def test_current_utc_timestamp_honors_date_only_quaid_now(self, monkeypatch):
+        from ingest import extract as extract_mod
+
+        monkeypatch.setenv("QUAID_NOW", "2026-03-11")
+
+        assert extract_mod._current_utc_timestamp() == "2026-03-11T23:59:59+00:00"
+
     def test_current_utc_timestamp_malformed_quaid_now_honors_failhard(self, monkeypatch):
         from ingest import extract as extract_mod
 
@@ -1471,8 +1478,8 @@ class TestExtractFromTranscript:
 
         fact = result["raw_facts"][0]
         assert fact["mentioned_at"] == "2026-07-06T05:15:41+00:00"
-        assert fact["occurred_start"] == "2026-06-29T23:59:59"
-        assert fact["occurred_end"] == "2026-07-06T23:59:59"
+        assert fact["occurred_start"] == "2026-06-29T23:59:59+00:00"
+        assert fact["occurred_end"] == "2026-07-06T23:59:59+00:00"
         assert fact["_source_timestamp"] == "2026-07-06T05:40:09+00:00"
 
     @patch("ingest.extract._current_utc_timestamp", return_value="2026-05-09T08:00:00+00:00")
@@ -1617,8 +1624,8 @@ class TestExtractFromTranscript:
         )
 
         fact = result["raw_facts"][0]
-        assert fact["occurred_start"] == "2023-05-01T23:59:59"
-        assert fact["occurred_end"] == "2023-05-31T23:59:59"
+        assert fact["occurred_start"] == "2023-05-01T23:59:59+00:00"
+        assert fact["occurred_end"] == "2023-05-31T23:59:59+00:00"
         assert fact["mentioned_at"] == "2026-05-02T14:49:46+00:00"
         assert fact["_source_timestamp"] == "2026-05-02T14:50:00+00:00"
         assert "created_at" not in fact
@@ -1701,8 +1708,8 @@ class TestExtractFromTranscript:
 
         fact = result["raw_facts"][0]
         assert fact["mentioned_at"] == "2026-06-16T20:04:26+00:00"
-        assert fact["occurred_start"] == "2026-06-16T23:59:59"
-        assert fact["occurred_end"] == "2026-06-22T23:59:59"
+        assert fact["occurred_start"] == "2026-06-16T23:59:59+00:00"
+        assert fact["occurred_end"] == "2026-06-22T23:59:59+00:00"
 
     def test_extraction_keeps_last_week_bounds_before_mention_date(self):
         from ingest.extract import _normalize_fact_temporal_hint
@@ -1720,8 +1727,8 @@ class TestExtractFromTranscript:
         )
 
         assert fact["mentioned_at"] == "2026-06-16T20:04:26+00:00"
-        assert fact["occurred_start"] == "2026-06-09T23:59:59"
-        assert fact["occurred_end"] == "2026-06-15T23:59:59"
+        assert fact["occurred_start"] == "2026-06-09T23:59:59+00:00"
+        assert fact["occurred_end"] == "2026-06-15T23:59:59+00:00"
 
     def test_extraction_shifts_semantic_current_week_bounds_for_non_english_text(
         self,
@@ -1741,8 +1748,8 @@ class TestExtractFromTranscript:
         )
 
         assert fact["mentioned_at"] == "2026-06-16T20:04:26+00:00"
-        assert fact["occurred_start"] == "2026-06-16T23:59:59"
-        assert fact["occurred_end"] == "2026-06-22T23:59:59"
+        assert fact["occurred_start"] == "2026-06-16T23:59:59+00:00"
+        assert fact["occurred_end"] == "2026-06-22T23:59:59+00:00"
 
     @patch("ingest.extract.call_deep_reasoning")
     def test_stale_week_classifier_uses_temporal_markers_without_llm(self, mock_llm):
@@ -1785,8 +1792,8 @@ class TestExtractFromTranscript:
             prefer_default_mentioned_at=True,
         )
 
-        assert fact["occurred_start"] == "2026-06-09T23:59:59"
-        assert fact["occurred_end"] == "2026-06-15T23:59:59"
+        assert fact["occurred_start"] == "2026-06-09T23:59:59+00:00"
+        assert fact["occurred_end"] == "2026-06-15T23:59:59+00:00"
         mock_llm.assert_not_called()
 
     @patch("ingest.extract.call_deep_reasoning")
@@ -1825,8 +1832,8 @@ class TestExtractFromTranscript:
 
         fact = result["raw_facts"][0]
         assert fact["mentioned_at"] == "2026-05-07T05:10:21+00:00"
-        assert fact["occurred_start"] == "2023-05-01T23:59:59"
-        assert fact["occurred_end"] == "2023-05-31T23:59:59"
+        assert fact["occurred_start"] == "2023-05-01T23:59:59+00:00"
+        assert fact["occurred_end"] == "2023-05-31T23:59:59+00:00"
 
     @patch("ingest.extract.call_deep_reasoning")
     def test_assistant_named_option_anchor_is_preserved_when_llm_omits_it(self, mock_llm):
@@ -6928,7 +6935,7 @@ class TestExtractFromTranscript:
                 "recipe-app": [
                     {
                         "text": "Added tests/recipe.test.js",
-                        "created_at": "2026-03-11T23:59:59",
+                        "created_at": "2026-03-11T23:59:59+00:00",
                     }
                 ]
             },

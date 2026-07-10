@@ -15,7 +15,7 @@ def _normalize_extracted_timestamp(value: Any) -> Optional[str]:
     if not raw:
         return None
     if re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw):
-        return f"{raw}T23:59:59"
+        return f"{raw}T23:59:59+00:00"
     try:
         parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
     except ValueError:
