@@ -190,6 +190,8 @@ def _write_publish_trace(event: str, **data: Any) -> None:
             fh.write(json.dumps(payload, ensure_ascii=True) + "\n")
     except OSError as exc:
         logger.warning("[datastore-memorydb] extraction publish trace write failed: %s", exc)
+        if is_fail_hard_enabled():
+            raise RuntimeError(f"Failed to write extraction publish trace {path}") from exc
 
 
 def _content_hash(text: str) -> str:

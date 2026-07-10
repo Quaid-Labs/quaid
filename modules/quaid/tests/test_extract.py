@@ -5588,6 +5588,43 @@ class TestExtractFromTranscript:
         assert timestamp != "not-a-clock"
         assert timestamp.endswith("+00:00")
 
+    def test_memorydb_extraction_publish_trace_write_failure_warns_when_fail_open(self, monkeypatch, caplog):
+        from datastore.memorydb import extraction_publish
+
+        class _BrokenTracePath:
+            def open(self, *_args, **_kwargs):
+                raise OSError("trace disk offline")
+
+            def __str__(self):
+                return "/tmp/publish-trace.jsonl"
+
+        monkeypatch.setattr(extraction_publish, "_publish_trace_path", lambda: _BrokenTracePath())
+        monkeypatch.setattr(extraction_publish, "is_fail_hard_enabled", lambda: False)
+
+        with caplog.at_level("WARNING", logger=extraction_publish.__name__):
+            extraction_publish._write_publish_trace("publish_start", session_id="sess-trace")
+
+        assert "extraction publish trace write failed" in caplog.text
+        assert "trace disk offline" in caplog.text
+
+    def test_memorydb_extraction_publish_trace_write_failure_raises_under_failhard(self, monkeypatch):
+        from datastore.memorydb import extraction_publish
+
+        class _BrokenTracePath:
+            def open(self, *_args, **_kwargs):
+                raise OSError("trace disk offline")
+
+            def __str__(self):
+                return "/tmp/publish-trace.jsonl"
+
+        monkeypatch.setattr(extraction_publish, "_publish_trace_path", lambda: _BrokenTracePath())
+        monkeypatch.setattr(extraction_publish, "is_fail_hard_enabled", lambda: True)
+
+        with pytest.raises(RuntimeError, match="Failed to write extraction publish trace") as excinfo:
+            extraction_publish._write_publish_trace("publish_start", session_id="sess-trace")
+
+        assert isinstance(excinfo.value.__cause__, OSError)
+
     def test_extract_publish_batch_size_invalid_env_raises_under_failhard(self, monkeypatch):
         from datastore.memorydb import extraction_publish
 
