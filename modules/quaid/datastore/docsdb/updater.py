@@ -501,7 +501,7 @@ def check_cleanup_needed() -> Dict[str, CleanupInfo]:
         if not doc_abs.exists():
             continue
 
-        current_chars = len(doc_abs.read_text())
+        current_chars = len(doc_abs.read_text(encoding="utf-8"))
         doc_state = state.get(doc_path, {})
         updates = doc_state.get("updates_since_cleanup", 0)
         chars_at_cleanup = doc_state.get("chars_at_cleanup", current_chars)
@@ -543,7 +543,7 @@ def cleanup_doc(doc_path: str, purpose: str, dry_run: bool = True) -> bool:
         print(f"  Doc not found: {doc_abs}")
         return False
 
-    current_doc = doc_abs.read_text()
+    current_doc = doc_abs.read_text(encoding="utf-8")
     chars_before = len(current_doc)
 
     system_prompt = (
@@ -795,7 +795,7 @@ def _read_prompt_doc(doc_abs: Path) -> Tuple[str, bool]:
         size = 0
     if size > max_bytes:
         return "", True
-    text = doc_abs.read_text()
+    text = doc_abs.read_text(encoding="utf-8")
     truncated, capped = _truncate_text_bytes(text, max_bytes)
     return truncated, capped
 
@@ -1538,7 +1538,7 @@ def update_doc_from_transcript(
         print(f"  Doc not found: {doc_abs}")
         return False
 
-    current_doc = doc_abs.read_text()
+    current_doc = doc_abs.read_text(encoding="utf-8")
     chars_before = len(current_doc)
     sources = changed_sources or []
 
@@ -2054,7 +2054,7 @@ def cmd_update_from_transcript(transcript_path: str, dry_run: bool = True, max_d
         print(f"Transcript not found: {transcript_path}")
         return 0
 
-    transcript = transcript_file.read_text()
+    transcript = transcript_file.read_text(encoding="utf-8")
     if not transcript.strip():
         print("Empty transcript.")
         return 0

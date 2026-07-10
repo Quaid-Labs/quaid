@@ -1254,6 +1254,24 @@ class TestCleanupStateLocking:
             assert updater._load_cleanup_state() == {}
             assert seen["encoding"] == "utf-8"
 
+    def test_check_cleanup_needed_reads_docs_as_utf8(self, tmp_path, monkeypatch):
+        with _adapter_patch(tmp_path) as iroot:
+            import datastore.docsdb.updater as updater
+
+            doc = iroot / "docs" / "caf\u00e9.md"
+            doc.parent.mkdir(parents=True, exist_ok=True)
+            doc.write_text("# Caf\u00e9\n\nR\u00e9sum\u00e9 details.\n", encoding="utf-8")
+            monkeypatch.setattr(updater, "get_doc_purposes", lambda: {"docs/caf\u00e9.md": "demo"})
+
+            updater._reset_cleanup_state("docs/caf\u00e9.md", 1)
+            state = updater._load_cleanup_state()
+            state["docs/caf\u00e9.md"]["updates_since_cleanup"] = updater.CLEANUP_UPDATE_THRESHOLD
+            updater._save_cleanup_state(state)
+
+            cleanup = updater.check_cleanup_needed()
+
+            assert cleanup["docs/caf\u00e9.md"].current_chars == len("# Caf\u00e9\n\nR\u00e9sum\u00e9 details.\n")
+
     def test_reset_cleanup_state_honors_quaid_now(self, tmp_path, monkeypatch):
         with _adapter_patch(tmp_path):
             import datastore.docsdb.updater as updater
