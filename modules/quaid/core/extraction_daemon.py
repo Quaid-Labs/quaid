@@ -5943,7 +5943,14 @@ def _should_skip_newly_discovered_orphan_transcript(transcript_path: Path, now_t
     except OSError:
         # If we cannot stat the host file, do not fabricate a new cursor for it.
         return True
-    except Exception:
+    except Exception as exc:
+        logger.warning(
+            "stale orphan transcript check failed for %s; not skipping: %s",
+            transcript_path,
+            exc,
+        )
+        if _fail_hard_enabled():
+            raise
         return False
     now = time.time() if now_ts is None else float(now_ts)
     if mtime >= installed_at:

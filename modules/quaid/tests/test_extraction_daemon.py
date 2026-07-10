@@ -8773,6 +8773,45 @@ def test_get_compact_on_timeout_raises_malformed_config_when_fail_hard(
         extraction_daemon._get_compact_on_timeout(default=False)
 
 
+def test_should_skip_new_orphan_transcript_logs_install_state_failure_fail_open(
+    monkeypatch,
+    tmp_path,
+    caplog,
+):
+    transcript_path = tmp_path / "session.jsonl"
+    monkeypatch.setattr(
+        extraction_daemon,
+        "_read_installed_at",
+        lambda: (_ for _ in ()).throw(RuntimeError("install state unreadable")),
+    )
+    monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: False)
+
+    with caplog.at_level("WARNING", logger="quaid.daemon"):
+        assert (
+            extraction_daemon._should_skip_newly_discovered_orphan_transcript(transcript_path)
+            is False
+        )
+
+    assert "stale orphan transcript check failed" in caplog.text
+    assert "install state unreadable" in caplog.text
+
+
+def test_should_skip_new_orphan_transcript_raises_install_state_failure_fail_hard(
+    monkeypatch,
+    tmp_path,
+):
+    transcript_path = tmp_path / "session.jsonl"
+    monkeypatch.setattr(
+        extraction_daemon,
+        "_read_installed_at",
+        lambda: (_ for _ in ()).throw(RuntimeError("install state unreadable")),
+    )
+    monkeypatch.setattr(extraction_daemon, "_fail_hard_enabled", lambda: True)
+
+    with pytest.raises(RuntimeError, match="install state unreadable"):
+        extraction_daemon._should_skip_newly_discovered_orphan_transcript(transcript_path)
+
+
 def test_check_idle_sessions_timeout_signal_carries_compaction_metadata(monkeypatch, tmp_path):
     transcript_path = tmp_path / "session.jsonl"
     transcript_path.write_text('{"role":"user","content":"hello"}\n{"role":"assistant","content":"hi"}\n', encoding="utf-8")
