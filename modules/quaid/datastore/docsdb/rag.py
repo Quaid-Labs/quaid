@@ -12,6 +12,7 @@ import os
 import re
 import sqlite3
 import sys
+import time
 import unicodedata
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -32,6 +33,8 @@ from lib.runtime_context import get_visible_quaid_home, get_workspace_dir
 
 logger = logging.getLogger(__name__)
 _DEFAULT_MAX_CHUNKS_PER_DOCUMENT = 5000
+_LINKED_PROJECT_SCOPE_RECONCILE_TTL_SECONDS = 5.0
+_LINKED_PROJECT_SCOPE_RECONCILE_NEXT_AT = 0.0
 
 # Configuration — resolved from config system
 def _default_db_path() -> Path:
@@ -184,21 +187,25 @@ def _linked_projects_for_current_instance() -> tuple[List[str], bool]:
     Returns (projects, resolved) where resolved=False means instance context
     could not be determined and caller should not enforce scope filtering.
     """
+    global _LINKED_PROJECT_SCOPE_RECONCILE_NEXT_AT
     try:
         from lib.instance import InstanceError, instance_id as _instance_id
         from lib.project_registry import list_all as _list_projects
 
-        try:
-            from datastore.docsdb.registry import DocsRegistry
-
-            DocsRegistry(seed_projects=False).reconcile_global_project_registry()
-        except Exception as exc:
-            if is_fail_hard_enabled():
-                raise RuntimeError("Failed to reconcile docs/project registry before linked-project scoping.") from exc
-            logger.warning("docs/project registry reconciliation failed; shared docs recall is failing closed: %s", exc)
-            return [], True
-
         current_instance = _instance_id()
+        now = time.monotonic()
+        if now >= _LINKED_PROJECT_SCOPE_RECONCILE_NEXT_AT:
+            try:
+                from datastore.docsdb.registry import DocsRegistry
+
+                DocsRegistry(seed_projects=False).reconcile_global_project_registry()
+            except Exception as exc:
+                if is_fail_hard_enabled():
+                    raise RuntimeError("Failed to reconcile docs/project registry before linked-project scoping.") from exc
+                logger.warning("docs/project registry reconciliation failed; shared docs recall is failing closed: %s", exc)
+                return [], True
+            _LINKED_PROJECT_SCOPE_RECONCILE_NEXT_AT = now + _LINKED_PROJECT_SCOPE_RECONCILE_TTL_SECONDS
+
         linked: List[str] = []
         for project_name, entry in (_list_projects() or {}).items():
             instances = entry.get("instances") or []

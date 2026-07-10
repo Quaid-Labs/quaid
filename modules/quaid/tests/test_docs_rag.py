@@ -2820,6 +2820,7 @@ class TestDocsSearchFiltering:
     def test_linked_project_scope_fails_closed_when_reconcile_fails(self, tmp_path):
         from datastore.docsdb import rag as rag_module
 
+        rag_module._LINKED_PROJECT_SCOPE_RECONCILE_NEXT_AT = 0.0
         with patch("datastore.docsdb.registry.DocsRegistry", side_effect=RuntimeError("registry boom")), \
              patch("datastore.docsdb.rag.is_fail_hard_enabled", return_value=False), \
              patch("lib.instance.instance_id", return_value="claude-code-private-tmp-cc-livetest"):
@@ -2831,6 +2832,7 @@ class TestDocsSearchFiltering:
     def test_linked_project_scope_raises_under_failhard_when_reconcile_fails(self, tmp_path):
         from datastore.docsdb import rag as rag_module
 
+        rag_module._LINKED_PROJECT_SCOPE_RECONCILE_NEXT_AT = 0.0
         with patch("datastore.docsdb.registry.DocsRegistry", side_effect=RuntimeError("registry boom")), \
              patch("datastore.docsdb.rag.is_fail_hard_enabled", return_value=True), \
              patch("lib.instance.instance_id", return_value="claude-code-private-tmp-cc-livetest"), \
@@ -2841,12 +2843,38 @@ class TestDocsSearchFiltering:
         from datastore.docsdb import rag as rag_module
         from lib.instance import InstanceError
 
+        rag_module._LINKED_PROJECT_SCOPE_RECONCILE_NEXT_AT = 0.0
         with patch("datastore.docsdb.rag.is_fail_hard_enabled", return_value=False), \
              patch("lib.instance.instance_id", side_effect=InstanceError("instance missing")):
             linked, resolved = rag_module._linked_projects_for_current_instance()
 
         assert linked == []
         assert resolved is False
+
+    def test_linked_project_scope_throttles_registry_reconcile(self, tmp_path):
+        from datastore.docsdb import rag as rag_module
+
+        rag_module._LINKED_PROJECT_SCOPE_RECONCILE_NEXT_AT = 0.0
+        try:
+            with patch("datastore.docsdb.registry.DocsRegistry") as registry_cls, \
+                 patch("lib.instance.instance_id", return_value="inst-a"), \
+                 patch(
+                     "lib.project_registry.list_all",
+                     return_value={
+                         "alpha": {"instances": ["inst-a"]},
+                         "beta": {"instances": ["inst-b"]},
+                     },
+                 ) as list_all, \
+                 patch("datastore.docsdb.rag.time.monotonic", side_effect=[100.0, 101.0]):
+                first = rag_module._linked_projects_for_current_instance()
+                second = rag_module._linked_projects_for_current_instance()
+
+            assert first == (["alpha"], True)
+            assert second == (["alpha"], True)
+            assert registry_cls.return_value.reconcile_global_project_registry.call_count == 1
+            assert list_all.call_count == 2
+        finally:
+            rag_module._LINKED_PROJECT_SCOPE_RECONCILE_NEXT_AT = 0.0
 
     @patch("datastore.docsdb.rag._lib_get_embedding", return_value=[0.1, 0.2, 0.3])
     @patch("datastore.docsdb.rag._lib_unpack_embedding", return_value=[0.1, 0.2, 0.3])
