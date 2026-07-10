@@ -6636,8 +6636,37 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
         _release_session_processing_lock(lock_owner_key, lock_fd)
         return
 
-    cursor_offset = int(cursor_data["line_offset"] or 0)
-    cursor_transcript = cursor_data["transcript_path"]
+    missing_cursor_fields = [
+        field for field in ("line_offset", "transcript_path")
+        if field not in cursor_data
+    ]
+    if missing_cursor_fields:
+        message = (
+            f"[{label}] session {session_id}: cursor state for {lock_owner_key} "
+            f"missing required field(s): {', '.join(missing_cursor_fields)}"
+        )
+        if _fail_hard_enabled():
+            _release_session_processing_lock(lock_owner_key, lock_fd)
+            raise RuntimeError(message)
+        logger.warning(message)
+
+    try:
+        cursor_offset = int(cursor_data.get("line_offset", 0) or 0)
+    except (TypeError, ValueError) as exc:
+        if _fail_hard_enabled():
+            _release_session_processing_lock(lock_owner_key, lock_fd)
+            raise
+        logger.warning(
+            "[%s] session %s: invalid cursor line_offset for %s: %r (%s); "
+            "resetting offset to 0",
+            label,
+            session_id,
+            lock_owner_key,
+            cursor_data.get("line_offset"),
+            exc,
+        )
+        cursor_offset = 0
+    cursor_transcript = str(cursor_data.get("transcript_path") or "").strip()
     cursor_processed_signal_type = str(cursor_data.get("processed_signal_type") or "").strip()
     cursor_marks_processed_extraction = cursor_processed_signal_type in VALID_SIGNAL_TYPES
     reset_staged_state_for_full_reextract = False
